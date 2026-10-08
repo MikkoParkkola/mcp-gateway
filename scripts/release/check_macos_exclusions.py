@@ -8,7 +8,8 @@ Usage: check_macos_exclusions.py [<root>]
 Scans the tree's Rust files for a test function, or a module in a test file,
 whose attributes keep it off macOS: `cfg(target_os = "linux")`,
 `cfg(not(target_os = "macos"))`, `cfg(all(..., not(target_os = "macos")))` or
-`cfg_attr(target_os = "macos", ignore ...)`. Fails on any such item missing
+`cfg_attr(target_os = "macos", ignore ...)`, and every `--skip` of the macOS
+job's test step in .github/workflows/ci.yml. Fails on any such item missing
 from docs/release/macos-test-exclusions.tsv, on a row with no reason, and on a
 row that no longer matches an item (a stale exclusion)."""
 
@@ -19,10 +20,11 @@ import sys
 from pathlib import Path
 
 LIST = "docs/release/macos-test-exclusions.tsv"
+WORKFLOW = ".github/workflows/ci.yml"
 OFF_MACOS = re.compile(
     r'#\[cfg\(target_os = "linux"\)\]'
     r'|#\[cfg\(not\(target_os = "macos"\)\)\]'
-    r'|#\[cfg\(all\(.*not\(target_os = "macos"\).*\)\)\]'
+    r'|#\[cfg\(all\(.*(?:not\(target_os = "macos"\)|target_os = "linux").*\)\)\]'
     r'|#\[cfg_attr\(target_os = "macos", ignore'
 )
 TEST_ATTR = re.compile(r"#\[(tokio::)?test\b")
@@ -71,16 +73,19 @@ def listed(root: Path) -> tuple[set[tuple[str, str]], list[str]]:
     return rows, problems
 
 
+def skipped(root: Path) -> set[tuple[str, str]]:
+    """The `--skip` filters of the macOS job's test step, as (workflow, name)."""
+    text = (root / WORKFLOW).read_text()
+    job = text.split("\n  macos-check:\n", 1)[1]
+    job = re.split(r"\n  [A-Za-z0-9_-]+:\n", job, maxsplit=1)[0]
+    return {(WORKFLOW, name) for name in re.findall(r"--skip (\S+)", job)}
+
+
 def problems(root: Path) -> list[str]:
     rows, out = listed(root)
-    items = excluded(root)
+    items = excluded(root) | skipped(root)
     out += [f"not run on macOS and not listed: {p} {name}" for p, name in sorted(items - rows)]
-    # A ci.yml row documents a --skip in the job step; there is no attribute to find.
-    out += [
-        f"stale row, nothing matches: {p} {name}"
-        for p, name in sorted(rows - items)
-        if p != ".github/workflows/ci.yml"
-    ]
+    out += [f"stale row, nothing matches: {p} {name}" for p, name in sorted(rows - items)]
     return out
 
 

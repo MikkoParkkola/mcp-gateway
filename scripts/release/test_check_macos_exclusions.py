@@ -20,8 +20,15 @@ HEADER = "path\titem\tportable\treason\n"
 
 
 class CheckMacosExclusions(unittest.TestCase):
-    def tree(self, rust: str, rows: str = "", path: str = "src/x_tests.rs") -> list[str]:
+    def tree(
+        self, rust: str, rows: str = "", path: str = "src/x_tests.rs", skips: str = ""
+    ) -> list[str]:
         root = Path(self.dir.name)
+        (root / mac.WORKFLOW).parent.mkdir(parents=True, exist_ok=True)
+        (root / mac.WORKFLOW).write_text(
+            f"jobs:\n  macos-check:\n    steps:\n      - run: cargo test{skips}\n"
+            "  test:\n    steps:\n      - run: cargo test -- --skip linux_only\n"
+        )
         (root / path).parent.mkdir(parents=True, exist_ok=True)
         (root / path).write_text(rust)
         (root / mac.LIST).parent.mkdir(parents=True, exist_ok=True)
@@ -49,8 +56,24 @@ class CheckMacosExclusions(unittest.TestCase):
             '#[cfg(not(target_os = "macos"))]\n#[test]\nfn b() {}\n'
             '#[cfg(all(unix, not(target_os = "macos")))]\n#[test]\nfn c() {}\n'
             '#[cfg(target_os = "linux")]\nmod d;\n'
+            '#[cfg(all(test, target_os = "linux"))]\n#[test]\nfn e() {}\n'
         )
-        self.assertEqual(len(self.tree(rust)), 4)
+        self.assertEqual(len(self.tree(rust)), 5)
+
+    def test_a_macos_job_skip_needs_a_row_and_a_row_needs_the_skip(self) -> None:
+        # The Tests job's own skip is not the macOS job's and needs no row.
+        found = self.tree(
+            "fn nothing() {}\n",
+            ".github/workflows/ci.yml\tgone_skip\tn/a\tr\n",
+            skips=" -- --skip burst",
+        )
+        self.assertEqual(
+            found,
+            [
+                "not run on macOS and not listed: .github/workflows/ci.yml burst",
+                "stale row, nothing matches: .github/workflows/ci.yml gone_skip",
+            ],
+        )
 
     def test_a_row_without_a_reason_and_a_stale_row_fail(self) -> None:
         found = self.tree("fn nothing() {}\n", "src/x_tests.rs\tgone\tinherent\tr\nsrc/y.rs\tz\tno\t\n")

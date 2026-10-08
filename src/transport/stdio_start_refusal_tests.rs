@@ -46,15 +46,14 @@ async fn a_file_the_os_cannot_execute_is_a_transport_error() {
         None,
     );
     let err = transport.start().await.expect_err("nothing to run");
-    let expected = if cfg!(target_os = "macos") {
-        "exit status: 126"
-    } else {
-        "Failed to spawn"
+    let Error::Transport(message) = &err else {
+        panic!("got {err:?}");
     };
-    assert!(
-        matches!(&err, Error::Transport(m) if m.contains(expected)),
-        "got {err:?}"
-    );
+    if cfg!(target_os = "macos") {
+        assert!(message.contains("exit status: 126"), "got {err:?}");
+    } else {
+        assert!(message.starts_with("Failed to spawn"), "got {err:?}");
+    }
 }
 
 #[tokio::test]
