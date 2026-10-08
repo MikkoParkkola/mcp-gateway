@@ -188,6 +188,9 @@ impl A2aClient {
             "configuration": {
                 "acceptedOutputModes": ["text/plain", "application/json"],
                 "returnImmediately": true,
+                // The bridge never reads a task's history: asking for none
+                // keeps a long conversation from filling the reply cap.
+                "historyLength": 0,
             },
         });
         let envelope = self
@@ -204,7 +207,12 @@ impl A2aClient {
         extra_headers: &[(String, String)],
     ) -> Result<Reply<Task>> {
         let envelope = self
-            .rpc(endpoint, "GetTask", json!({"id": task_id}), extra_headers)
+            .rpc(
+                endpoint,
+                "GetTask",
+                json!({"id": task_id, "historyLength": 0}),
+                extra_headers,
+            )
             .await?;
         decode_task(&envelope, "GetTask")
     }

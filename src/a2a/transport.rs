@@ -23,7 +23,7 @@ use tokio::sync::watch;
 
 use super::client::{A2aClient, Endpoint, Reply};
 use super::delegation::{
-    CancelGuard, PARKED_TTL, ParkRefused, Parked, Pending, SWEEP_EVERY, spawn_cancel,
+    CancelGuard, Canceller, PARKED_TTL, ParkRefused, Parked, Pending, SWEEP_EVERY,
 };
 use super::translator::{
     TOOL_NAME, card_to_tool, error_result, reply_to_result, status_text, task_to_result,
@@ -45,6 +45,8 @@ const ASK_KEY: &str = "a2a_reply";
 /// agent's answer is usually one poll away.
 const FIRST_POLL: Duration = Duration::from_millis(250);
 const LONGEST_POLL: Duration = Duration::from_secs(5);
+/// How long `close` waits for the cancels it sent.
+const CLOSE_SETTLE: Duration = Duration::from_secs(5);
 
 pub(crate) struct A2aTransport {
     client: A2aClient,
@@ -55,6 +57,8 @@ pub(crate) struct A2aTransport {
     closed: watch::Sender<bool>,
     /// Questions waiting on their caller; each owns its agent task.
     parked: Parked,
+    /// Sends the `CancelTask`s of abandoned tasks, bounded.
+    canceller: Canceller,
     /// The backend timeout: bounds a whole delegation, send plus polls.
     timeout: Duration,
 }
@@ -89,9 +93,11 @@ impl A2aTransport {
         let client = A2aClient::new(a2a_url, card_path, headers, http)?;
         let card = client.fetch_card().await?;
         let endpoint = client.endpoint(&card)?;
+        let canceller = Canceller::new(client.clone(), endpoint.clone());
         let transport = Arc::new(Self {
             client,
             endpoint,
+            canceller,
             card,
             closed: watch::channel(false).0,
             parked: Parked::new(PARKED_TTL),
@@ -130,12 +136,7 @@ impl A2aTransport {
 
     /// One best-effort `CancelTask` for a parked task.
     fn cancel(&self, pending: Pending) {
-        spawn_cancel(
-            self.client.clone(),
-            self.endpoint.clone(),
-            pending.task_id,
-            pending.headers,
-        );
+        self.canceller.spawn(pending.task_id, pending.headers);
     }
 
     /// Run `call` unless the transport is, or becomes, closed.
@@ -225,11 +226,7 @@ impl A2aTransport {
                 "`{TOOL_NAME}` requires a `message` string argument"
             ));
         };
-        let mut guard = CancelGuard::new(
-            self.client.clone(),
-            self.endpoint.clone(),
-            extra_headers.to_vec(),
-        );
+        let mut guard = CancelGuard::new(self.canceller.clone(), extra_headers.to_vec());
         self.delegate(
             id,
             Message::user_text(text),
@@ -267,11 +264,7 @@ impl A2aTransport {
         };
         // The map no longer owns the task; this guard does, from here on, so
         // a retry abandoned midway still cancels it.
-        let mut guard = CancelGuard::new(
-            self.client.clone(),
-            self.endpoint.clone(),
-            extra_headers.to_vec(),
-        );
+        let mut guard = CancelGuard::new(self.canceller.clone(), extra_headers.to_vec());
         guard.arm(&pending.task_id);
         let answer = params.and_then(|p| p.pointer(&format!("/inputResponses/{ASK_KEY}")));
         let accepted = answer
@@ -448,12 +441,7 @@ impl A2aTransport {
         ) {
             Ok(token) => token,
             Err(refused) => {
-                spawn_cancel(
-                    self.client.clone(),
-                    self.endpoint.clone(),
-                    task.id,
-                    extra_headers.to_vec(),
-                );
+                self.canceller.spawn(task.id, extra_headers.to_vec());
                 let why = match refused {
                     ParkRefused::Full => "too many unanswered agent questions",
                     ParkRefused::Closed => "the A2A backend is closing",
@@ -534,7 +522,21 @@ impl Transport for A2aTransport {
         for pending in self.parked.close() {
             self.cancel(pending);
         }
+        // The cancels are sent before `close` returns, so a shutdown that
+        // follows does not abort them; bounded below the lifecycle's close
+        // stage.
+        self.canceller.settle(CLOSE_SETTLE).await;
         Ok(())
+    }
+}
+
+impl Drop for A2aTransport {
+    /// A transport dropped without `close` (a failed start, a replaced
+    /// backend) still cancels the tasks of its waiting questions.
+    fn drop(&mut self) {
+        for pending in self.parked.close() {
+            self.cancel(pending);
+        }
     }
 }
 

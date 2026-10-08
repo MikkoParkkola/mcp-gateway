@@ -9,9 +9,12 @@
 //! so an abandoned delegation does not keep running at the agent.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::client::{A2aClient, Endpoint};
+use tokio::sync::Semaphore;
+
+use super::client::{A2aClient, Endpoint, Reply};
 
 /// How long an unanswered question stays redeemable: the gateway's 300 s
 /// continuation plus a margin, so a live sealed envelope never outlives its
@@ -172,55 +175,84 @@ fn fresh_token() -> Option<String> {
     Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
 }
 
-/// Send one best-effort `CancelTask` without waiting for it. Bounded by the
-/// client's own timeout; a failure is logged, never retried.
-pub(crate) fn spawn_cancel(
+/// At most this many `CancelTask`s of one backend are in flight. Past it a
+/// cancel is skipped and logged: callers that abandon calls faster than the
+/// agent answers cancels cannot pile up gateway tasks and connections.
+const MAX_CANCELS: u32 = 64;
+/// One `CancelTask` waits no longer than this, whatever the backend timeout.
+const CANCEL_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Sends best-effort `CancelTask`s for one backend, bounded in number and in
+/// time, and lets `close` wait for the ones in flight.
+#[derive(Clone)]
+pub(crate) struct Canceller {
     client: A2aClient,
     endpoint: Endpoint,
-    task_id: String,
-    headers: Vec<(String, String)>,
-) {
-    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-        tracing::warn!(task_id, "no runtime to cancel an abandoned A2A task on");
-        return;
-    };
-    runtime.spawn(async move {
-        match client.cancel_task(&endpoint, &task_id, &headers).await {
-            Ok(super::client::Reply::Answer(_)) => {}
-            Ok(super::client::Reply::AgentError { code, message }) => {
-                tracing::warn!(
-                    task_id,
-                    code,
-                    message,
-                    "the A2A agent refused to cancel a task"
-                );
-            }
-            Err(error) => {
-                tracing::warn!(task_id, %error, "canceling an abandoned A2A task failed");
-            }
+    permits: Arc<Semaphore>,
+}
+
+impl Canceller {
+    pub(crate) fn new(client: A2aClient, endpoint: Endpoint) -> Self {
+        Self {
+            client,
+            endpoint,
+            permits: Arc::new(Semaphore::new(MAX_CANCELS as usize)),
         }
-    });
+    }
+
+    /// Send one `CancelTask` without waiting for it, never retried. A failure
+    /// is logged without the agent's text or ids: an agent can echo a
+    /// caller's credential into either.
+    pub(crate) fn spawn(&self, task_id: String, headers: Vec<(String, String)>) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!("no runtime to cancel an abandoned A2A task on");
+            return;
+        };
+        let Ok(permit) = Arc::clone(&self.permits).try_acquire_owned() else {
+            tracing::warn!(
+                limit = MAX_CANCELS,
+                "too many A2A cancellations in flight; an abandoned task is left to the agent"
+            );
+            return;
+        };
+        let this = self.clone();
+        runtime.spawn(async move {
+            let _permit = permit;
+            let sent = tokio::time::timeout(
+                CANCEL_TIMEOUT,
+                this.client.cancel_task(&this.endpoint, &task_id, &headers),
+            )
+            .await;
+            match sent {
+                Ok(Ok(Reply::Answer(_))) => {}
+                Ok(Ok(Reply::AgentError { code, .. })) => {
+                    tracing::warn!(code, "the A2A agent refused to cancel a task");
+                }
+                Ok(Err(_)) => tracing::warn!("canceling an abandoned A2A task failed"),
+                Err(_) => tracing::warn!("canceling an abandoned A2A task timed out"),
+            }
+        });
+    }
+
+    /// Wait until no `CancelTask` is in flight, for at most `budget`.
+    pub(crate) async fn settle(&self, budget: Duration) {
+        let _ = tokio::time::timeout(budget, self.permits.acquire_many(MAX_CANCELS)).await;
+    }
 }
 
 /// Owns an in-flight task: armed once the agent names it, disarmed when the
 /// call ends with an answer or hands the task to [`Parked`]. Dropped while
 /// armed, it cancels the task.
 pub(crate) struct CancelGuard {
-    client: A2aClient,
-    endpoint: Endpoint,
+    canceller: Canceller,
     headers: Vec<(String, String)>,
     task_id: Option<String>,
 }
 
 impl CancelGuard {
-    pub(crate) fn new(
-        client: A2aClient,
-        endpoint: Endpoint,
-        headers: Vec<(String, String)>,
-    ) -> Self {
+    pub(crate) fn new(canceller: Canceller, headers: Vec<(String, String)>) -> Self {
         Self {
-            client,
-            endpoint,
+            canceller,
             headers,
             task_id: None,
         }
@@ -243,12 +275,8 @@ impl CancelGuard {
 impl Drop for CancelGuard {
     fn drop(&mut self) {
         if let Some(task_id) = self.task_id.take() {
-            spawn_cancel(
-                self.client.clone(),
-                self.endpoint.clone(),
-                task_id,
-                std::mem::take(&mut self.headers),
-            );
+            self.canceller
+                .spawn(task_id, std::mem::take(&mut self.headers));
         }
     }
 }

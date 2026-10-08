@@ -204,7 +204,9 @@ async fn an_abandoned_question_is_canceled_by_the_sweep() {
     assert_eq!(refused.error.map(|e| e.code), Some(-32602));
 }
 
-/// MIK-8063: closing the backend cancels every question still waiting.
+/// MIK-8063: closing the backend cancels every question still waiting, and
+/// the cancel has reached the agent by the time `close` returns, so a
+/// shutdown that follows cannot abort it.
 #[tokio::test]
 async fn close_cancels_waiting_questions() {
     let (base, canceled) = asking_agent().await;
@@ -212,14 +214,27 @@ async fn close_cancels_waiting_questions() {
     let params = json!({"name": TOOL_NAME, "arguments": {"message": "hi"}});
     transport.request("tools/call", Some(params)).await.unwrap();
     transport.close().await.unwrap();
+    assert_eq!(canceled.lock().as_slice(), ["asked-1"]);
+}
+
+/// MIK-8063: a transport dropped without `close` still cancels the task of a
+/// question waiting on its caller.
+#[tokio::test]
+async fn a_dropped_transport_cancels_waiting_questions() {
+    let (base, canceled) = asking_agent().await;
+    let transport = started(&base).await;
+    let params = json!({"name": TOOL_NAME, "arguments": {"message": "hi"}});
+    transport.request("tools/call", Some(params)).await.unwrap();
+    drop(transport);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while canceled.lock().is_empty() {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "close never canceled the question"
+            "the dropped transport never canceled the question"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    assert_eq!(canceled.lock().as_slice(), ["asked-1"]);
 }
 
 /// MIK-8063 A2A.3: under the hardened policy a literal private `a2a_url` is

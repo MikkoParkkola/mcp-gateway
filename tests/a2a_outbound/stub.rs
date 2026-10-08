@@ -40,12 +40,17 @@ pub fn request_violation(headers: &HeaderMap, body: &Value) -> Option<String> {
     }
     match body.get("method").and_then(Value::as_str) {
         Some("SendMessage") => send_message_violation(body),
-        Some("GetTask" | "CancelTask") => {
+        Some(method @ ("GetTask" | "CancelTask")) => {
             let named = body
                 .pointer("/params/id")
                 .and_then(Value::as_str)
                 .is_some_and(|id| !id.is_empty());
-            (!named).then(|| "params.id missing or empty".into())
+            if !named {
+                return Some("params.id missing or empty".into());
+            }
+            // The bridge reads no history, so it asks for none on a poll.
+            (method == "GetTask" && body.pointer("/params/historyLength") != Some(&json!(0)))
+                .then(|| "GetTask must ask for historyLength 0".into())
         }
         other => Some(format!("unexpected method {other:?}")),
     }
@@ -56,6 +61,9 @@ fn send_message_violation(body: &Value) -> Option<String> {
     // The bridge must learn the task id before it waits, so it never blocks.
     if body.pointer("/params/configuration/returnImmediately") != Some(&Value::Bool(true)) {
         return Some("configuration.returnImmediately must be true".into());
+    }
+    if body.pointer("/params/configuration/historyLength") != Some(&json!(0)) {
+        return Some("configuration.historyLength must be 0".into());
     }
     let Some(message) = body.pointer("/params/message") else {
         return Some("params.message missing".into());
