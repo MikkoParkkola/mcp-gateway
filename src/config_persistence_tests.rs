@@ -346,3 +346,30 @@ fn a_written_config_is_owner_only_even_in_an_open_directory() {
     // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
     assert_owner_only("1718-W1", &path, false);
 }
+
+/// Both CLI writers load the file again under the lock and refuse one that
+/// exists but no longer loads (it changed after the command loaded it),
+/// with or without `--force`; a missing file is still created.
+#[test]
+fn a_cli_write_refuses_a_config_that_no_longer_loads() {
+    const BROKEN: &str = "backends: 5\n";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(&path, BROKEN).expect("write");
+    let config = Config::default();
+    for (name, result) in [
+        ("preserving", write_config_preserving(&path, &config)),
+        ("--force", write_config(&path, &config)),
+    ] {
+        let error = result.expect_err(name);
+        assert!(error.starts_with("Failed to load"), "{name}: {error}");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            BROKEN,
+            "{name}"
+        );
+    }
+    let missing = dir.path().join("new.yaml");
+    write_config_preserving(&missing, &config).expect("a missing file is created");
+    assert!(missing.exists());
+}

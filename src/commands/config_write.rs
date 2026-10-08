@@ -112,9 +112,6 @@ fn dropped_comments(before: &str, after: &str) -> Vec<String> {
 mod tests {
     use super::dropped_comments;
 
-    /// An I/O failure under `--force` comes back as that failure, not as a
-    /// comment warning over a rewrite (a directory where the file goes makes
-    /// the rename fail on every platform).
     /// A lock refusal under `--force` is reported as itself: `--force`
     /// overrides only the comment check, never another writer's lock (a
     /// directory where the lock file goes makes the lock fail at once).
@@ -133,6 +130,9 @@ mod tests {
         );
     }
 
+    /// An I/O failure under `--force` comes back as that failure, not as a
+    /// comment warning over a rewrite (a directory where the file goes makes
+    /// the rename fail on every platform).
     #[test]
     fn an_io_failure_under_force_is_reported_as_itself() {
         let dir = tempfile::tempdir().expect("tempdir");

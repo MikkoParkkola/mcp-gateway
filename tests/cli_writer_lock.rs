@@ -44,16 +44,11 @@ fn spawn_add(home: &Path, config: &Path) -> std::process::Child {
     command.spawn().expect("spawn mcp-gateway add")
 }
 
-/// R2: while another writer holds the lock, `add` says it is waiting and
-/// writes nothing; once the lock is released it completes.
-#[test]
-fn a_cli_write_waits_for_the_config_lock() {
-    let home = tempfile::tempdir().expect("home");
-    let path = home.path().join("gateway.yaml");
-    mcp_gateway::gateway::test_helpers::write_owner_only(&path, START).expect("write");
-    // An owner-only sidecar, as the gateway creates it: on Windows the CLI
-    // refuses a sidecar whose ACL lets anyone else in.
-    let sidecar = home.path().join(".gateway.yaml.lock");
+/// Hold the config lock in `home` as another writer would, on an owner-only
+/// sidecar as the gateway creates it: on Windows the CLI refuses a sidecar
+/// whose ACL lets anyone else in.
+fn hold_lock(home: &Path) -> std::fs::File {
+    let sidecar = home.join(".gateway.yaml.lock");
     mcp_gateway::gateway::test_helpers::write_owner_only(&sidecar, "").expect("sidecar");
     let lock = std::fs::File::options()
         .create(true)
@@ -62,24 +57,39 @@ fn a_cli_write_waits_for_the_config_lock() {
         .open(&sidecar)
         .expect("open the lock sidecar");
     lock.lock().expect("the test holds the config lock");
+    lock
+}
 
-    let mut child = spawn_add(home.path(), &path);
+/// Start `add` and return once it says it is waiting for the lock, with the
+/// rest of its stderr still open (a closed pipe would fail its next line).
+fn spawn_waiting_add(
+    home: &Path,
+    config: &Path,
+) -> (std::process::Child, BufReader<std::process::ChildStderr>) {
+    let mut child = spawn_add(home, config);
     let mut stderr = BufReader::new(child.stderr.take().expect("piped stderr"));
     let mut seen = String::new();
-    let mut waiting = false;
     let mut line = String::new();
     while stderr.read_line(&mut line).expect("read stderr") > 0 {
         seen.push_str(&line);
         if line.contains("Waiting for") {
-            waiting = true;
-            break;
+            return (child, stderr);
         }
         line.clear();
     }
-    assert!(
-        waiting,
-        "the CLI did not wait for the config lock; stderr={seen:?}"
-    );
+    panic!("the CLI did not wait for the config lock; stderr={seen:?}");
+}
+
+/// R2: while another writer holds the lock, `add` says it is waiting and
+/// writes nothing; once the lock is released it completes.
+#[test]
+fn a_cli_write_waits_for_the_config_lock() {
+    let home = tempfile::tempdir().expect("home");
+    let path = home.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, START).expect("write");
+    let lock = hold_lock(home.path());
+
+    let (mut child, _stderr) = spawn_waiting_add(home.path(), &path);
     assert_eq!(
         std::fs::read_to_string(&path).expect("read"),
         START,
@@ -94,4 +104,30 @@ fn a_cli_write_waits_for_the_config_lock() {
         written.contains("local") && written.contains("# kept by hand"),
         "{written}"
     );
+}
+
+/// A config that stops loading while `add` waits (another writer saved a
+/// broken file) is refused once the lock is free, never replaced by the
+/// copy `add` loaded before it waited. The broken file has no comments, so
+/// the comment check cannot be what refuses it.
+#[test]
+fn a_config_broken_while_the_cli_waits_is_not_replaced() {
+    const BROKEN: &str = "backends: 5\n";
+    let home = tempfile::tempdir().expect("home");
+    let path = home.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, START).expect("write");
+    let lock = hold_lock(home.path());
+
+    let (mut child, mut stderr) = spawn_waiting_add(home.path(), &path);
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, BROKEN).expect("break it");
+    lock.unlock().expect("release the config lock");
+
+    let mut rest = String::new();
+    std::io::Read::read_to_string(&mut stderr, &mut rest).expect("read stderr");
+    let status = child.wait().expect("wait for add");
+    assert!(
+        !status.success() && rest.contains("Failed to load"),
+        "add must refuse a config that no longer loads; stderr={rest:?}"
+    );
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), BROKEN);
 }
