@@ -78,12 +78,12 @@ pub(super) fn code(body: &Value) -> Option<i64> {
         .and_then(Value::as_i64)
 }
 
-fn answers() -> Value {
+pub(super) fn answers() -> Value {
     json!({"k1": {"action": "accept", "content": {"account": "work"}}})
 }
 
 /// The continuation the interim answer carries.
-fn state_of(body: &Value) -> String {
+pub(super) fn state_of(body: &Value) -> String {
     body["result"]["requestState"]
         .as_str()
         .unwrap_or_else(|| panic!("an interim answer with a state: {body}"))
