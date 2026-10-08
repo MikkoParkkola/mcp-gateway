@@ -62,11 +62,12 @@ HIDDEN_MARKUP = re.compile(
 # Raw HTML that can interrupt a paragraph (CommonMark HTML block types 1-6):
 # any other tag line inside a paragraph is paragraph text.
 BLOCK_HTML = re.compile(
-    r"^ {0,3}<(?:[?!]|/?(?:script|pre|style|textarea|address|article|aside|"
-    r"blockquote|body|center|details|dialog|dir|div|dl|dt|dd|fieldset|figcaption|"
-    r"figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|"
-    r"li|link|main|menu|nav|noframes|ol|optgroup|option|p|param|search|section|"
-    r"summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?:[\s/>]|$))",
+    r"^ {0,3}<(?:[?!]|/?(?:script|pre|style|textarea|address|article|aside|base|"
+    r"basefont|blockquote|body|caption|center|col|colgroup|details|dialog|dir|div|"
+    r"dl|dt|dd|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|"
+    r"header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|"
+    r"optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|"
+    r"thead|title|tr|track|ul)(?:[\s/>]|$))",
     re.IGNORECASE,
 )
 # A tag read with quoted attribute values, so a quoted > does not end it. An
@@ -338,9 +339,15 @@ def later_releases(line):
 
 
 def problems(section, release):
-    # A comment or tag may span lines and split a version, so the section is
-    # also read with comments, then tags, removed across line breaks.
-    joined = re.sub(r"<!--.*?(?:-->|$)", "", "\n".join(section), flags=re.S)
+    # A comment, processing instruction, CDATA section or tag may span lines
+    # and split a version, so the section is also read with those removed
+    # across line breaks.
+    joined = re.sub(
+        r"<!--.*?(?:-->|$)|<\?.*?(?:\?>|$)|<!\[CDATA\[.*?(?:\]\]>|$)",
+        "",
+        "\n".join(section),
+        flags=re.S,
+    )
     untagged = HIDDEN_MARKUP.sub("", QUOTED_TAG.sub("", joined))
     extra = joined.splitlines() + untagged.splitlines()
     lines = section + [line for line in dict.fromkeys(extra) if line not in section]
