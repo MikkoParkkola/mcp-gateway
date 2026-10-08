@@ -680,3 +680,6 @@ async fn a_holder_that_joins_during_the_poll_keeps_the_poller() {
 
 #[path = "watch_source_partial_tests.rs"]
 mod partial;
+
+#[path = "watch_hold_tests.rs"]
+mod hold;
