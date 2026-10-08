@@ -69,6 +69,20 @@ pub(crate) struct Subscription {
     /// lease, whatever its refreshes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub held_until: Option<DateTime<Utc>>,
+    /// A REST watch's sharing class, recorded at admission (MIK-8122): its
+    /// poller, hold and resume follow the row, never a later catalogue read.
+    /// `None` on other rows, and on a watch written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watch_class: Option<WatchClass>,
+}
+
+/// How a REST watch is polled: one shared poller for a credential-free
+/// capability, or one per principal under that principal's key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WatchClass {
+    Free,
+    Keyed,
 }
 
 /// The credential a caller presented, as events keep it: never the secret.

@@ -54,6 +54,7 @@ fn sub(id: &str, now: DateTime<Utc>) -> Subscription {
         payload_fields: Vec::new(),
         unoffered_since: None,
         held_until: None,
+        watch_class: None,
     }
 }
 

@@ -9,7 +9,7 @@
 use chrono::{DateTime, Utc};
 
 use super::{State, Store};
-use crate::events::records::{Subscription, write_record};
+use crate::events::records::{Subscription, WatchClass, write_record};
 
 /// Why a subscription is held.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,28 +39,37 @@ pub(crate) struct Judged {
     /// The payload fields to record for a row that has none yet (a row
     /// written before MIK-8076): its type's fields now.
     pub backfill: Option<Vec<String>>,
+    /// The sharing class to record for a watch row that has none yet (a
+    /// row written before MIK-8122).
+    pub watch_class: Option<WatchClass>,
 }
 
 impl Store {
-    /// Under the catalogue gate the caller holds: replace the held set with
-    /// what `judge` decides for every live row, stamp a row that becomes
-    /// held (`unoffered_since` now, `held_until` now plus `max_ttl`), clear
-    /// the stamp of one that resumes, and back-fill payload fields. A row past
-    /// its effective expiry is left to the expiry path, never resumed. The
-    /// held set is in place even when a stamp write fails; the next refresh
-    /// writes it again.
+    /// Apply what `judge` decides for each live row it owns (`Some`): hold
+    /// it, stamping a row that becomes held (`unoffered_since` now,
+    /// `held_until` now plus `max_ttl`), or resume it, clearing the stamp;
+    /// and back-fill payload fields and the watch class. A row the judge
+    /// does not own (`None`) keeps its hold state as it is: each source
+    /// judges its own rows (MIK-8122). A row past its effective expiry is
+    /// left to the expiry path, never resumed. The held set is in place even
+    /// when a stamp write fails; the next judgement writes it again.
     pub(crate) fn apply_holds(
         &self,
-        judge: &dyn Fn(&Subscription) -> Judged,
+        judge: &dyn Fn(&Subscription) -> Option<Judged>,
         now: DateTime<Utc>,
         max_ttl: chrono::Duration,
     ) -> std::io::Result<()> {
         let mut state = self.state.lock();
-        let mut held = std::collections::HashMap::new();
+        let mut verdicts = Vec::new();
         let mut changed = Vec::new();
         for sub in state.subs.values().filter(|s| s.live(now)) {
-            let judged = judge(sub);
+            let Some(judged) = judge(sub) else {
+                continue;
+            };
             let mut row = sub.clone();
+            if row.watch_class.is_none() {
+                row.watch_class = judged.watch_class;
+            }
             if let Some(fields) = judged.backfill
                 && row.payload_fields.is_empty()
             {
@@ -71,20 +80,27 @@ impl Store {
                     row.unoffered_since = Some(now);
                     row.held_until = Some(now + max_ttl);
                 }
-                held.insert(row.id.clone(), why);
+                verdicts.push((row.id.clone(), Some(why)));
             } else {
                 row.unoffered_since = None;
                 row.held_until = None;
+                verdicts.push((row.id.clone(), None));
             }
             if row.payload_fields != sub.payload_fields
                 || row.unoffered_since != sub.unoffered_since
                 || row.held_until != sub.held_until
+                || row.watch_class != sub.watch_class
                 || state.hold_unsynced.contains(&row.id)
             {
                 changed.push(row);
             }
         }
-        state.held = held;
+        for (id, verdict) in verdicts {
+            match verdict {
+                Some(why) => state.held.insert(id, why),
+                None => state.held.remove(&id),
+            };
+        }
         let mut first_error = None;
         for row in changed {
             if let Err(error) = self.persist_row(&mut state, row) {

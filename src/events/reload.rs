@@ -103,7 +103,7 @@ pub(crate) fn judge(
                 reason: "event type no longer offered; the subscription resumes if it returns",
                 key: None,
             }),
-            backfill: None,
+            ..Judged::default()
         });
     };
     let filters = sub.arguments.as_object().into_iter().flat_map(|m| m.keys());
@@ -121,6 +121,7 @@ pub(crate) fn judge(
             key: Some(key.clone()),
         }),
         backfill: Some(shape.fields.iter().cloned().collect()),
+        ..Judged::default()
     })
 }
 
