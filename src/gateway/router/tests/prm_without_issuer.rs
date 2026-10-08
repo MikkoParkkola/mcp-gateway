@@ -29,8 +29,11 @@ async fn no_metadata_without_auth() {
 
 /// An auth-enabled config, run through the real auth fixture.
 async fn authed(config: crate::config::Config) -> StatusCode {
-    let (state, _store) =
-        test_router_app_state_with_auth_and_config(&config.auth.clone(), config).await;
+    let (state, _store) = Box::pin(test_router_app_state_with_auth_and_config(
+        &config.auth.clone(),
+        config,
+    ))
+    .await;
     metadata_status(state).await
 }
 
@@ -57,7 +60,7 @@ fn delegated(issuers: &[&str]) -> crate::config::Config {
 async fn no_metadata_for_an_api_key_only_gateway() {
     let mut config = crate::config::Config::default();
     config.auth.enabled = true;
-    assert_eq!(authed(config).await, StatusCode::NOT_FOUND);
+    assert_eq!(Box::pin(authed(config)).await, StatusCode::NOT_FOUND);
 }
 
 /// `MIK-8158.PRM.1`: a wildcard bind with no `public_url` used to answer 503,
@@ -68,7 +71,7 @@ async fn no_issuer_answers_404_before_any_origin_check() {
     let mut config = crate::config::Config::default();
     config.server.host = "0.0.0.0".to_string();
     config.auth.enabled = true;
-    assert_eq!(authed(config).await, StatusCode::NOT_FOUND);
+    assert_eq!(Box::pin(authed(config)).await, StatusCode::NOT_FOUND);
 }
 
 /// `MIK-8158.PRM.1`: agent auth refuses every issuer token, so it names none.
@@ -76,14 +79,14 @@ async fn no_issuer_answers_404_before_any_origin_check() {
 async fn no_metadata_under_agent_auth() {
     let mut config = delegated(&["https://idp.example"]);
     config.agent_auth.enabled = true;
-    assert_eq!(authed(config).await, StatusCode::NOT_FOUND);
+    assert_eq!(Box::pin(authed(config)).await, StatusCode::NOT_FOUND);
 }
 
 /// `MIK-8158.PRM.2`: with a delegated issuer the document is served as before.
 #[tokio::test]
 async fn a_delegated_issuer_is_still_advertised() {
     assert_eq!(
-        authed(delegated(&["https://idp.example"])).await,
+        Box::pin(authed(delegated(&["https://idp.example"]))).await,
         StatusCode::OK
     );
 }
