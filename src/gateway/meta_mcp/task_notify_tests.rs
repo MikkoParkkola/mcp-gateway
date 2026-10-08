@@ -91,3 +91,42 @@ async fn a_task_frame_that_cannot_be_logged_is_withheld_when_fail_closed() {
         "withheld, not delivered unlogged"
     );
 }
+
+/// `MIK-7858.FRAMES.1`: a frame carries the task as it is when the frame is
+/// built, never a mix. A notification published while the task was working,
+/// delivered after it completed, is sent as the completed task, whole.
+#[tokio::test]
+async fn a_frame_carries_the_task_as_it_is_at_delivery() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (meta, _log) = gateway(&dir, AuditFailurePolicy::FailClosed);
+    let subscription = SubscriptionId::of_request(RequestId::Number(7));
+    let mut task = crate::protocol::tasks::Task::create("gateway_invoke");
+    let working = json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/tasks",
+        "params": { "taskId": task.id(), "status": "working" },
+    });
+    task.complete(json!({ "content": [{ "type": "text", "text": "done" }] }));
+    let stored = crate::gateway::task_service::CommittedTask {
+        task,
+        revision: 2,
+        targets: Vec::new(),
+        targets_recorded: true,
+        output_free: false,
+        error_author: None,
+        owner_digest: String::new(),
+        gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
+    };
+
+    let pending = meta
+        .task_notification_frame(&working, Some(&stored), |_| false, &subscription)
+        .await
+        .expect("a frame is built");
+    let mut expected = serde_json::to_value(stored.task.wire()).expect("the task serializes");
+    expected["_meta"] = pending.frame["params"]["_meta"].clone();
+    assert_eq!(
+        pending.frame["params"], expected,
+        "the frame is not the stored task as it is now"
+    );
+    assert_eq!(pending.frame["params"]["status"], json!("completed"));
+}
