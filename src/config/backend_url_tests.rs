@@ -94,7 +94,9 @@ fn cleartext_credentials_on_url_are_refused_as_on_the_alias() {
 }
 
 #[test]
-fn a_url_from_the_environment_overrides_the_file_url() {
+fn a_url_from_the_environment_is_refused_naming_the_variables_that_work() {
+    // The file and environment layers merge key by key, so an environment
+    // `url` could not replace a file `http_url`; it is refused, not ignored.
     let dir = tempfile::tempdir().expect("tempdir");
     let env = dir.path().join("gw.env");
     crate::gateway::test_helpers::write_owner_only(
@@ -102,20 +104,26 @@ fn a_url_from_the_environment_overrides_the_file_url() {
         "MCP_GATEWAY_BACKENDS__B__URL=wss://env.example.com/mcp\n",
     )
     .expect("write env file");
-    let config = load(
+    let message = match load(
         dir.path(),
         &format!(
             "env_files: ['{}']\nbackends:\n  b:\n    url: \"https://file.example.com/mcp\"\n",
             env.display()
         ),
-    )
-    .unwrap_or_else(|e| panic!("config loads: {e}"));
-    match &config.backends["b"].transport {
-        TransportConfig::WebSocket { ws_url, .. } => {
-            assert_eq!(ws_url, "wss://env.example.com/mcp")
-        }
-        other => panic!("the environment's url did not apply: {other:?}"),
-    }
+    ) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("an environment url was ignored instead of refused"),
+    };
+    assert!(
+        message.contains("MCP_GATEWAY_BACKENDS__B__URL")
+            && message.contains("MCP_GATEWAY_BACKENDS__B__HTTP_URL")
+            && message.contains("MCP_GATEWAY_BACKENDS__B__WS_URL"),
+        "{message}"
+    );
+    assert!(
+        !message.contains("env.example.com"),
+        "echoed the URL: {message}"
+    );
 }
 
 #[test]
