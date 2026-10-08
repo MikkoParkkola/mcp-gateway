@@ -45,6 +45,7 @@ fn start_refill(backend: &Arc<Backend>, name: &str) -> Refill {
         );
         if !filled {
             warn!(backend = %name, "upstream listener: tools refill did not complete; announcing the change anyway");
+            backend.nudge_tools(crate::backend::tools_nudge::NudgeKind::Changed);
         }
         filled
     })

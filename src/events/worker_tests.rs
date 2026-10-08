@@ -185,6 +185,7 @@ fn queued_with(
         payload_fields: Vec::new(),
         unoffered_since: None,
         held_until: None,
+        watch_class: None,
     };
     let tail = TailPolicy {
         ttl: Duration::from_secs(3600),
