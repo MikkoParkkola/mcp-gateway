@@ -64,9 +64,12 @@ impl Sketch {
 /// 64-bit fingerprint (the second hash odd, so the probes cycle the table).
 fn positions(fp: u64, len: usize) -> impl Iterator<Item = usize> {
     let len = u64::try_from(len).unwrap_or(u64::MAX);
-    let step = fp.rotate_left(32) | 1;
+    // Mixed first: a kept fingerprint is 0 mod 4 (sampling), so its low
+    // bits alone would reach a quarter of the table.
+    let h = fp.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let step = h.rotate_left(32) | 1;
     (0..u64::from(PROBES)).map(move |i| {
-        let at = fp.wrapping_add(i.wrapping_mul(step)) % len;
+        let at = h.wrapping_add(i.wrapping_mul(step)) % len;
         usize::try_from(at).unwrap_or(0)
     })
 }

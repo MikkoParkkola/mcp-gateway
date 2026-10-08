@@ -197,3 +197,17 @@ fn text_a_plan_answer_delivered_is_excused_past_the_cap() {
         "text the answer delivered was not excused"
     );
 }
+
+/// `MIK-8066.EXCUSE.1`: a delivery over 1 MiB, cut to its head and tail,
+/// still excuses its holder for the middle it received.
+#[test]
+fn a_holder_of_a_delivery_over_a_mebibyte_is_excused() {
+    let fw = firewall();
+    deliver(&fw, "carol", "read", P);
+    let answer = format!("{} {P} {}", filler(4, 600_000), filler(5, 600_000));
+    deliver(&fw, "alice", "read", &answer);
+    assert!(
+        !relays(&fw, "alice", P),
+        "a holder of a large delivery was refused for its middle"
+    );
+}
