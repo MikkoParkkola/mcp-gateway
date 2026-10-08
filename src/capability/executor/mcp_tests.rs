@@ -25,7 +25,7 @@ fn python() -> String {
         .to_string()
 }
 
-fn capability_yaml() -> String {
+pub(super) fn capability_yaml() -> String {
     let script = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/cap_exec/fake_mcp.py")
         .display()

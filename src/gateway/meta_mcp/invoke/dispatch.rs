@@ -265,6 +265,7 @@ impl MetaMcp {
                     // and again before egress.
                     account_credential,
                     mcp_generation: None,
+                    credential_principal: None,
                 },
             )
             .await?;

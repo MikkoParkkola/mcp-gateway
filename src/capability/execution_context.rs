@@ -165,6 +165,7 @@ impl CapabilityExecutionContext {
             // credential validated on this request. Fail closed.
             caller_provenance: crate::identity_propagation::CallerProvenance::Anonymous,
             mcp_generation: None,
+            credential_principal: None,
         }
     }
 

@@ -11,10 +11,10 @@ use std::sync::atomic::Ordering;
 
 use serde_json::json;
 
-use super::tests::{call, caller, capability};
+use super::tests::{call, caller, capability, capability_yaml};
 use super::{MAX_CHILDREN_PER_CAPABILITY, principal};
-use crate::capability::CapabilityExecutionContext;
 use crate::capability::executor::CapabilityExecutor;
+use crate::capability::{CapabilityExecutionContext, parse_capability};
 use crate::identity_grants::GrantSubject;
 use crate::identity_propagation::CallerProvenance;
 
@@ -121,4 +121,55 @@ fn a_binding_or_a_grant_subject_beats_the_credential_digest() {
 fn an_empty_digest_is_still_refused_on_a_multi_user_gateway() {
     let err = principal(&capability(), &api_key(""), true).unwrap_err();
     assert!(err.to_string().contains("identified caller"), "{err}");
+}
+
+/// T10: a verified identity beats the credential owner, as it does today.
+#[test]
+fn a_verified_identity_beats_the_credential_owner() {
+    let identity = std::sync::Arc::new(crate::key_server::oidc::VerifiedIdentity {
+        subject: "alice".to_owned(),
+        email: "alice@example.test".to_owned(),
+        name: None,
+        groups: Vec::new(),
+        issuer: "https://idp.example.test".to_owned(),
+    });
+    let verified = CapabilityExecutionContext {
+        verified_identity: Some(std::sync::Arc::clone(&identity)),
+        ..api_key("credential:5e1f0a2b3c4d")
+    };
+    assert_eq!(
+        principal(&capability(), &verified, true).unwrap(),
+        identity.stable_actor_id()
+    );
+}
+
+/// D7: a cached MCP answer is read back only by the caller whose child gave
+/// it. Two API keys, the same arguments: the second key gets its own child's
+/// answer, not the first key's cached one.
+#[tokio::test]
+async fn a_cached_mcp_answer_is_served_only_to_the_key_that_produced_it() {
+    let executor = multi_user();
+    let yaml = capability_yaml().replacen(
+        "description: MCP probe.\n",
+        "description: MCP probe.\ncache:\n  ttl: 60\n  strategy: memory\n",
+        1,
+    );
+    let cap = parse_capability(&yaml).expect("cacheable probe parses");
+    assert!(cap.is_cacheable(), "premise: the probe caches");
+    let say = json!({"operation": "say", "text": "x"});
+    let run =
+        |owner: &'static str| executor.execute_with_context(&cap, say.clone(), api_key(owner));
+    let first = run("credential:1d2c3b4a5f6e")
+        .await
+        .expect("first key served");
+    let again = run("credential:1d2c3b4a5f6e").await.unwrap();
+    let other = run("credential:9e8d7c6b5a4f")
+        .await
+        .expect("second key served");
+    assert_eq!(first, again, "one key reads its own answer back");
+    assert!(first["pid"].is_i64(), "the probe reports its pid: {first}");
+    assert_ne!(
+        first["pid"], other["pid"],
+        "another key never reads the first key's answer"
+    );
 }
