@@ -94,7 +94,8 @@ pub(crate) enum HoldCommit {
     /// [`CapHit::HeldRowGone`] when that row is gone or expired.
     Keep,
     /// Checked against the routes at the commit: a hold of the key ends
-    /// with the row put in place.
+    /// with the row put in place, unless the live row is held at the
+    /// commit, which keeps its hold and committed fields.
     End,
 }
 
@@ -370,14 +371,22 @@ impl Store {
         let mut state = self.state.lock();
         let at = Utc::now().max(now);
         self.sweep(&mut state, at)?;
-        if hold == HoldCommit::Keep {
-            let Some(old) = state.subs.get(&sub.id).filter(|s| s.live(at)) else {
-                return Ok(Err(CapHit::HeldRowGone));
-            };
-            sub.payload_fields.clone_from(&old.payload_fields);
-            sub.unoffered_since = old.unoffered_since;
-            sub.held_until = old.held_until;
+        // Decided here, under the store lock that writes the row: a row held
+        // now keeps its hold and the fields it was committed with, whatever
+        // the commit was checked against and however its refresh began.
+        let live = state.subs.get(&sub.id).filter(|s| s.live(at));
+        let held_live = live.is_some() && state.held.contains_key(&sub.id);
+        let keep = hold == HoldCommit::Keep || held_live;
+        match live {
+            Some(old) if keep => {
+                sub.payload_fields.clone_from(&old.payload_fields);
+                sub.unoffered_since = old.unoffered_since;
+                sub.held_until = old.held_until;
+            }
+            None if hold == HoldCommit::Keep => return Ok(Err(CapHit::HeldRowGone)),
+            _ => {}
         }
+        let ends_hold = hold == HoldCommit::End && !held_live;
         // A tail over the cap in force is gone before it can vouch.
         self.trim_tails(&mut state, at, tail)?;
         // An expired row kept for its records' burials: a new row over it
@@ -463,13 +472,14 @@ impl Store {
         // In place: memory follows the disk even when the directory sync
         // failed, and that failure is then reported.
         let expires_at = sub.expires_at;
-        // The row on disk now carries its current stamps.
-        state.hold_unsynced.remove(&sub.id);
-        if hold == HoldCommit::End {
-            state.held.remove(&sub.id);
+        let id = sub.id.clone();
+        if ends_hold {
+            state.held.remove(&id);
         }
-        state.subs.insert(sub.id.clone(), sub);
+        state.subs.insert(id.clone(), sub);
         placed.durable()?;
+        // Durable: the row on disk carries its current stamps.
+        state.hold_unsynced.remove(&id);
         self.trim_tails(&mut state, at, tail)?;
         let admission = if refreshed {
             Admission::Refreshed

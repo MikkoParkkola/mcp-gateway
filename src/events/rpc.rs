@@ -585,11 +585,11 @@ impl EventsHub {
                 attempt.held_until = None;
                 Ok(())
             };
-            // A row held at the commit keeps its hold and committed fields,
-            // whether its refresh started held or a reload held it while the
-            // refresh waited; every other commit is checked and ends any hold.
+            // A held row's refresh keeps the row's hold as the store holds it
+            // at the commit; every other commit is checked, and the store
+            // keeps the hold of a row held by then (MIK-8057, MIK-8076).
             let mut hold = HoldCommit::Keep;
-            if commit == Commit::Checked && store.held(&attempt.id).is_none() {
+            if commit == Commit::Checked {
                 if let Err(refused) = checked(&mut attempt) {
                     return Ok(Err(refused));
                 }
