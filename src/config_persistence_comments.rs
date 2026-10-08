@@ -18,25 +18,59 @@ pub(crate) fn dropped_comment_lines(before: &str, after: &str) -> Vec<String> {
         .zip(a[head..].iter().rev())
         .take_while(|(x, y)| x == y)
         .count();
-    // A `#` inside a quoted value or a URL fragment is not a comment.
-    let comment = |line: &str| super::splice::inline_comment(line).map(|c| c.trim().to_owned());
-    let mut kept: Vec<String> = a[head..a.len() - tail]
-        .iter()
-        .copied()
-        .filter_map(comment)
-        .collect();
+    let (cb, ca) = (comments(&b), comments(&a));
+    let mut kept: Vec<String> = ca[head..a.len() - tail].iter().flatten().cloned().collect();
     (head..b.len() - tail)
         .filter(|&i| {
-            comment(b[i]).is_some_and(|c| match kept.iter().position(|k| *k == c) {
-                Some(at) => {
-                    kept.swap_remove(at);
-                    false
-                }
-                None => true,
-            })
+            cb[i]
+                .as_ref()
+                .is_some_and(|c| match kept.iter().position(|k| k == c) {
+                    Some(at) => {
+                        kept.swap_remove(at);
+                        false
+                    }
+                    None => true,
+                })
         })
         .map(|i| format!("line {}", i + 1))
         .collect()
+}
+
+/// Each line's comment, if it has one. A `#` inside a quoted value, a URL
+/// fragment, or a block scalar's text (the lines under `key: |` or `key: >`)
+/// is not a comment.
+fn comments(lines: &[&str]) -> Vec<Option<String>> {
+    // The indent of the open block scalar's header line, while inside one.
+    let mut block: Option<usize> = None;
+    lines
+        .iter()
+        .map(|line| {
+            let depth = line.len() - line.trim_start().len();
+            if let Some(header) = block {
+                if line.trim().is_empty() || depth > header {
+                    return None;
+                }
+                block = None;
+            }
+            let comment = super::splice::inline_comment(line);
+            let code = line[..line.len() - comment.map_or(0, str::len)].trim_end();
+            if opens_block_scalar(code) {
+                block = Some(depth);
+            }
+            comment.map(|c| c.trim().to_owned())
+        })
+        .collect()
+}
+
+/// Whether `code` (a line without its comment) ends in a block scalar
+/// header: `key: |`, `- >-`, `key: |2+` and the like.
+fn opens_block_scalar(code: &str) -> bool {
+    let (before, last) = code.rsplit_once([' ', '\t']).unwrap_or(("", code));
+    let mut chars = last.chars();
+    matches!(chars.next(), Some('|' | '>'))
+        && last.len() <= 3
+        && chars.all(|c| c == '+' || c == '-' || c.is_ascii_digit())
+        && matches!(before.trim_end().chars().last(), Some(':' | '-'))
 }
 
 #[cfg(test)]
@@ -69,5 +103,12 @@ mod tests {
         let before = "backends:\n  a:\n    http_url: \"http://h/#q\"\n    command: x#y\n  b:\n    command: y\n";
         let after = "backends:\n  b:\n    command: y\n";
         assert!(dropped_comment_lines(before, after).is_empty());
+    }
+
+    #[test]
+    fn a_hash_inside_a_block_scalar_is_not_a_comment() {
+        let before = "backends:\n  a:\n    description: |\n      step # one\n      # not a comment\n    command: x  # why\n  b:\n    command: y\n";
+        let after = "backends:\n  b:\n    command: y\n";
+        assert_eq!(dropped_comment_lines(before, after), ["line 6"]);
     }
 }
