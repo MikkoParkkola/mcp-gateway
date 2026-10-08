@@ -331,6 +331,8 @@ fn cap_refusal(hit: CapHit) -> RpcError {
         // Only reachable for a fresh opt-in, which the store never refuses
         // as unverified.
         CapHit::Unverified => RpcError::internal(),
+        // Retryable: the worker settles an expired row's records each tick.
+        CapHit::Settling => RpcError::exhausted("expiredSubscriptionSettling", None),
     }
 }
 
