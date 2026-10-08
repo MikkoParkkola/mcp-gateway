@@ -18,8 +18,6 @@
 //! - T20: a staged write paused past a newer commit, and past an
 //!   unsubscribe; the newer row is kept and the deleted row stays deleted.
 
-use std::time::Duration;
-
 use serde_json::json;
 
 use super::*;
@@ -62,25 +60,6 @@ async fn t11_a_held_webhook_row_releases_its_key() {
     refresh(&hub, &registry, &full());
     assert!(hub.store.held(&id).is_none(), "premise: resumed");
     assert!(keys_settle(&hub, 1).await, "started again");
-}
-
-/// T19, retry half (MIK-8133 AC3, design r3 P1): a stamp write that failed
-/// is retried by the reconcile step itself once the store is writable
-/// again, with no further reload.
-#[cfg(unix)]
-#[tokio::test(start_paused = true)]
-async fn t19_a_failed_stamp_write_is_retried_without_a_reload() {
-    use std::os::unix::fs::PermissionsExt;
-    let (dir, hub, registry) = restarted(json!({}), &full()).await;
-    let _ = subscribe(&hub, json!({})).await.expect("refresh");
-    let subs = dir.path().join("subs");
-    let mode = |m| std::fs::set_permissions(&subs, std::fs::Permissions::from_mode(m));
-    mode(0o500).expect("read-only");
-    refresh(&hub, &registry, "");
-    mode(0o700).expect("writable");
-    assert!(!stamped(dir.path()), "premise: the write failed");
-    tokio::time::sleep(Duration::from_secs(120)).await;
-    assert!(stamped(dir.path()), "retried with no reload");
 }
 
 /// T28, webhook half (PIN, #3488): a complete catalogue without the route

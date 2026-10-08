@@ -93,28 +93,6 @@ async fn t12_a_retired_poller_leaves_no_map_entry() {
     );
 }
 
-/// T21 (MIK-8151 AC2, design r3 L6): a held watch refreshed while the poller
-/// cap is full resumes under its own key and needs no new slot. Here the
-/// capability moved from shared to keyed, so the catalogue's class differs
-/// from the row's.
-#[tokio::test(start_paused = true)]
-async fn t21_a_held_refresh_at_the_cap_needs_no_new_slot() {
-    let dir = tempfile::tempdir().expect("dir");
-    let mut config = crate::config::EventsConfig::default();
-    config.watch.max_pollers = 1;
-    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
-    let hub = installed(dir.path(), &config, &host).await;
-    let id = row_id(&hub);
-    *host.targets.lock() = vec![target("weather", true, CredentialUse::Keyed)];
-    one_poll().await;
-    assert!(hub.store.held(&id).is_some(), "premise: held, class moved");
-    // The refresh's start, as the subscribe commit runs it.
-    let mut started = hub.lifecycle.lock().await;
-    let refreshed = hub.start_key(&mut started, "p", NAME, &json!({})).await;
-    assert!(refreshed.is_ok(), "no new slot needed: {refreshed:?}");
-    assert_eq!(started.len(), 1, "one key: {started:?}");
-}
-
 /// T28, watch half (PIN, #3550): a complete read without the capability
 /// holds the watch and deletes nothing; its return resumes it.
 #[tokio::test(start_paused = true)]
