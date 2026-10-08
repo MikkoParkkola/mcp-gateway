@@ -648,6 +648,6 @@ fn build_output_no_mapping_returns_all_results() {
     ctx.step_results
         .insert("s1".to_string(), json!({"data": 1}));
 
-    let output = build_output(&def, &ctx);
+    let (output, _) = build_output(&def, &ctx, &HashMap::new());
     assert_eq!(output["s1"], json!({"data": 1}));
 }

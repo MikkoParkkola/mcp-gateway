@@ -57,6 +57,18 @@ pub(crate) struct Subscription {
     pub failed_since: Option<DateTime<Utc>>,
     pub last_delivery_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+    /// The top-level payload fields its event carried when it was last
+    /// committed: a restored route without one of them holds it (MIK-8076).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub payload_fields: Vec<String>,
+    /// When the routes stopped offering or serving it (MIK-8057, MIK-8076);
+    /// cleared when they serve it again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unoffered_since: Option<DateTime<Utc>>,
+    /// The latest a held row lives: `unoffered_since` plus the maximum
+    /// lease, whatever its refreshes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_until: Option<DateTime<Utc>>,
 }
 
 /// The credential a caller presented, as events keep it: never the secret.
@@ -171,9 +183,18 @@ impl std::fmt::Debug for Subscription {
 }
 
 impl Subscription {
-    /// Live at `now`: not past its expiry.
+    /// When the row stops being live: its expiry or the bound of its hold,
+    /// whichever comes first; `None` when neither is set.
+    pub(crate) fn effective_expiry(&self) -> Option<DateTime<Utc>> {
+        match (self.expires_at, self.held_until) {
+            (Some(at), Some(bound)) => Some(at.min(bound)),
+            (at, bound) => at.or(bound),
+        }
+    }
+
+    /// Live at `now`: not past its effective expiry.
     pub(crate) fn live(&self, now: DateTime<Utc>) -> bool {
-        self.expires_at.is_none_or(|at| at > now)
+        self.effective_expiry().is_none_or(|at| at > now)
     }
 }
 
@@ -354,7 +375,7 @@ fn rename(from: &Path, to: &Path) -> std::io::Result<()> {
     }
 }
 
-fn sync_dir(dir: &Path) -> std::io::Result<()> {
+pub(crate) fn sync_dir(dir: &Path) -> std::io::Result<()> {
     #[cfg(windows)]
     {
         crate::private_fs::sync_dir(dir)

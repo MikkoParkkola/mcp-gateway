@@ -24,6 +24,27 @@ pub(in crate::gateway::router) async fn test_router_app_state_with_meta_and_fire
     firewall: Option<Arc<crate::security::firewall::Firewall>>,
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Fixture {
+    let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
+    fixture_with(auth, key_server, firewall, agent_auth, configure).await
+}
+
+/// [`test_router_app_state_with_auth`] with `agent_auth` in place from the
+/// start, so the listener registry re-validates against the same agents the
+/// request middleware admits.
+pub(in crate::gateway::router) async fn test_router_app_state_with_agent_auth(
+    auth: &AuthConfig,
+    agent_auth: AgentAuthState,
+) -> Fixture {
+    fixture_with(auth, None, None, agent_auth, |meta| meta).await
+}
+
+async fn fixture_with(
+    auth: &AuthConfig,
+    key_server: Option<Arc<crate::key_server::KeyServer>>,
+    firewall: Option<Arc<crate::security::firewall::Firewall>>,
+    agent_auth: AgentAuthState,
+    configure: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fixture {
     #[cfg(not(feature = "firewall"))]
     let _ = firewall;
     let backends = Arc::new(BackendRegistry::new());
@@ -35,10 +56,9 @@ pub(in crate::gateway::router) async fn test_router_app_state_with_meta_and_fire
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
     let auth_config = Arc::new(ResolvedAuthConfig::from_config(auth));
-    let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    let subscriptions = test_subscriptions(&auth_config, key_server.clone());
+    let subscriptions = test_subscriptions(&auth_config, key_server.clone(), &agent_auth);
     let (task_service, task_executor, store_dir) =
         test_task_runtime(&subscriptions, &meta_mcp).await;
 

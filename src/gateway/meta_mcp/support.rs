@@ -193,6 +193,58 @@ pub(super) fn caller_cache_principal(
     }
 }
 
+/// What a continuation binds a caller with no verified identity to (MIK-8078,
+/// lead ruling A): the principal the idempotency guard keys that caller's
+/// calls on, from the same [`caller_cache_principal`], so the two can never
+/// name one caller two ways. A caller the guard cannot name binds to nothing
+/// (`Credential(None)`), and no continuation is minted for it.
+pub(super) fn key_binding<'a>(
+    (cache_binding, grant_subject): (Option<&str>, Option<&crate::identity_grants::GrantSubject>),
+    credential_principal: Option<&str>,
+    authentication: Authentication,
+) -> crate::protocol::mrtr::PrincipalSource<'a> {
+    // Every input the guard reads but the verified identity, which binds
+    // first, as its own scheme: a propagated identity or a proven subject
+    // behind one shared key stays its own caller here, as in the guard.
+    let principal = caller_cache_principal(
+        cache_binding,
+        None,
+        grant_subject,
+        credential_principal,
+        authentication,
+    );
+    match principal {
+        CachePrincipal::Caller(principal) => crate::protocol::mrtr::PrincipalSource::Key(principal),
+        CachePrincipal::Anonymous | CachePrincipal::Unresolved => {
+            crate::protocol::mrtr::PrincipalSource::Credential(None)
+        }
+    }
+}
+
+/// The owner key an authenticated caller's MCP child is named by when nothing
+/// else names it (MIK-7825): `credential:<principal>`, the string a task records
+/// as its owner (`handlers::tasks::session_owner_key`). A live request carries
+/// the bare principal (hex, or a fixed label: never a colon); a background
+/// task's rebuilt caller carries that recorded owner, already prefixed. Both
+/// map to one key, so a call and the task it starts reach one child.
+///
+/// `None` unless the request authenticated: with authentication off the
+/// principal is a gateway constant, not a caller.
+pub(super) fn credential_owner(caller: &super::MetaMcpCallerContext<'_>) -> Option<String> {
+    if caller.authentication != Authentication::Authenticated {
+        return None;
+    }
+    let principal = caller
+        .credential_principal
+        .filter(|text| !text.is_empty())?;
+    let prefix = crate::gateway::auth::CREDENTIAL_OWNER_PREFIX;
+    Some(if principal.starts_with(prefix) {
+        principal.to_owned()
+    } else {
+        format!("{prefix}{principal}")
+    })
+}
+
 /// The proven subject a caller with no credential owns its keyed calls by
 /// (MIK-7688): an OAuth agent (its client id) or a client certificate (its
 /// SAN URI, else its CN), as the router's `caller_key` encodes them. Never a
@@ -488,11 +540,10 @@ impl ToolInvoker for MetaMcpInvoker<'_, '_> {
         // step they could run directly, which is a regression rather than a
         // control: a playbook is not a way AROUND a check, so it faces the same
         // one — now including the scope checks, at the chokepoint.
-        let outcome = crate::gateway::meta_mcp::invoke::relay::plan_step(self.meta.invoke_tool(
-            &args,
-            None,
-            self.caller,
-        ))
+        let outcome = crate::gateway::meta_mcp::invoke::relay::plan_step(
+            crate::playbook::current_step(),
+            self.meta.invoke_tool(&args, None, self.caller),
+        )
         .await;
         // A refused step's reason names an operator-defined target the caller
         // may not reach, so it is replaced with a neutral one (A3). Decided
