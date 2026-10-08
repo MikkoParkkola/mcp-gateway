@@ -29,3 +29,10 @@ src/gateway/task_service/store_disk.rs	visit_unit	1	A non-object admission membe
 src/gateway/task_service/store_expiry.rs	sealed_files	1	Absolute paths of sealed rows for the operator's startup report
 src/gateway/task_service/store_targets.rs	bounded	1	The constant bounded-failure transition
 src/transport/stdio.rs	diagnostic_command	1	Forwards to summarize_stdio_command for logs
+src/transport/http/listen.rs	carried_session	1	Reads the session id header an outgoing stream open carried
+src/transport/http/listen.rs	refused	1	Maps a refused stream-open status; on 404 hands the carried session to the heal
+src/transport/http/listen.rs	session_expired	1	Drops an expired shared session id and re-handshakes; transport recovery, no access decision
+src/transport/http/listen.rs	reinit_if_needed	1	Re-runs initialize after a dropped session; transport recovery
+src/transport/http/listen.rs	legacy_pin	1	Names the holder (transport and HTTP session) a legacy subscribe lands on, for the ledger
+src/transport/http/listen.rs	legacy_interest	1	Sends resources/subscribe or unsubscribe pinned to one session; no access decision
+src/transport/http/listen.rs	unsolicited	1	Opens the legacy notification stream with its URI filter; delivery is authorized downstream
