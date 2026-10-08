@@ -152,9 +152,13 @@ def is_title(text):
     """True when the letters of `text` hold "knownissues".
 
     Containment, not an exact match: whatever else the title says only makes
-    a doubtful start, and a start fails closed.
+    a doubtful start, and a start fails closed. The letters are also read
+    with no markup dropped, so text that only looks like a tag (an unclosed
+    one renders as text) cannot hide a title; such a start keeps its title
+    as content (see known_issues).
     """
-    return any(TITLE in letters for letters in title_readings(text))
+    raw = re.sub(r"[^a-z]", "", html.unescape(text).lower())
+    return TITLE in raw or any(TITLE in letters for letters in title_readings(text))
 
 
 def atx_start(line):
