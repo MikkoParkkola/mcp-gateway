@@ -204,3 +204,48 @@ async fn an_already_resolved_shutdown_future_stops_the_listener() {
     .expect("the listener kept running after its shutdown future resolved")
     .expect("serve");
 }
+
+/// MIK-8120 (`MIK-WRITE-CANCEL.3`): a client that closes its connection while
+/// its request is still being handled cancels that handler: the listener
+/// drops the request's future. So a handler cannot rely on running to the
+/// end once it has started; work that must finish (a config write and the
+/// reload that publishes it) has to be handed to a task of its own.
+#[tokio::test]
+async fn a_client_disconnect_cancels_the_pending_handler() {
+    use tokio::io::AsyncWriteExt;
+
+    let (started_tx, started_rx) = oneshot::channel::<()>();
+    let (dropped_tx, dropped_rx) = oneshot::channel::<()>();
+    let slot = Arc::new(Mutex::new(Some((started_tx, dropped_tx))));
+    let app = Router::new().route(
+        "/hang",
+        get(move || {
+            let taken = slot.lock().expect("slot").take();
+            async move {
+                let (started, dropped) = taken.expect("one request");
+                let _guard = SendOnDrop(Some(dropped));
+                let _ = started.send(());
+                std::future::pending::<()>().await;
+            }
+        }),
+    );
+    let (addr, stop, server) = start(app, Duration::from_secs(5)).await;
+    let mut client = tokio::net::TcpStream::connect(addr).await.expect("connect");
+    client
+        .write_all(b"GET /hang HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .expect("send the request");
+    timeout(HANG_STOP, started_rx)
+        .await
+        .expect("the request reached its handler")
+        .expect("started");
+
+    drop(client);
+
+    timeout(HANG_STOP, dropped_rx)
+        .await
+        .expect("the handler kept running after its client disconnected")
+        .expect("guard sends on drop");
+    let _ = stop.send(());
+    let _ = timeout(HANG_STOP, server).await;
+}

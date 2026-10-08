@@ -11,7 +11,7 @@
 Everything lives under --dir (default ~/events8-run). It never touches the
 live gateway: separate ports, separate HOME, separate store. Stdlib only.
 """
-import argparse, hashlib, hmac, json, os, re, secrets, shutil, signal, socket, subprocess, sys, time
+import argparse, hashlib, hmac, json, os, re, secrets, signal, socket, stat, subprocess, sys, time
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -53,15 +53,76 @@ def state_path(d):
 def owned(d):
     """True only when d/state.json is this script's: a generic state.json
     written by anything else is not a licence to empty the directory, and a
-    symlink or hard link cannot lend another directory's marker."""
-    marker = state_path(d)
-    if marker.is_symlink() or not marker.is_file() or marker.stat().st_nlink != 1:
+    symlink or hard link cannot lend another directory's marker. A symlinked
+    d is never owned: its target is somebody else's directory."""
+    fd = open_run_dir(d)
+    if fd is None:
         return False
     try:
-        state = json.loads(marker.read_text())
-    except (OSError, ValueError):
+        return owned_at(fd)
+    finally:
+        os.close(fd)
+
+
+def open_run_dir(d):
+    """A handle on d itself, never on what a symlink at d points to."""
+    try:
+        return os.open(d, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+
+
+def owned_at(fd):
+    """`owned`, judged through the directory handle fd."""
+    try:
+        # O_NONBLOCK: a FIFO marker is refused by the type check, not waited on.
+        mfd = os.open("state.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    except OSError:
         return False
+    with os.fdopen(mfd) as marker:
+        st = os.fstat(marker.fileno())
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            return False
+        try:
+            state = json.loads(marker.read())
+        except (OSError, ValueError):
+            return False
     return isinstance(state, dict) and state.get("owner") == OWNER
+
+
+def clear_owned(d):
+    """Empty d if it is this script's run directory, else remove nothing.
+
+    One handle, opened without following a symlink, carries the ownership
+    check and every removal, so d cannot be swapped between them (MIK-7945).
+    """
+    fd = open_run_dir(d)
+    if fd is None:
+        return False
+    try:
+        if not owned_at(fd):
+            return False
+        for name in os.listdir(fd):
+            remove_at(fd, name)
+        return True
+    finally:
+        os.close(fd)
+
+
+def remove_at(fd, name):
+    """Remove name under the directory handle fd, never following a symlink.
+
+    Hand-rolled rather than shutil.rmtree(dir_fd=), which needs Python 3.11."""
+    if stat.S_ISDIR(os.stat(name, dir_fd=fd, follow_symlinks=False).st_mode):
+        sub = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+        try:
+            for child in os.listdir(sub):
+                remove_at(sub, child)
+        finally:
+            os.close(sub)
+        os.rmdir(name, dir_fd=fd)
+    else:
+        os.unlink(name, dir_fd=fd)
 
 
 def digest(key):
@@ -124,17 +185,17 @@ def cmd_up(a):
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt))
     d = Path(a.dir).expanduser()
     # Ownership first: a foreign directory is refused whatever holds the ports.
-    if d.exists() and any(d.iterdir()) and not owned(d):
+    # A symlink at d is refused even when its target is empty: up writes there.
+    if d.is_symlink() or (d.exists() and any(d.iterdir()) and not owned(d)):
         sys.exit(f"{d} is not an events8 run directory; pass an empty --dir")
     for port in (GW_PORT, SHIM_PORT):
         with socket.socket() as probe:
             if probe.connect_ex(("127.0.0.1", port)) == 0:
                 sys.exit(f"port {port} is already in use; stop the previous run first")
-    if d.exists() and any(d.iterdir()):
-        if not owned(d):  # judged again here: the directory may have changed during the probes
-            sys.exit(f"{d} is not an events8 run directory; pass an empty --dir")
-        for old in d.iterdir():  # a previous run's files only: the run starts clean
-            shutil.rmtree(old) if old.is_dir() else old.unlink()
+    # Judged again, through the handle the removal uses: the directory may
+    # have changed during the probes. A previous run's files only.
+    if d.is_symlink() or (d.exists() and any(d.iterdir()) and not clear_owned(d)):
+        sys.exit(f"{d} is not an events8 run directory; pass an empty --dir")
     d.mkdir(parents=True, exist_ok=True)
     d.chmod(0o700)
     state_path(d).write_text(json.dumps({"owner": OWNER}))  # marks the directory as ours
@@ -312,8 +373,19 @@ def cmd_evidence(a):
     # Several subscribes may be filtered to the repo (ChatGPT retries): take the
     # one whose delivery the gateway audited, else the first, so a later complete
     # chain is not rejected for an earlier incomplete one.
+    def first_seen(r):
+        # When the gateway first audited this event: a retried older event was seen before the fire.
+        ev = find(r, "event_id")
+        times = [epoch(a) or 0 for a in audit if ev and has(a, "event_id", ev)]
+        return min(times) if times else -1
+
+    # Only deliveries for THIS fire count: an earlier run's subscription,
+    # delivered before it or retrying an event seen before it, must not be
+    # picked over this one (MIK-7945).
     delivered = {r.get("subscription_id") for r in audit
-                 if has(r, "action", "events.delivery_outcome") and has(r, "delivered", True)}
+                 if has(r, "action", "events.delivery_outcome") and has(r, "delivered", True)
+                 and (epoch(r) or 0) >= fire.get("ts", 1e18) - 1
+                 and first_seen(r) >= fire.get("ts", 1e18) - 1}
     sub = step("events/subscribe answered with an id for this event and repo", shim,
                lambda r: subscribed(r) and r.get("result_id") in delivered) \
         if any(subscribed(r) and r.get("result_id") in delivered for r in shim) else \
@@ -323,12 +395,6 @@ def cmd_evidence(a):
     sub_id = (sub or {}).get("result_id")
     sub_param = wanted(sub or {}) or {}
     sub_args, sub_key = sub_param.get("arguments") or {}, sub_param.get("key")
-    def first_seen(r):
-        # When the gateway first audited this event: a retried older event was seen before the fire.
-        ev = find(r, "event_id")
-        times = [epoch(a) or 0 for a in audit if ev and has(a, "event_id", ev)]
-        return min(times) if times else -1
-
     step("signed inbound webhook accepted (fire.json)", [fire] if fire else [],
          lambda r: r.get("signed") and r.get("status") == 200 and (r.get("ts", 0) >= last - 1))
     step("signed delivery accepted 2xx for the same subscription (gateway audit)", audit,

@@ -5,6 +5,7 @@
 //!   GET  `/ui/api/events/dead-letters`                    — list
 //!   POST `/ui/api/events/dead-letters/{id}/replay`        — replay one
 //!   POST `/ui/api/events/dead-letters/replay?all=1&subscription=S` — replay a subscription's
+//!   GET  `/ui/api/events/held`                            — held subscriptions per type
 //!
 //! Admin only. Never a meta-tool: the meta surface is pinned.
 
@@ -33,6 +34,7 @@ pub(super) fn events_router() -> Router<Arc<AppState>> {
         .route(routes::UI_DEAD_LETTERS, get(list))
         .route(routes::UI_DEAD_LETTERS_REPLAY, post(replay_all))
         .route(routes::UI_DEAD_LETTER_REPLAY, post(replay_one))
+        .route(routes::UI_EVENTS_HELD, get(held))
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,6 +87,20 @@ fn refusal(why: ReplayRefusal) -> axum::response::Response {
         Json(json!({"error": "replay refused", "reason": why.as_str()})),
     )
         .into_response()
+}
+
+/// The held webhook subscriptions per type (MIK-8057): their type is not
+/// offered or served now; each resumes if it is, or ends at its lease.
+async fn held(
+    State(state): State<Arc<AppState>>,
+    client: Option<Extension<AuthenticatedClient>>,
+    identity: Option<Extension<VerifiedIdentity>>,
+) -> axum::response::Response {
+    let (hub, _) = match admitted(&state, client, identity) {
+        Ok(admitted) => admitted,
+        Err(answer) => return *answer,
+    };
+    Json(json!({ "held": hub.list_held() })).into_response()
 }
 
 async fn list(

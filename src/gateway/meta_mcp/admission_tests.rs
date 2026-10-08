@@ -678,6 +678,40 @@ fn replay_facts_round_trip_and_older_records_decode() {
     );
 }
 
+/// `MIK-7993` T9 (r5c): a stored delivery whose write record an earlier
+/// build wrote (`{layer, path, digest}` with a number), or one of any other
+/// shape, still decodes with its facts. The record drops what it cannot
+/// read; the delivery and its replay are never lost to it.
+#[test]
+fn a_stored_delivery_with_any_write_record_still_decodes() {
+    use crate::security::audit::AuditOutcome;
+    let response = json!({"jsonrpc": "2.0", "id": null, "result": {}});
+    let stored = StoredDelivery {
+        response,
+        chain: StoredChain::NotEligible,
+        audit: Some(ReplayAudit::new(AuditOutcome::Ok, None)),
+        read: None,
+        writes: crate::gateway::gateway_writes::WriteRecord::default(),
+    };
+    for writes in [
+        json!([{"layer": "value", "path": ["trace_id"], "digest": 17}]),
+        json!({"x": 1}),
+        json!(null),
+        json!("x"),
+    ] {
+        let mut value = serde_json::to_value(&stored).unwrap();
+        value["writes"] = writes.clone();
+        let bytes = serde_json::to_vec(&value).unwrap();
+        let (_, audit) = stored_response(&bytes)
+            .unwrap_or_else(|| panic!("{writes}: the stored delivery decodes"));
+        assert_eq!(
+            audit.map(|audit| audit.outcome()),
+            Some(AuditOutcome::Ok),
+            "{writes}: the envelope, not the bare-response fallback"
+        );
+    }
+}
+
 /// MIK-7116.MIN.2 row 14, stored-delivery half: a replay restores the first
 /// execution's reading into the read scope; a record without one is unread.
 #[cfg(feature = "firewall")]

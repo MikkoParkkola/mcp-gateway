@@ -207,6 +207,10 @@ mod attestation_plan;
 #[cfg(test)]
 #[path = "chain_strip_tests.rs"]
 mod chain_strip;
+/// `MIK-7993` r5: a playbook's step notes are carried onto its answer.
+#[cfg(test)]
+#[path = "playbook_writes_tests.rs"]
+mod playbook_writes;
 
 /// A caller the gateway can name, and so can bind a continuation to.
 ///

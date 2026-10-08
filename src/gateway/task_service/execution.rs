@@ -130,6 +130,8 @@ pub(crate) enum TransitionWrite<'a> {
         targets: Option<Vec<Target>>,
         /// Who wrote a `Fail` event's error (MIK-7887.RECEIPT.1).
         author: ErrorAuthor,
+        /// The members of a `Complete` result the gateway wrote (MIK-7993).
+        writes: crate::gateway::gateway_writes::WriteRecord,
     },
     Cancel {
         principal: &'a str,
@@ -146,6 +148,9 @@ pub(crate) enum TransitionWrite<'a> {
         event: TaskTransition,
         /// Who wrote a `Fail` event's error (MIK-7887.RECEIPT.1).
         author: ErrorAuthor,
+        /// The members of a recovered `Complete` result the gateway wrote
+        /// while processing it (MIK-7993); empty for a startup settlement.
+        writes: crate::gateway::gateway_writes::WriteRecord,
     },
 }
 
@@ -505,8 +510,9 @@ impl TaskExecutor {
                 event,
                 targets,
                 author,
+                writes,
             } => {
-                self.transition_write(principal, id, revision, (event, targets), author)
+                self.transition_write(principal, id, revision, (event, targets, writes), author)
                     .await?
             }
             // Its own arm, never merged with `Settle`: the two carry the same
@@ -518,9 +524,16 @@ impl TaskExecutor {
                 revision,
                 event,
                 author,
+                writes,
             } => {
-                self.transition_digest_write(owner_digest, id, revision, (event, None), author)
-                    .await?
+                self.transition_digest_write(
+                    owner_digest,
+                    id,
+                    revision,
+                    (event, None, writes),
+                    author,
+                )
+                .await?
             }
             TransitionWrite::Cancel {
                 principal,
@@ -531,7 +544,11 @@ impl TaskExecutor {
                     principal,
                     id,
                     revision,
-                    (TaskTransition::Cancel, None),
+                    (
+                        TaskTransition::Cancel,
+                        None,
+                        crate::gateway::gateway_writes::WriteRecord::default(),
+                    ),
                     ErrorAuthor::Gateway,
                 )
                 .await?
@@ -553,7 +570,11 @@ impl TaskExecutor {
         principal: &str,
         id: &str,
         revision: u64,
-        outcome: (TaskTransition, Option<Vec<Target>>),
+        outcome: (
+            TaskTransition,
+            Option<Vec<Target>>,
+            crate::gateway::gateway_writes::WriteRecord,
+        ),
         author: ErrorAuthor,
     ) -> Result<(CommittedTask, bool, String), CommitFailure> {
         let owner = self

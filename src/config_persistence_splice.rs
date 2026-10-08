@@ -360,7 +360,7 @@ fn edit_block(
 /// comment: the whole document parses the same with and without it, so
 /// anchors defined elsewhere still resolve. Text the parser keeps as part of
 /// a value is never carried as a comment.
-fn parsed_as_comment(lines: &[&str], line: usize, comment: &str) -> bool {
+pub(super) fn parsed_as_comment(lines: &[&str], line: usize, comment: &str) -> bool {
     let parse = |text: &[&str]| serde_yaml::from_str::<Value>(&text.join("\n")).ok();
     let mut cut = lines.to_vec();
     cut[line] = &lines[line][..lines[line].len() - comment.len()];
@@ -745,7 +745,13 @@ mod tests {
             "backends:\n  a: {command: a}\n  b: {command: b}\n  c: {command: c}\n",
         )
         .expect("config");
-        let result = write_config_with(&path, &stale, CommentLoss::Refuse);
+        let held = crate::config_persistence::lock::lock_config_blocking(
+            &path,
+            std::time::Instant::now(),
+            |_| {},
+        )
+        .expect("config lock");
+        let result = write_config_with(&path, &stale, CommentLoss::Refuse, &held);
         assert!(
             matches!(result, Err(Unwritten::CommentLoss(_))),
             "{result:?}"
