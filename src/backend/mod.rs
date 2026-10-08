@@ -36,6 +36,7 @@ pub(crate) mod listen;
 mod metadata;
 mod oauth_client;
 mod ops;
+mod package_cache;
 mod pool;
 mod probe;
 mod registry;
@@ -45,6 +46,7 @@ mod runtime_launch;
 mod status;
 mod stdio_start;
 mod stop;
+pub(crate) mod tools_nudge;
 
 impl Backend {
     /// This backend's signature chain policy (ASI07 inc3, design D1): the
@@ -242,11 +244,21 @@ pub struct Backend {
     /// [`Backend::begin_connecting`] checks and marks.
     #[cfg(test)]
     mark_window_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
+    /// A test's pause point in an HTTP start, after its era step and before
+    /// the handshake shape is chosen (MIK-8056).
+    #[cfg(test)]
+    era_decision_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
     /// A test's stand-ins for the user's token store and browser, used by the
     /// OAuth client [`Backend::create_oauth_client`] builds.
     #[cfg(test)]
     oauth_test_seam: parking_lot::Mutex<Option<OAuthTestSeam>>,
     pub(crate) budgets: ShutdownBudgets,
+    /// Unique for the life of the process (`MIK-8127`): names this instance in
+    /// the nudges it sends, so a replaced instance's late ones are ignored.
+    instance: u64,
+    /// Where this instance's nudges go, set when a registry with a change feed
+    /// holds it.
+    nudge_feed: std::sync::OnceLock<tools_nudge::NudgeFeed>,
 }
 
 /// Where a test backend's OAuth client keeps tokens, and who plays the
@@ -480,6 +492,10 @@ mod era_stale_probe_tests;
 #[cfg(test)]
 #[path = "era_retired_slot_tests.rs"]
 mod era_retired_slot_tests;
+
+#[cfg(test)]
+#[path = "era_start_own_probe_tests.rs"]
+mod era_start_own_probe_tests;
 
 #[cfg(all(test, unix))]
 #[path = "frame_limit_start_tests.rs"]

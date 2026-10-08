@@ -26,7 +26,7 @@ fn rotating(client: &OAuthClient) {
     let key = client.credential_key().unwrap();
     let state = RefreshState {
         rotates: true,
-        in_flight: None,
+        ..RefreshState::default()
     };
     client
         .storage
@@ -215,17 +215,17 @@ async fn a_refresh_that_cannot_mark_its_token_sends_nothing() {
     assert_eq!(marker(&owned), None);
 }
 
-/// A refresh-state sidecar that does not parse reads as rotating, never as
-/// the non-rotating default, so an exchange that ends unsettled from here on
-/// spends its token. (An in-flight marker the damage destroyed is not
-/// recovered here; MIK-8091 tracks that case.)
+/// A refresh-state sidecar that does not parse reads as rotating and
+/// damaged, never as the non-rotating default: the marker it may have held is
+/// lost, so the stored token is retired rather than sent (MIK-8091).
 #[test]
 fn a_corrupt_refresh_state_reads_as_rotating() {
     let dir = tempfile::tempdir().unwrap();
     let storage = TokenStorage::new(dir.path().to_path_buf()).unwrap();
     std::fs::write(storage.refresh_state_path(BACKEND, RESOURCE), "not json").unwrap();
     let state = storage.load_refresh_state(BACKEND, RESOURCE);
-    assert!(state.rotates);
+    assert!(state.may_rotate());
+    assert!(state.damaged);
     assert_eq!(state.in_flight, None);
 }
 
@@ -241,16 +241,35 @@ fn an_unreadable_refresh_state_reads_as_rotating() {
     );
     std::fs::create_dir(storage.refresh_state_path(BACKEND, RESOURCE)).unwrap();
     let state = storage.load_refresh_state(BACKEND, RESOURCE);
-    assert!(state.rotates);
+    assert!(state.may_rotate());
+    assert!(state.damaged);
     assert_eq!(state.in_flight, None);
+}
+
+/// ROT3.4: a sidecar an earlier build wrote has no `keeps`. Its
+/// `rotates: false` meant only "not seen to rotate", so it reads as not seen
+/// either way, which may rotate; a recorded rotation still does; only a
+/// settled refresh that kept its token clears it (MIK-8145).
+#[test]
+fn an_earlier_builds_refresh_state_reads_as_not_yet_seen() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+    let read = |json: &str| {
+        std::fs::write(storage.refresh_state_path(BACKEND, RESOURCE), json).unwrap();
+        storage.load_refresh_state(BACKEND, RESOURCE).may_rotate()
+    };
+    assert!(read(r#"{"rotates":false,"in_flight":null}"#));
+    assert!(read(r#"{"rotates":true,"in_flight":null}"#));
+    assert!(read(r#"{"rotates":true,"keeps":true}"#));
+    assert!(!read(r#"{"rotates":false,"keeps":true}"#));
 }
 
 /// A token marked in flight by an exchange that never settled is retired at
 /// the next start, and nothing is sent even when storage refuses to clear
 /// it: the token is spent in this process and both records are left as they
 /// were. This does not tell a conditional marker clear from an unconditional
-/// one (both writes share the refused directory); that needs a token-only
-/// write fault, which the MIK-7324 follow-up adds.
+/// one (both writes share the refused directory);
+/// `a_marker_survives_a_clear_that_fails` does.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_marked_token_that_cannot_be_cleared_is_not_sent() {
@@ -267,6 +286,7 @@ async fn a_marked_token_that_cannot_be_cleared_is_not_sent() {
     let state = RefreshState {
         rotates: true,
         in_flight: Some(fingerprint.clone()),
+        ..RefreshState::default()
     };
     owned
         .storage
@@ -337,4 +357,220 @@ async fn a_refresh_that_cannot_take_the_cross_process_lock_sends_nothing() {
         "sent: {:?}",
         server.sent.lock().unwrap()
     );
+}
+
+/// `MIK-8091.FAILCLOSED.1`: on a server that rotates, a refresh-state sidecar
+/// that cannot be read may have held an in-flight marker for the stored
+/// token. The token is retired, not sent: spent, cleared from storage, and a
+/// login is required.
+#[tokio::test]
+async fn a_damaged_refresh_state_retires_the_token_instead_of_sending_it() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let owned = client(dir.path(), &server);
+    hold(&owned, &token("a1", Some("r1"), true));
+    headless(&owned)
+        .await
+        .expect("a first refresh shows the server rotates");
+    expire(&owned);
+    let key = owned.credential_key().unwrap();
+    std::fs::write(owned.storage.refresh_state_path(&key, RESOURCE), "not json").unwrap();
+
+    assert!(headless(&owned).await.is_err(), "a login is needed");
+    assert_eq!(
+        server.uses("r2"),
+        0,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+    assert!(flight_of(&owned).is_spent("r2"));
+    assert_eq!(stored(&owned).and_then(|t| t.refresh_token), None);
+    // Retirement rewrites a clean sidecar, and a fresh login's token refreshes.
+    let state = owned.storage.load_refresh_state(&key, RESOURCE);
+    assert!(state.may_rotate() && !state.damaged && state.in_flight.is_none());
+    hold(&owned, &token("a9", Some("r9"), true));
+    headless(&owned).await.expect("a fresh token refreshes");
+    assert_eq!(
+        server.uses("r9"),
+        1,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+}
+
+/// `MIK-8091.FAILCLOSED.2`: an absent sidecar is no damage: the token is sent.
+#[tokio::test]
+async fn an_absent_refresh_state_still_sends_the_token() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let owned = client(dir.path(), &server);
+    hold(&owned, &token("a1", Some("r1"), true));
+    let key = owned.credential_key().unwrap();
+    assert!(!owned.storage.refresh_state_path(&key, RESOURCE).exists());
+
+    headless(&owned).await.expect("refreshed");
+    assert_eq!(
+        server.uses("r1"),
+        1,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+}
+
+/// A sidecar that cannot even be opened (here a directory in its place) is
+/// damage too: the token is retired and cleared, though the sidecar cannot
+/// be rewritten, and nothing is sent.
+#[tokio::test]
+async fn an_unreadable_refresh_state_retires_the_token_it_cannot_rewrite() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let owned = client(dir.path(), &server);
+    hold(&owned, &token("a1", Some("r1"), true));
+    let key = owned.credential_key().unwrap();
+    std::fs::create_dir(owned.storage.refresh_state_path(&key, RESOURCE)).unwrap();
+
+    assert!(headless(&owned).await.is_err(), "a login is needed");
+    assert_eq!(
+        server.requests(),
+        0,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+    assert!(flight_of(&owned).is_spent("r1"));
+    assert_eq!(stored(&owned).and_then(|t| t.refresh_token), None);
+}
+
+/// A token whose clear fails keeps its in-flight marker: a stored record that
+/// cannot be read may still hold the token, so the marker must survive for a
+/// later start to retire it. The sidecar stays writable here, so a marker
+/// cleared regardless of the clear would show.
+#[test]
+fn a_marker_survives_a_clear_that_fails() {
+    use super::super::refresh_flight::{Flight, fingerprint_hex, retire_unsettled};
+    let dir = tempfile::tempdir().unwrap();
+    let storage = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+    let key = "flight-key";
+    std::fs::write(storage.token_path(key, RESOURCE), "not a token record").unwrap();
+    let state = RefreshState {
+        rotates: true,
+        in_flight: Some(fingerprint_hex("r1")),
+        ..RefreshState::default()
+    };
+    storage.save_refresh_state(key, RESOURCE, &state).unwrap();
+    let flight = Flight::of(&storage.token_path(key, RESOURCE));
+
+    retire_unsettled(&flight, &storage, (key, RESOURCE), BACKEND, "r1", state);
+
+    assert!(flight.is_spent("r1"), "spent in this process");
+    assert_eq!(
+        storage.load_refresh_state(key, RESOURCE).in_flight,
+        Some(fingerprint_hex("r1")),
+        "the marker stays until the token is known to be gone"
+    );
+}
+
+/// A login repairs a damaged sidecar: the token it saves is new, so no lost
+/// marker can have named it, and its first refresh sends it. Without the
+/// repair every fresh token would be retired at its first refresh, and the
+/// backend would ask for a login once per token lifetime.
+#[tokio::test]
+async fn a_login_repairs_a_damaged_refresh_state() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut owned = client(dir.path(), &server);
+    if let Some(meta) = owned.auth_metadata.as_mut() {
+        meta.grant_types_supported = vec!["client_credentials".to_string()];
+    }
+    let key = owned.credential_key().unwrap();
+    std::fs::write(owned.storage.refresh_state_path(&key, RESOURCE), "not json").unwrap();
+
+    owned.try_client_credentials().await.expect("logged in");
+    let issued = stored(&owned)
+        .and_then(|t| t.refresh_token)
+        .expect("the login stored a refresh token");
+    expire(&owned);
+    headless(&owned).await.expect("the fresh token refreshes");
+
+    assert_eq!(
+        server.uses(&issued),
+        1,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+    let state = owned.storage.load_refresh_state(&key, RESOURCE);
+    assert!(!state.damaged, "the login rewrote the sidecar");
+}
+
+/// ROT3.6: a login that repairs a damaged sidecar does not brand its server
+/// as rotating, since the damage observed nothing about rotation. A server
+/// that then keeps its token keeps it after an unsettled refresh too.
+#[tokio::test]
+async fn a_login_repair_does_not_brand_the_server_rotating() {
+    let server = TokenServer::start(&[
+        Answer::Rotate,
+        Answer::Keep,
+        Answer::KeepThenBrokenBody,
+        Answer::Keep,
+    ])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut owned = client(dir.path(), &server);
+    if let Some(meta) = owned.auth_metadata.as_mut() {
+        meta.grant_types_supported = vec!["client_credentials".to_string()];
+    }
+    let key = owned.credential_key().unwrap();
+    std::fs::write(owned.storage.refresh_state_path(&key, RESOURCE), "not json").unwrap();
+
+    owned.try_client_credentials().await.expect("logged in");
+    let issued = stored(&owned)
+        .and_then(|t| t.refresh_token)
+        .expect("the login stored a refresh token");
+    expire(&owned);
+    headless(&owned)
+        .await
+        .expect("a settled refresh that keeps the token");
+    expire(&owned);
+    assert!(headless(&owned).await.is_err(), "the answer was lost");
+    expire(&owned);
+    headless(&owned).await.expect("the kept token refreshes");
+    assert_eq!(
+        server.uses(&issued),
+        3,
+        "sent: {:?}",
+        server.sent.lock().unwrap()
+    );
+}
+
+/// A login stands when the damaged sidecar cannot be rewritten (here a
+/// directory in its place): the user keeps the token the login issued, and
+/// its refresh still fails closed until the path is cleared.
+#[tokio::test]
+async fn a_login_stands_when_the_sidecar_cannot_be_repaired() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut owned = client(dir.path(), &server);
+    if let Some(meta) = owned.auth_metadata.as_mut() {
+        meta.grant_types_supported = vec!["client_credentials".to_string()];
+    }
+    let key = owned.credential_key().unwrap();
+    std::fs::create_dir(owned.storage.refresh_state_path(&key, RESOURCE)).unwrap();
+
+    let access = owned.try_client_credentials().await.expect("logged in");
+    assert_eq!(stored(&owned).map(|t| t.access_token), Some(access));
+    assert!(owned.storage.load_refresh_state(&key, RESOURCE).damaged);
+}
+
+/// A sidecar path holding a dangling symlink is damage, not absence: the
+/// entry exists, and what it held may have been a marker for the stored token.
+#[cfg(unix)]
+#[test]
+fn a_dangling_refresh_state_link_reads_as_damaged() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = TokenStorage::new(dir.path().to_path_buf()).unwrap();
+    let path = storage.refresh_state_path(BACKEND, RESOURCE);
+    std::os::unix::fs::symlink(dir.path().join("gone.json"), &path).unwrap();
+
+    let state = storage.load_refresh_state(BACKEND, RESOURCE);
+    assert!(state.may_rotate());
+    assert!(state.damaged);
 }

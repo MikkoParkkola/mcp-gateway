@@ -261,7 +261,6 @@ impl OAuthClient {
             key: &key,
             resource_url: &self.resource_url,
             label: &self.backend_name,
-            rotation: super::refresh_flight::Rotation::Observed,
         };
         match refresh_stored(self, at).await? {
             Refreshed::Adopted(access) => Ok(access),
@@ -294,7 +293,31 @@ impl OAuthClient {
         let flight = super::refresh_flight::Flight::of(&token_path);
         let _guard = flight.lock.lock().await;
         let _across = super::refresh_flight::hold_across_processes(&token_path).await?;
-        self.storage.save(&key, &self.resource_url, token)
+        self.storage.save(&key, &self.resource_url, token)?;
+        // A token a login issues was never marked in flight, so a damaged
+        // sidecar's lost marker cannot name it (MIK-8091). Rewrite the sidecar
+        // clean, keeping the rotation observation, or every fresh token would
+        // be retired at its first refresh.
+        let state = self.storage.load_refresh_state(&key, &self.resource_url);
+        if state.damaged {
+            let repaired = crate::oauth::storage::RefreshState {
+                damaged: false,
+                ..state
+            };
+            if let Err(error) = self
+                .storage
+                .save_refresh_state(&key, &self.resource_url, &repaired)
+            {
+                // The login stands: refusing it over a state file would leave
+                // the user with nothing. The next refresh still fails closed;
+                // the path names what to remove so the repair can happen.
+                let backend = self.backend_name.as_str();
+                let path = self.storage.refresh_state_path(&key, &self.resource_url);
+                let path = path.display();
+                warn!(backend = %backend, path = %path, %error, "Could not repair the refresh state after a login; remove this path (a file or a directory) so the next login rebuilds it");
+            }
+        }
+        Ok(())
     }
 
     /// The stored token instead of a refresh, when it is unexpired and either

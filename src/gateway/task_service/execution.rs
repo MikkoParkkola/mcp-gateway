@@ -30,6 +30,7 @@ pub(crate) use observe::{
     UpstreamRecovery,
 };
 use observe::{Handoff, HandoffRegistry};
+pub(in crate::gateway::task_service) use recovery::recovery_event;
 pub(crate) use upstream::UpstreamCapture;
 /// Reachable at the visibility of [`TaskExecutor::commit`], which returns it.
 pub(crate) use worker::CommitFailure;
@@ -130,6 +131,8 @@ pub(crate) enum TransitionWrite<'a> {
         targets: Option<Vec<Target>>,
         /// Who wrote a `Fail` event's error (MIK-7887.RECEIPT.1).
         author: ErrorAuthor,
+        /// The members of a `Complete` result the gateway wrote (MIK-7993).
+        writes: crate::gateway::gateway_writes::WriteRecord,
     },
     Cancel {
         principal: &'a str,
@@ -146,6 +149,9 @@ pub(crate) enum TransitionWrite<'a> {
         event: TaskTransition,
         /// Who wrote a `Fail` event's error (MIK-7887.RECEIPT.1).
         author: ErrorAuthor,
+        /// The members of a recovered `Complete` result the gateway wrote
+        /// while processing it (MIK-7993); empty for a startup settlement.
+        writes: crate::gateway::gateway_writes::WriteRecord,
     },
 }
 
@@ -179,6 +185,9 @@ pub struct TaskExecutor {
     observer: Mutex<Option<Arc<dyn CommitObserver>>>,
     /// Told of every committed transition (the events source), once installed.
     publication_hook: std::sync::OnceLock<PublicationHook>,
+    /// The adapters startup recovery deferred to, kept so the sweep that
+    /// serves a repaired row decides the same way (MIK-8121). Write-once.
+    pub(super) managed: std::sync::OnceLock<Arc<[String]>>,
     /// Cancelled once, by a shutdown whose drain ran out; every worker runs
     /// under it ([`Self::spawn_worker`]).
     shutdown: tokio_util::sync::CancellationToken,
@@ -201,6 +210,7 @@ impl TaskExecutor {
             query_gate: tokio::sync::Mutex::new(std::collections::HashMap::new()),
             observer: Mutex::new(None),
             publication_hook: std::sync::OnceLock::new(),
+            managed: std::sync::OnceLock::new(),
             shutdown: tokio_util::sync::CancellationToken::new(),
         })
     }
@@ -209,6 +219,16 @@ impl TaskExecutor {
     /// id, its new status and its last-change time. Write-once.
     pub(crate) fn on_publication(&self, hook: PublicationHook) -> bool {
         self.publication_hook.set(hook).is_ok()
+    }
+
+    /// Serve the sealed rows an operator repaired (MIK-8121), deciding a live
+    /// one as startup did, and announce each row settled on the way.
+    pub(crate) async fn reread_sealed(&self) {
+        let managed = self.managed.get().cloned().unwrap_or_else(|| Arc::from([]));
+        for committed in self.service.reread_sealed_deferring(managed).await {
+            let id = committed.task.id().to_owned();
+            self.published(&committed, &id);
+        }
     }
 
     pub(crate) fn recovery(&self) -> Option<&Arc<dyn UpstreamRecovery>> {
@@ -505,8 +525,9 @@ impl TaskExecutor {
                 event,
                 targets,
                 author,
+                writes,
             } => {
-                self.transition_write(principal, id, revision, (event, targets), author)
+                self.transition_write(principal, id, revision, (event, targets, writes), author)
                     .await?
             }
             // Its own arm, never merged with `Settle`: the two carry the same
@@ -518,9 +539,16 @@ impl TaskExecutor {
                 revision,
                 event,
                 author,
+                writes,
             } => {
-                self.transition_digest_write(owner_digest, id, revision, (event, None), author)
-                    .await?
+                self.transition_digest_write(
+                    owner_digest,
+                    id,
+                    revision,
+                    (event, None, writes),
+                    author,
+                )
+                .await?
             }
             TransitionWrite::Cancel {
                 principal,
@@ -531,7 +559,11 @@ impl TaskExecutor {
                     principal,
                     id,
                     revision,
-                    (TaskTransition::Cancel, None),
+                    (
+                        TaskTransition::Cancel,
+                        None,
+                        crate::gateway::gateway_writes::WriteRecord::default(),
+                    ),
                     ErrorAuthor::Gateway,
                 )
                 .await?
@@ -553,7 +585,11 @@ impl TaskExecutor {
         principal: &str,
         id: &str,
         revision: u64,
-        outcome: (TaskTransition, Option<Vec<Target>>),
+        outcome: (
+            TaskTransition,
+            Option<Vec<Target>>,
+            crate::gateway::gateway_writes::WriteRecord,
+        ),
         author: ErrorAuthor,
     ) -> Result<(CommittedTask, bool, String), CommitFailure> {
         let owner = self

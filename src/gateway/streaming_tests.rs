@@ -492,13 +492,16 @@ async fn a_failing_audit_log_cannot_withhold_the_confirmation_prompt() {
         "the control is queued"
     );
     let proxy = ProxyManager::new(Arc::clone(&multiplexer));
-    let ask = crate::protocol::ElicitationCreateParams {
-        mode: None,
-        message: "Are you sure you want to kill server 'payments'?".to_string(),
-        requested_schema: None,
-        url: None,
-    };
-    let asked = proxy.forward_elicitation_with_response(&id, &ask, Duration::from_secs(2));
+    // The production gate builds and sends the prompt; nobody answers it, so
+    // it is cut off once the stream has been read.
+    let asked = tokio::time::timeout(
+        Duration::from_secs(2),
+        crate::gateway::destructive_confirmation::require_destructive_confirmation(
+            &proxy,
+            &id,
+            "kill server 'payments'",
+        ),
+    );
 
     let mut seen = String::new();
     let read = async {
@@ -514,6 +517,10 @@ async fn a_failing_audit_log_cannot_withhold_the_confirmation_prompt() {
     assert!(
         seen.contains("elicitation/create"),
         "the prompt was withheld: {seen}"
+    );
+    assert!(
+        seen.contains("cannot be undone"),
+        "the prompt is the gate's own: {seen}"
     );
     assert!(
         !seen.contains("cust-b"),
@@ -703,3 +710,9 @@ async fn a_withheld_confirmation_prompt_reads_as_undelivered() {
 
 #[path = "streaming_tests/relay_commit.rs"]
 mod relay_commit;
+
+#[path = "streaming_tests/listen_graceful.rs"]
+mod listen_graceful;
+
+#[path = "streaming_tests/credential_at_write.rs"]
+mod credential_at_write;

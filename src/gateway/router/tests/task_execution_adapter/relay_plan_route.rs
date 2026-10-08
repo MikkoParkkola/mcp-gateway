@@ -52,20 +52,24 @@ async fn plan_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDi
         },
         None,
     ));
-    let relay = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                // One shared fingerprint: a 63-char run guarantees one, so a
-                // relay of the URL or the advice is refused if receipted.
-                min_matches: 1,
-                sources: vec![format!("{BACKEND}:*")],
-                ..CollusionConfig::default()
+    // Every k-gram kept: any 48-char run holds a fingerprint under any hash
+    // key, so with one shared fingerprint a relay of the URL or the advice
+    // is always refused if receipted (MIK-8083).
+    let relay = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    min_matches: 1,
+                    sources: vec![format!("{BACKEND}:*")],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+            None,
+        )
+        .keeping_every_kgram(),
+    );
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
         &two_principal_auth(),
         None,

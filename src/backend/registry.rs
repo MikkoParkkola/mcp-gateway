@@ -131,7 +131,7 @@ pub struct BackendRegistry {
     backends: DashMap<String, Arc<Backend>>,
     /// Where a changed backend name goes so listeners hear `tools/list_changed`
     /// (F24). Unset outside the HTTP server, which is the only mode that delivers it.
-    change_feed: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<String>>,
+    change_feed: std::sync::OnceLock<super::tools_nudge::NudgeFeed>,
     /// Whether shutdown has begun. Set once by [`BackendRegistry::stop_all`] and
     /// never cleared.
     ///
@@ -289,6 +289,7 @@ impl BackendRegistry {
         if let Some(observer) = self.breaker_observer.get() {
             breaker.observe(observer);
         }
+        let inserted = Arc::clone(&backend);
         self.backends.insert(name.clone(), backend);
         drop(stopping);
         // Before the insert, so no transition escapes; again after it, so an
@@ -296,7 +297,13 @@ impl BackendRegistry {
         if let Some(observer) = self.breaker_observer.get() {
             breaker.observe(observer);
         }
-        self.announce_change(&name);
+        // Not an announcement: a fresh instance shows no tools until it stores
+        // a list, and the drain decides whether anything visible changed
+        // (`MIK-8127`).
+        if let Some(feed) = self.change_feed.get() {
+            inserted.attach_nudges(feed);
+            inserted.nudge_tools(super::tools_nudge::NudgeKind::Changed);
+        }
         true
     }
 
@@ -384,15 +391,48 @@ impl BackendRegistry {
         Ok(())
     }
 
-    /// Route every membership change to one consumer (F24). Set once, by the HTTP server.
-    pub(crate) fn set_change_feed(&self, feed: tokio::sync::mpsc::UnboundedSender<String>) {
-        let _ = self.change_feed.set(feed);
+    /// Route every change to the tools discovery shows to one consumer (F24).
+    /// Set once, by the HTTP server; backends already held are attached too, so
+    /// a list they store from now on is seen.
+    pub(crate) fn set_change_feed(&self, feed: super::tools_nudge::NudgeFeed) {
+        if self.change_feed.set(feed).is_err() {
+            return;
+        }
+        if let Some(feed) = self.change_feed.get() {
+            for backend in &self.backends {
+                backend.attach_nudges(feed);
+            }
+        }
     }
 
-    /// Report that `name`'s tools changed. A no-op until a feed is set.
-    pub(crate) fn announce_change(&self, name: &str) {
+    /// The capability watcher's report, routed to the change feed set now.
+    pub(crate) fn catalogue_hook(&self) -> crate::capability::CatalogueChanged {
+        let feed = self.change_feed.get().cloned();
+        Arc::new(move |name: &str| {
+            if let Some(feed) = &feed {
+                let _ = feed.send(super::tools_nudge::ToolsNudge::Catalogue {
+                    name: name.to_string(),
+                });
+            }
+        })
+    }
+
+    /// Report that the capability catalogue `name` was reloaded. A no-op until
+    /// a feed is set.
+    pub(crate) fn nudge_catalogue(&self, name: &str) {
         if let Some(feed) = self.change_feed.get() {
-            let _ = feed.send(name.to_string());
+            let _ = feed.send(super::tools_nudge::ToolsNudge::Catalogue {
+                name: name.to_string(),
+            });
+        }
+    }
+
+    /// Report that the instance now registered as `name` is settled without a
+    /// stored list (`NudgeKind::Resolved`): no warm-up will fill it, so it
+    /// shows nothing until something stores one.
+    pub(crate) fn resolve_unwarmed(&self, name: &str) {
+        if let Some(backend) = self.get(name) {
+            backend.nudge_tools(super::tools_nudge::NudgeKind::Resolved);
         }
     }
 
@@ -422,11 +462,12 @@ impl BackendRegistry {
     /// If the backend must be stopped before removal, call `backend.stop()`
     /// first.  Returns `true` when the backend was present and removed.
     pub fn remove(&self, name: &str) -> bool {
-        let removed = self.backends.remove(name).is_some();
-        if removed {
-            self.announce_change(name);
+        let removed = self.backends.remove(name);
+        if let Some((_, gone)) = &removed {
+            // The drain finds the name unregistered: the backend shows nothing.
+            gone.nudge_tools(super::tools_nudge::NudgeKind::Changed);
         }
-        removed
+        removed.is_some()
     }
 
     /// Stop all backends, concurrently.

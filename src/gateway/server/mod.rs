@@ -1258,7 +1258,7 @@ impl Gateway {
         // F24: this mode delivers tools/list_changed, so it may advertise it.
         meta_mcp.set_change_feed(crate::gateway::ChangeFeed::Http);
         let (tools_changed_tx, tools_changed_rx) = tokio::sync::mpsc::unbounded_channel();
-        self.backends.set_change_feed(tools_changed_tx.clone());
+        self.backends.set_change_feed(tools_changed_tx);
 
         // Log policy and feature states now that the shared builder has run.
         if self.config.security.tool_policy.enabled {
@@ -1438,7 +1438,7 @@ impl Gateway {
             match CapabilityWatcher::start(
                 Arc::clone(&cap_backend),
                 shutdown_tx.subscribe(),
-                Some(tools_changed_tx.clone()),
+                Some(self.backends.catalogue_hook()),
             ) {
                 Ok(w) => {
                     info!("Capability hot-reload enabled");
@@ -1799,6 +1799,7 @@ impl Gateway {
                     // Only the session cookie reads this; re-validation sets none.
                     tls_enabled: false,
                     live_config: Arc::clone(&live_config),
+                    agent_auth: agent_auth.clone(),
                 },
             ),
         );

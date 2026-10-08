@@ -184,7 +184,7 @@ pub enum Error {
     /// terminal. The first provably did not, and settling it terminal denies a
     /// caller a retry of work that never ran.
     ///
-    /// Constructed at exactly two sites. The first is
+    /// Constructed at exactly four sites. The first is
     /// [`crate::security::safe_request_error_for`], and only when reqwest
     /// reports `is_connect()` AND the caller supplies
     /// [`crate::security::RedirectEvidence::NoRedirectFollowed`], which the
@@ -193,7 +193,12 @@ pub enum Error {
     /// re-submits the body, so the side effect may already have run at the
     /// origin that redirected. The second is the stdio transport's send with
     /// no stdin writer (MIK-7979): the writer is absent, so no write was
-    /// attempted.
+    /// attempted. The third and fourth are a stdio request that ends before
+    /// its frame was admitted to the writer (MIK-7871): refused because stdout
+    /// had already closed, or timed out or overtaken by stdout closing while
+    /// still waiting for stdin (`stdio_write.rs`, `unsent_or`). A frame admitted
+    /// to the writer goes out whole (#3453), so after that it stays `Transport`
+    /// or `BackendTimeout`.
     ///
     /// The counter, not `reqwest::Error::url()`, is what carries this. An
     /// earlier revision compared the error's URL against the posted URL; that

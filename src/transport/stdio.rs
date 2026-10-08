@@ -9,7 +9,6 @@
 //! supported version.
 
 use std::collections::HashMap;
-use std::ffi::OsString;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -18,7 +17,7 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use process_wrap::tokio::ChildWrapper;
 use serde_json::Value;
-use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, error, info, warn};
@@ -35,56 +34,12 @@ use crate::{Error, Result};
 
 #[path = "stdio_cache.rs"]
 mod cache;
+pub(crate) use cache::assigned_package_cache_dir;
 pub use cache::isolated_package_manager_env;
 
-#[cfg(unix)]
-const FALLBACK_EXEC_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
-#[cfg(windows)]
-const FALLBACK_EXEC_PATH: &str = r"C:\Windows\System32;C:\Windows";
-#[cfg(not(any(unix, windows)))]
-const FALLBACK_EXEC_PATH: &str = "";
-
-pub(crate) fn configure_child_environment(
-    cmd: &mut Command,
-    backend_env: &HashMap<String, String>,
-) {
-    cmd.env_clear();
-
-    let path = std::env::var_os("PATH").unwrap_or_else(|| OsString::from(FALLBACK_EXEC_PATH));
-    cmd.env("PATH", path);
-
-    if let Some(home) = std::env::var_os("HOME")
-        .or_else(|| crate::home_dir::home_dir().map(std::path::PathBuf::into_os_string))
-    {
-        cmd.env("HOME", home);
-    }
-
-    let tmpdir =
-        std::env::var_os("TMPDIR").unwrap_or_else(|| std::env::temp_dir().into_os_string());
-    cmd.env("TMPDIR", tmpdir);
-
-    #[cfg(windows)]
-    for key in [
-        "USERPROFILE",
-        "APPDATA",
-        "LOCALAPPDATA",
-        "TEMP",
-        "TMP",
-        "SYSTEMROOT",
-        "COMSPEC",
-        "PATHEXT",
-    ] {
-        if let Some(value) = std::env::var_os(key) {
-            cmd.env(key, value);
-        }
-    }
-
-    // Backend configuration is authoritative and may intentionally override
-    // a safe default such as PATH, HOME, or TMPDIR.
-    for (key, value) in backend_env {
-        cmd.env(key, value);
-    }
-}
+#[path = "stdio_env.rs"]
+mod env;
+pub(crate) use env::configure_child_environment;
 
 /// Stdio transport for subprocess MCP servers
 pub struct StdioTransport {
@@ -105,7 +60,9 @@ pub struct StdioTransport {
     /// Request timeout for initialize and JSON-RPC calls
     request_timeout: std::time::Duration,
     /// Writer handle
-    writer: Mutex<Option<tokio::process::ChildStdin>>,
+    writer: Arc<Mutex<Option<tokio::process::ChildStdin>>>,
+    /// Cancelled by `close()`, renewed by `start()`: ends a write stuck on a reader.
+    shutdown: parking_lot::Mutex<tokio_util::sync::CancellationToken>,
     /// Negotiated protocol version (config override or auto-negotiated)
     protocol_version: RwLock<Option<String>>,
     /// Where to deliver a notification for each call that supplied a progress
@@ -125,6 +82,13 @@ pub struct StdioTransport {
     pub(crate) taps: super::upstream_tap::Taps,
     /// Longest frame the reader accepts; set before `start`.
     max_frame_bytes: AtomicUsize,
+    /// What a failed start said, kept only long enough to classify it (#1759).
+    failure: start_failure::FailureRecord,
+    /// The cache directory the gateway assigned this backend, or `None`.
+    ///
+    /// `Some` is the gateway's to clear; `None` says the value that reaches
+    /// the child, if any, came from the operator's own configuration.
+    assigned_cache: Option<std::path::PathBuf>,
 }
 
 impl StdioTransport {
@@ -141,22 +105,7 @@ impl StdioTransport {
         request_timeout: std::time::Duration,
         protocol_version: Option<String>,
     ) -> Arc<Self> {
-        Arc::new(Self {
-            child: Mutex::new(None),
-            pending: dashmap::DashMap::new(),
-            request_id: AtomicU64::new(1),
-            connected: AtomicBool::new(false),
-            command: command.to_string(),
-            env,
-            cwd,
-            request_timeout,
-            writer: Mutex::new(None),
-            protocol_version: RwLock::new(protocol_version),
-            progress_destinations: dashmap::DashMap::new(),
-            start: early_exit::StartState::default(),
-            taps: super::upstream_tap::Taps::default(),
-            max_frame_bytes: AtomicUsize::new(DEFAULT_MAX_FRAME_BYTES),
-        })
+        Self::new_with_assigned_cache(command, env, cwd, request_timeout, protocol_version, None)
     }
 
     /// Set the longest frame this transport accepts (clamped to the ceiling).
@@ -166,17 +115,13 @@ impl StdioTransport {
             .store(bytes.clamp(1, CEILING_MAX_FRAME_BYTES), Ordering::Relaxed);
     }
 
-    fn diagnostic_command(&self) -> String {
+    pub(crate) fn diagnostic_command(&self) -> String {
         crate::security::summarize_stdio_command(&self.command)
     }
 
-    /// Start the subprocess
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the command cannot be spawned or MCP initialization fails.
-    pub async fn start(self: &Arc<Self>) -> Result<()> {
-        self.start.forget_shown_stderr();
+    /// The child's command, with piped stdio, environment and working
+    /// directory.
+    fn spawn_command(&self) -> Result<Command> {
         let parts = crate::transport::split_command(&self.command).ok_or_else(|| {
             Error::Config(format!(
                 "Invalid stdio command quoting: {}",
@@ -186,6 +131,7 @@ impl StdioTransport {
         let Some((program, args)) = parts.split_first() else {
             return Err(Error::Config("Empty command".to_string()));
         };
+
         let mut cmd = Command::new(program);
         cmd.args(args)
             .stdin(Stdio::piped())
@@ -198,11 +144,25 @@ impl StdioTransport {
         // loaded into the gateway process must not be inherited implicitly.
         configure_child_environment(&mut cmd, &self.env);
 
-        // Set working directory
         if let Some(ref cwd) = self.cwd {
             cmd.current_dir(cwd);
         }
+        Ok(cmd)
+    }
 
+    /// Start the subprocess and complete the MCP handshake.
+    ///
+    /// A failure leaves the child's last stderr lines settled, so whoever
+    /// decides what to do about the failure can read what it said.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the command cannot be spawned or MCP initialization fails.
+    pub async fn start(self: &Arc<Self>) -> Result<()> {
+        self.start.forget_shown_stderr();
+        self.failure.begin();
+
+        let cmd = self.spawn_command()?;
         let mut child = spawn_in_own_tree(cmd)?;
 
         let stdin = child
@@ -219,10 +179,15 @@ impl StdioTransport {
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stderr".to_string()))?;
 
-        *self.writer.lock().await = Some(stdin);
+        let mut writer = self.writer.lock().await;
+        // Renewed under the stdin lock, so a write never pairs new stdin with
+        // the token a previous `close()` cancelled.
+        *self.shutdown.lock() = tokio_util::sync::CancellationToken::new();
+        *writer = Some(stdin);
+        drop(writer);
         *self.child.lock().await = Some(child);
-        let (eof_tx, eof_rx) = tokio::sync::watch::channel(false);
-        self.start.begin(eof_rx);
+        let eof_tx = Arc::new(tokio::sync::watch::channel(false).0);
+        self.start.begin(Arc::clone(&eof_tx));
 
         // Spawn reader task.
         //
@@ -240,7 +205,8 @@ impl StdioTransport {
         // decide when it is safe.
         let transport = Arc::downgrade(self);
         let max_frame = self.max_frame_bytes.load(Ordering::Relaxed);
-        tokio::spawn(async move {
+        let stdout_reader = tokio::spawn(async move {
+            let latch = early_exit::TripOnDrop(eof_tx);
             debug!("Reader task started");
             let mut reader = BufReader::new(stdout);
             let mut frame = Vec::new();
@@ -276,7 +242,9 @@ impl StdioTransport {
                 }
             }
 
-            let _ = eof_tx.send(true);
+            // Before the clear: a request that registers after it sees the
+            // latch, and one that registered before it is dropped by it.
+            drop(latch);
             if let Some(transport) = transport.upgrade() {
                 transport.connected.store(false, Ordering::Relaxed);
                 // The stream is over: wake every waiting call now (its receiver
@@ -289,6 +257,7 @@ impl StdioTransport {
         });
 
         let stderr_tail = early_exit::spawn_stderr_tail(stderr, self.diagnostic_command());
+        self.failure.track(&stderr_tail.1);
 
         // Initialize with protocol version negotiation. If initialization
         // fails, tear down the spawned process now rather than waiting for the
@@ -297,12 +266,30 @@ impl StdioTransport {
         // child running until that handle happens to go away.
         // (Promptness only: the reader holds a `Weak`, so a drop would reap it.)
         if let Err(mut error) = self.initialize().await {
-            if self.start.exited_early() {
+            // Order matters on the late path: the exit status has to be read
+            // before `close` kills the child, and the stderr after, because the
+            // reader only reaches EOF once the child is gone.
+            let late_reader = if self.start.exited_early() {
                 error = self.early_exit_error(stderr_tail).await;
-            }
+                None
+            } else {
+                self.settle_child_exit().await;
+                Some(stderr_tail.0)
+            };
             if let Err(close_error) = self.close().await {
                 warn!(error = %close_error, "Failed to clean up stdio process after initialization error");
             }
+            if let Some(reader) = late_reader {
+                // The child `close` just killed: record that ending, so the
+                // failure is not reported as a child still running.
+                self.settle_child_exit().await;
+                Self::settle_stderr_tail(reader).await;
+            }
+            // A retry may start on this same transport. This start's reader
+            // must be gone first: at its EOF it clears `pending` and marks the
+            // transport disconnected, which would land on the retry instead.
+            stdout_reader.abort();
+            let _ = stdout_reader.await;
             return Err(error);
         }
 
@@ -576,34 +563,6 @@ impl StdioTransport {
         Ok(())
     }
 
-    /// Write a message to stdin
-    async fn write_message(&self, message: &str) -> Result<()> {
-        debug!(message_len = message.len(), "Writing to stdin");
-        let mut writer = self.writer.lock().await;
-        if let Some(ref mut stdin) = *writer {
-            stdin
-                .write_all(message.as_bytes())
-                .await
-                .map_err(|e| Error::Transport(e.to_string()))?;
-            stdin
-                .write_all(b"\n")
-                .await
-                .map_err(|e| Error::Transport(e.to_string()))?;
-            stdin
-                .flush()
-                .await
-                .map_err(|e| Error::Transport(e.to_string()))?;
-            // Drop the lock before yielding to allow concurrent reads
-            drop(writer);
-            // Yield to give the runtime a chance to process the I/O
-            tokio::task::yield_now().await;
-            debug!("Write complete and flushed");
-            Ok(())
-        } else {
-            Err(Error::TransportConnect("Not connected".to_string()))
-        }
-    }
-
     /// Get next request ID
     #[allow(clippy::cast_possible_wrap)] // request IDs won't exceed i64::MAX
     fn next_id(&self) -> RequestId {
@@ -690,17 +649,8 @@ impl Transport for StdioTransport {
         // stranded entry would leak here for the transport's lifetime.
         let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
 
-        // Both guards drop after this value is produced, which is where the
-        // pending entry and the progress registration are retired.
-        match self.write_message(&message).await {
-            Err(e) => Err(e),
-            // Wait for response with timeout
-            Ok(()) => match tokio::time::timeout(self.request_timeout, rx).await {
-                Ok(Ok(response)) => Ok(response),
-                Ok(Err(_)) => Err(Error::Transport("Response channel closed".to_string())),
-                Err(_) => Err(Error::BackendTimeout("Request timed out".to_string())),
-            },
-        }
+        // Both guards drop after this value: the pending entry and progress go.
+        self.exchange(message, rx).await
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
@@ -711,7 +661,7 @@ impl Transport for StdioTransport {
         };
 
         let message = serde_json::to_string(&notification)?;
-        self.write_message(&message).await
+        self.write_message(message).await
     }
 
     fn is_connected(&self) -> bool {
@@ -740,13 +690,15 @@ impl Transport for StdioTransport {
     async fn close(&self) -> Result<()> {
         self.connected.store(false, Ordering::Relaxed);
 
-        // Close stdin
-        *self.writer.lock().await = None;
-
-        // Kill child process
+        // A write stuck on a peer that stopped reading holds stdin; the kill ends it.
+        if let Ok(mut writer) = self.writer.try_lock() {
+            *writer = None;
+        }
         if let Some(ref mut child) = *self.child.lock().await {
             let _ = Box::into_pin(child.kill()).await;
         }
+        self.shutdown.lock().cancel();
+        tree::clear_writer(&self.writer).await;
 
         Ok(())
     }
@@ -764,7 +716,11 @@ mod early_exit;
 mod listen;
 #[path = "stdio_progress.rs"]
 mod progress;
+#[path = "stdio_start_failure.rs"]
+mod start_failure;
 use progress::{progress_token_string, request_progress_token};
+#[path = "stdio_write.rs"]
+mod write;
 
 #[cfg(test)]
 #[path = "stdio_tests.rs"]
@@ -792,33 +748,14 @@ mod cache_tests;
 mod start_refusal_tests;
 
 #[cfg(test)]
-mod spawn_classification_tests {
-    use super::StdioTransport;
-    use crate::Error;
-    use std::collections::HashMap;
-    use std::time::Duration;
+#[path = "stdio_spawn_classification_tests.rs"]
+mod spawn_classification_tests;
 
-    #[tokio::test]
-    async fn a_missing_command_is_reported_as_permanent() {
-        // END TO END, not a synthetic classifier input: this really tries to
-        // spawn, so it pins the actual io::ErrorKind the OS returns rather than
-        // the one this code assumes it returns.
-        let transport = StdioTransport::new(
-            "/nonexistent/definitely-not-a-real-binary",
-            HashMap::new(),
-            None,
-            Duration::from_secs(1),
-            None,
-        );
+// Unix-only: the fake backend is a `sh` script.
+#[cfg(all(test, unix))]
+#[path = "stdio_eof_request_tests.rs"]
+mod eof_request_tests;
 
-        let err = transport
-            .start()
-            .await
-            .expect_err("spawning a missing binary must fail");
-
-        assert!(
-            matches!(err, Error::TransportPermanent(_)),
-            "a missing command must be permanent, got {err:?}"
-        );
-    }
-}
+#[cfg(test)]
+#[path = "stdio_cache_abs_tests.rs"]
+mod cache_abs_tests;

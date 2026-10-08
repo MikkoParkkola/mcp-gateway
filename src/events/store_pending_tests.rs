@@ -51,6 +51,10 @@ fn sub(id: &str, now: DateTime<Utc>) -> Subscription {
         failed_since: None,
         last_delivery_at: None,
         last_error: None,
+        payload_fields: Vec::new(),
+        unoffered_since: None,
+        held_until: None,
+        watch_class: None,
     }
 }
 
@@ -76,6 +80,7 @@ fn record(event: &str, sub: &str, now: DateTime<Utc>) -> OutboxRecord {
         state: OutboxState::Pending,
         last_status: None,
         dead_as: None,
+        replayed: false,
     }
 }
 
@@ -113,7 +118,7 @@ fn caps_drop_new_records_and_keep_pending_ones() {
     assert_eq!(put("d", "s2"), Enqueued::Written);
     assert_eq!(put("e", "s2"), Enqueued::DroppedGlobal);
     assert_eq!(put("f", "gone"), Enqueued::NoSubscription);
-    let due = store.due(now, &HashSet::new()).expect("io");
+    let due = store.due(now, &HashSet::new(), ROOMY).expect("io");
     assert_eq!(due.ready.len(), 2, "one per subscription");
 }
 
@@ -145,12 +150,12 @@ fn claim_settle_and_unsubscribe_cancel() {
         store.get("s1").and_then(|s| s.last_error).as_deref(),
         Some("http_5xx")
     );
-    let due = store.due(now, &HashSet::new()).expect("io");
+    let due = store.due(now, &HashSet::new(), ROOMY).expect("io");
     assert!(due.ready.is_empty() && due.next == Some(next));
     store.remove("s1", now, TAIL).expect("remove");
     assert!(
         store
-            .due(next, &HashSet::new())
+            .due(next, &HashSet::new(), ROOMY)
             .expect("io")
             .ready
             .is_empty()
@@ -273,7 +278,14 @@ fn records_of_expired_subscriptions_are_cancelled_but_suspended_ones_kept() {
     store.enqueue(record("a", "live", now), caps).expect("io");
     store.enqueue(record("b", "paused", now), caps).expect("io");
     store.suspend("paused").expect("io");
-    assert_eq!(store.due(now, &HashSet::new()).expect("io").ready.len(), 1);
+    assert_eq!(
+        store
+            .due(now, &HashSet::new(), ROOMY)
+            .expect("io")
+            .ready
+            .len(),
+        1
+    );
     let on_disk = || {
         std::fs::read_dir(dir.path().join("outbox"))
             .expect("dir")
@@ -281,7 +293,7 @@ fn records_of_expired_subscriptions_are_cancelled_but_suspended_ones_kept() {
     };
     assert_eq!(on_disk(), 2, "the suspended subscription keeps its record");
     let past_expiry = now + chrono::Duration::hours(2);
-    store.due(past_expiry, &HashSet::new()).expect("io");
+    store.due(past_expiry, &HashSet::new(), ROOMY).expect("io");
     assert_eq!(on_disk(), 0, "expired: their records are cancelled");
 }
 
@@ -309,12 +321,12 @@ fn a_failed_settlement_leaves_the_record_pending() {
     let retry_at = now + super::SETTLE_RETRY;
     assert!(
         store
-            .due(now, &HashSet::new())
+            .due(now, &HashSet::new(), ROOMY)
             .expect("io")
             .ready
             .is_empty()
     );
-    let due = store.due(retry_at, &HashSet::new()).expect("io");
+    let due = store.due(retry_at, &HashSet::new(), ROOMY).expect("io");
     assert_eq!(due.ready.len(), 1, "pending again, not stranded in flight");
     let Claim::Ready(claimed) = store.claim("a", retry_at).expect("io") else {
         panic!("claimable");
@@ -417,7 +429,7 @@ fn a_failed_settlement_ignores_an_older_dead_letter_under_the_same_id() {
     };
     assert!(store.settle("a", now, dead, now, ROOMY).is_err());
     let due = store
-        .due(now + super::SETTLE_RETRY, &HashSet::new())
+        .due(now + super::SETTLE_RETRY, &HashSet::new(), ROOMY)
         .expect("io");
     assert_eq!(
         due.ready.len(),
@@ -649,7 +661,7 @@ fn revive_moves_a_dead_letter_back_only_while_it_is_the_one_scanned() {
         .collect();
     assert_eq!(left, ["e2", "e3"], "only the revived letter left dead/");
     assert!(!dir.path().join("dead/e1.json").exists(), "and its file");
-    let due = store.due(now, &HashSet::new()).expect("io");
+    let due = store.due(now, &HashSet::new(), ROOMY).expect("io");
     assert_eq!(due.ready.len(), 1);
     assert_eq!(due.ready[0].event_id, "e1");
     assert_eq!(due.ready[0].attempt, 0);
@@ -762,5 +774,7 @@ fn a_record_without_unsent_reads_as_none() {
 mod burial;
 #[path = "store_pending_crash_tests.rs"]
 mod crash;
+#[path = "store_expiry_tests.rs"]
+mod expiry;
 #[path = "store_revive_tests.rs"]
 mod revive;

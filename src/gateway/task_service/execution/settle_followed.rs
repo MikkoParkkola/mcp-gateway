@@ -57,7 +57,10 @@ pub(super) async fn settle_followed(
     executor: &Arc<TaskExecutor>,
     state: &crate::gateway::task_service::host::LiveHost,
     followed: &FollowedJob<'_>,
-    (event, screened): (TaskTransition, ErrorAuthor),
+    ((event, screened), writes): (
+        (TaskTransition, ErrorAuthor),
+        crate::gateway::gateway_writes::WriteRecord,
+    ),
     notes: &crate::gateway::meta_mcp::invoke::audit::DispatchNotes,
 ) {
     let (job, id) = (followed.job, followed.id);
@@ -83,6 +86,7 @@ pub(super) async fn settle_followed(
             followed.revision,
             (event, None),
             author,
+            writes,
         )
         .await;
     state.meta_mcp().commit_staged_relay(stored);

@@ -946,7 +946,7 @@ async fn meta_mcp_dispatch(
 
     // Resolved ONCE, here, and reused by creation, retrieval, cancellation,
     // idempotent replay and subscription ownership below.
-    let owner = tasks::route_task_owner(
+    let (owner, events_owner) = tasks::route_owners(
         &state,
         verified_identity.as_ref(),
         oauth_agent_identity.as_ref(),
@@ -1189,7 +1189,7 @@ async fn meta_mcp_dispatch(
             let hub = std::sync::Arc::clone(state.meta_mcp.events().expect("guarded above"));
             let session = Some(session_id.as_str());
             let caller = crate::events::Caller {
-                principal: events::principal(&owner, state.auth_config.enabled),
+                principal: events::principal(&events_owner, state.auth_config.enabled),
                 read_key: read_key.clone(),
                 credential: presented.credential(client.as_ref(), &state),
                 visible_backends: hub
@@ -2150,8 +2150,8 @@ mod cacheable_field_tests {
         // still pass if a method were dropped from it.
         assert_eq!(
             CACHEABLE_METHODS.len(),
-            5,
-            "the criterion names five methods: {CACHEABLE_METHODS:?}"
+            6,
+            "five cacheable methods and discovery: {CACHEABLE_METHODS:?}"
         );
         for method in CACHEABLE_METHODS {
             let response = JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({}));
@@ -2178,7 +2178,7 @@ mod cacheable_field_tests {
     #[tokio::test]
     async fn a_non_cacheable_method_gets_neither_field() {
         let response = JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({}));
-        let built = build_modern_response(response, StatusCode::OK, "server/discover");
+        let built = build_modern_response(response, StatusCode::OK, "tools/call");
         let bytes = axum::body::to_bytes(built.into_body(), usize::MAX)
             .await
             .expect("the builder produces a complete in-memory body");

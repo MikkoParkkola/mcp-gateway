@@ -62,10 +62,25 @@ pub(crate) fn held_credential(headers: &axum::http::HeaderMap) -> Option<HeldCre
 /// credential that no longer validates yields `None`, never the public
 /// identity. With authentication on, a session that presented no credential
 /// yields `None` as well.
+///
+/// With agent authentication on, ingress refuses any request whose bearer is
+/// not a valid agent token, before gateway authentication is asked, so this
+/// does too: an expired token, a removed agent or a rotated key yields `None`
+/// in either gateway mode. A valid agent token that no gateway credential
+/// recognises gets the public identity, as ingress gave it on the public path
+/// that admitted the stream.
 pub(crate) async fn current_client(
     state: &AuthState,
     credential: Option<&HeldCredential>,
 ) -> Option<AuthenticatedClient> {
+    // Dead here, in either gateway mode, unless the held bearer is a valid
+    // agent token: ingress refused every other request already.
+    let mut agent_validated = false;
+    if state.agent_auth.enabled {
+        let token = credential.and_then(|held| held.bearer.as_deref())?;
+        crate::gateway::oauth::validate_agent_token(token, &state.agent_auth.registry).ok()?;
+        agent_validated = true;
+    }
     if !state.auth_config.enabled {
         return Some(anonymous_client());
     }
@@ -86,9 +101,10 @@ pub(crate) async fn current_client(
     if let Some((client, _)) = state.auth_config.validate_token_with_origin(token) {
         return Some(client);
     }
-    key_server_credential(state, token)
-        .await
-        .map(|(client, _, _)| client)
+    if let Some((client, _, _)) = key_server_credential(state, token).await {
+        return Some(client);
+    }
+    agent_validated.then(super::public_client)
 }
 
 /// Who a notification is for: callers who may access one backend, or every
@@ -294,6 +310,10 @@ mod tests {
             live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
                 crate::config::Config::default(),
             )),
+            agent_auth: crate::gateway::oauth::AgentAuthState::new(
+                false,
+                std::sync::Arc::default(),
+            ),
         }
     }
 
