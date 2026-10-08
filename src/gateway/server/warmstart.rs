@@ -10,6 +10,7 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use crate::Error;
+use crate::backend::tools_nudge::NudgeKind;
 use crate::backend::{Backend, BackendRegistry};
 use crate::config::Config;
 use crate::config_reload::{OnRegistered, RegisteredChange};
@@ -557,9 +558,10 @@ impl WarmerGuard {
     pub(super) fn hook(&self) -> OnRegistered {
         let warmer = Arc::downgrade(&self.0);
         Arc::new(move |change: &RegisteredChange, config: &Config| {
-            if let Some(warmer) = warmer.upgrade() {
-                warmer.apply(change, config);
-            }
+            warmer
+                .upgrade()
+                .map(|warmer| warmer.apply(change, config))
+                .unwrap_or_default()
         })
     }
 
@@ -632,6 +634,15 @@ async fn warm_start_until_cached(
     // Set when an attempt came back with no tools, so the NEXT attempt knows to
     // discard the cached emptiness and actually re-ask.
     let saw_empty_list = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // A second attempt means the first ended without a list: this instance
+    // shows nothing for now, decided rather than pending (`MIK-8127`). Once it
+    // stores a list the drain ignores this, so repeating it costs nothing.
+    let attempted = std::sync::atomic::AtomicBool::new(false);
+    let settled = || {
+        if let Some(backend) = instance.upgrade() {
+            backend.nudge_tools(NudgeKind::Resolved);
+        }
+    };
 
     let outcome = retry_warm_start_attempts(
         name,
@@ -644,6 +655,9 @@ async fn warm_start_until_cached(
             })
         },
         || {
+            if attempted.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                settled();
+            }
             let dormant_yields = Arc::clone(&dormant_yields);
             let saw_empty_list = Arc::clone(&saw_empty_list);
             async move {
@@ -710,8 +724,9 @@ async fn warm_start_until_cached(
     )
     .await;
 
-    if let Some(tools) = outcome {
-        info!(backend = %name, tools, "Warm-started + tools cached");
+    match outcome {
+        Some(tools) => info!(backend = %name, tools, "Warm-started + tools cached"),
+        None => settled(),
     }
 }
 

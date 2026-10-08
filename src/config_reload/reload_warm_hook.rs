@@ -20,8 +20,9 @@ pub(crate) struct RegisteredChange {
 
 /// Told about every fully applied reload, after its config is published and
 /// while the reload transaction still holds `lock_reload`, so reloads report
-/// in commit order against their own config and instances.
-pub(crate) type OnRegistered = Arc<dyn Fn(&RegisteredChange, &Config) + Send + Sync>;
+/// in commit order against their own config and instances. Returns the names
+/// it scheduled a warm-up for.
+pub(crate) type OnRegistered = Arc<dyn Fn(&RegisteredChange, &Config) -> Vec<String> + Send + Sync>;
 
 impl ReloadContext {
     /// Attach the environment startup published.
@@ -42,9 +43,22 @@ impl ReloadContext {
     }
 
     /// Report an applied reload to the hook, if one is attached.
+    ///
+    /// A registered instance no warm-up will fill is settled here: it shows
+    /// nothing until something stores its list, and listeners told it had
+    /// tools must hear that they are gone (`MIK-8127`).
     pub(super) fn report_registered(&self, change: &RegisteredChange, config: &Config) {
-        if let Some(hook) = &self.on_registered {
-            hook(change, config);
+        let warmed = self
+            .on_registered
+            .as_ref()
+            .map(|hook| hook(change, config))
+            .unwrap_or_default();
+        for name in change
+            .registered
+            .iter()
+            .filter(|name| !warmed.contains(name))
+        {
+            self.registry.resolve_unwarmed(name);
         }
     }
 }

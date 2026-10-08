@@ -14,7 +14,13 @@ use crate::Result;
 
 pub(crate) struct CachedMetadata<T> {
     state: RwLock<CachedMetadataState<T>>,
+    /// Told after every accepted store, whichever writer made it (`MIK-8127`):
+    /// set once, on a backend's shared tool slot only.
+    store_observer: std::sync::OnceLock<StoreObserver>,
 }
+
+/// What [`CachedMetadata::observe_stores`] runs after an accepted store.
+pub(crate) type StoreObserver = Arc<dyn Fn() + Send + Sync>;
 
 struct CachedMetadataState<T> {
     value: Option<Arc<T>>,
@@ -65,6 +71,19 @@ impl<T> CachedMetadata<T> {
     pub(crate) fn new() -> Self {
         Self {
             state: RwLock::new(CachedMetadataState::default()),
+            store_observer: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Run `observer` after every store this cache accepts from now on. The
+    /// first observer stays; a later one is ignored.
+    pub(crate) fn observe_stores(&self, observer: StoreObserver) {
+        let _ = self.store_observer.set(observer);
+    }
+
+    fn stored(&self) {
+        if let Some(observer) = self.store_observer.get() {
+            observer();
         }
     }
 
@@ -104,6 +123,8 @@ impl<T> CachedMetadata<T> {
             return;
         }
         Self::store_locked(&mut state, value, on_stored);
+        drop(state);
+        self.stored();
     }
 
     /// The one store both writers share, run under the caller's write guard
@@ -124,6 +145,8 @@ impl<T> CachedMetadata<T> {
         let mut state = self.state.write();
         Self::store_locked(&mut state, Arc::new(value), on_stored);
         state.generation = state.generation.wrapping_add(1);
+        drop(state);
+        self.stored();
     }
 
     /// Not `value.is_some()`: `invalidate_if` clears the value, so that would

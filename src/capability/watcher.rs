@@ -38,7 +38,7 @@ impl CapabilityWatcher {
     pub fn start(
         backend: Arc<CapabilityBackend>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-        changes: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+        changes: Option<crate::backend::tools_nudge::NudgeFeed>,
     ) -> Result<Self> {
         let directories = backend.watched_directories();
         debug!(directories = ?directories, "Starting capability watcher");
@@ -121,7 +121,7 @@ impl CapabilityWatcher {
         backend: Arc<CapabilityBackend>,
         mut event_rx: mpsc::Receiver<()>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
-        changes: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+        changes: Option<crate::backend::tools_nudge::NudgeFeed>,
     ) {
         tokio::spawn(async move {
             // Debounce: wait 500ms after last event before reloading
@@ -169,7 +169,11 @@ impl CapabilityWatcher {
                                                 "Hot-reload complete"
                                             );
                                             if let Some(changes) = &changes {
-                                                let _ = changes.send(backend.name.clone());
+                                                let _ = changes.send(
+                                                    crate::backend::tools_nudge::ToolsNudge::Catalogue {
+                                                        name: backend.name.clone(),
+                                                    },
+                                                );
                                             }
                                         }
                                         Err(e) => {

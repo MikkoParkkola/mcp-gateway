@@ -329,10 +329,10 @@ async fn revive_backend(
     // saying "revived" there would misreport it to the operator.
     let outcome = backend.force_restart().await;
     let rebuilt = matches!(outcome, Ok(crate::backend::RestartOutcome::Rebuilt));
+    // No announcement: a restart keeps the stored tool list, so what discovery
+    // shows is unchanged; a list the new transport stores later is announced by
+    // the change drain if it differs (`MIK-8127`).
     let status = if rebuilt { "revived" } else { "not_revived" };
-    if rebuilt {
-        state.announce_tools_changed(&name).await;
-    }
 
     (
         StatusCode::OK,
