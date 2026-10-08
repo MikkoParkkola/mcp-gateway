@@ -312,3 +312,24 @@ fn unsubscribing_a_kept_expired_row_does_not_restart_its_tail() {
         "the tail began at the expiry, not at the unsubscribe"
     );
 }
+
+/// A record written before fan-out stamped its callback host is buried at
+/// expiry with its row's host: the receipt names the host after the row is
+/// gone.
+#[test]
+fn an_expiry_burial_carries_its_rows_callback_host() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = Utc::now();
+    let store = open_with(dir.path(), now, &["s1"]);
+    let tried = OutboxRecord {
+        attempt: 1,
+        ..record("e1", "s1", now)
+    };
+    store.enqueue(tried, OUTBOX).expect("io");
+    let due = store
+        .due(past_expiry(now), &HashSet::new(), ROOMY)
+        .expect("io");
+    assert!(store.get("s1").is_none(), "the row is gone");
+    assert_eq!(due.buried.len(), 1, "buried");
+    assert_eq!(due.buried[0].callback_host, "h", "the row's host");
+}
