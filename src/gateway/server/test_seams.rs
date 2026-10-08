@@ -14,6 +14,7 @@ pub(super) struct TestSeams {
     pub(super) data_dir: Option<PathBuf>,
     bound_port: Option<oneshot::Sender<u16>>,
     /// Starts the graceful shutdown as Ctrl+C or SIGTERM would (MIK-8156).
+    #[cfg(test)]
     shutdown: Option<oneshot::Receiver<()>>,
     /// Receives `run`'s in-flight request gate, so a test can hold a request
     /// open across the drain (MIK-8156).
@@ -37,6 +38,7 @@ impl TestSeams {
     }
 
     /// The test's shutdown trigger, taken once by `run`.
+    #[cfg(test)]
     pub(super) fn take_shutdown_trigger(&mut self) -> Option<oneshot::Receiver<()>> {
         self.shutdown.take()
     }
@@ -95,6 +97,7 @@ impl super::Gateway {
 
     /// A trigger that starts `run`'s graceful shutdown, as a signal would.
     /// Sending, or dropping the sender, starts it.
+    #[cfg(test)]
     pub(super) fn shutdown_trigger_for_test(&mut self) -> oneshot::Sender<()> {
         let (sender, receiver) = oneshot::channel();
         self.test_seams.shutdown = Some(receiver);
