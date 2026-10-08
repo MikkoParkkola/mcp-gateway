@@ -221,3 +221,38 @@ fn a_composing_boundary_elsewhere_keeps_other_seams() {
         "one composing boundary dropped every run-together seam"
     );
 }
+
+/// A mark from another step that composes with the seam's own last char
+/// costs only the k-grams over that boundary: the seam before it stays.
+#[test]
+fn a_mark_composing_with_a_seams_field_keeps_the_seam() {
+    let det = detector();
+    let parts = [
+        (FIELD_A, Some(0)),
+        (FIELD_B, Some(1)),
+        ("\u{301} terrace rows, closing time", Some(2)),
+    ];
+    assert!(
+        matched(&det, &parts, &format!("{FIELD_A}{FIELD_B}")),
+        "a composing mark erased the seam before it"
+    );
+}
+
+/// Hangul jamo split over leaves, with an empty leaf between them, compose
+/// when run together; the seam elsewhere in the form stays.
+#[test]
+fn jamo_split_over_empty_leaves_keep_other_seams() {
+    let det = detector();
+    let parts = [
+        (FIELD_A, Some(0)),
+        (FIELD_B, Some(1)),
+        ("\u{1100}", Some(2)),
+        ("", Some(3)),
+        ("\u{1161}", Some(4)),
+        ("\u{11A8}", Some(5)),
+    ];
+    assert!(
+        matched(&det, &parts, &format!("{FIELD_A}{FIELD_B}")),
+        "composing jamo erased an unrelated seam"
+    );
+}

@@ -27,10 +27,9 @@ impl CollusionDetector {
     /// each with the step that produced it. Every occurrence of a fingerprint
     /// adds its steps, so each occurrence's limits apply to it together.
     ///
-    /// Cost: each form is normalized twice (once tagged, once as
-    /// [`Self::kgram_hashes`] reads it, which the tagged result must equal),
-    /// and each k-gram reads the at most `K` steps in its window: O(L * K)
-    /// time, O(L) memory, for L chars of answer.
+    /// Cost: each form is normalized once, part by part, and the window is
+    /// slid twice, collecting steps only for winnowed seam fingerprints:
+    /// O(L) time and memory for L chars of answer.
     pub(crate) fn seam_fingerprints(&self, parts: &[(&str, Option<u32>)]) -> Vec<SeamFingerprint> {
         let mut steps: HashMap<u64, BTreeSet<u32>> = HashMap::new();
         for separator in ["\n", ""] {
@@ -58,9 +57,7 @@ impl CollusionDetector {
         parts: &[(&str, Option<u32>)],
         separator: &str,
     ) -> Vec<(u64, BTreeSet<u32>)> {
-        let Some((norm, tags)) = self.tagged_form(parts, separator) else {
-            return Vec::new();
-        };
+        let (norm, tags) = self.tagged_form(parts, separator);
         let chars = tags.len();
         if chars < K {
             return Vec::new();
@@ -99,56 +96,31 @@ impl CollusionDetector {
     }
 
     /// The form's text normalized as [`Self::kgram_hashes`] normalizes it,
-    /// with the step of each char. Each part is normalized alone, except
-    /// where a boundary composes across (the next part opens with a mark
-    /// that joins the previous char): those parts are normalized together,
-    /// owned by their step only when they share one, else by none, so one
-    /// such boundary costs at most the seams over it. `None` only when the
-    /// result still differs from the text normalized whole: never a
-    /// fingerprint the egress side cannot compute.
+    /// with the step of each char. Each part is normalized alone. NFC is
+    /// local: where a part opens with a mark that composes with the char
+    /// before it, only the k-grams over that boundary differ from the text
+    /// normalized whole, so such a boundary costs at most the seams over
+    /// it, never another seam in the form.
+    #[expect(
+        clippy::unused_self,
+        reason = "normalized as every k-gram the detector reads"
+    )]
     fn tagged_form(
         &self,
         parts: &[(&str, Option<u32>)],
         separator: &str,
-    ) -> Option<(String, Vec<Option<u32>>)> {
+    ) -> (String, Vec<Option<u32>>) {
         let nfc = ComposingNormalizerBorrowed::new_nfc();
-        let visible: Vec<String> = parts
-            .iter()
-            .map(|(text, _)| {
-                text.chars()
-                    .filter(|&c| !crate::security::sanitize::is_unsafe_control(c))
-                    .collect()
-            })
-            .collect();
-        let alone: Vec<String> = visible
-            .iter()
-            .map(|v| nfc.normalize(v).into_owned())
-            .collect();
         let mut stream: Vec<(char, Option<u32>)> = Vec::new();
-        let mut i = 0;
-        while i < parts.len() {
-            // Each boundary is normalized once, so this stays linear.
-            let mut j = i;
-            while j + 1 < parts.len() {
-                let pair = format!("{}{separator}{}", visible[j], visible[j + 1]);
-                if nfc.normalize(&pair) == format!("{}{separator}{}", alone[j], alone[j + 1]) {
-                    break;
-                }
-                j += 1;
-            }
+        for (i, (text, owner)) in parts.iter().enumerate() {
             if i > 0 {
                 stream.extend(separator.chars().map(|c| (c, None)));
             }
-            if j == i {
-                stream.extend(alone[i].chars().map(|c| (c, parts[i].1)));
-            } else {
-                let owner = parts[i]
-                    .1
-                    .filter(|o| parts[i..=j].iter().all(|p| p.1 == Some(*o)));
-                let fused = visible[i..=j].join(separator);
-                stream.extend(nfc.normalize(&fused).chars().map(|c| (c, owner)));
-            }
-            i = j + 1;
+            let visible: String = text
+                .chars()
+                .filter(|&c| !crate::security::sanitize::is_unsafe_control(c))
+                .collect();
+            stream.extend(nfc.normalize(&visible).chars().map(|c| (c, *owner)));
         }
         // Whitespace collapsed as `split_whitespace().join(" ")`: trimmed, and
         // each inner run one unowned space.
@@ -168,12 +140,7 @@ impl CollusionDetector {
             norm.push(c);
             tags.push(owner);
         }
-        let joined = parts
-            .iter()
-            .map(|(text, _)| *text)
-            .collect::<Vec<_>>()
-            .join(separator);
-        (self.normalized(&joined) == norm).then_some((norm, tags))
+        (norm, tags)
     }
 }
 
