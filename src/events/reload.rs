@@ -87,7 +87,7 @@ pub(crate) fn judge(
     shapes: &BTreeMap<String, Shape>,
 ) -> Option<super::store::Judged> {
     use super::store::{Held, Judged};
-    if !sub.name.starts_with("webhook.") {
+    if !sub.name.starts_with(super::webhook_source::NAME_PREFIX) {
         return None;
     }
     let Some(shape) = shapes.get(&sub.name) else {

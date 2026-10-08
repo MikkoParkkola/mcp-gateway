@@ -254,15 +254,11 @@ impl EventsHub {
     }
 
     /// Once the startup capability scan has registered the webhook routes:
-    /// delete the subscriptions to webhook event types the catalogue no
-    /// longer offers (a route removed while the gateway was down, or webhooks
-    /// turned off), their pending records with them, and let the worker start.
-    /// Before this the webhook catalogue is partial, so no webhook type is
-    /// withdrawn and nothing is sent (MIK-7772); backend types are complete
-    /// from the start and are withdrawn whatever the scan did (MIK-7803). `false`, with the worker still held, when
-    /// a removal failed: the caller retries.
-    /// It runs as the deferred startup pass does, after the grace period
-    /// (MIK-8027).
+    /// withdraw the subscriptions of backends removed while the gateway was
+    /// down (MIK-7803), hold the webhook subscriptions the routes do not offer
+    /// or serve (MIK-8057; nothing is sent to them, nothing deleted), and let
+    /// the worker start. `false`, with the worker still held, when a removal
+    /// failed: the caller retries.
     #[cfg(test)]
     pub(crate) fn reconcile_catalogue(&self, scan: CatalogueScan) -> bool {
         self.reconcile_catalogue_after(&|| scan)

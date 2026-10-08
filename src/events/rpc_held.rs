@@ -65,7 +65,7 @@ impl EventsHub {
             .get("secret")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let key = super::client::decode_whsec(secret)
+        let key = crate::events::client::decode_whsec(secret)
             .ok_or_else(|| RpcError::invalid("delivery.secret"))?;
         let grant = Grant {
             ttl: granted_ttl(self, params)?,
@@ -88,7 +88,7 @@ impl EventsHub {
             per_principal: self.config.max_subscriptions_per_principal,
             global: self.config.max_subscriptions,
         };
-        let tail = super::tail_policy(&self.config);
+        let tail = crate::events::tail_policy(&self.config);
         let grace = chrono::Duration::from_std(self.config.secret_rotation_grace)
             .unwrap_or_else(|_| chrono::Duration::zero());
         let mut verified = self.store.is_verified(principal, url.as_str(), now, tail);
@@ -152,7 +152,7 @@ impl EventsHub {
     pub(super) fn payload_fields(&self, name: &str) -> Vec<String> {
         self.webhook_registry
             .get()
-            .map(|registry| super::reload::payload_fields(registry, name))
+            .map(|registry| crate::events::reload::payload_fields(registry, name))
             .unwrap_or_default()
     }
 }
