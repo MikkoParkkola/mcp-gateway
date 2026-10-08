@@ -759,3 +759,8 @@ mod eof_request_tests;
 #[cfg(test)]
 #[path = "stdio_cache_abs_tests.rs"]
 mod cache_abs_tests;
+
+// MIK-8080 red proof (throwaway): T1, T5, D1 against today's code.
+#[cfg(all(test, unix))]
+#[path = "stdio_child_tree_red_tests.rs"]
+mod child_tree_red_tests;
