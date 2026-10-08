@@ -103,7 +103,13 @@ impl SketchStore {
         let list = self.by_pair.entry(pair).or_default();
         list.push((seq, at, sketch));
         if list.len() > MAX_SKETCHES {
-            let (old, old_at, gone) = list.remove(0);
+            // The earliest delivered goes, whatever order calls arrived in.
+            let oldest = list
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, (seq, at, _))| (*at, *seq))
+                .map_or(0, |(i, _)| i);
+            let (old, old_at, gone) = list.remove(oldest);
             self.order.remove(&(old_at, old));
             self.bytes -= gone.bytes();
             self.evicted += 1;

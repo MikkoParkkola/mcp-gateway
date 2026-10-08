@@ -148,3 +148,52 @@ fn a_plan_step_cut_at_staging_excuses_nothing() {
         "a step cut at staging excused text its answer never delivered"
     );
 }
+
+/// Alice's plan step carried `long_answer()`; the plan's answer delivered
+/// `answer`. Her step receipt is kept to it, capped, and recorded, as a
+/// plan's delivery does.
+fn deliver_plan_step(fw: &Firewall, answer: &serde_json::Value) {
+    let staged = std::cell::Cell::new(0);
+    let step = json!({"content": [{"type": "text", "text": long_answer()}]});
+    let digest = fw
+        .receipt_digest("alpha", "read", &step, Some(&staged))
+        .expect("relay detection is on");
+    let delivered = fw
+        .delivered_for_plan(answer, None)
+        .expect("under the bound");
+    let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered));
+    fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &kept);
+}
+
+/// `MIK-8066` (E5): text a plan step carried but the plan's answer left
+/// out was never received, so nothing excuses it.
+#[test]
+fn text_a_plan_answer_left_out_is_not_excused() {
+    let fw = firewall();
+    deliver(&fw, "carol", "read", P);
+    deliver_plan_step(
+        &fw,
+        &json!({"a": filler(1, 10_000), "b": filler(2, 10_000)}),
+    );
+    assert!(
+        relays(&fw, "alice", P),
+        "text the answer left out was excused"
+    );
+}
+
+/// `MIK-8066` (E1''): text a plan answer delivered from a step whose receipt
+/// was then capped is excused for its holder.
+#[test]
+fn text_a_plan_answer_delivered_is_excused_past_the_cap() {
+    let fw = firewall();
+    deliver(&fw, "carol", "read", P);
+    deliver_plan_step(&fw, &json!({"whole": long_answer()}));
+    assert!(
+        relays(&fw, "bob", P),
+        "control: bob without a copy is a relay"
+    );
+    assert!(
+        !relays(&fw, "alice", P),
+        "text the answer delivered was not excused"
+    );
+}
