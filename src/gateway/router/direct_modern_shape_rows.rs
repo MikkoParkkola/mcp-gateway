@@ -418,7 +418,7 @@ fn the_declared_revision_is_observed() {
 /// MIK-8022.FOLLOW.1: through the route, a modern answer is delivered with
 /// the gateway's `serverInfo`, and the receipt is built without it, on both
 /// call arms, on a replay, and on a catalogue read. This pins the stamps
-/// from `deliver_tail` to each stager, not only inside the stagers.
+/// from `finish_tail` to each stager, not only inside the stagers.
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn a_direct_receipt_is_built_without_the_gateway_stamp() {
