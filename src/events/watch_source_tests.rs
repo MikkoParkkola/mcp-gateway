@@ -772,3 +772,6 @@ async fn a_poller_stopped_during_a_partial_catalogue_restarts_after_it() {
 
 #[path = "watch_source_partial_tests.rs"]
 mod partial;
+
+#[path = "watch_hold_tests.rs"]
+mod hold;
