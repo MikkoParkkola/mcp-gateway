@@ -297,6 +297,8 @@ async fn close_returns_while_a_write_is_stuck_on_a_peer_that_stopped_reading() {
 
 /// MIK-8079: `close()` returns even when a reader that escaped the process
 /// group (a daemonized descendant still holding stdin) keeps a write stuck.
+/// The pipe goes through fd 3: a background job's own stdin is `/dev/null`
+/// in a non-interactive shell, so `<&0` would not hand it the pipe.
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
@@ -309,7 +311,7 @@ async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
         "while IFS= read -r line; do\n\
          case \"$line\" in\n\
          *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
-         *'notifications/initialized'*) setsid sleep 1000 <&0 >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
+         *'notifications/initialized'*) exec 3<&0; setsid sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
          esac\ndone\n",
         pid = pidfile.display()
     );
