@@ -310,3 +310,25 @@ fn only_the_named_flow_style_backends_are_reported() {
     assert_eq!(out.skipped, vec!["c".to_string()]);
     assert_eq!(out.kept, vec!["b".to_string()]);
 }
+
+#[test]
+fn a_block_style_rename_in_a_file_with_a_repeated_key_is_rolled_back() {
+    // The strict proof cannot read the file, so nothing is written and the
+    // backend is named for a hand edit.
+    let text = "server: {port: 1}\nserver: {port: 2}\nbackends:\n  fs:\n    http_url: \"https://fs.example.test/mcp\"\n";
+    let out = rewrite_url_aliases(text, None);
+    assert_eq!(out.text, text);
+    assert!(out.changed.is_empty(), "{:?}", out.changed);
+    assert_eq!(out.skipped, vec!["fs".to_string()]);
+}
+
+#[test]
+fn a_repeated_alias_is_judged_by_its_last_value() {
+    let address = "\"https://fs.example.test/mcp\"";
+    let last_address = format!("backends:\n  fs: {{http_url: \"${{X}}\", http_url: {address}}}\n");
+    let out = rewrite_url_aliases(&last_address, None);
+    assert_eq!(out.skipped, vec!["fs".to_string()], "{:?}", out.kept);
+    let last_variable = format!("backends:\n  fs: {{http_url: {address}, http_url: \"${{X}}\"}}\n");
+    let out = rewrite_url_aliases(&last_variable, None);
+    assert_eq!(out.kept, vec!["fs".to_string()], "{:?}", out.skipped);
+}
