@@ -265,8 +265,31 @@ impl Provider for OverlayEnv<'_> {
             }
             Self::insert_nested(&mut dict, &parts, value);
         }
+        refuse_backend_url(&dict)?;
         Ok(Profile::Default.collect(dict))
     }
+}
+
+/// An environment `url` for a backend is refused, never ignored. The file and
+/// the environment merge key by key, so `MCP_GATEWAY_BACKENDS__<NAME>__URL`
+/// could not replace a `http_url` the file sets; the variables that can are
+/// named instead. The value is not echoed: a URL can carry a credential.
+fn refuse_backend_url(dict: &Dict) -> figment::Result<()> {
+    let Some(figment::value::Value::Dict(_, backends)) = dict.get("backends") else {
+        return Ok(());
+    };
+    for (name, fields) in backends {
+        if let figment::value::Value::Dict(_, fields) = fields
+            && fields.contains_key("url")
+        {
+            let var = format!("{}BACKENDS__{}", OverlayEnv::PREFIX, name.to_uppercase());
+            return Err(format!(
+                "{var}__URL is not read: set {var}__HTTP_URL or {var}__WS_URL instead."
+            )
+            .into());
+        }
+    }
+    Ok(())
 }
 
 /// Whether a load substitutes the environment into the config it returns.

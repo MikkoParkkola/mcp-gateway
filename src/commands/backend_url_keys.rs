@@ -23,6 +23,7 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
     let mut lines: Vec<String> = text.split_inclusive('\n').map(str::to_string).collect();
     let mut changed = Vec::new();
     let mut skipped = Vec::new();
+    let mut renamed: Vec<(String, &'static str)> = Vec::new();
     for entry in backend_entries(&lines) {
         if only.is_some_and(|names| !names.contains(&entry.name)) {
             continue;
@@ -38,13 +39,51 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
         if let Some(&(at, alias)) = entry.aliases.first() {
             lines[at] = lines[at].replacen(alias, "url", 1);
             changed.push(at + 1);
+            renamed.push((entry.name, alias));
         }
     }
+    let rewritten = lines.concat();
+    if !changed.is_empty() && !only_renamed(text, &rewritten, &renamed) {
+        // A line that looked like a key was text inside a value. Nothing is
+        // saved; each backend involved is reported for a hand edit.
+        skipped.extend(renamed.into_iter().map(|(name, _)| name));
+        return UrlRewrite {
+            text: text.to_string(),
+            changed: Vec::new(),
+            skipped,
+        };
+    }
     UrlRewrite {
-        text: lines.concat(),
+        text: rewritten,
         changed,
         skipped,
     }
+}
+
+/// Whether `after` parses to exactly `before` with each `(backend, alias)`
+/// key renamed `url` and every value, comment-free, unchanged.
+fn only_renamed(before: &str, after: &str, renamed: &[(String, &'static str)]) -> bool {
+    use serde_yaml::Value;
+    let (Ok(mut expected), Ok(actual)) = (
+        serde_yaml::from_str::<Value>(before),
+        serde_yaml::from_str::<Value>(after),
+    ) else {
+        return false;
+    };
+    for (name, alias) in renamed {
+        let Some(fields) = expected
+            .get_mut("backends")
+            .and_then(|b| b.get_mut(name.as_str()))
+            .and_then(Value::as_mapping_mut)
+        else {
+            return false;
+        };
+        let Some(value) = fields.remove(*alias) else {
+            return false;
+        };
+        fields.insert(Value::from("url"), value);
+    }
+    expected == actual
 }
 
 /// One entry under `backends:`: its name, whether it is written in flow
@@ -67,7 +106,8 @@ fn key_of(line: &str) -> Option<String> {
     let body = line.trim_start();
     let (key, _) = body.split_once(':')?;
     let key = key.trim().trim_matches(|c| c == '"' || c == '\'');
-    (!key.is_empty() && !key.contains(' ')).then(|| key.to_string())
+    // A backend name may hold spaces; a list item is not a key.
+    (!key.is_empty() && !key.starts_with('-')).then(|| key.to_string())
 }
 
 /// The entries of the top-level `backends:` block.

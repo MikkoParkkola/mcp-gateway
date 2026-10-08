@@ -297,10 +297,22 @@ fn unread_backend_keys(raw: &str, ignored: &mut IgnoredKeys) -> BackendFindings 
             .keys()
             .filter_map(serde_yaml::Value::as_str)
             .collect();
+        // `url` selects what its scheme stands for, as the loader resolves it.
+        let by_url = fields
+            .get("url")
+            .and_then(serde_yaml::Value::as_str)
+            .map(|url| {
+                let url = url.to_ascii_lowercase();
+                if url.starts_with("ws://") || url.starts_with("wss://") {
+                    "ws_url"
+                } else {
+                    "http_url"
+                }
+            });
         let selected = TRANSPORTS
             .iter()
             .filter(|(selector, ..)| is_backend_key(selector))
-            .find(|(selector, ..)| keys.contains(selector));
+            .find(|(selector, ..)| keys.contains(selector) || by_url == Some(*selector));
         for key in keys {
             let path = format!("backends.{name}.{key}");
             if !is_backend_key(key) {
