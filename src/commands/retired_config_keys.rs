@@ -6,9 +6,10 @@
 //! `upgrade` names it for the operator to delete by hand.
 
 /// What `upgrade`'s rewrite did with `meta_mcp.cache_tools`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Retired {
     /// The file sets no `meta_mcp.cache_tools`.
+    #[default]
     Absent,
     /// The key's line, 1-based, was removed.
     Removed(usize),
