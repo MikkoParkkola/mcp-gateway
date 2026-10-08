@@ -58,9 +58,8 @@ pub(super) fn with_backend_edited(
             let raw = backends.get_mut(name)?.as_mapping_mut()?;
             if raw.contains_key("url") {
                 // The file says `url`: edit it there, never `http_url` beside it.
-                for side in [&mut old, &mut new] {
-                    super::url_spelling::spell_as_url(side);
-                }
+                super::url_spelling::spell_as_url(&mut old);
+                super::url_spelling::spell_as_url(&mut new);
             }
             // `want` is the file's own spelling of the entry with only the
             // changed keys replaced, never the fully serialised backend.
