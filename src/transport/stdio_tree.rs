@@ -140,7 +140,7 @@ impl Drop for CancelUnanswered<'_> {
         let shutdown = parking_lot::Mutex::new(self.transport.shutdown.lock().clone());
         let message = serde_json::json!({
             "jsonrpc": "2.0", "method": "notifications/cancelled",
-            "params": {"requestId": self.id, "reason": "the gateway's caller abandoned the request"},
+            "params": crate::transport::write_claim::cancelled_params(&self.id),
         })
         .to_string();
         runtime.spawn(async move { drop(write_frame(&writer, &shutdown, &message, None).await) });

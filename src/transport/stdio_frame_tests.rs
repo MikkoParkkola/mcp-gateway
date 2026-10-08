@@ -449,3 +449,38 @@ async fn dropping_the_transport_ends_a_write_stuck_on_an_escaped_reader() {
         "a dropped transport left its stuck write holding stdin"
     );
 }
+
+/// `MIK-7642.PR.B`: an `initialize` dropped before its answer is never
+/// cancelled; the protocol forbids it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_dropped_initialize_is_never_cancelled() {
+    use std::collections::HashMap;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("frames.log");
+    let script = format!(
+        "while IFS= read -r line; do printf '%s\\n' \"$line\" >> \"{}\"; done\n",
+        log.display()
+    );
+    std::fs::write(dir.path().join("deaf.sh"), script).unwrap();
+    let transport = super::StdioTransport::new(
+        "sh deaf.sh",
+        HashMap::new(),
+        Some(dir.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(30),
+        None,
+    );
+    let started =
+        tokio::time::timeout(std::time::Duration::from_millis(500), transport.start()).await;
+    assert!(
+        started.is_err(),
+        "precondition: initialize was still waiting"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let frames = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        frames.contains("\"method\":\"initialize\""),
+        "precondition: sent: {frames}"
+    );
+    assert!(!frames.contains("notifications/cancelled"), "{frames}");
+}

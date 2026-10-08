@@ -15,6 +15,7 @@ use tracing::debug;
 use super::HTTP_TARGET;
 use crate::protocol::era::Era;
 use crate::protocol::{JsonRpcNotification, JsonRpcRequest};
+use crate::transport::write_claim::cancelled_params;
 
 /// Bound on the cancel POST; nothing waits for it, but it must not linger.
 const CANCEL_POST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -52,10 +53,7 @@ impl CancelOnDrop {
             body: JsonRpcNotification {
                 jsonrpc: "2.0".to_string(),
                 method: "notifications/cancelled".to_string(),
-                params: Some(serde_json::json!({
-                    "requestId": request.id,
-                    "reason": "the gateway's caller abandoned the request",
-                })),
+                params: Some(cancelled_params(&request.id)),
             },
         }))
     }

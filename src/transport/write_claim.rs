@@ -40,6 +40,15 @@ impl WriteClaim {
     }
 }
 
+/// The params of the `notifications/cancelled` every transport sends for a
+/// request whose caller gave up, naming the id the backend received.
+pub(crate) fn cancelled_params(id: &crate::protocol::RequestId) -> serde_json::Value {
+    serde_json::json!({
+        "requestId": id,
+        "reason": "the gateway's caller abandoned the request",
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::WriteClaim;

@@ -205,3 +205,35 @@ async fn a_dropped_recovery_resend_is_cancelled_once_on_the_fresh_session() {
         "on the fresh session"
     );
 }
+
+/// The cancel rides the caller's own session bucket, never the shared one: a
+/// stateful backend sees it on the same session as the request.
+#[tokio::test]
+async fn the_cancel_carries_the_callers_identity() {
+    let (url, seen) = backend().await;
+    let transport = super::make_transport(&url);
+    super::set_default_session(&transport, "shared-session");
+    transport
+        .sessions
+        .write()
+        .insert("alice".to_string(), "alice-session".to_string());
+    let _ = tokio::time::timeout(
+        PATIENCE,
+        transport.send_request_with_headers(&request(45, "slow"), &[], Some("alice"), None),
+    )
+    .await;
+    tokio::time::sleep(ARRIVAL).await;
+    let cancels: Vec<_> = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, _)| m["method"] == "notifications/cancelled")
+        .cloned()
+        .collect();
+    assert_eq!(cancels.len(), 1, "{cancels:?}");
+    assert_eq!(
+        cancels[0].1.as_deref(),
+        Some("alice-session"),
+        "alice's session"
+    );
+}
