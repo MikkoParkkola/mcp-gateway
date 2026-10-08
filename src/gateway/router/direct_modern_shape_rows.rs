@@ -461,11 +461,17 @@ async fn a_direct_receipt_is_built_without_the_shapers_members() {
         let _ = take_staged_for_test();
         let first = keyed(&fx, backend, (true, 1), "shaped").await;
         unshaped(&format!("{backend} fresh"), &first, &["resultType"]);
+        let dispatched = fx.calls.load(std::sync::atomic::Ordering::SeqCst);
         let again = keyed(&fx, backend, (true, 2), "shaped").await;
+        assert_eq!(
+            fx.calls.load(std::sync::atomic::Ordering::SeqCst),
+            dispatched,
+            "{backend}: base: the replay dispatched again"
+        );
         unshaped(&format!("{backend} replay"), &again, &["resultType"]);
     }
     let fx = fixture_relayed(Answer::Ok).await;
     let _ = take_staged_for_test();
     let read = modern(&fx, "alpha", "resources/read", json!({"uri": "res://x"})).await;
-    unshaped("catalogue", &read, &["resultType", "cacheScope"]);
+    unshaped("catalogue", &read, &["resultType", "cacheScope", "ttlMs"]);
 }
