@@ -169,6 +169,8 @@ fn a_positive_cost_rounds_up_to_whole_micro_usd() {
     assert_eq!(micro(500.000_000_1), 500_000_001);
     assert_eq!(micro(0.0), 0);
     assert_eq!(micro(-0.07), 0);
+    // A negative fraction must not round up to a positive charge.
+    assert_eq!(micro(-1.5e-6), 0);
     assert_eq!(micro(f64::NAN), 0);
 }
 
