@@ -266,3 +266,53 @@ async fn the_open_judges_live_rows_and_not_settled_ones() {
     );
     reopened.close().await.unwrap();
 }
+
+/// `MIK-8052`: a sealed live row repaired under a cap it fits but its
+/// fallback does not stays sealed, as startup would refuse it: lifting the
+/// seal there would leave a store the next restart cannot open.
+#[tokio::test]
+async fn a_repaired_row_without_fallback_room_stays_sealed() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let task = task();
+    let store = TaskStore::open(&path, limits(4 * 1024)).await.unwrap();
+    store
+        .create(PreparedTask::for_test(&task, OWNER, 1))
+        .await
+        .unwrap();
+    store.close().await.unwrap();
+    let record = path.join(format!("{}.json", task.id()));
+    let original = fs::read(&record).unwrap();
+    // Same length, so the cap judges the same bytes: syntax damage before
+    // `admission` seals the row.
+    let text = String::from_utf8(original.clone()).unwrap();
+    assert!(text.contains("\"dispatched\":"), "fixture shape");
+    fs::write(
+        &record,
+        text.replacen("\"dispatched\":", "\"dispatched\";", 1),
+    )
+    .unwrap();
+
+    let store = TaskStore::open(&path, limits(original.len()))
+        .await
+        .expect("a sealed row never stops the store");
+    assert_eq!(
+        store.skipped_records().sealed,
+        1,
+        "premise: the row is sealed"
+    );
+    fs::write(&record, &original).unwrap();
+    assert_eq!(
+        store.reread_sealed(|_, _| true).await,
+        1,
+        "a repaired row with no room for its bounded failure lifted the seal"
+    );
+    store.close().await.unwrap();
+
+    let refused = TaskStore::open(&path, limits(original.len())).await;
+    assert!(
+        matches!(refused, Err(StoreError::Capacity)),
+        "parity: startup refuses the same row: {:?}",
+        refused.err()
+    );
+}

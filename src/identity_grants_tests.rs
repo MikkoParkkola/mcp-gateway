@@ -474,3 +474,43 @@ fn a_stalled_grants_read_does_not_hold_the_runtime_drop() {
         "dropping the runtime waited on a stalled grants read"
     );
 }
+
+/// `MIK-8052.AC2`: the PUBLIC reader moves a stalled read off the runtime, not
+/// only the helper above. Fails if the reader goes back to `spawn_blocking`
+/// (the drop waits) or bypasses its read seam (the stand-in never runs).
+#[test]
+fn a_stalled_read_through_the_public_reader_does_not_hold_the_runtime_drop() {
+    static RAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    fn stalled(_: &Path, _: crate::config::CheckedFile) -> std::io::Result<String> {
+        RAN.store(true, std::sync::atomic::Ordering::SeqCst);
+        // Never returns, as on a stalled mount; the thread leaks until exit.
+        loop {
+            std::thread::park();
+        }
+    }
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.spawn(async {
+        TEST_READER.with(|read| read.set(Some(stalled)));
+        let _ = read_identity_grants_file(Path::new("grants.json")).await;
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !RAN.load(std::sync::atomic::Ordering::SeqCst) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the public reader never used its read seam"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    let (dropped, drop_done) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        drop(runtime);
+        let _ = dropped.send(());
+    });
+    assert!(
+        drop_done
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .is_ok(),
+        "dropping the runtime waited on a stalled read from the public reader"
+    );
+}

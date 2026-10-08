@@ -188,7 +188,7 @@ backend" and "fails a capability file" first.**
 | 161 | `add`, `remove`, `setup wizard` and `cap discover --write-config` keep the comments in `gateway.yaml`, except those on lines the change deletes (a removed backend's entry, or a field an edit drops), which the command names by line number. On a file with comments, a change they cannot write as a text edit (a flow-style `backends:` mapping, or a comment inside a changed value) is refused: nothing is written, the command exits non-zero and names the comment lines. A file without comments is rewritten as before. 3.x rewrote the file and dropped every comment | Rerun with `--force` to rewrite the file without its comments, or edit the file by hand. Scripts that run these commands on a hand-commented flow-style file need `--force` |
 | 162 | An A2A backend (`transport: a2a`) now starts and delegates to an A2A 1.0 agent; `mcp_gateway::a2a` is no longer public | None for gateway operators. Library users: configure the agent as a `transport: a2a` backend, or use your own A2A client to poll or cancel tasks |
 | 163 | Reserved: #3489 | None |
-| 164 | Reserved: #3490 | None |
+| 164 | `/health` answers 503 `degraded` while a stored task row's idempotency key cannot be read; until that file is repaired or removed, new keyed calls answer 409 | Expect it on `/health` monitors; repair or remove the file the admin view names (a repaired key is kept, a removed one released); restart to read a repaired task; probes (`/livez`, `/readyz`) are unaffected |
 | 165 | A failed config reload answers with the status of its cause. `POST /ui/api/reload` returns 409 when the network-posture policy refuses the file (tools reachable without a credential, or credentials sent over plain HTTP), 503 when shutdown stopped the reload, and 500 otherwise (a change that needs a restart included); it returned 500 for all three. `gateway_reload_config` returns JSON-RPC -32600 for that refusal and -32603 otherwise. The message text is unchanged | A monitor that alerts on any reload failure as a crash alerts on 500 and 503 only; to see a refused file, match 409 (or -32600) |
 
 
@@ -4277,6 +4277,36 @@ send messages to an agent can configure the agent as a backend, as above. A prog
 polled or cancelled tasks itself (`get_task`, `cancel_task`), or continued a conversation by its
 `context_id`, needs its own A2A client: each `send_message` call to the backend starts a new
 conversation with the agent and answers with the task's final result.
+
+## 164. A task row with an unreadable key refuses new keyed calls
+
+**Startup:** no notice
+
+A stored task row whose idempotency key cannot be read unambiguously (damage
+before or inside its `admission` block, or a second copy of it) used to release
+that key, so a client retry was admitted as new work and its backend ran again.
+Now, while any such row is in the task store:
+
+- Every NEW keyed call, task or synchronous, is refused with code 409 and a
+  message saying new keyed calls are paused until an operator repairs or
+  removes a record. It never names the file. Keys already held and unkeyed
+  calls work as before.
+- The log names each file at startup and on every expiry sweep, the
+  `mcp_task_store_skipped_records{class="sealed"}` gauge counts the rows, and
+  `/health` reads `degraded` (503). The admin view adds
+  `task_store.sealed_rows`, `task_store.sealed_files` (full paths) and
+  `task_store.action`.
+
+It clears without a restart, at the next expiry sweep. Removing the file
+releases its key, so a retry of that call runs again. Repairing the file keeps
+its key, so a retry never runs again: until the next restart that retry is
+refused, and after a restart a task retry finds its task.
+
+The one step: repair or remove the file; restart to read a repaired task.
+Until a restart a repaired task stays unreadable (a known gap).
+
+A record-named FIFO in the task store is now refused as unsafe at startup
+instead of hanging it.
 
 ## 165. A refused config reload answers 409, not 500
 

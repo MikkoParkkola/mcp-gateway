@@ -416,6 +416,61 @@ async fn health_is_degraded_while_capabilities_load() {
     assert_eq!(admin["capability_backend"]["loaded"], true, "{admin}");
 }
 
+/// `MIK-8052`: a sealed task row (its idempotency key unreadable) makes health
+/// degraded, with the count in the admin view, and health recovers once the
+/// row is gone and re-read. The public body keeps its two fields.
+#[tokio::test]
+async fn health_is_degraded_while_a_task_row_is_sealed() {
+    let auth = AuthConfig {
+        enabled: true,
+        bearer_token: Some("probe-secret".to_string()),
+        public_paths: vec!["/health".into()],
+        ..AuthConfig::default()
+    };
+    let (state, _store) = test_router_app_state_with_auth(&auth).await;
+    let tasks = std::sync::Arc::clone(&state.tasks);
+    tasks.seal_for_test("task-00000000-0000-4000-8000-000000000000.json");
+    let router = create_router(state);
+
+    let (status, body) = get_json(&router, "/health").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["status"], "degraded", "{body}");
+    let fields: Vec<&String> = body.as_object().unwrap().keys().collect();
+    assert_eq!(fields, ["status", "version"], "public body shape");
+    let admin = admin_health(&router).await;
+    assert_eq!(admin["task_store"]["sealed_rows"], 1, "{admin}");
+    // The operator never hunts: the admin view names the file and the one
+    // action that clears it (operator rule, ideal UX).
+    let files = admin["task_store"]["sealed_files"].to_string();
+    assert!(
+        files.contains("task-00000000-0000-4000-8000-000000000000.json"),
+        "the sealed file is not named: {admin}"
+    );
+    let action = admin["task_store"]["action"].as_str().unwrap_or_default();
+    assert!(
+        action.contains("repair or remove") && action.contains("next expiry sweep"),
+        "the clearing action is not stated: {admin}"
+    );
+    // A repaired task reads only after a restart; the operator is told so
+    // rather than left waiting for a sweep that will not make it readable.
+    assert!(
+        action.contains("restart to read a repaired task"),
+        "the restart step is not stated: {admin}"
+    );
+
+    // No such file: the re-read clears it.
+    tasks.reread_sealed().await;
+    let (status, body) = get_json(&router, "/health").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let admin = admin_health(&router).await;
+    assert_eq!(admin["task_store"]["sealed_rows"], 0, "{admin}");
+    assert_eq!(
+        admin["task_store"]["sealed_files"],
+        serde_json::json!([]),
+        "{admin}"
+    );
+}
+
 async fn admin_health(router: &axum::Router) -> serde_json::Value {
     let request = axum::http::Request::builder()
         .method("GET")
