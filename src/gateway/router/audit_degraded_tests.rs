@@ -243,10 +243,16 @@ async fn readyz_alone_recovers_after_storage_heals() {
         "the cause is named"
     );
     fx.log.set_append_failure_for_test(false);
+    // MIK-8171 red proof: the first probe after the heal overruns its bound,
+    // as on a loaded runner.
+    let gate = fx.log.stall_next_write_for_test(Duration::from_millis(100));
+    let first = readyz_body(&fx).await;
+    gate.release();
     assert_eq!(
-        readyz(&fx).await,
+        first.0,
         StatusCode::OK,
-        "readiness probe recovered it"
+        "readiness probe recovered it: {}",
+        first.1
     );
     assert!(!fx.log.is_degraded());
 }
