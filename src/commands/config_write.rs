@@ -146,6 +146,35 @@ mod tests {
         );
     }
 
+    /// MIK-8051: a `#` the parser keeps as text (a URL fragment, a block
+    /// scalar line, a tagged or multi-line quoted value) is never named; a
+    /// real comment after one is.
+    #[test]
+    fn a_hash_the_parser_keeps_as_text_is_not_a_comment() {
+        let after = "backends:\n  b:\n    command: y\n";
+        let rows = [
+            (
+                "backends:\n  a:\n    http_url: \"http://h/#q\"\n    command: x#y\n  b:\n    command: y\n",
+                vec![],
+            ),
+            (
+                "backends:\n  a:\n    description: |\n      step # one\n      # not a comment\n    command: x  # why\n  b:\n    command: y\n",
+                vec!["line 6"],
+            ),
+            (
+                "backends:\n  a:\n    description: !!str \"old # x\"\n    note: \"one\n      # two\"\n    command: x  # why\n  b:\n    command: y\n",
+                vec!["line 6"],
+            ),
+            (
+                "backends:\n  a:\n    description: !!str \"old # x\" # real\n  b:\n    command: y\n",
+                vec!["line 3"],
+            ),
+        ];
+        for (before, want) in rows {
+            assert_eq!(dropped_comments(before, after), want, "{before}");
+        }
+    }
+
     #[test]
     fn a_removed_entry_names_its_own_line_not_a_repeat_of_it() {
         let before = "backends:\n  a:\n    command: y  # why\n  b:\n    command: y  # why\n";
