@@ -58,7 +58,7 @@ impl Run {
     /// A row written before its class was recorded belongs to the poller
     /// whose key it matches, and takes that poller's class once it is
     /// watchable again.
-    pub(super) fn judge_rows(&self, hub: &EventsHub, held: Option<Held>) {
+    pub(super) fn judge_rows(&self, hub: &EventsHub, held: Option<&Held>) {
         let class = match self.charge {
             Charge::Global => WatchClass::Free,
             Charge::Holder => WatchClass::Keyed,
@@ -70,7 +70,7 @@ impl Run {
         };
         let judge = |s: &Subscription| {
             self.owns(s).then(|| Judged {
-                held: held.clone(),
+                held: held.cloned(),
                 ..Judged::default()
             })
         };

@@ -617,7 +617,7 @@ impl Run {
     /// under this poller's class. In that last case this poller's rows are
     /// held, never withdrawn (MIK-8122); once the capability is watchable
     /// again they resume in the same poll.
-    async fn watched(&self, hub: &Arc<EventsHub>) -> Result<(Target, u64), Step> {
+    fn watched(&self, hub: &Arc<EventsHub>) -> Result<(Target, u64), Step> {
         // The classification is re-read every poll (MIK-7216.IDEM.1): a
         // capability removed, reclassified as side-effecting, or moved to
         // another credential class (a shared poller never calls under one
@@ -638,7 +638,7 @@ impl Run {
         if unread(&read, &self.name) || self.host.catalogue_generation() != read.generation {
             return Err(Step::Polled);
         }
-        self.judge_rows(hub, Some(self.why_not_watchable(&read)));
+        self.judge_rows(hub, Some(&self.why_not_watchable(&read)));
         Err(Step::Polled)
     }
 
@@ -647,7 +647,7 @@ impl Run {
         hub: &Arc<EventsHub>,
         last: &mut Option<(BTreeMap<String, Value>, String)>,
     ) -> Step {
-        let (target, generation) = match self.watched(hub).await {
+        let (target, generation) = match self.watched(hub) {
             Ok(found) => found,
             Err(step) => return step,
         };

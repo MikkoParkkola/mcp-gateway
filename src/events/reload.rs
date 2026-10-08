@@ -121,7 +121,6 @@ pub(crate) fn judge(
             key: Some(key.clone()),
         }),
         backfill: Some(shape.fields.iter().cloned().collect()),
-        ..Judged::default()
     })
 }
 
