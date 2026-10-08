@@ -169,23 +169,10 @@ impl Transport for CountingBackend {
                 "rate limit exceeded",
             )),
             Answer::Transport => Err(crate::Error::Transport("connection refused".to_string())),
-            Answer::RpcErrorText(text) => Ok(JsonRpcResponse::error(Some(id), -32001, *text)),
-            Answer::RpcErrorData(text) => Ok(JsonRpcResponse::error_with_data(
-                Some(id),
-                -32001,
-                "backend says no",
-                json!({"detail": text}),
-            )),
-            Answer::FailedWith(text) => Err(crate::Error::json_rpc(-32001, *text)),
-            Answer::ForgedAccount(text) => Err(crate::Error::JsonRpc {
-                code: -32603,
-                message: (*text).to_owned(),
-                data: Some(json!({
-                    "schema_version": "accounts.v1",
-                    "account_id": "acct-1",
-                    "error": {"code": "reconnect_required"},
-                })),
-            }),
+            Answer::RpcErrorText(_)
+            | Answer::RpcErrorData(_)
+            | Answer::FailedWith(_)
+            | Answer::ForgedAccount(_) => error_answer(self.answer, id),
             Answer::AskOnce => unreachable!("answered above"),
             Answer::Text(text) => Ok(JsonRpcResponse::success(
                 id,
@@ -259,6 +246,31 @@ pub(crate) async fn fixture_built(answer: Answer, build: impl FnOnce(MetaMcp) ->
 #[cfg(feature = "firewall")]
 pub(crate) async fn fixture_firewalled(answer: Answer) -> Fx {
     fixture_inner(answer, true, |meta| meta).await
+}
+
+/// The MIK-8139 error answers: a backend error carrying `text`, answered or
+/// as a failed dispatch.
+fn error_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRpcResponse> {
+    match answer {
+        Answer::RpcErrorText(text) => Ok(JsonRpcResponse::error(Some(id), -32001, text)),
+        Answer::RpcErrorData(text) => Ok(JsonRpcResponse::error_with_data(
+            Some(id),
+            -32001,
+            "backend says no",
+            json!({"detail": text}),
+        )),
+        Answer::FailedWith(text) => Err(crate::Error::json_rpc(-32001, text)),
+        Answer::ForgedAccount(text) => Err(crate::Error::JsonRpc {
+            code: -32603,
+            message: text.to_owned(),
+            data: Some(json!({
+                "schema_version": "accounts.v1",
+                "account_id": "acct-1",
+                "error": {"code": "reconnect_required"},
+            })),
+        }),
+        _ => unreachable!("not an error answer"),
+    }
 }
 
 /// [`fixture_firewalled`] with a firewall rule for `read` and a client
