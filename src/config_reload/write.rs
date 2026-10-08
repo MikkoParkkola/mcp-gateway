@@ -261,6 +261,11 @@ where
     // No live gateway to reload, so no reload lock exists to hold. The config
     // lock is still held from the load to the write: another process (a CLI,
     // a second gateway) may be writing the same file.
+    // A file that does not load is refused before the lock is taken, so the
+    // refusal leaves the directory as it was, no lock file added (GH462). It
+    // is loaded again under the lock: this check only decides refusal early.
+    crate::config_persistence::load_existing_or_default(path)
+        .map_err(|e| load_failure(path, &e, mode))?;
     let held = lock_config(path, Instant::now() + super::RELOAD_LOCK_WAIT)
         .await
         .map_err(ConfigWriteError::from)?;

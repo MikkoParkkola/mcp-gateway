@@ -138,6 +138,11 @@ impl ReloadContext {
         // The config lock is held from the load through the reload, so another
         // process's write can neither land between this load and this write
         // nor between this write and the reload that reads it back.
+        // A file that does not load is refused before the config lock is
+        // taken, so the refusal adds no lock file (GH462); it is loaded again
+        // under the lock.
+        crate::config_persistence::load_existing_or_default(path)
+            .map_err(|e| crate::config_reload::write::load_failure(path, &e, mode))?;
         let held = lock_config(path, deadline)
             .await
             .map_err(ConfigWriteError::from)?;
