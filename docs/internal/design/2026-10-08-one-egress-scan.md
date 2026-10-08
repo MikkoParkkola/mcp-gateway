@@ -41,8 +41,10 @@ exactly when tools/call results are; it needs a proving row, not a code path.
 in a new `meta_mcp/egress.rs`. `Egress` carries targets and correlation (who,
 which backend, which method). It owns, in one place:
 
-- **Parts.** A frame carries `result` or `error`, never both. `result` is
-  inspected whole (every string leaf and key, as today: content items,
+- **Parts.** Every part present is inspected; nothing assumes `result` and
+  `error` are exclusive (a peer frame may carry both:
+  `protocol/messages_response_de.rs:42` keeps a non-null `result` beside an
+  `error`). `result` is inspected whole (every string leaf and key, as today: content items,
   `structuredContent`, A2A parts after translation, catalogue bodies). `error`
   is inspected as the artifact `{"message", "data"}`; a redaction is written
   back, a redaction that leaves no text message is a Block.
@@ -67,24 +69,34 @@ which backend, which method). It owns, in one place:
   in-flight hold key, read before the frame is replaced.
 - **Once per frame.** `JsonRpcResponse::egress_scanned` replaces
   `discovery_inspected` and `DeliveryInspection::AlreadyInspected`; a marked
-  frame is returned untouched. Discovery's canonical-value pass sets it. A
-  delivery refusal is born marked. This keeps NFR.WORKLOAD.1 (one inspection).
+  frame is returned untouched. Discovery's canonical-value pass calls the same
+  scan core (firewall, D2, context integrity) on the canonical value, then
+  sets the mark, so the mark always means every check ran. A delivery refusal
+  is born marked. This keeps NFR.WORKLOAD.1 (one inspection).
+- **Relay receipts.** The scan takes the relay snapshot before inspecting and
+  calls `restage_if_changed` after, with the frame's `AnswerShape`, so a
+  redaction rebuilds the receipt from what is delivered (today done by the
+  HTTP pre-pass `handlers.rs:1786`, `finalize_content` and `inspect_settled`).
+- **Accounting.** A refusal frame keeps `delivery_refusal`, so
+  `excludes_client_accounting` still holds; client success is recorded only
+  after the scan admits the frame (as `direct_guards.rs:131` does today).
 
 ### E2. One call per route exit, everything else deleted
 
 | Route | The one call | Deleted |
 |---|---|---|
 | HTTP `/mcp` and stdio | `finalize_content`, for every method (the `tools/call` / `tools/list` filter goes) | `response_pass.rs` pre-pass, `handlers.rs:1768` block |
-| `/mcp/{name}` | each of the 4 exits below, before `settle_direct_idempotency` (a replay serves the scanned copy) | `response_blocked`, `scan_direct_tools_list_response`, `screen_backend_response` |
+| `/mcp/{name}` | each of the 4 exits below, at its start: before `tools/list` normalization and trust-card stamping, before client-success accounting, before `settle_direct_idempotency` (so the cache holds the scanned copy and a replay needs no scan) | `response_blocked`, `scan_direct_tools_list_response`, `screen_backend_response` |
 | tasks | `inspect_settled` (stored result is the scanned one), watch poll, upstream recovery | `inspect_task_result` body becomes a call |
 
 The direct route has 11 `build_http_response` calls under
 `router/backend_handlers/`. Five, in 4 exits, carry backend-derived text and
 take the scan:
 
-1. `direct_dispatch.rs` `deliver_tail`: every success, the plain arm, the
-   sanitized arm (`forward_sanitized` also ends in `finish_response`) and a
-   cached replay.
+1. `direct_dispatch.rs` `finish_response` (top, before the list arm):
+   every success, the plain arm and the sanitized arm (`forward_sanitized`
+   also ends in `finish_response`). A cached replay through `deliver_tail`
+   serves what this exit settled, already scanned.
 2. `direct_failure.rs` `DirectFailure::answer`: a failed dispatch, from
    `answer_failure` and from `key_check.rs` (its `Err` arm). A cached failure
    (`direct_dispatch.rs:245`) replays what this exit settled, already scanned.
@@ -94,13 +106,16 @@ take the scan:
 
 `direct_dispatch.rs:245` replays a failure exit 2 settled. The other 5
 (`direct_caller.rs:231`, `direct_dispatch.rs:211, 274, 341`,
-`direct_preflight.rs:151`) build gateway-own refusals before any dispatch. The completeness test (below) source-scans the directory and
-fails on a new exit that neither scans nor is on that list.
+`direct_preflight.rs:151`) build gateway-own refusals before any dispatch.
 
-Rejected: a `Scanned<JsonRpcResponse>` newtype that `build_http_response`
-alone accepts. It is the stronger proof, but `build_http_response` has 17
-callers across the router and the stdio writer has its own; the source-scan
-test gets the same guarantee for this family at a fraction of the diff.
+**Completeness is a type, not a list.** `build_http_response` and the stdio
+writer accept only `Egressed`, which two constructors make: `scan_egress`
+(backend-derived frames) and `Egressed::gateway_own` (a frame the gateway
+built with no backend text, e.g. a pre-dispatch refusal). Every one of the 17
+`build_http_response` callers and the stdio writer must pick one, so a new
+exit cannot compile without deciding, and a `gateway_own` wrapping backend
+text is visible in review at its call site. Both seats asked for this over a
+source-scan list of exempt exits, which drifts the way the method lists did.
 
 Kept as they are, because they are a different artifact, not a frame part:
 the bridge challenge (Immutable, a question the gateway asks), event payloads
@@ -130,6 +145,11 @@ correlation). Each notification's `params` is inspected as its own artifact
 counts it, as a full sink does. A notification is never delayed by a call
 into the async world: the scan is synchronous, as `check_response_artifact` is.
 
+`notifications/tasks` frames (`meta_mcp/task_notify.rs:66`) carry the stored
+task result to its subscriber. They are rescanned at send under the task's
+recorded targets, as `tasks/get` is, so a policy tightened after settlement
+covers both reads of the same row.
+
 Not frames for this family, with the reason:
 
 | Frame | Why it stays |
@@ -137,15 +157,18 @@ Not frames for this family, with the reason:
 | Bridged `sampling/createMessage`, `elicitation/create`, `roots/list` | Already scanned, `Immutable`, before each round (`bridge_dispatch.rs:185`) |
 | `tools/list_changed` | Constant frame, no backend text |
 | Upstream listen notes | Webhook only, scanned at `events/fanout.rs:149` |
-| `notifications/tasks` | Carries the stored result, scanned at settlement |
 | Gateway `emit_log` | Gateway-built text |
 | Server-to-client requests a backend sends itself | Refused and dropped (`stdio.rs:545`, `sse_decoder.rs:268`) |
 
 ### E3. MIK-8131
 
-`finalize_content` returns the `Refused` hold key; the async HTTP and stdio
-callers free that slot with the release helper #3451 (MIK-8078, open) adds.
-That piece lands after #3451 merges; until then the row is written and red.
+`scan_egress` returns the `Refused` hold key; every async caller that can
+refuse an interim answer frees that slot with the release helper #3451
+(MIK-8078, open) adds: HTTP and stdio `finalize_content`, and task settlement
+on the first and resumed rounds (`task_service/execution/worker.rs:269`,
+`input_round.rs:114`). If #3451 has not merged when the rest of #3527 is
+ready, MIK-8131 moves to a follow-up PR and stays open; no row is committed
+red on the branch that merges.
 
 ## Test plan (red first, on #3527)
 
@@ -167,7 +190,9 @@ One table test, `egress_matrix_tests.rs`:
 - Each cell: the backend plants a credential in that part. Assert the secret
   never reaches the caller, the outcome (redacted vs refused) is the same on
   every route for that method x part, and the backend was called once.
-  Interim cells assert refused (MIK-8155) and no in-flight slot held (MIK-8131).
+  Interim cells assert refused (MIK-8155) and that only the refused
+  exchange's slot is freed: an unrelated live exchange opened first keeps its
+  slot (MIK-8131 FW.3).
 - Clean cells: the same frames without a secret come out byte-identical.
 - Completeness: a source scan lists every method arm of the HTTP and stdio
   dispatchers and the direct route and fails if one is missing from the table,
@@ -201,5 +226,23 @@ the egress call removed per route, the mark ignored.
 | MIK-8155 | POLICY.2 completed answer keeps Redact | completed result rows | yes |
 | MIK-8112 | AC1 A2A reply scanned like an MCP result | A2A backend x tools/call x text and data parts | partly |
 | MIK-8112 | marked untrusted, cannot trigger a privileged call, ADR-001 vs OWASP doc | none here | no: stays open unless scoped in |
-| new (filed with this design) | backend notifications streamed mid-call scanned | notification rows | yes |
+| MIK-8161 | backend notifications streamed mid-call scanned | notification rows | yes |
 | MIK-8131 | FW.1-FW.3 blocked interim answer frees only its slot | interim refused rows assert `in_flight().len == 0` | after #3451 merges |
+
+## Review round 1 (gpt-review, agy-review: both SHIP-WITH-FIXES, 2026-10-08)
+
+| # | Seat | Finding | Disposition |
+|---|---|---|---|
+| 1 | gpt | Mixed `result` + `error` frame escapes the scan of one part | Fixed: every present part is scanned (E1 Parts) |
+| 2 | gpt | `notifications/tasks` exempt, stale against a policy change | Fixed: rescanned at send (E2b) |
+| 3 | gpt | Discovery mark skips D2 and context integrity | Fixed: discovery runs the full scan core before marking (E1) |
+| 4 | gpt | Direct `tools/list` scan after trust-card stamping | Fixed: scan at the top of `finish_response` (E2) |
+| 5 | gpt | Task settlement refusals keep continuation slots | Fixed: E3 covers task rounds |
+| 6 | gpt, agy | Deleting the pre-pass drops relay restaging | Fixed: restage moves into the scan (E1). agy's "stale HTTP headers" framing is not what restage does (relay receipts); same fix |
+| 7 | gpt | `deliver_tail` runs after idempotency settle | Fixed: scan before settle (E2) |
+| 8 | gpt | Client success recorded before the scan | Fixed: success after admit (E1 Accounting) |
+| 9 | agy | Refusal accounting lost | Preserved: refusal frames keep `delivery_refusal` (E1 Accounting) |
+| 10 | gpt, agy | Source-scan exemption list drifts; use a type | Adopted: `Egressed` (E2) |
+| 11 | agy | A red MIK-8131 row on the merging branch breaks CI | Adopted: follow-up PR if #3451 is late (E3) |
+| 12 | gpt | Slot test must include an unrelated live exchange | Adopted (test plan) |
+| 13 | agy | Exhaustive method enum instead of a source scan | Declined: the dispatchers match on strings from the wire; an enum would be a second list of the same methods. The method axis is read from the dispatchers' own arms |
