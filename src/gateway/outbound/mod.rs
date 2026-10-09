@@ -96,7 +96,9 @@ pub(crate) struct Assessment {
 #[derive(Debug, Clone)]
 pub(crate) struct OutboundFrame {
     payload: Payload,
-    assessment: Option<Assessment>,
+    /// Boxed: most frames carry none, and inline it would push
+    /// `Admission::Admitted` past the variant-size limit.
+    assessment: Option<Box<Assessment>>,
     /// The history reservation; committed by the sink that writes the frame.
     ticket: Option<ReadTicket>,
     /// The `tenant_read` fields were taken by a record of the caller's own
@@ -109,6 +111,10 @@ pub(crate) struct OutboundFrame {
     /// bridged prompt's relay receipt). Shared by fan-out clones and taken
     /// once; a replaced or withheld frame drops it uncommitted.
     delivery: Option<Arc<parking_lot::Mutex<Option<crate::gateway::input_bridge::DeliveryCommit>>>>,
+    /// The continuation holds this answer carries (MIK-8176): handed off by
+    /// the stdio writer as it takes the frame. A frame replaced, withheld or
+    /// dropped before then carries none of them away, so they release.
+    holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds,
 }
 
 impl OutboundFrame {
@@ -122,6 +128,7 @@ impl OutboundFrame {
             record_taken: false,
             key: None,
             delivery: None,
+            holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
         }
     }
 
@@ -149,8 +156,8 @@ impl OutboundFrame {
     }
 
     /// The judgement this frame carries, if it was assessed.
-    pub(crate) const fn assessment(&self) -> Option<&Assessment> {
-        self.assessment.as_ref()
+    pub(crate) fn assessment(&self) -> Option<&Assessment> {
+        self.assessment.as_deref()
     }
 
     /// Whether a sink bound to `destination` may write this frame. An
@@ -185,6 +192,7 @@ impl OutboundFrame {
             record_taken: self.record_taken,
             key: self.key,
             delivery: None,
+            holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
         }
     }
 
@@ -198,6 +206,32 @@ impl OutboundFrame {
             record_taken: self.record_taken,
             key: self.key,
             delivery: None,
+            holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+        }
+    }
+
+    /// This answer with the open request's holds it carries attached, for a
+    /// sink that hands them off when it writes the frame (MIK-8176).
+    pub(crate) fn carry_holds(mut self) -> Self {
+        let result = match &self.payload {
+            Payload::Response(answer) => answer.result.as_ref(),
+            Payload::Answer(answer) => answer.get("result"),
+            _ => None,
+        };
+        if let Some(result) = result {
+            self.holds = crate::gateway::meta_mcp::sealed_hold::carried(result);
+        }
+        self
+    }
+
+    /// Hand off the holds this frame (and each frame a batch holds) carries:
+    /// the sink is taking it to write.
+    pub(crate) fn hand_off_holds(&self) {
+        crate::gateway::meta_mcp::sealed_hold::hand_off(&self.holds);
+        if let Payload::Batch(items) = &self.payload {
+            for item in items {
+                item.hand_off_holds();
+            }
         }
     }
 

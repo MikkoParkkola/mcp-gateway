@@ -184,6 +184,6 @@ fn an_imported_config_with_client_variables_loads() {
     config
         .backends
         .insert("http".to_string(), http.to_backend_config());
-    crate::config_persistence::write_config(&path, &config).expect("config written");
+    crate::gateway::test_helpers::write_config_fixture(&path, &config).expect("config written");
     crate::config::Config::load(Some(&path)).expect("the written config loads");
 }

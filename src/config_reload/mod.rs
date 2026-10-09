@@ -435,10 +435,9 @@ pub use watcher::ConfigWatcher;
 use watcher::{ReloadTrigger, watch_dir_of};
 #[cfg(test)]
 use watcher::{absolute_watch_path, config_watch_paths, is_config_event, is_config_event_for};
-pub use write::{
-    ConfigMutation, ConfigWriteError, mutate_config_and_reload, write_config_and_reload,
-    write_config_and_reload_outcome,
-};
+pub use write::{ConfigMutation, ConfigWriteError, mutate_config_and_reload};
+#[allow(deprecated)] // the deprecated writers stay reachable by name until 5.0
+pub use write::{write_config_and_reload, write_config_and_reload_outcome};
 // The writer-lock tests call the refusing writer directly.
 #[cfg(test)]
 use write::mutate_config_and_reload_with;

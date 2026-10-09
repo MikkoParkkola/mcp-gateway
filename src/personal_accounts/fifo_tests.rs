@@ -91,7 +91,9 @@ impl AuthorityProbe {
     }
 
     fn finish_successfully(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(2);
+        // A hang guard on the child's exit, not a timing oracle: a loaded
+        // runner may take seconds to reap it (MIK-8222).
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             if let Some(status) = self.child.try_wait().unwrap() {
                 assert!(status.success(), "store-open child exited unsuccessfully");
