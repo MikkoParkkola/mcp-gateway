@@ -10,15 +10,19 @@
 //! They keep running and stop protecting, and a test that asserts "a score came
 //! back" passes just as happily against a control that has stopped looking.
 
+#[cfg(feature = "firewall")]
 use std::sync::Arc;
 
+#[cfg(feature = "firewall")]
 use mcp_gateway::security::firewall::anomaly::{AnomalyDetector, Observation};
 use mcp_gateway::transition::TransitionTracker;
 
+#[cfg(feature = "firewall")]
 fn detector() -> AnomalyDetector {
     AnomalyDetector::new(Arc::new(TransitionTracker::new()), 0.7)
 }
 
+#[cfg(feature = "firewall")]
 #[test]
 fn ac_control_1_scoring_without_a_key_is_unobservable_not_neutral() {
     // The silent failure, stated as a test. Under statelessness there is no
@@ -38,6 +42,7 @@ fn ac_control_1_scoring_without_a_key_is_unobservable_not_neutral() {
     );
 }
 
+#[cfg(feature = "firewall")]
 #[test]
 fn ac_control_1_a_principal_key_restores_observation() {
     // The replacement for the session: the authenticated principal. Same
@@ -51,6 +56,7 @@ fn ac_control_1_a_principal_key_restores_observation() {
     );
 }
 
+#[cfg(feature = "firewall")]
 #[test]
 fn ac_control_1_transitions_are_tracked_per_principal_not_globally() {
     // Two callers must not pollute each other's history: one caller's ordinary
@@ -67,6 +73,7 @@ fn ac_control_1_transitions_are_tracked_per_principal_not_globally() {
     );
 }
 
+#[cfg(feature = "firewall")]
 #[test]
 fn ac_control_1_the_unobservable_answer_is_not_a_score() {
     // Deliberately not representable as a float. An `f64` sentinel — -1.0, or
@@ -87,6 +94,7 @@ fn ac_control_1_the_unobservable_answer_is_not_a_score() {
 // finding" has rebuilt the silent pass one layer up.
 // ===========================================================================
 
+#[cfg(feature = "firewall")]
 mod firewall {
     use mcp_gateway::security::firewall::anomaly::Observation;
 

@@ -49,7 +49,8 @@ mod parser;
 mod read_only_call;
 mod response_cache;
 mod schema_validator;
-#[cfg(test)]
+// The tenant guard it drives is part of the `firewall` feature.
+#[cfg(all(test, feature = "firewall"))]
 mod tenant_read_tests;
 pub mod validator;
 mod watcher;

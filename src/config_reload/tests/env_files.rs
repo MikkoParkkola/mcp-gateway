@@ -583,6 +583,7 @@ async fn envfile_6b_the_restart_report_names_the_key_and_carries_neither_value()
 /// a new overlay through `publish_overlay` and none is mutated in place, so
 /// this row drives the production reload, not `LiveEnv::set`: an exemption a
 /// reload revokes must reach the very next scan.
+#[cfg(feature = "firewall")]
 #[tokio::test]
 async fn perf6_a_reload_that_revokes_a_skip_key_reaches_the_next_scan() {
     use crate::security::firewall::input_scanner::InputScanner;

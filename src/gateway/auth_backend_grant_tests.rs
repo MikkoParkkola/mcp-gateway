@@ -5,7 +5,7 @@
 
 use super::ResolvedAuthConfig;
 use crate::config::{ApiKeyConfig, AuthConfig};
-use crate::security::firewall::response_tests::audit::capture_warnings;
+use crate::test_log_capture::capture_warnings;
 
 fn key(name: &str, backends: &[&str], admin: bool) -> ApiKeyConfig {
     ApiKeyConfig {

@@ -30,6 +30,7 @@ use crate::transport::Transport;
 /// number of eviction closes allowed to run at once.
 const CAP: usize = 64;
 const CLOSE_STAGE: Duration = Duration::from_millis(100);
+#[cfg(feature = "metrics")]
 const ABANDONED: &str = "mcp_backend_eviction_close_abandoned_total";
 
 /// Counts closes running right now and the most ever seen at once.
@@ -76,62 +77,73 @@ impl Transport for WedgedCountedClose {
     }
 }
 
+/// Evicts two batches of `CAP` wedged slots and checks the cap and the close
+/// budget. Feature-free: the counter it leaves is read by the `metrics` row.
+fn evict_two_wedged_batches(running: &Arc<Running>) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .start_paused(true)
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let mut backend = per_user_backend("wedged");
+        Arc::get_mut(&mut backend)
+            .expect("sole owner before the test starts")
+            .budgets
+            .close_stage = CLOSE_STAGE;
+
+        for batch in ["b1", "b2"] {
+            for i in 0..CAP {
+                backend.set_pooled_transport_for_test(
+                    &slot(&format!("{batch}:{i}")),
+                    Arc::new(WedgedCountedClose(Arc::clone(running))),
+                );
+            }
+            assert_eq!(
+                backend.evict_identity_slots(&format!("{batch}:")),
+                CAP,
+                "every {batch} slot is evicted"
+            );
+            // Let the detached closes start.
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        let peak = running.peak.load(Ordering::SeqCst);
+        assert!(peak > 0, "no eviction close ever ran");
+        assert!(
+            peak <= CAP,
+            "{peak} eviction closes ran at once; cap is {CAP}"
+        );
+
+        tokio::time::sleep(CLOSE_STAGE * 2).await;
+        assert_eq!(
+            running.now.load(Ordering::SeqCst),
+            0,
+            "a close outlived its budget"
+        );
+    });
+}
+
+/// The cap and the close budget hold in every build.
+#[test]
+fn eviction_closes_are_capped() {
+    evict_two_wedged_batches(&Arc::new(Running::default()));
+}
+
 /// GIVEN two full batches of idle slots whose transports never close, the
 /// second evicted while the first batch's closes still run
 /// WHEN each batch is evicted
 /// THEN no more than `CAP` closes ever run at once, and once `close_stage` has
 /// passed the abandoned counter reads every one of the `2 * CAP` closes: the
 /// second batch refused a permit, the first ran out its budget.
+#[cfg(feature = "metrics")]
 #[test]
 fn eviction_closes_are_capped_and_every_abandoned_close_is_counted() {
     let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
     let handle = recorder.handle();
     let running = Arc::new(Running::default());
 
-    telemetry_metrics::with_local_recorder(&recorder, || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .start_paused(true)
-            .build()
-            .expect("runtime");
-        runtime.block_on(async {
-            let mut backend = per_user_backend("wedged");
-            Arc::get_mut(&mut backend)
-                .expect("sole owner before the test starts")
-                .budgets
-                .close_stage = CLOSE_STAGE;
-
-            for batch in ["b1", "b2"] {
-                for i in 0..CAP {
-                    backend.set_pooled_transport_for_test(
-                        &slot(&format!("{batch}:{i}")),
-                        Arc::new(WedgedCountedClose(Arc::clone(&running))),
-                    );
-                }
-                assert_eq!(
-                    backend.evict_identity_slots(&format!("{batch}:")),
-                    CAP,
-                    "every {batch} slot is evicted"
-                );
-                // Let the detached closes start.
-                tokio::time::sleep(Duration::from_millis(1)).await;
-            }
-
-            let peak = running.peak.load(Ordering::SeqCst);
-            assert!(peak > 0, "no eviction close ever ran");
-            assert!(
-                peak <= CAP,
-                "{peak} eviction closes ran at once; cap is {CAP}"
-            );
-
-            tokio::time::sleep(CLOSE_STAGE * 2).await;
-            assert_eq!(
-                running.now.load(Ordering::SeqCst),
-                0,
-                "a close outlived its budget"
-            );
-        });
-    });
+    telemetry_metrics::with_local_recorder(&recorder, || evict_two_wedged_batches(&running));
 
     let rendered = handle.render();
     let expected = 2 * CAP;

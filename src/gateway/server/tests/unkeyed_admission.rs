@@ -5,14 +5,20 @@
 //!
 //! Driven through the production stdio dispatcher (T9), which reaches the same
 //! `admit_meta_sync` → `admit_operation` refusal point as the HTTP meta route.
-//! Counter rows read a scoped Prometheus recorder, so the tests stay on the
+//! Counter rows (`metrics` only; the warn row runs in every build) read a
+//! scoped Prometheus recorder, so the tests stay on the
 //! current-thread runtime and await dispatch inline.
 
+#[cfg(feature = "metrics")]
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use serde_json::{Value, json};
 
-use super::signing_nonce_allocations_support::{Fixture, SESSION, Target, error_of, invoke};
-use crate::config::IdempotencyKeyMode::{Optional, Required};
+#[cfg(feature = "metrics")]
+use super::signing_nonce_allocations_support::error_of;
+use super::signing_nonce_allocations_support::{Fixture, SESSION, Target, invoke};
+use crate::config::IdempotencyKeyMode::Optional;
+#[cfg(feature = "metrics")]
+use crate::config::IdempotencyKeyMode::Required;
 
 const COUNTER: &str = "mcp_unkeyed_calls_total";
 
@@ -51,6 +57,7 @@ fn legacy(mut request: Value) -> Value {
 }
 
 /// Every `mcp_unkeyed_calls_total` sample as (label set, value).
+#[cfg(feature = "metrics")]
 fn samples(handle: &PrometheusHandle) -> Vec<(Vec<String>, u64)> {
     handle
         .render()
@@ -66,6 +73,7 @@ fn samples(handle: &PrometheusHandle) -> Vec<(Vec<String>, u64)> {
         .collect()
 }
 
+#[cfg(feature = "metrics")]
 fn count(handle: &PrometheusHandle, era: &str, read_only: bool) -> u64 {
     let want = vec![
         format!("era=\"{era}\""),
@@ -78,6 +86,7 @@ fn count(handle: &PrometheusHandle, era: &str, read_only: bool) -> u64 {
         .sum()
 }
 
+#[cfg(feature = "metrics")]
 fn total(handle: &PrometheusHandle) -> u64 {
     samples(handle).into_iter().map(|(_, value)| value).sum()
 }
@@ -89,12 +98,14 @@ fn assert_ok(phase: &str, response: &Value) {
     );
 }
 
+#[cfg(feature = "metrics")]
 fn assert_invalid_params(phase: &str, response: &Value) -> String {
     let (code, message) = error_of(response);
     assert_eq!(code, -32602, "{phase} must be -32602, got {response}");
     message
 }
 
+#[cfg(feature = "metrics")]
 fn recorder() -> (
     metrics_exporter_prometheus::PrometheusRecorder,
     PrometheusHandle,
@@ -106,6 +117,7 @@ fn recorder() -> (
 
 /// T1 + T9: the default admits an un-keyed modern mutation, once, counted with
 /// exactly `{era, gateway_read_only}` and no principal label.
+#[cfg(feature = "metrics")]
 #[tokio::test]
 async fn t1_unkeyed_modern_mutation_is_admitted_by_default() {
     let fixture = Fixture::start_keyed_mode(Target::MutatingUncached, Optional).await;
@@ -128,6 +140,7 @@ async fn t1_unkeyed_modern_mutation_is_admitted_by_default() {
 
 /// T2 + T9: `required` restores the refusal, names the key, and neither
 /// reaches the backend nor moves the counter.
+#[cfg(feature = "metrics")]
 #[tokio::test]
 async fn t2_required_refuses_unkeyed_modern_mutation() {
     let fixture = Fixture::start_keyed_mode(Target::MutatingUncached, Required).await;
@@ -147,6 +160,7 @@ async fn t2_required_refuses_unkeyed_modern_mutation() {
 
 /// T3: a keyed call re-issued under a new request id executes once, in both
 /// modes (existing guarantee).
+#[cfg(feature = "metrics")]
 #[tokio::test]
 async fn t3_keyed_reissue_executes_once() {
     for mode in [Optional, Required] {
@@ -163,6 +177,7 @@ async fn t3_keyed_reissue_executes_once() {
 }
 
 /// T4: a malformed key is -32602 in both modes, before execution.
+#[cfg(feature = "metrics")]
 #[tokio::test]
 async fn t4_malformed_key_is_refused_in_both_modes() {
     for mode in [Optional, Required] {
@@ -177,6 +192,7 @@ async fn t4_malformed_key_is_refused_in_both_modes() {
 }
 
 /// T5: a read-only-marked tool, un-keyed, is admitted and counted as such.
+#[cfg(feature = "metrics")]
 #[tokio::test]
 async fn t5_unkeyed_read_only_call_is_counted_read_only() {
     let fixture = Fixture::start_keyed_mode(Target::ReadOnlyCached, Optional).await;
@@ -192,6 +208,7 @@ async fn t5_unkeyed_read_only_call_is_counted_read_only() {
 
 /// T7: the accepted exposure. An un-keyed re-issue cannot be recognised, so it
 /// executes twice and counts twice.
+#[cfg(feature = "metrics")]
 #[tokio::test]
 async fn t7_unkeyed_reissue_executes_twice_by_default() {
     let fixture = Fixture::start_keyed_mode(Target::MutatingUncached, Optional).await;
@@ -210,6 +227,7 @@ async fn t7_unkeyed_reissue_executes_twice_by_default() {
 }
 
 /// T8: `required` refuses neither a legacy frame nor a read-only-marked tool.
+#[cfg(feature = "metrics")]
 #[tokio::test]
 async fn t8_required_scope_excludes_legacy_and_read_only() {
     let fixture = Fixture::start_keyed_mode(Target::MutatingUncached, Required).await;
@@ -234,7 +252,7 @@ fn warns_for(calls: Vec<Value>) -> String {
         .enable_all()
         .build()
         .expect("a test runtime");
-    let ((), logs) = crate::security::firewall::response_tests::audit::capture_warnings(|| {
+    let ((), logs) = crate::test_log_capture::capture_warnings(|| {
         runtime.block_on(async {
             let fixture = Fixture::start_keyed_mode(Target::MutatingUncached, Optional).await;
             for call in calls {
