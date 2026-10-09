@@ -29,13 +29,14 @@ const WARMUP: usize = 200;
 const CALLS: usize = 2000;
 
 /// Set only by the negative-control arm (`PER_CALL_NEGATIVE_CONTROL=1`): the
-/// dispatch spins this long per call, so the gate can prove it catches a
-/// slowdown. Test builds only; nothing in production reads it.
-pub(crate) static NEGATIVE_CONTROL_SPIN_NS: std::sync::atomic::AtomicU64 =
+/// harness's own backend spins this long per call, so the gate can prove it
+/// catches a slowdown. It lives in test code that both arms carry, so no
+/// production path holds a hook and the arms pay identical costs.
+static NEGATIVE_CONTROL_SPIN_NS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
 /// The negative-control stage: a deliberate busy wait, off unless armed.
-pub(crate) fn negative_control_stage() {
+fn negative_control_stage() {
     let ns = NEGATIVE_CONTROL_SPIN_NS.load(std::sync::atomic::Ordering::Relaxed);
     if ns > 0 {
         let start = Instant::now();
@@ -55,6 +56,7 @@ impl crate::transport::Transport for Answer {
         _method: &str,
         _params: Option<serde_json::Value>,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        negative_control_stage();
         Ok(crate::protocol::JsonRpcResponse::success_serialized(
             crate::protocol::RequestId::Number(1),
             json!({"content": []}),

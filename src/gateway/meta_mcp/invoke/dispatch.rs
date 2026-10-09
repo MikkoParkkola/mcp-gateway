@@ -111,8 +111,6 @@ impl MetaMcp {
         // The call's admission: its reservation is settled with the spend.
         admission: &dispatch_guards::Admission,
     ) -> Result<Value> {
-        #[cfg(test)]
-        crate::gateway::server::signing_allocation_tests::per_call_timing::negative_control_stage();
         let dispatch_start = Instant::now();
         let dispatch_result = self
             .dispatch_to_backend(
