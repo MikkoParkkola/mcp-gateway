@@ -36,7 +36,10 @@ fn presented(facts: Option<CredentialFacts>, session_sha256: Option<String>) -> 
 /// Facts that name `jti` and an expiry a day out.
 fn facts(jti: Option<&str>) -> CredentialFacts {
     CredentialFacts {
-        expires_at: Some(chrono::Utc::now() + crate::duration_bound::delta!(days, 1)),
+        expires_at: Some(
+            crate::clock::utc_now().expect("the test host's clock reads after 1970")
+                + crate::duration_bound::delta!(days, 1),
+        ),
         jti: jti.map(str::to_owned),
         issued_at: None,
         provider_sha256: None,
@@ -85,11 +88,11 @@ async fn a_dashboard_subscription_binds_the_session_and_expires_one_idle_timeout
     let digest = crate::hashing::sha256_hex(b"session-handle");
     let idle = crate::duration_bound::delta!(seconds, 600);
     // WHEN
-    let before = chrono::Utc::now();
+    let before = crate::clock::utc_now().expect("the test host's clock reads after 1970");
     let credential = presented(Some(facts(Some("ignored"))), Some(digest.clone()))
         .credential(Some(&caller), &state)
         .expect("a bounded idle timeout");
-    let after = chrono::Utc::now();
+    let after = crate::clock::utc_now().expect("the test host's clock reads after 1970");
     // THEN
     assert_eq!(credential.kind, CredentialKind::DashboardSession);
     assert_eq!(credential.principal, caller.principal);
