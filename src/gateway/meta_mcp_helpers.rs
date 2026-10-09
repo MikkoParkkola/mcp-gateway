@@ -658,24 +658,6 @@ pub(crate) fn extract_required_str<'a>(args: &'a Value, key: &str) -> Result<&'a
 ///
 /// Handles both JSON objects and stringified JSON objects (OpenAI-style).
 /// Returns an error if arguments are neither.
-/// The `arguments` a call dispatches, as every gate judges them: the
-/// JSON-string form parsed to the object it is sent as (MIK-8137 b1: a string
-/// once skipped the request scan, which reads objects), otherwise the value as
-/// given (`{}` when absent). A string that does not parse to an object is kept
-/// as given; [`parse_tool_arguments`] refuses that call before any dispatch.
-pub(crate) fn judged_arguments(holder: &Value) -> std::borrow::Cow<'_, Value> {
-    use std::borrow::Cow;
-    match holder.get("arguments") {
-        // Owned only here, where a string had to be parsed (MIK-8014 keeps
-        // the object form borrowed).
-        Some(raw @ Value::String(_)) => {
-            parse_tool_arguments_cow(holder).unwrap_or(Cow::Borrowed(raw))
-        }
-        Some(value) => Cow::Borrowed(value),
-        None => Cow::Owned(json!({})),
-    }
-}
-
 pub(crate) fn parse_tool_arguments(args: &Value) -> Result<Value> {
     parse_tool_arguments_cow(args).map(std::borrow::Cow::into_owned)
 }

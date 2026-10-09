@@ -80,7 +80,7 @@ impl MetaMcp {
         // different targets are two gates that can disagree.
         // The arguments as dispatched (a JSON-string form parsed), the same
         // value the router's target builder judges (MIK-8137 b1).
-        let judged = crate::gateway::meta_mcp_helpers::judged_arguments(args);
+        let judged = crate::gateway::authz::judged_arguments(args);
         let target = crate::gateway::authz::ToolTarget {
             server,
             tool,

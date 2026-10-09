@@ -426,7 +426,7 @@ fn target_from_invoke_arguments(arguments: &Value) -> Option<CallTarget<'_>> {
     Some(CallTarget {
         server: arguments.get("server")?.as_str()?.to_string(),
         tool: arguments.get("tool")?.as_str()?.to_string(),
-        arguments: crate::gateway::meta_mcp_helpers::judged_arguments(arguments),
+        arguments: crate::gateway::authz::judged_arguments(arguments),
     })
 }
 
@@ -440,7 +440,7 @@ fn targets_from_code_mode_arguments(arguments: &Value) -> Vec<CallTarget<'_>> {
                 Some(CallTarget {
                     server: server.to_string(),
                     tool: tool.to_string(),
-                    arguments: crate::gateway::meta_mcp_helpers::judged_arguments(step),
+                    arguments: crate::gateway::authz::judged_arguments(step),
                 })
             })
             .collect();
@@ -456,7 +456,7 @@ fn targets_from_code_mode_arguments(arguments: &Value) -> Vec<CallTarget<'_>> {
     vec![CallTarget {
         server: server.to_string(),
         tool: tool.to_string(),
-        arguments: crate::gateway::meta_mcp_helpers::judged_arguments(arguments),
+        arguments: crate::gateway::authz::judged_arguments(arguments),
     }]
 }
 

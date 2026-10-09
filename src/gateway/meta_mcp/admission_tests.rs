@@ -499,11 +499,13 @@ async fn sub4_playbook_dispatch_uses_admitted_definition() {
     let _outcome = meta.run_playbook(&args, &caller).await;
     assert_eq!(
         *policy.seen.lock(),
-        decided_twice(&[
+        vec![
+            (FIRST.0.to_string(), FIRST.1.to_string()),
             (FIRST.0.to_string(), FIRST.1.to_string()),
             (SECOND.0.to_string(), SECOND.1.to_string()),
-        ]),
-        "dispatch must use the admitted definition, not the replacement engine"
+            (SECOND.0.to_string(), SECOND.1.to_string()),
+        ],
+        "dispatch must use the admitted definition (each step decided at invocation and at the chokepoint)"
     );
 
     // A new owner must observe the new definition. This rules out preserving
@@ -524,20 +526,13 @@ async fn sub4_playbook_dispatch_uses_admitted_definition() {
     let _outcome = meta.run_playbook(&args, &fresh_caller).await;
     assert_eq!(
         *policy.seen.lock(),
-        decided_twice(&[
+        vec![
+            ("replacement".to_string(), FIRST.1.to_string()),
             ("replacement".to_string(), FIRST.1.to_string()),
             (SECOND.0.to_string(), SECOND.1.to_string()),
-        ])
+            (SECOND.0.to_string(), SECOND.1.to_string()),
+        ]
     );
-}
-
-/// Each step that runs is decided twice: at its invocation and again at the
-/// dispatch chokepoint (MIK-8137 b1), in step order.
-fn decided_twice(steps: &[(String, String)]) -> Vec<(String, String)> {
-    steps
-        .iter()
-        .flat_map(|step| [step.clone(), step.clone()])
-        .collect()
 }
 
 /// The paired falsifier for the stdio credential principal: a keyed modern
