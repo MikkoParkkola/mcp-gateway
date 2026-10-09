@@ -372,7 +372,12 @@ fn parse_expiry(
         (None, Some(seconds)) if seconds <= 0 => {
             Err("--ttl-seconds must be greater than zero".to_string())
         }
-        (None, Some(seconds)) => Ok(Some(Utc::now() + Duration::seconds(seconds))),
+        // MIK-8207: both the duration and the sum are checked; either one
+        // out of range used to panic.
+        (None, Some(seconds)) => Duration::try_seconds(seconds)
+            .and_then(|ttl| Utc::now().checked_add_signed(ttl))
+            .map(Some)
+            .ok_or_else(|| format!("--ttl-seconds {seconds} is too large")),
         (None, None) => Ok(None),
     }
 }
@@ -472,6 +477,17 @@ mod tests {
     use mcp_gateway::identity_grants::{
         CapabilityExposure, IdentityGrantRequest, LocalIdentityGrantStore,
     };
+
+    /// MIK-8207: a `--ttl-seconds` too large for a timestamp is refused;
+    /// it panicked, either building the duration or adding it to now.
+    #[test]
+    fn a_ttl_too_large_for_a_timestamp_is_refused() {
+        for ttl in [i64::MAX, 10_000_000_000_000] {
+            let refused = parse_expiry(None, Some(ttl));
+            assert!(refused.is_err(), "{ttl}: {refused:?}");
+        }
+        assert!(parse_expiry(None, Some(3_600)).expect("an hour").is_some());
+    }
 
     fn grant_input(path: PathBuf) -> LocalGrantInput {
         LocalGrantInput {

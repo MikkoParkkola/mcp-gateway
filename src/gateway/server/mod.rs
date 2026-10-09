@@ -2275,6 +2275,9 @@ impl Gateway {
         // MIK-7272.OWNER.2: `<tasks.store_dir>/stdio`, or `None` to serve as before.
         let task_store =
             stdio_tasks::open(&self.config, self.env.startup(), &meta_mcp, &tool_policy).await;
+        // MIK-7839.CANCEL.3: a session future dropped before EOF never reaches
+        // the async teardown; this guard still stops its task workers.
+        let _stop_tasks = task_store.as_ref().map(|(tasks, _)| tasks.stop_on_drop());
         // MIK-7217.STDIO.1: read once, as the store is; discover lists 2026-07-28 by it.
         let modern = self.config.server.modern_protocol;
 

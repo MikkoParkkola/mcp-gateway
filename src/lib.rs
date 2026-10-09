@@ -44,6 +44,7 @@ pub mod context_integrity;
 pub mod control_plane;
 pub mod cost_accounting;
 pub mod discovery;
+mod duration_bound;
 pub mod error;
 mod events;
 pub mod failsafe;

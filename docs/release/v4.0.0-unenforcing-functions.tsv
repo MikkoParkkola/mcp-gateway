@@ -57,6 +57,13 @@ src/gateway/server/tools_changed/views.rs	bury	1	Per-user change hint: keeps an 
 src/oauth/login_gate.rs	fill_scope	1	Runs a shared fill under its dispatch mark; affects only which timeout error a joiner reports (MIK-8046).
 src/oauth/login_gate.rs	joined	1	Records which shared fill a deadline scope waits on; affects only which timeout error it reports (MIK-8046).
 src/gateway/router/helpers.rs	build_http_response	1	Serialises a frame already wrapped as Egressed; the scan is decided where the Egressed value is made, not here.
+src/gateway/server/stdio_tasks.rs	stop_on_drop	1	Session lifecycle (MIK-7839.CANCEL.3): builds the guard that stops task workers when the session future is dropped
+src/gateway/task_service/service.rs	stop_serving	1	Store lifecycle (MIK-7839.CANCEL.3): forwards the admission cutoff to the store
+src/gateway/task_service/store.rs	stop_serving	1	Store lifecycle (MIK-7839.CANCEL.3): clears ready so later mutations answer Unavailable; ownership checks are elsewhere
+src/transport/http/cancel_guard.rs	arm	1	Records a legacy exchange sent to the backend so a drop can cancel it (MIK-7642); no access decision
+src/transport/http/cancel_guard.rs	disarm	1	Marks the exchange answered so no cancel is sent (MIK-7642); no access decision
+src/transport/http/cancel_guard.rs	drop	1	Sends the backend one notifications/cancelled for a dropped, unanswered legacy exchange (MIK-7642); no access decision
+src/transport/http/requests.rs	post_and_read	1	The existing POST-and-read body moved out so the cancel guard can wrap it (MIK-7642); the redirect and status checks it carries are unchanged
 src/gateway/server/persistence.rs	write_costs	1	Shutdown persistence (MIK-8157): writes today's spend to costs.json under the cost-write lock; the budget decision is the enforcer's
 src/gateway/server/persistence.rs	save_costs_unless_busy	1	Shutdown persistence (MIK-8157): periodic cost save that skips while a previous write runs
 src/gateway/server/persistence.rs	run_shutdown_saves	1	Shutdown persistence (MIK-8157): runs the shutdown saves on detached threads under one deadline

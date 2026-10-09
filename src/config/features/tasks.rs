@@ -34,8 +34,10 @@ pub struct TasksConfig {
     /// `~` is expanded at startup.
     pub store_dir: String,
     /// Retention stamped onto a new record. `0` is unlimited (`ttlMs: null`).
+    #[serde(deserialize_with = "crate::duration_bound::millis")]
     pub default_ttl_ms: u64,
     /// Suggested poll cadence stamped onto a new record. `0` omits the field.
+    #[serde(deserialize_with = "crate::duration_bound::millis")]
     pub poll_interval_ms: u64,
     /// Store-wide live record cap.
     pub max_records: usize,

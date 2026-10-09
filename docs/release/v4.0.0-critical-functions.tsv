@@ -206,6 +206,8 @@ src/gateway/server/support.rs	client_identity_from_peer_chain	1	critical	a,b	cli
 src/gateway/server/support.rs	network_bind_refusal	1	critical	a,d	network_bind_refusal	The single definition of the unauthenticated network exposure: None means this configuration may serve
 src/gateway/server/support.rs	serve_tls	1	critical	a	serve_tls	The mTLS listener: decides which client certificates may connect
 src/gateway/server/support.rs	start_refusal	1	critical	a,d	start_refusal	Every refusal Gateway::run asks before it binds, in order; reload restart advice asks the same
+src/gateway/server/stdio_tasks.rs	new	1	critical	c	TasksDropGuard::new	Binds the guard to the session's own executor and store, so its drop seals the workers that session started (MIK-7839.CANCEL.3)
+src/gateway/server/stdio_tasks.rs	drop	1	critical	c	TasksDropGuard::drop	Seals the executor so no worker takes another step, then stops store admission, when the session future is dropped (MIK-7839.CANCEL.3)
 src/gateway/task_service/execution.rs	cancel	1	critical	c	TaskExecutor::cancel	Cancel is a write scoped to the owner via the principal; signals the worker only after it commits
 src/gateway/task_service/execution.rs	cancel_lost_the_revision	1	critical	c	TaskExecutor::cancel_lost_the_revision	Retries cancel only after re-reading the task through the owner-scoped service.get
 src/gateway/task_service/execution.rs	transition_write	1	critical	c	TaskExecutor::transition_write	Hashes the request principal to an owner
@@ -368,6 +370,7 @@ src/oauth/client/refresh_flight.rs	spend	1	standard	borderline	Flight::spend	Rec
 src/oauth/client/refresh_flight.rs	redirect_target	1	standard	borderline	Exchange::redirect_target	Resolves the untrusted Location that redirect_error judges; a None would turn an SSRF refusal into a generic error
 src/oauth/client/refresh_flight.rs	limit	1	standard	borderline	Flight::limit	The bound on one exchange; a wrong value lets a supplied client hold the credential indefinitely
 src/oauth/client/refresh_flight.rs	refresh_stored	1	critical	d	refresh_stored	Refuses to resend a spent refresh token; retires one an unsettled exchange may have consumed, or whose sidecar is damaged (MIK-8091); marks the token in flight before sending
+src/oauth/client/mod.rs	refuse_oversized_expires_in	1	critical	d	refuse_oversized_expires_in	Refuses a token answer whose expires_in is above the 100-year bound (MIK-8207)
 src/oauth/metadata.rs	discover	1	critical	b	AuthorizationServerMetadata::discover	RFC 8414 issuer must match the discovery base
 src/oauth/storage.rs	is_expired	1	critical	d	TokenInfo::is_expired	Expiry decision (60s buffer) gating reuse of a cached token
 src/oauth/storage.rs	create_secret_tmp	1	standard	borderline	TokenStorage::create_secret_tmp	Creates a private (0600/DACL) temp file via create_new_private

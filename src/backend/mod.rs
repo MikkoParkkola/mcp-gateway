@@ -265,6 +265,10 @@ pub struct Backend {
     /// filter and reading the slots, so a test can land a verdict there.
     #[cfg(test)]
     snapshot_seam: parking_lot::Mutex<Option<String>>,
+    /// A list the next drain stores into the shared slot right after reading
+    /// it, so a test can land a store between that read and the next.
+    #[cfg(test)]
+    shared_read_seam: parking_lot::Mutex<Option<Vec<crate::protocol::Tool>>>,
 }
 
 /// Where a test backend's OAuth client keeps tokens, and who plays the

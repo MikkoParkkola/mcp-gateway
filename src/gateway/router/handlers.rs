@@ -870,13 +870,17 @@ async fn meta_mcp_dispatch(
         // fails and the method falls through to `-32601`.
         "events/list" | "events/subscribe" | "events/unsubscribe"
             if state.meta_mcp.events().is_some() =>
-        {
+        'events: {
             let hub = std::sync::Arc::clone(state.meta_mcp.events().expect("guarded above"));
             let session = Some(session_id.as_str());
+            let credential = match presented.credential(client.as_ref(), &state) {
+                Ok(credential) => credential,
+                Err(why) => break 'events JsonRpcResponse::error(Some(id), -32603, why),
+            };
             let caller = crate::events::Caller {
                 principal: events::principal(&events_owner, state.auth_config.enabled),
                 read_key: read_key.clone(),
-                credential: presented.credential(client.as_ref(), &state),
+                credential,
                 visible_backends: hub
                     .scope_backends()
                     .into_iter()

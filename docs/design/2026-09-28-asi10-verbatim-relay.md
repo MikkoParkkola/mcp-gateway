@@ -857,16 +857,21 @@ causes names it (MIK-8201):
   same-source copy (D2). Needs one text delivered to one caller from over 64 sources, or the pool
   exhausted, inside one window.
 - The per-source excuse (14.2), with its own metric and named refusal (MIK-8206).
-- Not a bound: a fifth cut delivery from one source evicting a holder's sketch (MIK-8066), which
-  then refuses the holder's own copy. Ordinary use; an in-model defect: MIK-8200. The fix keeps a
-  sketch while conflicting evidence can still live, bounded by memory (bound stated here when it
-  lands), keeps the B3 aggregate, and has a red row of 5+ cut deliveries from one source followed by
-  egress of the first one's middle. It lands before CAP.2's thinned sample.
+- Cut-delivery sketches (MIK-8200). A sketch lives as long as its delivery's window, with no count
+  cap. Memory: at most 32 MiB of sketches across every pair, live and being built, and at most
+  8 MiB for one (source, caller) pair; past either, the oldest live sketch goes (the pair's own for
+  its 8 MiB). A sketch still being built is never evicted. A sketch that cannot fit even then is
+  not built: the delivery is recorded without one, and the refusal is counted. A 1 MiB delivery's
+  sketch is about 735 KiB, so 7 fit one pair's budget.
 
-**B3 Bloom false excuse (D3).** A cut delivery's sketch says "held" for an absent fingerprint at most
-0.25% of the time, at most 1% across a pair's 4 live sketches; only for the holder's own (source,
-caller) pair. A relay with exactly 2 matches is lost if either is falsely excused: about 2%. Keeping
-more sketches per pair (MIK-8200) must keep this aggregate.
+**B3 Bloom false excuse (D3).** A pair's sketch at position i is sized for a target rate of
+0.35% × 2^-i, using the classic ideal-hash rate with independent per-probe mixing (splitmix64);
+sizing is bounded by the byte cap. The guarantee is the measured aggregate across all of a pair's
+live sketches: 0.69% (0.6876%, 95% CI [0.6695%, 0.7057%], 800,000 trials, final sizing with
+geometric growth and a local probe search) for 8 sketches of 10,000 then 40 of 16 fingerprints,
+against a stated bound of 0.8% for production-sized sketches. It applies only to
+the holder's own (source, caller) pair. A relay with exactly 2 matches is lost if either is falsely
+excused: under 2%.
 
 ### 14.4 Falsifier
 
