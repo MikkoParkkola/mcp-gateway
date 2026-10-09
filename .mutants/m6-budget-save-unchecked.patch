@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/persistence.rs b/src/gateway/server/persistence.rs
+index 657486a45..87b5bdabe 100644
+--- a/src/gateway/server/persistence.rs
++++ b/src/gateway/server/persistence.rs
+@@ -96,7 +96,7 @@ pub(super) const COST_SAVE_INTERVAL: std::time::Duration = std::time::Duration::
+ /// Save today's spend to `<data_dir>/costs.json`.
+ #[cfg(feature = "cost-governance")]
+ pub(super) fn save_costs(enforcer: &BudgetEnforcer, data_dir: &Path) {
+-    let Ok(snapshot) = enforcer.snapshot_for_save() else {
++    let Ok(snapshot) = Ok::<_, ()>(enforcer.snapshot()) else {
+         tracing::warn!("Clock reads before 1970; cost save skipped, the last saved spend stands");
+         return;
+     };

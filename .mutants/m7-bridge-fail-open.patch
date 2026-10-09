@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/accounts/bridge.rs b/src/gateway/router/accounts/bridge.rs
+index ed4e2b0ec..9715866b7 100644
+--- a/src/gateway/router/accounts/bridge.rs
++++ b/src/gateway/router/accounts/bridge.rs
+@@ -132,7 +132,7 @@ impl OwuiSessionBridge {
+         // A session with an expiry is refused when the clock cannot be read
+         // (MIK-8202); one without an expiry never needs the clock.
+         let unexpired = user.expires_at.is_none_or(|at| {
+-            expired_by(|now| {
++            crate::clock::unix_secs().map_or(Validity::Live, |now| {
+                 if at >= i64::try_from(now).unwrap_or(i64::MAX) {
+                     Validity::Live
+                 } else {

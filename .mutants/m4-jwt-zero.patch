@@ -1,0 +1,13 @@
+diff --git a/src/gateway/oauth/jwt.rs b/src/gateway/oauth/jwt.rs
+index d7bbf6600..5564a5094 100644
+--- a/src/gateway/oauth/jwt.rs
++++ b/src/gateway/oauth/jwt.rs
+@@ -120,7 +120,7 @@ pub fn validate_agent_token(
+ ) -> Result<ValidatedToken, JwtError> {
+     // A clock that reads before 1970 refuses, as an expired token would
+     // (MIK-8202): there is no time to judge `exp` against.
+-    let now = registry.now().map_err(|_| {
++    let now = registry.now().or(Ok::<u64, crate::clock::ClockBeforeEpoch>(0)).map_err(|_| {
+         JwtError::JwtVerification(jsonwebtoken::errors::Error::from(
+             jsonwebtoken::errors::ErrorKind::ExpiredSignature,
+         ))

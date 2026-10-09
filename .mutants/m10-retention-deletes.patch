@@ -1,0 +1,13 @@
+diff --git a/src/idempotency/admission.rs b/src/idempotency/admission.rs
+index b7646a385..3293911a9 100644
+--- a/src/idempotency/admission.rs
++++ b/src/idempotency/admission.rs
+@@ -364,7 +364,7 @@ impl ExecutionAdmission {
+     )]
+     pub(crate) fn reclaim_completed(&self) -> usize {
+         // Retention: a clock it cannot read reclaims nothing this pass.
+-        (self.clock)().map_or(0, |now| self.state.lock().reclaim(now))
++        self.state.lock().reclaim((self.clock)().unwrap_or(u64::MAX))
+     }
+ 
+     fn finish(&self, identity: &str, generation: u64, bytes: Option<Arc<[u8]>>) -> Settlement {

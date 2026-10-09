@@ -1,0 +1,15 @@
+diff --git a/src/idempotency/admission.rs b/src/idempotency/admission.rs
+index b7646a385..3f8ae628b 100644
+--- a/src/idempotency/admission.rs
++++ b/src/idempotency/admission.rs
+@@ -369,9 +369,7 @@ impl ExecutionAdmission {
+ 
+     fn finish(&self, identity: &str, generation: u64, bytes: Option<Arc<[u8]>>) -> Settlement {
+         // An unreadable clock settles the entry undated: it never expires.
+-        let expires = (self.clock)()
+-            .ok()
+-            .and_then(|now| now.checked_add(RETENTION_SECS));
++        let expires = (self.clock)().unwrap_or(0).checked_add(RETENTION_SECS);
+         let mut state = self.state.lock();
+         if !state.entries.get(identity).is_some_and(|entry| {
+             entry.generation == generation && matches!(entry.status, Status::Active)

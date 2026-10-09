@@ -1,0 +1,13 @@
+diff --git a/src/protocol/continuation/payload.rs b/src/protocol/continuation/payload.rs
+index ef99be02f..15b617cd4 100644
+--- a/src/protocol/continuation/payload.rs
++++ b/src/protocol/continuation/payload.rs
+@@ -169,7 +169,7 @@ pub(super) const fn expiry_for(now: u64) -> u64 {
+ /// (MIK-8202): an open refuses rather than judge a deadline against a clock it
+ /// cannot read, and a mint is refused rather than stamped `issued_at = 0`.
+ pub(crate) fn clock_now() -> Result<u64, ContinuationError> {
+-    crate::clock::unix_secs().map_err(|_| ContinuationError::Expired)
++    Ok(crate::clock::unix_secs().unwrap_or(0))
+ }
+ 
+ /// The real clock, for tests that mint against now.

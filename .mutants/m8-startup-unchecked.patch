@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/start_checks.rs b/src/gateway/server/start_checks.rs
+index 6f1e40f66..f4a69ac83 100644
+--- a/src/gateway/server/start_checks.rs
++++ b/src/gateway/server/start_checks.rs
+@@ -11,7 +11,7 @@ use crate::config::Config;
+ /// Refusing here, once, keeps a box that boots with a dead clock from serving
+ /// at all; a clock that steps back later is handled at each check.
+ pub(super) fn clock() -> Result<()> {
+-    crate::clock::unix_secs().map(drop).map_err(|_| {
++    Ok::<u64, crate::clock::ClockBeforeEpoch>(0).map(drop).map_err(|_| {
+         crate::Error::Config(
+             "system clock reads before 1970; set the clock and restart (MIK-8202)".to_owned(),
+         )

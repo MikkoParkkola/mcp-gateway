@@ -1,0 +1,13 @@
+diff --git a/src/key_server/store.rs b/src/key_server/store.rs
+index b2229025d..a2a93ddc7 100644
+--- a/src/key_server/store.rs
++++ b/src/key_server/store.rs
+@@ -82,7 +82,7 @@ impl TemporaryToken {
+     /// per-identity count go by. A clock it cannot read ages nothing out, so
+     /// nothing is deleted on it (MIK-8202); access still refuses.
+     fn aged_out(&self) -> bool {
+-        crate::clock::unix_secs().is_ok_and(|now| now >= self.exp)
++        self.is_expired()
+     }
+ }
+ 

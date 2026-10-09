@@ -1,0 +1,14 @@
+diff --git a/src/personal_accounts/provider/grant_flow.rs b/src/personal_accounts/provider/grant_flow.rs
+index 625e29728..7cc1facd8 100644
+--- a/src/personal_accounts/provider/grant_flow.rs
++++ b/src/personal_accounts/provider/grant_flow.rs
+@@ -182,8 +182,7 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
+         // clock before 1970 no code is spent and no token exists to drop or
+         // revoke. Only a clock stepping back during this call can still fail
+         // `map_token_response` after tokens were issued.
+-        self.now_unix()
+-            .map_err(|_| ProviderRefreshError::Unavailable)?;
++        let _ = self.now_unix();
+         let response = self
+             .http
+             .post_token(pinned.token_endpoint.as_str(), &form)
