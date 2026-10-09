@@ -86,6 +86,7 @@ mod undeclared_gate;
 pub(crate) mod audit;
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
 pub(crate) mod egress;
+mod nonce_settle; // MIK-8150: refund requests and dispatch marks of a signed execution
 mod r2_check;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
 mod bridge_settle;
@@ -416,9 +417,7 @@ impl MetaMcp {
                 trace_id,
                 caller_key: None,
             })
-            .inspect_err(|_| {
-                caller.signing.inspect(|signing| signing.want_refund());
-            })?;
+            .inspect_err(|_| nonce_settle::ask_refund(caller))?;
         #[cfg(feature = "cost-governance")]
         let cost_warnings = std::mem::take(&mut admission.warnings);
         #[cfg(not(feature = "cost-governance"))]
@@ -447,7 +446,7 @@ impl MetaMcp {
                     // acted: the key is released rather than settled (settling
                     // would answer an honest retry with a side effect nothing
                     // performed), and the signing nonce is asked back.
-                    dispatch_guards::give_back_unsent(caller, &mut idem_reservation);
+                    nonce_settle::give_back_unsent(caller, &mut idem_reservation);
                     return Err(error);
                 }
             };
@@ -460,10 +459,7 @@ impl MetaMcp {
         };
         let reservation = idem_reservation.as_mut();
         self.refuse_relay(caller, session_id, (server, tool), &egress, reservation)?;
-        if let Some(execution) = caller.execution {
-            execution.mark_dispatched();
-        }
-        caller.signing.inspect(|signing| signing.mark_dispatched());
+        nonce_settle::mark_dispatched(caller);
         // Boxed: the dispatch future is the largest thing this frame ever
         // holds, and inlining it puts `invoke_tool_traced` over
         // `clippy::large_futures` at every call site.

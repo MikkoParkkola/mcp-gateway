@@ -256,18 +256,3 @@ impl MetaMcp {
 #[cfg(test)]
 #[path = "dispatch_guards_tests.rs"]
 mod dispatch_guards_tests;
-
-/// A call refused before its backend was reached gives back what it took:
-/// its idempotency key (released, not settled: nothing acted) and, once the
-/// call returns with no step dispatched, the signing nonce it admitted, so the
-/// honest call re-sent under that nonce is judged on its merits, not refused as
-/// a replay (MIK-8150, as the direct route does since #3451).
-pub(crate) fn give_back_unsent(
-    caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-    reservation: &mut Option<crate::idempotency::IdempotencyReservation>,
-) {
-    if let Some(reservation) = reservation.as_mut() {
-        reservation.release();
-    }
-    caller.signing.inspect(|context| context.want_refund());
-}
