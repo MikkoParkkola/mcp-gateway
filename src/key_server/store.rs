@@ -77,6 +77,13 @@ impl TemporaryToken {
             }
         }) == Validity::Expired
     }
+
+    /// Past its expiry on a clock that reads: what eviction, reaping and the
+    /// per-identity count go by. A clock it cannot read ages nothing out, so
+    /// nothing is deleted on it (MIK-8202); access still refuses.
+    fn aged_out(&self) -> bool {
+        crate::clock::unix_secs().is_ok_and(|now| now >= self.exp)
+    }
 }
 
 /// Scopes granted to a temporary token.
@@ -189,10 +196,12 @@ impl TokenStore for InMemoryTokenStore {
         drop(entry);
 
         if token.is_expired() {
-            // Lazy eviction: remove on access
-            self.by_bearer.remove(bearer);
-            self.by_jti.remove(&token.jti);
-            debug!(jti = %token.jti, "Lazy-evicted expired token");
+            // Lazy eviction: remove on access, once really past its expiry.
+            if token.aged_out() {
+                self.by_bearer.remove(bearer);
+                self.by_jti.remove(&token.jti);
+                debug!(jti = %token.jti, "Lazy-evicted expired token");
+            }
             return None;
         }
 
@@ -239,7 +248,7 @@ impl TokenStore for InMemoryTokenStore {
             .iter()
             .filter(|e| {
                 let identity = &e.value().identity;
-                identity.issuer == issuer && identity.subject == subject && !e.value().is_expired()
+                identity.issuer == issuer && identity.subject == subject && !e.value().aged_out()
             })
             .count()
     }
@@ -248,7 +257,7 @@ impl TokenStore for InMemoryTokenStore {
         let expired_bearers: Vec<String> = self
             .by_bearer
             .iter()
-            .filter(|e| e.value().is_expired())
+            .filter(|e| e.value().aged_out())
             .map(|e| e.key().clone())
             .collect();
 
@@ -580,10 +589,21 @@ mod tests {
             "control: live on the real clock"
         );
 
-        let _clock = crate::clock::test_clock::before_epoch();
+        {
+            let _clock = crate::clock::test_clock::before_epoch();
+            assert!(
+                store.get(&bearer).await.is_none(),
+                "an unreadable clock admitted a bearer token"
+            );
+            assert_eq!(
+                store.reap_expired().await,
+                0,
+                "an unreadable clock reaped a token"
+            );
+        }
         assert!(
-            store.get(&bearer).await.is_none(),
-            "an unreadable clock admitted a bearer token"
+            store.get(&bearer).await.is_some(),
+            "a refusal on an unreadable clock deleted the token for good"
         );
     }
 }
