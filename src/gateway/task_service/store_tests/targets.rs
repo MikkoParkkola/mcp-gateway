@@ -65,13 +65,14 @@ async fn a_version_5_row_with_targets_round_trips() {
 }
 
 #[tokio::test]
-async fn the_loader_accepts_versions_1_to_6_and_refuses_7() {
-    for version in 1..=7_u32 {
+async fn the_loader_accepts_versions_1_to_7_and_refuses_8() {
+    // v7 is the upstream cancel claim (MIK-7642).
+    for version in 1..=8_u32 {
         let dir = tempfile::tempdir().unwrap();
         let (path, id) = one_row(dir.path()).await;
         set_version(&path.join(format!("{id}.json")), version);
         let opened = TaskStore::open(&path, StoreLimits::default()).await;
-        assert_eq!(opened.is_ok(), version <= 6, "version {version}");
+        assert_eq!(opened.is_ok(), version <= 7, "version {version}");
         if let Ok(store) = opened {
             store.close().await.unwrap();
         }
