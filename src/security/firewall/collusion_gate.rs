@@ -68,6 +68,7 @@ pub struct CollusionConfig {
     /// `off` (default), `observe` or `block`.
     pub action: CollusionAction,
     /// How long a delivery is remembered, in seconds.
+    #[serde(deserialize_with = "crate::duration_bound::secs")]
     pub window_secs: u64,
     /// Matching fingerprints one egress needs before it is a relay.
     pub min_matches: usize,

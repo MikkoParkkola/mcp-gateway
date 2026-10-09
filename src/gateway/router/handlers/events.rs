@@ -56,8 +56,8 @@ impl Presented {
     /// delegated-bearer credential ends at its own expiry; a dashboard
     /// session at most one idle timeout from now, since activity alone
     /// extends it. Each kind but an API key carries the binding every
-    /// delivery attempt re-checks (design F9).
-    #[allow(clippy::unnecessary_wraps)] // red seam: the fix refuses
+    /// delivery attempt re-checks (design F9). Refused when a dashboard
+    /// idle timeout is too long for a timestamp to hold.
     pub(super) fn credential(
         &self,
         client: Option<&crate::gateway::auth::AuthenticatedClient>,
@@ -72,10 +72,23 @@ impl Presented {
         });
         let expires_at = match kind {
             CredentialKind::DashboardSession => {
-                let config = state.live_config.get();
-                let idle = config.auth.dashboard_session.idle_timeout_secs;
-                let idle = chrono::Duration::seconds(i64::try_from(idle).unwrap_or(i64::MAX));
-                chrono::Utc::now().checked_add_signed(idle)
+                // MIK-8207: an idle timeout no timestamp can hold refuses the
+                // call; it never panics and never leaves the session unbounded.
+                let idle = state
+                    .live_config
+                    .get()
+                    .auth
+                    .dashboard_session
+                    .idle_timeout_secs;
+                let ends = i64::try_from(idle)
+                    .ok()
+                    .and_then(chrono::TimeDelta::try_seconds)
+                    .and_then(|idle| chrono::Utc::now().checked_add_signed(idle));
+                Some(ends.ok_or_else(|| {
+                    crate::duration_bound::too_long(&format!(
+                        "auth.dashboard_session.idle_timeout_secs ({idle})"
+                    ))
+                })?)
             }
             _ => facts.expires_at,
         };

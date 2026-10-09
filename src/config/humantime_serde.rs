@@ -12,20 +12,30 @@ use serde::{self, Deserialize, Deserializer, Serializer};
 /// `"s"` first, so `"100ms"` took the seconds branch and failed to parse
 /// `"100m"` as an integer — every `ms` value in every duration field was
 /// rejected. Bare integers are seconds.
+///
+/// A value above 100 years is refused (MIK-8207): it would overflow the
+/// arithmetic it reaches, and the old unchecked `m * 60` and `h * 3600`
+/// wrapped to a few seconds.
 fn parse(text: &str) -> Result<Duration, String> {
     let text = text.trim();
-    if let Some(ms) = text.strip_suffix("ms") {
-        ms.parse::<u64>().map(Duration::from_millis)
+    type Scale = fn(u64) -> Option<Duration>;
+    let (number, scale): (&str, Scale) = if let Some(ms) = text.strip_suffix("ms") {
+        (ms, |n| Some(Duration::from_millis(n)))
     } else if let Some(secs) = text.strip_suffix('s') {
-        secs.parse::<u64>().map(Duration::from_secs)
+        (secs, |n| Some(Duration::from_secs(n)))
     } else if let Some(mins) = text.strip_suffix('m') {
-        mins.parse::<u64>().map(|m| Duration::from_secs(m * 60))
+        (mins, |n| n.checked_mul(60).map(Duration::from_secs))
     } else if let Some(hours) = text.strip_suffix('h') {
-        hours.parse::<u64>().map(|h| Duration::from_secs(h * 3600))
+        (hours, |n| n.checked_mul(3600).map(Duration::from_secs))
     } else {
-        text.parse::<u64>().map(Duration::from_secs)
-    }
-    .map_err(|e| format!("invalid duration {text:?}: {e}"))
+        (text, |n| Some(Duration::from_secs(n)))
+    };
+    let n = number
+        .parse::<u64>()
+        .map_err(|e| format!("invalid duration {text:?}: {e}"))?;
+    scale(n)
+        .filter(|d| *d <= crate::duration_bound::MAX_DURATION)
+        .ok_or_else(|| crate::duration_bound::too_long(&format!("duration {text:?}")))
 }
 
 /// Serialize `Duration` to a human-readable string (e.g., `"30s"`).

@@ -389,13 +389,19 @@ impl IdentityPropagation for TokenExchangeStrategy {
             .expires_in
             .unwrap_or(DEFAULT_EXCHANGED_TOKEN_TTL_SECS)
             .max(1);
-        // saturating_add: a hostile/compromised STS returning `expires_in` near
-        // `i64::MAX` must not overflow (debug panic; release wraps to
-        // instantly-expired) — MIK-6729 review L2. Saturating to `i64::MAX`
-        // is safe: it only ever makes the cache entry live *longer* under
-        // attack, which `reap_expired`/IDP.6 already bound via
-        // `MAX_CACHE_ENTRIES`, never a security downgrade.
-        let expires_at = now.saturating_add(ttl);
+        // A hostile or broken STS answering `expires_in` near `i64::MAX` must
+        // not overflow (MIK-6729 review L2), nor be trusted for centuries: an
+        // answer above the 100-year bound is malformed and refused (MIK-8207).
+        let expires_at = u64::try_from(now)
+            .ok()
+            .and_then(|now| crate::duration_bound::expiry_from_expires_in(now, ttl.unsigned_abs()))
+            .and_then(|at| i64::try_from(at).ok())
+            .ok_or_else(|| {
+                PropagationError::Refuse(format!(
+                    "token-exchange endpoint {endpoint} answered expires_in {ttl}, \
+                     more than 100 years; the answer is refused as malformed"
+                ))
+            })?;
         let scopes: Vec<String> = body
             .scope
             .unwrap_or_default()

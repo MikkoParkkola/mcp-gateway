@@ -448,11 +448,12 @@ async fn wait_ready(
     // Absolute: the configured wait, cut short by what is left of the call's own
     // deadline (less a second), so running out here is the non-evicting wait
     // timeout and never the outer timeout that discards the child.
-    let ends = (Instant::now() + Duration::from_secs(wait.max_wait_s)).min(
-        call_ends
-            .checked_sub(Duration::from_secs(1))
-            .unwrap_or_else(Instant::now),
-    );
+    let cap = call_ends
+        .checked_sub(Duration::from_secs(1))
+        .unwrap_or_else(Instant::now);
+    let ends = Instant::now()
+        .checked_add(Duration::from_secs(wait.max_wait_s))
+        .map_or(cap, |wait_ends| wait_ends.min(cap));
     let interval = Duration::from_millis(wait.interval_ms);
     loop {
         let poll = tokio::time::timeout_at(
@@ -612,7 +613,11 @@ impl CapabilityExecutor {
         let backend = lease.backend;
         let _busy = lease.busy;
         let child_id = lease.id;
-        let call_ends = Instant::now() + deadline;
+        let call_ends = Instant::now().checked_add(deadline).ok_or_else(|| {
+            Error::Config(crate::duration_bound::too_long(
+                "the capability's provider timeout",
+            ))
+        })?;
         let outcome = tokio::time::timeout(deadline, async {
             let mut args = arguments(template, &params)?;
             if let Some(prepare) = prepare {

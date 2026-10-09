@@ -548,6 +548,22 @@ impl OAuthClient {
 }
 
 /// Generate PKCE code verifier and challenge
+/// MIK-8207: a token answer whose `expires_in` is above 100 years is
+/// malformed. Trusted, it would keep a token for centuries without a refresh;
+/// added unchecked, it wrapped to an expiry in the past (a refresh on every
+/// call). The answer is refused, naming the endpoint that sent it.
+fn refuse_oversized_expires_in(endpoint: &str, expires_in: Option<u64>) -> Result<()> {
+    match expires_in {
+        Some(secs) if secs > crate::duration_bound::MAX_DURATION.as_secs() => {
+            Err(Error::OAuth(format!(
+                "the token endpoint {endpoint} answered expires_in {secs}, more than 100 years; \
+                 the answer is refused as malformed"
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
 fn generate_pkce() -> (String, String) {
     // Generate 32 random bytes for verifier
     let verifier_bytes: [u8; 32] = rand::rng().random();

@@ -61,6 +61,7 @@ pub struct TenantGuardConfig {
     /// Distinct tenants one principal may touch inside the window.
     pub max_tenants_per_window: usize,
     /// How long a tenant observation counts against its principal.
+    #[serde(deserialize_with = "crate::duration_bound::secs")]
     pub window_secs: u64,
     /// Argument keys whose values name a tenant, at any nesting depth. The
     /// same keys attribute tool results (text-JSON included) to tenants in

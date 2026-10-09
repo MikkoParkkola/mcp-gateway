@@ -77,6 +77,7 @@ impl OAuthClient {
             ))
         })?;
 
+        super::refuse_oversized_expires_in(&auth_meta.token_endpoint, token_response.expires_in)?;
         let token = TokenInfo::from_response(
             token_response.access_token,
             token_response.token_type,
@@ -234,6 +235,7 @@ impl OAuthClient {
             "OAuth token exchange succeeded"
         );
 
+        super::refuse_oversized_expires_in(&auth_meta.token_endpoint, token_response.expires_in)?;
         Ok(TokenInfo::from_response(
             token_response.access_token,
             token_response.token_type,

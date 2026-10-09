@@ -132,7 +132,8 @@ fn a_capability_duration_above_the_bound_is_refused() {
 }
 
 /// Every integer duration on a struct read from config, a capability or a
-/// runtime profile carries the load-time bound. Names alone decide which
+/// runtime profile (one that derives `Deserialize`) carries the load-time
+/// bound. Names alone decide which
 /// fields are durations, so a new `*_secs` field fails here until bounded.
 #[test]
 fn every_integer_duration_read_from_input_is_bounded() {
@@ -167,6 +168,14 @@ fn every_integer_duration_read_from_input_is_bounded() {
         let lines: Vec<&str> = text.lines().collect();
         for (at, line) in lines.iter().enumerate() {
             if !field.is_match(line) {
+                continue;
+            }
+            // Only a struct read from input: one whose derive lists Deserialize.
+            let derive = lines[..at]
+                .iter()
+                .rev()
+                .find(|l| l.trim_start().starts_with("#[derive("));
+            if !derive.is_some_and(|d| d.contains("Deserialize")) {
                 continue;
             }
             let attributes = lines[..at].iter().rev().take_while(|l| {
