@@ -21,8 +21,9 @@ That module assumes test binaries run one after another, as cargo runs them.
 So this check also fails if nextest, which runs test processes in parallel, is
 introduced into CI or `.config/` without revisiting `src/test_ports.rs`.
 
-A line that must keep one of these shapes carries
-`// port-check: <reason>` on the bind line; the reason is required.
+A socket that must keep one of these shapes (a listener that serves on in a
+spawned task, say) carries `// port-check: <reason>` on its bind line or the
+line above; the reason is required.
 
 Threat model and stop rule: this is a guard against forgetting, not against
 intent. It reads one function at a time and matches exactly the three shapes
@@ -93,10 +94,15 @@ def logical_lines(text: str) -> list[tuple[int, str, str]]:
                 parts.append(raws[j])
             else:
                 break
-        joined = " ".join(part.strip() for part in parts) if len(parts) > 1 else raw
-        if len(parts) > 1:
-            joined = raw[: len(raw) - len(raw.lstrip())] + joined
-        out.append((i + 1, joined, code_of(joined)))
+        if len(parts) == 1:
+            out.append((i + 1, raw, code))
+        else:
+            # Strip each physical line's comment before joining: a comment
+            # joined mid-statement would hide the code after it.
+            lead = raw[: len(raw) - len(raw.lstrip())]
+            joined_raw = lead + " ".join(part.strip() for part in parts)
+            joined_code = lead + " ".join(code_of(part).strip() for part in parts)
+            out.append((i + 1, joined_raw, joined_code))
         i = j + 1
     return out
 
@@ -110,14 +116,14 @@ def scan_text(text: str, name: str) -> list[str]:
     sockets: dict[str, int] = {}
     ports: dict[str, str] = {}
     dropped: dict[str, int] = {}
-    moved: set[str] = set()
+    prev_raw = ""
     for i, raw, line in rows:
         # Code only (`line`): a comment that mentions a port is not a use of
         # it, but the marker lives in the comment, so it is read from `raw`.
         fn = FN.match(line)
         if fn:
             fn_ret = (fn.group(3) or "").strip()
-            sockets, ports, dropped, moved = {}, {}, {}, set()
+            sockets, ports, dropped = {}, {}, {}
         # A rebinding (shadowing `let`) ends the old variable's story.
         for port_var in list(ports):
             if re.search(rf'\blet\s+(?:mut\s+)?{port_var}\b', line):
@@ -125,19 +131,11 @@ def scan_text(text: str, name: str) -> list[str]:
         bind = BIND.search(line)
         if bind:
             dropped.pop(bind.group(1), None)
-            if not MARKER.search(raw):
+            if not (MARKER.search(raw) or MARKER.search(prev_raw)):
                 sockets[bind.group(1)] = i
         port = PORT_OF.search(line)
         if port and port.group(2) in sockets:
             ports[port.group(1)] = port.group(2)
-        elif not bind:
-            # A socket touched again after its port was read (moved into a
-            # server task, accepted on) lives on: not a returned dead port.
-            for var in list(sockets):
-                if var in ports.values() and re.search(rf'\b{var}\b', line) and not re.search(
-                    rf'\bdrop\(\s*{var}\s*\)', line
-                ):
-                    moved.add(var)
         for var, at in list(sockets.items()):
             if re.search(rf'\bdrop\(\s*{var}\s*\)', line):
                 if indent_of(line) > indent_of(lines[at]) and var in ports.values():
@@ -147,7 +145,7 @@ def scan_text(text: str, name: str) -> list[str]:
                     del sockets[var]
                     continue
                 dropped[var] = at
-            elif var not in moved and re.search(r'\b(u16|SocketAddr)\b', fn_ret) and (
+            elif re.search(r'\b(u16|SocketAddr)\b', fn_ret) and (
                 re.match(rf'^\s*(?:return\s+)?{var}\s*\.\s*local_addr\(\)', line)
                 or any(
                     socket == var and re.match(rf'^\s*(?:return\s+)?{port_var}\s*;?\s*$', line)
@@ -162,6 +160,7 @@ def scan_text(text: str, name: str) -> list[str]:
             ):
                 out.append(f"{name}:{dropped[socket]}: the port of a dropped socket is used after the drop")
                 del dropped[socket]
+        prev_raw = raw
     return out
 
 
@@ -254,8 +253,39 @@ fn t() {
     connect(port);
 }
 """, 1),
-    "helper whose socket serves on": ("""
+    "helper whose socket serves on, unmarked": ("""
 async fn stalling_listener() -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {}
+    });
+    port
+}
+""", 1),
+    "helper that borrows its socket": ("""
+async fn free_port() -> u16 {
+    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = probe.local_addr().unwrap().port();
+    log(&probe);
+    port
+}
+""", 1),
+    "comment inside a split statement": ("""
+fn t() {
+    let listener = // the probe
+        TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener // read it
+        .local_addr()
+        .unwrap()
+        .port();
+    drop(listener);
+    connect(port);
+}
+""", 1),
+    "helper whose socket serves on, marked": ("""
+async fn stalling_listener() -> u16 {
+    // port-check: the listener serves on in the spawned task
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
