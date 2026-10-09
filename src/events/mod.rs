@@ -189,6 +189,11 @@ pub(crate) trait EventSource: Send + Sync {
     /// Backend `backend`'s registration or configuration changed: wake
     /// whatever upstream work was waiting on it (design r3 L2).
     fn backend_changed(&self, _backend: &str) {}
+    /// The upstream listeners this source owns, for session-level tests.
+    #[cfg(test)]
+    fn upstream_listeners(&self) -> Option<Arc<upstream_listener::UpstreamListeners>> {
+        None
+    }
     /// Upstream listener tasks this source spawned, so a hub-level test can
     /// see upstream work start (reconcile table, design r3 section 6).
     #[cfg(test)]

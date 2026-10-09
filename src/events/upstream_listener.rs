@@ -416,6 +416,12 @@ impl UpstreamListeners {
         (!replaced).then_some(entry)
     }
 
+    /// The entry for `backend`, so a session-level test can drive it.
+    #[cfg(test)]
+    pub(super) fn entry_of(&self, backend: &str) -> Option<Arc<Shared>> {
+        self.backends.lock().get(backend).cloned()
+    }
+
     /// Whether a registered backend called `name` exists.
     pub(crate) fn knows(&self, name: &str) -> bool {
         self.registry.get(name).is_some()

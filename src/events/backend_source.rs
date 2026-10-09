@@ -199,6 +199,11 @@ impl EventSource for BackendSource {
     }
 
     #[cfg(test)]
+    fn upstream_listeners(&self) -> Option<Arc<UpstreamListeners>> {
+        self.upstream.as_ref().map(|up| Arc::clone(&up.listeners))
+    }
+
+    #[cfg(test)]
     fn upstream_starts(&self) -> usize {
         self.upstream.as_ref().map_or(0, |up| {
             up.listeners
