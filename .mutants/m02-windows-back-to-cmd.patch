@@ -1,0 +1,15 @@
+diff --git a/src/oauth/client/browser.rs b/src/oauth/client/browser.rs
+index 1735d078f..781502e0e 100644
+--- a/src/oauth/client/browser.rs
++++ b/src/oauth/client/browser.rs
+@@ -44,8 +44,8 @@ pub(super) fn launchable(url: &str) -> Result<url::Url> {
+ pub(super) fn launch_command(url: &url::Url) -> Command {
+     #[cfg(target_os = "windows")]
+     let mut command = {
+-        let mut command = Command::new("rundll32.exe");
+-        command.args(["url.dll,FileProtocolHandler", url.as_str()]);
++        let mut command = Command::new("cmd");
++        command.args(["/c", "start", url.as_str()]);
+         command
+     };
+     #[cfg(target_os = "macos")]
