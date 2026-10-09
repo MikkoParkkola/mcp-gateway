@@ -98,13 +98,16 @@ impl TaskRoute<'_> {
     /// `tasks/get`. The owner-scoped lookup comes FIRST, so a foreign or
     /// missing task causes nothing below it. `recover` runs for a working task
     /// (HTTP's bounded upstream read; nothing on stdio). `refuse` is the
-    /// transport's delivery check on the ONE snapshot returned.
+    /// transport's delivery check on the ONE snapshot returned, and `screen`
+    /// its egress scan of what that snapshot serves (every transport passes
+    /// the Meta-MCP's, under the task's recorded targets).
     pub(crate) async fn get<'p, R>(
         &self,
         id: RequestId,
         params: Option<&'p Value>,
         recover: impl FnOnce(&'p str) -> R,
         refuse: impl FnOnce(&CommittedTask) -> Option<JsonRpcResponse>,
+        screen: impl FnOnce(&CommittedTask, &mut JsonRpcResponse),
     ) -> JsonRpcResponse
     where
         R: Future<Output = ()>,
@@ -128,7 +131,10 @@ impl TaskRoute<'_> {
                 if current.serves_backend_output() {
                     crate::security::tenant_reads::note_restored(None);
                 }
-                JsonRpcResponse::success(id, task_envelope(&current.task, "complete"))
+                let mut frame =
+                    JsonRpcResponse::success(id, task_envelope(&current.task, "complete"));
+                screen(&current, &mut frame);
+                frame
             }),
             Err(ServiceError::NotFound) => missing_task_error(id),
             Err(_) => store_unavailable(id),

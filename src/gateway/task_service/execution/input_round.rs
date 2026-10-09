@@ -124,6 +124,10 @@ impl<'a> Settling<'a> {
                 return;
             };
             response = inspect_settled(self.state, self.call, self.id, next);
+            self.state
+                .meta_mcp()
+                .release_unsent_hold(&mut response)
+                .await; // MIK-8131
         }
     }
 
@@ -530,7 +534,8 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
         rejected_after_expiry(&response, d, unix_secs(executor.service.store.now()))
     });
     executor.proceed_unless_late(ids, deadline, expired).await?;
-    let response = inspect_settled(&state, &call, &id, response);
+    let mut response = inspect_settled(&state, &call, &id, response);
+    state.meta_mcp().release_unsent_hold(&mut response).await; // MIK-8131
     Settling::new(&executor, &state, &owned, &call, &principal, &id, revision)
         .settle_or_ask(response, &mut cancel_rx)
         .await;

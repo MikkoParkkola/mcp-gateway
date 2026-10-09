@@ -331,54 +331,66 @@ impl MetaMcp {
         // annotates the result with `_security_findings`.
         // Action mode (`action_mode = true`): blocks any response with a
         // HIGH/CRITICAL finding, returning a security error to the caller.
-        {
-            let text = crate::security::response_inspect::extract_text_from_result(&result);
-            if !text.is_empty() {
-                let inspection = crate::security::response_inspect::inspect_response(
-                    &text,
-                    self.response_inspection_action_mode,
+        let text = crate::security::response_inspect::extract_text_from_result(&result);
+        let findings = self.inspect_backend_text((server, tool, trace_id), &text)?;
+        if !findings.is_empty() {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert(
+                    "_security_findings".to_string(),
+                    serde_json::to_value(&findings).unwrap_or_default(),
                 );
-                if inspection.has_findings() {
-                    for finding in &inspection.findings {
-                        warn!(
-                            server,
-                            tool,
-                            trace_id,
-                            category = finding.category,
-                            severity = ?finding.severity,
-                            description = finding.description,
-                            "Response inspection finding"
-                        );
-                    }
-                    if inspection.should_block {
-                        return Err(Error::json_rpc(
-                            -32603,
-                            format!(
-                                "Tool '{tool}' on server '{server}' returned a response blocked \
-                                 by anomaly screening (HIGH/CRITICAL security finding detected). \
-                                 See gateway logs for details."
-                            ),
-                        ));
-                    }
-                    if let Some(obj) = result.as_object_mut() {
-                        obj.insert(
-                            "_security_findings".to_string(),
-                            serde_json::to_value(&inspection.findings).unwrap_or_default(),
-                        );
-                    }
-                    super::gateway_writes::note(
-                        super::gateway_writes::Layer::Value,
-                        &["_security_findings"],
-                        &result,
-                    );
-                }
             }
+            super::gateway_writes::note(
+                super::gateway_writes::Layer::Value,
+                &["_security_findings"],
+                &result,
+            );
         }
 
         let delivered = self.apply_context_integrity(server, tool, api_key_name, trace_id, result);
         // MIN.2: past every gate, so this dispatch's raw reading counts.
         crate::security::tenant_reads::note_attribution(raw_read);
         Ok(delivered)
+    }
+
+    /// D2 content inspection of a backend answer's text, shared by a result
+    /// and a backend error (MIK-8139) so their screening cannot diverge:
+    /// findings are logged and returned; in action mode a HIGH/CRITICAL
+    /// finding refuses the answer.
+    pub(in crate::gateway::meta_mcp) fn inspect_backend_text(
+        &self,
+        (server, tool, trace_id): (&str, &str, &str),
+        text: &str,
+    ) -> Result<Vec<crate::security::response_inspect::Finding>> {
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+        let inspection = crate::security::response_inspect::inspect_response(
+            text,
+            self.response_inspection_action_mode,
+        );
+        for finding in &inspection.findings {
+            warn!(
+                server,
+                tool,
+                trace_id,
+                category = finding.category,
+                severity = ?finding.severity,
+                description = finding.description,
+                "Response inspection finding"
+            );
+        }
+        if inspection.should_block {
+            return Err(Error::json_rpc(
+                -32603,
+                format!(
+                    "Tool '{tool}' on server '{server}' returned a response blocked \
+                     by anomaly screening (HIGH/CRITICAL security finding detected). \
+                     See gateway logs for details."
+                ),
+            ));
+        }
+        Ok(inspection.findings)
     }
 
     /// The response contract gate (issue #133, D1), split out of

@@ -16,7 +16,6 @@ use crate::gateway::chain_test_support::{
     CHAIN_KEY, KEY_ID, carries_chain, chain_of, origin_link, signer, verify_self,
 };
 use crate::protocol::{JsonRpcResponse, RequestId};
-use crate::security::response_policy::ResponseMutationPolicy;
 use crate::security::signature_chain::{LinkSource, content_digest};
 
 const NONCE: &str = "chain-nonce-1";
@@ -56,7 +55,6 @@ async fn deliver(
                 external_tool: "gateway_invoke",
                 subject: None,
             },
-            mutation: ResponseMutationPolicy::Redact,
             signing,
             chain_source: source,
             chain_nonce: nonce,

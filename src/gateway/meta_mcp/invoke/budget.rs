@@ -121,15 +121,30 @@ impl MetaMcp {
             .map(|name| GrantSubject::new("api_key", name, Some(name.to_string())))
     }
 
-    pub(super) fn apply_context_integrity(
+    /// Whether the kernel enforces on `carrier`. Notes no data classes: the
+    /// egress scan's check is not the call's classification, and a replay
+    /// has none (MIK-7116.MIN.1).
+    pub(super) fn context_integrity_enforces(
         &self,
-        server: &str,
-        tool: &str,
+        (server, tool): (&str, &str),
         api_key_name: Option<&str>,
         trace_id: &str,
-        result: Value,
-    ) -> (Value, super::super::response_security::GateEffect) {
-        use super::super::response_security::GateEffect;
+        carrier: &Value,
+    ) -> bool {
+        let input = self.context_integrity_input((server, tool), api_key_name, trace_id, carrier);
+        let evaluation = self.context_integrity_kernel.read().evaluate(input);
+        let clean = evaluation.classification.findings.is_empty()
+            && evaluation.policy.would_decision == ContextIntegrityDecisionKind::Allow;
+        !clean && evaluation.policy.enforcement_applied
+    }
+
+    fn context_integrity_input(
+        &self,
+        (server, tool): (&str, &str),
+        api_key_name: Option<&str>,
+        trace_id: &str,
+        result: &Value,
+    ) -> ContextIntegrityInput {
         let mut provenance = ContextProvenance::tool_result(
             server,
             tool,
@@ -149,7 +164,7 @@ impl MetaMcp {
         if super::gateway_writes::owns(
             super::gateway_writes::Layer::Value,
             super::gateway_writes::REQUEST_STATE,
-            &result,
+            result,
         ) && let Some(map) = judged.as_object_mut()
         {
             map.remove("requestState");
@@ -164,7 +179,19 @@ impl MetaMcp {
         } else {
             ContextActionRisk::Medium
         };
+        input
+    }
 
+    pub(super) fn apply_context_integrity(
+        &self,
+        server: &str,
+        tool: &str,
+        api_key_name: Option<&str>,
+        trace_id: &str,
+        result: Value,
+    ) -> (Value, super::super::response_security::GateEffect) {
+        use super::super::response_security::GateEffect;
+        let input = self.context_integrity_input((server, tool), api_key_name, trace_id, &result);
         let evaluation = audit::noted_classes(self.context_integrity_kernel.read().evaluate(input));
         if evaluation.classification.findings.is_empty()
             && evaluation.policy.would_decision == ContextIntegrityDecisionKind::Allow
