@@ -682,8 +682,8 @@ fn relay_description(reason: RelayReason) -> &'static str {
              copy of yours can excuse it"
         }
         RelayReason::ExcuseLost => {
-            "the relay detector ran out of room for text you received from this tool, so it could \
-             not tell whether your own copy covers this"
+            "the relay detector ran out of room for text you received, so it could not tell \
+             whether your own copy covers this"
         }
     }
 }

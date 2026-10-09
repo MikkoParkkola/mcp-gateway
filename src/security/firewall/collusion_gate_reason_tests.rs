@@ -80,6 +80,22 @@ fn an_overflow_refusal_names_capacity() {
     );
 }
 
+/// `MIK-8201.VIS.2`: bob's own copy overflowed his cap, so the refusal says
+/// the detector ran out of room, naming no tool he never received it from.
+#[test]
+fn an_overflowed_holder_refusal_names_lost_room() {
+    let fw = firewall();
+    for i in 0..65 {
+        deliver(&fw, "bob", &format!("read{i}"), P);
+    }
+    deliver(&fw, "carol", "read70", P);
+    let description = relay_description(&fw, "bob", P).expect("premise: still a relay");
+    assert!(
+        description.contains("ran out of room for text you received, so"),
+        "not named: {description}"
+    );
+}
+
 /// A finding with one plainly unheld match is a relay whatever else it
 /// holds: dave holds nothing, so his refusal reads as ordinary detection.
 #[test]

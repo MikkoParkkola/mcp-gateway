@@ -872,9 +872,9 @@ expiry) and `marker_evicted`. `mcp_gateway_collusion_relay_total{action, reason}
 refusal under `relay`, `other_source`, `capacity` or `unkeyed`. A refusal names its reason:
 another tool's copy (MIK-8206), another caller's overflow record, or an excuse of the caller's
 dropped for room. A dropped excuse leaves an "excuse lost" marker per (source, caller) for one
-window (at most 65,536, oldest first; never charged to the sketch budget). Labels never excuse;
-a marker is source-level, so a genuine relay from a source whose other text lost an excuse is
-labelled `capacity` and still refused.
+window (at most 65,536, oldest first, about 10 MiB with map overhead beside the 32 MiB sketch
+budget, never charged to it). Labels never excuse; a marker is source-level, so a genuine relay
+from a source whose other text lost an excuse is labelled `capacity` and still refused.
 
 **B3 Bloom false excuse (D3).** A pair's sketch at position i is sized for a target rate of
 0.35% × 2^-i, using the classic ideal-hash rate with independent per-probe mixing (splitmix64);

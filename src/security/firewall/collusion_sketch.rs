@@ -18,7 +18,7 @@
 //! excused at most `2 · P0` of the time (design §14.3 B3; measured bound
 //! 0.8%). Memory is bounded by bytes, globally and per pair.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -216,6 +216,9 @@ pub(super) struct Reservation {
 /// byte caps.
 pub(super) struct SketchStore {
     by_pair: HashMap<Pair, PairState>,
+    /// The sources each caller holds a pair with: what `held_from_elsewhere`
+    /// reads, so a label never scans every pair (`MIK-8206`).
+    by_caller: HashMap<u64, HashSet<u64>>,
     order: BTreeMap<(Instant, u64), Pair>,
     next: u64,
     /// Live and pending bytes across every pair.
@@ -236,6 +239,7 @@ impl Default for SketchStore {
     fn default() -> Self {
         Self {
             by_pair: HashMap::new(),
+            by_caller: HashMap::new(),
             order: BTreeMap::new(),
             next: 0,
             bytes: 0,
@@ -267,7 +271,7 @@ impl SketchStore {
     pub(super) fn reserve(&mut self, pair: Pair, n: usize) -> Option<Reservation> {
         let pair_cap = self.pair_cap;
         loop {
-            let state = self.by_pair.entry(pair).or_default();
+            let state = self.pair_state(pair);
             let position = state.lowest_free();
             let shape = shape(n, position);
             let bytes = shape.bytes();
@@ -285,10 +289,10 @@ impl SketchStore {
                 self.evicted_for_room(gone);
                 continue;
             }
-            let state = self.by_pair.entry(pair).or_default();
+            self.bytes += bytes;
+            let state = self.pair_state(pair);
             state.pending.push(position);
             state.bytes += bytes;
-            self.bytes += bytes;
             return Some(Reservation {
                 pair,
                 position,
@@ -319,7 +323,7 @@ impl SketchStore {
     pub(super) fn publish(&mut self, reservation: &Reservation, sketch: Arc<Sketch>, at: Instant) {
         let seq = self.next;
         self.next += 1;
-        let state = self.by_pair.entry(reservation.pair).or_default();
+        let state = self.pair_state(reservation.pair);
         state.pending.retain(|p| *p != reservation.position);
         state.live.push(Live {
             seq,
@@ -397,6 +401,12 @@ impl SketchStore {
         self.drop_if_empty(pair);
     }
 
+    /// `pair`'s state, created and indexed by caller on first use.
+    fn pair_state(&mut self, pair: Pair) -> &mut PairState {
+        self.by_caller.entry(pair.1).or_default().insert(pair.0);
+        self.by_pair.entry(pair).or_default()
+    }
+
     fn drop_if_empty(&mut self, pair: Pair) {
         if self
             .by_pair
@@ -404,12 +414,17 @@ impl SketchStore {
             .is_some_and(|s| s.live.is_empty() && s.pending.is_empty())
         {
             self.by_pair.remove(&pair);
+            if let Some(sources) = self.by_caller.get_mut(&pair.1) {
+                sources.remove(&pair.0);
+                if sources.is_empty() {
+                    self.by_caller.remove(&pair.1);
+                }
+            }
         }
     }
 
     /// Whether a live sketch `caller` holds from a source other than
     /// `source` may hold `fp`: a label only (`MIK-8206`), never an excuse.
-    /// ponytail: scans every pair; an index by caller if findings get hot.
     pub(super) fn held_from_elsewhere(
         &self,
         (source, caller): Pair,
@@ -417,10 +432,12 @@ impl SketchStore {
         now: Instant,
         window: Duration,
     ) -> bool {
-        self.by_pair
-            .keys()
-            .filter(|(s, c)| *c == caller && *s != source)
-            .any(|pair| self.holds(*pair, fp, now, window))
+        self.by_caller.get(&caller).is_some_and(|sources| {
+            sources
+                .iter()
+                .filter(|s| **s != source)
+                .any(|s| self.holds((*s, caller), fp, now, window))
+        })
     }
 
     /// Whether a live sketch of `pair` at `now` holds `fp`.

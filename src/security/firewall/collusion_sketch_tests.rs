@@ -408,3 +408,28 @@ fn concurrent_cut_deliveries_publish_at_distinct_positions() {
         "positions collided or a sketch was lost"
     );
 }
+
+/// `MIK-8206`: a caller's sketches from other sources are found through the
+/// by-caller index, never another caller's, and the index empties with them.
+#[test]
+fn sketches_from_elsewhere_are_found_by_caller() {
+    let now = Instant::now();
+    let window = secs(600);
+    let fps = values(90, 10);
+    let mut store = SketchStore::default();
+    assert!(store.insert((2, 9), &fps, now));
+    assert!(store.held_from_elsewhere((1, 9), fps[0], now, window));
+    assert!(
+        !store.held_from_elsewhere((2, 9), fps[0], now, window),
+        "own source"
+    );
+    assert!(
+        !store.held_from_elsewhere((1, 8), fps[0], now, window),
+        "other caller"
+    );
+    store.sweep(now + secs(700), window);
+    assert!(
+        store.by_caller.is_empty(),
+        "the index outlived its sketches"
+    );
+}

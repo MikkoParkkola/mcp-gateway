@@ -229,6 +229,18 @@ fn the_marker_map_is_capped() {
     assert!(markers.holds((65_536, 0), now), "the newest went");
 }
 
+/// The marker map's memory bound: a marker is one entry in each of two maps,
+/// at most 80 bytes of payload on 64-bit targets; doubled for hash and tree
+/// overhead, 65,536 markers hold at most 10 MiB.
+#[test]
+fn the_marker_map_is_bounded_in_bytes() {
+    type Pair = (u64, u64);
+    let entry = std::mem::size_of::<(Pair, (Instant, u64))>()
+        + std::mem::size_of::<((Instant, u64), Pair)>();
+    assert!(entry <= 80, "a marker grew to {entry} bytes");
+    assert!(65_536 * entry * 2 <= 10 * 1024 * 1024);
+}
+
 /// A sketch that expires was not lost for room: it leaves no marker.
 #[test]
 fn an_expired_sketch_is_not_lost() {
