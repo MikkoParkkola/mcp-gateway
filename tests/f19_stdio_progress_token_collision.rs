@@ -18,12 +18,15 @@
 //! a swapped delivery is visible even though both carry token `"1"`.
 
 mod common;
+#[path = "common/windows_paths.rs"]
+mod windows_paths;
 
 use std::time::Duration;
 
 use common::{AppState, Arc, Body, Fixture, Request, ServiceExt, Value, create_router, json};
 use mcp_gateway::backend::Backend;
 use mcp_gateway::config::{BackendConfig, FailsafeConfig, TransportConfig};
+use windows_paths::{hostile_home, sh_path};
 
 const BACKEND: &str = "fixture";
 const TOOL: &str = "marks";
@@ -59,22 +62,6 @@ while IFS= read -r line; do
   esac
 done
 "#;
-
-/// A temporary home whose path holds a space and an apostrophe, so a path
-/// left unquoted (or unescaped in YAML) in the peer script or its `command:`
-/// line breaks and the row fails.
-fn spaced_home() -> tempfile::TempDir {
-    tempfile::Builder::new()
-        .prefix("home o'space ")
-        .tempdir()
-        .expect("temporary home")
-}
-
-/// A path as `sh` reads it: double-quoted so a space cannot split it, with
-/// forward slashes because a Windows backslash is a shell escape.
-fn sh_path(path: &std::path::Path) -> String {
-    format!("\"{}\"", path.display().to_string().replace('\\', "/"))
-}
 
 fn register_command_backend(state: &Arc<AppState>, home: &std::path::Path) -> std::path::PathBuf {
     let log = home.join("calls.log");
@@ -172,7 +159,7 @@ fn progress_of(frames: &[Value]) -> Vec<(Value, Value)> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_callers_sharing_a_progress_token_each_receive_only_their_own_progress() {
-    let home = spaced_home();
+    let home = hostile_home();
     let (state, _store_dir) = common::state(Fixture::default()).await;
     let log = register_command_backend(&state, home.path());
 
@@ -229,7 +216,7 @@ async fn two_callers_sharing_a_progress_token_each_receive_only_their_own_progre
 /// exactly its own progress.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_task_call_sharing_a_progress_token_cannot_reach_a_direct_caller() {
-    let home = spaced_home();
+    let home = hostile_home();
     let (state, _store_dir) = common::state(Fixture::default()).await;
     let log = register_command_backend(&state, home.path());
 

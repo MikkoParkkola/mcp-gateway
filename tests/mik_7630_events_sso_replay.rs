@@ -5,9 +5,9 @@
 //! record by the verified issuer and subject, never by a display label.
 //!
 //! The issuer is the owned HTTPS OIDC issuer of the upstream-recovery proof, so
-//! the gateway verifies the bearer through its production path. Linux-only for
-//! `SSL_CERT_FILE`.
-#![cfg(all(unix, not(target_vendor = "apple")))]
+//! the gateway verifies the bearer through its production path. Unix; the child trusts the test CA through `SSL_CERT_FILE` (Linux) and the
+//! debug-only `MCP_GATEWAY_TEST_TRUST_CA` (every platform; MIK-8188).
+#![cfg(unix)]
 
 #[path = "mik_7630_events/delivery.rs"]
 #[allow(dead_code, reason = "shared helpers; each binary uses a subset")]
@@ -29,7 +29,7 @@ use delivery::{
     DEADLINE, audit_records, dead_letters, delivery_config, fire, subscribe, wait_until,
 };
 use gateway::{ALICE, Gateway};
-use receiver::{EventReply, Receiver, whsec};
+use receiver::{EventReply, Receiver, TRUST_CA, whsec};
 use serde_json::{Value, json};
 
 const ADMIN_EMAIL: &str = "sso-admin@example.test";
@@ -42,9 +42,8 @@ async fn an_sso_admins_replays_carry_the_verified_issuer_and_subject() {
     let issuer = issuer::Issuer::start(root.path()).await;
     let rx = Receiver::start(root.path()).await;
     // One trust file for the child: the receiver's CA and the issuer's.
-    let (_, receiver_ca) = rx.trust_env();
     let both = root.path().join("trust-both.pem");
-    let mut pem = std::fs::read_to_string(receiver_ca).expect("receiver CA");
+    let mut pem = std::fs::read_to_string(&rx.ca_file).expect("receiver CA");
     pem.push_str(&std::fs::read_to_string(&issuer.ca_file).expect("issuer CA"));
     std::fs::write(&both, pem).expect("combined trust file");
 
@@ -64,7 +63,10 @@ async fn an_sso_admins_replays_carry_the_verified_issuer_and_subject() {
     let gw = Gateway::start_with_env(
         root.path(),
         cfg,
-        &[("SSL_CERT_FILE", &both.to_string_lossy())],
+        &[
+            ("SSL_CERT_FILE", &both.to_string_lossy()),
+            (TRUST_CA, &both.to_string_lossy()),
+        ],
     )
     .await;
     gw.event_names(Some(ALICE), Some(gateway::EVENT)).await;

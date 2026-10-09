@@ -11,6 +11,10 @@ mod stdout;
 
 mod allocator;
 mod commands;
+// Its one user in this crate is `dashboard-link`, compiled with `webui`.
+#[cfg(feature = "webui")]
+#[path = "debug_trust_roots.rs"]
+mod debug_trust_roots;
 mod home_dir;
 #[cfg(test)]
 #[path = "test_ports.rs"]

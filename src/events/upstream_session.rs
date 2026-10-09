@@ -144,6 +144,9 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         gate = Arc::clone(&shared.gate).lock_owned() => gate,
     };
     let mut failures = 0u32;
+    // One receiver for the task's life (T35): a revival sent at any point
+    // after the registry check below is seen by the park that follows it.
+    let mut wake = shared.wake.subscribe();
     loop {
         if shared.stop.is_cancelled() {
             return;
@@ -151,11 +154,14 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         if shared.is_ineligible() && end_ineligible(&shared, &hub).await {
             return;
         }
+        // Signals sent before this check are answered by it.
+        wake.borrow_and_update();
         let Some(backend) = registry.get(&shared.name) else {
             // Gone: park until the interest changes or the keys are deleted.
             // A removed backend owes nothing; a re-added one starts afresh.
             *shared.tools.lock() = ToolsDebt::default();
-            let mut wake = shared.wake.subscribe();
+            #[cfg(test)]
+            shared.before_park.pause().await;
             tokio::select! {
                 () = shared.stop.cancelled() => return,
                 _ = wake.changed() => {}
@@ -180,11 +186,31 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
                 backoff(failures)
             }
         };
-        tokio::select! {
-            () = shared.stop.cancelled() => return,
-            () = tokio::time::sleep(delay) => {}
+        #[cfg(test)]
+        shared.before_backoff.pause().await;
+        // A revival cuts the wait; a filter change does not, so churn on the
+        // subscriptions cannot reconnect a failing backend early (T35).
+        let deadline = tokio::time::Instant::now() + delay;
+        loop {
+            tokio::select! {
+                () = shared.stop.cancelled() => return,
+                () = tokio::time::sleep_until(deadline) => break,
+                _ = wake.changed() => {
+                    if registered_anew(&registry, &shared.name, &backend) {
+                        break;
+                    }
+                }
+            }
         }
     }
+}
+
+/// Whether the registry no longer holds `ended` under `name`: the backend
+/// was removed or replaced since its session ended.
+fn registered_anew(registry: &BackendRegistry, name: &str, ended: &Arc<Backend>) -> bool {
+    registry
+        .get(name)
+        .is_none_or(|now| !Arc::ptr_eq(&now, ended))
 }
 
 fn requested(shared: &Shared) -> Requested {

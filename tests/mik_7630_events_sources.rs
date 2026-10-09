@@ -3,8 +3,9 @@
 //! MIK-7630 increment I4: event sources on existing producers (design §10:
 //! T3 backend and task clauses, T38, T40). T41 and the debounce row are
 //! in-crate (`src/events/lifecycle_tests.rs`): the trait is crate-private.
-//! Receiver rows need `SSL_CERT_FILE` (Unix other than Apple).
-#![cfg(all(unix, not(target_vendor = "apple")))]
+//! Receiver rows trust its CA through `Receiver::trust_env`
+//! (MIK-8188).
+#![cfg(unix)]
 
 #[path = "mik_7630_events/delivery.rs"]
 #[allow(dead_code, reason = "shared helpers; each binary uses a subset")]
@@ -27,7 +28,7 @@ use std::time::Duration;
 
 use delivery::{DEADLINE, delivery_config, wait_until};
 use gateway::{ADMIN, ALICE, BOB, Gateway, config, error};
-use receiver::{Received, Receiver, whsec};
+use receiver::{Received, Receiver, TRUST_CA, whsec};
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 
@@ -138,8 +139,9 @@ fn config_with_mock(root: &std::path::Path, mock: &Mock) -> Value {
 }
 
 async fn start(root: &std::path::Path, rx: &Receiver, cfg: Value) -> Gateway {
-    let (k, v) = rx.trust_env();
-    let gw = Gateway::start_with_env(root, cfg, &[(k, &v)]).await;
+    let trust = rx.trust_env();
+    let env = trust.each_ref().map(|(k, v)| (*k, v.as_str()));
+    let gw = Gateway::start_with_env(root, cfg, &env).await;
     gw.event_names(Some(ALICE), Some("task.settled")).await;
     gw
 }
@@ -304,7 +306,12 @@ async fn two_owner_gateway(
     )
     .expect("bundle");
     let bundle_path = bundle.to_string_lossy().into_owned();
-    let gw = Gateway::start_with_env(root, cfg, &[("SSL_CERT_FILE", &bundle_path)]).await;
+    let gw = Gateway::start_with_env(
+        root,
+        cfg,
+        &[("SSL_CERT_FILE", &bundle_path), (TRUST_CA, &bundle_path)],
+    )
+    .await;
     gw.event_names(Some(ALICE), Some("task.settled")).await;
     (gw, rx, mock, alice, bob, issuer)
 }
