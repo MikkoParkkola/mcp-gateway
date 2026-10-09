@@ -32,7 +32,7 @@ use crate::{Error, Result};
 /// back ([`release_unless_carried`]) when a later step keeps the envelope from
 /// the client.
 pub(super) async fn mint_continuation(
-    continuation: &crate::protocol::continuation::ContinuationState,
+    continuation: &std::sync::Arc<crate::protocol::continuation::ContinuationState>,
     source: crate::protocol::mrtr::PrincipalSource<'_>,
     (server, instance): (&str, Option<u64>),
     tool: &str,
@@ -57,6 +57,7 @@ pub(super) async fn mint_continuation(
         record_continuation_mint("no_slot");
         return None;
     };
+    crate::gateway::meta_mcp::sealed_hold::register(continuation);
     match continuation.keyring().mint(&payload) {
         Ok(envelope) => {
             record_continuation_mint("ok");

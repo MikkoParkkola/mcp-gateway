@@ -305,6 +305,7 @@ fn reload_stamps_listed_backends_private() {
 /// A loopback listener that accepts every connection and never writes: no
 /// TLS handshake, no upgrade answer.
 async fn stalling_listener() -> u16 {
+    // port-check: the listener serves on in the spawned task
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {

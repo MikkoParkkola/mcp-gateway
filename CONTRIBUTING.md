@@ -328,6 +328,7 @@ We want your PR to merge fast. Here is what helps.
 - [ ] **Tests for new behavior**, not just regression. If your change adds a config field, add a test that exercises it. If it adds a branch, add a test that hits it.
 - [ ] **CI green on Linux**. We ignore known-flaky checks labelled `flaky-ci`, but Linux must pass.
 - [ ] **`cargo fmt --all && cargo clippy --all-features -- -D warnings`** clean on your branch.
+- [ ] **Files stay at 800 lines or fewer**: `python3 scripts/dev/check-file-size.py --base origin/<base-branch>` passes. It is the one size gate, and it covers test files too. A `mod child;` declaration, and the inert attributes above it, are not counted: attaching a split-out module must not count as growth, or the rule would punish the very refactor it exists to encourage (#609). The few files already over the limit are listed in `scripts/dev/file-size-baseline.txt`. A listed file may shrink but never grow, and a PR may not add a row or raise one, so split the file instead.
 - [ ] **A test that reads a repository file** (`include_str!`, or a path under `CARGO_MANIFEST_DIR`) has that exact path in `Cargo.toml` `include`. The published crate carries only that list; the `package-tests` job builds the tests from it and fails otherwise.
 - [ ] **Threat-model note for security-sensitive code** (auth, OAuth, URL handling, path handling, secrets, deserialization of untrusted input): a short note in the PR description covering what inputs come from untrusted sources, what validation you run, what you chose not to validate and why.
 

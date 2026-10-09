@@ -192,6 +192,9 @@ pub(crate) struct Snapshot {
     good: Option<(std::collections::HashSet<String>, bool)>,
     /// Bumped by every clear, so a read begun before it cannot refill it.
     epoch: u64,
+    /// The store generation when the snapshot's read began: it judges only
+    /// grants at or below it (MIK-8194). A later grant was not covered.
+    covers: u64,
 }
 
 impl Snapshot {
@@ -211,19 +214,23 @@ impl Snapshot {
     pub(crate) fn read_at(
         &mut self,
         epoch: u64,
-        uris: std::collections::HashSet<String>,
-        complete: bool,
+        (uris, complete): (std::collections::HashSet<String>, bool),
+        covers: u64,
     ) -> bool {
         if epoch != self.epoch {
             return false;
         }
-        self.read(uris, complete);
+        self.good = Some((uris, complete));
+        self.covers = covers;
         true
     }
 
     /// Record a successful read; `complete` is false when the page cap cut it.
+    /// It judges every grant: a read with no known start.
+    #[cfg(test)]
     pub(crate) fn read(&mut self, uris: std::collections::HashSet<String>, complete: bool) {
         self.good = Some((uris, complete));
+        self.covers = u64::MAX;
     }
 
     /// Whether any read has succeeded yet.
@@ -232,10 +239,16 @@ impl Snapshot {
     }
 
     pub(crate) fn verdict(&self, uri: &str) -> Verdict {
+        self.verdict_for(uri, None)
+    }
+
+    /// [`Self::verdict`] for a subscription granted at `granted`: a grant
+    /// after the read began is not revoked by it (MIK-8194).
+    pub(crate) fn verdict_for(&self, uri: &str, granted: Option<u64>) -> Verdict {
         match &self.good {
             Some((uris, _)) if uris.contains(uri) => Verdict::Deliver,
-            Some((_, true)) => Verdict::Revoke,
-            None | Some((_, false)) => Verdict::Skip,
+            Some((_, true)) if granted.is_none_or(|g| g <= self.covers) => Verdict::Revoke,
+            _ => Verdict::Skip,
         }
     }
 }
