@@ -42,7 +42,6 @@ src/events/schedule_source.rs	2
 src/events/schedule_source_tests.rs	2
 src/events/services.rs	4
 src/events/services_tests.rs	3
-src/events/snapshot_renewal_tests.rs	4
 src/events/sources_tests.rs	10
 src/events/store_expiry_tests.rs	16
 src/events/store_hold.rs	1
