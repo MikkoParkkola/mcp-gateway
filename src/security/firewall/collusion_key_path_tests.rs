@@ -163,6 +163,7 @@ mod digest {
         let kept = digest.retaining_for(&detector, &delivered, None);
         let fps = kept.fingerprints(&detector);
         let join = detector.fingerprints(&parts.concat());
+        assert!(!join.is_empty(), "premise: the join holds k-grams");
         assert!(
             join.iter().all(|f| !fps.contains(f)),
             "an undelivered join was kept"
