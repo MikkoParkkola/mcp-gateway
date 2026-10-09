@@ -647,3 +647,138 @@ async fn two_pinned_definitions_of_one_name_never_share_an_answer() {
         "the second read the first's answer: {two}"
     );
 }
+
+/// The `grandchild` probe definition the teardown-reachability tests share.
+#[cfg(unix)]
+fn grandchild_probe(name: &str, description: &str) -> String {
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cap_exec/fake_mcp.py")
+        .display()
+        .to_string();
+    format!(
+        "name: {name}\ndescription: {description}\nschema:\n  input:\n    type: object\n    \
+         properties:\n      operation:\n        type: string\n\
+         providers:\n  primary:\n    service: mcp\n    timeout: 20\n    config:\n      \
+         command: 'python3'\n      args: ['{script}']\n      transport: stdio\n      \
+         tool_selector:\n        param: operation\n        tools:\n          \
+         spawn: {{ tool: grandchild }}\n"
+    )
+}
+
+/// The grandchild pid a `spawn` call reported.
+#[cfg(unix)]
+fn reported_pid(out: &ToolsCallResult) -> String {
+    let rendered = serde_json::to_value(out).unwrap();
+    serde_json::from_str::<serde_json::Value>(
+        rendered["content"][0]["text"].as_str().unwrap_or_default(),
+    )
+    .ok()
+    .and_then(|v| v["pid"].as_i64())
+    .expect("grandchild pid")
+    .to_string()
+}
+
+/// Whether `pid` is still alive after up to 5 s, polled without any runtime.
+#[cfg(unix)]
+fn still_alive_after_5s(pid: &str) -> bool {
+    for _ in 0..50 {
+        let status = std::process::Command::new("kill")
+            .args(["-0", pid])
+            .status()
+            .unwrap();
+        if !status.success() {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    true
+}
+
+/// Kill a grandchild a failing run left behind, so a red test leaks nothing.
+#[cfg(unix)]
+fn reap_leftover(pid: &str) {
+    let _ = std::process::Command::new("kill")
+        .args(["-9", pid])
+        .status();
+}
+
+/// MIK-7923.FIX.1/.FIX.2, teardown matrix T1 x idle runtime: the child starts
+/// inside a current-thread runtime that is then kept but never driven again.
+/// Replacing the definition from another thread must still end its tree.
+#[cfg(unix)]
+#[test]
+fn replaced_child_dies_on_an_idle_runtime() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let backend = Arc::new(CapabilityBackend::new(
+        "test",
+        Arc::new(python_policy_executor()),
+    ));
+    let (pid, replacement) = runtime.block_on(async {
+        backend
+            .register_capability(pinned_from(&grandchild_probe("idle_probe", "Idle one.")).await)
+            .unwrap();
+        let out = backend
+            .call_tool("idle_probe", json!({"operation": "spawn"}))
+            .await
+            .expect("the pinned mcp definition starts a child");
+        let replacement = pinned_from(&grandchild_probe("idle_probe", "Idle two.")).await;
+        (reported_pid(&out), replacement)
+    });
+    // The runtime stays alive and idle from here on.
+    let registering = Arc::clone(&backend);
+    std::thread::spawn(move || registering.register_capability(replacement).unwrap())
+        .join()
+        .unwrap();
+    let alive = still_alive_after_5s(&pid);
+    drop(runtime);
+    reap_leftover(&pid);
+    assert!(
+        !alive,
+        "grandchild {pid} outlived a replacement while its runtime sat idle"
+    );
+}
+
+/// Teardown matrix T1 x dropped future: after the child's runtime is dropped,
+/// a call still holding the child's backend must not keep its tree alive once
+/// the definition is replaced.
+#[cfg(unix)]
+#[test]
+fn replaced_child_dies_after_its_runtime_drops() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let backend = Arc::new(CapabilityBackend::new(
+        "test",
+        Arc::new(python_policy_executor()),
+    ));
+    let (pid, replacement) = runtime.block_on(async {
+        backend
+            .register_capability(pinned_from(&grandchild_probe("drop_probe", "Drop one.")).await)
+            .unwrap();
+        let out = backend
+            .call_tool("drop_probe", json!({"operation": "spawn"}))
+            .await
+            .expect("the pinned mcp definition starts a child");
+        let replacement = pinned_from(&grandchild_probe("drop_probe", "Drop two.")).await;
+        (reported_pid(&out), replacement)
+    });
+    // A call in flight elsewhere: its lease keeps the child's backend alive.
+    let in_flight = backend.executor.mcp_children.lease_backends_for_test();
+    assert_eq!(in_flight.len(), 1);
+    drop(runtime);
+    let registering = Arc::clone(&backend);
+    std::thread::spawn(move || registering.register_capability(replacement).unwrap())
+        .join()
+        .unwrap();
+    let alive = still_alive_after_5s(&pid);
+    drop(in_flight);
+    reap_leftover(&pid);
+    assert!(
+        !alive,
+        "grandchild {pid} outlived a replacement after its runtime dropped"
+    );
+}

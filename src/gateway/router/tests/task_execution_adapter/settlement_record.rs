@@ -52,18 +52,6 @@ fn result_naming_cust9(extra: &str) -> Value {
     json!({"content": [{"type": "text", "text": rows_naming_cust9(extra)}]})
 }
 
-/// The owner every row submits as: `key-a`'s verified identity (`support.rs`).
-fn admission_principal() -> String {
-    crate::key_server::oidc::VerifiedIdentity {
-        subject: "alice".to_string(),
-        email: "alice@adapter.test".to_string(),
-        name: None,
-        groups: Vec::new(),
-        issuer: "https://idp.adapter.test".to_string(),
-    }
-    .stable_actor_id()
-}
-
 // =====================================================================
 // The peer
 // =====================================================================

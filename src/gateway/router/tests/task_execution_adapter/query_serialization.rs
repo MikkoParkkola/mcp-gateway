@@ -560,7 +560,7 @@ fn recovery_token() -> String {
                 capabilities: vec![TOOL.to_string()],
             },
             chrono::Utc::now(),
-            chrono::TimeDelta::minutes(5),
+            crate::duration_bound::delta!(minutes, 5),
         )
         .encoded()
         .to_string()

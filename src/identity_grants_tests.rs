@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-use chrono::{Duration, TimeZone};
+use chrono::TimeZone;
 
 use super::*;
 
@@ -63,7 +63,7 @@ fn grant() -> IdentityGrant {
         tool: Some("send_message".to_string()),
         scope: GrantScope::Execute,
         owner: Some(alice()),
-        expires_at: Some(now() + Duration::hours(1)),
+        expires_at: Some(now() + crate::duration_bound::delta!(hours, 1)),
         revoked_at: None,
         provenance: "linear://MIK-6553".to_string(),
         reason: "operator-approved test grant".to_string(),
@@ -105,7 +105,7 @@ fn personal_capability_requires_own_resource() {
 fn personal_capability_requires_matching_live_grant() {
     let mut store = LocalIdentityGrantStore::new();
     let mut expired = grant();
-    expired.expires_at = Some(now() - Duration::minutes(1));
+    expired.expires_at = Some(now() - crate::duration_bound::delta!(minutes, 1));
     store.upsert(expired);
 
     let evaluation = store.evaluate(&personal_request(Some(alice())));
@@ -230,7 +230,7 @@ fn recommendation_proposes_short_least_privilege_lease_for_local_workflow() {
     assert_eq!(lease.scope, GrantScope::Read);
     assert_eq!(
         lease.expires_at,
-        now() + Duration::seconds(DEFAULT_GRANT_LEASE_SECONDS)
+        now() + crate::duration_bound::delta!(seconds, DEFAULT_GRANT_LEASE_SECONDS)
     );
     assert_eq!(
         recommendation.audit.lease_expires_at,
@@ -249,7 +249,7 @@ fn recommendation_clamps_requested_lease_duration() {
 
     assert_eq!(
         lease.expires_at,
-        now() + Duration::seconds(MAX_GRANT_LEASE_SECONDS)
+        now() + crate::duration_bound::delta!(seconds, MAX_GRANT_LEASE_SECONDS)
     );
 }
 

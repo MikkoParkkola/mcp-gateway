@@ -304,7 +304,7 @@ async fn meta_with_staged_cache_entry(dir: &tempfile::TempDir) -> (MetaMcp, Stri
         tool: Some("calendar_read".to_string()),
         scope: GrantScope::Execute,
         owner: Some(subject),
-        expires_at: Some(chrono::Utc::now() + chrono::Duration::minutes(5)),
+        expires_at: Some(chrono::Utc::now() + crate::duration_bound::delta!(minutes, 5)),
         revoked_at: None,
         provenance: "unit-test".to_string(),
         reason: "prove a cache hit does not outrank the grant".to_string(),

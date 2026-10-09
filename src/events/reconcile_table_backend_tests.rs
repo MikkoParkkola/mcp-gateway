@@ -346,7 +346,7 @@ fn t10_every_row_removal_is_counted_for_the_tick() {
 async fn t07_a_re_grant_in_the_same_tick_survives() {
     let (hub, _dir) = hub();
     hub.install_backend_source(Arc::new(|| vec!["x".to_owned()]));
-    let tick = chrono::Utc::now() + chrono::Duration::hours(1);
+    let tick = chrono::Utc::now() + crate::duration_bound::delta!(hours, 1);
     admit_on_at(&hub, "x", "tools_changed", tick);
     let (reached, release) = hub.before_withdraw.arm();
     let pass = tokio::task::spawn_blocking({

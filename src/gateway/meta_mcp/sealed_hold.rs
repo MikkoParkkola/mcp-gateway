@@ -3,24 +3,41 @@
 //! A sealed question's in-flight slot, owned by the copies of its answer
 //! (MIK-8176, family continuation-slot-release).
 //!
-//! Every mint registers a hold right after its slot is taken, in the request
-//! scope its route opened at its outermost boundary. Stage 1 of 4: the type,
-//! the registry and the mints, with no change in behaviour. Drop only counts
-//! what a later stage releases: a hold whose last copy goes without ever
-//! reaching a transport.
+//! Every mint registers a hold in the request scope its route opened at its
+//! outermost boundary. The answer that becomes an HTTP response carries the
+//! holds whose envelope it contains ([`carried`]), and the JSON reply hands
+//! them off once its delivery record is written ([`hand_off`]). A hold whose
+//! last copy goes without ever being handed off gives its slot back, under a
+//! [`HoldPolicy::Release`] scope; a [`HoldPolicy::CountOnly`] scope (a
+//! transport whose handoff lands in a later stage) only counts it.
 
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use serde_json::Value;
 use tracing::warn;
 
 use crate::protocol::continuation::ContinuationState;
+
+/// What a request scope does with a hold that was never handed off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HoldPolicy {
+    /// Count it; its slot waits for expiry. For a transport whose handoff
+    /// is not wired yet: releasing there would free a delivered slot.
+    CountOnly,
+    /// Give its slot back.
+    Release,
+}
 
 /// One minted slot, shared (behind an `Arc`) by every copy of the answer
 /// that carries it. The slot's fate follows its last clone.
 pub(crate) struct SealedHold {
     continuation: Arc<ContinuationState>,
+    hold_key: String,
+    /// The envelope the mint sealed, so a carrier can be recognised.
+    envelope: String,
+    policy: HoldPolicy,
     /// Set once any copy reaches a transport; the slot then lives until
     /// redeemed or expired.
     handed_off: AtomicBool,
@@ -28,47 +45,79 @@ pub(crate) struct SealedHold {
 
 impl Drop for SealedHold {
     fn drop(&mut self) {
-        if !self.handed_off.load(Ordering::Acquire) {
-            // Stage 1 counts; the release itself arrives with the handoffs.
-            self.continuation
-                .hold_counts()
-                .unhanded_drops
-                .fetch_add(1, Ordering::Relaxed);
+        if self.handed_off.load(Ordering::Acquire) {
+            return;
+        }
+        self.continuation
+            .hold_counts()
+            .unhanded_drops
+            .fetch_add(1, Ordering::Relaxed);
+        if self.policy == HoldPolicy::Release {
+            release(&self.continuation, &self.hold_key);
         }
     }
 }
 
-tokio::task_local! {
-    /// The holds minted while the open request is served, owned by the
-    /// outermost opener.
-    static HOLDS: Arc<Mutex<Vec<Arc<SealedHold>>>>;
+/// Give `key`'s slot back without awaiting: in place when the table is free,
+/// else on the runtime, else (no runtime) at expiry. Never panics.
+fn release(continuation: &Arc<ContinuationState>, key: &str) {
+    if continuation.in_flight().try_complete(key).is_some() {
+        return;
+    }
+    if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        let (continuation, key) = (Arc::clone(continuation), key.to_owned());
+        runtime.spawn(async move {
+            let now = crate::protocol::continuation::now_unix_secs();
+            continuation.in_flight().complete(&key, now).await;
+        });
+    }
 }
 
-/// Run `future` inside a request scope that collects the holds its mints
-/// take. Inside an open scope this adds nothing, so the outermost boundary
-/// owns them: an inner scope ending cannot drop them early.
-pub(crate) async fn scoped<F: Future>(future: F) -> F::Output {
+/// The holds minted while one request is served.
+struct Holds {
+    policy: HoldPolicy,
+    held: Mutex<Vec<Arc<SealedHold>>>,
+}
+
+tokio::task_local! {
+    /// The open request's holds, owned by the outermost opener.
+    static HOLDS: Arc<Holds>;
+}
+
+/// Run `future` inside a request scope under `policy`, collecting the holds
+/// its mints take. Inside an open scope this adds nothing: the outermost
+/// boundary owns the holds and its policy governs them.
+pub(crate) async fn scoped<F: Future>(policy: HoldPolicy, future: F) -> F::Output {
     if HOLDS.try_with(|_| ()).is_ok() {
         return future.await;
     }
-    HOLDS.scope(Arc::default(), future).await
+    let holds = Arc::new(Holds {
+        policy,
+        held: Mutex::default(),
+    });
+    HOLDS.scope(holds, future).await
 }
 
-/// Register the slot a mint just took from `continuation`.
+/// Register the slot `hold_key` a mint took from `continuation` and sealed
+/// into `envelope`.
 ///
 /// A mint with no open scope registers nothing, so nothing can release its
 /// slot early: it waits for expiry, as every slot did before. Counted and
 /// warned; the slot-release matrix asserts no route's cell mints unscoped,
 /// so a route or a spawn that drops the scope fails CI there.
-pub(crate) fn register(continuation: &Arc<ContinuationState>) {
+pub(crate) fn register(continuation: &Arc<ContinuationState>, hold_key: &str, envelope: &str) {
     let counts = continuation.hold_counts();
     let scoped = HOLDS
         .try_with(|holds| {
             let hold = Arc::new(SealedHold {
                 continuation: Arc::clone(continuation),
+                hold_key: hold_key.to_owned(),
+                envelope: envelope.to_owned(),
+                policy: holds.policy,
                 handed_off: AtomicBool::new(false),
             });
             holds
+                .held
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(hold);
@@ -85,11 +134,74 @@ pub(crate) fn register(continuation: &Arc<ContinuationState>) {
     }
 }
 
+/// The holds an HTTP answer carries: a response extension, handed off by the
+/// JSON reply once its delivery record is written. A replacer that builds a
+/// new response drops it, so those holds release with their scope.
+#[derive(Clone, Default)]
+pub(crate) struct CarriedHolds(Vec<Arc<SealedHold>>);
+
+/// The open scope's holds whose envelope `answer` carries: anywhere in a
+/// string (an envelope text-wrapped by `gateway_invoke`), or as a top-level
+/// `requestState` that opens to the same slot (a chain's re-seal).
+pub(crate) fn carried(answer: &Value) -> CarriedHolds {
+    let held = HOLDS
+        .try_with(|holds| {
+            holds
+                .held
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        })
+        .unwrap_or_default();
+    if held.is_empty() {
+        return CarriedHolds::default();
+    }
+    let reseal = answer.get("requestState").and_then(Value::as_str);
+    CarriedHolds(
+        held.into_iter()
+            .filter(|hold| contains(answer, &hold.envelope) || reopens(hold, reseal))
+            .collect(),
+    )
+}
+
+/// Whether any string in `value` contains `needle`.
+fn contains(value: &Value, needle: &str) -> bool {
+    match value {
+        Value::String(text) => text.contains(needle),
+        Value::Array(items) => items.iter().any(|item| contains(item, needle)),
+        Value::Object(fields) => fields.values().any(|field| contains(field, needle)),
+        _ => false,
+    }
+}
+
+/// Whether `token` opens, under `hold`'s keyring, to `hold`'s own slot.
+fn reopens(hold: &SealedHold, token: Option<&str>) -> bool {
+    let now = crate::protocol::continuation::now_unix_secs();
+    token.is_some_and(|token| {
+        hold.continuation
+            .keyring()
+            .open(token, now)
+            .is_ok_and(|payload| payload.hold_key == hold.hold_key)
+    })
+}
+
+/// Hand `holds` off to the transport: their slots now live until redeemed or
+/// expired. The one place a hold is disarmed.
+pub(crate) fn hand_off(holds: &CarriedHolds) {
+    for hold in &holds.0 {
+        hold.handed_off.store(true, Ordering::Release);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use futures::FutureExt as _;
+    use serde_json::json;
 
-    use super::{Arc, ContinuationState, Ordering, register, scoped};
+    use super::{
+        Arc, CarriedHolds, ContinuationState, HoldPolicy, Ordering, carried, hand_off, register,
+        scoped,
+    };
 
     /// Registered, unscoped and dropped-without-handoff counts.
     fn counts(continuation: &ContinuationState) -> [u64; 3] {
@@ -101,13 +213,32 @@ mod tests {
         ]
     }
 
+    /// A slot really held, as a mint takes it.
+    async fn slot(continuation: &ContinuationState) -> String {
+        let now = crate::protocol::continuation::now_unix_secs();
+        let payload = continuation
+            .begin_exchange("alpha".into(), None, "fp".into(), "digest".into(), now)
+            .await
+            .expect("a fresh state has a slot");
+        payload.hold_key
+    }
+
+    async fn held(continuation: &ContinuationState) -> usize {
+        let now = crate::protocol::continuation::now_unix_secs();
+        continuation.in_flight().len(now).await
+    }
+
     /// A nested scope adds nothing: the outermost opener owns the holds, so
-    /// an inner scope ending cannot drop them early.
+    /// an inner scope ending cannot drop them early, and its policy governs.
     #[tokio::test]
     async fn an_inner_scope_does_not_own_the_holds() {
         let continuation = Arc::new(ContinuationState::new());
-        scoped(async {
-            scoped(async { register(&continuation) }).await;
+        let key = slot(&continuation).await;
+        scoped(HoldPolicy::CountOnly, async {
+            scoped(HoldPolicy::Release, async {
+                register(&continuation, &key, "env");
+            })
+            .await;
             assert_eq!(
                 counts(&continuation),
                 [1, 0, 0],
@@ -116,15 +247,20 @@ mod tests {
         })
         .await;
         assert_eq!(counts(&continuation), [1, 0, 1]);
+        assert_eq!(
+            held(&continuation).await,
+            1,
+            "the outer count-only policy governs"
+        );
     }
 
     /// A request dropped mid-flight drops every hold it registered.
     #[tokio::test]
     async fn a_cancelled_request_drops_its_holds() {
         let continuation = Arc::new(ContinuationState::new());
-        let mut request = Box::pin(scoped(async {
-            register(&continuation);
-            register(&continuation);
+        let mut request = Box::pin(scoped(HoldPolicy::CountOnly, async {
+            register(&continuation, "k1", "env-1");
+            register(&continuation, "k2", "env-2");
             std::future::pending::<()>().await;
         }));
         assert!((&mut request).now_or_never().is_none());
@@ -138,7 +274,129 @@ mod tests {
     #[test]
     fn an_unscoped_mint_is_counted_not_held() {
         let continuation = Arc::new(ContinuationState::new());
-        register(&continuation);
+        register(&continuation, "k", "env");
         assert_eq!(counts(&continuation), [0, 1, 0]);
+    }
+
+    /// Under `Release`, a hold never handed off gives its slot back; one
+    /// handed off keeps it, whatever the scope does after.
+    #[tokio::test]
+    async fn release_frees_only_what_was_never_handed_off() {
+        let continuation = Arc::new(ContinuationState::new());
+        let (kept, freed) = (slot(&continuation).await, slot(&continuation).await);
+        scoped(HoldPolicy::Release, async {
+            register(&continuation, &kept, "env-kept");
+            register(&continuation, &freed, "env-freed");
+            hand_off(&carried(&json!({"content": [{"text": "see env-kept"}]})));
+        })
+        .await;
+        assert_eq!(
+            held(&continuation).await,
+            1,
+            "only the handed-off slot stays"
+        );
+        let now = crate::protocol::continuation::now_unix_secs();
+        assert_eq!(
+            continuation.in_flight().route(&kept, now).await,
+            crate::protocol::continuation::Routing::Here
+        );
+    }
+
+    /// An answer carries a hold by its envelope anywhere in a string; one
+    /// that does not name it carries nothing.
+    #[tokio::test]
+    async fn carried_finds_the_envelope_in_any_string() {
+        let continuation = Arc::new(ContinuationState::new());
+        scoped(HoldPolicy::CountOnly, async {
+            register(&continuation, "k", "env-123");
+            assert_eq!(carried(&json!({"a": [{"b": "x env-123 y"}]})).0.len(), 1);
+            assert_eq!(
+                carried(&json!({"error": {"message": "refused"}})).0.len(),
+                0
+            );
+        })
+        .await;
+    }
+
+    /// The bridge: holds an answer carries outlive the scope that minted them
+    /// (the reply is finalized after it ends). Not handed off (finalization
+    /// cancelled or replaced) they give the slot back; handed off, they keep it.
+    #[tokio::test]
+    async fn carried_holds_outlive_their_scope_until_handed_off_or_dropped() {
+        let continuation = Arc::new(ContinuationState::new());
+        let (sent, lost) = (slot(&continuation).await, slot(&continuation).await);
+        let (delivered, cancelled) = scoped(HoldPolicy::Release, async {
+            register(&continuation, &sent, "env-sent");
+            register(&continuation, &lost, "env-lost");
+            (
+                carried(&json!({"requestState": "env-sent"})),
+                carried(&json!({"requestState": "env-lost"})),
+            )
+        })
+        .await;
+        assert_eq!(
+            held(&continuation).await,
+            2,
+            "carried holds survive the scope"
+        );
+        drop(cancelled);
+        assert_eq!(held(&continuation).await, 1, "a dropped carrier releases");
+        hand_off(&delivered);
+        drop(delivered);
+        assert_eq!(
+            held(&continuation).await,
+            1,
+            "a handed-off carrier keeps its slot"
+        );
+    }
+
+    /// A `Release` request dropped mid-flight gives back every real slot it
+    /// registered.
+    #[tokio::test]
+    async fn a_cancelled_release_request_gives_its_slots_back() {
+        let continuation = Arc::new(ContinuationState::new());
+        let (one, two) = (slot(&continuation).await, slot(&continuation).await);
+        let mut request = Box::pin(scoped(HoldPolicy::Release, async {
+            register(&continuation, &one, "env-1");
+            register(&continuation, &two, "env-2");
+            std::future::pending::<()>().await;
+        }));
+        assert!((&mut request).now_or_never().is_none());
+        assert_eq!(held(&continuation).await, 2);
+        drop(request);
+        assert_eq!(held(&continuation).await, 0);
+    }
+
+    /// The direct route renders its answer as a whole JSON-RPC document. A
+    /// state re-sealed over the same slot (a different envelope) sits in its
+    /// `result`, and `to_http` must still carry the hold (agy F2 on #3645).
+    #[tokio::test]
+    async fn a_direct_answer_carries_a_reseal_of_its_slot() {
+        let continuation = Arc::new(ContinuationState::new());
+        let now = crate::protocol::continuation::now_unix_secs();
+        let payload = continuation
+            .begin_exchange("alpha".into(), None, "fp".into(), "digest".into(), now)
+            .await
+            .expect("a fresh state has a slot");
+        let minted = continuation.keyring().mint(&payload).expect("mint");
+        let resealed = continuation.keyring().mint(&payload).expect("reseal");
+        assert_ne!(minted, resealed, "a reseal is a different envelope");
+        let carried = scoped(HoldPolicy::Release, async {
+            register(&continuation, &payload.hold_key, &minted);
+            let body = json!({"jsonrpc": "2.0", "id": 1,
+                              "result": {"resultType": "input_required", "requestState": resealed}});
+            let frame = crate::gateway::outbound::answer_value(None, None, body, None, None);
+            let response =
+                crate::gateway::outbound::to_http(frame, axum::http::StatusCode::OK, "");
+            response
+                .extensions()
+                .get::<CarriedHolds>()
+                .map_or(0, |holds| holds.0.len())
+        })
+        .await;
+        assert_eq!(
+            carried, 1,
+            "the reseal in the result carries its slot's hold"
+        );
     }
 }

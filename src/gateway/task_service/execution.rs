@@ -481,8 +481,15 @@ impl TaskExecutor {
         // task; task-locals do not cross `tokio::spawn`.
         let worker = crate::gateway::meta_mcp::invoke::relay::collecting(worker);
         // MIK-8176: and owns the slots its mints take, through the durable
-        // write of what it settles.
-        let worker = crate::gateway::meta_mcp::sealed_hold::scoped(worker);
+        // write of what it settles. The scope must travel inside the spawned
+        // task, around the worker: a task-local does not cross `tokio::spawn`,
+        // so a scope opened outside the spawn would leave every mint unscoped.
+        // Dropping the worker on cancel (the select below) ends the scope and
+        // with it the holds.
+        let worker = crate::gateway::meta_mcp::sealed_hold::scoped(
+            crate::gateway::meta_mcp::sealed_hold::HoldPolicy::CountOnly,
+            worker,
+        );
         // Cancellation first on every poll (MIK-7839.CANCEL.3): tokio-util's
         // `run_until_cancelled_owned` polls the worker before the token, so a
         // worker cancelled while its runtime sat idle would take one more step

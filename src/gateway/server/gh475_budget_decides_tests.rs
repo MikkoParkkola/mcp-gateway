@@ -3,8 +3,8 @@
 //! GH475.CFG.5 / CFG.5b — a configured error budget DECIDES, it does not merely
 //! arrive.
 //!
-//! `gh475_cfg_5_error_budget_section_reaches_running_meta_mcp` (in this
-//! module's parent) reads the effective config back off the running meta-MCP,
+//! `gh475_cfg_5_error_budget_section_reaches_running_meta_mcp` (in
+//! `server/tests/boot.rs`) reads the effective config back off the running meta-MCP,
 //! so it proves the operator's YAML reached the budgets. It cannot fail on a
 //! gateway that stores the value and then decides on something else. These two
 //! cases take the config as the boot path applied it and drive the real

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use super::records::{load_records, write_record};
 
 /// How long an id is remembered.
-const WINDOW: chrono::Duration = chrono::Duration::hours(24);
+const WINDOW: chrono::Duration = crate::duration_bound::delta!(hours, 24);
 
 #[derive(Serialize, Deserialize, Default)]
 struct SeenFile {

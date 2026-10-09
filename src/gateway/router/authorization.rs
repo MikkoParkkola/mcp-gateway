@@ -7,7 +7,7 @@ use tracing::warn;
 
 use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
-pub(super) use crate::gateway::authz::{AuthorizationError, OwnedToolTarget, ToolTarget};
+pub(super) use crate::gateway::authz::{AuthorizationError, CallTarget, ToolTarget};
 use crate::gateway::authz::{Decision, Emit, ToolAuthorizer, Transport};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::oauth::{
@@ -16,16 +16,16 @@ use crate::gateway::oauth::{
 use crate::mtls::{CertIdentity, PolicyDecision};
 use crate::security::validate_tool_name;
 
-pub(crate) fn backend_tool_targets_for_call(
+pub(crate) fn backend_tool_targets_for_call<'a>(
     meta_mcp: &MetaMcp,
     tool_name: &str,
-    arguments: &Value,
-) -> Vec<OwnedToolTarget> {
+    arguments: &'a Value,
+) -> Vec<CallTarget<'a>> {
     if let Some(server) = meta_mcp.surfaced_tool_server(tool_name) {
-        return vec![OwnedToolTarget {
+        return vec![CallTarget {
             server: server.to_string(),
             tool: tool_name.to_string(),
-            arguments: arguments.clone(),
+            arguments: std::borrow::Cow::Borrowed(arguments),
         }];
     }
 
@@ -422,26 +422,25 @@ fn backend_tool_names(state: &AppState, server: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn target_from_invoke_arguments(arguments: &Value) -> Option<OwnedToolTarget> {
-    Some(OwnedToolTarget {
+fn target_from_invoke_arguments(arguments: &Value) -> Option<CallTarget<'_>> {
+    Some(CallTarget {
         server: arguments.get("server")?.as_str()?.to_string(),
         tool: arguments.get("tool")?.as_str()?.to_string(),
-        arguments: crate::gateway::meta_mcp_helpers::judged_arguments(arguments).into_owned(),
+        arguments: crate::gateway::meta_mcp_helpers::judged_arguments(arguments),
     })
 }
 
-fn targets_from_code_mode_arguments(arguments: &Value) -> Vec<OwnedToolTarget> {
+fn targets_from_code_mode_arguments(arguments: &Value) -> Vec<CallTarget<'_>> {
     if let Some(chain) = arguments.get("chain").and_then(Value::as_array) {
         return chain
             .iter()
             .filter_map(|step| {
                 let tool_ref = step.get("tool")?.as_str()?;
                 let (server, tool) = parse_qualified_tool_ref(tool_ref)?;
-                Some(OwnedToolTarget {
+                Some(CallTarget {
                     server: server.to_string(),
                     tool: tool.to_string(),
-                    arguments: crate::gateway::meta_mcp_helpers::judged_arguments(step)
-                        .into_owned(),
+                    arguments: crate::gateway::meta_mcp_helpers::judged_arguments(step),
                 })
             })
             .collect();
@@ -454,10 +453,10 @@ fn targets_from_code_mode_arguments(arguments: &Value) -> Vec<OwnedToolTarget> {
         return Vec::new();
     };
 
-    vec![OwnedToolTarget {
+    vec![CallTarget {
         server: server.to_string(),
         tool: tool.to_string(),
-        arguments: crate::gateway::meta_mcp_helpers::judged_arguments(arguments).into_owned(),
+        arguments: crate::gateway::meta_mcp_helpers::judged_arguments(arguments),
     }]
 }
 

@@ -364,7 +364,7 @@ mod tests {
         // above.
         use super::super::signer::TokenRequest;
         use super::super::validator::AttestationRejection;
-        use chrono::{TimeDelta, Utc};
+        use chrono::Utc;
 
         let (validator, _) = resolve_attestation_wiring(
             Some("observe"),
@@ -386,7 +386,8 @@ mod tests {
         // proving the wired validator did not use those bytes as key material.
         let literal_signer =
             BnautAttestationSigner::new(b"   ".to_vec(), "kid").with_audience("test-gateway");
-        let literal_token = literal_signer.issue(&request, now, TimeDelta::minutes(5));
+        let literal_token =
+            literal_signer.issue(&request, now, crate::duration_bound::delta!(minutes, 5));
         let err = validator
             .validate_boundary_call(Some(literal_token.encoded()), "test", None, now)
             .expect_err("token signed with the literal whitespace key must be rejected");
@@ -396,7 +397,8 @@ mod tests {
         // whitespace-only normalizes to.
         let empty_signer =
             BnautAttestationSigner::new(Vec::new(), "kid").with_audience("test-gateway");
-        let empty_token = empty_signer.issue(&request, now, TimeDelta::minutes(5));
+        let empty_token =
+            empty_signer.issue(&request, now, crate::duration_bound::delta!(minutes, 5));
         validator
             .validate_boundary_call(Some(empty_token.encoded()), "test", None, now)
             .expect("whitespace-only key normalizes to empty key material");

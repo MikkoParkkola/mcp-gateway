@@ -269,7 +269,7 @@ async fn expired_input_rounds_selects_open_rounds_past_their_ttl_only() {
         .create(PreparedTask::for_test(&running, OWNER, 2))
         .await
         .unwrap();
-    let later = at(0) + chrono::Duration::milliseconds(86_400_001);
+    let later = at(0) + crate::duration_bound::delta!(milliseconds, 86_400_001);
     let selected: Vec<_> = store
         .expired_input_rounds(later)
         .into_iter()
@@ -365,7 +365,7 @@ async fn an_update_queued_across_the_deadline_is_refused_under_the_lock() {
 async fn a_round_without_a_deadline_takes_answers_until_the_ttl() {
     let (_dir, store, task) = opened().await;
     parked(&store, &task, &["a", "b"]).await;
-    store.set_clock_for_test(Some(at(1) + chrono::Duration::hours(1)));
+    store.set_clock_for_test(Some(at(1) + crate::duration_bound::delta!(hours, 1)));
     let accepted = store
         .provide_input(
             OWNER,
@@ -518,7 +518,7 @@ async fn a_closed_store_and_a_moved_revision_refuse_every_input_round_write() {
     assert_eq!(on_disk(&path, task.id()), before, "nothing was written");
 
     // Past the task's TTL the sweep sees the round while the store serves.
-    let far = at(0) + chrono::Duration::days(2);
+    let far = at(0) + crate::duration_bound::delta!(days, 2);
     assert_eq!(store.expired_input_rounds(far).len(), 1, "control");
 
     // Poisoned with every row still in memory: the guards, not an empty map.

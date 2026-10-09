@@ -26,7 +26,7 @@ const SWEEP_EVERY: Duration = Duration::from_secs(30);
 const IDLE: Duration = Duration::from_secs(5);
 /// Back off before the next attempt of a record that was refused before its
 /// POST: the access re-check failed or the audit log refused the record.
-const REFUSAL_RETRY: chrono::TimeDelta = chrono::TimeDelta::seconds(30);
+const REFUSAL_RETRY: chrono::TimeDelta = crate::duration_bound::delta!(seconds, 30);
 
 impl EventsHub {
     /// Run the worker until the runtime stops.

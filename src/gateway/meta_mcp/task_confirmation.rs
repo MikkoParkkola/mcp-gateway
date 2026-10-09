@@ -363,7 +363,6 @@ impl MetaMcp {
                 "this destructive call cannot be confirmed right now",
             );
         };
-        super::sealed_hold::register(&self.continuation);
         let issued_key = challenge_key(&payload);
         let envelope = match self.continuation.keyring().mint(&payload) {
             Ok(envelope) => envelope,
@@ -378,6 +377,7 @@ impl MetaMcp {
                 );
             }
         };
+        super::sealed_hold::register(&self.continuation, &payload.hold_key, &envelope);
 
         record("challenged");
         TaskConfirmation::Answer(Box::new(JsonRpcResponse::success(

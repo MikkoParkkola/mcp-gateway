@@ -108,7 +108,7 @@ async fn seed(
     settle: Settle,
 ) -> Seeded {
     let (operation, representation) = (operation(), representation());
-    let created_at = Utc::now() - chrono::Duration::milliseconds(age_ms);
+    let created_at = Utc::now() - chrono::TimeDelta::try_milliseconds(age_ms).expect("in range");
     let task = Task::create_at(
         "write",
         created_at,

@@ -135,7 +135,7 @@ async fn personal_capability_accepts_propagated_identity_before_schema_validatio
         tool: Some("calendar_read".to_string()),
         scope: GrantScope::Execute,
         owner: Some(subject.clone()),
-        expires_at: Some(chrono::Utc::now() + chrono::Duration::minutes(5)),
+        expires_at: Some(chrono::Utc::now() + crate::duration_bound::delta!(minutes, 5)),
         revoked_at: None,
         provenance: "unit-test".to_string(),
         reason: "prove propagated caller identity grants personal dispatch".to_string(),
