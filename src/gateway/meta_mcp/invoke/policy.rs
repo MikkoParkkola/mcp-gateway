@@ -72,17 +72,19 @@ impl MetaMcp {
         // the earliest point at which the target is known, so nothing has yet
         // happened that a refused call is not entitled to: no nonce consumed,
         // no cache read, no idempotency entry, no credential minted, no budget
-        // consulted. And the router builds its own target from the same raw
-        // arguments, so a policy that one day reads them cannot give the two
-        // layers two answers.
+        // consulted. And the router builds its own target from the same
+        // arguments (`judged_arguments`), so a policy that one day reads them
+        // cannot give the two layers two answers.
         // `{}` and not `Null`: the router's own target builder defaults a
         // missing inner `arguments` to an empty object, and two gates that see
         // different targets are two gates that can disagree.
-        let empty_args = serde_json::json!({});
+        // The arguments as dispatched (a JSON-string form parsed), the same
+        // value the router's target builder judges (MIK-8137 b1).
+        let judged = crate::gateway::authz::judged_arguments(args);
         let target = crate::gateway::authz::ToolTarget {
             server,
             tool,
-            arguments: args.get("arguments").unwrap_or(&empty_args),
+            arguments: &judged,
         };
         let authorizer = caller.authorizer;
         // The admin-capability rule is refused and audited like the authorizer.

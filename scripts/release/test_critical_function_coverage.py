@@ -109,6 +109,33 @@ class CriticalFunctionCoverage(unittest.TestCase):
         row = "src/lib.rs\tcheck\t2\tcritical\td\tcheck\tr"
         self.assertEqual(self.run_rows([row], lcovs=[self.lcov, windows]), 0)
 
+    def run_scoped(self, rows, scope):
+        inventory = self.root / "inv.tsv"
+        inventory.write_text(HEADER + "".join(r + "\n" for r in rows))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cfc.main(["--inventory", str(inventory), "--root", str(self.root),
+                             "--lcov", str(self.lcov), "--scope", scope])
+        return code, out.getvalue()
+
+    def test_a_linux_only_grade_lists_an_unmeasured_variant_without_failing(self):
+        # A pull request's grade has the Linux report alone (MIK-8217): a variant
+        # compiled only elsewhere is listed and counted, and graded on the push.
+        row = "src/lib.rs\tcheck\t2\tcritical\td\tcheck\tr"
+        code, out = self.run_scoped([row], "linux-only")
+        self.assertEqual(code, 0)
+        self.assertIn("UNMEASURED-HERE\t-\t-\tsrc/lib.rs:check#2", out)
+        self.assertIn("critical rows not measured in this scope: 1", out)
+        self.assertIn("critical rows failing: 0", out)
+        self.assertEqual(self.run_scoped([row], "all-platforms")[0], 1)
+
+    def test_a_linux_only_grade_still_fails_a_row_below_or_missing(self):
+        for row in ("src/lib.rs\tcheck\t1\tcritical\td\tcheck\tr",
+                    "src/lib.rs\tgone\t1\tcritical\td\tgone\tr"):
+            code, out = self.run_scoped([row], "linux-only")
+            self.assertEqual(code, 1, row)
+            self.assertIn("critical rows failing: 1", out)
+
     def test_a_checkout_under_a_directory_named_src_still_resolves(self):
         nested = self.root / "nested.lcov"
         nested.write_text(LCOV.replace("SF:/build/repo/src/lib.rs", "SF:/src/mcp-gateway/src/lib.rs"))

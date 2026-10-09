@@ -1854,6 +1854,27 @@ CASES += [
      "          git fetch --no-tags --depth=1 origin f241b464", CAUGHT),
 ]
 
+# MIK-8245: the C6 obligation resolver runs on every pull request and every
+# release-line push, unconditionally, and its status fails the run.
+_C6_STEP = (
+    "      - name: Every framed obligation resolves to its function\n"
+    "        timeout-minutes: 1\n"
+    "        run: python3 scripts/release/c6_resolve.py --tree HEAD\n"
+)
+CASES += [
+    ("c6-resolver-deleted", "c6-obligations.yml", _C6_STEP, "", CAUGHT),
+    ("c6-resolver-masked", "c6-obligations.yml",
+     "c6_resolve.py --tree HEAD\n", "c6_resolve.py --tree HEAD || true\n", CAUGHT),
+    ("c6-resolver-continues-on-error", "c6-obligations.yml",
+     "        timeout-minutes: 1\n", "        timeout-minutes: 1\n        continue-on-error: true\n", CAUGHT),
+    ("c6-resolver-job-conditional", "c6-obligations.yml",
+     "    runs-on: ubuntu-latest\n", "    if: github.event_name == 'push'\n    runs-on: ubuntu-latest\n", CAUGHT),
+    ("c6-resolver-pull-requests-path-filtered", "c6-obligations.yml",
+     "  pull_request:\n", "  pull_request:\n    paths: [\"docs/release/**\"]\n", CAUGHT),
+    ("c6-resolver-release-push-dropped", "c6-obligations.yml",
+     "  push:\n    branches: [docs/ranking-1-release-line]\n", "", CAUGHT),
+]
+
 def verdict(directory, workflow, before, after):
     """Apply one mutation to the copied workflows and run the suite against it."""
     path = directory / workflow

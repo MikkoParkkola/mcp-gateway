@@ -1,18 +1,6 @@
 # Timing asserts the guard refuses that are allowed to stay, for now.
 # Shrink-only: a row may be deleted, never added (check-timing-asserts.py --base).
 # path<TAB>enclosing fn<TAB>normalised assert<TAB>reason
-src/backend/websocket_backend_tests.rs	t6_the_next_call_after_a_dropped_socket_reconnects	assert!( started.elapsed() < Duration::from_secs(2), "" )	converted in PR2 (MIK-8222)
 src/cost_accounting/enforcer_tests.rs	enforcer_check_performance_under_100us	assert!( elapsed.as_secs() < 1, "" )	perf AC, CPU-only
-src/events/upstream_session_debt_tests.rs	a_failed_refill_is_retried_once_after_the_cooldown	assert!(retry + Duration::from_secs(1) >= Instant::now() + REFILL_RETRY)	converted in PR2 (MIK-8222)
-src/gateway/meta_mcp/grant_decision_slot_tests.rs	stalled_log_bounds_the_decision_write	assert!( elapsed < APPEND_BOUND * 2 + Duration::from_secs(1), "" )	converted in PR2 (MIK-8222)
-src/gateway/meta_mcp/tests/backend_lists.rs	prompts_list_skips_hung_backend_within_timeout	assert!( elapsed < Duration::from_secs(2), "" )	converted in PR2 (MIK-8222)
-src/gateway/meta_mcp/tests/backend_lists.rs	resources_list_skips_hung_backend_within_timeout	assert!( elapsed < Duration::from_secs(2), "" )	converted in PR2 (MIK-8222)
-src/gateway/meta_mcp/tests/backend_lists.rs	prompts_list_fast_backend_not_stalled_by_hung_one	assert!( elapsed < Duration::from_secs(3), "" )	converted in PR2 (MIK-8222)
-src/gateway/server/listener_tests.rs	a_request_that_never_ends_does_not_hold_shutdown_past_the_timeout	assert!( elapsed < Duration::from_secs(2), "" )	converted in PR2 (MIK-8222)
-src/gateway/server/support_tests.rs	an_mtls_request_that_never_ends_does_not_hold_shutdown_past_the_timeout	assert!( elapsed < Duration::from_secs(2), "" )	converted in PR2 (MIK-8222)
-src/personal_accounts/fifo_tests.rs	finish_successfully	assert!( Instant::now() < deadline, "" )	converted in PR2 (MIK-8222)
 src/test_wait.rs	a_late_os_thread_write_is_waited_for_on_a_still_clock	assert_eq!( moved, Duration::ZERO, "" )	paused clock: asserts the virtual clock did not move, not a wall-clock window
-src/transport/stdio_child_tree_tests.rs	closing_ten_live_backends_does_not_add_a_grace_each	assert!(took < Duration::from_secs(3), "")	converted in PR2 (MIK-8222)
-src/transport/websocket_cancel_tests.rs	the_writer_skips_a_request_abandoned_in_the_queue	assert!(tokio::time::Instant::now() < deadline, "")	converted in PR2 (MIK-8222)
-src/trust/schema_bounds/closed_keys/tests.rs	catastrophic_pattern_completes	assert!(started.elapsed() < std::time::Duration::from_secs(2))	converted in PR2 (MIK-8222)
 tests/mik_5223_acs.rs	ac_5_forgery_detected_and_logged_within_100ms_over_100_cases	assert!( elapsed.as_millis() < 100, "" )	perf AC, CPU-only
