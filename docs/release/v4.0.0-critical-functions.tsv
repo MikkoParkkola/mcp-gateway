@@ -757,3 +757,5 @@ src/gateway/router/helpers.rs	parse_request_ref	1	critical	d	parse_request_ref	R
 src/gateway/router/helpers.rs	parse_sampling_params	1	critical	d	parse_sampling_params	Refuses sampling parameters that are missing or malformed before they are forwarded
 src/gateway/router/helpers.rs	parse_elicitation_params	1	critical	d	parse_elicitation_params	Refuses elicitation parameters that are missing or malformed before they are forwarded
 src/gateway/router/helpers.rs	is_notification_method	1	standard	borderline	is_notification_method	Decides which methods are exempt from parse_request_ref's required-id refusal; a mistake would let an id-less request through
+src/gateway/router/helpers.rs	parse_request	1	standard	borderline	parse_request	Owned form of parse_request_ref: carries its framing refusal and hands method and params to dispatch; a mistake would let a refused frame through
+src/gateway/router/accounts/complete.rs	list	1	standard	borderline	list	Renders the caller's connection rows into HTML with escaped descriptor ids; an escaping mistake opens markup injection, as for its escape and render siblings

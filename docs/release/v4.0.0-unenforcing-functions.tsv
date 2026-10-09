@@ -108,8 +108,6 @@ src/gateway/router/helpers.rs	merge_client_meta	1	Copies the client's self-asser
 src/gateway/router/helpers.rs	insert_client_meta	1	Inserts the client's metadata object into the arguments unless one is already present.
 src/gateway/router/helpers.rs	client_meta_insert_required	1	Reports whether the metadata merge would insert anything, a pure precondition over non-authorizing metadata.
 src/gateway/router/helpers.rs	merge_client_meta_ref	1	Borrowed form of the metadata merge that copies only when an insertion is needed.
-src/gateway/router/helpers.rs	parse_request	1	Owned wrapper that copies method and params out of the borrowed JSON-RPC parse.
-src/gateway/router/accounts/complete.rs	list	1	Formats the caller's already-scoped connection rows into HTML with escaped descriptor ids.
 src/gateway/router/watch_poll.rs	application_value	1	Extracts the structured content or first text item from an already-gated tool result.
 src/gateway/router/watch_poll.rs	new	1	Stores a weak handle to the gateway state for the watch host.
 src/gateway/router/authorization.rs	transport	1	Returns the constant HTTP transport label written into refusal audit lines.
