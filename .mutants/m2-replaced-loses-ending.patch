@@ -1,0 +1,13 @@
+diff --git a/src/config_persistence_eol.rs b/src/config_persistence_eol.rs
+index f6f45614e..0cfbb0048 100644
+--- a/src/config_persistence_eol.rs
++++ b/src/config_persistence_eol.rs
+@@ -30,7 +30,7 @@ pub(super) fn render(original: &str, out: &[Line]) -> String {
+         .iter()
+         .map(|line| match line {
+             Line::Kept(at) => source[*at],
+-            Line::Replaced(at, text) => (text.as_str(), source[*at].1),
++            Line::Replaced(_, text) => (text.as_str(), ""),
+             Line::New(text) => (text.as_str(), ""),
+         })
+         .collect();

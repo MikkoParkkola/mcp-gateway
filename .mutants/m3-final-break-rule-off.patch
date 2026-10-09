@@ -1,0 +1,15 @@
+diff --git a/src/config_persistence_eol.rs b/src/config_persistence_eol.rs
+index f6f45614e..1a3868055 100644
+--- a/src/config_persistence_eol.rs
++++ b/src/config_persistence_eol.rs
+@@ -46,9 +46,7 @@ pub(super) fn render(original: &str, out: &[Line]) -> String {
+     let mut text = String::with_capacity(original.len() + 64);
+     for (at, &(line, ending)) in rows.iter().enumerate() {
+         text.push_str(line);
+-        if at + 1 == rows.len() && unbroken_end {
+-            break;
+-        }
++        let _ = unbroken_end;
+         let ending = if ending.is_empty() {
+             before.unwrap_or(after[at])
+         } else {

@@ -1,0 +1,16 @@
+diff --git a/src/config_persistence_splice.rs b/src/config_persistence_splice.rs
+index 93b6538f4..49cd53410 100644
+--- a/src/config_persistence_splice.rs
++++ b/src/config_persistence_splice.rs
+@@ -27,10 +27,7 @@ pub(super) fn with_backend_edited(
+         return None;
+     }
+     // A file of comments alone parses as no document: it is an empty mapping.
+-    let mut want = match serde_yaml::from_str(original).ok()? {
+-        Value::Null => Value::Mapping(Mapping::new()),
+-        document => document,
+-    };
++    let mut want: Value = serde_yaml::from_str(original).ok()?;
+     let root = want.as_mapping_mut()?;
+     let key = Value::from("backends");
+     match root.get(&key) {

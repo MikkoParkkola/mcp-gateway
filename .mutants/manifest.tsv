@@ -1,0 +1,6 @@
+head_sha	2f7311c462992151e6dac07f60ee73d4564bdfd3
+m1-kept-loses-ending	linux	m1-kept-loses-ending.patch	--lib -- an_edit_keeps_every_line_ending_of_a_mixed_file
+m2-replaced-loses-ending	linux	m2-replaced-loses-ending.patch	--lib -- adjacent_edited_fields_keep_their_own_endings
+m3-final-break-rule-off	linux	m3-final-break-rule-off.patch	--lib -- a_file_without_a_final_line_break_keeps_none
+m4-new-follows-next	linux	m4-new-follows-next.patch	--lib -- an_addition_keeps_a_mixed_file_and_follows_its_last_ending
+m5-null-document-refused	linux	m5-null-document-refused.patch	--lib -- a_first_backend_in_a_crlf_file_follows_its_endings

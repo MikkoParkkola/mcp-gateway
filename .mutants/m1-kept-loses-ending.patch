@@ -1,0 +1,13 @@
+diff --git a/src/config_persistence_eol.rs b/src/config_persistence_eol.rs
+index f6f45614e..1ad61f3c8 100644
+--- a/src/config_persistence_eol.rs
++++ b/src/config_persistence_eol.rs
+@@ -29,7 +29,7 @@ pub(super) fn render(original: &str, out: &[Line]) -> String {
+     let rows: Vec<(&str, &str)> = out
+         .iter()
+         .map(|line| match line {
+-            Line::Kept(at) => source[*at],
++            Line::Kept(at) => (source[*at].0, ""),
+             Line::Replaced(at, text) => (text.as_str(), source[*at].1),
+             Line::New(text) => (text.as_str(), ""),
+         })
