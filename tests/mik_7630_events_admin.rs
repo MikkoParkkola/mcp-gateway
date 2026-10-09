@@ -5,8 +5,9 @@
 //! listing clause, T54).
 //!
 //! Today the routes do not exist, so each row goes red at its first
-//! admin answer (404 where 200 is expected). Linux-only for `SSL_CERT_FILE`.
-#![cfg(all(unix, not(target_vendor = "apple")))]
+//! admin answer (404 where 200 is expected). Unix; the child trusts
+//! the receiver's CA through `Receiver::trust_env` (MIK-8188).
+#![cfg(unix)]
 
 use gateway::gateway_bin;
 

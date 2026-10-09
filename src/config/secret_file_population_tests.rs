@@ -119,6 +119,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cost ledger; no secret",
     ),
     (
+        "src/debug_trust_roots.rs",
+        "debug builds only (MIK-8188): a test CA PEM named by MCP_GATEWAY_TEST_TRUST_CA, public certificates and no secret; the binary's copy (dashboard-link) cannot reach the lib-internal mode-checked read, as dashboard_link.rs cannot; release builds compile no read",
+    ),
+    (
         "src/discovery/config_scanner.rs",
         "other MCP clients' configs; not the gateway's files",
     ),

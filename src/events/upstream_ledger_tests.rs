@@ -225,3 +225,32 @@ fn a_call_stranded_by_a_holder_change_needs_no_cleanup() {
     l.observe(2);
     assert!(!l.needs_cleanup());
 }
+
+/// T33 (pins mutant m1, `!e.stranded` in `prune`): after two overlapping
+/// unsubscribes on one key, the first answering Uncertain and the second
+/// Done, the key stays stranded. The uncertain unsubscribe may still land
+/// at the peer, so a later subscribe of the URI never reads held and keeps
+/// being re-sent; releasing the key would forget that and lose the
+/// re-subscriber's events silently. The overlap is unreachable at runtime
+/// (a task's passes and stop cleanup run one at a time, and a backend's next
+/// task starts after its predecessor's cleanup), so this drives the ledger.
+#[test]
+fn t33_overlapping_unsubscribes_keep_the_key_stranded() {
+    let mut l = Ledger::default();
+    subscribed(&mut l, "a");
+    l.unwant("a");
+    let first = l.sent("a", false).expect("key");
+    let second = l.sent("a", false).expect("key");
+    l.answered(&first, Outcome::Uncertain, Instant::now());
+    l.answered(&second, Outcome::Done, Instant::now());
+    assert_eq!(l.size().2, 1, "the key stays, stranded");
+
+    l.want("a").expect("room");
+    let again = l.sent("a", true).expect("key");
+    l.answered(&again, Outcome::Done, Instant::now());
+    assert_eq!(
+        l.due(later()),
+        vec![("a".to_owned(), true)],
+        "the late unsubscribe may still undo it, so the subscribe is re-sent"
+    );
+}

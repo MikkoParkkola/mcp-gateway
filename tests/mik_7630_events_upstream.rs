@@ -6,9 +6,9 @@
 //! `prompts/list_changed` become events for every backend era.
 //!
 //! Before I5 no `backend.<x>.resource_updated|...` descriptor exists, so each
-//! row goes red at its first "listed" assertion. Receiver rows need
-//! `SSL_CERT_FILE`, honoured only on Unix other than Apple.
-#![cfg(all(unix, not(target_vendor = "apple")))]
+//! row goes red at its first "listed" assertion. Receiver rows trust its CA
+//! through `Receiver::trust_env` (MIK-8188).
+#![cfg(unix)]
 
 #[path = "mik_7630_events/delivery.rs"]
 #[allow(dead_code, reason = "shared helpers; each binary uses a subset")]

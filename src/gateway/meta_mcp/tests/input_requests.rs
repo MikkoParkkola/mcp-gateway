@@ -648,3 +648,101 @@ async fn a_mode_refusal_does_not_claim_the_capability_was_undeclared() {
          which of its modes the backend wanted: {message}"
     );
 }
+
+/// A `booking` backend answering every call with `result`.
+fn backend_answering(result: serde_json::Value) -> Arc<BackendRegistry> {
+    use crate::backend::Backend;
+    use crate::config::{BackendConfig, FailsafeConfig};
+    use crate::transport::Transport;
+
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(Backend::new(
+        "booking",
+        BackendConfig::r2_off(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let transport: Arc<dyn Transport> = Arc::new(ToolCallTestTransport { result });
+    backend.set_transport_for_test(transport);
+    let _ = registry.register(backend);
+    registry
+}
+
+/// `MIK-8117.MALFORMED.1`: a result that claims `input_required` but which
+/// `InputRequired::from_result` declines (a non-string `requestState` beside a
+/// valid `inputRequests` object) is still refused by MRTR.9 when it asks a
+/// question the client never declared, with the refusal its well-formed twin
+/// gets: same code, message and data. Mutant: the gate reading only the parsed
+/// interim.
+#[tokio::test]
+async fn a_malformed_round_asking_an_undeclared_question_is_refused_alike() {
+    let answer = |state: serde_json::Value| {
+        json!({
+            "resultType": "input_required",
+            "inputRequests": {
+                "confirm": {
+                    "method": "elicitation/create",
+                    "params": { "message": "Charge the card?" }
+                }
+            },
+            "requestState": state
+        })
+    };
+    let refusal = |state| async move {
+        let meta = MetaMcp::new(backend_answering(answer(state)));
+        let ctx = allow_all_ctx_declaring(crate::protocol::meta::Declared::NONE);
+        let err = meta
+            .invoke_tool(&book_flight(), Some("session-1"), &ctx)
+            .await
+            .expect_err("a client that declared nothing must not be asked");
+        let wire = crate::gateway::meta_mcp::error_response_preserving_status(
+            crate::protocol::RequestId::Number(1),
+            &err,
+        );
+        serde_json::to_value(wire.error).expect("an error serializes")
+    };
+    let well_formed = refusal(json!("backend-opaque")).await;
+    for state in [json!(7), json!({"k": 1}), json!(null)] {
+        assert_eq!(
+            refusal(state.clone()).await,
+            well_formed,
+            "a malformed round ({state}) must be refused as its well-formed twin is"
+        );
+    }
+}
+
+/// `MIK-8117.MALFORMED.1` control: the malformed-round fallback reads only a
+/// result that claims `input_required`. A completed result carrying an
+/// `inputRequests` object and a malformed `requestState` (no `resultType`, or
+/// another one) is relayed, never refused. Mutant: the fallback ignoring
+/// `resultType`.
+#[tokio::test]
+async fn a_completed_result_carrying_input_requests_is_not_refused() {
+    for result_type in [None, Some("complete")] {
+        let mut result = json!({
+            "content": [{ "type": "text", "text": "booked" }],
+            "inputRequests": {
+                "confirm": {
+                    "method": "elicitation/create",
+                    "params": { "message": "Charge the card?" }
+                }
+            },
+            "requestState": 7
+        });
+        if let Some(kind) = result_type {
+            result["resultType"] = json!(kind);
+        }
+        let meta = MetaMcp::new(backend_answering(result));
+        let ctx = allow_all_ctx_declaring(crate::protocol::meta::Declared::NONE);
+        let outcome = meta
+            .invoke_tool(&book_flight(), Some("session-1"), &ctx)
+            .await;
+        let relayed = outcome.unwrap_or_else(|error| {
+            panic!("a completed result ({result_type:?}) must be relayed: {error}")
+        });
+        assert!(
+            relayed.to_string().contains("booked"),
+            "the relayed result keeps its payload: {relayed}"
+        );
+    }
+}

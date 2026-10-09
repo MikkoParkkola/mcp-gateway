@@ -322,6 +322,13 @@ impl Backend {
         )
     }
 
+    /// Whether this backend is an A2A agent (MIK-8063): its input rounds must
+    /// be bound to the caller who was asked. Read from the transport's name,
+    /// which every build has, so no feature gate is needed here.
+    pub(crate) fn is_a2a(&self) -> bool {
+        self.config.transport.transport_type() == "a2a"
+    }
+
     /// Start the outbound A2A bridge (MIK-8063) under `destination`: the agent
     /// becomes one tool behind the same funnel as every backend. Like the HTTP
     /// arm, the configured address is checked before anything connects and

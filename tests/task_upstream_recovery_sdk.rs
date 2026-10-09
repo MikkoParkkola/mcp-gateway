@@ -143,7 +143,10 @@ async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result() {
     let alice = Owner::new(&issuer, "alice-subject", "alice@vertical.test");
     let bob = Owner::new(&issuer, "bob-subject", "bob@vertical.test");
     let ca = issuer.ca_file.display().to_string();
-    let trust = [("SSL_CERT_FILE", ca.as_str())];
+    let trust = [
+        ("SSL_CERT_FILE", ca.as_str()),
+        ("MCP_GATEWAY_TEST_TRUST_CA", ca.as_str()),
+    ];
 
     let base = helper::write_config(
         root,
@@ -482,7 +485,10 @@ async fn a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result_from
     let issuer = issuer::Issuer::start(root).await;
     let alice = Owner::new(&issuer, "alice-subject", "alice@vertical.test");
     let ca = issuer.ca_file.display().to_string();
-    let trust = [("SSL_CERT_FILE", ca.as_str())];
+    let trust = [
+        ("SSL_CERT_FILE", ca.as_str()),
+        ("MCP_GATEWAY_TEST_TRUST_CA", ca.as_str()),
+    ];
     let base = helper::write_config(
         root,
         &Fixture {
