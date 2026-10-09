@@ -205,16 +205,26 @@ fn hold_save_for_test(data_dir: &Path) {
 
 /// Whether a periodic save has written `costs`, for the tests that advance a
 /// paused clock past [`COST_SAVE_INTERVAL`] (MIK-8216). The save runs on its
-/// own OS thread (MIK-8157), which a paused clock does not schedule.
+/// own OS thread (MIK-8157), which a paused clock does not schedule and a busy
+/// runner may start late, so the wait is real time, not a count of turns.
+///
+/// Yielding between polls lets the saver task spawn its thread; the short
+/// blocking sleep is real time, and neither one lets the paused clock move on,
+/// so no second interval can stand in for the one under test.
 #[cfg(test)]
 pub(super) async fn periodic_save_landed(costs: &Path) -> bool {
-    for _ in 0..1000 {
+    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+    let start = std::time::Instant::now();
+    loop {
         if costs.exists() {
             return true;
         }
+        if start.elapsed() >= DEADLINE {
+            return false;
+        }
         tokio::task::yield_now().await;
+        std::thread::sleep(std::time::Duration::from_millis(2));
     }
-    costs.exists()
 }
 
 impl super::Gateway {
