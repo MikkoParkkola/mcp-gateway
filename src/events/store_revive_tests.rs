@@ -42,7 +42,9 @@ fn a_revived_record_keeps_its_dead_letters_stamp() {
         ..record("e1", "s1", now)
     };
     assert_eq!(
-        store.revive("e1", now, replay, OUTBOX, || now).expect("io"),
+        store
+            .revive("e1", now, replay, OUTBOX, || Ok(now))
+            .expect("io"),
         Revived::Written
     );
     let due = store.due(now, &HashSet::new(), ROOMY).expect("io");
@@ -84,7 +86,7 @@ fn a_replay_into_a_suspended_subscription_is_refused() {
         .expect("io");
     store.suspend("s1").expect("io");
     let outcome = store
-        .revive("e1", now, record("e1", "s1", now), OUTBOX, || now)
+        .revive("e1", now, record("e1", "s1", now), OUTBOX, || Ok(now))
         .expect("io");
     assert_eq!(
         outcome,
@@ -104,7 +106,7 @@ fn a_replay_into_a_suspended_subscription_is_refused() {
     );
     assert_eq!(
         store
-            .revive("e1", now, record("e1", "s1", now), OUTBOX, || now)
+            .revive("e1", now, record("e1", "s1", now), OUTBOX, || Ok(now))
             .expect("io"),
         Revived::Written,
         "the kept dead letter replays once refreshed"

@@ -46,9 +46,9 @@ pub(super) enum Added {
     Kept,
     /// A plain record did not fit: dropped.
     PlainDropped,
-    /// A sensitive record took the place of the caller's plain one, whose
-    /// excuse is gone.
-    PlainReplaced,
+    /// A sensitive record took the place of the caller's plain one from
+    /// `source`, whose excuse is gone.
+    PlainReplaced { source: u64 },
     /// A sensitive record did not fit: kept as its caller's overflow.
     Overflowed,
 }
@@ -134,8 +134,9 @@ impl Tracked {
                     .is_none_or(|c| now.saturating_duration_since(c.latest()) > window)
         };
         if let Some(i) = self.records.iter().position(plain) {
+            let source = self.records[i].source;
             self.records[i] = new;
-            return Added::PlainReplaced;
+            return Added::PlainReplaced { source };
         }
         match self.overflow.iter_mut().find(|(p, _)| *p == new.principal) {
             Some((_, copies)) => copies.add(&sensitive, window),
@@ -149,6 +150,15 @@ impl Tracked {
             Some((_, at)) => *at = (*at).max(now),
             None => self.callers.push((principal, now)),
         }
+    }
+
+    /// Whether `principal`'s own sensitive copy is held only as overflow at
+    /// `now`: its record did not fit, so no exact copy of it can excuse it
+    /// (`MIK-8201`: such a refusal is named capacity).
+    pub(super) fn overflowed(&self, principal: u64, now: Instant, window: Duration) -> bool {
+        self.overflow
+            .iter()
+            .any(|(p, copies)| *p == principal && copies.held(now, window))
     }
 
     /// A caller other than `sender` whose overflow is held at `now`: it

@@ -32,6 +32,8 @@ const _: () = {
 };
 
 type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
+/// Now, or a clock that reads before 1970 (MIK-8202).
+type FallibleClock = Arc<dyn Fn() -> Result<u64, crate::clock::ClockBeforeEpoch> + Send + Sync>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Mode {
@@ -94,7 +96,7 @@ pub(crate) struct ExecutionAdmission {
     /// "blocked on the lock" from "the thread never arrived". Test-only.
     #[cfg(test)]
     lock_witness: Mutex<Option<LockWitness>>,
-    clock: Clock,
+    clock: FallibleClock,
 }
 
 #[derive(Default)]
@@ -229,7 +231,15 @@ impl Request<'_> {
 }
 
 impl ExecutionAdmission {
+    /// With a clock that always reads (a test's fixed clock).
     pub(crate) fn new(clock: Clock) -> Arc<Self> {
+        Self::new_fallible(Arc::new(move || Ok(clock())))
+    }
+
+    /// With the wall clock. A clock it cannot read never expires, reclaims or
+    /// dates an entry (MIK-8202): an early expiry would readmit a completed
+    /// key's retry and repeat its side effects.
+    pub(crate) fn new_fallible(clock: FallibleClock) -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new(State::default()),
             #[cfg(test)]
@@ -284,12 +294,12 @@ impl ExecutionAdmission {
                 round
             ]))
         };
-        let now = (self.clock)();
+        let now = (self.clock)().ok();
         let mut state = self.state.lock();
         if state
             .entries
             .get(&identity)
-            .is_some_and(|entry| entry.expired(now))
+            .is_some_and(|entry| now.is_some_and(|now| entry.expired(now)))
         {
             state.remove(&identity);
         }
@@ -316,10 +326,12 @@ impl ExecutionAdmission {
         if state.sealed > 0 {
             return Ok(Admission::Sealed);
         }
-        now.checked_add(RETENTION_SECS)
-            .ok_or(Refusal::ExpiryOverflow)?;
-        if state.entries.len() >= SLOT_LIMIT {
-            state.reclaim(now);
+        if let Some(now) = now {
+            now.checked_add(RETENTION_SECS)
+                .ok_or(Refusal::ExpiryOverflow)?;
+            if state.entries.len() >= SLOT_LIMIT {
+                state.reclaim(now);
+            }
         }
         if state.entries.len() >= SLOT_LIMIT {
             return Err(Refusal::Capacity);
@@ -351,12 +363,15 @@ impl ExecutionAdmission {
         )
     )]
     pub(crate) fn reclaim_completed(&self) -> usize {
-        let now = (self.clock)();
-        self.state.lock().reclaim(now)
+        // Retention: a clock it cannot read reclaims nothing this pass.
+        (self.clock)().map_or(0, |now| self.state.lock().reclaim(now))
     }
 
     fn finish(&self, identity: &str, generation: u64, bytes: Option<Arc<[u8]>>) -> Settlement {
-        let expires = (self.clock)().checked_add(RETENTION_SECS);
+        // An unreadable clock settles the entry undated: it never expires.
+        let expires = (self.clock)()
+            .ok()
+            .and_then(|now| now.checked_add(RETENTION_SECS));
         let mut state = self.state.lock();
         if !state.entries.get(identity).is_some_and(|entry| {
             entry.generation == generation && matches!(entry.status, Status::Active)

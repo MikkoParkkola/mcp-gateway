@@ -93,14 +93,13 @@ impl Services {
         let Some(key) = key else {
             return true;
         };
-        let now = chrono::Utc::now();
         self.live
             .get()
             .auth
             .api_keys
             .iter()
             .find(|k| k.name == key.name)
-            .filter(|k| !k.is_expired_at(now))
+            .filter(|k| !k.is_expired_now())
             .filter(|k| {
                 k.key_sha256
                     .as_deref()

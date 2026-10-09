@@ -290,17 +290,6 @@ impl WatchSource {
             .find(|t| t.read_only && event_name(&t.capability) == name)
     }
 
-    /// Live rows of `principal` for `name` with these canonical `arguments`.
-    fn rows(hub: &EventsHub, principal: &str, name: &str, arguments: &Value) -> Vec<Subscription> {
-        let now = Utc::now();
-        hub.store
-            .subscriptions()
-            .into_iter()
-            .filter(|s| s.live(now) && s.principal == principal && s.name == name)
-            .filter(|s| s.arguments == *arguments)
-            .collect()
-    }
-
     /// The holder a stored row polls as, when its credential still passes:
     /// an API key that is live and may invoke `target`.
     fn holder(&self, row: &Subscription, target: &Target) -> Option<Holder> {
@@ -595,18 +584,6 @@ impl Run {
         poll_key(alone, &row.name, &row.arguments)
     }
 
-    /// The live rows that hold this poller's key.
-    fn holders(&self, hub: &EventsHub) -> Vec<Subscription> {
-        let now = Utc::now();
-        hub.store
-            .subscriptions()
-            .into_iter()
-            // Its own class only: a poller never holds, resumes or polls
-            // for a row admitted under another class (MIK-8122).
-            .filter(|s| s.live(now) && self.owns(s))
-            .collect()
-    }
-
     /// No holder is left: retire the key under the lock a subscribe commits
     /// under, so the next subscribe starts a fresh poller instead of finding
     /// the key started with nothing polling. A holder that committed while
@@ -670,7 +647,11 @@ impl Run {
             Ok(found) => found,
             Err(step) => return step,
         };
-        let now = Utc::now();
+        // No lease is judged on a clock before 1970: the poll is skipped,
+        // nothing is called for and the poller is not retired (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            return Step::Polled;
+        };
         let rows = self.holders(hub);
         let Some(services) = hub.runtime.services.get().cloned() else {
             return Step::Failed;
@@ -791,6 +772,9 @@ impl EventsHub {
 #[path = "watch_source_hold.rs"]
 mod hold;
 use hold::class_of_target;
+
+#[path = "watch_source_live.rs"]
+mod live;
 
 #[cfg(test)]
 #[path = "watch_source_tests.rs"]

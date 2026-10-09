@@ -121,7 +121,7 @@ async fn ttl_is_clamped() {
         .propagate(&identity("c", "https://idp"), &backend())
         .await
         .unwrap();
-    assert!(cred.expires_at - SignedAssertionStrategy::now_secs() <= 3600);
+    assert!(cred.expires_at - SignedAssertionStrategy::now_secs().unwrap() <= 3600);
 }
 
 // IDP.3 — cache_binding distinguishes users AND audiences, collision-safe.

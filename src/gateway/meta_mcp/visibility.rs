@@ -334,6 +334,16 @@ impl MetaMcp {
         if server != cap.name {
             return Ok(None);
         }
+        // A clock before 1970 can judge no grant expiry and date no decision,
+        // so no grant authorizes on it: refused like a denied grant (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            return Err(Error::json_rpc(
+                -32004,
+                format!(
+                    "Identity grant denied for tool '{tool}': the gateway clock reads before 1970"
+                ),
+            ));
+        };
         // Borrowed, not cloned: this runs per tool on every listing (#2110).
         // One lookup, so a reload removing the tool reads as absent (#2236).
         // Absent is refused, not skipped: a skip here would admit a tool a
@@ -351,7 +361,7 @@ impl MetaMcp {
             scope: GrantScope::requested_by(cap_def),
             exposure: cap_def.metadata.exposure,
             owner: cap_def.metadata.identity_owner.clone(),
-            now: chrono::Utc::now(),
+            now,
         }) else {
             return Err(Error::ToolNotFound(tool.to_string()));
         };

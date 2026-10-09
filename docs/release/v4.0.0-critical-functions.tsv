@@ -202,6 +202,10 @@ src/gateway/server/identity_grants.rs	audit_startup	1	critical	a	audit_startup	R
 src/gateway/server/identity_grants.rs	start_identity_grant_audit	1	critical	a	start_identity_grant_audit	Decides which identity grants go live; fails closed when reconciliation or its audit cannot be recorded
 src/gateway/server/mod.rs	prepare_signing	1	critical	b,d	Gateway::prepare_signing	stdio first step: refuses a malformed chain nonce or signing envelope
 src/gateway/server/mod.rs	response_firewall	1	critical	d	Gateway::response_firewall	Builds the firewall both transports enforce with; anomaly blocking depends on it
+src/gateway/server/run.rs	run	1	standard	borderline	Gateway::run	HTTP serve mode: wires every enforcer before the bind and refuses to start on start_refusal; a mistake would serve without one (moved from mod.rs, MIK-8144)
+src/gateway/server/run_steps.rs	start_capability_watcher	1	standard	borderline	Gateway::start_capability_watcher	An account-bound deployment finishes the capability admission scan before serving and fails startup on refusals; a mistake would serve a partial catalogue
+src/gateway/server/run_steps.rs	start_key_server	1	standard	borderline	Gateway::start_key_server	Resolves the key server admin token before the key server starts
+src/gateway/server/run_steps.rs	start_config_watcher	1	standard	borderline	Gateway::start_config_watcher	Starts hot reload with the identity-grant sink; a mistake would stop grant reloads reaching the enforcer
 src/gateway/server/stdio_catalogue.rs	operator	1	standard	borderline	operator	The stdio operator as one keyed relay caller
 src/gateway/server/stdio_channel.rs	reply_id	1	critical	b	StdioClientChannel::reply_id	Treats a frame as a reply only without `method`, so a client request is never routed as one
 src/gateway/server/stdio_channel.rs	resolve	1	critical	b	StdioClientChannel::resolve	Sends a reply only to the pending one-shot entry for that id; consumes it
@@ -629,6 +633,12 @@ src/personal_accounts/journey/sweep.rs	evict_for_insert	1	critical	d	evict_for_i
 src/oauth/client/browser.rs	launchable	1	critical	d	launchable	Refuses an authorization URL that is not https or loopback http, or that a launcher would quote, before any browser launcher runs (MIK-8197).
 src/oauth/client/browser.rs	launch_command	1	standard	borderline	launch_command	Builds the shell-free launcher with closed stdin/stdout; a cmd.exe launcher here would reopen the injection (MIK-8197).
 src/oauth/client/browser.rs	open_browser	1	standard	borderline	open_browser	Runs launchable before any spawn; skipping it would hand an unchecked URL to the launcher (MIK-8197).
+src/gateway/server/start_checks.rs	clock	1	critical	d	start_checks::clock	Refuses to start on a clock before 1970 (MIK-8202)
+src/identity_propagation/mod.rs	now_secs	1	critical	d	SignedAssertionStrategy::now_secs	Refuses to mint or judge an assertion on a clock before 1970
+src/personal_accounts/provider.rs	now_unix	2	critical	d	SystemClock::now_unix	Reports a clock before 1970 as an error so token expiry is never judged on it
+src/personal_accounts/provider/grant_flow.rs	now_unix	1	critical	d	PersonalOAuthRefresh::now_unix	The journey and grant expiry time base; an error refuses the journey
+src/personal_accounts/worker_journeys.rs	now_seconds	1	critical	d	now_seconds	Refuses a journey step as expired on a clock before 1970
 src/oauth/client/renewal.rs	refused	1	standard	borderline	OAuthClient::refused	Builds the policy-refusal outcome that stops the refresh task; a wrong outcome would keep retrying a refused destination.
 src/oauth/login_gate.rs	in_flight	1	critical	d	LoginGate::in_flight	Decides whether a login is in flight, the predicate a non-interactive backend restart is refused on (src/backend/restart.rs).
 src/personal_accounts/journey/persist.rs	write_journeys	1	standard	borderline	write_journeys	Seals and replaces journeys.json and marks the slot Stale after a post-rename failure, which stops reuse of outdated journey state.
+src/gateway/server/start_checks.rs	new_evaluated	1	critical	d	Gateway::new_evaluated	The deployment constructor: refuses to start on a clock before 1970 before it builds the gateway

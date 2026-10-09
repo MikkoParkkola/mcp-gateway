@@ -106,3 +106,38 @@ fn only_one_nonempty_session_cookie_yields_a_token() {
         "an empty cookie still counts as a duplicate"
     );
 }
+
+/// A session endpoint on `127.0.0.1:0` answering one user whose session ends
+/// at `expires_at`, for any bearer.
+async fn session_endpoint(expires_at: i64) -> String {
+    let body = serde_json::json!({"id": "u-1", "expires_at": expires_at}).to_string();
+    let app = axum::Router::new().fallback(move || {
+        let body = body.clone();
+        async move { body }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://127.0.0.1:{port}/api/v1/auths/")
+}
+
+/// MIK-8202: a clock before 1970 refuses an Open `WebUI` session the real
+/// clock still admits.
+#[tokio::test]
+async fn a_clock_before_the_epoch_refuses_a_live_session() {
+    let ahead = chrono::Utc::now().timestamp() + 3600;
+    let endpoint = session_endpoint(ahead).await;
+    let bridge = super::OwuiSessionBridge::new().expect("client builds");
+    assert_eq!(
+        bridge.session_user(&endpoint, "tok").await.as_deref(),
+        Some("u-1"),
+        "control: a session ending in an hour is accepted on the real clock"
+    );
+
+    let _clock = crate::clock::test_clock::before_epoch();
+    assert_eq!(
+        bridge.session_user(&endpoint, "tok").await,
+        None,
+        "an unreadable clock accepted an Open WebUI session"
+    );
+}

@@ -12,7 +12,7 @@
 //! test module further down that file.
 
 mod admission_allocations;
-mod alloc_meter;
+pub(crate) mod alloc_meter;
 mod input_key_allocations;
 mod invoke_argument_copies;
 #[cfg(feature = "firewall")]
@@ -27,7 +27,6 @@ mod visibility_reload_race;
 mod signing_stdio_routing;
 
 mod dispatcher_admission_arms;
-#[cfg(feature = "metrics")]
 mod unkeyed_admission;
 
 mod stdout_death_admission;

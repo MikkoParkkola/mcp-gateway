@@ -11,6 +11,9 @@ mod differential;
 mod http_error;
 pub mod input_bridge;
 mod meta_mcp;
+/// Where the CLI runner notes a child it started for the call's invocation
+/// record (MIK-7926.FIX.2), without `meta_mcp` becoming crate-visible.
+pub(crate) use meta_mcp::invoke::audit::note_process;
 /// The per-delivery write record, shared with the response and idempotency
 /// caches that store it beside an answer (MIK-7991).
 pub(crate) use meta_mcp::invoke::gateway_writes;
@@ -19,6 +22,10 @@ pub(crate) use meta_mcp::invoke::gateway_writes;
 /// Same shape as `STDIO_CREDENTIAL_PRINCIPAL`. A second copy of those four
 /// lines is how the `Release` ordering gets dropped in a later edit.
 pub(crate) use meta_mcp::publish_identity_grants;
+/// The notes scope and the gateway, for the CLI process audit rows
+/// (MIK-7926.FIX.2), which run a real child in `capability::executor`.
+#[cfg(test)]
+pub(crate) use meta_mcp::{MetaMcp, invoke::audit::with_dispatch_scope};
 mod meta_mcp_helpers;
 mod meta_mcp_helpers_text;
 mod meta_mcp_search_schema;
@@ -31,7 +38,8 @@ pub mod oauth;
 // auth layer that must run first.
 #[cfg(test)]
 pub(crate) mod chain_test_support;
-#[cfg(test)]
+// Every egress matrix it feeds is `firewall`-gated.
+#[cfg(all(test, feature = "firewall"))]
 pub(crate) mod egress_fixture;
 mod openwebui_adapter;
 pub(crate) mod outbound;
@@ -69,6 +77,11 @@ pub(crate) use server::StdioNonce;
 /// The declared account catalogue, for `cap list`'s readiness answer; crate-only.
 pub(crate) use server::account_bindings::declare_account_descriptors;
 pub(crate) use server::account_bindings::{ServeMode, sole_operator_asserted};
+/// The test-only allocation meter, for allocation rows outside `gateway`
+/// (`MIK-8201`), without `server` becoming crate-visible. Its one reader
+/// outside `gateway` is a `firewall`-gated row.
+#[cfg(all(test, feature = "firewall"))]
+pub(crate) use server::signing_allocation_tests::alloc_meter;
 pub(crate) mod session_id;
 pub mod session_lifecycle;
 pub mod state;
