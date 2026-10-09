@@ -41,6 +41,8 @@ pub mod discovery;
 mod execution_context;
 mod executor;
 pub mod hash;
+#[cfg(test)]
+mod linear_write_tests;
 mod loader;
 mod openapi;
 mod parser;
