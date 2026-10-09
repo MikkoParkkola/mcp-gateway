@@ -71,6 +71,7 @@ src/gateway/router/mod.rs	announce_backend_view_changed	1	Per-user change hint (
 src/gateway/server/tools_changed.rs	revoked	1	Per-user change hint: always announces a revoked grant; the revocation itself is enforced elsewhere
 src/gateway/server/tools_changed.rs	backend_views	1	Per-user change hint: recomputes per-user views after a backend-wide nudge
 src/gateway/server/tools_changed.rs	decide	1	Change drain: decides whether and how widely a content-free hint goes; who is admitted is decided at delivery
+src/gateway/server/tools_changed.rs	catalogue_fingerprint	1	Change drain: fingerprints a capability catalogue's listed tools
 src/gateway/server/tools_changed.rs	slot_seen	1	Change drain: fingerprints a per-user slot's served list
 src/gateway/server/tools_changed.rs	per_user_seen	1	Change drain: snapshots every per-user slot and the descriptor filter
 src/gateway/server/tools_changed/views.rs	acct	1	Per-user change hint: parses an account binding's audience and lease revision
