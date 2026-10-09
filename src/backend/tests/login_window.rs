@@ -145,17 +145,6 @@ fn spawn_start(backend: &Arc<Backend>) -> tokio::task::JoinHandle<Result<()>> {
     tokio::spawn(async move { backend.ensure_started().await })
 }
 
-/// The callback port the authorization URL `url` redirects to: the port the
-/// login bound, read back rather than picked in advance (MIK-8211).
-fn callback_port_of(url: &str) -> u16 {
-    let parsed = url::Url::parse(url).unwrap();
-    let query: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
-    url::Url::parse(&query["redirect_uri"])
-        .unwrap()
-        .port()
-        .expect("a callback port")
-}
-
 /// The callback listener on `port` is gone: the port binds again.
 async fn assert_port_released(port: u16, what: &str) {
     within(what, async {
@@ -252,10 +241,18 @@ async fn stop_ends_a_pending_login_and_frees_its_port() {
     let origin = authorization_server().await;
     let dir = tempfile::tempdir().unwrap();
     let browser = Browser::new();
-    // No fixed port: the login binds port 0 and the URL names what it got.
-    let backend = login_backend(&origin, dir.path(), &browser, Duration::from_secs(30), None);
+    // The release is proved by binding the port again, so it comes from the
+    // reserved range no parallel port-0 bind can take first (MIK-8211).
+    let port = crate::test_ports::reserved_port();
+    let backend = login_backend(
+        &origin,
+        dir.path(),
+        &browser,
+        Duration::from_secs(30),
+        Some(port),
+    );
     let start = spawn_start(&backend);
-    let port = callback_port_of(&browser.opened(1, "the start opening the browser").await);
+    browser.opened(1, "the start opening the browser").await;
 
     tokio::time::timeout(Duration::from_secs(60), backend.stop())
         .await

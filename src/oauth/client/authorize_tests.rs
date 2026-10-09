@@ -458,17 +458,6 @@ async fn an_unparseable_authorization_endpoint_is_refused_before_any_browser_ope
     assert_eq!(*opened.lock().unwrap(), 0, "no browser is opened");
 }
 
-/// The callback port a login bound, read off the authorization URL its
-/// browser was handed; `None` until the browser opens (MIK-8211).
-type BoundPort = Arc<std::sync::Mutex<Option<u16>>>;
-
-/// The port in `bound`, which the browser has been handed by now.
-fn bound(port: &BoundPort) -> u16 {
-    port.lock()
-        .unwrap()
-        .expect("the browser opened with a callback URL")
-}
-
 /// The callback listener on `port` is gone: the port binds again. An aborted
 /// listener drops on its next poll, so this allows it a moment.
 async fn assert_port_released(port: u16) {
@@ -485,29 +474,17 @@ async fn assert_port_released(port: u16) {
         .expect("the callback listener is released");
 }
 
-/// A client whose callback binds port 0, and whose browser opens without
-/// anyone approving: `opened` fires once the URL is handed over, and the
-/// port the callback bound is read off that URL.
-async fn unanswered_client(
-    dir: &std::path::Path,
-) -> (OAuthClient, BoundPort, Arc<tokio::sync::Notify>) {
+/// A client whose callback listens on a known port, and whose browser opens
+/// without anyone approving: `opened` fires once the URL is handed over. The
+/// release is proved by binding the port again, so it comes from the
+/// reserved range no parallel port-0 bind can take first (MIK-8211).
+async fn unanswered_client(dir: &std::path::Path) -> (OAuthClient, u16, Arc<tokio::sync::Notify>) {
     let mut client = client(dir, Some("https://as.example"));
-    client.callback_port = None;
+    let port = crate::test_ports::reserved_port();
+    client.callback_port = Some(port);
     let opened = Arc::new(tokio::sync::Notify::new());
     let signal = Arc::clone(&opened);
-    let port = BoundPort::default();
-    let seen = Arc::clone(&port);
-    client.open_browser = Box::new(move |url| {
-        let redirect = url::Url::parse(url)
-            .ok()
-            .and_then(|u| {
-                u.query_pairs()
-                    .find(|(k, _)| k == "redirect_uri")
-                    .map(|(_, v)| v.into_owned())
-            })
-            .and_then(|r| url::Url::parse(&r).ok())
-            .and_then(|r| r.port());
-        *seen.lock().unwrap() = redirect;
+    client.open_browser = Box::new(move |_| {
         signal.notify_one();
         true
     });
@@ -532,7 +509,7 @@ async fn an_unanswered_authorization_ends_at_the_window_and_frees_the_port() {
         text.contains(BACKEND) && text.contains("300s") && text.contains("retry"),
         "the error names the backend, the window and the remedy: {text}"
     );
-    assert_port_released(bound(&port)).await;
+    assert_port_released(port).await;
 }
 
 /// MIK-7982.BOUND.3 (root cause F2): an authorization whose future is dropped
@@ -548,7 +525,7 @@ async fn a_dropped_authorization_closes_its_callback_listener() {
         () = opened.notified() => {}
     }
 
-    assert_port_released(bound(&port)).await;
+    assert_port_released(port).await;
 }
 
 impl OAuthClient {
