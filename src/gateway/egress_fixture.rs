@@ -55,11 +55,11 @@ pub(crate) enum Part {
     InterimStolenState,
     /// A state-only interim round (`requestState`, no questions) whose
     /// `extra.note` is the planted text (MIK-8177). Not in [`Part::ALL`].
+    InterimStateOnly,
     /// A harmless `notifications/progress` streamed first, then an interim
     /// answer whose question carries the planted text: the answer leaves on
     /// a stream's streaming arm (MIK-8176). Not in [`Part::ALL`].
     ProgressThenQuestion,
-    InterimStateOnly,
     /// A parameter name in the tool's input schema: a call with an undeclared
     /// key is refused with a text listing the declared names. Not in
     /// [`Part::ALL`]: the call never reaches the backend.
@@ -279,7 +279,14 @@ impl crate::transport::Transport for Planted {
             ));
         }
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(self.answer(params.as_ref()))
+        let answer = self.answer(params.as_ref());
+        if self.part == Part::ProgressThenQuestion {
+            // Answer on a later poll than the notification, so the stream's
+            // biased select takes the notification first: the answer then
+            // leaves on the streaming arm, never the buffered one.
+            tokio::task::yield_now().await;
+        }
+        Ok(answer)
     }
 
     async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {

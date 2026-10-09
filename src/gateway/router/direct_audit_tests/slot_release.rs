@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8176 stage 2 (family continuation-slot-release): a sealed question
-//! withheld after finalization gives its slot back on the JSON arm of `/mcp`
-//! and on the direct route, and keeps it when delivered. The SSE arm stays
-//! count-only until stage 3, so its rows are listed as known leaks.
+//! MIK-8176 (family continuation-slot-release): a sealed question withheld
+//! after finalization gives its slot back on `/mcp` (JSON, and both arms of an
+//! event stream) and on the direct route, and keeps it when delivered.
 
 use super::*;
 use crate::security::firewall::tenant_guard::CrossTenantReads;
@@ -294,19 +293,21 @@ async fn a_delivered_question_is_redeemed_once() {
 }
 
 /// The scripted backend's side of [`Arm::MetaSseStreamed`]: a `tools/call`
-/// carrying a progress token gets a progress notification first, so a
-/// streamed answer leaves on the stream's streaming arm. No other row sends
-/// a progress token.
-pub(super) fn notify_first(method: &str, params: Option<&Value>) {
+/// carrying a progress token gets a progress notification first; `true` when
+/// one was published, so the backend answers on a later poll and the stream's
+/// biased select takes the notification first (the streaming arm, never the
+/// buffered one). No other row sends a progress token.
+pub(super) fn notify_first(method: &str, params: Option<&Value>) -> bool {
     if method != "tools/call" {
-        return;
+        return false;
     }
     let Some(token) = params.and_then(|p| p.pointer("/_meta/progressToken")) else {
-        return;
+        return false;
     };
     crate::transport::notification_sink::publish(vec![crate::protocol::JsonRpcNotification {
         jsonrpc: "2.0".to_string(),
         method: "notifications/progress".to_string(),
         params: Some(json!({"progressToken": token, "progress": 1})),
     }]);
+    true
 }

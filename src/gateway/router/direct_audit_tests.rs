@@ -54,7 +54,9 @@ impl Transport for Scripted {
         let id = RequestId::Number(1);
         // MIK-8176: a progress token gets a notification first.
         #[cfg(feature = "firewall")]
-        slot_release::notify_first(method, params.as_ref());
+        if slot_release::notify_first(method, params.as_ref()) {
+            tokio::task::yield_now().await;
+        }
         #[cfg(not(feature = "firewall"))]
         let _ = &params;
         // F13: a cold `tools/call` lists the backend first. The list names the
