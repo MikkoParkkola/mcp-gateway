@@ -483,7 +483,7 @@ pub(super) async fn intake(
             .map(str::to_owned);
 
     // ADR-014 §4. Set here, beside the other shape-derived facts and above
-    // every early return Err(below), so a later reordering cannot silently darken
+    // every early return below, so a later reordering cannot silently darken
     // the emitter: the dispatch this scopes is already inside the sink opened
     // by `meta_mcp_handler`, and a request that never reaches the checks below
     // still declared what it declared.
@@ -583,8 +583,8 @@ pub(super) async fn intake(
         && method != "subscriptions/listen"
         && reaches_tasks_extension(method.as_str(), params)
     {
-        // The early return Err(skips the tail that counts every other JSON-RPC
-        // answer), so the refusal is counted here or it is invisible: an
+        // The early return skips the tail that counts every other JSON-RPC
+        // answer, so the refusal is counted here or it is invisible: an
         // operator watching this counter would see the task probes of a
         // credential-less caller as no traffic at all. `record_client_failure`
         // is deliberately NOT called — the caller has no identity to hold a
