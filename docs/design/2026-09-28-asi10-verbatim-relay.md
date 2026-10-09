@@ -97,7 +97,7 @@ behaviour, not a bound.
 **Action** (the enum `collusion.action`):
 - `off` (default): no state is kept.
 - `observe`: emit the audit finding `ScanType::CollusionRelay` (Medium; digests of A and B, T, U
-  and the count, never content) and increment `mcp_gateway_collusion_relay_total{action}`.
+  and the count, never content) and increment `mcp_gateway_collusion_relay_total{action, reason}`.
 - `block`: the same, and B's call is refused with `-32002` before dispatch
   (`handlers.rs:1436-1440`).
 
@@ -670,7 +670,8 @@ These amend the r2 text above; where they disagree, r3 wins.
   holder sharing a bit with the egress is skipped when looking for a relay witness. Other holders
   still count, and no state beyond one `u64` per (source, principal) pair is added. Allowing a
   flow never changes what is recorded, so a later non-allowed egress is still checked.
-- `mcp_gateway_collusion_relay_total{action}` (`observe` or `block`) counts every reported relay.
+- `mcp_gateway_collusion_relay_total{action, reason}` (`observe` or `block`; `reason` per B2)
+  counts every reported relay.
   `mcp_gateway_collusion_unkeyed_egress_total{action}` counts egress checks made without an
   authenticated caller (the §13.1 internal counter, now exported).
   `mcp_gateway_collusion_plan_receipts_dropped_total` counts plans whose step receipts were

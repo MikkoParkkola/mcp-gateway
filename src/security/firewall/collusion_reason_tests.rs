@@ -175,6 +175,34 @@ fn an_unrelated_marker_labels_a_relay_that_is_still_reported() {
     assert_eq!(reason(&d, BOB, &a, now), Some(RelayReason::ExcuseLost));
 }
 
+/// Bob's plain copy from carol's source gave way to his sensitive copy
+/// from another: the replaced excuse is named as lost.
+#[test]
+fn a_replaced_record_is_named_as_lost() {
+    let d = detector();
+    let now = Instant::now();
+    let a = words("a", 60);
+    for i in 0..64 {
+        d.record_delivery_at(&source(i), BOB, false, &a, now);
+    }
+    d.record_delivery_at(&source(64), BOB, true, &a, now);
+    d.record_delivery_at(&source(0), CAROL, true, &a, now);
+    assert_eq!(reason(&d, BOB, &a, now), Some(RelayReason::ExcuseLost));
+}
+
+/// Every witness is classified: carol's copy from a marked source,
+/// recorded first, does not hide dave's plain one.
+#[test]
+fn a_plain_witness_recorded_later_still_names_a_relay() {
+    let d = detector();
+    let now = Instant::now();
+    let (a, c) = (words("a", 60), words("c", 60));
+    dropped(&d, BOB, &c, now);
+    d.record_delivery_at(&source(64), CAROL, true, &a, now);
+    d.record_delivery_at(&source(99), "principal-dave", true, &a, now);
+    assert_eq!(reason(&d, BOB, &a, now), Some(RelayReason::Relay));
+}
+
 /// A marker never evicts a sketch: bob's same-source sketch, left before a
 /// marker for that source, still excuses his over-cap copy.
 #[test]

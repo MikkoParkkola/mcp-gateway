@@ -486,6 +486,11 @@ impl CollusionDetector {
             let mut state = self.state.lock();
             state.sweep(now, window);
             pending.reservation = state.sketches.reserve(pair, sketched.len());
+            // A loss is marked under the lock that caused it, so no egress
+            // checked during the build sees it unmarked (`MIK-8201`).
+            for lost in state.sketches.take_lost() {
+                state.markers.mark(lost, now + window);
+            }
         }
         let built = pending
             .reservation
@@ -630,17 +635,13 @@ impl CollusionDetector {
             };
             let sensitive =
                 |t: &&Holder| t.sensitive.is_some_and(|copies| copies.held(now, window));
-            if let Some(t) = tuples.iter().filter(sensitive).find(|t| {
-                t.principal != sender && !excused(t.source) && !t.flows.allows(egress_flows)
-            }) {
-                matches += 1;
-                // `MIK-8201`: which reason this match supports. Capacity
-                // first, then another source; labels only, never excuses.
-                let witness = (t.source, t.principal);
+            // `MIK-8201`: which reason a witness supports. Capacity first,
+            // then another source; labels only, never excuses.
+            let classify = |t: &Holder| {
                 if tracked.overflowed(sender, now, window)
                     || state.markers.holds((t.source, sender), now)
                 {
-                    lost.get_or_insert(witness);
+                    1
                 } else if tuples
                     .iter()
                     .filter(live)
@@ -649,10 +650,30 @@ impl CollusionDetector {
                         .sketches
                         .held_from_elsewhere((t.source, sender), fp, now, window)
                 {
-                    elsewhere.get_or_insert(witness);
+                    2
                 } else {
-                    plain.get_or_insert(witness);
+                    0
                 }
+            };
+            // Every qualifying witness is classified, so delivery order never
+            // hides a plain one behind a bound (0 plain, 1 lost, 2 elsewhere).
+            if let Some((class, t)) = tuples
+                .iter()
+                .filter(sensitive)
+                .filter(|t| {
+                    t.principal != sender && !excused(t.source) && !t.flows.allows(egress_flows)
+                })
+                .map(|t| (classify(t), t))
+                .min_by_key(|(class, _)| *class)
+            {
+                matches += 1;
+                let witness = (t.source, t.principal);
+                match class {
+                    0 => &mut plain,
+                    1 => &mut lost,
+                    _ => &mut elsewhere,
+                }
+                .get_or_insert(witness);
             } else if let Some(receiver) = tracked.overflow_witness(sender, now, window) {
                 // `MIK-8123`: a sensitive record past the cap has no source
                 // left to excuse it or flow to allow it.
