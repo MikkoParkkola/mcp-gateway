@@ -119,11 +119,13 @@ impl OAuthClient {
                 match renewal {
                     Renewal::Renewed => {}
                     Renewal::Refused => return,
-                    Renewal::Exhausted => warn!(
-                        backend = %backend_name,
-                        "All automatic token renewal strategies failed — \
-                         manual re-authorization required"
-                    ),
+                    Renewal::Exhausted => {
+                        warn!(
+                            backend = %backend_name,
+                            "All automatic token renewal strategies failed — \
+                             manual re-authorization required"
+                        );
+                    }
                 }
             }
         }

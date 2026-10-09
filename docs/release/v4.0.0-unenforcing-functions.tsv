@@ -38,6 +38,35 @@ src/transport/http/listen.rs	reinit_if_needed	1	Re-runs initialize after a dropp
 src/transport/http/listen.rs	legacy_pin	1	Names the holder (transport and HTTP session) a legacy subscribe lands on, for the ledger
 src/transport/http/listen.rs	legacy_interest	1	Sends resources/subscribe or unsubscribe pinned to one session; no access decision
 src/transport/http/listen.rs	unsolicited	1	Opens the legacy notification stream with its URI filter; delivery is authorized downstream
+src/oauth/client/mod.rs	fmt	1	Redacting Debug for TokenResponse; hides tokens from logs but makes no allow/deny decision.
+src/oauth/client/mod.rs	fmt	2	Redacting Debug for ClientRegistrationResponse; hides the client secret but decides nothing.
+src/oauth/client/mod.rs	fmt	3	Redacting Debug for OAuthClientConfig; hides the client secret but decides nothing.
+src/oauth/client/mod.rs	backend_name	1	Accessor returning the backend name for logs and errors.
+src/oauth/client/mod.rs	needs_proactive_refresh	1	Timing heuristic: remaining lifetime under the refresh buffer; decides when to refresh, not whether access is allowed.
+src/oauth/client/mod.rs	generate_client_id	1	Random public client_id fallback when DCR is unavailable; the id is not a secret and gates nothing.
+src/oauth/client/renewal.rs	spawn_refresh_task	1	Spawns refresh_loop with a fixed 60 s period; plumbing.
+src/oauth/login_gate.rs	outcome	1	Accessor for the cohort's recorded login outcome; login sharing, not access control.
+src/oauth/login_gate.rs	finished	1	Waits on the watch channel for a login's end and returns its outcome; plumbing.
+src/oauth/login_gate.rs	cancel_token	1	Accessor returning the lead's cancellation token.
+src/oauth/login_gate.rs	take_listeners_guard	1	Hands over the callback-listener drop guard once; lifecycle plumbing.
+src/oauth/login_gate.rs	end	1	Lead::end marks the lead ended and forwards its result to LoginGate::end; records an outcome, decides nothing.
+src/oauth/login_gate.rs	drop	1	Abandoned-lead cleanup: releases the attempt as Cancelled once listeners close; lifecycle.
+src/oauth/login_gate.rs	cohort	1	Accessor returning the current cohort a caller captures before queueing; login sharing.
+src/oauth/login_gate.rs	pending_in	1	Reports whether a cohort's login is in flight, used only to classify a deadline error.
+src/oauth/login_gate.rs	end	2	LoginGate::end maps the lead's error to an outcome and calls release; records, decides nothing.
+src/oauth/login_gate.rs	release	1	Clears the attempt, sets the cohort outcome and notifies joiners; lifecycle bookkeeping.
+src/oauth/login_gate.rs	scope	1	Provenance::scope captures the cohort in a task-local for deadline error classification.
+src/oauth/login_gate.rs	mark_started	1	Sets a provenance flag used only to classify a deadline error.
+src/oauth/login_gate.rs	mark_dispatched	1	Sets a provenance flag used only to classify a deadline error.
+src/oauth/login_gate.rs	mark_waited	1	Sets a provenance flag used only to classify a deadline error.
+src/oauth/login_gate.rs	expired	1	Chooses AuthorizationPending or the given error for an expired deadline; error classification that admits nothing.
+src/personal_accounts/journey/ids.rs	draw	1	Draws two random journey id candidates; ids are lookup keys, owner is checked separately.
+src/personal_accounts/journey/ids.rs	fresh_id	1	Random 32-hex journey id (or a forced one under test); generation only.
+src/personal_accounts/journey/mod.rs	fmt	1	Debug for JourneyRecord printing only status and reason; redaction, no decision.
+src/personal_accounts/journey/mod.rs	witness	2	cfg(not(test)) no-op; the test variant counts comparisons.
+src/personal_accounts/journey/ops.rs	storage	1	Wraps an AccountError as JourneyError::Storage; error mapping.
+src/personal_accounts/journey/ops.rs	view	1	Projects a record into the status view; formatting.
+src/personal_accounts/journey/ops.rs	journey_status	1	Unscoped status read by id; its only production caller (worker arm) runs after start_journey's owner check, and owner-scoped reads use journey_status_owned.
 src/gateway/router/mod.rs	announce_backend_view_changed	1	Per-user change hint (MIK-8148): calls the existing backend-scoped broadcasts, which make the access decision
 src/gateway/server/tools_changed.rs	revoked	1	Per-user change hint: always announces a revoked grant; the revocation itself is enforced elsewhere
 src/gateway/server/tools_changed.rs	backend_views	1	Per-user change hint: recomputes per-user views after a backend-wide nudge
@@ -71,3 +100,4 @@ src/gateway/server/persistence.rs	save_state_on_shutdown	1	Shutdown persistence 
 src/gateway/router/handlers/health.rs	backends_overall_healthy	1	Folds backend statuses into one health bit for /health; admin detail is decided in health_handler
 src/gateway/router/handlers/session_end.rs	sse_deprecated_handler	1	Answers the retired /sse route with a fixed 410 migration notice; reads no request data
 src/gateway/router/handlers/sse.rs	unsupported_version_error	1	Builds the unsupported-version JSON-RPC error; the refusal is decided by its callers
+src/gateway/router/handlers/dispatch_intake.rs	params	1	Returns the request params or the narrowed listen copy; decides nothing
