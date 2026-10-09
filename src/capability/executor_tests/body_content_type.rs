@@ -202,10 +202,16 @@ async fn send_with_retry_recovers_from_transient_timeouts() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    // Local server: the first two connections hang past the client's per-attempt
-    // timeout (a transient timeout -> retry); the third responds 200 at once.
+    // Local server: the first two connections never answer, so each attempt
+    // times out (a transient timeout -> retry); the third responds 200 at once.
     // Verifies MIK-5081: transient outbound failures are retried with backoff
     // instead of surfacing as an immediate BACKEND_ERROR.
+    //
+    // The per-attempt timeout also bounds the third, answering attempt: if
+    // suite load delays that answer past it, the retry budget is spent and the
+    // call fails with "error sending request" (MIK-8212). The timeout is
+    // therefore wide, and an unanswered connection stays open until the client
+    // gives up on it, so no answer can arrive late and none can close early.
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
     let addr = listener.local_addr().unwrap();
     let counter = Arc::new(AtomicUsize::new(0));
@@ -218,7 +224,10 @@ async fn send_with_retry_recovers_from_transient_timeouts() {
                 let mut buf = [0u8; 1024];
                 let _ = stream.read(&mut buf);
                 if n < 2 {
-                    std::thread::sleep(std::time::Duration::from_millis(400));
+                    // Hold the connection until the client drops it (read
+                    // returns 0 or errors); the cap only ends an orphaned thread.
+                    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(30)));
+                    while matches!(stream.read(&mut buf), Ok(k) if k > 0) {}
                 } else {
                     let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
                     let _ = stream.flush();
@@ -229,9 +238,7 @@ async fn send_with_retry_recovers_from_transient_timeouts() {
 
     let client = reqwest::Client::new();
     let url = format!("http://{addr}/");
-    let req = client
-        .get(&url)
-        .timeout(std::time::Duration::from_millis(120));
+    let req = client.get(&url).timeout(std::time::Duration::from_secs(1));
 
     // Idempotent (retry_timeouts = true): timeouts are retried.
     let health = crate::failsafe::HealthTracker::new("test");
