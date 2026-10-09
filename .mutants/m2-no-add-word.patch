@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_sketch.rs b/src/security/firewall/collusion_sketch.rs
+index cc11b5ac2..9d3fcb150 100644
+--- a/src/security/firewall/collusion_sketch.rs
++++ b/src/security/firewall/collusion_sketch.rs
+@@ -82,7 +82,7 @@ pub(super) fn shape(n: usize, position: usize) -> Shape {
+         let probes = (1..=MAX_PROBES)
+             .min_by(|a, b| ln_rate(n, bits, *a).total_cmp(&ln_rate(n, bits, *b)))
+             .unwrap_or(1);
+-        if n == 0 || words >= MAX_WORDS || ln_rate(n, bits, probes) <= ln_target {
++        if n == 0 || words >= MAX_WORDS || ln_rate(n, bits, probes) <= f64::INFINITY {
+             return Shape { words, probes };
+         }
+         words += 1;

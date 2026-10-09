@@ -1,0 +1,7 @@
+head_sha	c91aa35440e1adafbe395d21a1b2b0c2da46b8ed
+m1-weak-mixer	linux	m1-weak-mixer.patch	--lib -- sketch::tests::independent_probes_keep_small_filters_under_the_budget
+m2-no-add-word	linux	m2-no-add-word.patch	--lib -- sketch::tests::every_shape_meets_its_target
+m3-asymptotic	linux	m3-asymptotic.patch	--lib -- sketch::tests::every_shape_meets_its_target
+m4-count-cap	linux	m4-count-cap.patch	--lib -- sketch::tests::a_fifth_sketch_keeps_the_first
+m5-live-count	linux	m5-live-count.patch	--lib -- sketch::tests::a_freed_position_is_reused_first
+m6-no-cap	linux	m6-no-cap.patch	--lib -- sketch::tests::an_impossible_count_is_bounded_and_refused

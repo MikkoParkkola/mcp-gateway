@@ -1,0 +1,16 @@
+diff --git a/src/security/firewall/collusion_sketch.rs b/src/security/firewall/collusion_sketch.rs
+index cc11b5ac2..508bb8816 100644
+--- a/src/security/firewall/collusion_sketch.rs
++++ b/src/security/firewall/collusion_sketch.rs
+@@ -77,6 +77,11 @@ pub(super) fn shape(n: usize, position: usize) -> Shape {
+         reason = "a positive, bounded word count"
+     )]
+     let mut words = ((n.max(1) as f64 * per_fp / 64.0).ceil() as usize).clamp(MIN_WORDS, MAX_WORDS);
++    #[expect(clippy::cast_precision_loss, reason = "mutant")]
++    let ln_rate = |n: usize, bits: usize, k: u32| {
++        let k = f64::from(k);
++        k * (-((-(k * n as f64 / bits as f64)).exp())).ln_1p()
++    };
+     loop {
+         let bits = words * 64;
+         let probes = (1..=MAX_PROBES)
