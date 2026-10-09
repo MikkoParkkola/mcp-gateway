@@ -1,0 +1,11 @@
+--- a/src/gateway/server/stdio_tasks.rs
++++ b/src/gateway/server/stdio_tasks.rs
+@@ -95,7 +95,7 @@
+ ) -> Arc<crate::gateway::subscription_registry::SubscriptionRegistry> {
+     use crate::gateway::auth::{AuthState, DashboardBootstrap, ResolvedAuthConfig};
+     let auth_config =
+-        ResolvedAuthConfig::try_from_config(&crate::config::AuthConfig::default(), overlay)
++        ResolvedAuthConfig::try_from_config(&config.auth, overlay)
+             .expect("the default auth configuration holds no secret to resolve");
+     Arc::new(
+         crate::gateway::subscription_registry::SubscriptionRegistry::new(

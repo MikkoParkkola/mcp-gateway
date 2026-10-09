@@ -1,0 +1,3 @@
+head_sha	c2964c0e5fe421b5b5cf497dd43a784325e0f487
+# MIK-7638 rows
+m01-stdio-resolves-gateway-auth	linux	m01-stdio-resolves-gateway-auth.patch	--lib -- owner2_stdio_tasks::an_unresolvable_auth_config
