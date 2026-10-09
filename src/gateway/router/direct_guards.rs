@@ -251,13 +251,17 @@ pub(super) fn scan_direct_egress(
         external_tool: call.tool,
         subject: None,
     };
+    // The router's own instance judges the direct route (MIK-7669).
+    #[cfg(feature = "firewall")]
+    let firewall = state.firewall.as_deref();
+    #[cfg(not(feature = "firewall"))]
+    let firewall = None;
     let at = Egress {
         content,
         targets: &targets,
         correlation: &correlation,
         api_key_name: client.map(|c| c.name.as_str()),
-        // The router's own instance judges the direct route (MIK-7669).
-        firewall: state.firewall.as_deref(),
+        firewall,
     };
     state.meta_mcp.scan_egress(response, &at)
 }

@@ -54,4 +54,6 @@ src/gateway/server/tools_changed/views.rs	revoked	1	Per-user change hint: announ
 src/gateway/server/tools_changed/views.rs	any_shown	1	Per-user change hint: whether removing the backend changes any view
 src/gateway/server/tools_changed/views.rs	baseline	1	Per-user change hint: picks what a first fill is compared with
 src/gateway/server/tools_changed/views.rs	bury	1	Per-user change hint: keeps an evicted view's fingerprint, capped
+src/oauth/login_gate.rs	fill_scope	1	Runs a shared fill under its dispatch mark; affects only which timeout error a joiner reports (MIK-8046).
+src/oauth/login_gate.rs	joined	1	Records which shared fill a deadline scope waits on; affects only which timeout error it reports (MIK-8046).
 src/gateway/router/helpers.rs	build_http_response	1	Serialises a frame already wrapped as Egressed; the scan is decided where the Egressed value is made, not here.
