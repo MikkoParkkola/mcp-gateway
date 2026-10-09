@@ -623,30 +623,31 @@ async fn a_retire_between_spawn_and_install_refuses_the_start() {
 
 /// The reader's dropped-transport exit (MIK-8229): a member that escaped the
 /// group keeps stdout and writes after the transport is gone, so the reader
-/// gets a line it can no longer deliver, logs why, and stops. Captured on one
-/// thread: the reader task runs on this current-thread runtime.
+/// gets a line it can no longer deliver, logs why, and stops. Handshaked, not
+/// timed: the member records its pid only once it has left the group, and
+/// writes only after the drop, when the test creates `go`. The record is
+/// awaited on this thread, where the reader task runs.
 #[test]
 fn a_line_after_the_transport_dropped_stops_the_reader() {
-    let late = "perl -MPOSIX -e 'setsid; exec @ARGV' sh -c 'sleep 0.5; echo \"{}\"' \
-                </dev/null 2>/dev/null & echo $! > d.pid\nwhile IFS= read -r l; do :; done";
-    let records = crate::test_log_capture::records(|| {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
-        runtime.block_on(async {
-            let (w, t) = started(late, None).await;
-            let writer = descendant(w.path()).await;
-            drop(Arc::into_inner(t).expect("the only handle"));
-            gone(writer).await;
-            // The line is in the pipe once its writer has exited; the reader
-            // runs on this thread as soon as it is polled.
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        });
+    let late = "perl -MPOSIX -e 'setsid; exec @ARGV' sh -c \
+                'echo $$ > d.pid; while [ ! -e go ]; do sleep 0.05; done; echo \"{}\"' \
+                </dev/null 2>/dev/null &\nwhile IFS= read -r l; do :; done";
+    let (_capture, mut seen) =
+        crate::test_log_capture::live_count("Transport dropped while reading");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let (w, t) = started(late, None).await;
+        let writer = descendant(w.path()).await;
+        drop(Arc::into_inner(t).expect("the only handle"));
+        std::fs::write(w.path().join("go"), b"").expect("release the writer");
+        let logged = tokio::time::timeout(ROW_LIMIT, seen.wait_for(|n| *n >= 1)).await;
+        let _ = rustix::process::kill_process(writer, rustix::process::Signal::KILL);
+        assert!(
+            logged.is_ok(),
+            "the reader saw a line after the drop and stopped"
+        );
     });
-    assert_eq!(
-        crate::test_log_capture::count(&records, "DEBUG", "Transport dropped while reading"),
-        1,
-        "the reader saw a line after the drop and stopped"
-    );
 }
