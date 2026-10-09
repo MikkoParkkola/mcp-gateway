@@ -438,6 +438,38 @@ class CeilingFromBase(unittest.TestCase):
         self.assertEqual(code, 0, err)
 
 
+    def test_a_stale_head_cannot_slip_in_a_numbered_item(self):
+        """A head without the ceiling that adds item 4 by hand: the merged
+        checkout is held to the base ceiling (3), so item 4 is refused."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = pathlib.Path(tmp)
+            git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+            git("init", "-q")
+            git("config", "user.email", "t@t")
+            git("config", "user.name", "t")
+            (repo / "docs").mkdir()
+            (repo / "docs/UPGRADING-4.0.md").write_text(DOC)
+            git("add", "-A")
+            git("commit", "-qm", "before the ceiling")
+            git("branch", "-q", "stale")
+            (repo / "upgrading.d").mkdir()
+            (repo / "upgrading.d/.frozen-max").write_text("3\n")
+            git("add", "-A")
+            git("commit", "-qm", "the ceiling lands on the base")
+            base = git("rev-parse", "HEAD")
+            git("checkout", "-q", "stale")
+            numbered = DOC.replace("| 3 | Three | Do three |\n", "| 3 | Three | Do three |\n| 4 | Four | Do four |\n").replace(
+                uf.WALKTHROUGH, "## 4. Four\n\n**Startup:** no notice\n\nBody.\n\n" + uf.WALKTHROUGH
+            )
+            (repo / "docs/UPGRADING-4.0.md").write_text(numbered)
+            git("commit", "-qam", "a hand-numbered item")
+            head = git("rev-parse", "HEAD")
+            git("checkout", "-q", base)
+            git("merge", "-q", "--no-edit", head)  # the checkout CI judges
+            code, _, err = run_main(repo, "check", "--base", base, "--head", head)
+        self.assertEqual(code, 1, err)
+        self.assertIn("item 4", err)
+
 class Wiring(unittest.TestCase):
     """The CI step that re-runs the guide checks on the assembled guide: if it
     were dropped or pointed at no test, a fragment that breaks a check would
