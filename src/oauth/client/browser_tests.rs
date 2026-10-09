@@ -1,0 +1,69 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-8197: the authorization URL reaches the browser as one verbatim
+//! argument, through no shell, and only when it is https or loopback http.
+
+use super::{launch_command, launchable};
+
+const AUTHORIZE: &str =
+    "https://as.example/authorize?response_type=code&client_id=c&state=s&echo=pwned&c=%41^x,y%22";
+
+/// `MIK-8197.SCHEME`: a scheme a platform handler would act on (a file, a
+/// script, a registered protocol) or cleartext off this machine is refused
+/// before any launcher runs, on every platform, whatever the metadata
+/// check upstream already did.
+#[test]
+fn a_url_that_is_not_https_or_loopback_http_is_never_launched() {
+    for url in [
+        "file:///etc/passwd",
+        "javascript:alert(1)",
+        "ms-settings:privacy",
+        "http://as.example/authorize",
+    ] {
+        assert!(launchable(url).is_err(), "{url} must not reach a launcher");
+    }
+}
+
+#[test]
+fn an_https_or_loopback_http_url_is_launched_unchanged() {
+    assert_eq!(launchable(AUTHORIZE).unwrap().as_str(), AUTHORIZE);
+    let loopback = "http://127.0.0.1:8080/authorize?a=1&b=2";
+    assert_eq!(launchable(loopback).unwrap().as_str(), loopback);
+}
+
+/// `MIK-8197.QUOTE`: the argument a launcher gets never holds what makes
+/// Rust's Windows quoting wrap it (a space, tab, newline or quote): those
+/// are percent-encoded by the parse, so the handler receives the URL byte
+/// for byte.
+#[test]
+fn the_launched_argument_carries_nothing_that_would_be_quoted() {
+    let url = launchable("https://as.example/a b\"c?d=e\tf").unwrap();
+    let command = launch_command(&url);
+    let argument = command.get_args().last().unwrap().to_str().unwrap();
+    assert_eq!(argument, url.as_str(), "the launcher gets the parsed URL");
+    assert!(
+        !argument.contains([' ', '\t', '\n', '"']),
+        "nothing to quote: {argument}"
+    );
+}
+
+/// `MIK-8197.WINDOWS`: no cmd.exe, so `&`, `^`, `%` and `,` stay part of
+/// the URL instead of becoming shell syntax.
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_opens_the_url_without_a_shell() {
+    let url = launchable(AUTHORIZE).unwrap();
+    let command = launch_command(&url);
+    assert_eq!(command.get_program(), "rundll32.exe");
+    let args: Vec<_> = command.get_args().collect();
+    assert_eq!(args, ["url.dll,FileProtocolHandler", AUTHORIZE]);
+}
+
+#[cfg(not(target_os = "windows"))]
+#[test]
+fn unix_hands_the_url_as_its_one_argument() {
+    let url = launchable(AUTHORIZE).unwrap();
+    let command = launch_command(&url);
+    let args: Vec<_> = command.get_args().collect();
+    assert_eq!(args, [AUTHORIZE]);
+}
