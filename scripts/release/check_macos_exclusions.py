@@ -30,13 +30,76 @@ OFF_MACOS = re.compile(
     r'|target_os = "linux").*\)\)\]'
     r'|#\[cfg_attr\(target_os = "macos", ignore'
 )
-# A `cfg` gate that names macOS outside a `not(...)`, as in
-# `all(test, any(target_os = "linux", target_os = "macos"))`, keeps the item on
-# macOS even though it also names Linux (MIK-8181). A `cfg_attr` naming macOS
-# is the opposite: it ignores the item there.
-ON_MACOS = re.compile(r'(?<!not\()target_os = "macos"')
-# Any `not(macos)` or `not(apple)` in the same gate still keeps it off macOS.
-NOT_MACOS = re.compile(r'not\((?:target_os = "macos"|target_vendor = "apple")\)')
+# The truth of each `cfg` atom on the macOS CI job (`cargo test
+# --all-features`). An atom not in this table is unresolved, and a gate whose
+# answer rests on one counts as off macOS: the safe side for an exclusion list.
+MACOS_CFG = {
+    "test": True,
+    "unix": True,
+    "windows": False,
+    "debug_assertions": True,
+    'target_os = "macos"': True,
+    'target_vendor = "apple"': True,
+    'target_family = "unix"': True,
+    'target_family = "windows"': False,
+}
+CFG_TOKEN = re.compile(r'\s*(?:(\w+)\s*=\s*"([^"]*)"|(\w+)|([(),]))')
+
+
+def runs_on_macos(gate: str) -> bool:
+    """Whether a `#[cfg(...)]` or `#![cfg(...)]` gate is true on macOS (MIK-8181).
+
+    Evaluates the whole predicate (`all`, `any`, `not`), so a gate that names
+    macOS but also requires Linux, or excludes Apple, is still off macOS. A
+    gate that cannot be parsed, or rests on an unresolved atom, is off."""
+    body = re.match(r"#!?\[cfg\((.*)\)\]\s*$", gate)
+    if not body:
+        return False
+    tokens = list(CFG_TOKEN.finditer(body.group(1)))
+    pos = 0
+
+    def atom(m: re.Match) -> bool | None:
+        key, val, ident = m.group(1), m.group(2), m.group(3)
+        if key == "feature":
+            return True
+        if key is not None:
+            if f'{key} = "{val}"' in MACOS_CFG:
+                return MACOS_CFG[f'{key} = "{val}"']
+            # Any other target_os, target_vendor or target_family is false.
+            return False if key in ("target_os", "target_vendor", "target_family") else None
+        return MACOS_CFG.get(ident)
+
+    def pred() -> bool | None:
+        nonlocal pos
+        m = tokens[pos]
+        pos += 1
+        op = m.group(3)
+        if op in ("all", "any", "not") and pos < len(tokens) and tokens[pos].group(4) == "(":
+            pos += 1
+            args = []
+            while tokens[pos].group(4) != ")":
+                args.append(pred())
+                if tokens[pos].group(4) == ",":
+                    pos += 1
+            pos += 1
+            if op == "not":
+                if len(args) != 1:
+                    raise ValueError("not takes one predicate")
+                return None if args[0] is None else not args[0]
+            if op == "all":
+                return False if False in args else (None if None in args else True)
+            return True if True in args else (None if None in args else False)
+        if m.group(4):
+            raise ValueError("unexpected punctuation")
+        return atom(m)
+
+    try:
+        result = pred()
+    except (ValueError, IndexError):
+        return False
+    return pos == len(tokens) and result is True
+
+
 TEST_ATTR = re.compile(r"#\[(tokio::)?test\b")
 ITEM = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(fn|mod)\s+(\w+)")
 TEST_CFG = re.compile(r"#\[cfg\((?:all\()?test\b")
@@ -53,9 +116,7 @@ def excluded(root: Path) -> set[tuple[str, str]]:
         lines = [line.strip() for line in file.read_text(errors="replace").splitlines()]
         for n, line in enumerate(lines):
             if not OFF_MACOS.match(line) or (
-                not line.startswith("#[cfg_attr")
-                and ON_MACOS.search(line)
-                and not NOT_MACOS.search(line)
+                not line.startswith("#[cfg_attr") and runs_on_macos(line)
             ):
                 continue
             if line.startswith("#!["):
