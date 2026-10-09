@@ -472,11 +472,14 @@ async fn an_upgraded_candidate_is_never_reachable_in_the_old_dialect() {
     );
 }
 
+/// HOLD.1's contradiction from the old transport, parked on the era lock.
+type Discard = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
+
 /// HOLD.1: an old transport's contradiction that reaches the era lock between
 /// the candidate's install and its slot write must not erase the candidate's
 /// verdict. The install keeps the lock until the candidate is in the slot, so
 /// the contradiction then finds its transport replaced and discards nothing.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn a_contradiction_from_the_old_transport_cannot_erase_the_installed_verdict() {
     use crate::protocol::era::Era;
     let (url, stub) = era_stub().await;
@@ -485,22 +488,27 @@ async fn a_contradiction_from_the_old_transport_cannot_erase_the_installed_verdi
     let entry = backend.shared_entry();
     let old = pooled(&backend).expect("premise: pooled");
 
-    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let (polled_tx, polled_rx) = std::sync::mpsc::channel::<std::result::Result<bool, Discard>>();
     let (entry_in, old_in) = (Arc::clone(&entry), Arc::clone(&old));
     *backend.between_install_and_write.lock() = Some(Box::new(move || {
-        std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .build()
-                .expect("runtime");
-            let discarded = runtime.block_on(entry_in.era.discard_if_serving(
-                |_| true,
-                |clear| crate::backend::era::with_serving(&entry_in, &old_in, clear),
-            ));
-            done_tx.send(discarded).expect("the test is waiting");
+        let mut discard: Discard = Box::pin(async move {
+            entry_in
+                .era
+                .discard_if_serving(
+                    |_| true,
+                    |clear| crate::backend::era::with_serving(&entry_in, &old_in, clear),
+                )
+                .await
         });
-        // Long enough for an unblocked discard to land; a blocked one is
-        // refused after the write. Too short can only pass, never fail.
-        std::thread::sleep(Duration::from_millis(300));
+        // One poll, here, between the install and the slot write: a free era
+        // lock lets the discard finish now, against the old transport still
+        // in the slot; a held one parks it until after the write.
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let polled = match discard.as_mut().poll(&mut cx) {
+            std::task::Poll::Ready(discarded) => Ok(discarded),
+            std::task::Poll::Pending => Err(discard),
+        };
+        polled_tx.send(polled).ok();
     }));
 
     stub.mode.store(DISCOVER_LEGACY, Ordering::SeqCst);
@@ -508,9 +516,10 @@ async fn a_contradiction_from_the_old_transport_cannot_erase_the_installed_verdi
         .await
         .expect("restart task")
         .expect("the candidate starts");
-    let discarded = done_rx
-        .recv_timeout(Duration::from_secs(10))
-        .expect("the contradiction finished");
+    let discarded = match polled_rx.try_recv().expect("the hook ran") {
+        Ok(discarded) => discarded,
+        Err(parked) => within("the parked contradiction", parked).await,
+    };
     assert!(
         !discarded,
         "an old transport's contradiction erased the new verdict"
