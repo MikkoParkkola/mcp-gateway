@@ -106,9 +106,15 @@ pub(crate) struct AdapterConfig {
     /// Which authenticated gateway API keys may assert an identity. Required and
     /// nonempty: an absent or empty list must never read as "any key".
     pub(crate) allowed_api_key_names: Vec<String>,
-    #[serde(default = "default_max_lifetime_seconds")]
+    #[serde(
+        default = "default_max_lifetime_seconds",
+        deserialize_with = "crate::duration_bound::secs"
+    )]
     pub(crate) max_lifetime_seconds: u64,
-    #[serde(default = "default_clock_skew_seconds")]
+    #[serde(
+        default = "default_clock_skew_seconds",
+        deserialize_with = "crate::duration_bound::secs"
+    )]
     pub(crate) clock_skew_seconds: u64,
     /// The hosted browser bridge for this installation (journey design §4.2).
     /// Absent stays absent through a rewrite.

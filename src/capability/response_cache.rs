@@ -62,10 +62,16 @@ impl ResponseCache {
             tracing::debug!(key, "Refused to cache an error result");
             return;
         }
+        // MIK-8207: the parser bounds `cache.ttl`; a ttl no clock can hold is
+        // still never added unchecked.
+        let Some(expires_at) = Instant::now().checked_add(Duration::from_secs(ttl_seconds)) else {
+            tracing::debug!(key, ttl_seconds, "Refused to cache: ttl too long");
+            return;
+        };
         let entry = CacheEntry {
             value: value.clone(),
             read,
-            expires_at: Instant::now() + Duration::from_secs(ttl_seconds),
+            expires_at,
         };
         self.entries.insert(key.to_string(), entry);
     }

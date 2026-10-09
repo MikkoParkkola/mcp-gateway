@@ -52,6 +52,8 @@ pub(in crate::personal_accounts) use grant_flow::{ProviderRevocation, TokenTypeH
 #[cfg(test)]
 mod provider_accept_tests;
 #[cfg(test)]
+mod provider_bound_tests;
+#[cfg(test)]
 mod provider_tests;
 #[cfg(test)]
 mod wire_tests;
@@ -404,11 +406,13 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
         // a default lifetime would let a stale token be served as fresh.
         let expires_in = body.expires_in.ok_or(ProviderRefreshError::Unavailable)?;
         // A recorder: an unreadable clock writes no expiry (MIK-8202).
-        let expires_at = self
+        let now = self
             .clock
             .now_unix()
-            .map_err(|_| ProviderRefreshError::Unavailable)?
-            .checked_add(expires_in)
+            .map_err(|_| ProviderRefreshError::Unavailable)?;
+        // MIK-8207: one rule with every other token answer; an `expires_in`
+        // above 100 years, or one that overflows, is refused.
+        let expires_at = crate::duration_bound::expiry_from_expires_in(now, expires_in)
             .ok_or(ProviderRefreshError::Unavailable)?;
         Ok(TokenRefresh {
             access_token: body.access_token,

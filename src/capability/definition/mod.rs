@@ -158,7 +158,10 @@ pub struct ProviderConfig {
     pub cost_per_call: f64,
 
     /// Request timeout in seconds
-    #[serde(default = "default_timeout")]
+    #[serde(
+        default = "default_timeout",
+        deserialize_with = "crate::duration_bound::nonzero_secs"
+    )]
     pub timeout: u64,
 
     /// REST configuration
@@ -344,7 +347,7 @@ pub struct CacheConfig {
     pub strategy: String,
 
     /// Time-to-live in seconds (0 = no caching)
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::duration_bound::secs")]
     pub ttl: u64,
 
     /// Cache key template (for custom cache keys)

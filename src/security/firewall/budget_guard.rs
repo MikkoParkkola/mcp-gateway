@@ -53,6 +53,7 @@ pub struct BudgetGuardConfig {
     /// Calls one principal may make inside the window before being refused.
     pub max_calls_per_window: usize,
     /// How long a call observation counts against its principal.
+    #[serde(deserialize_with = "crate::duration_bound::secs")]
     pub window_secs: u64,
 }
 
