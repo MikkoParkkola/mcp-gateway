@@ -204,7 +204,7 @@ impl Registry {
                     });
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to parse {}: {e}", path.display());
+                    println!("Warning: Failed to parse {}: {e}", path.display());
                 }
             }
         }
