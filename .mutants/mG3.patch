@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/admission.rs b/src/gateway/meta_mcp/admission.rs
+index 33d32bf54..810b93806 100644
+--- a/src/gateway/meta_mcp/admission.rs
++++ b/src/gateway/meta_mcp/admission.rs
+@@ -50,7 +50,7 @@ impl SyncLease {
+     /// same execution did act, whose protection stays.
+     pub(crate) fn withdraw_dispatch(&self) {
+         let mut state = self.state.lock();
+-        state.1 = state.1.saturating_sub(1);
++        state.1 = 0;
+         if state.1 == 0 {
+             state.0.dispatched = false;
+         }

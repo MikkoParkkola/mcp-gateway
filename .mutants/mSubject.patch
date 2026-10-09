@@ -1,0 +1,14 @@
+diff --git a/src/gateway/router/handlers/tasks.rs b/src/gateway/router/handlers/tasks.rs
+index 0384dd2ec..bd53a1dea 100644
+--- a/src/gateway/router/handlers/tasks.rs
++++ b/src/gateway/router/handlers/tasks.rs
+@@ -139,9 +139,6 @@ pub(super) fn route_owners(
+     let owner_key = task_owner_key(subject, cert, client);
+     let proven = super::super::identity::subject_key(subject, cert);
+     let route = |agent: Option<&OAuthAgentIdentity>| match (agent, &proven) {
+-        (None, Some(subject)) if !state.auth_config.enabled && verified_identity.is_none() => {
+-            subject.clone()
+-        }
+         _ => route_task_owner(state, verified_identity, agent, &owner_key),
+     };
+     let owner = route(agent);
