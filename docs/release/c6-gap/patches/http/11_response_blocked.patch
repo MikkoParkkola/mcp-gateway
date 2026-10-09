@@ -1,17 +1,13 @@
 diff --git a/src/gateway/router/direct_guards.rs b/src/gateway/router/direct_guards.rs
-index f319bd90a..6c1caf2c6 100644
+index 0000000..0000000 100644
 --- a/src/gateway/router/direct_guards.rs
 +++ b/src/gateway/router/direct_guards.rs
-@@ -258,5 +258,11 @@ pub(super) fn scan_direct_egress(
-         // The router's own instance judges the direct route (MIK-7669).
-         firewall: state.firewall.as_deref(),
+@@ -274,7 +274,7 @@ pub(super) fn scan_direct_egress(
      };
--    state.meta_mcp.scan_egress(response, &at)
-+    let before = response.clone();
-+    let outcome = state.meta_mcp.scan_egress(response, &at);
-+    if outcome == EgressOutcome::Refused {
-+        *response = before;
-+        response.egress_scanned = true;
-+    }
-+    outcome
- }
+     // The router's own instance judges the direct route (MIK-7669).
+     #[cfg(feature = "firewall")]
+-    let firewall = state.firewall.as_deref();
++    let firewall = None;
+     #[cfg(not(feature = "firewall"))]
+     let firewall = None;
+     let at = Egress {
