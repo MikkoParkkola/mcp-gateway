@@ -665,7 +665,7 @@ async fn eof_drains_a_running_task_before_returning() {
 /// secret reference cannot be resolved leaves the store open.
 #[tokio::test]
 async fn an_unresolvable_auth_config_leaves_the_stdio_store_open() {
-    let fixture = fixture(None).await;
+    let fixture = Box::pin(fixture(None)).await;
     let store = tempfile::tempdir().expect("store root");
     let mut config = Config::default();
     config.tasks.store_dir = store.path().display().to_string();
