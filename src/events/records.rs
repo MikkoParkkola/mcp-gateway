@@ -58,8 +58,8 @@ pub(crate) struct Subscription {
     pub last_delivery_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
     /// Bumped from the store-wide counter on every persisted change of this
-    /// row (design r3 G3): a delete or delayed write judged against an older
-    /// row refuses it, even for a row re-made under the same id.
+    /// row (design r3 G3), by admit, `touch` and `persist_row` alike. Deletes
+    /// key on `incarnation`, not on this.
     #[serde(default)]
     pub generation: u64,
     /// The generation this subscription was granted at, kept by every later
