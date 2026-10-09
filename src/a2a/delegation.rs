@@ -30,10 +30,12 @@ pub(crate) const ABANDONED_CANCEL_BOUND: Duration = Duration::from_secs(330);
 // Checked at build time: the token expires after the TTL and the sweep finds
 // it at most one interval later, within the promised bound; and it outlives
 // the gateway's 300 s continuation, so an answer in time is never refused.
-const _: () = assert!(
-    PARKED_TTL.as_secs() + SWEEP_EVERY.as_secs() <= ABANDONED_CANCEL_BOUND.as_secs()
-        && PARKED_TTL.as_secs() > 300
-);
+const _: () = {
+    assert!(
+        PARKED_TTL.as_secs() + SWEEP_EVERY.as_secs() <= ABANDONED_CANCEL_BOUND.as_secs()
+            && PARKED_TTL.as_secs() > 300
+    );
+};
 /// The most questions one agent backend holds open at once.
 pub(crate) const PARKED_CAP: usize = 1024;
 
