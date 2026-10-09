@@ -104,3 +104,34 @@ async fn a_query_naming_an_mcp_backend_finds_its_tools() {
         .unwrap();
     assert_eq!(tool_names(&response), vec!["search_code".to_string()]);
 }
+
+/// With the ranker on, a tool found only by its backend's name must not score
+/// zero: under `limit: 1` it has to beat a tool elsewhere whose description
+/// merely mentions the query, which is collected first.
+#[tokio::test]
+async fn a_backend_name_match_ranks_above_a_description_mention() {
+    let backends = Arc::new(BackendRegistry::new());
+    assert!(
+        backends.register(mcp_backend(BACKEND, &[("search_code", "returns exact snippets")]).await),
+        "fixture backend failed to register"
+    );
+    let (docs, _dirs) =
+        capability_backend_named("docs", &[("guide_page", "explains how codesearch indexes")])
+            .await;
+    let meta = MetaMcp::with_features(
+        backends,
+        None,
+        None,
+        Some(Arc::new(SearchRanker::new())),
+        Duration::from_secs(60),
+    )
+    .with_code_mode(false)
+    .with_profile_registry(profile(None));
+    meta.set_capabilities(docs);
+    let response = meta
+        .search_tools_anon(&json!({ "query": BACKEND, "limit": 1 }), None)
+        .await
+        .unwrap();
+    assert_eq!(tool_names(&response), vec!["search_code".to_string()]);
+    assert_eq!(response["total_available"], 2);
+}

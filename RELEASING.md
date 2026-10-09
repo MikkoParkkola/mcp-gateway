@@ -82,6 +82,16 @@ python3 scripts/release/changelog_fragments.py assemble --dry-run | less   # rev
 python3 scripts/release/changelog_fragments.py assemble   # writes CHANGELOG.md, deletes the fragments
 ```
 
+The same pull request numbers the pending UPGRADING entries. Pull requests add
+`upgrading.d/<pr>.md` rather than a numbered item in `docs/UPGRADING-4.0.md`; the
+assembler numbers them from `upgrading.d/.frozen-max` + 1 in file-name order, adds
+each row and section, raises `.frozen-max` and deletes the fragments:
+
+```sh
+python3 scripts/release/upgrading_fragments.py assemble --dry-run | less   # review
+python3 scripts/release/upgrading_fragments.py assemble   # writes the guide and .frozen-max, deletes the fragments
+```
+
 For 4.0.0 only, the same pull request also folds the older `## [4.0.0] - Unreleased`
 section, so that the release leaves exactly one `[4.0.0]` heading. Before the fold,
 every pull request that `docs/release/v4.0.0-release-notes-DRAFT.md` cites must be merged,
