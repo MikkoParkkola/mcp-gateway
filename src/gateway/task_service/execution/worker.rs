@@ -755,3 +755,7 @@ pub(crate) enum CommitFailure {
     Service(ServiceError),
     RevisionConflict,
 }
+
+#[cfg(test)]
+#[path = "worker_tests.rs"]
+mod worker_tests;
