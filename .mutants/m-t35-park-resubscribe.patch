@@ -1,0 +1,12 @@
+diff --git a/src/events/upstream_session.rs b/src/events/upstream_session.rs
+index 3cfe1ea28..995604b46 100644
+--- a/src/events/upstream_session.rs
++++ b/src/events/upstream_session.rs
+@@ -162,6 +162,7 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
+             *shared.tools.lock() = ToolsDebt::default();
+             #[cfg(test)]
+             shared.before_park.pause().await;
++            wake = shared.wake.subscribe();
+             tokio::select! {
+                 () = shared.stop.cancelled() => return,
+                 _ = wake.changed() => {}

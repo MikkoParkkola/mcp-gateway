@@ -1,0 +1,17 @@
+diff --git a/src/events/upstream_session.rs b/src/events/upstream_session.rs
+index 3cfe1ea28..ee7069a78 100644
+--- a/src/events/upstream_session.rs
++++ b/src/events/upstream_session.rs
+@@ -195,10 +195,8 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
+             tokio::select! {
+                 () = shared.stop.cancelled() => return,
+                 () = tokio::time::sleep_until(deadline) => break,
+-                _ = wake.changed() => {
+-                    if registered_anew(&registry, &shared.name, &backend) {
+-                        break;
+-                    }
++                _ = std::future::pending::<()>() => {
++                    let _ = registered_anew(&registry, &shared.name, &backend);
+                 }
+             }
+         }

@@ -1,0 +1,16 @@
+diff --git a/src/events/upstream_session.rs b/src/events/upstream_session.rs
+index 3cfe1ea28..66f713e05 100644
+--- a/src/events/upstream_session.rs
++++ b/src/events/upstream_session.rs
+@@ -208,9 +208,8 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
+ /// Whether the registry no longer holds `ended` under `name`: the backend
+ /// was removed or replaced since its session ended.
+ fn registered_anew(registry: &BackendRegistry, name: &str, ended: &Arc<Backend>) -> bool {
+-    registry
+-        .get(name)
+-        .is_none_or(|now| !Arc::ptr_eq(&now, ended))
++    let _ = (registry, name, ended);
++    true
+ }
+ 
+ fn requested(shared: &Shared) -> Requested {

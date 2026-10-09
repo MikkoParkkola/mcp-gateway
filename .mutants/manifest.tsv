@@ -1,0 +1,6 @@
+head_sha	aea00ce1699333580876174d33da9e932e5253c8
+m-t35-park-resubscribe	linux	m-t35-park-resubscribe.patch	--lib events::upstream_session
+m-t35-base-backoff	linux	m-t35-base-backoff.patch	--lib events::upstream_session
+m-t35-cut-always	linux	m-t35-cut-always.patch	--lib events::upstream_session
+m-t35-reset-deadline	linux	m-t35-reset-deadline.patch	--lib events::upstream_session
+m1-stranded-released	linux	m1-stranded-released.patch	--lib events::upstream_need::ledger

@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_ledger.rs b/src/events/upstream_ledger.rs
+index eca0ab0a1..04d050d1b 100644
+--- a/src/events/upstream_ledger.rs
++++ b/src/events/upstream_ledger.rs
+@@ -147,7 +147,7 @@ impl Ledger {
+         if self
+             .keys
+             .get(key)
+-            .is_some_and(|e| !e.wanted && e.held == Held::No && e.in_flight == 0 && !e.stranded)
++            .is_some_and(|e| !e.wanted && e.held == Held::No && e.in_flight == 0)
+         {
+             self.keys.remove(key);
+             self.bytes -= encoded(&key.1);

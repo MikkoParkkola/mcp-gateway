@@ -1,0 +1,21 @@
+diff --git a/src/events/upstream_session.rs b/src/events/upstream_session.rs
+index 3cfe1ea28..1980ccee3 100644
+--- a/src/events/upstream_session.rs
++++ b/src/events/upstream_session.rs
+@@ -190,7 +190,7 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
+         shared.before_backoff.pause().await;
+         // A revival cuts the wait; a filter change does not, so churn on the
+         // subscriptions cannot reconnect a failing backend early (T35).
+-        let deadline = tokio::time::Instant::now() + delay;
++        let mut deadline = tokio::time::Instant::now() + delay;
+         loop {
+             tokio::select! {
+                 () = shared.stop.cancelled() => return,
+@@ -199,6 +199,7 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
+                     if registered_anew(&registry, &shared.name, &backend) {
+                         break;
+                     }
++                    deadline = tokio::time::Instant::now() + delay;
+                 }
+             }
+         }
