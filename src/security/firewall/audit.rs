@@ -73,6 +73,10 @@ struct AuditEntry<'a> {
     /// from (`invoke`, `step`, `retry`, `bridged`). Absent on every other row.
     #[serde(skip_serializing_if = "Option::is_none")]
     source: Option<&'a str>,
+    /// Set when the row's `timestamp` is the epoch because the host clock
+    /// read before 1970 (MIK-8202). Absent on every row with a real time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    clock_invalid: Option<bool>,
 }
 
 impl AuditLogger {
@@ -165,6 +169,7 @@ impl AuditLogger {
             policy_targets: None,
             tenants,
             source: None,
+            clock_invalid: None,
         };
         self.write_entry(&entry);
     }
@@ -181,22 +186,31 @@ impl AuditLogger {
         verdict: &FirewallVerdict,
         source: &'static str,
     ) {
-        // A recorder stamps a time it can read or writes nothing (MIK-8202,
-        // `crate::clock`): the send is refused all the same; the row is lost.
-        let Ok(now) = crate::clock::utc_now() else {
-            tracing::warn!(
-                source,
-                "Firewall: dispatch audit row skipped, the host clock reads before 1970"
-            );
-            return;
+        // A security row is kept even on a clock it cannot read (d1 seats,
+        // gpt + kimi, over the `crate::clock` recorder default): stamped with
+        // the epoch and marked `clock_invalid`, so a refused send never
+        // vanishes from the log. The send's verdict does not depend on it.
+        let (now, clock_invalid) = match crate::clock::utc_now() {
+            Ok(now) => (now, None),
+            Err(_) => {
+                tracing::warn!(
+                    source,
+                    "Firewall: dispatch audit row stamped with the epoch, the host clock reads before 1970"
+                );
+                (chrono::DateTime::<Utc>::default(), Some(true)) // the epoch, a constant: no clock read
+            }
         };
+        // Built from the allowed fields only: never the caller's fragment or
+        // its key-naming description.
         let content_free: Vec<Finding> = verdict
             .findings
             .iter()
             .map(|finding| Finding {
+                scan_type: finding.scan_type,
+                severity: finding.severity,
                 description: String::new(),
                 matched: String::new(),
-                ..finding.clone()
+                location: finding.location,
             })
             .collect();
         let entry = AuditEntry {
@@ -216,6 +230,7 @@ impl AuditLogger {
             policy_targets: None,
             tenants: None,
             source: Some(source),
+            clock_invalid,
         };
         self.write_entry(&entry);
     }
@@ -271,6 +286,7 @@ impl AuditLogger {
             policy_targets: Some(targets),
             tenants: None,
             source: None,
+            clock_invalid: None,
         };
         self.write_entry(&entry);
     }
@@ -464,5 +480,62 @@ mod tests {
         let args = json!({});
         logger.log_request("s", "srv", "t", "c", &args, &clean_verdict());
         assert!(path.exists());
+    }
+
+    // ── Dispatch rows (MIK-8137 b1) ───────────────────────────────────────────
+
+    /// The dispatch row as written for `blocked_verdict()` from `source`.
+    fn dispatch_row() -> serde_json::Value {
+        let tmp = NamedTempFile::new().unwrap();
+        let logger = AuditLogger::new(tmp.path()).unwrap();
+        let correlation = ResponseCorrelation {
+            session_id: "s",
+            caller: "c",
+            external_server: "srv",
+            external_tool: "t",
+            subject: None,
+        };
+        logger.log_dispatch(
+            &correlation,
+            &json!({"cmd": "x"}),
+            &blocked_verdict(),
+            "step",
+        );
+        serde_json::from_str(&read_lines(tmp.path())[0]).unwrap()
+    }
+
+    /// A dispatch row carries no caller content: the finding's fragment and
+    /// its key-naming description are empty, its type and severity kept.
+    #[test]
+    fn a_dispatch_row_carries_no_caller_content() {
+        let row = dispatch_row();
+        let finding = &row["findings"][0];
+        assert_eq!(
+            (&finding["matched"], &finding["description"]),
+            (&json!(""), &json!(""))
+        );
+        assert_eq!(finding["scan_type"], "shell_injection", "{row}");
+        assert!(!row.to_string().contains("rm -rf"), "{row}");
+        assert_eq!(
+            (&row["event"], &row["source"]),
+            (&json!("dispatch"), &json!("step"))
+        );
+        assert!(row.get("clock_invalid").is_none(), "{row}");
+    }
+
+    /// On a host clock before 1970 the row is still written (d1 seats): the
+    /// epoch, marked `clock_invalid`, and still content-free.
+    #[test]
+    fn a_dispatch_row_on_a_clock_before_1970_is_kept_and_marked() {
+        let _clock = crate::clock::test_clock::before_epoch();
+        let row = dispatch_row();
+        assert_eq!(row["clock_invalid"], true, "{row}");
+        assert!(
+            row["timestamp"]
+                .as_str()
+                .is_some_and(|t| t.starts_with("1970-01-01T00:00:00")),
+            "{row}"
+        );
+        assert_eq!(row["findings"][0]["matched"], "", "{row}");
     }
 }

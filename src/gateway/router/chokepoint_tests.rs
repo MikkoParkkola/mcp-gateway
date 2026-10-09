@@ -117,9 +117,17 @@ async fn f6_a_playbook_step_carrying_a_blocked_pattern_is_refused_at_dispatch() 
     // The row carries no caller content (gpt i1 HIGH on #3688): no fragment
     // of the argument and no argument key, only the finding's type.
     let row = rows[0].to_string();
-    assert!(!row.contains(BLOCKED.trim()), "a fragment was logged: {row}");
-    assert!(!row.contains("'cmd'"), "the argument key was logged: {row}");
-    assert_eq!(rows[0]["findings"][0]["matched"], "", "{row}");
+    assert!(
+        !row.contains(BLOCKED.trim()),
+        "a fragment was logged: {row}"
+    );
+    assert!(!row.contains("cmd"), "the argument key was logged: {row}");
+    let finding = &rows[0]["findings"][0];
+    assert_eq!(
+        (&finding["matched"], &finding["description"]),
+        (&json!(""), &json!("")),
+        "{row}"
+    );
 }
 
 /// The chokepoint's `dispatch` rows in the firewall audit log at `path`.
