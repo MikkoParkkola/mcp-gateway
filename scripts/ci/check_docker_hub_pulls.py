@@ -13,8 +13,12 @@ Dockerfiles, workflows and shell scripts:
 - a workflow `image:` value without a registry host;
 - a `<ref>@sha256:<digest>` token without a registry host;
 - an explicit `docker.io`, `registry-1.docker.io` or `index.docker.io`;
-- a job that uses `helm/kind-action` without the mirror step before it (kind
-  pulls its node image through the host daemon).
+- a literal image argument of `docker pull|run|create` without a registry
+  host, and a `FROM` written by a shell script (a heredoc or printf);
+- a `helm/kind-action` step without a hosted `node_image` (kind's default
+  node image is on Docker Hub);
+- a `docker/setup-buildx-action` step without a hosted
+  `driver-opts: image=` (buildx bootstraps BuildKit from Docker Hub).
 
 Lexical, by design: a pull assembled at run time from variables is out of its
 reach and is caught in review, not by more patterns.
@@ -33,11 +37,16 @@ FROM = re.compile(r"^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?", r
 IMAGE_KEY = re.compile(r"^\s*(?:-\s+)?image:\s*['\"]?([^'\"\s#]+)")
 DIGEST_REF = re.compile(r"(?<![\w./:-])([\w][\w./:-]*@sha256:[0-9a-f]{64})")
 KIND = re.compile(r"uses:\s*helm/kind-action@")
-MIRROR_STEP = "registry-mirrors"
+BUILDX = re.compile(r"uses:\s*docker/setup-buildx-action@")
+DOCKER_CMD = re.compile(r"\bdocker\s+(?:pull|run|create)\b(.*)")
+SHELL_FROM = re.compile(r"\bFROM\s+([A-Za-z0-9$][^\s\\'\"]*)")
+TAGGED = re.compile(r"^[a-z][\w./-]*(?::[\w.-]+)?(?:@sha256:[0-9a-f]{64})?$")
 
 
 def has_registry(ref: str) -> bool:
-    """Whether `ref` names its registry host explicitly."""
+    """Whether `ref` names its registry host explicitly: a first path part
+    before a `/` that has a `.` or a `:` or is `localhost`. A bare
+    `name:tag` or `name@digest` has no `/`, so it is Docker Hub."""
     first = ref.split("/", 1)[0]
     return "/" in ref and ("." in first or ":" in first or first == "localhost")
 
@@ -82,25 +91,43 @@ def check_text(path: str, text: str) -> list[str]:
         for ref in DIGEST_REF.findall(line):
             if not has_registry(ref):
                 problems.append(f"{where}: {ref} pulls from Docker Hub")
+        m = DOCKER_CMD.search(line)
+        if m:
+            for token in m.group(1).split():
+                if ("@sha256:" in token or ":" in token) and TAGGED.match(token) and not has_registry(token):
+                    problems.append(f"{where}: docker pulls {token} from Docker Hub")
+        if path.endswith(".sh") and not is_dockerfile:
+            for ref in SHELL_FROM.findall(line):
+                if ref != "scratch" and not ref.startswith("$") and not has_registry(ref):
+                    problems.append(f"{where}: a script writes FROM {ref} (Docker Hub)")
     if is_workflow:
-        problems.extend(check_kind(path, text))
+        problems.extend(check_steps(path, text))
     return problems
 
 
-def check_kind(path: str, text: str) -> list[str]:
-    """Every kind-action step follows a daemon mirror step in its job."""
+def check_steps(path: str, text: str) -> list[str]:
+    """kind-action and setup-buildx-action steps name a hosted image."""
     problems = []
     lines = text.splitlines()
-    job_start = 0
     for n, line in enumerate(lines):
-        if re.match(r"^  [\w-]+:\s*$", line):
-            job_start = n
-        if KIND.search(line):
-            before = "\n".join(lines[job_start:n])
-            if MIRROR_STEP not in before:
-                problems.append(
-                    f"{path}:{n + 1}: kind-action without the mirror.gcr.io daemon step before it"
-                )
+        for pattern, key, what in (
+            (KIND, "node_image:", "kind-action without a hosted node_image"),
+            (BUILDX, "driver-opts:", "setup-buildx-action without a hosted driver-opts image"),
+        ):
+            if not pattern.search(line):
+                continue
+            indent = len(line) - len(line.lstrip(" -"))
+            body = []
+            for nxt in lines[n + 1 :]:
+                if nxt.strip() and len(nxt) - len(nxt.lstrip(" -")) < indent:
+                    break
+                if nxt.lstrip().startswith("- "):
+                    break
+                body.append(nxt)
+            value = next((b.split(key, 1)[1].strip() for b in body if key in b), "")
+            ref = value.split("image=", 1)[1].split(",")[0] if "image=" in value else value
+            if not has_registry(ref):
+                problems.append(f"{path}:{n + 1}: {what}")
     return problems
 
 
@@ -126,17 +153,25 @@ def self_test() -> list[str]:
         "bare services image": (".github/workflows/x.yml", "    services:\n      r:\n        image: registry:2\n"),
         "bare digest ref": ("scripts/x.sh", f"docker run -d {redis}\n"),
         "explicit docker.io": ("scripts/x.sh", "docker pull docker.io/library/busybox:1\n"),
-        "kind without mirror": (".github/workflows/x.yml", "jobs:\n  k:\n    steps:\n      - uses: helm/kind-action@abc\n"),
+        "kind without node_image": (".github/workflows/x.yml", "jobs:\n  k:\n    steps:\n      - uses: helm/kind-action@abc\n"),
+        "buildx without driver image": (".github/workflows/x.yml", "      - uses: docker/setup-buildx-action@abc\n"),
+        "literal docker pull": ("scripts/x.sh", "docker pull redis:7\n"),
+        "script-written FROM": ("scripts/x.sh", "printf 'FROM busybox:1.36\\n' > Dockerfile\n"),
     }
     allowed = {
         "mirrored FROM and stage": ("Dockerfile", "FROM mirror.gcr.io/library/rust:1 AS b\nFROM b AS c\nFROM scratch\n"),
         "mirrored image": (".github/workflows/x.yml", "        image: mirror.gcr.io/library/registry:2\n"),
         "ghcr digest": ("scripts/x.sh", "docker pull ghcr.io/o/r@sha256:" + "a" * 64 + "\n"),
         "comment": ("scripts/x.sh", "# docker pull docker.io/library/x\n"),
-        "kind with mirror": (
+        "kind with hosted node_image": (
             ".github/workflows/x.yml",
-            "jobs:\n  k:\n    steps:\n      - run: echo registry-mirrors\n      - uses: helm/kind-action@abc\n",
+            "      - uses: helm/kind-action@abc\n        with:\n          node_image: mirror.gcr.io/kindest/node:v1\n",
         ),
+        "buildx with hosted image": (
+            ".github/workflows/x.yml",
+            "      - uses: docker/setup-buildx-action@abc\n        with:\n          driver-opts: image=mirror.gcr.io/moby/buildkit:1\n",
+        ),
+        "port mapping and scratch": ("scripts/x.sh", "docker run --publish 127.0.0.1::6379 mirror.gcr.io/library/redis:7\nprintf 'FROM scratch\\n'\n"),
     }
     out = []
     for name, (path, text) in refused.items():
