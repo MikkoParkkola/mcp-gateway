@@ -123,7 +123,11 @@ impl DashboardBootstrap {
         if let Ok(mut sessions) = self.sessions.lock() {
             // Sweep on issue: the only way the map grows, so it is the one
             // place that has to shrink it.
-            sessions.retain(|_, times| !times.expired(now, limits));
+            // Not on an unreadable wall clock: every session would read as
+            // expired and be deleted (MIK-8202).
+            if !wall_unreadable(now) {
+                sessions.retain(|_, times| !times.expired(now, limits));
+            }
             sessions.insert(
                 handle.clone(),
                 SessionTimes {
@@ -222,7 +226,11 @@ impl DashboardBootstrap {
             return SessionCheck::Unknown;
         };
         if times.expired(now, limits) {
-            sessions.remove(handle);
+            // Refused on an unreadable wall clock, but kept: it may still be
+            // live once the clock reads again (MIK-8202).
+            if !wall_unreadable(now) {
+                sessions.remove(handle);
+            }
             return SessionCheck::Expired;
         }
         if touch == Touch::Yes {
@@ -294,7 +302,11 @@ impl DashboardBootstrap {
             )
         };
         if expired {
-            *slot = None;
+            // An unreadable wall clock refuses the code but keeps it
+            // (MIK-8202).
+            if !wall_unreadable(now) {
+                *slot = None;
+            }
             return None;
         }
         if !matches {

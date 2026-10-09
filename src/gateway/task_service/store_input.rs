@@ -401,7 +401,14 @@ impl Shared {
         let (mut task, mut record) = self.read_owned(owner, id)?;
         // Read after the lock, never before: an update queued while the round
         // was open must not be let through once it has closed.
-        if let Some(closed) = closed_at(&task, &record, self.now()) {
+        let now = self.now();
+        // A clock before 1970 dates nothing: the update is refused for now,
+        // and the round is not closed, since closing cancels the task for
+        // good on a time it cannot read (MIK-8202).
+        if now.timestamp() < 0 {
+            return Err(StoreError::Unavailable);
+        }
+        if let Some(closed) = closed_at(&task, &record, now) {
             return Ok(ProvideOutcome::Closed(closed));
         }
         let outstanding = task.input_requests().ok_or(StoreError::InvalidTransition)?;

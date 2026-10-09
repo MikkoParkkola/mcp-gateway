@@ -378,6 +378,36 @@ async fn a_round_without_a_deadline_takes_answers_until_the_ttl() {
     assert!(matches!(accepted, Ok(ProvideOutcome::Partial(_))));
 }
 
+/// MIK-8202: an update on a clock before 1970 is refused without closing the
+/// round, since a close cancels the task for good. The same update is taken
+/// once the clock reads again. Mutant: the round closed on that clock.
+#[tokio::test]
+async fn a_clock_before_the_epoch_refuses_an_update_and_keeps_the_round() {
+    let (_dir, store, task) = opened().await;
+    parked(&store, &task, &["a", "b"]).await;
+    let update = || answers(json!({ "a": {} }));
+
+    store.set_clock_for_test(Some(
+        chrono::DateTime::<chrono::Utc>::from_timestamp(-1, 0).expect("one second before 1970"),
+    ));
+    let refused = store
+        .provide_input(OWNER, task.id(), update(), || None, at(2))
+        .await;
+    assert!(
+        matches!(refused, Err(StoreError::Unavailable)),
+        "an unreadable clock took or closed the update"
+    );
+
+    store.set_clock_for_test(Some(at(1) + chrono::Duration::hours(1)));
+    let accepted = store
+        .provide_input(OWNER, task.id(), update(), || None, at(2))
+        .await;
+    assert!(
+        matches!(accepted, Ok(ProvideOutcome::Partial(_))),
+        "the round did not survive an unreadable clock"
+    );
+}
+
 /// Pin: a record written before the field loads as `None`, and a `None`
 /// round writes no field. Mutant: `skip_serializing_if` removed.
 #[test]
