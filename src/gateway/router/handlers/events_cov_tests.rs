@@ -51,7 +51,9 @@ async fn a_key_server_subscription_binds_the_token_jti_and_keeps_its_expiry() {
     let caller = client(CredentialKind::KeyServerToken);
     let with = facts(Some("jti-7f3a"));
     // WHEN
-    let credential = presented(Some(with.clone()), None).credential(Some(&caller), &state);
+    let credential = presented(Some(with.clone()), None)
+        .credential(Some(&caller), &state)
+        .expect("a bounded idle timeout");
     // THEN
     assert_eq!(
         credential,
@@ -65,7 +67,9 @@ async fn a_key_server_subscription_binds_the_token_jti_and_keeps_its_expiry() {
             }),
         }
     );
-    let unbound = presented(Some(facts(None)), None).credential(Some(&caller), &state);
+    let unbound = presented(Some(facts(None)), None)
+        .credential(Some(&caller), &state)
+        .expect("a bounded idle timeout");
     assert_eq!(unbound.binding, None, "no jti, no binding");
 }
 
@@ -83,7 +87,8 @@ async fn a_dashboard_subscription_binds_the_session_and_expires_one_idle_timeout
     // WHEN
     let before = chrono::Utc::now();
     let credential = presented(Some(facts(Some("ignored"))), Some(digest.clone()))
-        .credential(Some(&caller), &state);
+        .credential(Some(&caller), &state)
+        .expect("a bounded idle timeout");
     let after = chrono::Utc::now();
     // THEN
     assert_eq!(credential.kind, CredentialKind::DashboardSession);
@@ -100,7 +105,26 @@ async fn a_dashboard_subscription_binds_the_session_and_expires_one_idle_timeout
         before + idle <= expires_at && expires_at <= after + idle,
         "{expires_at} is one idle timeout from now, not the facts' day"
     );
-    let unbound = presented(None, None).credential(Some(&caller), &state);
+    let unbound = presented(None, None)
+        .credential(Some(&caller), &state)
+        .expect("a bounded idle timeout");
     assert_eq!(unbound.binding, None, "no session cookie, no binding");
     assert!(unbound.expires_at.is_some(), "the idle cap still applies");
+}
+
+/// MIK-8207: an idle timeout too long for a timestamp refuses the dashboard
+/// subscription instead of leaving the session unbounded.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dashboard_subscription_with_an_unholdable_idle_timeout_is_refused() {
+    let (state, _dir) = crate::gateway::router::tests::test_router_app_state().await;
+    let mut config = (*state.live_config.get()).clone();
+    config.auth.dashboard_session.idle_timeout_secs = u64::MAX;
+    state.live_config.set(config);
+    let caller = client(CredentialKind::DashboardSession);
+    let refused = presented(None, Some(crate::hashing::sha256_hex(b"session-handle")))
+        .credential(Some(&caller), &state);
+    assert!(
+        refused.is_err(),
+        "an unbounded session was admitted: {refused:?}"
+    );
 }
