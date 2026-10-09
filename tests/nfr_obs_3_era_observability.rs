@@ -737,10 +737,19 @@ async fn the_era_probe_record_carries_exactly_its_designed_fields() {
     let record = only("evidence");
     assert_eq!(
         keys(&record),
-        vec!["backend", "duration_ms", "evidence", "outcome", "trigger"],
+        vec![
+            "backend",
+            "duration_ms",
+            "evidence",
+            "outcome",
+            "slot",
+            "trigger"
+        ],
         "field set: {record:?}"
     );
     assert_eq!(record.field("backend"), "probe-record", "{record:?}");
+    // The slot the record describes (MIK-8186); this backend has only Shared.
+    assert_eq!(record.field("slot"), "shared", "{record:?}");
     assert_eq!(record.field("evidence"), "discover_modern", "{record:?}");
     assert_eq!(record.field("trigger"), "start", "{record:?}");
     assert_eq!(record.field("outcome"), "modern", "{record:?}");
@@ -758,7 +767,11 @@ async fn the_era_cache_record_reports_a_miss_then_a_hit() {
     let first = records
         .first()
         .expect("a cache record on the resolving probe");
-    assert_eq!(keys(first), vec!["backend", "hit"], "field set: {first:?}");
+    assert_eq!(
+        keys(first),
+        vec!["backend", "hit", "slot"],
+        "field set: {first:?}"
+    );
     assert_eq!(first.field("backend"), "cache-record", "{first:?}");
     assert_eq!(
         first.field("hit"),
@@ -789,7 +802,7 @@ async fn the_era_invalidated_record_names_the_contradiction_as_its_reason() {
     let record = only("reason");
     assert_eq!(
         keys(&record),
-        vec!["backend", "reason"],
+        vec!["backend", "reason", "slot"],
         "field set: {record:?}"
     );
     assert_eq!(record.field("backend"), "invalidated", "{record:?}");

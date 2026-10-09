@@ -21,6 +21,9 @@ use std::path::Path;
 const PRE_SEND_SITES: &[&str] = &[
     // Cold tools/list timeout and cooldown fast-fail; rebuilds a stored refusal.
     "backend/fill_check.rs",
+    // The dispatch's started slot was replaced before its era was read: refused
+    // before the wire, to be retried (MIK-8186, `start_judged`).
+    "backend/era.rs",
     // Start loop exhausted, connect policy changed, publish refused, and
     // `pre_send_start_error`.
     "backend/lifecycle.rs",
