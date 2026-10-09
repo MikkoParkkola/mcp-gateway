@@ -18,30 +18,23 @@ use super::authorization::{
     is_admin_meta_tool, refusal_principal, require_admin_log_level, require_admin_tool_access,
 };
 use super::helpers::{
-    build_accepted_response, build_error_response, build_error_response_with_data,
-    build_http_error_response, build_response, extract_tools_call_params,
-    extract_tools_call_params_ref, merge_client_meta, parse_elicitation_params, parse_request_ref,
-    parse_sampling_params,
+    build_error_response, build_response, extract_tools_call_params, merge_client_meta,
+    parse_elicitation_params, parse_sampling_params,
 };
 use super::meta_refusal_audit::Refused;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::relay::{self, CatalogueCaller};
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
-use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::outbound::{OutboundReply, judged_reply, stream_reply};
-use crate::gateway::session_id::SessionId;
-use crate::gateway::{recovery::SurfaceRequest, session_lifecycle};
-use crate::key_server::oidc::VerifiedIdentity;
+use crate::gateway::session_lifecycle;
 use crate::mtls::CertIdentity;
 use crate::protocol::JsonRpcResponse;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
-use crate::security::{
-    extract_agent_identity, log_agent_identity, sanitize_json_value, validate_agent_identity,
-};
 
 #[cfg(test)]
 mod cacheable_field_tests;
+mod dispatch_intake;
 mod events;
 mod health;
 #[cfg(feature = "metrics")]
@@ -60,7 +53,6 @@ pub(super) use health::health_handler;
 pub(super) use metrics_scrape::metrics_handler;
 pub(crate) use modern_response::shape_modern_response;
 pub(super) use owner::owner_of;
-use owner::request_session_owner;
 #[cfg(test)]
 use owner::session_owner;
 pub(super) use session_end::{mcp_delete_handler, sse_deprecated_handler};
@@ -180,535 +172,46 @@ async fn meta_mcp_dispatch(
     State(state): State<Arc<AppState>>,
     http_request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
-    // Extract headers and authenticated client from request
-    let headers = http_request.headers().clone();
-    let client = http_request
-        .extensions()
-        .get::<AuthenticatedClient>()
-        .cloned();
-    // Extract mTLS certificate identity (present when mTLS is active and a valid
-    // client certificate was presented during the TLS handshake).
-    let cert_identity = http_request.extensions().get::<CertIdentity>().cloned();
-    let oauth_agent_identity = http_request
-        .extensions()
-        .get::<OAuthAgentIdentity>()
-        .cloned();
-    let verified_identity = http_request.extensions().get::<VerifiedIdentity>().cloned();
-    // MCP Events caps a subscription at the credential's own expiry.
-    let presented = events::Presented::capture(&http_request);
-
-    // === OWASP ASI03: per-agent identity ===
-    //
-    // Resolve what the request PROVED (mTLS subject, verified JWT `sub`) from
-    // what it merely DECLARED (X-Agent-ID, agent_id query param). The bearer
-    // string is deliberately NOT passed: a payload decoded without checking the
-    // signature is the caller's own assertion, and the verified `sub` is
-    // already in extensions via `agent_auth_middleware`.
-    let query_str = http_request.uri().query();
-    let agent_identity = extract_agent_identity(
-        &headers,
-        query_str,
-        cert_identity.as_ref(),
-        oauth_agent_identity.as_ref().map(|a| a.client_id.as_str()),
-    );
-
-    // Per-connection Code Mode override (issue #146).
-    // Accepted value: ?codemode=search_and_execute
-    // When the static config already enables Code Mode, this is a no-op.
-    let code_mode_url_active = query_str.is_some_and(|q| {
-        q.split('&')
-            .any(|pair| pair == "codemode=search_and_execute")
-    });
-    let surface_request = SurfaceRequest::from_url(code_mode_url_active);
-    // The refusal arm emits its own audit record. Before this change it
-    // returned silently, so a proved-A-claimed-B refusal left no trace on the
-    // one path an attacker is most likely to be on.
-    match validate_agent_identity(&agent_identity, &state.agent_identity_config) {
-        Ok(audit) => {
-            log_agent_identity(&agent_identity, audit, None);
-        }
-        Err(reason) => {
-            log_agent_identity(
-                &agent_identity,
-                crate::security::IdentityAudit::Clean,
-                Some(&reason),
-            );
-            return build_http_error_response(None, -32600, reason, StatusCode::FORBIDDEN)
-                .into_response();
-        }
-    }
-
-    // The caller as a grant subject, resolved once and before the body is
-    // read, so a refused identity header reaches no dispatch, cache or idempotency work.
-    let (grant_subject, caller_owner) =
-        match request_session_owner(&state, &headers, http_request.extensions(), client.as_ref())
-            .await
-        {
-            Ok(resolved) => resolved,
-            Err(refusal) => return refusal,
+    // The prelude (MIK-8143). One `let` drops its bindings in reverse, so
+    // `intake` (holding the in-flight permit) drops before `judge` (holding
+    // the read guard), as the two locals did.
+    let (judge, mut signing_context, intake) =
+        match dispatch_intake::intake(&state, http_request).await {
+            Ok(parts) => parts,
+            Err(response) => return response,
         };
-    // MIN.2: the caller every frame of this request is judged for, formed
-    // only when the verdict is on (the default config allocates nothing).
-    let read_guard = super::helpers::read_guard(&state);
-    let read_key = crate::gateway::outbound::judges(read_guard.as_deref())
-        .then(|| {
-            super::identity::caller_key(
-                grant_subject.as_ref(),
-                cert_identity.as_ref(),
-                client.as_ref(),
-            )
-        })
-        .filter(|key| !key.is_empty());
-    if let Some(key) = &read_key {
-        crate::transport::notification_sink::bind_reader(|| key.clone());
-    }
-
-    // Parse JSON body
-    let body_bytes = match super::helpers::read_body(http_request).await {
-        Ok(bytes) => bytes,
-        Err(refusal) => return refusal.into_response(),
-    };
-
-    let mut request: Value = match serde_json::from_slice(&body_bytes) {
-        Ok(v) => v,
-        Err(e) => {
-            return build_http_error_response(
-                None,
-                -32700,
-                format!("Invalid JSON: {e}"),
-                StatusCode::BAD_REQUEST,
-            )
-            .into_response();
-        }
-    };
-    // Track in-flight request for graceful drain
-    let _inflight_permit = state.inflight.acquire().await;
-
-    if !state.meta_mcp_enabled {
-        return (
-            [(
-                axum::http::header::HeaderName::from_static("content-type"),
-                axum::http::header::HeaderValue::from_static("application/json"),
-            )],
-            build_http_error_response(None, -32600, "Meta-MCP disabled", StatusCode::FORBIDDEN),
-        )
-            .into_response();
-    }
-
-    // 2026-07-28 removed protocol-level sessions, so a request written against
-    // it gets none — and answering it with a session header would hand a
-    // stateless client state the revision deleted, and an intermediary a value
-    // to route on.
-    //
-    // Decided from the header, before the body is parsed, because the session
-    // is created first; the mirrored-header check refuses a modern request
-    // without `MCP-Protocol-Version`. Any modern declaration counts, even an
-    // unsupported 2026 revision: it is stateless and about to be refused.
-    // Read duplicate-safe and ONCE (`headers.get` returns the FIRST value): a
-    // doubled header takes the modern reading and reaches the refusal with no
-    // session behind it.
-    let mut version_headers = headers.get_all("mcp-protocol-version").iter();
-    let declared_version = match (version_headers.next(), version_headers.next()) {
-        (Some(only), None) => only.to_str().ok(),
-        (None, _) => None,
-        (Some(_), Some(_)) => Some(crate::protocol::meta::MODERN_VERSIONS[0]),
-    };
-    let declares_modern_by_header =
-        declared_version.is_some_and(crate::protocol::meta::declares_modern_era);
-
-    // Get or create session for this client
-    let existing_session_id = session_id_header(&headers).map(String::from);
-
-    // Not a stream reader, so no branch subscribes: a held subscription
-    // fakes a deliverable prompt.
-    let opened = if declares_modern_by_header {
-        // No session, and none minted. Minting one per request grew a table of
-        // sessions nothing could reach, and handed the sequence-anomaly
-        // detector a fresh identity every call — a detector that sees a first
-        // request every time keeps running and stops protecting.
-        None
-    } else {
-        // The identity that owns the session. A caller with neither a subject
-        // nor a credential is "anonymous", so a single-user gateway behaves
-        // exactly as before.
-        let held = crate::gateway::auth::live::held_credential(&headers);
-        let existing = existing_session_id.as_deref();
-        Some(if !super::hardened_elicitation::is_hardened(&state) {
-            state
-                .multiplexer
-                .get_or_create_session_id_scoped(existing, &caller_owner, held)
-        } else if super::hardened_elicitation::is_initialize(&request) {
-            // Hardened (row 10): refused before anything is minted.
-            if !super::hardened_elicitation::declares_elicitation(&request) {
-                return super::hardened_elicitation::refusal().into_response();
-            }
-            state
-                .multiplexer
-                .get_or_create_session_id_scoped(existing, &caller_owner, held)
-        } else {
-            // Hardened: only a declaring `initialize` opens a legacy session.
-            match state
-                .multiplexer
-                .resume_session_id_scoped(existing, &caller_owner, held)
-            {
-                Some(id) => id,
-                None => return super::hardened_elicitation::refusal().into_response(),
-            }
-        })
-    };
-    // The empty id is the router's "no session"; its fingerprint is empty too.
-    let session_id = opened
-        .as_ref()
-        .map_or_else(String::new, |id| id.expose_secret().to_owned());
-    // MIK-8161: the notification screen's verdicts name this caller and session.
-    let screen_caller = client.as_ref().map_or("anonymous", |c| c.name.as_str());
-    crate::transport::notification_sink::bind_screen(screen_caller, &session_id);
-
-    let raw_id = crate::protocol::mrtr::raw_request_id(&request);
-    // A failed grant-decision write refuses under this id (MIK-7663.GH2409.3).
-    crate::gateway::meta_mcp::grant_audit::note_answer_id(raw_id.as_ref());
-    // Hardened signs every `tools/call` here, not only `gateway_invoke`
-    // (GH1942.HARDEN.1 row 7).
-    let mut signing_context = state.meta_mcp.signing_enabled().then(|| {
-        use crate::gateway::meta_mcp::signing::{SigningInvocationContext, SigningScope};
-        let scope = SigningScope::of(state.live_config.running().security.posture);
-        SigningInvocationContext::capture_scoped(&mut request, scope)
-    });
-    // Off the request before sanitization can rewrite or reject its bytes
-    // (ASI07 A3); a malformed one is refused here, with the request's own id.
-    let chain_nonce = match crate::protocol::mrtr::take_chain_nonce(&mut request) {
-        Ok(nonce) => nonce,
-        Err(error) => {
-            let message = crate::gateway::meta_mcp::signing::wire_error_message(&error);
-            let code = error.to_rpc_code();
-            return build_error_response(
-                raw_id,
-                code,
-                message,
-                &session_id,
-                StatusCode::BAD_REQUEST,
-            );
-        }
-    };
-    // Optionally sanitize input
-    let mut request = if state.sanitize_input {
-        match sanitize_json_value(&request) {
-            Ok(sanitized) => sanitized,
-            Err(e) => {
-                return build_error_response(
-                    None,
-                    -32600,
-                    e.to_string(),
-                    &session_id,
-                    StatusCode::BAD_REQUEST,
-                );
-            }
-        }
-    } else {
-        request
-    };
-
-    if let Some(context) = signing_context.as_mut()
-        && let Err(error) = context.restore(&mut request)
-    {
-        return build_error_response(
-            None,
-            error.to_rpc_code(),
-            crate::gateway::meta_mcp::signing::wire_error_message(&error),
-            &session_id,
-            StatusCode::BAD_REQUEST,
-        );
-    }
-    if let Some(error) = signing_context
-        .as_ref()
-        .and_then(|context| context.refuse_malformed_nonce_early().err())
-    {
-        return build_error_response(
-            raw_id,
-            error.to_rpc_code(),
-            crate::gateway::meta_mcp::signing::wire_error_message(&error),
-            &session_id,
-            StatusCode::BAD_REQUEST,
-        );
-    }
-
-    // Detect client POST-back responses (has "result" or "error" but no "method").
-    // These are replies to server-to-client requests such as `sampling/createMessage`.
-    // Must be handled BEFORE `parse_request`, which rejects messages without "method".
-    if request.get("method").is_none()
-        && (request.get("result").is_some() || request.get("error").is_some())
-        && let Some(resp_id) = request.get("id").and_then(|v| v.as_str())
-        && crate::gateway::input_bridge::is_bridge_reply_id(resp_id)
-    {
-        debug!(id = %resp_id, body = %request, "Received sampling/elicitation response POST-back");
-        let resolved = state
-            .proxy_manager
-            .resolve_pending(resp_id, &session_id, request.clone());
-        if resolved {
-            debug!(id = %resp_id, "Routed proxy response to caller");
-        } else {
-            warn!(id = %resp_id, "No pending request for response");
-        }
-        return build_accepted_response(&session_id);
-    }
-
-    // Parse request
-    let (id, method, params) = match parse_request_ref(&request) {
-        Ok((id, method, params)) => (id, method.to_string(), params),
-        Err(response) => {
-            return build_response(response, &session_id, StatusCode::BAD_REQUEST);
-        }
-    };
-
-    let protocol_header = headers
-        .get("mcp-protocol-version")
-        .and_then(|value| value.to_str().ok());
-    crate::protocol_revision_telemetry::observe_inbound_request(
-        &request,
-        params,
-        &method,
-        protocol_header,
-        Some(session_id.as_str()),
-        crate::protocol_revision_telemetry::Transport::Http,
+    let dispatch_intake::JudgeInputs {
+        read_guard,
+        read_key,
+    } = judge;
+    // The prelude's facts under the names the arms below were written with.
+    let (headers, client, cert_identity) = (&intake.headers, &intake.client, &intake.cert_identity);
+    let (oauth_agent_identity, verified_identity) =
+        (&intake.oauth_agent_identity, &intake.verified_identity);
+    let (presented, agent_identity, grant_subject) = (
+        &intake.presented,
+        &intake.agent_identity,
+        &intake.grant_subject,
     );
-
-    // Which protocol generation is this request written against? Decided per
-    // request, not per connection: 2026-07-28 removed the handshake precisely so
-    // one connection can carry both.
-    //
-    // The header is read as well as the body: a `2026-07-28` header with no
-    // body metadata would otherwise classify legacy and pass the feature gate.
-    // It was read once, duplicate-safe, above the session decision, so the two
-    // readings cannot disagree; a doubled header is refused below.
-    // NFR.OBS.1 is recorded by the classifier itself, so the HTTP and stdio
-    // dispatchers cannot drift apart on what a request declared.
-    let shape = crate::protocol::meta::classify_and_observe(
-        &method,
-        params,
-        declared_version,
-        // HTTP echoes the revision in a header on every request, so there
-        // is nothing for a session lookup to add.
-        None,
+    let (session_id, existing_session_id, chain_nonce) = (
+        &intake.session_id,
+        &intake.existing_session_id,
+        &intake.chain_nonce,
     );
-    if let crate::protocol::meta::RequestShape::Malformed { ref missing } = shape {
-        // Declared itself modern and then omitted a required field. The
-        // specification is specific about both halves of the answer: -32602,
-        // and 400 on HTTP.
-        return build_error_response(
-            id,
-            -32602,
-            format!("missing required request metadata: {}", missing.join(", ")),
-            &session_id,
-            StatusCode::BAD_REQUEST,
-        );
-    }
-    // One derivation, two consumers. `era` is what `initialize` advertises
-    // against and `is_modern` is what the method gate refuses on; deriving the
-    // second from the first is what keeps them from becoming two predicates
-    // that can disagree (`protocol::meta::classify_request`).
-    let era = shape.era();
-    let is_modern = era == crate::protocol::meta::Era::Modern;
-
-    // Derived alongside `is_modern` so every shape-derived fact is read once,
-    // here, rather than re-classified where the caller context is built. This
-    // is not the per-method capability check further down: that one answers
-    // "did the client declare the capability THIS method needs" for a method
-    // the *client* called; this one is consulted before the gateway asks the
-    // *client* for something. Owned rather than borrowed because `shape` is
-    // moved by the per-method check below, ~100 lines before the caller context
-    // is built.
-    let declared_capabilities = shape.declared_capabilities();
-    // Same reason, and the same parser the classifier used: the gate below once
-    // ran its own `pointer()` read that asked only whether the identifier was
-    // *present*, so `{"…/tasks": 3}` passed a gate that
-    // `ExtensionSet::from_capabilities` would have refused. One parser, one
-    // answer.
-    let declared_extensions = shape.declared_extensions();
-    // The other half of the extension exchange. `server/discover` states what
-    // this gateway speaks; this reads back what the client declared, so
-    // adoption is measured on the live path rather than assumed. Reads the
-    // parsed set rather than `declared_capabilities`, which is a name list and
-    // cannot tell a valid settings object from a bare number.
-    crate::protocol_revision_telemetry::observe_client_extensions(&declared_extensions);
-    // Owned: `shape` is moved ~100 lines before the caller is built. Classifier
-    // output, never the duplicate-header sentinel.
-    //
-    // Verified evidence only: the echoed `MCP-Protocol-Version` header, which
-    // the transport has already OWS-stripped, or the revision this session's
-    // `initialize` was answered with — bound once at the single negotiation
-    // site (`protocol_revision_telemetry::bind_session_revision`). The request
-    // body is not consulted: `params.protocolVersion` is not a `tools/call`
-    // field, so reading it would let a header-less caller pick the revision
-    // bucket its response is stored in and read from. With neither piece of
-    // evidence this is `None` and the request bypasses both caches.
-    let session_revision =
-        crate::protocol_revision_telemetry::session_negotiated_revision(Some(session_id.as_str()));
-    let protocol_revision_owned =
-        crate::protocol::meta::cache_protocol_revision(&shape, declared_version, session_revision)
-            .map(str::to_owned);
-
-    // ADR-014 §4. Set here, beside the other shape-derived facts and above
-    // every early return below, so a later reordering cannot silently darken
-    // the emitter: the dispatch this scopes is already inside the sink opened
-    // by `meta_mcp_handler`, and a request that never reaches the checks below
-    // still declared what it declared.
-    crate::transport::notification_sink::set_request_log_level(shape.declared_log_level());
-
-    // Read before the macro so its count is graded (MIK-7725).
-    let session = opened.as_ref().map_or("", SessionId::fp);
-    debug!(method = %method, session_id = %session, "Meta-MCP request");
-
-    if let Some((rpc, status)) = request_checks::request_check_refusal(
-        &state,
-        &headers,
-        &shape,
-        declared_version,
-        &method,
-        params,
-        id.as_ref(),
-    ) {
-        return build_response(rpc, &session_id, status);
-    }
-
-    // Validated first, answered second. A notification carries no id and gets no
-    // response body, but "no body" is not "no checks": returning 202 before the
-    // era, version, mirrored-header and removed-method checks ran accepted a
-    // malformed or disabled modern notification as though it had been honoured.
-    if method.starts_with("notifications/") {
-        debug!(notification = %method, "Handling notification");
-        return build_accepted_response(&session_id);
-    }
-
-    // For requests, id is guaranteed to exist (checked in parse_request)
-    let id = id.expect("id should exist for non-notification requests");
-
-    // Extract optional profile hint from X-MCP-Profile header (used at initialize time).
-    let header_profile: Option<String> = headers
-        .get("x-mcp-profile")
-        .and_then(|v| v.to_str().ok())
-        .map(String::from);
-
-    if !is_modern && crate::protocol::meta::ADDED_IN_2026_07_28.contains(&method.as_str()) {
-        // A 2026 method reached by a 2025 client. Serving it would tell that
-        // client the gateway speaks a revision it cannot hold up its end of.
-        return build_error_response(
-            Some(id.clone()),
-            -32601,
-            format!("method '{method}' requires MCP 2026-07-28"),
-            &session_id,
-            StatusCode::NOT_FOUND,
-        );
-    }
-
-    // A request reaching the tasks extension must DECLARE it, on that request.
-    // Handing a task handle to a client that never said it could hold one
-    // strands the work: the client reads a handle it will never redeem.
-    if reaches_tasks_extension(method.as_str(), params)
-        && !declared_extensions.contains(crate::protocol::extensions::Extension::Tasks)
-    {
-        return build_error_response_with_data(
-            Some(id.clone()),
-            crate::protocol::era::MISSING_REQUIRED_CLIENT_CAPABILITY,
-            format!("'{method}' requires the '{TASKS_EXTENSION}' extension to be declared"),
-            json!({ "requiredCapabilities": { "extensions": { TASKS_EXTENSION: {} } } }),
-            &session_id,
-            StatusCode::BAD_REQUEST,
-        );
-    }
-
-    // Resolved ONCE, here, and reused by creation, retrieval, cancellation,
-    // idempotent replay and subscription ownership below.
-    let (owner, events_owner, admission_owner) = tasks::route_owners(
-        &state,
-        verified_identity.as_ref(),
-        oauth_agent_identity.as_ref(),
-        (
-            grant_subject.as_ref(),
-            cert_identity.as_ref(),
-            client.as_ref(),
-        ),
-    );
-
-    // An empty owner key is not an identity (`task_owner_key`); the firewall
-    // refuses on it too. On a gateway that HAS identities, every credential-less
-    // caller would own every other one's tasks. `/mcp` is public in the shipped
-    // presets: exactly where credentialled and unattributed callers meet.
-    //
-    // Auth DISABLED is not a defect: a validated agent JWT owns its tasks apart
-    // (`route_task_owner`) and every other caller shares one pool, the
-    // operator's own choice (`anonymous_client`) that a refusal would break.
-    let unattributed = owner.is_empty() && state.auth_config.enabled;
-
-    // The refusal names nothing. An unattributed caller must not be able to
-    // tell "no task here is yours" from "that task does not exist", which is
-    // the same disclosure `missing_task_error` exists to prevent — so it is the
-    // same answer, and `subscriptions/listen` is excluded because on that path
-    // silence IS the refusal (see below).
-    if unattributed
-        && method != "subscriptions/listen"
-        && reaches_tasks_extension(method.as_str(), params)
-    {
-        // The early return skips the tail that counts every other JSON-RPC
-        // answer, so the refusal is counted here or it is invisible: an
-        // operator watching this counter would see the task probes of a
-        // credential-less caller as no traffic at all. `record_client_failure`
-        // is deliberately NOT called — the caller has no identity to hold a
-        // breaker against, which is the whole reason it is being refused.
-        telemetry_metrics::counter!(
-            "mcp_jsonrpc_requests_total",
-            "method" => method.clone(),
-            "status" => "error"
-        )
-        .increment(1);
-        return build_response(
-            crate::gateway::task_route::missing_task_error(id),
-            &session_id,
-            StatusCode::OK,
-        );
-    }
-
-    // A `subscriptions/listen` naming tasks and nothing else HAS said what it
-    // wants, so the empty notification filter is synthesised rather than
-    // refused. Ownership narrows the stream in silence: a task another
-    // principal owns must be indistinguishable from one that never existed, and
-    // a refusal would announce the difference. A caller with no credential
-    // under authentication is refused at the listen arm, whatever ids it names.
-    // Borrowed from `request` for every method but this one, which narrows a
-    // private copy; `tools/call` payloads are never duplicated here.
-    let mut narrowed_listen: Option<Value> = None;
-    if method == "subscriptions/listen" {
-        let ids = listened_task_ids(params);
-        if !ids.is_empty() {
-            let caller_holds_ids =
-                !unattributed && state.tasks.owns_all(&owner, ids.iter().map(String::as_str));
-            narrowed_listen = params.cloned();
-            if let Some(map) = narrowed_listen.as_mut().and_then(Value::as_object_mut) {
-                map.entry("notifications").or_insert_with(|| json!({}));
-                if !caller_holds_ids {
-                    // Both placements: a copy left standing would opt the
-                    // stream into a task the caller does not own.
-                    map.insert("taskIds".into(), json!([]));
-                    if let Some(filter) = map
-                        .get_mut("notifications")
-                        .and_then(Value::as_object_mut)
-                        .filter(|filter| filter.contains_key("taskIds"))
-                    {
-                        filter.insert("taskIds".into(), json!([]));
-                    }
-                }
-            }
-        }
-    }
-
-    let params = narrowed_listen.as_ref().or(params);
-
-    let external_tool = if method == "tools/call" {
-        extract_tools_call_params_ref(params).0.to_owned()
-    } else {
-        method.clone()
-    };
+    let (request, method, external_tool) = (&intake.request, &intake.method, &intake.external_tool);
+    let (owner, events_owner, admission_owner) =
+        (&intake.owner, &intake.events_owner, &intake.admission_owner);
+    let (protocol_revision_owned, header_profile) =
+        (&intake.protocol_revision_owned, &intake.header_profile);
+    let (code_mode_url_active, surface_request) =
+        (intake.code_mode_url_active, intake.surface_request);
+    let (era, is_modern, declared_capabilities) =
+        (intake.era, intake.is_modern, intake.declared_capabilities);
+    let params = intake.params();
+    // Each arm consumes the id, as it consumed the prelude's local.
+    let id = intake.id.clone();
     let mut response_targets =
-        crate::gateway::meta_mcp::response_security::meta_response_targets(&external_tool, &[]);
+        crate::gateway::meta_mcp::response_security::meta_response_targets(external_tool, &[]);
     let mut execution = None;
 
     // Route to appropriate handler
@@ -744,12 +247,12 @@ async fn meta_mcp_dispatch(
     // an operator action. Checked before dispatch so a case variant of the
     // method meets the same refusal as the canonical name.
     if let Err(e) = require_admin_log_level(
-        &method,
+        method,
         scope,
         router_authorizer.principal.as_deref(),
         "gateway",
     ) {
-        return build_error_response(Some(id), e.code, e.message, &session_id, e.status);
+        return build_error_response(Some(id), e.code, e.message, session_id, e.status);
     }
     let mut response = match method.as_str() {
         "subscriptions/listen" => {
@@ -769,7 +272,7 @@ async fn meta_mcp_dispatch(
                     Some(id),
                     -32602,
                     "subscriptions/listen requires a 'notifications' filter",
-                    &session_id,
+                    session_id,
                     StatusCode::BAD_REQUEST,
                 );
             };
@@ -784,7 +287,7 @@ async fn meta_mcp_dispatch(
             // so admitting it would only hold one of the slots.
             let listener = match state
                 .subscriptions
-                .subscribe_as(crate::gateway::auth::live::held_credential(&headers))
+                .subscribe_as(crate::gateway::auth::live::held_credential(headers))
                 .await
             {
                 Ok(listener) => listener,
@@ -793,7 +296,7 @@ async fn meta_mcp_dispatch(
                         Some(id),
                         -32001,
                         "subscriptions/listen requires a credential that authenticates",
-                        &session_id,
+                        session_id,
                         StatusCode::UNAUTHORIZED,
                     );
                 }
@@ -802,7 +305,7 @@ async fn meta_mcp_dispatch(
                         Some(id),
                         -32003,
                         "too many open subscriptions",
-                        &session_id,
+                        session_id,
                         StatusCode::SERVICE_UNAVAILABLE,
                     );
                 }
@@ -838,7 +341,7 @@ async fn meta_mcp_dispatch(
                     input_capabilities: declared_capabilities,
                     session_id: Some(session_id.as_str()),
                 };
-                tasks::task_frames(&state, &owner, &reader)
+                tasks::task_frames(&state, owner, &reader)
             });
             let judge = state.meta_mcp.stream_judge(read_guard, read_key);
             return crate::gateway::streaming::subscription_stream(
@@ -860,7 +363,7 @@ async fn meta_mcp_dispatch(
             let hub = std::sync::Arc::clone(state.meta_mcp.events().expect("guarded above"));
             let session = Some(session_id.as_str());
             let caller = crate::events::Caller {
-                principal: events::principal(&events_owner, state.auth_config.enabled),
+                principal: events::principal(events_owner, state.auth_config.enabled),
                 read_key: read_key.clone(),
                 credential: presented.credential(client.as_ref(), &state),
                 visible_backends: hub
@@ -870,7 +373,7 @@ async fn meta_mcp_dispatch(
                     .collect(),
                 admin: CallerStanding::of_client(client.as_ref()) == CallerStanding::Admin,
             };
-            events::answer(&hub, id, &method, params, &caller).await
+            events::answer(&hub, id, method, params, &caller).await
         }
         // 2026-07-28 MUST. Deliberately ahead of `initialize`: discovery is what
         // a peer calls when it has no handshake to make.
@@ -970,7 +473,7 @@ async fn meta_mcp_dispatch(
                 &arguments,
                 client.as_ref(),
                 grant_subject.as_ref(),
-                &session_id,
+                session_id,
             );
             if retry.is_malformed() {
                 // Neither a usable retry nor a fresh call. Running it as a fresh
@@ -998,7 +501,7 @@ async fn meta_mcp_dispatch(
                 )
                 .await
             {
-                return build_error_response(Some(id), e.code, e.message, &session_id, e.status);
+                return build_error_response(Some(id), e.code, e.message, session_id, e.status);
             }
 
             let backend_targets =
@@ -1066,7 +569,7 @@ async fn meta_mcp_dispatch(
                             cert_identity.as_ref(),
                             client.as_ref(),
                         ),
-                        &session_id,
+                        session_id,
                         existing_session_id.as_deref(),
                     );
                     // Renew the reclaim deadline on every call (`IDLE_TTL`). An
@@ -1080,7 +583,7 @@ async fn meta_mcp_dispatch(
                         );
                     }
                     let verdict = fw.check_request(
-                        &session_id,
+                        session_id,
                         target.server,
                         target.tool,
                         target.arguments,
@@ -1236,7 +739,7 @@ async fn meta_mcp_dispatch(
                         is_modern,
                         retry: &retry,
                         verified_identity: verified_identity.as_ref(),
-                        owner: &owner,
+                        owner,
                         client: client.as_ref(),
                         oauth_agent_identity: oauth_agent_identity.as_ref(),
                         cert_identity: cert_identity.as_ref(),
@@ -1253,7 +756,7 @@ async fn meta_mcp_dispatch(
                 ) {
                     Ok(intent) => intent,
                     Err(refusal) => {
-                        return build_response(*refusal, &session_id, StatusCode::BAD_REQUEST);
+                        return build_response(*refusal, session_id, StatusCode::BAD_REQUEST);
                     }
                 }
             } else {
@@ -1338,7 +841,7 @@ async fn meta_mcp_dispatch(
                     context,
                     tool_name,
                     &arguments,
-                    Some(&session_id),
+                    Some(session_id),
                     &caller,
                 )
             {
@@ -1346,17 +849,17 @@ async fn meta_mcp_dispatch(
                     Some(id),
                     error.to_rpc_code(),
                     crate::gateway::meta_mcp::signing::wire_error_message(&error),
-                    &session_id,
+                    session_id,
                     StatusCode::BAD_REQUEST,
                 );
             }
             caller.signing = signing_context.as_ref();
             let admission = state.meta_mcp.admit_meta_sync(
-                crate::gateway::meta_mcp::AdmissionOwner::routed(&admission_owner),
+                crate::gateway::meta_mcp::AdmissionOwner::routed(admission_owner),
                 &caller,
                 tool_name,
                 &arguments,
-                Some(&session_id),
+                Some(session_id),
                 &id,
             );
             let (owned_execution, replay) = match admission {
@@ -1379,7 +882,7 @@ async fn meta_mcp_dispatch(
                         Some(id),
                         error.to_rpc_code(),
                         error.to_string(),
-                        &session_id,
+                        session_id,
                         status,
                     );
                 }
@@ -1417,7 +920,7 @@ async fn meta_mcp_dispatch(
                 grant_subject.as_ref(),
                 cert_identity.as_ref(),
                 client.as_ref(),
-                &session_id,
+                session_id,
             );
             // Boxed like `handle_tools_call` above: an inline future would
             // enlarge `meta_mcp_dispatch`'s own state, which every request
@@ -1452,7 +955,7 @@ async fn meta_mcp_dispatch(
                 grant_subject.as_ref(),
                 cert_identity.as_ref(),
                 client.as_ref(),
-                &session_id,
+                session_id,
             );
             Box::pin(relay::as_caller(
                 caller,
@@ -1469,7 +972,7 @@ async fn meta_mcp_dispatch(
 
         "sampling/createMessage" => {
             let sampling_params =
-                match parse_sampling_params(id.clone(), params.cloned(), &session_id) {
+                match parse_sampling_params(id.clone(), params.cloned(), session_id) {
                     Ok(p) => p,
                     Err(resp) => return resp,
                 };
@@ -1478,7 +981,7 @@ async fn meta_mcp_dispatch(
             let timeout = std::time::Duration::from_secs(120);
             match state
                 .proxy_manager
-                .forward_sampling_with_response(&session_id, &sampling_params, timeout)
+                .forward_sampling_with_response(session_id, &sampling_params, timeout)
                 .await
             {
                 Ok(result) => JsonRpcResponse::success(id, result),
@@ -1488,7 +991,7 @@ async fn meta_mcp_dispatch(
 
         "elicitation/create" => {
             let elicitation_params =
-                match parse_elicitation_params(id.clone(), params.cloned(), &session_id) {
+                match parse_elicitation_params(id.clone(), params.cloned(), session_id) {
                     Ok(p) => p,
                     Err(resp) => return resp,
                 };
@@ -1497,7 +1000,7 @@ async fn meta_mcp_dispatch(
             let timeout = std::time::Duration::from_secs(120);
             match state
                 .proxy_manager
-                .forward_elicitation_with_response(&session_id, &elicitation_params, timeout)
+                .forward_elicitation_with_response(session_id, &elicitation_params, timeout)
                 .await
             {
                 Ok(result) => JsonRpcResponse::success(id, result),
@@ -1537,18 +1040,18 @@ async fn meta_mcp_dispatch(
                 session_id: Some(session_id.as_str()),
             };
             if method == "tasks/get" {
-                tasks::tasks_get(&state, &owner, id.clone(), params, &caller).await
+                tasks::tasks_get(&state, owner, id.clone(), params, &caller).await
             } else {
                 let update = (params, surface_request);
-                tasks::tasks_update(&state, &owner, id.clone(), update, &caller).await
+                tasks::tasks_update(&state, owner, id.clone(), update, &caller).await
             }
         }
-        "tasks/cancel" => tasks::tasks_cancel(&state, &owner, id.clone(), params).await,
+        "tasks/cancel" => tasks::tasks_cancel(&state, owner, id.clone(), params).await,
         _ => JsonRpcResponse::error(Some(id), -32601, format!("Method not found: {method}")),
     };
 
     let stamps = if is_modern {
-        shape_modern_response(&mut response, &method)
+        shape_modern_response(&mut response, method)
     } else {
         crate::gateway::meta_mcp::invoke::relay::GatewayStamps::Legacy
     };
@@ -1556,13 +1059,13 @@ async fn meta_mcp_dispatch(
         .as_ref()
         .map_or("anonymous", |client| client.name.as_str());
     let delivery = crate::gateway::meta_mcp::response_security::ResponseDeliveryContext {
-        method: &method,
+        method,
         targets: &response_targets,
         correlation: crate::security::response_policy::ResponseCorrelation {
-            session_id: &session_id,
+            session_id,
             caller,
             external_server: "gateway",
-            external_tool: &external_tool,
+            external_tool,
             subject: grant_subject.as_ref(),
         },
         signing: signing_context.as_ref(),
@@ -1603,7 +1106,7 @@ async fn meta_mcp_dispatch(
     // MIK-7887.RECEIPT.4: the receipt describes this, the delivered answer.
     {
         use crate::gateway::meta_mcp::invoke::relay::AnswerShape;
-        let shape = AnswerShape::of(&external_tool);
+        let shape = AnswerShape::of(external_tool);
         state
             .meta_mcp
             .rebuild_receipt_from_final(response.result.as_ref(), stamps, shape);
@@ -1620,7 +1123,7 @@ async fn meta_mcp_dispatch(
 
     // A confirmation or delivery refusal is the gate working, not a misbehaving
     // client: excluded from BOTH arms (a success would clear a tripped breaker).
-    if let Some(ref client) = client
+    if let Some(client) = client
         && !response.excludes_client_accounting()
     {
         if response.error.is_some() {
@@ -1656,7 +1159,7 @@ async fn meta_mcp_dispatch(
         // session header — the legacy path below keeps both unchanged.
         return crate::gateway::outbound::to_http(frame, status, "");
     }
-    crate::gateway::outbound::to_http(frame, status, &session_id)
+    crate::gateway::outbound::to_http(frame, status, session_id)
 }
 
 /// The HTTP status a response deserves when it carries an authorization
