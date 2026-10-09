@@ -41,6 +41,16 @@ fn a_successor_title_may_contain_a_colon() {
         successor_name("Nothing known: why", doc, &pending),
         "Nothing known"
     );
+    // Overlapping titles: the longer one that fits wins, not the first listed.
+    let overlap = "## 4. OAuth: issuer\n\n## 5. OAuth: issuer credentials\n";
+    assert_eq!(
+        successor_name("OAuth: issuer credentials: why", overlap, &[]),
+        "OAuth: issuer credentials"
+    );
+    assert_eq!(
+        successor_name("OAuth: issuer: why", overlap, &[]),
+        "OAuth: issuer"
+    );
 }
 
 /// Titles of the pending fragments the checks see: none when `UPGRADING_DOC`

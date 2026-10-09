@@ -367,16 +367,24 @@ class Deletions(unittest.TestCase):
 
 class Ceiling(unittest.TestCase):
     def test_unchanged_or_cutover_passes(self):  # green controls
-        self.assertEqual(uf.check_ceiling(173, 173, 0), [])
-        self.assertEqual(uf.check_ceiling(None, 175, 0), [])
+        self.assertEqual(uf.check_ceiling(173, 173, set()), [])
+        self.assertEqual(uf.check_ceiling(None, 175, set()), [])
 
-    def test_a_rise_matching_the_fold_passes(self):
-        self.assertEqual(uf.check_ceiling(173, 175, 2), [])
+    def test_a_rise_held_by_folded_fragments_passes(self):
+        self.assertEqual(uf.check_ceiling(173, 175, {174, 175}), [])
 
     def test_a_rise_beside_a_hand_numbered_item_is_refused(self):
-        errors = uf.check_ceiling(173, 174, 0)
+        errors = uf.check_ceiling(173, 174, set())
         self.assertTrue(any("173" in e and "174" in e and "upgrading.d/<pr>.md" in e for e in errors), errors)
-        self.assertTrue(uf.check_ceiling(173, 176, 2))
+
+    def test_a_fold_into_an_old_gap_does_not_cover_a_new_number(self):
+        # The fragment landed on gap number 2; the new 174 is hand-numbered.
+        errors = uf.check_ceiling(173, 174, {2})
+        self.assertTrue(any("[174]" in e for e in errors), errors)
+
+    def test_folded_numbers_come_from_the_guide(self):
+        self.assertEqual(uf.folded_numbers([("D", "upgrading.d/3700.md")], FOLDED, Deletions.BASE), {4})
+        self.assertEqual(uf.folded_numbers([("M", "upgrading.d/3700.md")], FOLDED, Deletions.BASE), set())
 
 
 class Wiring(unittest.TestCase):

@@ -236,17 +236,34 @@ def check_deletions(changes: list[tuple[str, str]], head_doc: str, base_fragment
     return errors
 
 
-def check_ceiling(base_max: int | None, head_max: int, folded: int) -> list[str]:
-    """`.frozen-max` rises only by folding fragments: by exactly as many as the
-    PR folds. Raising it beside a hand-numbered item would reopen the race
-    fragments close. None: the base has no ceiling yet (the cutover itself)."""
+def folded_numbers(changes: list[tuple[str, str]], head_doc: str, base_fragments: dict[str, str]) -> set[int]:
+    """The item numbers the fragments this PR deletes now hold in the guide."""
+    titles = _titles(head_doc)
+    numbers = set()
+    for status, path in changes:
+        name = path.removeprefix(f"{FRAGMENT_DIR}/")
+        if status != "D" or name == path or not NAME.match(name):
+            continue
+        fragment, _ = parse(name, base_fragments.get(name, ""))
+        if fragment is not None and fragment.title in titles:
+            numbers.add(titles[fragment.title])
+    return numbers
+
+
+def check_ceiling(base_max: int | None, head_max: int, folded: set[int]) -> list[str]:
+    """`.frozen-max` rises only by folding fragments: every number from the old
+    ceiling + 1 to the new one must be held by a fragment this PR folds.
+    Raising it beside a hand-numbered item would reopen the race fragments
+    close. None: the base has no ceiling yet (the cutover itself)."""
     if base_max is None or head_max <= base_max:
         return []
-    if head_max - base_max == folded:
+    unfolded = sorted(set(range(base_max + 1, head_max + 1)) - folded)
+    if not unfolded:
         return []
     return [
-        f"{FRAGMENT_DIR}/{FROZEN_MAX} rises from {base_max} to {head_max}, but this PR folds {folded} fragment(s). "
-        f"Only `upgrading_fragments.py assemble` raises it; add the entry as {FRAGMENT_DIR}/<pr>.md instead"
+        f"{FRAGMENT_DIR}/{FROZEN_MAX} rises from {base_max} to {head_max}, but item(s) {unfolded} hold no "
+        f"fragment this PR folds. Only `upgrading_fragments.py assemble` raises it; add the entry as "
+        f"{FRAGMENT_DIR}/<pr>.md instead"
     ]
 
 
@@ -294,14 +311,15 @@ def main(argv: list[str]) -> int:
             rows = [r.split("\t", 1) for r in _git("diff", "--name-status", "--no-renames", f"{args.base}...{args.head}").splitlines() if r]
             gone = [p.removeprefix(f"{FRAGMENT_DIR}/") for s, p in rows if s == "D" and p.startswith(f"{FRAGMENT_DIR}/")]
             base = {n: _git("show", f"{args.base}:{FRAGMENT_DIR}/{n}") for n in gone if NAME.match(n)}
-            deletion_errors = check_deletions([tuple(r) for r in rows], _git("show", f"{args.head}:{DOC}"), base)
+            head_doc = _git("show", f"{args.head}:{DOC}")
+            deletion_errors = check_deletions([tuple(r) for r in rows], head_doc, base)
             errors += deletion_errors
             try:
                 base_max = int(_git("show", f"{args.base}:{FRAGMENT_DIR}/{FROZEN_MAX}").strip())
             except subprocess.CalledProcessError:
                 base_max = None
             head_max = int(_git("show", f"{args.head}:{FRAGMENT_DIR}/{FROZEN_MAX}").strip())
-            folded = len(base) if not deletion_errors else 0
+            folded = folded_numbers([tuple(r) for r in rows], head_doc, base) if not deletion_errors else set()
             errors += check_ceiling(base_max, head_max, folded)
         for e in errors:
             print(f"error: {e}", file=sys.stderr)
