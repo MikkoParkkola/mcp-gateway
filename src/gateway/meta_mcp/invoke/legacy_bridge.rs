@@ -90,6 +90,7 @@ impl MetaMcp {
             let bridged = Box::pin(run_input_bridge(
                 BridgeDispatcher {
                     meta: self,
+                    caller,
                     server,
                     tool,
                     arguments,
