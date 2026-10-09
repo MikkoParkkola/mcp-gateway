@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/sealed_hold.rs b/src/gateway/meta_mcp/sealed_hold.rs
+index ee6550291..b26fa9b54 100644
+--- a/src/gateway/meta_mcp/sealed_hold.rs
++++ b/src/gateway/meta_mcp/sealed_hold.rs
+@@ -28,7 +28,7 @@ pub(crate) struct SealedHold {
+ 
+ impl Drop for SealedHold {
+     fn drop(&mut self) {
+-        if !self.handed_off.load(Ordering::Acquire) {
++        if false && !self.handed_off.load(Ordering::Acquire) {
+             // Stage 1 counts; the release itself arrives with the handoffs.
+             self.continuation
+                 .hold_counts()

@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/sealed_hold.rs b/src/gateway/meta_mcp/sealed_hold.rs
+index ee6550291..25b7641e0 100644
+--- a/src/gateway/meta_mcp/sealed_hold.rs
++++ b/src/gateway/meta_mcp/sealed_hold.rs
+@@ -48,9 +48,6 @@ tokio::task_local! {
+ /// take. Inside an open scope this adds nothing, so the outermost boundary
+ /// owns them: an inner scope ending cannot drop them early.
+ pub(crate) async fn scoped<F: Future>(future: F) -> F::Output {
+-    if HOLDS.try_with(|_| ()).is_ok() {
+-        return future.await;
+-    }
+     HOLDS.scope(Arc::default(), future).await
+ }
+ 
