@@ -1,0 +1,12 @@
+diff --git a/src/protocol/messages.rs b/src/protocol/messages.rs
+index 50d965380..5f72d1955 100644
+--- a/src/protocol/messages.rs
++++ b/src/protocol/messages.rs
+@@ -547,6 +547,7 @@ pub struct ElicitationCreateResult {
+ #[derive(Debug, Clone, Serialize, Deserialize)]
+ pub struct SamplingCreateMessageParams {
+     /// Messages for the sampling request
++    #[serde(default)]
+     pub messages: Vec<super::SamplingMessage>,
+     /// Tools available for the model to use
+     #[serde(skip_serializing_if = "Option::is_none")]

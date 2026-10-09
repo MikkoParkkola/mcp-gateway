@@ -1,0 +1,3 @@
+head_sha	7ce9c25925d749ddd990932cffa4d9dd1d83b2bd
+mw3-sampling-invalid-answers-ok	linux	mw3-sampling-invalid-answers-ok.patch	--lib -- parse_sampling_params_invalid_returns_bad_request_with_context
+mw5-sampling-messages-optional	linux	mw5-sampling-messages-optional.patch	--lib -- parse_sampling_params_invalid_returns_bad_request_with_context
