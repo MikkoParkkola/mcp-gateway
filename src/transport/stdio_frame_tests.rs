@@ -458,6 +458,70 @@ async fn dropping_the_transport_ends_a_write_stuck_on_an_escaped_reader() {
     );
 }
 
+/// MIK-7923 T1-stdin: a retire, with the transport still held and no close,
+/// ends a write stuck on an escaped reader and frees stdin. The request fails
+/// at the stdout-closed latch either way; the write itself holds stdin until
+/// the per-start token is cancelled, which `kill_tree_now` does.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_retire_frees_a_write_stuck_on_an_escaped_reader() {
+    use crate::transport::Transport as _;
+    use std::collections::HashMap;
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("escaped.pid");
+    let _reaper = KillEscapedOnDrop(pidfile.clone());
+    let reply = r#"'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'"#;
+    let script = format!(
+        "while IFS= read -r line; do\n\
+         case \"$line\" in\n\
+         *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
+         *'notifications/initialized'*) exec 3<&0; setsid sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
+         esac\ndone\n",
+        pid = pidfile.display()
+    );
+    std::fs::write(dir.path().join("escape.sh"), script).unwrap();
+    let transport = super::StdioTransport::new(
+        "sh escape.sh",
+        HashMap::new(),
+        Some(dir.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(30),
+        None,
+    );
+    transport.start().await.expect("start");
+    let writer = std::sync::Arc::clone(&transport.writer);
+    let big = serde_json::json!({ "name": "x", "arguments": { "blob": "a".repeat(256 * 1024) } });
+    let stuck = {
+        let transport = std::sync::Arc::clone(&transport);
+        tokio::spawn(async move { transport.request("tools/call", Some(big)).await })
+    };
+    for _ in 0..100 {
+        if !std::fs::read_to_string(&pidfile)
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let held = writer.try_lock().is_err();
+    transport.kill_tree_now();
+    let mut freed = false;
+    for _ in 0..50 {
+        if writer.try_lock().is_ok() {
+            freed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    stuck.abort();
+    let _ = stuck.await;
+    assert!(held, "precondition: the write holds stdin");
+    assert!(freed, "a retire left a stuck write holding stdin");
+    drop(transport);
+}
+
 /// `MIK-8099.ROW.1`: a write queued behind the stdin lock while the shutdown
 /// token is renewed (what `close()` then `start()` do to it) takes the NEW
 /// token: the token is read under the stdin lock, so the old token's cancel
@@ -512,4 +576,113 @@ async fn a_write_queued_across_a_token_renewal_takes_the_new_token() {
         matches!(written, Ok(Ok(()))),
         "the old token's cancel ended a write queued before the renewal: {written:?}"
     );
+}
+
+/// MIK-7923 T1-install: a restart parked at the writer lock on an idle runtime
+/// has spawned nothing, so a retire there misses no child. The server logs
+/// each launch; while the runtime idles there is still only the first. Driven
+/// again, the restart spawns, finds the transport retired, installs nothing,
+/// and the fresh tree is ended.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_restart_parked_on_the_writer_lock_spawns_nothing_a_retire_misses() {
+    use crate::transport::Transport as _;
+    use std::collections::HashMap;
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("escaped.pid");
+    let launches = dir.path().join("launches");
+    let _reaper = KillEscapedOnDrop(pidfile.clone());
+    let reply = r#"'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'"#;
+    let script = format!(
+        "echo $$ >> \"{launches}\"\n\
+         while IFS= read -r line; do\n\
+         case \"$line\" in\n\
+         *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
+         *'notifications/initialized'*) exec 3<&0; setsid sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
+         esac\ndone\n",
+        pid = pidfile.display(),
+        launches = launches.display()
+    );
+    std::fs::write(dir.path().join("escape.sh"), script).unwrap();
+    let launched = || -> Vec<String> {
+        std::fs::read_to_string(&launches)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let transport = super::StdioTransport::new(
+        "sh escape.sh",
+        HashMap::new(),
+        Some(dir.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(30),
+        None,
+    );
+    let restart = runtime.block_on(async {
+        transport.start().await.expect("first start");
+        // A write stuck on the escaped reader holds the writer lock.
+        let big =
+            serde_json::json!({ "name": "x", "arguments": { "blob": "a".repeat(256 * 1024) } });
+        let writing = std::sync::Arc::clone(&transport);
+        tokio::spawn(async move { writing.request("tools/call", Some(big)).await });
+        while transport.writer.try_lock().is_ok() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let restarting = std::sync::Arc::clone(&transport);
+        let restart = tokio::spawn(async move { restarting.start().await });
+        // Let the restart run up to the writer lock and park there.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        restart
+    });
+    // The runtime idles from here until the restart is driven again.
+    let first = launched();
+    transport.kill_tree_now();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let while_idle = launched();
+    let outcome = runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(10), restart).await
+    });
+    let all = launched();
+    let alive = |pid: &str| {
+        std::process::Command::new("kill")
+            .args(["-0", pid])
+            .status()
+            .is_ok_and(|status| status.success())
+    };
+    let mut fresh_gone = false;
+    for _ in 0..50 {
+        if all.get(1).is_none_or(|pid| !alive(pid)) {
+            fresh_gone = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    for pid in &all {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", pid])
+            .status();
+    }
+    drop(runtime);
+    assert_eq!(
+        first.len(),
+        1,
+        "a restart parked at the writer lock had already spawned"
+    );
+    assert_eq!(
+        while_idle.len(),
+        1,
+        "the parked restart spawned before taking the writer lock"
+    );
+    let refused = outcome
+        .expect("the restart finished once driven")
+        .expect("no panic");
+    assert!(
+        matches!(refused, Err(crate::Error::BackendNotFound(_))),
+        "a retired transport installed a fresh tree: {refused:?}"
+    );
+    assert!(fresh_gone, "the refused start's tree outlived the retire");
 }

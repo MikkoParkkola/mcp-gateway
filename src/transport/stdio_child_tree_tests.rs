@@ -420,3 +420,67 @@ async fn a_failed_start_signals_the_group_before_the_reap() {
     );
     gone(child).await;
 }
+
+/// MIK-7923 T1-stall: a tree still unreaped at `REAP_DEADLINE` is given up,
+/// with its signal gate closed, rather than waited on. Deterministic: the
+/// step is handed a `now` past the deadline.
+#[tokio::test]
+async fn a_reap_step_past_its_deadline_gives_up() {
+    let (w, t) = started(
+        &format!("{DESCENDANT}\nwhile IFS= read -r l; do :; done"),
+        None,
+    )
+    .await;
+    let child = descendant(w.path()).await;
+    let mut tree = t.child.lock().tree.take().expect("a started tree");
+    let first = std::time::Instant::now();
+    assert!(matches!(tree.reap_step(first), Reap::Pending));
+    let late = first + super::REAP_DEADLINE + Duration::from_millis(1);
+    assert!(
+        matches!(tree.reap_step(late), Reap::Done(None)),
+        "a step past the deadline gives up unreaped"
+    );
+    let sent_before_drop = tree.group_signals_sent;
+    drop(tree);
+    // The gate is closed: the drop path sent nothing more.
+    assert_eq!(
+        sent_before_drop, 1,
+        "only the close signal before giving up"
+    );
+    gone(child).await;
+}
+
+/// MIK-7923 T1-burst: twenty trees handed to the reaper at once are each
+/// finished within `REAP_DEADLINE` of their own handover: one tree's grace
+/// delays no other.
+#[tokio::test]
+async fn twenty_handed_over_trees_each_finish_within_their_deadline() {
+    super::super::reaper::ensure_started().expect("reaper");
+    let mut handed = Vec::new();
+    for _ in 0..20 {
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.args(["-c", "exec sleep 60"]);
+        let tree = ChildTree::new(super::super::spawn_in_own_tree(cmd).expect("spawn"));
+        handed.push((
+            std::time::Instant::now(),
+            super::super::reaper::hand_over(tree),
+        ));
+    }
+    for (at, mut done) in handed {
+        tokio::time::timeout(
+            super::REAP_DEADLINE + Duration::from_millis(500),
+            done.wait_for(|state| matches!(state, super::super::reaper::Reaped::Done(_))),
+        )
+        .await
+        .expect("finished in time")
+        .expect("reaper alive");
+        assert!(
+            at.elapsed() < super::REAP_DEADLINE + Duration::from_millis(500),
+            "a tree waited behind the others"
+        );
+        assert!(
+            matches!(*done.borrow(), super::super::reaper::Reaped::Done(Some(_))),
+            "reaped, not abandoned"
+        );
+    }
+}
