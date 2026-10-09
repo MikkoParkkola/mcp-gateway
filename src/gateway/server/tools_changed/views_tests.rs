@@ -34,7 +34,10 @@ const U1: &str = "idp:3:sub:3:aud";
 fn a_first_fill_announces_once_and_an_identical_refill_never() {
     let mut views = Views::new(1);
     let tools = [tool("x", "one")];
-    assert!(!views.slot(U1, SlotSeen::Unfilled), "an open, unfilled slot");
+    assert!(
+        !views.slot(U1, SlotSeen::Unfilled),
+        "an open, unfilled slot"
+    );
     assert!(views.slot(U1, holds(&tools)), "first fill after nothing");
     assert!(!views.slot(U1, holds(&tools)), "identical refill");
 }
@@ -65,12 +68,19 @@ fn a_token_refresh_with_the_same_tools_is_silent() {
 fn a_late_store_into_an_old_revision_cannot_hide_the_current_change() {
     // K1: r1 {x}, r2 {y}, late r1 {z}, then r3 {z}.
     let mut views = Views::new(1);
-    let (r1, r2, r3) = (acct("d", "g", 1, 1), acct("d", "g", 1, 2), acct("d", "g", 1, 3));
+    let (r1, r2, r3) = (
+        acct("d", "g", 1, 1),
+        acct("d", "g", 1, 2),
+        acct("d", "g", 1, 3),
+    );
     let (x, y, z) = ([tool("x", "")], [tool("y", "")], [tool("z", "")]);
     assert!(views.slot(&r1, holds(&x)));
     assert!(views.slot(&r2, holds(&y)));
     assert!(views.slot(&r1, holds(&z)), "an extra hint is allowed");
-    assert!(views.slot(&r3, holds(&z)), "r3 inherits r2's {{y}}, not r1's {{z}}");
+    assert!(
+        views.slot(&r3, holds(&z)),
+        "r3 inherits r2's {{y}}, not r1's {{z}}"
+    );
 }
 
 #[test]
@@ -131,7 +141,10 @@ fn a_recompute_sees_a_blocked_tool_and_an_evicted_slot() {
     assert!(views.slot("idp:1:b:0:", holds(&x)));
     // A verdict blocks y: U1's served view loses it; the other slot is gone.
     assert!(views.recompute(&[(U1.to_string(), holds(&x))]));
-    assert!(!views.recompute(&[(U1.to_string(), holds(&x))]), "said once");
+    assert!(
+        !views.recompute(&[(U1.to_string(), holds(&x))]),
+        "said once"
+    );
 }
 
 #[test]
@@ -140,6 +153,18 @@ fn a_replacement_instance_compares_with_what_its_predecessor_showed() {
     let tools = [tool("x", "one")];
     assert!(views.slot(U1, holds(&tools)));
     assert!(!views.adopt(2));
-    assert!(!views.slot(U1, holds(&tools)), "same tools after replacement");
+    assert!(
+        !views.slot(U1, holds(&tools)),
+        "same tools after replacement"
+    );
     assert!(views.slot(U1, holds(&[tool("x", "two")])));
+}
+
+#[test]
+fn a_revoked_grant_announces_the_loss_once() {
+    let mut views = Views::new(1);
+    assert!(views.slot(U1, holds(&[tool("x", "one")])));
+    assert!(views.revoked(U1), "the caller lost what it saw");
+    assert!(!views.revoked(U1), "said once");
+    assert!(!views.any_shown(), "no tombstone after a revocation");
 }

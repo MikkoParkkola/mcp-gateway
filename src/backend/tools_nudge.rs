@@ -117,8 +117,12 @@ impl super::Backend {
         let (super::PoolKey::PerUser { binding }, Some(feed)) = (key, self.nudge_feed.get()) else {
             return;
         };
-        let (feed, name, instance, binding) =
-            (feed.clone(), self.name.clone(), self.instance, binding.clone());
+        let (feed, name, instance, binding) = (
+            feed.clone(),
+            self.name.clone(),
+            self.instance,
+            binding.clone(),
+        );
         entry.tools_cache.observe_stores(Arc::new(move || {
             let _ = feed.send(ToolsNudge::Binding {
                 name: name.clone(),
@@ -155,6 +159,19 @@ impl super::Backend {
             Some(tools) => SlotView::Holds(self.without_blocked(tools)),
             None => SlotView::Unfilled,
         }
+    }
+
+    /// Store `tools` into per-user slot `binding`, opening it if needed, the
+    /// way a fill does, so its observer runs.
+    #[cfg(test)]
+    pub(crate) fn store_per_user_tools_for_test(&self, binding: &str, tools: Vec<Tool>) {
+        let key = super::PoolKey::PerUser {
+            binding: binding.to_string(),
+        };
+        self.pooled_entry(&key)
+            .expect("a per-user slot is admitted")
+            .tools_cache
+            .replace(tools, || ());
     }
 
     /// Every per-user slot's binding, for a backend-wide recompute.
