@@ -9,6 +9,9 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
+#[path = "interest.rs"]
+mod interest;
+
 #[derive(Clone, Default)]
 struct Captured(Arc<Mutex<Vec<u8>>>);
 
@@ -28,6 +31,7 @@ impl Write for Captured {
 
 /// Every ERROR line `body` logs on this thread.
 pub fn errors_logged(body: impl FnOnce()) -> String {
+    interest::keep_interest_open();
     let captured = Captured::default();
     let writer = captured.clone();
     let subscriber = tracing_subscriber::fmt()

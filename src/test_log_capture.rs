@@ -7,6 +7,13 @@
 
 use std::sync::{Arc, Mutex};
 
+// The one keeper, shared with the binary's capture (MIK-8254).
+#[path = "test_support/interest.rs"]
+mod interest;
+// Re-exported at its old path: callers outside this file (#3696) use
+// `crate::test_log_capture::keep_interest_open`.
+pub(crate) use interest::keep_interest_open;
+
 #[derive(Clone, Default)]
 struct Sink(Arc<Mutex<Vec<u8>>>);
 
@@ -64,19 +71,6 @@ pub(crate) fn capture_warnings<T>(operation: impl FnOnce() -> T) -> (T, String) 
     let result = tracing::subscriber::with_default(subscriber, operation);
     let output = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
     (result, output)
-}
-
-/// The process-wide TRACE registry, installed once: a scoped subscriber
-/// only sees an event whose callsite interest is not already cached as off.
-fn keep_interest_open() {
-    use tracing_subscriber::prelude::*;
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        let _ = tracing::subscriber::set_global_default(
-            tracing_subscriber::Registry::default()
-                .with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
 }
 
 /// A live count, on this thread, of log records containing `text`, for a
