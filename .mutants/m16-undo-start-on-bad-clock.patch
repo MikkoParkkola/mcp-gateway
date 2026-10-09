@@ -1,0 +1,13 @@
+diff --git a/src/events/lifecycle.rs b/src/events/lifecycle.rs
+index 012db0a2c..c98f21bbf 100644
+--- a/src/events/lifecycle.rs
++++ b/src/events/lifecycle.rs
+@@ -92,7 +92,7 @@ impl EventsHub {
+         // once it reads (MIK-8202).
+         if self
+             .live_keys()
+-            .is_none_or(|keys| keys.iter().any(|(live, ..)| *live == key))
++            .is_some_and(|keys| keys.iter().any(|(live, ..)| *live == key))
+         {
+             return;
+         }

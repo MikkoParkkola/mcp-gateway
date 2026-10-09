@@ -1,0 +1,13 @@
+diff --git a/src/events/records.rs b/src/events/records.rs
+index 9d7b259f9..bdb5fdd09 100644
+--- a/src/events/records.rs
++++ b/src/events/records.rs
+@@ -216,7 +216,7 @@ impl Subscription {
+     /// chrono's 1969 date read every ended lease as live (MIK-8202).
+     pub(crate) fn live_now(&self) -> bool {
+         use crate::clock::Validity;
+-        crate::clock::expired_by_utc(|now| {
++        crate::clock::utc_now().map_or(Validity::Live, |now| {
+             if self.live(now) {
+                 Validity::Live
+             } else {
