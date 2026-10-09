@@ -28,6 +28,7 @@ pub mod paths;
 mod protocol_import;
 mod ranking;
 mod regular_file;
+mod retired_config_keys;
 mod setup;
 mod skills;
 mod stats;
@@ -208,7 +209,6 @@ fn build_init_config(with_examples: bool, profile: InitProfile, starter: &str) -
             "# Keeps prompt overhead low by discovering backend tools on demand\n",
             "meta_mcp:\n",
             "  enabled: true\n",
-            "  cache_tools: true\n",
             "{examples_section}",
             "{starter}",
         ),
@@ -769,6 +769,13 @@ mod admin_credential_tests {
             token.len() >= 6 + 42,
             "too short to be 32 random bytes: {token}"
         );
+    }
+
+    /// MIK-8064: `init` writes no `meta_mcp.cache_tools`, which nothing reads.
+    #[test]
+    fn init_writes_no_cache_tools() {
+        let config = build_init_config(true, InitProfile::Local, "");
+        assert!(!config.contains("cache_tools"), "{config}");
     }
 
     /// D1-T12. The starter config turns auth on, and D1-a refuses auth
