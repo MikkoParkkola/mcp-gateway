@@ -14,7 +14,7 @@
 //! `scripts/ci/check_pick_then_bind.py` fails if nextest is ever introduced
 //! without revisiting this); and an unexplained address conflict seen on macOS
 //! (MIK-8242): about 1 in 100 runs of the whole test binary, a reserved port
-//! returned free was in use (AddrInUse) a moment later, with no listener
+//! returned free was in use (`AddrInUse`) a moment later, with no listener
 //! visible to lsof. The macOS dynamic range is the default 49152-65535, so it
 //! is not range overlap; holder and socket state were not identified.
 
