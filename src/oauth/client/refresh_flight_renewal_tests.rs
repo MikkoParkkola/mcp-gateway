@@ -64,8 +64,36 @@ async fn refused_grants_that_are_not_the_policy_exhaust_the_renewal() {
     );
 }
 
+/// How long the refresh task may take to reach what a test waits for. A
+/// bound on a hung task, never a window the outcome is timed against: under
+/// full-suite load a real HTTP round trip can take seconds (MIK-8235).
+const REACHED: Duration = Duration::from_secs(10);
+
+/// Run `client`'s refresh loop until `reached` holds, polling. Fails if the
+/// loop returns first (the task must keep running) or `REACHED` passes.
+async fn run_until(client: OAuthClient, what: &str, reached: impl Fn() -> bool) {
+    let watch = async {
+        while !reached() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::select! {
+        () = OAuthClient::refresh_loop(
+            Arc::new(tokio::sync::Mutex::new(client)),
+            BACKEND.to_string(),
+            Duration::from_millis(10),
+        ) => panic!("the refresh task ended before {what}"),
+        waited = tokio::time::timeout(REACHED, watch) => {
+            waited.unwrap_or_else(|_| panic!("the refresh task never reached {what}"));
+        }
+    }
+}
+
 /// The refresh task keeps running after a renewal, and after an exhausted
 /// one it logs that the person must authorize again and keeps running.
+///
+/// Each half waits for the event it names, not for a fixed window: the old
+/// 200 ms window read the log before a loaded runner wrote it (MIK-8235).
 #[tokio::test]
 async fn the_refresh_task_keeps_running_after_a_renewal_or_an_exhausted_one() {
     let server = TokenServer::start(&[]).await;
@@ -73,16 +101,14 @@ async fn the_refresh_task_keeps_running_after_a_renewal_or_an_exhausted_one() {
     let mut renewing = client(dir.path(), &server);
     renewing.token_refresh_buffer_secs = 300;
     hold(&renewing, &token("a1", Some("r1"), true));
-    let running = tokio::time::timeout(
-        Duration::from_millis(500),
-        OAuthClient::refresh_loop(
-            Arc::new(tokio::sync::Mutex::new(renewing)),
-            BACKEND.to_string(),
-            Duration::from_millis(10),
-        ),
-    )
+    // Renewed, then three more polls (30 ms or more) for the 10 ms loop to
+    // ask again if the fresh token were not taken. Load only gives it fewer
+    // turns: a weaker check, never a false failure.
+    let polls_after = std::sync::atomic::AtomicUsize::new(0);
+    run_until(renewing, "a renewal and three more polls", || {
+        server.requests() >= 1 && polls_after.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 3
+    })
     .await;
-    assert!(running.is_err(), "a renewal does not end the task");
     assert_eq!(
         server.requests(),
         1,
@@ -94,20 +120,10 @@ async fn the_refresh_task_keeps_running_after_a_renewal_or_an_exhausted_one() {
     exhausted.token_refresh_buffer_secs = 300;
     hold(&exhausted, &token("a1", Some("r1"), true));
     let (guard, buffer) = crate::oauth::callback::tests::capture();
-    let running = tokio::time::timeout(
-        Duration::from_millis(200),
-        OAuthClient::refresh_loop(
-            Arc::new(tokio::sync::Mutex::new(exhausted)),
-            BACKEND.to_string(),
-            Duration::from_millis(10),
-        ),
-    )
+    run_until(exhausted, "the re-authorization warning", || {
+        String::from_utf8_lossy(&buffer.lock().unwrap())
+            .contains("manual re-authorization required")
+    })
     .await;
     drop(guard);
-    let log = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
-    assert!(
-        running.is_err(),
-        "an exhausted renewal does not end the task"
-    );
-    assert!(log.contains("manual re-authorization required"), "{log}");
 }
