@@ -20,7 +20,7 @@ async fn t10_an_expired_row_releases_its_key_without_a_sweep() {
         "name": NAME, "arguments": {"k": "v"}, "secret": "whsec_x",
         "previous_secret": null, "previous_until": null,
         "granted_at": chrono::Utc::now(),
-        "expires_at": chrono::Utc::now() + chrono::Duration::milliseconds(300),
+        "expires_at": chrono::Utc::now() + crate::duration_bound::delta!(milliseconds, 300),
         "active": true, "failed_since": null, "last_delivery_at": null,
         "last_error": null
     }))

@@ -57,10 +57,16 @@ pub(super) async fn mint_continuation(
         record_continuation_mint("no_slot");
         return None;
     };
-    crate::gateway::meta_mcp::sealed_hold::register(continuation);
     match continuation.keyring().mint(&payload) {
         Ok(envelope) => {
             record_continuation_mint("ok");
+            // MIK-8176: the hold carries the envelope, so the answer that
+            // delivers it can be recognised and hand the slot off.
+            crate::gateway::meta_mcp::sealed_hold::register(
+                continuation,
+                &payload.hold_key,
+                &envelope,
+            );
             Some((envelope, payload.hold_key))
         }
         Err(error) => {

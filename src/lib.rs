@@ -22,6 +22,13 @@
 //! - 2024-11-05
 
 #![deny(unsafe_code)]
+// In stdio mode stdout is the JSON-RPC stream to the client, so library code
+// never prints to it: a stray line breaks the client's framing. Diagnostics go
+// to stderr or tracing. CLI output lives in the binary (`main.rs`,
+// `commands`), and the library's two CLI-output modules write through
+// `cli::stdout`'s macros, which this lint does not cover by design. Test code
+// keeps `println!`: test-only child processes use stdout as their protocol.
+#![cfg_attr(not(test), deny(clippy::print_stdout))]
 #![warn(missing_docs)]
 // Macro-generated arrays (e.g. include_bytes!) may exceed the 16 KiB stack
 // threshold.  Clippy cannot show a source location for these — allow crate-wide.

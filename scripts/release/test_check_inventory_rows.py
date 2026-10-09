@@ -161,6 +161,21 @@ class CheckInventoryRows(unittest.TestCase):
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), ["a", "b"])
 
+    def test_the_whole_tree_mode_sees_a_function_older_than_the_change(self) -> None:
+        # MIK-8195: `existing` came in with the base, so the diff check never
+        # sees it; the whole-tree mode does, and a row satisfies it.
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn added() {}\n")
+        self.repo.commit("add")
+        rows.ROOT = self.repo.root
+        self.addCleanup(setattr, rows, "SWEPT_AREAS", rows.SWEPT_AREAS)
+        rows.SWEPT_AREAS = ("src/cli/",)
+        self.assertEqual(rows.missing_rows(rows.ALL, "HEAD"), [], "an unswept area is not enforced yet")
+        rows.SWEPT_AREAS = ("src/oauth/",)
+        self.assertEqual(sorted(f[1] for f in rows.missing_rows(rows.ALL, "HEAD")), ["added", "existing"])
+        self.repo.write(rows.UNENFORCING, "src/oauth/mod.rs\texisting\t1\tr\nsrc/oauth/mod.rs\tadded\t1\tr\n")
+        self.repo.commit("rows")
+        self.assertEqual(rows.missing_rows(rows.ALL, "HEAD"), [])
+
     def test_a_private_top_level_function_is_seen(self) -> None:
         # The wave-4 sweep's pattern missed `fn` with nothing before it.
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn helper() {}\n")

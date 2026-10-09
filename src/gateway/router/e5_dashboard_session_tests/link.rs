@@ -281,7 +281,7 @@ fn session_handle(out: &Reply) -> String {
 #[tokio::test]
 async fn a_link_minted_by_an_expiring_key_ends_with_the_key() {
     let mut admin = api_key(ADMIN_KEY, true);
-    admin.expires_at = Some(chrono::Utc::now() + chrono::Duration::hours(1));
+    admin.expires_at = Some(chrono::Utc::now() + crate::duration_bound::delta!(hours, 1));
     let auth = AuthConfig {
         enabled: true,
         bearer_token: Some(BEARER.to_string()),

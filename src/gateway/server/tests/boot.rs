@@ -18,7 +18,7 @@ fn test_grant_file() -> IdentityGrantFile {
         tool: Some("read_day".to_string()),
         scope: GrantScope::Read,
         owner: Some(subject),
-        expires_at: Some(Utc::now() + Duration::hours(1)),
+        expires_at: Some(Utc::now() + crate::duration_bound::delta!(hours, 1)),
         revoked_at: None,
         provenance: "test://startup".to_string(),
         reason: "prove startup grant loading".to_string(),

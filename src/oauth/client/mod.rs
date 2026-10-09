@@ -616,6 +616,8 @@ impl OAuthClient {
 use url::Url;
 
 mod grants;
+#[cfg(test)]
+mod grants_tests;
 mod refresh_flight;
 pub(crate) use refresh_flight::{
     RefreshCaller, RefreshRequest, Refreshed, StoredCredential, refresh_stored,
