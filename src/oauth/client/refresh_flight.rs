@@ -382,6 +382,9 @@ impl Exchange {
         // Malformed like an unparsable answer, and handled the same way: the
         // sent token may already be consumed.
         if let Err(error) = super::refuse_oversized_expires_in(&self.endpoint, answer.expires_in) {
+            // The caller falls back to a login, so this is where the reason
+            // is seen.
+            warn!(backend = %self.backend, %error, "Refused the token endpoint's answer");
             return Outcome::Uncertain(error);
         }
         if answer
