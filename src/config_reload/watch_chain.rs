@@ -169,12 +169,18 @@ pub(super) fn named_config_path(path: PathBuf) -> PathBuf {
 /// (a target missing mid-update) watches the named file's own directory, and
 /// the rewatch task resolves it again on its first wake, on a timer and on
 /// every event.
+///
+/// That directory is recorded canonically, as every resolved one is
+/// (MIK-8181). Named through a linked directory higher up (macOS `/var` is
+/// one), its other spelling is the same inotify watch, so the repair's
+/// unwatch of the stale spelling would drop the watch the chain still needs.
 pub(super) fn startup_dirs(named: &Path) -> BTreeSet<PathBuf> {
     chain_dirs(named).map_or_else(
         |e| {
             // The rewatch task warns once if the chain stays broken.
             info!(error = %e, "Config watcher: cannot resolve the config's link chain yet");
-            BTreeSet::from([watch_dir_of(named)])
+            let dir = watch_dir_of(named);
+            BTreeSet::from([std::fs::canonicalize(&dir).unwrap_or(dir)])
         },
         |(wanted, _)| wanted,
     )
