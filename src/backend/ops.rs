@@ -324,7 +324,7 @@ impl Backend {
         let entry = std::sync::Arc::clone(activity.entry());
 
         // Ensure this slot's transport is live.
-        let transport = self.start_recorded(&key, &entry, start_time).await?;
+        let transport = self.start_judged(&key, &entry, start_time, method).await?;
 
         // Execute with retry
         let name = self.name.clone();

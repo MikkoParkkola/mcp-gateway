@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::time::Instant;
-use tracing::warn;
+use tracing::{error, warn};
 
 use super::{Gateway, StdioTelemetry, stdio_tasks, task_runtime, warmstart::WarmerGuard};
 
@@ -28,9 +28,10 @@ pub(super) async fn bounded_step<F: Future>(
 ) -> Option<F::Output> {
     let finished = tokio::time::timeout_at(deadline, future).await.ok();
     if finished.is_none() {
-        warn!(
+        // ERROR: an abandoned step may be a write that never landed.
+        error!(
             step,
-            "stdio: shutdown step did not finish within the teardown deadline; abandoned"
+            "shutdown step did not finish within its deadline; abandoned"
         );
     }
     finished
@@ -47,13 +48,13 @@ pub(super) async fn bounded_blocking(
 ) {
     let (done, finished) = tokio::sync::oneshot::channel();
     let spawned = std::thread::Builder::new()
-        .name(format!("stdio-shutdown: {step}"))
+        .name(format!("shutdown: {step}"))
         .spawn(move || {
             work();
             let _ = done.send(());
         });
     if let Err(error) = spawned {
-        warn!(step, %error, "stdio: shutdown step could not start a thread; skipped");
+        warn!(step, %error, "shutdown step could not start a thread; skipped");
         return;
     }
     bounded_step(deadline, step, finished).await;
@@ -78,7 +79,7 @@ pub(super) async fn final_cost_save(
         warn!("stdio: final cost snapshot skipped: the periodic saver is still running");
         return;
     }
-    bounded_blocking(deadline, "final cost save", move || {
+    bounded_blocking(deadline, super::persistence::COST_SAVE_STEP, move || {
         super::persistence::save_costs(&enforcer, &data_dir);
     })
     .await;

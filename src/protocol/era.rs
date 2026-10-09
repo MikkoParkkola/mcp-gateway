@@ -147,6 +147,10 @@ pub fn classify(outcome: &ProbeOutcome) -> Era {
 pub struct EraCache {
     /// The backend this cache belongs to, so the records it emits name it.
     name: String,
+    /// Which of the backend's slots this cache describes (`shared` or
+    /// `per_user`), so slots that reach peers of different eras emit separate
+    /// rows rather than one flapping value (MIK-8186).
+    slot: &'static str,
     /// The determination, held across an await because the probe runs under
     /// the lock — a `tokio` lock rather than a `std` one for that reason.
     ///
@@ -159,8 +163,14 @@ impl EraCache {
     /// A cache whose records name `backend`.
     #[must_use]
     pub fn for_backend(backend: impl Into<String>) -> Self {
+        Self::for_slot(backend, "shared")
+    }
+
+    /// The cache of one slot of `backend`, labelled `slot` in its records.
+    pub fn for_slot(backend: impl Into<String>, slot: &'static str) -> Self {
         Self {
             name: backend.into(),
+            slot,
             observation: tokio::sync::Mutex::default(),
         }
     }
@@ -209,6 +219,7 @@ impl EraCache {
         tracing::info!(
             target: "mcp_gateway::observed",
             backend = %self.name,
+            slot = self.slot,
             hit = observation.source == EraSource::Probed,
         );
         observation
@@ -229,6 +240,7 @@ impl EraCache {
         tracing::info!(
             target: "mcp_gateway::observed",
             backend = %self.name,
+            slot = self.slot,
             reason = "trigger",
         );
     }
@@ -270,6 +282,7 @@ impl EraCache {
         tracing::info!(
             target: "mcp_gateway::observed",
             backend = %self.name,
+            slot = self.slot,
             reason = "trigger",
         );
         true
@@ -302,10 +315,10 @@ impl EraCache {
     {
         let mut guard = self.observation.lock().await;
         if guard.source == EraSource::Probed {
-            tracing::info!(target: "mcp_gateway::observed", backend = %self.name, hit = true);
+            tracing::info!(target: "mcp_gateway::observed", backend = %self.name, slot = self.slot, hit = true);
             return guard.era;
         }
-        tracing::info!(target: "mcp_gateway::observed", backend = %self.name, hit = false);
+        tracing::info!(target: "mcp_gateway::observed", backend = %self.name, slot = self.slot, hit = false);
         self.probe_and_store(&mut guard, ProbeTrigger::Reprobe, probe, install)
             .await
     }
@@ -324,10 +337,10 @@ impl EraCache {
     {
         let mut guard = self.observation.lock().await;
         if guard.source == EraSource::Probed {
-            tracing::info!(target: "mcp_gateway::observed", backend = %self.name, hit = true);
+            tracing::info!(target: "mcp_gateway::observed", backend = %self.name, slot = self.slot, hit = true);
             return guard.era;
         }
-        tracing::info!(target: "mcp_gateway::observed", backend = %self.name, hit = false);
+        tracing::info!(target: "mcp_gateway::observed", backend = %self.name, slot = self.slot, hit = false);
         self.probe_and_store(&mut guard, trigger, probe, install_always)
             .await
     }
@@ -380,13 +393,14 @@ impl EraCache {
             tracing::info!(
                 target: "mcp_gateway::observed",
                 backend = %self.name,
+                slot = self.slot,
                 reason = "restart",
             );
         }
         // A restart always probes: the verdict it might have reused has just been
         // discarded. The miss is recorded for the same reason the start path records
         // one -- an era resolved by probing must never read as a cache hit.
-        tracing::info!(target: "mcp_gateway::observed", backend = %self.name, hit = false);
+        tracing::info!(target: "mcp_gateway::observed", backend = %self.name, slot = self.slot, hit = false);
         self.probe_and_store(&mut guard, ProbeTrigger::Start, probe, &serving)
             .await
     }
@@ -415,6 +429,7 @@ impl EraCache {
             tracing::info!(
                 target: "mcp_gateway::observed",
                 backend = %self.name,
+                slot = self.slot,
                 reason = "transport_replaced",
                 outcome = outcome.outcome_label(observation.era),
                 evidence = observation.evidence.as_str(),
@@ -432,6 +447,7 @@ impl EraCache {
             tracing::info!(
                 target: "mcp_gateway::observed",
                 backend = %self.name,
+                slot = self.slot,
                 outcome = outcome.outcome_label(observation.era),
                 evidence = observation.evidence.as_str(),
                 error_code = code,
@@ -442,6 +458,7 @@ impl EraCache {
             tracing::info!(
                 target: "mcp_gateway::observed",
                 backend = %self.name,
+                slot = self.slot,
                 outcome = outcome.outcome_label(observation.era),
                 evidence = observation.evidence.as_str(),
                 duration_ms,
