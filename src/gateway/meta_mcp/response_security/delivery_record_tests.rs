@@ -34,9 +34,8 @@ fn record_bytes(meta: &crate::gateway::meta_mcp::MetaMcp, size: usize) -> u64 {
         json!({"content": [{"type": "text", "text": "x".repeat(size)}]}),
     );
     let correlation = correlation();
-    let (delivered, measured) = measure(|| {
-        runtime.block_on(meta.record_delivery_of(&response, &correlation, None))
-    });
+    let (delivered, measured) =
+        measure(|| runtime.block_on(meta.record_delivery_of(&response, &correlation, None)));
     assert!(delivered, "with no log a delivery is never withheld");
     measured.bytes
 }
