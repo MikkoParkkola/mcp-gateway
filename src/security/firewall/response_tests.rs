@@ -97,7 +97,10 @@ fn firewall_response_single_target_audit_has_v2_contract() {
     assert_eq!(events.len(), 1);
     let event = &events[0];
     assert_eq!(event["event"], "response");
-    assert_eq!(event["schema_version"], 2);
+    assert_eq!(
+        event["schema_version"], 3,
+        "MIK-8236: every row is version 3"
+    );
     assert_eq!(event["artifact_kind"], "final_response");
     assert_eq!(
         event["policy_targets"],
@@ -240,7 +243,10 @@ fn firewall_response_change_preserves_request_refusal_and_audit_shape() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0]["event"], "request");
     assert!(events[0]["args_hash"].is_string());
-    assert!(events[0].get("schema_version").is_none());
+    assert_eq!(
+        events[0]["schema_version"], 3,
+        "MIK-8236: request rows are versioned too"
+    );
     assert!(events[0].get("artifact_kind").is_none());
     assert!(events[0].get("policy_targets").is_none());
 }

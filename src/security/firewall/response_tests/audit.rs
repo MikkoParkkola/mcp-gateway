@@ -55,7 +55,7 @@ pub(crate) fn assert_v2_event(
 ) {
     let parsed: V2ResponseEvent =
         serde_json::from_value(event.clone()).expect("complete typed v2 event");
-    assert_eq!(parsed.schema_version, 2);
+    assert_eq!(parsed.schema_version, 3, "MIK-8236: every row is version 3");
     assert_eq!(
         json!(parsed.artifact_kind),
         serde_json::to_value(artifact).unwrap()
