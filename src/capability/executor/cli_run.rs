@@ -12,7 +12,7 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 use process_wrap::tokio::JobObject;
@@ -258,6 +258,8 @@ pub(crate) async fn run(
     #[cfg(windows)]
     wrap.wrap(JobObject);
     wrap.wrap(KillOnDrop);
+    // From just before spawn: the fork and exec are part of what it cost.
+    let started = Instant::now();
     let child = wrap.spawn().map_err(|e| {
         Error::Protocol(format!(
             "could not start '{}': {}",
@@ -288,9 +290,9 @@ pub(crate) async fn run(
         )?;
         let status =
             guard.child().wait().await.map_err(|e| {
-                Error::Protocol(format!("waiting for the child failed: {}", e.kind()))
+                Failure::Observe(format!("waiting for the child failed: {}", e.kind()))
             })?;
-        Ok::<_, Error>(CliOutcome {
+        Ok::<_, Failure>(CliOutcome {
             status,
             stdout: out,
             stderr: err,
@@ -298,18 +300,106 @@ pub(crate) async fn run(
     })
     .await;
     // `guard` drops here on every path and takes the tree with it.
-    match collected {
-        Ok(outcome) => outcome,
-        Err(_) => Err(Error::BackendTimeout(format!(
-            "'{}' did not finish within {}s",
-            invocation.command,
-            timeout.as_secs()
-        ))),
+    let (ended, result) = match collected {
+        Ok(Ok(outcome)) => (ProcessEnd::of(outcome.status), Ok(outcome)),
+        Ok(Err(Failure::Overflow(max))) => (
+            ProcessEnd::OutputOverflow,
+            Err(Error::Protocol(format!(
+                "child output passed the {max}-byte limit"
+            ))),
+        ),
+        Ok(Err(Failure::Observe(message))) => {
+            (ProcessEnd::ObservationFailed, Err(Error::Protocol(message)))
+        }
+        Err(_) => (
+            ProcessEnd::TimedOut,
+            Err(Error::BackendTimeout(format!(
+                "'{}' did not finish within {}s",
+                invocation.command,
+                timeout.as_secs()
+            ))),
+        ),
+    };
+    let bytes = result
+        .as_ref()
+        .ok()
+        .map(|o| (o.stdout.len(), o.stderr.len()));
+    crate::gateway::note_process(ProcessNote {
+        ended,
+        duration: started.elapsed(),
+        bytes,
+    });
+    result
+}
+
+/// How a started child ended, as the invocation record states it
+/// (MIK-7926.FIX.2). Counts and codes only, never output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProcessEnd {
+    /// It exited with this code.
+    Exited(i32),
+    /// It was ended by a signal (no exit code).
+    Signalled,
+    /// It outlived the capability's timeout and was killed.
+    TimedOut,
+    /// It wrote more than `max_output_bytes` and was killed.
+    OutputOverflow,
+    /// Reading its output or waiting for it failed.
+    ObservationFailed,
+}
+
+impl ProcessEnd {
+    fn of(status: ExitStatus) -> Self {
+        status.code().map_or(Self::Signalled, Self::Exited)
     }
 }
 
+/// One started child, for the invocation record of the call that ran it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProcessNote {
+    pub(crate) ended: ProcessEnd,
+    /// From spawn to the end of collection, the wait included.
+    pub(crate) duration: Duration,
+    /// Stdout and stderr byte counts; `None` when the output was not kept.
+    pub(crate) bytes: Option<(usize, usize)>,
+}
+
+impl ProcessNote {
+    /// The record's form: `ended` in `snake_case`, `exit_code` for an exit,
+    /// byte counts `null` when the output was not kept.
+    pub(crate) fn to_json(self) -> serde_json::Value {
+        let (ended, code) = match self.ended {
+            ProcessEnd::Exited(code) => ("exited", Some(code)),
+            ProcessEnd::Signalled => ("signalled", None),
+            ProcessEnd::TimedOut => ("timed_out", None),
+            ProcessEnd::OutputOverflow => ("output_overflow", None),
+            ProcessEnd::ObservationFailed => ("observation_failed", None),
+        };
+        let mut json = serde_json::json!({
+            "ended": ended,
+            "duration_ms": u64::try_from(self.duration.as_millis()).unwrap_or(u64::MAX),
+            "stdout_bytes": self.bytes.map(|b| b.0),
+            "stderr_bytes": self.bytes.map(|b| b.1),
+        });
+        if let Some(code) = code {
+            json["exit_code"] = code.into();
+        }
+        json
+    }
+}
+
+/// Why collection stopped short, kept apart so `run` names the outcome
+/// without reading error text.
+enum Failure {
+    Overflow(usize),
+    Observe(String),
+}
+
 /// Read a stream to its end, failing once it passes `max` bytes.
-async fn read_capped<R: AsyncRead + Unpin>(stream: Option<R>, max: usize) -> Result<Vec<u8>> {
+async fn read_capped<R: AsyncRead + Unpin>(
+    stream: Option<R>,
+    max: usize,
+) -> std::result::Result<Vec<u8>, Failure> {
     let Some(stream) = stream else {
         return Ok(Vec::new());
     };
@@ -319,11 +409,9 @@ async fn read_capped<R: AsyncRead + Unpin>(stream: Option<R>, max: usize) -> Res
         .take(limit)
         .read_to_end(&mut buf)
         .await
-        .map_err(|e| Error::Protocol(format!("reading child output failed: {}", e.kind())))?;
+        .map_err(|e| Failure::Observe(format!("reading child output failed: {}", e.kind())))?;
     if buf.len() > max {
-        return Err(Error::Protocol(format!(
-            "child output passed the {max}-byte limit"
-        )));
+        return Err(Failure::Overflow(max));
     }
     Ok(buf)
 }
@@ -331,3 +419,7 @@ async fn read_capped<R: AsyncRead + Unpin>(stream: Option<R>, max: usize) -> Res
 #[cfg(test)]
 #[path = "cli_run_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cli_audit_tests.rs"]
+mod audit_tests;

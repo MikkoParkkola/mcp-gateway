@@ -507,22 +507,32 @@ impl AccountStrategyRegistry {
         // decided by the lease recheck. Nothing here invents a lifetime for
         // either kind — an external strategy that publishes no usable expiry
         // publishes no usable credential.
-        let minted_at = chrono::Utc::now().timestamp();
-        if managed.is_none() && credential.expires_at <= minted_at {
-            let reason = "the external strategy published an expiry that has already passed";
-            Self::audit_refusal(
-                logger.as_ref(),
-                &subject_id,
-                descriptor_id,
-                audience,
-                reason,
-            )
-            .await;
-            return Err(Error::Config(format!(
-                "account '{descriptor_id}' minted a credential that is already expired: {reason}. \
-                 Refusing rather than caching or dispatching with it."
-            )));
-        }
+        // A clock before 1970 can judge no expiry and stamp no mint time, so
+        // the credential is refused, managed or not (MIK-8202).
+        let minted_at = match crate::clock::utc_now() {
+            Err(_) => Err("the gateway clock reads before 1970, so no expiry can be judged"),
+            Ok(now) if managed.is_none() && credential.expires_at <= now.timestamp() => {
+                Err("the external strategy published an expiry that has already passed")
+            }
+            Ok(now) => Ok(now.timestamp()),
+        };
+        let minted_at = match minted_at {
+            Ok(minted_at) => minted_at,
+            Err(reason) => {
+                Self::audit_refusal(
+                    logger.as_ref(),
+                    &subject_id,
+                    descriptor_id,
+                    audience,
+                    reason,
+                )
+                .await;
+                return Err(Error::Config(format!(
+                    "account '{descriptor_id}' minted a credential that is already expired: {reason}. \
+                     Refusing rather than caching or dispatching with it."
+                )));
+            }
+        };
 
         Self::validate_and_audit_mint(
             logger.as_ref(),
@@ -644,7 +654,15 @@ impl AccountStrategyRegistry {
         if principal.stable_actor_id() != prepared.actor_id {
             return refuse("it was minted for a different caller");
         }
-        if !prepared.published_lifetime_open(chrono::Utc::now().timestamp()) {
+        // An unreadable clock reads as a lifetime that has run out (MIK-8202).
+        let lifetime = crate::clock::expired_by_utc(|now| {
+            if prepared.published_lifetime_open(now.timestamp()) {
+                crate::clock::Validity::Live
+            } else {
+                crate::clock::Validity::Expired
+            }
+        });
+        if lifetime == crate::clock::Validity::Expired {
             return refuse("its published lifetime has run out");
         }
         // THE DURABLE HALF. Last, because the checks above are cheap and this

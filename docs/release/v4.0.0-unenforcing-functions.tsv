@@ -100,6 +100,7 @@ src/gateway/server/persistence.rs	save_state_on_shutdown	1	Shutdown persistence 
 src/gateway/router/handlers/health.rs	backends_overall_healthy	1	Folds backend statuses into one health bit for /health; admin detail is decided in health_handler
 src/gateway/router/handlers/session_end.rs	sse_deprecated_handler	1	Answers the retired /sse route with a fixed 410 migration notice; reads no request data
 src/gateway/router/handlers/sse.rs	unsupported_version_error	1	Builds the unsupported-version JSON-RPC error; the refusal is decided by its callers
+src/transport/stdio.rs	kill_tree_now	1	Process lifecycle (MIK-7923): ends a retired stdio transport's process tree; no access decision
 src/gateway/router/handlers/dispatch_intake.rs	params	1	Returns the request params or the narrowed listen copy; decides nothing
 src/gateway/router/helpers.rs	bodiless_accepted	1	Strips the placeholder body from a 202 direct answer and passes every other answer through unchanged.
 src/gateway/router/helpers.rs	parse_sampling_params	1	Deserializes sampling parameters and returns a protocol-level invalid-params error when they are missing or malformed.

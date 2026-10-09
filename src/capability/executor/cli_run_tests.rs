@@ -28,7 +28,12 @@ fn script() -> String {
 }
 
 /// A capability running `python argv_echo.py <mode> <args...>`.
-fn capability(mode: &str, args: &str, extra: &str, timeout: u64) -> CapabilityDefinition {
+pub(super) fn capability(
+    mode: &str,
+    args: &str,
+    extra: &str,
+    timeout: u64,
+) -> CapabilityDefinition {
     let yaml = format!(
         "name: echo_probe\ndescription: Echo probe.\nschema:\n  input:\n    type: object\n\
          providers:\n  primary:\n    service: cli\n    timeout: {timeout}\n    config:\n      \
@@ -46,7 +51,7 @@ fn config(cap: &CapabilityDefinition) -> &CliConfig {
     }
 }
 
-async fn call(cap: &CapabilityDefinition, params: Value) -> crate::Result<Value> {
+pub(super) async fn call(cap: &CapabilityDefinition, params: Value) -> crate::Result<Value> {
     CapabilityExecutor::new()
         .execute_cli(
             cap,

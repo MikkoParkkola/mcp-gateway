@@ -58,7 +58,8 @@ pub struct AgentClaims {
     /// Optional audience.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aud: Option<serde_json::Value>,
-    /// Expiry (Unix timestamp), validated by jsonwebtoken.
+    /// Expiry (Unix timestamp): required by the decoder, judged against the
+    /// registry's clock by `validate_agent_token_at`.
     pub exp: u64,
     /// Issued-at (Unix timestamp).
     #[serde(default)]
@@ -117,15 +118,21 @@ pub fn validate_agent_token(
     token: &str,
     registry: &AgentRegistry,
 ) -> Result<ValidatedToken, JwtError> {
-    validate_agent_token_at(token, registry, registry.now())
+    // A clock that reads before 1970 refuses, as an expired token would
+    // (MIK-8202): there is no time to judge `exp` against.
+    let now = registry.now().map_err(|_| {
+        JwtError::JwtVerification(jsonwebtoken::errors::Error::from(
+            jsonwebtoken::errors::ErrorKind::ExpiredSignature,
+        ))
+    })?;
+    validate_agent_token_at(token, registry, now)
 }
 
-/// [`validate_agent_token`] judged at `now` (Unix seconds) as well as by the
-/// library's own clock: a token is refused once `exp + 30 < now`, the leeway
-/// rule jsonwebtoken applies. In production `now` is the wall clock read just
-/// before the library reads it, so the two checks agree up to a clock step
-/// landing between the reads; a test that moves the registry's clock moves
-/// only this check.
+/// [`validate_agent_token`] judged at `now` (Unix seconds), and only at `now`:
+/// a token is refused once `exp + 30 < now`, the leeway rule jsonwebtoken
+/// applied. The library's own time check is off, because it reads the clock
+/// again and panics on one before 1970 (MIK-8202); one sample judges the token.
+/// A test moves `now` through the registry's clock.
 pub(crate) fn validate_agent_token_at(
     token: &str,
     registry: &AgentRegistry,
@@ -168,10 +175,22 @@ pub(crate) fn validate_agent_token_at(
     // to support both string and array forms.
     validation.validate_aud = false;
 
-    // 5. Verify signature + exp.
+    // The library never reads the clock (MIK-8202): `exp` stays a required
+    // claim, so its presence is still enforced, and is judged below against
+    // `now`. `nbf` was never checked here and still is not.
+    validation.validate_exp = false;
+    validation.validate_nbf = false;
+
+    // 5. Verify signature, then exp. Adding the leeway rather than
+    // subtracting it keeps a clock near the epoch from underflowing; an
+    // `exp` so large the add overflows is refused, not trusted.
     let token_data = jsonwebtoken::decode::<AgentClaims>(token, &decoding_key, &validation)?;
     let claims = token_data.claims;
-    if claims.exp.saturating_add(LEEWAY_SECS) < now {
+    if claims
+        .exp
+        .checked_add(LEEWAY_SECS)
+        .is_none_or(|end| end < now)
+    {
         return Err(JwtError::JwtVerification(
             jsonwebtoken::errors::Error::from(jsonwebtoken::errors::ErrorKind::ExpiredSignature),
         ));
@@ -681,6 +700,30 @@ mod tests {
                     if matches!(e.kind(), jsonwebtoken::errors::ErrorKind::InvalidAudience)
             ),
             "the refusal must be an audience failure, not an incidental one: {err:?}"
+        );
+    }
+
+    /// MIK-8202: a clock before 1970 refuses a live agent token, and never panics.
+    #[test]
+    fn a_clock_before_the_epoch_refuses_a_live_agent_token() {
+        let reg = AgentRegistry::new();
+        reg.register(make_hs256_agent("agent-1", "my-secret"));
+        let token = hs256_token("agent-1", "my-secret", 3600);
+        assert!(
+            validate_agent_token(&token, &reg).is_ok(),
+            "control: a token expiring in an hour validates on the real clock"
+        );
+
+        let _clock = crate::clock::test_clock::before_epoch();
+        let judged = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            validate_agent_token(&token, &reg)
+        }));
+        let Ok(judged) = judged else {
+            panic!("an unreadable clock panicked the token decoder");
+        };
+        assert!(
+            judged.is_err(),
+            "an unreadable clock admitted an agent token"
         );
     }
 }

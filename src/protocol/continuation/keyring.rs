@@ -373,6 +373,12 @@ impl Keyring {
         Ok(encoded)
     }
 
+    /// [`Self::open`] at now: a clock that reads before 1970 refuses as
+    /// [`ContinuationError::Expired`] (MIK-8202).
+    pub(crate) fn open_now(&self, token: &str) -> Result<Payload, ContinuationError> {
+        self.open(token, super::clock_now()?)
+    }
+
     /// Open an envelope the client presented.
     ///
     /// Treated as attacker-controlled throughout: every failure returns an

@@ -585,8 +585,11 @@ fn rejected_after_expiry(response: &JsonRpcResponse, deadline: u64, now: u64) ->
             .is_some_and(|error| error.code == -32602 && error.message == expired.client_message())
 }
 
+/// `at` in the seconds round deadlines are kept in. Read only to compare
+/// against a deadline: a time before 1970 is a clock that cannot be read, and
+/// reads as past every deadline, never as before them (MIK-8202).
 fn unix_secs(at: chrono::DateTime<Utc>) -> u64 {
-    u64::try_from(at.timestamp()).unwrap_or(0)
+    u64::try_from(at.timestamp()).unwrap_or(u64::MAX)
 }
 
 impl TaskExecutor {

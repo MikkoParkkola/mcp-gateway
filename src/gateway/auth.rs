@@ -550,6 +550,9 @@ pub async fn auth_middleware(
         && request.uri().query().and_then(bootstrap_param).is_some();
     // The kind a dead cookie is refused as, when it is refused on its own.
     let mut dead_session = None;
+    // A session refused on a clock before 1970 keeps its cookie: it may be
+    // live once the clock reads (MIK-8202).
+    let mut keep_cookie = false;
     if let Some(handle) = session_cookie_value(request.headers()) {
         let touch = if has_authorization || is_poll(&request) {
             Touch::No
@@ -568,6 +571,10 @@ pub async fn auth_middleware(
             SessionCheck::Valid => {}
             SessionCheck::Expired => dead_session = Some(AuthFailureKind::SessionExpired),
             SessionCheck::Unknown => dead_session = Some(AuthFailureKind::InvalidCredential),
+            SessionCheck::ClockUnreadable => {
+                dead_session = Some(AuthFailureKind::SessionExpired);
+                keep_cookie = true;
+            }
         }
     }
     if let Some(kind) = dead_session {
@@ -579,6 +586,11 @@ pub async fn auth_middleware(
         let has_bearer = presented_credential(request.headers()).is_some();
         if !has_bearer && !is_bootstrap && !auth_config.is_public_path(request.uri().path()) {
             auth_failure(kind);
+            if keep_cookie {
+                return bearer_unauthorized_response(
+                    "The gateway clock reads before 1970; the dashboard session resumes once it is set.",
+                );
+            }
             return session_ended_response(cookie_secure(&state));
         }
     }
@@ -597,6 +609,7 @@ pub async fn auth_middleware(
                 .is_some_and(|rest| rest.starts_with(b"="))
         });
     if dead_session.is_some()
+        && !keep_cookie
         && !sets_session
         && let Ok(value) = session_cookie("", 0, secure).parse()
     {

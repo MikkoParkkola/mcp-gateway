@@ -66,12 +66,14 @@ pub(crate) use execution_context::{
     validate_oauth_isolation, validate_personal_capability_identity,
 };
 pub use executor::CapabilityExecutor;
+pub(crate) use executor::ProcessNote;
 pub use executor::graphql::GraphqlExecutor;
 pub use executor::jsonrpc::JsonRpcExecutor;
 pub use executor::rest::{ExecutionContext, ProtocolExecutor};
 pub use hash::{compute_capability_hash, rewrite_with_pin, strip_sha256_line};
 pub use loader::CapabilityLoader;
 pub use openapi::{AuthTemplate, CacheTemplate, GeneratedCapability, OpenApiConverter};
+pub(crate) use parser::validate_cli_templates;
 pub use parser::{parse_capability, parse_capability_file, validate_capability};
 pub(crate) use read_only_call::{read_only_call_as, served_over_rest};
 pub(crate) use schema_validator::undeclared_key_refusal;
