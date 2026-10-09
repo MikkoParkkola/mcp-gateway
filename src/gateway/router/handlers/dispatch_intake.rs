@@ -73,7 +73,6 @@ pub(super) struct Intake<'r> {
     pub(super) owner: String,
     pub(super) events_owner: String,
     pub(super) admission_owner: String,
-    pub(super) external_tool: String,
     // Held, never read: the in-flight permit drops when the dispatcher
     // returns. The dispatcher binds `Intake` after `JudgeInputs`, so the
     // permit drops before the read guard, as the two locals did.
@@ -87,6 +86,17 @@ impl Intake<'_> {
         self.narrowed_listen
             .as_ref()
             .or_else(|| self.request.get("params"))
+    }
+
+    /// The name the response policy and answer shape key on: the tool for a
+    /// `tools/call`, else the method. Read from the request, not copied
+    /// (MIK-8014 design item 5).
+    pub(super) fn external_tool(&self) -> &str {
+        if self.method == "tools/call" {
+            extract_tools_call_params_ref(self.params()).0
+        } else {
+            &self.method
+        }
     }
 }
 
@@ -636,14 +646,6 @@ pub(super) async fn intake(
         }
     }
 
-    let params = narrowed_listen.as_ref().or(params);
-
-    let external_tool = if method == "tools/call" {
-        extract_tools_call_params_ref(params).0.to_owned()
-    } else {
-        method.clone()
-    };
-
     Ok((
         JudgeInputs {
             read_guard,
@@ -676,7 +678,6 @@ pub(super) async fn intake(
             owner,
             events_owner,
             admission_owner,
-            external_tool,
             _inflight_permit: inflight_permit,
         },
     ))
