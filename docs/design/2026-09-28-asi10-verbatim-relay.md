@@ -782,14 +782,16 @@ at that key path is a string.
 
 **Join rule** (MIK-8209, residuals 1, 3, 4 split from MIK-8035): besides the all-values forms, a delivery records, for
 each key path, the run-together of each run's values in order. A verbatim forward matches the
-all-values form; a re-join of one key path's pieces matches the per-key-path form. No list of
-metadata keys is needed. The mid-word evasion row (A3c) must stay red on revert.
+all-values form; a re-join of one key path's pieces matches only the per-key-path form. No list of
+metadata keys is needed. The per-key-path form is text the caller received, so it is valid as
+evidence and as excuse. The mid-word evasion row (A3c) must stay red on revert.
 
 **Subsets.** A subset forward of whole pieces is excused for every k-gram inside a kept piece or a
 delivered join of consecutive kept pieces. A k-gram spanning a seam the forward created is evidence
 only if some other caller was delivered that exact join. A source is a tool name (`{server}:{tool}`,
-`collusion_gate.rs:612`), so one tool may return one text split on one call and joined on another;
-then the subset forward is refused. That is an in-model defect: MIK-8205.
+`collusion_gate.rs:612`), so one tool may return one text split on one call and joined on another.
+If it delivered another caller the exact join of the kept pieces, sensitively, the holder's subset
+forward is refused. That is an in-model defect: MIK-8205.
 
 ### 14.2 Cross-tool copies: the per-source excuse is load-bearing (MIK-8206)
 
@@ -837,7 +839,7 @@ The examples assume no repeated k-grams.
 | 80 | 127-char copy, or 80-char tail | 2.80e-09 | 357,389,749 | 2.80e-07 |
 
 "Per 100 texts" is 1 - (1 - P)^100: how often a 100-text row fails if it asserts "always".
-**Acceptance test** (B1 only): over N >= 10,000 texts of one n, the miss count M is within budget
+**Acceptance test** (B1 only): over N >= 10,000 independent texts of one n, the miss count M is within budget
 when M <= N·P + 3·sqrt(N·P·(1 - P)). MIK-8196 measured M = 625 at N = 20,000, n = 19, against a
 bound of 694; with every k-gram kept, 0.
 
@@ -856,7 +858,10 @@ causes names it (MIK-8201):
   exhausted, inside one window.
 - The per-source excuse (14.2), with its own metric and named refusal (MIK-8206).
 - Not a bound: a fifth cut delivery from one source evicting a holder's sketch (MIK-8066), which
-  then refuses the holder's own copy. Ordinary use; an in-model defect: MIK-8200.
+  then refuses the holder's own copy. Ordinary use; an in-model defect: MIK-8200. The fix keeps a
+  sketch while conflicting evidence can still live, bounded by memory (bound stated here when it
+  lands), keeps the B3 aggregate, and has a red row of 5+ cut deliveries from one source followed by
+  egress of the first one's middle. It lands before CAP.2's thinned sample.
 
 **B3 Bloom false excuse (D3).** A cut delivery's sketch says "held" for an absent fingerprint at most
 0.25% of the time, at most 1% across a pair's 4 live sketches; only for the holder's own (source,
@@ -873,16 +878,17 @@ middle of its own long answer, D2) are all in model.
 
 | Ticket | Direction | Class | Disposition |
 |---|---|---|---|
-| MIK-8066 CAP.2: the middle of a delivery over 6 KiB is never receipted | D1 | in model | Fix: a thinned sample of the cut middle as evidence |
+| MIK-8066 CAP.2: the middle of a delivery over 6 KiB is never receipted | D1 | in model | Fix: a thinned sample of the cut middle as evidence, safe for holders because the cut-delivery sketch excuses their own copy; its miss rate is stated in B1 terms when it lands; after MIK-8200 |
 | MIK-8066 BIG.3 and remainder: plan answers or steps over 1 MiB lose receipts and excuses | D1, D2 | in model | Fix: streaming sketch build; the thinned sample |
-| MIK-8209 (from MIK-8035) residuals 1, 3, 4: content items, labelled parts, plan path | D2 | in model | Fix: the per-key-path join |
+| MIK-8209 (from MIK-8035) residuals 1, 3: content items, labelled parts | D2 | in model | Fix: the per-key-path join |
+| MIK-8209 (from MIK-8035) residual 4: plan path has no run-together form | D2 and D1 | in model | Fix: the per-key-path join applied to the plan answer's k-grams |
 | MIK-8209 (from MIK-8035) residual 2: over the cap, flat and split receipts cut differently | D2 | in model | Pin with one row; likely met by MIK-8066's sketch |
 | MIK-8196: a 56-char tail missed once on one platform | D1 | in model, inside B1 | Row keeps every k-gram; determinism row added |
-| MIK-8200: sketch eviction refuses a holder | D2 | in model | Fix (High) |
+| MIK-8200: sketch eviction refuses a holder | D2 | in model | Fix (High): see B2 |
 | MIK-8201: capacity bounds not metered or named | B2 visibility | in model | Fix |
 | MIK-8205: subset forward refused against the same tool's exact join | D2 | in model | Fix |
 | MIK-8206: cross-tool verbatim copy refused | D2 | stated bound (14.2) | Fix: metric and named refusal |
-| MIK-8136 (1): a combining-mark run over 256 bytes may normalize differently near the cut | D1 only | out of model | Pathological input; a miss, never a refusal |
+| MIK-8136 (1): a run of over 256 bytes of combining marks without a starter may normalize differently near the forced cut | D1 only | out of model | Pathological input; a miss, never a refusal |
 | MIK-8136 (2): cut rule not checked against the Unicode corpus | none | not a finding | No concrete input |
 
 ### 14.6 Stop rule
@@ -897,7 +903,8 @@ A relay finding blocks a PR, reopens a ticket, or creates one only if it carries
 4. a red row at a production path: recording through `Firewall::delivery_digest` or
    `receipt_digest`, plan retention through `retain_delivered` and `cap_kept`, seams through
    `seam_fingerprints`, then `record_digest`; egress through `check_relay` or
-   `relay_block_message`. A gateway-level reproduction through the relay handlers also counts.
+   `relay_block_message`. A gateway-level reproduction through `router/backend_handlers/relay.rs`
+   or `meta_mcp/invoke/relay*.rs` also counts.
    `record_delivery` is a test shorthand for `delivery_digest` plus `record_digest`.
 
 Anything else gets one line in the ledger below and no ticket. Reviews of relay PRs receive this
