@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/invoke/budget.rs b/src/gateway/meta_mcp/invoke/budget.rs
+index f282e4843..e566fcdd4 100644
+--- a/src/gateway/meta_mcp/invoke/budget.rs
++++ b/src/gateway/meta_mcp/invoke/budget.rs
+@@ -130,6 +130,9 @@ impl MetaMcp {
+         result: Value,
+     ) -> (Value, super::super::response_security::GateEffect) {
+         use super::super::response_security::GateEffect;
++        if tool == "send_message" {
++            return (result, GateEffect::PassedThrough);
++        }
+         let mut provenance = ContextProvenance::tool_result(
+             server,
+             tool,

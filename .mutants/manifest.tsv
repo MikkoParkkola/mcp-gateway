@@ -1,0 +1,6 @@
+head_sha	51ebb51595783a0d0ba4c5f0c720ddbbce2d4555
+# #3597 MIK-8112 rows: one mutant per pinned behaviour
+q18-a2a-skips-anomaly-screen	linux	q18-a2a-skips-anomaly-screen.patch	--test a2a_outbound -- mik_8112_an_injected_a2a_answer_is_flagged_by_default
+q18b-a2a-skips-anomaly-screen-task	linux	q18b-a2a-skips-anomaly-screen-task.patch	--test a2a_outbound -- mik_8140_a_task_delivered_answer_carries_the_same_provenance
+q19-a2a-skips-response-firewall	linux	q19-a2a-skips-response-firewall.patch	--test a2a_outbound -- mik_8112_an_injected_a2a_answer_is_refused_under_a_block_rule
+q17b-a2a-skips-kernel-task	linux	q17b-a2a-skips-kernel-task.patch	--test a2a_outbound -- mik_8140_a_task_delivered_answer_carries_the_same_provenance

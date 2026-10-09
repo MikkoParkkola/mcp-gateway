@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/policy.rs b/src/gateway/meta_mcp/invoke/policy.rs
+index 9054ba8af..bb38c04de 100644
+--- a/src/gateway/meta_mcp/invoke/policy.rs
++++ b/src/gateway/meta_mcp/invoke/policy.rs
+@@ -322,7 +322,7 @@ impl MetaMcp {
+         // HIGH/CRITICAL finding, returning a security error to the caller.
+         {
+             let text = crate::security::response_inspect::extract_text_from_result(&result);
+-            if !text.is_empty() {
++            if !text.is_empty() && tool != "send_message" {
+                 let inspection = crate::security::response_inspect::inspect_response(
+                     &text,
+                     self.response_inspection_action_mode,
