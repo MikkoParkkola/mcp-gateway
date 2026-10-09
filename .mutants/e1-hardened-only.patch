@@ -1,0 +1,14 @@
+diff --git a/src/gateway/router/backend_handlers/direct_caller.rs b/src/gateway/router/backend_handlers/direct_caller.rs
+index b1ea2d3dc..23abf0ce6 100644
+--- a/src/gateway/router/backend_handlers/direct_caller.rs
++++ b/src/gateway/router/backend_handlers/direct_caller.rs
+@@ -261,7 +261,8 @@ pub(super) async fn read_envelope(
+     // `hardened` (GH1942.HARDEN.1 row 10) this route, which keeps no
+     // handshake state, also serves no legacy request other than an
+     // `initialize` that declares elicitation.
+-    if let Some(refusal) = super::super::hardened_elicitation::direct_refusal(
++    if super::super::hardened_elicitation::is_hardened(state)
++        && let Some(refusal) = super::super::hardened_elicitation::direct_refusal(
+         state,
+         &caller.inbound_headers,
+         &json_request,

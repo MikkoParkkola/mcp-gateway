@@ -1,0 +1,4 @@
+head_sha	5cbac07330eda3c5562db4d838d36e8174eff976
+# MIK-8040: the /mcp request checks run on the direct route under every posture; legacy refusal stays hardened-only
+e1-hardened-only	linux	e1-hardened-only.patch	--lib -- gateway::router::direct
+e2-legacy-refused-everywhere	linux	e2-legacy-refused-everywhere.patch	--lib -- gateway::router::direct

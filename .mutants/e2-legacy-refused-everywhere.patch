@@ -1,0 +1,12 @@
+diff --git a/src/gateway/router/hardened_elicitation.rs b/src/gateway/router/hardened_elicitation.rs
+index 3b130c32a..b6cd212c4 100644
+--- a/src/gateway/router/hardened_elicitation.rs
++++ b/src/gateway/router/hardened_elicitation.rs
+@@ -103,6 +103,6 @@ pub(super) fn direct_refusal(
+     ) {
+         return Some(build_http_response(&Egressed::gateway_own(rpc), status));
+     }
+-    (is_hardened(state) && shape.era() == Era::Legacy && !declares_elicitation(request))
++    (shape.era() == Era::Legacy && !declares_elicitation(request))
+         .then(refusal)
+ }
