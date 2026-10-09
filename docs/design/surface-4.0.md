@@ -711,7 +711,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `security.tool_policy.log_denied` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:57 |
 | `security.tool_policy.use_default_deny` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:55 |
 | `security.transparency_log` | KEEP | `TransparencyLogConfig::default()` | audit-log signing key the operator owns | - | src/config/features/security.rs:632 |
-| `security.transparency_log.enabled` | KEEP | `false` | opt-in audit when auth is off; required when auth is on (src/config/features/security.rs:117) | - | src/config/features/security.rs:33 |
+| `security.transparency_log.enabled` | KEEP | unset: on with auth, off without | opt-in audit when auth is off; on by default with auth, and `false` with auth fails the load (MIK-8044 P2c2, src/config/features/security.rs:127) | - | src/config/features/security.rs:37 |
 | `security.transparency_log.key_id` | KEEP | `"default".to_string()` | audit-log signing key the operator owns | - | src/config/features/security.rs:37 |
 | `security.transparency_log.path` | KEEP | `"~/.mcp-gateway/transparency/transparency.jsonl".to_string()` | state location; deployments put it on a chosen volume (the Helm chart puts the audit log on its own persistent volume) | - | src/config/features/security.rs:35 |
 | `security.transparency_log.rotation` | KEEP | `crate::security::audit_rotation_config::RotationConfig::defa` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/config/features/security.rs:44 |
