@@ -28,6 +28,9 @@
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
+#[path = "common/windows_paths.rs"]
+mod windows_paths;
+use windows_paths::{hostile_home, sh_path, yaml_single_quoted};
 
 use std::path::Path;
 use std::process::Stdio;
