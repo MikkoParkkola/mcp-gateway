@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/handlers.rs b/src/gateway/router/handlers.rs
+index 58d9188d2..534b95a9f 100644
+--- a/src/gateway/router/handlers.rs
++++ b/src/gateway/router/handlers.rs
+@@ -685,7 +685,7 @@ async fn meta_mcp_dispatch(
+                 .resume_session_id_scoped(existing, &caller_owner, held)
+             {
+                 Some(id) => id,
+-                None => return super::hardened_elicitation::refuse(&request, declared_version),
++                None => return { let _ = (&request, &declared_version); super::hardened_elicitation::refusal().into_response() },
+             }
+         })
+     };
