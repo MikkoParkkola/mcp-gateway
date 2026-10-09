@@ -248,6 +248,10 @@ pub(crate) fn edit_config_with<F>(path: &Path, mode: CommentLoss, edit: F) -> Re
 where
     F: FnOnce(&mut Config) -> Result<(), String>,
 {
+    // A file that does not load is refused before the lock file is made, so
+    // the refusal leaves the directory as it was; it loads again under it.
+    load_existing_or_default(path)
+        .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
     let _held = cli_lock(path)?;
     let mut config = load_existing_or_default(path)
         .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
