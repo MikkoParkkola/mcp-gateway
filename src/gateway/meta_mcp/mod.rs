@@ -455,7 +455,9 @@ impl MetaMcp {
         stats: Option<Arc<UsageStats>>,
         ranker: Option<Arc<SearchRanker>>,
         default_cache_ttl: Duration,
-        clock: Arc<dyn Fn() -> Result<u64, crate::clock::ClockBeforeEpoch> + Send + Sync>,
+        clock: Arc<
+            dyn Fn() -> std::result::Result<u64, crate::clock::ClockBeforeEpoch> + Send + Sync,
+        >,
     ) -> Self {
         Self {
             backends,
@@ -564,7 +566,9 @@ impl MetaMcp {
         stats: Option<Arc<UsageStats>>,
         ranker: Option<Arc<SearchRanker>>,
         default_ttl: Duration,
-        clock: Arc<dyn Fn() -> Result<u64, crate::clock::ClockBeforeEpoch> + Send + Sync>,
+        clock: Arc<
+            dyn Fn() -> std::result::Result<u64, crate::clock::ClockBeforeEpoch> + Send + Sync,
+        >,
     ) -> Self {
         Self::build(backends, cache, stats, ranker, default_ttl, clock)
     }

@@ -593,8 +593,9 @@ impl MetaMcp {
             return None;
         }
         let envelope = result.get("requestState")?.as_str()?;
-        let now = crate::protocol::continuation::now_unix_secs();
-        let payload = self.continuation.keyring().open(envelope, now).ok()?;
+        // A clock it cannot read opens nothing: the slot then waits out its own
+        // expiry instead of being freed early (MIK-8202).
+        let payload = self.continuation.keyring().open_now(envelope).ok()?;
         Some((envelope.to_owned(), payload.hold_key))
     }
 }
@@ -604,7 +605,9 @@ impl MetaMcp {
     /// its envelope never leaves, so nothing could redeem it.
     pub(crate) async fn release_unsent_hold(&self, response: &mut JsonRpcResponse) {
         if let Some(hold_key) = response.unsent_hold.take() {
-            let now = crate::protocol::continuation::now_unix_secs();
+            // Freeing a slot is retention work: 0 frees this one and skips the
+            // reclaim of others a clock before 1970 cannot date (MIK-8202 D2).
+            let now = crate::clock::unix_secs().unwrap_or(0);
             self.continuation.in_flight().complete(&hold_key, now).await;
         }
     }
