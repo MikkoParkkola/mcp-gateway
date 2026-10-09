@@ -467,3 +467,7 @@ fn closed_at(task: &Task, record: &Record, now: DateTime<Utc>) -> Option<RoundCl
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "store_input_tests.rs"]
+mod tests;
