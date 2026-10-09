@@ -1,0 +1,13 @@
+diff --git a/src/backend/descriptor_gate.rs b/src/backend/descriptor_gate.rs
+index 9e1bd1c41..50ba6c120 100644
+--- a/src/backend/descriptor_gate.rs
++++ b/src/backend/descriptor_gate.rs
+@@ -292,7 +292,7 @@ impl Backend {
+         // discovery shows without any list being stored (`MIK-8127`).
+         // Coalesced with every store's nudge (`MIK-8208`): a fill per caller
+         // must not queue a nudge per fill.
+-        self.nudge_changed_coalesced();
++        self.nudge_tools(super::tools_nudge::NudgeKind::Changed);
+     }
+ 
+     /// Refusal text when `tool` is blocked on this backend.

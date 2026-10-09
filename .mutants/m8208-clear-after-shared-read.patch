@@ -1,0 +1,24 @@
+diff --git a/src/gateway/server/tools_changed.rs b/src/gateway/server/tools_changed.rs
+index 9785b3552..ca00deed6 100644
+--- a/src/gateway/server/tools_changed.rs
++++ b/src/gateway/server/tools_changed.rs
+@@ -207,9 +207,6 @@ fn decide(
+             // Cleared BEFORE any read of this backend, shared slot included: a
+             // store or verdict from now on queues a fresh nudge, so none is
+             // lost between this and the reads (`MIK-8208`).
+-            if let Some(b) = backend.as_ref().filter(|b| b.instance() == instance) {
+-                b.clear_views_dirty();
+-            }
+             let seen = backend.as_ref().map_or(Seen::Unregistered, |b| {
+                 let (stored, populated) = b.stored_tools_snapshot();
+                 Seen::Registered {
+@@ -222,6 +219,9 @@ fn decide(
+             if let Some(b) = backend.as_ref() {
+                 b.run_shared_read_seam_for_test();
+             }
++            if let Some(b) = backend.as_ref().filter(|b| b.instance() == instance) {
++                b.clear_views_dirty();
++            }
+             // Read before the lock: it walks the pool.
+             // ponytail: fingerprints every per-user slot per backend
+             // nudge; cache per-slot fingerprints if slots x stores bites.
