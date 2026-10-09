@@ -8,19 +8,19 @@ src/gateway/meta_mcp/grant_audit.rs	allow_unslotted_check_for_test	-	test-only h
 src/gateway/meta_mcp/grant_audit.rs	check_or_stamp	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	dispatch_below_gate_shaped	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	drop	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	envelope	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/grant_audit.rs	envelope	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
 src/gateway/meta_mcp/grant_audit.rs	eq	-	equality impl; not on the dispatch path
-src/gateway/meta_mcp/grant_audit.rs	fingerprint	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/grant_audit.rs	fingerprint	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
 src/gateway/meta_mcp/grant_audit.rs	fmt	-	Debug formatting; not called per call
 src/gateway/meta_mcp/grant_audit.rs	grant_bookkeeping_for_test	-	test-only helper
-src/gateway/meta_mcp/grant_audit.rs	in_repeat_scope	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/grant_audit.rs	in_repeat_scope	-	task replay only
 src/gateway/meta_mcp/grant_audit.rs	invoke_tool	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	is_repeat	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/grant_audit.rs	is_repeat	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
 src/gateway/meta_mcp/grant_audit.rs	note_answer_id	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	note_grant_decision	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	project	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	remember	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	select_records	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/grant_audit.rs	project	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
+src/gateway/meta_mcp/grant_audit.rs	remember	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
+src/gateway/meta_mcp/grant_audit.rs	select_records	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
 src/gateway/meta_mcp/grant_audit.rs	slot_http	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	slot_result	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	slot_rpc	-	stdio/RPC transport slot; the HTTP path opens slot_http

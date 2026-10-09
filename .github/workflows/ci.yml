@@ -131,6 +131,7 @@ jobs:
       - name: Every tools/call path function has a per-call stage (MIK-8014)
         run: |
           python3 scripts/ci/check_per_call_stages.py
+          python3 scripts/ci/test_check_per_call_stages.py
           python3 scripts/perf/test_per_call_gate.py
       - name: Validate tracked public docs boundary
         run: scripts/dev/check-public-repo-hygiene.sh

@@ -18,6 +18,10 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 TABLE = ROOT / "docs/internal/perf/per_call_stages.tsv"
 HARNESS = ROOT / "src/gateway/server/tests/per_call_timing.rs"
+TEST_MOD = re.compile(
+    r"^#\[cfg\((?:all\()?test\b[^\n]*\n(?:#\[[^\n]*\n)*\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+",
+    re.M,
+)
 # The tools/call path (design r4 K-M6): the HTTP handler, the meta wrapper
 # chain, and the stdio request path.
 PATH_FILES = [
@@ -32,6 +36,27 @@ PATH_FILES = [
     "src/gateway/server/mod.rs",
     "src/gateway/server/stdio_notify.rs",
 ]
+
+
+def without_test_modules(source):
+    """The source with each inline cfg(test) module's body removed: its
+    helpers are not stages. A file-mounted `mod x;` carries no body here, and
+    nothing after a test module is dropped."""
+    out, at = [], 0
+    for m in TEST_MOD.finditer(source):
+        rest = source[m.end():]
+        brace = len(rest) - len(rest.lstrip())
+        if not rest[brace:].startswith("{"):
+            continue  # `mod x;`: the body lives in another file
+        depth, end = 0, m.end() + brace
+        for i in range(end, len(source)):
+            depth += {"{": 1, "}": -1}.get(source[i], 0)
+            if depth == 0:
+                end = i + 1
+                break
+        out.append(source[at:m.start()])
+        at = end
+    return "".join(out) + source[at:]
 
 
 def stages():
@@ -66,8 +91,7 @@ def main():
             errors.append(f"{file} {fn}: off the per-call path needs a reason")
     for file in PATH_FILES:
         source = (ROOT / file).read_text()
-        # Production functions only: a cfg(test) module's helpers are not stages.
-        source = source.split("#[cfg(test)]\nmod tests")[0]
+        source = without_test_modules(source)
         for fn in sorted(set(re.findall(r"\bfn ([a-z_][a-z0-9_]*)", source))):
             if (file, fn) not in rows:
                 errors.append(f"{file} {fn}: no entry in {TABLE.relative_to(ROOT)}")

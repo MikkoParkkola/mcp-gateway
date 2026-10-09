@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Tests for per_call_gate.py's verdict rules (MIK-8014): a row whose null-arm
 budget is above the ceiling is VOID, a head-base difference above the budget
-is OVER, anything else PASS."""
+is OVER, anything else PASS; a run that cannot measure is VOID, never FAIL."""
 
 from __future__ import annotations
 
@@ -45,6 +45,39 @@ class Judge(unittest.TestCase):
     def test_each_row_is_judged_on_its_own_budget(self):
         verdict = judge({"a": 100, "b": 5000}, {"a": 50, "b": 50})
         self.assertEqual(verdict, {"a": "PASS", "b": "VOID"})
+
+
+def decide(*verdicts):
+    with contextlib.redirect_stdout(io.StringIO()):
+        return gate.decide(list(verdicts))
+
+
+class Decide(unittest.TestCase):
+    def test_over_twice_fails(self):
+        self.assertEqual(decide({"r": "OVER"}, {"r": "OVER"}), 1)
+
+    def test_over_once_then_pass_passes(self):
+        self.assertEqual(decide({"r": "OVER"}, {"r": "PASS"}), 0)
+
+    def test_a_void_confirmation_is_void_not_pass(self):
+        self.assertEqual(decide({"r": "OVER"}, {"r": "VOID"}), 2)
+
+    def test_a_void_row_voids_the_run(self):
+        self.assertEqual(decide({"a": "PASS", "b": "VOID"}), 2)
+
+    def test_all_pass_passes(self):
+        self.assertEqual(decide({"a": "PASS", "b": "PASS"}), 0)
+
+
+class Errors(unittest.TestCase):
+    def test_a_failed_command_is_void_not_fail(self):
+        with self.assertRaises(gate.Void) as raised:
+            gate.sh(["sh", "-c", "echo broken >&2; exit 101"])
+        self.assertIn("broken", str(raised.exception))
+
+    def test_a_hung_command_is_void(self):
+        with self.assertRaises(gate.Void):
+            gate.sh(["sleep", "5"], timeout=0.2)
 
 
 if __name__ == "__main__":
