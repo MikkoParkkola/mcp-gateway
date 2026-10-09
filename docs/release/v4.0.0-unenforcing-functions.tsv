@@ -61,3 +61,6 @@ src/gateway/server/persistence.rs	write_costs	1	Shutdown persistence (MIK-8157):
 src/gateway/server/persistence.rs	save_costs_unless_busy	1	Shutdown persistence (MIK-8157): periodic cost save that skips while a previous write runs
 src/gateway/server/persistence.rs	run_shutdown_saves	1	Shutdown persistence (MIK-8157): runs the shutdown saves on detached threads under one deadline
 src/gateway/server/persistence.rs	save_state_on_shutdown	1	Shutdown persistence (MIK-8157): lists the HTTP shutdown saves for run_shutdown_saves
+src/gateway/router/handlers/health.rs	backends_overall_healthy	1	Folds backend statuses into one health bit for /health; admin detail is decided in health_handler
+src/gateway/router/handlers/session_end.rs	sse_deprecated_handler	1	Answers the retired /sse route with a fixed 410 migration notice; reads no request data
+src/gateway/router/handlers/sse.rs	unsupported_version_error	1	Builds the unsupported-version JSON-RPC error; the refusal is decided by its callers
