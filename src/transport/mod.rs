@@ -226,6 +226,13 @@ pub trait Transport: Send + Sync {
 
     /// Close the transport
     async fn close(&self) -> Result<()>;
+
+    /// End the transport's process tree now, synchronously and without any
+    /// Tokio runtime (MIK-7923): a replaced capability's child must die even
+    /// when the runtime that started it sits idle or is gone. A no-op for
+    /// transports that own no process. `close` still runs later where it can,
+    /// and waits (bounded) for what this started.
+    fn kill_tree_now(&self) {}
 }
 
 /// RAII removal of a `pending` entry when its request future is dropped.

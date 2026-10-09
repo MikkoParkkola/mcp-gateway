@@ -460,13 +460,16 @@ async fn fixture_inner(
         use crate::security::firewall::{Firewall, FirewallConfig};
         let rules = FIREWALL_RULE
             .with(std::cell::Cell::get)
+            // `send_message` is the A2A backend's one tool (MIK-8139).
             .map_or_else(Vec::new, |action| {
-                vec![crate::security::firewall::FirewallRule {
-                    tool_match: "read".to_string(),
-                    action,
-                    reason: None,
-                    scan: Vec::new(),
-                }]
+                ["read", "send_message"]
+                    .map(|tool| crate::security::firewall::FirewallRule {
+                        tool_match: tool.to_string(),
+                        action,
+                        reason: None,
+                        scan: Vec::new(),
+                    })
+                    .to_vec()
             });
         let anomaly = ANOMALY.with(std::cell::Cell::get);
         let tracker = anomaly.then(|| {

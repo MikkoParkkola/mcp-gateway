@@ -22,26 +22,58 @@ pub(super) struct ChildTree {
     pid: Option<rustix::process::Pid>,
     /// Set once the close phase has signalled the group (or the leader proved
     /// gone): `start_kill` sends at most one, and nothing signals after the
-    /// reap. The pre-reap phase (A5) has its own latch.
+    /// reap. The pre-reap phase (A5) repeats while the group settles
+    /// (MIK-8213), then closes the gate for good.
     signals_closed: bool,
-    /// The pre-reap phase ran to its probe (A5): at most one signal per
-    /// phase. Set after the grace, so a cancelled grace retries the phase.
-    #[cfg(unix)]
-    pre_reap_done: bool,
     /// The leader's exit, from the single reap.
     status: Option<ExitStatus>,
+    /// When the reaper first stepped this tree, and how far it got (MIK-7923).
+    reaping: Option<(std::time::Instant, ReapPhase)>,
     #[cfg(test)]
     pub(super) group_signals_sent: usize,
     #[cfg(all(test, unix))]
     pub(super) signals_refused: usize,
-    #[cfg(test)]
-    pub(super) after_close_before_wait: crate::test_pause::Slot,
-    /// Test-only: inside the pre-reap phase, before its grace and latch.
-    #[cfg(all(test, unix))]
-    pub(super) in_pre_reap_grace: crate::test_pause::Slot,
 }
 
 /// What the kernel says about the leader, without reaping it.
+/// How long a tree handed to the reaper may take before it is dropped
+/// unreaped (MIK-7923, design P3).
+pub(super) const REAP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Test record of a finished tree (see the reaper's `FINISHED`). Unix-only,
+/// like the only tests that read it.
+#[cfg(all(test, unix))]
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Counts {
+    pub(super) pid: Option<u32>,
+    pub(super) sent: usize,
+    pub(super) refused: usize,
+    pub(super) status: Option<ExitStatus>,
+}
+
+/// One [`ChildTree::reap_step`]: still working, or finished with the leader's
+/// status (`None` when the deadline passed unreaped).
+pub(super) enum Reap {
+    Pending,
+    Done(Option<ExitStatus>),
+}
+
+/// Where a stepped tree is in the reap order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReapPhase {
+    /// Unix: the close signal is sent; waiting up to `PRE_REAP_GRACE` for the
+    /// leader to exit before the A5 signal. Windows starts at `Reaping`.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    Grace,
+    /// Unix (MIK-8213): the leader has exited; the group is signalled again
+    /// on every step until `PRE_REAP_SETTLE` after `since`, catching a member
+    /// whose fork completed after an earlier signal's snapshot of the group.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    Settle { since: std::time::Instant },
+    /// The signal gate is closed; reaping the leader.
+    Reaping,
+}
+
 #[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Leader {
@@ -81,17 +113,12 @@ impl ChildTree {
             #[cfg(unix)]
             pid,
             signals_closed: false,
-            #[cfg(unix)]
-            pre_reap_done: false,
             status: None,
+            reaping: None,
             #[cfg(test)]
             group_signals_sent: 0,
             #[cfg(all(test, unix))]
             signals_refused: 0,
-            #[cfg(test)]
-            after_close_before_wait: crate::test_pause::Slot::default(),
-            #[cfg(all(test, unix))]
-            in_pre_reap_grace: crate::test_pause::Slot::default(),
         }
     }
 
@@ -130,7 +157,8 @@ impl ChildTree {
     }
 
     /// The only place a group signal is sent, always after an ownership check
-    /// (Unix): close once, pre-reap once (A5), never after the reap.
+    /// (Unix): the close signal, then the pre-reap signal (A5) repeated while
+    /// the group settles, never after the reap.
     fn send_group_signal(&mut self) {
         let _ = self.wrapper.start_kill();
         self.signals_closed = true;
@@ -163,55 +191,111 @@ impl ChildTree {
         self.send_group_signal();
     }
 
-    /// End the tree and reap the leader, once: the close signal, the pre-reap
-    /// signal (Unix), then the signal gate closes BEFORE the wait is polled,
-    /// so a cancelled or failed wait is never followed by another signal. The single reap is the
-    /// wrapper's own `wait`, so tokio sees it. Idempotent; a failed wait may
-    /// be retried, without a signal.
-    pub(super) async fn finish(&mut self) -> Option<ExitStatus> {
-        if self.status.is_some() {
-            return self.status;
+    /// End the tree and reap the leader, one non-blocking step at a time, for
+    /// the reaper thread
+    /// (MIK-7923, design P3): it needs no runtime, never sleeps and never
+    /// awaits. Order (MIK-8080): the close signal on the first step,
+    /// then (Unix) up to `PRE_REAP_GRACE` for the leader to exit, the A5
+    /// signal, the gate closed, then the reap. Past [`REAP_DEADLINE`] it
+    /// gives up unreaped, with the gate closed, and the caller drops the tree.
+    pub(super) fn reap_step(&mut self, now: std::time::Instant) -> Reap {
+        if let Some(status) = self.status {
+            return Reap::Done(Some(status));
         }
-        self.start_kill();
-        #[cfg(unix)]
-        self.pre_reap_signal().await;
-        self.signals_closed = true;
-        #[cfg(test)]
-        self.after_close_before_wait.pause().await;
-        if let Ok(status) = self.wrapper.wait().await {
-            self.status = Some(status);
-        }
-        self.status
-    }
-
-    /// A5: one more group signal just before the reap, once the leader has
-    /// exited. It catches a member forked after the close signal's snapshot
-    /// of the group (a macOS window). Still ownership-checked: the unreaped
-    /// leader holds the group id, so it cannot name a reused group.
-    #[cfg(unix)]
-    async fn pre_reap_signal(&mut self) {
-        if self.pre_reap_done {
-            return;
-        }
-        #[cfg(test)]
-        self.in_pre_reap_grace.pause().await;
-        wait_exited(self, PRE_REAP_GRACE).await;
-        // Latched only now: a finish cancelled during the grace has not had
-        // this phase, and a retried finish must still send it.
-        self.pre_reap_done = true;
-        if matches!(self.leader_state(), Leader::Running | Leader::Zombie) {
-            self.send_group_signal();
+        let (started, phase) = if let Some(state) = self.reaping {
+            state
         } else {
-            #[cfg(test)]
-            {
-                self.signals_refused += 1;
+            self.start_kill();
+            let state = (now, Self::FIRST_REAP_PHASE);
+            self.reaping = Some(state);
+            state
+        };
+        let elapsed = now.saturating_duration_since(started);
+        if elapsed >= REAP_DEADLINE {
+            self.signals_closed = true;
+            tracing::warn!(
+                pid = self.wrapper.id(),
+                "stdio child not reaped within its deadline; dropped unreaped"
+            );
+            return Reap::Done(None);
+        }
+        #[cfg(unix)]
+        if phase == ReapPhase::Grace {
+            if !self.exited() && elapsed < PRE_REAP_GRACE {
+                return Reap::Pending;
             }
+            self.reaping = Some((started, ReapPhase::Settle { since: now }));
+        }
+        // A5, repeated until the group settles (MIK-8080, MIK-8213): a group
+        // signal on every step for `PRE_REAP_SETTLE` after the leader exits.
+        // One signal is not enough on macOS: a fork already under way when a
+        // signal lands can complete after that signal's snapshot, and its
+        // child is in the group but in no snapshot so far. Each signal is
+        // ownership-checked: the unreaped leader holds the group id, so it
+        // cannot name a reused group. A refusal closes the gate at once.
+        #[cfg(unix)]
+        if let Some((_, ReapPhase::Settle { since })) = self.reaping {
+            if matches!(self.leader_state(), Leader::Running | Leader::Zombie) {
+                self.send_group_signal();
+                if now.saturating_duration_since(since) < PRE_REAP_SETTLE {
+                    return Reap::Pending;
+                }
+            } else {
+                #[cfg(test)]
+                {
+                    self.signals_refused += 1;
+                }
+            }
+            self.signals_closed = true;
+            self.reaping = Some((started, ReapPhase::Reaping));
+        }
+        #[cfg(not(unix))]
+        let _ = phase;
+        match self.try_reap() {
+            Some(status) => {
+                self.status = Some(status);
+                Reap::Done(Some(status))
+            }
+            None => Reap::Pending,
         }
     }
 
-    /// The status the single reap recorded, if it has happened.
-    pub(super) fn status(&self) -> Option<ExitStatus> {
-        self.status
+    /// This tree's signal counts and `status`, for the test record.
+    #[cfg(all(test, unix))]
+    pub(super) fn counts(&self, status: Option<ExitStatus>) -> Counts {
+        Counts {
+            // Captured at spawn: tokio's `id()` is `None` once reaped.
+            pid: self
+                .pid
+                .and_then(|pid| u32::try_from(pid.as_raw_nonzero().get()).ok()),
+            sent: self.group_signals_sent,
+            refused: self.signals_refused,
+            status,
+        }
+    }
+
+    #[cfg(unix)]
+    const FIRST_REAP_PHASE: ReapPhase = ReapPhase::Grace;
+    #[cfg(not(unix))]
+    const FIRST_REAP_PHASE: ReapPhase = ReapPhase::Reaping;
+
+    /// The leader's status if it can be reaped now, without blocking.
+    ///
+    /// Unix reaps through the NATIVE tokio child, never the wrapper:
+    /// process-wrap's `ProcessGroupChild::try_wait` reaps with a raw group
+    /// `waitpid` first, so tokio would not record the exit and its
+    /// `kill_on_drop` would stay armed against a pid the kernel may reuse.
+    /// Windows has no pid to reuse and keeps the Job wrapper's own `try_wait`,
+    /// matching what the release line's async reap observed there.
+    fn try_reap(&mut self) -> Option<ExitStatus> {
+        #[cfg(unix)]
+        {
+            native_child(&mut *self.wrapper).and_then(|child| child.try_wait().ok().flatten())
+        }
+        #[cfg(not(unix))]
+        {
+            self.wrapper.try_wait().ok().flatten()
+        }
     }
 
     /// Test-only: reap through the raw wrapper, behind the tree's back, as a
@@ -231,19 +315,10 @@ impl ChildTree {
 #[cfg(unix)]
 const PRE_REAP_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Wait up to `limit` for the leader to exit, without reaping it.
-pub(super) async fn wait_exited(child: &mut ChildTree, limit: std::time::Duration) -> bool {
-    let deadline = tokio::time::Instant::now() + limit;
-    loop {
-        if child.exited() {
-            return true;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
-}
+/// How long, after the leader exits, the group keeps being signalled before
+/// the gate closes and the leader is reaped (MIK-8213).
+#[cfg(unix)]
+const PRE_REAP_SETTLE: std::time::Duration = std::time::Duration::from_millis(50);
 
 #[cfg(all(test, unix))]
 #[path = "stdio_child_tree_tests.rs"]
@@ -253,9 +328,34 @@ mod tests;
 mod windows_tests;
 
 impl Drop for ChildTree {
-    /// The single kill owner on drop: a dropped transport, a slot replaced by
-    /// a restart, or a retry all end the group here, before tokio reaps.
+    /// The fallback kill, never the normal path: a dropped transport and a
+    /// replaced slot hand their tree to the reaper (MIK-7923), so this runs
+    /// for a tree the reaper finished (its gate already closed) or one it
+    /// could not take. Gated like every other group signal.
     fn drop(&mut self) {
         self.start_kill();
+    }
+}
+
+/// The native tokio child at the bottom of a wrapper chain: the same walk as
+/// process-wrap's `try_inner_child_mut`, which is `unsafe` in its signature;
+/// this crate is `#![deny(unsafe_code)]`. `None` when the chain ends in a
+/// child that is not a tokio one.
+#[cfg(unix)]
+fn native_child(wrapper: &mut dyn ChildWrapper) -> Option<&mut tokio::process::Child> {
+    let mut current = wrapper;
+    loop {
+        if (&*current as &dyn std::any::Any).is::<tokio::process::Child>() {
+            return (current as &mut dyn std::any::Any).downcast_mut::<tokio::process::Child>();
+        }
+        let here = std::ptr::from_ref::<dyn ChildWrapper>(current).cast::<()>();
+        let next = current.inner_mut();
+        if std::ptr::eq(
+            here,
+            std::ptr::from_ref::<dyn ChildWrapper>(next).cast::<()>(),
+        ) {
+            return None;
+        }
+        current = next;
     }
 }
