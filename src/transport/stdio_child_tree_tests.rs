@@ -596,3 +596,58 @@ async fn gone_or_zombie(mut child: std::process::Child) {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
+
+/// MIK-7923 coverage of `start`'s install refusal: a retire that lands
+/// between the spawn and the install (one from another thread can) refuses
+/// the start, installs nothing and releases stdin, so no later write can
+/// reach the refused child.
+#[tokio::test]
+async fn a_retire_between_spawn_and_install_refuses_the_start() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    std::fs::write(workspace.path().join("idle.sh"), "exec sleep 60\n").expect("script");
+    let t = StdioTransport::new(
+        "sh idle.sh",
+        HashMap::new(),
+        Some(workspace.path().to_string_lossy().into_owned()),
+        Duration::from_secs(30),
+        None,
+    );
+    t.retire_after_spawn_for_test();
+    let refused = t.start().await;
+    assert!(
+        matches!(&refused, Err(crate::Error::BackendNotFound(m)) if m.contains("while it started")),
+        "refused at install: {refused:?}"
+    );
+    assert!(t.writer.lock().await.is_none(), "stdin was released");
+    assert!(t.child.lock().tree.is_none(), "nothing was installed");
+}
+
+/// The reader's dropped-transport exit (MIK-8229): a member that escaped the
+/// group keeps stdout and writes after the transport is gone, so the reader
+/// gets a line it can no longer deliver, logs why, and stops. Captured on one
+/// thread: the reader task runs on this current-thread runtime.
+#[test]
+fn a_line_after_the_transport_dropped_stops_the_reader() {
+    let late = "perl -MPOSIX -e 'setsid; exec @ARGV' sh -c 'sleep 0.5; echo \"{}\"' \
+                </dev/null 2>/dev/null & echo $! > d.pid\nwhile IFS= read -r l; do :; done";
+    let records = crate::test_log_capture::records(|| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime.block_on(async {
+            let (w, t) = started(late, None).await;
+            let writer = descendant(w.path()).await;
+            drop(Arc::into_inner(t).expect("the only handle"));
+            gone(writer).await;
+            // The line is in the pipe once its writer has exited; the reader
+            // runs on this thread as soon as it is polled.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        });
+    });
+    assert_eq!(
+        crate::test_log_capture::count(&records, "DEBUG", "Transport dropped while reading"),
+        1,
+        "the reader saw a line after the drop and stopped"
+    );
+}
