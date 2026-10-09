@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/store.rs b/src/gateway/task_service/store.rs
+index da7a0f89f..6fc4e5196 100644
+--- a/src/gateway/task_service/store.rs
++++ b/src/gateway/task_service/store.rs
+@@ -416,7 +416,7 @@ impl TaskStore {
+     /// already past it was admitted earlier and finishes. Takes only the state
+     /// lock, never the ordering lock, so a caller in `Drop` never waits on disk.
+     pub(crate) fn stop_serving(&self) {
+-        self.0.state().ready = false;
++        let _ = &self.0;
+     }
+ }
+ 

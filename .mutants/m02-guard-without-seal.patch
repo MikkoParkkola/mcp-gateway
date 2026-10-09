@@ -1,0 +1,12 @@
+diff --git a/src/gateway/server/stdio_tasks.rs b/src/gateway/server/stdio_tasks.rs
+index be7ac50ad..3c12fa7ec 100644
+--- a/src/gateway/server/stdio_tasks.rs
++++ b/src/gateway/server/stdio_tasks.rs
+@@ -63,7 +63,6 @@ impl Drop for TasksDropGuard {
+     /// store mutation. A write already admitted finishes; nothing waits on it
+     /// here, so a stalled disk cannot hold the drop.
+     fn drop(&mut self) {
+-        self.executor.seal();
+         self.service.stop_serving();
+     }
+ }

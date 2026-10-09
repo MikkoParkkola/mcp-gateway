@@ -1,0 +1,5 @@
+head_sha	f67fd302e1476fd7667c2cb59aa661fd070c295e
+# MIK-7839 rows
+m01-spawn-completion-first	linux	m01-spawn-completion-first.patch	--lib -- spawn_tests::a_sealed_worker_takes_no_step_when_it_wakes
+m02-guard-without-seal	linux	m02-guard-without-seal.patch	--lib -- stdio_session_drop
+m03-stop-serving-noop	linux	m03-stop-serving-noop.patch	--lib -- store_tests::stop_serving
