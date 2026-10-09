@@ -103,16 +103,12 @@ src/gateway/router/handlers/sse.rs	unsupported_version_error	1	Builds the unsupp
 src/transport/stdio.rs	kill_tree_now	1	Process lifecycle (MIK-7923): ends a retired stdio transport's process tree; no access decision
 src/gateway/router/handlers/dispatch_intake.rs	params	1	Returns the request params or the narrowed listen copy; decides nothing
 src/gateway/router/helpers.rs	bodiless_accepted	1	Strips the placeholder body from a 202 direct answer and passes every other answer through unchanged.
-src/gateway/router/helpers.rs	parse_sampling_params	1	Deserializes sampling parameters and returns a protocol-level invalid-params error when they are missing or malformed.
-src/gateway/router/helpers.rs	parse_elicitation_params	1	Deserializes elicitation parameters and returns a protocol-level invalid-params error when they are missing or malformed.
 src/gateway/router/helpers.rs	extract_request_id	1	Converts a JSON string or integer into a request id, nothing else.
-src/gateway/router/helpers.rs	is_notification_method	1	Reports whether a method name is in the notifications namespace, used to decide whether a request id is required.
 src/gateway/router/helpers.rs	merge_client_meta	1	Copies the client's self-asserted request metadata, never an authorization input, into a meta-tool's arguments.
 src/gateway/router/helpers.rs	insert_client_meta	1	Inserts the client's metadata object into the arguments unless one is already present.
 src/gateway/router/helpers.rs	client_meta_insert_required	1	Reports whether the metadata merge would insert anything, a pure precondition over non-authorizing metadata.
 src/gateway/router/helpers.rs	merge_client_meta_ref	1	Borrowed form of the metadata merge that copies only when an insertion is needed.
 src/gateway/router/helpers.rs	parse_request	1	Owned wrapper that copies method and params out of the borrowed JSON-RPC parse.
-src/gateway/router/helpers.rs	parse_request_ref	1	Validates JSON-RPC framing (version, method, id presence) and returns protocol errors, a syntactic check rather than a security refusal [unenforcing vs critical].
 src/gateway/router/accounts/complete.rs	list	1	Formats the caller's already-scoped connection rows into HTML with escaped descriptor ids.
 src/gateway/router/watch_poll.rs	application_value	1	Extracts the structured content or first text item from an already-gated tool result.
 src/gateway/router/watch_poll.rs	new	1	Stores a weak handle to the gateway state for the watch host.
