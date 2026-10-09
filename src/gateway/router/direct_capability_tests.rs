@@ -187,15 +187,24 @@ async fn g7_a_malformed_round_with_undeclared_questions_is_refused() {
     }
 }
 
-/// G8: a modern request `/mcp` would refuse is relayed as legacy, so what it
-/// declared does not count: refused like G4. Here its `Mcp-Name` header names
-/// another tool than its body.
+/// G8: what a request `/mcp` would refuse declared does not count. Since
+/// MIK-8040 such a request is refused before dispatch, so the declaration never
+/// reaches the seal. Here its `Mcp-Name` header names another tool than its body.
 #[tokio::test]
-async fn g8_a_declaration_on_a_request_relayed_as_legacy_does_not_count() {
+async fn g8_a_declaration_on_a_request_the_checks_refuse_does_not_count() {
+    // A request `/mcp` would refuse (here an `Mcp-Name` header that disagrees
+    // with the body) is refused before dispatch on this route too (MIK-8040),
+    // so its declaration never reaches the seal: nothing is asked of the
+    // backend and nothing is relayed.
     for backend in BACKENDS {
         let fx = fixture(Answer::AskOnce, |_| {}).await;
         let body = call_named(&fx, backend, Some(form()), "other").await;
-        let data = json!({"requiredCapabilities": ["elicitation"]});
-        assert_refused(&body, &data, backend);
+        assert_eq!(body["error"]["code"], -32020, "{backend}: {body}");
+        assert!(body.get("result").is_none(), "{backend}: {body}");
+        assert_eq!(
+            fx.calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "{backend}"
+        );
     }
 }

@@ -699,9 +699,18 @@ async fn r19_the_propagated_binding_binds_ahead_of_the_identity() {
             "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}}},
         "requestState": BACKEND_STATE
     });
-    meta.seal_direct_interim(who("binding-a"), ("alpha", None, Some(&sent)), &mut asked)
-        .await
-        .expect("sealed");
+    // A client that declared form elicitation, so the question may be asked
+    // (MRTR.9, MIK-8089).
+    let declared = crate::protocol::meta::Declared::from_handshake(Some(
+        &json!({"elicitation": {"form": {}}}),
+    ));
+    meta.seal_direct_interim(
+        who("binding-a"),
+        ("alpha", None, Some(&sent), declared),
+        &mut asked,
+    )
+    .await
+    .expect("sealed");
     let retry = json!({"name": "read", "arguments": {},
         "requestState": asked["requestState"], "inputResponses": answers()});
     let mut outbound = retry.clone();
