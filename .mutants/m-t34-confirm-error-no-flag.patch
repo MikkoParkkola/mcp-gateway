@@ -1,0 +1,12 @@
+diff --git a/src/events/upstream_listener.rs b/src/events/upstream_listener.rs
+index 8ea50c72b..f08ceb5a9 100644
+--- a/src/events/upstream_listener.rs
++++ b/src/events/upstream_listener.rs
+@@ -493,7 +493,6 @@ impl UpstreamListeners {
+                     // A failed confirm counts like the first lookup's failure:
+                     // the attempt does not wait on the catalogue again.
+                     _ => {
+-                        let _ = FAILED_LOOKUP.try_with(|failed| failed.set(true));
+                         Ok(())
+                     }
+                 }

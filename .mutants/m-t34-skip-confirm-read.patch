@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_listener.rs b/src/events/upstream_listener.rs
+index 8ea50c72b..68e11d08e 100644
+--- a/src/events/upstream_listener.rs
++++ b/src/events/upstream_listener.rs
+@@ -474,7 +474,7 @@ impl UpstreamListeners {
+             Ok(Ok(snapshot)) if snapshot.complete && !snapshot.uris.contains(uri) => {
+                 // A cached list may predate the grant (MIK-8194): an absence
+                 // is confirmed by a read begun now, after it, before revoking.
+-                if granted.is_none() {
++                if granted.is_some() || granted.is_none() {
+                     return Err(RpcError::forbidden());
+                 }
+                 if !self.may_confirm(backend) {

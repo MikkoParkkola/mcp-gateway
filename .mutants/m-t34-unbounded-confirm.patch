@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_listener.rs b/src/events/upstream_listener.rs
+index 8ea50c72b..fea3386af 100644
+--- a/src/events/upstream_listener.rs
++++ b/src/events/upstream_listener.rs
+@@ -515,7 +515,7 @@ impl UpstreamListeners {
+         confirmed.retain(|_, at| now.duration_since(*at) < CONFIRM_EVERY);
+         if confirmed
+             .get(backend)
+-            .is_some_and(|at| now.duration_since(*at) < CONFIRM_EVERY)
++            .is_some_and(|at| now.duration_since(*at) < CONFIRM_EVERY && false)
+         {
+             return false;
+         }

@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_listener.rs b/src/events/upstream_listener.rs
+index 8ea50c72b..e7a3852e1 100644
+--- a/src/events/upstream_listener.rs
++++ b/src/events/upstream_listener.rs
+@@ -512,7 +512,7 @@ impl UpstreamListeners {
+         let now = tokio::time::Instant::now();
+         let mut confirmed = self.confirmed.lock();
+         // Only windows still open are kept, so the map never outgrows them.
+-        confirmed.retain(|_, at| now.duration_since(*at) < CONFIRM_EVERY);
++        
+         if confirmed
+             .get(backend)
+             .is_some_and(|at| now.duration_since(*at) < CONFIRM_EVERY)

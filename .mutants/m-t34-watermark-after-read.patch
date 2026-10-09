@@ -1,0 +1,20 @@
+diff --git a/src/events/upstream_session.rs b/src/events/upstream_session.rs
+index 1e8f40109..229d63eea 100644
+--- a/src/events/upstream_session.rs
++++ b/src/events/upstream_session.rs
+@@ -484,7 +484,6 @@ impl<'a> State<'a> {
+         }
+         let epoch = self.shared.snapshot.lock().epoch();
+         // A grant after this point is not judged by this read.
+-        let granted_by = hub.upgrade().map_or(0, |hub| hub.store.generation_now());
+         match backend.read_resource_snapshot(fresh).await {
+             Ok(mut read) => {
+                 // A watched URI missing from a cached list is confirmed by a
+@@ -500,6 +499,7 @@ impl<'a> State<'a> {
+                     read = again;
+                 }
+                 let (complete, listed) = (read.complete, read.uris.clone());
++                let granted_by = hub.upgrade().map_or(0, |hub| hub.store.generation_now());
+                 // A clear while this read was out (the last URI interest left,
+                 // the instance was replaced) drops it, revocations included.
+                 if !self
