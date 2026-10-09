@@ -383,9 +383,10 @@ impl UpstreamListeners {
 
     /// What the backend's last good catalogue read says about `uri`;
     /// `Skip` while no listener holds one.
-    pub(crate) fn verdict(&self, backend: &str, uri: &str) -> Verdict {
-        self.answering(backend)
-            .map_or(Verdict::Skip, |s| s.snapshot.lock().verdict(uri))
+    pub(crate) fn verdict(&self, backend: &str, uri: &str, granted: Option<u64>) -> Verdict {
+        self.answering(backend).map_or(Verdict::Skip, |s| {
+            s.snapshot.lock().verdict_for(uri, granted)
+        })
     }
 
     /// Whether a listener task holds a good snapshot for `backend`.
@@ -416,6 +417,12 @@ impl UpstreamListeners {
         (!replaced).then_some(entry)
     }
 
+    /// The entry for `backend`, so a session-level test can drive it.
+    #[cfg(test)]
+    pub(super) fn entry_of(&self, backend: &str) -> Option<Arc<Shared>> {
+        self.backends.lock().get(backend).cloned()
+    }
+
     /// Whether a registered backend called `name` exists.
     pub(crate) fn knows(&self, name: &str) -> bool {
         self.registry.get(name).is_some()
@@ -425,9 +432,17 @@ impl UpstreamListeners {
     /// answers; with none (subscribe time) the catalogue is read, filling
     /// it, and a backend that cannot be read admits (design §7, offline
     /// rule). `-32012` only on confirmed absence from a complete read.
-    pub(crate) async fn authorize_uri(&self, backend: &str, uri: &str) -> Result<(), RpcError> {
+    /// `granted` is the subscription's incarnation when one exists (a
+    /// delivery), `None` at subscribe: a snapshot does not revoke a grant
+    /// made after its read began (MIK-8194).
+    pub(crate) async fn authorize_uri(
+        &self,
+        backend: &str,
+        uri: &str,
+        granted: Option<u64>,
+    ) -> Result<(), RpcError> {
         if self.has_snapshot(backend) {
-            return match self.verdict(backend, uri) {
+            return match self.verdict(backend, uri, granted) {
                 Verdict::Revoke => Err(RpcError::forbidden()),
                 Verdict::Deliver | Verdict::Skip => Ok(()),
             };
