@@ -64,10 +64,26 @@ pub(crate) enum SlotView {
     Holds(Arc<Vec<Tool>>),
 }
 
-/// Set by any per-user slot's store while a nudge for it is queued and
-/// unread; cleared by the drain before it reads the slots. So the feed holds
-/// at most ONE store nudge per backend, however many callers store meanwhile.
+/// Set by any store (shared or per-user) or descriptor verdict while a nudge
+/// for it is queued and unread; cleared by the drain before it reads the
+/// backend. So the feed holds at most ONE such nudge per backend, however
+/// many land meanwhile.
 pub(crate) type ViewsDirty = Arc<std::sync::atomic::AtomicBool>;
+
+/// Send a `Changed` nudge for backend `name` unless one is already queued
+/// and unread (`MIK-8148`, `MIK-8208`). Every store and verdict goes through
+/// here, so the feed holds at most one such nudge per backend while the drain
+/// is held; the drain reads the backend as it is when it gets there.
+fn send_coalesced(dirty: &ViewsDirty, feed: &NudgeFeed, name: &str, instance: u64) {
+    if dirty.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let _ = feed.send(ToolsNudge::Backend {
+        name: name.to_string(),
+        instance,
+        kind: NudgeKind::Changed,
+    });
+}
 
 /// The sending half of the change feed.
 pub(crate) type NudgeFeed = tokio::sync::mpsc::UnboundedSender<ToolsNudge>;
@@ -88,14 +104,11 @@ impl super::Backend {
             return;
         }
         let (feed, name, instance) = (feed.clone(), self.name.clone(), self.instance);
+        let dirty = Arc::clone(&self.views_dirty);
         self.shared_entry()
             .tools_cache
             .observe_stores(Arc::new(move || {
-                let _ = feed.send(ToolsNudge::Backend {
-                    name: name.clone(),
-                    instance,
-                    kind: NudgeKind::Changed,
-                });
+                send_coalesced(&dirty, &feed, &name, instance);
             }));
         // Slots opened before the feed existed. NO SLOT IS MISSED, and the
         // order of the two steps is what makes it so: the feed is set BEFORE
@@ -120,16 +133,7 @@ impl super::Backend {
         let (feed, name, instance) = (feed.clone(), self.name.clone(), self.instance);
         let dirty = Arc::clone(&self.views_dirty);
         entry.tools_cache.observe_stores(Arc::new(move || {
-            // Coalesced per backend: while a nudge is queued, a store adds
-            // nothing, because the drain reads every slot as it is then.
-            if dirty.swap(true, Ordering::SeqCst) {
-                return;
-            }
-            let _ = feed.send(ToolsNudge::Backend {
-                name: name.clone(),
-                instance,
-                kind: NudgeKind::Changed,
-            });
+            send_coalesced(&dirty, &feed, &name, instance);
         }));
     }
 
@@ -137,6 +141,14 @@ impl super::Backend {
     /// queues a fresh nudge, so none is lost between this and the read.
     pub(crate) fn clear_views_dirty(&self) {
         self.views_dirty.store(false, Ordering::SeqCst);
+    }
+
+    /// A `Changed` nudge, coalesced with every store's (`MIK-8208`). A no-op
+    /// before a feed is attached.
+    pub(crate) fn nudge_changed_coalesced(&self) {
+        if let Some(feed) = self.nudge_feed.get() {
+            send_coalesced(&self.views_dirty, feed, &self.name, self.instance);
+        }
     }
 
     /// Nudge the drain that the grant behind `binding_prefix` was revoked.
@@ -460,7 +472,10 @@ mod tests {
         let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
         backend.attach_nudges(&feed);
         for _ in 0..64 {
-            backend.shared_entry().tools_cache.replace(Vec::new(), || ());
+            backend
+                .shared_entry()
+                .tools_cache
+                .replace(Vec::new(), || ());
         }
         assert_eq!(std::iter::from_fn(|| nudges.try_recv().ok()).count(), 1);
     }

@@ -204,6 +204,12 @@ fn decide(
             kind,
         } => {
             let backend = state.backends.get(&name);
+            // Cleared BEFORE any read of this backend, shared slot included: a
+            // store or verdict from now on queues a fresh nudge, so none is
+            // lost between this and the reads (`MIK-8208`).
+            if let Some(b) = backend.as_ref().filter(|b| b.instance() == instance) {
+                b.clear_views_dirty();
+            }
             let seen = backend.as_ref().map_or(Seen::Unregistered, |b| {
                 let (stored, populated) = b.stored_tools_snapshot();
                 Seen::Registered {
@@ -218,12 +224,7 @@ fn decide(
             let present = backend
                 .as_ref()
                 .filter(|b| b.instance() == instance)
-                .map(|b| {
-                    // Cleared BEFORE the read: a store from now on queues a
-                    // fresh nudge, so none is lost between this and the read.
-                    b.clear_views_dirty();
-                    per_user_seen(b)
-                });
+                .map(|b| per_user_seen(b));
             let mut told = announced.lock();
             let shared = told.backend(&name, instance, kind, &seen);
             let private = match (&backend, present) {
