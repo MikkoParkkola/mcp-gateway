@@ -15,7 +15,9 @@
 
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
 use rand::RngExt;
@@ -64,12 +66,16 @@ impl std::fmt::Debug for TemporaryToken {
 impl TemporaryToken {
     /// Returns `true` if the token has passed its expiry time.
     #[must_use]
+    /// A clock it cannot read counts as expired (MIK-8202).
     pub fn is_expired(&self) -> bool {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_secs();
-        now >= self.exp
+        use crate::clock::{Validity, expired_by};
+        expired_by(|now| {
+            if now >= self.exp {
+                Validity::Expired
+            } else {
+                Validity::Live
+            }
+        }) == Validity::Expired
     }
 }
 
