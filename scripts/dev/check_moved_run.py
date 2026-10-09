@@ -12,7 +12,8 @@ parameter's own name (`x` or `&x`), so the substitution is exact. A `&`
 directly before a step's parameter name is dropped on both sides (Clippy
 refuses re-borrowing a reference). A body of
 the form `let step = E; Ok(step)` reads back as `E`, and the call's trailing
-`.await` and `?` go with it. The rebuilt `run` must equal <base>'s, token for
+`.await` and `?` go with it; the call must carry exactly the `.await` an
+async method needs and the `?` a `Result` return needs. The rebuilt `run` must equal <base>'s, token for
 token, in order. The rest of server/mod.rs must be unchanged apart from its
 `use` lines and the two new `mod` lines. Exit 0 when both hold.
 """
@@ -75,11 +76,14 @@ def steps(head: str) -> dict[str, tuple[list[str], list[str]]]:
         paren = t.index("(", k)
         params = [t[j - 1] for j in range(paren, block(t, paren)) if t[j] == ":"
                   and t[j - 1] != "self"]
+        # The call must carry exactly the suffixes the signature implies.
+        is_async = k > 0 and t[k - 1] == "async"
+        returns_result = t[block(t, paren) + 2] == "Result"
         body = t[b + 1 : e]
         n = len(body)
         if body[:4] == ["let", "step", "=", body[3]] and body[n - 5 :] == [";", "Ok", "(", "step", ")"]:
             body = body[3 : n - 5]
-        out[name] = (params, body)
+        out[name] = (params, body, is_async, returns_result)
     return out
 
 
@@ -96,16 +100,18 @@ def inline(run: list[str], table: dict) -> list[str]:
     while k < len(run):
         recv = run[k] in ("self", "Self") and k + 3 < len(run) and run[k + 1] in (".", "::")
         if recv and run[k + 2] in table and run[k + 3] == "(":
-            params, body = table[run[k + 2]]
+            params, body, is_async, returns_result = table[run[k + 2]]
             close = block(run, k + 3)
             args = [a for a in " ".join(run[k + 4 : close]).split(" , ") if a]
             got = [a.removeprefix("& ") for a in args]
             assert got == params, f"{run[k + 2]}: arguments {got} are not its parameters {params}"
             k = close + 1
-            if run[k : k + 2] == [".", "await"]:
-                k += 2
-            if k < len(run) and run[k] == "?":
-                k += 1
+            awaited = run[k : k + 2] == [".", "await"]
+            assert awaited == is_async, f"{run[k - 1]}: .await {'missing' if is_async else 'added'}"
+            k += 2 if awaited else 0
+            tried = k < len(run) and run[k] == "?"
+            assert tried == returns_result, f"{params}: ? {'missing' if returns_result else 'added'}"
+            k += 1 if tried else 0
             out.extend(body)
             continue
         out.append(run[k])
@@ -147,7 +153,7 @@ def main() -> int:
     _, hb, he = fn_span(ht, "run")
     table = steps(head)
     rebuilt = inline(ht[hb : he + 1], table)
-    names = {p for params, _ in table.values() for p in params}
+    names = {p for params, *_ in table.values() for p in params}
     base_run, rebuilt = unborrow(base_run, names), unborrow(rebuilt, names)
     problems = []
     if rebuilt != base_run:
