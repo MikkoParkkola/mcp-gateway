@@ -83,24 +83,11 @@ pub async fn run_setup_command(
         return ExitCode::SUCCESS;
     }
 
-    // ── 3. Ensure first-run config ─────────────────────────────────────────
-    if !output.exists() {
-        let code = bootstrap_local_profile(output);
-        if code != ExitCode::SUCCESS {
-            return code;
-        }
-    }
-
-    // ── 4. Merge into config ───────────────────────────────────────────────
-    let mut added = 0;
-    let written = super::config_write::write(output, mode, |config| {
-        added = merge_servers_into_config(config, &selected);
-        Ok(())
-    });
-    if let Err(e) = written {
-        eprintln!("Error: {e}");
-        return ExitCode::FAILURE;
-    }
+    // ── 3–4. Ensure first-run config, merge into it ────────────────────────
+    let added = match import_servers(output, mode, &selected) {
+        Ok(added) => added,
+        Err(code) => return code,
+    };
 
     println!();
     println!("Imported {added} server(s) into {}", output.display());
@@ -298,6 +285,34 @@ fn interactive_select(servers: &[DiscoveredServer]) -> Result<Vec<&DiscoveredSer
 /// Merge selected servers into `config.backends`, skipping duplicates.
 ///
 /// Returns the number of newly-added backends.
+/// Steps 3 and 4 of `setup`: create the first-run config when there is none,
+/// then merge `selected` into it under one hold of the config lock
+/// (`config_write::write` loads the file under that hold). The only write
+/// `run_setup_command` makes to `output`, so the overlap row (MIK-8241) that
+/// drives this function covers the setup import path.
+fn import_servers(
+    output: &Path,
+    mode: CommentLoss,
+    selected: &[&DiscoveredServer],
+) -> Result<usize, ExitCode> {
+    if !output.exists() {
+        let code = bootstrap_local_profile(output);
+        if code != ExitCode::SUCCESS {
+            return Err(code);
+        }
+    }
+    let mut added = 0;
+    super::config_write::write(output, mode, |config| {
+        added = merge_servers_into_config(config, selected);
+        Ok(())
+    })
+    .map_err(|e| {
+        eprintln!("Error: {e}");
+        ExitCode::FAILURE
+    })?;
+    Ok(added)
+}
+
 fn merge_servers_into_config(config: &mut Config, selected: &[&DiscoveredServer]) -> usize {
     let mut added = 0usize;
     for server in selected {
@@ -364,6 +379,49 @@ mod tests {
             },
             ServerMetadata::default(),
         )
+    }
+
+    /// MIK-8241 MIK-CLI-OVERLAP.2: the setup import overlapping a gateway's
+    /// locked mutation loads the file under the lock it writes with, so the
+    /// mutation's backend and the imported server both survive. The row
+    /// drives `import_servers`, the only write `run_setup_command` makes.
+    #[tokio::test]
+    async fn setup_import_racing_a_gateway_mutation_keeps_both() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gateway.yaml");
+        mcp_gateway::gateway::test_helpers::write_owner_only(
+            &path,
+            "backends:\n  a:\n    command: a\n",
+        )
+        .expect("write");
+        let at = path.clone();
+        let mutated = mcp_gateway::config_reload::mutate_config_and_reload(&path, None, |config| {
+            let queued = mcp_gateway::gateway::test_helpers::when_waiting_for_config_lock(&at);
+            let import = at.clone();
+            let cli = std::thread::spawn(move || {
+                let server = make_stdio_server("tavily", DiscoverySource::ClaudeDesktop);
+                import_servers(&import, CommentLoss::Refuse, &[&server])
+                    .map_err(|_| "import failed")
+            });
+            assert!(
+                queued
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .is_ok(),
+                "the setup import never waited for the config lock"
+            );
+            let x = serde_yaml::from_str("command: x\n").expect("backend");
+            config.backends.insert("x".into(), x);
+            Ok::<_, String>(cli)
+        })
+        .await;
+        let Ok(mcp_gateway::config_reload::ConfigMutation::Applied(cli, _)) = mutated else {
+            panic!("mutation not applied");
+        };
+        assert_eq!(cli.join().expect("cli thread"), Ok(1));
+        let config = Config::load_literal(Some(&path)).expect("loads");
+        let mut names: Vec<_> = config.backends.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["a", "tavily", "x"]);
     }
 
     #[test]

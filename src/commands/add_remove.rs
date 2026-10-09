@@ -275,6 +275,94 @@ mod tests {
         (dir, path)
     }
 
+    /// Runs `cli` on its own thread while a gateway mutation holds the config
+    /// lock and adds backend `x` to `a`, the overlap MIK-8241 checks for each
+    /// CLI writer. Returns what `cli` returned and the backends left after.
+    async fn overlap_with_gateway_add<T: Send + 'static>(
+        cli: impl FnOnce(std::path::PathBuf) -> T + Send + 'static,
+    ) -> (T, Vec<String>) {
+        let (_dir, path) = temp_config();
+        mcp_gateway::gateway::test_helpers::write_owner_only(
+            &path,
+            "backends:\n  a:\n    command: a\n",
+        )
+        .expect("write");
+        let at = path.clone();
+        let mutated = mcp_gateway::config_reload::mutate_config_and_reload(&path, None, |config| {
+            let queued = mcp_gateway::gateway::test_helpers::when_waiting_for_config_lock(&at);
+            let writer = at.clone();
+            let cli = std::thread::spawn(move || cli(writer));
+            assert!(
+                queued
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .is_ok(),
+                "the CLI writer never waited for the config lock"
+            );
+            let x = serde_yaml::from_str("command: x\n").expect("backend");
+            config.backends.insert("x".into(), x);
+            Ok::<_, String>(cli)
+        })
+        .await;
+        let Ok(mcp_gateway::config_reload::ConfigMutation::Applied(cli, _)) = mutated else {
+            panic!("mutation not applied");
+        };
+        let out = cli.join().expect("cli thread");
+        let config = Config::load_literal(Some(&path)).expect("loads");
+        let mut names: Vec<_> = config.backends.keys().cloned().collect();
+        names.sort_unstable();
+        (out, names)
+    }
+
+    /// MIK-8241 MIK-CLI-OVERLAP.1: `add` overlapping a gateway's locked
+    /// mutation keeps the mutation's backend and adds its own.
+    #[tokio::test]
+    async fn add_racing_a_gateway_mutation_keeps_both_backends() {
+        let (code, names) = overlap_with_gateway_add(|path| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime")
+                .block_on(run_add_command(
+                    "y",
+                    Some("y"),
+                    None,
+                    None,
+                    &[],
+                    &path,
+                    CommentLoss::Refuse,
+                ))
+        })
+        .await;
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert_eq!(names, ["a", "x", "y"]);
+    }
+
+    /// MIK-8241 MIK-CLI-OVERLAP.3: `cap discover --write-config` overlapping a
+    /// gateway's locked mutation keeps the mutation's backend and adds the
+    /// discovered one.
+    #[tokio::test]
+    async fn discover_write_racing_a_gateway_mutation_keeps_both() {
+        let (written, names) = overlap_with_gateway_add(|path| {
+            let server = mcp_gateway::discovery::DiscoveredServer::new(
+                "found".to_string(),
+                "found description".to_string(),
+                mcp_gateway::discovery::DiscoverySource::ClaudeDesktop,
+                TransportConfig::Stdio {
+                    command: "found".to_string(),
+                    cwd: None,
+                    protocol_version: None,
+                },
+                mcp_gateway::discovery::ServerMetadata::default(),
+            );
+            crate::write_discovered_to_config(&[server], Some(&path), CommentLoss::Refuse)
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })
+        .await;
+        assert_eq!(written, Ok(()));
+        assert_eq!(names, ["a", "found", "x"]);
+    }
+
     /// MIK-8042: `remove` overlapping a gateway's locked mutation loads the
     /// file under the same lock it writes with, so the backend the mutation
     /// added survives the removal.
