@@ -67,11 +67,69 @@ fn configure_child_environment(cmd: &mut Command, backend_env: &HashMap<String, 
         }
     }
 
+    // Operator-level npm settings that are behaviour rather than credentials,
+    // and that apply to every backend rather than to one. An allowlist, not a
+    // deny list: npm's credential surface is open-ended — `_password`,
+    // `certfile`, `keyfile`, `userconfig`, and registry URLs with embedded
+    // userinfo all name secrets — and anything a deny rule misses reaches every
+    // backend. A backend that needs a credential names it in its own `env:`.
+    // A backend that names one of these settings keeps its own value: see
+    // `forwarded_npm_config`.
+    for (name, value) in forwarded_npm_config(std::env::vars_os(), backend_env) {
+        cmd.env(name, value);
+    }
+
     // Backend configuration is authoritative and may intentionally override
     // a safe default such as PATH, HOME, or TMPDIR.
     for (key, value) in backend_env {
         cmd.env(key, value);
     }
+}
+
+/// npm settings forwarded to every backend.
+///
+/// Matched case-insensitively, because npm reads its environment that way and
+/// `NPM_CONFIG_ALLOW_GIT` is the spelling npm's own documentation uses. The
+/// operator's spelling is what the child receives.
+const FORWARDED_NPM_SETTINGS: [&str; 6] = [
+    "npm_config_allow_git",
+    "npm_config_cafile",
+    "npm_config_prefer_offline",
+    "npm_config_offline",
+    "npm_config_strict_ssl",
+    "npm_config_loglevel",
+];
+
+/// The operator's npm settings that this gateway passes on.
+///
+/// `npm_config_cache` is not among them, and cannot be added by accident: the
+/// gateway assigns that per backend, and a shared cache is what tears under
+/// concurrent installs.
+///
+/// A setting `backend_env` already names is skipped, in whatever spelling
+/// either side used. Forwarding it as well would leave the child holding the
+/// same setting twice, and npm keeps the last value it reads: on Unix the child
+/// environment is passed in sorted order, so the operator's lowercase
+/// `npm_config_strict_ssl` arrives after a backend's `NPM_CONFIG_STRICT_SSL` and
+/// silently overrules the backend's explicit choice.
+fn forwarded_npm_config<I>(
+    vars: I,
+    backend_env: &HashMap<String, String>,
+) -> Vec<(OsString, OsString)>
+where
+    I: IntoIterator<Item = (OsString, OsString)>,
+{
+    vars.into_iter()
+        .filter(|(key, _)| {
+            key.to_str().is_some_and(|name| {
+                let name = name.to_ascii_lowercase();
+                FORWARDED_NPM_SETTINGS.contains(&name.as_str())
+                    && !backend_env.keys().any(|configured| {
+                        cache::npm_setting(configured) == cache::npm_setting(&name)
+                    })
+            })
+        })
+        .collect()
 }
 
 #[path = "stdio_cache.rs"]
@@ -1035,6 +1093,13 @@ done
                 PARENT_SECRET_ENV,
                 "dummy-parent-secret-must-not-reach-backend",
             )
+            // The operator's npm settings — in both spellings npm reads — plus a
+            // credential that no backend's config names, plus a setting the
+            // backend below names for itself in the other spelling.
+            .env("npm_config_allow_git", "all")
+            .env("NPM_CONFIG_PREFER_OFFLINE", "1")
+            .env("npm_config__auth", "must-not-reach-a-backend")
+            .env("npm_config_strict_ssl", "false")
             .output()
             .expect("run isolated child-environment scenario");
 
@@ -1077,15 +1142,27 @@ done
             home_present=false
             tmpdir_present=false
             cwd_preserved=false
+            npm_setting_present=false
+            npm_upper_setting_present=false
+            npm_credential_present=false
+            operator_strict_ssl_present=false
+            backend_strict_ssl_present=false
             [ "${MCP_GATEWAY_TEST_PARENT_SECRET+x}" = x ] && parent_secret_present=true
             [ "${MCP_GATEWAY_TEST_EXPLICIT_BACKEND:-}" = configured-value ] && explicit_backend_present=true
             [ -n "${PATH:-}" ] && path_present=true
             [ -n "${HOME:-}" ] && home_present=true
             [ -n "${TMPDIR:-}" ] && tmpdir_present=true
             [ -f server.sh ] && cwd_preserved=true
-            printf '{"jsonrpc":"2.0","id":2,"result":{"parent_secret_present":%s,"explicit_backend_present":%s,"path_present":%s,"home_present":%s,"tmpdir_present":%s,"cwd_preserved":%s}}\n' \
+            [ "${npm_config_allow_git:-}" = all ] && npm_setting_present=true
+            [ "${NPM_CONFIG_PREFER_OFFLINE:-}" = 1 ] && npm_upper_setting_present=true
+            [ "${npm_config__auth+x}" = x ] && npm_credential_present=true
+            [ "${npm_config_strict_ssl+x}" = x ] && operator_strict_ssl_present=true
+            [ "${NPM_CONFIG_STRICT_SSL:-}" = true ] && backend_strict_ssl_present=true
+            printf '{"jsonrpc":"2.0","id":2,"result":{"parent_secret_present":%s,"explicit_backend_present":%s,"path_present":%s,"home_present":%s,"tmpdir_present":%s,"cwd_preserved":%s,"npm_setting_present":%s,"npm_upper_setting_present":%s,"npm_credential_present":%s,"operator_strict_ssl_present":%s,"backend_strict_ssl_present":%s}}\n' \
                 "$parent_secret_present" "$explicit_backend_present" "$path_present" \
-                "$home_present" "$tmpdir_present" "$cwd_preserved"
+                "$home_present" "$tmpdir_present" "$cwd_preserved" \
+                "$npm_setting_present" "$npm_upper_setting_present" "$npm_credential_present" \
+                "$operator_strict_ssl_present" "$backend_strict_ssl_present"
             ;;
     esac
 done
@@ -1095,10 +1172,15 @@ done
 
         let transport = StdioTransport::new(
             "sh server.sh",
-            HashMap::from([(
-                EXPLICIT_BACKEND_ENV.to_string(),
-                "configured-value".to_string(),
-            )]),
+            HashMap::from([
+                (
+                    EXPLICIT_BACKEND_ENV.to_string(),
+                    "configured-value".to_string(),
+                ),
+                // The operator exports the lowercase spelling of this one from
+                // the parent above; the backend deliberately picks the other.
+                ("NPM_CONFIG_STRICT_SSL".to_string(), "true".to_string()),
+            ]),
             Some(workspace.path().to_string_lossy().into_owned()),
             std::time::Duration::from_secs(5),
             None,
@@ -1118,6 +1200,30 @@ done
         assert_eq!(report["home_present"], true);
         assert_eq!(report["tmpdir_present"], true);
         assert_eq!(report["cwd_preserved"], true);
+        assert_eq!(
+            report["npm_setting_present"], true,
+            "a setting that decides whether a git-sourced dependency can install at all must \
+             reach the package manager the backend shells out to"
+        );
+        assert_eq!(
+            report["npm_upper_setting_present"], true,
+            "npm reads its environment case-insensitively, so the uppercase spelling is a setting too"
+        );
+        assert_eq!(
+            report["npm_credential_present"], false,
+            "the child environment stays what the config names: a credential the config does not \
+             name for this backend must not be inherited"
+        );
+        assert_eq!(
+            report["backend_strict_ssl_present"], true,
+            "a setting the backend names for itself must reach the package manager it spawns"
+        );
+        assert_eq!(
+            report["operator_strict_ssl_present"], false,
+            "the operator's other-spelling duplicate is not forwarded beside it: npm keeps the \
+             last value it reads, and the child environment is passed in sorted order, so \
+             forwarding the lowercase key would silently overrule the backend's explicit setting"
+        );
     }
 
     /// Is dropping every handle enough to reap the child, or does the reader
