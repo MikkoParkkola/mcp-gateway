@@ -144,6 +144,9 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         gate = Arc::clone(&shared.gate).lock_owned() => gate,
     };
     let mut failures = 0u32;
+    // One receiver for the task's life (T35): a revival sent at any point
+    // after the registry check below is seen by the park that follows it.
+    let mut wake = shared.wake.subscribe();
     loop {
         if shared.stop.is_cancelled() {
             return;
@@ -151,13 +154,14 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         if shared.is_ineligible() && end_ineligible(&shared, &hub).await {
             return;
         }
+        // Signals sent before this check are answered by it.
+        wake.borrow_and_update();
         let Some(backend) = registry.get(&shared.name) else {
             // Gone: park until the interest changes or the keys are deleted.
             // A removed backend owes nothing; a re-added one starts afresh.
             *shared.tools.lock() = ToolsDebt::default();
             #[cfg(test)]
             shared.before_park.pause().await;
-            let mut wake = shared.wake.subscribe();
             tokio::select! {
                 () = shared.stop.cancelled() => return,
                 _ = wake.changed() => {}
