@@ -1,0 +1,19 @@
+diff --git a/src/security/firewall/collusion.rs b/src/security/firewall/collusion.rs
+index 872767a01..554f28154 100644
+--- a/src/security/firewall/collusion.rs
++++ b/src/security/firewall/collusion.rs
+@@ -274,11 +274,13 @@ impl State {
+ /// The hashes kept as fingerprints: those 0 mod `every` ([`SAMPLE`]),
+ /// distinct, in position order.
+ fn sample(hashes: &[u64], every: u64) -> Vec<u64> {
++    static CALLS: AtomicU64 = AtomicU64::new(0);
++    let salt = CALLS.fetch_add(1, Ordering::Relaxed);
+     let mut seen = HashSet::new();
+     hashes
+         .iter()
+         .copied()
+-        .filter(|h| h % every == 0 && seen.insert(*h))
++        .filter(|h| (h ^ salt) % every == 0 && seen.insert(*h))
+         .collect()
+ }
+ 

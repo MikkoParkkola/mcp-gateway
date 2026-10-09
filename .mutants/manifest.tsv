@@ -1,0 +1,2 @@
+head_sha	b71a62d4e5ddbb1ababef87d67a68231f02b2a1b
+m1-per-call-salt	linux	m1-per-call-salt.patch	--lib -- relay_excuse::a_retried_relay_gets_the_same_verdict
