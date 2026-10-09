@@ -48,6 +48,24 @@ pub(crate) fn records(run: impl FnOnce()) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// `operation`'s value and the WARN-and-above lines it logged on this thread,
+/// as plain text. Feature-free, so a row that only reads a warning runs in
+/// every feature combination (MIK-8219).
+pub(crate) fn capture_warnings<T>(operation: impl FnOnce() -> T) -> (T, String) {
+    keep_interest_open();
+    let sink = Sink::default();
+    let writer = sink.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(move || writer.clone())
+        .finish();
+    let result = tracing::subscriber::with_default(subscriber, operation);
+    let output = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+    (result, output)
+}
+
 /// The process-wide TRACE registry, installed once: a scoped subscriber
 /// only sees an event whose callsite interest is not already cached as off.
 fn keep_interest_open() {

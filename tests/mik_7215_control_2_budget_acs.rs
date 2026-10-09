@@ -9,6 +9,9 @@
 //! a number came back. A budget that keeps returning numbers while its key
 //! disappears is the shape of failure this file is written against.
 
+// Every row drives the `firewall` feature.
+#![cfg(feature = "firewall")]
+
 use std::time::{Duration, Instant};
 
 use mcp_gateway::security::firewall::principal_window::{PrincipalWindow, Usage};

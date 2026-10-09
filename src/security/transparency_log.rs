@@ -330,7 +330,8 @@ impl TransparencyLogger {
             .store(true, std::sync::atomic::Ordering::Release);
     }
 
-    #[cfg(test)]
+    // Read by the firewall-gated streaming rows only.
+    #[cfg(all(test, feature = "firewall"))]
     pub(crate) fn append_attempts_for_test(&self) -> usize {
         self.append_attempts
             .load(std::sync::atomic::Ordering::Acquire)
