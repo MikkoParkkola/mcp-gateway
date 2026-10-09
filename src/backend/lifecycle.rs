@@ -85,7 +85,6 @@ impl Backend {
                 pool
             },
             failsafe_config: failsafe_config.clone(),
-            era: Arc::new(crate::protocol::era::EraCache::for_backend(name)),
             #[cfg(test)]
             after_reprobe_lookup: crate::test_pause::Slot::default(),
             unserved_consecutive: AtomicU64::new(0),
@@ -453,7 +452,7 @@ impl Backend {
                 // wire, deliberately — the probe below is itself a request, and
                 // it reads this cache to know it is the one message that may
                 // not wait for a verdict.
-                transport.attach_era(Arc::clone(&self.era));
+                transport.attach_era(Arc::clone(&entry.era));
                 // Connect without handshaking: the probe needs the credential
                 // and the message endpoint, and nothing else.
                 self.begin_connecting(built_under)?;

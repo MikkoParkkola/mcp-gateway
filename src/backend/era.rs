@@ -146,11 +146,27 @@ fn contradicts_modern(method: &str, code: i32) -> bool {
 }
 
 impl Backend {
-    /// The era this backend's peer was last observed to speak, if it has been
-    /// resolved. Never probes: a caller asking what is known must not change
-    /// what is known.
+    /// The era the Shared slot's peer was last observed to speak, if it has
+    /// been resolved: the backend-level view (liveness, `gateway_list_servers`).
+    /// A request routed to a per-user slot is shaped by that slot's own era
+    /// instead (MIK-8186). Never probes: a caller asking what is known must not
+    /// change what is known.
     pub async fn cached_era(&self) -> Option<Era> {
-        self.era.cached().await
+        self.shared_entry().era.cached().await
+    }
+
+    /// The era of the slot a request for `identity_key` is dispatched to,
+    /// starting that slot first if it is cold so its own probe has run
+    /// (MIK-8186): a verdict read before the start would be "not yet known" for
+    /// every new user's first call. A start that fails reports `None`; the
+    /// dispatch that follows reports the failure itself.
+    pub(crate) async fn dispatch_era(&self, identity_key: Option<&str>) -> Option<Era> {
+        let key = self.pool_key_for(identity_key);
+        let entry = self.pooled_entry(&key).ok()?;
+        if entry.transport.read().is_none() {
+            let _ = self.ensure_entry_started(&key).await;
+        }
+        entry.era.cached().await
     }
 
     /// Which liveness method this peer's era answers.
@@ -170,7 +186,7 @@ impl Backend {
     /// Everything an operator can see about this backend's era, for
     /// `gateway_list_servers`. Never probes.
     pub async fn era_observation(&self) -> EraObservation {
-        self.era.observation().await
+        self.shared_entry().era.observation().await
     }
 
     /// Test-only reach-through to [`Backend::resolve_era`] for rows that live
@@ -180,8 +196,8 @@ impl Backend {
     /// `resolve_era` itself, so the production visibility stays `pub(super)`.
     #[cfg(test)]
     pub(crate) async fn resolve_era_for_test(&self, transport: &Arc<dyn Transport>) {
-        let unpooled = PooledEntry::new(&self.name, &self.failsafe_config);
-        self.resolve_era(transport, &unpooled).await;
+        let shared = self.shared_entry();
+        self.resolve_era(transport, &shared).await;
     }
 
     /// Test-only: the start path's era step for the slot `entry` (MIK-7643),
@@ -220,7 +236,8 @@ impl Backend {
         // detached re-probe of the old peer must not be able to land between them.
         // A revocation removes a per-user slot without its start lock, so the slot this
         // start serves may be retired before the discard or before the install (MIK-7643).
-        self.era
+        entry
+            .era
             .restart_while_serving(
                 || probe(transport, timeout),
                 |step| unless_retired(entry, step),
@@ -274,7 +291,7 @@ impl Backend {
         // Judging the verdict and dropping it are one locked step, and only the task that
         // dropped it probes. Reading the era and clearing it separately would let two answers
         // arriving at once both find the stale verdict and each fan out a detached probe.
-        let discarded = self
+        let discarded = entry
             .era
             .discard_if_serving(
                 |era| match era {
@@ -291,7 +308,7 @@ impl Backend {
             return;
         }
 
-        let era = Arc::clone(&self.era);
+        let era = Arc::clone(&entry.era);
         let transport = Arc::clone(transport);
         let timeout = self.probe_timeout();
         tokio::spawn(async move {

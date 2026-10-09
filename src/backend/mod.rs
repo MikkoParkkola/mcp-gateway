@@ -102,11 +102,6 @@ pub struct Backend {
     /// fix 1). The per-backend `Failsafe` this replaced is gone; every slot,
     /// including Shared, now owns one.
     failsafe_config: crate::config::FailsafeConfig,
-    /// Protocol era of the peer on the other end of this backend's
-    /// transport (MIK-7217). Resolved once per start by a `server/discover`
-    /// probe and shared with the detached re-probe task, which outlives the
-    /// request that triggered it — hence `Arc`.
-    era: Arc<crate::protocol::era::EraCache>,
     /// Test-only: one re-probe pauses between finding its slot and discarding
     /// the era, so a removal can land inside that window (MIK-7643).
     #[cfg(test)]

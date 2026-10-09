@@ -339,7 +339,7 @@ impl MetaMcp {
             // skipped rather than refused: the caller asked the gateway to set
             // its own level, which it did, and one backend that cannot be told
             // is not a failed request.
-            if super::era_removed_method(&backend, "logging/setLevel").await {
+            if super::era_removed_method(&backend, "logging/setLevel", None).await {
                 continue;
             }
             if let Err(e) = backend

@@ -20,15 +20,21 @@
 /// route (`gateway::router::backend_handlers`) can reuse this one mechanism
 /// instead of a second copy of the revision's removed-method list (MIK-7217,
 /// OUTBOUND.1).
+///
+/// The era read is the one of the slot `identity_key` is dispatched to,
+/// started first if cold (MIK-8186): another slot's peer may speak a
+/// different revision, and a cold slot has no verdict yet. The membership
+/// check runs first, so only a removed method ever starts a slot here.
 pub(in crate::gateway) async fn era_removed_method(
     backend: &crate::backend::Backend,
     method: &str,
+    identity_key: Option<&str>,
 ) -> bool {
-    let era = backend.cached_era().await;
-    if era != Some(crate::protocol::era::Era::Modern) {
+    if !crate::protocol::meta::REMOVED_IN_2026_07_28.contains(&method) {
         return false;
     }
-    if !crate::protocol::meta::REMOVED_IN_2026_07_28.contains(&method) {
+    let era = backend.dispatch_era(identity_key).await;
+    if era != Some(crate::protocol::era::Era::Modern) {
         return false;
     }
     // `debug!`, not `warn!`: the refusal is triggered by whatever method a

@@ -372,7 +372,7 @@ async fn dispatch_in_scope(
     // `method` here is client-chosen, so this funnel refuses whatever the
     // peer's era removed before it reaches the wire (MIK-7217, OUTBOUND.1),
     // with the caller's own id: an `id: null` error cannot be correlated.
-    if crate::gateway::meta_mcp::era_removed_method(backend, method).await {
+    if crate::gateway::meta_mcp::era_removed_method(backend, method, identity_key).await {
         return Ok(JsonRpcResponse::error(
             Some(id.clone()),
             crate::protocol::era::METHOD_NOT_FOUND_CODE,

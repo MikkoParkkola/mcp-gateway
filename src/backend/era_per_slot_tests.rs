@@ -37,6 +37,12 @@ struct Seen {
 
 /// A legacy MCP server on loopback: `server/discover` is unknown to it.
 async fn legacy_upstream() -> (String, Arc<Mutex<Vec<Seen>>>) {
+    upstream(false).await
+}
+
+/// An MCP server on loopback that records what it receives; `answers_modern` makes it
+/// answer `server/discover` with a 2026 discovery document.
+async fn upstream(answers_modern: bool) -> (String, Arc<Mutex<Vec<Seen>>>) {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let app = axum::Router::new().fallback({
         let seen = Arc::clone(&seen);
@@ -53,6 +59,12 @@ async fn legacy_upstream() -> (String, Arc<Mutex<Vec<Seen>>>) {
                     return StatusCode::ACCEPTED.into_response();
                 };
                 let body = match method.as_str() {
+                    "server/discover" if answers_modern => {
+                        json!({ "jsonrpc": "2.0", "id": id, "result": {
+                            "supportedVersions": [crate::protocol::meta::MODERN_VERSIONS[0]],
+                            "capabilities": {}
+                        }})
+                    }
                     "initialize" => json!({ "jsonrpc": "2.0", "id": id, "result": {
                         "protocolVersion": crate::protocol::PROTOCOL_VERSION,
                         "capabilities": {},
@@ -172,4 +184,82 @@ async fn a_per_user_legacy_verdict_does_not_demote_the_shared_slot() {
     per_user_slot_resolved(&backend, Answer::MethodNotFound).await;
 
     assert_eq!(backend.cached_era().await, Some(Era::Modern));
+}
+
+/// PERSLOT.3a, the other start order: the per-user slot resolves first, the
+/// Shared slot after. Each slot keeps its own peer's verdict.
+#[tokio::test]
+async fn each_slot_keeps_its_own_verdict_whichever_starts_first() {
+    let (url, _seen) = legacy_upstream().await;
+    let backend = backend_at(url);
+    per_user_slot_resolved(&backend, Answer::Modern).await;
+    backend
+        .ensure_started()
+        .await
+        .expect("the Shared slot starts");
+
+    let per_user = Arc::clone(backend.pool.get(&slot(USER)).expect("the slot").value());
+    assert_eq!(per_user.era.cached().await, Some(Era::Modern));
+    assert_eq!(backend.cached_era().await, Some(Era::Legacy));
+}
+
+/// PERSLOT.3a: a contradiction-driven re-probe on one slot drops and
+/// re-resolves only that slot's verdict.
+#[tokio::test]
+async fn a_reprobe_on_one_slot_leaves_the_other_slots_verdict() {
+    let (url, _seen) = legacy_upstream().await;
+    let backend = backend_at(url);
+    backend
+        .ensure_started()
+        .await
+        .expect("the Shared slot starts");
+    let (peer, _handles) = Peer::new(Answer::Modern);
+    let peer: Arc<dyn Transport> = peer;
+    backend.set_pooled_transport_for_test(&slot(USER), Arc::clone(&peer));
+    let per_user = Arc::clone(backend.pool.get(&slot(USER)).expect("the slot").value());
+    backend.resolve_era_for_entry_test(&peer, &per_user).await;
+
+    backend
+        .reprobe_if_code_contradicts(
+            "server/discover",
+            crate::protocol::era::METHOD_NOT_FOUND_CODE,
+            &peer,
+        )
+        .await;
+    // The re-probe holds the slot's era lock while it runs: this read waits for it.
+    let _ = tokio::time::timeout(Duration::from_secs(20), per_user.era.cached()).await;
+
+    assert_eq!(backend.cached_era().await, Some(Era::Legacy));
+}
+
+/// PERSLOT.3c: the era a request is judged by is the one of the slot it is
+/// dispatched to: a legacy per-user peer beside a modern Shared one.
+#[tokio::test]
+async fn a_request_is_judged_by_its_own_slots_era() {
+    let backend = backend_at("http://127.0.0.1:9/mcp".to_string());
+    let (shared, _h1) = Peer::new(Answer::Modern);
+    let shared: Arc<dyn Transport> = shared;
+    backend.set_pooled_transport_for_test(&super::pool::PoolKey::Shared, Arc::clone(&shared));
+    backend
+        .resolve_era_for_entry_test(&shared, &backend.shared_entry())
+        .await;
+    per_user_slot_resolved(&backend, Answer::MethodNotFound).await;
+
+    assert_eq!(backend.dispatch_era(Some(USER)).await, Some(Era::Legacy));
+    assert_eq!(backend.dispatch_era(None).await, Some(Era::Modern));
+}
+
+/// PERSLOT.3c, cold slot: a slot not yet started is started before its era is
+/// read, so a new caller's first request is judged by its peer's real era,
+/// not by a missing verdict.
+#[tokio::test]
+async fn a_cold_slot_is_started_before_its_era_is_read() {
+    let (url, _seen) = upstream(true).await;
+    let backend = backend_at(url);
+    assert!(
+        backend.shared_entry().transport.read().is_none(),
+        "premise: cold"
+    );
+
+    assert_eq!(backend.dispatch_era(None).await, Some(Era::Modern));
 }
