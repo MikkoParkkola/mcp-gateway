@@ -25,6 +25,9 @@ src/gateway/meta_mcp/task_confirmation/helpers.rs	challenge_key	1	standard	borde
 src/gateway/meta_mcp/task_confirmation/helpers.rs	cleared	1	standard	borderline	cleared	Strips the grant and answers before dispatch; wrong would forward the gateway's requestState to the backend
 src/gateway/meta_mcp/task_confirmation/helpers.rs	operation_digest	1	standard	borderline	operation_digest	Computes the grant binding digest; omitting a field silently widens the grant
 src/gateway/meta_mcp/task_confirmation/helpers.rs	task_admission_request	1	standard	borderline	task_admission_request	Single builder for admission identity; drift would break replay and owner match
+src/gateway/meta_mcp/task_confirmation/helpers.rs	routed	1	critical	c	AdmissionOwner::routed	Spells an HTTP caller's admission principal from its routed task owner; the pooled anonymous owner is no principal, so a keyed call is refused (MIK-8193)
+src/gateway/meta_mcp/task_confirmation/helpers.rs	local_operator	1	critical	c	AdmissionOwner::local_operator	The stdio transport's reserved admission principal, shared by the sync lease and task admission (MIK-8193)
+src/gateway/meta_mcp/task_confirmation/helpers.rs	principal	1	critical	c	AdmissionOwner::principal	The one principal both admissions key an execution on; a second spelling admits one key twice (MIK-8193)
 src/gateway/router/accounts.rs	own_key	1	critical	c	own_key	Derives the account key from the caller's identity; returns 404 for descriptors that are not the caller's.
 src/gateway/router/accounts.rs	revoke_for	1	critical	c	revoke_for	Revokes only the account key derived from the caller's own verified identity.
 src/gateway/router/accounts.rs	browser_routes	1	standard	borderline	browser_routes	Merged outside auth on purpose; correctness depends on each handler's own checks.

@@ -98,6 +98,8 @@ mod direct_notification_slot_tests;
 #[cfg(test)]
 mod direct_notification_wire_tests;
 #[cfg(test)]
+mod direct_request_checks_tests;
+#[cfg(test)]
 mod direct_sole_operator_tests;
 #[cfg(test)]
 mod direct_tasks_owner_tests;
@@ -121,6 +123,10 @@ mod hardened_identity_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 mod judged_answer;
+#[cfg(test)]
+mod meta_fingerprint_tests;
+#[cfg(test)]
+mod mrtr9_lease_tests;
 /// MIK-8058: a failed reload's status says whose fault it is.
 #[cfg(all(test, feature = "webui"))]
 mod reload_status_tests;
@@ -303,6 +309,23 @@ impl AppState {
             backend,
         );
         self.meta_mcp.events_tools_changed(backend);
+    }
+
+    /// Announce that some caller's own view of `backend` changed (`MIK-8148`).
+    ///
+    /// The same two audiences as [`Self::announce_tools_changed`], scoped the
+    /// same way, and never wider. The notice carries no tool and no caller:
+    /// a listener learns only that some view of `backend` changed, and when,
+    /// and its relist returns its own view. The webhook hub is not told: it
+    /// reports the backend's shared tools to external subscribers.
+    pub async fn announce_backend_view_changed(&self, backend: &str) {
+        self.proxy_manager
+            .broadcast_tools_list_changed(backend)
+            .await;
+        self.subscriptions.publish_for_backend(
+            crate::gateway::subscription_registry::tools_list_changed(),
+            backend,
+        );
     }
 }
 

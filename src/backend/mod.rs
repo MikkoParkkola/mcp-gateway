@@ -248,6 +248,10 @@ pub struct Backend {
     /// the handshake shape is chosen (MIK-8056).
     #[cfg(test)]
     era_decision_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
+    /// A test's pause point in a start, just after its transport is
+    /// published (the publish order of MIK-7897 LIFE.3a).
+    #[cfg(test)]
+    pub(crate) publish_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
     /// A test's stand-ins for the user's token store and browser, used by the
     /// OAuth client [`Backend::create_oauth_client`] builds.
     #[cfg(test)]
@@ -259,6 +263,12 @@ pub struct Backend {
     /// Where this instance's nudges go, set when a registry with a change feed
     /// holds it.
     nudge_feed: std::sync::OnceLock<tools_nudge::NudgeFeed>,
+    /// Whether a per-user store nudge is queued and unread (`MIK-8148`).
+    views_dirty: tools_nudge::ViewsDirty,
+    /// A tool the next drain snapshot blocks between reading the descriptor
+    /// filter and reading the slots, so a test can land a verdict there.
+    #[cfg(test)]
+    snapshot_seam: parking_lot::Mutex<Option<String>>,
 }
 
 /// Where a test backend's OAuth client keeps tokens, and who plays the
@@ -274,9 +284,9 @@ pub(crate) struct OAuthTestSeam {
 /// and waits for `release`.
 #[cfg(test)]
 #[derive(Default)]
-struct MarkWindowGate {
-    reached: tokio::sync::Notify,
-    release: tokio::sync::Notify,
+pub(crate) struct MarkWindowGate {
+    pub(crate) reached: tokio::sync::Notify,
+    pub(crate) release: tokio::sync::Notify,
 }
 
 impl Backend {
@@ -512,6 +522,9 @@ mod websocket_backend_tests;
 #[cfg(test)]
 mod destination_tests;
 
+#[cfg(test)]
+#[path = "publish_order_tests.rs"]
+mod publish_order_tests;
 #[cfg(test)]
 #[path = "stop_race_tests.rs"]
 mod stop_race_tests;

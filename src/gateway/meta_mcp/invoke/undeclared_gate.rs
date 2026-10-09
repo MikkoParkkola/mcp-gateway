@@ -22,6 +22,14 @@ pub(super) fn refuse_undeclared(
     let Some(refused) = interim.and_then(|i| i.undeclared(caller.input_capabilities)) else {
         return Ok(());
     };
+    // The backend stopped to ask, so this dispatch acted on nothing: the outer
+    // lease does not keep the refusal as the call's outcome, or a keyed retry
+    // that now declares the capability is served it instead of running
+    // (MIK-8191). An earlier step of the same execution that did act keeps
+    // its protection (`withdraw_dispatch`).
+    if let Some(execution) = caller.execution {
+        execution.withdraw_dispatch();
+    }
     Err(refusal(&refused, server, tool, trace_id))
 }
 

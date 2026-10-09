@@ -92,6 +92,9 @@ impl Backend {
                 "Identity-keyed slot eviction removed per-user slots"
             );
         }
+        // One hint per revocation, slot or not: an idle-evicted caller, or one
+        // whose first store the drain has not read yet, still loses its view.
+        self.nudge_revoked(binding_prefix);
         evicted
     }
 
@@ -175,6 +178,9 @@ impl Backend {
             }
         }
         if closed > 0 {
+            // ONE nudge per sweep, however many slots closed: the drain
+            // recomputes every slot and buries the ones that are gone.
+            self.nudge_tools(crate::backend::tools_nudge::NudgeKind::Changed);
             // MIK-6735 fix 3: gauge + log the live slot count after eviction,
             // mirroring the creation-side observability in `pooled_entry`.
             #[allow(clippy::cast_precision_loss)] // pool size is never remotely close to 2^52
