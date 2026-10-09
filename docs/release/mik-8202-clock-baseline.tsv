@@ -58,7 +58,7 @@ src/events/watch_source.rs	1
 src/events/watch_source_hold.rs	2
 src/events/watch_source_tests.rs	3
 src/events/webhook_source.rs	2
-src/events/worker.rs	11
+src/events/worker.rs	9
 src/events/worker_audit_order_tests.rs	7
 src/events/worker_hold_tests.rs	1
 src/events/worker_recheck_tests.rs	2
