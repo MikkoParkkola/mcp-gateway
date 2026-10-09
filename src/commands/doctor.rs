@@ -383,7 +383,7 @@ fn check_port(port: u16) -> CheckResult {
     let addr = format!("127.0.0.1:{port}");
     match TcpListener::bind(&addr) {
         Ok(_) => CheckResult::pass("Port", format!("{port} available")).with_category("port"),
-        Err(_) => CheckResult::fail("Port", format!("{port} already in use"))
+        Err(e) => CheckResult::fail("Port", format!("{port} already in use (probe: {:?} {e})", e.kind()))
             .with_category("port")
             .with_hint("Another process is listening on this port")
             .with_manual_fix(format!("lsof -nP -iTCP:{port} -sTCP:LISTEN")),
