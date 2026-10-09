@@ -68,6 +68,7 @@ impl Backend {
                 continue;
             };
             evicted += 1;
+            self.nudge_slot_closed(&key, crate::backend::tools_nudge::SlotEvent::Revoked);
 
             let idle_transport = {
                 let mut transport = entry.transport.write();
@@ -166,7 +167,8 @@ impl Backend {
                         >= cutoff;
                 idle && retire(entry)
             });
-            if let Some((_, entry)) = removed {
+            if let Some((key, entry)) = removed {
+                self.nudge_slot_closed(&key, crate::backend::tools_nudge::SlotEvent::Idle);
                 let transport = entry.transport.write().take();
                 if let Some(transport) = transport {
                     self.close_evicted(&mut cleanups, transport);

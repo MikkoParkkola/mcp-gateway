@@ -42,8 +42,37 @@ pub(crate) enum ToolsNudge {
         instance: u64,
         kind: NudgeKind,
     },
+    /// One per-user slot of a registry backend (`MIK-8148`), by binding.
+    Binding {
+        name: String,
+        instance: u64,
+        binding: String,
+        event: SlotEvent,
+    },
     /// The capability catalogue, which is not a registry backend.
     Catalogue { name: String },
+}
+
+/// What one per-user slot holds now.
+pub(crate) enum SlotView {
+    /// No slot holds the binding.
+    Absent,
+    /// The slot has stored no list.
+    Unfilled,
+    /// The slot's list, filtered as discovery serves it.
+    Holds(Arc<Vec<Tool>>),
+}
+
+/// What happened to a per-user slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SlotEvent {
+    /// It stored a list.
+    Stored,
+    /// It was closed for idleness: what its caller sees did not change.
+    Idle,
+    /// It was closed because its caller's grant was revoked: what that caller
+    /// sees did change.
+    Revoked,
 }
 
 /// The sending half of the change feed.
@@ -74,6 +103,70 @@ impl super::Backend {
                     kind: NudgeKind::Changed,
                 });
             }));
+        // Slots opened before the feed existed. One opened concurrently is
+        // observed by `pooled_entry_with` too; the first observer stays.
+        for slot in &self.pool {
+            self.observe_slot(slot.key(), slot.value());
+        }
+    }
+
+    /// Nudge after every list per-user slot `key` stores (`MIK-8148`). A no-op
+    /// for the shared slot, which `attach_nudges` observes, and before a feed
+    /// is attached.
+    pub(super) fn observe_slot(&self, key: &super::PoolKey, entry: &super::pool::PooledEntry) {
+        let (super::PoolKey::PerUser { binding }, Some(feed)) = (key, self.nudge_feed.get()) else {
+            return;
+        };
+        let (feed, name, instance, binding) =
+            (feed.clone(), self.name.clone(), self.instance, binding.clone());
+        entry.tools_cache.observe_stores(Arc::new(move || {
+            let _ = feed.send(ToolsNudge::Binding {
+                name: name.clone(),
+                instance,
+                binding: binding.clone(),
+                event: SlotEvent::Stored,
+            });
+        }));
+    }
+
+    /// Nudge the drain that per-user slot `key` closed for `event`'s reason.
+    pub(super) fn nudge_slot_closed(&self, key: &super::PoolKey, event: SlotEvent) {
+        if let (super::PoolKey::PerUser { binding }, Some(feed)) = (key, self.nudge_feed.get()) {
+            let _ = feed.send(ToolsNudge::Binding {
+                name: self.name.clone(),
+                instance: self.instance,
+                binding: binding.clone(),
+                event,
+            });
+        }
+    }
+
+    /// What per-user slot `binding` holds now, as discovery would serve it
+    /// (descriptor-blocked names removed).
+    #[must_use]
+    pub(crate) fn per_user_view(&self, binding: &str) -> SlotView {
+        let key = super::PoolKey::PerUser {
+            binding: binding.to_string(),
+        };
+        let Some(entry) = self.pool.get(&key).map(|slot| Arc::clone(slot.value())) else {
+            return SlotView::Absent;
+        };
+        match entry.tools_cache.snapshot_shared() {
+            Some(tools) => SlotView::Holds(self.without_blocked(tools)),
+            None => SlotView::Unfilled,
+        }
+    }
+
+    /// Every per-user slot's binding, for a backend-wide recompute.
+    #[must_use]
+    pub(crate) fn per_user_bindings(&self) -> Vec<String> {
+        self.pool
+            .iter()
+            .filter_map(|slot| match slot.key() {
+                super::PoolKey::PerUser { binding } => Some(binding.clone()),
+                super::PoolKey::Shared => None,
+            })
+            .collect()
     }
 
     /// Nudge the drain about this instance. A no-op before a feed is attached.

@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::backend::tools_nudge::{NudgeKind, ToolsNudge};
+use crate::backend::tools_nudge::{NudgeKind, SlotEvent, SlotView, ToolsNudge};
 use crate::gateway::router::AppState;
 use crate::protocol::Tool;
 
@@ -63,6 +63,8 @@ pub(super) struct Announced {
     backends: HashMap<String, u64>,
     phases: HashMap<String, (u64, Phase)>,
     catalogues: HashMap<String, u64>,
+    /// `MIK-8148`: each backend's per-user views.
+    views: HashMap<String, views::Views>,
 }
 
 impl Announced {
@@ -120,6 +122,47 @@ impl Announced {
         true
     }
 
+    /// `MIK-8148`: whether backend `name`'s audience must hear that per-user
+    /// slot `binding` changed after `event`, given what it holds now.
+    pub(super) fn binding(
+        &mut self,
+        name: &str,
+        instance: u64,
+        binding: &str,
+        event: SlotEvent,
+        seen: views::SlotSeen,
+    ) -> bool {
+        let views = self
+            .views
+            .entry(name.to_string())
+            .or_insert_with(|| views::Views::new(instance));
+        let overflow = views.adopt(instance);
+        let changed = match event {
+            SlotEvent::Revoked => views.revoked(binding),
+            SlotEvent::Idle | SlotEvent::Stored => views.slot(binding, seen),
+        };
+        overflow | changed
+    }
+
+    /// `MIK-8148`: after a backend-wide nudge, whether any per-user view of
+    /// `name` changed. `present` is every per-user slot now, or `None` when
+    /// the backend is gone, which changes every view that showed tools.
+    pub(super) fn backend_views(
+        &mut self,
+        name: &str,
+        instance: u64,
+        present: Option<&[(String, views::SlotSeen)]>,
+    ) -> bool {
+        let Some(present) = present else {
+            return self.views.remove(name).is_some_and(|views| views.any_shown());
+        };
+        let views = self
+            .views
+            .entry(name.to_string())
+            .or_insert_with(|| views::Views::new(instance));
+        views.adopt(instance) | views.recompute(present)
+    }
+
     /// Whether listeners must hear about capability catalogue `name`, whose
     /// tools now have `visible` as their fingerprint. Before its first report
     /// listeners were shown nothing from it, so an empty first report (an
@@ -143,13 +186,14 @@ pub(super) fn spawn_drain(
     tokio::spawn(drain_until(rx, shutdown, move |nudge: ToolsNudge| {
         let (state, announced) = (Arc::clone(&state), Arc::clone(&announced));
         async move {
-            let name = match nudge {
+            let (name, reach) = match nudge {
                 ToolsNudge::Backend {
                     name,
                     instance,
                     kind,
                 } => {
-                    let seen = state.backends.get(&name).map_or(Seen::Unregistered, |b| {
+                    let backend = state.backends.get(&name);
+                    let seen = backend.as_ref().map_or(Seen::Unregistered, |b| {
                         let (stored, populated) = b.stored_tools_snapshot();
                         Seen::Registered {
                             instance: b.instance(),
@@ -157,10 +201,51 @@ pub(super) fn spawn_drain(
                             populated,
                         }
                     });
-                    if !announced.lock().backend(&name, instance, kind, &seen) {
+                    // Read before the lock: it walks the pool.
+                    // ponytail: fingerprints every per-user slot per backend
+                    // nudge; cache per-slot fingerprints if slots x stores bites.
+                    let present = backend
+                        .as_ref()
+                        .filter(|b| b.instance() == instance)
+                        .map(|b| per_user_seen(b));
+                    let mut told = announced.lock();
+                    let shared = told.backend(&name, instance, kind, &seen);
+                    let private = match (&backend, present) {
+                        (None, _) => told.backend_views(&name, instance, None),
+                        (Some(_), Some(present)) => {
+                            told.backend_views(&name, instance, Some(&present))
+                        }
+                        (Some(_), None) => false,
+                    };
+                    drop(told);
+                    match (shared, private) {
+                        (true, _) => (name, Reach::Tools),
+                        (false, true) => (name, Reach::View),
+                        (false, false) => return,
+                    }
+                }
+                ToolsNudge::Binding {
+                    name,
+                    instance,
+                    binding,
+                    event,
+                } => {
+                    // A replaced instance's late nudge: its successor's own follow.
+                    let Some(backend) = state
+                        .backends
+                        .get(&name)
+                        .filter(|b| b.instance() == instance)
+                    else {
+                        return;
+                    };
+                    let seen = slot_seen(backend.per_user_view(&binding));
+                    if !announced
+                        .lock()
+                        .binding(&name, instance, &binding, event, seen)
+                    {
                         return;
                     }
-                    name
+                    (name, Reach::View)
                 }
                 ToolsNudge::Catalogue { name } => {
                     // A capability reload also refreshes webhook event routes,
@@ -173,12 +258,42 @@ pub(super) fn spawn_drain(
                     if !announced.lock().catalogue(&name, visible) {
                         return;
                     }
-                    name
+                    (name, Reach::Tools)
                 }
             };
-            state.announce_tools_changed(&name).await;
+            match reach {
+                Reach::Tools => state.announce_tools_changed(&name).await,
+                Reach::View => state.announce_backend_view_changed(&name).await,
+            }
         }
     }));
+}
+
+/// Who hears an announcement.
+enum Reach {
+    /// Every listener of the backend, and the webhook hub: the shared tools changed.
+    Tools,
+    /// The backend's listeners only (`MIK-8148`): some per-user view changed.
+    View,
+}
+
+fn slot_seen(view: SlotView) -> views::SlotSeen {
+    match view {
+        SlotView::Absent => views::SlotSeen::Absent,
+        SlotView::Unfilled => views::SlotSeen::Unfilled,
+        SlotView::Holds(tools) => views::SlotSeen::Holds(fingerprint(&tools)),
+    }
+}
+
+fn per_user_seen(backend: &crate::backend::Backend) -> Vec<(String, views::SlotSeen)> {
+    backend
+        .per_user_bindings()
+        .into_iter()
+        .map(|binding| {
+            let seen = slot_seen(backend.per_user_view(&binding));
+            (binding, seen)
+        })
+        .collect()
 }
 
 async fn drain_until<T, F, Fut>(
@@ -199,6 +314,8 @@ async fn drain_until<T, F, Fut>(
         }
     }
 }
+
+mod views;
 
 #[cfg(test)]
 mod decision_tests;
