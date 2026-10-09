@@ -150,6 +150,13 @@ pub(super) async fn tools_call(
     }
 
     let backend_targets = backend_tool_targets_for_call(&state.meta_mcp, tool_name, &arguments);
+    // Computed once (MIK-8014): the firewall's per-caller controls and the
+    // caller context below key on the same caller.
+    let caller_key = crate::gateway::router::identity::caller_key(
+        grant_subject.as_ref(),
+        cert_identity.as_ref(),
+        client.as_ref(),
+    );
     *response_targets = crate::gateway::meta_mcp::response_security::meta_response_targets(
         tool_name,
         &backend_targets,
@@ -208,11 +215,7 @@ pub(super) async fn tools_call(
             // never the display name, which every anonymous caller
             // shares. Empty is no identity: refused.
             let control_identity = crate::gateway::router::identity::control_identity(
-                crate::gateway::router::identity::caller_key(
-                    grant_subject.as_ref(),
-                    cert_identity.as_ref(),
-                    client.as_ref(),
-                ),
+                caller_key.clone(),
                 session_id,
                 existing_session_id.as_deref(),
             );
@@ -417,11 +420,6 @@ pub(super) async fn tools_call(
     // The A/B arm and the prefetch hints key on the caller (G4). Its
     // reclaim deadline is renewed here, in every build, because those
     // entries have no session end to reclaim them.
-    let caller_key = crate::gateway::router::identity::caller_key(
-        grant_subject.as_ref(),
-        cert_identity.as_ref(),
-        client.as_ref(),
-    );
     if let Some(ref lifecycle) = state.session_lifecycle
         && !caller_key.is_empty()
     {

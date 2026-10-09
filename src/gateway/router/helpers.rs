@@ -241,7 +241,10 @@ pub(crate) fn is_notification_method(method: &str) -> bool {
 #[cfg(test)]
 pub(crate) fn extract_tools_call_params(params: Option<&Value>) -> (&str, Value) {
     let (tool_name, arguments) = extract_tools_call_params_ref(params);
-    (tool_name, arguments.cloned().unwrap_or_else(|| serde_json::json!({})))
+    (
+        tool_name,
+        arguments.cloned().unwrap_or_else(|| serde_json::json!({})),
+    )
 }
 
 /// Borrowed form of [`extract_tools_call_params`]: same field selection, no
