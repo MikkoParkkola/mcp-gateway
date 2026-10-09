@@ -1,0 +1,4 @@
+head_sha	92838ec8fc7ec23940b3c4c87de873121b19ce13
+# MIK-8229 rows
+m1-refused-start-keeps-stdin	linux	m1-refused-start-keeps-stdin.patch	--lib -- a_retire_between_spawn_and_install_refuses_the_start
+m2-reader-ignores-dropped-transport	linux	m2-reader-ignores-dropped-transport.patch	--lib -- a_line_after_the_transport_dropped_stops_the_reader

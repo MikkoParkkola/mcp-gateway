@@ -1,0 +1,14 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index 883e7a670..fd09bc8e4 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -234,8 +234,7 @@ impl StdioTransport {
+                         let line_len = line.len();
+                         debug!(line_len, "Received line from stdout");
+                         let Some(transport) = transport.upgrade() else {
+-                            debug!("Transport dropped while reading; stopping reader task");
+-                            return;
++                            continue;
+                         };
+                         if let Err(e) = transport.handle_response(&line) {
+                             error!(error = %e, line_len, "Failed to handle response");

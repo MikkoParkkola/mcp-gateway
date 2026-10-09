@@ -1,0 +1,12 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index 883e7a670..befb3577d 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -198,7 +198,6 @@ impl StdioTransport {
+         // the token a previous `close()` cancelled.
+         *self.shutdown.lock() = tokio_util::sync::CancellationToken::new();
+         if let Err(refused) = self.install_tree(ChildTree::new(child)) {
+-            *writer = None;
+             return Err(refused);
+         }
+         *writer = Some(stdin);
