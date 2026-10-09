@@ -237,7 +237,11 @@ fn notice_sources() -> (String, Vec<(String, String)>) {
             entries
                 .filter_map(Result::ok)
                 .map(|e| e.file_name().to_string_lossy().into_owned())
-                .filter(|name| name.ends_with(".md"))
+                .filter(|name| {
+                    std::path::Path::new(name)
+                        .extension()
+                        .is_some_and(|e| e == "md")
+                })
                 .map(|name| {
                     let text = std::fs::read_to_string(dir.join(&name))
                         .unwrap_or_else(|e| panic!("upgrading.d/{name}: {e}"));

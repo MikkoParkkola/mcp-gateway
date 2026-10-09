@@ -517,6 +517,7 @@ fn superseded_items_point_at_their_successor() {
             );
         }
         // MIK-8185: a successor still in `upgrading.d/` is named by its title.
+        let pending = pending_titles();
         for line in body.lines() {
             let Some(rest) = line.strip_prefix("> Superseded in part by ") else {
                 continue;
@@ -524,11 +525,47 @@ fn superseded_items_point_at_their_successor() {
             if rest.starts_with("item") {
                 continue;
             }
-            let name = rest.split_once(':').map_or(rest, |(name, _)| name).trim();
-            resolve_successor(&GUIDE, &pending_titles(), *n, name)
-                .unwrap_or_else(|e| panic!("{e}"));
+            let name = successor_name(rest, &GUIDE, &pending);
+            resolve_successor(&GUIDE, &pending, *n, name).unwrap_or_else(|e| panic!("{e}"));
         }
     }
+}
+
+/// The successor a `> Superseded in part by <name>: ...` note names. A title
+/// may itself contain `:`, so the longest known title (numbered or pending)
+/// followed by `:` wins; a name matching no title ends at the first `:`.
+fn successor_name<'a>(rest: &'a str, doc: &str, pending: &[String]) -> &'a str {
+    let numbered = doc.lines().filter_map(|l| {
+        l.strip_prefix("## ")?
+            .split_once(". ")
+            .map(|(_, t)| t.trim())
+    });
+    numbered
+        .chain(pending.iter().map(String::as_str))
+        .filter(|t| rest.strip_prefix(t).is_some_and(|r| r.starts_with(':')))
+        .max_by_key(|t| t.len())
+        .map_or_else(
+            || rest.split_once(':').map_or(rest, |(name, _)| name).trim(),
+            |t| &rest[..t.len()],
+        )
+}
+
+#[test]
+fn a_successor_title_may_contain_a_colon() {
+    let doc = "## 1. One\n\n## 3. OAuth: issuer credentials\n";
+    let pending = vec!["Cap: search -C".to_string()];
+    assert_eq!(
+        successor_name("OAuth: issuer credentials: the rest", doc, &pending),
+        "OAuth: issuer credentials"
+    );
+    assert_eq!(
+        successor_name("Cap: search -C: why", doc, &pending),
+        "Cap: search -C"
+    );
+    assert_eq!(
+        successor_name("Nothing known: why", doc, &pending),
+        "Nothing known"
+    );
 }
 
 /// Titles of the pending fragments the checks see: none when `UPGRADING_DOC`
@@ -654,7 +691,11 @@ fn pending_fragments(dir: &std::path::Path) -> Vec<(String, String)> {
     let mut found: Vec<(String, String)> = entries
         .filter_map(Result::ok)
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.ends_with(".md"))
+        .filter(|name| {
+            std::path::Path::new(name)
+                .extension()
+                .is_some_and(|e| e == "md")
+        })
         .map(|name| {
             let text = std::fs::read_to_string(dir.join(&name))
                 .unwrap_or_else(|e| panic!("upgrading.d/{name}: {e}"))

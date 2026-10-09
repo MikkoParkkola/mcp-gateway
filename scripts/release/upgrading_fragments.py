@@ -207,8 +207,9 @@ def check_doc(doc: str, frozen_max: int, fragments: list[Fragment]) -> list[str]
 
 
 def check_deletions(changes: list[tuple[str, str]], head_doc: str, base_fragments: dict[str, str]) -> list[str]:
-    """A fragment leaves only by being folded into the guide: its title as a
-    numbered section, its row under that number, and its notice phrase."""
+    """A fragment leaves only by being folded into the guide: its row under the
+    number it was given, and its whole section exactly as `assemble` writes it
+    (marker, notice phrase and body), so a fold cannot drop the explanation."""
     lines = head_doc.replace("\r\n", "\n").split("\n")
     titles = _titles(head_doc)
     errors = []
@@ -223,16 +224,30 @@ def check_deletions(changes: list[tuple[str, str]], head_doc: str, base_fragment
         missing = []
         if n is None:
             missing.append(f"a `## N. {fragment.title}` section")
-        elif fragment.row(n) not in lines:
-            missing.append(f"the summary row `{fragment.row(n)}`")
-        if n is not None and fragment.notice is not None:
+        else:
+            if fragment.row(n) not in lines:
+                missing.append(f"the summary row `{fragment.row(n)}`")
             start = lines.index(f"## {n}. {fragment.title}")
             end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
-            if f"<!-- notice: {fragment.notice} -->" not in lines[start:end]:
-                missing.append("its notice phrase")
+            if "\n".join(lines[start:end]).strip() != fragment.section(n).strip():
+                missing.append("its section as written in the fragment (marker, notice phrase and body)")
         if missing:
             errors.append(f"{FRAGMENT_DIR}/{name} is deleted but not folded into {DOC}: missing {', '.join(missing)}")
     return errors
+
+
+def check_ceiling(base_max: int | None, head_max: int, folded: int) -> list[str]:
+    """`.frozen-max` rises only by folding fragments: by exactly as many as the
+    PR folds. Raising it beside a hand-numbered item would reopen the race
+    fragments close. None: the base has no ceiling yet (the cutover itself)."""
+    if base_max is None or head_max <= base_max:
+        return []
+    if head_max - base_max == folded:
+        return []
+    return [
+        f"{FRAGMENT_DIR}/{FROZEN_MAX} rises from {base_max} to {head_max}, but this PR folds {folded} fragment(s). "
+        f"Only `upgrading_fragments.py assemble` raises it; add the entry as {FRAGMENT_DIR}/<pr>.md instead"
+    ]
 
 
 def _git(*args: str) -> str:
@@ -279,7 +294,15 @@ def main(argv: list[str]) -> int:
             rows = [r.split("\t", 1) for r in _git("diff", "--name-status", "--no-renames", f"{args.base}...{args.head}").splitlines() if r]
             gone = [p.removeprefix(f"{FRAGMENT_DIR}/") for s, p in rows if s == "D" and p.startswith(f"{FRAGMENT_DIR}/")]
             base = {n: _git("show", f"{args.base}:{FRAGMENT_DIR}/{n}") for n in gone if NAME.match(n)}
-            errors += check_deletions([tuple(r) for r in rows], _git("show", f"{args.head}:{DOC}"), base)
+            deletion_errors = check_deletions([tuple(r) for r in rows], _git("show", f"{args.head}:{DOC}"), base)
+            errors += deletion_errors
+            try:
+                base_max = int(_git("show", f"{args.base}:{FRAGMENT_DIR}/{FROZEN_MAX}").strip())
+            except subprocess.CalledProcessError:
+                base_max = None
+            head_max = int(_git("show", f"{args.head}:{FRAGMENT_DIR}/{FROZEN_MAX}").strip())
+            folded = len(base) if not deletion_errors else 0
+            errors += check_ceiling(base_max, head_max, folded)
         for e in errors:
             print(f"error: {e}", file=sys.stderr)
         return 1 if errors else 0

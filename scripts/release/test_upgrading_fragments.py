@@ -354,11 +354,52 @@ class Deletions(unittest.TestCase):
                 errors = uf.check_deletions([("D", "upgrading.d/3700.md")], doc, self.BASE)
                 self.assertTrue(any("upgrading.d/3700.md" in e for e in errors), errors)
 
+    def test_a_fold_that_drops_the_body_is_refused(self):
+        errors = uf.check_deletions([("D", "upgrading.d/3700.md")], FOLDED.replace("Body.\n\n" + uf.WALKTHROUGH, uf.WALKTHROUGH), self.BASE)
+        self.assertTrue(any("upgrading.d/3700.md" in e and "section" in e for e in errors), errors)
+
     def test_two_deleted_one_folded_names_the_other(self):
         errors = uf.check_deletions([("D", "upgrading.d/3700.md"), ("D", "upgrading.d/3701.md")], FOLDED, self.BASE)
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("upgrading.d/3701.md", errors[0])
 
+
+
+class Ceiling(unittest.TestCase):
+    def test_unchanged_or_cutover_passes(self):  # green controls
+        self.assertEqual(uf.check_ceiling(173, 173, 0), [])
+        self.assertEqual(uf.check_ceiling(None, 175, 0), [])
+
+    def test_a_rise_matching_the_fold_passes(self):
+        self.assertEqual(uf.check_ceiling(173, 175, 2), [])
+
+    def test_a_rise_beside_a_hand_numbered_item_is_refused(self):
+        errors = uf.check_ceiling(173, 174, 0)
+        self.assertTrue(any("173" in e and "174" in e and "upgrading.d/<pr>.md" in e for e in errors), errors)
+        self.assertTrue(uf.check_ceiling(173, 176, 2))
+
+
+class Wiring(unittest.TestCase):
+    """The CI step that re-runs the guide checks on the assembled guide: if it
+    were dropped or pointed at no test, a fragment that breaks a check would
+    pass its PR and fail only at release."""
+
+    def test_the_assembled_guide_step_runs_both_targets(self):
+        ci = (uf.ROOT / ".github/workflows/ci.yml").read_text()
+        step = ci[ci.index("UPGRADING checks on the assembled guide") :]
+        step = step[: step.index("\n      - ") if "\n      - " in step else len(step)]
+        for needle in (
+            "upgrading_fragments.py assemble --dry-run",
+            "UPGRADING_DOC=",
+            "--test upgrading_summary_rows",
+            "--bin mcp-gateway upgrade_notice_tests",
+            "running [1-9]",
+        ):
+            self.assertIn(needle, step)
+        release = ci[ci.index("release-script-tests:") :]
+        self.assertIn("upgrading_fragments.py check", release)
+        changelog = (uf.ROOT / ".github/workflows/changelog.yml").read_text()
+        self.assertIn('upgrading_fragments.py check --base "$BASE_SHA" --head "$HEAD_SHA"', changelog)
 
 if __name__ == "__main__":
     unittest.main()
