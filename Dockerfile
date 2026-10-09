@@ -14,7 +14,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1: Build
 # ---------------------------------------------------------------------------
-FROM rust:1.98-slim AS builder
+FROM mirror.gcr.io/library/rust:1.98-slim AS builder
 
 WORKDIR /app
 
@@ -43,7 +43,7 @@ RUN touch src/main.rs && cargo build --release
 # ---------------------------------------------------------------------------
 # Stage 2: Runtime
 # ---------------------------------------------------------------------------
-FROM debian:trixie-slim AS runtime
+FROM mirror.gcr.io/library/debian:trixie-slim AS runtime
 
 LABEL io.modelcontextprotocol.server.name="io.github.MikkoParkkola/mcp-gateway"
 

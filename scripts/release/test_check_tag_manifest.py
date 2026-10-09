@@ -1645,7 +1645,7 @@ class WorkflowWiring(unittest.TestCase):
             ["dockerfile", "rust-version"],
             "release-compile must compile on both the Dockerfile's toolchain and the rust-version",
         )
-        self.assertIn("sed -n 's/^FROM rust:", body, "the Dockerfile row no longer reads the Dockerfile")
+        self.assertIn("sed -n 's/^FROM mirror\\.gcr\\.io\\/library\\/rust:", body, "the Dockerfile row no longer reads the Dockerfile")
         self.assertIn("sed -n 's/^rust-version = ", body, "the rust-version row no longer reads Cargo.toml")
         # The Dockerfile row builds the binary (MIK-8188) so the next step can
         # grep it for the debug-only test trust roots; the rust-version row
