@@ -111,6 +111,9 @@ include = [
     "docs/TEAM_DEPLOYMENT.md",
     "docs/trustcard.md",
     "docs/UPGRADING-4.0.md",
+    # The one glob here: pending UPGRADING entries are one file per PR and
+    # leave at release preparation, so no exact path can name them (MIK-8185).
+    "upgrading.d/*.md",
     "gateway.example.yaml",
     "scripts/release/nfr_upgrade_1_rehearsal.sh",
     "server.json",
