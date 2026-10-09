@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/sealed_hold.rs b/src/gateway/meta_mcp/sealed_hold.rs
+index c6d640854..47456975e 100644
+--- a/src/gateway/meta_mcp/sealed_hold.rs
++++ b/src/gateway/meta_mcp/sealed_hold.rs
+@@ -159,7 +159,7 @@ pub(crate) fn carried(answer: &Value) -> CarriedHolds {
+     let reseal = answer.get("requestState").and_then(Value::as_str);
+     CarriedHolds(
+         held.into_iter()
+-            .filter(|hold| contains(answer, &hold.envelope) || reopens(hold, reseal))
++            .filter(|hold| reopens(hold, reseal))
+             .collect(),
+     )
+ }

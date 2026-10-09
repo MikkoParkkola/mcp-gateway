@@ -1,0 +1,6 @@
+head_sha	713d65e46d36dd753e00e1d0c0f196728338f930
+m01-drop-never-releases	linux	m01-drop-never-releases.patch	--lib -- slot_release
+m04-carried-loses-reseal-arm	linux	m04-carried-loses-reseal-arm.patch	--lib -- slot_release
+m05-mcp-releases-for-streams	linux	m05-mcp-releases-for-streams.patch	--lib -- slot_release
+m06-direct-only-counts	linux	m06-direct-only-counts.patch	--lib -- slot_release
+m03-carried-loses-substring-arm	linux	m03-carried-loses-substring-arm.patch	--lib -- gateway::meta_mcp::sealed_hold::tests::carried_finds_the_envelope_in_any_string
