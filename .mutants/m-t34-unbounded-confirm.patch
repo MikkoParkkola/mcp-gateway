@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_listener.rs b/src/events/upstream_listener.rs
+index 71da107db..c9a6584e2 100644
+--- a/src/events/upstream_listener.rs
++++ b/src/events/upstream_listener.rs
+@@ -507,7 +507,7 @@ impl UpstreamListeners {
+         let mut confirmed = self.confirmed.lock();
+         if confirmed
+             .get(backend)
+-            .is_some_and(|at| now.duration_since(*at) < CONFIRM_EVERY)
++            .is_some_and(|at| now.duration_since(*at) < CONFIRM_EVERY && false)
+         {
+             return false;
+         }
