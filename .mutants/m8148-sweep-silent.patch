@@ -1,0 +1,12 @@
+diff --git a/src/backend/pool_eviction.rs b/src/backend/pool_eviction.rs
+index e7e45a253..4d1f6765b 100644
+--- a/src/backend/pool_eviction.rs
++++ b/src/backend/pool_eviction.rs
+@@ -180,7 +180,6 @@ impl Backend {
+         if closed > 0 {
+             // ONE nudge per sweep, however many slots closed: the drain
+             // recomputes every slot and buries the ones that are gone.
+-            self.nudge_tools(crate::backend::tools_nudge::NudgeKind::Changed);
+             // MIK-6735 fix 3: gauge + log the live slot count after eviction,
+             // mirroring the creation-side observability in `pooled_entry`.
+             #[allow(clippy::cast_precision_loss)] // pool size is never remotely close to 2^52

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/tools_changed/views.rs b/src/gateway/server/tools_changed/views.rs
+index 641c59a2d..79cfce3dd 100644
+--- a/src/gateway/server/tools_changed/views.rs
++++ b/src/gateway/server/tools_changed/views.rs
+@@ -186,7 +186,7 @@ impl Views {
+     fn baseline(&mut self, binding: &str) -> Option<u64> {
+         let key = audience(binding).to_string();
+         let tomb = self.tombstones.remove(&key);
+-        if let Some(me) = acct(binding) {
++        if let Some(me) = acct(binding).filter(|_| false) {
+             let live = self.live.iter().filter_map(|(other, &shown)| {
+                 let o = acct(other)?;
+                 (o.audience == me.audience && o.generation == me.generation)

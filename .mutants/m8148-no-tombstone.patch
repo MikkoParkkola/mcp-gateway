@@ -1,0 +1,14 @@
+diff --git a/src/gateway/server/tools_changed/views.rs b/src/gateway/server/tools_changed/views.rs
+index 641c59a2d..c0e50b247 100644
+--- a/src/gateway/server/tools_changed/views.rs
++++ b/src/gateway/server/tools_changed/views.rs
+@@ -240,6 +240,9 @@ impl Views {
+         {
+             return false;
+         }
++        if self.stamp < u64::MAX {
++            return false;
++        }
+         self.stamp += 1;
+         self.tombstones.insert(
+             key,

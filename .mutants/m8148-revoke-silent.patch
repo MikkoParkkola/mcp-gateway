@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/tools_changed/views.rs b/src/gateway/server/tools_changed/views.rs
+index 641c59a2d..0324bc1c1 100644
+--- a/src/gateway/server/tools_changed/views.rs
++++ b/src/gateway/server/tools_changed/views.rs
+@@ -164,7 +164,7 @@ impl Views {
+         self.tombstones.retain(|audience, _| {
+             !audience.starts_with(prefix) && !prefix.starts_with(audience.as_str())
+         });
+-        true
++        false
+     }
+ 
+     /// Whether any per-user view last showed tools: removing the backend

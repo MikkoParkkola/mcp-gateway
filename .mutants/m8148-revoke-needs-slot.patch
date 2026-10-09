@@ -1,0 +1,12 @@
+diff --git a/src/backend/pool_eviction.rs b/src/backend/pool_eviction.rs
+index e7e45a253..1109a47b7 100644
+--- a/src/backend/pool_eviction.rs
++++ b/src/backend/pool_eviction.rs
+@@ -94,7 +94,6 @@ impl Backend {
+         }
+         // One hint per revocation, slot or not: an idle-evicted caller, or one
+         // whose first store the drain has not read yet, still loses its view.
+-        self.nudge_revoked(binding_prefix);
+         evicted
+     }
+ 
