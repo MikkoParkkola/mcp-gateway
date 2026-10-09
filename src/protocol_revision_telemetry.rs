@@ -972,10 +972,6 @@ fn sync_parent_directory(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(not(unix))]
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "a no-op off unix that keeps the unix signature"
-)]
 fn sync_parent_directory(_path: &Path) -> io::Result<()> {
     Ok(())
 }
