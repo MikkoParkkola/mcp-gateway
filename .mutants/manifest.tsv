@@ -1,0 +1,3 @@
+head_sha	f0a0f896a00d68da03d8808367dce43d43c7703e
+a1-stall-never-clears	linux	a1-stall-never-clears.patch	--lib gateway::router::audit_degraded_tests
+a2-probe-success-still-refuses	linux	a2-probe-success-still-refuses.patch	--lib gateway::router::audit_degraded_tests
