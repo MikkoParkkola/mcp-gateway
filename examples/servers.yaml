@@ -11,7 +11,6 @@ server:
 
 meta_mcp:
   enabled: true
-  cache_tools: true
   cache_ttl: "5m"
 
 failsafe:
