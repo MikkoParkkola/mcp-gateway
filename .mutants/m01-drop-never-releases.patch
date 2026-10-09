@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/sealed_hold.rs b/src/gateway/meta_mcp/sealed_hold.rs
+index c6d640854..2d0fe4c3e 100644
+--- a/src/gateway/meta_mcp/sealed_hold.rs
++++ b/src/gateway/meta_mcp/sealed_hold.rs
+@@ -52,7 +52,7 @@ impl Drop for SealedHold {
+             .hold_counts()
+             .unhanded_drops
+             .fetch_add(1, Ordering::Relaxed);
+-        if self.policy == HoldPolicy::Release {
++        if false && self.policy == HoldPolicy::Release {
+             release(&self.continuation, &self.hold_key);
+         }
+     }

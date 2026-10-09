@@ -1,0 +1,20 @@
+diff --git a/src/gateway/router/backend_handlers/direct_audit.rs b/src/gateway/router/backend_handlers/direct_audit.rs
+index 8f1deec68..41f33dcce 100644
+--- a/src/gateway/router/backend_handlers/direct_audit.rs
++++ b/src/gateway/router/backend_handlers/direct_audit.rs
+@@ -173,13 +173,13 @@ pub(super) async fn audited_call(
+     if state.firewall.as_ref().is_some_and(|fw| fw.relay_active()) {
+         let collected = crate::gateway::meta_mcp::invoke::relay::collecting(Box::pin(judged));
+         return crate::gateway::meta_mcp::sealed_hold::scoped(
+-            crate::gateway::meta_mcp::sealed_hold::HoldPolicy::Release,
++            crate::gateway::meta_mcp::sealed_hold::HoldPolicy::CountOnly,
+             collected,
+         )
+         .await;
+     }
+     crate::gateway::meta_mcp::sealed_hold::scoped(
+-        crate::gateway::meta_mcp::sealed_hold::HoldPolicy::Release,
++        crate::gateway::meta_mcp::sealed_hold::HoldPolicy::CountOnly,
+         Box::pin(judged),
+     )
+     .await
