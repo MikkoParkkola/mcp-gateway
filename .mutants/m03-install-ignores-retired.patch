@@ -1,0 +1,13 @@
+diff --git a/src/transport/stdio_reaper.rs b/src/transport/stdio_reaper.rs
+index 45afce2f1..1e6756039 100644
+--- a/src/transport/stdio_reaper.rs
++++ b/src/transport/stdio_reaper.rs
+@@ -234,7 +234,7 @@ impl super::StdioTransport {
+     /// `BackendNotFound` (pre-dispatch) when the transport was retired.
+     pub(super) fn install_tree(&self, tree: ChildTree) -> crate::Result<()> {
+         let mut slot = self.child.lock();
+-        if slot.retired {
++        if false {
+             slot.track(tree);
+             return Err(crate::Error::BackendNotFound(
+                 "stdio backend retired while it started".to_string(),
