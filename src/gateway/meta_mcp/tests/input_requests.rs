@@ -710,3 +710,37 @@ async fn a_malformed_round_asking_an_undeclared_question_is_refused_alike() {
         );
     }
 }
+
+/// `MIK-8117.MALFORMED.1` control: the malformed-round fallback reads only a
+/// result that claims `input_required`. A completed result carrying an
+/// `inputRequests` object and a malformed `requestState` (no `resultType`, or
+/// another one) is relayed, never refused. Mutant: the fallback ignoring
+/// `resultType`.
+#[tokio::test]
+async fn a_completed_result_carrying_input_requests_is_not_refused() {
+    for result_type in [None, Some("complete")] {
+        let mut result = json!({
+            "content": [{ "type": "text", "text": "booked" }],
+            "inputRequests": {
+                "confirm": {
+                    "method": "elicitation/create",
+                    "params": { "message": "Charge the card?" }
+                }
+            },
+            "requestState": 7
+        });
+        if let Some(kind) = result_type {
+            result["resultType"] = json!(kind);
+        }
+        let meta = MetaMcp::new(backend_answering(result));
+        let ctx = allow_all_ctx_declaring(crate::protocol::meta::Declared::NONE);
+        let outcome = meta
+            .invoke_tool(&book_flight(), Some("session-1"), &ctx)
+            .await;
+        assert!(
+            outcome.is_ok(),
+            "a completed result ({result_type:?}) must be relayed: {:?}",
+            outcome.err()
+        );
+    }
+}

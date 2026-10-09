@@ -71,10 +71,11 @@ async fn n1b_a_spend_refusal_consumes_no_nonce_on_mcp() {
     for backend in BACKENDS {
         let fx = fixture_hardened_signed_built(Answer::Ok, true, budget).await;
         let who = ("k-budget", backend);
-        let _ = signed_invoke(&fx, who, &format!("{backend}-n1"), json!({})).await;
+        let (_, first) = signed_invoke(&fx, who, &format!("{backend}-n1"), json!({})).await;
+        assert!(first.get("error").is_none(), "{backend}: {first}");
         let n2 = format!("{backend}-n2");
         let (status, refused) = signed_invoke(&fx, who, &n2, json!({})).await;
-        assert!(refused.get("error").is_some(), "{backend}: {refused}");
+        assert_eq!(code(&refused), Some(-32003), "{backend}: {refused}");
         let (again_status, again) = signed_invoke(&fx, who, &n2, json!({})).await;
         assert_eq!(
             (again_status, code(&again)),
