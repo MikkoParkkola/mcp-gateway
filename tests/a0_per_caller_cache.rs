@@ -423,7 +423,7 @@ async fn post_direct(
         "params": {
             "name": TOOL,
             "arguments": { "a": 1 },
-            "_meta": { IDEMPOTENCY_KEY_META: key }
+            "_meta": client_meta(Some(key))
         }
     });
     send(state, &format!("/mcp/{BACKEND}"), &body, caller).await

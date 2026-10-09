@@ -90,7 +90,8 @@ header checks: a revision served in neither era, an unsupported modern revision,
 single-occurrence and header/body mirroring checks (`handlers.rs:808-934`). That block moves
 into one function both routes call, unchanged for `/mcp`, so the two cannot drift. A request whose era is
 `Legacy` is refused with the same 403 + `-32600`, unless it is an `initialize` declaring
-elicitation. This classification runs only under `hardened`; standard keeps today's path.
+elicitation. This Legacy gate runs only under `hardened`; since MIK-8040 the
+`/mcp` request checks above run on the direct route under every posture, before dispatch.
 Notifications from such a client are refused too, with the same 403 and body; the gate runs before the notification branch.
 
 **Row 11.** At `handlers.rs:1523-1527` the policy is `for_modern()` when the request is modern

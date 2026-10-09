@@ -746,3 +746,26 @@ Neither gate is reachable today — `router/handlers.rs` refuses every retry bef
 is built, so the idempotency cache is never populated on this path. The repair is recorded as a
 design event rather than left to the criterion that will wire it, because a future reader finding
 `!stopped_to_ask` where the obvious spelling is `interim.is_none()` needs the reason in writing.
+
+### DE-11 — the state-only round counter stays with the worker, and why that is the design (MIK-7661)
+
+The task input-round design (MIK-7311, §4.1b and §4.3b) put the count of consecutive state-only
+rounds on the stored record and capped state-only continuations against the record byte cap. The
+code keeps the counter in the worker's loop (`execution/input_round.rs`, `STATE_ONLY_CEILING`) and
+never writes a state-only round to the store. That is now the design, for three reasons:
+
+- A state-only round is resumed in place by the worker that received it. Nothing about it is
+  written: the continuation goes back to the backend in memory and never reaches the record, so
+  there is nothing for the byte cap to bound.
+- The count only has to survive as long as the worker. A round that asks the client ends that
+  worker, and the next worker starting at zero is the reset the design asked for. A restart
+  never resumes a worker's loop: an interrupted row is settled by the I3 table, or, when it is a
+  managed backend's `working` row with an upstream handle, retained as `working` for that
+  backend's own read (`recovery_event`). Neither path continues the state-only loop, so no later
+  process could ever read a stored count.
+- Persisting it would add a record field and a write per state-only round to protect against a
+  loop the ceiling already stops within one worker.
+
+The byte cap still guards everything that is written: a round that asks the client is refused when
+it is produced if its shortest answer would not fit, measured through the same transition
+`provide_input` applies (MIK-7661.GH2418.1).

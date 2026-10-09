@@ -229,36 +229,36 @@ where
     Fut: std::future::Future<Output = Result<T, E>>,
 {
     let failures = log.append_failures();
-    let mut stalls = log.stall_answers_for_test();
-    let deadline = tokio::time::Instant::now() + HEAL_BOUND_FOR_TEST;
-    loop {
-        let answer = attempt().await;
-        // Only a stall may be retried: this attempt timed out or was refused
-        // while stalled. A refusal with no stall behind it fails at once.
-        let stalled = log.stall_answers_for_test() > stalls;
-        stalls = log.stall_answers_for_test();
-        assert!(
-            answer.is_ok() || stalled,
-            "refused without a stall: {:?}",
-            answer.as_ref().err()
-        );
-        // A stalled write that lands as a failure is counted here even when
-        // a later attempt succeeds.
-        assert_eq!(
-            log.append_failures(),
-            failures,
-            "an append failed, not a stall: {:?}",
-            answer.as_ref().err()
-        );
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "not recovered within {HEAL_BOUND_FOR_TEST:?}: {:?}",
-            answer.as_ref().err()
-        );
-        if let Ok(value) = answer {
-            return value;
+    let stalls = std::cell::Cell::new(log.stall_answers_for_test());
+    let waited = crate::test_wait::wait_until(HEAL_BOUND_FOR_TEST, || {
+        let pending = attempt();
+        let stalls = &stalls;
+        async move {
+            let answer = pending.await;
+            // Only a stall may be retried: this attempt timed out or was
+            // refused while stalled. A stalled write that lands as a failure
+            // is counted even when a later attempt succeeds.
+            let now = log.stall_answers_for_test();
+            let stalled = now > stalls.replace(now);
+            assert_eq!(
+                log.append_failures(),
+                failures,
+                "an append failed, not a stall: {:?}",
+                answer.as_ref().err()
+            );
+            match answer {
+                Ok(value) => std::ops::ControlFlow::Break(value),
+                Err(refused) => {
+                    assert!(stalled, "refused without a stall: {refused:?}");
+                    std::ops::ControlFlow::Continue(format!("{refused:?}"))
+                }
+            }
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    })
+    .await;
+    match waited {
+        Ok(value) => value,
+        Err(last) => panic!("not recovered within {HEAL_BOUND_FOR_TEST:?}: {last}"),
     }
 }
 
