@@ -44,7 +44,7 @@ pub struct ProjectionDecision {
     pub arm: &'static str,
 }
 
-/// Deterministic session-bucketing hash: FNV-1a accumulation followed by the
+/// Deterministic bucketing hash of the experiment key: FNV-1a accumulation followed by the
 /// `MurmurHash3` `fmix64` finalizer.
 ///
 /// Stable across process restarts (no random seed, unlike
@@ -53,7 +53,7 @@ pub struct ProjectionDecision {
 /// bit reduces to input byte-parity (the prime is odd), and even its high bit
 /// skews badly (empirically ~80/20 on `mcp-session-N`-style ids). `fmix64`
 /// diffuses every input bit across all 64 output bits, so the low-bit split in
-/// [`projection_decision`] is an unbiased ~50/50 for arbitrary session ids.
+/// [`projection_decision`] is an unbiased ~50/50 for arbitrary keys.
 fn session_hash(bytes: &[u8]) -> u64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -79,6 +79,9 @@ fn session_hash(bytes: &[u8]) -> u64 {
 /// - [`ProjectionMode::Experimental`] → sticky 50/50 split by experiment key
 ///   (`MetaMcpCallerContext::experiment_key`); a missing key is assigned to
 ///   `control` (no projection), so a keyless call never silently changes shape.
+///
+/// The second argument is that experiment key, the caller key: it is never a
+/// session id (MIK-7997), whatever the parameter's older name says.
 #[must_use]
 pub fn projection_decision(mode: ProjectionMode, session_id: Option<&str>) -> ProjectionDecision {
     match mode {
@@ -112,7 +115,8 @@ pub fn projection_decision(mode: ProjectionMode, session_id: Option<&str>) -> Pr
 /// key is otherwise just `server:tool:hash(args)`, so one arm's shape would be
 /// served to the other. This returns `"#arm=treatment"` / `"#arm=control"` to
 /// append to those keys, isolating arms while still deduping within an arm.
-/// `off` / `on` return an empty string, leaving their keys byte-identical.
+/// `off` / `on` return an empty string, leaving their keys byte-identical. The
+/// arm is the one [`projection_decision`] gives the same experiment key.
 #[must_use]
 pub fn projection_key_suffix(mode: ProjectionMode, session_id: Option<&str>) -> String {
     match mode {
