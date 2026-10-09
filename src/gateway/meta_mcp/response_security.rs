@@ -198,7 +198,7 @@ impl super::MetaMcp {
         &self,
         mut response: crate::protocol::JsonRpcResponse,
         context: &ResponseDeliveryContext<'_>,
-        router: Option<&crate::security::firewall::Firewall>,
+        router: Option<&super::invoke::egress::Firewall>,
     ) -> crate::protocol::JsonRpcResponse {
         use crate::protocol::JsonRpcResponse;
 
