@@ -108,6 +108,14 @@ fn clone_bytes(size: usize) -> u64 {
     measured.bytes
 }
 
+/// A byte count as `f64`, exactly: every count here is a few megabytes.
+fn exact<T: TryInto<u32>>(bytes: T) -> f64
+where
+    T::Error: std::fmt::Debug,
+{
+    f64::from(bytes.try_into().expect("a byte count under 4 GiB"))
+}
+
 #[test]
 fn one_invoke_copies_its_arguments_at_most_twice() {
     if isolate(&test_path("one_invoke_copies_its_arguments_at_most_twice")) {
@@ -119,11 +127,11 @@ fn one_invoke_copies_its_arguments_at_most_twice() {
         dispatch_bytes(&state, SMALL).await;
         dispatch_bytes(&state, LARGE).await;
         let dispatch =
-            dispatch_bytes(&state, LARGE).await as f64 - dispatch_bytes(&state, SMALL).await as f64;
-        let unit = clone_bytes(LARGE) as f64 - clone_bytes(SMALL) as f64;
+            exact(dispatch_bytes(&state, LARGE).await) - exact(dispatch_bytes(&state, SMALL).await);
+        let unit = exact(clone_bytes(LARGE)) - exact(clone_bytes(SMALL));
         // Positive control: the meter sees a deep copy at about its size.
         assert!(
-            unit >= (LARGE - SMALL) as f64,
+            unit >= exact(LARGE - SMALL),
             "one explicit clone of a {LARGE} B argument measured {unit} B: the meter is blind"
         );
         // The body parse builds the arguments once; it is not a copy of them.
