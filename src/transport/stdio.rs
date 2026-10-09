@@ -43,7 +43,7 @@ pub(crate) use env::configure_child_environment;
 /// Stdio transport for subprocess MCP servers
 pub struct StdioTransport {
     /// Child process
-    child: Mutex<Option<ChildTree>>,
+    child: parking_lot::Mutex<reaper::ChildSlot>,
     /// Pending requests waiting for response
     pending: dashmap::DashMap<String, oneshot::Sender<JsonRpcResponse>>,
     /// Request ID counter
@@ -162,6 +162,13 @@ impl StdioTransport {
         self.failure.begin();
 
         let cmd = self.spawn_command()?;
+        // The reaper exists before any child does (MIK-7923, design P4).
+        reaper::ensure_started()
+            .map_err(|error| Error::Transport(format!("stdio reaper unavailable: {error}")))?;
+        // Taken before the spawn: from spawn to install there is no await, so a
+        // retire lands either before the spawn (the install guard refuses) or
+        // after the install (`kill_tree_now` reaches the tree).
+        let mut writer = self.writer.lock().await;
         let mut child = spawn_in_own_tree(cmd)?;
 
         let stdin = child
@@ -178,13 +185,25 @@ impl StdioTransport {
             .take()
             .ok_or_else(|| Error::Transport("Failed to get stderr".to_string()))?;
 
-        let mut writer = self.writer.lock().await;
         // Renewed under the stdin lock, so a write never pairs new stdin with
         // the token a previous `close()` cancelled.
         *self.shutdown.lock() = tokio_util::sync::CancellationToken::new();
+        {
+            let mut slot = self.child.lock();
+            if slot.retired {
+                // Retired while this start ran: the fresh tree is ended, never
+                // installed (MIK-7923, design P5).
+                slot.track(ChildTree::new(child));
+                drop(slot);
+                *writer = None;
+                return Err(Error::BackendNotFound(
+                    "stdio backend retired while it started".to_string(),
+                ));
+            }
+            slot.tree = Some(ChildTree::new(child));
+        }
         *writer = Some(stdin);
         drop(writer);
-        *self.child.lock().await = Some(ChildTree::new(child));
         let eof_tx = Arc::new(tokio::sync::watch::channel(false).0);
         self.start.begin(Arc::clone(&eof_tx));
 
@@ -232,9 +251,9 @@ impl StdioTransport {
                         // cannot be resynchronised, so it is treated as gone.
                         error!(error = %e, "Error reading from stdout");
                         if let Some(transport) = transport.upgrade()
-                            && let Some(child) = transport.child.lock().await.as_mut()
+                            && let Some(tree) = transport.child.lock().tree.as_mut()
                         {
-                            child.start_kill();
+                            tree.start_kill();
                         }
                         break;
                     }
@@ -674,9 +693,9 @@ impl Transport for StdioTransport {
         // pipe — the core reason a tripped breaker never recovered. Confirm real
         // liveness with a non-blocking waitpid. `try_lock` keeps this sync
         // method from blocking; on lock contention we trust the flag.
-        if let Ok(mut guard) = self.child.try_lock()
-            && let Some(child) = guard.as_mut()
-            && child.exited()
+        if let Some(mut slot) = self.child.try_lock()
+            && let Some(tree) = slot.tree.as_mut()
+            && tree.exited()
         {
             // Child has exited; reconcile the cached flag so callers and future
             // checks see the truth.
@@ -686,6 +705,10 @@ impl Transport for StdioTransport {
         true
     }
 
+    fn kill_tree_now(&self) {
+        self.retire_tree_now();
+    }
+
     async fn close(&self) -> Result<()> {
         self.connected.store(false, Ordering::Relaxed);
 
@@ -693,10 +716,10 @@ impl Transport for StdioTransport {
         if let Ok(mut writer) = self.writer.try_lock() {
             *writer = None;
         }
-        if let Some(ref mut child) = *self.child.lock().await {
-            child.finish().await;
-        }
+        // The per-start stdin token first, then the tree to the reaper,
+        // waited for (bounded) with any reap a retire started earlier.
         self.shutdown.lock().cancel();
+        self.end_tree().await;
         tree::clear_writer(&self.writer).await;
 
         Ok(())
@@ -705,6 +728,8 @@ impl Transport for StdioTransport {
 
 #[path = "stdio_child_tree.rs"]
 mod child_tree;
+#[path = "stdio_reaper.rs"]
+mod reaper;
 #[path = "stdio_tree.rs"]
 mod tree;
 use child_tree::ChildTree;

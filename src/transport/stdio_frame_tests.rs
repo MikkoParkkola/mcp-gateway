@@ -113,7 +113,7 @@ async fn dropping_a_live_transport_takes_its_descendants_with_it() {
     let mut cmd = tokio::process::Command::new("sh");
     cmd.arg("-c")
         .arg(format!("sleep 120 & echo $! > {}; wait", pidfile.display()));
-    *transport.child.lock().await = Some(super::ChildTree::new(
+    transport.child.lock().tree = Some(super::ChildTree::new(
         super::spawn_in_own_tree(cmd).unwrap(),
     ));
     let mut pid = String::new();

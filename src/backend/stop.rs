@@ -13,6 +13,28 @@ use crate::Result;
 use crate::transport::Transport;
 
 impl Backend {
+    /// End every process tree this backend's stdio transports own, now,
+    /// synchronously and without any Tokio runtime (MIK-7923, design P0).
+    ///
+    /// Under one hold of the cleanup lock: latch `stopping` (no later start
+    /// spawns) and upgrade every live transport, pooled or not. Nothing is
+    /// taken from the pool: [`Self::stop`] still closes every transport under
+    /// its own deadline, and each close waits for the reap this started.
+    pub(crate) fn retire_now(&self) {
+        let live: Vec<Arc<dyn Transport>> = {
+            let mut cleanups = self.replaced_transport_cleanups.lock();
+            cleanups.stopping = true;
+            cleanups
+                .live
+                .iter()
+                .filter_map(std::sync::Weak::upgrade)
+                .collect()
+        };
+        for transport in live {
+            transport.kill_tree_now();
+        }
+    }
+
     /// Stop the backend, draining every pooled transport slot.
     ///
     /// # Errors

@@ -170,7 +170,7 @@ async fn t4_a_child_that_closes_stdout_and_stays_is_reported_and_killed() {
     let err = start_err(&t).await;
     assert!(err.contains("closed its stdout before initialize"), "{err}");
     assert!(
-        t.child.lock().await.is_none(),
+        t.child.lock().tree.is_none(),
         "the child handle is still held"
     );
 }

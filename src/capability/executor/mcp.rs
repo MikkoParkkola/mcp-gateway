@@ -306,6 +306,10 @@ fn stop_all(children: Vec<Child>) {
     // entered but never driven, and a stop spawned there would never run.
     let current = tokio::runtime::Handle::try_current().ok();
     for child in children {
+        // First, synchronously and without any runtime: end every process tree
+        // the child's backend owns, pooled or held by a busy caller. The async
+        // stop below may never run on an idle or dropped runtime (MIK-7923).
+        child.backend.retire_now();
         let Some(handle) = child.runtime.clone().or_else(|| current.clone()) else {
             continue;
         };

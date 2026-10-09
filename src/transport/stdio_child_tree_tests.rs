@@ -5,8 +5,9 @@
 //! A5: one signal per phase, close then pre-reap, so a finish sends two.
 //!
 //! Oracle: `group_signals_sent` (signals actually sent) and `signals_refused`,
-//! read off the tree, plus the kernel's own view of the leader (`waitid`
-//! NOWAIT in the test) and of a descendant planted in the group.
+//! read off the tree while it is in the slot, or off the reaper's record once
+//! a close or retire handed it over (MIK-7923), plus the kernel's own view of
+//! the leader (`waitid` NOWAIT in the test) and of a descendant in the group.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -16,7 +17,7 @@ use std::time::Duration;
 use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
 
 use super::super::{PROTOCOL_VERSION, StdioTransport};
-use super::{ChildTree, Leader};
+use super::{ChildTree, Counts, Leader, Reap, native_child};
 use crate::transport::Transport;
 
 const ROW_LIMIT: Duration = Duration::from_secs(5);
@@ -56,7 +57,30 @@ const DESCENDANT: &str = "sleep 60 </dev/null >/dev/null 2>&1 & echo $! > d.pid"
 
 /// Run `f` on the started tree.
 async fn with_tree<T>(t: &StdioTransport, f: impl FnOnce(&mut ChildTree) -> T) -> T {
-    f(t.child.lock().await.as_mut().expect("a started tree"))
+    f(t.child.lock().tree.as_mut().expect("a started tree"))
+}
+
+/// The reaper's record of the tree whose leader was `pid`, once it finished.
+async fn finished(pid: Pid) -> Counts {
+    let raw = u32::try_from(pid.as_raw_nonzero().get()).expect("pid fits");
+    let mut found = None;
+    poll_until("the reaper finishes the tree", || {
+        found = super::super::reaper::FINISHED
+            .lock()
+            .iter()
+            .rev()
+            .find(|counts| counts.pid == Some(raw))
+            .copied();
+        found.is_some()
+    })
+    .await;
+    found.expect("a finished record")
+}
+
+/// `(sent, refused)` of the tree the reaper finished for leader `pid`.
+async fn sent_after(pid: Pid) -> (usize, usize) {
+    let counts = finished(pid).await;
+    (counts.sent, counts.refused)
 }
 
 fn pid_of(raw: u32) -> Pid {
@@ -148,7 +172,7 @@ async fn close_after_the_exit_signals_each_phase_once_then_reaps() {
     let child = descendant(w.path()).await;
     let pid = leader_exited(&t).await;
     t.close().await.expect("close");
-    assert_eq!(sent(&t).await, (2, 0));
+    assert_eq!(sent_after(pid).await, (2, 0));
     assert_eq!(kernel_view(pid), None, "the leader is reaped by close");
     gone(child).await;
 }
@@ -157,13 +181,20 @@ async fn close_after_the_exit_signals_each_phase_once_then_reaps() {
 #[tokio::test]
 async fn a_second_close_sends_nothing() {
     let (_w, t) = started("exit 7", None).await;
-    leader_exited(&t).await;
+    let pid = leader_exited(&t).await;
     t.close().await.expect("close");
-    let first = with_tree(&t, |c| c.status()).await;
+    let first = finished(pid).await.status;
     assert_eq!(first.and_then(|s| s.code()), Some(7));
     t.close().await.expect("second close");
-    assert_eq!(sent(&t).await, (2, 0));
-    assert_eq!(with_tree(&t, |c| c.status()).await, first);
+    assert_eq!(sent_after(pid).await, (2, 0));
+    let raw = u32::try_from(pid.as_raw_nonzero().get()).expect("pid fits");
+    let records = super::super::reaper::FINISHED
+        .lock()
+        .iter()
+        .filter(|counts| counts.pid == Some(raw))
+        .count();
+    assert_eq!(records, 1, "the second close handed nothing over");
+    assert_eq!(t.child.lock().last_status(), first);
 }
 
 /// P1: the probe's mapping. EINTR and an unexpected errno cannot be forced
@@ -187,10 +218,10 @@ async fn the_probe_reads_a_real_leader() {
     let (w, t) = started("while [ ! -f go ]; do sleep 0.05; done\nexit 0", None).await;
     assert_eq!(with_tree(&t, |c| c.leader_state()).await, Leader::Running);
     std::fs::write(w.path().join("go"), "").expect("release the leader");
-    leader_exited(&t).await;
+    let pid = leader_exited(&t).await;
     assert_eq!(with_tree(&t, |c| c.leader_state()).await, Leader::Zombie);
     t.close().await.expect("close");
-    assert_eq!(with_tree(&t, |c| c.leader_state()).await, Leader::Gone);
+    assert_eq!(kernel_view(pid), None, "reaped: the leader's ids are gone");
 }
 
 /// T4: the reader-error kill is the close phase's one signal; the close
@@ -211,37 +242,30 @@ async fn a_reader_error_then_close_adds_only_the_pre_reap_signal() {
     })
     .await;
     t.close().await.expect("close");
-    assert_eq!(sent(&t).await, (2, 0));
+    assert_eq!(sent_after(pid).await, (2, 0));
     assert_eq!(kernel_view(pid), None, "the leader is reaped by close");
     gone(child).await;
 }
 
-/// T7: the gate closes before the wait. A close cancelled inside its wait,
-/// then a foreign reap, then the drop path: no third signal and no refusal
-/// (the drop path stops at the gate, never reaching the probe).
+/// T7: once handed over, the tree is the reaper's: a close cancelled while it
+/// waits still leaves the group ended, each phase signalled once, then reaped.
 #[tokio::test]
-async fn a_cancelled_close_leaves_the_gate_shut() {
+async fn a_cancelled_close_still_ends_the_tree() {
     let (w, t) = started(&format!("{DESCENDANT}\nexit 0"), None).await;
     let child = descendant(w.path()).await;
-    leader_exited(&t).await;
-    let (reached, release) = with_tree(&t, |c| c.after_close_before_wait.arm()).await;
+    let pid = leader_exited(&t).await;
     let closer = {
         let t = Arc::clone(&t);
         tokio::spawn(async move { t.close().await })
     };
-    tokio::time::timeout(ROW_LIMIT, reached.notified())
-        .await
-        .expect("close reaches the wait");
+    poll_until("close hands the tree over", || {
+        t.child.lock().tree.is_none()
+    })
+    .await;
     closer.abort();
     let _ = closer.await;
-    drop(release);
-    let mut guard = t.child.lock().await;
-    let tree = guard.as_mut().expect("a started tree");
-    tree.reap_bypassing_tree().await;
-    // What ChildTree's Drop runs.
-    tree.start_kill();
-    assert_eq!((tree.group_signals_sent, tree.signals_refused), (2, 0));
-    drop(guard.take());
+    assert_eq!(sent_after(pid).await, (2, 0));
+    assert_eq!(kernel_view(pid), None, "the reaper reaped the leader");
     gone(child).await;
 }
 
@@ -253,17 +277,12 @@ async fn a_foreign_reap_leaks_rather_than_signals() {
     let heartbeat = "(while :; do echo x >> hb; sleep 0.1; done) </dev/null >/dev/null 2>&1 &";
     let (w, t) = started(&format!("{heartbeat} echo $! > d.pid\nexit 0"), None).await;
     let child = descendant(w.path()).await;
-    leader_exited(&t).await;
-    t.child
-        .lock()
-        .await
-        .as_mut()
-        .expect("tree")
-        .reap_bypassing_tree()
-        .await;
+    let pid = leader_exited(&t).await;
+    let mut tree = t.child.lock().tree.take().expect("tree");
+    tree.reap_bypassing_tree().await;
+    t.child.lock().tree = Some(tree);
     t.close().await.expect("close");
-    with_tree(&t, ChildTree::start_kill).await;
-    let (signals, refused) = sent(&t).await;
+    let (signals, refused) = sent_after(pid).await;
     // Proof of life before cleanup, so a failed assertion still cleans up.
     let beats = || std::fs::metadata(w.path().join("hb")).map_or(0, |m| m.len());
     let before = beats();
@@ -306,27 +325,38 @@ async fn close_ends_a_group_that_keeps_forking() {
     assert!(survivors.is_empty(), "outlived close: {survivors:?}");
 }
 
-/// A finish cancelled inside the pre-reap grace has not had that phase: a
-/// retried finish still sends the pre-reap signal.
+/// `reap_step` driven by hand, as the reaper drives it: the close signal and
+/// the A5 signal once each, then the reap goes through the native tokio child,
+/// so tokio recorded the exit and its kill_on_drop is disarmed (MIK-7923).
 #[tokio::test]
-async fn a_retried_finish_still_sends_the_pre_reap_signal() {
+async fn a_stepped_tree_signals_each_phase_once_then_reaps_natively() {
     let (w, t) = started(
         &format!("{DESCENDANT}\nwhile IFS= read -r l; do :; done"),
         None,
     )
     .await;
     let child = descendant(w.path()).await;
-    let mut guard = t.child.lock().await;
-    let tree = guard.as_mut().expect("a started tree");
-    let (reached, _release) = tree.in_pre_reap_grace.arm();
-    tokio::select! {
-        _ = tree.finish() => panic!("finish passed the armed grace"),
-        () = reached.notified() => {} // parked: dropping finish cancels it
-    }
-    assert_eq!(tree.group_signals_sent, 1, "only the close signal so far");
-    tree.finish().await;
+    let pid = leader(&t).await;
+    let mut tree = t.child.lock().tree.take().expect("a started tree");
+    let deadline = std::time::Instant::now() + ROW_LIMIT;
+    let status = loop {
+        match tree.reap_step(std::time::Instant::now()) {
+            Reap::Done(status) => break status,
+            Reap::Pending => {
+                assert!(std::time::Instant::now() < deadline, "reaped in time");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+    };
+    assert!(status.is_some(), "reaped, not abandoned");
     assert_eq!((tree.group_signals_sent, tree.signals_refused), (2, 0));
-    drop(guard);
+    let native = native_child(&mut *tree.wrapper).expect("a tokio child at the bottom");
+    assert!(
+        native.try_wait().expect("try_wait").is_some(),
+        "tokio recorded the exit, so kill_on_drop is disarmed"
+    );
+    assert_eq!(kernel_view(pid), None, "the leader is reaped");
+    drop(tree);
     gone(child).await;
 }
 
@@ -338,10 +368,18 @@ async fn closing_ten_live_backends_does_not_add_a_grace_each() {
     for _ in 0..10 {
         started_ones.push(started("while IFS= read -r l; do :; done", None).await);
     }
-    let began = std::time::Instant::now();
+    let mut pids = Vec::new();
     for (_w, t) in &started_ones {
+        pids.push(leader(t).await);
+    }
+    let began = std::time::Instant::now();
+    for ((_w, t), pid) in started_ones.iter().zip(&pids) {
         t.close().await.expect("close");
-        assert_eq!(sent(t).await, (2, 0), "close and pre-reap both signalled");
+        assert_eq!(
+            sent_after(*pid).await,
+            (2, 0),
+            "close and pre-reap both signalled"
+        );
     }
     let took = began.elapsed();
     assert!(took < Duration::from_secs(3), "ten closes took {took:?}");
@@ -376,7 +414,7 @@ async fn a_failed_start_signals_the_group_before_the_reap() {
     assert_eq!(t.exit_status().and_then(|s| s.code()), Some(3));
     assert_eq!(kernel_view(pid_of(leader)), None, "the leader is reaped");
     assert_eq!(
-        sent(&t).await,
+        sent_after(pid_of(leader)).await,
         (2, 0),
         "close and pre-reap, before the reap"
     );

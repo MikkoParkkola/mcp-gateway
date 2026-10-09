@@ -74,7 +74,7 @@ impl StdioTransport {
         assigned_cache: Option<PathBuf>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            child: Mutex::new(None),
+            child: parking_lot::Mutex::new(super::reaper::ChildSlot::default()),
             pending: dashmap::DashMap::new(),
             request_id: AtomicU64::new(1),
             connected: AtomicBool::new(false),
@@ -138,18 +138,23 @@ impl StdioTransport {
     /// the exit is reaped is `None`. This is only called on a failed start, so
     /// the wait can never delay a backend that is working.
     pub(super) async fn settle_child_exit(&self) {
-        let mut guard = self.child.lock().await;
-        let Some(child) = guard.as_mut() else {
-            return;
-        };
         // Exit observed without reaping, then the group ends before the reap
-        // (MIK-8080). After `close`, the status its finish recorded.
-        if child.status().is_none()
-            && !super::child_tree::wait_exited(child, EXIT_DRAIN_GRACE).await
-        {
+        // (MIK-8080). After `close`, the status its reap recorded. The tree
+        // leaves the slot only for the reaper (MIK-7923).
+        let (has_tree, recorded) = {
+            let slot = self.child.lock();
+            (slot.tree.is_some(), slot.last_status())
+        };
+        if !has_tree {
+            if let Some(status) = recorded {
+                self.failure.record_exit(Some(status));
+            }
             return;
         }
-        if let Some(status) = child.finish().await {
+        if !self.wait_exited_in_slot(EXIT_DRAIN_GRACE).await {
+            return;
+        }
+        if let Some(status) = self.end_tree().await {
             self.failure.record_exit(Some(status));
         }
     }
