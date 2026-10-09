@@ -78,6 +78,9 @@ pub(crate) fn register(continuation: &Arc<ContinuationState>) {
         counts.registered.fetch_add(1, Ordering::Relaxed);
     } else {
         counts.unscoped.fetch_add(1, Ordering::Relaxed);
+        // Exported, so a production route that misses its scope shows to the
+        // operator: nonzero means some slots only ever expire.
+        telemetry_metrics::counter!("mcp_continuation_unscoped_mint_total").increment(1);
         warn!("A continuation slot was minted outside any request scope");
     }
 }
