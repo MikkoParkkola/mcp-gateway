@@ -24,7 +24,7 @@ fn set(dirs: &[&Path]) -> BTreeSet<PathBuf> {
 /// Point `link` at `target` atomically, the way a deploy does: a new link
 /// renamed over the old one.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn retarget(link: &Path, target: &Path) {
+pub(super) fn retarget(link: &Path, target: &Path) {
     // Named from the whole file name, not `with_extension`: for a dot-led
     // name like `..data` that can land on the link itself.
     let name = link.file_name().expect("link name").to_string_lossy();
@@ -295,7 +295,7 @@ pub(crate) mod real_watcher {
         }
 
         /// Wait until the ledger holds `dir`: the watch is in place.
-        async fn wait_watched(&self, dir: &Path) {
+        pub(crate) async fn wait_watched(&self, dir: &Path) {
             let dir = canonical(dir);
             tokio::time::timeout(Duration::from_secs(10), async {
                 while !self.chain.watched().contains(&dir) {
@@ -613,37 +613,6 @@ pub(crate) mod real_watcher {
         );
         std::fs::write(a.join("cfg.yaml"), "a: 1\n").unwrap();
         h.wait_watched(&a).await;
-        let _ = h.shutdown.send(());
-    }
-
-    /// T18c (MIK-8181): a chain broken at startup, named through a linked
-    /// directory higher up (macOS `/var` is one), stays heard after its
-    /// repair. The startup watch must be the directory's canonical name, as
-    /// every other ledger entry is; a second spelling of one directory is one
-    /// inotify watch, and unwatching the stale spelling would drop the watch
-    /// the repaired chain still needs.
-    #[tokio::test]
-    async fn t18c_a_repaired_chain_named_through_a_linked_directory_stays_heard() {
-        let root = tempfile::tempdir().expect("root");
-        let real = root.path().join("real");
-        let (a, b, c) = (real.join("a"), real.join("b"), real.join("c"));
-        for dir in [&a, &b, &c] {
-            std::fs::create_dir_all(dir).unwrap();
-        }
-        std::fs::write(b.join("cfg.yaml"), "b: 1\n").unwrap();
-        symlink(&real, root.path().join("alias")).unwrap();
-        symlink(a.join("cfg.yaml"), c.join("l")).unwrap();
-        let mut h = start(&root.path().join("alias").join("c").join("l"));
-        h.wait_wakes_above(0).await;
-        std::fs::write(a.join("cfg.yaml"), "a: 1\n").unwrap();
-        h.wait_watched(&a).await;
-        h.drain_idle().await;
-
-        retarget(&c.join("l"), &b.join("cfg.yaml"));
-        assert!(
-            h.triggered_within(10).await,
-            "a retarget in the link's directory was not heard after the repair"
-        );
         let _ = h.shutdown.send(());
     }
 
