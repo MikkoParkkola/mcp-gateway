@@ -225,12 +225,11 @@ impl DashboardBootstrap {
         let Some(times) = sessions.get_mut(handle) else {
             return SessionCheck::Unknown;
         };
+        if wall_unreadable(now) {
+            return SessionCheck::ClockUnreadable;
+        }
         if times.expired(now, limits) {
-            // Refused on an unreadable wall clock, but kept: it may still be
-            // live once the clock reads again (MIK-8202).
-            if !wall_unreadable(now) {
-                sessions.remove(handle);
-            }
+            sessions.remove(handle);
             return SessionCheck::Expired;
         }
         if touch == Touch::Yes {
@@ -443,6 +442,9 @@ pub(crate) enum SessionCheck {
     Expired,
     /// Never issued here, already removed, or from before a restart.
     Unknown,
+    /// Not judged: the wall clock reads before 1970. Refused for now and
+    /// kept, since it may be live once the clock reads (MIK-8202).
+    ClockUnreadable,
 }
 
 impl Default for DashboardBootstrap {

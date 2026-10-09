@@ -305,7 +305,7 @@ fn a_session_on_a_clock_before_the_epoch_is_refused() {
     };
     assert_eq!(
         b.check_session(&h, stepped, &LIMITS, Touch::Yes),
-        SessionCheck::Expired,
+        SessionCheck::ClockUnreadable,
         "a clock before 1970 kept a dashboard session"
     );
     // Refused, never deleted: neither the check nor a sign-in's sweep on
