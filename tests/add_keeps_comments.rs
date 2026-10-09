@@ -217,10 +217,14 @@ fn several_backends_at_once_keep_comments() {
     let mut config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
     config.backends.insert("one".into(), echo_backend());
     config.backends.insert("two".into(), echo_backend());
-    let kept = mcp_gateway::config_persistence::edit_config(&path, |c| {
-        *c = config.clone();
-        Ok(())
-    })
+    let kept = mcp_gateway::config_persistence::edit_config(
+        &path,
+        mcp_gateway::config_persistence::CommentLoss::Refuse,
+        |c| {
+            *c = config.clone();
+            Ok(())
+        },
+    )
     .map(drop);
     assert_eq!(kept, Ok(()));
     let written = std::fs::read_to_string(&path).expect("read");
@@ -243,10 +247,14 @@ fn a_stale_multi_change_is_refused_not_spliced() {
     stale.backends.insert("b".into(), echo_backend());
     let current = format!("{NOTED}  c:\n    command: c\n");
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, &current).expect("write");
-    let refusal = edit_config(&path, |c| {
-        *c = stale.clone();
-        Ok(())
-    })
+    let refusal = edit_config(
+        &path,
+        mcp_gateway::config_persistence::CommentLoss::Refuse,
+        |c| {
+            *c = stale.clone();
+            Ok(())
+        },
+    )
     .map(drop)
     .expect_err("refused");
     assert!(

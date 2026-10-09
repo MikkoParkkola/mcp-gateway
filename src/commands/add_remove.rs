@@ -288,9 +288,16 @@ mod tests {
         .expect("write");
         let at = path.clone();
         let mutated = mcp_gateway::config_reload::mutate_config_and_reload(&path, None, |config| {
-            let cli = std::thread::spawn(move || run_remove_command("b", &at, CommentLoss::Refuse));
-            // Long enough for the CLI to load and queue on the lock.
-            std::thread::sleep(std::time::Duration::from_millis(300));
+            let queued = mcp_gateway::gateway::test_helpers::when_waiting_for_config_lock(&at);
+            let remove = at.clone();
+            let cli =
+                std::thread::spawn(move || run_remove_command("b", &remove, CommentLoss::Refuse));
+            assert!(
+                queued
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .is_ok(),
+                "remove never waited for the config lock"
+            );
             let x = serde_yaml::from_str("command: x\n").expect("backend");
             config.backends.insert("x".into(), x);
             Ok::<_, String>(cli)

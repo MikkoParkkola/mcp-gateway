@@ -764,7 +764,7 @@ mod tests {
         write(&path, flow).expect("write");
         let two: Config = serde_yaml::from_str("backends:\n  a: {command: a}\n  b: {command: b}\n")
             .expect("config");
-        let refusal = edit_config(&path, |c| {
+        let refusal = edit_config(&path, crate::config_persistence::CommentLoss::Refuse, |c| {
             *c = two.clone();
             Ok(())
         })
@@ -778,7 +778,7 @@ mod tests {
         let block = "backends:\n  a:  # kept by hand\n    command: a\n";
         write(&path, block).expect("write");
         assert_eq!(
-            edit_config(&path, |c| {
+            edit_config(&path, crate::config_persistence::CommentLoss::Refuse, |c| {
                 *c = two.clone();
                 Ok(())
             })

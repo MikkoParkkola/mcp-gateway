@@ -7,19 +7,11 @@
 use std::path::Path;
 
 use mcp_gateway::config::Config;
-use mcp_gateway::config_persistence::{edit_config, write_config, write_config_text};
+pub use mcp_gateway::config_persistence::CommentLoss;
+use mcp_gateway::config_persistence::{edit_config, edit_config_text};
 
 use super::backend_url_keys::{UrlRewrite, rewrite_url_aliases};
 use super::retired_config_keys::Retired;
-
-/// What a CLI write does when it cannot keep the file's comments.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CommentLoss {
-    /// Rewrite the whole file (`--force`).
-    Rewrite,
-    /// Write nothing and say which comment lines would be lost.
-    Refuse,
-}
 
 /// `--force` rewrites a file whose comments cannot be kept; without it that
 /// write is refused and nothing is written.
@@ -31,60 +23,29 @@ pub fn comment_loss(force: bool) -> CommentLoss {
     }
 }
 
-/// How [`edit_config`] starts a comment-loss refusal. A lock
-/// refusal also starts "Not saved:", and `--force` must not override that one.
-const REFUSAL: &str = "Not saved: this edit cannot be written into";
-
 /// Load `path`, apply `edit`, and write the result; the error is a message
 /// ready to print. The load, `edit` and the write share one hold of the
 /// config lock, so another writer's change is never overwritten.
 ///
-/// Every write is tried as a refusing one first, so `--force` still names
-/// the comment lines it drops before it rewrites the file. A write that
-/// keeps the file's comments but removes an entry names the comment lines
-/// that went with that entry.
-///
-/// `--force` alone rewrites from the config the refused try edited, under a
-/// second hold of the lock: a write landing between the two is overwritten
-/// (last writer wins). It is the CLI's one write from a snapshot.
+/// A write that keeps the file's comments but removes an entry names the
+/// comment lines that went with that entry. A write that cannot keep them
+/// is refused, naming the lines, or under `--force` rewrites the file in
+/// full and names the lines it dropped.
 pub fn write<F>(path: &Path, mode: CommentLoss, edit: F) -> Result<(), String>
 where
     F: FnOnce(&mut Config) -> Result<(), String>,
 {
-    let mut edited = None;
-    let tried = edit_config(path, |config| {
-        edit(config)?;
-        edited = Some(config.clone());
-        Ok(())
-    });
-    match tried {
-        Ok(gone) if !gone.is_empty() => {
-            // A removed entry takes its own comments with it; say so.
-            eprintln!(
-                "Note: comments inside the changed entry went with it ({}): {}",
-                path.display(),
-                gone.join("; ")
-            );
-            Ok(())
-        }
-        Ok(_) => Ok(()),
-        // `--force` overrides only the comment check; a validation or I/O
-        // failure is reported as itself, never as a comment warning.
-        Err(refusal) if mode == CommentLoss::Refuse || !is_comment_refusal(&refusal) => {
-            Err(refusal)
-        }
-        Err(refusal) => {
-            let config = edited.ok_or_else(|| refusal.clone())?;
-            #[allow(deprecated)] // `--force`: the documented snapshot rewrite.
-            write_config(path, &config)
-                .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
-            eprintln!(
-                "Warning: --force rewrites {} in full. Without it this write is refused:\n  {refusal}",
-                path.display()
-            );
-            Ok(())
-        }
+    let dropped = edit_config(path, mode, edit)?;
+    if !dropped.is_empty() {
+        // A removed entry, or a `--force` full rewrite, takes comments with
+        // it; say which lines, never their text.
+        eprintln!(
+            "Note: comments dropped by this write ({}): {}",
+            path.display(),
+            dropped.join("; ")
+        );
     }
+    Ok(())
 }
 
 /// Whether a rewrite saves the file or only reports what it would change.
@@ -100,31 +61,39 @@ pub(crate) enum RewriteMode {
 /// `url`, saving only when a line changed and `mode` applies. The error is a
 /// message ready to print.
 ///
-/// The text is read before the config lock is taken, so a write landing
-/// between the read and the save is overwritten (MIK-8042).
+/// The saved text is read under the config lock, so a write landing before
+/// the save is kept (MIK-8042).
 pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<UrlRewrite, String> {
+    // Refuses a FIFO or a device at once, before waiting for the lock.
     let text = super::regular_file::read_regular_text(path)
         .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
-    let mut rewrite = rewrite_url_aliases(&text, None);
-    // The retired key goes in the same pass, so the file is written once.
+    if mode == RewriteMode::DryRun {
+        return Ok(rewrite_of(&text));
+    }
+    let mut done = None;
+    edit_config_text(path, |current| {
+        let text =
+            current.ok_or_else(|| format!("Failed to read {}: it was removed", path.display()))?;
+        let rewrite = rewrite_of(text);
+        let save =
+            !rewrite.changed.is_empty() || matches!(rewrite.retired, Retired::Removed { .. });
+        let saved = save.then(|| rewrite.text.clone());
+        done = Some(rewrite);
+        Ok(saved)
+    })?;
+    Ok(done.expect("edit_config_text ran the edit"))
+}
+
+/// The URL alias rewrite of `text`, with the retired key dropped in the same
+/// pass, so the file is written once.
+fn rewrite_of(text: &str) -> UrlRewrite {
+    let mut rewrite = rewrite_url_aliases(text, None);
     let (dropped, retired) = super::retired_config_keys::drop_cache_tools(&rewrite.text);
     rewrite.retired = retired;
     if let Some(text) = dropped {
         rewrite.text = text;
     }
-    if mode == RewriteMode::Apply
-        && (!rewrite.changed.is_empty() || matches!(retired, Retired::Removed { .. }))
-    {
-        write_config_text(path, &rewrite.text)?;
-    }
-    Ok(rewrite)
-}
-
-/// Whether `refusal` is the comment check, the only refusal `--force`
-/// overrides. A busy or untakeable lock, a validation or an I/O failure is
-/// reported as itself.
-fn is_comment_refusal(refusal: &str) -> bool {
-    refusal.starts_with(REFUSAL)
+    rewrite
 }
 
 #[cfg(test)]
@@ -158,17 +127,13 @@ mod tests {
         std::fs::create_dir(&path).expect("dir in the way");
         let error =
             super::write(&path, super::CommentLoss::Rewrite, |_| Ok(())).expect_err("fails");
-        assert!(
-            error.starts_with("Failed to load") && !error.contains(super::REFUSAL),
-            "{error}"
-        );
+        assert!(error.starts_with("Failed to load"), "{error}");
     }
 
-    /// MIK-8042: the CLI's only writes outside one hold of the config lock
-    /// are `--force`'s snapshot rewrite, `init`'s create and `upgrade`'s
-    /// text rewrite. A new one has to be added here, on purpose.
+    /// MIK-8042: the CLI writes gateway.yaml only through the locked editors
+    /// (`edit_config`, `edit_config_text`), never from a snapshot.
     #[test]
-    fn the_cli_writes_outside_the_locked_edit_are_the_known_three() {
+    fn the_cli_writes_only_through_the_locked_editors() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut found = Vec::new();
         for dir in ["src/commands", "src/cli"] {
@@ -199,15 +164,7 @@ mod tests {
                 }
             }
         }
-        found.sort();
-        assert_eq!(
-            found,
-            [
-                "config_write.rs:write_config(",
-                "config_write.rs:write_config_text(",
-                "mod.rs:write_config_text(",
-            ]
-        );
+        assert!(found.is_empty(), "{found:?}");
     }
 
     /// MIK-8042: `upgrade`'s text rewrite overlapping a gateway's locked
@@ -223,11 +180,17 @@ mod tests {
         .expect("write");
         let at = path.clone();
         let mutated = mcp_gateway::config_reload::mutate_config_and_reload(&path, None, |config| {
+            let queued = mcp_gateway::gateway::test_helpers::when_waiting_for_config_lock(&at);
+            let upgrade = at.clone();
             let cli = std::thread::spawn(move || {
-                super::rewrite_url_aliases_in(&at, super::RewriteMode::Apply).map(drop)
+                super::rewrite_url_aliases_in(&upgrade, super::RewriteMode::Apply).map(drop)
             });
-            // Long enough for `upgrade` to read and queue on the lock.
-            std::thread::sleep(std::time::Duration::from_millis(300));
+            assert!(
+                queued
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .is_ok(),
+                "upgrade never waited for the config lock"
+            );
             let x = serde_yaml::from_str("command: x\n").expect("backend");
             config.backends.insert("x".into(), x);
             Ok::<_, String>(cli)

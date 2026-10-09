@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use super::{CommentLoss, Edited, edit_config_text_with, edit_config_with};
+use super::{CommentLoss, edit_config, edit_config_text, when_waiting_for_lock};
 use crate::config::{BackendConfig, Config};
 
 fn backend(command: &str) -> BackendConfig {
@@ -39,7 +39,7 @@ fn with_a_concurrent_add<T>(path: &Path, ours: impl FnOnce(Option<&mpsc::Sender<
     let at = path.to_path_buf();
     let other = std::thread::spawn(move || {
         started.recv().expect("released");
-        let added = edit_config_with(&at, CommentLoss::Refuse, |config| {
+        let added = edit_config(&at, CommentLoss::Refuse, |config| {
             config.backends.insert("x".into(), backend("x-server"));
             Ok(())
         });
@@ -56,12 +56,16 @@ fn with_a_concurrent_add<T>(path: &Path, ours: impl FnOnce(Option<&mpsc::Sender<
     result
 }
 
-/// Release the other writer and give it time to finish if nothing holds
-/// the lock against it.
-fn release(go: Option<&mpsc::Sender<()>>) {
+/// Release the other writer from inside our edit, and return once it has
+/// tried the lock and queued behind ours: its edit must see our write.
+fn release(go: Option<&mpsc::Sender<()>>, path: &Path) {
     if let Some(go) = go {
+        let queued = when_waiting_for_lock(path);
         go.send(()).expect("release");
-        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            queued.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "the other writer never waited for the config lock"
+        );
     }
 }
 
@@ -70,8 +74,8 @@ fn release(go: Option<&mpsc::Sender<()>>) {
 fn an_add_racing_another_add_keeps_both() {
     let (_dir, path) = config_file("backends:\n  a:\n    command: a-server\n");
     with_a_concurrent_add(&path, |go| {
-        edit_config_with(&path, CommentLoss::Refuse, |config| {
-            release(go);
+        edit_config(&path, CommentLoss::Refuse, |config| {
+            release(go, &path);
             config.backends.insert("y".into(), backend("y-server"));
             Ok(())
         })
@@ -90,8 +94,8 @@ fn a_remove_racing_an_add_keeps_the_add() {
     let (_dir, path) =
         config_file("backends:\n  a:\n    command: a-server\n  b:\n    command: b-server\n");
     with_a_concurrent_add(&path, |go| {
-        edit_config_with(&path, CommentLoss::Refuse, |config| {
-            release(go);
+        edit_config(&path, CommentLoss::Refuse, |config| {
+            release(go, &path);
             config.backends.remove("b");
             Ok(())
         })
@@ -106,8 +110,8 @@ fn a_remove_racing_an_add_keeps_the_add() {
 fn a_forced_rewrite_racing_an_add_keeps_the_add() {
     let (_dir, path) = config_file("# mine\nbackends:\n  a:\n    command: a-server\n");
     let edited = with_a_concurrent_add(&path, |go| {
-        edit_config_with(&path, CommentLoss::Rewrite, |config| {
-            release(go);
+        edit_config(&path, CommentLoss::Rewrite, |config| {
+            release(go, &path);
             config.server.port = 39_999;
             Ok(())
         })
@@ -116,7 +120,11 @@ fn a_forced_rewrite_racing_an_add_keeps_the_add() {
     let config = Config::load_literal_with_text(&path).expect("loads").0;
     assert_eq!(config.server.port, 39_999);
     assert_eq!(names(&path), vec!["a".to_string(), "x".to_string()]);
-    assert_eq!(edited, Edited::Rewritten);
+    assert_eq!(
+        edited,
+        ["line 1"],
+        "the rewrite names the comment it dropped"
+    );
 }
 
 /// `upgrade`'s byte-keeping rewrite reads the text under the lock.
@@ -124,8 +132,8 @@ fn a_forced_rewrite_racing_an_add_keeps_the_add() {
 fn a_text_rewrite_racing_an_add_keeps_the_add() {
     let (_dir, path) = config_file("# note\nbackends:\n  a:\n    command: a-server\n");
     with_a_concurrent_add(&path, |go| {
-        edit_config_text_with(&path, |current| {
-            release(go);
+        edit_config_text(&path, |current| {
+            release(go, &path);
             Ok(current.map(|text| text.replace("# note", "# renamed")))
         })
         .expect("ours written")
@@ -140,11 +148,21 @@ fn a_text_rewrite_racing_an_add_keeps_the_add() {
 #[test]
 fn a_create_only_text_write_refuses_an_existing_file() {
     let (_dir, path) = config_file("backends:\n  a:\n    command: a-server\n");
-    let refused = edit_config_text_with(&path, |current| match current {
+    let refused = edit_config_text(&path, |current| match current {
         None => Ok(Some("backends: {}\n".to_string())),
         Some(_) => Err("already exists".to_string()),
     });
     assert_eq!(refused, Err("already exists".to_string()));
+    assert_eq!(names(&path), vec!["a".to_string()]);
+}
+
+/// GH462: text that would not load as a config is refused, never written.
+#[test]
+fn a_text_write_that_would_not_load_is_refused() {
+    let (_dir, path) = config_file("backends:\n  a:\n    command: a-server\n");
+    let refused = edit_config_text(&path, |_| Ok(Some("backends: [\n".to_string())));
+    let error = refused.expect_err("refused");
+    assert!(error.starts_with("Not saved:"), "{error}");
     assert_eq!(names(&path), vec!["a".to_string()]);
 }
 
@@ -155,23 +173,12 @@ fn a_removal_names_the_comments_it_took() {
     let (_dir, path) = config_file(
         "backends:\n  a:\n    command: a-server\n  b:\n    # b's note\n    command: b-server\n",
     );
-    let edited = edit_config_with(&path, CommentLoss::Refuse, |config| {
+    let edited = edit_config(&path, CommentLoss::Refuse, |config| {
         config.backends.remove("b");
         Ok(())
     })
     .expect("removed");
-    match edited {
-        Edited::Spliced {
-            dropped_comment_lines,
-        } => {
-            assert_eq!(dropped_comment_lines.len(), 1, "{dropped_comment_lines:?}");
-            assert!(
-                dropped_comment_lines[0].contains('5'),
-                "{dropped_comment_lines:?}"
-            );
-        }
-        other => panic!("not spliced: {other:?}"),
-    }
+    assert_eq!(edited, ["line 5"]);
 }
 
 /// MIK-8051 AC4: the CLI keeps no second copy of the dropped-comment compare.

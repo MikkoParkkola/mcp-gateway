@@ -150,6 +150,13 @@ pub mod test_helpers {
         }
     }
 
+    /// A receiver told once when a CLI config writer next starts waiting for
+    /// `config`'s lock: a concurrency test overlaps two writers by it instead
+    /// of a fixed sleep.
+    pub fn when_waiting_for_config_lock(config: &std::path::Path) -> std::sync::mpsc::Receiver<()> {
+        crate::config_persistence::when_waiting_for_lock(config)
+    }
+
     /// Writes a fixture owner-only (0600 on Unix), as the gateway requires of
     /// a config or env file it loads (CONFIG.2). Same shape as `std::fs::write`,
     /// so a fixture swaps one call for the other.

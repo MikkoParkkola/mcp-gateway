@@ -123,10 +123,14 @@ fn a_full_rewrite_keeps_url_and_uses_it_for_a_new_backend() {
         "backends:\n  a:\n    url: \"https://a.example.test/mcp\"\n  b:\n    http_url: \"https://b.example.test/mcp\"\n",
     )
     .expect("config loads");
-    crate::config_persistence::edit_config(&path, |c| {
-        *c = config.clone();
-        Ok(())
-    })
+    crate::config_persistence::edit_config(
+        &path,
+        crate::config_persistence::CommentLoss::Refuse,
+        |c| {
+            *c = config.clone();
+            Ok(())
+        },
+    )
     .map(drop)
     .expect("written");
     let text = std::fs::read_to_string(&path).expect("read");
@@ -144,10 +148,14 @@ fn a_full_rewrite_that_adds_nothing_keeps_the_aliases() {
     crate::gateway::test_helpers::write_owner_only(&path, flow).expect("write");
     let mut config = Config::from_file_text(flow).expect("config loads");
     config.backends.get_mut("a").expect("a").description = "edited".into();
-    crate::config_persistence::edit_config(&path, |c| {
-        *c = config.clone();
-        Ok(())
-    })
+    crate::config_persistence::edit_config(
+        &path,
+        crate::config_persistence::CommentLoss::Refuse,
+        |c| {
+            *c = config.clone();
+            Ok(())
+        },
+    )
     .map(drop)
     .expect("written");
     let text = std::fs::read_to_string(&path).expect("read");

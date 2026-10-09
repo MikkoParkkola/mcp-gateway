@@ -344,7 +344,7 @@ fn a_cli_write_refuses_a_config_that_no_longer_loads() {
     for (name, result) in [
         (
             "preserving",
-            edit_config(&path, |c| {
+            edit_config(&path, crate::config_persistence::CommentLoss::Refuse, |c| {
                 *c = config.clone();
                 Ok(())
             })
@@ -361,10 +361,14 @@ fn a_cli_write_refuses_a_config_that_no_longer_loads() {
         );
     }
     let missing = dir.path().join("new.yaml");
-    edit_config(&missing, |c| {
-        *c = config.clone();
-        Ok(())
-    })
+    edit_config(
+        &missing,
+        crate::config_persistence::CommentLoss::Refuse,
+        |c| {
+            *c = config.clone();
+            Ok(())
+        },
+    )
     .map(drop)
     .expect("a missing file is created");
     assert!(missing.exists());
@@ -384,7 +388,7 @@ fn a_write_through_a_symlinked_config_keeps_the_link() {
     let backend = serde_yaml::from_str("command: echo\n").expect("backend");
     config.backends.insert("b".into(), backend);
 
-    edit_config(&link, |c| {
+    edit_config(&link, crate::config_persistence::CommentLoss::Refuse, |c| {
         *c = config.clone();
         Ok(())
     })

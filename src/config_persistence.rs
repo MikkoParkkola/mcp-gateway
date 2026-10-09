@@ -116,6 +116,34 @@ fn say_waiting(config: &Path, lock: &Path) {
         config.display(),
         lock.display()
     );
+    let mut waiters = LOCK_WAITERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    waiters.retain(|(path, tell)| {
+        if path != config {
+            return true;
+        }
+        // Told once; a test that stopped listening is not an error.
+        let _ = tell.send(());
+        false
+    });
+}
+
+/// Who wants to know that a CLI writer started waiting for a config's lock:
+/// the concurrency tests, which overlap writers by this signal rather than a
+/// fixed sleep. Each sender is told once. Touched only when a writer waits.
+static LOCK_WAITERS: std::sync::Mutex<Vec<(PathBuf, std::sync::mpsc::Sender<()>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// A receiver told once when a CLI writer next starts waiting for `config`'s
+/// lock (for tests; see [`LOCK_WAITERS`]).
+pub(crate) fn when_waiting_for_lock(config: &Path) -> std::sync::mpsc::Receiver<()> {
+    let (tell, told) = std::sync::mpsc::channel();
+    LOCK_WAITERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push((config.to_path_buf(), tell));
+    told
 }
 
 /// A lock that was not taken, as a message ready to print.
@@ -131,7 +159,7 @@ fn not_locked(path: &Path, e: lock::NotLocked) -> String {
 
 /// What a write does when it cannot keep the file's comments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CommentLoss {
+pub enum CommentLoss {
     /// Re-serialise the whole file (a CLI write given `--force`, and the
     /// reload module's public write API).
     Rewrite,
@@ -179,7 +207,7 @@ pub(crate) fn write_config_with(
     mode: CommentLoss,
     _held: &ExclusiveFileLock,
 ) -> Result<(), Unwritten> {
-    write_spliced(path, config, mode, Splice::One).map(drop)
+    write_spliced(path, config, mode, Splice::One)
 }
 
 /// The comment lines (as `line N`) that [`write_config_with`] writing
@@ -198,53 +226,33 @@ pub(crate) fn comments_a_write_drops(path: &Path, config: &Config) -> Vec<String
         .unwrap_or_default()
 }
 
-/// Load `path`, apply `edit`, and write the result for a CLI command,
-/// keeping the file's comments (MIK-8042).
+/// Load `path`, apply `edit`, and write the result, keeping the file's
+/// comments (MIK-8042).
 ///
 /// The load, the edit and the write run under one hold of the config lock
 /// ([`lock`]), so a change another writer made before it is never
 /// overwritten: `edit` sees the file as it is. The file's text is edited in
 /// place when the result differs from it in `backends` alone (several
-/// backends added or edited, or one removed). A write that would drop
-/// comments is refused, and the refusal names the comment lines; a result
-/// that is what the file already loads as writes nothing. A missing file is
+/// backends added or edited, or one removed). Otherwise the file is
+/// rewritten in full under [`CommentLoss::Rewrite`], or, under
+/// [`CommentLoss::Refuse`], a file with comments is left as it is and the
+/// refusal names the comment lines. A result that is what the file already
+/// loads as writes nothing under [`CommentLoss::Refuse`]. A missing file is
 /// created.
 ///
-/// Returns the comment lines (as `line N`, never their text) that went with
-/// a removed entry; empty when none did.
+/// Returns the comment lines (as `line N`, never their text) the write
+/// dropped: those inside a removed entry, or under
+/// [`CommentLoss::Rewrite`] every comment a full rewrite lost.
+///
+/// Takes the lock blocking, waiting up to [`CLI_LOCK_WAIT`]; an async caller
+/// uses the reload module's write API instead.
 ///
 /// # Errors
 ///
 /// `edit`'s own error; the refusal, which starts with `Not saved:`; a lock
 /// that cannot be taken; an existing file that does not load; or a
 /// validation, serialisation or I/O failure. Each is a message ready to print.
-pub fn edit_config<F>(path: &Path, edit: F) -> Result<Vec<String>, String>
-where
-    F: FnOnce(&mut Config) -> Result<(), String>,
-{
-    Ok(match edit_config_with(path, CommentLoss::Refuse, edit)? {
-        Edited::Spliced {
-            dropped_comment_lines,
-        } => dropped_comment_lines,
-        Edited::Unchanged | Edited::Rewritten => Vec::new(),
-    })
-}
-
-/// What [`edit_config_with`] did to the file.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Edited {
-    /// The edit left the config as the file already loads; nothing written.
-    Unchanged,
-    /// The file's text was edited in place, keeping its comments except the
-    /// ones inside a removed entry, named by line (never by text).
-    Spliced { dropped_comment_lines: Vec<String> },
-    /// The whole file was re-serialised (only under [`CommentLoss::Rewrite`]).
-    Rewritten,
-}
-
-/// [`edit_config`] with an explicit answer to a write that would drop the
-/// file's comments.
-pub(crate) fn edit_config_with<F>(path: &Path, mode: CommentLoss, edit: F) -> Result<Edited, String>
+pub fn edit_config<F>(path: &Path, mode: CommentLoss, edit: F) -> Result<Vec<String>, String>
 where
     F: FnOnce(&mut Config) -> Result<(), String>,
 {
@@ -253,31 +261,96 @@ where
     // under the lock is the authoritative one.
     load_existing_or_default(path)
         .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
-    let _held = cli_lock(path)?;
-    let mut config = load_existing_or_default(path)
-        .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
-    edit(&mut config)?;
-    write_spliced(path, &config, mode, Splice::NoRemoval).map_err(|e| match e {
-        Unwritten::CommentLoss(message) => message,
-        Unwritten::Failed(message) => format!("Failed to write {}: {message}", path.display()),
-    })
+    let mut dropped = Vec::new();
+    edit_locked(path, read_config, |current| {
+        let mut config = current
+            .as_ref()
+            .map_or_else(Config::default, |(c, _)| c.clone());
+        edit(&mut config)?;
+        let (before, text) = current.as_ref().map(|(c, t)| (c, t.as_str())).unzip();
+        let rendered =
+            render(path, before, text, &config, mode, Splice::NoRemoval).map_err(|e| match e {
+                Unwritten::CommentLoss(message) => message,
+                Unwritten::Failed(message) => {
+                    format!("Failed to write {}: {message}", path.display())
+                }
+            })?;
+        Ok(rendered.map(|(yaml, lines)| {
+            dropped = lines;
+            yaml
+        }))
+    })?;
+    Ok(dropped)
 }
 
-/// Read `path`'s text (`None` when absent), and write what `edit` returns
-/// (`None` writes nothing). For `init` and `upgrade` (MIK-8042).
+/// Read `path`'s text (`None` when it does not exist) and write what `edit`
+/// returns (`None` writes nothing), under one hold of the config lock, so a
+/// change another writer made before it is never overwritten (MIK-8042).
+/// For a command that edits the file as text: `init` (create only: its
+/// `edit` refuses `Some`) and `upgrade` (a byte-keeping rewrite). Text that
+/// does not parse as a config is refused, never written.
 ///
-/// RED SEAM: today's behaviour; the text is read before the lock is taken.
-#[allow(dead_code)] // red seam
-pub(crate) fn edit_config_text_with<F>(path: &Path, edit: F) -> Result<bool, String>
+/// Returns whether the file was written.
+///
+/// # Errors
+///
+/// `edit`'s own error; a lock that cannot be taken; a path that is not a
+/// regular file; text that does not parse as a config; or a read or write
+/// failure. Each is a message ready to print.
+pub fn edit_config_text<F>(path: &Path, edit: F) -> Result<bool, String>
 where
     F: FnOnce(Option<&str>) -> Result<Option<String>, String>,
 {
-    let current = std::fs::read_to_string(path).ok();
-    let Some(text) = edit(current.as_deref())? else {
+    edit_locked(path, read_text, |current| edit(current.as_deref()))
+}
+
+/// The one locked write path: take the config lock, `read` the file, let
+/// `edit` give its new text (`None` writes nothing), prove that text parses
+/// as a config, and write it atomically, all in one hold. Returns whether
+/// the file was written.
+fn edit_locked<T>(
+    path: &Path,
+    read: impl FnOnce(&Path) -> Result<T, String>,
+    edit: impl FnOnce(T) -> Result<Option<String>, String>,
+) -> Result<bool, String> {
+    let _held = cli_lock(path)?;
+    let Some(text) = edit(read(path)?)? else {
         return Ok(false);
     };
-    write_config_text(path, &text)?;
+    // Fail closed (GH462): bytes that do not parse are never written.
+    Config::from_file_text(&text)
+        .map_err(|e| format!("Not saved: the new {} would not load: {e}", path.display()))?;
+    write_yaml(path, &text)?;
     Ok(true)
+}
+
+/// The config at `path` and the text it loaded from, or `None` when there is
+/// no file. A dangling symlink is an existing entry, not absence.
+fn read_config(path: &Path) -> Result<Option<(Config, String)>, String> {
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!(
+            "Cannot inspect config file {}: {e}",
+            path.display()
+        )),
+        Ok(_) => Config::load_literal_with_text(path)
+            .map(Some)
+            .map_err(|e| format!("Failed to load {}: {e}", path.display())),
+    }
+}
+
+/// `path`'s text, or `None` when there is no file. A FIFO or a device would
+/// block the read or never end it, so only a regular file is read.
+fn read_text(path: &Path) -> Result<Option<String>, String> {
+    let failed = |e: &dyn std::fmt::Display| format!("Failed to read {}: {e}", path.display());
+    match std::fs::metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(failed(&e)),
+        Ok(meta) if !meta.is_file() => Err(failed(&"not a regular file")),
+        Ok(_) => std::fs::read_to_string(path)
+            .map(Some)
+            .map_err(|e| failed(&e)),
+    }
 }
 
 /// How many backends one splice may change.
@@ -297,34 +370,58 @@ fn write_spliced(
     config: &Config,
     mode: CommentLoss,
     scope: Splice,
-) -> Result<Edited, Unwritten> {
+) -> Result<(), Unwritten> {
+    let current = Config::load_literal_with_text(path).ok();
+    let (before, text) = current.as_ref().map(|(c, t)| (c, t.as_str())).unzip();
+    // A file that does not load is still read, so its comments are refused.
+    let unloaded = text
+        .is_none()
+        .then(|| std::fs::read_to_string(path).ok())
+        .flatten();
+    let text = text.or(unloaded.as_deref());
+    if let Some((yaml, _)) = render(path, before, text, config, mode, scope)? {
+        write_yaml(path, &yaml)?;
+    }
+    Ok(())
+}
+
+/// The text a write of `config` over `text` (which loads as `before`, when
+/// it loads) should leave, and the comment lines it drops; `None` when
+/// nothing needs writing. The text is spliced when `config` differs from
+/// `before` in `backends` alone, within `scope`; otherwise it is rendered in
+/// full, which under [`CommentLoss::Refuse`] a file with comments refuses.
+fn render(
+    path: &Path,
+    before: Option<&Config>,
+    text: Option<&str>,
+    config: &Config,
+    mode: CommentLoss,
+    scope: Splice,
+) -> Result<Option<(String, Vec<String>)>, Unwritten> {
     config
         .validate_with_env(&config.env_overlay())
         .map_err(|e| format!("Failed to validate config: {e}"))?;
-    let current = Config::load_literal_with_text(path).ok();
-    if let Some((before, text)) = &current {
+    if let (Some(before), Some(text)) = (before, text) {
         let value = |c: &Config| serde_json::to_value(c).ok();
         if mode == CommentLoss::Refuse && value(before) == value(config) {
-            return Ok(Edited::Unchanged);
+            return Ok(None);
         }
         if let Some(edited) = splice::with_backends_edited(text, before, config, scope) {
-            write_yaml(path, &edited)?;
-            return Ok(Edited::Spliced {
-                dropped_comment_lines: comments::dropped_comment_lines(text, &edited),
-            });
+            let dropped = comments::dropped_comment_lines(text, &edited);
+            return Ok(Some((edited, dropped)));
         }
     }
-    let existing = current
-        .map(|(_, text)| text)
-        .or_else(|| std::fs::read_to_string(path).ok());
+    let commented = text.filter(|t| t.contains('#'));
     if mode == CommentLoss::Refuse
-        && let Some(text) = existing.as_ref().filter(|t| t.contains('#'))
+        && let Some(text) = commented
     {
         return Err(Unwritten::CommentLoss(splice::comment_loss(path, text)));
     }
-    let yaml = url_spelling::render(config, existing.as_deref())?;
-    write_yaml(path, &yaml)?;
-    Ok(Edited::Rewritten)
+    let yaml = url_spelling::render(config, text)?;
+    let dropped = commented
+        .map(|text| comments::dropped_comment_lines(text, &yaml))
+        .unwrap_or_default();
+    Ok(Some((yaml, dropped)))
 }
 
 /// How many times a rename is retried before the write is reported failed.
