@@ -87,7 +87,7 @@ impl MetaMcp {
         #[cfg(feature = "firewall")]
         self.rescan_outbound(caller, session_id, (server, tool), outbound, source)?;
         #[cfg(not(feature = "firewall"))]
-        let _ = (session_id, source);
+        let _ = (session_id, source, outbound.answers);
         Ok(Permit(()))
     }
 
