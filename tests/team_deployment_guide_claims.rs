@@ -402,8 +402,9 @@ fn cleartext_table_lists_every_variant() {
     );
 }
 
-/// How the defaults table spells an unset audit-log switch (MIK-8044 P2c2).
-const UNSET_AUDIT_DEFAULT: &str = "on when `auth.enabled`, else `false`";
+/// How the defaults table spells an unset audit-log switch (MIK-8044 P2c2),
+/// backticks stripped as `table` strips them.
+const UNSET_AUDIT_DEFAULT: &str = "on when auth.enabled, else false";
 
 #[test]
 fn defaults_table_matches_the_code() {
