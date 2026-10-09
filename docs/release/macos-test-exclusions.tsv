@@ -5,9 +5,6 @@ src/config_reload/watch_chain_filter_tests.rs	real_watcher	no-port-yet	Real-watc
 src/config_reload/watch_chain_tests.rs	real_watcher	no-port-yet	Real-watcher rows are written against inotify event shapes (W-L9); the macOS watcher backend is not exercised.
 src/gateway/server/warmstart/hot_reload_tests.rs	http_a_backend_added_by_a_watched_edit_is_warmed	no-port-yet	Drives the real config watcher, as the real-watcher rows (inotify).
 src/gateway/task_service/store_tests/durability.rs	open_refuses_a_lease_it_cannot_inspect_and_creates_none	inherent	Builds a path at the Linux PATH_MAX (4096); macOS PATH_MAX is 1024, so the fixture cannot be made the same way.
-src/personal_accounts/store_tests.rs	record_lookup_child	no-port-yet	Child-process entrypoint of the record-FIFO regression below; ignored on every platform.
-src/personal_accounts/store_tests.rs	s03_fifo_record_refuses_promptly_without_blocking_lookup	no-port-yet	Record-FIFO regression uses mkfifo and a bounded child process (W-L8); macOS has FIFOs, the harness is Linux-only.
-src/personal_accounts/tests.rs	fifo	no-port-yet	Authority-FIFO regression module, same harness as the record-FIFO row (W-L8).
 src/test_ports.rs	the_reserved_range_is_outside_the_ephemeral_range	inherent	Reads /proc/sys/net/ipv4/ip_local_port_range, which exists only on Linux.
 src/transport/stdio_frame_tests.rs	close_returns_when_an_escaped_reader_keeps_a_write_stuck	no-port-yet	Escaped-reader process-group case (MIK-8079); macOS process-group behaviour differs and is MIK-8080's subject.
 src/transport/stdio_frame_tests.rs	dropping_the_transport_ends_a_write_stuck_on_an_escaped_reader	no-port-yet	Escaped-reader process-group case (MIK-8079); macOS process-group behaviour differs and is MIK-8080's subject.

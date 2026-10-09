@@ -647,15 +647,15 @@ fn s03_maximum_plaintext_record_reads_under_a_long_configured_key_id() {
 
 // A record FIFO cannot be observed in-process: an implementation that opens it
 // without O_NONBLOCK blocks forever, which is the defect under test. The bounded
-// child process is the oracle. Linux-only, matching the existing authority FIFO
-// regression; other platforms leave this path unexecuted, not passed.
-#[cfg(target_os = "linux")]
+// child process is the oracle. Unix: `mkfifo(1)` exists on Linux and macOS
+// (MIK-8182); Windows has no FIFO path to guard.
+#[cfg(unix)]
 const RECORD_CHILD_ROOT: &str = "MCP_ACCOUNTS_RECORD_FIFO_TEST_ROOT";
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 const RECORD_CHILD_TEST: &str = "personal_accounts::tests::store::record_lookup_child";
 
 /// Private test-binary entrypoint; no daemon or real credentials are involved.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 #[ignore = "private child entrypoint; exercised by the bounded record-FIFO regression"]
 fn record_lookup_child() {
@@ -680,15 +680,15 @@ fn record_lookup_child() {
 }
 
 /// Always reap the owned child, including an implementation that never returns.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 struct RecordProbe {
     child: std::process::Child,
     reader: Option<std::thread::JoinHandle<()>>,
     events: std::sync::mpsc::Receiver<String>,
 }
 
-// Linux-only (W-L8): the record-FIFO regression needs `mkfifo` and a bounded child.
-#[cfg(target_os = "linux")]
+// Unix (W-L8, MIK-8182): the record-FIFO regression needs `mkfifo` and a bounded child.
+#[cfg(unix)]
 impl Drop for RecordProbe {
     fn drop(&mut self) {
         super::probe::reap(&mut self.child);
@@ -698,8 +698,8 @@ impl Drop for RecordProbe {
     }
 }
 
-// Linux-only (W-L8): the record-FIFO regression needs `mkfifo` and a bounded child.
-#[cfg(target_os = "linux")]
+// Unix (W-L8, MIK-8182): the record-FIFO regression needs `mkfifo` and a bounded child.
+#[cfg(unix)]
 fn probe_record_lookup(
     root: &std::path::Path,
 ) -> Result<String, std::sync::mpsc::RecvTimeoutError> {
@@ -757,8 +757,8 @@ fn probe_record_lookup(
     probe.events.recv_timeout(Duration::from_secs(1))
 }
 
-// Linux-only (W-L8): the record-FIFO regression needs `mkfifo` and a bounded child.
-#[cfg(target_os = "linux")]
+// Unix (W-L8, MIK-8182): the record-FIFO regression needs `mkfifo` and a bounded child.
+#[cfg(unix)]
 #[test]
 fn s03_fifo_record_refuses_promptly_without_blocking_lookup() {
     use std::os::unix::fs::FileTypeExt as _;
