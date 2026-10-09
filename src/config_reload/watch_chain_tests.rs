@@ -571,7 +571,20 @@ pub(crate) mod real_watcher {
             loaded.is_ok(),
             "the initial resolve did not leave the named release loaded"
         );
-        assert_eq!(g.watcher.chain().wakes_handled.load(Ordering::SeqCst), 1);
+        // Start's own resolve is one wake; any other must come from an event.
+        // On Linux none does. macOS `FSEvents` can report the fixture's own
+        // writes from just before the watch began, and each such event may
+        // wake the task once more (MIK-8181).
+        let chain = g.watcher.chain();
+        let wakes = chain.wakes_handled.load(Ordering::SeqCst);
+        let events = chain.names.passed.lock().len();
+        assert!(
+            wakes >= 1 && wakes <= 1 + events,
+            "{wakes} wakes for {events} events"
+        );
+        if cfg!(target_os = "linux") {
+            assert_eq!(wakes, 1);
+        }
     }
 
     /// T18: a chain that cannot be resolved at startup (the target missing

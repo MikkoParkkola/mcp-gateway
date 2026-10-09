@@ -305,12 +305,18 @@ mod real_watcher {
         std::fs::write(a.join("cfg.yaml"), "a: 1\n").unwrap();
         h.wait_watched(&a).await;
         h.drain_idle().await;
+        let c_real = std::fs::canonicalize(&c).unwrap();
+        assert!(
+            h.chain.watched().contains(&c_real),
+            "premise: the repaired chain watches the link's directory by its canonical name"
+        );
 
         super::super::tests::retarget(&c.join("l"), &b.join("cfg.yaml"));
         assert!(
             h.triggered_within(10).await,
             "a retarget in the link's directory was not heard after the repair"
         );
+        h.wait_watched(&b).await;
         let _ = h.shutdown.send(());
     }
 

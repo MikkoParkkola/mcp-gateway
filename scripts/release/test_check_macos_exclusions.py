@@ -112,10 +112,15 @@ class CheckMacosExclusions(unittest.TestCase):
         rust = (
             '#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]\nmod e2e_tests;\n'
             '#[cfg(all(unix, not(target_os = "macos")))]\n#[test]\nfn off() {}\n'
+            '#[cfg(all(test, any(target_os = "linux", target_os = "macos"), '
+            'not(target_vendor = "apple")))]\nmod apple_off_tests;\n'
         )
         self.assertEqual(
             self.tree(rust, path="src/reload/mod.rs"),
-            ["not run on macOS and not listed: src/reload/mod.rs off"],
+            [
+                "not run on macOS and not listed: src/reload/mod.rs apple_off_tests",
+                "not run on macOS and not listed: src/reload/mod.rs off",
+            ],
         )
 
     def test_the_release_tree_passes(self) -> None:
