@@ -516,6 +516,9 @@ pub(super) enum Upstream {
     Plain,
     /// A first `tools/list` page after the delay, then one that never comes.
     ListStalls(Duration),
+    /// As `ListStalls`, counting each first-page request (MIK-8046: proves a
+    /// joiner sent none of its own). One test owns each counter.
+    ListStallsCounted(Duration, &'static AtomicUsize),
     /// Hands out a session at the handshake, and answers every later request
     /// after the delay with "session not found".
     SessionExpires(Duration),
@@ -564,7 +567,15 @@ async fn issuing_server(expires_in: u64, upstream: Upstream) -> String {
                     json!({"jsonrpc": "2.0", "id": id,
                         "result": {"tools": [], "nextCursor": "page-2"}})
                 }
-                (Upstream::ListStalls(_), Some(_)) => std::future::pending().await,
+                (Upstream::ListStallsCounted(first, pages), None) => {
+                    pages.fetch_add(1, Ordering::SeqCst);
+                    sleep(first).await;
+                    json!({"jsonrpc": "2.0", "id": id,
+                        "result": {"tools": [], "nextCursor": "page-2"}})
+                }
+                (Upstream::ListStalls(_) | Upstream::ListStallsCounted(..), Some(_)) => {
+                    std::future::pending().await
+                }
                 _ => json!({"jsonrpc": "2.0", "id": id, "result": {"tools": []}}),
             },
             _ => json!({"jsonrpc": "2.0", "id": id,

@@ -122,7 +122,7 @@ pub use prompt_cache::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerpri
 pub(crate) use support::Authentication;
 pub use support::prune_constant_signals;
 pub(crate) use task_confirmation::{
-    TaskConfirmation, TaskConfirmationRequest, task_admission_request,
+    AdmissionOwner, TaskConfirmation, TaskConfirmationRequest, task_admission_request,
 };
 
 mod accessors;
@@ -441,8 +441,7 @@ pub struct MetaMcp {
     /// scans and redacts backend-supplied tool descriptions with the exact
     /// config as the direct `tools/call` path. `None` (the default, and the
     /// stdio path) disables scanning — a zero-cost no-op on the hot path.
-    #[cfg(feature = "firewall")]
-    pub(super) firewall: Option<Arc<crate::security::firewall::Firewall>>,
+    pub(super) firewall: Option<Arc<invoke::egress::Firewall>>,
 }
 
 // ============================================================================
@@ -528,7 +527,6 @@ impl MetaMcp {
             caller_identity: crate::security::caller_identity::CallerIdentityConfig::default(),
             access_verifier: None,
             context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
-            #[cfg(feature = "firewall")]
             firewall: None,
         }
     }

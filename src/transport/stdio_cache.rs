@@ -185,8 +185,9 @@ fn names_setting(key: &str, var: &str) -> bool {
 /// `NPM_CONFIG_STRICT-SSL` are one setting; a key outside the prefix is none.
 /// Lowercasing is ASCII only, where npm's is Unicode: enough here, whose
 /// settings are ASCII, since a key that folds differently cannot name one.
-/// The rule MIK-8097 found for forwarded settings.
-fn npm_setting(key: &str) -> Option<String> {
+/// One fold for the cache check and the forwarded-settings filter
+/// (`stdio_env.rs`, MIK-8097), so the two cannot drift.
+pub(super) fn npm_setting(key: &str) -> Option<String> {
     const PREFIX: &str = "npm_config_";
     let rest = key
         .get(..PREFIX.len())
