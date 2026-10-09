@@ -15,7 +15,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use serde_json::json;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use crate::gateway::router::create_router;
@@ -55,6 +55,15 @@ fn negative_control_stage() {
     }
 }
 
+/// The one tool the bench backend lists.
+fn search_tool() -> serde_json::Value {
+    json!({
+        "name": "search",
+        "description": "probe",
+        "inputSchema": {"type": "object", "properties": {"blob": {"type": "string"}}}
+    })
+}
+
 /// A backend that answers every call at once and keeps nothing.
 struct Answer;
 
@@ -62,13 +71,20 @@ struct Answer;
 impl crate::transport::Transport for Answer {
     async fn request(
         &self,
-        _method: &str,
+        method: &str,
         _params: Option<serde_json::Value>,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
-        negative_control_stage();
+        let result = match method {
+            "tools/list" => json!({"tools": [search_tool()]}),
+            "tools/call" => {
+                negative_control_stage();
+                json!({"content": []})
+            }
+            _ => json!({}),
+        };
         Ok(crate::protocol::JsonRpcResponse::success_serialized(
             crate::protocol::RequestId::Number(1),
-            json!({"content": []}),
+            result,
         ))
     }
     async fn notify(&self, _method: &str, _params: Option<serde_json::Value>) -> crate::Result<()> {
@@ -97,15 +113,7 @@ async fn bench_state() -> (Arc<crate::gateway::router::AppState>, tempfile::Temp
         std::time::Duration::from_secs(60),
     ));
     backend.set_transport_for_test(Arc::new(Answer));
-    backend.remember_listed_tools(
-        None,
-        false,
-        &[json!({
-            "name": "search",
-            "description": "probe",
-            "inputSchema": {"type": "object", "properties": {"blob": {"type": "string"}}}
-        })],
-    );
+    backend.remember_listed_tools(None, false, &[search_tool()]);
     assert!(state.backends.register(backend), "bench backend registered");
     (state, store)
 }
@@ -146,93 +154,117 @@ async fn median_ns(state: &Arc<crate::gateway::router::AppState>, blob: usize) -
     samples[samples.len() / 2]
 }
 
-/// The stdio row: the production stdio dispatcher, called as `run_stdio`
-/// calls it, against the fixture's echo backend.
-async fn stdio_median_ns(fixture: &super::signing_nonce_allocations_support::Fixture) -> u128 {
-    let arguments = json!({"blob": "x".repeat(16)});
-    let mut samples = Vec::with_capacity(CALLS);
-    for round in 0..WARMUP + CALLS {
-        let request = super::signing_nonce_allocations_support::invoke(
-            &format!("t{round}"),
-            None,
-            arguments.clone(),
-        );
-        let start = Instant::now();
-        let response = super::super::Gateway::dispatch_single_with_sink(
-            &fixture.meta,
-            &fixture.tool_policy,
-            &fixture.mtls_policy,
-            request,
-            super::super::StdioClient {
-                session_id: "per-call-timing",
-                channel: &crate::gateway::input_bridge::NoClientChannel,
-                handshake_capabilities: crate::protocol::meta::Declared::NONE,
-                tasks: None,
-                modern: false,
-            },
-            &super::super::StdioTelemetry::default(),
-        )
-        .await;
-        let elapsed = start.elapsed().as_nanos();
-        let text = response.map(|r| r.to_string()).unwrap_or_default();
-        assert!(
-            !text.contains("\"error\"") && !text.contains("\"isError\":true"),
-            "round {round}: the timed stdio call must reach the backend: {text}"
-        );
-        if round >= WARMUP {
-            samples.push(elapsed);
-        }
-    }
-    samples.sort_unstable();
-    samples[samples.len() / 2]
+/// A gateway serving stdio (`run_stdio_on`) over in-memory pipes, its
+/// `bench` backend on the harness transport, past its handshake.
+struct StdioLoop {
+    stdin: tokio::io::DuplexStream,
+    stdout: tokio::io::Lines<tokio::io::BufReader<tokio::io::DuplexStream>>,
+    _served: tokio::task::JoinHandle<crate::Result<()>>,
+    _dir: tempfile::TempDir,
 }
 
-/// The batch row: the production batch dispatcher, called as `run_stdio`
-/// calls it for an array frame, with `BATCH` calls per frame. Reported per
-/// call so it reads against the single-request row.
-async fn stdio_batch_median_ns(
-    fixture: &super::signing_nonce_allocations_support::Fixture,
-) -> u128 {
-    let arguments = json!({"blob": "x".repeat(16)});
+impl StdioLoop {
+    async fn start() -> Self {
+        use tokio::io::AsyncBufReadExt as _;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        // The URL is never dialled: the transport is replaced below.
+        let yaml = format!(
+            "backends:\n  bench:\n    http_url: \"http://127.0.0.1:9/\"\n\
+             failsafe:\n  rate_limit:\n    enabled: false\n  circuit_breaker:\n    enabled: false\n\
+             tasks:\n  store_dir: {}\n",
+            serde_json::to_string(&dir.path().join("tasks").display().to_string())
+                .expect("a JSON string")
+        );
+        crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
+        let config = crate::config::Config::load(Some(&path)).expect("config loads");
+        let gateway = super::super::Gateway::new(config)
+            .await
+            .expect("gateway boots")
+            .with_data_dir(dir.path().to_path_buf());
+        let backend = gateway.backends.get("bench").expect("bench backend");
+        backend.set_transport_for_test(Arc::new(Answer));
+        backend.remember_listed_tools(None, false, &[search_tool()]);
+        let (stdin, input) = tokio::io::duplex(64 * 1024);
+        let (output, reader) = tokio::io::duplex(1 << 20);
+        let served = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
+        let mut served_loop = Self {
+            stdin,
+            stdout: tokio::io::BufReader::new(reader).lines(),
+            _served: served,
+            _dir: dir,
+        };
+        let handshake = json!({
+            "jsonrpc": "2.0", "id": 0, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "per-call-timing", "version": "0"},
+            },
+        });
+        let answer = served_loop.round_trip(&handshake.to_string()).await;
+        assert!(answer.contains("\"result\""), "handshake: {answer}");
+        served_loop
+    }
+
+    /// Writes one line and reads the next line the gateway writes.
+    async fn round_trip(&mut self, line: &str) -> String {
+        use tokio::io::AsyncWriteExt as _;
+        self.stdin
+            .write_all(format!("{line}\n").as_bytes())
+            .await
+            .expect("stdin");
+        self.stdout
+            .next_line()
+            .await
+            .expect("stdout")
+            .expect("stdout open")
+    }
+}
+
+/// One `gateway_invoke` of the bench backend's `search`, as a stdio frame.
+fn stdio_invoke(id: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0", "id": id, "method": "tools/call",
+        "params": {"name": "gateway_invoke", "arguments": {
+            "server": "bench", "tool": "search", "arguments": {"blob": "x".repeat(16)},
+        }},
+    })
+}
+
+/// The stdio rows: the whole stdio loop (`run_stdio_on`), from the line
+/// written to its stdin to the answer read from its stdout, so the request
+/// task's spawn and its `CountOnly` hold (MIK-8176) are on the timed path.
+/// `batch` calls go in one array frame; the time is reported per call.
+async fn stdio_median_ns(stdio: &mut StdioLoop, batch: usize) -> u128 {
     let mut samples = Vec::with_capacity(CALLS);
     for round in 0..WARMUP + CALLS {
-        let batch = serde_json::Value::Array(
-            (0..BATCH)
-                .map(|i| {
-                    super::signing_nonce_allocations_support::invoke(
-                        &format!("b{round}-{i}"),
-                        None,
-                        arguments.clone(),
-                    )
-                })
-                .collect(),
-        );
-        let reads = fixture.meta.stdio_reads();
+        let line = if batch == 1 {
+            stdio_invoke(&format!("t{round}")).to_string()
+        } else {
+            Value::Array(
+                (0..batch)
+                    .map(|i| stdio_invoke(&format!("b{round}-{i}")))
+                    .collect(),
+            )
+            .to_string()
+        };
         let start = Instant::now();
-        let frames = super::super::Gateway::dispatch_batch_read(
-            &fixture.meta,
-            &fixture.tool_policy,
-            &fixture.mtls_policy,
-            batch,
-            "per-call-timing",
-            &super::super::StdioTelemetry::default(),
-            &reads,
-        )
-        .await;
+        let answer = stdio.round_trip(&line).await;
         let elapsed = start.elapsed().as_nanos();
-        let answers: Vec<String> = frames
-            .iter()
-            .filter_map(|frame| frame.stdio_value().map(|v| v.to_string()))
-            .collect();
+        let answers: Vec<Value> = match serde_json::from_str(&answer).expect("one JSON frame") {
+            Value::Array(items) => items,
+            single => vec![single],
+        };
         assert!(
-            answers.len() == BATCH
+            answers.len() == batch
                 && answers
                     .iter()
-                    .all(|text| !text.contains("\"error\"") && !text.contains("\"isError\":true")),
-            "round {round}: every batched call must reach the backend: {answers:?}"
+                    .all(|a| a.get("result").is_some() && a["result"]["isError"] != json!(true)),
+            "round {round}: every timed stdio call must reach the backend: {answer}"
         );
         if round >= WARMUP {
-            samples.push(elapsed / BATCH as u128);
+            samples.push(elapsed / batch as u128);
         }
     }
     samples.sort_unstable();
@@ -250,14 +282,14 @@ fn per_call_timing() {
         for (stage, blob) in STAGES.iter().zip([16, 64 * 1024]) {
             println!("PER_CALL_NS {stage} {}", median_ns(&state, blob).await);
         }
-        let stdio = super::signing_nonce_allocations_support::Fixture::start_unthrottled().await;
+        let mut stdio = StdioLoop::start().await;
         println!(
             "PER_CALL_NS stdio_invoke_tiny {}",
-            stdio_median_ns(&stdio).await
+            stdio_median_ns(&mut stdio, 1).await
         );
         println!(
             "PER_CALL_NS stdio_batch_tiny {}",
-            stdio_batch_median_ns(&stdio).await
+            stdio_median_ns(&mut stdio, BATCH).await
         );
     });
 }

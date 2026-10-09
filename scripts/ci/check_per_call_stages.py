@@ -18,9 +18,12 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 TABLE = ROOT / "docs/internal/perf/per_call_stages.tsv"
 HARNESS = ROOT / "src/gateway/server/tests/per_call_timing.rs"
-# The tools/call wrapper path (design r4 K-M6). The handler body's own file is
-# added once MIK-8143 step B gives it its final name.
+# The tools/call path (design r4 K-M6): the HTTP handler, the meta wrapper
+# chain, and the stdio request path.
 PATH_FILES = [
+    "src/gateway/router/handlers.rs",
+    "src/gateway/router/handlers/dispatch_intake.rs",
+    "src/gateway/router/handlers/dispatch_tools_call.rs",
     "src/gateway/meta_mcp/grant_audit.rs",
     "src/gateway/meta_mcp/call_dispatch.rs",
     "src/gateway/meta_mcp/invoke/dispatch.rs",
