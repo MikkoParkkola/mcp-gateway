@@ -1,0 +1,13 @@
+diff --git a/src/backend/era.rs b/src/backend/era.rs
+index bcc0c7f69..4db3b4be1 100644
+--- a/src/backend/era.rs
++++ b/src/backend/era.rs
+@@ -277,7 +277,7 @@ impl Backend {
+             .era
+             .restart_while_serving(
+                 || probe(transport, timeout),
+-                |step| unless_retired(entry, step),
++                |step| { let _ = entry; step(); true },
+             )
+             .await
+     }

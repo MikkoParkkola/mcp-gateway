@@ -1,0 +1,13 @@
+diff --git a/src/backend/era.rs b/src/backend/era.rs
+index bcc0c7f69..a8c998c99 100644
+--- a/src/backend/era.rs
++++ b/src/backend/era.rs
+@@ -351,7 +351,7 @@ impl Backend {
+         tokio::spawn(async move {
+             era.reprobe_with(
+                 || probe(&transport, timeout),
+-                |store| with_serving(&entry, &transport, store),
++                |store| { let _ = (&entry, &transport); store(); true },
+             )
+             .await;
+         });

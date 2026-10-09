@@ -1,0 +1,13 @@
+diff --git a/src/backend/era.rs b/src/backend/era.rs
+index bcc0c7f69..70ad45d63 100644
+--- a/src/backend/era.rs
++++ b/src/backend/era.rs
+@@ -204,7 +204,7 @@ impl Backend {
+                 .map(|current| Arc::clone(current.value()))
+         };
+         let holder = replacement.as_deref().unwrap_or(entry);
+-        let verdict = holder.era.cached().await;
++        let verdict = self.shared_entry().era.cached().await;
+         if !holds(holder, &transport) {
+             return Err(super::lifecycle::pre_send_start_error(
+                 &self.name,
