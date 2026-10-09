@@ -160,7 +160,9 @@ def scan_text(text: str, name: str) -> list[str]:
             ):
                 out.append(f"{name}:{dropped[socket]}: the port of a dropped socket is used after the drop")
                 del dropped[socket]
-        prev_raw = raw
+        # Only a comment-only line above a bind can carry its marker, so a
+        # marked statement never exempts the bind that follows it.
+        prev_raw = raw if not line.strip() else ""
     return out
 
 
@@ -294,6 +296,14 @@ async fn stalling_listener() -> u16 {
     port
 }
 """, 0),
+    "a marked bind does not exempt the next": ("""
+async fn two() -> u16 {
+    let server = // port-check: serves on below
+        tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    probe.local_addr().unwrap().port()
+}
+""", 1),
     "marked": ("""
 fn t() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap(); // port-check: the drop is the subject
