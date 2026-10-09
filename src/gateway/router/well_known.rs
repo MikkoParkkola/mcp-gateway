@@ -41,9 +41,10 @@
 //! `authorization_servers` names the OIDC issuers of an enabled key server with
 //! `delegated_bearer` on: those are the authorization servers whose tokens the
 //! MCP routes accept, so a standards-following client learns
-//! where to sign in. It stays empty, and is omitted (RFC 9728 section 3.2),
-//! when no issuer token is accepted: the gateway itself serves no RFC 8414
-//! authorization-server metadata, so naming itself would break discovery.
+//! where to sign in. When no issuer token is accepted the endpoint answers
+//! `404` (MIK-8158): the gateway itself serves no RFC 8414 authorization-server
+//! metadata, so there is no server to name, and a document naming none would
+//! send a client into an OAuth sign-in that cannot complete.
 
 use std::sync::Arc;
 
@@ -316,6 +317,12 @@ pub async fn oauth_protected_resource_handler(
     state: Arc<AppState>,
     bind_origin: Option<String>,
 ) -> Response {
+    // MIK-8158: no authorization server, nothing to discover. A document
+    // naming none tells a client this is an OAuth resource it can never sign
+    // in to; without one it uses the credential it was given.
+    if authorization_servers(state.live_config.running()).is_empty() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let config = state.live_config.get();
     let json_header = (
         header::CONTENT_TYPE,
