@@ -29,6 +29,7 @@ Usage: check_docker_hub_pulls.py [--self-test] [<root>]
 from __future__ import annotations
 
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -40,7 +41,37 @@ KIND = re.compile(r"uses:\s*helm/kind-action@")
 BUILDX = re.compile(r"uses:\s*docker/setup-buildx-action@")
 DOCKER_CMD = re.compile(r"\bdocker\s+(?:pull|run|create)\b(.*)")
 SHELL_FROM = re.compile(r"\bFROM\s+([A-Za-z0-9$][^\s\\'\"]*)")
-TAGGED = re.compile(r"^[a-z][\w./-]*(?::[\w.-]+)?(?:@sha256:[0-9a-f]{64})?$")
+# Options of `docker run|create|pull` that take a separate value.
+VALUED = {
+    "-e", "--env", "-v", "--volume", "-p", "--publish", "--name", "--label", "-l",
+    "--network", "--net", "--entrypoint", "-w", "--workdir", "-u", "--user",
+    "--platform", "--pull", "--add-host", "--mount", "--env-file", "--cidfile",
+    "-h", "--hostname", "--memory", "-m", "--cpus", "--restart", "--tmpfs",
+    "--ulimit", "--cap-add", "--cap-drop", "--device", "--log-driver", "--log-opt",
+    "--security-opt", "--shm-size", "--stop-signal", "--stop-timeout", "--health-cmd",
+    "--expose", "--dns", "--ipc", "--pid", "--group-add", "--init-path",
+}
+
+
+def docker_image(rest: str) -> str | None:
+    """The image operand of `docker run|create|pull <rest>`, or None when it is
+    not a literal (a variable, or the line cannot be tokenised)."""
+    try:
+        tokens = shlex.split(rest, comments=True)
+    except ValueError:
+        return None
+    skip = False
+    for token in tokens:
+        if skip:
+            skip = False
+            continue
+        if token.startswith("-"):
+            skip = token in VALUED
+            continue
+        if token in {"|", "&&", ";", ">", "2>&1"} or "$" in token or "{" in token:
+            return None
+        return token
+    return None
 
 
 def has_registry(ref: str) -> bool:
@@ -91,17 +122,35 @@ def check_text(path: str, text: str) -> list[str]:
         for ref in DIGEST_REF.findall(line):
             if not has_registry(ref):
                 problems.append(f"{where}: {ref} pulls from Docker Hub")
-        m = DOCKER_CMD.search(line)
-        if m:
-            for token in m.group(1).split():
-                if ("@sha256:" in token or ":" in token) and TAGGED.match(token) and not has_registry(token):
-                    problems.append(f"{where}: docker pulls {token} from Docker Hub")
         if path.endswith(".sh") and not is_dockerfile:
             for ref in SHELL_FROM.findall(line):
                 if ref != "scratch" and not ref.startswith("$") and not has_registry(ref):
                     problems.append(f"{where}: a script writes FROM {ref} (Docker Hub)")
+    problems.extend(check_docker_commands(path, text))
     if is_workflow:
         problems.extend(check_steps(path, text))
+    return problems
+
+
+def check_docker_commands(path: str, text: str) -> list[str]:
+    """Literal image operands of `docker run|create|pull`, with backslash
+    continuations joined so an image on the next line is still seen."""
+    problems = []
+    logical, start = "", 0
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = code(raw)
+        if not logical:
+            start = n
+        if line.rstrip().endswith("\\"):
+            logical += line.rstrip()[:-1] + " "
+            continue
+        logical += line
+        m = DOCKER_CMD.search(logical)
+        if m:
+            image = docker_image(m.group(1))
+            if image and not has_registry(image):
+                problems.append(f"{path}:{start}: docker pulls {image} from Docker Hub")
+        logical = ""
     return problems
 
 
@@ -124,8 +173,13 @@ def check_steps(path: str, text: str) -> list[str]:
                 if nxt.lstrip().startswith("- "):
                     break
                 body.append(nxt)
-            value = next((b.split(key, 1)[1].strip() for b in body if key in b), "")
-            ref = value.split("image=", 1)[1].split(",")[0] if "image=" in value else value
+            value = next(
+                (code(b).split(key, 1)[1].strip() for b in body if key in code(b)), ""
+            )
+            if pattern is BUILDX:
+                ref = value.split("image=", 1)[1].split(",")[0] if "image=" in value else ""
+            else:
+                ref = value
             if not has_registry(ref):
                 problems.append(f"{path}:{n + 1}: {what}")
     return problems
@@ -156,6 +210,17 @@ def self_test() -> list[str]:
         "kind without node_image": (".github/workflows/x.yml", "jobs:\n  k:\n    steps:\n      - uses: helm/kind-action@abc\n"),
         "buildx without driver image": (".github/workflows/x.yml", "      - uses: docker/setup-buildx-action@abc\n"),
         "literal docker pull": ("scripts/x.sh", "docker pull redis:7\n"),
+        "untagged docker pull": ("scripts/x.sh", "docker pull redis\n"),
+        "quoted docker pull": ("scripts/x.sh", 'docker pull "redis:7"\n'),
+        "image on a continuation line": ("scripts/x.sh", "docker run --detach \\\n  redis:7 redis-server\n"),
+        "commented kind node_image": (
+            ".github/workflows/x.yml",
+            "      - uses: helm/kind-action@abc\n        with:\n          # node_image: mirror.gcr.io/kindest/node:v1\n",
+        ),
+        "buildx driver-opts without image": (
+            ".github/workflows/x.yml",
+            "      - uses: docker/setup-buildx-action@abc\n        with:\n          driver-opts: network=host\n",
+        ),
         "script-written FROM": ("scripts/x.sh", "printf 'FROM busybox:1.36\\n' > Dockerfile\n"),
     }
     allowed = {
@@ -171,6 +236,8 @@ def self_test() -> list[str]:
             ".github/workflows/x.yml",
             "      - uses: docker/setup-buildx-action@abc\n        with:\n          driver-opts: image=mirror.gcr.io/moby/buildkit:1\n",
         ),
+        "app argument after the image": ("scripts/x.sh", "docker run ghcr.io/o/client:1 redis:6379\n"),
+        "variable image": ("scripts/x.sh", 'docker run --rm "$IMAGE" true\n'),
         "port mapping and scratch": ("scripts/x.sh", "docker run --publish 127.0.0.1::6379 mirror.gcr.io/library/redis:7\nprintf 'FROM scratch\\n'\n"),
     }
     out = []
