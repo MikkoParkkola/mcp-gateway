@@ -67,7 +67,7 @@ fn sources() -> Vec<(String, String)> {
 /// ADM-SWEEP (`MIK-8193`): every production admission of a call goes through
 /// one owner spelling. The synchronous lease is entered only through
 /// `admit_meta_sync`, each call site naming its `AdmissionOwner` (HTTP: the
-/// task owner key; stdio: the reserved local owner), and an execution
+/// routed task owner; stdio: the reserved local owner), and an execution
 /// admission request is built only at the two reviewed sites. A new path
 /// fails here until it is reviewed into the lists.
 #[test]
@@ -75,7 +75,7 @@ fn adm_sweep_every_admission_uses_one_owner_spelling() {
     let expected_sync: BTreeMap<&str, &str> = [
         (
             "gateway/router/handlers.rs",
-            "AdmissionOwner::credential(&owner_key)",
+            "AdmissionOwner::routed(&admission_owner)",
         ),
         ("gateway/server/mod.rs", "AdmissionOwner::local_operator()"),
     ]

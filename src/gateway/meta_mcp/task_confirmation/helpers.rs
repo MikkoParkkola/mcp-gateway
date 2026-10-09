@@ -7,19 +7,20 @@ use super::{
     TaskConfirmationRequest, Value, canonical_json, json, sha256_hex,
 };
 
-/// The credential principal an execution is admitted under when the caller
-/// has no verified identity (`MIK-8193`). The synchronous lease and task
-/// admission share one store keyed `(principal, key)`, so they must spell the
-/// caller alike, or one key admits the same operation twice: once in each
-/// spelling. HTTP mints it from the task owner key (`task_owner_key`: proven
-/// subject, else `credential:<principal>`), stdio from its reserved owner.
+/// The principal an execution is admitted under (`MIK-8193`). The synchronous
+/// lease and task admission share one store keyed `(principal, key)`, so they
+/// must spell the caller alike, or one key admits the same operation twice:
+/// once in each spelling. HTTP mints it from the request's routed task owner
+/// (`route_owners`: verified identity, agent, proven subject or credential;
+/// the pooled anonymous owner is no principal), stdio from its reserved owner.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AdmissionOwner<'a>(Option<&'a str>);
 
 impl<'a> AdmissionOwner<'a> {
-    /// An HTTP caller's task owner key; empty is no owner (refused when keyed).
-    pub(crate) fn credential(owner_key: &'a str) -> Self {
-        Self((!owner_key.is_empty()).then_some(owner_key))
+    /// An HTTP caller's routed task owner; empty is no owner (refused when
+    /// keyed, unless its proven subject admits it).
+    pub(crate) fn routed(owner: &'a str) -> Self {
+        Self((!owner.is_empty()).then_some(owner))
     }
 
     /// The stdio transport's reserved owner (MIK-7272.OWNER.3).

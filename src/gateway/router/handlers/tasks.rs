@@ -117,9 +117,15 @@ pub(super) fn route_task_owner(
 /// at each delivery by its gateway credential, and an agent-only caller has
 /// none to re-check, so it stays without an events principal (MIK-8055 K6).
 ///
-/// Also returns the owner key itself ([`task_owner_key`]): the synchronous
-/// execution lease admits an identity-less caller under that same spelling,
-/// so a key cannot admit one operation once per spelling (MIK-8193).
+/// With authentication off, a caller with a proven subject (an mTLS
+/// certificate, a grant) owns its tasks by that subject, never by the pooled
+/// anonymous owner, so two such callers cannot read or cancel each other's
+/// tasks (MIK-8193).
+///
+/// Also returns the admission principal: the owner itself, except the pooled
+/// anonymous owner, which is no principal (a keyed sync call stays refused).
+/// The synchronous lease admits under it, so one key cannot admit one
+/// operation once per spelling (MIK-8193).
 pub(super) fn route_owners(
     state: &AppState,
     verified_identity: Option<&VerifiedIdentity>,
@@ -131,11 +137,20 @@ pub(super) fn route_owners(
     ),
 ) -> (String, String, String) {
     let owner_key = task_owner_key(subject, cert, client);
-    (
-        route_task_owner(state, verified_identity, agent, &owner_key),
-        route_task_owner(state, verified_identity, None, &owner_key),
-        owner_key,
-    )
+    let proven = super::super::identity::subject_key(subject, cert);
+    let route = |agent: Option<&OAuthAgentIdentity>| match (agent, &proven) {
+        (None, Some(subject)) if !state.auth_config.enabled && verified_identity.is_none() => {
+            subject.clone()
+        }
+        _ => route_task_owner(state, verified_identity, agent, &owner_key),
+    };
+    let owner = route(agent);
+    let admission = if owner == AUTH_DISABLED_TASK_OWNER {
+        String::new()
+    } else {
+        owner.clone()
+    };
+    (owner, route(None), admission)
 }
 
 /// The owner of a validated agent's tasks on a gateway with auth off.

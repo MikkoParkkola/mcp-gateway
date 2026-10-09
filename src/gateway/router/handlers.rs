@@ -946,7 +946,7 @@ async fn meta_mcp_dispatch(
 
     // Resolved ONCE, here, and reused by creation, retrieval, cancellation,
     // idempotent replay and subscription ownership below.
-    let (owner, events_owner, owner_key) = tasks::route_owners(
+    let (owner, events_owner, admission_owner) = tasks::route_owners(
         &state,
         verified_identity.as_ref(),
         oauth_agent_identity.as_ref(),
@@ -1681,7 +1681,7 @@ async fn meta_mcp_dispatch(
             }
             caller.signing = signing_context.as_ref();
             let admission = state.meta_mcp.admit_meta_sync(
-                crate::gateway::meta_mcp::AdmissionOwner::credential(&owner_key),
+                crate::gateway::meta_mcp::AdmissionOwner::routed(&admission_owner),
                 &caller,
                 tool_name,
                 &arguments,
