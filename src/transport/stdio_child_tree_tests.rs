@@ -494,6 +494,26 @@ async fn twenty_handed_over_trees_each_finish_within_their_deadline() {
     }
 }
 
+/// MIK-7923 P5: a tree spawned by a start the retire overtook after its
+/// pre-spawn check is refused at install and ended by the reaper, never
+/// installed.
+#[tokio::test]
+async fn a_tree_installed_after_a_retire_is_refused_and_ended() {
+    let (_w, t) = started("while IFS= read -r l; do :; done", None).await;
+    t.retire_tree_now();
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.args(["-c", "exec sleep 60"]);
+    let tree = ChildTree::new(super::super::spawn_in_own_tree(cmd).expect("spawn"));
+    let pid = pid_of(tree.pid().expect("leader pid"));
+    let refused = t.install_tree(tree);
+    assert!(
+        matches!(refused, Err(crate::Error::BackendNotFound(_))),
+        "a retired transport installed a tree: {refused:?}"
+    );
+    assert!(t.child.lock().tree.is_none(), "nothing was installed");
+    assert_eq!(finished(pid).await.refused, 0, "the reaper ended it");
+}
+
 /// MIK-7923: a transport dropped without `close` hands its tree to the
 /// reaper, so it gets the settle and the reap a close gets, not the single
 /// fallback signal of `ChildTree`'s Drop.

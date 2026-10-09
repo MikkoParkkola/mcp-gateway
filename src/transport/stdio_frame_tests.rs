@@ -581,8 +581,8 @@ async fn a_write_queued_across_a_token_renewal_takes_the_new_token() {
 /// MIK-7923 T1-install: a restart parked at the writer lock on an idle runtime
 /// has spawned nothing, so a retire there misses no child. The server logs
 /// each launch; while the runtime idles there is still only the first. Driven
-/// again, the restart spawns, finds the transport retired, installs nothing,
-/// and the fresh tree is ended.
+/// again, the restart finds the transport retired and spawns nothing (a start
+/// the retire overtakes after that check is refused at install instead).
 #[cfg(target_os = "linux")]
 #[test]
 fn a_restart_parked_on_the_writer_lock_spawns_nothing_a_retire_misses() {
