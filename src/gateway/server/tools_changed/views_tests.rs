@@ -140,9 +140,9 @@ fn a_recompute_sees_a_blocked_tool_and_an_evicted_slot() {
     assert!(views.slot(U1, holds(&xy)));
     assert!(views.slot("idp:1:b:0:", holds(&x)));
     // A verdict blocks y: U1's served view loses it; the other slot is gone.
-    assert!(views.recompute(&[(U1.to_string(), holds(&x))]));
+    assert!(views.recompute(&[(U1.to_string(), holds(&x))], 0));
     assert!(
-        !views.recompute(&[(U1.to_string(), holds(&x))]),
+        !views.recompute(&[(U1.to_string(), holds(&x))], 0),
         "said once"
     );
 }
@@ -152,7 +152,10 @@ fn a_replacement_instance_compares_with_what_its_predecessor_showed() {
     let mut views = Views::new(1);
     let tools = [tool("x", "one")];
     assert!(views.slot(U1, holds(&tools)));
-    assert!(!views.adopt(2));
+    assert!(
+        views.adopt(2),
+        "a predecessor that showed tools is announced"
+    );
     assert!(
         !views.slot(U1, holds(&tools)),
         "same tools after replacement"
@@ -165,6 +168,74 @@ fn a_revoked_grant_announces_the_loss_once() {
     let mut views = Views::new(1);
     assert!(views.slot(U1, holds(&[tool("x", "one")])));
     assert!(views.revoked(U1), "the caller lost what it saw");
-    assert!(!views.revoked(U1), "said once");
     assert!(!views.any_shown(), "no tombstone after a revocation");
+}
+
+#[test]
+fn a_revocation_announces_even_when_the_drain_never_saw_the_slot() {
+    // It can overtake the first store's nudge, or follow an idle eviction.
+    let mut views = Views::new(1);
+    assert!(views.revoked(U1));
+}
+
+#[test]
+fn an_older_lease_never_wins_over_an_evicted_newer_one() {
+    // G2: r1 {x}, r2 {y}, r2 evicted, then r3 {x}: the caller last saw {y}.
+    let mut views = Views::new(1);
+    let (r1, r2, r3) = (
+        acct("d", "g", 1, 1),
+        acct("d", "g", 1, 2),
+        acct("d", "g", 1, 3),
+    );
+    let (x, y) = ([tool("x", "")], [tool("y", "")]);
+    assert!(views.slot(&r1, holds(&x)));
+    assert!(views.slot(&r2, holds(&y)));
+    assert!(!views.slot(&r2, SlotSeen::Absent));
+    assert!(views.slot(&r3, holds(&x)));
+}
+
+#[test]
+fn an_older_eviction_never_replaces_a_newer_tombstone() {
+    let mut views = Views::new(1);
+    let (r1, r2, r3) = (
+        acct("d", "g", 1, 1),
+        acct("d", "g", 1, 2),
+        acct("d", "g", 1, 3),
+    );
+    let (x, y) = ([tool("x", "")], [tool("y", "")]);
+    assert!(views.slot(&r1, holds(&x)));
+    assert!(views.slot(&r2, holds(&y)));
+    assert!(!views.slot(&r2, SlotSeen::Absent));
+    assert!(!views.slot(&r1, SlotSeen::Absent));
+    assert!(!views.slot(&r3, holds(&y)), "compared with r2's {{y}}");
+}
+
+#[test]
+fn a_new_generation_beside_a_live_old_one_announces_even_when_empty() {
+    // G3: generations have no order, so the change cannot be ruled out.
+    let mut views = Views::new(1);
+    assert!(views.slot(&acct("d", "g1", 1, 1), holds(&[tool("x", "")])));
+    assert!(views.slot(&acct("d", "g2", 1, 1), holds(&[])));
+}
+
+#[test]
+fn a_filter_change_announces_for_an_evicted_view_and_a_store_does_not() {
+    // G5: a blocked tool shown only by an evicted caller.
+    let mut views = Views::new(1);
+    assert!(views.slot(U1, holds(&[tool("x", "")])));
+    assert!(!views.slot(U1, SlotSeen::Absent));
+    assert!(!views.recompute(&[], 7), "first look at the filter");
+    assert!(!views.recompute(&[], 7), "a store, the filter unchanged");
+    assert!(views.recompute(&[], 8), "the filter changed");
+}
+
+#[test]
+fn a_generation_with_colons_and_multibyte_text_parses() {
+    let mut views = Views::new(1);
+    let tools = [tool("x", "")];
+    assert!(views.slot(&acct("d", "a:b:é", 1, 1), holds(&tools)));
+    assert!(
+        !views.slot(&acct("d", "a:b:é", 1, 2), holds(&tools)),
+        "the refresh inherits, so the generation was read whole"
+    );
 }

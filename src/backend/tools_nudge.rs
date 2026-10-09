@@ -75,6 +75,9 @@ pub(crate) enum SlotEvent {
     Revoked,
 }
 
+/// Bindings whose store nudge is queued and unread.
+pub(crate) type PendingSlots = Arc<parking_lot::Mutex<std::collections::HashSet<String>>>;
+
 /// The sending half of the change feed.
 pub(crate) type NudgeFeed = tokio::sync::mpsc::UnboundedSender<ToolsNudge>;
 
@@ -103,8 +106,14 @@ impl super::Backend {
                     kind: NudgeKind::Changed,
                 });
             }));
-        // Slots opened before the feed existed. One opened concurrently is
-        // observed by `pooled_entry_with` too; the first observer stays.
+        // Slots opened before the feed existed. NO SLOT IS MISSED, and the
+        // order of the two steps is what makes it so: the feed is set BEFORE
+        // this walk, and `pooled_entry_with` checks for the feed while holding
+        // the new slot's shard WRITE guard. A slot that checked before the feed
+        // was set is still being inserted under that guard, so this walk blocks
+        // on its shard and then sees it; a slot whose shard the walk already
+        // passed checks after the feed was set. Observing twice is harmless:
+        // the first observer stays.
         for slot in &self.pool {
             self.observe_slot(slot.key(), slot.value());
         }
@@ -123,7 +132,13 @@ impl super::Backend {
             self.instance,
             binding.clone(),
         );
+        let pending = Arc::clone(&self.pending_slot_nudges);
         entry.tools_cache.observe_stores(Arc::new(move || {
+            // Coalesced: a store while one is queued adds nothing, because the
+            // drain reads the slot as it is when it gets there.
+            if !pending.lock().insert(binding.clone()) {
+                return;
+            }
             let _ = feed.send(ToolsNudge::Binding {
                 name: name.clone(),
                 instance,
@@ -131,6 +146,12 @@ impl super::Backend {
                 event: SlotEvent::Stored,
             });
         }));
+    }
+
+    /// The drain is about to read slot `binding`: a store from now on queues
+    /// a fresh nudge, so none is lost between this and the read.
+    pub(crate) fn take_slot_nudge(&self, binding: &str) {
+        self.pending_slot_nudges.lock().remove(binding);
     }
 
     /// Nudge the drain that per-user slot `key` closed for `event`'s reason.
@@ -283,6 +304,27 @@ mod tests {
             std::iter::from_fn(|| nudges.try_recv().ok()).count(),
             1,
             "a slot that predates the feed is observed too"
+        );
+    }
+
+    #[tokio::test]
+    async fn stores_queued_before_the_drain_reads_coalesce_into_one_nudge() {
+        let backend = backend("a");
+        let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
+        backend.attach_nudges(&feed);
+        let slot = backend
+            .pooled_entry(&per_user("idp:u1"))
+            .expect("a per-user slot is admitted");
+        for _ in 0..3 {
+            slot.tools_cache.replace(Vec::new(), || ());
+        }
+        assert_eq!(std::iter::from_fn(|| nudges.try_recv().ok()).count(), 1);
+        backend.take_slot_nudge("idp:u1");
+        slot.tools_cache.replace(Vec::new(), || ());
+        assert_eq!(
+            std::iter::from_fn(|| nudges.try_recv().ok()).count(),
+            1,
+            "a store after the drain read queues a fresh nudge"
         );
     }
 

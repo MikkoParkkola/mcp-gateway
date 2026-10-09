@@ -36,3 +36,19 @@ src/transport/http/listen.rs	reinit_if_needed	1	Re-runs initialize after a dropp
 src/transport/http/listen.rs	legacy_pin	1	Names the holder (transport and HTTP session) a legacy subscribe lands on, for the ledger
 src/transport/http/listen.rs	legacy_interest	1	Sends resources/subscribe or unsubscribe pinned to one session; no access decision
 src/transport/http/listen.rs	unsolicited	1	Opens the legacy notification stream with its URI filter; delivery is authorized downstream
+src/gateway/router/mod.rs	announce_backend_view_changed	1	Per-user change hint (MIK-8148): calls the existing backend-scoped broadcasts, which make the access decision
+src/gateway/server/tools_changed.rs	binding	1	Per-user change hint: decides only whether a content-free relist hint is sent
+src/gateway/server/tools_changed.rs	backend_views	1	Per-user change hint: recomputes per-user views after a backend-wide nudge
+src/gateway/server/tools_changed.rs	decide	1	Change drain: decides whether and how widely a content-free hint goes; who is admitted is decided at delivery
+src/gateway/server/tools_changed.rs	slot_seen	1	Change drain: fingerprints a per-user slot's served list
+src/gateway/server/tools_changed.rs	per_user_seen	1	Change drain: snapshots every per-user slot and the descriptor filter
+src/gateway/server/tools_changed/views.rs	acct	1	Per-user change hint: parses an account binding's audience and lease revision
+src/gateway/server/tools_changed/views.rs	audience	1	Per-user change hint: names the caller across credential refreshes
+src/gateway/server/tools_changed/views.rs	new	1	Per-user change hint: empty view state for one backend instance
+src/gateway/server/tools_changed/views.rs	adopt	1	Per-user change hint: carries views across a backend replacement
+src/gateway/server/tools_changed/views.rs	slot	1	Per-user change hint: compares one slot with what it last showed
+src/gateway/server/tools_changed/views.rs	recompute	1	Per-user change hint: recomputes every present slot and the filter
+src/gateway/server/tools_changed/views.rs	revoked	1	Per-user change hint: announces a revoked grant's loss; the revocation itself is enforced elsewhere
+src/gateway/server/tools_changed/views.rs	any_shown	1	Per-user change hint: whether removing the backend changes any view
+src/gateway/server/tools_changed/views.rs	baseline	1	Per-user change hint: picks what a first fill is compared with
+src/gateway/server/tools_changed/views.rs	bury	1	Per-user change hint: keeps an evicted view's fingerprint, capped

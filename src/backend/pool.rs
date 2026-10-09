@@ -323,7 +323,9 @@ impl Backend {
                 dashmap::mapref::entry::Entry::Vacant(vacant) => {
                     let mut entry = PooledEntry::new(&self.name, &self.failsafe_config);
                     entry.identity_lease = self.admit(key)?;
-                    // Observed before it is published, so no store escapes it.
+                    // Observed before it is published, so no store escapes it,
+                    // and under this shard's write guard, which `attach_nudges`
+                    // relies on to never miss a slot opened while it runs.
                     self.observe_slot(key, &entry);
                     created = true;
                     vacant.insert(Arc::new(entry))

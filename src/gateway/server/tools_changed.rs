@@ -151,7 +151,7 @@ impl Announced {
         &mut self,
         name: &str,
         instance: u64,
-        present: Option<&[(String, views::SlotSeen)]>,
+        present: Option<&PerUserNow>,
     ) -> bool {
         let Some(present) = present else {
             return self
@@ -163,7 +163,7 @@ impl Announced {
             .views
             .entry(name.to_string())
             .or_insert_with(|| views::Views::new(instance));
-        views.adopt(instance) | views.recompute(present)
+        views.adopt(instance) | views.recompute(&present.slots, present.filter)
     }
 
     /// Whether listeners must hear about capability catalogue `name`, whose
@@ -254,6 +254,7 @@ fn decide(
                 .backends
                 .get(&name)
                 .filter(|b| b.instance() == instance)?;
+            backend.take_slot_nudge(&binding);
             let seen = slot_seen(backend.per_user_view(&binding));
             if !announced
                 .lock()
@@ -297,15 +298,25 @@ fn slot_seen(view: SlotView) -> views::SlotSeen {
     }
 }
 
-fn per_user_seen(backend: &crate::backend::Backend) -> Vec<(String, views::SlotSeen)> {
-    backend
+/// Every per-user slot of one backend now, and its descriptor filter.
+pub(super) struct PerUserNow {
+    slots: Vec<(String, views::SlotSeen)>,
+    filter: u64,
+}
+
+fn per_user_seen(backend: &crate::backend::Backend) -> PerUserNow {
+    let slots = backend
         .per_user_bindings()
         .into_iter()
         .map(|binding| {
             let seen = slot_seen(backend.per_user_view(&binding));
             (binding, seen)
         })
-        .collect()
+        .collect();
+    PerUserNow {
+        slots,
+        filter: backend.visibility_filter_fingerprint(),
+    }
 }
 
 async fn drain_until<T, F, Fut>(
