@@ -30,7 +30,7 @@ use super::hash::compute_capability_hash;
 use super::schema_validator::validate_arguments;
 use super::{
     CapabilityDefinition, CapabilityExecutionContext, CapabilityExecutor, CapabilityLoader,
-    validate_capability_account_binding, validate_oauth_isolation,
+    validate_capability_account_binding, validate_cli_templates, validate_oauth_isolation,
     validate_personal_capability_identity,
 };
 use crate::Result;
@@ -694,6 +694,7 @@ impl CapabilityBackend {
     /// in flight elsewhere keeps it running until released (MIK-7923).
     pub fn register_capability(&self, capability: CapabilityDefinition) -> Result<()> {
         validate_capability_account_binding(&capability, self.executor.account_strategies())?;
+        validate_cli_templates(&capability)?;
         let name = capability.name.clone();
         let mut caps = self.capabilities.write();
         let replaced = caps.contains(&name);

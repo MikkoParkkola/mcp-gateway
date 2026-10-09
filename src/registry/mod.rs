@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
-use crate::capability::parse_capability_file;
+use crate::capability::{parse_capability_file, validate_capability};
 use crate::{Error, Result};
 
 /// Registry entry describing a capability
@@ -178,7 +178,12 @@ impl Registry {
             }
 
             // Parse capability file
-            match parse_capability_file(path).await {
+            // Validated as loading validates, so search never offers a
+            // definition the gateway would refuse (MIK-7926.FIX.3).
+            match parse_capability_file(path)
+                .await
+                .and_then(|c| validate_capability(&c).map(|()| c))
+            {
                 Ok(capability) => {
                     // Calculate relative path from capabilities directory
                     let relative_path = path
@@ -204,7 +209,7 @@ impl Registry {
                     });
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to parse {}: {e}", path.display());
+                    eprintln!("Warning: skipping {}: {e}", path.display());
                 }
             }
         }

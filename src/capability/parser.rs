@@ -137,7 +137,28 @@ pub fn validate_capability(capability: &CapabilityDefinition) -> Result<()> {
 
     validate_webhook_events(capability)?;
     validate_mcp_operations(capability)?;
+    validate_cli_templates(capability)?;
 
+    Ok(())
+}
+
+/// Refuse a CLI argv template that would fail every call (MIK-7926.FIX.3),
+/// with the rules the call path applies, on every process provider.
+///
+/// # Errors
+///
+/// `Error::Config` naming the capability, the provider and the template.
+pub(crate) fn validate_cli_templates(capability: &CapabilityDefinition) -> Result<()> {
+    for (provider, process) in &capability.providers.process {
+        if let super::ProcessConfig::Cli(config) = process {
+            super::executor::check_cli_templates(config).map_err(|e| {
+                Error::Config(format!(
+                    "Capability '{}' provider '{provider}': {e}",
+                    capability.name
+                ))
+            })?;
+        }
+    }
     Ok(())
 }
 
