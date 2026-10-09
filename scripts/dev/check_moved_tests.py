@@ -86,6 +86,13 @@ def items(text: str) -> list[str]:
     return out
 
 
+# `super::super::` reads back as `super::` in code only: comments, string and
+# char literals are matched first and kept, so a path inside a string is
+# compared as written.
+DEEPER = re.compile(r"//[^\n]*|/\*.*?\*/|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])'"
+                    r"|(?<![\w:])(super::super::)", re.S)
+
+
 def rebuild(ref: str, body: str, base: str, base_body: str) -> tuple[str, list[str]]:
     """The head test module with each new child read back in place."""
     problems, out = [], []
@@ -108,7 +115,7 @@ def rebuild(ref: str, body: str, base: str, base_body: str) -> tuple[str, list[s
         text = INCLUDE.sub(back, text)
         if not re.search(rf"^    mod {m.group(1)} {{$", base_body, re.M):
             text = re.sub(r"^use super::\*;$", "", text, count=1, flags=re.M)
-            out.append(re.sub(r"(?<![\w:])super::super::", "super::", text))
+            out.append(DEEPER.sub(lambda m: m.group(0) if m.group(1) is None else "super::", text))
         else:
             out.append(f"mod {m.group(1)} {{\n{text}\n}}")
     return "\n".join(out), problems
