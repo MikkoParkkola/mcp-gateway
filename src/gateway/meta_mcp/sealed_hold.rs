@@ -142,6 +142,19 @@ pub(crate) fn register(continuation: &Arc<ContinuationState>, hold_key: &str, en
 #[derive(Clone, Default)]
 pub(crate) struct CarriedHolds(Vec<Arc<SealedHold>>);
 
+impl CarriedHolds {
+    /// No holds: a frame that carries no sealed question.
+    pub(crate) const fn none() -> Self {
+        Self(Vec::new())
+    }
+}
+
+impl std::fmt::Debug for CarriedHolds {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CarriedHolds({})", self.0.len())
+    }
+}
+
 /// The open scope's holds whose envelope `answer` carries: anywhere in a
 /// string (an envelope text-wrapped by `gateway_invoke`), or as a top-level
 /// `requestState` that opens to the same slot (a chain's re-seal).
