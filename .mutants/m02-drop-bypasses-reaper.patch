@@ -1,0 +1,13 @@
+diff --git a/src/transport/stdio_tree.rs b/src/transport/stdio_tree.rs
+index a1fbeea71..ed436f675 100644
+--- a/src/transport/stdio_tree.rs
++++ b/src/transport/stdio_tree.rs
+@@ -18,7 +18,7 @@ impl Drop for StdioTransport {
+         // The reaper ends the tree, settle and reap included, with no runtime
+         // (MIK-7923): `ChildTree`'s own Drop is only the fallback.
+         if let Some(tree) = self.child.get_mut().tree.take() {
+-            let _ = super::reaper::hand_over(tree);
++            drop(tree);
+         }
+         self.shutdown.get_mut().cancel();
+     }
