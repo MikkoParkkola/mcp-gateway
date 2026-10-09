@@ -971,29 +971,18 @@ fn sync_parent_directory(path: &Path) -> io::Result<()> {
     File::open(parent)?.sync_all()
 }
 
-#[cfg(not(unix))]
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "a no-op off unix that keeps the unix signature"
-)]
-fn sync_parent_directory(_path: &Path) -> io::Result<()> {
-    Ok(())
-}
-
 #[cfg(unix)]
 fn force_directory_owner_only(path: &Path) -> io::Result<()> {
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
 }
 
+// The non-unix no-ops keep the unix signatures; they live beside this file.
 #[cfg(not(unix))]
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "a no-op off unix that keeps the unix signature"
-)]
-fn force_directory_owner_only(_path: &Path) -> io::Result<()> {
-    Ok(())
-}
+#[path = "protocol_revision_telemetry_nonunix.rs"]
+mod nonunix;
+#[cfg(not(unix))]
+use nonunix::{force_directory_owner_only, sync_parent_directory};
 
 fn global() -> &'static Mutex<Registry> {
     static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
