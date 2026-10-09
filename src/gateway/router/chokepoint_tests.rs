@@ -127,33 +127,95 @@ fn dispatch_rows(path: &std::path::Path) -> Vec<Value> {
         .collect()
 }
 
-/// F7 (perflane, b1): `arguments` sent as a JSON string is judged as the object
-/// it parses to and is dispatched as. The string form of a blocked payload is
-/// refused like the object form, on `gateway_invoke` and on a `gateway_execute`
-/// chain step, and no backend is reached. Base scanned the raw string and so
-/// let it through. Mutant: the route target built from the raw `arguments`.
+/// F7 (MIK-8226 STRARGS.SCAN.1-3, perflane): `arguments` sent as a JSON string
+/// is judged as the object it parses to and is dispatched as. On
+/// `gateway_invoke` and on a `gateway_execute` chain step, the string form of a
+/// blocked payload is refused exactly like the object form: the same error and
+/// the same route audit record (action, finding count, argument hash), and no
+/// backend is reached. Base scanned the raw string and so let it through.
+/// Mutant: the route target built from the raw `arguments`.
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn f7_string_form_arguments_are_judged_as_the_object_they_dispatch() {
-    use super::direct_guards_fixture::{fixture_firewalled, send};
-    let stringly = serde_json::to_string(&json!({"cmd": BLOCKED})).expect("serializes");
-    let invoke = json!({"name": "gateway_invoke", "arguments": {
-        "server": "alpha", "tool": "read", "arguments": stringly
-    }});
-    let chain = json!({"name": "gateway_execute", "arguments": {"chain": [
-        {"tool": "alpha:read", "arguments": stringly}
-    ]}});
-    for (shape, params) in [("invoke", invoke), ("chain step", chain)] {
-        let fx = fixture_firewalled(Answer::Ok).await;
-        let (_, body) = send(&fx, "/mcp", "k-std", "tools/call", params, None).await;
+    use super::direct_guards_fixture::{fixture_firewalled_audited, send};
+    let object = json!({"cmd": BLOCKED});
+    let stringly = json!(serde_json::to_string(&object).expect("serializes"));
+    let invoke = |arguments: &Value| {
+        json!({"name": "gateway_invoke", "arguments": {
+            "server": "alpha", "tool": "read", "arguments": arguments
+        }})
+    };
+    let chain = |arguments: &Value| {
+        json!({"name": "gateway_execute", "arguments": {"chain": [
+            {"tool": "alpha:read", "arguments": arguments}
+        ]}})
+    };
+    for (shape, build) in [
+        ("invoke", &invoke as &dyn Fn(&Value) -> Value),
+        ("chain step", &chain),
+    ] {
+        let mut seen = Vec::new();
+        for form in [&object, &stringly] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let audit = dir.path().join("audit.jsonl");
+            let fx = fixture_firewalled_audited(Answer::Ok, audit.clone()).await;
+            let (_, body) = send(&fx, "/mcp", "k-std", "tools/call", build(form), None).await;
+            assert_eq!(dispatched(&fx), 0, "{shape} {form}: sent: {body}");
+            assert!(
+                body.to_string().contains("Firewall blocked"),
+                "{shape} {form}: refused by the firewall: {body}"
+            );
+            let request = request_rows(&audit)
+                .into_iter()
+                .find(|row| row["action"] == "block")
+                .unwrap_or_else(|| panic!("{shape} {form}: a blocking request row"));
+            seen.push((
+                body["error"].clone(),
+                request["findings_count"].clone(),
+                request["args_hash"].clone(),
+            ));
+        }
         assert_eq!(
-            dispatched(&fx),
-            0,
-            "{shape}: the string form was sent: {body}"
+            seen[0], seen[1],
+            "{shape}: the string form judged unlike the object form"
         );
-        assert!(
-            body.to_string().contains("Firewall blocked"),
-            "{shape}: refused by the firewall: {body}"
-        );
+    }
+}
+
+/// The route scan's `request` rows in the firewall audit log at `path`.
+#[cfg(feature = "firewall")]
+fn request_rows(path: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| row["event"] == "request")
+        .collect()
+}
+
+/// F7b (MIK-8226, lead): string-form `arguments` that parse to something other than
+/// an object (an array, a number) are refused -32602 before any dispatch, on
+/// `gateway_invoke` and on a chain step. They are not passed through: no gate
+/// can judge a non-object as tool arguments, and a backend expects an object.
+#[tokio::test]
+async fn f7b_string_arguments_that_parse_to_a_non_object_are_refused() {
+    use super::direct_guards_fixture::{fixture, send};
+    for stringly in ["[1, 2]", "7"] {
+        let invoke = json!({"name": "gateway_invoke", "arguments": {
+            "server": "alpha", "tool": "read", "arguments": stringly
+        }});
+        let chain = json!({"name": "gateway_execute", "arguments": {"chain": [
+            {"tool": "alpha:read", "arguments": stringly}
+        ]}});
+        for (shape, params) in [("invoke", invoke), ("chain step", chain)] {
+            let fx = fixture(Answer::Ok, |_| {}).await;
+            let (_, body) = send(&fx, "/mcp", "k-std", "tools/call", params, None).await;
+            assert_eq!(dispatched(&fx), 0, "{shape} {stringly}: sent: {body}");
+            assert!(
+                body.to_string()
+                    .contains("expected object or JSON object string"),
+                "{shape} {stringly}: refused as invalid arguments: {body}"
+            );
+        }
     }
 }
