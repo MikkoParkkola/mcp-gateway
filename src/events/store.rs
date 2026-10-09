@@ -262,6 +262,12 @@ impl Store {
             .map_err(|_| std::io::Error::other("subscription generations exhausted"))
     }
 
+    /// The last generation handed out: a row whose incarnation is above it
+    /// was granted after this call.
+    pub(crate) fn generation_now(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Open (creating) the store at `root`, sweeping expired subscriptions
     /// and trimming the verification tail.
     pub(crate) fn open(root: &Path, now: DateTime<Utc>, tail: TailPolicy) -> std::io::Result<Self> {

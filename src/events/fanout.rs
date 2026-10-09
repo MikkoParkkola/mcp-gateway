@@ -459,7 +459,9 @@ impl EventsHub {
         let removed = self
             .blocking(move |store| {
                 store.remove_where(&snapshot.id, Utc::now(), tail, |row| {
-                    row.credential_principal == snapshot.credential_principal
+                    // A re-grant under the same id is not the row judged.
+                    row.incarnation == snapshot.incarnation
+                        && row.credential_principal == snapshot.credential_principal
                         && row.binding == snapshot.binding
                         && row.api_key == snapshot.api_key
                 })

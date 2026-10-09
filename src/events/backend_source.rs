@@ -176,6 +176,10 @@ impl EventSource for BackendSource {
                 // Counted with no task: the revive sweep starts one once the
                 // backend can be listened to (MIK-7944 D6.EVENTS_MISC.6).
                 up.listeners.hold(backend, &interest);
+                // A registration between the check and the park missed it.
+                if up.listeners.knows(backend) {
+                    up.listeners.revive_backend(backend);
+                }
                 Ok(())
             } else if refused {
                 Err(RpcError::forbidden())

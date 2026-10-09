@@ -76,11 +76,11 @@ impl Shared {
         let need = self.need.lock();
         let mut slot = self.ledger.lock();
         if !Arc::ptr_eq(&slot, &fresh) {
+            // The snapshot was read from the instance this ledger replaces:
+            // cleared first, so no reader sees the new ledger with it.
+            self.snapshot.lock().clear();
             fresh.lock().want_all(need.filter().1);
             *slot = fresh;
-            // The snapshot was read from the instance this ledger replaces:
-            // the new one is judged live until it is read (design r3 L4).
-            self.snapshot.lock().clear();
         }
     }
 
@@ -148,10 +148,13 @@ impl EventsHub {
     /// A complete read of `backend`'s catalogue lacks some watched URIs: end
     /// those `resource_updated` subscriptions now, freeing their interest
     /// and URI budget instead of waiting for an occurrence (parent F9, §7).
+    /// Only rows granted by `granted_by` (the generation when the read
+    /// began) are judged: a later grant was not covered by this read.
     pub(super) async fn revoke_absent_uris(
         self: &Arc<Self>,
         backend: &str,
         listed: &std::collections::HashSet<String>,
+        granted_by: u64,
     ) {
         let name = format!("backend.{backend}.resource_updated");
         let now = chrono::Utc::now();
@@ -159,7 +162,7 @@ impl EventsHub {
             .store
             .subscriptions()
             .into_iter()
-            .filter(|s| s.name == name && s.live(now))
+            .filter(|s| s.name == name && s.live(now) && s.incarnation <= granted_by)
             .filter(|s| {
                 s.arguments
                     .get("uri")
@@ -317,6 +320,10 @@ impl UpstreamListeners {
     /// changed (design r3 L2).
     pub(crate) fn revive_backend(&self, name: &str) {
         self.revive_where(|of| of == name);
+        // A task parked while its backend was gone retries now, not in 30 s.
+        if let Some(shared) = self.backends.lock().get(name) {
+            shared.wake.send_modify(|n| *n += 1);
+        }
     }
 
     fn revive_where(&self, only: impl Fn(&str) -> bool) {
@@ -393,13 +400,18 @@ impl UpstreamListeners {
     fn answering(&self, backend: &str) -> Option<Arc<Shared>> {
         let entry = self.backends.lock().get(backend).cloned()?;
         let now = self.registry.get(backend);
+        let current = entry.ledger();
+        // Replaced: the ledgers map holds another instance, or the entry has
+        // not yet taken the map's ledger (a swap in progress).
         let replaced = self
             .ledgers
             .lock()
             .get(backend)
-            .is_some_and(|(made_for, _)| {
-                now.as_ref()
-                    .is_none_or(|b| !std::ptr::eq(made_for.as_ptr(), Arc::as_ptr(b)))
+            .is_some_and(|(made_for, ledger)| {
+                !Arc::ptr_eq(ledger, &current)
+                    || now
+                        .as_ref()
+                        .is_none_or(|b| !std::ptr::eq(made_for.as_ptr(), Arc::as_ptr(b)))
             });
         (!replaced).then_some(entry)
     }

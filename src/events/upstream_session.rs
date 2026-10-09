@@ -483,6 +483,8 @@ impl<'a> State<'a> {
             return;
         }
         let epoch = self.shared.snapshot.lock().epoch();
+        // A grant after this point is not judged by this read.
+        let granted_by = hub.upgrade().map_or(0, |hub| hub.store.generation_now());
         match backend.read_resource_snapshot(fresh).await {
             Ok(mut read) => {
                 // A watched URI missing from a cached list is confirmed by a
@@ -509,7 +511,8 @@ impl<'a> State<'a> {
                     return;
                 }
                 if complete && let Some(hub) = hub.upgrade() {
-                    hub.revoke_absent_uris(&self.shared.name, &listed).await;
+                    hub.revoke_absent_uris(&self.shared.name, &listed, granted_by)
+                        .await;
                 }
                 self.reread = false;
                 // The catalogue cache's own TTL: a shorter configured one

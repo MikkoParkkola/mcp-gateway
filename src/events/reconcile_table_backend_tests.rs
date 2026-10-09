@@ -418,3 +418,46 @@ async fn t07_a_re_grant_after_a_restart_survives() {
         "the re-grant survives the stale withdraw"
     );
 }
+
+/// T06, revocation half (R1a d1 review CRITICAL): a catalogue read revokes
+/// only rows granted before it began; a grant after it is not judged by it.
+#[tokio::test]
+async fn t06_a_read_revokes_only_grants_it_covered() {
+    let (hub, _dir) = hub();
+    let config = crate::config::EventsConfig::default();
+    let row: records::Subscription = serde_json::from_value(serde_json::json!({
+        "v": 1, "id": "sub_uri", "principal": "p", "url": "https://h/x",
+        "name": "backend.b.resource_updated", "arguments": {"uri": "file:///x"},
+        "secret": "whsec_x", "previous_secret": null, "previous_until": null,
+        "granted_at": chrono::Utc::now(), "expires_at": null, "active": true,
+        "failed_since": null, "last_delivery_at": null, "last_error": null
+    }))
+    .expect("row");
+    hub.store
+        .admit(
+            row,
+            true,
+            store::Caps {
+                per_principal: 10,
+                global: 10,
+            },
+            chrono::Duration::zero(),
+            chrono::Utc::now(),
+            tail_policy(&config),
+        )
+        .expect("io")
+        .expect("admitted");
+    let granted = hub.store.subscriptions()[0].incarnation;
+    let listed = std::collections::HashSet::new();
+    hub.revoke_absent_uris("b", &listed, granted - 1).await;
+    assert_eq!(
+        hub.store.subscriptions().len(),
+        1,
+        "a grant after the read began is kept"
+    );
+    hub.revoke_absent_uris("b", &listed, granted).await;
+    assert!(
+        hub.store.subscriptions().is_empty(),
+        "a grant the read covered and that is absent goes"
+    );
+}
