@@ -67,7 +67,9 @@ fn release(continuation: &Arc<ContinuationState>, key: &str) {
     if let Ok(runtime) = tokio::runtime::Handle::try_current() {
         let (continuation, key) = (Arc::clone(continuation), key.to_owned());
         runtime.spawn(async move {
-            let now = crate::protocol::continuation::now_unix_secs();
+            // Retention: completing only frees the slot, so a clock before
+            // 1970 dates nothing here (MIK-8202).
+            let now = crate::clock::unix_secs().unwrap_or(0);
             continuation.in_flight().complete(&key, now).await;
         });
     }
@@ -175,8 +177,13 @@ fn contains(value: &Value, needle: &str) -> bool {
 }
 
 /// Whether `token` opens, under `hold`'s keyring, to `hold`'s own slot.
+/// On a clock before 1970 nothing can be opened, so any resealed token keeps
+/// the hold: a hold only reserves its slot until it expires, while dropping
+/// it would free a slot the answer may still carry (MIK-8202).
 fn reopens(hold: &SealedHold, token: Option<&str>) -> bool {
-    let now = crate::protocol::continuation::now_unix_secs();
+    let Ok(now) = crate::clock::unix_secs() else {
+        return token.is_some();
+    };
     token.is_some_and(|token| {
         hold.continuation
             .keyring()
@@ -397,6 +404,30 @@ mod tests {
         assert_eq!(
             carried, 1,
             "the reseal in the result carries its slot's hold"
+        );
+    }
+
+    /// MIK-8202: on a clock before 1970 a reseal cannot be opened, so it
+    /// keeps its hold instead of freeing a slot the answer may still carry.
+    #[tokio::test]
+    async fn a_reseal_on_a_clock_before_the_epoch_keeps_its_hold() {
+        let continuation = Arc::new(ContinuationState::new());
+        let now = crate::protocol::continuation::now_unix_secs();
+        let payload = continuation
+            .begin_exchange("alpha".into(), None, "fp".into(), "digest".into(), now)
+            .await
+            .expect("a fresh state has a slot");
+        let minted = continuation.keyring().mint(&payload).expect("mint");
+        let resealed = continuation.keyring().mint(&payload).expect("reseal");
+        let kept = scoped(HoldPolicy::Release, async {
+            register(&continuation, &payload.hold_key, &minted);
+            let _clock = crate::clock::test_clock::before_epoch();
+            carried(&json!({"requestState": resealed})).0.len()
+        })
+        .await;
+        assert_eq!(
+            kept, 1,
+            "an unreadable clock dropped a resealed slot's hold"
         );
     }
 }
