@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/invoke/dispatch_guards.rs b/src/gateway/meta_mcp/invoke/dispatch_guards.rs
+index 7eef6ff46..f13071789 100644
+--- a/src/gateway/meta_mcp/invoke/dispatch_guards.rs
++++ b/src/gateway/meta_mcp/invoke/dispatch_guards.rs
+@@ -271,6 +271,6 @@ impl MetaMcp {
+         if let Some(reservation) = reservation.as_mut() {
+             reservation.release();
+         }
+-        self.release_unasked_nonce(caller);
++        let _ = caller;
+     }
+ }

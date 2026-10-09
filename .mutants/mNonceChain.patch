@@ -1,0 +1,17 @@
+diff --git a/src/gateway/meta_mcp/signing.rs b/src/gateway/meta_mcp/signing.rs
+index cabd5a828..89d1598ed 100644
+--- a/src/gateway/meta_mcp/signing.rs
++++ b/src/gateway/meta_mcp/signing.rs
+@@ -444,12 +444,6 @@ impl super::MetaMcp {
+         let Some(context) = caller.signing else {
+             return;
+         };
+-        if context
+-            .dispatched
+-            .load(std::sync::atomic::Ordering::Acquire)
+-        {
+-            return;
+-        }
+         if let (true, Ok(Some(nonce)), Some(stamp)) =
+             (context.admitted, context.nonce_value(), context.nonce_stamp)
+         {
