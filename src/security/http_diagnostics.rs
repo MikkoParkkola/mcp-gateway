@@ -472,4 +472,19 @@ mod tests {
         assert!(!bad.contains(CANARY), "{bad}");
         assert_eq!(bad, "invalid quoting (command redacted)");
     }
+
+    /// MIK-7926.FIX.4: a peer's own JSON-RPC error that happens to use code
+    /// 401 is not a credential refusal. Only the typed status, or the CLI
+    /// executor's own refusal, is (A11-b).
+    #[test]
+    fn a_peers_json_rpc_code_401_is_not_an_upstream_refusal() {
+        for data in [None, Some(serde_json::json!({"anything": true}))] {
+            let peer = Error::JsonRpc {
+                code: 401,
+                message: "unauthorized".into(),
+                data,
+            };
+            assert!(!is_upstream_unauthorized(&peer), "{peer:?}");
+        }
+    }
 }
