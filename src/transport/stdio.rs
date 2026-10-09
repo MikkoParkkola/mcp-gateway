@@ -23,7 +23,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::transport::notification_sink::DeliveryHandle;
 
-use super::{PendingRequestGuard, Transport};
+use super::{PendingRequestGuard, Transport, write_claim::WriteClaim};
 use crate::protocol::{
     JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
     RequestId, Selectable, checked_selection, initialize_params, is_version_mismatch_error,
@@ -664,8 +664,14 @@ impl Transport for StdioTransport {
         // stranded entry would leak here for the transport's lifetime.
         let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
 
-        // Both guards drop after this value: the pending entry and progress go.
-        self.exchange(message, rx).await
+        // Declared after `_cleanup`, so it drops first and still finds the
+        // entry of a request nobody answered.
+        let claim = WriteClaim::new();
+        let mut cancel = tree::CancelUnanswered::arm(self, &request, &claim);
+        // The guards drop after this value: the pending entry and progress go.
+        let outcome = self.exchange(message, rx, Some(&claim)).await;
+        cancel.disarm();
+        outcome
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {

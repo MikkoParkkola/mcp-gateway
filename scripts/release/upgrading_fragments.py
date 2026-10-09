@@ -267,18 +267,47 @@ def check_ceiling(base_max: int | None, head_max: int, folded: set[int]) -> list
     ]
 
 
+def ceiling_against_base(
+    base_max: int | None, head_max: int | None, folded: set[int]
+) -> tuple[int | None, list[str]]:
+    """The ceiling a PR is held to, and why its own `.frozen-max` is refused.
+
+    The base is the authority on what has been numbered (MIK-8214). A head
+    without the file (a PR branched before the ceiling existed) is judged
+    against the base. A head may change it only on the release-preparation
+    path: raised onto numbers its folded fragments hold. None means the base
+    has no ceiling yet (the cutover itself), so the caller keeps its own.
+    """
+    if base_max is None:
+        return head_max, []
+    if head_max is None or head_max == base_max:
+        return base_max, []
+    if head_max < base_max:
+        return base_max, [
+            f"{FRAGMENT_DIR}/{FROZEN_MAX} falls from {base_max} to {head_max}; only "
+            f"`upgrading_fragments.py assemble` changes it. Merge the base instead"
+        ]
+    errors = check_ceiling(base_max, head_max, folded)
+    return (base_max if errors else head_max), errors
+
+
 def _git(*args: str) -> str:
     return subprocess.run(["git", *args], cwd=ROOT, check=True, capture_output=True, text=True).stdout
+
+
+def _ceiling_at(ref: str) -> int | None:
+    """`.frozen-max` as committed at `ref`; None when that commit has none."""
+    try:
+        return int(_git("show", f"{ref}:{FRAGMENT_DIR}/{FROZEN_MAX}").strip())
+    except subprocess.CalledProcessError:
+        return None
 
 
 def _tree() -> tuple[pathlib.Path, list[str], list[str]]:
     """The fragment directory, its file names, and the errors in naming and the ceiling file."""
     frag_dir = ROOT / FRAGMENT_DIR
     names = sorted(p.name for p in frag_dir.iterdir()) if frag_dir.is_dir() else []
-    errors = name_errors(names)
-    if not (frag_dir / FROZEN_MAX).is_file():
-        errors.append(f"{FRAGMENT_DIR}/{FROZEN_MAX} is missing")
-    return frag_dir, [n for n in names if NAME.match(n)], errors
+    return frag_dir, [n for n in names if NAME.match(n)], name_errors(names)
 
 
 def main(argv: list[str]) -> int:
@@ -302,11 +331,15 @@ def main(argv: list[str]) -> int:
         for e in errors:
             print(f"error: {e}", file=sys.stderr)
         return 1
-    frozen_max = int((frag_dir / FROZEN_MAX).read_text(encoding="utf-8").strip())
+    ceiling_file = frag_dir / FROZEN_MAX
+    frozen_max = int(ceiling_file.read_text(encoding="utf-8").strip()) if ceiling_file.is_file() else None
+    if frozen_max is None and not (args.cmd == "check" and args.base):
+        print(f"error: {FRAGMENT_DIR}/{FROZEN_MAX} is missing", file=sys.stderr)
+        return 1
     doc = (ROOT / DOC).read_text(encoding="utf-8")
 
     if args.cmd == "check":
-        errors = check_doc(doc, frozen_max, parsed)
+        errors, ceiling = [], frozen_max
         if args.base:
             rows = [r.split("\t", 1) for r in _git("diff", "--name-status", "--no-renames", f"{args.base}...{args.head}").splitlines() if r]
             gone = [p.removeprefix(f"{FRAGMENT_DIR}/") for s, p in rows if s == "D" and p.startswith(f"{FRAGMENT_DIR}/")]
@@ -314,13 +347,17 @@ def main(argv: list[str]) -> int:
             head_doc = _git("show", f"{args.head}:{DOC}")
             deletion_errors = check_deletions([tuple(r) for r in rows], head_doc, base)
             errors += deletion_errors
-            try:
-                base_max = int(_git("show", f"{args.base}:{FRAGMENT_DIR}/{FROZEN_MAX}").strip())
-            except subprocess.CalledProcessError:
-                base_max = None
-            head_max = int(_git("show", f"{args.head}:{FRAGMENT_DIR}/{FROZEN_MAX}").strip())
             folded = folded_numbers([tuple(r) for r in rows], head_doc, base) if not deletion_errors else set()
-            errors += check_ceiling(base_max, head_max, folded)
+            ceiling, ceiling_errors = ceiling_against_base(
+                _ceiling_at(args.base), _ceiling_at(args.head), folded
+            )
+            errors += ceiling_errors
+            if ceiling is None:
+                ceiling = frozen_max
+        if ceiling is None:
+            errors.append(f"{FRAGMENT_DIR}/{FROZEN_MAX} is missing at the base and in the tree")
+        else:
+            errors = check_doc(doc, ceiling, parsed) + errors
         for e in errors:
             print(f"error: {e}", file=sys.stderr)
         return 1 if errors else 0

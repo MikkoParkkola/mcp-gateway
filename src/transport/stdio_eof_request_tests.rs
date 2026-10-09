@@ -135,7 +135,9 @@ fn big_params() -> Value {
 
 /// Whole-frame contract (#3453): a request cancelled while its frame waits on
 /// a full pipe still delivers that frame whole, and the next message follows
-/// it intact instead of being torn into it.
+/// it intact instead of being torn into it. The request was written and never
+/// answered, so its cancel follows it too (`MIK-7642.PR.B`), in either order
+/// with the marker.
 #[tokio::test]
 async fn a_cancelled_request_still_writes_its_whole_frame() {
     let (w, t) = started("sleep 1\ncat > seen").await;
@@ -152,19 +154,60 @@ async fn a_cancelled_request_still_writes_its_whole_frame() {
     let recorded = tokio::time::timeout(ROW_LIMIT, async {
         loop {
             let text = std::fs::read_to_string(&seen).unwrap_or_default();
-            if text.contains("notifications/marker") {
+            if text.contains("notifications/marker") && text.contains("notifications/cancelled") {
                 return text;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
-    .expect("the child records both frames");
-    let frames: Vec<&str> = recorded.lines().collect();
-    assert_eq!(frames.len(), 2, "two whole frames, nothing torn");
-    for frame in frames {
-        serde_json::from_str::<Value>(frame).expect("each line is one whole frame");
-    }
+    .expect("the child records every frame");
+    let frames: Vec<Value> = recorded
+        .lines()
+        .map(|frame| serde_json::from_str(frame).expect("each line is one whole frame"))
+        .collect();
+    assert_eq!(frames.len(), 3, "three whole frames, nothing torn");
+    assert_eq!(frames[0]["method"], "tools/list", "the request goes first");
+    let cancel = frames
+        .iter()
+        .find(|frame| frame["method"] == "notifications/cancelled")
+        .expect("the written, unanswered request is cancelled");
+    assert_eq!(cancel["params"]["requestId"], frames[0]["id"]);
+    let _ = t.close().await;
+}
+
+/// `MIK-7642.PR.B`: the transport's own timeout is not a cancel. A request
+/// that timed out unanswered sends the backend nothing more.
+#[tokio::test]
+async fn a_request_that_timed_out_sends_no_cancel() {
+    let (w, t) = started_with_timeout("cat > seen", Duration::from_millis(300)).await;
+    let err = t
+        .request("tools/list", None)
+        .await
+        .expect_err("nothing answers");
+    assert!(matches!(err, Error::BackendTimeout(_)), "{err:?}");
+    t.notify("notifications/marker", None)
+        .await
+        .expect("the marker is written");
+    let seen = w.path().join("seen");
+    tokio::time::timeout(ROW_LIMIT, async {
+        while !std::fs::read_to_string(&seen)
+            .unwrap_or_default()
+            .contains("notifications/marker")
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the child records the marker");
+    // A cancel sent late would land after the marker: give it the time.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let recorded = std::fs::read_to_string(&seen).unwrap_or_default();
+    assert!(
+        recorded.contains("tools/list"),
+        "precondition: written: {recorded}"
+    );
+    assert!(!recorded.contains("notifications/cancelled"), "{recorded}");
     let _ = t.close().await;
 }
 

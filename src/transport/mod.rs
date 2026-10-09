@@ -10,6 +10,7 @@ pub(crate) mod upstream_tap;
 pub mod websocket;
 #[cfg(test)]
 pub(crate) mod websocket_test_server;
+mod write_claim;
 
 pub(crate) use self::command_split::join_command;
 pub use self::command_split::{split_command, split_command_unix, split_command_windows};
