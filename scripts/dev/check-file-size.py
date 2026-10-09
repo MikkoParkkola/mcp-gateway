@@ -91,10 +91,16 @@ def write_baseline(sizes: dict[str, int]) -> None:
     )
 
 
-def main() -> int:
+def check_ratchet(base: dict[str, int], head: dict[str, int]) -> list[str]:
+    """Errors for a head baseline that adds a row or raises an allowance over `base`."""
+    return []
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
     sizes = measure()
 
-    if "--update" in sys.argv:
+    if "--update" in argv:
         write_baseline(sizes)
         print(f"baseline updated: {len(sizes)} files over {CEILING} lines")
         return 0

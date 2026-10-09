@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -127,6 +128,141 @@ class FileSizeGate(unittest.TestCase):
             status = gate.main()
         self.assertEqual(status, 0, out.getvalue())
 
+
+def run_main(root: Path, argv: list[str]) -> tuple[int, str]:
+    gate = load_gate(root)
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        status = gate.main(argv)
+    return status, out.getvalue()
+
+
+class OneRule(unittest.TestCase):
+    """MIK-8210: the two cases the retired shell gate counted differently are
+    counted one way, by this gate alone."""
+
+    def tree(self, files: dict[str, str]) -> tuple[int, str]:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for rel, text in files.items():
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text(text, encoding="utf-8")
+            (root / "file-size-baseline.txt").write_text("", encoding="utf-8")
+            return run_main(root, [])
+
+    def test_d1_mod_declarations_are_not_counted(self):
+        # 801 raw lines (the shell's `wc -l` breach), 798 counted.
+        status, out = self.tree({"src/mods.rs": body(798) + "mod a;\nmod b;\nmod c;\n"})
+        self.assertEqual(status, 0, out)
+
+    def test_d2_test_file_names_are_held_to_the_ceiling(self):
+        # The shell skipped `*_tests.rs` and `tests.rs`; one gate holds every file.
+        status, out = self.tree({"src/big_tests.rs": body(801), "src/x/tests.rs": body(801)})
+        self.assertEqual(status, 1, out)
+        self.assertIn("FAIL src/big_tests.rs: 801 lines, over the 800-line ceiling", out)
+        self.assertIn("FAIL src/x/tests.rs: 801 lines, over the 800-line ceiling", out)
+
+
+class Ratchet(unittest.TestCase):
+    """MIK-8210: the baseline is the count ratchet. Rows may shrink or leave;
+    a PR may not add a row or raise an allowance, even through --update."""
+
+    def gate(self):
+        return load_gate(Path("/nonexistent"))
+
+    def test_r1_a_new_row_is_refused(self):
+        errors = self.gate().check_ratchet({"src/a.rs": 805}, {"src/a.rs": 805, "src/b.rs": 801})
+        self.assertTrue(any("src/b.rs" in e for e in errors), errors)
+
+    def test_r2_an_equal_count_replacement_is_refused(self):
+        errors = self.gate().check_ratchet({"src/a.rs": 805}, {"src/b.rs": 805})
+        self.assertTrue(any("src/b.rs" in e for e in errors), errors)
+
+    def test_r3_a_raised_allowance_is_refused(self):
+        errors = self.gate().check_ratchet({"src/a.rs": 805}, {"src/a.rs": 806})
+        self.assertTrue(any("src/a.rs" in e and "805" in e and "806" in e for e in errors), errors)
+
+    def test_r4_shrinking_and_leaving_pass(self):  # green control
+        self.assertEqual(self.gate().check_ratchet({"src/a.rs": 805, "src/b.rs": 900}, {"src/a.rs": 801}), [])
+
+    def test_r5_an_unreadable_base_fails_naming_the_ref(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "file-size-baseline.txt").write_text("", encoding="utf-8")
+            status, out = run_main(root, ["--base", "nosuchref"])
+        self.assertEqual(status, 1, out)
+        self.assertIn("nosuchref", out)
+
+    def test_r6_base_is_read_through_git(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git = lambda *a: subprocess.run(["git", *a], cwd=root, check=True, capture_output=True)
+            git("init", "-q")
+            git("config", "user.email", "t@t")
+            git("config", "user.name", "t")
+            (root / "src").mkdir()
+            (root / "src/a.rs").write_text(body(805), encoding="utf-8")
+            (root / "scripts/dev").mkdir(parents=True)
+            baseline = root / "scripts/dev/file-size-baseline.txt"
+            baseline.write_text("805 src/a.rs\n", encoding="utf-8")
+            git("add", "-A")
+            git("commit", "-qm", "base")
+            (root / "src/b.rs").write_text(body(801), encoding="utf-8")
+            baseline.write_text("805 src/a.rs\n801 src/b.rs\n", encoding="utf-8")
+            gate = load_gate(root)
+            gate.BASELINE = baseline
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+                status = gate.main(["--base", "HEAD"])
+        self.assertEqual(status, 1, out.getvalue())
+        self.assertIn("src/b.rs", out.getvalue())
+
+
+class RatchetThroughGit(unittest.TestCase):
+    def test_r7_a_raised_allowance_through_base_is_refused(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git = lambda *a: subprocess.run(["git", *a], cwd=root, check=True, capture_output=True)
+            git("init", "-q")
+            git("config", "user.email", "t@t")
+            git("config", "user.name", "t")
+            (root / "src").mkdir()
+            (root / "src/a.rs").write_text(body(805), encoding="utf-8")
+            (root / "scripts/dev").mkdir(parents=True)
+            baseline = root / "scripts/dev/file-size-baseline.txt"
+            baseline.write_text("805 src/a.rs\n", encoding="utf-8")
+            git("add", "-A")
+            git("commit", "-qm", "base")
+            (root / "src/a.rs").write_text(body(806), encoding="utf-8")
+            baseline.write_text("806 src/a.rs\n", encoding="utf-8")
+            gate = load_gate(root)
+            gate.BASELINE = baseline
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+                status = gate.main(["--base", "HEAD"])
+        self.assertEqual(status, 1, out.getvalue())
+        self.assertIn("src/a.rs", out.getvalue())
+        self.assertIn("806", out.getvalue())
+
+
+class Wiring(unittest.TestCase):
+    """MIK-8210: one gate runs in CI, against an explicit base."""
+
+    REPO = Path(__file__).resolve().parents[2]
+
+    def test_w1_the_shell_gate_is_gone_and_ci_passes_a_base(self):
+        self.assertFalse((self.REPO / "scripts/ci/check-loc-ceiling.sh").exists())
+        ci = (self.REPO / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertNotIn("check-loc-ceiling", ci)
+        step = ci[ci.index("- name: Check the 800-line ceiling") :]
+        step = step[: step.find("\n      - ", 1) if "\n      - " in step[1:] else len(step)]
+        self.assertIn("check-file-size.py --base", step)
+        self.assertIn("git fetch", step)
+        self.assertIn("0000000000000000000000000000000000000000", step)
+        # The base: the PR's base on a pull request, the previous tip on a
+        # push, and the parent commit when a push has no previous tip.
+        self.assertIn("github.event.pull_request.base.sha || github.event.before", step)
+        self.assertIn("HEAD^", step)
 
 if __name__ == "__main__":
     unittest.main()
