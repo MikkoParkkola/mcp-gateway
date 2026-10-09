@@ -26,7 +26,11 @@ pub(super) fn with_backend_edited(
     if !only_differs_by(before, config, name) {
         return None;
     }
-    let mut want: Value = serde_yaml::from_str(original).ok()?;
+    // A file of comments alone parses as no document: it is an empty mapping.
+    let mut want = match serde_yaml::from_str(original).ok()? {
+        Value::Null => Value::Mapping(Mapping::new()),
+        document => document,
+    };
     let root = want.as_mapping_mut()?;
     let key = Value::from("backends");
     match root.get(&key) {
