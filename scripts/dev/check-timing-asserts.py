@@ -22,6 +22,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import bisect
+import functools
 import re
 import subprocess
 import sys
@@ -63,39 +65,58 @@ RAW_OPEN = re.compile(r'b?r(#*)"')
 CHAR = re.compile(r"'(?:\\.|[^\\'])'")
 
 
+SPECIAL = re.compile(r'//|/\*|b?r#*"|"|\'')
+
+
+@functools.lru_cache(maxsize=None)
 def blank_strings_and_comments(text: str) -> str:
     """`text` with comments and string literals blanked, newlines kept.
 
     Strings become `""`, so a message naming `elapsed()` reads as nothing.
+    Jumps from one comment or literal opener to the next, so the plain text
+    between them is copied in one slice rather than character by character.
     """
     out, i, n = [], 0, len(text)
     while i < n:
-        c = text[i]
-        if text.startswith("//", i):
+        m = SPECIAL.search(text, i)
+        if m is None:
+            out.append(text[i:])
+            break
+        k, tok = m.start(), m.group()
+        out.append(text[i:k])
+        i = k
+        if tok == "//":
             j = text.find("\n", i)
             i = n if j < 0 else j
-        elif text.startswith("/*", i):
+        elif tok == "/*":
             j = text.find("*/", i + 2)
             j = n if j < 0 else j + 2
             out.append("\n" * text.count("\n", i, j))
             i = j
-        elif (m := RAW_OPEN.match(text, i)) and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")):
-            end = '"' + m.group(1)
-            j = text.find(end, m.end())
-            j = n if j < 0 else j + len(end)
+        elif tok not in ('"', "'"):
+            quote = k + len(tok) - 1
+            if k > 0 and (text[k - 1].isalnum() or text[k - 1] == "_"):
+                # An identifier ending in `r` / `b` before a quote: not a raw
+                # prefix. Copy it; the quote opens a plain string next round.
+                out.append(text[k:quote])
+                i = quote
+                continue
+            close = '"' + RAW_OPEN.match(text, k).group(1)
+            j = text.find(close, m.end())
+            j = n if j < 0 else j + len(close)
             out.append('""' + "\n" * text.count("\n", i, j))
             i = j
-        elif c == '"':
+        elif tok == '"':
             j = i + 1
             while j < n and text[j] != '"':
                 j += 2 if text[j] == "\\" else 1
             out.append('""' + "\n" * text.count("\n", i, j))
             i = j + 1
-        elif c == "'" and (m := CHAR.match(text, i)):
+        elif char := CHAR.match(text, i):
             out.append("' '")
-            i = m.end()
+            i = char.end()
         else:
-            out.append(c)
+            out.append("'")
             i += 1
     return "".join(out)
 
@@ -336,9 +357,10 @@ def scan_text(path: str, text: str, tree_consts: dict[str, list[tuple[str, str]]
     file_consts = {m.group(2): m.group(3) for m in CONST.finditer(code)}
     imports = imports_of(code)
     found = []
+    fns = [(m.start(), m.group(1)) for m in FN.finditer(code)]
     for offset, equality, args in calls(code):
-        fns = list(FN.finditer(code, 0, offset))
-        fn, start = (fns[-1].group(1), fns[-1].start()) if fns else ("<file>", 0)
+        at = bisect.bisect_left(fns, (offset,)) - 1
+        start, fn = fns[at] if at >= 0 else (0, "<file>")
         lets, names, deadlines = bindings(code[start:offset])
         hit = window_of(equality, args, names, deadlines)
         if hit is None:

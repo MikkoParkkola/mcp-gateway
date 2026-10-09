@@ -18,7 +18,7 @@ use std::time::Duration;
 use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
 
 use super::super::{PROTOCOL_VERSION, StdioTransport};
-use super::{ChildTree, Counts, Leader, Reap, native_child};
+use super::{ChildTree, Counts, Leader, REAP_DEADLINE, Reap, native_child};
 use crate::transport::Transport;
 
 const ROW_LIMIT: Duration = Duration::from_secs(5);
@@ -377,8 +377,13 @@ async fn a_stepped_tree_signals_each_phase_once_then_reaps_natively() {
     gone(child).await;
 }
 
-/// A5's wait ends when the killed leader exits, not after its 1 s grace:
-/// ten live backends closed one after another take well under ten graces.
+/// A5's wait ends when the killed leader exits, not after its grace: ten
+/// live backends closed one after another each settle on the exit.
+///
+/// Each tree's grace is stretched past `REAP_DEADLINE`, so a wait that sat
+/// out the grace instead of ending on the exit reaches the deadline, sends no
+/// A5 signal and is dropped unreaped: `assert_settled` refuses it at once.
+/// The oracle is that outcome, not ten closes against a stopwatch (MIK-8222).
 #[tokio::test]
 async fn closing_ten_live_backends_does_not_add_a_grace_each() {
     let mut started_ones = Vec::new();
@@ -387,15 +392,18 @@ async fn closing_ten_live_backends_does_not_add_a_grace_each() {
     }
     let mut pids = Vec::new();
     for (_w, t) in &started_ones {
+        with_tree(t, |c| c.grace_for_test = Some(REAP_DEADLINE * 4)).await;
         pids.push(leader(t).await);
     }
-    let began = std::time::Instant::now();
     for ((_w, t), pid) in started_ones.iter().zip(&pids) {
         t.close().await.expect("close");
-        assert_settled(sent_after(*pid).await);
+        let counts = finished(*pid).await;
+        assert!(
+            counts.status.is_some(),
+            "reaped, not dropped at the deadline"
+        );
+        assert_settled((counts.sent, counts.refused));
     }
-    let took = began.elapsed();
-    assert!(took < Duration::from_secs(3), "ten closes took {took:?}");
 }
 
 /// T5: a start that times out after the leader died (a descendant holds

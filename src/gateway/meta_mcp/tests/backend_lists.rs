@@ -4,6 +4,13 @@
 
 use super::*;
 
+/// How long the hung mock sleeps: past every bound below, so it never answers.
+const HUNG: Duration = Duration::from_secs(600);
+/// The backend's own per-call timeout: past the hang guard, so only the
+/// aggregation timeout can end a list inside it.
+const BACKEND_TIMEOUT: Duration = Duration::from_secs(120);
+const HANG_GUARD: Duration = Duration::from_secs(30);
+
 // ============================================================================
 // Prompts/resources aggregation: parallel fan-out + per-backend timeout
 // ============================================================================
@@ -118,25 +125,25 @@ async fn prompts_list_skips_hung_backend_within_timeout() {
     let url = start_mock(MockMcpBackend {
         method: "prompts/list",
         payload: serde_json::json!([]),
-        delay: Duration::from_secs(60), // far beyond the 100ms test timeout
+        delay: HUNG,
     })
     .await;
-    let meta = meta_with_backend(&url, Duration::from_millis(100));
+    // The backend's own timeout outlasts the hang guard, so a list that waited
+    // for it instead of the 100 ms aggregation timeout fails the guard: the
+    // oracle is that the list answers at all (MIK-8222).
+    let meta = meta_with_backend_timeout(&url, Duration::from_millis(100), BACKEND_TIMEOUT);
 
-    let start = std::time::Instant::now();
-    let resp = meta
-        .handle_prompts_list(RequestId::Number(1), None, None, None)
-        .await;
-    let elapsed = start.elapsed();
+    let resp = tokio::time::timeout(
+        HANG_GUARD,
+        meta.handle_prompts_list(RequestId::Number(1), None, None, None),
+    )
+    .await
+    .expect("must skip the hung backend at the aggregation timeout, not at the backend's own");
 
     assert!(
         resp.error.is_none(),
         "list still succeeds: {:?}",
         resp.error
-    );
-    assert!(
-        elapsed < Duration::from_secs(2),
-        "must skip the hung backend at the 100ms aggregation timeout, not at the backend's own 5s timeout, took {elapsed:?}"
     );
     // Only the gateway meta-prompts remain.
     let result = resp.result.unwrap();
@@ -149,25 +156,25 @@ async fn resources_list_skips_hung_backend_within_timeout() {
     let url = start_mock(MockMcpBackend {
         method: "resources/list",
         payload: serde_json::json!([]),
-        delay: Duration::from_secs(60),
+        delay: HUNG,
     })
     .await;
-    let meta = meta_with_backend(&url, Duration::from_millis(100));
+    // The backend's own timeout outlasts the hang guard, so a list that waited
+    // for it instead of the 100 ms aggregation timeout fails the guard: the
+    // oracle is that the list answers at all (MIK-8222).
+    let meta = meta_with_backend_timeout(&url, Duration::from_millis(100), BACKEND_TIMEOUT);
 
-    let start = std::time::Instant::now();
-    let resp = meta
-        .handle_resources_list(RequestId::Number(1), None, None, None)
-        .await;
-    let elapsed = start.elapsed();
+    let resp = tokio::time::timeout(
+        HANG_GUARD,
+        meta.handle_resources_list(RequestId::Number(1), None, None, None),
+    )
+    .await
+    .expect("must skip the hung backend at the aggregation timeout, not at the backend's own");
 
     assert!(
         resp.error.is_none(),
         "list still succeeds: {:?}",
         resp.error
-    );
-    assert!(
-        elapsed < Duration::from_secs(2),
-        "must skip the hung backend at the 100ms aggregation timeout, not at the backend's own 5s timeout, took {elapsed:?}"
     );
 }
 
@@ -211,7 +218,7 @@ async fn prompts_list_fast_backend_not_stalled_by_hung_one() {
     let hung = start_mock(MockMcpBackend {
         method: "prompts/list",
         payload: serde_json::json!([]),
-        delay: Duration::from_secs(60),
+        delay: HUNG,
     })
     .await;
 
@@ -227,7 +234,7 @@ async fn prompts_list_fast_backend_not_stalled_by_hung_one() {
             },
             stop_when_idle_for: None,
             max_frame_bytes: None,
-            timeout: Duration::from_secs(5),
+            timeout: BACKEND_TIMEOUT,
             ..BackendConfig::default()
         };
         let backend = Arc::new(Backend::new(
@@ -241,20 +248,19 @@ async fn prompts_list_fast_backend_not_stalled_by_hung_one() {
 
     let meta = MetaMcp::new(registry).with_prompts_resources_fetch_timeout(Duration::from_secs(1));
 
-    let start = std::time::Instant::now();
-    let resp = meta
-        .handle_prompts_list(RequestId::Number(1), None, None, None)
-        .await;
-    let elapsed = start.elapsed();
+    // The hung backend's own timeout outlasts the hang guard, so a list held
+    // by it fails the guard instead of passing slowly (MIK-8222).
+    let resp = tokio::time::timeout(
+        HANG_GUARD,
+        meta.handle_prompts_list(RequestId::Number(1), None, None, None),
+    )
+    .await
+    .expect("the fast result returns at the aggregation timeout, not the hung backend's own");
 
     assert!(
         resp.error.is_none(),
         "list still succeeds: {:?}",
         resp.error
-    );
-    assert!(
-        elapsed < Duration::from_secs(3),
-        "fast result must return at the 1s aggregation timeout, not at the hung backend's own 5s timeout, took {elapsed:?}"
     );
     // Both the gateway meta-prompts AND the fast backend's prompt are present;
     // the hung backend was skipped within the bound.

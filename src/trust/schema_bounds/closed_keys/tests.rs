@@ -235,7 +235,10 @@ fn catastrophic_pattern_completes() {
     let key = format!("{}!", "a".repeat(10_000));
     let started = std::time::Instant::now();
     let _ = refused(&schema, &json!({ key: 1 }));
-    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    // A backtracking engine never finishes this key (exponential in 10_000),
+    // so any finite bound tells the engines apart: a hang guard, not a
+    // performance window a loaded runner can miss (MIK-8222).
+    assert!(started.elapsed() < std::time::Duration::from_secs(30));
     // A pattern the engine cannot express compiles to nothing: fail closed.
     let lookaround = json!({"type": "object", "patternProperties": {"^(?=a)": {}}});
     assert!(refused(&lookaround, &json!({"abc": 1})));
