@@ -41,3 +41,7 @@ src/transport/http/listen.rs	unsolicited	1	Opens the legacy notification stream 
 src/oauth/login_gate.rs	fill_scope	1	Runs a shared fill under its dispatch mark; affects only which timeout error a joiner reports (MIK-8046).
 src/oauth/login_gate.rs	joined	1	Records which shared fill a deadline scope waits on; affects only which timeout error it reports (MIK-8046).
 src/gateway/router/helpers.rs	build_http_response	1	Serialises a frame already wrapped as Egressed; the scan is decided where the Egressed value is made, not here.
+src/gateway/server/stdio_tasks.rs	stop_on_drop	1	Session lifecycle (MIK-7839.CANCEL.3): builds the guard that stops task workers when the session future is dropped
+src/gateway/server/stdio_tasks.rs	drop	1	Session lifecycle (MIK-7839.CANCEL.3): seals the executor and stops store admission; no access decision
+src/gateway/task_service/service.rs	stop_serving	1	Store lifecycle (MIK-7839.CANCEL.3): forwards the admission cutoff to the store
+src/gateway/task_service/store.rs	stop_serving	1	Store lifecycle (MIK-7839.CANCEL.3): clears ready so later mutations answer Unavailable; ownership checks are elsewhere
