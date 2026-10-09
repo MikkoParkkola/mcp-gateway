@@ -33,6 +33,11 @@ pub(super) struct ChildTree {
     pub(super) group_signals_sent: usize,
     #[cfg(all(test, unix))]
     pub(super) signals_refused: usize,
+    /// Test-only: replaces `PRE_REAP_GRACE` for this tree, so a test can tell
+    /// "the leader's exit ended the wait" from "the grace ran out" by outcome
+    /// rather than by elapsed time (MIK-8222).
+    #[cfg(all(test, unix))]
+    pub(super) grace_for_test: Option<std::time::Duration>,
 }
 
 /// What the kernel says about the leader, without reaping it.
@@ -119,6 +124,8 @@ impl ChildTree {
             group_signals_sent: 0,
             #[cfg(all(test, unix))]
             signals_refused: 0,
+            #[cfg(all(test, unix))]
+            grace_for_test: None,
         }
     }
 
@@ -219,9 +226,13 @@ impl ChildTree {
             );
             return Reap::Done(None);
         }
+        #[cfg(all(test, unix))]
+        let grace = self.grace_for_test.unwrap_or(PRE_REAP_GRACE);
+        #[cfg(all(not(test), unix))]
+        let grace = PRE_REAP_GRACE;
         #[cfg(unix)]
         if phase == ReapPhase::Grace {
-            if !self.exited() && elapsed < PRE_REAP_GRACE {
+            if !self.exited() && elapsed < grace {
                 return Reap::Pending;
             }
             self.reaping = Some((started, ReapPhase::Settle { since: now }));
