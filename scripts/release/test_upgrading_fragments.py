@@ -387,6 +387,57 @@ class Ceiling(unittest.TestCase):
         self.assertEqual(uf.folded_numbers([("M", "upgrading.d/3700.md")], FOLDED, Deletions.BASE), set())
 
 
+class CeilingFromBase(unittest.TestCase):
+    """MIK-8214: with --base, the ceiling comes from the base. A PR changes it
+    only on the release-preparation path: raised onto numbers its folded
+    fragments hold."""
+
+    def test_missing_at_head_passes_against_the_base(self):
+        self.assertEqual(uf.ceiling_against_base(175, None, set()), (175, []))
+
+    def test_unchanged_at_head_passes(self):  # green control
+        self.assertEqual(uf.ceiling_against_base(175, 175, set()), (175, []))
+
+    def test_raised_at_head_without_a_fold_is_refused(self):
+        ceiling, errors = uf.ceiling_against_base(175, 176, set())
+        self.assertEqual(ceiling, 175)
+        self.assertTrue(any("175" in e and "176" in e for e in errors), errors)
+
+    def test_lowered_at_head_is_refused(self):
+        ceiling, errors = uf.ceiling_against_base(175, 174, set())
+        self.assertEqual(ceiling, 175)
+        self.assertTrue(any("174" in e for e in errors), errors)
+
+    def test_the_release_fold_raises_it(self):
+        self.assertEqual(uf.ceiling_against_base(175, 177, {176, 177}), (177, []))
+
+    def test_a_head_branched_before_the_ceiling_existed_passes(self):
+        """The #3631 shape: the PR head has no upgrading.d/ at all; the
+        checkout (the merge with the base) and the base both do."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = pathlib.Path(tmp)
+            git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+            git("init", "-q")
+            git("config", "user.email", "t@t")
+            git("config", "user.name", "t")
+            (repo / "docs").mkdir()
+            (repo / "docs/UPGRADING-4.0.md").write_text(DOC)
+            git("add", "-A")
+            git("commit", "-qm", "before the ceiling")
+            head = git("rev-parse", "HEAD")
+            (repo / "upgrading.d").mkdir()
+            (repo / "upgrading.d/.frozen-max").write_text("3\n")
+            (repo / "upgrading.d/.gitkeep").write_text("")
+            git("add", "-A")
+            git("commit", "-qm", "the ceiling lands on the base")
+            base = git("rev-parse", "HEAD")
+            try:
+                code, _, err = run_main(repo, "check", "--base", base, "--head", head)
+            except subprocess.CalledProcessError as crash:
+                self.fail(f"check crashed reading the PR head instead of judging it against the base: {crash}")
+        self.assertEqual(code, 0, err)
+
+
 class Wiring(unittest.TestCase):
     """The CI step that re-runs the guide checks on the assembled guide: if it
     were dropped or pointed at no test, a fragment that breaks a check would

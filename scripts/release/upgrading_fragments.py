@@ -267,6 +267,11 @@ def check_ceiling(base_max: int | None, head_max: int, folded: set[int]) -> list
     ]
 
 
+def ceiling_against_base(base_max: int | None, head_max: int | None, folded: set[int]) -> tuple[int, list[str]]:
+    """The ceiling a PR is held to, and why its own `.frozen-max` is refused."""
+    return (head_max if head_max is not None else (base_max or 0)), []
+
+
 def _git(*args: str) -> str:
     return subprocess.run(["git", *args], cwd=ROOT, check=True, capture_output=True, text=True).stdout
 
