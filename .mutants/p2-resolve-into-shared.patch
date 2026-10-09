@@ -1,0 +1,13 @@
+diff --git a/src/backend/era.rs b/src/backend/era.rs
+index bcc0c7f69..b81758a36 100644
+--- a/src/backend/era.rs
++++ b/src/backend/era.rs
+@@ -273,7 +273,7 @@ impl Backend {
+         // detached re-probe of the old peer must not be able to land between them.
+         // A revocation removes a per-user slot without its start lock, so the slot this
+         // start serves may be retired before the discard or before the install (MIK-7643).
+-        entry
++        self.shared_entry()
+             .era
+             .restart_while_serving(
+                 || probe(transport, timeout),

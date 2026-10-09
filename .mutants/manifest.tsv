@@ -1,0 +1,9 @@
+head_sha	20bda7258cf4271d466ac8d960b335b1c35599b4
+p1-attach-shared-cache	linux	p1-attach-shared-cache.patch	--lib -- another_slots_modern_verdict_does_not_shape_the_shared_slots_frames
+p2-resolve-into-shared	linux	p2-resolve-into-shared.patch	--lib -- the_backend_view_follows_the_shared_slot_not_the_last_prober
+p4-gate-reads-shared	linux	p4-gate-reads-shared.patch	--lib -- a_removed_method_is_judged_by_its_own_slots_era
+p5-gate-dropped	linux	p5-gate-dropped.patch	--lib -- a_cold_slots_first_removed_method_is_judged_after_its_probe
+p6-reprobe-into-shared	linux	p6-reprobe-into-shared.patch	--lib -- a_reprobe_on_one_slot_leaves_the_other_slots_verdict
+g1-start-ignores-retired	linux	g1-start-ignores-retired.patch	--lib -- a_start_era_step_for_a_revoked_slot_keeps_the_era
+g2-reprobe-ignores-serving	linux	g2-reprobe-ignores-serving.patch	--lib -- a_contradiction_from_a_slot_revoked_before_the_discard_keeps_the_era
+g3-reprobe-install-ignores-serving	linux	g3-reprobe-install-ignores-serving.patch	--lib -- a_reprobe_answer_for_a_revoked_busy_slot_is_not_stored

@@ -1,0 +1,13 @@
+diff --git a/src/backend/era.rs b/src/backend/era.rs
+index bcc0c7f69..a3be6694c 100644
+--- a/src/backend/era.rs
++++ b/src/backend/era.rs
+@@ -338,7 +338,7 @@ impl Backend {
+                 // Re-checked under the era lock, and held through the clear: a restart may have
+                 // installed and resolved a new peer since the lookup above, or the pool removed
+                 // the slot, and a contradiction from the old one must not erase the verdict.
+-                |clear| with_serving(&entry, transport, clear),
++                |clear| { clear(); true },
+             )
+             .await;
+         if !discarded {
