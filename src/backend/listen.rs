@@ -72,7 +72,9 @@ impl Backend {
             .ok_or_else(|| Error::Transport("transport has no event stream".to_owned()))?;
         // An unresolved era is not read as legacy: a modern peer mid
         // re-probe would be sent a legacy GET (MIK-7899 CLASS.3).
+        // The Shared slot's own era: the stream is that slot's (MIK-8186).
         let era = self
+            .shared_entry()
             .era
             .settled()
             .await

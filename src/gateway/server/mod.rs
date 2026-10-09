@@ -2551,30 +2551,35 @@ impl Gateway {
                     if writer.is_closed() {
                         return;
                     }
-                    // Boxed: the dispatch future is tens of kilobytes.
-                    let (responses, _) = Self::dispatch_streaming_notifications(
-                        Box::pin(Self::dispatch_batch_read(
-                            &meta_mcp,
-                            &tool_policy,
-                            &mtls_policy,
-                            request,
-                            session_id,
-                            &telemetry,
+                    // MIK-8176: the batch's slots are owned here, from
+                    // dispatch through the writer queue.
+                    Box::pin(crate::gateway::meta_mcp::sealed_hold::scoped(async {
+                        // Boxed: the dispatch future is tens of kilobytes.
+                        let (responses, _) = Self::dispatch_streaming_notifications(
+                            Box::pin(Self::dispatch_batch_read(
+                                &meta_mcp,
+                                &tool_policy,
+                                &mtls_policy,
+                                request,
+                                session_id,
+                                &telemetry,
+                                &reads,
+                            )),
+                            &writer,
                             &reads,
-                        )),
-                        &writer,
-                        &reads,
-                        Some(meta_mcp.notification_screen("stdio", session_id)),
-                    )
+                            Some(meta_mcp.notification_screen("stdio", session_id)),
+                        )
+                        .await;
+                        Self::persist_stdio_protocol_telemetry(&telemetry);
+                        if !responses.is_empty() {
+                            drop(
+                                writer
+                                    .send(crate::gateway::outbound::StdioReads::batch_of(responses))
+                                    .await,
+                            );
+                        }
+                    }))
                     .await;
-                    Self::persist_stdio_protocol_telemetry(&telemetry);
-                    if !responses.is_empty() {
-                        drop(
-                            writer
-                                .send(crate::gateway::outbound::StdioReads::batch_of(responses))
-                                .await,
-                        );
-                    }
                     drop(slot);
                 });
                 continue;
@@ -2638,7 +2643,9 @@ impl Gateway {
                 let answers = request_id.clone();
                 #[cfg(test)]
                 let gate = initialize_gate.clone().filter(|_| !spawned);
-                async move {
+                // MIK-8176: this request's slots are owned by its task, from
+                // dispatch through the writer queue.
+                Box::pin(crate::gateway::meta_mcp::sealed_hold::scoped(async move {
                     let ((response, staged), hidden) = Self::dispatch_streaming_notifications(
                         Box::pin(Self::dispatch_single_staged(
                             &meta_mcp,
@@ -2686,7 +2693,7 @@ impl Gateway {
                     {
                         cancelled.send_unless_cancelled(answers.as_ref(), permit, response);
                     }
-                }
+                }))
             };
             if spawned {
                 let slot = slot.expect("a spawned request holds the slot it was admitted on");

@@ -166,12 +166,15 @@ pub(super) async fn audited_call(
     name: String,
     request: axum::http::Request<axum::body::Body>,
 ) -> crate::gateway::outbound::OutboundReply {
+    // MIK-8176: the slots this call's mints take are owned here, outside the
+    // audits and the judge, whether or not relay detection is on.
     let judged = audited_call_judged(Arc::clone(&state), name, request);
     #[cfg(feature = "firewall")]
     if state.firewall.as_ref().is_some_and(|fw| fw.relay_active()) {
-        return crate::gateway::meta_mcp::invoke::relay::collecting(Box::pin(judged)).await;
+        let collected = crate::gateway::meta_mcp::invoke::relay::collecting(Box::pin(judged));
+        return crate::gateway::meta_mcp::sealed_hold::scoped(collected).await;
     }
-    Box::pin(judged).await
+    crate::gateway::meta_mcp::sealed_hold::scoped(Box::pin(judged)).await
 }
 
 async fn audited_call_judged(
