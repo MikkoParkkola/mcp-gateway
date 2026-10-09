@@ -17,7 +17,11 @@ impl Drop for StdioTransport {
     /// cancels `shutdown`, as `close()` does, so a write stuck on a reader
     /// outside the group ends and gives up stdin (MIK-8079).
     fn drop(&mut self) {
-        // The tree itself (`ChildTree`'s Drop) sends the one group signal.
+        // The reaper ends the tree, settle and reap included, with no runtime
+        // (MIK-7923): `ChildTree`'s own Drop is only the fallback.
+        if let Some(tree) = self.child.get_mut().tree.take() {
+            let _ = super::reaper::hand_over(tree);
+        }
         self.shutdown.get_mut().cancel();
     }
 }
