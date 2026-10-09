@@ -763,9 +763,7 @@ async fn a_probe_during_a_request_time_login_neither_waits_nor_rebuilds() {
 
     let probed = tokio::time::timeout(
         Duration::from_secs(10),
-        // The probe's own bound outlasts the outer one, so a probe that queued
-        // behind the login trips the outer bound instead of ending by itself.
-        backend.health_probe(Duration::from_secs(60)),
+        backend.health_probe(Duration::from_secs(60)), // outlasts the outer bound
     )
     .await
     .expect("a probe does not queue behind the login holding the OAuth client");
