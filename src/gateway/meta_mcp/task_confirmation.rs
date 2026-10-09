@@ -45,7 +45,7 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 use super::MetaMcp;
 
 mod helpers;
-pub(crate) use helpers::task_admission_request;
+pub(crate) use helpers::{AdmissionOwner, task_admission_request};
 use helpers::{challenge_key, cleared, operation_digest, record, refuse, refuse_grant};
 
 /// The interim `resultType` a challenge carries. Spelled once: a second

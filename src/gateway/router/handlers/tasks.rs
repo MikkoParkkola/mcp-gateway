@@ -116,15 +116,25 @@ pub(super) fn route_task_owner(
 /// owner never comes from the agent arm: an event subscription is re-checked
 /// at each delivery by its gateway credential, and an agent-only caller has
 /// none to re-check, so it stays without an events principal (MIK-8055 K6).
+///
+/// Also returns the owner key itself ([`task_owner_key`]): the synchronous
+/// execution lease admits an identity-less caller under that same spelling,
+/// so a key cannot admit one operation once per spelling (MIK-8193).
 pub(super) fn route_owners(
     state: &AppState,
     verified_identity: Option<&VerifiedIdentity>,
     agent: Option<&OAuthAgentIdentity>,
-    owner_key: &str,
-) -> (String, String) {
+    (subject, cert, client): (
+        Option<&crate::identity_grants::GrantSubject>,
+        Option<&CertIdentity>,
+        Option<&AuthenticatedClient>,
+    ),
+) -> (String, String, String) {
+    let owner_key = task_owner_key(subject, cert, client);
     (
-        route_task_owner(state, verified_identity, agent, owner_key),
-        route_task_owner(state, verified_identity, None, owner_key),
+        route_task_owner(state, verified_identity, agent, &owner_key),
+        route_task_owner(state, verified_identity, None, &owner_key),
+        owner_key,
     )
 }
 

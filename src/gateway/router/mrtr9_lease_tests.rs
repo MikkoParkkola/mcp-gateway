@@ -12,7 +12,7 @@ use super::direct_continuation_tests::{code, dispatched, meta_call};
 use super::direct_guards_fixture::{Answer, fixture};
 
 /// `gateway_invoke` params under idempotency key `key`, declaring `caps`.
-fn keyed(key: &str, caps: Value) -> Value {
+fn keyed(key: &str, caps: &Value) -> Value {
     json!({"_meta": {
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
         "io.modelcontextprotocol/clientCapabilities": caps,
@@ -27,12 +27,12 @@ fn keyed(key: &str, caps: Value) -> Value {
 #[tokio::test]
 async fn m1_a_keyed_retry_after_an_undeclared_refusal_runs_again() {
     let fx = fixture(Answer::AskOnce, |_| {}).await;
-    let refused = meta_call(&fx, "k-std", "alpha", keyed("op-1", json!({}))).await;
+    let refused = meta_call(&fx, "k-std", "alpha", keyed("op-1", &json!({}))).await;
     assert_eq!(code(&refused), Some(-32021), "MRTR.9 refusal: {refused}");
     assert_eq!(dispatched(&fx), 1, "the question was asked once");
 
     let declared = json!({"elicitation": {"form": {}}});
-    let retried = meta_call(&fx, "k-std", "alpha", keyed("op-1", declared)).await;
+    let retried = meta_call(&fx, "k-std", "alpha", keyed("op-1", &declared)).await;
     assert!(
         retried.get("error").is_none(),
         "the retry was served the stored refusal: {retried}"
@@ -45,7 +45,7 @@ async fn m1_a_keyed_retry_after_an_undeclared_refusal_runs_again() {
 async fn keyed_chain(
     fx: &super::direct_guards_fixture::Fx,
     op: &str,
-    caps: Value,
+    caps: &Value,
     chain: &Value,
 ) -> Value {
     let mut params = keyed(op, caps);
@@ -82,7 +82,7 @@ async fn g4_a_keyed_chain_never_repeats_a_step_that_ran() {
         {"tool": "alpha:read", "arguments": {}},
         {"tool": "alpha:read", "arguments": {"cmd": "two"}}
     ]);
-    let first = keyed_chain(&fx, "op-g4", json!({}), &chain).await;
+    let first = keyed_chain(&fx, "op-g4", &json!({}), &chain).await;
     assert!(first.get("error").is_some(), "step 2 refused: {first}");
     assert_eq!(
         dispatched(&fx),
@@ -92,7 +92,7 @@ async fn g4_a_keyed_chain_never_repeats_a_step_that_ran() {
 
     // The identical retry is served the stored outcome (G4c), which names the
     // failed step, so the client knows step 1 ran.
-    let again = keyed_chain(&fx, "op-g4", json!({}), &chain).await;
+    let again = keyed_chain(&fx, "op-g4", &json!({}), &chain).await;
     assert_eq!(dispatched(&fx), 2, "step 1 ran again: {again}");
     assert_eq!(again["error"], first["error"], "the stored outcome");
     assert!(
@@ -104,7 +104,7 @@ async fn g4_a_keyed_chain_never_repeats_a_step_that_ran() {
     // A retry that now declares the capability is refused too, and still
     // runs nothing: the key keeps the work that already ran.
     let declared = json!({"elicitation": {"form": {}}});
-    let retried = keyed_chain(&fx, "op-g4", declared, &chain).await;
+    let retried = keyed_chain(&fx, "op-g4", &declared, &chain).await;
     assert!(retried.get("error").is_some(), "{retried}");
     assert_eq!(dispatched(&fx), 2, "step 1 ran again: {retried}");
 }
@@ -120,10 +120,10 @@ async fn g4b_a_pre_send_refusal_after_a_step_ran_keeps_the_outcome() {
         {"tool": "nosuch:read", "arguments": {}}
     ]);
     let declared = json!({"elicitation": {"form": {}}});
-    let first = keyed_chain(&fx, "op-g4b", declared.clone(), &chain).await;
+    let first = keyed_chain(&fx, "op-g4b", &declared, &chain).await;
     assert!(first.get("error").is_some(), "step 2 refused: {first}");
     assert_eq!(dispatched(&fx), 1);
-    let retried = keyed_chain(&fx, "op-g4b", declared, &chain).await;
+    let retried = keyed_chain(&fx, "op-g4b", &declared, &chain).await;
     assert_eq!(dispatched(&fx), 1, "step 1 ran again: {retried}");
     assert_eq!(retried["error"], first["error"], "the stored outcome");
 }

@@ -7,6 +7,37 @@ use super::{
     TaskConfirmationRequest, Value, canonical_json, json, sha256_hex,
 };
 
+/// The credential principal an execution is admitted under when the caller
+/// has no verified identity (`MIK-8193`). The synchronous lease and task
+/// admission share one store keyed `(principal, key)`, so they must spell the
+/// caller alike, or one key admits the same operation twice: once in each
+/// spelling. HTTP mints it from the task owner key (`task_owner_key`: proven
+/// subject, else `credential:<principal>`), stdio from its reserved owner.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AdmissionOwner<'a>(Option<&'a str>);
+
+impl<'a> AdmissionOwner<'a> {
+    /// An HTTP caller's task owner key; empty is no owner (refused when keyed).
+    pub(crate) fn credential(owner_key: &'a str) -> Self {
+        Self((!owner_key.is_empty()).then_some(owner_key))
+    }
+
+    /// The stdio transport's reserved owner (MIK-7272.OWNER.3).
+    pub(crate) const fn local_operator() -> Self {
+        Self(Some(crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL))
+    }
+
+    /// A test's owner, written as the production paths would mint it.
+    #[cfg(test)]
+    pub(crate) const fn for_test(principal: Option<&'a str>) -> Self {
+        Self(principal)
+    }
+
+    pub(crate) const fn principal(self) -> Option<&'a str> {
+        self.0
+    }
+}
+
 /// The admission identity a task-augmented `tools/call` is admitted under.
 ///
 /// One builder, so the gate's read-only lookup and the admitting call site
@@ -117,4 +148,18 @@ pub(super) fn refuse(
 pub(super) fn record(outcome: &'static str) {
     telemetry_metrics::counter!("destructive_confirmation_total", "outcome" => outcome)
         .increment(1);
+}
+
+#[cfg(test)]
+impl crate::gateway::meta_mcp::MetaMcp {
+    /// Test-only: admit against `other`'s store, as production shares one
+    /// authority between this surface and the task runtime
+    /// (`server/task_runtime.rs`). A fixture that rebuilds the surface must
+    /// keep the store the task runtime already holds.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn admitting_as(mut self, other: &Self) -> Self {
+        self.execution_admission = std::sync::Arc::clone(&other.execution_admission);
+        self
+    }
 }

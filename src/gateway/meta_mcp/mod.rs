@@ -121,7 +121,7 @@ pub use prompt_cache::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerpri
 pub(crate) use support::Authentication;
 pub use support::prune_constant_signals;
 pub(crate) use task_confirmation::{
-    TaskConfirmation, TaskConfirmationRequest, task_admission_request,
+    AdmissionOwner, TaskConfirmation, TaskConfirmationRequest, task_admission_request,
 };
 
 mod accessors;

@@ -511,6 +511,8 @@ fn fixture_auth() -> AuthConfig {
     auth
 }
 
+/// The rebuilt Meta-MCP keeps the state's admission store: sync calls and
+/// tasks share one, as `server/task_runtime.rs` wires it.
 async fn fixture_inner(
     answer: Answer,
     #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
@@ -551,11 +553,7 @@ async fn fixture_inner(
         backend.set_transport_for_test(Arc::new(transport));
         assert!(state_mut.backends.register(backend), "fixture registration");
     }
-    // The task runtime was opened over the state's admission authority, as
-    // production wires it (`server/task_runtime.rs`); the rebuilt surface
-    // keeps it, so sync calls and tasks share one store.
-    let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends))
-        .with_execution_admission(Arc::clone(state_mut.meta_mcp.execution_admission()));
+    let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends)).admitting_as(&state_mut.meta_mcp);
     meta.enable_idempotency(
         Arc::new(crate::idempotency::IdempotencyCache::new()),
         Duration::from_secs(300),

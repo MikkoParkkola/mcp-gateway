@@ -113,8 +113,8 @@ async fn fp3_other_arguments_under_the_same_key_are_refused() {
 }
 
 /// FP4 (guard, lead): the same tool, arguments and key retried as a task
-/// (`params.task`) is another operation: refused 409, never served the stored
-/// synchronous result. Identity carries the admission mode
+/// (`params.task`) is another operation: refused, never admitted again and
+/// never served the stored synchronous result. Identity carries the admission mode
 /// (`idempotency/admission.rs:296-301`).
 #[tokio::test]
 async fn fp4_a_task_retry_of_a_sync_call_is_refused() {
@@ -123,7 +123,7 @@ async fn fp4_a_task_retry_of_a_sync_call_is_refused() {
     // authority (`server/task_runtime.rs:49`); this row means nothing over a
     // fixture with two.
     let shared = std::ptr::eq(
-        &**fx.state.meta_mcp.execution_admission(),
+        std::sync::Arc::as_ptr(fx.state.meta_mcp.execution_admission()),
         fx.state.task_executor.service.admission(),
     );
     assert!(
@@ -136,10 +136,10 @@ async fn fp4_a_task_retry_of_a_sync_call_is_refused() {
     let first = keyed_meta(&fx, "gateway_invoke", invoke(), caps.clone(), json!({})).await;
     assert!(first.get("error").is_none(), "{first}");
     let as_task = keyed_meta(&fx, "gateway_invoke", invoke(), caps, json!({"task": {}})).await;
+    assert!(as_task.get("result").is_none(), "admitted again: {as_task}");
     assert!(
-        as_task.get("result").is_none(),
-        "served the stored sync result: {as_task}"
+        as_task.get("error").is_some(),
+        "refused as another call: {as_task}"
     );
-    assert_eq!(as_task["error"]["code"], 409, "{as_task}");
     assert_eq!(dispatched(&fx), 1);
 }
