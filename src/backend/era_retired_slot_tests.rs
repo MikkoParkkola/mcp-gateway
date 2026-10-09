@@ -29,12 +29,12 @@ async fn busy_slot_probing(
     backend: &Arc<Backend>,
     peer: &Arc<Peer>,
     handles: &mut Handles,
-) -> Arc<dyn Transport> {
+) -> (Arc<dyn Transport>, Arc<PooledEntry>) {
     let transport: Arc<dyn Transport> = peer.clone();
     backend.set_pooled_transport_for_test(&slot(BINDING), Arc::clone(&transport));
-    backend.resolve_era_for_test(&transport).await;
-    assert_eq!(backend.cached_era().await, Some(Era::Modern), "primed");
-    let entry = Arc::clone(backend.pool.get(&slot(BINDING)).expect("the slot").value());
+    let entry = entry_of(backend, BINDING);
+    backend.resolve_era_for_entry_test(&transport, &entry).await;
+    assert_eq!(entry.era.cached().await, Some(Era::Modern), "primed");
     entry.in_flight.fetch_add(1, Ordering::SeqCst);
 
     peer.hold.store(true, Ordering::SeqCst);
@@ -45,7 +45,7 @@ async fn busy_slot_probing(
         .await
         .expect("the re-probe reached the peer in time")
         .expect("the re-probe reaches the peer");
-    transport
+    (transport, entry)
 }
 
 /// MIK-7643: the revocation removes the busy slot while its re-probe is on the
@@ -55,7 +55,7 @@ async fn busy_slot_probing(
 async fn a_reprobe_answer_for_a_revoked_busy_slot_is_not_stored() {
     let backend = per_user_backend("era-retired");
     let (peer, mut handles) = Peer::new(Answer::Modern);
-    let _transport = busy_slot_probing(&backend, &peer, &mut handles).await;
+    let (_transport, entry) = busy_slot_probing(&backend, &peer, &mut handles).await;
 
     assert_eq!(
         backend.evict_identity_slots("rev:"),
@@ -64,12 +64,12 @@ async fn a_reprobe_answer_for_a_revoked_busy_slot_is_not_stored() {
     );
     let _ = handles.release.send(());
 
-    let era = tokio::time::timeout(WAIT, backend.cached_era())
+    let era = tokio::time::timeout(WAIT, entry.era.cached())
         .await
         .expect("the re-probe decided in time");
     assert_eq!(
         era, None,
-        "an answer about a slot the pool no longer serves is not the backend's era"
+        "an answer about a slot the pool no longer serves is not stored as its era"
     );
 }
 
@@ -79,17 +79,17 @@ async fn a_reprobe_answer_for_a_revoked_busy_slot_is_not_stored() {
 async fn a_reprobe_answer_before_the_revocation_is_stored() {
     let backend = per_user_backend("era-retired-guard");
     let (peer, mut handles) = Peer::new(Answer::Modern);
-    let _transport = busy_slot_probing(&backend, &peer, &mut handles).await;
+    let (_transport, entry) = busy_slot_probing(&backend, &peer, &mut handles).await;
 
     let _ = handles.release.send(());
-    let era = tokio::time::timeout(WAIT, backend.cached_era())
+    let era = tokio::time::timeout(WAIT, entry.era.cached())
         .await
         .expect("the re-probe decided in time");
     assert_eq!(era, Some(Era::Modern), "a pooled slot's answer is stored");
 
     assert_eq!(backend.evict_identity_slots("rev:"), 1);
     assert_eq!(
-        backend.cached_era().await,
+        entry.era.cached().await,
         Some(Era::Modern),
         "a later revocation leaves the stored era alone"
     );
@@ -179,11 +179,10 @@ async fn a_contradiction_from_a_revoked_slot() {
     let (peer, _handles) = Peer::new(Answer::Modern);
     let transport: Arc<dyn Transport> = peer;
     backend.set_pooled_transport_for_test(&slot(BINDING), Arc::clone(&transport));
-    backend.resolve_era_for_test(&transport).await;
-    assert_eq!(backend.cached_era().await, Some(Era::Modern), "primed");
-    entry_of(&backend, BINDING)
-        .in_flight
-        .fetch_add(1, Ordering::SeqCst);
+    let entry = entry_of(&backend, BINDING);
+    backend.resolve_era_for_entry_test(&transport, &entry).await;
+    assert_eq!(entry.era.cached().await, Some(Era::Modern), "primed");
+    entry.in_flight.fetch_add(1, Ordering::SeqCst);
 
     let (reached, release) = backend.after_reprobe_lookup.arm();
     let contradiction = tokio::spawn({
@@ -206,7 +205,7 @@ async fn a_contradiction_from_a_revoked_slot() {
         .expect("the contradiction task");
 
     assert_eq!(
-        backend.cached_era().await,
+        entry.era.cached().await,
         Some(Era::Modern),
         "a contradiction from a slot the pool no longer serves keeps the verdict"
     );
@@ -232,9 +231,10 @@ async fn revoked_primed_slot(backend: &Arc<Backend>) -> Arc<PooledEntry> {
     let (peer, _handles) = Peer::new(Answer::Modern);
     let primed: Arc<dyn Transport> = peer;
     backend.set_pooled_transport_for_test(&slot(BINDING), Arc::clone(&primed));
-    backend.resolve_era_for_test(&primed).await;
-    assert_eq!(backend.cached_era().await, Some(Era::Modern), "primed");
-    entry_of(backend, BINDING)
+    let entry = entry_of(backend, BINDING);
+    backend.resolve_era_for_entry_test(&primed, &entry).await;
+    assert_eq!(entry.era.cached().await, Some(Era::Modern), "primed");
+    entry
 }
 
 /// MIK-7643: a start whose slot the revocation removed before the start's era
@@ -262,9 +262,9 @@ async fn a_start_era_step_for_a_revoked_slot_keeps_the_era() {
     );
 
     assert_eq!(
-        backend.cached_era().await,
+        entry.era.cached().await,
         Some(Era::Modern),
-        "a revoked slot's start must not replace the backend's verdict"
+        "a revoked slot's start must not replace its verdict"
     );
 }
 
@@ -318,7 +318,7 @@ async fn a_start_probe_answered_after_its_slot_was_revoked() {
         .expect("the era step task");
 
     assert_eq!(
-        backend.cached_era().await,
+        entry.era.cached().await,
         None,
         "discarded while serving, and the revoked peer's Legacy answer not installed"
     );

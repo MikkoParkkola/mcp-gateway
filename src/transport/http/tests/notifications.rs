@@ -138,8 +138,12 @@ async fn sse_decode_delivers_no_notifications_when_the_server_sent_none() {
 async fn a_connect_failure_after_a_followed_redirect_is_not_pre_dispatch() {
     use tokio::io::AsyncWriteExt;
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
+    // From the reserved range: once the listener closes below, no parallel
+    // port-0 bind can take this port before the hop (MIK-8211).
+    let port = crate::test_ports::reserved_port();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+        .await
+        .unwrap();
     // Same host AND port as the base URL (`evaluate_redirect` refuses a
     // cross-origin hop); `localhost`, a name, clears the loopback SSRF guard.
     let target = format!("http://localhost:{port}/moved");

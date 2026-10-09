@@ -30,6 +30,7 @@ const REACHABLE: &str = "http://localhost:{port}";
 /// Serve both discovery documents on loopback; return the mock's port.
 async fn serve(advertised: &Advertised) -> u16 {
     use axum::{Router, routing::get};
+    // port-check: the listener serves on in the spawned task
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let fill = |template: &str| template.replace("{port}", &port.to_string());
@@ -214,6 +215,7 @@ async fn hardened_oauth_client_is_pinned() {
 /// Answer every connection with a redirect to `location`.
 pub(super) async fn redirecting_listener(location: String) -> u16 {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // port-check: the listener serves on in the spawned task
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
@@ -434,6 +436,7 @@ async fn a_refused_oauth_redirect_is_typed_ssrf_blocked() {
 /// registration endpoint is `registration`.
 async fn serve_with_refused_resource(registration: String) -> u16 {
     use axum::{Router, response::Redirect, routing::get};
+    // port-check: the listener serves on in the spawned task
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let base = format!("http://127.0.0.1:{port}");
