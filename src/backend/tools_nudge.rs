@@ -200,6 +200,27 @@ impl super::Backend {
         self.commit_verdicts("", super::Listing::Complete, verdicts);
     }
 
+    /// Store `tools` into the shared slot, as a fill does.
+    #[cfg(test)]
+    pub(crate) fn store_shared_tools_for_test(&self, tools: Vec<Tool>) {
+        self.shared_entry().tools_cache.replace(tools, || ());
+    }
+
+    /// Have the next drain store `tools` into the shared slot right after it
+    /// reads that slot.
+    #[cfg(test)]
+    pub(crate) fn store_shared_after_read_for_test(&self, tools: Vec<Tool>) {
+        *self.shared_read_seam.lock() = Some(tools);
+    }
+
+    /// The shared-read seam: stores the list a test asked for, once.
+    #[cfg(test)]
+    pub(crate) fn run_shared_read_seam_for_test(&self) {
+        if let Some(tools) = self.shared_read_seam.lock().take() {
+            self.store_shared_tools_for_test(tools);
+        }
+    }
+
     /// Have the next drain snapshot block tool `name` mid-snapshot.
     #[cfg(test)]
     pub(crate) fn block_mid_snapshot_for_test(&self, name: &str) {

@@ -122,6 +122,8 @@ impl Backend {
             views_dirty: std::sync::Arc::default(),
             #[cfg(test)]
             snapshot_seam: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            shared_read_seam: parking_lot::Mutex::new(None),
         }
     }
 

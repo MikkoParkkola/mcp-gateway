@@ -218,6 +218,10 @@ fn decide(
                     populated,
                 }
             });
+            #[cfg(test)]
+            if let Some(b) = backend.as_ref() {
+                b.run_shared_read_seam_for_test();
+            }
             // Read before the lock: it walks the pool.
             // ponytail: fingerprints every per-user slot per backend
             // nudge; cache per-slot fingerprints if slots x stores bites.
@@ -415,6 +419,46 @@ mod tests {
         assert_eq!(
             decide(&state, &announced, second),
             Some(("demo".to_string(), Reach::View))
+        );
+    }
+
+    // MIK-8208: the drain clears the queued flag before it reads the shared
+    // slot, so a store landing right after that read queues a fresh nudge.
+    // Cleared after the read, the store would find the flag still set and its
+    // nudge would be lost.
+    #[tokio::test]
+    async fn a_shared_store_during_the_drain_read_queues_a_fresh_nudge() {
+        let (state, _store) = crate::gateway::router::tests::direct_route_state_with_identity(
+            crate::config::AgentIdentityConfig::default(),
+        )
+        .await;
+        let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
+        state.backends.set_change_feed(feed);
+        let backend = state.backends.get("demo").expect("fixture backend");
+        let announced = parking_lot::Mutex::new(Announced::default());
+        let tool = |name: &str| -> Tool {
+            serde_json::from_value(serde_json::json!({
+                "name": name, "description": "", "inputSchema": { "type": "object" }
+            }))
+            .expect("tool")
+        };
+        while let Ok(earlier) = nudges.try_recv() {
+            let _ = decide(&state, &announced, earlier);
+        }
+
+        backend.store_shared_tools_for_test(vec![tool("a")]);
+        let first = nudges.try_recv().expect("the store nudges");
+        backend.store_shared_after_read_for_test(vec![tool("c")]);
+        assert_eq!(
+            decide(&state, &announced, first),
+            Some(("demo".to_string(), Reach::Tools))
+        );
+        let second = nudges
+            .try_recv()
+            .expect("the store during the read queued a fresh nudge");
+        assert_eq!(
+            decide(&state, &announced, second),
+            Some(("demo".to_string(), Reach::Tools))
         );
     }
 
