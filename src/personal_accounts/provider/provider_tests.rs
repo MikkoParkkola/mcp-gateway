@@ -44,7 +44,7 @@ use crate::personal_accounts::config::{AccountDescriptor, DescriptorMode};
 use crate::personal_accounts::service::{ProviderRefreshError, RefreshProvider};
 use crate::personal_accounts::{AccountKey, GrantRecord};
 
-const GOOGLE_ISSUER: &str = "https://accounts.google.com";
+pub(super) const GOOGLE_ISSUER: &str = "https://accounts.google.com";
 const GOOGLE_AUTH: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN: &str = "https://oauth2.googleapis.com/token";
 const GOOGLE_REVOKE: &str = "https://oauth2.googleapis.com/revoke";
@@ -60,13 +60,13 @@ const LOGIN_TOKEN: &str = "https://login.example.com/token";
 const HOSTILE_ISSUER: &str = "https://idp.hostile.example";
 const HOSTILE_RFC8414: &str = "https://idp.hostile.example/.well-known/oauth-authorization-server";
 
-const RESOURCE: &str = "https://gateway.example.com/mcp";
+pub(super) const RESOURCE: &str = "https://gateway.example.com/mcp";
 const OTHER_RESOURCE: &str = "https://gateway.example.com/other";
 const CLIENT_ID: &str = "1234.apps.googleusercontent.com";
 const SECRET_REF: &str = "env:GOOGLE_CLIENT_SECRET";
 const SECRET_VALUE: &str = "client-secret-value";
 const REFRESH_TOKEN: &str = "refresh-token-alpha";
-const NOW: u64 = 1_700_000_000;
+pub(super) const NOW: u64 = 1_700_000_000;
 
 /// One metadata location and the answer scripted for it, as `TraceHttp::new` expects.
 type MetadataScript = Vec<(&'static str, Result<HttpResponse, HttpError>)>;
@@ -82,7 +82,7 @@ enum Call {
 }
 
 #[derive(Clone)]
-struct TraceHttp {
+pub(super) struct TraceHttp {
     metadata: BTreeMap<String, Result<HttpResponse, HttpError>>,
     token: Result<HttpResponse, HttpError>,
     calls: Arc<Mutex<Vec<Call>>>,
@@ -130,7 +130,7 @@ impl ProviderHttp for TraceHttp {
     }
 }
 
-struct FixedClock(u64);
+pub(super) struct FixedClock(u64);
 
 impl Clock for FixedClock {
     fn now_unix(&self) -> u64 {
@@ -140,7 +140,7 @@ impl Clock for FixedClock {
 
 /// Resolves only the one configured reference, and records the read in the same
 /// ordered log as the HTTP calls.
-struct MapSecrets {
+pub(super) struct MapSecrets {
     calls: Arc<Mutex<Vec<Call>>>,
 }
 
@@ -157,7 +157,7 @@ impl SecretSource for MapSecrets {
 /// The single ordered log, held independently of the provider so a REFUSED
 /// bootstrap is still inspectable.
 #[derive(Clone)]
-struct Trace(Arc<Mutex<Vec<Call>>>);
+pub(super) struct Trace(Arc<Mutex<Vec<Call>>>);
 
 impl Trace {
     fn all(&self) -> Vec<Call> {
@@ -199,7 +199,7 @@ impl Trace {
     clippy::unnecessary_wraps,
     reason = "every call site needs a Result<HttpResponse, HttpError> for the fixture table; the wrapper exists only to avoid writing Ok(...) at each of the many call sites"
 )]
-fn ok(body: &str) -> Result<HttpResponse, HttpError> {
+pub(super) fn ok(body: &str) -> Result<HttpResponse, HttpError> {
     Ok(HttpResponse {
         status: 200,
         body: body.to_string(),
@@ -256,7 +256,7 @@ fn descriptor(issuer: &str, resource: &str, send_resource: bool) -> AccountDescr
     descriptor_with(issuer, resource, send_resource, GOOGLE_TOKEN)
 }
 
-fn account(backend_id: &str, issuer: &str, resource: &str) -> AccountKey {
+pub(super) fn account(backend_id: &str, issuer: &str, resource: &str) -> AccountKey {
     AccountKey {
         principal_authority: "open-webui".to_string(),
         principal_subject: "user-7".to_string(),
@@ -266,7 +266,7 @@ fn account(backend_id: &str, issuer: &str, resource: &str) -> AccountKey {
     }
 }
 
-fn grant() -> GrantRecord {
+pub(super) fn grant() -> GrantRecord {
     GrantRecord {
         generation: "gen-1".to_string(),
         token_revision: 4,
@@ -282,7 +282,7 @@ fn grant() -> GrantRecord {
     }
 }
 
-type TestProvider = PersonalOAuthRefresh<TraceHttp, FixedClock, MapSecrets>;
+pub(super) type TestProvider = PersonalOAuthRefresh<TraceHttp, FixedClock, MapSecrets>;
 
 /// Awaits bootstrap and hands back the log REGARDLESS of the outcome. The log
 /// handle is cloned before the call: a refused bootstrap yields no provider, and
@@ -315,7 +315,7 @@ async fn expect_bootstrap(
 }
 
 /// Google reachable at the second location with a valid document.
-async fn google_rig(
+pub(super) async fn google_rig(
     token: Result<HttpResponse, HttpError>,
     send_resource: bool,
     now: u64,

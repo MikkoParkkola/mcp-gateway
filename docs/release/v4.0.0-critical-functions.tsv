@@ -75,6 +75,7 @@ src/gateway/router/backend_handlers/direct_preflight.rs	take_nonces	1	critical	b
 src/gateway/router/backend_handlers/direct_preflight.rs	check_attestation	1	critical	b,d	check_attestation	Refuses an unattested call before it mints a per-user credential or writes a mint audit row.
 src/gateway/router/backend_handlers/direct_preflight.rs	propagate_identity	1	critical	a,d	propagate_identity	Resolves the per-user credential and enforces the OAuth-isolation guard (ADR-008 INV-2).
 src/gateway/router/backend_handlers/direct_preflight.rs	resolve_headers	1	critical	a	resolve_headers	Passthrough versus minting credential resolution; binds the upstream session bucket to the caller.
+src/gateway/router/backend_handlers/direct_preflight.rs	a2a_round_binding	1	critical	a	a2a_round_binding	Binds an A2A input round to the caller who was asked (verified identity, else the authenticated client principal), so no other caller can redeem it.
 src/gateway/router/backend_handlers/direct_preflight.rs	audit_mint	1	critical	d	audit_mint	Fails closed when a minted credential has no durable audit record; audits refusals.
 src/gateway/router/backend_handlers/direct_dispatch.rs	admit	1	critical	d	admit	Admission order: dispatch controls, tool-call gate, idempotency guard, then the signing nonce.
 src/gateway/router/backend_handlers/direct_dispatch.rs	guard_and_sanitize	1	critical	d	guard_and_sanitize	Applies the tool-call security gate before the idempotency cache (#2445).
@@ -143,6 +144,7 @@ src/gateway/router/handlers/tasks.rs	agent_task_owner	1	critical	c	agent_task_ow
 src/gateway/router/hardened_elicitation.rs	declares_elicitation	1	critical	a	declares_elicitation	Decides whether an initialize declares elicitation, the condition the hardened refusal rests on
 src/gateway/router/hardened_elicitation.rs	direct_refusal	1	critical	a,d	direct_refusal	Hardened posture: refuses on the direct route any legacy request but a declaring initialize
 src/gateway/router/hardened_elicitation.rs	is_hardened	1	standard	borderline	is_hardened	Reads the hardened posture; a wrong answer silently disables the elicitation refusal
+src/gateway/router/hardened_elicitation.rs	refuse	1	critical	d	refuse	Hardened posture on /mcp: refuses a body-declared malformed modern request naming what it omitted (400 / -32602), else the elicitation refusal (MIK-8162)
 src/gateway/router/hardened_elicitation.rs	classify_direct	1	critical	a,d	classify_direct	The direct route's one reading of the declared revision; a doubled header reads modern so the hardened refusal applies
 src/gateway/router/hardened_identity.rs	hardened_identity_refusal	1	critical	a	hardened_identity_refusal	Hardened posture: 403 without a per-caller identity.
 src/gateway/router/helpers.rs	read_body	1	standard	borderline	read_body	Maps the max_body_size limit to a 413 refusal.
@@ -206,6 +208,8 @@ src/gateway/server/support.rs	client_identity_from_peer_chain	1	critical	a,b	cli
 src/gateway/server/support.rs	network_bind_refusal	1	critical	a,d	network_bind_refusal	The single definition of the unauthenticated network exposure: None means this configuration may serve
 src/gateway/server/support.rs	serve_tls	1	critical	a	serve_tls	The mTLS listener: decides which client certificates may connect
 src/gateway/server/support.rs	start_refusal	1	critical	a,d	start_refusal	Every refusal Gateway::run asks before it binds, in order; reload restart advice asks the same
+src/gateway/server/stdio_tasks.rs	new	1	critical	c	TasksDropGuard::new	Binds the guard to the session's own executor and store, so its drop seals the workers that session started (MIK-7839.CANCEL.3)
+src/gateway/server/stdio_tasks.rs	drop	1	critical	c	TasksDropGuard::drop	Seals the executor so no worker takes another step, then stops store admission, when the session future is dropped (MIK-7839.CANCEL.3)
 src/gateway/task_service/execution.rs	cancel	1	critical	c	TaskExecutor::cancel	Cancel is a write scoped to the owner via the principal; signals the worker only after it commits
 src/gateway/task_service/execution.rs	cancel_lost_the_revision	1	critical	c	TaskExecutor::cancel_lost_the_revision	Retries cancel only after re-reading the task through the owner-scoped service.get
 src/gateway/task_service/execution.rs	transition_write	1	critical	c	TaskExecutor::transition_write	Hashes the request principal to an owner
@@ -368,6 +372,7 @@ src/oauth/client/refresh_flight.rs	spend	1	standard	borderline	Flight::spend	Rec
 src/oauth/client/refresh_flight.rs	redirect_target	1	standard	borderline	Exchange::redirect_target	Resolves the untrusted Location that redirect_error judges; a None would turn an SSRF refusal into a generic error
 src/oauth/client/refresh_flight.rs	limit	1	standard	borderline	Flight::limit	The bound on one exchange; a wrong value lets a supplied client hold the credential indefinitely
 src/oauth/client/refresh_flight.rs	refresh_stored	1	critical	d	refresh_stored	Refuses to resend a spent refresh token; retires one an unsettled exchange may have consumed, or whose sidecar is damaged (MIK-8091); marks the token in flight before sending
+src/oauth/client/mod.rs	refuse_oversized_expires_in	1	critical	d	refuse_oversized_expires_in	Refuses a token answer whose expires_in is above the 100-year bound (MIK-8207)
 src/oauth/metadata.rs	discover	1	critical	b	AuthorizationServerMetadata::discover	RFC 8414 issuer must match the discovery base
 src/oauth/storage.rs	is_expired	1	critical	d	TokenInfo::is_expired	Expiry decision (60s buffer) gating reuse of a cached token
 src/oauth/storage.rs	create_secret_tmp	1	standard	borderline	TokenStorage::create_secret_tmp	Creates a private (0600/DACL) temp file via create_new_private

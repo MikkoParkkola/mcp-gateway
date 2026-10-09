@@ -137,12 +137,15 @@ impl TokenInfo {
         expires_in: Option<u64>,
         scope: Option<String>,
     ) -> Self {
+        // MIK-8207: never wraps. An `expires_in` above the bound gives a token
+        // that is already expired; the gateway's own callers refuse such an
+        // answer before it gets here.
         let expires_at = expires_in.map(|secs| {
-            SystemTime::now()
+            let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
-                .as_secs()
-                + secs
+                .as_secs();
+            crate::duration_bound::expiry_from_expires_in(now, secs).unwrap_or(now)
         });
 
         Self {

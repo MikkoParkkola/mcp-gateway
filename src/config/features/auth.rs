@@ -58,8 +58,10 @@ pub struct AuthConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct DashboardSessionConfig {
     /// Seconds without activity before a session ends (default 1800).
+    #[serde(deserialize_with = "crate::duration_bound::secs")]
     pub idle_timeout_secs: u64,
     /// Seconds from sign-in before a session ends in any case (default 28800).
+    #[serde(deserialize_with = "crate::duration_bound::secs")]
     pub absolute_timeout_secs: u64,
 }
 

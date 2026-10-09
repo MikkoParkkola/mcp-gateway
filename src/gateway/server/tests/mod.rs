@@ -75,6 +75,8 @@ mod life1_stdio_cancel;
 // MIK-7642.PR.B: a client cancel reaches the backend by its own request id.
 mod mik7642_backend_cancel;
 mod owner2_stdio_tasks;
+// MIK-7839.CANCEL.3: a dropped run_stdio future stops its task workers.
+mod stdio_session_drop;
 // MIK-7757: a drain timeout cancels the running workers on both shutdown paths.
 mod stdio1_discover_versions;
 mod stdio_reused_id;

@@ -74,6 +74,20 @@ pub(crate) struct SigningInvocationContext {
     /// The store's stamp of this call's nonce registration, so a refusal that
     /// ran nothing can give back that registration and no other (MIK-7869).
     nonce_stamp: Option<std::time::Instant>,
+    /// Whether this signed execution may give its nonce back (MIK-8150).
+    refund: NonceRefund,
+}
+
+/// A step refused before its backend asks for the nonce back; the call settles
+/// once, after it has returned ([`MetaMcp::settle_nonce_refund`]), and gives it
+/// back only if no step of the execution dispatched. Settling at the end, not
+/// at the refusal, is what keeps a later step (a playbook continuing past a
+/// refused one, a chain's step N after step 1 ran) from running under a nonce
+/// already given back: a replay would repeat its effects.
+#[derive(Default)]
+struct NonceRefund {
+    dispatched: std::sync::atomic::AtomicBool,
+    wanted: std::sync::atomic::AtomicBool,
 }
 
 pub(crate) enum SigningDelivery<'a> {
@@ -94,6 +108,23 @@ fn captured(value: Option<Value>) -> CapturedNonce {
 }
 
 impl SigningInvocationContext {
+    /// Record that a backend dispatch ran under this signed execution.
+    pub(crate) fn mark_dispatched(&self) {
+        (self.refund.dispatched).store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Ask for the nonce back: this step was refused before its backend (its
+    /// continuation or its spend, MIK-8150). Settled when the call returns.
+    pub(crate) fn want_refund(&self) {
+        (self.refund.wanted).store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// A step asked for the nonce back and no step dispatched.
+    fn refund_due(&self) -> bool {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.refund.wanted.load(SeqCst) && !self.refund.dispatched.load(SeqCst)
+    }
+
     /// Move protocol metadata out of the raw request. Invalid nonce values are
     /// dropped here without copying them; policy still decides before refusal.
     #[cfg(test)]
@@ -113,6 +144,7 @@ impl SigningInvocationContext {
             prepared_target: None,
             admitted: false,
             nonce_stamp: None,
+            refund: NonceRefund::default(),
         };
         if origin == Origin::Unsigned {
             return context;
@@ -217,6 +249,7 @@ impl SigningInvocationContext {
             prepared_target: None,
             admitted: false,
             nonce_stamp: None,
+            refund: NonceRefund::default(),
         }
     }
 
@@ -231,6 +264,7 @@ impl SigningInvocationContext {
             prepared_target: None,
             admitted: true,
             nonce_stamp: None,
+            refund: NonceRefund::default(),
         }
     }
 
@@ -244,6 +278,7 @@ impl SigningInvocationContext {
             prepared_target: None,
             admitted: true,
             nonce_stamp: None,
+            refund: NonceRefund::default(),
         }
     }
 
@@ -422,24 +457,30 @@ impl super::MetaMcp {
         self.prepare_signing_invocation(context, arguments, session, caller)
     }
 
-    /// Give back the nonce of a call refused because its confirmation question
-    /// could not be delivered (MIK-7869). Only a nonce this call admitted: a
-    /// call left unadmitted registered none.
+    /// Give back the nonce of a call refused before anything could dispatch:
+    /// its confirmation question could not be delivered (MIK-7869). Only a
+    /// nonce this call admitted: a call left unadmitted registered none. A step
+    /// refused inside an execution asks with
+    /// [`SigningInvocationContext::want_refund`].
     pub(crate) fn release_unasked_nonce(&self, caller: &super::MetaMcpCallerContext<'_>) {
-        let Some(context) = caller.signing else {
-            return;
-        };
+        if let Some(context) = caller.signing {
+            self.give_back_nonce(context, nonce_principal(caller));
+        }
+    }
+
+    /// Once per `tools/call`, after it returned: give the nonce back if a step
+    /// asked and none dispatched.
+    pub(crate) fn settle_nonce_refund(&self, context: &SigningInvocationContext, principal: &str) {
+        if context.refund_due() {
+            self.give_back_nonce(context, principal);
+        }
+    }
+
+    fn give_back_nonce(&self, context: &SigningInvocationContext, principal: &str) {
         if let (true, Ok(Some(nonce)), Some(stamp)) =
             (context.admitted, context.nonce_value(), context.nonce_stamp)
         {
-            self.release_signing_nonce(
-                nonce,
-                caller.authorizer.quota_principal().map_or(
-                    "anonymous",
-                    crate::gateway::auth::QuotaPrincipal::as_store_key,
-                ),
-                stamp,
-            );
+            self.release_signing_nonce(nonce, principal, stamp);
         }
     }
 
@@ -466,13 +507,9 @@ impl super::MetaMcp {
         let nonce = context
             .nonce_value()
             .inspect_err(|_| record_nonce_rejection(NONCE_REASON_INVALID))?;
-        context.nonce_stamp = self.admit_signing_nonce_stamped(
-            nonce,
-            caller.authorizer.quota_principal().map_or(
-                "anonymous",
-                crate::gateway::auth::QuotaPrincipal::as_store_key,
-            ),
-        )?;
+        // The same key the refund reads (`nonce_principal`), so the two
+        // cannot drift apart.
+        context.nonce_stamp = self.admit_signing_nonce_stamped(nonce, nonce_principal(caller))?;
         if context.origin == Origin::GatewayInvoke {
             context.prepared_target = Some((
                 extract_required_str(arguments, "server")?.to_owned(),
@@ -608,3 +645,11 @@ mod nonce_metrics_tests;
 #[cfg(test)]
 #[path = "signing_unspent_tests.rs"]
 mod unspent_tests;
+
+/// The nonce store key of `caller`'s principal.
+pub(crate) fn nonce_principal<'a>(caller: &super::MetaMcpCallerContext<'a>) -> &'a str {
+    caller.authorizer.quota_principal().map_or(
+        "anonymous",
+        crate::gateway::auth::QuotaPrincipal::as_store_key,
+    )
+}

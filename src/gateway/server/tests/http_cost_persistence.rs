@@ -87,14 +87,8 @@ async fn http_saves_spend_periodically_while_serving() {
     std::fs::remove_file(&costs).expect("remove costs.json; only a save can bring it back");
     tokio::time::pause();
     tokio::time::advance(COST_SAVE_INTERVAL + Duration::from_secs(1)).await;
-    for _ in 0..1000 {
-        if costs.exists() {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
     // Read on the paused clock, so only the advanced interval can explain it.
-    let saved = costs.exists();
+    let saved = crate::test_wait::wait_real_time(Duration::from_secs(30), || costs.exists()).await;
     tokio::time::resume();
     // Still serving: a server that had stopped would have made its shutdown
     // save, which must not pass for the periodic one.
@@ -110,8 +104,9 @@ async fn http_saves_spend_periodically_while_serving() {
         "control: the HTTP gateway stopped serving, so a shutdown save could explain the file"
     );
     assert!(
-        saved,
-        "the HTTP gateway made no periodic save while serving"
+        saved.is_ok(),
+        "the HTTP gateway made no periodic save while serving: the save {}",
+        saved.err().unwrap_or_default()
     );
     let (_, enforcer) = boot_cost_governance(&config.cost_governance, dir.path());
     let global = enforcer

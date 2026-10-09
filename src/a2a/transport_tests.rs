@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::Router;
 use axum::routing::{get, post};
-use serde_json::json;
+use serde_json::{Value, json};
+
+use crate::a2a::delegation::PARKED_TTL;
 
 use super::*;
 
@@ -127,6 +129,114 @@ async fn an_unknown_tool_or_a_missing_message_is_invalid_params() {
     }
 }
 
+/// An agent that asks a question on every `SendMessage` and records the ids
+/// of the tasks it is asked to cancel.
+async fn asking_agent() -> (String, Arc<parking_lot::Mutex<Vec<String>>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let canceled = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let (seen, endpoint) = (Arc::clone(&canceled), format!("{base}/a2a"));
+    let app = Router::new()
+        .route(
+            "/.well-known/agent-card.json",
+            get(move || {
+                let endpoint = endpoint.clone();
+                async move {
+                    axum::Json(json!({"name": "asks", "supportedInterfaces": [
+                        {"url": endpoint, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}]}))
+                }
+            }),
+        )
+        .route(
+            "/a2a",
+            post(move |axum::Json(body): axum::Json<Value>| {
+                let seen = Arc::clone(&seen);
+                async move {
+                    let id = body["id"].clone();
+                    if body["method"] == "CancelTask" {
+                        seen.lock().push(body["params"]["id"].as_str().unwrap_or_default().to_owned());
+                    }
+                    axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": {"task": {
+                        "id": "asked-1", "contextId": "c-1",
+                        "status": {"state": "TASK_STATE_INPUT_REQUIRED", "message": {
+                            "messageId": "m", "role": "ROLE_AGENT", "parts": [{"text": "which?"}]}}}}}))
+                }
+            }),
+        );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (base, canceled)
+}
+
+/// MIK-8063 D1: a question nobody answers has its agent task canceled by the
+/// sweep once its token expires, and the token is then refused.
+#[tokio::test]
+async fn an_abandoned_question_is_canceled_by_the_sweep() {
+    let (base, canceled) = asking_agent().await;
+    let transport = started(&base).await;
+    let params = json!({"name": TOOL_NAME, "arguments": {"message": "hi"}});
+    let asked = transport
+        .request("tools/call", Some(params))
+        .await
+        .unwrap()
+        .result
+        .unwrap();
+    assert_eq!(asked["resultType"], "input_required", "{asked}");
+    let token = asked["requestState"].clone();
+
+    transport.sweep(std::time::Instant::now());
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(canceled.lock().is_empty(), "a fresh question is not swept");
+
+    transport.sweep(std::time::Instant::now() + PARKED_TTL);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while canceled.lock().is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the expired task was never canceled"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(canceled.lock().as_slice(), ["asked-1"]);
+
+    let retry = json!({"name": TOOL_NAME, "arguments": {"message": "hi"}, "requestState": token,
+        "inputResponses": {"a2a_reply": {"action": "accept", "content": {"reply": "x"}}}});
+    let refused = transport.request("tools/call", Some(retry)).await.unwrap();
+    assert_eq!(refused.error.map(|e| e.code), Some(-32602));
+}
+
+/// MIK-8063: closing the backend cancels every question still waiting, and
+/// the cancel has reached the agent by the time `close` returns, so a
+/// shutdown that follows cannot abort it.
+#[tokio::test]
+async fn close_cancels_waiting_questions() {
+    let (base, canceled) = asking_agent().await;
+    let transport = started(&base).await;
+    let params = json!({"name": TOOL_NAME, "arguments": {"message": "hi"}});
+    transport.request("tools/call", Some(params)).await.unwrap();
+    transport.close().await.unwrap();
+    assert_eq!(canceled.lock().as_slice(), ["asked-1"]);
+}
+
+/// MIK-8063: a transport dropped without `close` still cancels the task of a
+/// question waiting on its caller.
+#[tokio::test]
+async fn a_dropped_transport_cancels_waiting_questions() {
+    let (base, canceled) = asking_agent().await;
+    let transport = started(&base).await;
+    let params = json!({"name": TOOL_NAME, "arguments": {"message": "hi"}});
+    transport.request("tools/call", Some(params)).await.unwrap();
+    drop(transport);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while canceled.lock().is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the dropped transport never canceled the question"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(canceled.lock().as_slice(), ["asked-1"]);
+}
+
 /// MIK-8063 A2A.3: under the hardened policy a literal private `a2a_url` is
 /// refused at start, before anything connects (no server listens there).
 #[tokio::test]
@@ -154,4 +264,159 @@ async fn a_private_literal_a2a_url_is_refused_under_the_hardened_policy() {
             "{url}: {error}"
         );
     }
+}
+
+/// What a [`scripted_agent`] records: the ids it was asked to cancel, and
+/// how many `GetTask`s reached it.
+struct Script {
+    canceled: Arc<parking_lot::Mutex<Vec<String>>>,
+    polls: Arc<AtomicUsize>,
+}
+
+/// An agent that answers each `SendMessage` with a new task `t-<n>` in
+/// `state`, never answers `GetTask`, and records each `CancelTask` (then
+/// never answers it when `cancel_hangs`).
+async fn scripted_agent(state: &'static str, cancel_hangs: bool) -> (String, Script) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let script = Script {
+        canceled: Arc::default(),
+        polls: Arc::default(),
+    };
+    let (canceled, polls) = (Arc::clone(&script.canceled), Arc::clone(&script.polls));
+    let sends = Arc::new(AtomicUsize::new(0));
+    let endpoint = format!("{base}/a2a");
+    let app = Router::new()
+        .route(
+            "/.well-known/agent-card.json",
+            get(move || {
+                let endpoint = endpoint.clone();
+                async move {
+                    axum::Json(json!({"name": "scripted", "supportedInterfaces": [
+                        {"url": endpoint, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}]}))
+                }
+            }),
+        )
+        .route(
+            "/a2a",
+            post(move |axum::Json(body): axum::Json<Value>| {
+                let (canceled, polls, sends) =
+                    (Arc::clone(&canceled), Arc::clone(&polls), Arc::clone(&sends));
+                async move {
+                    let id = body["id"].clone();
+                    match body["method"].as_str() {
+                        Some("GetTask") => {
+                            polls.fetch_add(1, Ordering::SeqCst);
+                            std::future::pending::<()>().await;
+                        }
+                        Some("CancelTask") => {
+                            let task = body["params"]["id"].as_str().unwrap_or_default();
+                            canceled.lock().push(task.to_owned());
+                            if cancel_hangs {
+                                std::future::pending::<()>().await;
+                            }
+                        }
+                        _ => {}
+                    }
+                    let n = sends.fetch_add(1, Ordering::SeqCst) + 1;
+                    axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": {"task": {
+                        "id": format!("t-{n}"), "contextId": "c-1",
+                        "status": {"state": state, "message": {
+                            "messageId": "m", "role": "ROLE_AGENT", "parts": [{"text": "which?"}]}}}}}))
+                }
+            }),
+        );
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (base, script)
+}
+
+/// Park `n` questions on `transport`, one call each.
+async fn park_questions(transport: &Arc<A2aTransport>, n: usize) {
+    for _ in 0..n {
+        let params = json!({"name": TOOL_NAME, "arguments": {"message": "hi"}});
+        let asked = transport.request("tools/call", Some(params)).await.unwrap();
+        assert_eq!(asked.result.unwrap()["resultType"], "input_required");
+    }
+}
+
+/// MIK-8063: a burst past the concurrency limit loses no cancel. Closing
+/// with 70 waiting questions has canceled all 70 by the time `close`
+/// returns.
+#[tokio::test]
+async fn close_cancels_a_burst_past_the_concurrency_limit() {
+    let (base, script) = scripted_agent("TASK_STATE_INPUT_REQUIRED", false).await;
+    let transport = started(&base).await;
+    park_questions(&transport, 70).await;
+    transport.close().await.unwrap();
+    assert_eq!(script.canceled.lock().len(), 70);
+}
+
+/// MIK-8063: at most 64 `CancelTask`s of one backend are on the wire at
+/// once; the rest wait their turn.
+#[tokio::test]
+async fn cancels_on_the_wire_stop_at_the_limit() {
+    let (base, script) = scripted_agent("TASK_STATE_INPUT_REQUIRED", true).await;
+    let transport = started(&base).await;
+    park_questions(&transport, 70).await;
+    transport.sweep(std::time::Instant::now() + PARKED_TTL);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while script.canceled.lock().len() < 64 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the first 64 never left"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(script.canceled.lock().len(), 64, "no 65th while 64 hang");
+}
+
+/// MIK-8063: `close` waits for a call it aborts. A delegation polling a
+/// working task when the backend closes has its task canceled by the time
+/// `close` returns.
+#[tokio::test]
+async fn close_cancels_the_task_of_a_call_it_aborts() {
+    let (base, script) = scripted_agent("TASK_STATE_WORKING", false).await;
+    let transport = started(&base).await;
+    let caller = Arc::clone(&transport);
+    let call = tokio::spawn(async move {
+        let params = json!({"name": TOOL_NAME, "arguments": {"message": "hi"}});
+        caller.request("tools/call", Some(params)).await
+    });
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while script.polls.load(Ordering::SeqCst) == 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the call never polled"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    transport.close().await.unwrap();
+    assert_eq!(script.canceled.lock().as_slice(), ["t-1"]);
+    let _ = call.await;
+}
+
+/// MIK-8063: a parked question is work `close` waits on from the moment it
+/// is parked until its cancel has run, so no handoff out of the map leaves
+/// a moment where nothing owns the task.
+#[tokio::test]
+async fn a_parked_question_is_owed_work_until_its_cancel_runs() {
+    let (base, script) = scripted_agent("TASK_STATE_INPUT_REQUIRED", false).await;
+    let transport = started(&base).await;
+    park_questions(&transport, 1).await;
+    assert_eq!(
+        transport.canceller.outstanding(),
+        1,
+        "the parked task is owed"
+    );
+    transport.sweep(std::time::Instant::now() + PARKED_TTL);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while transport.canceller.outstanding() > 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the owed work never cleared"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(script.canceled.lock().as_slice(), ["t-1"]);
 }

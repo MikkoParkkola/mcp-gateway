@@ -29,6 +29,8 @@ use crate::transport::Transport;
 pub(crate) enum Answer {
     /// Ordinary success, `isError: false`.
     Ok,
+    /// Like `Ok`, its `tools/list` also naming a second tool, `note`.
+    WithNote,
     /// Success envelope, `isError: true` (a tool refusing a request).
     IsError,
     /// JSON-RPC `error`, an arbitrary non-rate-limit code.
@@ -131,12 +133,14 @@ fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRpcResponse> 
             json!({"content": [{"type": "text", "text": "ok"}], "isError": false,
                    "requestState": "backend-state-1"}),
         )),
-        Answer::Ok | Answer::Paged(..) | Answer::Unreadable(_) | Answer::NonNumeric(_) => {
-            Ok(JsonRpcResponse::success(
-                id,
-                json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
-            ))
-        }
+        Answer::Ok
+        | Answer::WithNote
+        | Answer::Paged(..)
+        | Answer::Unreadable(_)
+        | Answer::NonNumeric(_) => Ok(JsonRpcResponse::success(
+            id,
+            json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
+        )),
         Answer::ModernList => Ok(JsonRpcResponse::success(
             id,
             json!({"content": [{"type": "text", "text": "ok"}], "isError": false, "ttlMs": 3000}),
@@ -197,6 +201,12 @@ fn listing(answer: Answer, params: Option<&Value>) -> Value {
         "properties": {"cmd": {"type": "string"}}
     }}]});
     match answer {
+        Answer::WithNote => {
+            result["tools"] = json!([
+                {"name": "read", "inputSchema": {"type": "object"}},
+                {"name": "note", "inputSchema": {"type": "object"}}
+            ]);
+        }
         Answer::ModernList => {
             result["resultType"] = json!("complete");
             result["ttlMs"] = json!(5000);

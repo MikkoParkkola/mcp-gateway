@@ -345,6 +345,7 @@ pub struct ExportConfig {
     /// OTel/HTTP sink is a separate enterprise follow-up.
     pub sink_path: String,
     /// Poll cadence in seconds (how often the task tails the logs).
+    #[serde(deserialize_with = "crate::duration_bound::secs")]
     pub poll_interval_secs: u64,
     /// Max entries forwarded per poll per source (memory bound).
     pub max_batch: usize,
