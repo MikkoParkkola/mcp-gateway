@@ -219,10 +219,9 @@ async fn t15_concurrent_callers_share_one_socket_and_never_cross_answers() {
             "id": 1
         });
         async move {
-            let (fut, _rx) =
-                crate::transport::notification_sink::scope(
-                    async move { call(&backend, params).await },
-                );
+            let (fut, _rx) = crate::transport::notification_sink::scope(None, async move {
+                call(&backend, params).await
+            });
             (n, fut.await)
         }
     });

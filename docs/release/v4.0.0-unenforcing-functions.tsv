@@ -38,3 +38,4 @@ src/transport/http/listen.rs	reinit_if_needed	1	Re-runs initialize after a dropp
 src/transport/http/listen.rs	legacy_pin	1	Names the holder (transport and HTTP session) a legacy subscribe lands on, for the ledger
 src/transport/http/listen.rs	legacy_interest	1	Sends resources/subscribe or unsubscribe pinned to one session; no access decision
 src/transport/http/listen.rs	unsolicited	1	Opens the legacy notification stream with its URI filter; delivery is authorized downstream
+src/gateway/router/helpers.rs	build_http_response	1	Serialises a frame already wrapped as Egressed; the scan is decided where the Egressed value is made, not here.
