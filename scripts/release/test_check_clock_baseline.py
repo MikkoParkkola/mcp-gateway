@@ -29,13 +29,15 @@ class Counting(unittest.TestCase):
             {
                 "src/a.rs": "let a = SystemTime::now(); let b = chrono::Utc::now();\n"
                 "let c = Local::now(); let d = UNIX_EPOCH . elapsed();\n"
-                "let e = jsonwebtoken::get_current_timestamp();\n",
+                "let e = jsonwebtoken::get_current_timestamp();\n"
+                "let f = Utc :: now (); let g = Arc::new(SystemTime::now);\n"
+                "let epoch = std::time::UNIX_EPOCH;\n",
                 "src/clock.rs": "SystemTime::now()",
                 "tests/t.rs": "Utc::now ()",
                 "src/clean.rs": "let i = Instant::now(); clock::utc_now();",
             }
         )
-        self.assertEqual(ccb.counts(root), {"src/a.rs": 5, "tests/t.rs": 1})
+        self.assertEqual(ccb.counts(root), {"src/a.rs": 8, "tests/t.rs": 1})
 
 
 class Aliasing(unittest.TestCase):
@@ -46,6 +48,9 @@ class Aliasing(unittest.TestCase):
                 "src/b.rs": "use chrono::{DateTime, Utc as Clock};\n",
                 "src/c.rs": "use std::time::SystemTime as St;\n",
                 "tests/d.rs": "type Now = chrono::Utc;\n",
+                "src/e.rs": "use std::time::UNIX_EPOCH as E;\nfn f() { E.elapsed(); }\n",
+                "src/f.rs": "const E: SystemTime = UNIX_EPOCH;\n",
+                "src/g.rs": "use jsonwebtoken::get_current_timestamp as t;\n",
                 "src/clock.rs": "use chrono::Utc as U;\n",
                 "src/ok.rs": "use chrono::{DateTime, Utc};\ntype When = DateTime<Utc>;\n",
             }
@@ -53,7 +58,7 @@ class Aliasing(unittest.TestCase):
         found = ccb.aliases(root)
         self.assertEqual(
             [f.split(":")[0] for f in found],
-            ["src/a.rs", "src/b.rs", "src/c.rs", "tests/d.rs"],
+            ["src/a.rs", "src/b.rs", "src/c.rs", "src/e.rs", "src/f.rs", "src/g.rs", "tests/d.rs"],
         )
 
 

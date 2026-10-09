@@ -39,18 +39,22 @@ ROOT = Path(__file__).resolve().parents[2]
 BASELINE = "docs/release/mik-8202-clock-baseline.tsv"
 # The one module that may read the wall clock.
 EXEMPT = {"src/clock.rs"}
-# Raw wall-clock reads: the std and chrono "now" constructors, a SystemTime's
-# elapsed time, and jsonwebtoken's own clock (which panics before 1970).
+# Raw wall-clock reads: the std and chrono "now" constructors, called or
+# passed as a function, any spacing around `::`; every `UNIX_EPOCH` (what an
+# elapsed time or a duration since the epoch is measured from, so an epoch
+# held in a variable still counts); and jsonwebtoken's own clock (which
+# panics before 1970).
 RAW = re.compile(
-    r"\b(?:SystemTime|Utc|Local)::now\s*\("
-    r"|\bUNIX_EPOCH\s*\.\s*elapsed\s*\("
-    r"|\bget_current_timestamp\s*\("
+    r"\b(?:SystemTime|Utc|Local)\s*::\s*now\b"
+    r"|\bUNIX_EPOCH\b"
+    r"|\bget_current_timestamp\b"
 )
 # An alias of a clock type: `use ...Utc as X`, inside braces too, or
 # `type X = ...Utc`. Its reads would not match RAW.
 ALIAS = re.compile(
-    r"\buse\b[^;]*\b(?:Utc|Local|SystemTime)\s+as\s+\w+"
+    r"\buse\b[^;]*\b(?:Utc|Local|SystemTime|UNIX_EPOCH|get_current_timestamp)\s+as\s+\w+"
     r"|\btype\s+\w+\s*=\s*(?:[\w:]*::)?(?:Utc|Local|SystemTime)\s*;"
+    r"|\b(?:const|static)\s+\w+\s*:\s*[\w:]*SystemTime\s*=\s*[\w:]*UNIX_EPOCH\b"
 )
 HEADER = (
     "# MIK-8202: raw wall-clock reads each file may still hold (path, count).\n"
