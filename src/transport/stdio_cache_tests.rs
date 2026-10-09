@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Unit tests for `isolated_package_manager_env`.
+//! Unit tests for `isolated_package_manager_env`, which gives each backend its
+//! own npm cache.
 //!
 //! Split out of `stdio_tests.rs` so it stays under the file-size ceiling
 //! `scripts/dev/check-file-size.py` gates. A `#[path]` child, not a
@@ -56,15 +57,25 @@ fn a_name_cannot_escape_the_state_directory() {
         .join("pkg-cache")
         .to_string_lossy()
         .into_owned();
-    for hostile in ["../evil", "a/b", "..", "", "with space", "/etc/passwd"] {
+    for hostile in [
+        "../evil",
+        "a/b",
+        "..",
+        "",
+        "with space",
+        "/etc/passwd",
+        r"..\evil",
+        r"a\b",
+        r"C:\evil",
+    ] {
         let out = isolated_package_manager_env(hostile, "npx -y pkg", HashMap::new());
         let path = &out["npm_config_cache"];
         let component = path
             .strip_prefix(&root)
-            .and_then(|rest| rest.strip_prefix('/'))
+            .and_then(|rest| rest.strip_prefix(std::path::MAIN_SEPARATOR))
             .unwrap_or_else(|| panic!("{hostile:?} escaped {root}: {path}"));
         assert!(
-            !component.is_empty() && !component.contains('/'),
+            !component.is_empty() && !component.contains(['/', '\\']),
             "{hostile:?} became a nested path: {path}"
         );
         assert!(
@@ -96,13 +107,15 @@ fn names_that_sanitize_alike_get_distinct_cache_dirs() {
 // #2258
 #[test]
 fn each_runner_gets_the_variable_it_reads() {
-    for (cmd, var) in [
-        ("npx -y pkg", "npm_config_cache"),
-        ("bunx pkg", "BUN_INSTALL_CACHE_DIR"),
-        ("/opt/bin/yarn dlx pkg", "YARN_CACHE_FOLDER"),
+    // Yarn also gets Berry's global cache turned off, or Berry ignores the
+    // folder (MIK-8147 D3b).
+    for (cmd, var, count) in [
+        ("npx -y pkg", "npm_config_cache", 1),
+        ("bunx pkg", "BUN_INSTALL_CACHE_DIR", 1),
+        ("/opt/bin/yarn dlx pkg", "YARN_CACHE_FOLDER", 2),
     ] {
         let out = isolated_package_manager_env("thing", cmd, HashMap::new());
-        assert_eq!(out.len(), 1, "{cmd}: {out:?}");
+        assert_eq!(out.len(), count, "{cmd}: {out:?}");
         assert!(out[var].contains("pkg-cache"), "{cmd} lacked {var}");
     }
     let out = isolated_package_manager_env("thing", "pnpm dlx pkg", HashMap::new());
@@ -113,6 +126,39 @@ fn each_runner_gets_the_variable_it_reads() {
     env.insert("BUN_INSTALL_CACHE_DIR".to_string(), "/mine".to_string());
     let out = isolated_package_manager_env("thing", "bunx pkg", env);
     assert_eq!(out["BUN_INSTALL_CACHE_DIR"], "/mine");
+}
+
+#[test]
+fn the_assigned_cache_is_the_one_the_child_receives() {
+    // The repair compares the two; a one-byte drift between them would leave
+    // every damaged cache in place without an error.
+    let env = isolated_package_manager_env("cache-glue", "npx -y some-server", HashMap::new());
+    assert_eq!(
+        assigned_package_cache_dir("cache-glue", "npx -y some-server", &HashMap::new()),
+        Some(std::path::PathBuf::from(&env["npm_config_cache"])),
+    );
+}
+
+#[test]
+fn only_an_npm_cache_the_gateway_set_is_reported_as_assigned() {
+    let operator = HashMap::from([("npm_config_cache".to_string(), "/opt/cache".to_string())]);
+    assert_eq!(
+        assigned_package_cache_dir("b", "npx -y some-server", &operator),
+        None,
+        "an operator's cache is not the gateway's to clear"
+    );
+    for command in [
+        "bunx some-server",
+        "yarn dlx some-server",
+        "pnpm dlx some-server",
+        "uvx x",
+    ] {
+        assert_eq!(
+            assigned_package_cache_dir("b", command, &HashMap::new()),
+            None,
+            "the repair covers npm's cache only: {command}"
+        );
+    }
 }
 
 #[test]
@@ -129,4 +175,42 @@ fn an_operator_cache_in_either_spelling_is_not_the_gateways() {
         1,
         "and the gateway adds no second, lowercase cache beside it: {env:?}"
     );
+}
+
+#[test]
+fn only_an_absolute_cache_directory_is_repairable() {
+    // Relative, it resolves against the gateway's working directory when
+    // removed and against the child's `cwd` when used: two different trees.
+    assert_eq!(cache::usable("pkg-cache/b".into()), None);
+    let absolute = std::env::temp_dir().join("pkg-cache").join("b");
+    assert_eq!(
+        cache::usable(absolute.clone()).as_deref(),
+        absolute.to_str()
+    );
+    // npm expands `${VAR}` in a config value: such a path names another tree.
+    assert_eq!(cache::usable(absolute.join("${HOME}")), None);
+    // `..` is text to npm and a symlink walk to the filesystem.
+    assert_eq!(cache::usable(absolute.join("..").join("b")), None);
+}
+
+#[test]
+fn a_live_cache_name_never_holds_a_dot() {
+    // The startup sweep deletes entries whose name contains ".tombstone-", so a
+    // live cache name must never contain a "." whatever the backend is called.
+    for name in [
+        "a.b",
+        "team.alpha",
+        "..",
+        "x.tombstone-1-0",
+        "émoji.🙂",
+        "plain",
+    ] {
+        let env = isolated_package_manager_env(name, "npx -y some-server", HashMap::new());
+        let leaf = std::path::Path::new(&env["npm_config_cache"])
+            .file_name()
+            .expect("a cache directory has a name")
+            .to_string_lossy()
+            .into_owned();
+        assert!(!leaf.contains('.'), "{name:?} became {leaf:?}");
+    }
 }
