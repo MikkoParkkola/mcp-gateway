@@ -51,6 +51,7 @@ pub(crate) struct Egress<'a> {
     /// always meets them: no dispatch gate reads errors).
     pub(crate) content: ContentChecks,
     /// The targets the firewall evaluates; never empty.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     pub(crate) targets: &'a [ResponsePolicyTarget],
     pub(crate) correlation: &'a ResponseCorrelation<'a>,
     /// The caller's key name, for context integrity's subject.
@@ -67,7 +68,9 @@ pub(crate) struct Egress<'a> {
 pub(crate) enum EgressOutcome {
     /// Nothing acted on it.
     Delivered,
-    /// A finding was redacted in place; the frame is delivered.
+    /// A finding was redacted in place; the frame is delivered. Only the
+    /// firewall redacts, so a build without it never constructs this.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     Rewritten,
     /// A policy refused it; the frame is now the delivery refusal.
     Refused,
