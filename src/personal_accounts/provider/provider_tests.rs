@@ -133,8 +133,8 @@ impl ProviderHttp for TraceHttp {
 struct FixedClock(u64);
 
 impl Clock for FixedClock {
-    fn now_unix(&self) -> u64 {
-        self.0
+    fn now_unix(&self) -> Result<u64, crate::clock::ClockBeforeEpoch> {
+        crate::clock::unix_secs().map(|_| self.0)
     }
 }
 

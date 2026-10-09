@@ -236,6 +236,12 @@ impl TaskStore {
         &self,
         now: DateTime<Utc>,
     ) -> Vec<(String, u64, String, RoundClosed)> {
+        // A sweep on a clock before 1970 skips this pass rather than cancel
+        // every round it cannot date; the answer path still refuses them
+        // (MIK-8202).
+        if now.timestamp() < 0 {
+            return Vec::new();
+        }
         let state = self.0.state();
         if !state.ready {
             return Vec::new();
@@ -445,9 +451,15 @@ fn closed_at(task: &Task, record: &Record, now: DateTime<Utc>) -> Option<RoundCl
         .input_round
         .as_ref()
         .and_then(|round| round.continuation_deadline);
-    let now_secs = u64::try_from(now.timestamp()).unwrap_or(0);
+    // A time before 1970 is a clock that cannot be read: every deadline
+    // counts as passed, never as still ahead (MIK-8202).
+    let passed = |deadline: u64| {
+        u64::try_from(now.timestamp())
+            .ok()
+            .is_none_or(|now| now >= deadline)
+    };
     match deadline {
-        Some(deadline) if now_secs >= deadline => Some(RoundClosed::Continuation(deadline)),
+        Some(deadline) if passed(deadline) => Some(RoundClosed::Continuation(deadline)),
         _ if task.retention_elapsed(now) => Some(RoundClosed::Ttl),
         _ => None,
     }

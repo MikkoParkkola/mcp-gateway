@@ -66,8 +66,15 @@ impl SessionTimes {
     fn expired(&self, now: Now, limits: &SessionLimits) -> bool {
         exceeds(self.last_seen, now, limits.idle)
             || exceeds(self.issued, now, limits.absolute)
-            || self.not_after.is_some_and(|cap| now.wall >= cap)
+            || self.not_after.is_some_and(|cap| cap_reached(now, cap))
     }
+}
+
+/// Whether `now` is at or past the minting credential's expiry `cap`. A wall
+/// clock reading before 1970 cannot be placed against a real expiry, so the
+/// cap counts as reached (MIK-8202); the monotonic limits are unchanged.
+fn cap_reached(now: Now, cap: SystemTime) -> bool {
+    now.wall.duration_since(std::time::UNIX_EPOCH).is_err() || now.wall >= cap
 }
 
 /// `true` when more than `limit` separates `since` from `now` on EITHER clock.
@@ -272,7 +279,7 @@ impl DashboardBootstrap {
             let live = slot.as_ref()?;
             (
                 exceeds(live.minted, now, HANDOFF_TTL)
-                    || live.cap.is_some_and(|cap| now.wall >= cap),
+                    || live.cap.is_some_and(|cap| cap_reached(now, cap)),
                 bool::from(live.value.as_bytes().ct_eq(candidate.as_bytes())),
             )
         };

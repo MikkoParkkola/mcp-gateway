@@ -101,8 +101,8 @@ impl TokenScript {
 pub(crate) struct FixtureClock(pub(crate) Arc<AtomicU64>);
 
 impl Clock for FixtureClock {
-    fn now_unix(&self) -> u64 {
-        super::super::provider::SystemClock.now_unix() + self.0.load(Ordering::SeqCst)
+    fn now_unix(&self) -> Result<u64, crate::clock::ClockBeforeEpoch> {
+        Ok(super::super::provider::SystemClock.now_unix()? + self.0.load(Ordering::SeqCst))
     }
 }
 
