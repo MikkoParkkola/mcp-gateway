@@ -635,3 +635,4 @@ src/personal_accounts/worker_journeys.rs	now_seconds	1	critical	d	now_seconds	Re
 src/oauth/client/renewal.rs	refused	1	standard	borderline	OAuthClient::refused	Builds the policy-refusal outcome that stops the refresh task; a wrong outcome would keep retrying a refused destination.
 src/oauth/login_gate.rs	in_flight	1	critical	d	LoginGate::in_flight	Decides whether a login is in flight, the predicate a non-interactive backend restart is refused on (src/backend/restart.rs).
 src/personal_accounts/journey/persist.rs	write_journeys	1	standard	borderline	write_journeys	Seals and replaces journeys.json and marks the slot Stale after a post-rename failure, which stops reuse of outdated journey state.
+src/gateway/server/start_checks.rs	new_evaluated	1	critical	d	Gateway::new_evaluated	The deployment constructor: refuses to start on a clock before 1970 before it builds the gateway
