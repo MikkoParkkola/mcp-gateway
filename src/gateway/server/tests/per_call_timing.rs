@@ -23,7 +23,16 @@ use crate::gateway::router::create_router;
 /// The rows this harness measures, one per per-call stage the family gates.
 /// `scripts/ci/check_per_call_stages.py` keeps this table in step with the
 /// tools/call path.
-pub(crate) const STAGES: &[&str] = &["http_invoke_tiny", "http_invoke_64k", "stdio_invoke_tiny"];
+pub(crate) const STAGES: &[&str] = &[
+    "http_invoke_tiny",
+    "http_invoke_64k",
+    "stdio_invoke_tiny",
+    "stdio_batch_tiny",
+];
+
+/// Calls per batch frame in the `stdio_batch_tiny` row; its time is reported
+/// per call.
+const BATCH: usize = 3;
 
 const WARMUP: usize = 200;
 const CALLS: usize = 2000;
@@ -178,6 +187,58 @@ async fn stdio_median_ns(fixture: &super::signing_nonce_allocations_support::Fix
     samples[samples.len() / 2]
 }
 
+/// The batch row: the production batch dispatcher, called as `run_stdio`
+/// calls it for an array frame, with `BATCH` calls per frame. Reported per
+/// call so it reads against the single-request row.
+async fn stdio_batch_median_ns(
+    fixture: &super::signing_nonce_allocations_support::Fixture,
+) -> u128 {
+    let arguments = json!({"blob": "x".repeat(16)});
+    let mut samples = Vec::with_capacity(CALLS);
+    for round in 0..WARMUP + CALLS {
+        let batch = serde_json::Value::Array(
+            (0..BATCH)
+                .map(|i| {
+                    super::signing_nonce_allocations_support::invoke(
+                        &format!("b{round}-{i}"),
+                        None,
+                        arguments.clone(),
+                    )
+                })
+                .collect(),
+        );
+        let reads = fixture.meta.stdio_reads();
+        let start = Instant::now();
+        let frames = super::super::Gateway::dispatch_batch_read(
+            &fixture.meta,
+            &fixture.tool_policy,
+            &fixture.mtls_policy,
+            batch,
+            "per-call-timing",
+            &super::super::StdioTelemetry::default(),
+            &reads,
+        )
+        .await;
+        let elapsed = start.elapsed().as_nanos();
+        let answers: Vec<String> = frames
+            .iter()
+            .filter_map(|frame| frame.stdio_value().map(|v| v.to_string()))
+            .collect();
+        assert!(
+            answers.len() == BATCH
+                && answers
+                    .iter()
+                    .all(|text| !text.contains("\"error\"") && !text.contains("\"isError\":true")),
+            "round {round}: every batched call must reach the backend: {answers:?}"
+        );
+        if round >= WARMUP {
+            samples.push(elapsed / BATCH as u128);
+        }
+    }
+    samples.sort_unstable();
+    samples[samples.len() / 2]
+}
+
 #[test]
 #[ignore = "timing harness: run by scripts/perf/per_call_gate.py on the bench host"]
 fn per_call_timing() {
@@ -193,6 +254,10 @@ fn per_call_timing() {
         println!(
             "PER_CALL_NS stdio_invoke_tiny {}",
             stdio_median_ns(&stdio).await
+        );
+        println!(
+            "PER_CALL_NS stdio_batch_tiny {}",
+            stdio_batch_median_ns(&stdio).await
         );
     });
 }

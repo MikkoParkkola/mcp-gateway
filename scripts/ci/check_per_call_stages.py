@@ -27,6 +27,7 @@ PATH_FILES = [
     "src/gateway/meta_mcp/invoke.rs",
     # The stdio request path (secE, MIK-8176 stage 2 wrap; lead ruling).
     "src/gateway/server/mod.rs",
+    "src/gateway/server/stdio_notify.rs",
 ]
 
 

@@ -44,7 +44,7 @@ src/gateway/server/mod.rs	build_meta_mcp	-	startup or lifecycle, not per call
 src/gateway/server/mod.rs	build_stdio_caller_context	stdio_invoke_tiny	on the stdio single-request path
 src/gateway/server/mod.rs	config_installs_minting_strategy	-	startup or lifecycle, not per call
 src/gateway/server/mod.rs	configured_minting_strategy_kind	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	dispatch_batch	-	batch frames: no row yet (stated limit)
+src/gateway/server/mod.rs	dispatch_batch	-	test-only wrapper (cfg(test)) over dispatch_batch_read
 src/gateway/server/mod.rs	dispatch_relay_scoped	-	relay egress scope: only when a relay is active
 src/gateway/server/mod.rs	dispatch_single	stdio_invoke_tiny	on the stdio single-request path
 src/gateway/server/mod.rs	dispatch_single_staged	stdio_invoke_tiny	on the stdio single-request path
@@ -79,3 +79,7 @@ src/gateway/server/mod.rs	stdio_routing_keys_only	stdio_invoke_tiny	on the stdio
 src/gateway/server/mod.rs	stdio_take_merged_client_meta	stdio_invoke_tiny	on the stdio single-request path
 src/gateway/server/mod.rs	with_env	-	startup or lifecycle, not per call
 src/gateway/server/mod.rs	with_watched_config	-	startup or lifecycle, not per call
+src/gateway/server/stdio_notify.rs	dispatch_batch_read	stdio_batch_tiny	on the stdio batch path
+src/gateway/server/stdio_notify.rs	dispatch_batch_with_sink	-	test-only wrapper (cfg(test)) over dispatch_batch_read
+src/gateway/server/stdio_notify.rs	dispatch_streaming_notifications	-	wraps each stdio dispatch inside run_stdio_on: not on the timed path until the rows move to the wrapped entry after #3645 merges
+src/gateway/server/stdio_notify.rs	queue_notification	-	only when a dispatch emits a notification; the rows' backend emits none
