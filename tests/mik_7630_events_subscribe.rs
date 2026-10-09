@@ -7,7 +7,7 @@
 //! The receiver speaks real TLS under a temporary CA, handed to the gateway
 //! child through `Receiver::trust_env`: `SSL_CERT_FILE`, which the
 //! platform verifier reads on Linux, and the debug-only
-//! `MCP_GATEWAY_TEST_TRUST_CA`, which `src/test_trust.rs` honours on every
+//! `MCP_GATEWAY_TEST_TRUST_CA`, which `src/debug_trust_roots.rs` honours on every
 //! platform (macOS reads its keychain; MIK-8188).
 #![cfg(unix)]
 

@@ -158,8 +158,30 @@ jobs:
           fi
           rustup toolchain install "$version" --profile minimal
           echo "TOOLCHAIN=$version" >> "$GITHUB_ENV"
+      # The Dockerfile entry builds the binary, not just checks it, so every
+      # source PR can show that the debug-only test trust roots (MIK-8188,
+      # src/debug_trust_roots.rs) are compiled out of a release binary. release.yml
+      # checks the shipped artifacts the same way.
       - name: Compile as the image does (release, locked, default features)
-        run: cargo +"$TOOLCHAIN" check --release --locked
+        env:
+          SOURCE: ${{ matrix.source }}
+        run: |
+          set -euo pipefail
+          if [ "$SOURCE" = dockerfile ]; then
+            cargo +"$TOOLCHAIN" build --release --locked --bin mcp-gateway
+          else
+            cargo +"$TOOLCHAIN" check --release --locked
+          fi
+      - name: The release binary carries no debug test trust roots
+        if: matrix.source == 'dockerfile'
+        run: |
+          set -uo pipefail
+          bin=target/release/mcp-gateway
+          # A grep that cannot see the binary's content would pass it, so the
+          # crate name must be found first; then only "no match" (exit 1) passes.
+          grep -qa mcp-gateway "$bin" || { echo "::error::$bin could not be inspected"; exit 1; }
+          grep -qa MCP_GATEWAY_TEST_TRUST_CA "$bin"; found=$?
+          if [ "$found" -ne 1 ]; then echo "::error::$bin carries the debug test trust roots, or could not be read (grep exit $found)"; exit 1; fi
 
   # Dependency-vulnerability gate for the image build. ci.yml runs `cargo audit`
   # on every PR/push; this re-scans the Cargo.lock against OSV so the published

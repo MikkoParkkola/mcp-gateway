@@ -179,7 +179,7 @@ fn verification_reply(shared: &Shared, headers: HeaderMap, body: &Bytes) -> (Sta
 }
 
 /// The debug-only variable naming extra test roots the gateway trusts on
-/// every platform (MIK-8188); `src/test_trust.rs` reads it.
+/// every platform (MIK-8188); `src/debug_trust_roots.rs` reads it.
 pub const TRUST_CA: &str = "MCP_GATEWAY_TEST_TRUST_CA";
 
 impl Receiver {

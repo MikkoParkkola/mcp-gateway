@@ -83,7 +83,7 @@ pub fn fixture_script() -> PathBuf {
 /// JWKS client on every Unix: `SSL_CERT_FILE` through
 /// `reqwest 0.13 (feature "rustls") -> rustls-platform-verifier ->
 /// rustls-native-certs` on Linux, and the debug-only
-/// `MCP_GATEWAY_TEST_TRUST_CA` (`src/test_trust.rs`) everywhere, since on
+/// `MCP_GATEWAY_TEST_TRUST_CA` (`src/debug_trust_roots.rs`) everywhere, since on
 /// Apple targets the verifier asks the Security framework and ignores
 /// `SSL_CERT_FILE` (MIK-8188).
 #[expect(

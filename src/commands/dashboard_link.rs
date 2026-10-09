@@ -191,9 +191,12 @@ pub(crate) async fn admin_call(
     let mut builder = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none());
-    if let Some(ca) = &tls.ca {
-        builder = builder.tls_certs_only(read_roots(ca)?);
-    }
+    // A named CA is the only root (#1832); the test roots join only the
+    // default roots, so a named CA replaces them too.
+    builder = match &tls.ca {
+        Some(ca) => builder.tls_certs_only(read_roots(ca)?),
+        None => crate::debug_trust_roots::extra_roots(builder),
+    };
     if let Some((cert, key)) = &tls.identity {
         builder = builder.identity(read_identity(cert, key)?);
     }
