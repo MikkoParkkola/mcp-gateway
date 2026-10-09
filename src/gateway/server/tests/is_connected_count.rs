@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8014 PERF.4: how many times one warm HTTP `gateway_invoke` asks its
 //! backend transport whether it is alive. The stdio transport answers with a
-//! try_lock plus waitpid, so each extra check is a syscall per call.
+//! `try_lock` plus `waitpid`, so each extra check is a syscall per call.
 //!
 //! Counted on a test transport: the checks are made by the backend layer
 //! (`lifecycle.rs`, `status.rs`), never by a transport on itself, so the
