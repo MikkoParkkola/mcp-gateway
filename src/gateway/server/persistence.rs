@@ -405,6 +405,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let costs = dir.path().join("costs.json");
         tokio::time::pause();
+        // A pending timer, as the periodic saver keeps one: an idle runtime
+        // would auto-advance the paused clock to it, which the wait must never
+        // allow.
+        let pending = tokio::spawn(tokio::time::sleep(COST_SAVE_INTERVAL));
         let before = tokio::time::Instant::now();
         let target = costs.clone();
         let writer = std::thread::spawn(move || {
@@ -414,6 +418,7 @@ mod tests {
         let landed = periodic_save_landed(&costs).await;
         let moved = tokio::time::Instant::now() - before;
         writer.join().expect("writer thread");
+        pending.abort();
         assert!(landed, "the late write was not waited for");
         assert_eq!(
             moved,
