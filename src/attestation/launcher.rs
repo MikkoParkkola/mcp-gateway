@@ -250,7 +250,6 @@ impl AttestedSandboxLauncher {
 mod tests {
     use super::*;
     use crate::attestation::signer::{BnautAttestationSigner, TokenRequest};
-    use chrono::TimeDelta;
     use uuid::Uuid;
 
     const KEY: &[u8] = b"launcher-test-key";
@@ -280,7 +279,7 @@ mod tests {
                     capabilities: vec!["cap".to_string()],
                 },
                 now,
-                TimeDelta::minutes(5),
+                crate::duration_bound::delta!(minutes, 5),
             )
             .encoded()
             .to_string()

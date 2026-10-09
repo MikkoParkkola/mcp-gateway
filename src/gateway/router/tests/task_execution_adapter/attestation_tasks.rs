@@ -82,7 +82,12 @@ async fn get_attested(state: &Arc<AppState>, id: &str, token: Option<String>) ->
 async fn poll_attested(state: &Arc<AppState>, id: &str) -> Value {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     while tokio::time::Instant::now() < deadline {
-        let body = get_attested(state, id, Some(token(chrono::TimeDelta::minutes(5)))).await;
+        let body = get_attested(
+            state,
+            id,
+            Some(token(crate::duration_bound::delta!(minutes, 5))),
+        )
+        .await;
         if is_terminal(&status_of(&body)) {
             return body;
         }
@@ -140,7 +145,7 @@ async fn surfaced_task_enforce_carries_meta_token() {
     assert_eq!(mock.calls(), 0, "an unattested task must not dispatch");
 
     // With a valid token it runs once, and the backend never sees the token.
-    let valid = token(chrono::TimeDelta::minutes(5));
+    let valid = token(crate::duration_bound::delta!(minutes, 5));
     let created = post(
         &state,
         "key-a",
@@ -172,7 +177,7 @@ async fn surfaced_task_enforce_rechecks_token_at_dispatch() {
     let mock = MockBackend::answering(Answer::ok());
     let (state, _store) = surfaced_enforced(&mock).await;
     let (observer, mut hold) = observe_dispatched(&state);
-    let short = token(chrono::TimeDelta::seconds(2));
+    let short = token(crate::duration_bound::delta!(seconds, 2));
     let created = post(
         &state,
         "key-a",
@@ -206,7 +211,11 @@ async fn a_finished_task_read_needs_a_valid_recovery_token_under_enforce() {
     let created = post(
         &state,
         "key-a",
-        surfaced_task(820, "fin-att", Some(&token(chrono::TimeDelta::minutes(5)))),
+        surfaced_task(
+            820,
+            "fin-att",
+            Some(&token(crate::duration_bound::delta!(minutes, 5))),
+        ),
     )
     .await;
     let id = task_id(&created);
