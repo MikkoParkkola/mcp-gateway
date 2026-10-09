@@ -212,6 +212,13 @@ fn a_stored_token_equal_to_the_live_cached_one_is_not_adopted() {
     let client = client(dir.path(), "https://as.example", &[]);
     let token = live_token("same-access");
     *client.current_token.write() = Some(token.clone());
+    // Stored too, so adoption would succeed if the freshness check let it:
+    // only that check can make this `None`.
+    let key = client.credential_key().unwrap();
+    client
+        .storage
+        .save(&key, &client.resource_url, &token)
+        .unwrap();
 
     let adopted = RefreshCaller::adopt(&client, Some(&token));
 
