@@ -312,14 +312,24 @@ where
 
     async fn run_callback(&self, request: CallbackRequest) -> Step<CallbackOutcome> {
         let provider = self.provider().map_err(|_| CallbackOutcome::Unavailable)?;
-        let mut journey = self.admit_journey(&request, provider.now_unix()).await?;
+        // An unreadable clock cannot judge the journey's deadline: refuse
+        // (MIK-8202).
+        let now = provider
+            .now_unix()
+            .map_err(|_| CallbackOutcome::Unavailable)?;
+        let mut journey = self.admit_journey(&request, now).await?;
         let (code, verifier, descriptor) = self.pre_exchange(&request, &journey).await?;
         let account = journey.admitted.account_id.as_str();
         let exchanged = provider.exchange_code(account, &code, &verifier).await;
         // The exchange can outlast the journey's window: every later store
         // write sweeps at the time it ended, so a lapsed journey is never
         // committed (R2-2).
-        journey.now = provider.now_unix();
+        // A clock lost during the exchange keeps the admission reading for
+        // the terminal write; the grant itself is refused below (MIK-8202).
+        let after = provider.now_unix();
+        if let Ok(now) = after {
+            journey.now = now;
+        }
         let tokens = match exchanged {
             Ok(tokens) => tokens,
             Err(error) => {
@@ -333,6 +343,11 @@ where
         };
         let abort =
             |reason, mark| self.abort_after_exchange(&provider, &journey, reason, mark, &tokens);
+        // An unreadable clock cannot tell whether the journey lapsed during
+        // the exchange: nothing is committed and the new grant is revoked.
+        if after.is_err() {
+            return Ok(abort(JourneyReason::ProviderUnavailable, Mark::Record).await);
+        }
         if let Some(reason) = invalid_grant(descriptor, &tokens) {
             return Ok(abort(reason, Mark::Record).await);
         }

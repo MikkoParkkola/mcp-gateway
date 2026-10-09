@@ -155,6 +155,7 @@ fn an_invalid_config_is_refused_and_left_unwritten() {
 }
 
 /// The web UI and admin write through `backend_ops::write_config`.
+#[cfg(feature = "webui")]
 fn ui_write(path: &Path, change: impl FnOnce(&mut mcp_gateway::config::Config)) -> String {
     use mcp_gateway::gateway::ui::backend_ops::{load_config_or_default, write_config};
     let mut config = load_config_or_default(path);
@@ -169,6 +170,7 @@ fn echo_backend() -> mcp_gateway::config::BackendConfig {
 
 const NOTED: &str = "# kept by hand\nbackends:\n  # why old exists\n  old:\n    command: x\n";
 
+#[cfg(feature = "webui")]
 #[test]
 fn a_single_backend_add_and_remove_through_the_ui_writer_keep_comments() {
     let home = tempfile::tempdir().expect("home");
@@ -194,6 +196,7 @@ fn a_single_backend_add_and_remove_through_the_ui_writer_keep_comments() {
     assert!(!removed.contains("new:"), "{removed}");
 }
 
+#[cfg(feature = "webui")]
 #[test]
 fn a_change_outside_backends_takes_the_full_rewrite() {
     let home = tempfile::tempdir().expect("home");

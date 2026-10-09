@@ -174,6 +174,7 @@ fn session_cleanup_logs_the_session_by_fingerprint() {
 }
 
 // F9-T7c, security/firewall/mod.rs: the anomaly-block warning
+#[cfg(feature = "firewall")]
 #[test]
 fn an_anomaly_block_logs_the_session_by_fingerprint() {
     use crate::security::firewall::{Firewall, FirewallConfig};

@@ -27,7 +27,9 @@ impl MetaMcp {
             return Err(Error::json_rpc(-32602, "Chain must not be empty"));
         }
 
-        let now = crate::protocol::continuation::now_unix_secs();
+        let now = crate::protocol::continuation::clock_now().map_err(|_| {
+            Error::json_rpc(-32603, "system clock reads before 1970; chain refused")
+        })?;
         // A presented resume decides where the chain starts and how many rounds
         // this exchange has already spent. Both are sealed, so neither is a
         // number the caller can choose.

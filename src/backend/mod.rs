@@ -70,7 +70,8 @@ use pool::PooledEntry;
 pub(crate) use probe::HealthTicker;
 
 pub(crate) use annotations::prepare_tool_metadata;
-#[cfg(test)]
+// Read only by the `firewall`-gated direct-route redaction rows.
+#[cfg(all(test, feature = "firewall"))]
 pub(crate) use descriptor_gate::descriptor_digest;
 pub(crate) use descriptor_gate::{Judging, Listing};
 pub(crate) use fill_check::{LIST_FILL_COOLDOWN, text_absent};

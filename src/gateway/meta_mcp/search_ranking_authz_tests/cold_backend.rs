@@ -341,8 +341,10 @@ async fn a_cache_read_never_fills_an_identity_bound_backend() {
 
 /// Admits no backend; every tool decision would pass, so only admission
 /// can keep a backend out.
+#[cfg(feature = "spec-preview")]
 struct NoBackends;
 
+#[cfg(feature = "spec-preview")]
 impl crate::gateway::authz::ToolAuthorizer for NoBackends {
     fn decide<'a>(
         &'a self,

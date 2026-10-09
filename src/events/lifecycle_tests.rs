@@ -557,6 +557,43 @@ async fn a_test_source_event_reaches_a_receiver() {
     );
 }
 
+/// MIK-8202: undoing a start on a clock before 1970 keeps the key started and
+/// the source running; the clock cannot tell whether a live row holds it, so
+/// reconciliation decides once it reads.
+#[tokio::test]
+async fn a_clock_before_the_epoch_keeps_an_undone_start() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let probe = Arc::new(Probe::default());
+    hub.register_source(probe.clone());
+    let key = (probe.kind(), probe.lifecycle_key("p1", NAME, &json!({})));
+
+    let mut started = std::collections::HashSet::from([key.clone()]);
+    hub.undo_start(&mut started, key.clone()).await;
+    assert!(
+        !started.contains(&key),
+        "control: an unheld key stayed started"
+    );
+    assert_eq!(
+        probe.last.load(Ordering::SeqCst),
+        1,
+        "control: an unheld key's source was not stopped"
+    );
+
+    let mut started = std::collections::HashSet::from([key.clone()]);
+    let _clock = crate::clock::test_clock::before_epoch();
+    hub.undo_start(&mut started, key.clone()).await;
+    assert!(
+        started.contains(&key),
+        "an unreadable clock dropped a started key"
+    );
+    assert_eq!(
+        probe.last.load(Ordering::SeqCst),
+        1,
+        "an unreadable clock stopped the source"
+    );
+}
+
 #[path = "hold_tests.rs"]
 mod hold;
 

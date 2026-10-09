@@ -92,9 +92,9 @@ unsafe impl GlobalAlloc for MeteredSystem {
 /// distinguish "one big copy" from "many small ones", and the diagnostics in a
 /// failing assertion are worth more than the assertion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Measured {
-    pub(super) bytes: u64,
-    pub(super) calls: u64,
+pub(crate) struct Measured {
+    pub(crate) bytes: u64,
+    pub(crate) calls: u64,
 }
 
 impl std::fmt::Display for Measured {
@@ -150,7 +150,7 @@ impl Drop for Meter {
 }
 
 /// Measure a synchronous body. Used by the two controls.
-pub(super) fn measure<T>(body: impl FnOnce() -> T) -> (T, Measured) {
+pub(crate) fn measure<T>(body: impl FnOnce() -> T) -> (T, Measured) {
     let meter = Meter::start();
     let value = body();
     (value, meter.stop())

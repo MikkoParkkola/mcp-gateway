@@ -602,7 +602,8 @@ fn a_reported_relay_increments_the_metric() {
     ] {
         let (fw, _dir) = observing(|c| c.action = action);
         delivered(&fw, "alice");
-        let series = format!("mcp_gateway_collusion_relay_total{{action=\"{label}\"}}");
+        let series =
+            format!("mcp_gateway_collusion_relay_total{{action=\"{label}\",reason=\"relay\"}}");
         let before = rendered_count(&series);
         let _ = egress(&fw, RelayCaller::Keyed("bob"));
         assert!(rendered_count(&series) > before, "{label}: not counted");
@@ -636,7 +637,7 @@ fn a_keyless_egress_increments_the_unkeyed_metric() {
 #[cfg(feature = "metrics")]
 #[test]
 fn an_unkeyed_block_increments_the_relay_metric() {
-    let series = "mcp_gateway_collusion_relay_total{action=\"block\"}";
+    let series = "mcp_gateway_collusion_relay_total{action=\"block\",reason=\"unkeyed\"}";
     let (fw, _dir) = observing(|c| c.action = CollusionAction::Block);
     let before = rendered_count(series);
     let verdict = egress(&fw, RelayCaller::Unkeyed("direct:alpha"));
@@ -725,5 +726,7 @@ fn a_clean_call_and_a_blocked_relay_log_no_observed_warning() {
     assert!(warnings.is_empty(), "{warnings:?}");
 }
 
+#[path = "collusion_gate_reason_tests.rs"]
+mod reason;
 #[path = "collusion_gate_relay_excuse_tests.rs"]
 mod relay_excuse;

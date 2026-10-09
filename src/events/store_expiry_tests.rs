@@ -33,7 +33,7 @@ fn a_replay_frozen_by_a_suspension_is_buried_at_expiry() {
         .expect("io");
     assert_eq!(
         store
-            .revive("e1", now, record("e1", "s1", now), OUTBOX, || now)
+            .revive("e1", now, record("e1", "s1", now), OUTBOX, || Ok(now))
             .expect("io"),
         Revived::Written
     );
@@ -163,7 +163,7 @@ fn an_unsubscribe_still_drops_a_replayed_record() {
         .dead_letter(record("e1", "s1", now), DeadReason::Exhausted, now, ROOMY)
         .expect("io");
     store
-        .revive("e1", now, record("e1", "s1", now), OUTBOX, || now)
+        .revive("e1", now, record("e1", "s1", now), OUTBOX, || Ok(now))
         .expect("io");
     assert!(store.remove("s1", now, TAIL).expect("io"), "unsubscribed");
     assert_eq!(dead_reason(&store, "e1"), None, "dropped, as before");

@@ -345,12 +345,14 @@ async fn the_lookup_budget_is_per_attempt() {
 /// Admits until the attempt's `tenant_read` record is in the audit log, then
 /// refuses: a check made before `admit_delivery` wrote that record admits, so a
 /// second verdict moved ahead of it would send (MIK-7922 TEST.3).
+#[cfg(feature = "firewall")]
 struct AfterTenantRecord {
     log: std::path::PathBuf,
     asked: AtomicUsize,
 }
 
 #[async_trait::async_trait]
+#[cfg(feature = "firewall")]
 impl crate::events::EventSource for AfterTenantRecord {
     fn kind(&self) -> SourceKind {
         SourceKind::RestWatch

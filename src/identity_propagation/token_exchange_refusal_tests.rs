@@ -84,7 +84,7 @@ async fn an_unparsable_or_empty_sts_answer_is_refused_and_a_good_one_is_not() {
 #[test]
 fn an_expired_cached_exchange_is_never_served() {
     let s = strategy();
-    let now = SignedAssertionStrategy::now_secs();
+    let now = SignedAssertionStrategy::now_secs().unwrap();
     let entry = |expires_at| CachedExchange {
         access_token: "t".to_owned(),
         expires_at,
