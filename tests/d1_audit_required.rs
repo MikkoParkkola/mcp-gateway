@@ -140,3 +140,19 @@ async fn stdio_serve_obeys_audit_required() {
         "must name the D1-a rule: {stderr}"
     );
 }
+
+/// P2c2: the derived default is not written back. A CLI rewrite loads the
+/// file literally and serialises the whole config, so a resolved value would
+/// add an `enabled` line the operator never wrote.
+#[test]
+fn a_rewrite_does_not_write_the_derived_audit_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = write_config(&dir, AUTH_ON);
+    let config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("literal load");
+    let written: serde_yaml::Value = serde_yaml::to_value(&config).expect("the config serialises");
+    assert!(
+        written["security"]["transparency_log"]["enabled"].is_null(),
+        "a rewrite wrote the derived default: {:?}",
+        written["security"]["transparency_log"]
+    );
+}
