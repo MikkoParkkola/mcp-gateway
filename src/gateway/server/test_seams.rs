@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! What an in-process test may set on a [`super::Gateway`] before `run`:
-//! where its data lives, and a channel for the port it binds.
+//! where its data lives, a channel for the port it binds, and a trigger for
+//! the graceful shutdown a signal starts in production.
 
 use std::path::PathBuf;
 
@@ -12,6 +13,13 @@ pub(super) struct TestSeams {
     /// The test's tempdir (`with_data_dir`); `None` is the standard one.
     pub(super) data_dir: Option<PathBuf>,
     bound_port: Option<oneshot::Sender<u16>>,
+    /// Starts the graceful shutdown as Ctrl+C or SIGTERM would (MIK-8156).
+    #[cfg(test)]
+    shutdown: Option<oneshot::Receiver<()>>,
+    /// Receives `run`'s in-flight request gate, so a test can hold a request
+    /// open across the drain (MIK-8156).
+    #[cfg(test)]
+    inflight: Option<oneshot::Sender<std::sync::Arc<tokio::sync::Semaphore>>>,
 }
 
 impl TestSeams {
@@ -28,6 +36,44 @@ impl TestSeams {
             sender.send(bound.port()).ok();
         }
     }
+
+    /// The test's shutdown trigger, taken once by `run`.
+    #[cfg(test)]
+    pub(super) fn take_shutdown_trigger(&mut self) -> Option<oneshot::Receiver<()>> {
+        self.shutdown.take()
+    }
+
+    /// Hand `run`'s in-flight request gate to the test that asked for it.
+    #[cfg(test)]
+    pub(super) fn report_inflight(&mut self, inflight: &std::sync::Arc<tokio::sync::Semaphore>) {
+        if let Some(sender) = self.inflight.take() {
+            sender.send(std::sync::Arc::clone(inflight)).ok();
+        }
+    }
+}
+
+/// `shutdown_signal`, also started by a test's trigger. Test builds only, so
+/// the production signal handler is the unchanged `support::shutdown_signal`.
+#[cfg(test)]
+pub(super) async fn shutdown_signal_or_trigger(
+    shutdown_tx: tokio::sync::broadcast::Sender<()>,
+    trigger: Option<oneshot::Receiver<()>>,
+) {
+    let on_trigger = shutdown_tx.clone();
+    tokio::select! {
+        () = super::support::shutdown_signal(shutdown_tx) => {},
+        () = async {
+            match trigger {
+                // A dropped sender starts it too: the test is over either way.
+                Some(trigger) => {
+                    trigger.await.ok();
+                }
+                None => std::future::pending::<()>().await,
+            }
+        } => {
+            on_trigger.send(()).ok();
+        },
+    }
 }
 
 impl super::Gateway {
@@ -38,4 +84,27 @@ impl super::Gateway {
         self.test_seams.bound_port = Some(sender);
         receiver
     }
+
+    /// `run`'s in-flight request gate, sent once `run` builds it.
+    #[cfg(test)]
+    pub(super) fn inflight_for_test(
+        &mut self,
+    ) -> oneshot::Receiver<std::sync::Arc<tokio::sync::Semaphore>> {
+        let (sender, receiver) = oneshot::channel();
+        self.test_seams.inflight = Some(sender);
+        receiver
+    }
+
+    /// A trigger that starts `run`'s graceful shutdown, as a signal would.
+    /// Sending, or dropping the sender, starts it.
+    #[cfg(test)]
+    pub(super) fn shutdown_trigger_for_test(&mut self) -> oneshot::Sender<()> {
+        let (sender, receiver) = oneshot::channel();
+        self.test_seams.shutdown = Some(receiver);
+        sender
+    }
 }
+
+#[cfg(test)]
+#[path = "shutdown_order_tests.rs"]
+mod shutdown_order_tests;

@@ -50,7 +50,9 @@ pub(crate) enum ToolsNudge {
 pub(crate) type NudgeFeed = tokio::sync::mpsc::UnboundedSender<ToolsNudge>;
 
 impl super::Backend {
-    /// This instance's identity, unique for the life of the process.
+    /// This instance's identity, unique for the life of the process. A
+    /// continuation binds it too (`MIK-8168`), so a backend replaced under the
+    /// same name is never answered a round the old one asked.
     #[must_use]
     pub(crate) fn instance(&self) -> u64 {
         self.instance

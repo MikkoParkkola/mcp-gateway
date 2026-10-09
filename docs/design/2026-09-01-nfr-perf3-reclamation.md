@@ -436,7 +436,7 @@ because the file is theirs.
 
 | risk | owner | why it stays open |
 |---|---|---|
-| the at-capacity O(4 096) retain under the lock, with no earliest-deadline guard | **MRTR.8b** | This document specified the guard; MRTR.8b's Design A does not carry it and accepts the walk as cost, so "raised there" is not the same as *treated as a defect there*. It is recorded here as residual, with a named owner, so it survives on a ledger rather than in a clause of a draft that has already declined it. Not repaired in this slice because every change to `InFlight`'s entry points is now OUT |
+| ~~the at-capacity O(4 096) retain under the lock, with no earliest-deadline guard~~ | MIK-8060 | Closed: `InFlight` keeps a lower bound on the earliest held deadline and walks the table only when that bound is behind `now` (`src/protocol/continuation/ledger.rs`, `guard`); a full table with nothing expired costs no walk per call (`row_09` in `ledger/in_flight_lifetime.rs`). |
 | `NFR.PERF.3` is not closed by this slice's test alone | this slice + `MRTR.6` | A component test proves the table reclaims; it does not prove production reaches the table. Stated at the head of this document and repeated here so the closure argument is not read out of one section |
 
 ## Review record

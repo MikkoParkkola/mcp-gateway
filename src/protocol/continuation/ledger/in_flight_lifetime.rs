@@ -143,3 +143,128 @@ async fn row_09_hold_at_capacity_still_refuses_when_the_occupants_are_live() {
     }
     assert!(table.hold("backend", T, T).await.is_none());
 }
+
+// --- MIK-8060: a reader walks the table only when something can be expired. ---
+
+/// A full table whose every deadline is still ahead of `T`.
+async fn full_of_live_holds() -> InFlight {
+    let table = InFlight::new("gw-1", IN_FLIGHT_CAPACITY);
+    for i in 0..IN_FLIGHT_CAPACITY {
+        let deadline = T + 1_000 + u64::try_from(i).expect("small");
+        table.hold("backend", deadline, T).await.expect("capacity");
+    }
+    table
+}
+
+#[tokio::test]
+async fn row_09_readers_of_a_table_with_nothing_expired_never_walk_it() {
+    let table = full_of_live_holds().await;
+    let before = table.walks.load(std::sync::atomic::Ordering::SeqCst);
+    let key = "absent".to_string();
+    for _ in 0..100 {
+        assert!(matches!(table.route(&key, T).await, Routing::Gone));
+    }
+    assert_eq!(table.len(T).await, IN_FLIGHT_CAPACITY);
+    let walked = table.walks.load(std::sync::atomic::Ordering::SeqCst) - before;
+    assert_eq!(
+        walked, 0,
+        "nothing had expired, yet readers walked {walked} times"
+    );
+}
+
+#[tokio::test]
+async fn row_10_completing_the_earliest_hold_never_hides_a_later_expiry() {
+    // The tracked earliest deadline may go stale when its hold completes; it
+    // must stay a lower bound, so an expiry behind it is still reclaimed.
+    let table = InFlight::new("gw-1", 4);
+    let first = table.hold("backend", T, T).await.expect("capacity");
+    let _second = table.hold("backend", T + 10, T).await.expect("capacity");
+    assert!(table.complete(&first, T).await);
+    assert_eq!(table.len(T + 5).await, 1, "the later hold is still live");
+    assert_eq!(
+        table.len(T + 11).await,
+        0,
+        "and is reclaimed once it expires"
+    );
+}
+
+#[tokio::test]
+async fn row_11_holds_inserted_out_of_deadline_order_expire_in_order() {
+    let table = InFlight::new("gw-1", 4);
+    for deadline in [T + 30, T + 10, T + 20] {
+        table.hold("backend", deadline, T).await.expect("capacity");
+    }
+    assert_eq!(table.len(T + 15).await, 2);
+    assert_eq!(table.len(T + 25).await, 1);
+    assert_eq!(table.len(T + 31).await, 0);
+}
+
+#[tokio::test]
+async fn row_12_a_reader_at_the_earliest_deadline_neither_walks_nor_evicts() {
+    let table = InFlight::new("gw-1", 4);
+    table.hold("backend", T + 10, T).await.expect("capacity");
+    let before = table.walks.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(table.len(T + 10).await, 1, "live at its own deadline");
+    let walked = table.walks.load(std::sync::atomic::Ordering::SeqCst) - before;
+    assert_eq!(walked, 0, "nothing can be expired at the earliest deadline");
+}
+
+#[tokio::test]
+async fn row_13_a_walk_resets_the_bound_to_the_earliest_survivor() {
+    let table = InFlight::new("gw-1", 4);
+    table.hold("backend", T + 5, T).await.expect("capacity");
+    table.hold("backend", T + 50, T).await.expect("capacity");
+    assert_eq!(table.len(T + 6).await, 1, "the first hold is reclaimed");
+    let before = table.walks.load(std::sync::atomic::Ordering::SeqCst);
+    for _ in 0..10 {
+        assert_eq!(table.len(T + 40).await, 1);
+    }
+    let walked = table.walks.load(std::sync::atomic::Ordering::SeqCst) - before;
+    assert_eq!(walked, 0, "a stale bound would walk on every read");
+}
+
+/// `MIK-8168`: a paused chain's step digest goes with its hold when the chain
+/// is abandoned. Expiry is the abandonment path (a client that stops calling
+/// makes no call; a reload keeps the shared table). Asserted on the map itself,
+/// after a reader that is not `step_digest`, so only the reclaim can clear it.
+#[tokio::test]
+async fn an_expired_hold_drops_its_step_digest() {
+    let (table, key) = held_until_t(4).await;
+    table
+        .steps
+        .lock()
+        .insert(key.clone(), "step-digest".to_string());
+    assert_eq!(table.len(T).await, 1);
+    assert_eq!(table.steps.lock().len(), 1, "a live hold keeps its digest");
+    assert_eq!(table.len(T + 1).await, 0);
+    assert!(
+        table.steps.lock().is_empty(),
+        "an abandoned chain's digest stayed"
+    );
+}
+
+/// `MIK-8060` x `MIK-8168`: with the reclaim walk skipped when nothing can be
+/// expired, a step recorded for an exchange no longer held (a bind that raced
+/// its hold's reclaim) must still not be returned.
+#[tokio::test]
+async fn a_step_digest_is_returned_only_while_its_hold_exists() {
+    let (table, key) = held_until_t(4).await;
+    let orphan = "backend:no-longer-held".to_string();
+    table
+        .steps
+        .lock()
+        .insert(orphan.clone(), "orphan-digest".to_string());
+    table
+        .steps
+        .lock()
+        .insert(key.clone(), "live-digest".to_string());
+    assert_eq!(
+        table.step_digest(&key, T).await.as_deref(),
+        Some("live-digest")
+    );
+    assert_eq!(
+        table.step_digest(&orphan, T).await,
+        None,
+        "an orphan step leaked"
+    );
+}
