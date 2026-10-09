@@ -292,8 +292,9 @@ fn a_reading_over_the_bound_falls_back_to_the_whole_text() {
 
 /// `MIK-8209` K7: two steps each staged a shared `kind` and their own piece;
 /// the answer repeats `kind`. Kept to its own span first, each step keeps its
-/// own piece whole. Control: without labels the earlier step's `kind` spends
-/// the later step's room, and its piece is lost (the crowd-out K7 fixes).
+/// own piece whole. Without labels K8 keeps it too: `chunk` is kept at most
+/// once, as staged, so the earlier step's copy cannot spend the later
+/// step's room (before K8 it did, and the piece was lost).
 #[test]
 fn a_repeated_leaf_from_another_step_never_crowds_out_a_steps_own_piece() {
     let detector = CollusionDetector::new(RelayParams::default());
@@ -302,10 +303,10 @@ fn a_repeated_leaf_from_another_step_never_crowds_out_a_steps_own_piece() {
     let labels = vec![Some(0), Some(0), Some(1), Some(1)];
     let (staged, _) = DeliveryDigest::of_plan_step_leaves(&["chunk", b], false);
     let unlabelled = Delivered::of_leaves(shown.clone()).expect("bounded");
-    let lost = staged.retaining(&detector, &unlabelled);
+    let kept = staged.retaining(&detector, &unlabelled);
     assert!(
-        !lost.whole_values().any(|v| v == b),
-        "premise: the crowd-out reproduces"
+        kept.whole_values().any(|v| v == b),
+        "K8: an unlabelled copy crowded out the piece"
     );
     let (staged, _) = DeliveryDigest::of_plan_step_leaves(&["chunk", b], false);
     let labelled = Delivered::of_leaves(shown)
@@ -387,10 +388,9 @@ fn a_large_answer_keeps_its_receipts_under_the_unchanged_bound() {
 /// `MIK-8209` Q2, gpt's input: three steps each staged `{part: p, x: "x"}`;
 /// each step's span of the answer repeats `x` twenty times before `part`.
 /// Each step must keep its own `part` whole (the seam pass owns it only then).
-/// Red until MIK-8251: no chain answer reaches it (see the route row
-/// `repeated_metadata_in_chain_steps_keeps_the_cross_step_join`).
+/// K8: a chain reaches it through late redaction (route row
+/// `late_redaction_copies_keep_the_cross_step_join`).
 #[test]
-#[ignore = "MIK-8251: retention crowd-out, unreachable from a chain"]
 fn twenty_repeats_before_part_keep_each_steps_part_whole() {
     let detector = CollusionDetector::new(RelayParams::default());
     let parts = ["a".repeat(32), "b".repeat(32), "c".repeat(32)];
@@ -404,8 +404,13 @@ fn twenty_repeats_before_part_keep_each_steps_part_whole() {
     }
     for (step, part) in parts.iter().enumerate() {
         let (staged, _) = DeliveryDigest::of_plan_step_leaves(&[part.as_str(), "x"], false);
-        let delivered = Delivered::of_leaves(shown.clone()).expect("bounded").with_labels(labels.clone());
+        let delivered = Delivered::of_leaves(shown.clone())
+            .expect("bounded")
+            .with_labels(labels.clone());
         let kept = staged.retaining_for(&detector, &delivered, u32::try_from(step).ok());
-        assert!(kept.whole_values().any(|v| v == part), "step {step} lost its part");
+        assert!(
+            kept.whole_values().any(|v| v == part),
+            "step {step} lost its part"
+        );
     }
 }

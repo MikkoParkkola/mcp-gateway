@@ -106,8 +106,8 @@ fn collect_arrays<'v>(value: &'v Value, out: &mut Vec<&'v [Value]>) {
     }
 }
 
-/// Object entries the walk has visited on this thread (tests only): the work
-/// a row bounds by the leaf count, so a quadratic walk fails it.
+// Object entries the walk has visited on this thread (tests only): the work
+// a row bounds by the leaf count, so a quadratic walk fails it.
 #[cfg(test)]
 thread_local! {
     pub(super) static VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
