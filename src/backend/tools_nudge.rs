@@ -433,6 +433,38 @@ mod tests {
         );
     }
 
+    /// `MIK-8208`: descriptor verdicts and shared-slot stores land on the
+    /// same feed as per-user stores, so they share its bound: one queued
+    /// nudge per backend while the drain is held, however many land.
+    #[tokio::test]
+    async fn many_verdicts_while_the_drain_is_held_queue_one_nudge() {
+        let backend = backend("a");
+        let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
+        backend.attach_nudges(&feed);
+        for n in 0..64 {
+            backend.block_tool_for_test(&format!("t{n}"));
+        }
+        assert_eq!(std::iter::from_fn(|| nudges.try_recv().ok()).count(), 1);
+        backend.clear_views_dirty();
+        backend.block_tool_for_test("after");
+        assert_eq!(
+            std::iter::from_fn(|| nudges.try_recv().ok()).count(),
+            1,
+            "a verdict after the drain read queues a fresh nudge"
+        );
+    }
+
+    #[tokio::test]
+    async fn many_shared_stores_while_the_drain_is_held_queue_one_nudge() {
+        let backend = backend("a");
+        let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
+        backend.attach_nudges(&feed);
+        for _ in 0..64 {
+            backend.shared_entry().tools_cache.replace(Vec::new(), || ());
+        }
+        assert_eq!(std::iter::from_fn(|| nudges.try_recv().ok()).count(), 1);
+    }
+
     #[tokio::test]
     async fn instances_never_share_an_identity() {
         assert_ne!(backend("a").instance(), backend("a").instance());
