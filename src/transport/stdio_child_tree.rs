@@ -64,7 +64,8 @@ pub(super) enum Reap {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReapPhase {
     /// Unix: the close signal is sent; waiting up to `PRE_REAP_GRACE` for the
-    /// leader to exit before the A5 signal.
+    /// leader to exit before the A5 signal. Windows starts at `Reaping`.
+    #[cfg_attr(not(unix), allow(dead_code))]
     Grace,
     /// The signal gate is closed; reaping the leader.
     Reaping,
@@ -278,7 +279,7 @@ impl ChildTree {
     /// Unix reaps through the NATIVE tokio child, never the wrapper:
     /// process-wrap's `ProcessGroupChild::try_wait` reaps with a raw group
     /// `waitpid` first, so tokio would not record the exit and its
-    /// kill_on_drop would stay armed against a pid the kernel may reuse.
+    /// `kill_on_drop` would stay armed against a pid the kernel may reuse.
     /// Windows has no pid to reuse and keeps the Job wrapper's own `try_wait`,
     /// matching what the release line's async reap observed there.
     fn try_reap(&mut self) -> Option<ExitStatus> {

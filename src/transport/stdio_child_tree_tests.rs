@@ -327,7 +327,7 @@ async fn close_ends_a_group_that_keeps_forking() {
 
 /// `reap_step` driven by hand, as the reaper drives it: the close signal and
 /// the A5 signal once each, then the reap goes through the native tokio child,
-/// so tokio recorded the exit and its kill_on_drop is disarmed (MIK-7923).
+/// so tokio recorded the exit and its `kill_on_drop` is disarmed (MIK-7923).
 #[tokio::test]
 async fn a_stepped_tree_signals_each_phase_once_then_reaps_natively() {
     let (w, t) = started(

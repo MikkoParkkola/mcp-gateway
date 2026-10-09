@@ -188,19 +188,9 @@ impl StdioTransport {
         // Renewed under the stdin lock, so a write never pairs new stdin with
         // the token a previous `close()` cancelled.
         *self.shutdown.lock() = tokio_util::sync::CancellationToken::new();
-        {
-            let mut slot = self.child.lock();
-            if slot.retired {
-                // Retired while this start ran: the fresh tree is ended, never
-                // installed (MIK-7923, design P5).
-                slot.track(ChildTree::new(child));
-                drop(slot);
-                *writer = None;
-                return Err(Error::BackendNotFound(
-                    "stdio backend retired while it started".to_string(),
-                ));
-            }
-            slot.tree = Some(ChildTree::new(child));
+        if let Err(refused) = self.install_tree(ChildTree::new(child)) {
+            *writer = None;
+            return Err(refused);
         }
         *writer = Some(stdin);
         drop(writer);

@@ -224,6 +224,24 @@ impl super::StdioTransport {
         status.or_else(|| slot.last_status())
     }
 
+    /// Install a freshly spawned tree, unless a retire landed while the start
+    /// ran: then the tree is ended, never installed (MIK-7923, design P5).
+    ///
+    /// # Errors
+    ///
+    /// `BackendNotFound` (pre-dispatch) when the transport was retired.
+    pub(super) fn install_tree(&self, tree: ChildTree) -> crate::Result<()> {
+        let mut slot = self.child.lock();
+        if slot.retired {
+            slot.track(tree);
+            return Err(crate::Error::BackendNotFound(
+                "stdio backend retired while it started".to_string(),
+            ));
+        }
+        slot.tree = Some(tree);
+        Ok(())
+    }
+
     /// Wait up to `limit` for the leader to exit, without reaping and without
     /// holding the slot across an await. An empty slot counts as exited.
     pub(super) async fn wait_exited_in_slot(&self, limit: Duration) -> bool {
