@@ -16,7 +16,7 @@ async fn gateway(auth: bool, dir: &tempfile::TempDir) -> Gateway {
     let mut config = Config::default();
     config.auth.enabled = auth;
     config.auth.bearer_token = Some("d1-start-test-token-0123456789abcdef".to_string());
-    config.security.transparency_log.enabled = true;
+    config.security.transparency_log.enabled = Some(true);
     config.security.transparency_log.path =
         blocker.join("audit.jsonl").to_string_lossy().into_owned();
     Gateway::new(config)
@@ -59,7 +59,7 @@ async fn refused_while_leased(auth: bool) {
     let mut config = Config::default();
     config.auth.enabled = auth;
     config.auth.bearer_token = Some("d1-start-test-token-0123456789abcdef".to_string());
-    config.security.transparency_log.enabled = true;
+    config.security.transparency_log.enabled = Some(true);
     config.security.transparency_log.path = path.to_string_lossy().into_owned();
     let gateway = Gateway::new(config).await.expect("the config is valid");
     let err = match gateway.build_meta_mcp().await {

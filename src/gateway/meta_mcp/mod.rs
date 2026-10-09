@@ -362,7 +362,7 @@ pub struct MetaMcp {
 
     /// Tamper-evident hash-chain transparency log (issue #133, D3).
     ///
-    /// `Some` when `security.transparency_log.enabled = true`; `None` otherwise.
+    /// `Some` when the audit log (`security.transparency_log`) is on; `None` otherwise.
     /// Zero overhead when `None` — no allocation or I/O on the hot path.
     pub(super) transparency_logger: Option<Arc<crate::security::TransparencyLogger>>,
 

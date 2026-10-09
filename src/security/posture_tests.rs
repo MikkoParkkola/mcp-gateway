@@ -325,7 +325,7 @@ fn gateway_startup_logs_posture_once() {
     let (_, mut unhardened, _) = auth_shapes().swap_remove(1);
     // Auth on requires the audit log; give it a writable home.
     let dir = tempfile::tempdir().unwrap();
-    unhardened.security.transparency_log.enabled = true;
+    unhardened.security.transparency_log.enabled = Some(true);
     unhardened.security.transparency_log.path = dir.path().join("audit.log").display().to_string();
     // The same multi-user shape: only the posture tells the two apart.
     let mut hardened = unhardened.clone();
