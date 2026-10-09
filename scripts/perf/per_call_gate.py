@@ -128,16 +128,26 @@ def verified(binary, commits):
     return binary
 
 
+def STAGES_FROM_HARNESS():  # noqa: N802 - names the Rust constant it reads
+    """The harness's STAGES table: every row a run must print."""
+    path = os.path.join(os.path.dirname(__file__), "../../src/gateway/server/tests/per_call_timing.rs")
+    with open(path) as f:
+        block = re.search(r"const STAGES: &\[&str\] = &\[(.*?)\];", f.read(), re.S)
+    return set(re.findall(r'"([^"]+)"', block.group(1)))
+
+
+# The highest 1-minute load seen before any harness run in this job.
+PEAK_LOAD = [0.0]
+
+
 def run(binary, negative=False):
+    PEAK_LOAD[0] = max(PEAK_LOAD[0], os.getloadavg()[0])
     env = dict(os.environ)
     if negative:
         env["PER_CALL_NEGATIVE_CONTROL"] = "1"
     out = sh([binary, "--ignored", "--exact", TEST, "--nocapture", "--test-threads=1"], env=env, timeout=RUN_TIMEOUT_S)
     rows = dict(re.findall(r"PER_CALL_NS (\S+) (\d+)", out))
-    stages = set(re.findall(r'"([^"]+)"', re.search(
-        r"const STAGES: &\[&str\] = &\[(.*?)\];",
-        open(os.path.join(os.path.dirname(__file__), "../../src/gateway/server/tests/per_call_timing.rs")).read(),
-        re.S).group(1)))
+    stages = STAGES_FROM_HARNESS()
     if set(rows) != stages:
         raise Void(f"every STAGES row must be measured: printed {sorted(rows)}, table {sorted(stages)}")
     return {k: int(v) for k, v in rows.items()}
@@ -147,9 +157,9 @@ def paired(first, second, blocks, rng):
     """Per row, the median over ABBA blocks of mean(second) - mean(first).
     An arm is (binary, negative); arms are told apart by position, so the
     same binary may stand on both sides (the null arm, the control)."""
-    start_second = rng.random() < 0.5
     deltas = {}
     for _ in range(blocks):
+        start_second = rng.random() < 0.5
         order = [1, 0, 0, 1] if start_second else [0, 1, 1, 0]
         results = [(side, run(*(first, second)[side])) for side in order]
         for row in results[0][1]:
@@ -220,6 +230,9 @@ def main():
     except Void as why:
         print(f"VOID: {why}")
         return 2
+    except Exception as why:  # noqa: BLE001 - any crash is no measurement
+        print(f"VOID: {type(why).__name__}: {why}")
+        return 2
 
 
 def shas(repo, a):
@@ -251,23 +264,21 @@ def prebuilt(repo, a, work):
 
 def measure(a, rng, binaries):
     base, head = binaries
-    # Read after the builds: their load must not be what the run starts in.
-    load_start = os.getloadavg()[0]
-
+    # One null arm judges the control and the head: same base, same statistic.
+    budget = null_budget(base, a.k, a.blocks, rng)
     # The gate checks itself: HEAD slowed on purpose must be OVER on every row,
     # judged against unarmed HEAD so HEAD's own change cannot mask it.
-    control = judge(null_budget(base, a.k, a.blocks, rng),
-                    paired((head, False), (head, True), a.blocks, rng))
-    verdicts = [judge(null_budget(base, a.k, a.blocks, rng),
-                      paired((base, False), (head, False), a.blocks, rng))]
+    control = judge(budget, paired((head, False), (head, True), a.blocks, rng))
+    verdicts = [judge(budget, paired((base, False), (head, False), a.blocks, rng))]
     if "OVER" in verdicts[0].values():
         print("confirmation run with a fresh null arm")
         verdicts.append(judge(null_budget(base, a.k, a.blocks, rng),
                               paired((base, False), (head, False), a.blocks, rng)))
 
-    load_end = os.getloadavg()[0]
-    print(f"host load: start {load_start:.1f}, end {load_end:.1f} (max {MAX_LOAD})")
-    if max(load_start, load_end) > MAX_LOAD:
+    # Load is sampled before every harness run; any breach anywhere is VOID.
+    peak = max(PEAK_LOAD[0], os.getloadavg()[0])
+    print(f"host load: peak {peak:.1f} over the run (max {MAX_LOAD})")
+    if peak > MAX_LOAD:
         print("VOID: the bench host was busy; rerun when it is quiet")
         return 2
     if any(v != "OVER" for v in control.values()):

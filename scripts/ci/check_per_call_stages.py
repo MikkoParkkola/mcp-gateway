@@ -99,7 +99,9 @@ def main():
                 errors.append(f"{file} {fn}: no entry in {TABLE.relative_to(ROOT)}")
     # A row whose function moved or went away would vouch for nothing.
     for file, fn in rows:
-        if file in present and fn not in present[file]:
+        if file not in present:
+            errors.append(f"{file} {fn}: the file is not one of PATH_FILES")
+        elif fn not in present[file]:
             errors.append(f"{file} {fn}: in the table but not in the file (stale row)")
     if errors:
         print("\n".join(errors))

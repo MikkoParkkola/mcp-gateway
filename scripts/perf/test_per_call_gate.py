@@ -125,5 +125,53 @@ class Prebuilt(unittest.TestCase):
         self.assertEqual(got, self.binary)
 
 
+class Measure(unittest.TestCase):
+    """The whole decision flow over stubbed harness runs and host load."""
+
+    def flow(self, head_ns, armed_ns, load=0.5, loads=None):
+        """measure() over the real run(), with the harness process stubbed:
+        BASE prints 100 us on every row, HEAD `head_ns`, armed HEAD `armed_ns`.
+        `loads` overrides the host load per reading (the last value repeats)."""
+        import types
+        from unittest import mock
+
+        stages = gate.STAGES_FROM_HARNESS()
+
+        def sh(cmd, cwd=None, env=None, timeout=None):
+            armed = bool(env and env.get("PER_CALL_NEGATIVE_CONTROL"))
+            ns = 100_000 if cmd[0] == "base" else (armed_ns if armed else head_ns)
+            return "".join(f"PER_CALL_NS {row} {ns}\n" for row in stages)
+
+        readings = iter(loads or [])
+        last = [load]
+
+        def getloadavg():
+            last[0] = next(readings, last[0])
+            return (last[0], last[0], last[0])
+
+        gate.PEAK_LOAD[0] = 0.0
+        a = types.SimpleNamespace(k=2, blocks=1)
+        with mock.patch.object(gate, "sh", sh), \
+                mock.patch.object(gate.os, "getloadavg", getloadavg), \
+                contextlib.redirect_stdout(io.StringIO()):
+            return gate.measure(a, gate.random.Random(1), ("base", "head"))
+
+    def test_a_load_spike_mid_run_voids_though_the_end_is_quiet(self):
+        spike = [0.5, gate.MAX_LOAD + 5, gate.MAX_LOAD + 5, 0.5]
+        self.assertEqual(self.flow(100_000, 110_000, loads=spike), 2)
+
+    def test_an_unchanged_head_passes(self):
+        self.assertEqual(self.flow(100_000, 110_000), 0)
+
+    def test_a_slower_head_fails_after_its_confirmation(self):
+        self.assertEqual(self.flow(103_000, 113_000), 1)
+
+    def test_a_control_that_does_not_move_voids_the_run(self):
+        self.assertEqual(self.flow(100_000, 100_000), 2)
+
+    def test_a_busy_host_voids_even_a_clean_result(self):
+        self.assertEqual(self.flow(100_000, 110_000, load=gate.MAX_LOAD + 1), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,7 +7,7 @@ src/gateway/meta_mcp/invoke/dispatch.rs	dispatch_to_backend	http_invoke_tiny	on 
 src/gateway/meta_mcp/grant_audit.rs	allow_unslotted_check_for_test	-	test-only helper
 src/gateway/meta_mcp/grant_audit.rs	check_or_stamp	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	dispatch_below_gate_shaped	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	drop	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/grant_audit.rs	drop	-	slot guard drop: a guard exists only with a transparency logger; the bench has none
 src/gateway/meta_mcp/grant_audit.rs	envelope	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
 src/gateway/meta_mcp/grant_audit.rs	eq	-	equality impl; not on the dispatch path
 src/gateway/meta_mcp/grant_audit.rs	fingerprint	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
@@ -24,16 +24,16 @@ src/gateway/meta_mcp/grant_audit.rs	select_records	-	audit write path: runs only
 src/gateway/meta_mcp/grant_audit.rs	slot_http	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	slot_result	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	slot_rpc	-	stdio/RPC transport slot; the HTTP path opens slot_http
-src/gateway/meta_mcp/grant_audit.rs	spawn_write	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/grant_audit.rs	spawn_write	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
 src/gateway/meta_mcp/grant_audit.rs	stamp_prepared	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	with_grant_slot	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/grant_audit.rs	write_records	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/grant_audit.rs	write_records	-	audit write path: runs only with a transparency logger and an identity-grant decision; the bench has neither (no audited row)
 src/gateway/meta_mcp/call_dispatch.rs	begin_task	-	task-augmented calls only
 src/gateway/meta_mcp/call_dispatch.rs	dispatch_below_gate	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/call_dispatch.rs	dispatch_below_gate_native_result	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/call_dispatch.rs	dispatch_below_gate_native_result	-	task worker and watch poll only
 src/gateway/meta_mcp/call_dispatch.rs	dispatch_below_gate_shaped_in_slot	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/call_dispatch.rs	invoke_named_backend_tool	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call	-	by-value wrapper kept for tests; both request paths call handle_tools_call_ref
+src/gateway/meta_mcp/call_dispatch.rs	invoke_named_backend_tool	-	direct and retry-to-origin routes only
 src/gateway/meta_mcp/call_dispatch.rs	route_direct_backend_call	-	direct /mcp/{backend} route, not the meta tools/call path
 src/gateway/meta_mcp/call_dispatch.rs	route_retry_to_origin_backend	-	retry-to-origin path only
 src/gateway/meta_mcp/call_dispatch.rs	task_backend_name	-	task-augmented calls only
@@ -45,9 +45,9 @@ src/gateway/server/mod.rs	config_installs_minting_strategy	-	startup or lifecycl
 src/gateway/server/mod.rs	configured_minting_strategy_kind	-	startup or lifecycle, not per call
 src/gateway/server/mod.rs	dispatch_batch	-	test-only wrapper (cfg(test)) over dispatch_batch_read
 src/gateway/server/mod.rs	dispatch_relay_scoped	-	relay egress scope: only when a relay is active
-src/gateway/server/mod.rs	dispatch_single	stdio_invoke_tiny	on the stdio single-request path
+src/gateway/server/mod.rs	dispatch_single	-	test-only (cfg(test)); the stdio loop calls dispatch_single_staged
 src/gateway/server/mod.rs	dispatch_single_staged	stdio_invoke_tiny	on the stdio single-request path
-src/gateway/server/mod.rs	dispatch_single_with_sink	stdio_invoke_tiny	on the stdio single-request path
+src/gateway/server/mod.rs	dispatch_single_with_sink	-	test-only (cfg(test)); the stdio loop calls dispatch_single_staged
 src/gateway/server/mod.rs	dispatch_tools_call	stdio_invoke_tiny	on the stdio single-request path
 src/gateway/server/mod.rs	drop	-	startup or lifecycle, not per call
 src/gateway/server/mod.rs	expand_home_path	-	startup or lifecycle, not per call
