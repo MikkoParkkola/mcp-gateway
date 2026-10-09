@@ -42,10 +42,9 @@ struct Standing {
 /// (MIK-8062).
 fn standing(services: &Services, principal: &str) -> Option<Standing> {
     let bearer = services.credentials.bearer_principal.as_deref() == Some(principal);
-    let now = Utc::now();
     let config = services.live.get();
     let mut keys = config.auth.api_keys.iter().filter(|k| {
-        !k.is_expired_at(now)
+        !k.is_expired_now()
             && k.key_sha256
                 .as_deref()
                 .and_then(crate::config::parse_api_key_digest)

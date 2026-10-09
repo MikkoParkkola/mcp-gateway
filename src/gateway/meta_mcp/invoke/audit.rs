@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 
 use serde_json::{Map, Value};
 
+use crate::capability::ProcessNote;
 use crate::context_integrity::ContextIntegrityEvaluation;
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
 use crate::protocol::JsonRpcResponse;
@@ -69,6 +70,23 @@ pub(crate) struct DispatchNotes {
     /// MIN.1 gap 1: how `audit_invocation` would class the refusal of a
     /// recovered result, which recovery commits as a plain `-32603` failure.
     refusal: Option<AuditOutcome>,
+    /// MIK-7926.FIX.2: the children this call started, the first
+    /// [`MAX_PROCESS_NOTES`], and how many there were.
+    process: Vec<ProcessNote>,
+    process_total: usize,
+}
+
+/// Most process notes one record carries (a playbook may run many).
+const MAX_PROCESS_NOTES: usize = 16;
+
+/// MIK-7926.FIX.2: note a child this call started.
+pub(crate) fn note_process(process: ProcessNote) {
+    note(|notes| {
+        notes.process_total += 1;
+        if notes.process.len() < MAX_PROCESS_NOTES {
+            notes.process.push(process);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -254,6 +272,13 @@ impl DispatchNotes {
             tenants.extend(self.response_tenants.iter().cloned());
         }
         let mut fields = Map::new();
+        if !self.process.is_empty() {
+            let process: Vec<Value> = self.process.iter().map(|p| p.to_json()).collect();
+            fields.insert("process".into(), process.into());
+            if self.process_total > self.process.len() {
+                fields.insert("process_total".into(), self.process_total.into());
+            }
+        }
         if tenants.is_empty() && !uninspected {
             return fields;
         }

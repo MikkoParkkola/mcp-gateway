@@ -92,8 +92,9 @@ fn random_256() -> String {
 
 impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
     /// The clock token lifetimes are read against, so journey deadlines and
-    /// grant expiry share one time base.
-    pub(crate) fn now_unix(&self) -> u64 {
+    /// grant expiry share one time base. `Err` on a clock before 1970
+    /// (MIK-8202): the journey it would judge is refused.
+    pub(crate) fn now_unix(&self) -> Result<u64, crate::clock::ClockBeforeEpoch> {
         self.clock.now_unix()
     }
 
@@ -177,6 +178,12 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
         if let Some(resource) = resource {
             form.push(("resource".to_string(), resource.to_string()));
         }
+        // Read the clock before the provider issues anything (MIK-8202): on a
+        // clock before 1970 no code is spent and no token exists to drop or
+        // revoke. Only a clock stepping back during this call can still fail
+        // `map_token_response` after tokens were issued.
+        self.now_unix()
+            .map_err(|_| ProviderRefreshError::Unavailable)?;
         let response = self
             .http
             .post_token(pinned.token_endpoint.as_str(), &form)

@@ -416,8 +416,12 @@ impl SignedAssertionStrategy {
     }
 
     /// Current unix-seconds. Isolated so tests document the time source.
-    fn now_secs() -> i64 {
-        chrono::Utc::now().timestamp()
+    /// A clock before 1970 refuses (MIK-8202): nothing is minted on it and no
+    /// expiry is judged by it.
+    fn now_secs() -> Result<i64, PropagationError> {
+        crate::clock::utc_now()
+            .map(|now| now.timestamp())
+            .map_err(|_| PropagationError::Refuse("the gateway clock reads before 1970".into()))
     }
 
     /// Mint a short-lived gateway-signed identity assertion for `identity`,
@@ -437,7 +441,7 @@ impl SignedAssertionStrategy {
         identity: &VerifiedIdentity,
         audience: &str,
     ) -> Result<(String, i64), PropagationError> {
-        let now = Self::now_secs();
+        let now = Self::now_secs()?;
         let exp = now + self.ttl_secs;
         let claims = AssertionClaims {
             sub: identity.subject.clone(),

@@ -288,6 +288,63 @@ fn a_backward_wall_step_does_not_extend() {
     );
 }
 
+/// MIK-8202: a wall clock stepped before 1970 refuses a dashboard session,
+/// even one with no credential cap that is inside its idle limit: the
+/// monotonic clock alone stops while the host sleeps.
+#[test]
+fn a_session_on_a_clock_before_the_epoch_is_refused() {
+    let (b, h, t0) = issued();
+    assert_eq!(
+        b.check_session(&h, at(t0, JUST_IDLE), &LIMITS, Touch::No),
+        SessionCheck::Valid,
+        "control: inside the idle limit on a readable clock"
+    );
+    let stepped = Now {
+        mono: t0.mono + JUST_IDLE,
+        wall: before_epoch(),
+    };
+    assert_eq!(
+        b.check_session(&h, stepped, &LIMITS, Touch::Yes),
+        SessionCheck::ClockUnreadable,
+        "a clock before 1970 kept a dashboard session"
+    );
+    // Refused, never deleted: neither the check nor a sign-in's sweep on
+    // that clock removes it, so it is live again once the clock reads.
+    b.issue_session_at(stepped, &LIMITS);
+    assert_eq!(
+        b.check_session(&h, at(t0, JUST_IDLE), &LIMITS, Touch::No),
+        SessionCheck::Valid,
+        "an unreadable clock deleted a live dashboard session"
+    );
+}
+
+/// A wall clock one second before 1970 (MIK-8202).
+fn before_epoch() -> std::time::SystemTime {
+    std::time::UNIX_EPOCH - Duration::from_secs(1)
+}
+
+/// MIK-8202: a sign-in code presented on a clock before 1970 is refused but
+/// not spent, so the same code still signs in once the clock reads again.
+#[cfg(feature = "webui")]
+#[test]
+fn a_handoff_code_on_a_clock_before_the_epoch_is_refused_and_kept() {
+    let b = DashboardBootstrap::new();
+    let t0 = Now::read();
+    let code = b.mint_handoff(t0, None);
+    let stepped = Now {
+        mono: t0.mono + SEC,
+        wall: before_epoch(),
+    };
+    assert!(
+        b.take_handoff(&code, stepped).is_none(),
+        "a clock before 1970 redeemed a sign-in code"
+    );
+    assert!(
+        b.take_handoff(&code, at(t0, SEC)).is_some(),
+        "an unreadable clock spent a live sign-in code"
+    );
+}
+
 /// Revocation removes the handle; a second revocation reports nothing.
 #[test]
 fn revoke_ends_a_session_once() {
