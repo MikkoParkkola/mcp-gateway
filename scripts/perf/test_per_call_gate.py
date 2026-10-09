@@ -75,6 +75,17 @@ class Errors(unittest.TestCase):
             gate.sh(["sh", "-c", "echo broken >&2; exit 101"])
         self.assertIn("broken", str(raised.exception))
 
+    def test_a_failed_repository_lookup_is_void_through_main(self):
+        from unittest import mock
+
+        def sh(cmd, cwd=None, env=None, timeout=None):
+            raise gate.Void("not a git repository")
+
+        argv = ["per_call_gate.py", "--base", "x", "--head", "y"]
+        with mock.patch.object(gate, "sh", sh), mock.patch.object(gate.sys, "argv", argv), \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(gate.main(), 2)
+
     def test_a_hung_command_is_void(self):
         with self.assertRaises(gate.Void):
             gate.sh(["sleep", "5"], timeout=0.2)

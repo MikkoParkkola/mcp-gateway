@@ -23,6 +23,7 @@ null arm. Else PASS (exit 0). The whole job holds one bench lock.
 
 import argparse
 import fcntl
+import functools
 import hashlib
 import json
 import os
@@ -83,8 +84,14 @@ def build(repo, ref, work, key, commits, overlay_from=None):
     if archive.returncode != 0:
         raise Void(f"git archive {ref} exited {archive.returncode}")
     subprocess.run(["tar", "-x", "-C", tree], input=archive.stdout, check=True)
+    # The overlay is read from git at HEAD's commit, never from a tree on
+    # disk that a reused build left behind.
     for path in HARNESS if overlay_from else []:
-        shutil.copy(os.path.join(overlay_from, path), os.path.join(tree, path))
+        blob = subprocess.run(["git", "show", f"{overlay_from}:{path}"], cwd=repo, capture_output=True)
+        if blob.returncode != 0:
+            raise Void(f"git show {overlay_from[:12]}:{path} exited {blob.returncode}")
+        with open(os.path.join(tree, path), "wb") as f:
+            f.write(blob.stdout)
     # Release: debug timings are dominated by unoptimised code, and the 4 us
     # ceiling would be meaningless there. One target dir for both arms, so the
     # second build reuses the dependencies; the binary is copied out because
@@ -109,8 +116,9 @@ def digest(path):
 
 
 def write_manifest(binary, commits):
-    with open(binary + ".json", "w") as f:
+    with open(binary + ".json.partial", "w") as f:
         json.dump({"commits": commits, "sha256": digest(binary)}, f)
+    os.replace(binary + ".json.partial", binary + ".json")
 
 
 def verified(binary, commits):
@@ -128,6 +136,7 @@ def verified(binary, commits):
     return binary
 
 
+@functools.cache
 def STAGES_FROM_HARNESS():  # noqa: N802 - names the Rust constant it reads
     """The harness's STAGES table: every row a run must print."""
     path = os.path.join(os.path.dirname(__file__), "../../src/gateway/server/tests/per_call_timing.rs")
@@ -197,19 +206,18 @@ def main():
     p.add_argument("--blocks", type=int, default=4)
     p.add_argument("--seed", type=int, default=random.randrange(1 << 30))
     p.add_argument("--work", help="where the binaries live (default: a temp dir)")
-    p.add_argument("--prebuild-only", action="store_true",
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--prebuild-only", action="store_true",
                    help="build both binaries into --work and stop; takes no bench lock")
-    p.add_argument("--measure-only", action="store_true",
+    mode.add_argument("--measure-only", action="store_true",
                    help="measure the binaries in --work; refuse unless their manifests match")
     a = p.parse_args()
     if a.k < 1 or a.blocks < 1:
         p.error("--k and --blocks must be at least 1")
     if (a.prebuild_only or a.measure_only) and not a.work:
         p.error("--prebuild-only and --measure-only need --work")
-    if a.prebuild_only and a.measure_only:
-        p.error("choose one of --prebuild-only and --measure-only")
-    repo = sh(["git", "rev-parse", "--show-toplevel"]).strip()
     try:
+        repo = sh(["git", "rev-parse", "--show-toplevel"]).strip()
         if a.prebuild_only:
             os.makedirs(a.work, exist_ok=True)
             for binary in builds(repo, a, a.work):
@@ -246,11 +254,15 @@ def keys(base_sha, head_sha):
 
 
 def builds(repo, a, work):
-    """(base, head) binaries, built or reused."""
+    """(base, head) binaries, built or reused. One builder at a time per
+    work dir: both arms share its target dir, and a concurrent build could
+    overwrite the binary this one is about to copy out and certify."""
     base_sha, head_sha = shas(repo, a)
     (base_key, base_commits), (head_key, head_commits) = keys(base_sha, head_sha)
-    head_tree, head = build(repo, head_sha, work, head_key, head_commits)
-    _, base = build(repo, base_sha, work, base_key, base_commits, overlay_from=head_tree)
+    with open(os.path.join(work, ".build.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        _, head = build(repo, head_sha, work, head_key, head_commits)
+        _, base = build(repo, base_sha, work, base_key, base_commits, overlay_from=head_sha)
     return base, head
 
 
