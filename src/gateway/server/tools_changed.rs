@@ -417,6 +417,31 @@ mod tests {
         );
     }
 
+    // MIK-8148: a revocation reaches the backend's listeners only, never the
+    // webhook hub, and a replaced instance's late one is ignored.
+    #[tokio::test]
+    async fn a_revocation_is_a_view_change() {
+        let (state, _store) = crate::gateway::router::tests::direct_route_state_with_identity(
+            crate::config::AgentIdentityConfig::default(),
+        )
+        .await;
+        let backend = state.backends.get("demo").expect("fixture backend");
+        let announced = parking_lot::Mutex::new(Announced::default());
+        let revoked = |instance: u64| ToolsNudge::Revoked {
+            name: "demo".into(),
+            instance,
+            prefix: "idp:1:u:".into(),
+        };
+        assert_eq!(
+            decide(&state, &announced, revoked(backend.instance())),
+            Some(("demo".to_string(), Reach::View))
+        );
+        assert_eq!(
+            decide(&state, &announced, revoked(backend.instance() + 1_000)),
+            None
+        );
+    }
+
     // MIK-8148: a verdict committing between the drain's filter read and its
     // slot read. Read in that order, the slots already show the verdict, so
     // the change is announced now; read the other way round, the new filter
