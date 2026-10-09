@@ -53,6 +53,22 @@ fn keys_order_as_key_sequences_and_the_gateway_slot_is_skipped() {
     assert_eq!(key_path_joins(&value), vec!["rs", "pq"]);
 }
 
+/// gpt impl HIGH: a sparse array (every element a distinct key) costs its
+/// leaves, not paths x elements. Counted, not timed: the walk visits each
+/// object entry once, so 20,000 elements cost about 20,000 visits; the
+/// quadratic walk would visit about 4e8.
+#[test]
+fn a_sparse_array_is_walked_in_linear_work() {
+    let rows: Vec<serde_json::Value> = (0..20_000)
+        .map(|i| json!({ format!("p{i:05}"): "x" }))
+        .collect();
+    let value = json!({ "rows": rows });
+    super::VISITS.with(|v| v.set(0));
+    assert!(key_path_joins(&value).is_empty());
+    let visits = super::VISITS.with(std::cell::Cell::get);
+    assert!(visits <= 2 * 20_000, "{visits} visits for 20,000 leaves");
+}
+
 mod digest {
     //! `MIK-8209` K2/K2a: how a digest carries its joins.
     use super::super::super::{Delivered, DeliveryDigest, Joins};
@@ -126,5 +142,30 @@ mod digest {
         let fps = kept.fingerprints(&detector);
         let join = detector.fingerprints(&format!("{p1}{p2}"));
         assert!(join.iter().all(|f| fps.contains(f)), "the join was lost");
+    }
+
+    /// gpt impl CRITICAL: a non-deferred receipt whose capped leaves all
+    /// survive in the answer still drops a join the answer no longer carries.
+    /// The cap kept only the head and tail leaves; the answer dropped the
+    /// rows, so their join is not delivered text and must not excuse.
+    #[test]
+    fn a_join_the_answer_dropped_is_not_kept() {
+        let detector = detector();
+        let (head, tail) = ("A".repeat(3_071), "Z".repeat(3_071));
+        let parts = ["a".repeat(32), "b".repeat(32), "c".repeat(32)];
+        let mut leaves: Vec<&str> = vec![head.as_str()];
+        leaves.extend(parts.iter().map(String::as_str));
+        leaves.push(tail.as_str());
+        let (capped, cut) = DeliveryDigest::of_leaves(&leaves, false);
+        assert!(cut, "premise: the cap dropped the middle");
+        let (digest, _) = capped.with_joins(vec![parts.concat()]);
+        let delivered = Delivered::of_leaves(vec![head.as_str(), tail.as_str()]).expect("bounded");
+        let kept = digest.retaining_for(&detector, &delivered, None);
+        let fps = kept.fingerprints(&detector);
+        let join = detector.fingerprints(&parts.concat());
+        assert!(
+            join.iter().all(|f| !fps.contains(f)),
+            "an undelivered join was kept"
+        );
     }
 }

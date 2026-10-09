@@ -6,7 +6,7 @@
 //! interleaves the elements' other fields between the pieces. No list of
 //! metadata keys: the rule is structural.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 use serde_json::Value;
 
@@ -29,21 +29,30 @@ pub(in super::super) fn key_path_runs(value: &Value) -> Vec<Vec<&str>> {
     }
     let mut runs = Vec::new();
     for items in arrays {
-        let mut paths = BTreeSet::new();
-        for item in items {
-            object_paths(item, &mut Vec::new(), &mut paths);
+        // One pass over the elements: each path's pieces with their element
+        // index, so a sparse array costs its leaves, not paths x elements.
+        let mut by_path: BTreeMap<Vec<&str>, Vec<(usize, &str)>> = BTreeMap::new();
+        for (i, item) in items.iter().enumerate() {
+            object_strings(item, &mut Vec::new(), &mut |path, piece| {
+                by_path.entry(path.to_vec()).or_default().push((i, piece));
+            });
         }
-        for path in &paths {
+        for pieces in by_path.values() {
+            // A run ends where the next element lacks a string at this path.
             let mut run: Vec<&str> = Vec::new();
-            for item in items.iter().map(Some).chain([None]) {
-                if let Some(piece) = item.and_then(|i| string_at(i, path)) {
-                    run.push(piece);
-                    continue;
+            let mut last: Option<usize> = None;
+            for &(i, piece) in pieces {
+                if last.is_some_and(|l| l + 1 != i) {
+                    if run.len() >= 2 {
+                        runs.push(std::mem::take(&mut run));
+                    }
+                    run.clear();
                 }
-                if run.len() >= 2 {
-                    runs.push(std::mem::take(&mut run));
-                }
-                run.clear();
+                run.push(piece);
+                last = Some(i);
+            }
+            if run.len() >= 2 {
+                runs.push(run);
             }
         }
     }
@@ -97,27 +106,37 @@ fn collect_arrays<'v>(value: &'v Value, out: &mut Vec<&'v [Value]>) {
     }
 }
 
-/// The key paths from `value` to its string leaves through objects only.
-fn object_paths<'v>(value: &'v Value, at: &mut Vec<&'v str>, out: &mut BTreeSet<Vec<&'v str>>) {
+/// Object entries the walk has visited on this thread (tests only): the work
+/// a row bounds by the leaf count, so a quadratic walk fails it.
+#[cfg(test)]
+thread_local! {
+    pub(super) static VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Count one object entry visited (tests only; nothing in production).
+fn visit() {
+    #[cfg(test)]
+    VISITS.with(|v| v.set(v.get() + 1));
+}
+
+/// Each string leaf of `value` reached through objects only, with its key
+/// path; a leaf inside a nested array is that array's, not this element's.
+fn object_strings<'v>(
+    value: &'v Value,
+    at: &mut Vec<&'v str>,
+    out: &mut dyn FnMut(&[&'v str], &'v str),
+) {
     let Value::Object(map) = value else { return };
     for (key, child) in map {
+        visit();
         at.push(key);
         match child {
-            Value::String(_) => {
-                out.insert(at.clone());
-            }
-            Value::Object(_) => object_paths(child, at, out),
+            Value::String(piece) => out(at, piece),
+            Value::Object(_) => object_strings(child, at, out),
             _ => {}
         }
         at.pop();
     }
-}
-
-/// The string at `path` under `value`, through objects only.
-fn string_at<'v>(value: &'v Value, path: &[&str]) -> Option<&'v str> {
-    path.iter()
-        .try_fold(value, |v, key| v.as_object()?.get(*key))
-        .and_then(Value::as_str)
 }
 
 #[cfg(test)]

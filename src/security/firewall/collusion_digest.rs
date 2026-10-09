@@ -462,7 +462,12 @@ impl DeliveryDigest {
             return self.retaining_deferred(detector, delivered, step);
         }
         let verbatim = |s: &Segment| delivered.holds(s);
-        if self.retained.is_empty() && self.segments.iter().all(verbatim) {
+        // Unchanged only without joins: a join is kept only where the answer
+        // still delivers it, even when every capped leaf survives (`MIK-8209`).
+        if self.retained.is_empty()
+            && matches!(self.joins, Joins::None)
+            && self.segments.iter().all(verbatim)
+        {
             return self;
         }
         let original = (
