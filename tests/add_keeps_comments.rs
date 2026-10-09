@@ -217,7 +217,11 @@ fn several_backends_at_once_keep_comments() {
     let mut config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
     config.backends.insert("one".into(), echo_backend());
     config.backends.insert("two".into(), echo_backend());
-    let kept = mcp_gateway::config_persistence::write_config_preserving(&path, &config);
+    let kept = mcp_gateway::config_persistence::edit_config(&path, |c| {
+        *c = config.clone();
+        Ok(())
+    })
+    .map(drop);
     assert_eq!(kept, Ok(()));
     let written = std::fs::read_to_string(&path).expect("read");
     assert!(written.contains("# kept by hand"), "{written}");
@@ -231,7 +235,7 @@ fn several_backends_at_once_keep_comments() {
 /// a removal plus an addition: it is refused, never spliced over `c`.
 #[test]
 fn a_stale_multi_change_is_refused_not_spliced() {
-    use mcp_gateway::config_persistence::write_config_preserving;
+    use mcp_gateway::config_persistence::edit_config;
     let home = tempfile::tempdir().expect("home");
     let path = home.path().join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, NOTED).expect("write");
@@ -239,7 +243,12 @@ fn a_stale_multi_change_is_refused_not_spliced() {
     stale.backends.insert("b".into(), echo_backend());
     let current = format!("{NOTED}  c:\n    command: c\n");
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, &current).expect("write");
-    let refusal = write_config_preserving(&path, &stale).expect_err("refused");
+    let refusal = edit_config(&path, |c| {
+        *c = stale.clone();
+        Ok(())
+    })
+    .map(drop)
+    .expect_err("refused");
     assert!(
         refusal.starts_with("Not saved") && refusal.contains("--force"),
         "{refusal}"

@@ -81,11 +81,17 @@ mod eol;
 #[path = "config_persistence_lock.rs"]
 pub(crate) mod lock;
 
-// Only the web UI names a write's dropped comments from the library; the
-// CLI keeps its own copy until MIK-8042's API change (MIK-8051).
-#[cfg(feature = "webui")]
+// Names the comments a write drops, for the web UI and the CLI (MIK-8051).
 #[path = "config_persistence_comments.rs"]
 pub(crate) mod comments;
+
+/// Take the config lock for a CLI write, waiting up to [`CLI_LOCK_WAIT`].
+fn cli_lock(path: &Path) -> Result<ExclusiveFileLock, String> {
+    lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
+        say_waiting(path, lock);
+    })
+    .map_err(|e| not_locked(path, e))
+}
 
 /// How long a synchronous writer (the CLI) waits for another writer's
 /// config lock: long enough to outlast a gateway's write and reload.
@@ -97,10 +103,7 @@ pub(crate) const CLI_LOCK_WAIT: Duration = Duration::from_secs(30);
 /// no longer loads was changed meanwhile: it is refused, not replaced by the
 /// command's older copy. A missing file is still created.
 fn lock_for_cli(path: &Path) -> Result<ExclusiveFileLock, String> {
-    let held = lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
-        say_waiting(path, lock);
-    })
-    .map_err(|e| not_locked(path, e))?;
+    let held = cli_lock(path)?;
     load_existing_or_default(path)
         .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
     Ok(held)
@@ -176,7 +179,7 @@ pub(crate) fn write_config_with(
     mode: CommentLoss,
     _held: &ExclusiveFileLock,
 ) -> Result<(), Unwritten> {
-    write_spliced(path, config, mode, Splice::One)
+    write_spliced(path, config, mode, Splice::One).map(drop)
 }
 
 /// The comment lines (as `line N`) that [`write_config_with`] writing
@@ -195,29 +198,39 @@ pub(crate) fn comments_a_write_drops(path: &Path, config: &Config) -> Vec<String
         .unwrap_or_default()
 }
 
-/// Write `config` to `path` for a CLI command, keeping the file's comments.
+/// Load `path`, apply `edit`, and write the result for a CLI command,
+/// keeping the file's comments (MIK-8042).
 ///
-/// The file's text is edited in place when `config` differs from it in
-/// `backends` alone: one backend added, removed or edited, or several added or
-/// edited (setup and discovery import). A write that would drop comments is
-/// refused, and the refusal names the comment lines; [`write_config`] (the
-/// CLI's `--force`) rewrites the file in full when it cannot splice. A `config`
-/// that is what the file already loads as writes nothing.
+/// The load, the edit and the write run under one hold of the config lock
+/// ([`lock`]), so a change another writer made before it is never
+/// overwritten: `edit` sees the file as it is. The file's text is edited in
+/// place when the result differs from it in `backends` alone (several
+/// backends added or edited, or one removed). A write that would drop
+/// comments is refused, and the refusal names the comment lines; a result
+/// that is what the file already loads as writes nothing. A missing file is
+/// created.
+///
+/// Returns the comment lines (as `line N`, never their text) that went with
+/// a removed entry; empty when none did.
 ///
 /// # Errors
 ///
-/// The refusal, which starts with `Not saved:`; an existing file that no
-/// longer loads; or a validation, serialisation or I/O failure. Each is a
-/// message ready to print.
-pub fn write_config_preserving(path: &Path, config: &Config) -> Result<(), String> {
-    let _held = lock_for_cli(path)?;
-    write_spliced(path, config, CommentLoss::Refuse, Splice::NoRemoval).map_err(|e| match e {
-        Unwritten::CommentLoss(message) => message,
-        Unwritten::Failed(message) => format!("Failed to write {}: {message}", path.display()),
+/// `edit`'s own error; the refusal, which starts with `Not saved:`; a lock
+/// that cannot be taken; an existing file that does not load; or a
+/// validation, serialisation or I/O failure. Each is a message ready to print.
+pub fn edit_config<F>(path: &Path, edit: F) -> Result<Vec<String>, String>
+where
+    F: FnOnce(&mut Config) -> Result<(), String>,
+{
+    Ok(match edit_config_with(path, CommentLoss::Refuse, edit)? {
+        Edited::Spliced {
+            dropped_comment_lines,
+        } => dropped_comment_lines,
+        Edited::Unchanged | Edited::Rewritten => Vec::new(),
     })
 }
 
-/// What [`edit_config_with`] did to the file (MIK-8042).
+/// What [`edit_config_with`] did to the file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Edited {
     /// The edit left the config as the file already loads; nothing written.
@@ -229,24 +242,19 @@ pub(crate) enum Edited {
     Rewritten,
 }
 
-/// Load `path`, apply `edit`, and write the result (MIK-8042).
-///
-/// RED SEAM: today's behaviour, kept so the MIK-8042 rows compile and fail
-/// at their own assertions: the file is read before the lock is taken.
-#[allow(dead_code, clippy::needless_pass_by_value)] // red seam
+/// [`edit_config`] with an explicit answer to a write that would drop the
+/// file's comments.
 pub(crate) fn edit_config_with<F>(path: &Path, mode: CommentLoss, edit: F) -> Result<Edited, String>
 where
     F: FnOnce(&mut Config) -> Result<(), String>,
 {
+    let _held = cli_lock(path)?;
     let mut config = load_existing_or_default(path)
         .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
     edit(&mut config)?;
-    let _held = lock_for_cli(path)?;
     write_spliced(path, &config, mode, Splice::NoRemoval).map_err(|e| match e {
-        Unwritten::CommentLoss(message) | Unwritten::Failed(message) => message,
-    })?;
-    Ok(Edited::Spliced {
-        dropped_comment_lines: Vec::new(),
+        Unwritten::CommentLoss(message) => message,
+        Unwritten::Failed(message) => format!("Failed to write {}: {message}", path.display()),
     })
 }
 
@@ -267,7 +275,7 @@ fn write_spliced(
     config: &Config,
     mode: CommentLoss,
     scope: Splice,
-) -> Result<(), Unwritten> {
+) -> Result<Edited, Unwritten> {
     config
         .validate_with_env(&config.env_overlay())
         .map_err(|e| format!("Failed to validate config: {e}"))?;
@@ -275,10 +283,13 @@ fn write_spliced(
     if let Some((before, text)) = &current {
         let value = |c: &Config| serde_json::to_value(c).ok();
         if mode == CommentLoss::Refuse && value(before) == value(config) {
-            return Ok(());
+            return Ok(Edited::Unchanged);
         }
         if let Some(edited) = splice::with_backends_edited(text, before, config, scope) {
-            return Ok(write_yaml(path, &edited)?);
+            write_yaml(path, &edited)?;
+            return Ok(Edited::Spliced {
+                dropped_comment_lines: comments::dropped_comment_lines(text, &edited),
+            });
         }
     }
     let existing = current
@@ -290,7 +301,8 @@ fn write_spliced(
         return Err(Unwritten::CommentLoss(splice::comment_loss(path, text)));
     }
     let yaml = url_spelling::render(config, existing.as_deref())?;
-    Ok(write_yaml(path, &yaml)?)
+    write_yaml(path, &yaml)?;
+    Ok(Edited::Rewritten)
 }
 
 /// How many times a rename is retried before the write is reported failed.

@@ -112,8 +112,11 @@ fn a_cli_write_saves_a_new_backend_with_url() {
     );
     super::super::config_write::write(
         &path,
-        &config,
         super::super::config_write::CommentLoss::Refuse,
+        |c| {
+            *c = config;
+            Ok(())
+        },
     )
     .expect("write succeeds");
     let text = std::fs::read_to_string(&path).expect("read back");
@@ -159,8 +162,11 @@ fn a_cli_write_keeps_url_on_a_backend_that_already_had_it() {
     );
     super::super::config_write::write(
         &path,
-        &config,
         super::super::config_write::CommentLoss::Refuse,
+        |c| {
+            *c = config;
+            Ok(())
+        },
     )
     .expect("write succeeds");
     let text = std::fs::read_to_string(&path).expect("read back");

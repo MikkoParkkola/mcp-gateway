@@ -90,16 +90,12 @@ pub async fn run_setup_command(
     }
 
     // ── 4. Merge into config ───────────────────────────────────────────────
-    let mut config = match load_existing_or_default(output) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("Error: Failed to load {}: {e}", output.display());
-            return ExitCode::FAILURE;
-        }
-    };
-    let added = merge_servers_into_config(&mut config, &selected);
-
-    if let Err(e) = super::config_write::write(output, &config, mode) {
+    let mut added = 0;
+    let written = super::config_write::write(output, mode, |config| {
+        added = merge_servers_into_config(config, &selected);
+        Ok(())
+    });
+    if let Err(e) = written {
         eprintln!("Error: {e}");
         return ExitCode::FAILURE;
     }

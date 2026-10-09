@@ -342,7 +342,14 @@ fn a_cli_write_refuses_a_config_that_no_longer_loads() {
     crate::gateway::test_helpers::write_owner_only(&path, BROKEN).expect("write");
     let config = Config::default();
     for (name, result) in [
-        ("preserving", write_config_preserving(&path, &config)),
+        (
+            "preserving",
+            edit_config(&path, |c| {
+                *c = config.clone();
+                Ok(())
+            })
+            .map(drop),
+        ),
         ("--force", write_config(&path, &config)),
     ] {
         let error = result.expect_err(name);
@@ -354,7 +361,12 @@ fn a_cli_write_refuses_a_config_that_no_longer_loads() {
         );
     }
     let missing = dir.path().join("new.yaml");
-    write_config_preserving(&missing, &config).expect("a missing file is created");
+    edit_config(&missing, |c| {
+        *c = config.clone();
+        Ok(())
+    })
+    .map(drop)
+    .expect("a missing file is created");
     assert!(missing.exists());
 }
 
@@ -372,7 +384,12 @@ fn a_write_through_a_symlinked_config_keeps_the_link() {
     let backend = serde_yaml::from_str("command: echo\n").expect("backend");
     config.backends.insert("b".into(), backend);
 
-    write_config_preserving(&link, &config).expect("write");
+    edit_config(&link, |c| {
+        *c = config.clone();
+        Ok(())
+    })
+    .map(drop)
+    .expect("write");
 
     let kind = std::fs::symlink_metadata(&link).expect("stat").file_type();
     assert!(kind.is_symlink(), "the link is kept");
