@@ -30,6 +30,11 @@ OFF_MACOS = re.compile(
     r'|target_os = "linux").*\)\)\]'
     r'|#\[cfg_attr\(target_os = "macos", ignore'
 )
+# A `cfg` gate that names macOS outside a `not(...)`, as in
+# `all(test, any(target_os = "linux", target_os = "macos"))`, keeps the item on
+# macOS even though it also names Linux (MIK-8181). A `cfg_attr` naming macOS
+# is the opposite: it ignores the item there.
+ON_MACOS = re.compile(r'(?<!not\()target_os = "macos"')
 TEST_ATTR = re.compile(r"#\[(tokio::)?test\b")
 ITEM = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(fn|mod)\s+(\w+)")
 TEST_CFG = re.compile(r"#\[cfg\((?:all\()?test\b")
@@ -45,7 +50,9 @@ def excluded(root: Path) -> set[tuple[str, str]]:
             continue
         lines = [line.strip() for line in file.read_text(errors="replace").splitlines()]
         for n, line in enumerate(lines):
-            if not OFF_MACOS.match(line):
+            if not OFF_MACOS.match(line) or (
+                not line.startswith("#[cfg_attr") and ON_MACOS.search(line)
+            ):
                 continue
             if line.startswith("#!["):
                 found.add((rel, "*"))
