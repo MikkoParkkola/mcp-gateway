@@ -1,0 +1,13 @@
+diff --git a/src/oauth/client/browser.rs b/src/oauth/client/browser.rs
+index fef347b3f..2fe764efe 100644
+--- a/src/oauth/client/browser.rs
++++ b/src/oauth/client/browser.rs
+@@ -57,7 +57,7 @@ pub(super) fn launch_command(url: &url::Url) -> Command {
+     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+     let mut command = {
+         let mut command = Command::new("xdg-open");
+-        command.arg(url.as_str());
++        command.arg(url.as_str().replace("%20", " "));
+         command
+     };
+     command.stdin(Stdio::null()).stdout(Stdio::null());

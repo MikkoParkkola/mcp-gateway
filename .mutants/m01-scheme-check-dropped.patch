@@ -1,0 +1,13 @@
+diff --git a/src/oauth/client/browser.rs b/src/oauth/client/browser.rs
+index fef347b3f..67518bde0 100644
+--- a/src/oauth/client/browser.rs
++++ b/src/oauth/client/browser.rs
+@@ -22,7 +22,7 @@ use crate::{Error, Result};
+ pub(super) fn launchable(url: &str) -> Result<url::Url> {
+     let parsed =
+         url::Url::parse(url).map_err(|e| Error::OAuth(format!("Invalid OAuth URL: {e}")))?;
+-    if !crate::gateway::is_tls_or_loopback(&parsed) {
++    if false && !crate::gateway::is_tls_or_loopback(&parsed) {
+         return Err(Error::OAuth(
+             "refusing to open an authorization URL that is not https (or http on a loopback host)"
+                 .to_string(),

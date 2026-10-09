@@ -1,0 +1,4 @@
+head_sha	89b0001ed87c6511a5947fb64e2f52051fb1f021
+m01-scheme-check-dropped	linux	m01-scheme-check-dropped.patch	--lib -- oauth::client::browser
+m02-windows-back-to-cmd	windows	m02-windows-back-to-cmd.patch	--lib -- oauth::client::browser
+m03-argument-not-the-parsed-url	linux	m03-argument-not-the-parsed-url.patch	--lib -- oauth::client::browser
