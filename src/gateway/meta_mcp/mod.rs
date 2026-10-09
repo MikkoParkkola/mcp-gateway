@@ -794,6 +794,8 @@ mod grant_decision_slot_tests;
 #[cfg(test)]
 mod grant_replay_dedupe_tests;
 #[cfg(test)]
+mod grant_slot_wrap_tests;
+#[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;
 #[cfg(test)]

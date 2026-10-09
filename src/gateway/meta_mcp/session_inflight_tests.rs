@@ -105,7 +105,7 @@ static ALLOW_ALL: crate::gateway::authz::AllowAll = crate::gateway::authz::Allow
 
 /// The legacy caller every row runs as: no caller key, as on stdio or HTTP
 /// with auth off.
-fn context(retry: &crate::protocol::mrtr::RetryFields) -> MetaMcpCallerContext<'_> {
+pub(super) fn context(retry: &crate::protocol::mrtr::RetryFields) -> MetaMcpCallerContext<'_> {
     let declared = classify_request(None, None).declared_capabilities();
     MetaMcpCallerContext {
         task: None,

@@ -471,6 +471,10 @@ pub(crate) async fn slot_rpc<'a, X: Send + 'a>(
     id: RequestId,
     future: impl Future<Output = (JsonRpcResponse, X)> + Send + 'a,
 ) -> (JsonRpcResponse, X) {
+    #[cfg(test)]
+    if logger.is_none() || GRANT_SLOT.try_with(|_| ()).is_ok() {
+        BOOKKEEPING.with(|b| b.borrow_mut().idle_wraps += 1);
+    }
     // Erased, so an opener's future type stays shallow (E0275 at the stdio spawn).
     let future: Pin<Box<dyn Future<Output = (JsonRpcResponse, X)> + Send + 'a>> = Box::pin(future);
     match with_grant_slot(logger, future).await {
@@ -623,6 +627,9 @@ pub(super) struct GrantBookkeeping {
     pub(super) slots_opened: usize,
     pub(super) notes_taken: usize,
     pub(super) flushes_spawned: usize,
+    /// `slot_rpc` calls that opened no slot (no log, or one already open):
+    /// a box and an id clone spent on nothing (MIK-8014 design item 3).
+    pub(super) idle_wraps: usize,
 }
 
 #[cfg(test)]
