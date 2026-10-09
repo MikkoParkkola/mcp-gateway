@@ -1,0 +1,3 @@
+head_sha	626c19b55fa723313a09d4c340e27d4f99ca54d1
+p1b-attach-shared-cache	linux	p1-attach-shared-cache.patch	--lib -- a_per_user_transport_is_shaped_by_its_own_slots_verdict
+p6b-reprobe-into-shared	linux	p6-reprobe-into-shared.patch	--lib -- a_per_user_reprobe_does_not_resolve_a_cold_shared_slot
