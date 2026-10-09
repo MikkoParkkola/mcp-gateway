@@ -434,23 +434,26 @@ mod tests {
 
     /// MIK-7940 SUBS.5: a store racing `invalidate_then` waits for the whole
     /// clear, derived state included, so the set it derives survives. Were
-    /// the callback run after the guard, the store would land in between and
-    /// the clear would then wipe the set the new value derived.
+    /// the callback run after the guard, a store could land in between and
+    /// the clear would then wipe the set the new value derived. The racing
+    /// thread probes the guard before it stores, so no timing is involved.
     #[test]
     fn a_store_racing_a_clear_keeps_the_state_it_derived() {
         let cache = Arc::new(CachedMetadata::<Vec<u8>>::new());
         let derived = Arc::new(parking_lot::Mutex::new(vec![1u8]));
-        let (stored, heard) = std::sync::mpsc::channel();
+        let (probed, heard) = std::sync::mpsc::channel();
         let mut store = None;
         cache.invalidate_then(|| {
             let (cache, set) = (Arc::clone(&cache), Arc::clone(&derived));
             store = Some(std::thread::spawn(move || {
+                probed
+                    .send(cache.state.try_write().is_none())
+                    .expect("send");
                 cache.replace(vec![2], || *set.lock() = vec![2]);
-                stored.send(()).expect("send");
             }));
             assert!(
-                heard.recv_timeout(Duration::from_millis(200)).is_err(),
-                "the store waits for the clear's guard"
+                heard.recv().expect("probe"),
+                "a store must wait for the clear's guard"
             );
             derived.lock().clear();
         });
