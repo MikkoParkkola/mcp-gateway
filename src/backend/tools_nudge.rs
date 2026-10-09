@@ -328,6 +328,56 @@ mod tests {
         );
     }
 
+    /// agy's concurrent-attach case, interleaved on purpose: a creation checks
+    /// for the feed (not set yet) while holding the new slot's shard, and the
+    /// feed attaches before it inserts. The walk must wait for that shard and
+    /// then observe the slot.
+    #[test]
+    fn a_slot_opened_while_the_feed_attaches_is_still_observed() {
+        let backend = std::sync::Arc::new(backend("a"));
+        let key = per_user("idp:u1");
+        let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
+        let (checked_tx, checked_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+
+        let creator = {
+            let (backend, key) = (std::sync::Arc::clone(&backend), key.clone());
+            std::thread::spawn(move || {
+                let dashmap::mapref::entry::Entry::Vacant(vacant) = backend.pool.entry(key.clone())
+                else {
+                    panic!("premise: the slot is new");
+                };
+                let entry =
+                    crate::backend::pool::PooledEntry::new(&backend.name, &backend.failsafe_config);
+                backend.observe_slot(&key, &entry);
+                checked_tx.send(()).expect("main waits");
+                release_rx.recv().expect("main releases");
+                vacant.insert(std::sync::Arc::new(entry));
+            })
+        };
+        checked_rx.recv().expect("the creation checked the feed");
+        let attacher = {
+            let backend = std::sync::Arc::clone(&backend);
+            std::thread::spawn(move || backend.attach_nudges(&feed))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(
+            !attacher.is_finished(),
+            "premise: the walk is held at the creating shard"
+        );
+        release_tx.send(()).expect("the creator waits");
+        creator.join().expect("creator");
+        attacher.join().expect("attacher");
+
+        let slot = backend.pooled_entry(&key).expect("the slot exists");
+        slot.tools_cache.replace(Vec::new(), || ());
+        assert_eq!(
+            std::iter::from_fn(|| nudges.try_recv().ok()).count(),
+            1,
+            "the slot opened during attach is observed"
+        );
+    }
+
     #[tokio::test]
     async fn instances_never_share_an_identity() {
         assert_ne!(backend("a").instance(), backend("a").instance());

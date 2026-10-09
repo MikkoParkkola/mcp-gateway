@@ -387,6 +387,45 @@ mod tests {
         );
     }
 
+    // MIK-8148: the drain clears a slot's queued flag when it reads the slot,
+    // so a later store queues a fresh nudge. Real feed, real drain decision.
+    #[tokio::test]
+    async fn a_store_after_the_drain_read_reaches_the_drain_again() {
+        let (state, _store) = crate::gateway::router::tests::direct_route_state_with_identity(
+            crate::config::AgentIdentityConfig::default(),
+        )
+        .await;
+        let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
+        state.backends.set_change_feed(feed);
+        let backend = state.backends.get("demo").expect("fixture backend");
+        let announced = parking_lot::Mutex::new(Announced::default());
+        let user = "idp:1:u:1:a";
+        let tool = |description: &str| -> Tool {
+            serde_json::from_value(serde_json::json!({
+                "name": "x", "description": description, "inputSchema": { "type": "object" }
+            }))
+            .expect("tool")
+        };
+        while let Ok(earlier) = nudges.try_recv() {
+            let _ = decide(&state, &announced, earlier);
+        }
+
+        backend.store_per_user_tools_for_test(user, vec![tool("one")]);
+        let first = nudges.try_recv().expect("the first store nudges");
+        assert_eq!(
+            decide(&state, &announced, first),
+            Some(("demo".to_string(), Reach::View))
+        );
+        backend.store_per_user_tools_for_test(user, vec![tool("two")]);
+        let second = nudges
+            .try_recv()
+            .expect("a store after the drain read queues a fresh nudge");
+        assert_eq!(
+            decide(&state, &announced, second),
+            Some(("demo".to_string(), Reach::View))
+        );
+    }
+
     // MIK-8148: the view-change announcement reaches a `subscriptions/listen`
     // listener exactly once.
     #[tokio::test]
