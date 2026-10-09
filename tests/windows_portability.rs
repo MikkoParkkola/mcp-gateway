@@ -49,6 +49,8 @@ fn hostile_paths(home: &Path) -> Vec<PathBuf> {
 #[test]
 fn every_windows_sensitive_helper_round_trips_a_hostile_path() {
     let home = hostile_home();
+    let shown = home.path().display().to_string();
+    assert!(shown.contains(' ') && shown.contains('\''), "{shown}");
     for path in hostile_paths(home.path()) {
         let expected = path.display().to_string().replace('\\', "/");
         let command = format!("sh {}", sh_path(&path));
@@ -75,20 +77,33 @@ fn every_windows_sensitive_helper_round_trips_a_hostile_path() {
     }
 }
 
+/// `line` without its comment: a `//` outside a string literal ends the code.
+fn code_of(line: &str) -> &str {
+    let mut quotes = 0usize;
+    for (at, c) in line.char_indices() {
+        if c == '"' {
+            quotes += 1;
+        } else if quotes.is_multiple_of(2) && line[at..].starts_with("//") {
+            return line[..at].trim_start();
+        }
+    }
+    line.trim_start()
+}
+
 /// Code lines in `text` that define one of [`HELPERS`]: comments and string
 /// literals do not count.
 fn helper_copies(file: &str, text: &str) -> Vec<String> {
     let mut found = Vec::new();
     for (n, line) in text.lines().enumerate() {
-        let code = line.trim_start();
-        if code.starts_with("//") {
-            continue;
-        }
+        let code = code_of(line);
         for name in HELPERS {
-            let def = format!("fn {name}(");
-            if let Some(at) = code.find(&def)
-                && code[..at].matches('"').count() % 2 == 0
-            {
+            let def = format!("fn {name}");
+            let defines = code.match_indices(&def).any(|(at, _)| {
+                let next = code[at + def.len()..].chars().next();
+                code[..at].matches('"').count().is_multiple_of(2)
+                    && !next.is_some_and(|c| c.is_alphanumeric() || c == '_')
+            });
+            if defines {
                 found.push(format!("{file}:{} defines {name}", n + 1));
             }
         }
@@ -96,15 +111,13 @@ fn helper_copies(file: &str, text: &str) -> Vec<String> {
     found
 }
 
-/// `canonicalize(` calls in `text` by enclosing fn (the latest `fn` seen).
-fn canonicalize_sites(file: &str, text: &str) -> BTreeMap<(String, String), usize> {
+/// `canonicalize(` calls in `text` by enclosing fn (the latest `fn` seen),
+/// each with the line it is on.
+fn canonicalize_sites(file: &str, text: &str) -> BTreeMap<(String, String), Vec<usize>> {
     let mut sites = BTreeMap::new();
     let mut current = String::new();
-    for line in text.lines() {
-        let code = line.trim_start();
-        if code.starts_with("//") {
-            continue;
-        }
+    for (n, line) in text.lines().enumerate() {
+        let code = code_of(line);
         if let Some(at) = code.find("fn ") {
             let name: String = code[at + 3..]
                 .chars()
@@ -114,14 +127,22 @@ fn canonicalize_sites(file: &str, text: &str) -> BTreeMap<(String, String), usiz
                 current = name;
             }
         }
-        let calls = code.matches("canonicalize(").count();
-        if calls > 0 {
-            *sites
+        for _ in code.matches("canonicalize(") {
+            sites
                 .entry((file.to_string(), current.clone()))
-                .or_insert(0) += calls;
+                .or_insert_with(Vec::new)
+                .push(n + 1);
         }
     }
     sites
+}
+
+/// How many calls each (file, fn) holds.
+fn counts(sites: &BTreeMap<(String, String), Vec<usize>>) -> BTreeMap<(String, String), usize> {
+    sites
+        .iter()
+        .map(|(at, lines)| (at.clone(), lines.len()))
+        .collect()
 }
 
 fn key(file: &str, function: &str) -> (String, String) {
@@ -171,24 +192,27 @@ fn no_second_copy_of_a_windows_sensitive_helper_exists() {
     );
 
     let mut sites = BTreeMap::new();
+    let dir = root.join("src/capability/executor");
     let mut executor = Vec::new();
-    rust_files(&root.join("src/capability/executor"), &mut executor);
+    rust_files(&dir, &mut executor);
     for path in executor {
+        // Relative to the executor, so two files of one name stay apart.
         let file = path
-            .file_name()
-            .expect("a file")
-            .to_string_lossy()
-            .into_owned();
-        if file.contains("tests") {
+            .strip_prefix(&dir)
+            .expect("under the executor")
+            .display()
+            .to_string()
+            .replace('\\', "/");
+        if file.ends_with("_tests.rs") {
             continue;
         }
         let text = std::fs::read_to_string(&path).expect("readable source");
         sites.extend(canonicalize_sites(&file, &text));
     }
     assert_eq!(
-        sites,
+        counts(&sites),
         allowed_sites(),
-        "a path a child is handed goes through cli::canonical"
+        "a path a child is handed goes through cli::canonical; calls by line: {sites:?}"
     );
 }
 
@@ -205,17 +229,23 @@ fn the_portability_scanners_reject_a_copy_and_pass_a_mention() {
     );
     assert!(helper_copies("x.rs", "// fn sh_path( is shared now").is_empty());
     assert!(helper_copies("x.rs", r#"let s = "fn sh_path(";"#).is_empty());
+    assert_eq!(
+        helper_copies("x.rs", "fn sh_path<P: AsRef<Path>>(p: P) {").len(),
+        1
+    );
+    assert!(helper_copies("x.rs", "fn sh_path_list() {").is_empty());
+    assert!(helper_copies("x.rs", "let a = 1; // fn sh_path( was here").is_empty());
 
     let confine_three =
         "fn confine() {\n canonicalize(a);\n canonicalize(b);\n canonicalize(c);\n}";
     let sites = canonicalize_sites("cli.rs", confine_three);
-    assert_eq!(sites.get(&key("cli.rs", "confine")), Some(&3));
+    assert_eq!(sites.get(&key("cli.rs", "confine")), Some(&vec![2, 3, 4]));
     assert_eq!(allowed_sites().get(&key("cli.rs", "confine")), Some(&2));
     let stray = canonicalize_sites(
         "mcp.rs",
         "fn bound_roots() {\n std::fs::canonicalize(p);\n}",
     );
-    assert_eq!(stray.get(&key("mcp.rs", "bound_roots")), Some(&1));
+    assert_eq!(stray.get(&key("mcp.rs", "bound_roots")), Some(&vec![2]));
     assert!(!allowed_sites().contains_key(&key("mcp.rs", "bound_roots")));
     assert!(canonicalize_sites("cli.rs", "// canonicalize(x)").is_empty());
 }
