@@ -33,6 +33,7 @@ async fn sse_decode_captures_the_notification_seen_before_the_response() {
 
     // WHEN: the transport decodes it inside the caller's sink scope
     let (response, notifications) = crate::transport::notification_sink::collect(
+        None,
         sse_decoder::decode_sse_exchange(sse_stream(body)),
     )
     .await;
@@ -73,7 +74,7 @@ async fn sse_decode_preserves_the_order_two_notifications_arrived_in() {
     );
 
     // WHEN: the transport decodes it
-    let (_, notifications) = crate::transport::notification_sink::collect(async {
+    let (_, notifications) = crate::transport::notification_sink::collect(None, async {
         // ADR-014 §4: a relayed `notifications/message` reaches the caller
         // only if the caller declared a level, so the request this row is
         // about declares one. What the row asserts is unchanged.
@@ -101,6 +102,7 @@ async fn sse_decode_preserves_the_order_two_notifications_arrived_in() {
 async fn sse_decode_delivers_no_notifications_when_the_server_sent_none() {
     let body = "data: {\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{\"ok\":true}}\n";
     let (response, notifications) = crate::transport::notification_sink::collect(
+        None,
         sse_decoder::decode_sse_exchange(sse_stream(body)),
     )
     .await;

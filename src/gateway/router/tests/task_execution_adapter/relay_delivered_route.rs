@@ -356,13 +356,9 @@ fn text_ok() -> Value {
 /// refused instead of delivered.
 #[tokio::test]
 async fn the_suites_firewall_delivers_a_minted_continuation() {
-    use crate::gateway::meta_mcp::response_security::{
-        DeliveryInspection, ResponseDeliveryContext,
-    };
+    use crate::gateway::meta_mcp::response_security::ResponseDeliveryContext;
     use crate::security::firewall::response_tests::minted_value::mint_credential_shaped;
-    use crate::security::response_policy::{
-        ResponseCorrelation, ResponseMutationPolicy, ResponsePolicyTarget,
-    };
+    use crate::security::response_policy::{ResponseCorrelation, ResponsePolicyTarget};
 
     let mock = MockBackend::answering(Answer::Sequence(vec![text_ok()]));
     let (state, _store) = surfaced_state(&mock).await;
@@ -386,17 +382,13 @@ async fn the_suites_firewall_delivers_a_minted_continuation() {
             external_tool: TOOL,
             subject: None,
         },
-        mutation: ResponseMutationPolicy::PreserveInputRequired,
         signing: None,
         chain_source: crate::protocol::ChainSource::default(),
         chain_nonce: None,
     };
     let response =
         crate::protocol::JsonRpcResponse::success(crate::protocol::RequestId::Number(1), answer);
-    let delivered =
-        state
-            .meta_mcp
-            .finalize_content(response, &context, DeliveryInspection::Required);
+    let delivered = state.meta_mcp.finalize_content(response, &context);
     assert!(
         delivered.error.is_none(),
         "the minted handle was refused: {delivered:?}"
