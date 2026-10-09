@@ -13,8 +13,8 @@ use tokio::time::timeout;
 
 /// What a race test stretches the produce-seam wait to: past [`HANG_GUARD`],
 /// so an update that waited it out fails the test instead of passing slowly.
-const STRETCHED_WAIT: Duration = Duration::from_secs(60);
-const HANG_GUARD: Duration = Duration::from_secs(30);
+pub(super) const STRETCHED_WAIT: Duration = Duration::from_secs(60);
+pub(super) const HANG_GUARD: Duration = Duration::from_secs(30);
 
 /// Holds the producing worker right after it committed `input_required`, so
 /// the worker still owns the task's handoff. Holds once.
