@@ -310,10 +310,10 @@ async fn close_returns_while_a_write_is_stuck_on_a_peer_that_stopped_reading() {
 }
 
 /// Kills the process whose pid the file holds, if any, when dropped.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 struct KillEscapedOnDrop(std::path::PathBuf);
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl Drop for KillEscapedOnDrop {
     fn drop(&mut self) {
         let pid = std::fs::read_to_string(&self.0).unwrap_or_default();
@@ -474,7 +474,7 @@ async fn dropping_the_transport_ends_a_write_stuck_on_an_escaped_reader() {
 /// ends a write stuck on an escaped reader and frees stdin. The request fails
 /// at the stdout-closed latch either way; the write itself holds stdin until
 /// the per-start token is cancelled, which `kill_tree_now` does.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[tokio::test]
 async fn a_retire_frees_a_write_stuck_on_an_escaped_reader() {
     use crate::transport::Transport as _;
@@ -487,7 +487,7 @@ async fn a_retire_frees_a_write_stuck_on_an_escaped_reader() {
         "while IFS= read -r line; do\n\
          case \"$line\" in\n\
          *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
-         *'notifications/initialized'*) exec 3<&0; setsid sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
+         *'notifications/initialized'*) exec 3<&0; perl -MPOSIX -e 'setsid; exec @ARGV' sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
          esac\ndone\n",
         pid = pidfile.display()
     );
@@ -595,7 +595,7 @@ async fn a_write_queued_across_a_token_renewal_takes_the_new_token() {
 /// each launch; while the runtime idles there is still only the first. Driven
 /// again, the restart finds the transport retired and spawns nothing (a start
 /// the retire overtakes after that check is refused at install instead).
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn a_restart_parked_on_the_writer_lock_spawns_nothing_a_retire_misses() {
     use crate::transport::Transport as _;
@@ -610,7 +610,7 @@ fn a_restart_parked_on_the_writer_lock_spawns_nothing_a_retire_misses() {
          while IFS= read -r line; do\n\
          case \"$line\" in\n\
          *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
-         *'notifications/initialized'*) exec 3<&0; setsid sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
+         *'notifications/initialized'*) exec 3<&0; perl -MPOSIX -e 'setsid; exec @ARGV' sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
          esac\ndone\n",
         pid = pidfile.display(),
         launches = launch_log.display()
