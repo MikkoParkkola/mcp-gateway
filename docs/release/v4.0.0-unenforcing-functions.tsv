@@ -91,7 +91,6 @@ src/gateway/router/handlers.rs	sse_deprecated_handler	1	Answers the retired SSE 
 src/gateway/router/handlers.rs	backends_overall_healthy	1	Computes overall gateway health from backend breaker and health-tracker status.
 src/gateway/router/mod.rs	probe_ok	1	Answers the liveness probe with a constant ok.
 src/gateway/router/backend_handlers.rs	dispatch_armed	1	Arms the idempotency reservation for a disconnect and awaits the dispatch, plumbing with no security decision.
-src/gateway/router/backend_handlers.rs	scan_direct_tools_list_response	2	Empty stand-in compiled only when the firewall feature is off, so it decides nothing.
 src/gateway/router/accounts/offer.rs	new	1	Stores the journey facade and live config in the offer holder, a plain constructor.
 src/gateway/router/accounts/offer.rs	envelope	1	Formats the accounts.v1 data object for an already-decided refusal.
 src/gateway/router/accounts/offer.rs	install_connect_offers	1	Installs the optional connect-offer holder; without it refusals pass unchanged, so no enforcer depends on it.
