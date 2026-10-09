@@ -251,7 +251,7 @@ impl Gateway {
     /// Shared custody startup body. The transport parameter
     /// exists only under `cfg(test)`; the production path is unchanged and
     /// builds its client exactly where it always did, inside `start_custody`.
-    pub(super) async fn start_account_custody_inner(
+    async fn start_account_custody_inner(
         &mut self,
         #[cfg(test)] http: Option<crate::personal_accounts::GatewayProviderHttp>,
     ) -> std::result::Result<(), crate::personal_accounts::CustodyBootstrapError> {
