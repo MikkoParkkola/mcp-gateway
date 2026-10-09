@@ -1,0 +1,6 @@
+head_sha	73a5a1e20e8dc1ed032e8f5bc6c1c56495432af0
+m1-expiry-exception-dropped	linux	m1-expiry-exception-dropped.patch	--lib -- a_401_json_rpc_session_expiry_keeps_session_recovery
+m2-status-skip-dropped	linux	m2-status-skip-dropped.patch	--lib -- a_401_carrying_a_json_rpc_error_is_typed_by_its_status
+m3-jsonrpc-401-arm-restored	linux	m3-jsonrpc-401-arm-restored.patch	--lib -- a_peers_json_rpc_code_401_is_not_an_upstream_refusal
+m4-cli-refusal-unmarked	linux	m4-cli-refusal-unmarked.patch	--lib -- a_refused_credential_is_the_typed_unauthorized_error
+m5-expired-marker-dropped	linux	m5-expired-marker-dropped.patch	--lib -- a_plain_401_saying_the_session_expired_keeps_session_recovery

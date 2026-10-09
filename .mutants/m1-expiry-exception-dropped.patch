@@ -1,0 +1,12 @@
+diff --git a/src/transport/http/requests.rs b/src/transport/http/requests.rs
+index 1a0492b18..25559ef31 100644
+--- a/src/transport/http/requests.rs
++++ b/src/transport/http/requests.rs
+@@ -325,7 +325,6 @@ impl HttpTransport {
+                 // status is returned directly: a body-text scan must not
+                 // overrule the parsed verdict.
+                 if is_deterministic_refusal(status)
+-                    && !is_session_expired_error(&refusal)
+                     && let Some(typed) = typed
+                 {
+                     return Err(Error::Http(typed.without_url()));

@@ -1,0 +1,12 @@
+diff --git a/src/security/http_diagnostics.rs b/src/security/http_diagnostics.rs
+index c9f6e2970..d40276ded 100644
+--- a/src/security/http_diagnostics.rs
++++ b/src/security/http_diagnostics.rs
+@@ -200,7 +200,6 @@ fn carries_session_expiry(body: &str) -> bool {
+     let lower = body.to_ascii_lowercase();
+     body.contains("-32015")
+         || lower.contains("session not found")
+-        || lower.contains(SESSION_EXPIRED_MARKER)
+ }
+ 
+ fn safe_status_text(status: StatusCode, body: &str) -> String {

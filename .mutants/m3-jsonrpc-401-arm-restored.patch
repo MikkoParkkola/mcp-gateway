@@ -1,0 +1,12 @@
+diff --git a/src/security/http_diagnostics.rs b/src/security/http_diagnostics.rs
+index c9f6e2970..a4bd31365 100644
+--- a/src/security/http_diagnostics.rs
++++ b/src/security/http_diagnostics.rs
+@@ -178,6 +178,7 @@ pub(crate) fn status_refusal(
+ pub(crate) fn is_upstream_unauthorized(error: &Error) -> bool {
+     matches!(error, Error::Http(e) if e.status() == Some(StatusCode::UNAUTHORIZED))
+         || matches!(error, Error::CliCredentialRefused { .. })
++        || matches!(error, Error::JsonRpc { code, .. } if *code == CLI_UNAUTHORIZED)
+ }
+ 
+ /// The code a CLI capability's refusal of its credential

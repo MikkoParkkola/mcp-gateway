@@ -1,0 +1,16 @@
+diff --git a/src/capability/executor/cli.rs b/src/capability/executor/cli.rs
+index 0288b6139..0bb369ab0 100644
+--- a/src/capability/executor/cli.rs
++++ b/src/capability/executor/cli.rs
+@@ -291,8 +291,10 @@ fn interpret(
+         };
+     }
+     if unauthorized(outcome) {
+-        return Err(Error::CliCredentialRefused {
++        return Err(Error::JsonRpc {
++            code: 1,
+             message: format!("'{}' refused its credential", invocation.command),
++            data: None,
+         });
+     }
+     let code = outcome
