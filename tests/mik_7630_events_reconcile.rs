@@ -5,8 +5,9 @@
 //! while the gateway was down holds its subscriptions (nothing is sent, and
 //! nothing is deleted on a read); a removed backend takes its subscriptions.
 //!
-//! Linux-only for `SSL_CERT_FILE`.
-#![cfg(all(unix, not(target_vendor = "apple")))]
+//! Unix; the child trusts the receiver's CA through
+//! `Receiver::trust_env` (MIK-8188).
+#![cfg(unix)]
 
 #[path = "mik_7630_events/delivery.rs"]
 #[allow(dead_code, reason = "shared helpers; each binary uses a subset")]
@@ -49,8 +50,8 @@ async fn restart_after(
         &root,
         &json!({"retry_base": "30s", "retry_max_attempts": 5, "retry_window": "15m"}),
     );
-    let (k, v) = rx.trust_env();
-    let env = [(k, v.as_str())];
+    let trust = rx.trust_env();
+    let env = trust.each_ref().map(|(k, v)| (*k, v.as_str()));
     let mut gw = Gateway::start_with_env(&root, cfg, &env).await;
     gw.event_names(Some(ALICE), Some(gateway::EVENT)).await;
     rx.event_default(EventReply::Status(503));
@@ -121,8 +122,9 @@ async fn a_backend_removed_while_down_takes_its_subscription() {
             .expect("backends")
             .push(json!("mock"));
     }
-    let (k, v) = rx.trust_env();
-    let mut gw = Gateway::start_with_env(&root, cfg.clone(), &[(k, &v)]).await;
+    let trust = rx.trust_env();
+    let env = trust.each_ref().map(|(k, v)| (*k, v.as_str()));
+    let mut gw = Gateway::start_with_env(&root, cfg.clone(), &env).await;
     let name = "backend.mock.tools_changed";
     gw.event_names(Some(ALICE), Some(name)).await;
     let mut params = delivery::params(&rx.url, &whsec(32), json!({}));

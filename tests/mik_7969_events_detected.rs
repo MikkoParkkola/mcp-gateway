@@ -6,9 +6,9 @@
 //! Since #3072 an unset key means "detect at connect", and `add --url` writes
 //! none, so a backend that speaks Streamable HTTP was refused
 //! `backend.<x>.resources_changed` with `sse_handshake_transport` by config
-//! alone. A subscribe now resolves the transport first. Receiver rows need
-//! `SSL_CERT_FILE`, honoured only on Unix other than Apple.
-#![cfg(all(unix, not(target_vendor = "apple")))]
+//! alone. A subscribe now resolves the transport first. Receiver rows trust its CA
+//! through `Receiver::trust_env` (MIK-8188).
+#![cfg(unix)]
 
 #[path = "mik_7630_events/delivery.rs"]
 #[allow(dead_code, reason = "shared helpers; each binary uses a subset")]

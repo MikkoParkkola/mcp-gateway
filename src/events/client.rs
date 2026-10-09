@@ -77,7 +77,7 @@ impl CallbackClient {
         if let Some(root) = root {
             builder = builder.add_root_certificate(root);
         }
-        let http = builder
+        let http = crate::debug_trust_roots::extra_roots(builder)
             .build()
             .map_err(|e| crate::Error::Config(format!("events callback client: {e}")))?;
         Ok(Self { http, allowed })

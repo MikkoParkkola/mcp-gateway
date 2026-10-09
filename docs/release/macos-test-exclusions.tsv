@@ -12,19 +12,5 @@ src/test_ports.rs	the_reserved_range_is_outside_the_ephemeral_range	inherent	Rea
 src/transport/stdio_frame_tests.rs	close_returns_when_an_escaped_reader_keeps_a_write_stuck	no-port-yet	Escaped-reader process-group case (MIK-8079); macOS process-group behaviour differs and is MIK-8080's subject.
 src/transport/stdio_frame_tests.rs	dropping_the_transport_ends_a_write_stuck_on_an_escaped_reader	no-port-yet	Escaped-reader process-group case (MIK-8079); macOS process-group behaviour differs and is MIK-8080's subject.
 tests/cli_broken_pipe.rs	any_other_stdout_error_still_fails	inherent	Writes to /dev/full for ENOSPC; macOS has no /dev/full.
-tests/dashboard_link_cli.rs	a_named_ca_replaces_the_system_roots	no-port-yet	Sets the system roots through SSL_CERT_FILE, which only Linux reads; macOS uses its keychain. Port tracked in MIK-8188.
 src/config_reload/mod.rs	reload_warm_hook_tests	no-port-yet	Real-watcher reload-warm rows, written against inotify like the other real-watcher rows; port tracked in MIK-8181.
 src/config_reload/mod.rs	env_poll_e2e_tests	no-port-yet	Env-file polling end-to-end rows driven by the real watcher (inotify, W-L9); port tracked in MIK-8181.
-tests/mik_7630_events_admin.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
-tests/mik_7630_events_delivery.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
-tests/mik_7630_events_delivery_lifecycle.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
-tests/mik_7630_events_delivery_safety.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
-tests/mik_7630_events_delivery_store.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
-tests/mik_7630_events_governance.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
-tests/mik_7630_events_reconcile.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
-tests/mik_7630_events_sources.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
-tests/mik_7630_events_sso_replay.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
-tests/mik_7630_events_subscribe.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
-tests/mik_7630_events_upstream.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
-tests/mik_7969_events_detected.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
-tests/task_crash_boundaries.rs	*	no-port-yet	Whole file: unix SIGKILL plus test CA trust through SSL_CERT_FILE (honoured only on Unix other than Apple); port tracked in MIK-8188.

@@ -5,9 +5,9 @@
 //!
 //! Events are triggered by POSTs to the inbound webhook route; today the route
 //! accepts them and emits nothing, so every row goes red at its first
-//! delivery assertion. Receiver rows need `SSL_CERT_FILE`, honoured only on
-//! Unix other than Apple (see `mik_7630_events_subscribe.rs`).
-#![cfg(all(unix, not(target_vendor = "apple")))]
+//! delivery assertion. Receiver rows trust its CA through
+//! `Receiver::trust_env` (MIK-8188).
+#![cfg(unix)]
 
 #[path = "mik_7630_events/delivery.rs"]
 #[allow(dead_code, reason = "shared helpers; each binary uses a subset")]
@@ -159,12 +159,13 @@ async fn provenance_rides_in_meta_and_is_signed() {
     let rx = Receiver::start(root.path()).await;
     let mut cfg = delivery_config(root.path(), &json!({}));
     cfg["security"]["provenance_stamping"] = json!(true);
-    let (trust, bundle) = rx.trust_env();
+    let [cert_file, test_trust] = rx.trust_env();
     let gw = Gateway::start_with_env(
         root.path(),
         cfg,
         &[
-            (trust, &bundle),
+            (cert_file.0, &cert_file.1),
+            (test_trust.0, &test_trust.1),
             ("GATEWAY_ATTESTATION_SIGNING_KEY", KEY),
             ("GATEWAY_ATTESTATION_KEY_ID", "events-test"),
         ],

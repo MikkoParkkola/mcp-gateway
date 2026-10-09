@@ -6,8 +6,9 @@
 //!
 //! Today the inbound route emits nothing and the `event:` block is parsed
 //! but never acted on, so each row goes red at its own count or record
-//! assertion. Linux-only for `SSL_CERT_FILE`.
-#![cfg(all(unix, not(target_vendor = "apple")))]
+//! assertion. Unix; the child trusts the
+//! receiver's CA through `Receiver::trust_env` (MIK-8188).
+#![cfg(unix)]
 
 #[path = "mik_7630_events/delivery.rs"]
 #[allow(dead_code, reason = "shared helpers; each binary uses a subset")]
