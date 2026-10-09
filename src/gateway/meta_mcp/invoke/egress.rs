@@ -36,6 +36,14 @@ impl ContentChecks {
     }
 }
 
+/// The firewall a route is judged by. Without the `firewall` feature it is
+/// uninhabited, so every `Option` of it is `None` and the code that carries
+/// one compiles in every build.
+#[cfg(feature = "firewall")]
+pub(crate) type Firewall = crate::security::firewall::Firewall;
+#[cfg(not(feature = "firewall"))]
+pub(crate) type Firewall = std::convert::Infallible;
+
 /// Where a frame is going: whether it owes the content checks, and the policy
 /// targets and correlation its firewall verdict is evaluated under.
 pub(crate) struct Egress<'a> {
@@ -43,6 +51,7 @@ pub(crate) struct Egress<'a> {
     /// always meets them: no dispatch gate reads errors).
     pub(crate) content: ContentChecks,
     /// The targets the firewall evaluates; never empty.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     pub(crate) targets: &'a [ResponsePolicyTarget],
     pub(crate) correlation: &'a ResponseCorrelation<'a>,
     /// The caller's key name, for context integrity's subject.
@@ -51,7 +60,7 @@ pub(crate) struct Egress<'a> {
     /// direct route (its own audit and rules, MIK-7669), the Meta-MCP's on
     /// every other.
     #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
-    pub(crate) firewall: Option<&'a crate::security::firewall::Firewall>,
+    pub(crate) firewall: Option<&'a Firewall>,
 }
 
 /// What the scan did to a frame, in increasing strength.
@@ -59,7 +68,9 @@ pub(crate) struct Egress<'a> {
 pub(crate) enum EgressOutcome {
     /// Nothing acted on it.
     Delivered,
-    /// A finding was redacted in place; the frame is delivered.
+    /// A finding was redacted in place; the frame is delivered. Only the
+    /// firewall redacts, so a build without it never constructs this.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     Rewritten,
     /// A policy refused it; the frame is now the delivery refusal.
     Refused,
