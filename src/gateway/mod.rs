@@ -38,7 +38,8 @@ pub mod oauth;
 // auth layer that must run first.
 #[cfg(test)]
 pub(crate) mod chain_test_support;
-#[cfg(test)]
+// Every egress matrix it feeds is `firewall`-gated.
+#[cfg(all(test, feature = "firewall"))]
 pub(crate) mod egress_fixture;
 mod openwebui_adapter;
 pub(crate) mod outbound;
@@ -77,8 +78,9 @@ pub(crate) use server::StdioNonce;
 pub(crate) use server::account_bindings::declare_account_descriptors;
 pub(crate) use server::account_bindings::{ServeMode, sole_operator_asserted};
 /// The test-only allocation meter, for allocation rows outside `gateway`
-/// (`MIK-8201`), without `server` becoming crate-visible.
-#[cfg(test)]
+/// (`MIK-8201`), without `server` becoming crate-visible. Its one reader
+/// outside `gateway` is a `firewall`-gated row.
+#[cfg(all(test, feature = "firewall"))]
 pub(crate) use server::signing_allocation_tests::alloc_meter;
 pub(crate) mod session_id;
 pub mod session_lifecycle;

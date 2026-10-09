@@ -128,3 +128,6 @@ src/gateway/router/backend_handlers/direct_audit.rs	direct_outcome	1	Classifies 
 src/gateway/router/accounts/envelope.rs	body	1	Formats the accounts.v1 error body with the code as its message.
 src/gateway/router/accounts/envelope.rs	body_with_message	1	Formats the accounts.v1 error body JSON.
 src/gateway/router/trace_span.rs	span_for	1	Builds a debug tracing span from the method and matched route only.
+src/gateway/server/run_steps.rs	webhook_routes	1	Builds the webhook routes the router puts behind its origin gate; the gate decides (MIK-8144)
+src/gateway/server/run_steps.rs	generate_gateway_key_pair	1	Generates the JWKS signing key pair; makes no access decision (MIK-8144)
+src/gateway/server/run_steps.rs	managed_recovery_adapters	1	Lists the recovery adapters that are configured backends; makes no access decision (MIK-8144)

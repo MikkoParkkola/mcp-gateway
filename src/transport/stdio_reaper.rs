@@ -265,6 +265,44 @@ impl super::StdioTransport {
         }
     }
 
+    /// What `close` does, which cannot fail: the failed-start path calls it
+    /// directly instead of handling an error `close` never returns.
+    pub(super) async fn shut(&self) {
+        self.connected
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+
+        // A write stuck on a peer that stopped reading holds stdin; the kill ends it.
+        if let Ok(mut writer) = self.writer.try_lock() {
+            *writer = None;
+        }
+        // The per-start stdin token first, then the tree to the reaper,
+        // waited for (bounded) with any reap a retire started earlier.
+        self.shutdown.lock().cancel();
+        self.end_tree().await;
+        super::tree::clear_writer(&self.writer).await;
+    }
+
+    /// Test seam (MIK-7923 coverage): a retire that lands in `start` between
+    /// the spawn and the install, as one from another thread can. Fires only
+    /// for the transport armed by [`Self::retire_after_spawn_for_test`].
+    #[cfg(all(test, unix))]
+    pub(super) fn after_spawn_for_test(&self) {
+        let mut armed = RETIRE_AFTER_SPAWN.lock();
+        if armed
+            .as_ref()
+            .is_some_and(|it| std::ptr::eq(it.as_ptr(), self))
+        {
+            *armed = None;
+            drop(armed);
+            self.retire_tree_now();
+        }
+    }
+
+    #[cfg(all(test, unix))]
+    pub(super) fn retire_after_spawn_for_test(self: &std::sync::Arc<Self>) {
+        *RETIRE_AFTER_SPAWN.lock() = Some(std::sync::Arc::downgrade(self));
+    }
+
     /// End this transport's tree now, synchronously and without a runtime
     /// (MIK-7923, design P5). Under one slot hold: mark it retired (a start
     /// finishing later installs nothing), mark it disconnected, trip the
@@ -285,6 +323,10 @@ impl super::StdioTransport {
         self.pending.clear();
     }
 }
+
+#[cfg(all(test, unix))]
+static RETIRE_AFTER_SPAWN: parking_lot::Mutex<Option<std::sync::Weak<super::StdioTransport>>> =
+    parking_lot::const_mutex(None);
 
 #[cfg(test)]
 mod start_tests {

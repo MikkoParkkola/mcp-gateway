@@ -584,8 +584,7 @@ mod tests {
                 ),
             ],
         };
-        let (result, logs) =
-            crate::security::firewall::response_tests::audit::capture_warnings(|| m.validate());
+        let (result, logs) = crate::test_log_capture::capture_warnings(|| m.validate());
         result.expect("the mapping is valid");
         assert_eq!(
             logs.matches("now grants gateway admin").count(),

@@ -43,7 +43,9 @@ pub(super) use backend::{Answer, GateHandle, MockBackend, TOOL};
 pub(super) const BACKEND: &str = "mock";
 
 /// The task owner `key-a` submits as: its verified identity, for the rows
-/// that read a committed task back from the store.
+/// that read a committed task back from the store. Its readers
+/// (`settlement_record`, `egress_task`) are `firewall`-gated.
+#[cfg(feature = "firewall")]
 pub(super) fn admission_principal() -> String {
     crate::key_server::oidc::VerifiedIdentity {
         subject: "alice".to_string(),

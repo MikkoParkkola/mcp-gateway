@@ -269,22 +269,22 @@ async fn logout_revokes_server_side() {
 }
 
 /// E5-T20: a stuck audit write never holds a logout: the record is written
-/// through the bounded append, and the 303 comes back within the bound.
+/// through the bounded append, and the 303 comes back on the bound's answer.
+/// The oracle is that answer, not the elapsed time (MIK-8222): a logout that
+/// waited on the write would get the write's answer, and none from the bound.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn logout_is_not_held_by_a_stalled_audit_write() {
     let (mut state, _dir) = fixture().await;
     let (log, _log_dir) = with_audit(&mut state);
-    let bound = Duration::from_millis(200);
     let h = issue(&state);
-    let release = log.stall_next_write_for_test(bound);
-    let start = std::time::Instant::now();
+    let release = log.stall_next_write_for_test(Duration::from_millis(200));
     let out = send(&state, logout(Some(&h))).await;
-    let took = start.elapsed();
+    let answered_by_the_bound = log.stall_answers_for_test();
     release.release();
     assert_eq!(out.status, StatusCode::SEE_OTHER, "{}", out.body);
-    assert!(
-        took < bound * 5,
-        "logout waited on the audit write: {took:?}"
+    assert_eq!(
+        answered_by_the_bound, 1,
+        "logout waited on the audit write instead of the bound"
     );
     assert_eq!(
         check(&state, &h),

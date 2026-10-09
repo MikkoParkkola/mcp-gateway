@@ -32,6 +32,10 @@ jobs:
         # including the default feature set users actually get: every optional
         # feature must compile both alone and on top of the defaults.
         #
+        # Every combination is linted with `--all-targets`, so a test that names
+        # a feature-gated item without the gate fails here, not on the first
+        # narrower build after release (MIK-8219).
+        #
         # Four shards, not one job per combination: each job holds one of the
         # account's concurrent-job slots. Combinations that share most of their
         # cfg sit in the same shard, so the warm target dir is reused. Every
@@ -77,9 +81,9 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           shared-key: feature-combos
-      # Library and binaries only: the test targets are written against the
-      # default feature set and do not compile without it. Every combination
-      # runs even after one fails; the step fails at the end, naming them all.
+      # Every target, tests included: a test names a gated item only under
+      # its gate. Every combination runs even after one fails; the step fails
+      # at the end, naming them all.
       - name: Clippy each combination in the shard
         env:
           COMBOS: ${{ matrix.combos }}
@@ -88,10 +92,10 @@ jobs:
           failed=()
           while IFS= read -r combo; do
             [ -n "$combo" ] || continue
-            echo "::group::cargo clippy $combo"
+            echo "::group::cargo clippy --all-targets $combo"
             # Word splitting of $combo is intended: it holds cargo flags.
             # shellcheck disable=SC2086
-            if ! cargo clippy $combo -- -D warnings; then
+            if ! cargo clippy --all-targets $combo -- -D warnings; then
               failed+=("$combo")
               echo "::error::clippy failed: $combo"
             fi
