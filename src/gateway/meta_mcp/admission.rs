@@ -500,12 +500,20 @@ impl MetaMcp {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn admit_meta_sync(
         &self,
+        owner: super::AdmissionOwner<'_>,
         caller: &super::MetaMcpCallerContext<'_>,
         tool_name: &str,
         arguments: &Value,
         session: Option<&str>,
         id: &RequestId,
     ) -> Result<SyncAdmission> {
+        // One admission authority per key, for every transport: a task is
+        // admitted durably under `Mode::Task` by its handoff (a lease too would
+        // self-mismatch); it runs no backend work here, and its worker's own
+        // dispatch re-applies policy. Signing admission owns its own calls.
+        if caller.task.is_some() || caller.awaits_signing_admission() {
+            return Ok(SyncAdmission::Unprotected);
+        }
         let is_modern = caller.is_modern;
         // These operations cannot execute on a sessionless protocol. Preserve
         // their protocol refusal before asking for or reserving a retry key.
@@ -521,9 +529,11 @@ impl MetaMcp {
             }
         }
         let verified_identity = caller.verified_identity;
-        // The key owner, not a display principal: for stdio it is the reserved
-        // owner value (MIK-7272.OWNER.3), never `STDIO_CREDENTIAL_PRINCIPAL`.
-        let owner_principal = caller.owner_principal();
+        // The key owner, spelled as task admission spells it (MIK-8193): one
+        // store, one identity per caller. For stdio it is the reserved owner
+        // value (MIK-7272.OWNER.3), never `STDIO_CREDENTIAL_PRINCIPAL`.
+        // No task owner (a certificate or agent alone): its proven subject.
+        let owner_principal = owner.principal().or_else(|| caller.owner_principal());
         let retry = caller.retry;
         // The arm the dispatch will use, so a retry's representation names it.
         let arm_key = caller.experiment_key();
@@ -550,7 +560,8 @@ impl MetaMcp {
         // loading and every target check precede lookup, including mismatches.
         let playbook = self.authorize_execution_plan(caller, tool_name, arguments, session)?;
         let mut operation = json!({"kind": "gateway", "tool": tool_name,
-            "arguments": arguments, "retry": retry.key_discriminator()});
+            "arguments": operation_arguments(arguments, OPERATION_DEFINING_META),
+            "retry": retry.key_discriminator()});
         if let Some(definition) = &playbook {
             let value = serde_json::to_value(definition)
                 .map_err(|_| Error::json_rpc(-32603, "Invalid playbook definition"))?;
@@ -728,6 +739,37 @@ const UNKEYED_WARN_INTERVAL: std::time::Duration = std::time::Duration::from_sec
 const UNKEYED_WARN_CAP: usize = 1024;
 
 type WarnedAt = std::collections::HashMap<(String, String), std::time::Instant>;
+
+/// `_meta` keys that change WHAT a meta-tool call does, and so stay in its
+/// operation fingerprint (MIK-8192). Empty: every request `_meta` key the
+/// gateway reads on `tools/call` is per-request transport (era, declared
+/// capabilities, progress and trace correlation, the key and nonces). The
+/// operation-defining facts (tool, arguments, `params.task`) live outside
+/// `_meta`. A key added here enters the fingerprint; nothing else can.
+pub(crate) const OPERATION_DEFINING_META: &[&str] = &[];
+
+/// A meta-tool's arguments as its operation fingerprint reads them: the
+/// client's `_meta` (merged in by `merge_client_meta`) reduced to `allowed`,
+/// and dropped when nothing allowed remains, so a retry differing only in a
+/// fresh `progressToken` or declared capabilities is the same operation.
+pub(crate) fn operation_arguments(arguments: &Value, allowed: &[&str]) -> Value {
+    let mut operation = arguments.clone();
+    if let Some(object) = operation.as_object_mut()
+        && let Some(meta) = object.remove("_meta")
+    {
+        let kept: serde_json::Map<String, Value> = meta
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(key, _)| allowed.contains(&key.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        if !kept.is_empty() {
+            object.insert("_meta".to_string(), Value::Object(kept));
+        }
+    }
+    operation
+}
 
 #[cfg(test)]
 #[path = "admission_tests.rs"]

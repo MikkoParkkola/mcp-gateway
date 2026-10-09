@@ -150,6 +150,28 @@ impl MetaMcp {
         tool_name: &str,
         arguments: Value,
         session_id: Option<&str>,
+        caller: MetaMcpCallerContext<'_>,
+    ) -> JsonRpcResponse {
+        // MIK-8150: a signed execution's nonce is given back here, once, after
+        // every step has run or been refused, never at a step's refusal.
+        let settle =
+            (caller.signing).map(|context| (context, super::signing::nonce_principal(&caller)));
+        let response = Box::pin(
+            self.handle_tools_call_unsettled(id, tool_name, arguments, session_id, caller),
+        )
+        .await;
+        if let Some((context, principal)) = settle {
+            self.settle_nonce_refund(context, principal);
+        }
+        response
+    }
+
+    async fn handle_tools_call_unsettled(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        arguments: Value,
+        session_id: Option<&str>,
         mut caller: MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
         // Operator exposure allow-list. Enforced ahead of the admin gate, not
@@ -426,11 +448,13 @@ impl MetaMcp {
             _ => Err(self.no_such_meta_tool(tool_name, caller)),
         };
 
-        let inspected = self.marks_discovery(tool_name, result.is_ok());
+        // A discovery answer the canonical pass refused was scanned too.
+        let scanned = matches!(result, Ok(_) | Err(crate::Error::ResponseFirewallRefused));
+        let inspected = self.marks_discovery(tool_name, scanned);
         let (declared, chain) = (caller.input_capabilities, (source, upstream));
         let mut response =
             response_security::shape_meta_result(id, tool_name, result, shape, declared, chain);
-        response.discovery_inspected = inspected && response.error.is_none();
+        response.egress_scanned = inspected;
         response
     }
 }

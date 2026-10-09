@@ -10,7 +10,6 @@
 //! - `handlers.rs` — `server/discover`, `initialize`, `tools/list`
 //! - `call_dispatch.rs` — `tools/call` routing and the dispatch below the gate
 //! - `session_tools.rs` — FSM workflow-state and routing-profile meta-tools
-//! - `removed_method.rs` — `era_removed_method`
 //! - `search.rs` — `code_mode_search`, `code_mode_execute`, `execute_chain`, `list_tools`, `search_tools`
 //! - `invoke.rs` — `invoke_tool`, `dispatch_to_backend`, stats, kill/revive, playbook, reload
 //! - `resources.rs` — `handle_resources_*` and `find_resource_owner`
@@ -103,6 +102,7 @@ pub(crate) mod response_security;
 pub(crate) use response_security::error_response_preserving_status;
 #[cfg(test)]
 mod response_security_tests;
+pub(crate) mod sealed_hold;
 mod search;
 pub(crate) mod signing;
 #[cfg(feature = "spec-preview")]
@@ -121,7 +121,7 @@ pub use prompt_cache::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerpri
 pub(crate) use support::Authentication;
 pub use support::prune_constant_signals;
 pub(crate) use task_confirmation::{
-    TaskConfirmation, TaskConfirmationRequest, task_admission_request,
+    AdmissionOwner, TaskConfirmation, TaskConfirmationRequest, task_admission_request,
 };
 
 mod accessors;
@@ -129,10 +129,8 @@ mod builders;
 mod call_dispatch;
 mod caller_context;
 mod handlers;
-mod removed_method;
 mod session_tools;
 pub use caller_context::MetaMcpCallerContext;
-pub(in crate::gateway) use removed_method::era_removed_method;
 
 // ============================================================================
 // Constants
@@ -440,8 +438,7 @@ pub struct MetaMcp {
     /// scans and redacts backend-supplied tool descriptions with the exact
     /// config as the direct `tools/call` path. `None` (the default, and the
     /// stdio path) disables scanning — a zero-cost no-op on the hot path.
-    #[cfg(feature = "firewall")]
-    pub(super) firewall: Option<Arc<crate::security::firewall::Firewall>>,
+    pub(super) firewall: Option<Arc<invoke::egress::Firewall>>,
 }
 
 // ============================================================================
@@ -527,7 +524,6 @@ impl MetaMcp {
             caller_identity: crate::security::caller_identity::CallerIdentityConfig::default(),
             access_verifier: None,
             context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
-            #[cfg(feature = "firewall")]
             firewall: None,
         }
     }

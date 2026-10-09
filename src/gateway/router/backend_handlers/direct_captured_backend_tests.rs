@@ -196,3 +196,69 @@ async fn the_notification_arm_resolves_on_the_captured_backend() {
         "the captured backend has no propagation: the reload must not decide for it"
     );
 }
+
+/// MIK-8063: an A2A agent's question on this route is bound to the caller who
+/// was asked, by this route itself. The continuation seal (MIK-8078) binds the
+/// same callers, so no end-to-end row can tell the two apart: every caller the
+/// seal leaves unbound gets no continuation at all. This row pins the inner
+/// binding. Mutant: dropping it leaves an A2A key holder's `identity_key` unset.
+#[cfg(feature = "a2a")]
+#[tokio::test]
+async fn an_a2a_question_on_this_route_is_bound_to_the_key_holder() {
+    let fx = fixture(Answer::Ok, |_| {}).await;
+    let agent = backend(BackendConfig {
+        transport: crate::config::TransportConfig::A2a {
+            a2a_url: "http://127.0.0.1:9/".into(),
+            a2a_agent_card_path: None,
+        },
+        ..BackendConfig::default()
+    });
+    let route = Route {
+        backend: agent,
+        session_id: None,
+    };
+    let key_of = |principal: Option<&str>| {
+        let mut caller = anonymous();
+        caller.client = principal.map(|principal| crate::gateway::auth::AuthenticatedClient {
+            quota_principal: None,
+            // One display name for every key holder: binding by name would
+            // make them one caller.
+            name: "key-holder".to_string(),
+            rate_limit: 0,
+            backends: vec!["*".to_string()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+            // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
+            principal: principal.to_string(),
+            authenticated: true,
+            credential_kind: crate::security::audit::CredentialKind::ApiKey,
+        });
+        caller
+    };
+    let mut keys = Vec::new();
+    for principal in [Some("alice-digest"), Some("bob-digest"), None] {
+        let propagation = propagate_identity(
+            &fx.state,
+            "alpha",
+            &key_of(principal),
+            &route,
+            &guarded(),
+            &RequestId::Number(1),
+        )
+        .await
+        .unwrap_or_else(|(status, _)| panic!("refused with {status}"));
+        keys.push(propagation.identity_key);
+    }
+    assert_eq!(
+        keys[0].as_deref(),
+        Some(crate::hashing::sha256_hex(b"a2a-client:alice-digest").as_str()),
+        "the key holder who was asked"
+    );
+    assert_eq!(
+        keys[1].as_deref(),
+        Some(crate::hashing::sha256_hex(b"a2a-client:bob-digest").as_str()),
+        "another key holder under the same name is another caller"
+    );
+    assert_eq!(keys[2], None, "an anonymous caller binds to nothing");
+}

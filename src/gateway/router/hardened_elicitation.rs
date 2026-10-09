@@ -10,6 +10,7 @@
 //! is kept. The direct route keeps no session at all, so it serves no legacy
 //! request other than a declaring `initialize`.
 
+use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use axum::Json;
 use axum::http::{HeaderMap, StatusCode};
 use serde_json::Value;
@@ -46,6 +47,32 @@ pub(super) fn refusal() -> (StatusCode, Json<Value>) {
     build_http_error_response(None, -32600, REFUSAL, StatusCode::FORBIDDEN)
 }
 
+/// `/mcp`'s refusal of a request with no session under `hardened`. One that
+/// declared the modern revision in its body and omitted a field is told which
+/// field, as the direct route and a header-declared request are (MIK-8162);
+/// anything else is a legacy client asked to declare elicitation.
+pub(super) fn refuse(request: &Value, declared_version: Option<&str>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let params = request.get("params");
+    if let RequestShape::Malformed { missing } =
+        crate::protocol::meta::classify_request(params, declared_version)
+    {
+        // The id as `/mcp` reads it everywhere else, so the error answers the
+        // request it refuses.
+        let id = request
+            .get("id")
+            .and_then(super::helpers::extract_request_id);
+        return build_http_error_response(
+            id,
+            -32602,
+            format!("missing required request metadata: {}", missing.join(", ")),
+            StatusCode::BAD_REQUEST,
+        )
+        .into_response();
+    }
+    refusal().into_response()
+}
+
 /// The direct route's one reading of what a request declared: the header
 /// read once, duplicate-safe, then the observing classifier, as `/mcp` reads
 /// it (handlers.rs `classify_and_observe`). The hardened refusal and the era a
@@ -68,12 +95,13 @@ pub(super) fn classify_direct<'h>(
     (shape, declared_version)
 }
 
-/// The direct route's refusal under `hardened`, or `None`.
+/// The direct route's refusal, or `None`.
 ///
-/// `reading` is [`classify_direct`]'s, so a modern header over a legacy body,
-/// a doubled or contradicted header, or an unsupported revision is refused
-/// here as on `/mcp`. What remains legacy is refused unless it is a declaring
-/// `initialize`.
+/// `reading` is [`classify_direct`]'s, so under every posture a malformed
+/// request, a modern header over a legacy body, a doubled or contradicted
+/// header, or an unsupported revision is refused here as on `/mcp`
+/// (MIK-8040). Under `hardened` only, what remains legacy is refused unless
+/// it is a declaring `initialize`.
 pub(super) fn direct_refusal(
     state: &AppState,
     headers: &HeaderMap,
@@ -99,7 +127,8 @@ pub(super) fn direct_refusal(
         params,
         id,
     ) {
-        return Some(build_http_response(&rpc, status));
+        return Some(build_http_response(&Egressed::gateway_own(rpc), status));
     }
-    (shape.era() == Era::Legacy && !declares_elicitation(request)).then(refusal)
+    (is_hardened(state) && shape.era() == Era::Legacy && !declares_elicitation(request))
+        .then(refusal)
 }

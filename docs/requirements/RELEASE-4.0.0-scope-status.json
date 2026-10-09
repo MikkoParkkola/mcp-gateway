@@ -1183,9 +1183,9 @@
         "src/gateway/router/tests/meta_firewall_verdict.rs:297",
         "src/gateway/router/dispatch_parity_tests.rs:313",
         "src/gateway/router/direct_guards.rs:101",
-        "src/gateway/router/response_pass.rs:34"
+        "src/gateway/meta_mcp/invoke/egress.rs:73"
       ],
-      "note": "Graded 2026-09-29 against MIK-7407's own AC. Meta HTTP tools/call: the router pass (response_pass.rs:34) replaces a Block or refused verdict with the -32600 refusal carrying the caller's id and no payload, read off the wire by meta_tools_call_refuses_delivery_when_response_firewall_blocks. Direct HTTP tools/call: direct_guards.rs response_blocked refuses on !allowed; t12_response_firewall_block_refuses_on_both_routes drives both routes. Merged before #2361; #2361 adds no change to this path."
+      "note": "Since #3527 (MIK-8139 family) the router pass is the one egress scan, `scan_egress` in egress.rs, run for every method and frame part; the refusal semantics below are unchanged. Graded 2026-09-29 against MIK-7407's own AC. Meta HTTP tools/call: the router pass (response_pass.rs:34, since replaced) replaces a Block or refused verdict with the -32600 refusal carrying the caller's id and no payload, read off the wire by meta_tools_call_refuses_delivery_when_response_firewall_blocks. Direct HTTP tools/call: direct_guards.rs response_blocked refuses on !allowed; t12_response_firewall_block_refuses_on_both_routes drives both routes. Merged before #2361; #2361 adds no change to this path."
     },
     {
       "id": "MIK-7407.RESPONSE.2",
@@ -1212,7 +1212,7 @@
         "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:179",
         "src/gateway/meta_mcp/response_security.rs:91",
         "src/gateway/task_service/execution/worker.rs:462",
-        "src/gateway/router/handlers.rs:1744"
+        "src/gateway/router/handlers.rs:1399"
       ],
       "note": "Closed by #2390 (da78488b1, fixes #2358). stdio: counted fixtures drive the real stdio serving path; a blocked tool call, a surfaced tools/list, the discovery lists and gateway_invoke are refused with exactly one inspection (stdio_refuses_blocked_responses_with_one_inspection), and allowed ones are served with exactly one (stdio_serves_allowed_responses_with_one_inspection). Discovery responses are inspected once, on their raw value: a server-owned marker (discovery_inspected, never serialised) set only after the meta-tool match makes the router pass, the delivery finalizer and task settlement skip them; HTTP pinned by allowed_discovery_listings_are_inspected_once. Mutants NOFLAG, ROUTERSKIP, FINALSKIP, ANYTOOL caught (runs 36620547421 and 36627286348). Coverage follow-up (retry under a discovery name, task-mode discovery): #2431, 4.0.1.\n\n--- prior note follows ---\nBuilt, not proven. stdio responses reach the shared finalizer (server/mod.rs finalize_response_for_delivery, Required inspection), which refuses on Block. Open: no counted stdio serving-path test drives a blocked call or list end to end; and discovery tools are inspected twice (raw value, then served form), so 'one content scan and one response audit per response' does not hold for them (#2358, filed 4.0.1)."
     },
@@ -1241,7 +1241,7 @@
       "evidence": [
         "src/gateway/meta_mcp/response_security/delivery_record.rs:57",
         "src/gateway/router/judged_answer.rs:18",
-        "src/gateway/router/handlers.rs:1957",
+        "src/gateway/router/handlers.rs:1612",
         "src/gateway/server/stdio_delivery.rs:102",
         "src/gateway/server/stdio_delivery.rs:141",
         "src/gateway/router/mod.rs:113",

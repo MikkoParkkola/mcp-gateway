@@ -458,12 +458,6 @@ async fn an_unparseable_authorization_endpoint_is_refused_before_any_browser_ope
     assert_eq!(*opened.lock().unwrap(), 0, "no browser is opened");
 }
 
-/// A loopback port nothing listens on, for a callback the test must see freed.
-async fn free_port() -> u16 {
-    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    probe.local_addr().unwrap().port()
-}
-
 /// The callback listener on `port` is gone: the port binds again. An aborted
 /// listener drops on its next poll, so this allows it a moment.
 async fn assert_port_released(port: u16) {
@@ -481,10 +475,12 @@ async fn assert_port_released(port: u16) {
 }
 
 /// A client whose callback listens on a known port, and whose browser opens
-/// without anyone approving: `opened` fires once the URL is handed over.
+/// without anyone approving: `opened` fires once the URL is handed over. The
+/// release is proved by binding the port again, so it comes from the
+/// reserved range no parallel port-0 bind can take first (MIK-8211).
 async fn unanswered_client(dir: &std::path::Path) -> (OAuthClient, u16, Arc<tokio::sync::Notify>) {
     let mut client = client(dir, Some("https://as.example"));
-    let port = free_port().await;
+    let port = crate::test_ports::reserved_port();
     client.callback_port = Some(port);
     let opened = Arc::new(tokio::sync::Notify::new());
     let signal = Arc::clone(&opened);

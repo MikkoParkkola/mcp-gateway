@@ -36,6 +36,44 @@ pub(super) struct StdioTasks {
     pub(super) options: TaskOptions,
 }
 
+impl StdioTasks {
+    /// A guard the session frame holds for as long as it serves
+    /// (MIK-7839.CANCEL.3). The async teardown never runs for a session
+    /// future an embedder drops before EOF; this guard's `Drop` is what still
+    /// stops the task workers there. On a normal return it repeats what the
+    /// teardown already did.
+    pub(super) fn stop_on_drop(&self) -> TasksDropGuard {
+        TasksDropGuard::new(&self.executor, &self.service)
+    }
+}
+
+/// See [`StdioTasks::stop_on_drop`]. Unbound, it would seal the session at once.
+#[must_use = "the guard stops the task workers when dropped; bind it for the whole session"]
+pub(super) struct TasksDropGuard {
+    executor: Arc<TaskExecutor>,
+    service: Arc<TaskService>,
+}
+
+impl TasksDropGuard {
+    pub(super) fn new(executor: &Arc<TaskExecutor>, service: &Arc<TaskService>) -> Self {
+        Self {
+            executor: Arc::clone(executor),
+            service: Arc::clone(service),
+        }
+    }
+}
+
+impl Drop for TasksDropGuard {
+    /// Synchronous, and needs no driven runtime: seal the executor, so every
+    /// worker ends at its next poll and none starts, then admit no further
+    /// store mutation. A write already admitted finishes; nothing waits on it
+    /// here, so a stalled disk cannot hold the drop.
+    fn drop(&mut self) {
+        self.executor.seal();
+        self.service.stop_serving();
+    }
+}
+
 /// Open stdio's store, or `None` when it cannot be opened (logged with the
 /// path and the cause). The expiry sweep is returned separately: it is joined
 /// at EOF, before the store closes.
@@ -46,13 +84,7 @@ pub(super) async fn open(
     tool_policy: &Arc<ToolPolicy>,
 ) -> Option<(Arc<StdioTasks>, ExpirySweep)> {
     let dir = store_dir(config);
-    let subscriptions = match subscriptions(config, overlay) {
-        Ok(subscriptions) => subscriptions,
-        Err(error) => {
-            degraded(&dir, &error.to_string());
-            return None;
-        }
-    };
+    let subscriptions = subscriptions(config, overlay);
     // No upstream adapter on stdio: every interrupted row it holds is settled
     // on open, and none is kept for an upstream read (D6 rev 5 item 4).
     let opened = super::task_runtime::open(config, &dir, subscriptions, meta_mcp, &[]).await;
@@ -90,19 +122,24 @@ pub(super) async fn open(
 }
 
 /// The executor publishes task notifications to a registry. Stdio has no
-/// listener route, so nothing subscribes; it is built as `Gateway::run` builds
-/// it, from the same auth configuration.
+/// listener route, so nothing subscribes: the registry admits none, and its
+/// authorizer is built from the default auth configuration, which holds no
+/// secret to resolve. The gateway's own auth configuration is never read here,
+/// so one that does not resolve cannot turn stdio's tasks off (MIK-7638).
+/// Publishing never consults the authorizer; only a delivery would.
 fn subscriptions(
     config: &Config,
     overlay: &crate::config::EnvOverlay,
-) -> crate::Result<Arc<crate::gateway::subscription_registry::SubscriptionRegistry>> {
+) -> Arc<crate::gateway::subscription_registry::SubscriptionRegistry> {
     use crate::gateway::auth::{AuthState, DashboardBootstrap, ResolvedAuthConfig};
-    let auth_config = Arc::new(ResolvedAuthConfig::try_from_config(&config.auth, overlay)?);
-    Ok(Arc::new(
+    let auth_config =
+        ResolvedAuthConfig::try_from_config(&crate::config::AuthConfig::default(), overlay)
+            .expect("the default auth configuration holds no secret to resolve");
+    Arc::new(
         crate::gateway::subscription_registry::SubscriptionRegistry::new(
-            crate::gateway::subscription_registry::DEFAULT_MAX_LISTENERS,
+            0,
             AuthState {
-                auth_config,
+                auth_config: Arc::new(auth_config),
                 key_server: None,
                 dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
                 tls_enabled: false,
@@ -111,7 +148,7 @@ fn subscriptions(
                 agent_auth: crate::gateway::oauth::AgentAuthState::new(false, Arc::default()),
             },
         ),
-    ))
+    )
 }
 
 fn degraded(dir: &Path, cause: &str) {
@@ -285,6 +322,7 @@ impl StdioTasks {
                                 caller,
                             )
                         },
+                        |current, frame| self.host.meta_mcp.scan_task_read(current, frame),
                     )
                     .await
             }

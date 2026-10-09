@@ -723,3 +723,6 @@ async fn a_notice_before_the_acknowledgement_is_not_delivered() {
 
 #[path = "upstream_session_backoff_tests.rs"]
 mod backoff;
+
+#[path = "snapshot_renewal_tests.rs"]
+mod snapshot_renewal;

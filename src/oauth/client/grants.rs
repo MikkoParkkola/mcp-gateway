@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The OAuth grants: authorization code exchange, refresh and client credentials, and their parameter builders.
+// stdout is the stdio transport's JSON-RPC stream: nothing here prints to it (MIK-8197).
+#![deny(clippy::print_stdout)]
 
 use super::super::callback;
 use super::super::storage::TokenInfo;
@@ -77,6 +79,7 @@ impl OAuthClient {
             ))
         })?;
 
+        super::refuse_oversized_expires_in(&auth_meta.token_endpoint, token_response.expires_in)?;
         let token = TokenInfo::from_response(
             token_response.access_token,
             token_response.token_type,
@@ -234,6 +237,7 @@ impl OAuthClient {
             "OAuth token exchange succeeded"
         );
 
+        super::refuse_oversized_expires_in(&auth_meta.token_endpoint, token_response.expires_in)?;
         Ok(TokenInfo::from_response(
             token_response.access_token,
             token_response.token_type,
@@ -566,8 +570,11 @@ impl OAuthClient {
 
         if !(self.open_browser)(&auth_url_str) {
             warn!("Failed to open browser automatically");
-            println!("\nPlease authorize this client by visiting:\n{auth_url_str}\n");
         }
+        // Always, on stderr (MIK-8197): a launcher that started can still be
+        // blocked (an endpoint-security tool may stop it), and stdout is the
+        // stdio transport's JSON-RPC stream.
+        eprintln!("\nIf no browser opened, authorize this client by visiting:\n{auth_url_str}\n");
 
         // Wait for callback
         let (actual_callback_url, callback_result) = callback_server

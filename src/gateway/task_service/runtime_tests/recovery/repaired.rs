@@ -4,6 +4,8 @@
 //! readable after the next expiry sweep, without a restart. A live row goes
 //! through the recovery a restart applies; a terminal row reads as stored.
 
+use std::ops::ControlFlow::{Break, Continue};
+
 use super::*;
 
 /// `MIK-8121.READ.1` and `.READ.2`: repair a sealed in-flight row, a sealed
@@ -49,14 +51,32 @@ async fn a_repaired_row_is_readable_without_a_restart() {
     for (record, original) in &originals {
         std::fs::write(record, original).unwrap();
     }
-    let deadline = std::time::Instant::now() + BUDGET;
-    while restored.skipped_records().sealed != 0 {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the expiry sweep never re-read the repaired rows"
-        );
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    // The seal lifts inside the sweep's blocking re-read; the announcement
+    // follows when the sweep resumes on the runtime (execution.rs
+    // `reread_sealed`). Wait for both, within BUDGET (5 s): a slow runner
+    // (Windows' coarse timer) can see the seal gone before the announcement.
+    let announced = |seeded: &[Seeded]| {
+        let heard = heard.lock();
+        seeded
+            .iter()
+            .filter(|row| row.expected.is_some())
+            .all(|row| heard.contains(&row.id))
+    };
+    // Past the bound the report below names each row not re-read or announced.
+    let _ = crate::test_wait::wait_until(BUDGET, || {
+        let done = restored.skipped_records().sealed == 0 && announced(&seeded);
+        std::future::ready(if done {
+            Break(())
+        } else {
+            Continue(String::new())
+        })
+    })
+    .await;
+    assert_eq!(
+        restored.skipped_records().sealed,
+        0,
+        "the expiry sweep never re-read the repaired rows"
+    );
 
     let mut problems = Vec::new();
     for row in &seeded {

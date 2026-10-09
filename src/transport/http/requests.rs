@@ -10,11 +10,12 @@ use tracing::{debug, info};
 use url::Url;
 
 use super::super::sanitize_url_for_diagnostics;
+use super::cancel_guard::CancelOnDrop;
 use super::extra_headers::merge_extra_headers;
 use super::modern_meta::{finalise_modern_headers, is_era_probe, with_modern_meta};
 use super::{
-    HTTP_TARGET, HeaderMode, HttpTransport, bearer_header_value, peer_refusal,
-    require_secure_oauth_target,
+    HTTP_TARGET, HeaderMode, HttpTransport, bearer_header_value, is_session_expired_error,
+    peer_refusal, require_secure_oauth_target,
 };
 use crate::gateway::trace;
 use crate::protocol::era::Era;
@@ -24,7 +25,8 @@ use crate::protocol::{
     is_version_mismatch_error, parse_supported_versions_from_error,
 };
 use crate::security::http_diagnostics::{
-    RedirectEvidence, safe_request_error, safe_request_error_for, status_refusal,
+    RedirectEvidence, is_deterministic_refusal, safe_request_error, safe_request_error_for,
+    status_refusal,
 };
 use crate::{Error, Result};
 
@@ -223,6 +225,24 @@ impl HttpTransport {
             finalise_modern_headers(&mut headers, &request.method, request.params.as_ref())?;
         }
 
+        // Armed before the POST, disarmed with no await between the read and
+        // the disarm: a drop in between is a drop before the reply was read.
+        let cancel = CancelOnDrop::arm(&self.client, &message_url, &headers, request, era);
+        let result = self
+            .post_and_read(request, headers, &message_url, identity_key)
+            .await;
+        cancel.disarm();
+        result
+    }
+
+    /// POST `request` with `headers` and read its reply.
+    async fn post_and_read(
+        &self,
+        request: &JsonRpcRequest,
+        headers: header::HeaderMap,
+        message_url: &str,
+        identity_key: Option<&str>,
+    ) -> Result<JsonRpcResponse> {
         // Sample the redirect counter either side of the send: an unchanged
         // count is the proof that a connect failure here is pre-dispatch
         // (MIK-7272.SUB.4). Sampled as late as possible so a peer request's
@@ -230,7 +250,7 @@ impl HttpTransport {
         let redirects_before = self.redirects_followed.load(Ordering::SeqCst);
         let response = self
             .client
-            .post(&message_url)
+            .post(message_url)
             .headers(headers)
             .json(request)
             .send()
@@ -265,7 +285,7 @@ impl HttpTransport {
                 // Presence, not value: an MCP session ID is replayable, so a log
                 // reader who sees one can resume another caller's session.
                 // Computed before the macro, as above (MIK-7324).
-                let diagnostic_url = sanitize_url_for_diagnostics(message_url.as_str());
+                let diagnostic_url = sanitize_url_for_diagnostics(message_url);
                 info!(target: HTTP_TARGET, url = %diagnostic_url, "Stored session ID from response");
                 self.sessions
                     .write()
@@ -289,7 +309,7 @@ impl HttpTransport {
             // Header NAMES only. Values are backend-controlled and routinely
             // carry `set-cookie`, `authorization` echoes and bearer material.
             // Computed before the macro, as above (MIK-7324).
-            let diagnostic_url = sanitize_url_for_diagnostics(message_url.as_str());
+            let diagnostic_url = sanitize_url_for_diagnostics(message_url);
             let names: Vec<&str> = response
                 .headers()
                 .keys()
@@ -317,6 +337,18 @@ impl HttpTransport {
                 return Err(Error::ProtocolVersionRejected { supported });
             }
             if let Some(refusal) = peer_refusal(&body, &request.id, status) {
+                // A11-b: a credential refusal is typed by its status, whatever
+                // the peer wrote, so the managed-account refresh sees it
+                // (MIK-7717). Only an expiry, judged by the classifier that
+                // performs the recovery, keeps the peer's answer. The typed
+                // status is returned directly: a body-text scan must not
+                // overrule the parsed verdict.
+                if is_deterministic_refusal(status)
+                    && !is_session_expired_error(&refusal)
+                    && let Some(typed) = typed
+                {
+                    return Err(Error::Http(typed.without_url()));
+                }
                 return Err(refusal);
             }
             return Err(status_refusal(typed, status, &body));

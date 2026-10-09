@@ -85,6 +85,8 @@ mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
 pub(crate) mod audit;
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
+pub(crate) mod egress;
+mod nonce_settle; // MIK-8150: refund requests and dispatch marks of a signed execution
 mod r2_check;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
 mod bridge_settle;
@@ -406,14 +408,16 @@ impl MetaMcp {
         // Returns the warnings to inject post-dispatch and blocks when the
         // budget is exceeded (returns JSON-RPC -32003 error).
         #[cfg(feature = "cost-governance")]
-        let mut admission = self.admit_spend_for(&dispatch_guards::BackendCall {
-            server,
-            tool,
-            session_id,
-            api_key_name,
-            trace_id,
-            caller_key: None,
-        })?;
+        let mut admission = self
+            .admit_spend_for(&dispatch_guards::BackendCall {
+                server,
+                tool,
+                session_id,
+                api_key_name,
+                trace_id,
+                caller_key: None,
+            })
+            .inspect_err(|_| nonce_settle::ask_refund(caller))?;
         #[cfg(feature = "cost-governance")]
         let cost_warnings = std::mem::take(&mut admission.warnings);
         #[cfg(not(feature = "cost-governance"))]
@@ -439,13 +443,10 @@ impl MetaMcp {
                 Ok(retry) => retry,
                 Err(error) => {
                     // Refused before the backend was reached, so it has not
-                    // acted: the key is released rather than settled. Settling
-                    // one here would answer an honest retry, made after a fresh
-                    // question, with a sentence naming a side effect nothing
-                    // performed.
-                    if let Some(reservation) = idem_reservation.as_mut() {
-                        reservation.release();
-                    }
+                    // acted: the key is released rather than settled (settling
+                    // would answer an honest retry with a side effect nothing
+                    // performed), and the signing nonce is asked back.
+                    nonce_settle::give_back_unsent(caller, &mut idem_reservation);
                     return Err(error);
                 }
             };
@@ -458,9 +459,7 @@ impl MetaMcp {
         };
         let reservation = idem_reservation.as_mut();
         self.refuse_relay(caller, session_id, (server, tool), &egress, reservation)?;
-        if let Some(execution) = caller.execution {
-            execution.mark_dispatched();
-        }
+        nonce_settle::mark_dispatched(caller);
         // Boxed: the dispatch future is the largest thing this frame ever
         // holds, and inlining it puts `invoke_tool_traced` over
         // `clippy::large_futures` at every call site.
@@ -574,7 +573,7 @@ impl MetaMcp {
         // survives the refusal. Relaying it instead leaves the client holding
         // an `inputRequests` entry it has no handler for and the backend
         // holding an exchange that can never be completed.
-        undeclared_gate::refuse_undeclared(interim.as_ref(), caller, server, tool, trace_id)?;
+        undeclared_gate::refuse_undeclared(&result, caller, server, tool, trace_id)?;
 
         if let Some(answer) = self
             .bridge_legacy_ask(

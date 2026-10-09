@@ -15,8 +15,13 @@ use mcp_gateway::config::{BackendConfig, FailsafeConfig, TransportConfig};
 use serde_json::{Value, json};
 
 mod common;
+#[path = "a2a_outbound/input_rounds.rs"]
+mod input_rounds;
 #[path = "a2a_outbound/stub.rs"]
 mod stub;
+#[cfg(feature = "firewall")]
+#[path = "a2a_outbound/untrusted.rs"]
+mod untrusted;
 
 use stub::{Agent, Answer};
 
@@ -24,6 +29,15 @@ use stub::{Agent, Answer};
 const TOOL: &str = "send_message";
 
 fn backend(a2a_url: &str, card_path: Option<&str>, headers: &[(&str, &str)]) -> Backend {
+    backend_timed(a2a_url, card_path, headers, Duration::from_secs(10))
+}
+
+fn backend_timed(
+    a2a_url: &str,
+    card_path: Option<&str>,
+    headers: &[(&str, &str)],
+    timeout: Duration,
+) -> Backend {
     let config = BackendConfig {
         description: "stub A2A agent".into(),
         enabled: true,
@@ -33,7 +47,7 @@ fn backend(a2a_url: &str, card_path: Option<&str>, headers: &[(&str, &str)]) -> 
         },
         stop_when_idle_for: None,
         max_frame_bytes: None,
-        timeout: Duration::from_secs(10),
+        timeout,
         env: HashMap::default(),
         headers: headers
             .iter()
@@ -287,8 +301,6 @@ async fn a2a_5_unfinished_tasks_are_tool_errors_with_the_reason() {
         ("TASK_STATE_FAILED", "upstream API down"),
         ("TASK_STATE_REJECTED", "out of scope for this agent"),
         ("TASK_STATE_CANCELED", "canceled by the agent"),
-        ("TASK_STATE_INPUT_REQUIRED", "which city?"),
-        ("TASK_STATE_AUTH_REQUIRED", "sign in at the agent first"),
     ] {
         let (base, _log) = stub::serve(Agent::answering(stub::task_in(state, reason))).await;
         let result = call(&backend(&base, None, &[]), "hi")
@@ -306,10 +318,14 @@ async fn a2a_5_unfinished_tasks_are_tool_errors_with_the_reason() {
 /// A2A.6: credentials in `a2a_url` never reach an error message.
 #[tokio::test]
 async fn a2a_6_url_credentials_are_redacted_from_errors() {
-    // Nothing listens on this port: the card fetch fails and is reported.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve a port");
-    let port = listener.local_addr().expect("port").port();
-    drop(listener);
+    // Nothing listens on this port: the card fetch fails and is reported. The
+    // socket stays bound, never listening, for the whole test, so no parallel
+    // test can bind the port in between (MIK-7981, MIK-8211).
+    let reserved = tokio::net::TcpSocket::new_v4().expect("socket");
+    reserved
+        .bind("127.0.0.1:0".parse().unwrap())
+        .expect("bind without listening");
+    let port = reserved.local_addr().expect("port").port();
     let secret = "hunter2-secret";
     let userinfo = ["operator", secret].join(":");
     let url = format!("http://{userinfo}@127.0.0.1:{port}");

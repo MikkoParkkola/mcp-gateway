@@ -85,7 +85,6 @@ impl Backend {
                 pool
             },
             failsafe_config: failsafe_config.clone(),
-            era: Arc::new(crate::protocol::era::EraCache::for_backend(name)),
             #[cfg(test)]
             after_reprobe_lookup: crate::test_pause::Slot::default(),
             unserved_consecutive: AtomicU64::new(0),
@@ -114,9 +113,16 @@ impl Backend {
             #[cfg(test)]
             era_decision_gate: parking_lot::Mutex::new(None),
             #[cfg(test)]
+            publish_gate: parking_lot::Mutex::new(None),
+            #[cfg(test)]
             oauth_test_seam: parking_lot::Mutex::new(None),
             instance: super::tools_nudge::next_instance(),
             nudge_feed: std::sync::OnceLock::new(),
+            views_dirty: std::sync::Arc::default(),
+            #[cfg(test)]
+            snapshot_seam: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            shared_read_seam: parking_lot::Mutex::new(None),
         }
     }
 
@@ -453,7 +459,7 @@ impl Backend {
                 // wire, deliberately — the probe below is itself a request, and
                 // it reads this cache to know it is the one message that may
                 // not wait for a verdict.
-                transport.attach_era(Arc::clone(&self.era));
+                transport.attach_era(Arc::clone(&entry.era));
                 // Connect without handshaking: the probe needs the credential
                 // and the message endpoint, and nothing else.
                 self.begin_connecting(built_under)?;
@@ -515,7 +521,7 @@ impl Backend {
         // traversal finds it, or shutdown latches first and this refuses. There
         // is no third case, which is what the previous check-then-publish could
         // not say.
-        if let Err(refusal) = self.publish(entry, &transport, built_under) {
+        if let Err(refusal) = self.publish(entry, (&transport, listen), built_under) {
             warn!(
                 backend = %self.name,
                 %refusal,
@@ -528,7 +534,8 @@ impl Backend {
             }
             return Err(Error::BackendUnavailable(self.name.clone()));
         }
-        *entry.listen.write() = listen;
+        #[cfg(test)]
+        hold_at(&self.publish_gate).await;
 
         // Note: Tools are fetched lazily on first get_tools() call
         // We can't pre-cache here because get_tools() -> ensure_started() -> start()

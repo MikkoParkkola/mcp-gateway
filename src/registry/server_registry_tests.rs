@@ -217,3 +217,15 @@ fn only_asana_speaks_the_legacy_sse_handshake() {
         ["asana"]
     );
 }
+
+/// chrome-devtools-mcp drives a local Chrome; the entry says so before the
+/// user adds it, instead of the first tool call failing.
+#[test]
+fn chrome_devtools_names_its_chrome_prerequisite() {
+    let entry = lookup("chrome-devtools").expect("chrome-devtools is listed");
+    assert!(
+        matches!(entry.setup, Setup::NeedsService { hint } if hint.contains("Chrome")),
+        "{:?}",
+        entry.setup
+    );
+}

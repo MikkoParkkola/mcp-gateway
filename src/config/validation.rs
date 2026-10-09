@@ -24,6 +24,35 @@ impl Config {
         self.validate_with_env(&EnvOverlay::none())
     }
 
+    /// MIK-8207: a timer that ticks every 0 seconds panics where it starts
+    /// (tokio's `interval` asserts a positive period), so each period read
+    /// from config must be positive where its timer runs. The session reaper
+    /// always runs; the other two run only when their feature is on, so a
+    /// zero under a disabled feature, which loaded before, still loads.
+    fn validate_timer_periods(&self) -> Result<()> {
+        for (key, zero) in [
+            (
+                "key_server.cleanup_interval_secs",
+                self.key_server.enabled && self.key_server.cleanup_interval_secs == 0,
+            ),
+            (
+                "streaming.session_reaper_interval",
+                self.streaming.session_reaper_interval.is_zero(),
+            ),
+            (
+                "failsafe.health_check.interval",
+                self.failsafe.health_check.enabled && self.failsafe.health_check.interval.is_zero(),
+            ),
+        ] {
+            if zero {
+                return Err(Error::ConfigValidation(format!(
+                    "{key} is 0; a timer needs a positive period"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// As [`Config::validate`], resolving `env:` references through `overlay`.
     ///
     /// A separate entry point rather than a field on `Config`: validation runs against
@@ -45,6 +74,7 @@ impl Config {
                     .into(),
             ));
         }
+        self.validate_timer_periods()?;
         self.validate_backend_names()?;
         self.validate_backend_urls()?;
         self.validate_remote_backend_provenance()?;

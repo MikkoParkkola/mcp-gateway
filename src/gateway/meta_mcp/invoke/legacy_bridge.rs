@@ -204,6 +204,12 @@ impl MetaMcp {
                     method,
                     reason,
                 }) => {
+                    // The backend's last round stopped to ask: as at the
+                    // dispatch gate, the lease does not keep this refusal,
+                    // and an earlier round that acted keeps its protection.
+                    if let Some(execution) = caller.execution {
+                        execution.withdraw_dispatch();
+                    }
                     return Err(undeclared_gate::bridge_refusal(
                         &key, &method, reason, server, tool, trace_id,
                     ));

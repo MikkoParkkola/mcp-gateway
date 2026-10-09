@@ -43,6 +43,8 @@ mod descriptor_withholding;
 mod f24_resource_subscribe;
 /// MIK-7215.CONTROL.5 G4: arm and hints key on the caller.
 mod g4_caller_keyed;
+/// MIK-8162: a malformed modern request under hardened on `/mcp`.
+mod mcp_malformed_hardened;
 /// The Meta-MCP route's own response-firewall verdict obligation (RED).
 #[cfg(feature = "firewall")]
 mod meta_firewall_verdict;
@@ -58,6 +60,8 @@ mod metrics_scrape;
 mod authz_and_sse;
 mod code_mode_param;
 mod direct_route_identity;
+/// `MIK-7642.PR.B` C2: a client disconnect cancels the backend call.
+mod mik7642_disconnect;
 mod origin_gate;
 mod playbook_authz;
 /// MIK-8158: no authorization server, no protected-resource metadata.

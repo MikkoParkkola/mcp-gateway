@@ -308,7 +308,7 @@ impl OAuthClient {
             client_id_source: RwLock::new(client_id_source),
             client_secret: cfg.client_secret,
             callback_host: cfg.callback_host,
-            open_browser: Box::new(open_browser),
+            open_browser: Box::new(browser::open_browser),
             callback_port: cfg.callback_port,
             callback_path: cfg.callback_path,
             token_refresh_buffer_secs: cfg.token_refresh_buffer_secs,
@@ -547,6 +547,23 @@ impl OAuthClient {
     }
 }
 
+/// MIK-8207: a token answer whose `expires_in` is above 100 years is
+/// malformed. Trusted, it would keep a token for centuries without a refresh;
+/// added unchecked, it wrapped to an expiry in the past (a refresh on every
+/// call). The answer is refused, naming the endpoint that sent it.
+fn refuse_oversized_expires_in(endpoint: &str, expires_in: Option<u64>) -> Result<()> {
+    match expires_in {
+        Some(secs) if secs > crate::duration_bound::MAX_DURATION.as_secs() => {
+            Err(Error::OAuth(format!(
+                "the token endpoint {} answered expires_in {secs}, more than 100 years; \
+                 the answer is refused as malformed",
+                crate::security::sanitize::redact_url_for_diagnostics(endpoint)
+            )))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Generate PKCE code verifier and challenge
 fn generate_pkce() -> (String, String) {
     // Generate 32 random bytes for verifier
@@ -574,30 +591,9 @@ fn generate_client_id() -> String {
     URL_SAFE_NO_PAD.encode(id_bytes)
 }
 
-/// Open a URL in the system default browser.
-///
-/// Uses `open` on macOS, `xdg-open` on Linux, and `start` on Windows.
-/// Returns `true` if the command was spawned successfully.
-fn open_browser(url: &str) -> bool {
-    #[cfg(target_os = "macos")]
-    let cmd = "open";
-    #[cfg(target_os = "linux")]
-    let cmd = "xdg-open";
-    #[cfg(target_os = "windows")]
-    let cmd = "cmd";
-
-    #[cfg(target_os = "windows")]
-    let result = std::process::Command::new(cmd)
-        .args(["/c", "start", url])
-        .spawn();
-    #[cfg(not(target_os = "windows"))]
-    let result = std::process::Command::new(cmd).arg(url).spawn();
-
-    result.is_ok()
-}
-
 #[cfg(test)]
 mod authorize_tests;
+mod browser;
 pub(crate) mod destination;
 #[cfg(test)]
 mod refresh_flight_tests;

@@ -87,6 +87,13 @@ pub(crate) struct PooledEntry {
     /// landed while the entry was pooled or sees this.
     pub(crate) retired: AtomicBool,
     pub(crate) failsafe: Failsafe,
+    /// Protocol era of THIS slot's peer (MIK-8186). Per slot for the reason the
+    /// metadata caches below are: each slot's transport reaches its own peer, and
+    /// during a rolling upgrade two slots of one backend can reach peers of
+    /// different eras. The slot's transport shapes every frame from this cache,
+    /// and only this slot's start and re-probes write it. `Arc` because the
+    /// detached re-probe outlives the request that triggered it.
+    pub(crate) era: Arc<crate::protocol::era::EraCache>,
     /// The four metadata caches, and the set derived from the first of them.
     ///
     /// CO-LOCATED WITH THE SLOT, NOT THE BACKEND (MIK-7334.CATALOGUE.1). A
@@ -217,6 +224,7 @@ impl PooledEntry {
             in_flight: AtomicUsize::new(0),
             retired: AtomicBool::new(false),
             failsafe: Failsafe::new(name, failsafe_config),
+            era: Arc::new(crate::protocol::era::EraCache::for_slot(name, "shared")),
             tools_cache: CachedMetadata::new(),
             resend_permitted: RwLock::default(),
             tools_truncated: AtomicBool::new(false),
@@ -323,6 +331,15 @@ impl Backend {
                 dashmap::mapref::entry::Entry::Vacant(vacant) => {
                     let mut entry = PooledEntry::new(&self.name, &self.failsafe_config);
                     entry.identity_lease = self.admit(key)?;
+                    if matches!(key, PoolKey::PerUser { .. }) {
+                        entry.era = Arc::new(crate::protocol::era::EraCache::for_slot(
+                            &self.name, "per_user",
+                        ));
+                    }
+                    // Observed before it is published, so no store escapes it,
+                    // and under this shard's write guard, which `attach_nudges`
+                    // relies on to never miss a slot opened while it runs.
+                    self.observe_slot(key, &entry);
                     created = true;
                     vacant.insert(Arc::new(entry))
                 }

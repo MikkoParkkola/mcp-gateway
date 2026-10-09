@@ -42,16 +42,25 @@ pub struct KeyServerConfig {
     /// Enable the key server (default: `false`).
     pub enabled: bool,
     /// Issued token lifetime in seconds (default: 3600 = 1 hour).
-    #[serde(default = "default_token_ttl_secs")]
+    #[serde(
+        default = "default_token_ttl_secs",
+        deserialize_with = "crate::duration_bound::secs"
+    )]
     pub token_ttl_secs: u64,
     /// Maximum active tokens per identity before new issuance is rejected (default: 5).
     #[serde(default = "default_max_tokens_per_identity")]
     pub max_tokens_per_identity: u32,
     /// Maximum age of an incoming OIDC token in seconds (replay protection, default: 300).
-    #[serde(default = "default_max_oidc_token_age_secs")]
+    #[serde(
+        default = "default_max_oidc_token_age_secs",
+        deserialize_with = "crate::duration_bound::secs"
+    )]
     pub max_oidc_token_age_secs: u64,
     /// How often to reap expired tokens from the in-memory store (seconds, default: 60).
-    #[serde(default = "default_cleanup_interval_secs")]
+    #[serde(
+        default = "default_cleanup_interval_secs",
+        deserialize_with = "crate::duration_bound::secs"
+    )]
     pub cleanup_interval_secs: u64,
     /// OIDC provider configurations.
     #[serde(default)]

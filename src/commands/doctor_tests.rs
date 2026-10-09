@@ -160,17 +160,14 @@ fn format_badge_color_contains_ansi_codes() {
 
 #[test]
 fn check_port_on_free_port_passes() {
-    // GIVEN: a port that is almost certainly free (dynamic range)
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let occupied_port = listener.local_addr().unwrap().port();
-    drop(listener);
+    // GIVEN: a free port no parallel port-0 bind can take (MIK-8211)
+    let free_port = crate::test_ports::reserved_port();
 
-    // WHEN: checking a free port
-    let free_port = occupied_port + 1;
+    // WHEN: checking it
     let result = check_port(free_port);
 
-    // THEN: may pass or fail depending on OS, but must not panic
-    let _ = result.status; // just verify it runs
+    // THEN: the check passes
+    assert_eq!(result.status, CheckStatus::Pass, "{}", result.detail);
 }
 
 #[test]

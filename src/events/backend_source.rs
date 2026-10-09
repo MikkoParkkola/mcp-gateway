@@ -49,6 +49,53 @@ fn event_name(backend: &str) -> String {
     format!("backend.{backend}.tools_changed")
 }
 
+impl BackendSource {
+    /// The authorization of `name` for a subscription granted at `granted`
+    /// (`None` at subscribe): see [`EventSource::authorize`].
+    async fn authorize_granted(
+        &self,
+        name: &str,
+        arguments: &Value,
+        granted: Option<u64>,
+    ) -> Result<(), RpcError> {
+        let Some((backend, kind)) = parse_name(name) else {
+            return Ok(());
+        };
+        // A backend the config no longer has is refused, not held: the
+        // subscription cannot be delivered again (MIK-7907).
+        if !(self.names)().iter().any(|n| n == backend) {
+            return Err(RpcError::forbidden());
+        }
+        let Some(up) = &self.upstream else {
+            return Ok(());
+        };
+        // Subscribe, fan-out and the worker all ask here, so a backend a
+        // reload made ineligible is refused at every delivery (MIK-7894).
+        // `tools_changed` stays: the gateway announces it itself.
+        if kind != Kind::ToolsChanged && (up.ineligible)().contains(backend) {
+            return Err(RpcError::forbidden());
+        }
+        if kind != Kind::ResourceUpdated {
+            return Ok(());
+        }
+        let Some(uri) = arguments
+            .get("uri")
+            .and_then(Value::as_str)
+            .filter(|u| u.len() <= 2048)
+        else {
+            return Err(RpcError::invalid("arguments.uri"));
+        };
+        up.listeners.authorize_uri(backend, uri, granted).await?;
+        // The lookup can wait on a catalogue read (up to 10s): a reload during
+        // it counts, so eligibility, and the backend still being registered,
+        // are read again once it returns.
+        if (up.ineligible)().contains(backend) || !up.listeners.knows(backend) {
+            return Err(RpcError::forbidden());
+        }
+        Ok(())
+    }
+}
+
 #[async_trait::async_trait]
 impl EventSource for BackendSource {
     fn kind(&self) -> SourceKind {
@@ -106,41 +153,12 @@ impl EventSource for BackendSource {
         name: &str,
         arguments: &Value,
     ) -> Result<(), RpcError> {
-        let Some((backend, kind)) = parse_name(name) else {
-            return Ok(());
-        };
-        // A backend the config no longer has is refused, not held: the
-        // subscription cannot be delivered again (MIK-7907).
-        if !(self.names)().iter().any(|n| n == backend) {
-            return Err(RpcError::forbidden());
-        }
-        let Some(up) = &self.upstream else {
-            return Ok(());
-        };
-        // Subscribe, fan-out and the worker all ask here, so a backend a
-        // reload made ineligible is refused at every delivery (MIK-7894).
-        // `tools_changed` stays: the gateway announces it itself.
-        if kind != Kind::ToolsChanged && (up.ineligible)().contains(backend) {
-            return Err(RpcError::forbidden());
-        }
-        if kind != Kind::ResourceUpdated {
-            return Ok(());
-        }
-        let Some(uri) = arguments
-            .get("uri")
-            .and_then(Value::as_str)
-            .filter(|u| u.len() <= 2048)
-        else {
-            return Err(RpcError::invalid("arguments.uri"));
-        };
-        up.listeners.authorize_uri(backend, uri).await?;
-        // The lookup can wait on a catalogue read (up to 10s): a reload during
-        // it counts, so eligibility, and the backend still being registered,
-        // are read again once it returns.
-        if (up.ineligible)().contains(backend) || !up.listeners.knows(backend) {
-            return Err(RpcError::forbidden());
-        }
-        Ok(())
+        self.authorize_granted(name, arguments, None).await
+    }
+
+    async fn authorize_row(&self, sub: &super::records::Subscription) -> Result<(), RpcError> {
+        self.authorize_granted(&sub.name, &sub.arguments, Some(sub.incarnation))
+            .await
     }
 
     fn matches(&self, _principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
@@ -176,6 +194,10 @@ impl EventSource for BackendSource {
                 // Counted with no task: the revive sweep starts one once the
                 // backend can be listened to (MIK-7944 D6.EVENTS_MISC.6).
                 up.listeners.hold(backend, &interest);
+                // A registration between the check and the park missed it.
+                if up.listeners.knows(backend) {
+                    up.listeners.revive_backend(backend);
+                }
                 Ok(())
             } else if refused {
                 Err(RpcError::forbidden())
@@ -186,6 +208,26 @@ impl EventSource for BackendSource {
         up.listeners
             .add(backend, &interest)
             .map_err(|_| RpcError::exhausted("upstream_uris", Some(MAX_URIS)))
+    }
+
+    fn backend_changed(&self, backend: &str) {
+        if let Some(up) = &self.upstream {
+            up.listeners.revive_backend(backend);
+        }
+    }
+
+    #[cfg(test)]
+    fn upstream_listeners(&self) -> Option<Arc<UpstreamListeners>> {
+        self.upstream.as_ref().map(|up| Arc::clone(&up.listeners))
+    }
+
+    #[cfg(test)]
+    fn upstream_starts(&self) -> usize {
+        self.upstream.as_ref().map_or(0, |up| {
+            up.listeners
+                .starts
+                .load(std::sync::atomic::Ordering::SeqCst)
+        })
     }
 
     async fn on_last_subscriber(&self, key: &str) {
@@ -301,15 +343,16 @@ impl EventsHub {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
-        // A removed backend takes its subscriptions with it, as a reload that
-        // removes a webhook route does; re-adding the name starts clean.
+        // Every change reconciles the backend's rows, keys and listener
+        // (MIK-7940 family): a removed backend takes every kind with it, an
+        // ineligible one its upstream kinds, and a re-added one is listened
+        // to at once.
+        self.reconcile_backend(backend);
         if let Some(source) = self.source(SourceKind::BackendNotification)
             && !source.offers(&event_name(backend))
         {
             // A report still waiting for its quiet period must not outlive the backend.
             self.debounce.latest.lock().remove(backend);
-            self.withdraw(&[event_name(backend)]);
-            self.reconcile_stops_in_background();
             return;
         }
         let generation = {

@@ -7,6 +7,7 @@
 //! and it is security-relevant: attestation precedes the propagation mint, so
 //! an unattested call mints nothing and writes no mint audit row.
 
+use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use axum::http::StatusCode;
 
 use super::super::AppState;
@@ -149,7 +150,7 @@ pub(super) fn preflight(
             Ok(minted) => challenge = minted,
             Err(e) => {
                 return Err(build_http_response(
-                    &refusal(Some(id.clone()), &e),
+                    &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
                     StatusCode::OK,
                 ));
             }
@@ -391,6 +392,13 @@ pub(super) async fn propagate_identity(
         typed,
     } = resolve_headers(state, name, caller, route, idp_cfg).await;
     propagation.identity_key = identity_key;
+    // MIK-8063: an A2A agent's question (an opaque, one-shot token) is bound
+    // to the caller this gateway authenticated whenever no propagated identity
+    // names them. The continuation seal (MIK-8078) binds the same callers; this
+    // keeps the agent's own token bound even if the seal's rule changes.
+    if propagation.identity_key.is_none() && route.backend.is_a2a() {
+        propagation.identity_key = a2a_round_binding(caller);
+    }
     propagation.managed = managed;
     propagation.headers =
         audit_mint(state, name, (caller, route), id, (idp_cfg, result, typed)).await?;
@@ -414,4 +422,19 @@ pub(super) async fn propagate_identity(
         ));
     }
     Ok(propagation)
+}
+
+/// Who an A2A input round on this route belongs to: the caller's verified
+/// identity, else the authenticated client principal. `None` only for an
+/// unauthenticated caller, where every caller is the same principal anyway.
+fn a2a_round_binding(caller: &Caller) -> Option<String> {
+    crate::protocol::mrtr::principal_fingerprint(caller.verified_identity.as_ref()).or_else(|| {
+        caller
+            .client
+            .as_ref()
+            .filter(|client| client.authenticated)
+            .map(|client| {
+                crate::hashing::sha256_hex(format!("a2a-client:{}", client.principal).as_bytes())
+            })
+    })
 }

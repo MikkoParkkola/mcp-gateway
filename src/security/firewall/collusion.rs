@@ -232,6 +232,9 @@ struct State {
     next_seq: u64,
     /// Pool records held across every entry (`MIK-8123`).
     pool: usize,
+    /// What cut deliveries carried, by (source, caller): excuse only
+    /// (`MIK-8066.EXCUSE.1`).
+    sketches: sketch::SketchStore,
 }
 
 impl State {
@@ -243,6 +246,7 @@ impl State {
             self.order.remove(&(seen, seq));
             self.remove(fp);
         }
+        self.sketches.sweep(now, window);
     }
 
     /// Remove `fp`'s entry, releasing its pool records: every removal goes
@@ -292,6 +296,23 @@ pub(crate) struct CollusionDetector {
     source_truncated: AtomicU64,
     /// Pool records allowed across every fingerprint.
     pool_capacity: usize,
+}
+
+/// A sketch position held while its sketch is built outside the lock; if
+/// the build never publishes it, dropping this releases the position and its
+/// bytes (`MIK-8200`: a pending position is never evicted, so only its owner
+/// may free it).
+struct Pending<'a> {
+    state: &'a Mutex<State>,
+    reservation: Option<sketch::Reservation>,
+}
+
+impl Drop for Pending<'_> {
+    fn drop(&mut self) {
+        if let Some(reservation) = self.reservation.take() {
+            self.state.lock().sketches.abandon(&reservation);
+        }
+    }
 }
 
 /// `SipHash` with a per-process random key: fingerprints and id digests are
@@ -442,7 +463,34 @@ impl CollusionDetector {
         fps: Vec<u64>,
         now: Instant,
     ) {
-        self.record_held_at(source, principal, (sensitive, Flows::Any(flows)), fps, now);
+        self.record_held_at(
+            source,
+            principal,
+            (sensitive, Flows::Any(flows)),
+            (fps, None),
+            now,
+        );
+    }
+
+    /// [`Self::record_fingerprints_at`] for a delivery whose receipt was cut:
+    /// `cut` is every fingerprint the caller received, sketched as excuse
+    /// only (`MIK-8066.EXCUSE.1`) and live in the same step as the receipt
+    /// (`MIK-8200`).
+    pub(crate) fn record_cut_fingerprints_at(
+        &self,
+        source: &str,
+        principal: &str,
+        (sensitive, flows): (bool, u64),
+        (fps, cut): (Vec<u64>, Option<std::sync::Arc<[u64]>>),
+        now: Instant,
+    ) {
+        self.record_held_at(
+            source,
+            principal,
+            (sensitive, Flows::Any(flows)),
+            (fps, cut),
+            now,
+        );
     }
 
     /// [`Self::record_fingerprints_at`] for a seam between plan steps under
@@ -461,7 +509,7 @@ impl CollusionDetector {
         masks.sort_unstable();
         masks.dedup();
         let flows = Flows::Each(masks.into());
-        self.record_held_at(source, principal, (sensitive, flows), fps, now);
+        self.record_held_at(source, principal, (sensitive, flows), (fps, None), now);
     }
 
     fn record_held_at(
@@ -469,19 +517,42 @@ impl CollusionDetector {
         source: &str,
         principal: &str,
         (sensitive, flows): (bool, Flows),
-        mut fps: Vec<u64>,
+        (mut fps, cut): (Vec<u64>, Option<std::sync::Arc<[u64]>>),
         now: Instant,
     ) {
         if self.params.action == RelayAction::Off {
             return;
         }
+        // `MIK-8066.EXCUSE.1`: what a cut or truncation drops is still the
+        // caller's own copy, so it is sketched, one sketch per delivery.
+        let mut sketched: Vec<u64> = cut.as_deref().map(<[u64]>::to_vec).unwrap_or_default();
         if fps.len() > MAX_SOURCE_FINGERPRINTS {
             self.source_truncated.fetch_add(
                 count(fps.len() - MAX_SOURCE_FINGERPRINTS),
                 Ordering::Relaxed,
             );
+            sketched.extend_from_slice(&fps);
             fps.truncate(MAX_SOURCE_FINGERPRINTS);
         }
+        sketched.sort_unstable();
+        sketched.dedup();
+        let pair = (self.digest(source), self.digest(principal));
+        let window = self.params.window;
+        // `MIK-8200`: the position is reserved under the lock, the sketch
+        // built outside it, then published with the receipt in one step.
+        let mut pending = Pending {
+            state: &self.state,
+            reservation: None,
+        };
+        if !sketched.is_empty() {
+            let mut state = self.state.lock();
+            state.sweep(now, window);
+            pending.reservation = state.sketches.reserve(pair, sketched.len());
+        }
+        let built = pending
+            .reservation
+            .as_ref()
+            .map(|r| std::sync::Arc::new(sketch::Sketch::build(&sketched, r.shape)));
         let holder = |at| Holder {
             source: self.digest(source),
             principal: self.digest(principal),
@@ -489,9 +560,11 @@ impl CollusionDetector {
             sensitive: sensitive.then(|| Copies::one(at)),
             flows: flows.clone(),
         };
-        let window = self.params.window;
         let mut state = self.state.lock();
         state.sweep(now, window);
+        if let (Some(reservation), Some(sketch)) = (pending.reservation.take(), built) {
+            state.sketches.publish(&reservation, sketch, now);
+        }
         for fp in fps {
             // Calls can reach the lock out of time order; an entry's age only
             // ever moves forward.
@@ -586,11 +659,14 @@ impl CollusionDetector {
                 continue;
             };
             let tuples = &tracked.records;
+            // The sender's own copy from that source: a held tuple, or a
+            // cut delivery's sketch (`MIK-8066.EXCUSE.1`).
             let excused = |source| {
                 tuples
                     .iter()
                     .filter(live)
                     .any(|t| t.source == source && t.principal == sender)
+                    || state.sketches.holds((source, sender), fp, now, window)
             };
             let sensitive =
                 |t: &&Holder| t.sensitive.is_some_and(|copies| copies.held(now, window));
@@ -645,6 +721,8 @@ mod seam;
 #[cfg(test)]
 #[path = "collusion_seam_tests.rs"]
 mod seam_tests;
+#[path = "collusion_sketch.rs"]
+pub(super) mod sketch;
 pub(crate) use seam::SeamFingerprint;
 
 #[cfg(test)]

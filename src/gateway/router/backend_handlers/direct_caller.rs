@@ -6,6 +6,7 @@
 //! passthrough, propagation or idempotency work. The order of every check and
 //! every early return is the order `backend_handler_inner` always had.
 
+use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use axum::{Json, http::HeaderMap, http::StatusCode};
 use serde_json::Value;
 
@@ -229,7 +230,7 @@ pub(super) async fn read_envelope(
         Ok(parsed) => parsed,
         Err(response) => {
             return Err(super::super::helpers::build_http_response(
-                &response,
+                &Egressed::gateway_own(response),
                 StatusCode::BAD_REQUEST,
             ));
         }
@@ -254,42 +255,25 @@ pub(super) async fn read_envelope(
         &method,
         params.as_ref(),
     );
-    // Hardened (GH1942.HARDEN.1 row 10), before the backend lookup: this
-    // route keeps no handshake state, so it serves no legacy request other
-    // than an `initialize` that declares elicitation.
-    if super::super::hardened_elicitation::is_hardened(state)
-        && let Some(refusal) = super::super::hardened_elicitation::direct_refusal(
-            state,
-            &caller.inbound_headers,
-            &json_request,
-            (&method, params.as_ref()),
-            id.as_ref(),
-            (&reading.0, reading.1),
-        )
-    {
+    // Before the backend lookup, under every posture (MIK-8040): what `/mcp`
+    // refuses is refused here with the same code and status, so an unknown
+    // backend gets the request refusal (no existence oracle). Under
+    // `hardened` (GH1942.HARDEN.1 row 10) this route, which keeps no
+    // handshake state, also serves no legacy request other than an
+    // `initialize` that declares elicitation.
+    if let Some(refusal) = super::super::hardened_elicitation::direct_refusal(
+        state,
+        &caller.inbound_headers,
+        &json_request,
+        (&method, params.as_ref()),
+        id.as_ref(),
+        (&reading.0, reading.1),
+    ) {
         return Err(refusal);
     }
-    // Shaped as modern only when `/mcp` would serve the request: outside
-    // `hardened` the checks above did not run, and a request they would
-    // refuse (rollback gate off, unserved revision) is relayed unshaped, as
-    // before MIK-8022, never answered in a revision the gateway turned off.
-    let era = match reading.0.era() {
-        crate::protocol::meta::Era::Modern
-            if super::super::handlers::request_checks::request_check_refusal(
-                state,
-                &caller.inbound_headers,
-                &reading.0,
-                reading.1,
-                &method,
-                params.as_ref(),
-                id.as_ref(),
-            )
-            .is_some() =>
-        {
-            crate::protocol::meta::Era::Legacy
-        }
-        era => era,
-    };
+    // Every modern request reaching here passed the `/mcp` checks above, so
+    // its reading is the era `/mcp` would answer in.
+    let era = reading.0.era();
     Ok(Envelope {
         json_request,
         attestation,
@@ -431,10 +415,28 @@ pub(super) async fn forward_notification(
         }
         Err(e) => {
             super::record_client_failure(state, caller.client.as_ref());
-            tracing::error!(backend = %name, error = %e, "Backend notification failed");
-            let response =
+            // The code only: the error's text can be the backend's.
+            tracing::error!(backend = %name, code = e.to_rpc_code(), "Backend notification failed");
+            let mut response =
                 crate::protocol::JsonRpcResponse::error(None, e.to_rpc_code(), e.to_string());
-            super::super::helpers::build_http_response(&response, StatusCode::INTERNAL_SERVER_ERROR)
+            let call = crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall {
+                server: name,
+                tool: &envelope.method,
+                session_id: None,
+                api_key_name: None,
+                trace_id: &envelope.method,
+                caller_key: None,
+            };
+            let screen = (
+                &call,
+                crate::gateway::meta_mcp::invoke::egress::ContentChecks::Here,
+            );
+            let client = caller.client.as_ref();
+            super::super::direct_guards::scan_direct_egress(state, screen, client, &mut response);
+            super::super::helpers::build_http_response(
+                &Egressed::of(response),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )
         }
     }
 }

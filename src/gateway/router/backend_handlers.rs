@@ -369,17 +369,8 @@ async fn dispatch_in_scope(
     propagated_headers: &[(String, String)],
     identity_key: Option<&str>,
 ) -> crate::Result<JsonRpcResponse> {
-    // `method` here is client-chosen, so this funnel refuses whatever the
-    // peer's era removed before it reaches the wire (MIK-7217, OUTBOUND.1),
-    // with the caller's own id: an `id: null` error cannot be correlated.
-    if crate::gateway::meta_mcp::era_removed_method(backend, method).await {
-        return Ok(JsonRpcResponse::error(
-            Some(id.clone()),
-            crate::protocol::era::METHOD_NOT_FOUND_CODE,
-            format!("{method} was removed in protocol revision 2026-07-28"),
-        ));
-    }
-    let (response, _discarded) = crate::transport::notification_sink::collect(async {
+    // Collected and discarded unread: nothing reaches a client, so no screen.
+    let (response, _discarded) = crate::transport::notification_sink::collect(None, async {
         if propagated_headers.is_empty() && identity_key.is_none() {
             backend.request(method, params).await
         } else {
@@ -389,6 +380,19 @@ async fn dispatch_in_scope(
         }
     })
     .await;
+    // `method` is client-chosen. The backend refuses whatever the dispatched
+    // slot's era removed, before the wire (MIK-7217 OUTBOUND.1, MIK-8186); the
+    // refusal is answered here with the caller's own id, since an `id: null`
+    // error cannot be correlated.
+    if let Err(error) = &response
+        && let Some(message) = crate::backend::removed_method_refusal_message(error)
+    {
+        return Ok(JsonRpcResponse::error(
+            Some(id.clone()),
+            crate::protocol::era::METHOD_NOT_FOUND_CODE,
+            message.to_string(),
+        ));
+    }
     // MIK-7116.MIN.2: what the backend sent counts as read here, before a
     // list drain, filter or normalisation drops fields. `tools/call` notes
     // its result at its gates instead, once they pass.
@@ -679,56 +683,6 @@ fn record_client_failure(state: &AppState, client: Option<&AuthenticatedClient>)
     if let Some(client) = client {
         state.auth_config.record_client_failure(&client.name);
     }
-}
-
-/// Scan a `tools/list` response through the same firewall response scanner used
-/// for `tools/call` (OWASP ASI01 tool-poisoning defense).
-///
-/// Backend-supplied tool `description`/metadata strings are scanned for prompt
-/// injection and have embedded credentials redacted in place before the tool
-/// list reaches the client; a blocking verdict refuses the list. Gated on the
-/// same firewall config as the `tools/call` path, so behavior is unchanged
-/// when the feature/config is off.
-#[cfg(feature = "firewall")]
-fn scan_direct_tools_list_response(
-    state: &AppState,
-    backend_name: &str,
-    client: Option<&AuthenticatedClient>,
-    response: &mut JsonRpcResponse,
-) {
-    use crate::security::response_policy::{ResponseCorrelation, ResponsePolicyTarget};
-
-    // The router's one pass, shared with `tools/call`: a Block (or no
-    // admitting target) replaces the list with the refusal, never a redacted
-    // success (#2349). No later pass inspects a direct response.
-    let caller = client.map_or("anonymous", |c| c.name.as_str());
-    let session_id = format!("direct:{backend_name}");
-    let targets = [ResponsePolicyTarget {
-        server: backend_name.to_owned(),
-        tool: "tools/list".to_owned(),
-    }];
-    let correlation = ResponseCorrelation {
-        session_id: &session_id,
-        caller,
-        external_server: backend_name,
-        external_tool: "tools/list",
-        subject: None,
-    };
-    let _ = super::response_pass::inspect_tools_call_response(
-        state.firewall.as_deref(),
-        response,
-        &targets,
-        &correlation,
-    );
-}
-
-#[cfg(not(feature = "firewall"))]
-fn scan_direct_tools_list_response(
-    _state: &AppState,
-    _backend_name: &str,
-    _client: Option<&AuthenticatedClient>,
-    _response: &mut JsonRpcResponse,
-) {
 }
 
 mod costs;

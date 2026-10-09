@@ -380,12 +380,12 @@ async fn send_message_errors_when_not_connected() {
 #[tokio::test]
 async fn send_message_succeeds_with_live_channel() {
     let t = test_transport("ws://localhost:9999");
-    let (tx, mut rx) = channel::<Message>(8);
+    let (tx, mut rx) = channel::<Outbound>(8);
     *t.inner.outbound_tx.lock().await = Some(tx);
 
     t.send_message(Message::Text("hello".into())).await.unwrap();
 
-    let msg = rx.try_recv().unwrap();
+    let (msg, _) = rx.try_recv().unwrap();
     assert_eq!(msg, Message::Text("hello".into()));
 }
 
@@ -398,8 +398,8 @@ async fn request_times_out_when_the_outbound_queue_is_full() {
         None,
     );
     // A stalled writer: capacity 1, filled, and never drained.
-    let (tx, _rx) = channel::<Message>(1);
-    tx.try_send(Message::Text("fill".into())).unwrap();
+    let (tx, _rx) = channel::<Outbound>(1);
+    tx.try_send((Message::Text("fill".into()), None)).unwrap();
     *t.inner.outbound_tx.lock().await = Some(tx);
 
     // The outer bound turns a hang into a failure instead of a stuck suite.
@@ -424,8 +424,8 @@ async fn close_does_not_wait_behind_a_blocked_send() {
         None,
     );
     // A stalled writer: capacity 1, filled, never drained.
-    let (tx, _rx) = channel::<Message>(1);
-    tx.try_send(Message::Text("fill".into())).unwrap();
+    let (tx, _rx) = channel::<Outbound>(1);
+    tx.try_send((Message::Text("fill".into()), None)).unwrap();
     *t.inner.outbound_tx.lock().await = Some(tx);
 
     let sender = Arc::clone(&t);
@@ -545,6 +545,7 @@ async fn ws_delivers_a_progress_notification_to_the_call_that_supplied_the_token
     let t = connected(&url).await;
 
     let (call, mut rx) = crate::transport::notification_sink::scope(
+        None,
         t.request("tools/call", Some(call_params("tok-a"))),
     );
     let response = tokio::time::timeout(WAIT, call)
@@ -593,9 +594,11 @@ async fn ws_does_not_deliver_another_calls_progress_token() {
     let t = connected(&url).await;
 
     let (a_call, mut a_rx) = crate::transport::notification_sink::scope(
+        None,
         t.request("tools/call", Some(call_params("tok-a"))),
     );
     let (b_call, mut b_rx) = crate::transport::notification_sink::scope(
+        None,
         t.request("tools/call", Some(call_params("tok-b"))),
     );
     let (a, b) = tokio::time::timeout(WAIT, async { tokio::join!(a_call, b_call) })
@@ -635,6 +638,7 @@ async fn ws_drops_a_notification_it_cannot_attribute_to_a_call() {
     let t = connected(&url).await;
 
     let (call, mut rx) = crate::transport::notification_sink::scope(
+        None,
         t.request("tools/call", Some(call_params("tok-a"))),
     );
     tokio::time::timeout(WAIT, call)
@@ -660,6 +664,7 @@ async fn ws_a_retired_progress_token_can_be_registered_again() {
     let t = connected(&url).await;
     for round in 0..2 {
         let (call, mut rx) = crate::transport::notification_sink::scope(
+            None,
             t.request("tools/call", Some(call_params("tok-a"))),
         );
         tokio::time::timeout(WAIT, call)
@@ -705,9 +710,10 @@ async fn ws_a_live_token_is_never_rerouted_to_a_second_call() {
     let t = connected(&url).await;
 
     let (a_call, mut a_rx) = crate::transport::notification_sink::scope(
+        None,
         t.request("tools/call", Some(call_params("tok-a"))),
     );
-    let (b_call, mut b_rx) = crate::transport::notification_sink::scope(async {
+    let (b_call, mut b_rx) = crate::transport::notification_sink::scope(None, async {
         // Let A register first, so B is the call that finds the token taken.
         tokio::task::yield_now().await;
         let mut params = call_params("tok-a");

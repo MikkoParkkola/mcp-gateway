@@ -110,21 +110,15 @@ fn direct_call(tenant: &str, idempotency_key: Option<&str>) -> String {
 }
 
 /// POST as a modern, anonymous client: the era that carries an idempotency key.
+/// The body declares the revision the header does, as `/mcp` requires of it
+/// and the direct route now does too (MIK-8040).
 async fn post_modern(fx: &Fixture, uri: &str, body: &str) -> (StatusCode, Value) {
-    let request = axum::http::Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header("content-type", "application/json")
-        .header("mcp-protocol-version", "2026-07-28")
-        .body(axum::body::Body::from(body.to_string()))
-        .unwrap();
-    let response = fx.router.clone().oneshot(request).await.unwrap();
-    let status = response.status();
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    (
-        status,
-        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-    )
+    let mut call: Value = serde_json::from_str(body).unwrap();
+    let meta = &mut call["params"]["_meta"];
+    meta["io.modelcontextprotocol/protocolVersion"] =
+        json!(crate::protocol::meta::MODERN_VERSIONS[0]);
+    meta["io.modelcontextprotocol/clientCapabilities"] = json!({});
+    post_to(fx, uri, &call.to_string(), &Caller::Modern).await
 }
 
 /// Knobs a cell varies; everything else is the plain auth-off gateway.

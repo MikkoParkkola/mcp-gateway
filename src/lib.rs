@@ -44,6 +44,7 @@ pub mod context_integrity;
 pub mod control_plane;
 pub mod cost_accounting;
 pub mod discovery;
+mod duration_bound;
 pub mod error;
 mod events;
 pub mod failsafe;
@@ -85,6 +86,10 @@ pub mod skills;
 pub mod stats;
 #[cfg(test)]
 mod test_pause;
+#[cfg(test)]
+mod test_ports;
+#[cfg(test)]
+mod test_wait;
 #[cfg(feature = "tool-profiles")]
 pub mod tool_profiles;
 pub mod tool_registry;

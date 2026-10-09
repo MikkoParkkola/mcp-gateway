@@ -328,6 +328,7 @@ We want your PR to merge fast. Here is what helps.
 - [ ] **Tests for new behavior**, not just regression. If your change adds a config field, add a test that exercises it. If it adds a branch, add a test that hits it.
 - [ ] **CI green on Linux**. We ignore known-flaky checks labelled `flaky-ci`, but Linux must pass.
 - [ ] **`cargo fmt --all && cargo clippy --all-features -- -D warnings`** clean on your branch.
+- [ ] **Files stay at 800 lines or fewer**: `python3 scripts/dev/check-file-size.py --base origin/<base-branch>` passes. It is the one size gate, and it covers test files too. A `mod child;` declaration, and the inert attributes above it, are not counted: attaching a split-out module must not count as growth, or the rule would punish the very refactor it exists to encourage (#609). The few files already over the limit are listed in `scripts/dev/file-size-baseline.txt`. A listed file may shrink but never grow, and a PR may not add a row or raise one, so split the file instead.
 - [ ] **A test that reads a repository file** (`include_str!`, or a path under `CARGO_MANIFEST_DIR`) has that exact path in `Cargo.toml` `include`. The published crate carries only that list; the `package-tests` job builds the tests from it and fails otherwise.
 - [ ] **Threat-model note for security-sensitive code** (auth, OAuth, URL handling, path handling, secrets, deserialization of untrusted input): a short note in the PR description covering what inputs come from untrusted sources, what validation you run, what you chose not to validate and why.
 
@@ -346,6 +347,27 @@ We want your PR to merge fast. Here is what helps.
   affected and what an operator must do, for example
   `  Affects: 3.0.0 up to 3.5.1. Operator action: none.`; the same check runs
   `scripts/release/check_security_fragments.py` over `changelog.d/` and fails without it.
+- [ ] **UPGRADING entry** if the change breaks or changes something an operator upgrading
+  from 3.5.x must act on: add `upgrading.d/<number>.md` (several: `<number>-1.md`, ...).
+  Do not number it or edit the numbered list in `docs/UPGRADING-4.0.md`: two open PRs
+  would take the same number. Release preparation numbers the fragments in file-name order.
+  A fragment is a front-matter block, then the section:
+
+  ```markdown
+  ---
+  change: <the summary row's Change cell, one line, no `|`>
+  action: <the summary row's Action needed cell, one line, no `|`>
+  notice: <only if the marker says `prints a notice`: a phrase the notice item contains>
+  ---
+  ## <Title, no number>
+
+  **Startup:** <marker, same grammar as the numbered items>
+
+  <body>
+  ```
+
+  To point an older item at a pending one, write `> Superseded in part by <Title>:`.
+  `python3 scripts/release/upgrading_fragments.py check` validates the fragments.
 - [ ] **PR description** answers: what problem this solves, the shape of the fix, anything you are unsure about.
 - [ ] **Prefer a config struct** over 5+ function arguments. Keeps future extensions clean.
 - [ ] **Doc comments on user-facing config fields**. They surface in `cargo doc` and in downstream IDE tooltips.

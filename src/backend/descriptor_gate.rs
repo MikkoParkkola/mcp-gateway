@@ -290,7 +290,9 @@ impl Backend {
         drop(blocked);
         // The shared view is filtered by this set, so a verdict can change what
         // discovery shows without any list being stored (`MIK-8127`).
-        self.nudge_tools(super::tools_nudge::NudgeKind::Changed);
+        // Coalesced with every store's nudge (`MIK-8208`): a fill per caller
+        // must not queue a nudge per fill.
+        self.nudge_changed_coalesced();
     }
 
     /// Refusal text when `tool` is blocked on this backend.
@@ -318,6 +320,19 @@ impl Backend {
         self.descriptor_gate
             .saturated
             .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// A digest of the filter [`Self::without_blocked`] applies: the blocked
+    /// names and saturation. `MIK-8148`: it lets the change drain tell a filter
+    /// change, which alters what an evicted caller would be shown, from a store.
+    pub(crate) fn visibility_filter_fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.gate_saturated().hash(&mut hasher);
+        for name in self.descriptor_gate.blocked.read().keys() {
+            name.hash(&mut hasher);
+        }
+        hasher.finish()
     }
 
     /// `tools` without the names this backend has blocked since they were
