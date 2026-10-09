@@ -367,6 +367,16 @@ async fn a_candidate_probes_an_upgraded_peer_in_the_2026_dialect() {
         Some(Era::Modern),
         "the candidate asked a strict 2026 peer in the 2025 dialect"
     );
+    pooled(&backend)
+        .expect("swapped in")
+        .request("tools/list", None)
+        .await
+        .expect("the new transport serves");
+    assert_eq!(
+        stub.lists.lock().unwrap().last(),
+        Some(&true),
+        "the first call after an upgrade swap was not shaped Modern (MIK-8218)"
+    );
 }
 
 /// ERA.4: a candidate that probes and then fails to start installs nothing;
@@ -397,5 +407,67 @@ async fn a_failed_candidate_leaves_the_verdict_alone() {
         entry.era.cached().await,
         Some(Era::Modern),
         "a candidate that never replaced the transport changed its verdict"
+    );
+}
+
+/// Restart a backend whose peer answered `before` after its peer switched to
+/// `after`, and return the slot's era at the instant the candidate became
+/// reachable, and whether the first call on it carried `_meta`.
+async fn swap_across_eras(before: u8, after: u8) -> (Option<crate::protocol::era::Era>, bool) {
+    let (url, stub) = era_stub().await;
+    stub.mode.store(before, Ordering::SeqCst);
+    let backend = http_backend(url);
+    backend.start().await.expect("premise: the backend starts");
+    stub.mode.store(after, Ordering::SeqCst);
+    let outcome = within("the restart", non_interactive_restart(&backend))
+        .await
+        .expect("restart task")
+        .expect("the candidate starts");
+    assert!(matches!(outcome, RestartOutcome::Rebuilt), "{outcome:?}");
+    let at_publish = *backend
+        .era_at_publish
+        .lock()
+        .last()
+        .expect("premise: the swap published");
+    pooled(&backend)
+        .expect("swapped in")
+        .request("tools/list", None)
+        .await
+        .expect("the candidate serves");
+    let shaped_modern = *stub.lists.lock().unwrap().last().expect("a list call");
+    (at_publish, shaped_modern)
+}
+
+/// BOUND.1 (downgrade): the candidate is never reachable while the slot still
+/// reads its predecessor's Modern verdict.
+#[tokio::test]
+async fn a_downgraded_candidate_is_never_reachable_in_the_old_dialect() {
+    use crate::protocol::era::Era;
+    let (at_publish, shaped_modern) = swap_across_eras(DISCOVER_MODERN, DISCOVER_LEGACY).await;
+    assert_eq!(
+        at_publish,
+        Some(Era::Legacy),
+        "the candidate became reachable with its predecessor's verdict"
+    );
+    assert!(
+        !shaped_modern,
+        "the first call on a legacy candidate carried _meta"
+    );
+}
+
+/// BOUND.2 (upgrade): the candidate is never reachable while the slot still
+/// reads its predecessor's Legacy verdict.
+#[tokio::test]
+async fn an_upgraded_candidate_is_never_reachable_in_the_old_dialect() {
+    use crate::protocol::era::Era;
+    let (at_publish, shaped_modern) = swap_across_eras(DISCOVER_LEGACY, DISCOVER_STRICT).await;
+    assert_eq!(
+        at_publish,
+        Some(Era::Modern),
+        "the candidate became reachable with its predecessor's verdict"
+    );
+    assert!(
+        shaped_modern,
+        "the first call on a modern candidate lacked _meta"
     );
 }

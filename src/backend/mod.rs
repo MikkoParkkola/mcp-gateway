@@ -255,6 +255,11 @@ pub struct Backend {
     /// transport pooled cannot show through the slot (MIK-8012).
     #[cfg(test)]
     pub(crate) rebuilds_attempted: std::sync::atomic::AtomicUsize,
+    /// The slot's era (`cached_now`) at the instant each publish made a
+    /// transport reachable: the dialect its first request is shaped in
+    /// (MIK-8012 boundary rows).
+    #[cfg(test)]
+    pub(crate) era_at_publish: parking_lot::Mutex<Vec<Option<crate::protocol::era::Era>>>,
     /// A test's stand-ins for the user's token store and browser, used by the
     /// OAuth client [`Backend::create_oauth_client`] builds.
     #[cfg(test)]

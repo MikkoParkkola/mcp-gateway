@@ -35,6 +35,8 @@ impl Backend {
         }
         *entry.listen.write() = listen;
         *entry.transport.write() = Some(Arc::clone(transport));
+        #[cfg(test)]
+        self.era_at_publish.lock().push(entry.era.cached_now());
         Ok(())
     }
 }
