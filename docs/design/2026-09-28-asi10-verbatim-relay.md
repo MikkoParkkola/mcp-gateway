@@ -867,8 +867,9 @@ causes names it (MIK-8201):
 **B3 Bloom false excuse (D3).** A pair's sketch at position i is sized for a target rate of
 0.35% × 2^-i, using the classic ideal-hash rate with independent per-probe mixing (splitmix64);
 sizing is bounded by the byte cap. The guarantee is the measured aggregate across all of a pair's
-live sketches: 0.69% (95% CI [0.67%, 0.71%], 800,000 trials) for 8 sketches of 10,000 then 40 of
-16 fingerprints, against a stated bound of 0.8% for production-sized sketches. It applies only to
+live sketches: 0.69% (0.6876%, 95% CI [0.6695%, 0.7057%], 800,000 trials, final sizing with
+geometric growth and a local probe search) for 8 sketches of 10,000 then 40 of 16 fingerprints,
+against a stated bound of 0.8% for production-sized sketches. It applies only to
 the holder's own (source, caller) pair. A relay with exactly 2 matches is lost if either is falsely
 excused: under 2%.
 

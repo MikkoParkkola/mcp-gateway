@@ -67,6 +67,12 @@ fn ln_rate(n: usize, bits: usize, probes: u32) -> f64 {
 /// The shape of the sketch at `position` holding `n` fingerprints: the
 /// smallest whose rate is at most `P0 · 2^-position`.
 pub(super) fn shape(n: usize, position: usize) -> Shape {
+    sized(n, position).0
+}
+
+/// [`shape`] with the number of growth steps it took: a few hundred at
+/// most, since it runs under the detector lock.
+fn sized(n: usize, position: usize) -> (Shape, usize) {
     #[expect(clippy::cast_precision_loss, reason = "positions are small")]
     let ln_target = P0.ln() - position as f64 * std::f64::consts::LN_2;
     let per_fp = -ln_target / (std::f64::consts::LN_2 * std::f64::consts::LN_2);
@@ -77,16 +83,35 @@ pub(super) fn shape(n: usize, position: usize) -> Shape {
         reason = "a positive, bounded word count"
     )]
     let mut words = ((n.max(1) as f64 * per_fp / 64.0).ceil() as usize).clamp(MIN_WORDS, MAX_WORDS);
-    loop {
+    // Grows by about 1/64 per step, so at most a few hundred steps up to the
+    // cap: this runs under the detector lock (`reserve`).
+    for steps in 0.. {
         let bits = words * 64;
-        let probes = (1..=MAX_PROBES)
-            .min_by(|a, b| ln_rate(n, bits, *a).total_cmp(&ln_rate(n, bits, *b)))
-            .unwrap_or(1);
+        let probes = best_probes(n, bits);
         if n == 0 || words >= MAX_WORDS || ln_rate(n, bits, probes) <= ln_target {
-            return Shape { words, probes };
+            return (Shape { words, probes }, steps);
         }
-        words += 1;
+        words = (words + words.div_ceil(64)).min(MAX_WORDS);
     }
+    unreachable!("the word count reaches MAX_WORDS")
+}
+
+/// The probe count with the lowest rate for `n` fingerprints in `bits`
+/// bits. The rate is unimodal in the probe count, with its minimum within one
+/// of `bits / n · ln 2`, so only that neighbourhood is searched.
+fn best_probes(n: usize, bits: usize) -> u32 {
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "a small positive probe count"
+    )]
+    let k0 = ((bits as f64 / n.max(1) as f64) * std::f64::consts::LN_2)
+        .round()
+        .clamp(1.0, f64::from(MAX_PROBES)) as u32;
+    (k0.saturating_sub(2).max(1)..=(k0 + 2).min(MAX_PROBES))
+        .min_by(|a, b| ln_rate(n, bits, *a).total_cmp(&ln_rate(n, bits, *b)))
+        .unwrap_or(k0)
 }
 
 /// splitmix64's finalizer.

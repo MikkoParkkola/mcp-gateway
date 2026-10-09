@@ -219,7 +219,7 @@ fn aggregate(sizes: &[usize], fixed: Option<&[Shape]>, builds: u64, strangers: u
 /// budget: under 1% (stated bound 0.8%, measured 0.69% on the mixed input).
 #[test]
 fn sixteen_live_sketches_keep_the_budget() {
-    let rate = aggregate(&[10_000; 16], None, 2, 50_000);
+    let rate = aggregate(&[10_000; 16], None, 8, 50_000);
     assert!(rate < 0.01, "aggregate {rate}");
 }
 
@@ -229,7 +229,7 @@ fn sixteen_live_sketches_keep_the_budget() {
 fn a_mixed_pair_keeps_the_budget() {
     let mut sizes = vec![10_000; 8];
     sizes.extend([16; 40]);
-    let rate = aggregate(&sizes, None, 4, 50_000);
+    let rate = aggregate(&sizes, None, 8, 50_000);
     assert!(rate < 0.01, "aggregate {rate}");
 }
 
@@ -336,4 +336,75 @@ fn an_impossible_count_is_bounded_and_refused() {
     let mut store = SketchStore::default();
     assert!(store.reserve((1, 2), usize::MAX).is_none(), "built");
     assert_eq!(store.refused, 1, "the refusal was not counted");
+}
+
+/// `MIK-8200`: sizing runs under the detector lock, so even a target no
+/// ordinary pair reaches (100,000 fingerprints at position 300) is sized in
+/// a bounded number of steps, not one word at a time up to the cap.
+#[test]
+fn sizing_a_deep_position_is_quick() {
+    for (n, position) in [(100_000, 300), (1, 2_000), (20_000, 64)] {
+        let (s, steps) = super::sized(n, position);
+        assert!(s.words <= super::MAX_WORDS, "{s:?}");
+        assert!(
+            steps <= 1_000,
+            "n = {n}, position {position}: {steps} steps"
+        );
+    }
+}
+
+/// `MIK-8200` (design T4): a reservation keeps its position when the pair's
+/// other sketches expire while it is being built.
+#[test]
+fn a_reservation_survives_expiry_during_its_build() {
+    let mut store = SketchStore::default();
+    let now = Instant::now();
+    let window = secs(600);
+    assert!(store.insert((1, 2), &values(1, 50), now));
+    let fps = values(2, 50);
+    let pending = store.reserve((1, 2), fps.len()).expect("fits");
+    assert_eq!(pending.position, 1);
+    store.sweep(now + secs(700), window);
+    let sketch = Arc::new(Sketch::build(&fps, pending.shape));
+    store.publish(&pending, sketch, now + secs(700));
+    assert_eq!(store.positions_of((1, 2)), vec![1], "the position moved");
+    assert!(store.holds((1, 2), fps[0], now + secs(700), window));
+}
+
+/// `MIK-8200` (design T3b, T4): two cut deliveries recorded for one pair at
+/// once, each reserving outside the lock's build step, end with both
+/// sketches live at distinct positions.
+#[test]
+fn concurrent_cut_deliveries_publish_at_distinct_positions() {
+    use super::super::{CollusionDetector, RelayAction, RelayParams};
+    let detector = CollusionDetector::new(RelayParams {
+        action: RelayAction::Observe,
+        ..RelayParams::default()
+    });
+    let now = Instant::now();
+    let barrier = std::sync::Barrier::new(2);
+    std::thread::scope(|scope| {
+        for seed in [1, 2] {
+            let (detector, barrier) = (&detector, &barrier);
+            scope.spawn(move || {
+                let cut: Arc<[u64]> = values(seed, 5_000).into();
+                barrier.wait();
+                detector.record_cut_fingerprints_at(
+                    "alpha:read",
+                    "alice",
+                    (false, 0),
+                    (Vec::new(), Some(cut)),
+                    now,
+                );
+            });
+        }
+    });
+    let pair = (detector.digest("alpha:read"), detector.digest("alice"));
+    let mut positions = detector.state.lock().sketches.positions_of(pair);
+    positions.sort_unstable();
+    assert_eq!(
+        positions,
+        vec![0, 1],
+        "positions collided or a sketch was lost"
+    );
 }
