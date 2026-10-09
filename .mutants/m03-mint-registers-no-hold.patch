@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/invoke/continuation.rs b/src/gateway/meta_mcp/invoke/continuation.rs
+index 78e91eae1..05347b235 100644
+--- a/src/gateway/meta_mcp/invoke/continuation.rs
++++ b/src/gateway/meta_mcp/invoke/continuation.rs
+@@ -57,7 +57,6 @@ pub(super) async fn mint_continuation(
+         record_continuation_mint("no_slot");
+         return None;
+     };
+-    crate::gateway::meta_mcp::sealed_hold::register(continuation);
+     match continuation.keyring().mint(&payload) {
+         Ok(envelope) => {
+             record_continuation_mint("ok");
