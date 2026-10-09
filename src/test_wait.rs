@@ -37,12 +37,35 @@ where
     }
 }
 
+/// Poll `done` until it holds, for at most `bound` of real time (MIK-8216).
+///
+/// For a paused-clock test that waits on blocking work an OS thread does,
+/// which [`wait_until`] cannot see: the tokio clock never moves while this
+/// waits. Each round yields, so tasks run, then sleeps 2 ms of real time, and
+/// neither lets the paused clock auto-advance to a pending timer.
+pub(crate) async fn wait_real_time(
+    bound: Duration,
+    mut done: impl FnMut() -> bool,
+) -> Result<(), String> {
+    let start = std::time::Instant::now();
+    loop {
+        if done() {
+            return Ok(());
+        }
+        if start.elapsed() >= bound {
+            return Err(format!("did not happen within {bound:?} of real time"));
+        }
+        tokio::task::yield_now().await;
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::ops::ControlFlow;
     use std::time::Duration;
 
-    use super::wait_until;
+    use super::{wait_real_time, wait_until};
 
     /// A wait whose condition never holds gives up at its bound, with the
     /// last observation, and not later.
@@ -79,5 +102,34 @@ mod tests {
         })
         .await;
         assert_eq!(value, Ok(3));
+    }
+
+    /// MIK-8216: work an OS thread finishes late, off the runtime, is still
+    /// waited for. The writer lands well after 1000 scheduler turns are over,
+    /// so the wait must be measured in real time; and the paused clock, with a
+    /// timer pending, must not move while it waits, so no later interval could
+    /// stand in for the one under test.
+    #[tokio::test]
+    async fn a_late_os_thread_write_is_waited_for_on_a_still_clock() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("late");
+        tokio::time::pause();
+        let pending = tokio::spawn(tokio::time::sleep(Duration::from_secs(300)));
+        let before = tokio::time::Instant::now();
+        let target = file.clone();
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            std::fs::write(&target, b"{}").expect("write");
+        });
+        let waited = wait_real_time(Duration::from_secs(30), || file.exists()).await;
+        let moved = tokio::time::Instant::now() - before;
+        writer.join().expect("writer thread");
+        pending.abort();
+        assert_eq!(waited, Ok(()), "the late write was not waited for");
+        assert_eq!(
+            moved,
+            Duration::ZERO,
+            "the paused clock moved while waiting: a later interval could explain the file"
+        );
     }
 }
