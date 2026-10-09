@@ -12,7 +12,9 @@
 use serde_json::{Value, json};
 use url::Url;
 
-use super::types::{AgentCard, DEFAULT_CARD_PATH, Message, PROTOCOL_VERSION, SendMessageResponse};
+use super::types::{
+    AgentCard, DEFAULT_CARD_PATH, Message, PROTOCOL_VERSION, SendMessageResponse, Task,
+};
 use crate::security::{diagnostic_url, safe_request_error, safe_reqwest_message};
 use crate::{Error, Result};
 
@@ -36,14 +38,19 @@ impl std::fmt::Debug for Endpoint {
     }
 }
 
-/// What one `SendMessage` came back as.
-pub(crate) enum Reply {
-    /// A `{task}` or `{message}` result.
-    Answer(Box<SendMessageResponse>),
+/// What one call came back as: its decoded result, or the agent's own error.
+pub(crate) enum Reply<T> {
+    Answer(T),
     /// The agent's own JSON-RPC error, passed on as the agent's.
-    AgentError { code: i32, message: String },
+    AgentError {
+        code: i32,
+        message: String,
+    },
 }
 
+/// Cheap to clone: the HTTP client is a handle to one shared pool. A clone is
+/// what a spawned `CancelTask` carries.
+#[derive(Clone)]
 pub(crate) struct A2aClient {
     http: reqwest::Client,
     origin: Url,
@@ -167,44 +174,99 @@ impl A2aClient {
         })
     }
 
-    /// One blocking `SendMessage`.
+    /// One `SendMessage` that returns once the agent has created its task.
     pub(crate) async fn send_message(
         &self,
         endpoint: &Endpoint,
         message: Message,
         extra_headers: &[(String, String)],
-    ) -> Result<Reply> {
-        let mut params = json!({
+    ) -> Result<Reply<Box<SendMessageResponse>>> {
+        let params = json!({
             "message": message,
-            "configuration": {"acceptedOutputModes": ["text/plain", "application/json"]},
+            // Return as soon as the task exists: the bridge must hold the task
+            // id while it waits, or a cancel during the wait reaches nothing.
+            "configuration": {
+                "acceptedOutputModes": ["text/plain", "application/json"],
+                "returnImmediately": true,
+                // The bridge never reads a task's history: asking for none
+                // keeps a long conversation from filling the reply cap.
+                "historyLength": 0,
+            },
         });
+        let envelope = self
+            .rpc(endpoint, "SendMessage", params, extra_headers)
+            .await?;
+        decode_reply(&envelope)
+    }
+
+    /// `GetTask`: the task's current state.
+    pub(crate) async fn get_task(
+        &self,
+        endpoint: &Endpoint,
+        task_id: &str,
+        extra_headers: &[(String, String)],
+    ) -> Result<Reply<Task>> {
+        let envelope = self
+            .rpc(
+                endpoint,
+                "GetTask",
+                json!({"id": task_id, "historyLength": 0}),
+                extra_headers,
+            )
+            .await?;
+        decode_task(&envelope, "GetTask")
+    }
+
+    /// `CancelTask`: ask the agent to stop the task.
+    pub(crate) async fn cancel_task(
+        &self,
+        endpoint: &Endpoint,
+        task_id: &str,
+        extra_headers: &[(String, String)],
+    ) -> Result<Reply<Task>> {
+        let envelope = self
+            .rpc(
+                endpoint,
+                "CancelTask",
+                json!({"id": task_id}),
+                extra_headers,
+            )
+            .await?;
+        decode_task(&envelope, "CancelTask")
+    }
+
+    /// One JSON-RPC request to `endpoint`; the raw envelope it answered with.
+    async fn rpc(
+        &self,
+        endpoint: &Endpoint,
+        method: &str,
+        mut params: Value,
+        extra_headers: &[(String, String)],
+    ) -> Result<Value> {
         if let Some(tenant) = &endpoint.tenant {
             params["tenant"] = json!(tenant);
         }
         let body = json!({
             "jsonrpc": "2.0",
             "id": uuid::Uuid::new_v4().to_string(),
-            "method": "SendMessage",
+            "method": method,
             "params": params,
         });
         let request = self.with_headers(self.http.post(&endpoint.url).json(&body), extra_headers);
         let response = request.send().await.map_err(|e| {
             safe_request_error(
-                &format!(
-                    "A2A SendMessage to {} failed",
-                    diagnostic_url(&endpoint.url)
-                ),
+                &format!("A2A {method} to {} failed", diagnostic_url(&endpoint.url)),
                 &e,
             )
         })?;
         if !response.status().is_success() {
             return Err(Error::Protocol(format!(
-                "A2A SendMessage to {} returned HTTP {}",
+                "A2A {method} to {} returned HTTP {}",
                 diagnostic_url(&endpoint.url),
                 response.status()
             )));
         }
-        decode_reply(&read_capped_json(response, "A2A SendMessage reply").await?)
+        read_capped_json(response, &format!("A2A {method} reply")).await
     }
 
     /// Configured headers, then this request's own, then the protocol version.
@@ -282,8 +344,8 @@ async fn read_capped_json(mut response: reqwest::Response, what: &str) -> Result
     serde_json::from_slice(&body).map_err(|e| Error::Protocol(format!("{what} is not JSON: {e}")))
 }
 
-/// A JSON-RPC envelope as the agent's error or its `SendMessage` result.
-fn decode_reply(envelope: &Value) -> Result<Reply> {
+/// A JSON-RPC envelope as the agent's error or its raw result.
+fn decode_envelope(envelope: &Value) -> Result<Reply<Value>> {
     // `"error": null` beside a result is a success some agents send; only an
     // error object is the agent's error.
     if let Some(error) = envelope.get("error").filter(|error| !error.is_null()) {
@@ -299,10 +361,20 @@ fn decode_reply(envelope: &Value) -> Result<Reply> {
             .to_owned();
         return Ok(Reply::AgentError { code, message });
     }
-    let result = envelope
+    envelope
         .get("result")
         .cloned()
-        .ok_or_else(|| Error::Protocol("A2A reply has neither result nor error".into()))?;
+        .map(Reply::Answer)
+        .ok_or_else(|| Error::Protocol("A2A reply has neither result nor error".into()))
+}
+
+/// A `SendMessage` envelope: the agent's error, or exactly one of a task and
+/// a message.
+fn decode_reply(envelope: &Value) -> Result<Reply<Box<SendMessageResponse>>> {
+    let result = match decode_envelope(envelope)? {
+        Reply::Answer(result) => result,
+        Reply::AgentError { code, message } => return Ok(Reply::AgentError { code, message }),
+    };
     let reply: SendMessageResponse = serde_json::from_value(result)
         .map_err(|e| Error::Protocol(format!("A2A SendMessage result is malformed: {e}")))?;
     if reply.task.is_some() == reply.message.is_some() {
@@ -311,6 +383,16 @@ fn decode_reply(envelope: &Value) -> Result<Reply> {
         ));
     }
     Ok(Reply::Answer(Box::new(reply)))
+}
+
+/// A `GetTask` or `CancelTask` envelope: the agent's error, or a task.
+fn decode_task(envelope: &Value, method: &str) -> Result<Reply<Task>> {
+    match decode_envelope(envelope)? {
+        Reply::Answer(result) => serde_json::from_value(result)
+            .map(Reply::Answer)
+            .map_err(|e| Error::Protocol(format!("A2A {method} result is malformed: {e}"))),
+        Reply::AgentError { code, message } => Ok(Reply::AgentError { code, message }),
+    }
 }
 
 #[cfg(test)]

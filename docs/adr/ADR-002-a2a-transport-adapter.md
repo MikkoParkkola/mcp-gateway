@@ -20,6 +20,11 @@ This amendment supersedes the body below wherever the two disagree.
   - Requests use the backend HTTP client: pinned resolution, and every redirect same-origin and SSRF-checked.
   - The endpoint the card advertises must share the origin of `a2a_url`, so configured credentials never leave the configured origin.
 - **No caller-supplied `context_id`.** One caller could otherwise name another caller's conversation at the agent.
+- **Questions and long tasks.** The send returns as soon as the agent creates its task, and the bridge polls `GetTask` until the task is terminal or interrupted, bounded by the backend `timeout`.
+  - An interrupted task (input-required or auth-required) becomes an MCP `input_required` round. Its `requestState` is an opaque, one-shot token bound to the caller: sealed by the gateway on the meta route, and bound to the authenticated principal on the per-backend route.
+  - An accepted answer continues the same agent task.
+  - The agent's task is canceled when a question is declined, when an in-flight call is abandoned, when the backend closes, and when a question goes unanswered: the token expires at 315 s and the sweep runs every 15 s, so within 330 s.
+  - The gateway's upstream-task recovery leg is not used: its follow loop cannot continue an input round. A gateway restart therefore loses unanswered questions, and the agent's own expiry applies to those tasks.
 
 ---
 
