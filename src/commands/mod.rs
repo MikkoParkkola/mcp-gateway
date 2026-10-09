@@ -798,7 +798,10 @@ mod admin_credential_tests {
         let config = mcp_gateway::config::Config::load(Some(&path))
             .expect("a fresh init config must load and validate under D1-a");
         assert!(
-            config.security.transparency_log.enabled,
+            config
+                .security
+                .transparency_log
+                .is_enabled(config.auth.enabled),
             "auth is on in the starter config, so the audit log must be too"
         );
     }

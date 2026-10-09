@@ -41,7 +41,13 @@ fn auth_enabled_without_an_audit_section_turns_the_log_on() {
     let path = write_config(&dir, AUTH_ON);
     let config = mcp_gateway::config::Config::load(Some(&path))
         .expect("auth on with no audit section must load");
-    assert!(config.security.transparency_log.enabled, "the log is on");
+    assert!(
+        config
+            .security
+            .transparency_log
+            .is_enabled(config.auth.enabled),
+        "the log is on"
+    );
 }
 
 /// P2c2: a section that sets only the path also leaves `enabled` unset, so
@@ -56,7 +62,13 @@ fn auth_enabled_with_a_section_that_omits_enabled_turns_the_log_on() {
     );
     let path = write_config(&dir, &body);
     let config = mcp_gateway::config::Config::load(Some(&path)).expect("loads");
-    assert!(config.security.transparency_log.enabled, "the log is on");
+    assert!(
+        config
+            .security
+            .transparency_log
+            .is_enabled(config.auth.enabled),
+        "the log is on"
+    );
 }
 
 /// P2c2 guard: the default follows auth, so auth off leaves the log off.
@@ -66,7 +78,10 @@ fn auth_disabled_leaves_the_audit_log_off() {
     let path = write_config(&dir, "auth:\n  enabled: false\n");
     let config = mcp_gateway::config::Config::load(Some(&path)).expect("loads");
     assert!(
-        !config.security.transparency_log.enabled,
+        !config
+            .security
+            .transparency_log
+            .is_enabled(config.auth.enabled),
         "the log stays off"
     );
 }

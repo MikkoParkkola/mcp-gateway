@@ -29,8 +29,12 @@ pub use crate::security::remote_provenance::RemoteServerSigningConfig;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TransparencyLogConfig {
-    /// Enable the transparency log. Default: `false` (opt-in).
-    pub enabled: bool,
+    /// Enable the transparency log. Unset means on when auth is on and off
+    /// otherwise (MIK-8044 P2c2); read it through [`Self::is_enabled`]. Kept
+    /// unset rather than resolved at load so a config rewrite does not write
+    /// a line the operator never did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
     /// Path to the NDJSON log file (`~` is expanded at startup).
     pub path: String,
     /// Key identifier written into `key_id` for rotation tracking.
@@ -69,7 +73,7 @@ impl std::fmt::Debug for TransparencyLogConfig {
 impl Default for TransparencyLogConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: None,
             path: "~/.mcp-gateway/transparency/transparency.jsonl".to_string(),
             key_id: "default".to_string(),
             shared_secret: String::new(),
@@ -78,21 +82,30 @@ impl Default for TransparencyLogConfig {
     }
 }
 
-/// The runtime copy the logger opens with; one mapping, so a new key cannot
-/// be dropped at one of several hand-written call sites.
-impl From<&TransparencyLogConfig> for crate::security::transparency_log::TransparencyLogConfig {
-    fn from(c: &TransparencyLogConfig) -> Self {
-        Self {
-            enabled: c.enabled,
-            path: c.path.clone(),
-            key_id: c.key_id.clone(),
-            shared_secret: c.shared_secret.clone(),
-            rotation: c.rotation.clone(),
+impl TransparencyLogConfig {
+    /// Whether the log is on: as written, or, when unset, on exactly when
+    /// auth is on (MIK-8044 P2c2).
+    #[must_use]
+    pub fn is_enabled(&self, auth_enabled: bool) -> bool {
+        self.enabled.unwrap_or(auth_enabled)
+    }
+
+    /// The runtime copy the logger opens with; one mapping, so a new key
+    /// cannot be dropped at one of several hand-written call sites. Takes
+    /// `auth_enabled` because an unset `enabled` means nothing without it.
+    pub(crate) fn runtime(
+        &self,
+        auth_enabled: bool,
+    ) -> crate::security::transparency_log::TransparencyLogConfig {
+        crate::security::transparency_log::TransparencyLogConfig {
+            enabled: self.is_enabled(auth_enabled),
+            path: self.path.clone(),
+            key_id: self.key_id.clone(),
+            shared_secret: self.shared_secret.clone(),
+            rotation: self.rotation.clone(),
         }
     }
-}
 
-impl TransparencyLogConfig {
     /// Load-time checks: the log is required with auth on (D1-a), and the
     /// rotation bounds hold (D6).
     ///
@@ -112,7 +125,7 @@ impl TransparencyLogConfig {
     /// [`crate::Error::ConfigValidation`] when auth is on and the log is off or
     /// has a blank path.
     pub(crate) fn validate_required_by_auth(&self, auth_enabled: bool) -> crate::Result<()> {
-        if auth_enabled && (!self.enabled || self.path.trim().is_empty()) {
+        if auth_enabled && (!self.is_enabled(auth_enabled) || self.path.trim().is_empty()) {
             return Err(crate::Error::ConfigValidation(
                 "auth is enabled, so security.transparency_log must be enabled with a writable \
                  path (docs/UPGRADING-4.0.md section 43)"
