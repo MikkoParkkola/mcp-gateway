@@ -17,6 +17,8 @@
 //! So the rule is asymmetric, and getting it backwards is the easy mistake:
 //! evidence of modernity must be positive, and everything else is legacy.
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use serde_json::json;
 
 /// What a peer speaks, as far as we have been able to establish.
@@ -157,6 +159,12 @@ pub struct EraCache {
     /// One value rather than five cells: no reader can observe an `era` from
     /// the latest probe beside an `era_evidence` from the previous one.
     observation: tokio::sync::Mutex<EraObservation>,
+    /// The determined era as the outbound path reads it, without the lock
+    /// (MIK-8218): 0 none, 1 Modern, 2 Legacy. Written only by [`Self::set`],
+    /// under the lock, so it always mirrors `observation`; any holder of the
+    /// lock (a reader, a discard that finds nothing to discard) no longer
+    /// hides a verdict from a request.
+    verdict: AtomicU8,
 }
 
 impl EraCache {
@@ -172,22 +180,40 @@ impl EraCache {
             name: backend.into(),
             slot,
             observation: tokio::sync::Mutex::default(),
+            verdict: AtomicU8::new(0),
         }
     }
 
     /// The era for a caller that must not wait — `None` when it is
-    /// undetermined *or* momentarily unreadable.
+    /// undetermined.
     ///
     /// The outbound request path reads the era on every request, and the
     /// probe's own `server/discover` is one of those requests. `resolve_*`
-    /// holds this lock across the probe on purpose, so an awaiting read on
-    /// that path deadlocks the probe against itself until its own timeout.
-    /// Collapsing "held" into `None` loses nothing: a held lock means a probe
-    /// is in flight, and an in-flight probe means no era is determined yet —
-    /// which is what `None` already says.
+    /// holds the lock across the probe on purpose, so this reads the
+    /// lock-free mirror instead of the lock. It used to `try_lock` and read a
+    /// held lock as `None`, on the belief that a held lock meant a probe in
+    /// flight; any brief reader holds it too, and a request to a known-Modern
+    /// peer then went out legacy-shaped (MIK-8218). A probe still reads
+    /// `None`: every probe runs after a discard or before any verdict.
     pub(crate) fn cached_now(&self) -> Option<Era> {
-        let observation = *self.observation.try_lock().ok()?;
-        (observation.source == EraSource::Probed).then_some(observation.era)
+        match self.verdict.load(Ordering::Acquire) {
+            1 => Some(Era::Modern),
+            2 => Some(Era::Legacy),
+            _ => None,
+        }
+    }
+
+    /// The one write of the determination: `slot` is the locked observation,
+    /// and the lock-free mirror [`Self::cached_now`] reads is updated with it,
+    /// so the two cannot disagree once the lock is released.
+    fn set(&self, slot: &mut EraObservation, value: EraObservation) {
+        *slot = value;
+        let verdict = match (value.source, value.era) {
+            (EraSource::Probed, Era::Modern) => 1,
+            (EraSource::Probed, Era::Legacy) => 2,
+            _ => 0,
+        };
+        self.verdict.store(verdict, Ordering::Release);
     }
 
     /// Test support: hold the era lock as a parked reader does (MIK-8218).
@@ -242,7 +268,10 @@ impl EraCache {
     /// leaving the caller believing it had discarded a belief it had not. A
     /// control that fails silently is worse than one that blocks briefly.
     pub async fn invalidate(&self) {
-        *self.observation.lock().await = EraObservation::never_probed();
+        self.set(
+            &mut *self.observation.lock().await,
+            EraObservation::never_probed(),
+        );
         tracing::info!(
             target: "mcp_gateway::observed",
             backend = %self.name,
@@ -282,7 +311,7 @@ impl EraCache {
         if observation.source != EraSource::Probed || !contradicted(observation.era) {
             return false;
         }
-        if !serving(&mut || *observation = EraObservation::never_probed()) {
+        if !serving(&mut || self.set(&mut observation, EraObservation::never_probed())) {
             return false;
         }
         tracing::info!(
@@ -389,7 +418,7 @@ impl EraCache {
         let mut discarded = false;
         if !serving(&mut || {
             if guard.source == EraSource::Probed {
-                *guard = EraObservation::never_probed();
+                self.set(&mut guard, EraObservation::never_probed());
                 discarded = true;
             }
         }) {
@@ -429,7 +458,7 @@ impl EraCache {
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let observation = EraObservation::from_outcome(&outcome, trigger, chrono::Utc::now());
 
-        if !install(&mut || *guard = observation) {
+        if !install(&mut || self.set(guard, observation)) {
             // The probed peer is gone: what it said is about a process no longer on
             // the wire. Same fields as the probe record, minus `error_code`, plus why.
             tracing::info!(
