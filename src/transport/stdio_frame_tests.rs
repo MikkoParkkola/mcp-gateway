@@ -310,10 +310,10 @@ async fn close_returns_while_a_write_is_stuck_on_a_peer_that_stopped_reading() {
 }
 
 /// Kills the process whose pid the file holds, if any, when dropped.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 struct KillEscapedOnDrop(std::path::PathBuf);
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl Drop for KillEscapedOnDrop {
     fn drop(&mut self) {
         let pid = std::fs::read_to_string(&self.0).unwrap_or_default();
@@ -328,8 +328,10 @@ impl Drop for KillEscapedOnDrop {
 /// MIK-8079: `close()` returns even when a reader that escaped the process
 /// group (a daemonized descendant still holding stdin) keeps a write stuck.
 /// The pipe goes through fd 3: a background job's own stdin is `/dev/null`
-/// in a non-interactive shell, so `<&0` would not hand it the pipe.
-#[cfg(target_os = "linux")]
+/// in a non-interactive shell, so `<&0` would not hand it the pipe. The
+/// reader leaves the group through perl's `setsid`, since macOS ships no
+/// `setsid` command (MIK-8183).
+#[cfg(unix)]
 #[tokio::test]
 async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
     use crate::transport::Transport as _;
@@ -344,7 +346,7 @@ async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
         "while IFS= read -r line; do\n\
          case \"$line\" in\n\
          *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
-         *'notifications/initialized'*) exec 3<&0; setsid sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
+         *'notifications/initialized'*) exec 3<&0; perl -MPOSIX -e 'setsid; exec @ARGV' sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
          esac\ndone\n",
         pid = pidfile.display()
     );
@@ -406,7 +408,7 @@ async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
 
 /// MIK-8079 (codex P2): a transport dropped without `close()` while a write is
 /// stuck on an escaped reader still ends that write and frees stdin.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[tokio::test]
 async fn dropping_the_transport_ends_a_write_stuck_on_an_escaped_reader() {
     use crate::transport::Transport as _;
@@ -421,7 +423,7 @@ async fn dropping_the_transport_ends_a_write_stuck_on_an_escaped_reader() {
         "while IFS= read -r line; do\n\
          case \"$line\" in\n\
          *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
-         *'notifications/initialized'*) exec 3<&0; setsid sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
+         *'notifications/initialized'*) exec 3<&0; perl -MPOSIX -e 'setsid; exec @ARGV' sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
          esac\ndone\n",
         pid = pidfile.display()
     );
