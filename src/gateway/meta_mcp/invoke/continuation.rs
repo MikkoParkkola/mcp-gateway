@@ -39,6 +39,11 @@ pub(super) async fn mint_continuation(
     arguments: &Value,
     backend_request_state: Option<String>,
 ) -> Option<(String, String)> {
+    let Ok(now) = crate::protocol::continuation::clock_now() else {
+        warn!(server, tool, "Clock reads before 1970; refusing to mint");
+        record_continuation_mint("clock_before_epoch");
+        return None;
+    };
     let Some(payload) = continuation
         .begin_exchange(
             server.to_string(),
@@ -49,7 +54,7 @@ pub(super) async fn mint_continuation(
                 tool,
                 arguments,
             ),
-            crate::protocol::continuation::now_unix_secs(),
+            now,
         )
         .await
     else {
@@ -79,7 +84,10 @@ async fn release_unsent(
     hold_key: Option<&str>,
 ) {
     if let Some(hold_key) = hold_key {
-        let now = crate::protocol::continuation::now_unix_secs();
+        // Freeing a slot is retention work: on a clock before 1970 it still
+        // frees this one, and 0 lets the reclaim of others it cannot date
+        // skip its pass (MIK-8202 D2).
+        let now = crate::clock::unix_secs().unwrap_or(0);
         continuation.in_flight().complete(hold_key, now).await;
     }
 }
@@ -258,8 +266,7 @@ pub(in crate::gateway::meta_mcp) fn retry_origin_backend(
     retry: &crate::protocol::mrtr::RetryFields,
 ) -> Option<Result<String>> {
     let token = retry.request_state.as_deref()?;
-    let now = crate::protocol::continuation::now_unix_secs();
-    let payload = match continuation.keyring().open(token, now) {
+    let payload = match continuation.keyring().open_now(token) {
         Ok(payload) => payload,
         Err(error) => {
             warn!(%error, "Continuation refused before routing");
@@ -323,12 +330,13 @@ pub(super) async fn redeem_retry(
         });
     };
 
-    let now = crate::protocol::continuation::now_unix_secs();
-    let payload = continuation.keyring().open(token, now).map_err(|error| {
+    let refuse = |error: ContinuationError| {
         warn!(server, tool, %error, "Continuation refused");
         record_continuation_rejection(continuation_error_reason(&error));
         rejected_continuation(&error)
-    })?;
+    };
+    let now = crate::protocol::continuation::clock_now().map_err(refuse)?;
+    let payload = continuation.keyring().open(token, now).map_err(refuse)?;
 
     // Which domain the envelope was sealed for, before anything is read out of
     // it and before the hold or the ledger is touched.

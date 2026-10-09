@@ -551,7 +551,10 @@ impl MetaMcp {
             stats,
             ranker,
             default_ttl,
-            Arc::new(crate::protocol::continuation::now_unix_secs),
+            // Retention: completed entries age out by this clock. On a clock
+            // before 1970 nothing is reclaimed, rather than every entry an
+            // early answer would delete (MIK-8202 D2).
+            Arc::new(|| crate::clock::unix_secs().unwrap_or(0)),
         )
     }
 

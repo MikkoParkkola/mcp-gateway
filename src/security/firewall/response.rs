@@ -8,7 +8,7 @@ use serde_json::Value;
 use super::{
     Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType, Severity,
 };
-use crate::protocol::continuation::{Keyring, now_unix_secs};
+use crate::protocol::continuation::Keyring;
 use crate::security::response_policy::{
     InvalidResponseTargets, ResponseArtifactKind, ResponseCorrelation, ResponseMutationPolicy,
     ResponsePolicyTarget,
@@ -124,7 +124,7 @@ impl Firewall {
 /// Expired, tampered and foreign values are not, so they are redacted as usual.
 /// `open` only reads: it consumes no budget, ledger entry or hold.
 fn is_own_continuation(keyring: &Keyring, value: &str) -> bool {
-    keyring.open(value, now_unix_secs()).is_ok()
+    keyring.open_now(value).is_ok()
 }
 
 /// Audit text for an injection finding while credential redaction is off.

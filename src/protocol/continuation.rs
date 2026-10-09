@@ -116,6 +116,8 @@ mod payload;
 
 pub use keyring::Keyring;
 pub use ledger::{ConsumedLedger, ContinuationState, InFlight, Routing};
+pub(crate) use payload::clock_now;
+#[cfg(test)]
 pub(crate) use payload::now_unix_secs;
 use payload::{CONTINUATION_LIFETIME_SECS, CONTINUATION_ROTATION_SECS, expiry_for};
 pub use payload::{ContinuationPurpose, Payload};
