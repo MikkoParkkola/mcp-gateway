@@ -21,6 +21,7 @@ use crate::transport::websocket_test_server::{Behaviour, WsPeer};
 
 const FAST: Duration = Duration::from_secs(1);
 const WAIT: Duration = Duration::from_secs(10);
+const HANG_GUARD: Duration = Duration::from_secs(30);
 
 fn transport(url: &str, timeout: Duration) -> Arc<WebSocketTransport> {
     WebSocketTransport::new(url, HashMap::new(), timeout, None)
@@ -100,17 +101,25 @@ async fn t3_an_env_reference_in_a_header_reaches_the_upgrade_expanded() {
 
 #[tokio::test]
 async fn t6_a_peer_that_closes_mid_call_fails_the_caller_at_once() {
+    // The call's own timeout outlasts the hang guard, so a call that waited it
+    // out fails the guard: the oracle is the outcome, not the time (MIK-8222).
     let peer = WsPeer::start(Behaviour::CloseFirstCall).await;
-    let t = connected(&peer).await;
-    let started = Instant::now();
-    let result = tokio::time::timeout(FAST, t.request("tools/call", Some(json!({"name": "echo"}))))
+    let t = transport(&peer.url, HANG_GUARD * 2);
+    tokio::time::timeout(WAIT, t.connect())
         .await
-        .expect("an in-flight call must fail when the socket closes, not wait out its timeout");
+        .expect("connect must not hang")
+        .expect("the peer must initialize");
+    let result = tokio::time::timeout(
+        HANG_GUARD,
+        t.request("tools/call", Some(json!({"name": "echo"}))),
+    )
+    .await
+    .expect("an in-flight call must fail when the socket closes, not wait out its timeout");
+    let err = result.expect_err("the call cannot succeed on a closed socket");
     assert!(
-        result.is_err(),
-        "the call cannot succeed on a closed socket"
+        !matches!(err, crate::Error::BackendTimeout(_)),
+        "the call failed on the close, not on its timeout: {err:?}"
     );
-    assert!(started.elapsed() < FAST);
     assert!(!t.is_connected(), "the transport reports the loss");
 }
 

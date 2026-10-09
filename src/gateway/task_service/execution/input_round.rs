@@ -347,6 +347,16 @@ fn input_outcome_of(error: StoreError) -> InputOutcome {
 }
 
 impl TaskExecutor {
+    /// How long an update waits for the current owner: the produce seam's
+    /// second, or what a test stretched it to.
+    fn produce_seam_wait(&self) -> Duration {
+        #[cfg(test)]
+        if let Some(wait) = self.produce_seam_wait.get() {
+            return *wait;
+        }
+        PRODUCE_SEAM_WAIT
+    }
+
     /// Apply answers to an open round and, when they complete it, resume the
     /// call as the caller of THIS update (`caller`).
     ///
@@ -375,7 +385,7 @@ impl TaskExecutor {
             Err(error) => return input_outcome_of(error),
         }
         let (handoff, cancel_rx) =
-            match Handoff::accept_when_free(self, id, PRODUCE_SEAM_WAIT, waiting).await {
+            match Handoff::accept_when_free(self, id, self.produce_seam_wait(), waiting).await {
                 Acceptance::Owned(handoff, cancel_rx) => (handoff, cancel_rx),
                 Acceptance::Moved => return InputOutcome::NotOutstanding,
                 Acceptance::Busy => return InputOutcome::Busy,

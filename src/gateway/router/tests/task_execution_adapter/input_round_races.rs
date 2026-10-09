@@ -9,6 +9,12 @@ use super::support::*;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+use tokio::time::timeout;
+
+/// What a race test stretches the produce-seam wait to: past [`HANG_GUARD`],
+/// so an update that waited it out fails the test instead of passing slowly.
+const STRETCHED_WAIT: Duration = Duration::from_secs(60);
+const HANG_GUARD: Duration = Duration::from_secs(30);
 
 /// Holds the producing worker right after it committed `input_required`, so
 /// the worker still owns the task's handoff. Holds once.
@@ -196,6 +202,9 @@ async fn an_update_losing_to_a_running_resume_is_refused_at_once() {
     let (mock, mut gate) =
         MockBackend::holding(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
     let (state, _store) = state_with(&mock).await;
+    state
+        .task_executor
+        .stretch_produce_seam_wait_for_test(STRETCHED_WAIT);
     let id = task_id(&post(&state, "key-a", create(1, "race-lost")).await);
     gate.wait_for_dispatch().await;
     gate.release();
@@ -205,15 +214,13 @@ async fn an_update_losing_to_a_running_resume_is_refused_at_once() {
     std::assert!(won.get("error").is_none(), "{won}");
     gate.wait_for_dispatch().await;
 
-    let started = std::time::Instant::now();
-    let lost = post(&state, "key-a", completing(3, &id)).await;
-    let waited = started.elapsed();
+    // The wait outlasts the hang guard, so a lost race that waited for the
+    // owner does not answer inside it.
+    let lost = timeout(HANG_GUARD, post(&state, "key-a", completing(3, &id)))
+        .await
+        .expect("a lost race is refused without the produce-seam wait");
     gate.release_all();
     std::assert_eq!(error_code(&lost), Some(-32602), "{lost}");
-    std::assert!(
-        waited < Duration::from_millis(500),
-        "a lost race is refused without the produce-seam wait: {waited:?}"
-    );
 }
 
 /// MIK-7662 (`GH2417.1`, `GH2417.2`). Mutants: no wake when the resume commits
@@ -221,8 +228,9 @@ async fn an_update_losing_to_a_running_resume_is_refused_at_once() {
 ///
 /// The loser parks while the winner owns the handoff and its write is held.
 /// The winner keeps the handoff through the resume, whose backend call is
-/// held too, so nothing but the commit itself can wake the loser: it answers
-/// at once instead of at the 1 s wait.
+/// held too, so nothing but the commit itself can wake the loser. Its wait is
+/// stretched past the hang guard, so it answers inside the guard only if the
+/// commit wakes it: the oracle is an outcome, not an elapsed time (MIK-8222).
 ///
 /// Current-thread runtime on purpose: the loser subscribes, fails to take the
 /// handoff and reads the row with no await in between, so once this task sees
@@ -232,6 +240,9 @@ async fn a_loser_parked_behind_a_resume_answers_when_the_resume_commits() {
     let (mock, mut gate) =
         MockBackend::holding(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
     let (state, _store) = state_with(&mock).await;
+    state
+        .task_executor
+        .stretch_produce_seam_wait_for_test(STRETCHED_WAIT);
     let id = task_id(&post(&state, "key-a", create(1, "wake-a")).await);
     gate.wait_for_dispatch().await;
     gate.release();
@@ -280,16 +291,12 @@ async fn a_loser_parked_behind_a_resume_answers_when_the_resume_commits() {
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 
-    let released = std::time::Instant::now();
     release_tx.send(()).expect("the barrier is waiting");
-    let lost = loser.await.expect("the loser joins");
-    let waited = released.elapsed();
+    let lost = timeout(HANG_GUARD, loser)
+        .await
+        .expect("the loser answers when the resume commits, not at the end of its wait")
+        .expect("the loser joins");
     std::assert_eq!(error_code(&lost), Some(-32602), "{lost}");
-    // Half the 1 s produce-seam wait: without the wake the loser sleeps it out.
-    std::assert!(
-        waited < Duration::from_millis(500),
-        "the loser answers when the resume commits, not at the 1 s wait: {waited:?}"
-    );
     let won = winner.await.expect("the winner joins");
     std::assert!(won.get("error").is_none(), "{won}");
     // Only now does the resumed call reach the backend and settle.

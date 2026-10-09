@@ -326,10 +326,40 @@ async fn per_subscription_rate_limit_delays_not_drops() {
     assert_eq!(status["throttled"], true, "{status}");
     let posts = events_at_least(&rx, 20).await;
     assert_eq!(posts.len(), 20, "every event delivered once");
-    let burst = posts[9].at.duration_since(posts[0].at);
-    assert!(burst < Duration::from_secs(1), "the burst goes at once");
     let paced = posts[19].at.duration_since(posts[0].at);
     assert!(paced >= Duration::from_secs(3), "the rest is paced");
+}
+
+/// T27 (SAFETY.5): the burst goes at once. One token a minute refills
+/// nothing inside the test, so the whole burst arrives and the next event is
+/// held: a count, not a stopwatch, so a loaded runner cannot fail it
+/// (MIK-8221). The subscription reads throttled only once the burst is spent.
+#[tokio::test]
+async fn per_subscription_burst_goes_at_once_and_the_next_is_held() {
+    let root = tempfile::tempdir().expect("root");
+    let rx = Receiver::start(root.path()).await;
+    let gw = start(
+        root.path(),
+        &rx,
+        json!({"rate_limit_per_subscription": {"per_minute": 1, "burst": 10}}),
+    )
+    .await;
+    let secret = whsec(32);
+    subscribe(&gw, ALICE, &rx.url, &secret, json!({})).await;
+    for n in 0..11 {
+        fire(&gw, &format!("d-27b-{n}"), "o/r").await;
+    }
+    events_at_least(&rx, 10).await;
+    let mut status = json!(null);
+    for _ in 0..100 {
+        status = delivery::delivery_status(&gw, ALICE, &rx.url, &secret, json!({})).await;
+        if status["throttled"] == true {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(status["throttled"], true, "{status}");
+    assert_eq!(rx.events().len(), 10, "the burst is sent, the next is held");
 }
 
 /// T28 (SAFETY.5): with cost governance on, a delivery that alice's key
