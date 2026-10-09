@@ -95,7 +95,9 @@ project rule is enums, not booleans, for behaviour-selecting values. A bad clock
 `expired_by` is for ACCESS decisions only: a credential, grant, session, lease, deadline or
 continuation that admits something. A RETENTION site (a sweep that deletes or reclaims what has
 aged out: idempotency entries, task rows, pooled connections, idle session state) reads
-`clock::unix_secs()` and skips that sweep on `Err`. There "expired" is the dangerous answer:
+`clock::unix_secs()` and skips that sweep on `Err`. It skips this pass only: a sweep loop never
+propagates the error with `?` out of the loop, so it runs again on schedule and resumes when the
+clock recovers. There "expired" is the dangerous answer:
 deleting an idempotency key early readmits a retry that would run a side effect twice. Keeping it
 until the clock is readable is the safe one. Appendix A marks each EXPIRY row ACCESS or
 RETENTION.
@@ -143,10 +145,18 @@ one such decode takes down the whole gateway.
 A check before `decode` is not enough, because the library samples the clock again inside it,
 and a clock step between the two still panics. So every decode sets `validate_exp = false` and
 `validate_nbf = false`, keeps `exp` in `required_spec_claims` (presence is still enforced), and
-then judges the decoded `exp` and `nbf` once, against one `clock::unix_secs()` sample, with the
-library's own rule: expired when `exp < now - leeway`, immature when `nbf > now + leeway`. This
+then judges the decoded `exp` and `nbf` once, against one `clock::unix_secs()` sample. This
 lives in one helper, `clock::jwt_window(exp, nbf, leeway) -> Validity`, used by all three decode
-sites (Appendix B). `AgentRegistry::now` (`gateway/oauth/agents.rs:107`) calls
+sites (Appendix B). The library's rule is `exp < now - leeway`, but a subtraction near the epoch
+underflows, and a saturating one turns `now - leeway` into 0, so every token passes: the original
+bug again. The helper adds instead of subtracting:
+
+- expired when `exp + leeway < now`, with `checked_add`;
+- immature when `nbf > now + leeway`, with `checked_add`;
+- an overflow on either add answers `Expired` (a token claiming an expiry near `u64::MAX` is
+  refused, not trusted), as does a clock `Err`;
+- a present but malformed `exp` or `nbf` answers `Expired`, the refusal the library gave when it
+  checked them (`InvalidClaimFormat`); an absent `nbf` is not checked, as before. `AgentRegistry::now` (`gateway/oauth/agents.rs:107`) calls
 `jsonwebtoken::get_current_timestamp` directly, so it moves to `clock::unix_secs` and refuses on
 `Err`. `jsonwebtoken::get_current_timestamp` joins the D6 disallowed list.
 
@@ -194,10 +204,16 @@ closed: nothing is admitted. D7 keeps a gateway from starting into it. It is not
      outer, `expect`, in a list). Each must be in the baseline or in the permanent set:
      `src/clock.rs`, `src/home_dir.rs`, and the existing home-directory test allows. Matching
      the reason text alone would let a differently worded allow through.
-  2. Per baselined file, it counts the raw calls; the count may not exceed the baseline value.
+  2. It counts raw clock calls in EVERY Rust file, not only baselined ones: a file's count may
+     not exceed its baseline value, and a file absent from the baseline must have none. An inner
+     `#![allow]` also covers that module's submodules, so clippy alone would miss a new read in
+     an unbaselined submodule. The count does not.
   3. The baseline is a subset of the base's baseline: no new file, no raised count.
   So a grandfathered file cannot take on another raw read, and a swap of one file for another
-  is refused.
+  is refused. What it cannot see: inside one grandfathered file, an existing read replaced by a
+  new one at the same count. That is the transition's accepted limit until PR2 empties the
+  baseline. It is also why PR1 migrates every ACCESS row, not only the reads that are wrong
+  today.
 
 **PR2 (Fixes MIK-8202), the mechanical half.** It migrates the remaining rows (RETENTION
 sweeps, records, rate windows, outbound OAuth), deletes the duplicate helpers, and empties and
@@ -210,8 +226,9 @@ reason "test clock; makes no expiry decision", in the permanent set.
 A test clock that returns `Err` is reachable through the seam each module already has: the
 `Clock` trait (D4), or a `#[cfg(test)]` override in `crate::clock` (thread-local, as
 `home_dir`'s `MCP_GATEWAY_TEST_HOME_DIR` does for directories). A thread-local does not follow a
-spawned task. Rows that cross a `tokio::spawn` (the event worker, the budget saver) drive the
-override inside the spawned task, or call the function under test directly. PR1's rows:
+spawned task. Fault tests therefore run on a current-thread runtime. Rows that cross a
+`tokio::spawn` or `spawn_blocking` (the event worker, the budget saver) set the override inside
+the spawned closure, or call the function under test directly. PR1's rows:
 
 | row | input | red today because | green after |
 |---|---|---|---|
@@ -220,6 +237,8 @@ override inside the spawned task, or call the function under test directly. PR1'
 | continuation | sealed continuation past `expires_at`, clock `Err` | `0 > expires_at` false, opens | `Expired` |
 | API key | key with `expires_at` in the past, chrono now 1969 | `api_key_expired` false, request authenticates | 401 expired |
 | JWT decode | valid agent token, clock `Err` | jsonwebtoken panics | refused, no panic |
+| JWT near epoch | clock = epoch + 100 s, leeway 60 s; exp = 30 (and control exp = 50) | (new helper; a subtracting form underflows below now = 60) | exp 30 refused (30 + 60 < 100); exp 50 live |
+| JWT boundaries | exp + leeway = now; nbf = now + leeway; exp near `u64::MAX`; malformed nbf | (new helper) | live; live; refused; refused |
 | bridge session | Open WebUI session past `expires_at`, clock `Err` | user id returned | `None` |
 | subscription lease | subscription whose lease ended, clock `Err`, one event published | event delivered | not delivered |
 | budget save | saved spend for today, clock `Err` at save, then clock restored and restart | `saved_at = 0` written, restore drops the day's spend | save skipped, restore keeps the spend |
