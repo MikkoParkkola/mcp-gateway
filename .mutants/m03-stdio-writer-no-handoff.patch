@@ -1,0 +1,12 @@
+diff --git a/src/gateway/server/stdio_writer.rs b/src/gateway/server/stdio_writer.rs
+index 541caa4fe..16276b09d 100644
+--- a/src/gateway/server/stdio_writer.rs
++++ b/src/gateway/server/stdio_writer.rs
+@@ -26,7 +26,6 @@ impl Gateway {
+             // MIK-8176: the writer has taken the answer, so its slots stay
+             // for the client's retry. A frame still queued when the session
+             // ends is dropped instead, and gives them back.
+-            frame.hand_off_holds();
+             if !Self::write_response(&mut sink, &value).await {
+                 queue.close();
+                 break;

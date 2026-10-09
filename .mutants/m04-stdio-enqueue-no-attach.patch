@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/stdio_dispatches.rs b/src/gateway/server/stdio_dispatches.rs
+index a76164a15..a28585fff 100644
+--- a/src/gateway/server/stdio_dispatches.rs
++++ b/src/gateway/server/stdio_dispatches.rs
+@@ -48,7 +48,7 @@ impl Cancelled {
+             // its holds are attached here, however it was built. The writer
+             // hands them off as it takes the frame; a cancelled answer is
+             // never attached, and its holds give the slot back with the scope.
+-            permit.send(frame.carry_holds());
++            permit.send(frame);
+         }
+         if let (Some(_), Some(task)) = (id, task) {
+             marks.answered.insert(task);

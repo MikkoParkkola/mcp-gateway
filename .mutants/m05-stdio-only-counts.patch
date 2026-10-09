@@ -1,0 +1,22 @@
+diff --git a/src/gateway/server/mod.rs b/src/gateway/server/mod.rs
+index f311f7568..9c3e90aba 100644
+--- a/src/gateway/server/mod.rs
++++ b/src/gateway/server/mod.rs
+@@ -2527,7 +2527,7 @@ impl Gateway {
+                     // MIK-8176: the batch's slots are owned here, from
+                     // dispatch through the writer queue.
+                     Box::pin(crate::gateway::meta_mcp::sealed_hold::scoped(
+-                        crate::gateway::meta_mcp::sealed_hold::HoldPolicy::Release,
++                        crate::gateway::meta_mcp::sealed_hold::HoldPolicy::CountOnly,
+                         async {
+                             // Boxed: the dispatch future is tens of kilobytes.
+                             let (responses, _) = Self::dispatch_streaming_notifications(
+@@ -2624,7 +2624,7 @@ impl Gateway {
+                 // MIK-8176: this request's slots are owned by its task, from
+                 // dispatch through the writer queue.
+                 Box::pin(crate::gateway::meta_mcp::sealed_hold::scoped(
+-                    crate::gateway::meta_mcp::sealed_hold::HoldPolicy::Release,
++                    crate::gateway::meta_mcp::sealed_hold::HoldPolicy::CountOnly,
+                     async move {
+                         let ((response, staged), hidden) = Self::dispatch_streaming_notifications(
+                             Box::pin(Self::dispatch_single_staged(

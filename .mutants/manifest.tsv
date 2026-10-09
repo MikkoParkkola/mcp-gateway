@@ -1,0 +1,7 @@
+head_sha	0a3c9d6552d385a0980d1a135402a3c566ec7713
+m01-sse-buffered-arm-no-handoff	linux	m01-sse-buffered-arm-no-handoff.patch	--lib -- slot_release
+m02-sse-streaming-arm-no-handoff	linux	m02-sse-streaming-arm-no-handoff.patch	--lib -- slot_release
+m03-stdio-writer-no-handoff	linux	m03-stdio-writer-no-handoff.patch	--lib -- slot_release
+m04-stdio-enqueue-no-attach	linux	m04-stdio-enqueue-no-attach.patch	--lib -- slot_release
+m05-stdio-only-counts	linux	m05-stdio-only-counts.patch	--lib -- slot_release
+m06-mcp-streams-only-count	linux	m06-mcp-streams-only-count.patch	--lib -- slot_release

@@ -1,0 +1,15 @@
+diff --git a/src/gateway/streaming_sse.rs b/src/gateway/streaming_sse.rs
+index 7006d9821..922801fb1 100644
+--- a/src/gateway/streaming_sse.rs
++++ b/src/gateway/streaming_sse.rs
+@@ -550,9 +550,7 @@ where
+                         .get::<crate::gateway::meta_mcp::sealed_hold::CarriedHolds>()
+                         .cloned();
+                     let frame = terminal_frame(emitted).await;
+-                    if let Some(carried) = &carried {
+-                        crate::gateway::meta_mcp::sealed_hold::hand_off(carried);
+-                    }
++                    let _ = &carried;
+                     yield Ok(frame);
+                     break;
+                 }
