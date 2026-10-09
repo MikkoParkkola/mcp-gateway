@@ -342,9 +342,11 @@ def main(argv=None):
     parser.add_argument("--root", default=".")
     args = parser.parse_args(argv)
 
-    failed = 0
+    failed = graded = 0
     for result in grade(args.root, args.inventory, args.lcov):
         status, row = result[0], result[1]
+        # An INDIRECT result is a diagnostic about the tree, not an inventory row.
+        graded += status != "INDIRECT"
         where = f"{row['path']}:{row['fn']}#{row['occurrence']}"
         if status in ("ok", "BELOW"):
             _, _, lo, hi, missed, covered, total, pct, excluded, unverifiable = result
@@ -357,6 +359,9 @@ def main(argv=None):
         else:
             print(f"{status}\t-\t-\t{where}")
             failed += 1
+    # The Critical count lives here, read from the inventory, and nowhere
+    # else (MIK-8195): a count copied into a doc goes stale with every wave.
+    print(f"critical rows graded: {graded}")
     print(f"critical rows failing: {failed}")
     return 1 if failed else 0
 

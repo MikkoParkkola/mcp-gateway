@@ -37,6 +37,9 @@ mod upstream_tasks;
 /// Request-scoped notifications and pre-dispatch connect failures (MIK-7272).
 mod notifications;
 
+/// `MIK-7642.PR.B`: a dropped legacy exchange cancels the backend's call.
+mod cancel_on_drop;
+
 /// The outbound half over HTTP, and status-carried JSON-RPC errors.
 mod outbound;
 
