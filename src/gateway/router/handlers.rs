@@ -198,7 +198,8 @@ async fn meta_mcp_dispatch(
         &intake.grant_subject,
     );
     let (session_id, chain_nonce) = (&intake.session_id, &intake.chain_nonce);
-    let (request, method, external_tool) = (&intake.request, &intake.method, &intake.external_tool);
+    let (request, method, external_tool) =
+        (&intake.request, &intake.method, intake.external_tool());
     let (owner, events_owner, header_profile) =
         (&intake.owner, &intake.events_owner, &intake.header_profile);
     let (code_mode_url_active, surface_request) =
