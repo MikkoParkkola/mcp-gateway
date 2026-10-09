@@ -68,7 +68,7 @@ pub(crate) fn capture_warnings<T>(operation: impl FnOnce() -> T) -> (T, String) 
 
 /// The process-wide TRACE registry, installed once: a scoped subscriber
 /// only sees an event whose callsite interest is not already cached as off.
-fn keep_interest_open() {
+pub(crate) fn keep_interest_open() {
     use tracing_subscriber::prelude::*;
     static INTEREST: std::sync::Once = std::sync::Once::new();
     INTEREST.call_once(|| {
