@@ -1,0 +1,6 @@
+head_sha	a1742f58be6c5fb091233030244c3b43d0976115
+b1-install-after-write	linux	b1-install-after-write.patch	--lib -- a_downgraded_candidate_is_never_reachable_in_the_old_dialect
+b1u-install-after-write	linux	b1-install-after-write.patch	--lib -- an_upgraded_candidate_is_never_reachable_in_the_old_dialect
+b2-refused-installs	linux	b2-refused-installs.patch	--lib -- a_start_built_before_the_stamp_is_not_published
+h1-lock-released-before-write	linux	h1-lock-released-before-write.patch	--lib -- a_contradiction_from_the_old_transport_cannot_erase_the_installed_verdict
+k5b-no-install	linux	k5b-no-install.patch	--lib -- a_successful_swap_installs_the_candidates_era

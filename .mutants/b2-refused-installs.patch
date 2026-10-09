@@ -1,0 +1,20 @@
+diff --git a/src/backend/repin.rs b/src/backend/repin.rs
+--- a/src/backend/repin.rs
++++ b/src/backend/repin.rs
+@@ -34,6 +34,7 @@ impl Backend {
+         built_under: crate::security::ssrf::DestinationPolicy,
+         on_publish: impl FnOnce() -> Held,
+     ) -> std::result::Result<(), &'static str> {
++        let early = on_publish();
+         let cleanups = self.replaced_transport_cleanups.lock();
+         if cleanups.stopping {
+             return Err("the backend shut down while it was starting");
+@@ -41,7 +42,7 @@ impl Backend {
+         if self.destination_bound() && self.destination() != built_under {
+             return Err("the destination policy changed while it was starting");
+         }
+-        let held = on_publish();
++        let held = early;
+         #[cfg(test)]
+         if let Some(between) = self.between_install_and_write.lock().take() {
+             between();

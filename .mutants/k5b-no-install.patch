@@ -1,0 +1,12 @@
+diff --git a/src/backend/lifecycle.rs b/src/backend/lifecycle.rs
+--- a/src/backend/lifecycle.rs
++++ b/src/backend/lifecycle.rs
+@@ -577,7 +577,7 @@ impl Backend {
+         };
+         let on_publish = move || {
+             install.map(|(mut install, probe)| {
+-                install.install(probe);
++                drop(probe);
+                 install
+             })
+         };

@@ -1,0 +1,19 @@
+diff --git a/src/backend/repin.rs b/src/backend/repin.rs
+--- a/src/backend/repin.rs
++++ b/src/backend/repin.rs
+@@ -41,7 +41,6 @@ impl Backend {
+         if self.destination_bound() && self.destination() != built_under {
+             return Err("the destination policy changed while it was starting");
+         }
+-        let held = on_publish();
+         #[cfg(test)]
+         if let Some(between) = self.between_install_and_write.lock().take() {
+             between();
+@@ -52,6 +51,7 @@ impl Backend {
+         #[cfg(test)]
+         self.era_at_publish.lock().push(entry.era.cached_now());
+         *entry.transport.write() = Some(Arc::clone(transport));
++        let held = on_publish();
+         drop(held);
+         Ok(())
+     }
