@@ -494,6 +494,19 @@ async fn twenty_handed_over_trees_each_finish_within_their_deadline() {
     }
 }
 
+/// MIK-7923: a transport dropped without `close` hands its tree to the
+/// reaper, so it gets the settle and the reap a close gets, not the single
+/// fallback signal of `ChildTree`'s Drop.
+#[tokio::test]
+async fn a_dropped_transport_hands_its_tree_to_the_reaper() {
+    let (w, t) = started(DESCENDANT, None).await;
+    let child = descendant(w.path()).await;
+    let pid = leader(&t).await;
+    drop(Arc::into_inner(t).expect("the only handle"));
+    assert_settled(sent_after(pid).await);
+    gone(child).await;
+}
+
 /// MIK-8213, deterministic: a member that joins the group after the first
 /// pre-reap signal (as a fork that completes late does) is still ended,
 /// because the pre-reap signal repeats until the group settles. The test

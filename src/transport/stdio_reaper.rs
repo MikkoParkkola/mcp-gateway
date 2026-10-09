@@ -240,7 +240,10 @@ impl super::StdioTransport {
                 "stdio backend retired while it started".to_string(),
             ));
         }
-        slot.tree = Some(tree);
+        // A tree still in the slot goes to the reaper, never to its Drop.
+        if let Some(old) = slot.tree.replace(tree) {
+            slot.track(old);
+        }
         Ok(())
     }
 
