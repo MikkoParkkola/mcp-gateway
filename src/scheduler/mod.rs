@@ -529,13 +529,13 @@ fn find_next_match(
         .with_second(0)
         .and_then(|t| t.with_nanosecond(0))
         .unwrap_or(*after)
-        + chrono::Duration::minutes(1);
+        + crate::duration_bound::delta!(minutes, 1);
 
     for _ in 0..horizon_minutes {
         if expr.matches(&candidate) {
             return Some(candidate);
         }
-        candidate += chrono::Duration::minutes(1);
+        candidate += crate::duration_bound::delta!(minutes, 1);
     }
     None
 }

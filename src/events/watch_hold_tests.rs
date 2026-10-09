@@ -130,7 +130,11 @@ async fn another_sources_judgement_keeps_a_watch_hold() {
     assert!(hub.store.held(&id).is_some(), "held");
     let not_mine = |_: &Subscription| None;
     hub.store
-        .apply_holds(&not_mine, Utc::now(), chrono::Duration::hours(1))
+        .apply_holds(
+            &not_mine,
+            Utc::now(),
+            crate::duration_bound::delta!(hours, 1),
+        )
         .expect("io");
     assert!(hub.store.held(&id).is_some(), "still held");
 }

@@ -86,7 +86,7 @@ async fn enforce_mode_with_a_key_starts_and_enforces() {
                 capabilities: vec!["t".to_string()],
             },
             chrono::Utc::now(),
-            chrono::TimeDelta::minutes(5),
+            crate::duration_bound::delta!(minutes, 5),
         )
         .encoded()
         .to_string();

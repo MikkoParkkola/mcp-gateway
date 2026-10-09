@@ -57,10 +57,16 @@ pub(super) async fn mint_continuation(
         record_continuation_mint("no_slot");
         return None;
     };
-    crate::gateway::meta_mcp::sealed_hold::register(continuation);
     match continuation.keyring().mint(&payload) {
         Ok(envelope) => {
             record_continuation_mint("ok");
+            // MIK-8176: the hold carries the envelope, so the answer that
+            // delivers it can be recognised and hand the slot off.
+            crate::gateway::meta_mcp::sealed_hold::register(
+                continuation,
+                &payload.hold_key,
+                &envelope,
+            );
             Some((envelope, payload.hold_key))
         }
         Err(error) => {
@@ -574,21 +580,40 @@ impl crate::gateway::meta_mcp::MetaMcp {
     /// Returns the sealed envelope and its hold key, for
     /// [`Self::release_direct_hold`] once the answer that leaves is known.
     ///
+    /// MRTR.9 and 9a first (MIK-8089): a question the client did not declare
+    /// it can answer is refused before anything is minted, as on `/mcp`.
+    ///
     /// # Errors
     ///
-    /// `-32003` when no continuation can be bound to this caller, or the mint
-    /// is refused: the backend's own state is never sent in its place.
+    /// The MRTR.9 capability refusal (`-32021`, naming what to declare) for an
+    /// undeclared question; `-32003` when no continuation can be bound to this
+    /// caller, or the mint is refused: the backend's own state is never sent in
+    /// its place.
     pub(crate) async fn seal_direct_interim(
         &self,
         who: DirectCaller<'_>,
-        (server, instance, sent): (&str, Option<u64>, Option<&Value>),
+        (server, instance, sent, declared): (
+            &str,
+            Option<u64>,
+            Option<&Value>,
+            crate::protocol::meta::Declared,
+        ),
         result: &mut Value,
     ) -> Result<Option<(String, String)>> {
+        let (tool, arguments) = direct_call_parts(sent);
+        // The meta route's reading of what the result asks (MIK-8117): a
+        // round `from_result` declines still puts its readable questions to
+        // the client, so they face the same gate.
+        let asked = super::undeclared_gate::asked_requests(result);
+        if let Some(refused) = asked.as_ref().and_then(|a| a.undeclared(declared)) {
+            return Err(super::undeclared_gate::refusal(
+                &refused, server, tool, "direct",
+            ));
+        }
         let Some(interim) = crate::protocol::mrtr::InputRequired::from_result(result) else {
             withhold_unsealed_state(result);
             return Ok(None);
         };
-        let (tool, arguments) = direct_call_parts(sent);
         let source = direct_source(who);
         let Some((envelope, hold_key)) = mint_continuation(
             &self.continuation,

@@ -8,6 +8,7 @@ mod backend_domain;
 mod fixture;
 mod hardened_signing;
 mod review_regressions;
+mod slot_release;
 use fixture::*;
 
 #[tokio::test]
