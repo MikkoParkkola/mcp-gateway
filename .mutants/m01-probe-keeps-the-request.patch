@@ -1,0 +1,21 @@
+--- a/src/gateway/task_service/store_input.rs
++++ b/src/gateway/task_service/store_input.rs
+@@ -304,16 +304,9 @@
+             .and_then(|requests| requests.keys().min_by_key(|key| key.len()))
+             .cloned()
+             .unwrap_or_default();
+-        let (mut answered, mut probe) = (task.clone(), record.clone());
+-        let mut minimal = Map::new();
+-        minimal.insert(shortest, json!({}));
+-        let change = answered
+-            .transition(TaskTransition::ProvideInput(Value::Object(minimal)), at)
+-            .map_err(|_| StoreError::InvalidTransition)?;
+-        probe.revision = probe.revision.checked_add(1).ok_or(StoreError::Capacity)?;
+-        probe.model = answered.snapshot();
++        let mut probe = record.clone();
+         if let Some(open) = probe.input_round.as_mut() {
+-            open.accepted_inputs.extend(change.accepted_inputs);
++            open.accepted_inputs.insert(shortest, json!({}));
+         }
+         self.fits_cap(&probe)?;
+         // The round's keys stay on the model, which the bounded failure keeps:
