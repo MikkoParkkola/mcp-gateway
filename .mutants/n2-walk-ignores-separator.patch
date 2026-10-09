@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/cli_argv.rs b/src/capability/executor/cli_argv.rs
+index 990f550c9..483e3e7eb 100644
+--- a/src/capability/executor/cli_argv.rs
++++ b/src/capability/executor/cli_argv.rs
+@@ -224,7 +224,7 @@ pub(crate) fn check_cli_templates(config: &CliConfig) -> Result<()> {
+         match item {
+             CliArg::Literal(template) => {
+                 element_placeholder(template, after_end_of_options)?;
+-                if template == "--" {
++                if false && template == "--" {
+                     after_end_of_options = true;
+                 }
+             }

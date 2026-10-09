@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/cli_argv.rs b/src/capability/executor/cli_argv.rs
+index 990f550c9..85625d22d 100644
+--- a/src/capability/executor/cli_argv.rs
++++ b/src/capability/executor/cli_argv.rs
+@@ -236,7 +236,7 @@ pub(crate) fn check_cli_templates(config: &CliConfig) -> Result<()> {
+         }
+     }
+     if let Some(template) = &config.stdin {
+-        single_placeholder(template)?;
++        let _ = template;
+     }
+     Ok(())
+ }

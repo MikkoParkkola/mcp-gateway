@@ -1,0 +1,12 @@
+diff --git a/src/registry/mod.rs b/src/registry/mod.rs
+index ec955ae6b..a1714d974 100644
+--- a/src/registry/mod.rs
++++ b/src/registry/mod.rs
+@@ -182,7 +182,6 @@ impl Registry {
+             // definition the gateway would refuse (MIK-7926.FIX.3).
+             match parse_capability_file(path)
+                 .await
+-                .and_then(|c| validate_capability(&c).map(|()| c))
+             {
+                 Ok(capability) => {
+                     // Calculate relative path from capabilities directory

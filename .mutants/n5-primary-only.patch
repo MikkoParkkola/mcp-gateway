@@ -1,0 +1,13 @@
+diff --git a/src/capability/parser.rs b/src/capability/parser.rs
+index cee04bcd9..ebd98b118 100644
+--- a/src/capability/parser.rs
++++ b/src/capability/parser.rs
+@@ -149,7 +149,7 @@ pub fn validate_capability(capability: &CapabilityDefinition) -> Result<()> {
+ ///
+ /// `Error::Config` naming the capability, the provider and the template.
+ pub(crate) fn validate_cli_templates(capability: &CapabilityDefinition) -> Result<()> {
+-    for (provider, process) in &capability.providers.process {
++    for (provider, process) in capability.providers.process.iter().filter(|(k, _)| k.as_str() == "primary") {
+         if let super::ProcessConfig::Cli(config) = process {
+             super::executor::check_cli_templates(config).map_err(|e| {
+                 Error::Config(format!(

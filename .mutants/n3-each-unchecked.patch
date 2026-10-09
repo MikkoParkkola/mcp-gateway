@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/cli_argv.rs b/src/capability/executor/cli_argv.rs
+index 990f550c9..827081b91 100644
+--- a/src/capability/executor/cli_argv.rs
++++ b/src/capability/executor/cli_argv.rs
+@@ -231,7 +231,7 @@ pub(crate) fn check_cli_templates(config: &CliConfig) -> Result<()> {
+             CliArg::Conditional(cond) => {
+                 element_placeholder(&cond.arg, after_end_of_options)?;
+             }
+-            CliArg::Each(each) => check_each(each)?,
++            CliArg::Each(_) => {}
+             CliArg::Json(json) => check_json(&json.value)?,
+         }
+     }

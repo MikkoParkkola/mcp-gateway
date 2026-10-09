@@ -1,0 +1,11 @@
+head_sha	a2bf1c4d57a0fc5af585dd388147cce2042a4c90
+n1-validator-skips-cli	linux	n1-validator-skips-cli.patch	--lib -- two_placeholders_in_one_element_are_refused_at_load
+n2-walk-ignores-separator	linux	n2-walk-ignores-separator.patch	--lib -- an_operand_after_the_separator_loads
+n3-each-unchecked	linux	n3-each-unchecked.patch	--lib -- an_unbound_each_template_is_refused_at_load
+n4-conditional-separator-switches	linux	n4-conditional-separator-switches.patch	--lib -- a_conditional_separator_does_not_admit_a_later_operand
+n5-primary-only	linux	n5-primary-only.patch	--lib -- a_fallback_providers_template_is_checked_too
+n6-json-unwalked	linux	n6-json-unwalked.patch	--lib -- a_json_value_with_two_placeholders_is_refused_at_load
+n7-conditional-unchecked	linux	n7-conditional-unchecked.patch	--lib -- a_malformed_conditional_template_is_refused_at_load
+n8-registry-unvalidated	linux	n8-registry-unvalidated.patch	--lib -- the_registry_index_leaves_out_a_malformed_cli_capability
+n9-register-unchecked	linux	n9-register-unchecked.patch	--lib -- registration_refuses_a_malformed_cli_template
+n10-stdin-unchecked	linux	n10-stdin-unchecked.patch	--lib -- a_stdin_template_with_two_placeholders_is_refused_at_load

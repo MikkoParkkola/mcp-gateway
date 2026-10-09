@@ -1,0 +1,12 @@
+diff --git a/src/capability/parser.rs b/src/capability/parser.rs
+index cee04bcd9..e4040a8af 100644
+--- a/src/capability/parser.rs
++++ b/src/capability/parser.rs
+@@ -137,7 +137,6 @@ pub fn validate_capability(capability: &CapabilityDefinition) -> Result<()> {
+ 
+     validate_webhook_events(capability)?;
+     validate_mcp_operations(capability)?;
+-    validate_cli_templates(capability)?;
+ 
+     Ok(())
+ }

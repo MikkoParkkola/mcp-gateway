@@ -1,0 +1,12 @@
+diff --git a/src/capability/backend.rs b/src/capability/backend.rs
+index 39eff3502..992ad255f 100644
+--- a/src/capability/backend.rs
++++ b/src/capability/backend.rs
+@@ -694,7 +694,6 @@ impl CapabilityBackend {
+     /// in flight elsewhere keeps it running until released (MIK-7923).
+     pub fn register_capability(&self, capability: CapabilityDefinition) -> Result<()> {
+         validate_capability_account_binding(&capability, self.executor.account_strategies())?;
+-        validate_cli_templates(&capability)?;
+         let name = capability.name.clone();
+         let mut caps = self.capabilities.write();
+         let replaced = caps.contains(&name);
