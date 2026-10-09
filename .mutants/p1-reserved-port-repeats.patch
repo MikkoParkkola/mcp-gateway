@@ -1,0 +1,13 @@
+diff --git a/src/test_ports.rs b/src/test_ports.rs
+index 9f1f73571..0326eb13e 100644
+--- a/src/test_ports.rs
++++ b/src/test_ports.rs
+@@ -34,7 +34,7 @@ pub(crate) fn reserved_port() -> u16 {
+     // Start where the process id points, so two processes rarely overlap.
+     let offset = u16::try_from(std::process::id() % u32::from(SPAN)).unwrap_or(0);
+     for _ in 0..SPAN {
+-        let n = HANDED_OUT.fetch_add(1, Ordering::Relaxed);
++        let n = HANDED_OUT.load(Ordering::Relaxed);
+         let port = FIRST + offset.wrapping_add(n) % SPAN;
+         if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+             return port;
