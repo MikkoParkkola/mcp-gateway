@@ -84,3 +84,50 @@ async fn n1b_a_spend_refusal_consumes_no_nonce_on_mcp() {
         assert_eq!(dispatched(&fx), 1, "{backend}");
     }
 }
+
+/// N1c (gpt i1 CRIT): a signed chain whose first step ran keeps its nonce
+/// spent when a later step is refused before its backend (here by the spend
+/// budget). Re-sent under that nonce, the chain is refused as a replay and its
+/// first step never runs twice. Mutant: the give-back ignoring earlier
+/// dispatches of the same signed execution.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn n1c_a_signed_chain_that_ran_a_step_keeps_its_nonce() {
+    use super::direct_continuation_tests::budget;
+    use super::direct_guards_fixture::fixture_hardened_signed_built;
+    let fx = fixture_hardened_signed_built(Answer::Ok, true, budget).await;
+    let chain = json!({"chain": [
+        {"tool": "alpha:read", "arguments": {}},
+        {"tool": "alpha:read", "arguments": {"cmd": "two"}}
+    ]});
+    let params = json!({"name": "gateway_execute", "arguments": chain, "_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+        crate::gateway::meta_mcp::signing::NONCE_META: "chain-n1"
+    }});
+    let headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tools/call"),
+        ("mcp-name", "gateway_execute"),
+    ];
+    let send = || {
+        send_with_headers(
+            &fx,
+            "/mcp",
+            "k-budget",
+            "tools/call",
+            params.clone(),
+            None,
+            &headers,
+        )
+    };
+    let (_, first) = send().await;
+    assert!(
+        first.get("error").is_some(),
+        "step 2 is refused by the budget: {first}"
+    );
+    assert_eq!(dispatched(&fx), 1, "step 1 ran once: {first}");
+    let (_, again) = send().await;
+    assert_eq!(code(&again), Some(-32001), "replay refused: {again}");
+    assert_eq!(dispatched(&fx), 1, "step 1 ran twice");
+}

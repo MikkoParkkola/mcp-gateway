@@ -461,6 +461,7 @@ impl MetaMcp {
         if let Some(execution) = caller.execution {
             execution.mark_dispatched();
         }
+        caller.signing.inspect(|signing| signing.mark_dispatched());
         // Boxed: the dispatch future is the largest thing this frame ever
         // holds, and inlining it puts `invoke_tool_traced` over
         // `clippy::large_futures` at every call site.

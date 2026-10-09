@@ -74,6 +74,10 @@ pub(crate) struct SigningInvocationContext {
     /// The store's stamp of this call's nonce registration, so a refusal that
     /// ran nothing can give back that registration and no other (MIK-7869).
     nonce_stamp: Option<std::time::Instant>,
+    /// A backend dispatch ran under this signed execution (any step of a chain
+    /// or playbook). From then on the nonce is never given back: a replay
+    /// under it would repeat that step's effects (MIK-8150).
+    dispatched: std::sync::atomic::AtomicBool,
 }
 
 pub(crate) enum SigningDelivery<'a> {
@@ -94,6 +98,12 @@ fn captured(value: Option<Value>) -> CapturedNonce {
 }
 
 impl SigningInvocationContext {
+    /// Record that a backend dispatch ran under this signed execution.
+    pub(crate) fn mark_dispatched(&self) {
+        self.dispatched
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
     /// Move protocol metadata out of the raw request. Invalid nonce values are
     /// dropped here without copying them; policy still decides before refusal.
     #[cfg(test)]
@@ -113,6 +123,7 @@ impl SigningInvocationContext {
             prepared_target: None,
             admitted: false,
             nonce_stamp: None,
+            dispatched: std::sync::atomic::AtomicBool::new(false),
         };
         if origin == Origin::Unsigned {
             return context;
@@ -217,6 +228,7 @@ impl SigningInvocationContext {
             prepared_target: None,
             admitted: false,
             nonce_stamp: None,
+            dispatched: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -231,6 +243,7 @@ impl SigningInvocationContext {
             prepared_target: None,
             admitted: true,
             nonce_stamp: None,
+            dispatched: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -244,6 +257,7 @@ impl SigningInvocationContext {
             prepared_target: None,
             admitted: true,
             nonce_stamp: None,
+            dispatched: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -430,6 +444,12 @@ impl super::MetaMcp {
         let Some(context) = caller.signing else {
             return;
         };
+        if context
+            .dispatched
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return;
+        }
         if let (true, Ok(Some(nonce)), Some(stamp)) =
             (context.admitted, context.nonce_value(), context.nonce_stamp)
         {
