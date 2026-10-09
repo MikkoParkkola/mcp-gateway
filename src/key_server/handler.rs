@@ -266,7 +266,8 @@ async fn exchange_token(
         identity: identity.clone(),
         scopes: scopes.clone(),
         iat: now,
-        exp: now + ttl,
+        // `token_ttl_secs` is bounded at load; never wraps regardless.
+        exp: now.saturating_add(ttl),
         client_ip,
     };
 

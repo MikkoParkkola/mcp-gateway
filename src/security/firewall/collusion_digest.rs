@@ -81,7 +81,7 @@ pub(crate) struct DeliveryDigest {
     pub(super) seam_sources: Option<Box<[String]>>,
     /// What the holder received when this receipt was cut: excuse only
     /// (`MIK-8066.EXCUSE.1`).
-    pub(super) cut_sketch: Option<std::sync::Arc<super::collusion::sketch::Sketch>>,
+    pub(super) cut_fps: Option<std::sync::Arc<[u64]>>,
 }
 
 /// Leaf `i` as a whole segment, no seam before it; the first `values` are
@@ -179,7 +179,7 @@ impl DeliveryDigest {
             sensitive,
             deferred: false,
             seam_sources: None,
-            cut_sketch: None,
+            cut_fps: None,
         };
         (digest, cut)
     }
@@ -214,7 +214,7 @@ impl DeliveryDigest {
             sensitive,
             deferred: true,
             seam_sources: None,
-            cut_sketch: None,
+            cut_fps: None,
         };
         (digest, false)
     }
@@ -235,7 +235,7 @@ impl DeliveryDigest {
             sensitive: self.sensitive,
             deferred: false,
             seam_sources: None,
-            cut_sketch: None,
+            cut_fps: None,
         };
         Some((digest, cut || kept < self.retained.len()))
     }
@@ -365,7 +365,7 @@ impl DeliveryDigest {
             sensitive: self.sensitive,
             deferred: false,
             seam_sources: None,
-            cut_sketch: None,
+            cut_fps: None,
         };
         kept.with_original(detector, found, original, retained, &HashSet::new())
     }
@@ -424,7 +424,7 @@ impl DeliveryDigest {
             sensitive: self.sensitive,
             deferred: true,
             seam_sources: None,
-            cut_sketch: None,
+            cut_fps: None,
         };
         kept.with_original(detector, found, original, retained, &in_step)
     }

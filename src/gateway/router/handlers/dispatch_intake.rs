@@ -279,9 +279,10 @@ pub(super) async fn intake(
                 {
                     Some(id) => id,
                     None => {
-                        return Err(
-                            crate::gateway::router::hardened_elicitation::refusal().into_response()
-                        );
+                        return Err(crate::gateway::router::hardened_elicitation::refuse(
+                            &request,
+                            declared_version,
+                        ));
                     }
                 }
             },

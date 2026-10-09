@@ -168,6 +168,10 @@ async fn t34_a_read_begun_before_a_renewal_does_not_revoke_it() {
         1,
         "the renewal survives a delivery judged against the older read"
     );
+    assert!(
+        hub.store.has_due("sub_x", chrono::Utc::now()),
+        "the renewal keeps its queued event after a delivery judged against the older read"
+    );
 }
 
 /// A peer whose first `resources/list` lists only `file:///a` and every later
@@ -273,6 +277,10 @@ async fn t34_a_cached_list_from_before_a_renewal_does_not_revoke_it() {
         hub.store.subscriptions().len(),
         1,
         "the renewal survives a delivery judged against the stale cache"
+    );
+    assert!(
+        hub.store.has_due("sub_x", chrono::Utc::now()),
+        "the renewal keeps its queued event after a delivery judged against the stale cache"
     );
 }
 

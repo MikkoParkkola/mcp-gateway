@@ -58,6 +58,12 @@ pub struct Fixture {
     /// The registry the route tracks scored identities in. `None` is the
     /// shipped router-test state: nothing is tracked and no sweep runs.
     pub session_lifecycle: Option<Arc<mcp_gateway::gateway::session_lifecycle::SessionLifecycle>>,
+    /// Install `firewall` on the Meta-MCP too, as the server does
+    /// (`server/mod.rs`): its anomaly screen and delivery pass then run with
+    /// the same rules as the router's. Off by default so rows that set only
+    /// the router firewall keep their meaning.
+    #[cfg(feature = "firewall")]
+    pub meta_firewall: bool,
 }
 
 impl Default for Fixture {
@@ -77,6 +83,8 @@ impl Default for Fixture {
             #[cfg(feature = "firewall")]
             firewall: None,
             session_lifecycle: None,
+            #[cfg(feature = "firewall")]
+            meta_firewall: false,
         }
     }
 }
@@ -113,11 +121,22 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
     .await
     .expect("the fixture task store opens");
 
+    // The router's firewall on the Meta-MCP too when the row asks, as the
+    // server installs it on both.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(unused_mut, reason = "only the firewall build sets it")
+    )]
+    let mut meta = MetaMcp::new(Arc::clone(&backends));
+    #[cfg(feature = "firewall")]
+    if f.meta_firewall {
+        meta.set_firewall(f.firewall.clone());
+    }
     let app = Arc::new(AppState {
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
         session_lifecycle: f.session_lifecycle,
         env: None,
-        meta_mcp: Arc::new(MetaMcp::new(Arc::clone(&backends))),
+        meta_mcp: Arc::new(meta),
         backends,
         meta_mcp_enabled: f.meta_mcp_enabled,
         multiplexer,

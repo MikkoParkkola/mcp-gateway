@@ -1,4 +1,4 @@
-sha256: 6b3537ef1a7bc5ebb9e121da12ee6e21d554df2675c06663175a250cdab0e21d
+sha256: 7a24a28cf6afdaefc1d806e1c131e70b4d8297a30c0a6e0894c1583a07b3af80
 fulcrum: "1.0"
 name: linear_create_issue
 description: Create a new issue in Linear. Requires teamId (use linear_get_teams to find it).
@@ -83,7 +83,7 @@ providers:
             issueCreate(input: $input) {
               success
               issue {
-                id identifier title url
+                id identifier title url description
                 state { name }
                 team { key }
                 priority priorityLabel

@@ -310,6 +310,19 @@ pub enum Error {
         data: Option<serde_json::Value>,
     },
 
+    /// A CLI capability refused the credential it was given (MIK-7782: gws
+    /// exits 2 with a JSON error whose code is 401).
+    ///
+    /// Gateway-owned, like [`Error::ResponseFirewallRefused`]: only the CLI
+    /// executor builds it, so a peer cannot. A peer's own JSON-RPC error that
+    /// happens to use code 401 stays [`Error::JsonRpc`] and is not read as a
+    /// credential refusal (MIK-7926.FIX.4). The caller still sees code 401.
+    #[error("{message}")]
+    CliCredentialRefused {
+        /// What the caller is told, naming the command and nothing it printed.
+        message: String,
+    },
+
     /// A JSON-RPC error the peer carried on a status that invites a retry.
     ///
     /// Two independent facts, and a caller breaks if either is dropped. The
@@ -459,6 +472,9 @@ impl Error {
             Self::Protocol(_) | Self::ResponseFirewallRefused => -32600, // Invalid request
             Self::BackendNotFound(_) | Self::ToolNotFound(_) => -32001,
             Self::AuditUnavailable => -32005,
+            Self::CliCredentialRefused { .. } => {
+                crate::security::http_diagnostics::CLI_UNAUTHORIZED
+            }
             Self::BackendUnavailable(_)
             | Self::CircuitOpen { .. }
             | Self::RateLimited(_)

@@ -12,7 +12,6 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::collusion::sketch::Sketch;
 use super::collusion::{CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams};
 use super::collusion_digest::DELIVERED_SET_CAP;
 #[cfg(test)]
@@ -68,6 +67,7 @@ pub struct CollusionConfig {
     /// `off` (default), `observe` or `block`.
     pub action: CollusionAction,
     /// How long a delivery is remembered, in seconds.
+    #[serde(deserialize_with = "crate::duration_bound::secs")]
     pub window_secs: u64,
     /// Matching fingerprints one egress needs before it is a relay.
     pub min_matches: usize,
@@ -432,7 +432,7 @@ impl Firewall {
         if cut {
             // `MIK-8066.EXCUSE.1`: the whole delivered value, as received.
             let (leaves, values) = delivery_parts(result);
-            digest.cut_sketch = self.sketch_of_leaves(&leaves, values);
+            digest.cut_fps = self.fps_of_leaves(&leaves, values);
         }
         Some(digest)
     }
@@ -495,15 +495,16 @@ impl Firewall {
         let (mut capped, cut) = digest.capped()?;
         self.count_cut(cut);
         if cut {
-            capped.cut_sketch = self.sketch_of(digest);
+            capped.cut_fps = self.fps_of(digest);
         }
         Some(capped)
     }
 
-    /// `MIK-8066.EXCUSE.1`: the sketch of every fingerprint of a delivered
-    /// value's leaves, values joined as a delivery walk reads them (both
-    /// forms) and each key, all of it text the caller received.
-    fn sketch_of_leaves(&self, leaves: &[&str], values: usize) -> Option<Arc<Sketch>> {
+    /// `MIK-8066.EXCUSE.1`: every fingerprint of a delivered value's leaves,
+    /// values joined as a delivery walk reads them (both forms) and each key,
+    /// all of it text the caller received; sketched when recorded
+    /// (`MIK-8200`).
+    fn fps_of_leaves(&self, leaves: &[&str], values: usize) -> Option<Arc<[u64]>> {
         let detector = self.relay_detector()?;
         let (vals, keys) = leaves.split_at(values.min(leaves.len()));
         let mut fps = detector.fingerprints(&vals.join("\n"));
@@ -513,14 +514,14 @@ impl Firewall {
         for key in keys {
             fps.extend(detector.fingerprints(key));
         }
-        Some(Arc::new(Sketch::of(&fps)))
+        Some(fps.into())
     }
 
-    /// `MIK-8066.EXCUSE.1`: the sketch of every fingerprint of `whole`, the
-    /// receipt before its cut: what the holder received, kept to excuse it.
-    fn sketch_of(&self, whole: &DeliveryDigest) -> Option<Arc<Sketch>> {
+    /// `MIK-8066.EXCUSE.1`: every fingerprint of `whole`, the receipt kept
+    /// to the plan's answer before its cut: what the holder received.
+    fn fps_of(&self, whole: &DeliveryDigest) -> Option<Arc<[u64]>> {
         let detector = self.relay_detector()?;
-        Some(Arc::new(Sketch::of(&whole.fingerprints(detector))))
+        Some(whole.fingerprints(detector).into())
     }
 
     fn count_cut(&self, cut: bool) {
@@ -629,16 +630,13 @@ impl Firewall {
         let capped = self.capped(digest);
         let digest = capped.as_ref().unwrap_or(digest);
         let now = Instant::now();
-        detector.record_fingerprints_at(
+        detector.record_cut_fingerprints_at(
             &source,
             caller.key(),
             (digest.sensitive, flows),
-            digest.fingerprints(detector),
+            (digest.fingerprints(detector), digest.cut_fps.clone()),
             now,
         );
-        if let Some(sketch) = &digest.cut_sketch {
-            detector.record_sketch_at(&source, caller.key(), Arc::clone(sketch), now);
-        }
     }
 }
 

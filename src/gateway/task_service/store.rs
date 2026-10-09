@@ -409,6 +409,15 @@ impl TaskStore {
             .await
             .map_err(|_| StoreError::Storage)
     }
+
+    /// Admit no further mutation, without waiting for one in flight
+    /// (MIK-7839.CANCEL.3). Every mutation checks `ready` under the ordering
+    /// lock before it writes, so one not yet past that check is refused; one
+    /// already past it was admitted earlier and finishes. Takes only the state
+    /// lock, never the ordering lock, so a caller in `Drop` never waits on disk.
+    pub(crate) fn stop_serving(&self) {
+        self.0.state().ready = false;
+    }
 }
 
 impl Shared {

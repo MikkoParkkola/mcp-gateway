@@ -14,11 +14,13 @@
 //! | Module | Purpose |
 //! |--------|---------|
 //! | [`types`] | the A2A 1.0 wire shapes this bridge reads and writes |
-//! | [`client`] | card fetch, endpoint choice (same origin), `SendMessage` |
+//! | [`client`] | card fetch, endpoint choice (same origin), the JSON-RPC calls |
+//! | [`delegation`] | who owns an agent task while the bridge waits on it |
 //! | [`translator`] | card -> tool, reply -> MCP `CallToolResult` |
 //! | [`transport`] | the backend `Transport` |
 
 pub(crate) mod client;
+pub(crate) mod delegation;
 pub(crate) mod translator;
 pub(crate) mod transport;
 pub(crate) mod types;
