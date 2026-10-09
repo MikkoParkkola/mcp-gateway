@@ -1,0 +1,6 @@
+head_sha	0081eb3de94693d9308a63a374fca644af5d82e6
+m01-http-route-opens-no-scope	linux	m01-http-route-opens-no-scope.patch	--lib -- gateway::router::egress_matrix_tests::slot_release::slot_release_matrix
+m02-direct-route-opens-no-scope	linux	m02-direct-route-opens-no-scope.patch	--lib -- gateway::router::egress_matrix_tests::slot_release::slot_release_matrix
+m03-mint-registers-no-hold	linux	m03-mint-registers-no-hold.patch	--lib -- gateway::router::egress_matrix_tests::slot_release::slot_release_matrix
+m04-drop-counts-nothing	linux	m04-drop-counts-nothing.patch	--lib -- gateway::router::egress_matrix_tests::slot_release::slot_release_matrix
+m05-inner-scope-owns-holds	linux	m05-inner-scope-owns-holds.patch	--lib -- gateway::meta_mcp::sealed_hold::tests::an_inner_scope_does_not_own_the_holds
