@@ -233,9 +233,18 @@ fn array_items_and_prefix_items_are_checked() {
 fn catastrophic_pattern_completes() {
     let schema = json!({"type": "object", "patternProperties": {"(a+)+$": {}}});
     let key = format!("{}!", "a".repeat(10_000));
-    let started = std::time::Instant::now();
-    let _ = refused(&schema, &json!({ key: 1 }));
-    assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    // A backtracking engine never finishes this key (exponential in 10_000).
+    // On its own thread, so a stuck matcher fails the hang guard instead of
+    // holding the test until the CI job times out; the oracle is that it
+    // finishes at all, not how fast (MIK-8222).
+    let (done, finished) = std::sync::mpsc::channel();
+    let probe = schema.clone();
+    std::thread::spawn(move || {
+        let _ = done.send(refused(&probe, &json!({ key: 1 })));
+    });
+    finished
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("a linear-time engine finishes; a backtracking one never does");
     // A pattern the engine cannot express compiles to nothing: fail closed.
     let lookaround = json!({"type": "object", "patternProperties": {"^(?=a)": {}}});
     assert!(refused(&lookaround, &json!({"abc": 1})));

@@ -36,6 +36,9 @@ enum Kind {
     Question,
     /// A round with `requestState` and no questions (`MIK-8177.STATE.1`).
     StateOnly,
+    /// A question that follows a progress notification, so on `/mcp` it
+    /// leaves on the stream's streaming arm, not the buffered one.
+    ProgressFirst,
 }
 
 /// The backend answer for `kind` taking `path`: a credential makes the
@@ -53,24 +56,26 @@ fn part(kind: Kind) -> Part {
     match kind {
         Kind::Question => Part::InterimQuestion,
         Kind::StateOnly => Part::InterimStateOnly,
+        Kind::ProgressFirst => Part::ProgressThenQuestion,
     }
 }
 
 /// The cells this stage covers. Paths the design names whose fixtures arrive
 /// with their stage (read judge, delivery audit, `slot_http`, SSE, stdio,
 /// tasks, confirmations, co-owners) are added there, with red proof each.
-const CELLS: [(Path, Kind); 4] = [
+const CELLS: [(Path, Kind); 6] = [
     (Path::Delivered, Kind::Question),
     (Path::FirewallRefused, Kind::Question),
     (Path::Delivered, Kind::StateOnly),
     (Path::FirewallRefused, Kind::StateOnly),
+    (Path::Delivered, Kind::ProgressFirst),
+    (Path::FirewallRefused, Kind::ProgressFirst),
 ];
 
 /// Cells that leak their slot on this tree, each with the stage that fixes it.
-const KNOWN_LEAK: [(Route, Path, Kind); 1] = [
-    // MIK-8177.STATE.1: stage 2's handoff release frees it.
-    (Route::Meta, Path::FirewallRefused, Kind::StateOnly),
-];
+/// Empty since stage 3: `MIK-8177.STATE.1` (`/mcp`, refused state-only, over
+/// SSE) is freed once SSE answers release unless handed off.
+const KNOWN_LEAK: [(Route, Path, Kind); 0] = [];
 
 /// The JSON-RPC message a reply carries: the last SSE `data:` line, or the
 /// whole body when the reply is plain JSON.
@@ -130,6 +135,10 @@ async fn slot_release_matrix() {
             let before = counts(&continuation);
             let (uri, sent, mut params) = request(route, "tools/call", part(kind));
             params["_meta"] = answering_client();
+            if kind == Kind::ProgressFirst {
+                // Maps the backend's notification back to this request.
+                params["_meta"]["progressToken"] = serde_json::json!("p1");
+            }
             let body = post_as(&fx, (uri, sent), &params, Some("alice")).await;
             // The cell only counts if its path really happened.
             let want = match path {
@@ -138,6 +147,17 @@ async fn slot_release_matrix() {
             };
             if !took(path, &body) {
                 failures.push(format!("{label}: did not take its path: {body}"));
+            }
+            // On `/mcp` the notification goes first, so the answer leaves on
+            // the stream's streaming arm; without it the cell would test the
+            // buffered arm instead.
+            if kind == Kind::ProgressFirst
+                && route == Route::Meta
+                && !body.contains("notifications/progress")
+            {
+                failures.push(format!(
+                    "{label}: the notification did not go first: {body}"
+                ));
             }
             let known_leak = KNOWN_LEAK.contains(&(route, path, kind));
             let want = if known_leak { want + 1 } else { want };
@@ -153,13 +173,13 @@ async fn slot_release_matrix() {
                 ));
             }
             // One hold registered in the route's scope, none minted outside
-            // one. A delivered answer the route hands off (the direct route's
-            // JSON reply; this matrix's `/mcp` cells are streams, handed off
-            // from stage 3) drops no unhanded hold; every other hold is gone
-            // unhanded with the request.
+            // one. A delivered answer is handed off where its bytes leave (the
+            // direct reply, or the stream's answer event on `/mcp`), so it
+            // drops no unhanded hold; every other hold is gone unhanded with
+            // the request.
             let after = counts(&continuation);
             let delta: Vec<u64> = after.iter().zip(before).map(|(a, b)| a - b).collect();
-            let handed = path == Path::Delivered && route == Route::Direct;
+            let handed = path == Path::Delivered;
             let want_delta = [1, 0, u64::from(!handed)];
             if delta != want_delta {
                 failures.push(format!(

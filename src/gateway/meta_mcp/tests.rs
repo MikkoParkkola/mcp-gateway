@@ -247,6 +247,11 @@ fn declaring(capabilities: &serde_json::Value) -> crate::protocol::meta::Declare
 /// Build a `MetaMcp` whose only backend is a mock at `url`, with a short
 /// aggregation timeout so tests run fast.
 fn meta_with_backend(url: &str, timeout: Duration) -> MetaMcp {
+    meta_with_backend_timeout(url, timeout, Duration::from_secs(5))
+}
+
+/// [`meta_with_backend`] whose backend gives up on a call after `backend`.
+fn meta_with_backend_timeout(url: &str, timeout: Duration, backend: Duration) -> MetaMcp {
     use crate::backend::Backend;
     use crate::config::{BackendConfig, TransportConfig};
 
@@ -260,7 +265,7 @@ fn meta_with_backend(url: &str, timeout: Duration) -> MetaMcp {
         },
         stop_when_idle_for: None,
         max_frame_bytes: None,
-        timeout: Duration::from_secs(5),
+        timeout: backend,
         ..BackendConfig::default()
     };
     let backend = Arc::new(Backend::new(

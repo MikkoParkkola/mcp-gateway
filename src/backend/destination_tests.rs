@@ -529,7 +529,9 @@ fn a_start_built_before_the_stamp_is_not_published() {
     let started: Arc<dyn crate::transport::Transport> = Arc::new(Started(Arc::default()));
     assert!(
         backend
-            .publish(&entry, (&started, None), built_under)
+            .publish(&entry, (&started, None), built_under, || {
+                unreachable!("a refused publish installed its era (MIK-8218)")
+            })
             .is_err()
     );
     assert!(
@@ -539,7 +541,7 @@ fn a_start_built_before_the_stamp_is_not_published() {
     );
     assert!(
         backend
-            .publish(&entry, (&started, None), DestinationPolicy::Public)
+            .publish(&entry, (&started, None), DestinationPolicy::Public, || {})
             .is_ok()
     );
 }
