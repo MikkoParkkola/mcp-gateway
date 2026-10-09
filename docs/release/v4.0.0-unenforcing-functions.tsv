@@ -61,6 +61,10 @@ src/gateway/server/stdio_tasks.rs	stop_on_drop	1	Session lifecycle (MIK-7839.CAN
 src/gateway/server/stdio_tasks.rs	drop	1	Session lifecycle (MIK-7839.CANCEL.3): seals the executor and stops store admission; no access decision
 src/gateway/task_service/service.rs	stop_serving	1	Store lifecycle (MIK-7839.CANCEL.3): forwards the admission cutoff to the store
 src/gateway/task_service/store.rs	stop_serving	1	Store lifecycle (MIK-7839.CANCEL.3): clears ready so later mutations answer Unavailable; ownership checks are elsewhere
+src/transport/http/cancel_guard.rs	arm	1	Records a legacy exchange sent to the backend so a drop can cancel it (MIK-7642); no access decision
+src/transport/http/cancel_guard.rs	disarm	1	Marks the exchange answered so no cancel is sent (MIK-7642); no access decision
+src/transport/http/cancel_guard.rs	drop	1	Sends the backend one notifications/cancelled for a dropped, unanswered legacy exchange (MIK-7642); no access decision
+src/transport/http/requests.rs	post_and_read	1	The existing POST-and-read body moved out so the cancel guard can wrap it (MIK-7642); the redirect and status checks it carries are unchanged
 src/gateway/server/persistence.rs	write_costs	1	Shutdown persistence (MIK-8157): writes today's spend to costs.json under the cost-write lock; the budget decision is the enforcer's
 src/gateway/server/persistence.rs	save_costs_unless_busy	1	Shutdown persistence (MIK-8157): periodic cost save that skips while a previous write runs
 src/gateway/server/persistence.rs	run_shutdown_saves	1	Shutdown persistence (MIK-8157): runs the shutdown saves on detached threads under one deadline

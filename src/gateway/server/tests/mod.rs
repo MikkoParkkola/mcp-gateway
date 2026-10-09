@@ -73,6 +73,8 @@ mod owner4_stdio_policy;
 
 // MIK-7272.LIFE.1 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I3).
 mod life1_stdio_cancel;
+// MIK-7642.PR.B: a client cancel reaches the backend by its own request id.
+mod mik7642_backend_cancel;
 mod owner2_stdio_tasks;
 // MIK-7839.CANCEL.3: a dropped run_stdio future stops its task workers.
 mod stdio_session_drop;
