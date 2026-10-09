@@ -151,12 +151,14 @@ jobs:
             exit 1
           fi
 
-  # Every test target must compile in the release profile too (MIK-8223): an
+  # Every test target must compile with debug assertions off (MIK-8223): an
   # item gated on `debug_assertions` that a plain `cfg(test)` module uses
-  # compiles in debug and breaks `cargo test --release`. Default features: the
-  # profile, not the feature set, is what this row adds.
+  # compiles in debug and breaks `cargo test --release`. The row turns
+  # debug_assertions off in the test profile instead of building `--release`:
+  # the cfg is the same, and the release profile (thin LTO, one codegen unit)
+  # over 200 test binaries ran the runner out of memory. Default features.
   release-test-compile:
-    name: Release-profile test compile
+    name: Test compile without debug assertions
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -164,9 +166,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
-      # Its own key: release artifacts would otherwise displace the debug
-      # ones the clippy shards reuse.
+      # Its own key: these artifacts differ in cfg from the clippy shards'.
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
-          shared-key: feature-combos-release
-      - run: cargo test --release --all-targets --no-run
+          shared-key: feature-combos-no-debug-assertions
+      - run: >-
+          cargo test --all-targets --no-run
+          --config profile.dev.debug-assertions=false
+          --config profile.test.debug-assertions=false
