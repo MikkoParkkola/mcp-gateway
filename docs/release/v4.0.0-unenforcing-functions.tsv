@@ -57,3 +57,6 @@ src/gateway/server/tools_changed/views.rs	bury	1	Per-user change hint: keeps an 
 src/oauth/login_gate.rs	fill_scope	1	Runs a shared fill under its dispatch mark; affects only which timeout error a joiner reports (MIK-8046).
 src/oauth/login_gate.rs	joined	1	Records which shared fill a deadline scope waits on; affects only which timeout error it reports (MIK-8046).
 src/gateway/router/helpers.rs	build_http_response	1	Serialises a frame already wrapped as Egressed; the scan is decided where the Egressed value is made, not here.
+src/gateway/router/handlers/health.rs	backends_overall_healthy	1	Folds backend statuses into one health bit for /health; admin detail is decided in health_handler
+src/gateway/router/handlers/session_end.rs	sse_deprecated_handler	1	Answers the retired /sse route with a fixed 410 migration notice; reads no request data
+src/gateway/router/handlers/sse.rs	unsupported_version_error	1	Builds the unsupported-version JSON-RPC error; the refusal is decided by its callers
