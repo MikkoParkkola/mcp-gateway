@@ -39,25 +39,26 @@ IMAGE_KEY = re.compile(r"^\s*(?:-\s+)?image:\s*['\"]?([^'\"\s#]+)")
 DIGEST_REF = re.compile(r"(?<![\w./:-])([\w][\w./:-]*@sha256:[0-9a-f]{64})")
 KIND = re.compile(r"uses:\s*helm/kind-action@")
 BUILDX = re.compile(r"uses:\s*docker/setup-buildx-action@")
-DOCKER_CMD = re.compile(r"\bdocker\s+(?:pull|run|create)\b(.*)")
+DOCKER_CMD = re.compile(r"\bdocker\s+(?:pull|run|create)\b((?:(?!\bdocker\s).)*)")
 SHELL_FROM = re.compile(r"\bFROM\s+([A-Za-z0-9$][^\s\\'\"]*)")
-# Options of `docker run|create|pull` that take a separate value.
-VALUED = {
-    "-e", "--env", "-v", "--volume", "-p", "--publish", "--name", "--label", "-l",
-    "--network", "--net", "--entrypoint", "-w", "--workdir", "-u", "--user",
-    "--platform", "--pull", "--add-host", "--mount", "--env-file", "--cidfile",
-    "-h", "--hostname", "--memory", "-m", "--cpus", "--restart", "--tmpfs",
-    "--ulimit", "--cap-add", "--cap-drop", "--device", "--log-driver", "--log-opt",
-    "--security-opt", "--shm-size", "--stop-signal", "--stop-timeout", "--health-cmd",
-    "--expose", "--dns", "--ipc", "--pid", "--group-add", "--init-path",
+# `docker run|create|pull` long options that take no value; every other long
+# option without `=` takes the next token. Short options take a value only if
+# listed in VALUED_SHORT.
+BOOLEAN_LONG = {
+    "--rm", "--detach", "--interactive", "--tty", "--init", "--privileged",
+    "--read-only", "--quiet", "--all-tags", "--disable-content-trust",
+    "--no-healthcheck", "--oom-kill-disable", "--publish-all", "--sig-proxy",
 }
+VALUED_SHORT = {"-e", "-v", "-p", "-l", "-w", "-u", "-h", "-m", "-a", "-c"}
 
 
 def docker_image(rest: str) -> str | None:
     """The image operand of `docker run|create|pull <rest>`, or None when it is
     not a literal (a variable, or the line cannot be tokenised)."""
+    # The command ends at a shell boundary: `)`, `;`, `&&`, `||` or `|`.
+    rest = re.split(r"\)|;|&&|\|\||\|", rest, maxsplit=1)[0]
     try:
-        tokens = shlex.split(rest, comments=True)
+        tokens = shlex.split(rest)
     except ValueError:
         return None
     skip = False
@@ -65,8 +66,11 @@ def docker_image(rest: str) -> str | None:
         if skip:
             skip = False
             continue
+        if token.startswith("--"):
+            skip = "=" not in token and token not in BOOLEAN_LONG
+            continue
         if token.startswith("-"):
-            skip = token in VALUED
+            skip = token in VALUED_SHORT
             continue
         if token in {"|", "&&", ";", ">", "2>&1"} or "$" in token or "{" in token:
             return None
@@ -145,8 +149,7 @@ def check_docker_commands(path: str, text: str) -> list[str]:
             logical += line.rstrip()[:-1] + " "
             continue
         logical += line
-        m = DOCKER_CMD.search(logical)
-        if m:
+        for m in DOCKER_CMD.finditer(logical):
             image = docker_image(m.group(1))
             if image and not has_registry(image):
                 problems.append(f"{path}:{start}: docker pulls {image} from Docker Hub")
@@ -211,6 +214,10 @@ def self_test() -> list[str]:
         "buildx without driver image": (".github/workflows/x.yml", "      - uses: docker/setup-buildx-action@abc\n"),
         "literal docker pull": ("scripts/x.sh", "docker pull redis:7\n"),
         "untagged docker pull": ("scripts/x.sh", "docker pull redis\n"),
+        "inside a substitution": ("scripts/x.sh", 'c="$(docker run --detach redis:7 redis-server)"\n'),
+        "second command on a line": ("scripts/x.sh", "docker pull ghcr.io/o/c:1 && docker pull redis:7\n"),
+        "hash in an option value": ("scripts/x.sh", "docker run -e FOO=abc#def redis:7\n"),
+        "after an unlisted valued option": ("scripts/x.sh", "docker run --pids-limit 128 --rm redis:7\n"),
         "quoted docker pull": ("scripts/x.sh", 'docker pull "redis:7"\n'),
         "image on a continuation line": ("scripts/x.sh", "docker run --detach \\\n  redis:7 redis-server\n"),
         "commented kind node_image": (
@@ -238,6 +245,7 @@ def self_test() -> list[str]:
         ),
         "app argument after the image": ("scripts/x.sh", "docker run ghcr.io/o/client:1 redis:6379\n"),
         "variable image": ("scripts/x.sh", 'docker run --rm "$IMAGE" true\n'),
+        "numeric option value": ("scripts/x.sh", 'docker run --pids-limit 128 --rm "$image" true\n'),
         "port mapping and scratch": ("scripts/x.sh", "docker run --publish 127.0.0.1::6379 mirror.gcr.io/library/redis:7\nprintf 'FROM scratch\\n'\n"),
     }
     out = []
