@@ -180,7 +180,9 @@ jobs:
           # A grep that cannot see the binary's content would pass it, so the
           # crate name must be found first; then only "no match" (exit 1) passes.
           grep -qa mcp-gateway "$bin" || { echo "::error::$bin could not be inspected"; exit 1; }
-          grep -qa MCP_GATEWAY_TEST_TRUST_CA "$bin"; found=$?
+          # The step shell runs with -e, and "no match" is exit 1: capture the
+          # status without letting -e end the step on the passing case.
+          found=0; grep -qa MCP_GATEWAY_TEST_TRUST_CA "$bin" || found=$?
           if [ "$found" -ne 1 ]; then echo "::error::$bin carries the debug test trust roots, or could not be read (grep exit $found)"; exit 1; fi
 
   # Dependency-vulnerability gate for the image build. ci.yml runs `cargo audit`

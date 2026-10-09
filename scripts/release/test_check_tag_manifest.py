@@ -1647,7 +1647,13 @@ class WorkflowWiring(unittest.TestCase):
         )
         self.assertIn("sed -n 's/^FROM rust:", body, "the Dockerfile row no longer reads the Dockerfile")
         self.assertIn("sed -n 's/^rust-version = ", body, "the rust-version row no longer reads Cargo.toml")
-        self.assertRegex(body, r'(?m)^        run: cargo \+"\$TOOLCHAIN" check --release --locked$')
+        # The Dockerfile row builds the binary (MIK-8188) so the next step can
+        # grep it for the debug-only test trust roots; the rust-version row
+        # still only checks.
+        self.assertRegex(body, r'(?m)^            cargo \+"\$TOOLCHAIN" build --release --locked --bin mcp-gateway$')
+        self.assertRegex(body, r'(?m)^            cargo \+"\$TOOLCHAIN" check --release --locked$')
+        self.assertIn("if: matrix.source == 'dockerfile'", body, "the trust-roots grep must run on the built row")
+        self.assertIn("grep -qa MCP_GATEWAY_TEST_TRUST_CA", body, "the release binary is no longer grepped")
         self.assertNotRegex(body, r"continue-on-error:\s*true", "the compile must be fatal")
         scope = jobs("docker.yml")["scope"]
         self.assertRegex(scope, r"compile_check: \$\{\{ steps\.decide\.outputs\.compile_check \}\}")
