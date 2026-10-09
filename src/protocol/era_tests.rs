@@ -156,3 +156,36 @@ async fn a_held_lock_still_reads_the_determined_verdict() {
     let _held = cache.observation.lock().await;
     assert_eq!(cache.cached_now(), None, "a discard reads undetermined");
 }
+
+/// MIK-8218: the lock-free mirror follows every transition the locked read
+/// does: a Legacy verdict, a silent peer (assumed, not determined), a
+/// discard that declines and one that clears, and a declined install.
+#[tokio::test]
+async fn the_lock_free_read_follows_every_transition() {
+    let cache = EraCache::for_backend("mirror-transitions");
+    cache
+        .resolve_with(|| async { ProbeOutcome::Error(METHOD_NOT_FOUND_CODE) })
+        .await;
+    assert_eq!(cache.cached_now(), Some(Era::Legacy));
+    assert_eq!(cache.cached_now(), cache.cached().await);
+
+    assert!(!cache.discard_if(|_| false).await);
+    assert_eq!(cache.cached_now(), Some(Era::Legacy), "a declined discard");
+    assert!(cache.discard_if(|_| true).await);
+    assert_eq!(cache.cached_now(), None, "a discard");
+
+    cache
+        .reprobe_with(|| async { modern_document() }, |_store| false)
+        .await;
+    assert_eq!(
+        cache.cached_now(),
+        None,
+        "a declined install writes nothing"
+    );
+
+    cache
+        .restart_with(|| async { ProbeOutcome::NoAnswer })
+        .await;
+    assert_eq!(cache.cached_now(), None, "silence is not a determination");
+    assert_eq!(cache.cached_now(), cache.cached().await);
+}
