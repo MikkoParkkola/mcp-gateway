@@ -449,13 +449,17 @@ async fn a_reap_step_past_its_deadline_gives_up() {
         matches!(tree.reap_step(late), Reap::Done(None)),
         "a step past the deadline gives up unreaped"
     );
-    let sent_before_drop = tree.group_signals_sent;
-    drop(tree);
-    // The gate is closed: the drop path sent nothing more.
+    // The close signal went out; a leader that died at once may also have
+    // had a settle signal in the same step.
+    let sent_before = tree.group_signals_sent;
+    assert!(sent_before >= 1, "the close signal was sent");
+    // The gate is closed: the drop path (`start_kill`) sends nothing more.
+    tree.start_kill();
     assert_eq!(
-        sent_before_drop, 1,
-        "only the close signal before giving up"
+        tree.group_signals_sent, sent_before,
+        "a tree given up at the deadline sends no further signal"
     );
+    drop(tree);
     gone(child).await;
 }
 
