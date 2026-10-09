@@ -15,7 +15,7 @@ use super::settle_followed::{
 use super::settlement::{
     backend_output, interrupted_before_dispatch, interrupted_result, strip_http_status,
 };
-use super::upstream::QueryLease;
+use super::upstream::{CancelSend, QueryLease};
 use super::{
     BeginOutcome, CommittedTask, CreateWrite, Handoff, TaskCall, TaskExecutor, TaskIntent,
     TransitionWrite, UpstreamAnswer, UpstreamCapture, UpstreamHandle,
@@ -28,6 +28,8 @@ use crate::gateway::task_service::service::{CreateOutcome, ServiceError};
 use crate::gateway::task_service::store::StoreError;
 use crate::protocol::RequestId;
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
+use crate::transport::submit_mark::{SubmitMark, with_submit_mark};
+use futures::FutureExt as _;
 
 /// The whole life of an owned handoff. `handoff` is the ownership `begin` took
 /// before this future existed; every `return` below, and any panic between
@@ -205,6 +207,9 @@ async fn run_dispatched(
     let submission = job
         .as_ref()
         .map(|job| Arc::new(UpstreamSubmission::armed_for(&job.server, &job.tool, &id)));
+    // Set by the transport when the submission's response head arrives: the
+    // line past which a cancel may still collect the handle (MIK-7642 R10.1).
+    let submit_mark = Arc::new(SubmitMark::default());
 
     // The same tail the request thread takes, asked for the backend's own
     // result rather than the synchronous wrapper: design §4 settles a task on
@@ -223,7 +228,7 @@ async fn run_dispatched(
                 Box::pin(
                     crate::gateway::meta_mcp::upstream::with_upstream_submission(
                         Arc::clone(submission),
-                        dispatch,
+                        with_submit_mark(Arc::clone(&submit_mark), dispatch),
                     ),
                 )
                 .await
@@ -232,10 +237,10 @@ async fn run_dispatched(
         }
     };
 
-    let dispatch = crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
+    let mut dispatch = Box::pin(crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
         Arc::clone(intent.owned.dispatch_log()),
         dispatch,
-    );
+    ));
 
     // Awaited into its own binding so the dispatch future — which borrows both
     // the caller context and the armed slot — is dropped before anything below
@@ -243,11 +248,27 @@ async fn run_dispatched(
     let dispatched = tokio::select! {
         biased;
         _ = cancel_rx.changed() => None,
-        response = dispatch => Some(response),
+        response = &mut dispatch => Some(response),
     };
     let Some(response) = dispatched else {
+        // The cancel arm (design r7 R7.2, r8 R8.1-R8.3). Only past the
+        // receive-only line is `dispatch` polled again, once, outside the coop
+        // budget, so a reply already buffered reaches `offer` and nothing new
+        // is sent. Then the slot is read, `dispatch` dropped, and only then the
+        // durable claim taken.
+        if submit_mark.submitted() {
+            #[cfg(test)]
+            rescue_seam::before_rescue_poll(&id).await;
+            let _ = tokio::task::unconstrained(&mut dispatch).now_or_never();
+        }
+        let held = submission.as_ref().and_then(|slot| slot.handle());
+        drop(dispatch);
+        if let (Some(handle), Some(job)) = (held, job.as_ref()) {
+            cancel_held_upstream(&executor, &principal, &id, job, handle).await;
+        }
         return;
     };
+    drop(dispatch);
 
     // A handle in the slot means the peer really did start a task: the
     // dispatch's own return is the `working` stub, not an answer, and settling
@@ -303,6 +324,9 @@ async fn follow_upstream_job(
     cancel_rx: &mut watch::Receiver<bool>,
 ) {
     let (job, handle, relay) = dispatched;
+    executor
+        .notify_observer(super::CommitStage::BeforeCapture, id)
+        .await;
     let captured = executor
         .capture_upstream(
             principal,
@@ -316,6 +340,12 @@ async fn follow_upstream_job(
             },
         )
         .await;
+    // Capture-side sender (design r8 R8.4): a capture refused because the row
+    // was cancelled meanwhile offers the handle to the row's one cancel claim.
+    // Any other refusal is not ours, and the job is followed as before.
+    if !captured && cancel_held_upstream(executor, principal, id, &job, handle.clone()).await {
+        return;
+    }
 
     let Some(adapter) = executor.recovery() else {
         return;
@@ -414,6 +444,28 @@ async fn follow_upstream_job(
         settle_followed(executor, state, &followed, (outcome, writes), &notes).await;
     }
     lease.release(executor, id).await;
+}
+
+/// Offer a handle this worker holds, for a row cancelled under it, to the
+/// row's one durable cancel claim; send it here if this worker wins. `false`
+/// when the row is not cancelled, another sender claimed, or nothing could be
+/// read.
+async fn cancel_held_upstream(
+    executor: &Arc<TaskExecutor>,
+    principal: &str,
+    id: &str,
+    job: &crate::gateway::meta_mcp::upstream::DirectJob,
+    handle: String,
+) -> bool {
+    let Ok(owner) = executor.service.owner(principal) else {
+        return false;
+    };
+    let Some(offer) = executor.offered_descriptor(owner.as_digest(), id, job, handle) else {
+        return false;
+    };
+    executor
+        .cancel_upstream_once(owner.as_digest(), id, Some(offer), CancelSend::Inline)
+        .await
 }
 
 /// What following one handle within the worker's budget produced.
@@ -754,4 +806,43 @@ fn is_terminal(status: TaskStatus) -> bool {
 pub(crate) enum CommitFailure {
     Service(ServiceError),
     RevisionConflict,
+}
+
+/// Test seam for design r9 R9.2 (row T2c): spend this worker's coop budget
+/// inside the cancel arm, immediately before the rescue poll, and record that
+/// it was spent there. Inert unless a test names the task.
+#[cfg(test)]
+pub(crate) mod rescue_seam {
+    use std::collections::HashSet;
+    use std::sync::LazyLock;
+
+    use parking_lot::Mutex;
+
+    static EXHAUST: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
+    static EXHAUSTED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
+
+    /// Spend the coop budget of `task_id`'s worker before its rescue poll.
+    pub(crate) fn exhaust_before_rescue(task_id: &str) {
+        EXHAUST.lock().insert(task_id.to_owned());
+    }
+
+    /// Whether the budget was observed spent before the rescue poll.
+    pub(crate) fn was_exhausted(task_id: &str) -> bool {
+        EXHAUSTED.lock().contains(task_id)
+    }
+
+    pub(super) async fn before_rescue_poll(task_id: &str) {
+        if !EXHAUST.lock().contains(task_id) {
+            return;
+        }
+        // Until the runtime says the budget is gone: `consume_budget` is
+        // Pending exactly then.
+        loop {
+            let mut step = std::pin::pin!(tokio::task::consume_budget());
+            if futures::poll!(step.as_mut()).is_pending() {
+                break;
+            }
+        }
+        EXHAUSTED.lock().insert(task_id.to_owned());
+    }
 }

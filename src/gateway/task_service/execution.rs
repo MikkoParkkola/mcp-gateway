@@ -35,6 +35,8 @@ pub(crate) use upstream::UpstreamCapture;
 /// Reachable at the visibility of [`TaskExecutor::commit`], which returns it.
 pub(crate) use worker::CommitFailure;
 use worker::commit_and_run;
+#[cfg(test)]
+pub(crate) use worker::rescue_seam;
 
 use super::record::{CommittedTask, ErrorAuthor, Target};
 use super::service::{CreateOutcome, ServiceError, TaskService};
@@ -300,7 +302,20 @@ impl TaskExecutor {
             Err(error) => return Err(commit_to_service(error)),
         };
         self.cancel_signal(id);
+        self.cancel_upstream_after_transition(&task, id).await;
         Ok(task)
+    }
+
+    /// The transition-side sender (design r8 R8.4): a row that already held
+    /// its upstream descriptor when the cancel committed claims and sends its
+    /// one `tasks/cancel` here. A worker still holding an uncaptured handle
+    /// finds the claim taken, or takes it itself when this finds no descriptor.
+    async fn cancel_upstream_after_transition(&self, task: &CommittedTask, id: &str) {
+        if task.task.status() != TaskStatus::Cancelled {
+            return;
+        }
+        self.cancel_upstream_once(&task.owner_digest, id, None, upstream::CancelSend::Detach)
+            .await;
     }
 
     /// One bounded re-read after a cancel lost its revision, mirroring what
@@ -332,6 +347,7 @@ impl TaskExecutor {
         {
             Ok(task) => {
                 self.cancel_signal(id);
+                self.cancel_upstream_after_transition(&task, id).await;
                 Ok(task)
             }
             // Bounded: the record moved again. If that move was terminal the

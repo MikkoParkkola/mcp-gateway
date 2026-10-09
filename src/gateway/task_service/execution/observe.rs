@@ -29,6 +29,10 @@ pub(crate) enum CommitStage {
     /// Not a write: a `cancel` lost its revision and is about to retry once at
     /// the one it just re-read. The seam a test uses to move the record again.
     CancelRetry,
+    /// Not a write: a worker holds an upstream handle and is about to make it
+    /// durable. The seam a test uses to cancel the task in that window
+    /// (MIK-7642, r5 T1).
+    BeforeCapture,
 }
 
 /// After a successful durable write at `stage`, before the worker proceeds.
@@ -316,9 +320,10 @@ pub(crate) enum UpstreamAnswer {
 /// It can name neither a tool nor arguments, so "never resubmit the original
 /// operation" is structural rather than promised: there is no argument through
 /// which an implementation could be handed the original call. Its vocabulary is
-/// one read — `tasks/get` — and `tasks/cancel` and every other mutation are
-/// outside it. `claims` reads configured trust and the peer's own declaration;
-/// an unclaimed backend is never queried at all.
+/// one read — `tasks/get` — plus exactly one write, `tasks/cancel` of a handle
+/// whose task the owner cancelled (MIK-7642, design r5 R4.4). Every other
+/// mutation is outside it. `claims` reads configured trust and the peer's own
+/// declaration; an unclaimed backend is never queried or cancelled at all.
 #[async_trait::async_trait]
 pub(crate) trait UpstreamRecovery: Send + Sync {
     /// Whether this adapter is trusted for `backend` right now. Re-evaluated
@@ -329,6 +334,13 @@ pub(crate) trait UpstreamRecovery: Send + Sync {
     /// One bounded read-only query. No retry loop, no polling across a process
     /// boundary, and no write of any kind upstream.
     async fn query(&self, handle: &UpstreamHandle, deadline: Duration) -> UpstreamAnswer;
+
+    /// The adapter's one write: a single bounded `tasks/cancel` naming
+    /// `handle`, best effort, its answer ignored. Called only by the sender
+    /// that won the row's durable cancel claim, so it is never retried here.
+    /// Required, with no default: an adapter that silently dropped cancels
+    /// would leave every owner's cancel unsent.
+    async fn cancel(&self, handle: &UpstreamHandle, deadline: Duration);
 }
 
 #[cfg(test)]

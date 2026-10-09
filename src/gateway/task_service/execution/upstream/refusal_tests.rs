@@ -32,6 +32,9 @@ struct CountingPeer {
 
 #[async_trait::async_trait]
 impl UpstreamRecovery for CountingPeer {
+    /// This suite asserts nothing about upstream cancels (MIK-7642 PR.D rows do).
+    async fn cancel(&self, _handle: &UpstreamHandle, _deadline: Duration) {}
+
     async fn claims(&self, backend: &str) -> bool {
         self.claims && backend == BACKEND
     }

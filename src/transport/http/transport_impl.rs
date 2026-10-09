@@ -207,7 +207,7 @@ impl Transport for HttpTransport {
             return Err(Error::Protocol(format!(
                 "refusing to send `{method}` with the upstream tasks capability: only {allowed} \
                  may carry it",
-                allowed = TASK_CAPABILITY_METHODS.join(" and "),
+                allowed = TASK_CAPABILITY_METHODS.join(", "),
             )));
         }
         if self.outbound_era() != Some(Era::Modern) {
@@ -225,8 +225,19 @@ impl Transport for HttpTransport {
             params: with_task_capability_meta(method, params)?,
         };
 
-        self.send_request_with_headers(&request, extra_headers, identity_key, Some(Era::Modern))
-            .await
+        // The submission alone arms the worker's submit mark (MIK-7642 R10.1):
+        // a `tasks/get` or `tasks/cancel` never runs inside a worker's dispatch.
+        let submission = method == "tools/call";
+        if submission {
+            crate::transport::submit_mark::arm();
+        }
+        let result = self
+            .send_request_with_headers(&request, extra_headers, identity_key, Some(Era::Modern))
+            .await;
+        if submission {
+            crate::transport::submit_mark::disarm();
+        }
+        result
     }
 
     // MIK-6710: HTTP is the only transport whose `request_with_headers`

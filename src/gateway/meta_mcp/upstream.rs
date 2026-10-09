@@ -238,6 +238,29 @@ impl UpstreamRecovery for NativeUpstreamTasks {
             }
         }
     }
+
+    async fn cancel(&self, handle: &UpstreamHandle, deadline: Duration) {
+        let Some(backend) = self.eligible(&handle.backend).await else {
+            tracing::warn!(backend = %handle.backend, "upstream tasks/cancel not sent: backend unclaimed");
+            return;
+        };
+        let deadline = deadline.min(backend.request_timeout());
+        // One attempt on the same trusted path `query` uses. The answer is
+        // ignored: the gateway task is already cancelled whatever the peer says.
+        let sent = tokio::time::timeout(
+            deadline,
+            backend.request_with_task_capability(
+                "tasks/cancel",
+                Some(json!({ "taskId": handle.handle })),
+                &[],
+                None,
+            ),
+        )
+        .await;
+        if !matches!(sent, Ok(Ok(_))) {
+            tracing::warn!(backend = %handle.backend, "upstream tasks/cancel not confirmed");
+        }
+    }
 }
 
 /// The fresh attestation token a recovery read supplies, if it supplied one.

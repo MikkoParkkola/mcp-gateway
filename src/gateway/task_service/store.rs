@@ -45,6 +45,8 @@ mod platform;
 mod platform;
 #[path = "store_targets.rs"]
 pub(crate) mod targets;
+#[path = "store_cancel.rs"]
+pub(crate) mod cancel;
 #[cfg(test)]
 use crate::protocol::tasks::TaskTransition;
 use crate::protocol::tasks::{Task, TaskStatus};
