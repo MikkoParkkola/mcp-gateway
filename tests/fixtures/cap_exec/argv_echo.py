@@ -13,6 +13,7 @@ a caller parameter. Everything after it is reported back exactly as received.
   unauthorized          print a gws-style 401 error, exit 2
   flood                 write 4 MiB to stdout
   grandchild <pidfile>  start a sleeping grandchild, write its pid, then sleep
+  signal                end itself with SIGTERM (unix)
 """
 import json
 import os
@@ -47,6 +48,10 @@ elif mode == "flood":
     chunk = "x" * 65536
     for _ in range(64):
         sys.stdout.write(chunk)
+elif mode == "signal":
+    import signal
+    os.kill(os.getpid(), signal.SIGTERM)
+    time.sleep(5)
 elif mode == "grandchild":
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
     with open(rest[0], "w") as f:

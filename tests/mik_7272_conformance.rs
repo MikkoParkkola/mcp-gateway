@@ -92,7 +92,7 @@ const MAJOR: &[Row] = &[
         evidence: &[
             "mik_7217_acs::ac_discover_1_document_matches_the_specified_shape",
             "mik_7217_acs::http::ac_discover_1_http_dispatch_answers_server_discover",
-            "gateway::server::tests::ac_discover_1_stdio_dispatch_answers_server_discover",
+            "gateway::server::tests::stdio_dispatch::ac_discover_1_stdio_dispatch_answers_server_discover",
             "mik_7217_acs::era::ac_discover_4_a_discovery_document_means_modern",
         ],
     },

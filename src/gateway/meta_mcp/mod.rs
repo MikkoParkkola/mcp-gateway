@@ -651,7 +651,8 @@ const NO_SESSION_FOR_STATE: &str = "The workflow state is per-session, and this 
 struct DispatchTarget<'a> {
     id: RequestId,
     tool_name: &'a str,
-    arguments: Value,
+    // MIK-8014: borrowed from the request where the caller still owns it.
+    arguments: std::borrow::Cow<'a, Value>,
     session_id: Option<&'a str>,
     caller: &'a MetaMcpCallerContext<'a>,
 }

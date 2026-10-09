@@ -21,6 +21,8 @@
 
 pub(crate) mod client;
 pub(crate) mod delegation;
+#[cfg(test)]
+pub(crate) mod test_agent;
 pub(crate) mod translator;
 pub(crate) mod transport;
 pub(crate) mod types;
