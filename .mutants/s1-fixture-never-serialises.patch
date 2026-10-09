@@ -1,0 +1,13 @@
+diff --git a/tests/mik_7272_sub2b_acs.rs b/tests/mik_7272_sub2b_acs.rs
+index e5e342752..a1b07c03b 100644
+--- a/tests/mik_7272_sub2b_acs.rs
++++ b/tests/mik_7272_sub2b_acs.rs
+@@ -279,7 +279,7 @@ async fn spawn_fixture_backend_handling(handling: Handling) -> (String, Received
+             async move {
+                 let slow = tool_name(&request).as_deref() == Some(SLOW_TOOL);
+                 let hold = match (&state.serial, slow) {
+-                    (Some(serial), true) => Some(Arc::clone(serial).lock_owned().await),
++                    (Some(_), true) => None,
+                     _ => None,
+                 };
+                 state

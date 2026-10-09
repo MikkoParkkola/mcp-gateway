@@ -1,0 +1,2 @@
+head_sha	8c4d818521599043d758fff3381603f549838544
+s1-fixture-never-serialises	linux	s1-fixture-never-serialises.patch	--test mik_7272_sub2b_acs s03_fails_when_the_backend_serialises_the_calls
