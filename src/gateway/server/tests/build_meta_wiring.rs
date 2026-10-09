@@ -9,10 +9,17 @@
 //!
 //! An INFO subscriber is installed so the startup log lines are formatted;
 //! without one their field expressions are never evaluated.
+//!
+//! Every test pins its environment with an overlay, so a key in the developer's
+//! own environment cannot decide it.
 
 use super::*;
 
 fn info_logging() -> tracing::subscriber::DefaultGuard {
+    // The crate's one keeper for cached callsite interest (MIK-8254): without
+    // it a test that logged first with no subscriber can leave a callsite
+    // cached as off, and this scoped subscriber would never see it.
+    crate::test_log_capture::keep_interest_open();
     tracing::subscriber::set_default(
         tracing_subscriber::fmt()
             .with_max_level(tracing::Level::INFO)
@@ -113,5 +120,92 @@ async fn the_response_contract_reaches_the_meta_mcp_in_observe_mode() {
     assert!(
         !contract.action_mode,
         "the installed contract keeps observe mode"
+    );
+}
+
+/// A cache with no entry limit is still a cache: `max_entries: 0` means
+/// unbounded, not off.
+#[tokio::test]
+async fn an_unbounded_response_cache_is_installed() {
+    let _log = info_logging();
+    let mut config = Config::default();
+    config.cache.enabled = true;
+    config.cache.max_entries = 0;
+
+    assert!(
+        built(config).await.cache.is_some(),
+        "an enabled cache with no entry limit must be installed"
+    );
+}
+
+/// A configured signature chain gives the meta-MCP its chain identity, so
+/// responses can carry the gateway's link.
+#[tokio::test]
+async fn a_configured_signature_chain_installs_the_chain_signer() {
+    let _log = info_logging();
+    use base64::Engine as _;
+    let seed = base64::engine::general_purpose::STANDARD.encode([9u8; 32]);
+    let mut config = Config::default();
+    config.security.signature_chain = Some(
+        serde_json::from_value(json!({ "signing_key": seed, "key_id": "gw-wiring" }))
+            .expect("signature chain section"),
+    );
+
+    assert!(
+        built(config).await.chain_signer.is_some(),
+        "a configured signature chain must install the chain signer"
+    );
+}
+
+/// Provenance stamping with an empty signing key fails closed: no signer is
+/// installed, because an empty-key HMAC would let anyone forge a receipt.
+#[tokio::test]
+async fn provenance_stamping_without_a_key_installs_no_signer() {
+    let _log = info_logging();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let env_file = dir.path().join(".env");
+    crate::gateway::test_helpers::write_owner_only(
+        &env_file,
+        format!("{}=\n", crate::attestation::ATTESTATION_SIGNING_KEY_ENV),
+    )
+    .expect("env file");
+    let env = Arc::new(crate::config::LiveEnv::new(
+        Arc::new(crate::config::EnvOverlay::from_paths(&[env_file])),
+        crate::config::ResolvedEnvFiles::default(),
+    ));
+    let mut config = Config::default();
+    config.security.provenance_stamping = true;
+    let gateway = Gateway::new(config).await.expect("gateway").with_env(env);
+
+    let meta = gateway
+        .build_meta_mcp()
+        .await
+        .expect("build_meta_mcp")
+        .meta_mcp;
+
+    assert!(
+        meta.provenance_signer.is_none(),
+        "stamping with an empty key must leave the signer uninstalled"
+    );
+}
+
+/// A configured local grants file is loaded into the running meta-MCP.
+#[tokio::test]
+async fn configured_identity_grants_reach_the_meta_mcp() {
+    let _log = info_logging();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("identity-grants.json");
+    let body = serde_json::to_string_pretty(&super::boot::test_grant_file()).expect("grants");
+    crate::gateway::test_helpers::write_owner_only(&path, body).expect("grants file");
+    let mut config = Config::default();
+    config.security.identity_grants.enabled = true;
+    config.security.identity_grants.path = path.display().to_string();
+
+    let meta = built(config).await;
+
+    assert_eq!(
+        meta.identity_grants.read().len(),
+        1,
+        "the configured grant must be loaded"
     );
 }
