@@ -658,12 +658,14 @@ async fn t11b_a_cached_error_replays_without_dispatch() {
 }
 
 /// Accepts every question a bridged round asks, counting them.
+#[cfg(feature = "cost-governance")]
 #[derive(Default)]
 struct AcceptingChannel {
     asked: std::sync::atomic::AtomicUsize,
 }
 
 #[async_trait::async_trait]
+#[cfg(feature = "cost-governance")]
 impl crate::gateway::input_bridge::ClientChannel for AcceptingChannel {
     async fn send_request(
         &self,

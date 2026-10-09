@@ -11,10 +11,11 @@ use std::{sync::Arc, time::Duration};
 
 use mcp_gateway::backend::{Backend, BackendRegistry};
 use mcp_gateway::config::{BackendConfig, Config, LiveEnv, TransportConfig};
-use mcp_gateway::config_persistence::{load_existing_or_default, write_config};
+use mcp_gateway::config_persistence::load_existing_or_default;
 use mcp_gateway::config_reload::{
     ConfigMutation, ConfigWriteError, LiveConfig, ReloadContext, mutate_config_and_reload,
 };
+use mcp_gateway::gateway::test_helpers::write_config_fixture;
 use mcp_gateway::gateway::test_helpers::write_owner_only;
 
 const MALFORMED: &str =
@@ -133,7 +134,7 @@ macro_rules! valid_mutation_case {
                 Config::default()
             };
             if existing {
-                write_config(&path, &config).unwrap();
+                write_config_fixture(&path, &config).unwrap();
             }
             let ctx = context(&path, config);
             let mut calls = 0;
@@ -173,7 +174,7 @@ async fn gh462_rejected_mutation_leaves_valid_config_exactly_unchanged() {
         let home = tempfile::tempdir().unwrap();
         let path = home.path().join("gateway.yaml");
         let config = baseline();
-        write_config(&path, &config).unwrap();
+        write_config_fixture(&path, &config).unwrap();
         let before = tree_snapshot(home.path());
         let ctx = context(&path, config);
         let live = ctx.live_config.get();
@@ -269,7 +270,7 @@ async fn gh462_successful_mutations_preserve_literal_secret_references() {
     for with_context in [false, true] {
         let home = tempfile::tempdir().unwrap();
         let path = home.path().join("gateway.yaml");
-        write_config(&path, &reference_config(home.path())).unwrap();
+        write_config_fixture(&path, &reference_config(home.path())).unwrap();
         let resolved = Config::load_evaluated(Some(&path)).unwrap();
         assert_eq!(resolved.config.auth.bearer_token.as_deref(), Some(SECRET));
         assert_eq!(
@@ -302,7 +303,7 @@ fn gh462_shared_loader_distinguishes_missing_valid_and_invalid_files() {
     let path = home.path().join("gateway.yaml");
     assert!(load_existing_or_default(&path).unwrap().backends.is_empty());
     assert!(!path.exists(), "a loader must not create the missing file");
-    write_config(&path, &baseline()).unwrap();
+    write_config_fixture(&path, &baseline()).unwrap();
     assert_eq!(load_existing_or_default(&path).unwrap().server.port, 39462);
     for original in [MALFORMED, SEMANTIC] {
         write_owner_only(&path, original).unwrap();
@@ -523,7 +524,7 @@ mod cli {
     async fn gh462_valid_config_control_reaches_empty_discovery() {
         let home = tempfile::tempdir().unwrap();
         let path = home.path().join("gateway.yaml");
-        write_config(&path, &baseline()).unwrap();
+        write_config_fixture(&path, &baseline()).unwrap();
         let before = tree_snapshot(home.path());
         let output = run(home.path(), &path, true, false).await;
         assert!(
@@ -595,7 +596,7 @@ mod cli {
                 seed_client(home.path());
                 let path = home.path().join("gateway.yaml");
                 if existing {
-                    write_config(&path, &baseline()).unwrap();
+                    write_config_fixture(&path, &baseline()).unwrap();
                 }
                 let client_before = std::fs::read(home.path().join(".claude.json")).unwrap();
                 let output = run(home.path(), &path, setup, true).await;
@@ -665,7 +666,7 @@ mod cli {
                 let home = tempfile::tempdir().unwrap();
                 seed_client(home.path());
                 let path = home.path().join("gateway.yaml");
-                write_config(&path, &reference_config(home.path())).unwrap();
+                write_config_fixture(&path, &reference_config(home.path())).unwrap();
                 assert_eq!(
                     Config::load(Some(&path))
                         .unwrap()

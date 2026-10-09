@@ -5,9 +5,7 @@
 //! The repository has a Firewall writer, not a production audit reader. These
 //! test consumers pin compatibility of its existing fields without inventing one.
 
-#[path = "capture.rs"]
-mod capture;
-pub(crate) use capture::capture_warnings;
+pub(crate) use crate::test_log_capture::capture_warnings;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

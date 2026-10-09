@@ -486,11 +486,10 @@ jobs:
       # The Windows-only modules (`win_acl`, the one module allowed `unsafe`
       # under ADR-016, and `private_fs`) compile nowhere else, so the Linux
       # clippy jobs never see them. Lint them where they compile.
-      # `unnecessary_wraps` is allowed here only: it fires on the existing
-      # non-unix no-op stubs, which keep the unix signature on purpose.
-      - run: >-
-          cargo clippy --all-targets --all-features --
-          -D warnings -A clippy::unnecessary_wraps
+      # No job-wide allow: each non-unix no-op stub that keeps the unix
+      # signature carries its own #[expect(clippy::unnecessary_wraps)]
+      # (MIK-8223).
+      - run: cargo clippy --all-targets --all-features -- -D warnings
       # Symlink creation for the no-follow row (W-T6): Developer Mode lets a
       # non-elevated token create symlinks, so the row runs rather than skips.
       - name: Allow symlink creation
@@ -1012,6 +1011,8 @@ jobs:
         run: python3 scripts/release/test_check_clock_baseline.py
       - name: Test the macOS exclusion check (MIK-8174)
         run: python3 scripts/release/test_check_macos_exclusions.py
+      - name: Test the release-binary test-hook check, and that every workflow calls it
+        run: python3 scripts/release/test_grep_no_test_hook.py
       - name: Test the tag/manifest publish gate
         run: python3 scripts/release/test_check_tag_manifest.py
       - name: Test the burndown summary drift check

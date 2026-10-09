@@ -7,19 +7,11 @@
 use std::path::Path;
 
 use mcp_gateway::config::Config;
-use mcp_gateway::config_persistence::{write_config, write_config_preserving, write_config_text};
+pub use mcp_gateway::config_persistence::CommentLoss;
+use mcp_gateway::config_persistence::{edit_config, edit_config_text};
 
 use super::backend_url_keys::{UrlRewrite, rewrite_url_aliases};
 use super::retired_config_keys::Retired;
-
-/// What a CLI write does when it cannot keep the file's comments.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CommentLoss {
-    /// Rewrite the whole file (`--force`).
-    Rewrite,
-    /// Write nothing and say which comment lines would be lost.
-    Refuse,
-}
 
 /// `--force` rewrites a file whose comments cannot be kept; without it that
 /// write is refused and nothing is written.
@@ -31,40 +23,26 @@ pub fn comment_loss(force: bool) -> CommentLoss {
     }
 }
 
-/// How [`write_config_preserving`] starts a comment-loss refusal. A lock
-/// refusal also starts "Not saved:", and `--force` must not override that one.
-const REFUSAL: &str = "Not saved: this edit cannot be written into";
-
-/// Write `config` to `path`; the error is a message ready to print.
+/// Load `path`, apply `edit`, and write the result; the error is a message
+/// ready to print. The load, `edit` and the write share one hold of the
+/// config lock, so another writer's change is never overwritten.
 ///
-/// Every write is tried as a refusing one first, so `--force` still names
-/// the comment lines it drops before it rewrites the file. A write that
-/// keeps the file's comments but removes an entry names the comment lines
-/// that went with that entry.
-pub fn write(path: &Path, config: &Config, mode: CommentLoss) -> Result<(), String> {
-    let before = std::fs::read_to_string(path).unwrap_or_default();
-    if let Err(refusal) = write_config_preserving(path, config) {
-        // `--force` overrides only the comment check; a validation or I/O
-        // failure is reported as itself, never as a comment warning.
-        if mode == CommentLoss::Refuse || !is_comment_refusal(&refusal) {
-            return Err(refusal);
-        }
-        write_config(path, config)
-            .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
+/// A write that keeps the file's comments but removes an entry names the
+/// comment lines that went with that entry. A write that cannot keep them
+/// is refused, naming the lines, or under `--force` rewrites the file in
+/// full and names the lines it dropped.
+pub fn write<F>(path: &Path, mode: CommentLoss, edit: F) -> Result<(), String>
+where
+    F: FnOnce(&mut Config) -> Result<(), String>,
+{
+    let dropped = edit_config(path, mode, edit)?;
+    if !dropped.is_empty() {
+        // A removed entry, or a `--force` full rewrite, takes comments with
+        // it; say which lines, never their text.
         eprintln!(
-            "Warning: --force rewrites {} in full. Without it this write is refused:\n  {refusal}",
-            path.display()
-        );
-        return Ok(());
-    }
-    let after = std::fs::read_to_string(path).unwrap_or_default();
-    let gone = dropped_comments(&before, &after);
-    if !gone.is_empty() {
-        // A removed entry takes its own comments with it; say so.
-        eprintln!(
-            "Note: comments inside the changed entry went with it ({}): {}",
+            "Note: comments dropped by this write ({}): {}",
             path.display(),
-            gone.join("; ")
+            dropped.join("; ")
         );
     }
     Ok(())
@@ -82,100 +60,44 @@ pub(crate) enum RewriteMode {
 /// Rewrite every backend's `http_url` or `ws_url` in the config at `path` as
 /// `url`, saving only when a line changed and `mode` applies. The error is a
 /// message ready to print.
+///
+/// The saved text is read under the config lock, so a write landing before
+/// the save is kept (MIK-8042).
 pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<UrlRewrite, String> {
+    // Refuses a FIFO or a device at once, before waiting for the lock.
     let text = super::regular_file::read_regular_text(path)
         .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
-    let mut rewrite = rewrite_url_aliases(&text, None);
-    // The retired key goes in the same pass, so the file is written once.
+    if mode == RewriteMode::DryRun {
+        return Ok(rewrite_of(&text));
+    }
+    let mut done = None;
+    edit_config_text(path, |current| {
+        let text =
+            current.ok_or_else(|| format!("Failed to read {}: it was removed", path.display()))?;
+        let rewrite = rewrite_of(text);
+        let save =
+            !rewrite.changed.is_empty() || matches!(rewrite.retired, Retired::Removed { .. });
+        let saved = save.then(|| rewrite.text.clone());
+        done = Some(rewrite);
+        Ok(saved)
+    })?;
+    Ok(done.expect("edit_config_text ran the edit"))
+}
+
+/// The URL alias rewrite of `text`, with the retired key dropped in the same
+/// pass, so the file is written once.
+fn rewrite_of(text: &str) -> UrlRewrite {
+    let mut rewrite = rewrite_url_aliases(text, None);
     let (dropped, retired) = super::retired_config_keys::drop_cache_tools(&rewrite.text);
     rewrite.retired = retired;
     if let Some(text) = dropped {
         rewrite.text = text;
     }
-    if mode == RewriteMode::Apply
-        && (!rewrite.changed.is_empty() || matches!(retired, Retired::Removed { .. }))
-    {
-        write_config_text(path, &rewrite.text)?;
-    }
-    Ok(rewrite)
-}
-
-/// Whether `refusal` is the comment check, the only refusal `--force`
-/// overrides. A busy or untakeable lock, a validation or an I/O failure is
-/// reported as itself.
-fn is_comment_refusal(refusal: &str) -> bool {
-    refusal.starts_with(REFUSAL)
-}
-
-/// The lines of `before` whose comment `after` no longer has, as `line N`.
-/// Only the changed region is compared (the lines between the common head
-/// and tail), so a repeated line elsewhere cannot stand in for a removed one,
-/// and an edited line that keeps its comment does not count. Line numbers
-/// only: a `#` inside a quoted value can be a secret.
-// ponytail: a copy of the library's `config_persistence::comments`, which the
-// binary cannot call (crate-private). Delete it when MIK-8042's API change
-// lands: the library then returns this note from the locked write itself.
-fn dropped_comments(before: &str, after: &str) -> Vec<String> {
-    let (b, a): (Vec<&str>, Vec<&str>) = (before.lines().collect(), after.lines().collect());
-    let head = b.iter().zip(&a).take_while(|(x, y)| x == y).count();
-    let tail = b[head..]
-        .iter()
-        .rev()
-        .zip(a[head..].iter().rev())
-        .take_while(|(x, y)| x == y)
-        .count();
-    // Only the changed region is classified: each candidate costs two parses.
-    let (cb, ca) = (
-        comments(&b, head..b.len() - tail),
-        comments(&a, head..a.len() - tail),
-    );
-    let mut kept: Vec<String> = ca.into_iter().flatten().collect();
-    (head..b.len() - tail)
-        .filter(|&i| {
-            cb[i - head]
-                .as_ref()
-                .is_some_and(|c| match kept.iter().position(|k| k == c) {
-                    Some(at) => {
-                        kept.swap_remove(at);
-                        false
-                    }
-                    None => true,
-                })
-        })
-        .map(|i| format!("line {}", i + 1))
-        .collect()
-}
-
-/// The comment of each line in `region`, if it has one. A candidate `#`
-/// counts only when the YAML parser agrees (removing it leaves the document
-/// unchanged), so a `#` inside a quoted, tagged or block scalar, or a URL
-/// fragment, is never named.
-fn comments(lines: &[&str], region: std::ops::Range<usize>) -> Vec<Option<String>> {
-    region
-        .map(|i| {
-            let line = lines[i];
-            line.match_indices('#')
-                .filter(|&(at, _)| at == 0 || line[..at].ends_with([' ', '\t']))
-                .map(|(at, _)| &line[line[..at].trim_end_matches([' ', '\t']).len()..])
-                .find(|comment| parsed_as_comment(lines, i, comment))
-                .map(|comment| comment.trim().to_owned())
-        })
-        .collect()
-}
-
-/// Whether the parser reads `comment`, the tail of `lines[line]`, as a
-/// comment: the document parses the same with and without it.
-fn parsed_as_comment(lines: &[&str], line: usize, comment: &str) -> bool {
-    let parse = |text: &[&str]| serde_yaml::from_str::<serde_yaml::Value>(&text.join("\n")).ok();
-    let mut cut = lines.to_vec();
-    cut[line] = &lines[line][..lines[line].len() - comment.len()];
-    matches!((parse(lines), parse(&cut)), (Some(with), Some(without)) if with == without)
+    rewrite
 }
 
 #[cfg(test)]
 mod tests {
-    use super::dropped_comments;
-
     /// A lock refusal under `--force` is reported as itself: `--force`
     /// overrides only the comment check, never another writer's lock (a
     /// directory where the lock file goes makes the lock fail at once).
@@ -183,10 +105,11 @@ mod tests {
     fn a_lock_refusal_under_force_is_not_overridden() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gateway.yaml");
-        std::fs::write(&path, "backends: {}\n").expect("write");
+        mcp_gateway::gateway::test_helpers::write_owner_only(&path, "backends: {}\n")
+            .expect("write");
         std::fs::create_dir(dir.path().join(".gateway.yaml.lock")).expect("dir in the way");
-        let config = mcp_gateway::config::Config::default();
-        let error = super::write(&path, &config, super::CommentLoss::Rewrite).expect_err("fails");
+        let error =
+            super::write(&path, super::CommentLoss::Rewrite, |_| Ok(())).expect_err("fails");
         assert!(error.starts_with("Not saved: cannot lock"), "{error}");
         assert_eq!(
             std::fs::read_to_string(&path).expect("read"),
@@ -202,62 +125,99 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gateway.yaml");
         std::fs::create_dir(&path).expect("dir in the way");
-        let config = mcp_gateway::config::Config::default();
-        let error = super::write(&path, &config, super::CommentLoss::Rewrite).expect_err("fails");
-        assert!(
-            error.starts_with("Failed to load") && !error.contains(super::REFUSAL),
-            "{error}"
-        );
+        let error =
+            super::write(&path, super::CommentLoss::Rewrite, |_| Ok(())).expect_err("fails");
+        assert!(error.starts_with("Failed to load"), "{error}");
     }
 
-    /// MIK-8051: a `#` the parser keeps as text (a URL fragment, a block
-    /// scalar line, a tagged or multi-line quoted value) is never named; a
-    /// real comment after one is.
+    /// MIK-8042: the CLI writes gateway.yaml only through the locked editors
+    /// (`edit_config`, `edit_config_text`), never from a snapshot.
     #[test]
-    fn a_hash_the_parser_keeps_as_text_is_not_a_comment() {
-        let after = "backends:\n  b:\n    command: y\n";
-        let rows = [
-            (
-                "backends:\n  a:\n    http_url: \"http://h/#q\"\n    command: x#y\n  b:\n    command: y\n",
-                vec![],
-            ),
-            (
-                "backends:\n  a:\n    description: |\n      step # one\n      # not a comment\n    command: x  # why\n  b:\n    command: y\n",
-                vec!["line 6"],
-            ),
-            (
-                "backends:\n  a:\n    description: !!str \"old # x\"\n    note: \"one\n      # two\"\n    command: x  # why\n  b:\n    command: y\n",
-                vec!["line 6"],
-            ),
-            (
-                "backends:\n  a:\n    description: !!str \"old # x\" # real\n  b:\n    command: y\n",
-                vec!["line 3"],
-            ),
-        ];
-        for (before, want) in rows {
-            assert_eq!(dropped_comments(before, after), want, "{before}");
+    fn the_cli_writes_only_through_the_locked_editors() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut files = vec![root.join("src/main.rs")];
+        let mut dirs = vec![root.join("src/commands"), root.join("src/cli")];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).expect("dir") {
+                let path = entry.expect("entry").path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else {
+                    files.push(path);
+                }
+            }
         }
+        let mut found = Vec::new();
+        for path in files {
+            let name = path
+                .strip_prefix(root)
+                .expect("under root")
+                .display()
+                .to_string();
+            if name.ends_with("_tests.rs") || path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path)
+                .expect("read")
+                .replace("\r\n", "\n");
+            // Production code only: a file's own test module comes last.
+            let code = text.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
+            for call in ["write_config(", "write_config_text("] {
+                let calls = code
+                    .match_indices(call)
+                    .filter(|(at, _)| {
+                        !code[..*at].ends_with(|c: char| c == '_' || c.is_alphanumeric())
+                    })
+                    .filter(|(at, _)| !code[..*at].ends_with("fn "))
+                    .count();
+                found.extend(std::iter::repeat_n(format!("{name}:{call}"), calls));
+            }
+        }
+        assert!(found.is_empty(), "{found:?}");
     }
 
-    #[test]
-    fn a_removed_entry_names_its_own_line_not_a_repeat_of_it() {
-        let before = "backends:\n  a:\n    command: y  # why\n  b:\n    command: y  # why\n";
-        let after = "backends:\n  a:\n    command: y  # why\n";
-        assert_eq!(dropped_comments(before, after), ["line 5"]);
-    }
-
-    #[test]
-    fn an_edited_line_that_keeps_its_comment_is_not_reported() {
-        let before = "backends:\n  a:\n    command: x  # pinned\n";
-        let after = "backends:\n  a:\n    command: z  # pinned\n";
-        assert!(dropped_comments(before, after).is_empty());
-    }
-
-    #[test]
-    fn every_comment_inside_a_removed_entry_is_named() {
-        let before =
-            "# top\nbackends:\n  a:\n    # note\n    command: x  # why\n  b:\n    command: y\n";
-        let after = "# top\nbackends:\n  b:\n    command: y\n";
-        assert_eq!(dropped_comments(before, after), ["line 4", "line 5"]);
+    /// MIK-8042: `upgrade`'s text rewrite overlapping a gateway's locked
+    /// mutation reads the file under the lock, so both changes survive.
+    #[tokio::test]
+    async fn upgrade_racing_a_gateway_mutation_keeps_both_changes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        mcp_gateway::gateway::test_helpers::write_owner_only(
+            &path,
+            "backends:\n  a:\n    http_url: \"https://a.example.test/mcp\"\n",
+        )
+        .expect("write");
+        let at = path.clone();
+        let mutated = mcp_gateway::config_reload::mutate_config_and_reload(&path, None, |config| {
+            let queued = mcp_gateway::gateway::test_helpers::when_waiting_for_config_lock(&at);
+            let upgrade = at.clone();
+            let cli = std::thread::spawn(move || {
+                super::rewrite_url_aliases_in(&upgrade, super::RewriteMode::Apply).map(drop)
+            });
+            assert!(
+                queued
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .is_ok(),
+                "upgrade never waited for the config lock"
+            );
+            let x = serde_yaml::from_str("command: x\n").expect("backend");
+            config.backends.insert("x".into(), x);
+            Ok::<_, String>(cli)
+        })
+        .await;
+        let Ok(mcp_gateway::config_reload::ConfigMutation::Applied(cli, _)) = mutated else {
+            panic!("mutation not applied");
+        };
+        cli.join().expect("upgrade thread").expect("upgrade wrote");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            !text.contains("http_url"),
+            "upgrade's rewrite was lost: {text}"
+        );
+        let config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
+        assert!(
+            config.backends.contains_key("x"),
+            "the mutation was lost: {text}"
+        );
     }
 }

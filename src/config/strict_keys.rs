@@ -460,7 +460,7 @@ mod tests {
             "{strategy: token_exchange, audience: a, session_mode: stateless}",
         )
         .expect("identity propagation sample parses");
-        let mut transports = vec![
+        let transports = vec![
             TransportConfig::Stdio {
                 command: "c".into(),
                 cwd: Some("d".into()),
@@ -476,11 +476,16 @@ mod tests {
                 protocol_version: Some("v".into()),
             },
         ];
+        // Shadowed, not `mut`: without `a2a` nothing is pushed.
         #[cfg(feature = "a2a")]
-        transports.push(TransportConfig::A2a {
-            a2a_url: "u".into(),
-            a2a_agent_card_path: Some("p".into()),
-        });
+        let transports = {
+            let mut all = transports;
+            all.push(TransportConfig::A2a {
+                a2a_url: "u".into(),
+                a2a_agent_card_path: Some("p".into()),
+            });
+            all
+        };
         let oauth: OAuthConfig = serde_yaml::from_str("{}").expect("oauth sample parses");
         let rule: CredentialRule = serde_yaml::from_str("{name: n, value: v, inject_key: k}")
             .expect("credential rule sample parses");
