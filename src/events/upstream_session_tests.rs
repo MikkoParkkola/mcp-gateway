@@ -26,6 +26,7 @@ fn shared_with(ineligible: crate::events::backend_source::Ineligible) -> Arc<Sha
         gate: Arc::default(),
         ineligible,
         tools: Mutex::default(),
+        before_park: Arc::default(),
     })
 }
 
@@ -726,3 +727,6 @@ mod backoff;
 
 #[path = "snapshot_renewal_tests.rs"]
 mod snapshot_renewal;
+
+#[path = "upstream_session_wake_tests.rs"]
+mod wake;

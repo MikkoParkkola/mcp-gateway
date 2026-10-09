@@ -155,6 +155,8 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
             // Gone: park until the interest changes or the keys are deleted.
             // A removed backend owes nothing; a re-added one starts afresh.
             *shared.tools.lock() = ToolsDebt::default();
+            #[cfg(test)]
+            shared.before_park.pause().await;
             let mut wake = shared.wake.subscribe();
             tokio::select! {
                 () = shared.stop.cancelled() => return,
