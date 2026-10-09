@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/helpers.rs b/src/gateway/router/helpers.rs
+index 9d5bd4a12..3e0473104 100644
+--- a/src/gateway/router/helpers.rs
++++ b/src/gateway/router/helpers.rs
+@@ -180,7 +180,7 @@ pub(super) fn parse_sampling_params(
+         build_response(
+             JsonRpcResponse::error(Some(id), -32602, format!("Invalid sampling params: {e}")),
+             session_id,
+-            StatusCode::BAD_REQUEST,
++            StatusCode::OK,
+         )
+     })
+ }

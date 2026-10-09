@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/well_known.rs b/src/gateway/router/well_known.rs
+index 9d7f68c0b..b5a5e29d2 100644
+--- a/src/gateway/router/well_known.rs
++++ b/src/gateway/router/well_known.rs
+@@ -335,7 +335,7 @@ pub async fn oauth_protected_resource_handler(
+     ) {
+         Some(metadata) => (StatusCode::OK, [json_header], Json(metadata)).into_response(),
+         None => (
+-            StatusCode::SERVICE_UNAVAILABLE,
++            StatusCode::NOT_FOUND,
+             [json_header],
+             Json(serde_json::json!({
+                 "error": "protected_resource_metadata_unavailable",

@@ -1,0 +1,19 @@
+diff --git a/src/gateway/router/helpers.rs b/src/gateway/router/helpers.rs
+index 9d5bd4a12..89c47393a 100644
+--- a/src/gateway/router/helpers.rs
++++ b/src/gateway/router/helpers.rs
+@@ -169,13 +169,7 @@ pub(super) fn parse_sampling_params(
+     params: Option<Value>,
+     session_id: &str,
+ ) -> Result<SamplingCreateMessageParams, axum::response::Response> {
+-    let Some(p) = params else {
+-        return Err(build_response(
+-            JsonRpcResponse::error(Some(id), -32602, "Missing sampling params"),
+-            session_id,
+-            StatusCode::BAD_REQUEST,
+-        ));
+-    };
++    let p = params.unwrap_or(Value::Null);
+     serde_json::from_value(p).map_err(|e| {
+         build_response(
+             JsonRpcResponse::error(Some(id), -32602, format!("Invalid sampling params: {e}")),

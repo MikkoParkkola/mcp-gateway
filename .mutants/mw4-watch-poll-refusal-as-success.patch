@@ -1,0 +1,11 @@
+diff --git a/src/gateway/router/watch_poll.rs b/src/gateway/router/watch_poll.rs
+index e7eef1f12..38fb2be53 100644
+--- a/src/gateway/router/watch_poll.rs
++++ b/src/gateway/router/watch_poll.rs
+@@ -220,5 +220,6 @@ impl WatchHost for GatewayWatchHost {
+             tracing::debug!(?refused, %capability, "events: watch poll refused");
+             PollFailed
+         })
++        .or_else(|_| Ok(Value::Null))
+     }
+ }

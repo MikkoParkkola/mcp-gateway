@@ -1,0 +1,5 @@
+head_sha	5d34633a793b813ca79f86d8b79c910fc6c0a33f
+mw1-prm-503-as-404	linux	mw1-prm-503-as-404.patch	--lib -- an_issuer_with_no_origin_answers_503
+mw2-sampling-missing-not-refused	linux	mw2-sampling-missing-not-refused.patch	--lib -- parse_sampling_params_missing_returns_bad_request_with_session_header
+mw3-sampling-invalid-answers-ok	linux	mw3-sampling-invalid-answers-ok.patch	--lib -- parse_sampling_params_invalid_returns_bad_request_with_context
+mw4-watch-poll-refusal-as-success	linux	mw4-watch-poll-refusal-as-success.patch	--lib -- the_watch_host_poll_refuses_a_gone_key_and_a_blocked_pattern
