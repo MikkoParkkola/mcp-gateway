@@ -269,6 +269,11 @@ async fn a_delivered_question_is_redeemed_once() {
                 "{arm:?}: a spent envelope was redeemed twice: {again}"
             ));
         }
+        if fx.calls.load(Ordering::SeqCst) != 2 {
+            failures.push(format!(
+                "{arm:?}: the spent retry reached the backend: {again}"
+            ));
+        }
     }
     report(&failures);
 }

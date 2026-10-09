@@ -199,7 +199,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        Arc, ContinuationState, HoldPolicy, Ordering, carried, hand_off, register, scoped,
+        Arc, CarriedHolds, ContinuationState, HoldPolicy, Ordering, carried, hand_off, register,
+        scoped,
     };
 
     /// Registered, unscoped and dropped-without-handoff counts.
@@ -364,5 +365,38 @@ mod tests {
         assert_eq!(held(&continuation).await, 2);
         drop(request);
         assert_eq!(held(&continuation).await, 0);
+    }
+
+    /// The direct route renders its answer as a whole JSON-RPC document. A
+    /// state re-sealed over the same slot (a different envelope) sits in its
+    /// `result`, and `to_http` must still carry the hold (agy F2 on #3645).
+    #[tokio::test]
+    async fn a_direct_answer_carries_a_reseal_of_its_slot() {
+        let continuation = Arc::new(ContinuationState::new());
+        let now = crate::protocol::continuation::now_unix_secs();
+        let payload = continuation
+            .begin_exchange("alpha".into(), None, "fp".into(), "digest".into(), now)
+            .await
+            .expect("a fresh state has a slot");
+        let minted = continuation.keyring().mint(&payload).expect("mint");
+        let resealed = continuation.keyring().mint(&payload).expect("reseal");
+        assert_ne!(minted, resealed, "a reseal is a different envelope");
+        let carried = scoped(HoldPolicy::Release, async {
+            register(&continuation, &payload.hold_key, &minted);
+            let body = json!({"jsonrpc": "2.0", "id": 1,
+                              "result": {"resultType": "input_required", "requestState": resealed}});
+            let frame = crate::gateway::outbound::answer_value(None, None, body, None, None);
+            let response =
+                crate::gateway::outbound::to_http(frame, axum::http::StatusCode::OK, "");
+            response
+                .extensions()
+                .get::<CarriedHolds>()
+                .map_or(0, |holds| holds.0.len())
+        })
+        .await;
+        assert_eq!(
+            carried, 1,
+            "the reseal in the result carries its slot's hold"
+        );
     }
 }
