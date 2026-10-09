@@ -13,19 +13,24 @@ pub(in crate::gateway::router) async fn test_router_app_state_with_meta(
     key_server: Option<Arc<crate::key_server::KeyServer>>,
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Fixture {
-    test_router_app_state_with_meta_and_firewall(auth, key_server, None, configure).await
+    let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
+    fixture_with(auth, key_server, agent_auth, configure).await
 }
 
 /// [`test_router_app_state_with_meta`], with `firewall` as the router's own
 /// engine (the response pass), as startup wires it beside the Meta-MCP's.
+#[cfg(feature = "firewall")]
 pub(in crate::gateway::router) async fn test_router_app_state_with_meta_and_firewall(
     auth: &AuthConfig,
     key_server: Option<Arc<crate::key_server::KeyServer>>,
     firewall: Option<Arc<crate::security::firewall::Firewall>>,
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Fixture {
-    let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
-    fixture_with(auth, key_server, firewall, agent_auth, configure).await
+    let (mut state, store) = test_router_app_state_with_meta(auth, key_server, configure).await;
+    Arc::get_mut(&mut state)
+        .expect("the fixture state is not shared yet")
+        .firewall = firewall;
+    (state, store)
 }
 
 /// [`test_router_app_state_with_auth`] with `agent_auth` in place from the
@@ -35,18 +40,15 @@ pub(in crate::gateway::router) async fn test_router_app_state_with_agent_auth(
     auth: &AuthConfig,
     agent_auth: AgentAuthState,
 ) -> Fixture {
-    fixture_with(auth, None, None, agent_auth, |meta| meta).await
+    fixture_with(auth, None, agent_auth, |meta| meta).await
 }
 
 async fn fixture_with(
     auth: &AuthConfig,
     key_server: Option<Arc<crate::key_server::KeyServer>>,
-    firewall: Option<Arc<crate::security::firewall::Firewall>>,
     agent_auth: AgentAuthState,
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Fixture {
-    #[cfg(not(feature = "firewall"))]
-    let _ = firewall;
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(configure(MetaMcp::new(Arc::clone(&backends))));
     let streaming_config = StreamingConfig::default();
@@ -85,7 +87,7 @@ async fn fixture_with(
         capability_dirs: Vec::new(),
         config_path: None,
         #[cfg(feature = "firewall")]
-        firewall,
+        firewall: None,
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,

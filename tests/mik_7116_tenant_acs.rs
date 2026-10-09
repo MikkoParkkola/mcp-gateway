@@ -10,6 +10,9 @@
 //! request, because every stateless request is a new session with one tenant
 //! in it. Each case below therefore asserts a refusal.
 
+// Every row drives the `firewall` feature.
+#![cfg(feature = "firewall")]
+
 use serde_json::json;
 
 use mcp_gateway::security::firewall::tenant_guard::{

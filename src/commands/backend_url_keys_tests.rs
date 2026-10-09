@@ -247,7 +247,9 @@ fn the_scheme_table_agrees_with_the_loader() {
             .map(|c| match c.backends["b"].transport {
                 TransportConfig::Http { .. } => "http_url",
                 TransportConfig::WebSocket { .. } => "ws_url",
-                _ => "another transport",
+                TransportConfig::Stdio { .. } => "another transport",
+                #[cfg(feature = "a2a")]
+                TransportConfig::A2a { .. } => "another transport",
             });
         assert_eq!(transport_key_for(address), loaded, "{address}");
     }

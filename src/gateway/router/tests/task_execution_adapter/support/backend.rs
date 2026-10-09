@@ -36,6 +36,7 @@ pub(crate) enum Answer {
     Failure,
     /// [`Self::Failure`] carrying this message on the first call; every later
     /// call answers a plain `ok` text, so only that first call delivers it.
+    #[cfg(feature = "firewall")]
     FirstCallFails(String),
 }
 
@@ -197,9 +198,11 @@ impl MockBackend {
                     "mock-backend-failed",
                 );
             }
+            #[cfg(feature = "firewall")]
             Answer::FirstCallFails(message) if call == 0 => {
                 return JsonRpcResponse::error(Some(RequestId::Number(1)), -32000, message.clone());
             }
+            #[cfg(feature = "firewall")]
             Answer::FirstCallFails(_) => {
                 let ok = json!({ "content": [{ "type": "text", "text": "ok" }] });
                 return JsonRpcResponse::success(RequestId::Number(1), ok);
