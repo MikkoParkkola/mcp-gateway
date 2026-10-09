@@ -53,12 +53,17 @@ def build(repo, ref, work, overlay_from=None):
     for path in HARNESS if overlay_from else []:
         shutil.copy(os.path.join(overlay_from, path), os.path.join(tree, path))
     # Release: debug timings are dominated by unoptimised code, and the 4 us
-    # ceiling would be meaningless there.
-    out = sh(["cargo", "test", "--release", "--lib", "--no-run", "--message-format=json"], cwd=tree)
+    # ceiling would be meaningless there. One target dir for both arms, so the
+    # second build reuses the dependencies; the binary is copied out because
+    # the next build writes the same path.
+    env = dict(os.environ, CARGO_TARGET_DIR=os.path.join(work, "target"))
+    out = sh(["cargo", "test", "--release", "--lib", "--no-run", "--message-format=json"], cwd=tree, env=env)
     exe = [m.group(1) for m in re.finditer(r'"executable":"([^"]+mcp_gateway-[^"]+)"', out)]
     if not exe:
         sys.exit(f"no lib test binary for {ref}")
-    return tree, exe[-1]
+    binary = os.path.join(work, ref.replace("/", "_") + ".bin")
+    shutil.copy(exe[-1], binary)
+    return tree, binary
 
 
 def run(binary, negative=False):
@@ -124,37 +129,47 @@ def main():
     os.makedirs(os.path.dirname(LOCK), exist_ok=True)
     with open(LOCK, "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        load_start = os.getloadavg()[0]
         rng = random.Random(a.seed)
         print(f"seed {a.seed}; K={a.k} (per-row false-alarm ~{1 / (a.k + 1):.0%}); blocks={a.blocks}")
         with tempfile.TemporaryDirectory() as work:
-            head_tree, head = build(repo, a.head, work)
-            _, base = build(repo, a.base, work, overlay_from=head_tree)
+            try:
+                return measure(repo, a, rng, work)
+            finally:
+                # The temp trees are gone with `work`; drop their registrations.
+                # `prune` only removes entries whose directory no longer exists.
+                shutil.rmtree(work, ignore_errors=True)
+                subprocess.run(["git", "worktree", "prune"], cwd=repo, check=False)
 
-            control = judge(null_budget(base, a.k), {
-                row: v - run(base)[row] for row, v in run(head, negative=True).items()})
-            if any(v != "OVER" for v in control.values()):
-                print("VOID: the negative control did not fail every row")
-                return 2
 
-            verdict = judge(null_budget(base, a.k), paired(base, head, a.blocks, rng))
-            if "OVER" in verdict.values():
-                print("confirmation run with a fresh null arm")
-                again = judge(null_budget(base, a.k), paired(base, head, a.blocks, rng))
-                failed = [r for r, v in verdict.items() if v == "OVER" and again[r] == "OVER"]
-                if failed:
-                    print(f"FAIL: {failed} over budget twice")
-                    return 1
-            load_end = os.getloadavg()[0]
-            print(f"host load: start {load_start:.1f}, end {load_end:.1f} (max {MAX_LOAD})")
-            if max(load_start, load_end) > MAX_LOAD:
-                print("VOID: the bench host was busy; rerun when it is quiet")
-                return 2
-            if "VOID" in verdict.values():
-                print("VOID: a row's budget exceeds the ceiling; rerun on a quieter host")
-                return 2
-            print("PASS")
-            return 0
+def measure(repo, a, rng, work):
+    head_tree, head = build(repo, a.head, work)
+    _, base = build(repo, a.base, work, overlay_from=head_tree)
+    # Read after the builds: their load must not be what the run starts in.
+    load_start = os.getloadavg()[0]
+    control = judge(null_budget(base, a.k), {
+        row: v - run(base)[row] for row, v in run(head, negative=True).items()})
+    if any(v != "OVER" for v in control.values()):
+        print("VOID: the negative control did not fail every row")
+        return 2
+
+    verdict = judge(null_budget(base, a.k), paired(base, head, a.blocks, rng))
+    if "OVER" in verdict.values():
+        print("confirmation run with a fresh null arm")
+        again = judge(null_budget(base, a.k), paired(base, head, a.blocks, rng))
+        failed = [r for r, v in verdict.items() if v == "OVER" and again[r] == "OVER"]
+        if failed:
+            print(f"FAIL: {failed} over budget twice")
+            return 1
+    load_end = os.getloadavg()[0]
+    print(f"host load: start {load_start:.1f}, end {load_end:.1f} (max {MAX_LOAD})")
+    if max(load_start, load_end) > MAX_LOAD:
+        print("VOID: the bench host was busy; rerun when it is quiet")
+        return 2
+    if "VOID" in verdict.values():
+        print("VOID: a row's budget exceeds the ceiling; rerun on a quieter host")
+        return 2
+    print("PASS")
+    return 0
 
 
 if __name__ == "__main__":
