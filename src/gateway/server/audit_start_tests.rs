@@ -34,6 +34,27 @@ async fn audit_log_open_failure_refuses_serve_with_auth() {
     );
 }
 
+/// MIK-8044 P2c2: with the switch unset and auth on, startup opens the log
+/// all the same. The path cannot open, so a start that skipped the log would
+/// succeed and this would fail.
+#[tokio::test]
+async fn an_unset_audit_switch_opens_the_log_with_auth() {
+    let dir = tempfile::tempdir().unwrap();
+    let blocker = dir.path().join("not-a-dir");
+    std::fs::write(&blocker, b"x").expect("blocker file");
+    let mut config = Config::default();
+    config.auth.enabled = true;
+    config.auth.bearer_token = Some("d1-start-test-token-0123456789abcdef".to_string());
+    assert_eq!(config.security.transparency_log.enabled, None, "left unset");
+    config.security.transparency_log.path =
+        blocker.join("audit.jsonl").to_string_lossy().into_owned();
+    let gateway = Gateway::new(config).await.expect("the config is valid");
+    assert!(
+        gateway.build_meta_mcp().await.is_err(),
+        "auth is on and the switch unset, so the log must open (and fail here)"
+    );
+}
+
 /// Positive control: auth off keeps today's warn-and-continue.
 #[tokio::test]
 async fn audit_log_open_failure_with_auth_off_still_starts() {

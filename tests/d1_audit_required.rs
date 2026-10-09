@@ -141,18 +141,55 @@ async fn stdio_serve_obeys_audit_required() {
     );
 }
 
-/// P2c2: the derived default is not written back. A CLI rewrite loads the
-/// file literally and serialises the whole config, so a resolved value would
-/// add an `enabled` line the operator never wrote.
+/// P2c2: the derived default is not written back. The CLI writers load the
+/// file literally and write the whole config through `write_config`, so a
+/// value resolved at load would add an `enabled` line nobody wrote.
 #[test]
 fn a_rewrite_does_not_write_the_derived_audit_default() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_config(&dir, AUTH_ON);
     let config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("literal load");
-    let written: serde_yaml::Value = serde_yaml::to_value(&config).expect("the config serialises");
+    mcp_gateway::config_persistence::write_config(&path, &config).expect("the rewrite succeeds");
+    let text = std::fs::read_to_string(&path).expect("read back");
+    let written: serde_yaml::Value = serde_yaml::from_str(&text).expect("valid YAML");
+    let log = &written["security"]["transparency_log"];
     assert!(
-        written["security"]["transparency_log"]["enabled"].is_null(),
-        "a rewrite wrote the derived default: {:?}",
-        written["security"]["transparency_log"]
+        log.as_mapping()
+            .is_none_or(|m| !m.contains_key(serde_yaml::Value::from("enabled"))),
+        "the rewrite wrote an `enabled` key (null counts too):\n{text}"
     );
+    let reloaded = mcp_gateway::config::Config::load(Some(&path)).expect("the rewrite loads");
+    assert!(
+        reloaded
+            .security
+            .transparency_log
+            .is_enabled(reloaded.auth.enabled)
+    );
+}
+
+/// P2c2: the switch still arrives from the environment, as `Option<bool>`.
+/// Routed through `env_files` so no process variable leaks into the tests
+/// running beside this one.
+#[test]
+fn the_environment_sets_the_audit_switch_both_ways() {
+    let env_var = "MCP_GATEWAY_SECURITY__TRANSPARENCY_LOG__ENABLED";
+    let config = |auth: &str, value: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        let env = dir.path().join("audit.env");
+        std::fs::write(&env, format!("{env_var}={value}\n")).expect("write env file");
+        let body = format!("env_files:\n  - {}\n{auth}", env.display());
+        let path = write_config(&dir, &body);
+        (dir, mcp_gateway::config::Config::load(Some(&path)))
+    };
+    let (_dir, off) = config(AUTH_ON, "false");
+    let err = off.expect_err("auth on with the variable set to false must not load");
+    assert!(
+        err.to_string().contains("security.transparency_log"),
+        "{err}"
+    );
+
+    let (_dir, on) = config("auth:\n  enabled: false\n", "true");
+    let on = on.expect("auth off with the variable set to true loads");
+    assert_eq!(on.security.transparency_log.enabled, Some(true));
+    assert!(on.security.transparency_log.is_enabled(on.auth.enabled));
 }
