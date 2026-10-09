@@ -303,8 +303,19 @@ impl LoginGate {
 
 tokio::task_local! {
     static PROVENANCE: Arc<Provenance>;
+    static FILL: Arc<AtomicBool>;
     static NON_INTERACTIVE: ();
     static SET_OUT: u64;
+}
+
+/// Run a shared metadata fill's `work` with its `mark`: a request the fill
+/// hands to the transport sets it, and every caller that joined the fill reads
+/// it when its own deadline passes (MIK-8046).
+pub(crate) async fn fill_scope<F: std::future::Future>(
+    mark: Arc<AtomicBool>,
+    work: F,
+) -> F::Output {
+    FILL.scope(mark, work).await
 }
 
 /// Run the start `work` as one that set out at the gate's cancel `epoch`:
@@ -346,6 +357,9 @@ pub(crate) struct Provenance {
     dispatched: AtomicBool,
     /// The scope itself led or joined a login (a request-time token step).
     waited: AtomicBool,
+    /// The mark of the shared fill this scope is waiting on, if it joined
+    /// one instead of running it (MIK-8046).
+    joined: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 impl Provenance {
@@ -358,6 +372,7 @@ impl Provenance {
             started: AtomicBool::new(false),
             dispatched: AtomicBool::new(false),
             waited: AtomicBool::new(false),
+            joined: Mutex::new(None),
         });
         PROVENANCE.scope(provenance, work).await
     }
@@ -376,6 +391,18 @@ impl Provenance {
                 p.dispatched.store(true, Ordering::SeqCst);
             }
         });
+        // The fill's mark has no `started` gate, on purpose: any request of a
+        // fill that got past its token step (handshake or page) had its token,
+        // so the fill was waiting on the backend, not on a login. Gating it as
+        // above would leave a joined discovery fill unmarked (MIK-8046).
+        let _ = FILL.try_with(|mark| mark.store(true, Ordering::SeqCst));
+    }
+
+    /// The scope now waits on the shared fill marked `fill` (`None`: it runs
+    /// the fill itself). Replaces any earlier fill, so a retry never reads a
+    /// fill the scope left (MIK-8046).
+    pub(crate) fn joined(fill: Option<Arc<AtomicBool>>) {
+        let _ = PROVENANCE.try_with(|p| *p.joined.lock() = fill);
     }
 
     /// The scope led or joined a login itself. Kept on the scope, because a
@@ -386,13 +413,19 @@ impl Provenance {
     }
 
     /// The error a deadline that expired in this scope reports:
-    /// `AuthorizationPending` when nothing was dispatched and the scope
-    /// waited on a login, or the captured cohort's login is in flight or
-    /// ended; else `otherwise`.
+    /// `AuthorizationPending` when nothing was dispatched, by the scope or by
+    /// the fill it joined, and the scope waited on a login, or the captured
+    /// cohort's login is in flight or ended; else `otherwise`.
     pub(crate) fn expired(backend: &str, otherwise: Error) -> Error {
         let waited_on_login = PROVENANCE
             .try_with(|p| {
+                let joined_dispatched = p
+                    .joined
+                    .lock()
+                    .as_ref()
+                    .is_some_and(|fill| fill.load(Ordering::SeqCst));
                 !p.dispatched.load(Ordering::SeqCst)
+                    && !joined_dispatched
                     && (p.waited.load(Ordering::SeqCst)
                         || p.gate.pending_in(&p.cohort)
                         || p.cohort.outcome().is_some())
