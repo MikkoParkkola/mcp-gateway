@@ -79,6 +79,12 @@ class RootStart(unittest.TestCase):
                 self.assertNotIn("apt-get install", log)
                 self.assertNotIn("setpriv", log)
 
+    def test_a_blank_package_list_installs_nothing(self):
+        run, log = self.run_entrypoint(EXTRA_APT_PACKAGES="   ")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertNotIn("apt-get", log, "a blank list ran apt")
+        self.assertIn("setpriv", log)
+
     def test_the_gateway_runs_as_the_image_identity(self):
         run, log = self.run_entrypoint()
         self.assertEqual(run.returncode, 0, run.stderr)
