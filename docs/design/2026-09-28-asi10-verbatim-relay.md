@@ -882,9 +882,9 @@ lost an excuse is labelled `capacity` and still refused.
 The `other_source` label reads the sender's sketches from other sources through a by-caller index
 (caller to the sources it holds a sketch from), so labelling one refusal visits only the sender's
 own pairs. This reverses an earlier choice to scan every pair: each pair holds at least one 128 B
-sketch of the 32 MiB budget, so up to 262,144 pairs per scan, run once per qualifying witness (up
-to 256) per matched fingerprint under the detector lock, which is about 67M key visits for a
-1 KiB egress.
+sketch of the 32 MiB budget, so up to 262,144 pairs per scan, run per matched fingerprint under
+the detector lock: a 1 KiB egress has about 256 sampled fingerprints, so about 67M key visits
+with one witness each, and up to 256 times that when each fingerprint has 256 qualifying witnesses.
 
 **B3 Bloom false excuse (D3).** A pair's sketch at position i is sized for a target rate of
 0.35% × 2^-i, using the classic ideal-hash rate with independent per-probe mixing (splitmix64);

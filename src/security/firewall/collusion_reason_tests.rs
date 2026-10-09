@@ -230,10 +230,12 @@ fn the_marker_map_is_capped() {
 }
 
 /// The marker map's memory bound, measured: filling it to its 65,536 cap
-/// allocated 15,878,060 bytes (15.1 MiB), under a 16 MiB bound. An upper
-/// bound on what the full map holds: no frees are subtracted, so the
+/// allocates at most 16 MiB (the measured figure is in design §14.3 B2). An
+/// upper bound on what the full map holds: no frees are subtracted, so the
 /// `HashMap`'s grow-and-copy blocks count too; filling to the cap evicts
 /// nothing, so no tree node is freed.
+/// The floor is the payload alone (at least 64 bytes per marker across both
+/// maps), so a meter that saw nothing cannot pass.
 #[test]
 fn the_marker_map_footprint_at_cap_is_measured() {
     const MARKER_BOUND: u64 = 16 * 1024 * 1024;
@@ -246,6 +248,10 @@ fn the_marker_map_footprint_at_cap_is_measured() {
         markers
     });
     assert!(markers.holds((0, 0), now), "premise: no marker was evicted");
+    assert!(
+        measured.bytes >= 65_536 * 64,
+        "the meter missed the fill: {measured}"
+    );
     assert!(measured.bytes <= MARKER_BOUND, "{measured}");
 }
 
