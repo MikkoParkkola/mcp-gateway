@@ -1,0 +1,9 @@
+head_sha	c99caa9aac722705fde9e4723b7f5ad788a9fcec
+# MIK-7923 + MIK-8213 rows
+m01-settle-signals-once	linux	m01-settle-signals-once.patch	--lib -- child_tree::tests::a_member_joining_after_the_first_pre_reap_signal_is_still_ended
+m02-drop-bypasses-reaper	linux	m02-drop-bypasses-reaper.patch	--lib -- child_tree::tests::a_dropped_transport_hands_its_tree_to_the_reaper
+m03-install-ignores-retired	linux	m03-install-ignores-retired.patch	--lib -- child_tree::tests::a_tree_installed_after_a_retire_is_refused_and_ended
+m04-spawn-before-writer-lock	linux	m04-spawn-before-writer-lock.patch	--lib -- a_restart_parked_on_the_writer_lock_spawns_nothing_a_retire_misses
+m05-retire-keeps-write-token	linux	m05-retire-keeps-write-token.patch	--lib -- a_retire_frees_a_write_stuck_on_an_escaped_reader
+m06-retire-now-noop	linux	m06-retire-now-noop.patch	--lib -- replaced_child_dies
+m07-after-dispatch-identity	linux	m07-after-dispatch-identity.patch	--lib -- after_dispatch

@@ -1,0 +1,12 @@
+diff --git a/src/transport/stdio_reaper.rs b/src/transport/stdio_reaper.rs
+index 45afce2f1..4ea840f3d 100644
+--- a/src/transport/stdio_reaper.rs
++++ b/src/transport/stdio_reaper.rs
+@@ -281,7 +281,6 @@ impl super::StdioTransport {
+             self.start.trip_eof();
+             slot.take_for_reaper();
+         }
+-        self.shutdown.lock().cancel();
+         self.pending.clear();
+     }
+ }
