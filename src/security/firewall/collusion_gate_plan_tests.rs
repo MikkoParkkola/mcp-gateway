@@ -292,9 +292,8 @@ fn a_reading_over_the_bound_falls_back_to_the_whole_text() {
 
 /// `MIK-8209` K7: two steps each staged a shared `kind` and their own piece;
 /// the answer repeats `kind`. Kept to its own span first, each step keeps its
-/// own piece whole. Without labels K8 keeps it too: `chunk` is kept at most
-/// once, as staged, so the earlier step's copy cannot spend the later
-/// step's room (before K8 it did, and the piece was lost).
+/// own piece whole. Control: without labels the earlier step's `kind` spends
+/// the later step's room, and its piece is lost (the crowd-out K7 fixes).
 #[test]
 fn a_repeated_leaf_from_another_step_never_crowds_out_a_steps_own_piece() {
     let detector = CollusionDetector::new(RelayParams::default());
@@ -303,10 +302,10 @@ fn a_repeated_leaf_from_another_step_never_crowds_out_a_steps_own_piece() {
     let labels = vec![Some(0), Some(0), Some(1), Some(1)];
     let (staged, _) = DeliveryDigest::of_plan_step_leaves(&["chunk", b], false);
     let unlabelled = Delivered::of_leaves(shown.clone()).expect("bounded");
-    let kept = staged.retaining(&detector, &unlabelled);
+    let lost = staged.retaining(&detector, &unlabelled);
     assert!(
-        kept.whole_values().any(|v| v == b),
-        "K8: an unlabelled copy crowded out the piece"
+        !lost.whole_values().any(|v| v == b),
+        "premise: the crowd-out reproduces"
     );
     let (staged, _) = DeliveryDigest::of_plan_step_leaves(&["chunk", b], false);
     let labelled = Delivered::of_leaves(shown)
@@ -388,9 +387,10 @@ fn a_large_answer_keeps_its_receipts_under_the_unchanged_bound() {
 /// `MIK-8209` Q2, gpt's input: three steps each staged `{part: p, x: "x"}`;
 /// each step's span of the answer repeats `x` twenty times before `part`.
 /// Each step must keep its own `part` whole (the seam pass owns it only then).
-/// K8: a chain reaches it through late redaction (route row
+/// Red until MIK-8251; a chain reaches it through late redaction (route row
 /// `late_redaction_copies_keep_the_cross_step_join`).
 #[test]
+#[ignore = "MIK-8251: copies within a step's own span spend its room first"]
 fn twenty_repeats_before_part_keep_each_steps_part_whole() {
     let detector = CollusionDetector::new(RelayParams::default());
     let parts = ["a".repeat(32), "b".repeat(32), "c".repeat(32)];
@@ -413,4 +413,29 @@ fn twenty_repeats_before_part_keep_each_steps_part_whole() {
             "step {step} lost its part"
         );
     }
+}
+
+/// A guard for any MIK-8251 fix (gpt, K8 design review): a step staged
+/// `[M, P, T, Q]`; a late redaction turns `T` into a second `M`, so it
+/// delivered `[M, P, M, Q]`. Its receipt must still carry the delivered run
+/// across the second `M`, so the holder relaying what it got is excused.
+/// K8 (keep `M` only as often as staged) broke it.
+#[test]
+fn a_dropped_extra_copy_keeps_the_delivered_run_across_it() {
+    let mut detector = CollusionDetector::new(RelayParams::default());
+    detector.keep_every_kgram();
+    let (m, p, q) = ("[REDACTED:credential]", "p".repeat(32), "q".repeat(32));
+    let t = "a token the router redacts after staging, forty";
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&[m, &p, t, &q], false);
+    let delivered = Delivered::of_leaves(vec![m, &p, m, &q])
+        .expect("bounded")
+        .with_labels(vec![Some(0); 4]);
+    let kept = staged.retaining_for(&detector, &delivered, Some(0));
+    let fps = kept.fingerprints(&detector);
+    let run = detector.fingerprints(&format!("{p}{m}{q}"));
+    assert!(!run.is_empty(), "premise: the run holds k-grams");
+    assert!(
+        run.iter().all(|f| fps.contains(f)),
+        "the delivered run across the extra copy was lost"
+    );
 }

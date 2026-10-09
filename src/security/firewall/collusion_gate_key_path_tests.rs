@@ -433,3 +433,24 @@ fn a_join_boundary_is_never_excused_by_the_sketch() {
         "a join boundary was excused: {excused:?}"
     );
 }
+
+/// `MIK-8209` K6 at the gate: a cross-step join's seams are read run
+/// together only, so none comes from the newline-joined form alone.
+#[test]
+fn the_gate_reads_a_join_seam_run_together_only() {
+    let fw = observing();
+    let (a, b) = (text(1), text(2));
+    let answer = json!({"rows": [{"t": a}, {"t": b}]});
+    let step_of = |piece: &str| Some(u32::from(piece == b));
+    let seams = fw.join_seam_fingerprints(&answer, &step_of);
+    assert!(!seams.is_empty(), "premise: the two steps' pieces seam");
+    let detector = fw.relay_detector().expect("relay detection on");
+    let together: std::collections::HashSet<u64> = detector
+        .fingerprints(&format!("{a}{b}"))
+        .into_iter()
+        .collect();
+    assert!(
+        seams.iter().all(|(fp, _)| together.contains(fp)),
+        "a newline-form fingerprint in a join seam"
+    );
+}

@@ -10,7 +10,7 @@
 //! and the original runs' fingerprints stay where their k-gram is in a
 //! delivered leaf or across adjacent kept leaves.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use serde_json::Value;
 
@@ -524,14 +524,13 @@ impl DeliveryDigest {
         step: Option<u32>,
     ) -> Self {
         // Matched as the same kind (MIK-7773): a step value the answer
-        // carries only as a key is not kept as a value. `MIK-8209` K8: each
-        // whole leaf is kept at most as many times as the step staged it, so
-        // copies the answer added (a late redaction marker) cannot spend the
-        // room of the step's other leaves.
-        let mut whole: HashMap<(&str, bool), usize> = HashMap::new();
-        for s in self.segments.iter().filter(|s| s.whole) {
-            *whole.entry((s.text.as_str(), s.key)).or_default() += 1;
-        }
+        // carries only as a key is not kept as a value.
+        let whole: HashSet<(&str, bool)> = self
+            .segments
+            .iter()
+            .filter(|s| s.whole)
+            .map(|s| (s.text.as_str(), s.key))
+            .collect();
         // At most what the step staged (MIK-7992): its text, never the index
         // runs `staged_len` also charges.
         let per_leaf = std::mem::size_of::<Segment>();
@@ -548,12 +547,8 @@ impl DeliveryDigest {
         {
             let (leaf, key) = (delivered.all[i], i >= delivered.values_len);
             let cost = leaf.len() + per_leaf;
-            let Some(left) = whole.get_mut(&(leaf, key)).filter(|n| **n > 0) else {
-                continue;
-            };
-            if cost <= room {
+            if whole.contains(&(leaf, key)) && cost <= room {
                 room -= cost;
-                *left -= 1;
                 keep[i] = true;
             }
         }

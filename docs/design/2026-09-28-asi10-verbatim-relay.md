@@ -798,12 +798,11 @@ stages its runs as leaf indices; retention keeps every held, consecutive sub-run
 fingerprints in the receipt. A plan answer's delivered k-grams include its values newline-joined,
 run together, and each join. The seam pass reads each join whose pieces several steps produced, run
 together. A step's retention spends its room (at most what it staged, MIK-7992) on its own span of
-the answer first, so an equal leaf another step delivered cannot crowd out its own piece,
-and keeps each whole leaf at most as many times as the step staged it (K8, MIK-8251), so copies the
-answer added in the step's own span (a late redaction marker) cannot either. Residual: a
-cross-step join of nested content arrays (each step's `content`) is never formed: the pieces sit in
-separate array instances, which the join never runs together, and a copy spread across them is out
-of model under D2.
+the answer first, so an equal leaf another step delivered cannot crowd out its own piece. Residuals:
+copies within one step's own span still spend its room first (MIK-8251, open; reachable through
+a late redaction of a step's values into copies of a staged leaf); a cross-step join of nested
+content arrays (each step's `content`) is never formed: the pieces sit in separate array instances,
+which the join never runs together, and a copy spread across them is out of model under D2.
 
 **Subsets.** A subset forward of whole pieces is excused for every k-gram inside a kept piece or a
 delivered join of consecutive kept pieces. A k-gram spanning a seam the forward created is evidence
