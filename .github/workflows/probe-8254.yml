@@ -1,6 +1,7 @@
 name: probe-8254
 # Throwaway probe for MIK-8254 (never merged): the MIK-8242 shape, whole bin
-# test binary 20 times on macOS, at the fix head. Baseline: 3/20 (run 37981500803).
+# test binary 20 times on macOS under the same lsof load, at the fix head. Baseline
+# run 37981500803: 4/20, of which 3 were the empty-capture row.
 on:
   push:
     branches: ["throwaway/probe-8254"]
@@ -17,15 +18,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - name: Build the bin test binary
         run: cargo test --all-features --bin mcp-gateway --no-run
-      - name: Whole bin test binary (20)
+      - name: Whole bin test binary under parallel load (20)
         shell: bash
         run: |
           set -uo pipefail
           fails=0
           for i in $(seq 1 20); do
+            ( while sleep 0.2; do lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk '$9 ~ /:2[0-9][0-9][0-9][0-9]$/ {print $1, $2, $9}' ; done ) > /tmp/holders.$i 2>&1 &
+            w=$!
             if ! cargo test -q --all-features --bin mcp-gateway > /tmp/bin.$i.log 2>&1; then
-              fails=$((fails+1)); echo "run $i FAILED"; awk '/ FAILED$|panicked/' /tmp/bin.$i.log | head -5 || true
+              fails=$((fails+1)); echo "run $i FAILED"; awk '/ FAILED$|already in use/' /tmp/bin.$i.log | head -5 || true
+              echo "holders seen in 20000-29999 during run $i:"; sort -u /tmp/holders.$i | head -20
             fi
+            kill $w 2>/dev/null || true
           done
           echo "whole binary: $fails/20 failed"
-          test "$fails" -eq 0
