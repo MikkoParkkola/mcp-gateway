@@ -1,0 +1,4 @@
+head_sha	d317f7730df2b0697a219001cef27122905c5b4b
+# #3637 MIK-7507: Linear writes echo the stored description
+r7507-update-no-echo	linux	r7507-update-no-echo.patch	--lib -- capability::linear_write_tests::a_second_description_write_applies_and_is_echoed
+r7507-create-no-echo	linux	r7507-create-no-echo.patch	--test linear_write_echo -- every_linear_write_selects_the_long_text_it_sends
