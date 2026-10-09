@@ -1,0 +1,41 @@
+name: probe-8242
+# Throwaway probe for MIK-8242 (never merged): the AC loop of the new
+# shipped-check doctor rows and the macOS range twin on macOS.
+on:
+  push:
+    branches: ["throwaway/probe-8242b"]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Build the test binaries
+        run: cargo test --all-features --bin mcp-gateway --lib --no-run
+      - name: Doctor port rows x200 and macOS range twin x20
+        shell: bash
+        run: |
+          set -uo pipefail
+          fails=0
+          for i in $(seq 1 200); do
+            if ! cargo test -q --all-features --bin mcp-gateway -- a_free_port_passes_and_reports_no_running_gateway a_port_held_by_a_non_gateway_fails > /tmp/d.$i.log 2>&1 \
+              || ! grep -q 'test result: ok. 2 passed' /tmp/d.$i.log; then
+              fails=$((fails+1)); echo "doctor run $i FAILED"; tail -20 /tmp/d.$i.log
+            fi
+          done
+          echo "doctor rows: $fails/200 failed"
+          tfails=0
+          for i in $(seq 1 20); do
+            if ! cargo test -q --all-features --lib -- test_ports > /tmp/t.$i.log 2>&1 \
+              || ! grep -q 'test result: ok. [1-9]' /tmp/t.$i.log; then
+              tfails=$((tfails+1)); echo "test_ports run $i FAILED"; tail -20 /tmp/t.$i.log
+            fi
+          done
+          echo "test_ports rows: $tfails/20 failed"
+          cargo test -q --all-features --lib -- test_ports --list 2>/dev/null | awk '/: test$/'
+          test "$fails" -eq 0 && test "$tfails" -eq 0
