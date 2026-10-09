@@ -71,6 +71,8 @@ pub struct Peer {
     submissions: AtomicUsize,
     queries: AtomicUsize,
     handles_asked: Mutex<Vec<String>>,
+    /// The handle named by every upstream `tasks/cancel` (MIK-7642.PR.D).
+    cancels: Mutex<Vec<String>>,
     /// Whether every `tools/call` carried the tasks-extension opt-in.
     optin_seen: AtomicUsize,
     state: Mutex<Upstream>,
@@ -93,6 +95,11 @@ impl Peer {
 
     pub fn handles_asked(&self) -> Vec<String> {
         self.handles_asked.lock().clone()
+    }
+
+    /// Every handle an upstream `tasks/cancel` named, in arrival order.
+    pub fn cancels(&self) -> Vec<String> {
+        self.cancels.lock().clone()
     }
 
     pub fn set(&self, next: Upstream) {
@@ -218,6 +225,19 @@ async fn peer_handler(State(peer): State<Arc<Peer>>, Json(body): Json<Value>) ->
                 }),
             }
         }
+        "tasks/cancel" => {
+            let asked = params
+                .and_then(|params| params.get("taskId"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            peer.cancels.lock().push(asked.clone());
+            json!({
+                "resultType": "complete", "taskId": asked, "status": "cancelled",
+                "createdAt": "2026-09-08T00:00:00Z", "lastUpdatedAt": "2026-09-08T00:00:00Z",
+                "ttlMs": 900_000,
+            })
+        }
         _ => json!({ "resultType": "complete" }),
     };
     Json(json!({ "jsonrpc": "2.0", "id": id, "result": result })).into_response()
@@ -240,6 +260,7 @@ pub async fn serve_peer(initial: Upstream) -> PeerGuard {
         submissions: AtomicUsize::new(0),
         queries: AtomicUsize::new(0),
         handles_asked: Mutex::new(Vec::new()),
+        cancels: Mutex::new(Vec::new()),
         optin_seen: AtomicUsize::new(0),
         state: Mutex::new(initial),
         payload: Mutex::new(json!({
@@ -642,6 +663,11 @@ pub fn task_invoke(id: i64, key: &str) -> Value {
 
 pub fn tasks_get(id: i64, task_id: &str) -> Value {
     modern(id, "tasks/get", json!({ "taskId": task_id }))
+}
+
+/// The owner's cancel of the gateway task (MIK-7642.PR.D).
+pub fn tasks_cancel(id: i64, task_id: &str) -> Value {
+    modern(id, "tasks/cancel", json!({ "taskId": task_id }))
 }
 
 /// The same read, carrying a fresh attestation token in the namespaced field
