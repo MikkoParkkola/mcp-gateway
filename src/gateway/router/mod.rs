@@ -122,6 +122,8 @@ mod hardened_identity_tests;
 mod identity_parity_tests;
 mod judged_answer;
 #[cfg(test)]
+mod mcp_nonce_tests;
+#[cfg(test)]
 mod meta_fingerprint_tests;
 #[cfg(test)]
 mod mrtr9_lease_tests;

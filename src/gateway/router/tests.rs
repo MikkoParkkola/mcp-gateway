@@ -43,6 +43,8 @@ mod descriptor_withholding;
 mod f24_resource_subscribe;
 /// MIK-7215.CONTROL.5 G4: arm and hints key on the caller.
 mod g4_caller_keyed;
+/// MIK-8162: a malformed modern request under hardened on `/mcp`.
+mod mcp_malformed_hardened;
 /// The Meta-MCP route's own response-firewall verdict obligation (RED).
 #[cfg(feature = "firewall")]
 mod meta_firewall_verdict;
