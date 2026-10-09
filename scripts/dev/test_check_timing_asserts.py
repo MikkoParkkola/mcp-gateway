@@ -171,6 +171,10 @@ class Timeouts(unittest.TestCase):
     def test_a_bound_result_consumed_later_is_judged(self):
         self.assertRefused('let got = timeout(Duration::from_millis(10), probe()).await;\nlet v = got.expect("in time");')
         self.assertRefused("let got = tokio::time::timeout(Duration::from_millis(10), probe()).await;\nlet v = got?;")
+        self.assertRefused(
+            "let got = timeout(Duration::from_millis(10), probe()).await;\n"
+            'let v = got.unwrap_or_else(|_| panic!("late"));'
+        )
 
     def test_the_rustfmt_layout_is_seen(self):
         self.assertRefused('tokio::time::timeout(\n    Duration::from_millis(500),\n    child.wait(),\n)\n.await\n.expect("exits");')

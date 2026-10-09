@@ -21,7 +21,11 @@ A const reaches a file `include!`d by the file that defines it.
 
 Stated misses: a `sleep` used as a window; a timeout that is expected to
 elapse and is then asserted on; a window passed in through a constructor or
-helper; `timeout_at`; a `select!` arm on `sleep`.
+helper; `timeout_at`; a `select!` arm on `sleep`; a `let`-bound result first
+consumed over 2000 characters later; a fn that pauses the clock partway, which
+is skipped whole; a commented-out `include!`, or a file included by two files
+(the last includer's consts are used). A same-named binding that shadows the
+timeout's result can be read as consuming it: that fails loudly, never quietly.
 
 The allowlist is shrink-only: with `--base <ref>` a row absent from the list
 at `ref` fails. The comparison is skipped only when `ref` has no list.
@@ -401,9 +405,10 @@ TIMEOUT = re.compile(r"(?<![\w.])(?:(?:tokio::)?time::)?timeout\(")
 TEST_FILE = re.compile(r"(^tests/|/tests/|_tests/|_tests\.rs$|/tests\.rs$)")
 # A timeout's Result consumed so that expiry fails the test, read from the
 # text right after `.await` (rustfmt may wrap each link onto its own line).
-FAILS_ON_EXPIRY = re.compile(
-    r"\s*\.await\s*(?:\.\s*(?:expect|unwrap)\s*\(|\?|\.\s*unwrap_or_else\(\s*\|[^|]*\|\s*panic!)"
-)
+# What turns an expired timeout into a failed test, whether it follows the
+# `.await` directly or a `let` binding of the result.
+CONSUMED = r"(?:\.\s*(?:expect|unwrap)\s*\(|\?|\.\s*unwrap_or_else\(\s*\|[^|]*\|\s*panic!)"
+FAILS_ON_EXPIRY = re.compile(r"\s*\.await\s*" + CONSUMED)
 LET_BOUND = re.compile(r"let\s+(?:mut\s+)?(\w+)\s*(?::[^=;]+)?=\s*$")
 
 
@@ -457,7 +462,7 @@ def scan_timeouts(
             if bound:
                 name = re.escape(bound.group(1))
                 after = code[end : end + 2000]
-                fails = bool(re.search(rf"\b{name}\s*(?:\.\s*(?:expect|unwrap)\s*\(|\?)", after))
+                fails = bool(re.search(rf"\b{name}\s*{CONSUMED}", after))
         if not fails:
             continue
         at = bisect.bisect_left(fns, (m.start(),)) - 1
