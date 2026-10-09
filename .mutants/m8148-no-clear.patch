@@ -1,0 +1,12 @@
+diff --git a/src/gateway/server/tools_changed.rs b/src/gateway/server/tools_changed.rs
+index 482af44e6..63c3708b2 100644
+--- a/src/gateway/server/tools_changed.rs
++++ b/src/gateway/server/tools_changed.rs
+@@ -221,7 +221,6 @@ fn decide(
+                 .map(|b| {
+                     // Cleared BEFORE the read: a store from now on queues a
+                     // fresh nudge, so none is lost between this and the read.
+-                    b.clear_views_dirty();
+                     per_user_seen(b)
+                 });
+             let mut told = announced.lock();

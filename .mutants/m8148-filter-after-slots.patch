@@ -1,0 +1,24 @@
+diff --git a/src/gateway/server/tools_changed.rs b/src/gateway/server/tools_changed.rs
+index 482af44e6..82ce3a41a 100644
+--- a/src/gateway/server/tools_changed.rs
++++ b/src/gateway/server/tools_changed.rs
+@@ -296,9 +296,6 @@ pub(super) struct PerUserNow {
+ fn per_user_seen(backend: &crate::backend::Backend) -> PerUserNow {
+     // The filter FIRST: a verdict landing during the snapshot then shows as a
+     // change on its own queued nudge, never as a filter already recorded.
+-    let filter = backend.visibility_filter_fingerprint();
+-    #[cfg(test)]
+-    backend.run_snapshot_seam_for_test();
+     let slots = backend
+         .per_user_bindings()
+         .into_iter()
+@@ -307,6 +304,9 @@ fn per_user_seen(backend: &crate::backend::Backend) -> PerUserNow {
+             (binding, seen)
+         })
+         .collect();
++    #[cfg(test)]
++    backend.run_snapshot_seam_for_test();
++    let filter = backend.visibility_filter_fingerprint();
+     PerUserNow { slots, filter }
+ }
+ 

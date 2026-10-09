@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/tools_changed/views.rs b/src/gateway/server/tools_changed/views.rs
+index 641c59a2d..9479dbd35 100644
+--- a/src/gateway/server/tools_changed/views.rs
++++ b/src/gateway/server/tools_changed/views.rs
+@@ -204,7 +204,7 @@ impl Views {
+                     .as_ref()
+                     .is_some_and(|(g, r)| g == me.generation && *r > me.revision)
+             });
+-            if newer_buried {
++            if newer_buried && false {
+                 let shown = newest.map(|(_, shown)| shown);
+                 if let Some(tomb) = tomb {
+                     self.tombstones.insert(key, tomb);

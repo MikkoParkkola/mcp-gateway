@@ -1,0 +1,12 @@
+diff --git a/src/backend/pool_eviction.rs b/src/backend/pool_eviction.rs
+index e7e45a253..5a923090d 100644
+--- a/src/backend/pool_eviction.rs
++++ b/src/backend/pool_eviction.rs
+@@ -175,6 +175,7 @@ impl Backend {
+                     self.close_evicted(&mut cleanups, transport);
+                 }
+                 closed += 1;
++                self.nudge_tools(crate::backend::tools_nudge::NudgeKind::Changed);
+             }
+         }
+         if closed > 0 {

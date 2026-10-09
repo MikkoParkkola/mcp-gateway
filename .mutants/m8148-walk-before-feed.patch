@@ -1,0 +1,24 @@
+diff --git a/src/backend/tools_nudge.rs b/src/backend/tools_nudge.rs
+index 00f57abe8..dbc38599d 100644
+--- a/src/backend/tools_nudge.rs
++++ b/src/backend/tools_nudge.rs
+@@ -93,6 +93,9 @@ impl super::Backend {
+     /// Route this instance's nudges to `feed`, and nudge after every list its
+     /// shared tool slot stores, whichever path stored it. Once per instance.
+     pub(super) fn attach_nudges(&self, feed: &NudgeFeed) {
++        for slot in &self.pool {
++            self.observe_slot(slot.key(), slot.value());
++        }
+         if self.nudge_feed.set(feed.clone()).is_err() {
+             return;
+         }
+@@ -114,9 +117,6 @@ impl super::Backend {
+         // on its shard and then sees it; a slot whose shard the walk already
+         // passed checks after the feed was set. Observing twice is harmless:
+         // the first observer stays.
+-        for slot in &self.pool {
+-            self.observe_slot(slot.key(), slot.value());
+-        }
+     }
+ 
+     /// Nudge after every list per-user slot `key` stores (`MIK-8148`). A no-op

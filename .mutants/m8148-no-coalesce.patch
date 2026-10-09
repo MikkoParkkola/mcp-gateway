@@ -1,0 +1,13 @@
+diff --git a/src/backend/tools_nudge.rs b/src/backend/tools_nudge.rs
+index 7f74302db..473fc43d7 100644
+--- a/src/backend/tools_nudge.rs
++++ b/src/backend/tools_nudge.rs
+@@ -122,7 +122,7 @@ impl super::Backend {
+         entry.tools_cache.observe_stores(Arc::new(move || {
+             // Coalesced per backend: while a nudge is queued, a store adds
+             // nothing, because the drain reads every slot as it is then.
+-            if dirty.swap(true, Ordering::SeqCst) {
++            if dirty.swap(true, Ordering::SeqCst) && false {
+                 return;
+             }
+             let _ = feed.send(ToolsNudge::Backend {

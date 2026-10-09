@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/tools_changed.rs b/src/gateway/server/tools_changed.rs
+index c277a17a2..6298e6011 100644
+--- a/src/gateway/server/tools_changed.rs
++++ b/src/gateway/server/tools_changed.rs
+@@ -234,7 +234,7 @@ fn decide(
+             drop(told);
+             match (shared, private) {
+                 (true, _) => (name, Reach::Tools),
+-                (false, true) => (name, Reach::View),
++                (false, true) => (name, Reach::Tools),
+                 (false, false) => return None,
+             }
+         }

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/tools_changed/views.rs b/src/gateway/server/tools_changed/views.rs
+index 641c59a2d..234d54630 100644
+--- a/src/gateway/server/tools_changed/views.rs
++++ b/src/gateway/server/tools_changed/views.rs
+@@ -218,7 +218,7 @@ impl Views {
+                 .live
+                 .keys()
+                 .any(|other| acct(other).is_some_and(|o| o.audience == me.audience));
+-            if other_generation_live {
++            if other_generation_live && false {
+                 return None;
+             }
+         }

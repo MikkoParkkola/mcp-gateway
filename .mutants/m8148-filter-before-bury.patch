@@ -1,0 +1,21 @@
+diff --git a/src/gateway/server/tools_changed/views.rs b/src/gateway/server/tools_changed/views.rs
+index 641c59a2d..a6b177a28 100644
+--- a/src/gateway/server/tools_changed/views.rs
++++ b/src/gateway/server/tools_changed/views.rs
+@@ -135,7 +135,7 @@ impl Views {
+             .filter
+             .replace(filter)
+             .is_some_and(|before| before != filter);
+-        let mut changed = false;
++        let mut changed = filter_moved && self.tombstones.values().any(|tomb| tomb.shown != empty);
+         let gone: Vec<String> = self
+             .live
+             .keys()
+@@ -150,7 +150,6 @@ impl Views {
+         }
+         // LAST, after every bury: a view evicted since the last look, or
+         // between listing the slots and reading one (a present Absent), counts.
+-        changed |= filter_moved && self.tombstones.values().any(|tomb| tomb.shown != empty);
+         changed
+     }
+ 
