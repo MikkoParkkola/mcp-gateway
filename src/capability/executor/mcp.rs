@@ -540,6 +540,21 @@ async fn call_tool(backend: &Backend, tool: &str, args: Map<String, Value>) -> R
         .unwrap_or(result))
 }
 
+/// A later round's error once an earlier round reached the backend
+/// (MIK-7923, design M9). A pre-dispatch refusal (the backend retired between
+/// rounds, a connect error, a missing backend) would tell the caller nothing
+/// was sent and free its key, but the earlier round already ran: it is
+/// reported as a transport failure, which settles uncertain.
+fn after_dispatch(error: Error, dispatched: bool) -> Error {
+    if dispatched && error.is_pre_dispatch() {
+        Error::Transport(format!(
+            "after an earlier round reached the backend: {error}"
+        ))
+    } else {
+        error
+    }
+}
+
 /// A prepare result as an object: `structuredContent` as is, or the first
 /// text content block parsed as JSON.
 fn prepare_object(result: Value) -> Option<Map<String, Value>> {
@@ -619,6 +634,9 @@ impl CapabilityExecutor {
         let call_ends = Instant::now() + deadline;
         let outcome = tokio::time::timeout(deadline, async {
             let mut args = arguments(template, &params)?;
+            // Once any round has reached the backend, a later round's refusal
+            // is never "nothing was sent" (MIK-7923, design M9).
+            let mut dispatched = false;
             if let Some(prepare) = prepare {
                 let first = call_tool(
                     &backend,
@@ -626,6 +644,7 @@ impl CapabilityExecutor {
                     arguments(prepare.arguments.as_ref(), &params)?,
                 )
                 .await?;
+                dispatched = true;
                 let object = prepare_object(first).ok_or_else(|| {
                     Error::Protocol(format!(
                         "prepare tool '{}' returned no object",
@@ -642,10 +661,14 @@ impl CapabilityExecutor {
                     args.insert(arg.clone(), value);
                 }
             }
-            let result = call_tool(&backend, tool, args).await?;
+            let result = call_tool(&backend, tool, args)
+                .await
+                .map_err(|error| after_dispatch(error, dispatched))?;
             match wait {
                 Some(wait) => {
-                    let ready = wait_ready(&backend, wait, &params, call_ends).await?;
+                    let ready = wait_ready(&backend, wait, &params, call_ends)
+                        .await
+                        .map_err(|error| after_dispatch(error, true))?;
                     Ok(json!({ "result": result, "ready": ready }))
                 }
                 None => Ok(result),
@@ -785,5 +808,33 @@ impl super::CapabilityExecutor {
     pub(crate) fn stop_mcp(&self, capability: &str) {
         self.mcp_children
             .evict(Duration::MAX, &|name| name != capability);
+    }
+}
+
+#[cfg(test)]
+mod after_dispatch_tests {
+    use super::{Error, after_dispatch};
+
+    /// MIK-7923 M9 (design T8): every pre-dispatch refusal a later round can
+    /// meet is reported as a transport failure once a round was dispatched,
+    /// and left alone before any was.
+    #[test]
+    fn a_refusal_after_a_dispatched_round_is_never_pre_dispatch() {
+        let refusals = || {
+            [
+                Error::BackendNotFound("retired".to_string()),
+                Error::TransportConnect("Not connected".to_string()),
+                Error::BackendUnavailable("stopping".to_string()),
+            ]
+        };
+        for refusal in refusals() {
+            assert!(refusal.is_pre_dispatch(), "premise: {refusal}");
+            let mapped = after_dispatch(refusal, true);
+            assert!(!mapped.is_pre_dispatch(), "{mapped} still reads as unsent");
+            assert!(matches!(mapped, Error::Transport(_)), "{mapped}");
+        }
+        for refusal in refusals() {
+            assert!(after_dispatch(refusal, false).is_pre_dispatch());
+        }
     }
 }

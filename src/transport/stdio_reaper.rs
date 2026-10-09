@@ -44,22 +44,30 @@ static START: parking_lot::Mutex<()> = parking_lot::const_mutex(());
 ///
 /// The OS refused the thread; the start must spawn nothing.
 pub(super) fn ensure_started() -> std::io::Result<()> {
-    if REAPER.get().is_some() {
+    start_once(&REAPER, |receiver| {
+        std::thread::Builder::new()
+            .name("stdio reaper".to_string())
+            .spawn(move || run(&receiver))
+            .map(drop)
+    })
+}
+
+/// Fill `cell` once, with a sender whose receiver `spawn` hands to a new
+/// thread. A failed spawn leaves `cell` empty, so a later start tries again.
+fn start_once(
+    cell: &OnceLock<mpsc::Sender<Job>>,
+    spawn: impl FnOnce(mpsc::Receiver<Job>) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    if cell.get().is_some() {
         return Ok(());
     }
     let _starting = START.lock();
-    if REAPER.get().is_some() {
+    if cell.get().is_some() {
         return Ok(());
     }
-    #[cfg(test)]
-    if FAIL_START.load(std::sync::atomic::Ordering::SeqCst) {
-        return Err(std::io::Error::other("test: reaper thread refused"));
-    }
     let (sender, receiver) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("stdio reaper".to_string())
-        .spawn(move || run(&receiver))?;
-    let _ = REAPER.set(sender);
+    spawn(receiver)?;
+    let _ = cell.set(sender);
     Ok(())
 }
 
@@ -127,12 +135,6 @@ fn step(job: &mut Job, now: Instant) -> bool {
 #[cfg(test)]
 pub(super) static FINISHED: parking_lot::Mutex<Vec<super::child_tree::Counts>> =
     parking_lot::const_mutex(Vec::new());
-
-/// Test seam: make the next [`ensure_started`] that would create the thread
-/// fail, as an OS refusing threads would.
-#[cfg(test)]
-pub(super) static FAIL_START: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
 
 /// A transport's child tree and the reaps it started (MIK-7923, design P2).
 /// Every hold of its lock is sync and spans no await. The tree leaves the slot
@@ -278,5 +280,28 @@ impl super::StdioTransport {
         }
         self.shutdown.lock().cancel();
         self.pending.clear();
+    }
+}
+
+#[cfg(test)]
+mod start_tests {
+    use super::*;
+
+    /// MIK-7923 T1-nothread: when the OS refuses the reaper thread, the start
+    /// is refused (so `StdioTransport::start` spawns no child, since it calls
+    /// `ensure_started` before the spawn) and nothing is cached: the next start
+    /// tries again.
+    #[test]
+    fn a_refused_reaper_thread_fails_the_start_and_is_retried() {
+        let cell = OnceLock::new();
+        let refused = start_once(&cell, |_| Err(std::io::Error::other("no threads")));
+        assert!(refused.is_err(), "a refused thread fails the start");
+        assert!(cell.get().is_none(), "a failed start caches nothing");
+        let started = start_once(&cell, |receiver| {
+            drop(receiver);
+            Ok(())
+        });
+        assert!(started.is_ok(), "the next start tries again");
+        assert!(cell.get().is_some());
     }
 }

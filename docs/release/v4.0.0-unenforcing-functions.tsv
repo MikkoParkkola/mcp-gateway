@@ -60,3 +60,4 @@ src/gateway/router/helpers.rs	build_http_response	1	Serialises a frame already w
 src/gateway/router/handlers/health.rs	backends_overall_healthy	1	Folds backend statuses into one health bit for /health; admin detail is decided in health_handler
 src/gateway/router/handlers/session_end.rs	sse_deprecated_handler	1	Answers the retired /sse route with a fixed 410 migration notice; reads no request data
 src/gateway/router/handlers/sse.rs	unsupported_version_error	1	Builds the unsupported-version JSON-RPC error; the refusal is decided by its callers
+src/transport/stdio.rs	kill_tree_now	1	Process lifecycle (MIK-7923): ends a retired stdio transport's process tree; no access decision
