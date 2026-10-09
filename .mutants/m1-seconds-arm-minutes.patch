@@ -1,0 +1,13 @@
+diff --git a/src/duration_bound.rs b/src/duration_bound.rs
+index ca46af193..496fe8a71 100644
+--- a/src/duration_bound.rs
++++ b/src/duration_bound.rs
+@@ -82,7 +82,7 @@ macro_rules! delta {
+         $crate::duration_bound::delta!(@checked try_minutes, $n)
+     };
+     (seconds, $n:expr) => {
+-        $crate::duration_bound::delta!(@checked try_seconds, $n)
++        $crate::duration_bound::delta!(@checked try_minutes, $n)
+     };
+     (milliseconds, $n:expr) => {
+         $crate::duration_bound::delta!(@checked try_milliseconds, $n)

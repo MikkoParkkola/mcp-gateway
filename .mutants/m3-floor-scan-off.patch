@@ -1,0 +1,13 @@
+diff --git a/src/events/schedule_source.rs b/src/events/schedule_source.rs
+index 5c7c0251e..c87e9e0ec 100644
+--- a/src/events/schedule_source.rs
++++ b/src/events/schedule_source.rs
+@@ -128,7 +128,7 @@ fn fires_too_often(cron: &str) -> bool {
+     let mut previous: Option<i64> = None;
+     for minute in 0..2 * 24 * 60 {
+         // Two days of minutes: always in range.
+-        if Duration::try_minutes(minute).is_some_and(|offset| daily.matches(&(start + offset))) {
++        if Duration::try_minutes(minute).is_some_and(|_offset| false) {
+             if previous.is_some_and(|p| minute - p < FLOOR_MINUTES) {
+                 return true;
+             }

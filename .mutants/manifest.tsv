@@ -1,0 +1,4 @@
+head_sha	52c7a7b87489de64c9b24e6e2ea3d2bbdc6c5414
+m1-seconds-arm-minutes	linux	m1-seconds-arm-minutes.patch	--lib -- duration_bound::tests::delta_builds_each_unit
+m2-days-arm-hours	linux	m2-days-arm-hours.patch	--lib -- duration_bound::tests::delta_builds_each_unit
+m3-floor-scan-off	linux	m3-floor-scan-off.patch	--lib -- events::schedule_source::tests::schedule_respects_the_five_minute_floor
