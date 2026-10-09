@@ -237,7 +237,7 @@ mod determination {
 
 #[path = "era_install.rs"]
 mod install;
-pub(crate) use install::{DetachedProbe, EraInstall};
+pub(crate) use install::DetachedProbe;
 
 impl EraCache {
     /// A cache whose records name `backend`.

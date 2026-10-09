@@ -576,9 +576,10 @@ impl Backend {
             None => None,
         };
         let on_publish = move || {
-            if let Some((install, probe)) = install {
+            install.map(|(mut install, probe)| {
                 install.install(probe);
-            }
+                install
+            })
         };
         if let Err(refusal) = self.publish(entry, (transport, listen), built_under, on_publish) {
             warn!(

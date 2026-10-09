@@ -15,8 +15,9 @@ impl EraCache {
     /// A build-first restart (MIK-8012) probes its candidate while the old
     /// transport still serves from this cache: probed as a restart probes, the
     /// verdict would be discarded first, and the old transport would read none
-    /// (`cached_now`) for the whole probe and shape every call legacy. The outcome is installed only once the
-    /// candidate has replaced the old transport ([`EraInstall::install`]).
+    /// (`cached_now`) for the whole probe and shape every call legacy. The
+    /// outcome is installed as the candidate is published, before it is
+    /// reachable ([`EraInstall::install`], `Backend::publish`).
     pub(crate) async fn probe_detached<F, Fut>(probe: F) -> DetachedProbe
     where
         F: FnOnce() -> Fut,
@@ -135,8 +136,11 @@ impl EraInstall<'_> {
     /// One write, with no "never probed" in between: a reader that cannot
     /// wait (`cached_now`) sees the old era or the new one, never none. The
     /// caller runs this before the candidate is reachable (`Backend::publish`),
-    /// so no request on the candidate is shaped in its predecessor's dialect.
-    pub(crate) fn install(mut self, probe: DetachedProbe) -> Era {
+    /// so no request on the candidate is shaped in its predecessor's dialect,
+    /// and keeps `self` (the lock) until the candidate is in the slot: an old
+    /// transport's contradiction queued on the lock then finds its transport
+    /// replaced and discards nothing.
+    pub(crate) fn install(&mut self, probe: DetachedProbe) -> Era {
         let cache = self.cache;
         if self.guard.source == EraSource::Probed {
             tracing::info!(
