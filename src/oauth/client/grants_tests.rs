@@ -481,3 +481,32 @@ fn restoring_a_client_id_without_a_discovered_issuer_is_a_no_op() {
     assert!(client.client_id.read().is_none());
     assert!(client.client_id_source.read().is_none());
 }
+
+// ---------------------------------------------------------------------------
+// login_epoch
+// ---------------------------------------------------------------------------
+
+/// An ungated client has no epoch to hand a start; a gated one hands the
+/// gate's current epoch, so a cancel after it was captured makes `begin`
+/// refuse the stale start.
+#[tokio::test]
+async fn a_start_captures_the_gates_current_epoch_and_none_when_ungated() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(
+        client(dir.path(), "https://as.example", &[]).login_epoch(),
+        None
+    );
+
+    let gate = Arc::new(LoginGate::default());
+    let client = client(dir.path(), "https://as.example", &[]).with_login_gate(Arc::clone(&gate));
+    let before = client.login_epoch();
+    assert_eq!(before, Some(gate.epoch()));
+
+    gate.cancel_and_join().await;
+    assert_eq!(client.login_epoch(), Some(gate.epoch()));
+    assert_ne!(client.login_epoch(), before, "a cancel advances the epoch");
+    assert!(
+        matches!(gate.begin(before), Begin::Refused),
+        "a stale start is refused"
+    );
+}
