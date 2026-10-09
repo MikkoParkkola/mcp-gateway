@@ -90,23 +90,28 @@ fn an_integer_duration_above_the_bound_is_refused_at_load() {
     );
 }
 
+/// `config` fails validation, and the error names `key`.
+fn refuses(config: &Config, key: &str) {
+    let refused = config.validate().expect_err(key).to_string();
+    assert!(refused.contains(key), "{refused}");
+}
+
 #[test]
 fn a_zero_interval_is_refused() {
     let mut config = Config::default();
     config.key_server.cleanup_interval_secs = 0;
-    assert!(
-        config.validate().is_err(),
-        "key_server.cleanup_interval_secs"
-    );
+    config
+        .validate()
+        .expect("its timer never starts with the key server off");
+    config.key_server.enabled = true;
+    refuses(&config, "key_server.cleanup_interval_secs");
     let mut config = Config::default();
     config.streaming.session_reaper_interval = Duration::ZERO;
-    assert!(
-        config.validate().is_err(),
-        "streaming.session_reaper_interval"
-    );
+    refuses(&config, "streaming.session_reaper_interval");
     let mut config = Config::default();
     config.failsafe.health_check.interval = Duration::ZERO;
-    assert!(config.validate().is_err(), "failsafe.health_check.interval");
+    config.failsafe.health_check.enabled = true;
+    refuses(&config, "failsafe.health_check.interval");
     Config::default()
         .validate()
         .expect("the defaults stay valid");
