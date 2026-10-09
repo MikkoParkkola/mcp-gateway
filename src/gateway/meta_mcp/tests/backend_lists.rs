@@ -9,7 +9,11 @@ const HUNG: Duration = Duration::from_secs(600);
 /// The backend's own per-call timeout: past the hang guard, so only the
 /// aggregation timeout can end a list inside it.
 const BACKEND_TIMEOUT: Duration = Duration::from_secs(120);
-const HANG_GUARD: Duration = Duration::from_secs(30);
+/// The tree's hang bound, and under `MetaMcp`'s own 10 s aggregation default:
+/// a list that fell back to that default instead of the configured 100 ms or
+/// 1 s fails here too, not only one that waited for the backend. Still 5x
+/// the longest configured window, so a loaded runner has room (MIK-8222).
+const HANG_GUARD: Duration = Duration::from_secs(5);
 
 // ============================================================================
 // Prompts/resources aggregation: parallel fan-out + per-backend timeout
