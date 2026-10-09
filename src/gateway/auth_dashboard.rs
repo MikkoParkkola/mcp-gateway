@@ -320,7 +320,7 @@ impl DashboardBootstrap {
 
     /// Test seam: move both clocks of `handle` back by `by`, the same as `by`
     /// passing with no activity.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "webui"))]
     pub(crate) fn backdate(&self, handle: &str, by: Duration) {
         let back = |t: Now| Now {
             mono: t

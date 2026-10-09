@@ -158,6 +158,7 @@ enum MetaMode {
     #[default]
     Plain,
     /// Response inspection refuses a HIGH finding instead of annotating it.
+    #[cfg(feature = "firewall")]
     InspectionBlocks,
     /// The idempotency cache is on, so a re-issued key replays.
     Idempotent,
@@ -170,6 +171,7 @@ impl MetaMode {
     fn arm(&self, mut meta: MetaMcp) -> MetaMcp {
         match self {
             Self::Plain => {}
+            #[cfg(feature = "firewall")]
             Self::InspectionBlocks => meta.enable_response_inspection_action_mode(),
             Self::Idempotent => meta.enable_idempotency(
                 Arc::new(crate::idempotency::IdempotencyCache::new()),

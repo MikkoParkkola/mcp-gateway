@@ -18,7 +18,9 @@ use clap::{Parser as _, ValueEnum as _};
 use mcp_gateway::cli::{Cli, ExportTarget};
 
 const DOC: &str = include_str!("../docs/CLIENTS.md");
+#[cfg(feature = "config-export")]
 const EXPORT_SRC: &str = include_str!("../src/commands/config_export/mod.rs");
+#[cfg(feature = "config-export")]
 const PATHS_SRC: &str = include_str!("../src/commands/paths.rs");
 const MATRIX: &str = include_str!("../docs/release/v4.0.0-supported-matrix.md");
 

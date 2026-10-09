@@ -20,6 +20,7 @@ use crate::config::IdempotencyKeyMode::Optional;
 #[cfg(feature = "metrics")]
 use crate::config::IdempotencyKeyMode::Required;
 
+#[cfg(feature = "metrics")]
 const COUNTER: &str = "mcp_unkeyed_calls_total";
 
 async fn dispatch(fixture: &Fixture, request: Value) -> Value {

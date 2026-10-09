@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 #[cfg(feature = "firewall")]
 use mcp_gateway::security::firewall::anomaly::{AnomalyDetector, Observation};
+#[cfg(feature = "firewall")]
 use mcp_gateway::transition::TransitionTracker;
 
 #[cfg(feature = "firewall")]
