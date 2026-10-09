@@ -36,7 +36,7 @@ SKIPPED = {
 }
 # Workflows with no pull_request trigger: they cannot run on a docs-only PR, so
 # they need no gate. Gaining a pull_request trigger fails main() until gated.
-PUSH_ONLY_WORKFLOWS = ("codeql.yml", "feature-combos.yml", "packaged-suite.yml", "size-gates.yml")
+PUSH_ONLY_WORKFLOWS = ("codeql.yml", "feature-combos.yml", "packaged-suite.yml")
 # Every job that runs tests stays on docs-only PRs, except task-sdk-recovery
 # and gws-dry-run (neither reads a docs file): tests read docs files
 # (include_str!, doc-claim tests), in the lib/bin suite as well as tests/.
@@ -58,6 +58,59 @@ NOT_ON_PRS = {"test-throwaway-hosted", "test-trusted", "docker-build", "docker-m
               "packaged-suite-rehearsal", "binary-signing-rehearsal", "binary-sbom-rehearsal",
               "helm-chart-publish"}  # dispatch-only, or a tag
 BINARY_STEPS = ("Build the shipped binary", "Verify pins with cap validate (real files accepted, tampered copy refused)")
+
+# Skipped on a push to the release line (MIK-8163, merge skew); every other job
+# that runs on a pull request also runs on that push, so a check two green PRs
+# break together goes red on the merge. Each skip names what covers it instead.
+POST_MERGE_SKIPPED = {
+    # packaged-suite.yml runs `cargo test --all-features` on every release-line push.
+    # (package-tests, a build of that crate, keeps running: #1812 pins it to every ref.)
+    "test",
+    # Per-item properties two clean PRs cannot break together; the tag reruns them.
+    "check", "kani",
+    # Platform builds: scarce hosted runners; the tag workflow runs both.
+    "windows-check", "macos-check",
+    # Build-heavy smokes; docker.yml builds and smokes the image per merge, the tag reruns them.
+    "service-template-smoke", "usability-smoke", "upgrade-rehearsal", "helm-oci-roundtrip",
+    "helm-supply-chain", "helm-airgap", "k8s-kind-rollback", "gws-dry-run", "task-sdk-recovery",
+}
+POST_MERGE_PUSH = {"event_name": "push", "ref": f"refs/heads/{RELEASE_LINE}"}
+
+
+def simulate(jobs: dict, c: dict) -> set[str]:
+    """Jobs that run, resolving `needs` in order with each prerequisite's own
+    simulated result, so a kept job behind a skipped one counts as skipped."""
+    results: dict[str, str] = {}
+    pending = dict(jobs)
+    while pending:
+        progressed = False
+        for name, job in list(pending.items()):
+            needs = job.get("needs") or []
+            needs = [needs] if isinstance(needs, str) else needs
+            if any(n not in results for n in needs):
+                continue
+            outputs = {"docs_only": "false"}
+            local = dict(c, needs={n: {"result": results[n], "outputs": outputs if n == "scope" else {}} for n in needs})
+            results[name] = "success" if runs(job, local) else "skipped"
+            del pending[name]
+            progressed = True
+        assert progressed, f"needs cycle among {sorted(pending)}"
+    return {k for k, v in results.items() if v == "success"}
+
+
+def post_merge_errors(jobs: dict) -> list[str]:
+    """A release-line push runs everything but POST_MERGE_SKIPPED and NOT_ON_PRS."""
+    errors = []
+    unknown = POST_MERGE_SKIPPED - set(jobs)
+    if unknown:
+        errors.append(f"POST_MERGE_SKIPPED names jobs ci.yml lacks: {sorted(unknown)}")
+    c = ctx("push", "success", "false")
+    c["github"].update(POST_MERGE_PUSH)
+    ran = simulate(jobs, c) - NOT_ON_PRS
+    want = (SKIPPED | KEPT) - POST_MERGE_SKIPPED
+    if ran != want:
+        errors.append(f"release-line push: unexpected runs {sorted(ran - want)}, unexpected skips {sorted(want - ran)}")
+    return errors
 
 
 def ctx(event: str, scope_result: str, docs_only: str | None) -> dict:
@@ -132,6 +185,31 @@ def main() -> int:
             active = cond is None or evaluate(str(cond), c)
             if active == (name == "docs-only PR"):
                 errors.append(f"{name}: capability-pins step '{step}' {'runs' if active else 'skips'}")
+    errors += post_merge_errors(jobs)
+    # The post-merge check must be able to fail (MIK-8163): each mutation is caught.
+    import copy
+    mutations = {
+        "a heavy job loses its post-merge skip": lambda j: j["test"].update(
+            {"if": str(j["test"]["if"]).replace(" && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line')", "")}),
+        "a kept job comes to depend on a skipped one": lambda j: j["release-criteria"].update({"needs": "test"}),
+        "a kept job skips the release-line push": lambda j: j["file-size-ceiling"].update(
+            {"if": "${{ github.event_name != 'push' }}"}),
+    }
+    for label, mutate in mutations.items():
+        mutated = copy.deepcopy(jobs)
+        mutate(mutated)
+        if not post_merge_errors(mutated):
+            errors.append(f"post-merge self-test: '{label}' was not caught")
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    on = workflow.get(True) or workflow.get("on") or {}
+    if RELEASE_LINE not in (on.get("push") or {}).get("branches", []):
+        errors.append(f"ci.yml does not run on a push to {RELEASE_LINE}")
+    # Every merge keeps its own run, so a red one names its merge commit.
+    cancel = str((workflow.get("concurrency") or {}).get("cancel-in-progress", ""))
+    c = ctx("push", "success", "false")
+    c["github"].update(POST_MERGE_PUSH)
+    if cancel in ("true", "True") or (cancel.startswith("${{") and evaluate(cancel, c)):
+        errors.append("ci.yml cancels an in-progress run on a release-line push")
     for e in errors:
         print(f"docs-gating: {e}", file=sys.stderr)
     if not errors:
