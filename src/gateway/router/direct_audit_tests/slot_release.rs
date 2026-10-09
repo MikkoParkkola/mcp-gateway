@@ -292,3 +292,21 @@ async fn a_delivered_question_is_redeemed_once() {
     }
     report(&failures);
 }
+
+/// The scripted backend's side of [`Arm::MetaSseStreamed`]: a `tools/call`
+/// carrying a progress token gets a progress notification first, so a
+/// streamed answer leaves on the stream's streaming arm. No other row sends
+/// a progress token.
+pub(super) fn notify_first(method: &str, params: Option<&Value>) {
+    if method != "tools/call" {
+        return;
+    }
+    let Some(token) = params.and_then(|p| p.pointer("/_meta/progressToken")) else {
+        return;
+    };
+    crate::transport::notification_sink::publish(vec![crate::protocol::JsonRpcNotification {
+        jsonrpc: "2.0".to_string(),
+        method: "notifications/progress".to_string(),
+        params: Some(json!({"progressToken": token, "progress": 1})),
+    }]);
+}

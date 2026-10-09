@@ -52,23 +52,11 @@ struct Scripted {
 impl Transport for Scripted {
     async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
         let id = RequestId::Number(1);
-        // MIK-8176: a call carrying a progress token gets a progress
-        // notification first, so a streamed answer leaves on the stream's
-        // streaming arm. No other row sends one.
-        if method == "tools/call"
-            && let Some(token) = params
-                .as_ref()
-                .and_then(|p| p.pointer("/_meta/progressToken"))
-                .cloned()
-        {
-            crate::transport::notification_sink::publish(vec![
-                crate::protocol::JsonRpcNotification {
-                    jsonrpc: "2.0".to_string(),
-                    method: "notifications/progress".to_string(),
-                    params: Some(json!({"progressToken": token, "progress": 1})),
-                },
-            ]);
-        }
+        // MIK-8176: a progress token gets a notification first.
+        #[cfg(feature = "firewall")]
+        slot_release::notify_first(method, params.as_ref());
+        #[cfg(not(feature = "firewall"))]
+        let _ = &params;
         // F13: a cold `tools/call` lists the backend first. The list names the
         // tool the rows call, and it is not a call, so `calls` skips it.
         if method == "tools/list" {
