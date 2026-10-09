@@ -502,23 +502,6 @@ fn direct_source(
     )
 }
 
-/// The questions of a result that claims `input_required` but that
-/// `InputRequired::from_result` declines, when its `inputRequests` is still an
-/// object a client could read (MIK-8089).
-fn unparsed_questions(result: &Value) -> Option<crate::protocol::mrtr::InputRequired> {
-    if !crate::protocol::mrtr::InputRequired::claims_input_required(result) {
-        return None;
-    }
-    let requests = result.get("inputRequests")?.as_object()?;
-    Some(crate::protocol::mrtr::InputRequired {
-        requests: requests
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone()))
-            .collect(),
-        request_state: None,
-    })
-}
-
 /// The tool and the argument object a direct-route `tools/call` names: the two
 /// parts of the request a continuation is bound to (MIK-8078). Read from the
 /// params as the client sent them, at the mint and at the redeem alike, so a
@@ -612,23 +595,19 @@ impl crate::gateway::meta_mcp::MetaMcp {
         result: &mut Value,
     ) -> Result<Option<(String, String)>> {
         let (tool, arguments) = direct_call_parts(sent);
-        let Some(interim) = crate::protocol::mrtr::InputRequired::from_result(result) else {
-            // A round `from_result` declines can still show readable questions.
-            if let Some(asked) = unparsed_questions(result)
-                && let Some(refused) = asked.undeclared(declared)
-            {
-                return Err(super::undeclared_gate::refusal(
-                    &refused, server, tool, "direct",
-                ));
-            }
-            withhold_unsealed_state(result);
-            return Ok(None);
-        };
-        if let Some(refused) = interim.undeclared(declared) {
+        // The meta route's reading of what the result asks (MIK-8117): a
+        // round `from_result` declines still puts its readable questions to
+        // the client, so they face the same gate.
+        let asked = super::undeclared_gate::asked_requests(result);
+        if let Some(refused) = asked.as_ref().and_then(|a| a.undeclared(declared)) {
             return Err(super::undeclared_gate::refusal(
                 &refused, server, tool, "direct",
             ));
         }
+        let Some(interim) = crate::protocol::mrtr::InputRequired::from_result(result) else {
+            withhold_unsealed_state(result);
+            return Ok(None);
+        };
         let source = direct_source(who);
         let Some((envelope, hold_key)) = mint_continuation(
             &self.continuation,
