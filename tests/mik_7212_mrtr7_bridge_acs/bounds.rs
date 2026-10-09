@@ -165,16 +165,16 @@ async fn ac_mrtr_7b_the_request_budget_is_checked_before_a_batch_is_sent() {
 /// bound it: with `left > per_prompt` the budget is still live, so the failure
 /// belongs to the prompt and is attributed to its key.
 ///
-/// Scaled bounds, in milliseconds, so the suite stays fast. The relation is
-/// what is asserted; the shipped literals are pinned elsewhere.
-#[tokio::test]
+/// On tokio's paused clock: both bounds are timers, so the clock jumps to
+/// whichever fires first and the test runs at once. Which arm fired is read
+/// from the outcome: the per-prompt bound ends the call as `k1`'s delivery
+/// failure, the aggregate as `Deadline` (MIK-8222). The aggregate is far past
+/// the per-prompt bound, so only a bridge that skipped it reaches the
+/// aggregate.
+#[tokio::test(start_paused = true)]
 async fn ac_mrtr_7b_an_unanswered_prompt_inside_a_live_budget_ends_the_call() {
-    // The aggregate outlasts the hang guard, so only the per-prompt bound can
-    // end the wait inside it: which arm was taken is read from the outcome,
-    // not from the elapsed time (MIK-8222).
-    let hang_guard = Duration::from_secs(30);
     let bounds = BridgeBounds {
-        aggregate: hang_guard * 2,
+        aggregate: Duration::from_secs(60),
         per_prompt: Duration::from_millis(60),
         ..BridgeBounds::DEFAULT
     };
@@ -182,9 +182,9 @@ async fn ac_mrtr_7b_an_unanswered_prompt_inside_a_live_budget_ends_the_call() {
     let backend = FakeBackend::never();
     let records = Records::default();
 
-    let started = std::time::Instant::now();
+    let started = tokio::time::Instant::now();
     let outcome = tokio::time::timeout(
-        hang_guard,
+        bounds.aggregate * 2,
         bridge_with(
             &client,
             &backend,
@@ -197,8 +197,8 @@ async fn ac_mrtr_7b_an_unanswered_prompt_inside_a_live_budget_ends_the_call() {
     )
     .await
     .expect(
-        "a bridge with no per-prompt bound waits out the aggregate or the fixture's own \
-             86_400s silence: the per-prompt bound is what must end it",
+        "a bridge with no bound at all waits on the fixture's own 86_400s silence, \
+             which is a hung suite rather than a failing row",
     );
     let elapsed = started.elapsed();
 

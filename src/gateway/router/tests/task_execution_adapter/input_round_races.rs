@@ -196,7 +196,11 @@ async fn two_completing_updates_make_one_resume_and_the_winner_stays_cancellable
     std::assert_eq!(mock.calls(), 2, "exactly one resume dispatch");
 }
 
-/// Mutant: the wait applied regardless of row state.
+/// An update losing to a running resume is refused at once: the row already
+/// reads `working`, so the route refuses it before the executor
+/// (`task_route.rs`), and it never reaches the produce-seam wait. The wait
+/// applied regardless of row state is caught by the parked loser below, the
+/// one path where the row moves while an update waits.
 #[tokio::test]
 async fn an_update_losing_to_a_running_resume_is_refused_at_once() {
     let (mock, mut gate) =

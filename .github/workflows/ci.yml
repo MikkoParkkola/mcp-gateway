@@ -1178,6 +1178,27 @@ jobs:
         if: github.event_name == 'pull_request'
         run: python3 scripts/dev/check-event-source-scope.py "origin/${{ github.base_ref }}"
 
+  timing-asserts:
+    name: No wall-clock windows under 5 s in tests (MIK-8222)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    # A test that tells two outcomes apart by elapsed time against a short
+    # window goes red on a loaded runner, on a change that touched nothing
+    # near it. Such a test waits on an event instead. The allowlist only
+    # shrinks: against the base, a new row fails.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check the guard refuses what it claims to
+        run: python3 scripts/dev/test_check_timing_asserts.py
+      - name: Check the tree
+        if: github.event_name != 'pull_request'
+        run: python3 scripts/dev/check-timing-asserts.py
+      - name: Check the tree and the allowlist against the base
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}"
+
   orphan-test-modules:
     name: Orphan test modules (MIK-7538)
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
