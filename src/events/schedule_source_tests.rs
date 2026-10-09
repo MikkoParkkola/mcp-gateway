@@ -134,7 +134,7 @@ async fn fired(arguments: &Value, from: DateTime<Utc>, minutes: i64) -> Vec<Stri
     let source = ScheduleSource::new(&hub, dir.path().join("schedule"));
     start(&source, arguments).await;
     for minute in 0..minutes {
-        source.tick_at(from + chrono::Duration::minutes(minute));
+        source.tick_at(from + chrono::TimeDelta::try_minutes(minute).expect("in range"));
     }
     received(&mut events)
         .iter()
@@ -464,7 +464,7 @@ async fn a_daylight_saving_collapse_keeps_the_floor() {
     assert!(times.len() >= 2, "{ticks:?}");
     for pair in times.windows(2) {
         assert!(
-            pair[1] - pair[0] >= chrono::Duration::minutes(5),
+            pair[1] - pair[0] >= crate::duration_bound::delta!(minutes, 5),
             "{ticks:?}"
         );
     }

@@ -46,7 +46,7 @@ fn grant(grant_id: &str, subject: &str, capability: &str) -> IdentityGrant {
 }
 
 fn revoked(mut row: IdentityGrant) -> IdentityGrant {
-    row.revoked_at = Some(Utc::now() - chrono::Duration::seconds(1));
+    row.revoked_at = Some(Utc::now() - crate::duration_bound::delta!(seconds, 1));
     row
 }
 

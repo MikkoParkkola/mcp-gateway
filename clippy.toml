@@ -4,4 +4,13 @@
 disallowed-methods = [
     { path = "dirs::home_dir", reason = "use crate::home_dir::home_dir" },
     { path = "dirs::config_dir", reason = "use crate::home_dir::config_dir (crate::home_dir::home_dir on macOS)" },
+    # MIK-8207: chrono's constructors panic out of range, and a release build
+    # aborts on a panic. A constant goes through delta!, checked at compile
+    # time; a runtime value through TimeDelta::try_*, which returns None.
+    { path = "chrono::TimeDelta::weeks", reason = "panics out of range: delta!(weeks, n) for a constant, TimeDelta::try_weeks otherwise" },
+    { path = "chrono::TimeDelta::days", reason = "panics out of range: delta!(days, n) for a constant, TimeDelta::try_days otherwise" },
+    { path = "chrono::TimeDelta::hours", reason = "panics out of range: delta!(hours, n) for a constant, TimeDelta::try_hours otherwise" },
+    { path = "chrono::TimeDelta::minutes", reason = "panics out of range: delta!(minutes, n) for a constant, TimeDelta::try_minutes otherwise" },
+    { path = "chrono::TimeDelta::seconds", reason = "panics out of range: delta!(seconds, n) for a constant, TimeDelta::try_seconds otherwise" },
+    { path = "chrono::TimeDelta::milliseconds", reason = "panics out of range: delta!(milliseconds, n) for a constant, TimeDelta::try_milliseconds otherwise" },
 ]

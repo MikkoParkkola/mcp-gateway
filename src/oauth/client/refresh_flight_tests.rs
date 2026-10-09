@@ -752,3 +752,6 @@ async fn an_oversized_expires_in_is_refused() {
         "the sent refresh token may be consumed, so it is retired"
     );
 }
+
+#[path = "refresh_flight_renewal_tests.rs"]
+mod renewal;

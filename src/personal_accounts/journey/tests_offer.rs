@@ -3,8 +3,12 @@
 //! The dispatch-site offer at the store (design §9.3, review H1; §11.2 row
 //! T-OFFER3). Read back through `journeys.json`, never an in-memory copy.
 
+use super::ids::force_ids;
 use super::tests::{T0, create, fresh, limits, on_disk, request, start};
-use super::{CALLBACK_WINDOW, JourneyLimits, JourneyReason, JourneyStatus, START_WINDOW};
+use super::{
+    AccountError, CALLBACK_WINDOW, JourneyError, JourneyLimits, JourneyReason, JourneyRefusal,
+    JourneyStatus, START_WINDOW,
+};
 
 /// One creation per minute gateway-wide: a second creation would be refused,
 /// so an offer that succeeds twice has reused rather than minted.
@@ -109,4 +113,50 @@ fn an_offer_never_reuses_another_principals_or_another_accounts_journey() {
     let table = on_disk(&store, &config, &limits);
     assert_eq!(table.journeys[&bobs].status, JourneyStatus::Pending);
     assert_eq!(table.journeys.len(), 3);
+}
+
+/// An offer with a field over its cap is refused before any store access:
+/// the table is never written.
+#[test]
+fn an_over_cap_offer_is_refused_before_any_store_access() {
+    let (_root, config, store) = fresh();
+    let limits = limits();
+    let mut long_path = request("alice", "google");
+    long_path.return_path = format!("/{}", "p".repeat(super::RETURN_PATH_MAX));
+
+    let refused = store.offer_journey(T0, &limits, long_path);
+
+    assert_eq!(
+        refused.unwrap_err(),
+        JourneyError::Refused(JourneyRefusal::InvalidRequest)
+    );
+    assert!(
+        !config.authority_dir.join(super::JOURNEYS_FILE).exists(),
+        "a refused offer must not have written the table"
+    );
+}
+
+/// An offer that must mint, but draws only ids live records hold, refuses
+/// rather than overwriting one.
+#[test]
+fn an_offer_whose_drawn_ids_all_collide_refuses_and_overwrites_nothing() {
+    let (_root, config, store) = fresh();
+    let limits = limits();
+    let taken = "a".repeat(32);
+    force_ids(&[&taken, &"c".repeat(32)]);
+    assert_eq!(create(&store, T0, &limits, "bob"), taken);
+    let before = on_disk(&store, &config, &limits);
+
+    force_ids(&[&taken, &taken]);
+    let refused = store.offer_journey(T0 + 1, &limits, request("alice", "google"));
+
+    assert_eq!(
+        refused.unwrap_err(),
+        JourneyError::Storage(AccountError::StorageUnavailable)
+    );
+    assert_eq!(
+        on_disk(&store, &config, &limits),
+        before,
+        "nothing overwritten"
+    );
 }

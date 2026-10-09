@@ -109,7 +109,7 @@ fn subscription(name: &str) -> super::super::records::Subscription {
         previous_secret: None,
         previous_until: None,
         granted_at: now,
-        expires_at: Some(now + chrono::Duration::hours(1)),
+        expires_at: Some(now + crate::duration_bound::delta!(hours, 1)),
         active: true,
         failed_since: None,
         last_delivery_at: None,

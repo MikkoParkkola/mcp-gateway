@@ -268,3 +268,30 @@ async fn a_step_digest_is_returned_only_while_its_hold_exists() {
         "an orphan step leaked"
     );
 }
+
+/// MIK-8176 (agy F4 on #3645): `try_complete` never blocks on the step map.
+/// With the map held on this thread, a release on another thread still frees
+/// the slot, inside a deadline; a blocking lock would miss it, not hang the
+/// test.
+#[tokio::test]
+async fn try_complete_frees_the_slot_while_the_step_map_is_held() {
+    let table = std::sync::Arc::new(InFlight::new("gw-1", IN_FLIGHT_CAPACITY));
+    let key = table
+        .hold("alpha", T + 60, T)
+        .await
+        .expect("an empty table has a slot");
+    let steps = table.steps.lock();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (worker, released) = (std::sync::Arc::clone(&table), key.clone());
+    std::thread::spawn(move || {
+        let _ = tx.send(worker.try_complete(&released));
+    });
+    let outcome = rx.recv_timeout(std::time::Duration::from_secs(2));
+    drop(steps);
+    assert_eq!(
+        outcome,
+        Ok(Some(true)),
+        "try_complete blocked on the step map or kept the slot"
+    );
+    assert_eq!(table.route(&key, T).await, Routing::Gone);
+}

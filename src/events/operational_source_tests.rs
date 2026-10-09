@@ -379,7 +379,7 @@ fn a_principal_the_bearer_and_a_key_share_has_no_standing() {
 #[test]
 fn a_principal_one_live_key_derives_keeps_its_standing() {
     let mut twin = twin_of("s-dev", "twin", true);
-    twin.expires_at = Some(Utc::now() - chrono::Duration::hours(1));
+    twin.expires_at = Some(Utc::now() - crate::duration_bound::delta!(hours, 1));
     for keys in [
         vec![key("dev", "s-dev", false)],
         vec![key("dev", "s-dev", false), twin.clone()],
@@ -401,7 +401,7 @@ fn a_principal_one_live_key_derives_keeps_its_standing() {
 #[test]
 fn the_bearer_alone_keeps_its_admin_standing() {
     let mut expired = key("dev", "s-dev", false);
-    expired.expires_at = Some(Utc::now() - chrono::Duration::hours(1));
+    expired.expires_at = Some(Utc::now() - crate::duration_bound::delta!(hours, 1));
     for keys in [vec![], vec![expired]] {
         let credentials = LiveCredentials {
             bearer_principal: Some(principal("s-dev")),
