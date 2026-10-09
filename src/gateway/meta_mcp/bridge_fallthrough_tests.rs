@@ -576,13 +576,13 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
 
 /// Every round asks `roots/list` (declared) except the last, which asks for
 /// sampling (undeclared): the bridge refuses the handed-back round (#2173).
-fn roots_then_sampling(n: usize) -> Option<&'static str> {
+const ROOTS_THEN_SAMPLING: fn(usize) -> Option<&'static str> = |n| {
     Some(if n >= last_round() {
         "sampling/createMessage"
     } else {
         "roots/list"
     })
-}
+};
 
 /// MIK-8191 on the legacy bridge (gpt i1): a bridged exchange whose last round
 /// asks an undeclared question is refused, and the execution lease does not
@@ -592,7 +592,7 @@ fn roots_then_sampling(n: usize) -> Option<&'static str> {
 async fn t4_a_bridged_undeclared_last_round_is_not_kept_by_the_lease() {
     use crate::gateway::meta_mcp::admission::SyncAdmission;
     use crate::gateway::meta_mcp::{AdmissionOwner, error_response_preserving_status};
-    let (m, _calls) = meta_that_always_asks(roots_then_sampling);
+    let (m, _calls) = meta_that_always_asks(ROOTS_THEN_SAMPLING);
     let channel = Answering::default();
     let retry = keyed("bridge-op");
     let caller = legacy_caller(&channel, &retry);
