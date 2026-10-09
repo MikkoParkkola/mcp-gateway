@@ -142,14 +142,23 @@ async fn stdio_serve_obeys_audit_required() {
 }
 
 /// P2c2: the derived default is not written back. The CLI writers load the
-/// file literally and write the whole config through `write_config`, so a
-/// value resolved at load would add an `enabled` line nobody wrote.
+/// file literally and re-serialise the whole config (`edit_config` with
+/// `CommentLoss::Rewrite`), so a value resolved at load would add an
+/// `enabled` line nobody wrote. The edit changes the port so the write
+/// cannot be skipped as a no-op.
 #[test]
 fn a_rewrite_does_not_write_the_derived_audit_default() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_config(&dir, AUTH_ON);
-    let config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("literal load");
-    mcp_gateway::config_persistence::write_config(&path, &config).expect("the rewrite succeeds");
+    mcp_gateway::config_persistence::edit_config(
+        &path,
+        mcp_gateway::config_persistence::CommentLoss::Rewrite,
+        |config| {
+            config.server.port = 39_401;
+            Ok(())
+        },
+    )
+    .expect("the rewrite succeeds");
     let text = std::fs::read_to_string(&path).expect("read back");
     let written: serde_yaml::Value = serde_yaml::from_str(&text).expect("valid YAML");
     let log = &written["security"]["transparency_log"];
@@ -159,6 +168,10 @@ fn a_rewrite_does_not_write_the_derived_audit_default() {
         "the rewrite wrote an `enabled` key (null counts too):\n{text}"
     );
     let reloaded = mcp_gateway::config::Config::load(Some(&path)).expect("the rewrite loads");
+    assert_eq!(
+        reloaded.server.port, 39_401,
+        "the rewrite happened:\n{text}"
+    );
     assert!(
         reloaded
             .security
@@ -169,17 +182,20 @@ fn a_rewrite_does_not_write_the_derived_audit_default() {
 
 /// P2c2: the switch still arrives from the environment, as `Option<bool>`.
 /// Routed through `env_files` so no process variable leaks into the tests
-/// running beside this one.
+/// running beside this one, and loaded with `load_evaluated` so an env file
+/// that fails to apply is an error, not a skipped warning.
 #[test]
 fn the_environment_sets_the_audit_switch_both_ways() {
     let env_var = "MCP_GATEWAY_SECURITY__TRANSPARENCY_LOG__ENABLED";
     let config = |auth: &str, value: &str| {
         let dir = tempfile::tempdir().unwrap();
         let env = dir.path().join("audit.env");
-        std::fs::write(&env, format!("{env_var}={value}\n")).expect("write env file");
+        mcp_gateway::gateway::test_helpers::write_owner_only(&env, &format!("{env_var}={value}\n"))
+            .expect("write env file");
         let body = format!("env_files:\n  - {}\n{auth}", env.display());
         let path = write_config(&dir, &body);
-        (dir, mcp_gateway::config::Config::load(Some(&path)))
+        let loaded = mcp_gateway::config::Config::load_evaluated(Some(&path)).map(|e| e.config);
+        (dir, loaded)
     };
     let (_dir, off) = config(AUTH_ON, "false");
     let err = off.expect_err("auth on with the variable set to false must not load");
