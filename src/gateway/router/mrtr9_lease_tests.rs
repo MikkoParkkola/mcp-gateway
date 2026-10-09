@@ -127,3 +127,26 @@ async fn g4b_a_pre_send_refusal_after_a_step_ran_keeps_the_outcome() {
     assert_eq!(dispatched(&fx), 1, "step 1 ran again: {retried}");
     assert_eq!(retried["error"], first["error"], "the stored outcome");
 }
+
+/// M2 (pin, MIK-8137 P1-route): an interim answer refused by MRTR.9 still
+/// records its spend, because `account_dispatch` charges any answered call
+/// before the gate runs (`dispatch_guards.rs`), so a refusal refunds nothing.
+/// With 1.5 of budget and 1.0 per call, the declared retry meets the budget.
+/// Mutant: the refusal refunding the spend.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn m2_a_refused_interim_answer_keeps_its_spend() {
+    use super::direct_continuation_tests::budget;
+    use super::direct_guards_fixture::fixture_built;
+    let fx = fixture_built(Answer::AskOnce, budget).await;
+    let refused = meta_call(&fx, "k-budget", "alpha", keyed("op-m2", &json!({}))).await;
+    assert_eq!(code(&refused), Some(-32021), "MRTR.9 refusal: {refused}");
+    let declared = json!({"elicitation": {"form": {}}});
+    let retried = meta_call(&fx, "k-budget", "alpha", keyed("op-m2b", &declared)).await;
+    assert_eq!(
+        code(&retried),
+        Some(-32003),
+        "the refused call was refunded: {retried}"
+    );
+    assert_eq!(dispatched(&fx), 1, "the budget refused before the backend");
+}

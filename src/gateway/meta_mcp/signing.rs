@@ -422,9 +422,10 @@ impl super::MetaMcp {
         self.prepare_signing_invocation(context, arguments, session, caller)
     }
 
-    /// Give back the nonce of a call refused because its confirmation question
-    /// could not be delivered (MIK-7869). Only a nonce this call admitted: a
-    /// call left unadmitted registered none.
+    /// Give back the nonce of a call refused before its backend was reached:
+    /// its confirmation question could not be delivered (MIK-7869), its
+    /// continuation was refused or its spend was (MIK-8150). Only a nonce this
+    /// call admitted: a call left unadmitted registered none.
     pub(crate) fn release_unasked_nonce(&self, caller: &super::MetaMcpCallerContext<'_>) {
         let Some(context) = caller.signing else {
             return;

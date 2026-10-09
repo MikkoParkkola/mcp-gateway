@@ -685,7 +685,7 @@ async fn meta_mcp_dispatch(
                 .resume_session_id_scoped(existing, &caller_owner, held)
             {
                 Some(id) => id,
-                None => return super::hardened_elicitation::refusal().into_response(),
+                None => return super::hardened_elicitation::refuse(&request, declared_version),
             }
         })
     };
