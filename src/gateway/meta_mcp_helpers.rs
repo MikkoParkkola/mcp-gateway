@@ -325,8 +325,33 @@ pub(crate) fn build_discovery_preamble(
 ///
 /// Groups capabilities by `metadata.category` and lists representative tools.
 /// Returns an empty string when no capabilities are provided.
+/// Kept for tests, which build the guide from whole definitions.
+#[cfg(test)]
 pub(crate) fn build_routing_instructions(
     capabilities: &[crate::capability::CapabilityDefinition],
+    capability_backend_name: &str,
+) -> String {
+    let entries: Vec<RoutingEntry<'_>> = capabilities
+        .iter()
+        .map(|cap| RoutingEntry {
+            name: &cap.name,
+            category: &cap.metadata.category,
+            chains_with: &cap.metadata.chains_with,
+        })
+        .collect();
+    build_routing_guide(&entries, capability_backend_name)
+}
+
+/// What the routing guide reads of one capability (MIK-8014 PERF.8a).
+pub(crate) struct RoutingEntry<'a> {
+    pub(crate) name: &'a str,
+    pub(crate) category: &'a str,
+    pub(crate) chains_with: &'a [String],
+}
+
+/// The initialize routing guide, built from the fields it reads.
+pub(crate) fn build_routing_guide(
+    capabilities: &[RoutingEntry<'_>],
     capability_backend_name: &str,
 ) -> String {
     use std::collections::BTreeMap;
@@ -339,10 +364,10 @@ pub(crate) fn build_routing_instructions(
     let mut by_category: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     for cap in capabilities {
-        let category = if cap.metadata.category.is_empty() {
+        let category = if cap.category.is_empty() {
             "general".to_string()
         } else {
-            cap.metadata.category.clone()
+            cap.category.to_string()
         };
 
         by_category
@@ -354,8 +379,8 @@ pub(crate) fn build_routing_instructions(
     // Also track chains_with hints per category: source_tool -> [downstream_tools]
     let mut chains: Vec<(String, Vec<String>)> = Vec::new();
     for cap in capabilities {
-        if !cap.metadata.chains_with.is_empty() {
-            chains.push((cap.name.clone(), cap.metadata.chains_with.clone()));
+        if !cap.chains_with.is_empty() {
+            chains.push((cap.name.to_string(), cap.chains_with.to_vec()));
         }
     }
 

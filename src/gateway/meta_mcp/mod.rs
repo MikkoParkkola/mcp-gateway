@@ -60,7 +60,7 @@ use crate::{stats::UsageStats, tool_registry::ToolRegistry};
 
 use super::meta_mcp_helpers::{
     build_code_mode_tools, build_discovery_preamble, build_initialize_result,
-    build_routing_instructions, extract_client_version, extract_required_str,
+    extract_client_version, extract_required_str,
 };
 use super::meta_mcp_tool_defs::{MetaToolExposure, ToolTotal};
 use super::meta_mcp_tool_total::tool_total;

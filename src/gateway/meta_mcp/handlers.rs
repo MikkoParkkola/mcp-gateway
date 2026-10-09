@@ -4,10 +4,10 @@
 
 use super::{
     CallerStanding, InvokeScope, JsonRpcResponse, MetaMcp, RequestId, ToolTotal, Value,
-    build_code_mode_tools, build_discovery_preamble, build_initialize_result,
-    build_routing_instructions, debug, extract_client_version, negotiate_version,
-    project_tool_descriptor_trust_card, project_tool_descriptors_trust_cards, session_fp,
-    session_key, tool_total, tools_list_result_with_trust_cards, warn,
+    build_code_mode_tools, build_discovery_preamble, build_initialize_result, debug,
+    extract_client_version, negotiate_version, project_tool_descriptor_trust_card,
+    project_tool_descriptors_trust_cards, session_fp, session_key, tool_total,
+    tools_list_result_with_trust_cards, warn,
 };
 
 // ============================================================================
@@ -167,7 +167,18 @@ impl MetaMcp {
             && self.admits_backend(&cap.name, scope, session_id)
         {
             let caps = self.guide_capabilities(&cap, scope, session_id);
-            let routing = build_routing_instructions(&caps, &cap.name);
+            let entries: Vec<_> = caps
+                .iter()
+                .map(|(name, category, chains_with)| {
+                    crate::gateway::meta_mcp_helpers::RoutingEntry {
+                        name,
+                        category,
+                        chains_with,
+                    }
+                })
+                .collect();
+            let routing =
+                crate::gateway::meta_mcp_helpers::build_routing_guide(&entries, &cap.name);
             if !routing.is_empty() {
                 instructions.push_str(&routing);
             }
