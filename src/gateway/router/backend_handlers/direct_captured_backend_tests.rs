@@ -227,6 +227,7 @@ async fn an_a2a_question_on_this_route_is_bound_to_the_key_holder() {
             allowed_tools: None,
             denied_tools: None,
             admin: false,
+            // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
             principal: principal.to_string(),
             authenticated: true,
             credential_kind: crate::security::audit::CredentialKind::ApiKey,
