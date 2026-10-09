@@ -17,8 +17,6 @@
 //! So the rule is asymmetric, and getting it backwards is the easy mistake:
 //! evidence of modernity must be positive, and everything else is legacy.
 
-use std::sync::atomic::{AtomicU8, Ordering};
-
 use serde_json::json;
 
 /// What a peer speaks, as far as we have been able to establish.
@@ -158,13 +156,64 @@ pub struct EraCache {
     ///
     /// One value rather than five cells: no reader can observe an `era` from
     /// the latest probe beside an `era_evidence` from the previous one.
-    observation: tokio::sync::Mutex<EraObservation>,
+    observation: tokio::sync::Mutex<determination::Determination>,
     /// The determined era as the outbound path reads it, without the lock
-    /// (MIK-8218): 0 none, 1 Modern, 2 Legacy. Written only by [`Self::set`],
-    /// under the lock, so it always mirrors `observation`; any holder of the
-    /// lock (a reader, a discard that finds nothing to discard) no longer
-    /// hides a verdict from a request.
-    verdict: AtomicU8,
+    /// (MIK-8218). Only [`determination::Determination::set`] writes it,
+    /// under the lock, so any holder of the lock (a reader, a discard that
+    /// finds nothing to discard) no longer hides a verdict from a request.
+    verdict: determination::Mirror,
+}
+
+/// The determination and its lock-free mirror, private so that the only way
+/// to change the determination is [`Determination::set`], which updates the
+/// mirror in the same step (MIK-8218 invariant). A direct write such as
+/// `*guard = EraObservation::never_probed()` is a type error, not a test
+/// failure: [`Determination`] derefs to the observation for reading only.
+mod determination {
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    use super::{Era, EraObservation, EraSource};
+
+    /// The determination as the era lock guards it.
+    #[derive(Debug, Default)]
+    pub(super) struct Determination(EraObservation);
+
+    /// The determined era, readable without the lock: 0 none, 1 Modern,
+    /// 2 Legacy.
+    #[derive(Debug, Default)]
+    pub(super) struct Mirror(AtomicU8);
+
+    impl Determination {
+        /// The one write of the determination. The caller holds the era
+        /// lock; `mirror` is the cache's own.
+        pub(super) fn set(&mut self, mirror: &Mirror, value: EraObservation) {
+            self.0 = value;
+            let verdict = match (value.source, value.era) {
+                (EraSource::Probed, Era::Modern) => 1,
+                (EraSource::Probed, Era::Legacy) => 2,
+                _ => 0,
+            };
+            mirror.0.store(verdict, Ordering::Release);
+        }
+    }
+
+    impl std::ops::Deref for Determination {
+        type Target = EraObservation;
+        fn deref(&self) -> &EraObservation {
+            &self.0
+        }
+    }
+
+    impl Mirror {
+        /// The determined era, or `None` when there is none.
+        pub(super) fn load(&self) -> Option<Era> {
+            match self.0.load(Ordering::Acquire) {
+                1 => Some(Era::Modern),
+                2 => Some(Era::Legacy),
+                _ => None,
+            }
+        }
+    }
 }
 
 impl EraCache {
@@ -180,7 +229,7 @@ impl EraCache {
             name: backend.into(),
             slot,
             observation: tokio::sync::Mutex::default(),
-            verdict: AtomicU8::new(0),
+            verdict: determination::Mirror::default(),
         }
     }
 
@@ -196,35 +245,18 @@ impl EraCache {
     /// peer then went out legacy-shaped (MIK-8218). A probe still reads
     /// `None`: every probe runs after a discard or before any verdict.
     pub(crate) fn cached_now(&self) -> Option<Era> {
-        match self.verdict.load(Ordering::Acquire) {
-            1 => Some(Era::Modern),
-            2 => Some(Era::Legacy),
-            _ => None,
-        }
-    }
-
-    /// The one write of the determination: `slot` is the locked observation,
-    /// and the lock-free mirror [`Self::cached_now`] reads is updated with it,
-    /// so the two cannot disagree once the lock is released.
-    fn set(&self, slot: &mut EraObservation, value: EraObservation) {
-        *slot = value;
-        let verdict = match (value.source, value.era) {
-            (EraSource::Probed, Era::Modern) => 1,
-            (EraSource::Probed, Era::Legacy) => 2,
-            _ => 0,
-        };
-        self.verdict.store(verdict, Ordering::Release);
+        self.verdict.load()
     }
 
     /// Test support: hold the era lock as a parked reader does (MIK-8218).
     #[cfg(test)]
-    pub(crate) async fn hold_for_test(&self) -> tokio::sync::MutexGuard<'_, EraObservation> {
+    pub(crate) async fn hold_for_test(&self) -> impl Sized + '_ {
         self.observation.lock().await
     }
 
     /// The era, if one has been determined and not since invalidated.
     pub async fn cached(&self) -> Option<Era> {
-        let observation = *self.observation.lock().await;
+        let observation = **self.observation.lock().await;
         (observation.source == EraSource::Probed).then_some(observation.era)
     }
 
@@ -234,7 +266,7 @@ impl EraCache {
     /// unresolved, before the first probe or after a discard whose re-probe
     /// is in flight (MIK-7899 CLASS.3).
     pub(crate) async fn settled(&self) -> Option<Era> {
-        let observation = *self.observation.lock().await;
+        let observation = **self.observation.lock().await;
         match (observation.source, observation.evidence) {
             (EraSource::Probed, _) => Some(observation.era),
             (_, EraEvidence::NoAnswer) => Some(Era::Legacy),
@@ -247,7 +279,7 @@ impl EraCache {
     /// Emits the `era_cache` record: a read of a determined era is a hit, a
     /// read of an undetermined one is not. Reading never probes.
     pub async fn observation(&self) -> EraObservation {
-        let observation = *self.observation.lock().await;
+        let observation = **self.observation.lock().await;
         tracing::info!(
             target: "mcp_gateway::observed",
             backend = %self.name,
@@ -268,10 +300,10 @@ impl EraCache {
     /// leaving the caller believing it had discarded a belief it had not. A
     /// control that fails silently is worse than one that blocks briefly.
     pub async fn invalidate(&self) {
-        self.set(
-            &mut *self.observation.lock().await,
-            EraObservation::never_probed(),
-        );
+        self.observation
+            .lock()
+            .await
+            .set(&self.verdict, EraObservation::never_probed());
         tracing::info!(
             target: "mcp_gateway::observed",
             backend = %self.name,
@@ -311,7 +343,7 @@ impl EraCache {
         if observation.source != EraSource::Probed || !contradicted(observation.era) {
             return false;
         }
-        if !serving(&mut || self.set(&mut observation, EraObservation::never_probed())) {
+        if !serving(&mut || observation.set(&self.verdict, EraObservation::never_probed())) {
             return false;
         }
         tracing::info!(
@@ -418,7 +450,7 @@ impl EraCache {
         let mut discarded = false;
         if !serving(&mut || {
             if guard.source == EraSource::Probed {
-                self.set(&mut guard, EraObservation::never_probed());
+                guard.set(&self.verdict, EraObservation::never_probed());
                 discarded = true;
             }
         }) {
@@ -443,7 +475,7 @@ impl EraCache {
     /// Run one probe and record what it decided. The caller owns the lock.
     async fn probe_and_store<F, Fut, I>(
         &self,
-        guard: &mut EraObservation,
+        guard: &mut determination::Determination,
         trigger: ProbeTrigger,
         probe: F,
         install: I,
@@ -458,7 +490,7 @@ impl EraCache {
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let observation = EraObservation::from_outcome(&outcome, trigger, chrono::Utc::now());
 
-        if !install(&mut || self.set(guard, observation)) {
+        if !install(&mut || guard.set(&self.verdict, observation)) {
             // The probed peer is gone: what it said is about a process no longer on
             // the wire. Same fields as the probe record, minus `error_code`, plus why.
             tracing::info!(
