@@ -201,6 +201,7 @@ fn every_integer_duration_read_from_input_is_bounded() {
             let attributes = lines[..at].iter().rev().take_while(|l| {
                 let l = l.trim();
                 let previous_field = l.ends_with(',')
+                    && l.contains(':')
                     && !l.contains('=')
                     && !l.starts_with('#')
                     && !l.starts_with("//");
