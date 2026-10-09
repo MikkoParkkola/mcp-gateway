@@ -163,17 +163,19 @@ pub(super) const fn expiry_for(now: u64) -> u64 {
     now.saturating_add(CONTINUATION_LIFETIME_SECS)
 }
 
-/// Wall-clock seconds since the Unix epoch — the unit `mint` and `open` measure
-/// `now` and `expires_at` in.
+/// Now, in the seconds `mint` and `open` measure `now` and `expires_at` in.
 ///
-/// Lives beside them rather than being borrowed from another module: the expiry
-/// contract is defined here, so the clock that feeds it belongs to the same
-/// unit. A pre-epoch clock yields 0, which expires every continuation rather
-/// than minting one that never expires.
+/// A clock that reads before 1970 is [`ContinuationError::Expired`]
+/// (MIK-8202): an open refuses rather than judge a deadline against a clock it
+/// cannot read, and a mint is refused rather than stamped `issued_at = 0`.
+pub(crate) fn clock_now() -> Result<u64, ContinuationError> {
+    crate::clock::unix_secs().map_err(|_| ContinuationError::Expired)
+}
+
+/// The real clock, for tests that mint against now.
+#[cfg(test)]
 pub(crate) fn now_unix_secs() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
+    crate::clock::unix_secs().expect("a test host clock reads after 1970")
 }
 
 impl Payload {

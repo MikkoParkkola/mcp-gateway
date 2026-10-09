@@ -149,7 +149,7 @@ async fn tail(meta: &MetaMcp, tool: &str, args: Value) -> JsonRpcResponse {
     meta.dispatch_below_gate(
         RequestId::Number(7),
         tool,
-        args,
+        std::borrow::Cow::Owned(args),
         Some(SESSION),
         &context(&retry),
         false,

@@ -278,7 +278,7 @@ impl MetaMcp {
         // then "decline" would fingerprint identically, and the decline would
         // be served the acceptance.
         let idem_fingerprint = idem_key.as_ref().map(|_| {
-            let base = derive_key(&format!("{server}:{tool}"), &arguments);
+            let base = derive_key(&tool_key, &arguments);
             let discriminator = caller.retry.key_discriminator();
             format!("{base}{discriminator}")
         });

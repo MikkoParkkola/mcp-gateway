@@ -26,7 +26,7 @@ mod identity_grant_doc_tests;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use chrono::{Duration as ChronoDuration, Utc};
+use chrono::Utc;
 
 use super::BackendRegistry;
 use super::MetaMcp;
@@ -224,7 +224,7 @@ async fn t8b_a_reordered_file_must_not_read_as_a_change() {
 fn t11_guard_expiry_is_live_without_any_reload() {
     let subject = GrantSubject::new("https://idp".to_string(), "alice".to_string(), None);
     let mut expiring = grant("g1", "alice", "cal");
-    expiring.expires_at = Some(Utc::now() + ChronoDuration::seconds(60));
+    expiring.expires_at = Some(Utc::now() + crate::duration_bound::delta!(seconds, 60));
     let store = LocalIdentityGrantStore::from_grants([expiring]);
 
     let request = |now| IdentityGrantRequest {
@@ -248,7 +248,9 @@ fn t11_guard_expiry_is_live_without_any_reload() {
     // Only the clock moves. No reload, no publish, no epoch bump.
     assert!(
         !store
-            .evaluate(&request(Utc::now() + ChronoDuration::seconds(120)))
+            .evaluate(&request(
+                Utc::now() + crate::duration_bound::delta!(seconds, 120)
+            ))
             .allowed,
         "T11: an elapsed expiry must deny with no reload at all"
     );
@@ -340,7 +342,7 @@ async fn t3b_a_grant_file_write_is_never_observable_as_a_valid_prefix() {
 // -------------------------------------------------------------------------
 
 fn revoked(mut row: IdentityGrant) -> IdentityGrant {
-    row.revoked_at = Some(Utc::now() - ChronoDuration::seconds(1));
+    row.revoked_at = Some(Utc::now() - crate::duration_bound::delta!(seconds, 1));
     row
 }
 

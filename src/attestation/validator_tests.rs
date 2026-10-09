@@ -9,7 +9,7 @@ fn validator() -> AttestationValidator {
         BnautAttestationSigner::new(b"validator-test-key".to_vec(), "unit")
             .with_audience("test-gateway"),
         8,
-        TimeDelta::seconds(30),
+        crate::duration_bound::delta!(seconds, 30),
     )
 }
 
@@ -94,7 +94,7 @@ fn issue(now: DateTime<Utc>) -> AttestationToken {
             capabilities: vec!["cap".to_string()],
         },
         now,
-        TimeDelta::minutes(10),
+        crate::duration_bound::delta!(minutes, 10),
     )
 }
 
@@ -168,7 +168,7 @@ fn wildcard_capability_grants_any_action() {
             capabilities: vec!["*".to_string()],
         },
         now,
-        TimeDelta::minutes(10),
+        crate::duration_bound::delta!(minutes, 10),
     );
     let v = validator();
     v.validate_boundary_call(Some(token.encoded()), "gateway_invoke", Some("write"), now)
@@ -180,7 +180,7 @@ fn expired_token_rejected() {
     let v = validator();
     let issued = Utc::now();
     let token = issue(issued);
-    let later = issued + TimeDelta::minutes(11);
+    let later = issued + crate::duration_bound::delta!(minutes, 11);
     let err = v
         .validate_boundary_call(Some(token.encoded()), "call", None, later)
         .unwrap_err();
@@ -213,7 +213,11 @@ fn checkpoint_round_trips_rotation_state() {
     let v = validator();
     let now = Utc::now();
     let token = issue(now);
-    let _successor = v.rotate(token.claims(), now, TimeDelta::minutes(10));
+    let _successor = v.rotate(
+        token.claims(),
+        now,
+        crate::duration_bound::delta!(minutes, 10),
+    );
     let checkpoint = v.checkpoint();
     assert_eq!(checkpoint.retiring.len(), 1);
     assert_eq!(checkpoint.retiring[0].token_id, token.claims().token_id);

@@ -30,7 +30,7 @@ use super::hash::compute_capability_hash;
 use super::schema_validator::validate_arguments;
 use super::{
     CapabilityDefinition, CapabilityExecutionContext, CapabilityExecutor, CapabilityLoader,
-    validate_capability_account_binding, validate_oauth_isolation,
+    validate_capability_account_binding, validate_cli_templates, validate_oauth_isolation,
     validate_personal_capability_identity,
 };
 use crate::Result;
@@ -687,13 +687,14 @@ impl CapabilityBackend {
     /// [`crate::Error::Config`] naming the unresolved reference, or the key the
     /// descriptor's provider requires.
     ///
-    /// Replacing a definition of the same name stops its `mcp` children on
-    /// the runtime that started them: keep that runtime driven, or drop it.
-    /// An idle runtime stops them only when it next runs. Dropping it ends
-    /// each child's process tree once no call still holds that child; a call
-    /// in flight elsewhere keeps it running until released (MIK-7923).
+    /// Replacing a definition of the same name ends its `mcp` children's
+    /// process trees at once, from any thread and without a Tokio runtime,
+    /// even when the runtime that started them is idle or gone and a call
+    /// still holds the child; that call fails, uncertain if it was already
+    /// sent (MIK-7923).
     pub fn register_capability(&self, capability: CapabilityDefinition) -> Result<()> {
         validate_capability_account_binding(&capability, self.executor.account_strategies())?;
+        validate_cli_templates(&capability)?;
         let name = capability.name.clone();
         let mut caps = self.capabilities.write();
         let replaced = caps.contains(&name);

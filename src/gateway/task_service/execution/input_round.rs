@@ -374,12 +374,21 @@ impl TaskExecutor {
             Ok(_) => return InputOutcome::NotOutstanding,
             Err(error) => return input_outcome_of(error),
         }
-        let (handoff, cancel_rx) =
-            match Handoff::accept_when_free(self, id, PRODUCE_SEAM_WAIT, waiting).await {
-                Acceptance::Owned(handoff, cancel_rx) => (handoff, cancel_rx),
-                Acceptance::Moved => return InputOutcome::NotOutstanding,
-                Acceptance::Busy => return InputOutcome::Busy,
-            };
+        // How long an update waits for the current owner: the produce seam's
+        // second, or what a test stretched it to.
+        #[cfg(test)]
+        let wait = self
+            .produce_seam_wait
+            .get()
+            .copied()
+            .unwrap_or(PRODUCE_SEAM_WAIT);
+        #[cfg(not(test))]
+        let wait = PRODUCE_SEAM_WAIT;
+        let (handoff, cancel_rx) = match Handoff::accept_when_free(self, id, wait, waiting).await {
+            Acceptance::Owned(handoff, cancel_rx) => (handoff, cancel_rx),
+            Acceptance::Moved => return InputOutcome::NotOutstanding,
+            Acceptance::Busy => return InputOutcome::Busy,
+        };
         // The write and the spawn run in one task that owns the handoff, the
         // permit and the cancel receiver, as `commit_and_run` does at create.
         // A dropped request future cannot then leave a committed `working`
@@ -585,8 +594,11 @@ fn rejected_after_expiry(response: &JsonRpcResponse, deadline: u64, now: u64) ->
             .is_some_and(|error| error.code == -32602 && error.message == expired.client_message())
 }
 
+/// `at` in the seconds round deadlines are kept in. Read only to compare
+/// against a deadline: a time before 1970 is a clock that cannot be read, and
+/// reads as past every deadline, never as before them (MIK-8202).
 fn unix_secs(at: chrono::DateTime<Utc>) -> u64 {
-    u64::try_from(at.timestamp()).unwrap_or(0)
+    u64::try_from(at.timestamp()).unwrap_or(u64::MAX)
 }
 
 impl TaskExecutor {

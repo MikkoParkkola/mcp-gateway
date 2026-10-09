@@ -236,6 +236,12 @@ impl TaskStore {
         &self,
         now: DateTime<Utc>,
     ) -> Vec<(String, u64, String, RoundClosed)> {
+        // A sweep on a clock before 1970 skips this pass rather than cancel
+        // every round it cannot date; the answer path still refuses them
+        // (MIK-8202).
+        if now.timestamp() < 0 {
+            return Vec::new();
+        }
         let state = self.0.state();
         if !state.ready {
             return Vec::new();
@@ -395,7 +401,14 @@ impl Shared {
         let (mut task, mut record) = self.read_owned(owner, id)?;
         // Read after the lock, never before: an update queued while the round
         // was open must not be let through once it has closed.
-        if let Some(closed) = closed_at(&task, &record, self.now()) {
+        let now = self.now();
+        // A clock before 1970 dates nothing: the update is refused for now,
+        // and the round is not closed, since closing cancels the task for
+        // good on a time it cannot read (MIK-8202).
+        if now.timestamp() < 0 {
+            return Err(StoreError::Unavailable);
+        }
+        if let Some(closed) = closed_at(&task, &record, now) {
             return Ok(ProvideOutcome::Closed(closed));
         }
         let outstanding = task.input_requests().ok_or(StoreError::InvalidTransition)?;
@@ -454,10 +467,23 @@ fn closed_at(task: &Task, record: &Record, now: DateTime<Utc>) -> Option<RoundCl
         .input_round
         .as_ref()
         .and_then(|round| round.continuation_deadline);
-    let now_secs = u64::try_from(now.timestamp()).unwrap_or(0);
+    // A time before 1970 is a clock that cannot be read: every deadline
+    // counts as passed, never as still ahead (MIK-8202).
+    let passed = |deadline: u64| {
+        u64::try_from(now.timestamp())
+            .ok()
+            .is_none_or(|now| now >= deadline)
+    };
+    // The task's lifetime too: a 1969 `now` would read a finite TTL as never
+    // reached, so it counts as elapsed (MIK-8202).
+    let before_epoch = now.timestamp() < 0;
     match deadline {
-        Some(deadline) if now_secs >= deadline => Some(RoundClosed::Continuation(deadline)),
-        _ if task.retention_elapsed(now) => Some(RoundClosed::Ttl),
+        Some(deadline) if passed(deadline) => Some(RoundClosed::Continuation(deadline)),
+        _ if before_epoch || task.retention_elapsed(now) => Some(RoundClosed::Ttl),
         _ => None,
     }
 }
+
+#[cfg(test)]
+#[path = "store_input_tests.rs"]
+mod tests;

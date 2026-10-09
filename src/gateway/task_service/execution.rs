@@ -191,6 +191,11 @@ pub struct TaskExecutor {
     /// Cancelled once, by a shutdown whose drain ran out; every worker runs
     /// under it ([`Self::spawn_worker`]).
     shutdown: tokio_util::sync::CancellationToken,
+    /// Test-only: replaces the produce-seam wait, so a test can tell "woken"
+    /// from "timed out" by whether an update answers at all, not by how long
+    /// it took (MIK-8222).
+    #[cfg(test)]
+    produce_seam_wait: std::sync::OnceLock<Duration>,
 }
 
 impl TaskExecutor {
@@ -212,6 +217,8 @@ impl TaskExecutor {
             publication_hook: std::sync::OnceLock::new(),
             managed: std::sync::OnceLock::new(),
             shutdown: tokio_util::sync::CancellationToken::new(),
+            #[cfg(test)]
+            produce_seam_wait: std::sync::OnceLock::new(),
         })
     }
 
@@ -383,6 +390,15 @@ impl TaskExecutor {
         self.handoffs.release_waiters()
     }
 
+    /// Test-only: an update waits up to `wait` for the current owner instead
+    /// of the produce-seam second. Set once per executor.
+    #[cfg(test)]
+    pub(crate) fn stretch_produce_seam_wait_for_test(&self, wait: Duration) {
+        self.produce_seam_wait
+            .set(wait)
+            .expect("the produce-seam wait is set once");
+    }
+
     /// Test-only: the recovery descriptor a dispatch made durable for `id`.
     ///
     /// The one seam through which a route-level regression can tell "the
@@ -481,8 +497,15 @@ impl TaskExecutor {
         // task; task-locals do not cross `tokio::spawn`.
         let worker = crate::gateway::meta_mcp::invoke::relay::collecting(worker);
         // MIK-8176: and owns the slots its mints take, through the durable
-        // write of what it settles.
-        let worker = crate::gateway::meta_mcp::sealed_hold::scoped(worker);
+        // write of what it settles. The scope must travel inside the spawned
+        // task, around the worker: a task-local does not cross `tokio::spawn`,
+        // so a scope opened outside the spawn would leave every mint unscoped.
+        // Dropping the worker on cancel (the select below) ends the scope and
+        // with it the holds.
+        let worker = crate::gateway::meta_mcp::sealed_hold::scoped(
+            crate::gateway::meta_mcp::sealed_hold::HoldPolicy::CountOnly,
+            worker,
+        );
         // Cancellation first on every poll (MIK-7839.CANCEL.3): tokio-util's
         // `run_until_cancelled_owned` polls the worker before the token, so a
         // worker cancelled while its runtime sat idle would take one more step

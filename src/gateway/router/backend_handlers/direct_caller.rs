@@ -185,6 +185,9 @@ pub(super) struct Envelope {
     /// `hardened_elicitation::classify_direct`: a modern request gets the
     /// 2026-07-28 result shape on the way out (MIK-8022).
     pub(super) era: crate::protocol::meta::Era,
+    /// What a modern request declared it can be asked (MIK-8089); nothing for
+    /// a legacy one, as on `/mcp`. Read from the same classification as `era`.
+    pub(super) declared: crate::protocol::meta::Declared,
 }
 
 /// Stage 2: read and parse the body, fill the D2-a audit slot, then refuse
@@ -274,6 +277,11 @@ pub(super) async fn read_envelope(
     // Every modern request reaching here passed the `/mcp` checks above, so
     // its reading is the era `/mcp` would answer in.
     let era = reading.0.era();
+    let declared = if era == crate::protocol::meta::Era::Modern {
+        reading.0.declared_capabilities()
+    } else {
+        crate::protocol::meta::Declared::NONE
+    };
     Ok(Envelope {
         json_request,
         attestation,
@@ -281,6 +289,7 @@ pub(super) async fn read_envelope(
         method,
         params,
         era,
+        declared,
     })
 }
 

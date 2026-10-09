@@ -116,7 +116,7 @@ async fn call_protected(config: ResolvedAuthConfig, bearer: &str) -> (StatusCode
 // E4-T5
 #[tokio::test]
 async fn expired_key_is_refused() {
-    let past = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+    let past = (chrono::Utc::now() - crate::duration_bound::delta!(seconds, 1)).to_rfc3339();
     let (status, reached) = call_protected(digest_key(Some(past)), KEY).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(!reached, "an expired key must publish no client");
@@ -125,7 +125,7 @@ async fn expired_key_is_refused() {
 // E4-T6 (positive control against an inverted comparison)
 #[tokio::test]
 async fn unexpired_key_is_accepted() {
-    let ahead = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    let ahead = (chrono::Utc::now() + crate::duration_bound::delta!(hours, 1)).to_rfc3339();
     let (status, reached) = call_protected(digest_key(Some(ahead)), KEY).await;
     assert_eq!(status, StatusCode::OK);
     assert!(reached);
@@ -144,4 +144,39 @@ fn resolved_auth_config_debug_shows_no_digest() {
         .unwrap_or(0);
     assert!(longest_hex_run < 64, "a digest leaked: {printed}");
     assert!(!printed.contains(&hex_of(KEY)[..13]), "{printed}");
+}
+
+/// MIK-8202: a clock before 1970 refuses an API key the real clock still admits.
+#[test]
+fn a_clock_before_the_epoch_refuses_a_live_api_key() {
+    let ahead = (chrono::Utc::now() + crate::duration_bound::delta!(hours, 1)).to_rfc3339();
+    let config = digest_key(Some(ahead));
+    assert!(
+        config.validate_token(KEY).is_some(),
+        "control: a key expiring in an hour authenticates on the real clock"
+    );
+
+    let _clock = crate::clock::test_clock::before_epoch();
+    assert!(
+        config.validate_token(KEY).is_none(),
+        "an unreadable clock admitted an API key"
+    );
+}
+
+/// MIK-8202: a clock before 1970 refuses a live key's work done on its behalf.
+#[test]
+fn a_clock_before_the_epoch_refuses_a_live_key_on_its_behalf() {
+    let ahead = (chrono::Utc::now() + crate::duration_bound::delta!(hours, 1)).to_rfc3339();
+    let config = digest_key(Some(ahead));
+    let principal = &hex_of(KEY)[..12];
+    assert!(
+        config.client_for_key("ops", principal).is_some(),
+        "control: a key expiring in an hour resolves on the real clock"
+    );
+
+    let _clock = crate::clock::test_clock::before_epoch();
+    assert!(
+        config.client_for_key("ops", principal).is_none(),
+        "an unreadable clock resolved an API key's caller"
+    );
 }

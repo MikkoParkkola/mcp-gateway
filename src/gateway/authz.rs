@@ -34,11 +34,12 @@ use super::auth::QuotaPrincipal;
 /// gain here.
 pub const HTTP_STATUS_DATA_KEY: &str = "gateway_http_status";
 
-/// A backend tool invocation, owned.
-pub(crate) struct OwnedToolTarget {
+/// A backend tool invocation: owned names, and the arguments borrowed from
+/// the request whenever they already exist there (MIK-8014: no per-call copy).
+pub(crate) struct CallTarget<'a> {
     pub server: String,
     pub tool: String,
-    pub arguments: Value,
+    pub arguments: std::borrow::Cow<'a, Value>,
 }
 
 /// A backend tool invocation, borrowed.
@@ -53,12 +54,12 @@ pub struct ToolTarget<'a> {
     pub arguments: &'a Value,
 }
 
-impl OwnedToolTarget {
+impl CallTarget<'_> {
     pub(crate) fn as_target(&self) -> ToolTarget<'_> {
         ToolTarget {
             server: &self.server,
             tool: &self.tool,
-            arguments: &self.arguments,
+            arguments: self.arguments.as_ref(),
         }
     }
 }
