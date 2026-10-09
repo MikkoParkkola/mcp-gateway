@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-7642.PR.B: a client's cancel reaches the backend as the backend's own
+//! `MIK-7642.PR.B`: a client's cancel reaches the backend as the backend's own
 //! request id, at most once, and never after the backend answered.
 //!
 //! Driven through `Gateway::run_stdio_on` over in-memory pipes, against a
