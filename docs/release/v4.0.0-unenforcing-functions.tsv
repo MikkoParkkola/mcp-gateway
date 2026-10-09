@@ -31,3 +31,10 @@ src/gateway/task_service/store_targets.rs	bounded	1	The constant bounded-failure
 src/transport/stdio.rs	diagnostic_command	1	Forwards to summarize_stdio_command for logs
 src/oauth/callback.rs	unbracketed	1	Strips IPv6 brackets before parsing; the loopback decision is loopback_literal (critical row)
 src/oauth/callback.rs	url_host	1	Names the redirect URI host from a literal loopback_literal already validated; binds and refuses nothing (MIK-7739)
+src/transport/http/listen.rs	carried_session	1	Reads the session id header an outgoing stream open carried
+src/transport/http/listen.rs	refused	1	Maps a refused stream-open status; on 404 hands the carried session to the heal
+src/transport/http/listen.rs	session_expired	1	Drops an expired shared session id and re-handshakes; transport recovery, no access decision
+src/transport/http/listen.rs	reinit_if_needed	1	Re-runs initialize after a dropped session; transport recovery
+src/transport/http/listen.rs	legacy_pin	1	Names the holder (transport and HTTP session) a legacy subscribe lands on, for the ledger
+src/transport/http/listen.rs	legacy_interest	1	Sends resources/subscribe or unsubscribe pinned to one session; no access decision
+src/transport/http/listen.rs	unsolicited	1	Opens the legacy notification stream with its URI filter; delivery is authorized downstream

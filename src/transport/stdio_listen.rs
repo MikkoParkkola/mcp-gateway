@@ -12,7 +12,8 @@ use super::StdioTransport;
 use crate::transport::Transport;
 use crate::transport::http::modern_listen_params;
 use crate::transport::upstream_tap::{
-    FrameStream, Refused, Requested, UpstreamListen, listen_filter,
+    FrameStream, LegacyPin, Refused, Requested, UpstreamListen, Watched, interest_method,
+    listen_filter,
 };
 
 /// Ends a listen upstream when its stream is dropped: stop routing to it and
@@ -63,7 +64,18 @@ impl UpstreamListen for StdioTransport {
         Ok(FrameStream::guarded(rx, guard))
     }
 
-    async fn unsolicited(self: Arc<Self>) -> Result<FrameStream, Refused> {
-        Ok(FrameStream::new(self.taps.unsolicited()))
+    async fn unsolicited(self: Arc<Self>, watched: Watched) -> Result<FrameStream, Refused> {
+        Ok(FrameStream::new(self.taps.unsolicited(watched)))
+    }
+
+    /// The process is the holder: a call on it lands nowhere else.
+    async fn legacy_interest(
+        self: Arc<Self>,
+        _pin: LegacyPin,
+        uri: &str,
+        subscribe: bool,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        self.request(interest_method(subscribe), Some(json!({ "uri": uri })))
+            .await
     }
 }
