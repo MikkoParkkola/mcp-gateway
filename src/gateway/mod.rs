@@ -76,6 +76,10 @@ pub(crate) use server::StdioNonce;
 /// The declared account catalogue, for `cap list`'s readiness answer; crate-only.
 pub(crate) use server::account_bindings::declare_account_descriptors;
 pub(crate) use server::account_bindings::{ServeMode, sole_operator_asserted};
+/// The test-only allocation meter, for allocation rows outside `gateway`
+/// (`MIK-8201`), without `server` becoming crate-visible.
+#[cfg(test)]
+pub(crate) use server::signing_allocation_tests::alloc_meter;
 pub(crate) mod session_id;
 pub mod session_lifecycle;
 pub mod state;

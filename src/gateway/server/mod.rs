@@ -32,7 +32,7 @@ mod remote_provenance_start_tests;
 mod replica_state_tests;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
-mod signing_allocation_tests;
+pub(crate) mod signing_allocation_tests;
 mod start_checks;
 mod stdio_catalogue;
 mod stdio_channel;

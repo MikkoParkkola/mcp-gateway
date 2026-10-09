@@ -408,3 +408,62 @@ fn concurrent_cut_deliveries_publish_at_distinct_positions() {
         "positions collided or a sketch was lost"
     );
 }
+
+/// `MIK-8206`: a caller's sketches from other sources are found through the
+/// by-caller index, never another caller's, and the index empties with them.
+#[test]
+fn sketches_from_elsewhere_are_found_by_caller() {
+    let now = Instant::now();
+    let window = secs(600);
+    let fps = values(90, 10);
+    let mut store = SketchStore::default();
+    assert!(store.insert((2, 9), &fps, now));
+    assert!(store.held_from_elsewhere((1, 9), fps[0], now, window));
+    assert!(
+        !store.held_from_elsewhere((2, 9), fps[0], now, window),
+        "own source"
+    );
+    assert!(
+        !store.held_from_elsewhere((1, 8), fps[0], now, window),
+        "other caller"
+    );
+    store.sweep(now + secs(700), window);
+    assert!(
+        store.by_caller.is_empty(),
+        "the index outlived its sketches"
+    );
+}
+
+/// The by-caller index follows every removal path: one source's sketch
+/// expiring leaves the other's entry, and a refused or abandoned
+/// reservation leaves none.
+#[test]
+fn the_caller_index_follows_every_removal() {
+    let now = Instant::now();
+    let window = secs(600);
+    let (early, late) = (values(91, 10), values(92, 10));
+    let mut store = SketchStore::default();
+    assert!(store.insert((1, 9), &early, now));
+    assert!(store.insert((2, 9), &late, now + secs(200)));
+    store.sweep(now + secs(700), window);
+    let at = now + secs(700);
+    assert!(store.held_from_elsewhere((3, 9), late[0], at, window));
+    assert_eq!(
+        store.by_caller.get(&9).map(std::collections::HashSet::len),
+        Some(1),
+        "the expired source stayed indexed"
+    );
+    let mut refusing = SketchStore::with_caps(64, 64);
+    assert!(!refusing.insert((1, 7), &early, now), "premise: refused");
+    assert!(
+        refusing.by_caller.is_empty(),
+        "a refused pair stayed indexed"
+    );
+    let mut abandoning = SketchStore::default();
+    let reservation = abandoning.reserve((1, 6), 10).expect("fits");
+    abandoning.abandon(&reservation);
+    assert!(
+        abandoning.by_caller.is_empty(),
+        "an abandoned pair stayed indexed"
+    );
+}
