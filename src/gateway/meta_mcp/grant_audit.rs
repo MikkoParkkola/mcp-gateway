@@ -587,10 +587,17 @@ impl super::MetaMcp {
     ) -> JsonRpcResponse {
         // MIK-7996: held to this dispatch's last write, on every exit path.
         let _session = self.hold_session(target.session_id);
-        let (logger, id) = (self.transparency_logger.as_ref(), target.id.clone());
+        let logger = self.transparency_logger.as_ref();
+        // A slot opens only with a log and none open (the HTTP handler opens
+        // one first): otherwise the wrap would box and clone for nothing.
+        let opens_slot = logger.is_some() && GRANT_SLOT.try_with(|_| ()).is_err();
+        let id = opens_slot.then(|| target.id.clone());
         let answer: Pin<Box<dyn Future<Output = JsonRpcResponse> + Send + '_>> =
             Box::pin(self.dispatch_below_gate_shaped_in_slot(target, shape, confirmed_in_band));
-        slot_rpc(logger, id, async { (answer.await, ()) }).await.0
+        match id {
+            Some(id) => slot_rpc(logger, id, async { (answer.await, ()) }).await.0,
+            None => answer.await,
+        }
     }
 }
 
