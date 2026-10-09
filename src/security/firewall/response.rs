@@ -146,8 +146,9 @@ fn protected_value_changed(
     match mutation {
         ResponseMutationPolicy::Immutable => original != inspected,
         ResponseMutationPolicy::PreserveInputRequired => {
-            original.get("inputRequests") != inspected.get("inputRequests")
-                || original.get("requestState") != inspected.get("requestState")
+            crate::security::response_policy::INTERIM_MEMBERS
+                .iter()
+                .any(|member| original.get(member) != inspected.get(member))
         }
         ResponseMutationPolicy::Redact => false,
     }

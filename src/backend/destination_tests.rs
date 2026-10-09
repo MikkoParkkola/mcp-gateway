@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use super::stop_race_tests::within;
 use super::{Backend, BackendRegistry};
 use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
 use crate::security::ssrf::DestinationPolicy;
@@ -525,7 +526,11 @@ fn a_start_built_before_the_stamp_is_not_published() {
     backend.stamp_destination(DestinationPolicy::Public);
     let entry = backend.shared_entry();
     let started: Arc<dyn crate::transport::Transport> = Arc::new(Started(Arc::default()));
-    assert!(backend.publish(&entry, &started, built_under).is_err());
+    assert!(
+        backend
+            .publish(&entry, (&started, None), built_under)
+            .is_err()
+    );
     assert!(
         backend
             .pooled_transport_for_test(&super::PoolKey::Shared)
@@ -533,7 +538,7 @@ fn a_start_built_before_the_stamp_is_not_published() {
     );
     assert!(
         backend
-            .publish(&entry, &started, DestinationPolicy::Public)
+            .publish(&entry, (&started, None), DestinationPolicy::Public)
             .is_ok()
     );
 }
@@ -635,13 +640,6 @@ async fn a_start_refused_before_connecting_does_not_block_a_hardened_pairing() {
         assert!(pair_hardened(registry).is_ok(), "{kind}");
         assert_eq!(backend.destination(), DestinationPolicy::Public, "{kind}");
     }
-}
-
-/// Bounds a wait in a window test, so a regression fails instead of hanging.
-async fn within<T>(what: &str, wait: impl std::future::Future<Output = T>) -> T {
-    tokio::time::timeout(Duration::from_secs(30), wait)
-        .await
-        .unwrap_or_else(|_| panic!("{what} did not happen within 30s"))
 }
 
 /// A loopback HTTP backend with its own OAuth client enabled.

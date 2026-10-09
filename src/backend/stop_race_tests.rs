@@ -41,7 +41,8 @@ async fn upstream() -> String {
     url
 }
 
-async fn within<T>(what: &str, wait: impl std::future::Future<Output = T>) -> T {
+/// Bounds a wait in a window test, so a regression fails instead of hanging.
+pub(super) async fn within<T>(what: &str, wait: impl std::future::Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(30), wait)
         .await
         .unwrap_or_else(|_| panic!("{what} did not happen within 30s"))

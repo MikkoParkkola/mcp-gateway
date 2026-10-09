@@ -349,6 +349,7 @@ mod tests {
     async fn a_failed_discovery_fetch_does_not_echo_the_url() {
         // Bound for the whole test but never listening: a connection is
         // refused, and no parallel test can bind the port in between (MIK-7984).
+        // macOS drops the connection attempt instead, so there it times out.
         let closed = tokio::net::TcpSocket::new_v4().unwrap();
         closed.bind("127.0.0.1:0".parse().unwrap()).unwrap();
         let base = format!("http://{}", closed.local_addr().unwrap());
@@ -363,7 +364,12 @@ mod tests {
         for error in [server, resource] {
             let text = error.to_string();
             assert!(!text.contains(authority), "the URL is echoed: {text}");
-            assert!(text.ends_with(": connection failed"), "{text}");
+            let category = if cfg!(target_os = "macos") {
+                ": timeout"
+            } else {
+                ": connection failed"
+            };
+            assert!(text.ends_with(category), "{text}");
         }
     }
 

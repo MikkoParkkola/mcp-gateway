@@ -62,6 +62,8 @@ mod direct_route_identity;
 mod mik7642_disconnect;
 mod origin_gate;
 mod playbook_authz;
+/// MIK-8158: no authorization server, no protected-resource metadata.
+mod prm_without_issuer;
 mod request_parsing;
 mod responses;
 mod session_hold_direct;

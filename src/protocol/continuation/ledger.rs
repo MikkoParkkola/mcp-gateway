@@ -143,18 +143,37 @@ pub struct InFlight {
     capacity: usize,
     /// key -> (replica holding it, deadline).
     held: tokio::sync::Mutex<std::collections::HashMap<String, (String, u64)>>,
+    /// A lower bound on the earliest deadline held (`u64::MAX` when none), so
+    /// a reader skips the walk when nothing can have expired (`MIK-8060`).
+    /// Written only under `held`'s lock: `hold` lowers it, a walk sets it to
+    /// the exact minimum, and `complete` leaves it, which keeps it a bound.
+    earliest: std::sync::atomic::AtomicU64,
+    /// How many times a reader walked the whole table to reclaim (`MIK-8060`).
+    #[cfg(test)]
+    walks: std::sync::atomic::AtomicUsize,
+    /// key -> the request digest of the chain step paused on that exchange
+    /// (MIK-8168). Crate-internal, and never longer-lived than its hold.
+    steps: parking_lot::Mutex<std::collections::HashMap<String, String>>,
 }
 
-/// Drop exchanges whose deadline has passed.
+/// Drop exchanges whose deadline has passed, returning the earliest deadline
+/// left (`u64::MAX` when none).
 ///
 /// A free function rather than a method because [`InFlight::guard`] calls it
 /// while already holding the lock.
 pub(super) fn reclaim_abandoned(
     held: &mut std::collections::HashMap<String, (String, u64)>,
     now: u64,
-) {
+) -> u64 {
     let before = held.len();
-    held.retain(|_, (_, deadline)| now <= *deadline);
+    let mut earliest = u64::MAX;
+    held.retain(|_, (_, deadline)| {
+        let live = now <= *deadline;
+        if live {
+            earliest = earliest.min(*deadline);
+        }
+        live
+    });
     let evicted = before - held.len();
     if evicted > 0 {
         // The only trace this event leaves. A client refused for presenting a
@@ -167,6 +186,7 @@ pub(super) fn reclaim_abandoned(
         telemetry_metrics::counter!("continuation_expiry_total", "reason" => "hold_evicted")
             .increment(evicted as u64);
     }
+    earliest
 }
 
 impl InFlight {
@@ -177,6 +197,10 @@ impl InFlight {
             replica: replica.to_string(),
             capacity,
             held: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+            earliest: std::sync::atomic::AtomicU64::new(u64::MAX),
+            #[cfg(test)]
+            walks: std::sync::atomic::AtomicUsize::new(0),
+            steps: parking_lot::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -200,6 +224,8 @@ impl InFlight {
         // backend must not collide, and no caller may name another's.
         let key = format!("{backend_id}:{}", uuid::Uuid::new_v4());
         held.insert(key.clone(), (self.replica.clone(), expires_at));
+        self.earliest
+            .fetch_min(expires_at, std::sync::atomic::Ordering::Relaxed);
         Some(key)
     }
 
@@ -226,7 +252,19 @@ impl InFlight {
         now: u64,
     ) -> tokio::sync::MutexGuard<'_, std::collections::HashMap<String, (String, u64)>> {
         let mut held = self.held.lock().await;
-        reclaim_abandoned(&mut held, now);
+        // Nothing held expires before the bound, so nothing can be reclaimed:
+        // a full table would otherwise cost a walk of every hold per call.
+        let earliest = &self.earliest;
+        if earliest.load(std::sync::atomic::Ordering::Relaxed) < now {
+            #[cfg(test)]
+            self.walks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let left = reclaim_abandoned(&mut held, now);
+            earliest.store(left, std::sync::atomic::Ordering::Relaxed);
+            // A paused chain's step digest lives exactly as long as its hold, so
+            // an abandoned chain (its hold expired) leaves nothing behind either.
+            // Only a walk removes holds here; `complete` drops its own step.
+            self.steps.lock().retain(|key, _| held.contains_key(key));
+        }
         held
     }
 
@@ -263,7 +301,30 @@ impl InFlight {
     /// ones that completed long ago. Reaping is the backstop for abandonment,
     /// not the ordinary path — the ordinary path is that an exchange ends.
     pub async fn complete(&self, key: &str, now: u64) -> bool {
-        self.guard(now).await.remove(key).is_some()
+        let removed = self.guard(now).await.remove(key).is_some();
+        self.steps.lock().remove(key);
+        removed
+    }
+
+    /// Remember the chain step paused on its exchange (MIK-8168): its request
+    /// digest, which binds the backend instance that asked. Synchronous
+    /// because the chain driver seals a stop synchronously; the entry goes
+    /// with its hold, on completion or on the next reclaim after expiry.
+    pub(crate) fn bind_step(&self, step: &Payload) {
+        let digest = step.original_request_digest.clone();
+        self.steps.lock().insert(step.hold_key.clone(), digest);
+    }
+
+    /// The step digest [`Self::bind_step`] recorded, while its exchange is
+    /// still held.
+    pub(crate) async fn step_digest(&self, key: &str, now: u64) -> Option<String> {
+        // Checked against the table, not left to the reclaim pass: a skipped
+        // walk (`MIK-8060`) must not let a step outlive its hold.
+        let held = self.guard(now).await;
+        if !held.contains_key(key) {
+            return None;
+        }
+        self.steps.lock().get(key).cloned()
     }
 
     /// How many exchanges are held, as of `now`.

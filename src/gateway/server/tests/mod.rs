@@ -36,6 +36,8 @@ mod collusion_stdio;
 mod collusion_stdio_delivered;
 #[cfg(feature = "firewall")]
 mod collusion_stdio_plan;
+#[cfg(feature = "firewall")]
+mod egress_matrix_stdio;
 mod r2_stdio_keys;
 mod stdio_cache_scope;
 mod stdio_listing_scope;

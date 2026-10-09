@@ -1,0 +1,29 @@
+path	item	portable	reason
+.github/workflows/ci.yml	a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result	n/a	Skipped by the Tests job too: needs Python and Redis, which only the task-sdk-recovery job provisions (MIK-7534).
+.github/workflows/ci.yml	mik_7479_full_burst	n/a	Skipped by the Tests job too: runs in full in mrtr7b-full-burst.yml (MIK-7479).
+src/config_reload/watch_chain_filter_tests.rs	real_watcher	no-port-yet	Real-watcher rows are written against inotify event shapes (W-L9); the macOS watcher backend is not exercised.
+src/config_reload/watch_chain_tests.rs	real_watcher	no-port-yet	Real-watcher rows are written against inotify event shapes (W-L9); the macOS watcher backend is not exercised.
+src/gateway/server/warmstart/hot_reload_tests.rs	http_a_backend_added_by_a_watched_edit_is_warmed	no-port-yet	Drives the real config watcher, as the real-watcher rows (inotify).
+src/gateway/task_service/store_tests/durability.rs	open_refuses_a_lease_it_cannot_inspect_and_creates_none	inherent	Builds a path at the Linux PATH_MAX (4096); macOS PATH_MAX is 1024, so the fixture cannot be made the same way.
+src/personal_accounts/store_tests.rs	record_lookup_child	no-port-yet	Child-process entrypoint of the record-FIFO regression below; ignored on every platform.
+src/personal_accounts/store_tests.rs	s03_fifo_record_refuses_promptly_without_blocking_lookup	no-port-yet	Record-FIFO regression uses mkfifo and a bounded child process (W-L8); macOS has FIFOs, the harness is Linux-only.
+src/personal_accounts/tests.rs	fifo	no-port-yet	Authority-FIFO regression module, same harness as the record-FIFO row (W-L8).
+src/transport/stdio_frame_tests.rs	close_returns_when_an_escaped_reader_keeps_a_write_stuck	no-port-yet	Escaped-reader process-group case (MIK-8079); macOS process-group behaviour differs and is MIK-8080's subject.
+src/transport/stdio_frame_tests.rs	dropping_the_transport_ends_a_write_stuck_on_an_escaped_reader	no-port-yet	Escaped-reader process-group case (MIK-8079); macOS process-group behaviour differs and is MIK-8080's subject.
+tests/cli_broken_pipe.rs	any_other_stdout_error_still_fails	inherent	Writes to /dev/full for ENOSPC; macOS has no /dev/full.
+tests/dashboard_link_cli.rs	a_named_ca_replaces_the_system_roots	no-port-yet	Sets the system roots through SSL_CERT_FILE, which only Linux reads; macOS uses its keychain. Port tracked in MIK-8188.
+src/config_reload/mod.rs	reload_warm_hook_tests	no-port-yet	Real-watcher reload-warm rows, written against inotify like the other real-watcher rows; port tracked in MIK-8181.
+src/config_reload/mod.rs	env_poll_e2e_tests	no-port-yet	Env-file polling end-to-end rows driven by the real watcher (inotify, W-L9); port tracked in MIK-8181.
+tests/mik_7630_events_admin.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
+tests/mik_7630_events_delivery.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
+tests/mik_7630_events_delivery_lifecycle.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
+tests/mik_7630_events_delivery_safety.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
+tests/mik_7630_events_delivery_store.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
+tests/mik_7630_events_governance.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
+tests/mik_7630_events_reconcile.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
+tests/mik_7630_events_sources.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
+tests/mik_7630_events_sso_replay.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
+tests/mik_7630_events_subscribe.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
+tests/mik_7630_events_upstream.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
+tests/mik_7969_events_detected.rs	*	no-port-yet	Whole file: trusts its test CA through SSL_CERT_FILE, which the gateway honours only on Unix other than Apple; port tracked in MIK-8188.
+tests/task_crash_boundaries.rs	*	no-port-yet	Whole file: unix SIGKILL plus test CA trust through SSL_CERT_FILE (honoured only on Unix other than Apple); port tracked in MIK-8188.

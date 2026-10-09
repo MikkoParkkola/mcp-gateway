@@ -34,7 +34,7 @@ use crate::{Error, Result};
 pub(super) async fn mint_continuation(
     continuation: &crate::protocol::continuation::ContinuationState,
     source: crate::protocol::mrtr::PrincipalSource<'_>,
-    server: &str,
+    (server, instance): (&str, Option<u64>),
     tool: &str,
     arguments: &Value,
     backend_request_state: Option<String>,
@@ -44,7 +44,11 @@ pub(super) async fn mint_continuation(
             server.to_string(),
             backend_request_state,
             crate::protocol::mrtr::source_fingerprint(source)?,
-            crate::protocol::mrtr::original_request_digest(server, tool, arguments),
+            crate::protocol::mrtr::original_request_digest(
+                &continuation_target(server, instance),
+                tool,
+                arguments,
+            ),
             crate::protocol::continuation::now_unix_secs(),
         )
         .await
@@ -305,7 +309,7 @@ pub(super) async fn redeem_retry(
         crate::protocol::mrtr::PrincipalSource<'_>,
         &crate::protocol::mrtr::RetryFields,
     ),
-    server: &str,
+    (server, instance): (&str, Option<u64>),
     tool: &str,
     arguments: &Value,
 ) -> Result<OutboundRetry> {
@@ -364,7 +368,11 @@ pub(super) async fn redeem_retry(
     payload
         .redeemable_by(
             &fingerprint,
-            &crate::protocol::mrtr::original_request_digest(server, tool, arguments),
+            &crate::protocol::mrtr::original_request_digest(
+                &continuation_target(server, instance),
+                tool,
+                arguments,
+            ),
         )
         .map_err(|error| {
             warn!(server, tool, %error, "Continuation not redeemable by this caller");
@@ -423,6 +431,19 @@ pub(super) async fn redeem_retry(
         request_state: payload.backend_request_state,
         input_responses,
     })
+}
+
+/// What a continuation's request digest names as its backend (MIK-8168): the
+/// server name and the instance of the backend object that asked, or is about
+/// to be sent the retry, length-prefixed so no name can imitate another
+/// name's instance. `-` when the call has no backend object (a capability).
+/// A reload that replaces the backend under the same name changes it, so the
+/// old round cannot be redeemed to the new backend.
+pub(crate) fn continuation_target(server: &str, instance: Option<u64>) -> String {
+    match instance {
+        Some(instance) => format!("{}:{server}:{instance}", server.len()),
+        None => format!("{}:{server}:-", server.len()),
+    }
 }
 
 /// MRTR.2a for any result that is not a usable round
@@ -516,7 +537,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
     pub(crate) async fn redeem_direct_retry(
         &self,
         who: DirectCaller<'_>,
-        (server, sent): (&str, Option<&Value>),
+        (server, instance, sent): (&str, Option<u64>, Option<&Value>),
         outbound: &mut Value,
     ) -> Result<()> {
         let retry = crate::protocol::mrtr::RetryFields::from_params(sent);
@@ -525,7 +546,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
         let redeemed = redeem_retry(
             &self.continuation,
             (source, &retry),
-            server,
+            (server, instance),
             tool,
             &arguments,
         )
@@ -559,7 +580,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
     pub(crate) async fn seal_direct_interim(
         &self,
         who: DirectCaller<'_>,
-        (server, sent): (&str, Option<&Value>),
+        (server, instance, sent): (&str, Option<u64>, Option<&Value>),
         result: &mut Value,
     ) -> Result<Option<(String, String)>> {
         let Some(interim) = crate::protocol::mrtr::InputRequired::from_result(result) else {
@@ -571,7 +592,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
         let Some((envelope, hold_key)) = mint_continuation(
             &self.continuation,
             source,
-            server,
+            (server, instance),
             tool,
             &arguments,
             interim.request_state,
@@ -602,9 +623,9 @@ impl crate::gateway::meta_mcp::MetaMcp {
         self.continuation = std::sync::Arc::new(state);
     }
 
-    /// Give back the slot of a question sealed on the direct route unless
-    /// `delivered`, the answer that leaves, still carries it
-    /// ([`release_unless_carried`]).
+    /// Give back the slot of a sealed question unless `delivered`, the answer
+    /// that leaves, still carries it ([`release_unless_carried`]): the direct
+    /// route after its tail, `/mcp` and stdio after their delivery scan.
     pub(crate) async fn release_direct_hold(
         &self,
         sealed: Option<(String, String)>,

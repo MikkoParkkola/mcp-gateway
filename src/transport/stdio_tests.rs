@@ -248,6 +248,13 @@ fn backend_subprocess_receives_only_safe_and_explicit_environment() {
             PARENT_SECRET_ENV,
             "dummy-parent-secret-must-not-reach-backend",
         )
+        // The operator's npm settings — in both spellings npm reads — plus a
+        // credential that no backend's config names, plus a setting the backend
+        // below names for itself in the other spelling.
+        .env("npm_config_allow_git", "all")
+        .env("NPM_CONFIG_PREFER_OFFLINE", "1")
+        .env("npm_config__auth", "must-not-reach-a-backend")
+        .env("npm_config_strict_ssl", "false")
         .output()
         .expect("run isolated child-environment scenario");
 
@@ -290,15 +297,27 @@ case "$request" in
         home_present=false
         tmpdir_present=false
         cwd_preserved=false
+        npm_setting_present=false
+        npm_upper_setting_present=false
+        npm_credential_present=false
+        operator_strict_ssl_present=false
+        backend_strict_ssl_present=false
         [ "${MCP_GATEWAY_TEST_PARENT_SECRET+x}" = x ] && parent_secret_present=true
         [ "${MCP_GATEWAY_TEST_EXPLICIT_BACKEND:-}" = configured-value ] && explicit_backend_present=true
         [ -n "${PATH:-}" ] && path_present=true
         [ -n "${HOME:-}" ] && home_present=true
         [ -n "${TMPDIR:-}" ] && tmpdir_present=true
         [ -f server.sh ] && cwd_preserved=true
-        printf '{"jsonrpc":"2.0","id":2,"result":{"parent_secret_present":%s,"explicit_backend_present":%s,"path_present":%s,"home_present":%s,"tmpdir_present":%s,"cwd_preserved":%s}}\n' \
+        [ "${npm_config_allow_git:-}" = all ] && npm_setting_present=true
+        [ "${NPM_CONFIG_PREFER_OFFLINE:-}" = 1 ] && npm_upper_setting_present=true
+        [ "${npm_config__auth+x}" = x ] && npm_credential_present=true
+        [ "${npm_config_strict_ssl+x}" = x ] && operator_strict_ssl_present=true
+        [ "${NPM_CONFIG_STRICT_SSL:-}" = true ] && backend_strict_ssl_present=true
+        printf '{"jsonrpc":"2.0","id":2,"result":{"parent_secret_present":%s,"explicit_backend_present":%s,"path_present":%s,"home_present":%s,"tmpdir_present":%s,"cwd_preserved":%s,"npm_setting_present":%s,"npm_upper_setting_present":%s,"npm_credential_present":%s,"operator_strict_ssl_present":%s,"backend_strict_ssl_present":%s}}\n' \
             "$parent_secret_present" "$explicit_backend_present" "$path_present" \
-            "$home_present" "$tmpdir_present" "$cwd_preserved"
+            "$home_present" "$tmpdir_present" "$cwd_preserved" \
+            "$npm_setting_present" "$npm_upper_setting_present" "$npm_credential_present" \
+            "$operator_strict_ssl_present" "$backend_strict_ssl_present"
         ;;
 esac
 done
@@ -308,10 +327,15 @@ done
 
     let transport = StdioTransport::new(
         "sh server.sh",
-        HashMap::from([(
-            EXPLICIT_BACKEND_ENV.to_string(),
-            "configured-value".to_string(),
-        )]),
+        HashMap::from([
+            (
+                EXPLICIT_BACKEND_ENV.to_string(),
+                "configured-value".to_string(),
+            ),
+            // The operator exports the lowercase spelling of this one from the
+            // parent above; the backend deliberately picks the other.
+            ("NPM_CONFIG_STRICT_SSL".to_string(), "true".to_string()),
+        ]),
         Some(workspace.path().to_string_lossy().into_owned()),
         std::time::Duration::from_secs(5),
         None,
@@ -331,6 +355,30 @@ done
     assert_eq!(report["home_present"], true);
     assert_eq!(report["tmpdir_present"], true);
     assert_eq!(report["cwd_preserved"], true);
+    assert_eq!(
+        report["npm_setting_present"], true,
+        "a setting that decides whether a git-sourced dependency can install at all must reach \
+         the package manager the backend shells out to"
+    );
+    assert_eq!(
+        report["npm_upper_setting_present"], true,
+        "npm reads its environment case-insensitively, so the uppercase spelling is a setting too"
+    );
+    assert_eq!(
+        report["npm_credential_present"], false,
+        "the child environment stays what the config names: a credential the config does not name \
+         for this backend must not be inherited"
+    );
+    assert_eq!(
+        report["backend_strict_ssl_present"], true,
+        "a setting the backend names for itself must reach the package manager it spawns"
+    );
+    assert_eq!(
+        report["operator_strict_ssl_present"], false,
+        "the operator's other-spelling duplicate is not forwarded beside it: npm keeps the last \
+         value it reads, and the child environment is passed in sorted order, so forwarding the \
+         lowercase key would silently overrule the backend's explicit setting"
+    );
 }
 
 /// Is dropping every handle enough to reap the child, or does the reader
@@ -424,7 +472,7 @@ async fn stdio_streams_a_progress_notification_while_its_call_is_still_running()
     let reader = std::sync::Arc::clone(&transport);
     let (release, held) = tokio::sync::oneshot::channel::<()>();
 
-    let (call, mut rx) = crate::transport::notification_sink::scope(async move {
+    let (call, mut rx) = crate::transport::notification_sink::scope(None, async move {
         let _ = transport.register_progress_token("tok-a");
         tokio::spawn(async move {
             reader
@@ -455,7 +503,7 @@ async fn stdio_streams_a_progress_notification_while_its_call_is_still_running()
 async fn a_message_stamped_with_a_registered_progress_token_is_not_delivered() {
     let transport = make_transport("cat");
     let stamped = r#"{"jsonrpc":"2.0","method":"notifications/message","params":{"progressToken":"tok-a","level":"debug","data":"x"}}"#;
-    let (call, mut rx) = crate::transport::notification_sink::scope(async {
+    let (call, mut rx) = crate::transport::notification_sink::scope(None, async {
         let _ = transport.register_progress_token("tok-a");
         transport
             .handle_response(stamped)
@@ -484,14 +532,14 @@ async fn stdio_routes_a_progress_notification_to_only_the_call_that_supplied_the
     let transport = std::sync::Arc::new(make_transport("cat"));
     let reader = std::sync::Arc::clone(&transport);
 
-    let (call, mut tok_b_rx) = crate::transport::notification_sink::scope(async {
+    let (call, mut tok_b_rx) = crate::transport::notification_sink::scope(None, async {
         // tok-a's caller gets its own scope, so a misroute is visible. Both
         // registrations in one scope share a sender, and a frame delivered
         // to the wrong destination then arrives on the right receiver --
         // the isolation this row exists to prove would be unfalsifiable.
         // The sender is cloned into the map at registration, so it outlives
         // the scope that supplied it.
-        let (tok_a_call, tok_a_rx) = crate::transport::notification_sink::scope(async {
+        let (tok_a_call, tok_a_rx) = crate::transport::notification_sink::scope(None, async {
             let _ = transport.register_progress_token("tok-a");
         });
         tok_a_call.await;
@@ -543,42 +591,44 @@ async fn stdio_refuses_to_reroute_a_progress_token_that_is_already_live() {
     // are distinguishable. Registering twice inside one scope cannot tell
     // a refused insert from an overwriting one -- both would deliver to
     // the same receiver.
-    let (incumbent_call, mut incumbent_rx) = crate::transport::notification_sink::scope(async {
-        let _owner = ProgressRegistrationGuard::register(&transport, "tok-a");
+    let (incumbent_call, mut incumbent_rx) =
+        crate::transport::notification_sink::scope(None, async {
+            let _owner = ProgressRegistrationGuard::register(&transport, "tok-a");
 
-        let (newcomer_call, mut newcomer_rx) = crate::transport::notification_sink::scope(async {
-            let refused = ProgressRegistrationGuard::register(&transport, "tok-a");
+            let (newcomer_call, mut newcomer_rx) =
+                crate::transport::notification_sink::scope(None, async {
+                    let refused = ProgressRegistrationGuard::register(&transport, "tok-a");
+                    assert!(
+                        !refused.owns_registration,
+                        "a token already registered to a live call must be refused"
+                    );
+                });
+            newcomer_call.await;
+
+            // The refused guard has dropped by here. Its cleanup must not
+            // have retired the incumbent's route -- that would silence a
+            // call that is still open, the exact damage the refusal exists
+            // to prevent.
             assert!(
-                !refused.owns_registration,
-                "a token already registered to a live call must be refused"
+                newcomer_rx.try_recv().is_err(),
+                "the refused call must have been routed nothing"
             );
+            assert_eq!(
+                transport.progress_destinations.len(),
+                1,
+                "the refused guard must leave the incumbent's entry in place"
+            );
+
+            // Delivery runs off-scope on purpose: the sender has to travel
+            // in the map, not be read from the ambient task-local.
+            tokio::spawn(async move {
+                reader
+                    .handle_response(&progress_line("tok-a", 3))
+                    .expect("handling a progress frame must succeed");
+            })
+            .await
+            .expect("the reader task must not panic");
         });
-        newcomer_call.await;
-
-        // The refused guard has dropped by here. Its cleanup must not
-        // have retired the incumbent's route -- that would silence a
-        // call that is still open, the exact damage the refusal exists
-        // to prevent.
-        assert!(
-            newcomer_rx.try_recv().is_err(),
-            "the refused call must have been routed nothing"
-        );
-        assert_eq!(
-            transport.progress_destinations.len(),
-            1,
-            "the refused guard must leave the incumbent's entry in place"
-        );
-
-        // Delivery runs off-scope on purpose: the sender has to travel
-        // in the map, not be read from the ambient task-local.
-        tokio::spawn(async move {
-            reader
-                .handle_response(&progress_line("tok-a", 3))
-                .expect("handling a progress frame must succeed");
-        })
-        .await
-        .expect("the reader task must not panic");
-    });
     incumbent_call.await;
 
     let got = incumbent_rx
@@ -621,7 +671,7 @@ async fn stdio_delivers_a_notification_into_the_callers_sink() {
     let t = make_transport("cat");
     let params = serde_json::json!({ "_meta": { "progressToken": "tok-live" } });
 
-    let ((), drained) = crate::transport::notification_sink::collect(async {
+    let ((), drained) = crate::transport::notification_sink::collect(None, async {
         let token = request_progress_token(Some(&params)).expect("token");
         let _ = t.register_progress_token(&token);
         t.handle_response(&progress_line("tok-live", 3)).unwrap();
@@ -638,7 +688,7 @@ async fn stdio_delivers_a_notification_into_the_callers_sink() {
 async fn stdio_never_attributes_a_stray_token_to_an_open_call() {
     let t = make_transport("cat");
 
-    let ((), drained) = crate::transport::notification_sink::collect(async {
+    let ((), drained) = crate::transport::notification_sink::collect(None, async {
         let _ = t.register_progress_token("tok-mine");
         t.handle_response(&progress_line("tok-stray", 1)).unwrap();
     })
@@ -658,7 +708,7 @@ async fn stdio_request_retires_its_registration_even_when_the_write_fails() {
     let t = make_transport("cat"); // never connected: the write fails
     let params = serde_json::json!({ "_meta": { "progressToken": "tok-leak" } });
 
-    let (result, drained) = crate::transport::notification_sink::collect(async {
+    let (result, drained) = crate::transport::notification_sink::collect(None, async {
         t.request("tools/call", Some(params)).await
     })
     .await;
@@ -686,7 +736,7 @@ async fn stdio_request_retires_its_registration_even_when_the_write_fails() {
 async fn a_dropped_progress_registration_retires_its_destination() {
     // GIVEN a registration holding one captured notification.
     let t = make_transport("cat");
-    let ((), drained) = crate::transport::notification_sink::collect(async {
+    let ((), drained) = crate::transport::notification_sink::collect(None, async {
         let guard = ProgressRegistrationGuard::register(&t, "tok-cancel");
         t.handle_response(&progress_line("tok-cancel", 1)).unwrap();
 
@@ -714,7 +764,7 @@ async fn a_dropped_progress_registration_retires_its_destination() {
 async fn stdio_drops_a_progress_notification_no_caller_asked_for() {
     let t = make_transport("cat");
 
-    let ((), drained) = crate::transport::notification_sink::collect(async {
+    let ((), drained) = crate::transport::notification_sink::collect(None, async {
         let _ = t.register_progress_token("tok-a");
         t.handle_response(&progress_line("tok-stray", 3)).unwrap();
     })

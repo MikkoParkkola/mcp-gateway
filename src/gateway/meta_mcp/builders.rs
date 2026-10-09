@@ -247,61 +247,6 @@ impl MetaMcp {
         self.firewall = firewall;
     }
 
-    /// Inspect a `gateway_list_tools` / `gateway_search_tools` result once, on
-    /// the canonical value before it is serialised into `content[].text`
-    /// (OWASP ASI01 tool-poisoning, #2350). Detectors see the raw strings: an
-    /// escaped copy hides a quoted key or a split injection phrase from them.
-    /// A Block (or no admitting target) refuses the call; otherwise credentials
-    /// are redacted in place. The discovery arm then marks its response
-    /// (`JsonRpcResponse::discovery_inspected`, set after the meta-tool match,
-    /// never on a direct-name route), and the router, delivery and task passes
-    /// skip only a marked response: the mark, not the tool name, proves this
-    /// pass ran. Every Ok path of the three discovery handlers must call this.
-    ///
-    /// # Errors
-    /// [`Error::ResponseFirewallRefused`] when the verdict refuses.
-    #[cfg(feature = "firewall")]
-    pub(in crate::gateway) fn inspect_discovery_value(
-        &self,
-        value: &mut serde_json::Value,
-    ) -> Result<()> {
-        use crate::security::firewall::FirewallAction;
-        let Some(ref fw) = self.firewall else {
-            return Ok(());
-        };
-        let verdict = fw.check_response(
-            "meta:tools/list",
-            "gateway",
-            "tools/list",
-            value,
-            "meta-mcp",
-        );
-        if !verdict.allowed || verdict.action == FirewallAction::Block {
-            tracing::warn!(
-                findings = verdict.findings.len(),
-                "Firewall: discovery response blocked"
-            );
-            return Err(Error::ResponseFirewallRefused);
-        }
-        if verdict.action == FirewallAction::Warn {
-            tracing::warn!(
-                findings = verdict.findings.len(),
-                "Firewall: discovery response warning"
-            );
-        }
-        Ok(())
-    }
-
-    /// No discovery inspection when the `firewall` feature is disabled.
-    #[cfg(not(feature = "firewall"))]
-    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
-    pub(in crate::gateway) fn inspect_discovery_value(
-        &self,
-        _value: &mut serde_json::Value,
-    ) -> Result<()> {
-        Ok(())
-    }
-
     /// Attach a [`ReloadContext`] to enable the `gateway_reload_config` meta-tool.
     pub fn set_reload_context(&self, ctx: Arc<ReloadContext>) {
         *self.reload_context.write() = Some(ctx);

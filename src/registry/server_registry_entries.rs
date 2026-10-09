@@ -480,7 +480,9 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
         reach: Reach::Arbitrary {
             reason: ARBITRARY_REACH_REASON,
         },
-        setup: Setup::Ready,
+        setup: Setup::NeedsService {
+            hint: "a local Chrome install, current stable or newer",
+        },
     },
     RegistryEntry {
         name: "grafana",

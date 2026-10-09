@@ -20,6 +20,7 @@ use super::direct_failure::DirectFailure;
 use super::direct_preflight::{Preflight, Propagation};
 use super::{BackendAuthContext, sign_and_record};
 use crate::gateway::meta_mcp::invoke::dispatch_guards::{Admission, BackendCall};
+use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
 use crate::protocol::meta::Era;
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -224,7 +225,7 @@ pub(super) async fn admit<'a>(
         && let Err(e) = DirectRouteGuards::run(&state.meta_mcp, &call, preflight.signing_scope)
     {
         return Err(build_http_response(
-            &refusal(Some(id.clone()), &e),
+            &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
             StatusCode::OK,
         ));
     }
@@ -252,15 +253,17 @@ pub(super) async fn admit<'a>(
             crate::gateway::meta_mcp::invoke::audit::note_cached();
             // A replay is a delivery too: it renews this caller's own copy,
             // shaped for this request's era (MIK-8022).
-            let response = JsonRpcResponse::success(id.clone(), cached);
+            let mut response = JsonRpcResponse::success(id.clone(), cached);
+            replay_scan(state, (&admitted.call, envelope), client, &mut response);
             let auth = (admitted.auth, admitted.call.tool);
             let response = finish_tail(scope, envelope, preflight, auth, response);
-            return Err(build_http_response(&response, StatusCode::OK));
+            return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
         }
         Some(crate::idempotency::GuardOutcome::CachedError(error)) => {
             crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
-            let response = super::cached_error_response(Some(id.clone()), &error);
-            return Err(build_http_response(&response, StatusCode::OK));
+            let mut response = super::cached_error_response(Some(id.clone()), &error);
+            replay_scan(state, (&admitted.call, envelope), client, &mut response);
+            return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
         }
         Some(crate::idempotency::GuardOutcome::Proceed(reservation)) => {
             admitted.idem_reservation = Some(reservation);
@@ -290,7 +293,10 @@ async fn forward_sanitized(
         Ok(admission) => admission,
         Err(e) => {
             give_back_nonce(state, &mut admitted);
-            return build_http_response(&refusal(Some(id.clone()), &e), StatusCode::OK);
+            return build_http_response(
+                &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
+                StatusCode::OK,
+            );
         }
     };
     if preflight.retry.is_retry()
@@ -331,7 +337,7 @@ async fn forward_sanitized(
             ),
             caller.client.as_ref(),
         ),
-        envelope.params.as_ref(),
+        (envelope.params.as_ref(), route.backend.instance()),
     );
     let guards = (client, &mut admitted.sealed);
     let forward =
@@ -347,7 +353,7 @@ async fn forward_sanitized(
         }
         // Settled as terminal unless raised before dispatch
         // (ADR-012 consequence 1; see `settle_direct_failure`).
-        Err(e) => answer_failure(admitted, e).await,
+        Err(e) => answer_failure(admitted, e, envelope.method.as_str()).await,
     }
 }
 
@@ -389,7 +395,7 @@ async fn forward_plain(
             Err(e) => {
                 give_back_nonce(state, admitted);
                 return Err(build_http_response(
-                    &refusal(Some(id.clone()), &e),
+                    &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
                     StatusCode::OK,
                 ));
             }
@@ -422,7 +428,7 @@ async fn forward_plain(
                 ),
                 caller.client.as_ref(),
             ),
-            envelope.params.as_ref(),
+            (envelope.params.as_ref(), route.backend.instance()),
         );
         let guards = (client, &mut admitted.sealed);
         let guarded =
@@ -431,7 +437,9 @@ async fn forward_plain(
         settle_parked(parked, &guarded, admitted);
         guarded
     } else {
-        forward.inspect(|_| super::record_client_success(state, client))
+        // Client success is recorded once the egress scan admits the answer
+        // (`finish_response`): a refused answer must not reset a breaker.
+        forward
     };
     // The spend is settled; an unsettled reservation is given back here.
     drop(admission);
@@ -459,12 +467,21 @@ async fn finish_response(
     // Upstream transport IDs are private gateway correlation state;
     // direct-route clients must receive the ID they supplied.
     response.id = Some(id.clone());
+    // The egress scan, every method and part, before the list stamps, client
+    // accounting and the reservation settle: a replay serves what it left.
+    // Redaction comes before the trust stamp: the firewall may remove a
+    // `$defs` entry a surviving `$ref` points at.
+    let target = screen_target(&admitted.call, method);
+    super::super::direct_guards::scan_direct_egress(
+        state,
+        (
+            &target,
+            crate::gateway::meta_mcp::invoke::egress::ContentChecks::for_method(method),
+        ),
+        client,
+        &mut response,
+    );
     if method == "tools/list" {
-        // Redaction FIRST, then the trust stamp. The firewall may remove a
-        // `$defs` entry a surviving `$ref` points at, so a verdict computed
-        // before it can say `within` about a document the client never
-        // receives.
-        super::scan_direct_tools_list_response(state, name, client, &mut response);
         if response.error.is_none() {
             super::record_client_success(state, client);
         }
@@ -475,7 +492,11 @@ async fn finish_response(
             caller.cert_identity.as_ref(),
         );
         super::direct_list::retain_invocable(state, client, oauth, cert, name, &mut response);
-    } else if method == "tools/call" {
+    } else if method != "tools/call" {
+        if !response.excludes_client_accounting() {
+            super::record_client_success(state, client);
+        }
+    } else {
         super::stamp_direct_provenance(
             state,
             name,
@@ -502,7 +523,7 @@ async fn finish_response(
     let sealed = admitted.sealed.take();
     let delivered = response.result.as_ref();
     state.meta_mcp.release_direct_hold(sealed, delivered).await;
-    build_http_response(&response, StatusCode::OK)
+    build_http_response(&Egressed::of(response), StatusCode::OK)
 }
 
 /// The tail every success shares, a cached replay included: the 2026-07-28
@@ -566,7 +587,8 @@ async fn redeem_retry(
         ),
         scope.caller.client.as_ref(),
     );
-    let sent = (scope.name, envelope.params.as_ref());
+    let instance = Some(scope.route.backend.instance());
+    let sent = (scope.name, instance, envelope.params.as_ref());
     let redeemed = scope
         .state
         .meta_mcp
@@ -577,7 +599,10 @@ async fn redeem_retry(
             reservation.release();
         }
         give_back_nonce(scope.state, admitted);
-        build_http_response(&refusal(Some(scope.id.clone()), &e), StatusCode::OK)
+        build_http_response(
+            &Egressed::gateway_own(refusal(Some(scope.id.clone()), &e)),
+            StatusCode::OK,
+        )
     })
 }
 
@@ -621,19 +646,62 @@ fn settle_parked(
     }
 }
 
+/// A replay is scanned like a fresh answer: the idempotency cache is shared
+/// across routes, and the meta route settles before its delivery scan, so an
+/// entry's provenance proves nothing (design round 2).
+fn replay_scan(
+    state: &AppState,
+    (call, envelope): (&BackendCall<'_>, &Envelope),
+    client: Option<&crate::gateway::auth::AuthenticatedClient>,
+    response: &mut JsonRpcResponse,
+) {
+    let method = envelope.method.as_str();
+    let target = screen_target(call, method);
+    super::super::direct_guards::scan_direct_egress(
+        state,
+        (
+            &target,
+            crate::gateway::meta_mcp::invoke::egress::ContentChecks::for_method(method),
+        ),
+        client,
+        response,
+    );
+}
+
+/// The policy target an answer of `method` is screened under (MIK-8139):
+/// the named tool for `tools/call`, otherwise the method itself, as the
+/// result scans target it.
+fn screen_target<'a>(call: &BackendCall<'a>, method: &'a str) -> BackendCall<'a> {
+    BackendCall {
+        server: call.server,
+        tool: if method == "tools/call" {
+            call.tool
+        } else {
+            method
+        },
+        session_id: call.session_id,
+        api_key_name: call.api_key_name,
+        trace_id: call.trace_id,
+        caller_key: call.caller_key,
+    }
+}
+
 /// Answer a dispatch that failed, settling the reservation (`answer` consumes
 /// the failure context, so this takes the admission by value).
-async fn answer_failure(mut admitted: Admitted<'_>, e: crate::Error) -> Rejection {
+async fn answer_failure(mut admitted: Admitted<'_>, e: crate::Error, method: &str) -> Rejection {
     // Nothing reached the backend, so the nonce is given back (MIK-7698).
     if e.is_pre_dispatch() {
         give_back_nonce(admitted.failed.state, &mut admitted);
     }
     let Admitted {
         failed,
+        call,
         mut idem_reservation,
         ..
     } = admitted;
-    failed.answer(idem_reservation.as_mut(), e).await
+    failed
+        .answer(idem_reservation.as_mut(), e, &screen_target(&call, method))
+        .await
 }
 
 /// The terminal arm: dispatch, then answer. Settled, never dropped: an
@@ -661,6 +729,6 @@ pub(super) async fn dispatch(
         Ok(Ok(response)) => {
             finish_response(scope, envelope, stages.0, (&mut admitted, response)).await
         }
-        Ok(Err(e)) => answer_failure(admitted, e).await,
+        Ok(Err(e)) => answer_failure(admitted, e, envelope.method.as_str()).await,
     }
 }

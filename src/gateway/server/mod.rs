@@ -95,7 +95,7 @@ use control_plane_store::{build_control_plane_store, control_plane_base};
 use identity_grants::load_configured_identity_grants;
 use warmstart::{WarmStartMode, WarmerGuard, build_warm_start_list};
 
-use support::{log_startup_banner, shutdown_signal};
+use support::log_startup_banner;
 
 /// State owner for the single client on a long-lived stdio connection.
 const STDIO_SESSION_ID: &str = "stdio-session";
@@ -1555,6 +1555,8 @@ impl Gateway {
         // In-flight request tracker: large initial permits, drain waits for
         // all permits to be returned (i.e., all in-flight requests complete).
         let inflight = Arc::new(tokio::sync::Semaphore::new(10_000));
+        #[cfg(test)]
+        self.test_seams.report_inflight(&inflight);
 
         // Create key server if enabled
         let key_server = if self.config.key_server.enabled {
@@ -2099,15 +2101,16 @@ impl Gateway {
             });
 
         // Plain HTTP or mTLS: one path, one shutdown bound (#2147).
+        // A test may start the same shutdown without a signal (MIK-8156).
+        #[cfg(test)]
+        let shutdown = test_seams::shutdown_signal_or_trigger(
+            shutdown_tx,
+            self.test_seams.take_shutdown_trigger(),
+        );
+        #[cfg(not(test))]
+        let shutdown = support::shutdown_signal(shutdown_tx);
         let std_listener = listener.into_std()?;
-        listener::serve(
-            app,
-            std_listener,
-            addr,
-            &self.config,
-            shutdown_signal(shutdown_tx),
-        )
-        .await?;
+        listener::serve(app, std_listener, addr, &self.config, shutdown).await?;
 
         // Save search ranker usage data
         persistence::save_with_logging(
@@ -2567,6 +2570,7 @@ impl Gateway {
                         )),
                         &writer,
                         &reads,
+                        Some(meta_mcp.notification_screen("stdio", session_id)),
                     )
                     .await;
                     Self::persist_stdio_protocol_telemetry(&telemetry);
@@ -2658,6 +2662,7 @@ impl Gateway {
                         )),
                         &writer,
                         &reads,
+                        Some(meta_mcp.notification_screen("stdio", session_id)),
                     )
                     .await;
                     Self::persist_stdio_protocol_telemetry(&telemetry);
@@ -3066,7 +3071,7 @@ impl Gateway {
             super::meta_mcp::invoke::relay::GatewayStamps::Legacy
         };
         let chain_source = response.chain_source;
-        let response = meta_mcp.finalize_content(
+        let mut response = meta_mcp.finalize_content(
             response,
             &super::meta_mcp::response_security::ResponseDeliveryContext {
                 method: &method,
@@ -3078,14 +3083,12 @@ impl Gateway {
                     external_tool: &external_tool,
                     subject: None,
                 },
-                mutation:
-                    crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
                 signing: signing_context.as_ref(),
                 chain_source,
                 chain_nonce: chain_nonce.as_deref(),
             },
-            super::meta_mcp::response_security::DeliveryInspection::Required,
         );
+        meta_mcp.release_unsent_hold(&mut response).await; // MIK-8131
         // MIK-7887.RECEIPT.4: the receipt describes the delivered answer, with
         // the stamps its era got; the judge can only replace the answer.
         {
@@ -3403,7 +3406,7 @@ impl Gateway {
                     &caller,
                 )
             {
-                break 'tool_call JsonRpcResponse::error(
+                break 'tool_call JsonRpcResponse::gateway_error(
                     Some(id),
                     error.to_rpc_code(),
                     super::meta_mcp::signing::wire_error_message(&error),
@@ -3424,18 +3427,14 @@ impl Gateway {
                     Err(refusal) => break 'tool_call *refusal,
                 }
             }
-            // A task is admitted durably by its handoff, as on HTTP.
-            let admission = if caller.task.is_some() || caller.awaits_signing_admission() {
-                Ok(super::meta_mcp::admission::SyncAdmission::Unprotected)
-            } else {
-                meta_mcp.admit_meta_sync(
-                    &caller,
-                    &tool_name,
-                    arguments.as_ref(),
-                    Some(session_id),
-                    &id,
-                )
-            };
+            let admission = meta_mcp.admit_meta_sync(
+                super::meta_mcp::AdmissionOwner::local_operator(),
+                &caller,
+                &tool_name,
+                arguments.as_ref(),
+                Some(session_id),
+                &id,
+            );
             execution = match admission {
                 Ok(super::meta_mcp::admission::SyncAdmission::Unprotected) => None,
                 Ok(super::meta_mcp::admission::SyncAdmission::Owned(lease)) => Some(lease),

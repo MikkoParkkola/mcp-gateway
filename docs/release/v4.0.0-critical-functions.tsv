@@ -25,6 +25,9 @@ src/gateway/meta_mcp/task_confirmation/helpers.rs	challenge_key	1	standard	borde
 src/gateway/meta_mcp/task_confirmation/helpers.rs	cleared	1	standard	borderline	cleared	Strips the grant and answers before dispatch; wrong would forward the gateway's requestState to the backend
 src/gateway/meta_mcp/task_confirmation/helpers.rs	operation_digest	1	standard	borderline	operation_digest	Computes the grant binding digest; omitting a field silently widens the grant
 src/gateway/meta_mcp/task_confirmation/helpers.rs	task_admission_request	1	standard	borderline	task_admission_request	Single builder for admission identity; drift would break replay and owner match
+src/gateway/meta_mcp/task_confirmation/helpers.rs	routed	1	critical	c	AdmissionOwner::routed	Spells an HTTP caller's admission principal from its routed task owner; the pooled anonymous owner is no principal, so a keyed call is refused (MIK-8193)
+src/gateway/meta_mcp/task_confirmation/helpers.rs	local_operator	1	critical	c	AdmissionOwner::local_operator	The stdio transport's reserved admission principal, shared by the sync lease and task admission (MIK-8193)
+src/gateway/meta_mcp/task_confirmation/helpers.rs	principal	1	critical	c	AdmissionOwner::principal	The one principal both admissions key an execution on; a second spelling admits one key twice (MIK-8193)
 src/gateway/router/accounts.rs	own_key	1	critical	c	own_key	Derives the account key from the caller's identity; returns 404 for descriptors that are not the caller's.
 src/gateway/router/accounts.rs	revoke_for	1	critical	c	revoke_for	Revokes only the account key derived from the caller's own verified identity.
 src/gateway/router/accounts.rs	browser_routes	1	standard	borderline	browser_routes	Merged outside auth on purpose; correctness depends on each handler's own checks.
@@ -88,9 +91,10 @@ src/gateway/router/backend_handlers/direct_dispatch.rs	redeem_retry	1	critical	d
 src/gateway/router/backend_handlers/direct_dispatch.rs	give_back_nonce	1	critical	b,d	give_back_nonce	Gives back the signing nonce of a call refused or failed before its backend ran (MIK-7698).
 src/gateway/router/backend_handlers/direct_dispatch.rs	park_if_interim	1	critical	d	park_if_interim	Holds an interim answer's idempotency key out of settlement until the guards ran (MIK-8078).
 src/gateway/router/backend_handlers/direct_dispatch.rs	settle_parked	1	critical	d	settle_parked	Releases the parked key once the answer was read; a failed receipt puts it back to be settled (MIK-8078).
+src/gateway/router/backend_handlers/direct_dispatch.rs	replay_scan	1	critical	d	replay_scan	Scans a cached result or error before it is replayed: the cache is shared across routes, so a skipped scan delivers backend text unscreened (MIK-8139).
+src/gateway/router/backend_handlers/direct_dispatch.rs	screen_target	1	standard	borderline	screen_target	Picks the policy target a direct answer is screened under; a wrong target applies another tool's response policy.
 src/gateway/router/backend_handlers/direct_list.rs	normalize_tools_list_response	1	critical	borderline	normalize_tools_list_response	Drops unjudged entries and rebuilds the result from an allow-list (A3).
 src/gateway/router/backend_handlers.rs	resolve_passthrough_headers	1	critical	a	resolve_passthrough_headers	Fails closed when a required passthrough credential is missing or the transport cannot carry it.
-src/gateway/router/backend_handlers.rs	scan_direct_tools_list_response	1	critical	d	scan_direct_tools_list_response	Applies the response firewall to a direct tools/list result.
 src/gateway/router/backend_handlers.rs	cached_error_response	1	standard	borderline	cached_error_response	Keeps a cached firewall refusal a refusal on idempotent replay.
 src/gateway/router/backend_handlers.rs	charged_binding	1	standard	borderline	charged_binding	Charges each slot binding to the caller's principal (per-principal slot budget).
 src/gateway/router/backend_handlers/relay.rs	direct_control_identity	1	standard	borderline	direct_control_identity	Firewall per-caller key; falls back to a shared bucket.
@@ -109,7 +113,7 @@ src/gateway/router/backend_handlers/key_check.rs	key_refusal	1	critical	borderli
 src/gateway/router/backend_handlers/notification_key.rs	resolve	1	critical	a,c	resolve	Applies the request's identity, passthrough, audit and OAuth-isolation refusals to notifications.
 src/gateway/router/direct_guards.rs	after_dispatch	1	critical	b,d	DirectRouteGuards::after_dispatch	Checks the chain receipt, payload gates and response firewall verdict.
 src/gateway/router/direct_guards.rs	before_dispatch	1	critical	d	DirectRouteGuards::before_dispatch	Spend/budget admission before dispatch.
-src/gateway/router/direct_guards.rs	response_blocked	1	critical	d	response_blocked	Response firewall check_response verdict blocks delivery (firewall build).
+src/gateway/router/direct_guards.rs	scan_direct_egress	1	critical	d	scan_direct_egress	The direct route's egress scan at every backend-text exit, on the router's own firewall (MIK-8139).
 src/gateway/router/direct_guards.rs	run	1	critical	a,d	DirectRouteGuards::run	admit_target policy plus refusal when message signing is enabled.
 src/gateway/router/direct_guards.rs	release_nonce	1	critical	b,d	DirectRouteGuards::release_nonce	Releases only the nonce registration a refused direct call made (MIK-7698).
 src/gateway/router/handlers.rs	health_handler	1	critical	a	health_handler	Backend detail only for admins; everyone else gets status and version.
@@ -173,7 +177,6 @@ src/gateway/router/origin_guard_hosted.rs	admits_origin	1	critical	b	HostedScope
 src/gateway/router/origin_guard_hosted.rs	exempts_fetch_site	1	critical	b	HostedScope::exempts_fetch_site	Cross-site exemption only for the callback navigation addressed to the hosted host.
 src/gateway/router/origin_guard_hosted.rs	scope	1	critical	b	scope	Limits the hosted-origin opening to /accounts/v1/ and the exact callback navigation.
 src/gateway/router/origin_guard_hosted.rs	from_config	1	standard	borderline	HostedOrigin::from_config	Builds the hosted-origin opening.
-src/gateway/router/response_pass.rs	inspect_tools_call_response	1	critical	d	inspect_tools_call_response	Meta tools/call response firewall; fails closed with no policy target.
 src/gateway/router/watch_poll.rs	may_invoke	1	critical	a	GatewayWatchHost::may_invoke	Authorizes each watch poll: the holder's key must still be allowed to invoke the capability
 src/gateway/router/watch_poll.rs	client	1	critical	a	GatewayWatchHost::client	Decides for may_invoke whether the holder's key still authenticates; a gone, expired or re-issued key is none
 src/gateway/router/watch_poll.rs	poll_capability	1	critical	d	poll_capability	Refuses a poll past the key's own /mcp rate bucket before it calls the capability as that key
@@ -552,7 +555,7 @@ src/transport/http/listen.rs	read_stream	1	critical	d	read_stream	Caps each list
 src/transport/http/listen.rs	unsolicited_frame	1	critical	d	unsolicited_frame	Admits only the three notifications from an untrusted legacy stream; everything else is dropped
 src/transport/http/listen.rs	next_events	1	critical	d	next_events	Turns an oversized frame or a read error from the untrusted backend into the end of the stream
 src/transport/stdio.rs	capture_notification	1	critical	c	StdioTransport::capture_notification	Routes only notifications/progress to the call that registered the token; drops the rest
-src/transport/stdio_env.rs	configure_child_environment	1	critical	d	configure_child_environment	Clears the env; passes only PATH/HOME/TMPDIR (plus Windows basics) and backend env, so no secret leakage
+src/transport/stdio_env.rs	configure_child_environment	1	critical	d	configure_child_environment	Clears the env; passes only PATH/HOME/TMPDIR (plus Windows basics), six allowlisted non-secret npm settings a backend has not named itself (npm spelling folded), and backend env, so no secret leakage
 src/transport/stdio.rs	drop	1	critical	c	ProgressRegistrationGuard::drop	Deregisters a progress token only for the registration's owner
 src/transport/stdio.rs	handle_response	1	critical	d	StdioTransport::handle_response	Refuses a peer request on the response stream; delivers a response only to the pending id
 src/transport/stdio.rs	register_progress_token	1	critical	c	StdioTransport::register_progress_token	Fails closed on a colliding token, so one call's progress cannot reach another call

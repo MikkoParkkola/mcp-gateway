@@ -700,6 +700,24 @@ fn bench_continuation(c: &mut Criterion) {
         });
     });
 
+    // MIK-8060: a route against a full in-flight table whose holds are all
+    // live, the case in which reclamation has nothing to do.
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("bench runtime");
+    let table = mcp_gateway::protocol::continuation::InFlight::new("replica-a", 4096);
+    runtime.block_on(async {
+        for i in 0..4096_u64 {
+            table
+                .hold("bench-backend", NOW + 3_600 + i, NOW)
+                .await
+                .expect("capacity");
+        }
+    });
+    group.bench_function("inflight_route_full", |b| {
+        b.iter(|| runtime.block_on(table.route(std::hint::black_box("absent"), NOW)));
+    });
+
     group.finish();
 }
 

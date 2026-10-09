@@ -15,7 +15,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use parking_lot::RwLock;
-use process_wrap::tokio::ChildWrapper;
 use serde_json::Value;
 use tokio::io::BufReader;
 use tokio::process::Command;
@@ -44,7 +43,7 @@ pub(crate) use env::configure_child_environment;
 /// Stdio transport for subprocess MCP servers
 pub struct StdioTransport {
     /// Child process
-    child: Mutex<Option<Box<dyn ChildWrapper>>>,
+    child: Mutex<Option<ChildTree>>,
     /// Pending requests waiting for response
     pending: dashmap::DashMap<String, oneshot::Sender<JsonRpcResponse>>,
     /// Request ID counter
@@ -185,7 +184,7 @@ impl StdioTransport {
         *self.shutdown.lock() = tokio_util::sync::CancellationToken::new();
         *writer = Some(stdin);
         drop(writer);
-        *self.child.lock().await = Some(child);
+        *self.child.lock().await = Some(ChildTree::new(child));
         let eof_tx = Arc::new(tokio::sync::watch::channel(false).0);
         self.start.begin(Arc::clone(&eof_tx));
 
@@ -235,7 +234,7 @@ impl StdioTransport {
                         if let Some(transport) = transport.upgrade()
                             && let Some(child) = transport.child.lock().await.as_mut()
                         {
-                            let _ = child.start_kill();
+                            child.start_kill();
                         }
                         break;
                     }
@@ -683,7 +682,7 @@ impl Transport for StdioTransport {
         // method from blocking; on lock contention we trust the flag.
         if let Ok(mut guard) = self.child.try_lock()
             && let Some(child) = guard.as_mut()
-            && let Ok(Some(_status)) = child.try_wait()
+            && child.exited()
         {
             // Child has exited; reconcile the cached flag so callers and future
             // checks see the truth.
@@ -701,7 +700,7 @@ impl Transport for StdioTransport {
             *writer = None;
         }
         if let Some(ref mut child) = *self.child.lock().await {
-            let _ = Box::into_pin(child.kill()).await;
+            child.finish().await;
         }
         self.shutdown.lock().cancel();
         tree::clear_writer(&self.writer).await;
@@ -710,8 +709,11 @@ impl Transport for StdioTransport {
     }
 }
 
+#[path = "stdio_child_tree.rs"]
+mod child_tree;
 #[path = "stdio_tree.rs"]
 mod tree;
+use child_tree::ChildTree;
 pub use tree::{CEILING_MAX_FRAME_BYTES, DEFAULT_MAX_FRAME_BYTES, MIN_MAX_FRAME_BYTES};
 use tree::{read_frame, spawn_in_own_tree};
 
@@ -765,3 +767,7 @@ mod eof_request_tests;
 #[cfg(test)]
 #[path = "stdio_cache_abs_tests.rs"]
 mod cache_abs_tests;
+
+#[cfg(test)]
+#[path = "stdio_cache_runner_tests.rs"]
+mod cache_runner_tests;
