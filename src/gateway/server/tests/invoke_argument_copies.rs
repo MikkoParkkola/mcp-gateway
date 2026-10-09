@@ -95,7 +95,7 @@ async fn dispatch_bytes(state: &Arc<AppState>, size: usize) -> u64 {
     // A refusal is an HTTP 200 carrying isError: the copies under test would
     // never have run.
     assert!(
-        status.is_success() && !body.contains("\"isError\":true"),
+        status.is_success() && body.contains("\"result\"") && !body.contains("\"isError\":true"),
         "the invoke must reach the backend: {status} {body}"
     );
     measured.bytes
@@ -192,22 +192,37 @@ fn the_dispatched_arguments_are_the_admitted_ones() {
             .get("demo")
             .expect("fixture backend")
             .set_transport_for_test(Arc::clone(&capture) as Arc<dyn crate::transport::Transport>);
+        // The last case carries a client `_meta` beside `arguments`: the one
+        // branch where the router copies the wrapper to merge it in.
         let cases = [
-            (json!({"blob": "v", "n": 1}), json!({"blob": "v", "n": 1})),
-            (json!("{\"blob\":\"v\"}"), json!({"blob": "v"})),
+            (
+                json!({"blob": "v", "n": 1}),
+                json!({"blob": "v", "n": 1}),
+                None,
+            ),
+            (json!("{\"blob\":\"v\"}"), json!({"blob": "v"}), None),
             (
                 json!({"blob": "v", "_full": true, "_claim": "c"}),
                 json!({"blob": "v"}),
+                None,
+            ),
+            (
+                json!({"blob": "v"}),
+                json!({"blob": "v"}),
+                Some(json!({"progressToken": "p"})),
             ),
         ];
-        for (sent, expected) in cases {
-            let body = json!({
+        for (sent, expected, meta) in cases {
+            let mut body = json!({
                 "jsonrpc": "2.0", "id": 7, "method": "tools/call",
                 "params": {"name": "gateway_invoke", "arguments": {
                     "server": "demo", "tool": "search", "arguments": sent,
                 }},
-            })
-            .to_string();
+            });
+            if let Some(meta) = meta {
+                body["params"]["_meta"] = meta;
+            }
+            let body = body.to_string();
             let request = axum::http::Request::builder()
                 .method("POST")
                 .uri("/mcp")
@@ -237,16 +252,20 @@ fn the_dispatched_arguments_are_the_admitted_ones() {
     });
 }
 
-/// A backend that answers at once and never touches what it is sent.
-struct Answer;
+/// A backend that answers at once, counts its `tools/call`s and never
+/// touches what it is sent.
+struct Answer(std::sync::atomic::AtomicUsize);
 
 #[async_trait::async_trait]
 impl crate::transport::Transport for Answer {
     async fn request(
         &self,
-        _method: &str,
+        method: &str,
         _params: Option<Value>,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method == "tools/call" {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         Ok(crate::protocol::JsonRpcResponse::success_serialized(
             crate::protocol::RequestId::Number(1),
             json!({"content": []}),
@@ -264,11 +283,14 @@ impl crate::transport::Transport for Answer {
 }
 
 /// The stdio dispatcher over one in-process backend, `bench`, listing `search`.
-fn stdio_stack() -> (
-    Arc<crate::gateway::meta_mcp::MetaMcp>,
-    Arc<crate::security::ToolPolicy>,
-    Arc<crate::mtls::MtlsPolicy>,
-) {
+struct StdioStack {
+    meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
+    policy: Arc<crate::security::ToolPolicy>,
+    mtls: Arc<crate::mtls::MtlsPolicy>,
+    answer: Arc<Answer>,
+}
+
+fn stdio_stack() -> StdioStack {
     let registry = Arc::new(crate::backend::BackendRegistry::new());
     let mut failsafe = crate::config::FailsafeConfig::default();
     failsafe.rate_limit.enabled = false;
@@ -278,7 +300,8 @@ fn stdio_stack() -> (
         &failsafe,
         std::time::Duration::from_secs(60),
     ));
-    backend.set_transport_for_test(Arc::new(Answer));
+    let answer = Arc::new(Answer(std::sync::atomic::AtomicUsize::new(0)));
+    backend.set_transport_for_test(Arc::clone(&answer) as Arc<dyn crate::transport::Transport>);
     backend.remember_listed_tools(
         None,
         false,
@@ -289,25 +312,21 @@ fn stdio_stack() -> (
         })],
     );
     assert!(registry.register(backend));
-    let meta = Arc::new(crate::gateway::meta_mcp::MetaMcp::new(registry));
-    let policy = Arc::new(crate::security::ToolPolicy::from_config(
-        &crate::security::ToolPolicyConfig::default(),
-    ));
-    let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
-        &crate::mtls::MtlsConfig::default(),
-    ));
-    (meta, policy, mtls)
+    StdioStack {
+        meta: Arc::new(crate::gateway::meta_mcp::MetaMcp::new(registry)),
+        policy: Arc::new(crate::security::ToolPolicy::from_config(
+            &crate::security::ToolPolicyConfig::default(),
+        )),
+        mtls: Arc::new(crate::mtls::MtlsPolicy::from_config(
+            &crate::mtls::MtlsConfig::default(),
+        )),
+        answer,
+    }
 }
 
 /// Bytes one stdio dispatch allocates; the request is built before the scope.
-async fn stdio_dispatch_bytes(
-    (meta, policy, mtls): &(
-        Arc<crate::gateway::meta_mcp::MetaMcp>,
-        Arc<crate::security::ToolPolicy>,
-        Arc<crate::mtls::MtlsPolicy>,
-    ),
-    size: usize,
-) -> u64 {
+/// The dispatch must answer with a result and reach the backend exactly once.
+async fn stdio_dispatch_bytes(stack: &StdioStack, size: usize) -> u64 {
     let request = json!({
         "jsonrpc": "2.0", "id": 7, "method": "tools/call",
         "params": {"name": "gateway_invoke", "arguments": {
@@ -315,11 +334,12 @@ async fn stdio_dispatch_bytes(
         }},
     });
     let telemetry = super::super::StdioTelemetry::default();
+    let before = stack.answer.0.load(std::sync::atomic::Ordering::Relaxed);
     let (response, measured) = measure_async(|| {
         super::super::Gateway::dispatch_single_with_sink(
-            meta,
-            policy,
-            mtls,
+            &stack.meta,
+            &stack.policy,
+            &stack.mtls,
             request,
             super::super::StdioClient {
                 session_id: "copies",
@@ -332,10 +352,11 @@ async fn stdio_dispatch_bytes(
         )
     })
     .await;
-    let text = response.map(|r| r.to_string()).unwrap_or_default();
+    let dispatched = stack.answer.0.load(std::sync::atomic::Ordering::Relaxed) - before;
+    let text = response.expect("a tools/call is answered").to_string();
     assert!(
-        !text.contains("\"error\"") && !text.contains("\"isError\":true"),
-        "the stdio invoke must reach the backend: {text}"
+        dispatched == 1 && text.contains("\"result\"") && !text.contains("\"isError\":true"),
+        "the stdio invoke must reach the backend once ({dispatched}): {text}"
     );
     measured.bytes
 }
