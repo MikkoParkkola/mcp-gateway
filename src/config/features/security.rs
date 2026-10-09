@@ -82,28 +82,33 @@ impl Default for TransparencyLogConfig {
     }
 }
 
+impl crate::config::Config {
+    /// The runtime config the audit logger opens with, or `None` when the log
+    /// is off. One mapping, so a new key cannot be dropped at one of several
+    /// hand-written call sites, and it reads the auth setting an unset
+    /// `enabled` depends on (MIK-8044 P2c2).
+    pub(crate) fn audit_log(
+        &self,
+    ) -> Option<crate::security::transparency_log::TransparencyLogConfig> {
+        let log = &self.security.transparency_log;
+        log.is_enabled(self.auth.enabled).then(|| {
+            crate::security::transparency_log::TransparencyLogConfig {
+                enabled: true,
+                path: log.path.clone(),
+                key_id: log.key_id.clone(),
+                shared_secret: log.shared_secret.clone(),
+                rotation: log.rotation.clone(),
+            }
+        })
+    }
+}
+
 impl TransparencyLogConfig {
     /// Whether the log is on: as written, or, when unset, on exactly when
     /// auth is on (MIK-8044 P2c2).
     #[must_use]
     pub fn is_enabled(&self, auth_enabled: bool) -> bool {
         self.enabled.unwrap_or(auth_enabled)
-    }
-
-    /// The runtime copy the logger opens with; one mapping, so a new key
-    /// cannot be dropped at one of several hand-written call sites. Takes
-    /// `auth_enabled` because an unset `enabled` means nothing without it.
-    pub(crate) fn runtime(
-        &self,
-        auth_enabled: bool,
-    ) -> crate::security::transparency_log::TransparencyLogConfig {
-        crate::security::transparency_log::TransparencyLogConfig {
-            enabled: self.is_enabled(auth_enabled),
-            path: self.path.clone(),
-            key_id: self.key_id.clone(),
-            shared_secret: self.shared_secret.clone(),
-            rotation: self.rotation.clone(),
-        }
     }
 
     /// Load-time checks: the log is required with auth on (D1-a), and the

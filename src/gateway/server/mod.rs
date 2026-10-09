@@ -992,18 +992,8 @@ impl Gateway {
         // backend route writes identity-propagation audit events straight
         // into this chain without going through `MetaMcp` (MIK-6740).
         let mut transparency_log: Option<Arc<crate::security::TransparencyLogger>> = None;
-        if self
-            .config
-            .security
-            .transparency_log
-            .is_enabled(self.config.auth.enabled)
-        {
-            let tl_cfg = Arc::new(
-                self.config
-                    .security
-                    .transparency_log
-                    .runtime(self.config.auth.enabled),
-            );
+        if let Some(tl_cfg) = self.config.audit_log() {
+            let tl_cfg = Arc::new(tl_cfg);
             // Auth on: the log is required (D1-a) and a failed append
             // withholds the call's result (D1-f).
             let auth_on = self.config.auth.enabled;
