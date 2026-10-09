@@ -1,0 +1,13 @@
+diff --git a/src/events/lifecycle.rs b/src/events/lifecycle.rs
+index 577e91e34..218bdc392 100644
+--- a/src/events/lifecycle.rs
++++ b/src/events/lifecycle.rs
+@@ -118,7 +118,7 @@ impl EventsHub {
+                 .iter()
+                 .find_map(|s| s.row_key(&sub).map(|key| (s.kind(), key)));
+             // Any other held row keeps no key (design r3 K rule, MIK-8179).
+-            if owned.is_none() && self.store.held(&sub.id).is_some() {
++            if owned.is_none() && self.store.held(&sub.id).is_some() && false {
+                 continue;
+             }
+             let key = owned.or_else(|| {

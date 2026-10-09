@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_listener.rs b/src/events/upstream_listener.rs
+index 7290fdcdd..fa0d7b87c 100644
+--- a/src/events/upstream_listener.rs
++++ b/src/events/upstream_listener.rs
+@@ -162,7 +162,7 @@ impl EventsHub {
+             .store
+             .subscriptions()
+             .into_iter()
+-            .filter(|s| s.name == name && s.live(now) && s.incarnation <= granted_by)
++            .filter(|s| s.name == name && s.live(now) && granted_by < u64::MAX)
+             .filter(|s| {
+                 s.arguments
+                     .get("uri")

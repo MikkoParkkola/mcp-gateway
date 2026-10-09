@@ -1,0 +1,18 @@
+head_sha	18a4a9cc87e6d5a9ebf9ff3f360277fcddb832a7
+m-r1-tools-only-withdraw	linux	m-r1-tools-only-withdraw.patch	--lib events::
+m-r1-no-replay	linux	m-r1-no-replay.patch	--lib events::
+m-r1a-no-revive	linux	m-r1a-no-revive.patch	--lib events::
+m-r1a-ineligible-kept	linux	m-r1a-ineligible-kept.patch	--lib events::
+m-r1-listen-not-published	linux	m-r1-listen-not-published.patch	--lib backend::publish_order_tests
+m-r1-snapshot-any-instance	linux	m-r1-snapshot-any-instance.patch	--lib events::
+m-r1a-swap-keeps-snapshot	linux	m-r1a-swap-keeps-snapshot.patch	--lib events::
+m-r1-keep-snapshot	linux	m-r1-keep-snapshot.patch	--lib events::
+m-r1a-stale-read-applied	linux	m-r1a-stale-read-applied.patch	--lib events::
+m-r1a-revoke-any-grant	linux	m-r1a-revoke-any-grant.patch	--lib events::
+m-r1a-incarnation-ignored	linux	m-r1a-incarnation-ignored.patch	--lib events::
+m-r1a-delete-on-generation	linux	m-r1a-delete-on-generation.patch	--lib events::
+m-r1a-revoke-ignores-incarnation	linux	m-r1a-revoke-ignores-incarnation.patch	--lib events::
+m-r1a-no-expiry-stop	linux	m-r1a-no-expiry-stop.patch	--lib events::
+m-r1a-removal-uncounted	linux	m-r1a-removal-uncounted.patch	--lib events::
+m-r1a-held-keeps-key	linux	m-r1a-held-keeps-key.patch	--lib events::
+m-r1a-retire-keeps-entry	linux	m-r1a-retire-keeps-entry.patch	--lib events::

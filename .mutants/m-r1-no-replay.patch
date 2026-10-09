@@ -1,0 +1,13 @@
+diff --git a/src/events/reconcile.rs b/src/events/reconcile.rs
+index 2acf817af..0e6408392 100644
+--- a/src/events/reconcile.rs
++++ b/src/events/reconcile.rs
+@@ -49,7 +49,7 @@ impl EventsHub {
+         let hub = Arc::clone(self);
+         runtime.spawn(async move {
+             hub.reconcile_stops().await;
+-            hub.replay_starts_of(|kind| kind == SourceKind::BackendNotification)
++            hub.replay_starts_of(|_| false)
+                 .await;
+         });
+     }
