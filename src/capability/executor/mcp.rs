@@ -423,6 +423,16 @@ fn select<'a>(config: &'a McpConfig, params: &Value) -> Result<Selected<'a>> {
     }
 }
 
+/// `deadline` from now. MIK-8207: the parser bounds a provider timeout, and a
+/// deadline no clock can hold is still refused rather than added unchecked.
+fn ends_after(deadline: Duration) -> Result<Instant> {
+    Instant::now().checked_add(deadline).ok_or_else(|| {
+        Error::Config(crate::duration_bound::too_long(
+            "the capability's provider timeout",
+        ))
+    })
+}
+
 /// Poll `wait.tool` until `until` holds, `max_wait_s` passes, or the call's
 /// own deadline cuts in. A poll that errors or does not match yet is "not
 /// ready", never fatal: the server answers an absent or unfinished item with
@@ -613,11 +623,7 @@ impl CapabilityExecutor {
         let backend = lease.backend;
         let _busy = lease.busy;
         let child_id = lease.id;
-        let call_ends = Instant::now().checked_add(deadline).ok_or_else(|| {
-            Error::Config(crate::duration_bound::too_long(
-                "the capability's provider timeout",
-            ))
-        })?;
+        let call_ends = ends_after(deadline)?;
         let outcome = tokio::time::timeout(deadline, async {
             let mut args = arguments(template, &params)?;
             if let Some(prepare) = prepare {

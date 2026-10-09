@@ -6,6 +6,9 @@ use std::time::Duration;
 
 use serde::{self, Deserialize, Deserializer, Serializer};
 
+/// How a number in a duration's unit becomes the duration; `None` overflows.
+type Scale = fn(u64) -> Option<Duration>;
+
 /// Parse a human-readable duration such as `"30s"`, `"5m"`, `"100ms"`.
 ///
 /// NOTE: `"ms"` is tested BEFORE `"s"`. The previous implementation tested
@@ -18,7 +21,6 @@ use serde::{self, Deserialize, Deserializer, Serializer};
 /// wrapped to a few seconds.
 fn parse(text: &str) -> Result<Duration, String> {
     let text = text.trim();
-    type Scale = fn(u64) -> Option<Duration>;
     let (number, scale): (&str, Scale) = if let Some(ms) = text.strip_suffix("ms") {
         (ms, |n| Some(Duration::from_millis(n)))
     } else if let Some(secs) = text.strip_suffix('s') {

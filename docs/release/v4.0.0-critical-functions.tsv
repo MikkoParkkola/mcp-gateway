@@ -365,6 +365,7 @@ src/oauth/client/refresh_flight.rs	spend	1	standard	borderline	Flight::spend	Rec
 src/oauth/client/refresh_flight.rs	redirect_target	1	standard	borderline	Exchange::redirect_target	Resolves the untrusted Location that redirect_error judges; a None would turn an SSRF refusal into a generic error
 src/oauth/client/refresh_flight.rs	limit	1	standard	borderline	Flight::limit	The bound on one exchange; a wrong value lets a supplied client hold the credential indefinitely
 src/oauth/client/refresh_flight.rs	refresh_stored	1	critical	d	refresh_stored	Refuses to resend a spent refresh token; retires one an unsettled exchange may have consumed, or whose sidecar is damaged (MIK-8091); marks the token in flight before sending
+src/oauth/client/mod.rs	refuse_oversized_expires_in	1	critical	d	refuse_oversized_expires_in	Refuses a token answer whose expires_in is above the 100-year bound (MIK-8207)
 src/oauth/metadata.rs	discover	1	critical	b	AuthorizationServerMetadata::discover	RFC 8414 issuer must match the discovery base
 src/oauth/storage.rs	is_expired	1	critical	d	TokenInfo::is_expired	Expiry decision (60s buffer) gating reuse of a cached token
 src/oauth/storage.rs	create_secret_tmp	1	standard	borderline	TokenStorage::create_secret_tmp	Creates a private (0600/DACL) temp file via create_new_private
