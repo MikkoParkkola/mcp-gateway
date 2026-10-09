@@ -1,0 +1,15 @@
+diff --git a/src/capability/executor/client.rs b/src/capability/executor/client.rs
+index cc11b4145..d28686f02 100644
+--- a/src/capability/executor/client.rs
++++ b/src/capability/executor/client.rs
+@@ -165,7 +165,9 @@ pub(super) async fn send_with_retry(
+         };
+         match attempt_req.send().await {
+             Ok(resp) => {
+-                health.record_success(started.elapsed());
++                if attempt == 1 {
++                    health.record_success(started.elapsed());
++                }
+                 return Ok(resp);
+             }
+             Err(e) => {

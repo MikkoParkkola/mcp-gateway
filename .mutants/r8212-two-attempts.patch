@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/client.rs b/src/capability/executor/client.rs
+index cc11b4145..cd3a58f0f 100644
+--- a/src/capability/executor/client.rs
++++ b/src/capability/executor/client.rs
+@@ -105,7 +105,7 @@ pub(super) fn build_refresh(proxy: Option<&url::Url>) -> RefreshClient {
+ 
+ /// Maximum number of send attempts (1 initial + 2 retries) for transient
+ /// outbound transport failures.
+-pub(super) const MAX_SEND_ATTEMPTS: u32 = 3;
++pub(super) const MAX_SEND_ATTEMPTS: u32 = 2;
+ 
+ /// Send an outbound HTTP request, retrying transient transport failures with
+ /// exponential backoff, and recording the transport outcome on `health`.
