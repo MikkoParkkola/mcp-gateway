@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/client.rs b/src/capability/executor/client.rs
+index cc11b4145..97248509d 100644
+--- a/src/capability/executor/client.rs
++++ b/src/capability/executor/client.rs
+@@ -175,7 +175,7 @@ pub(super) async fn send_with_retry(
+                 }
+                 let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
+                 let e = redact_url(e);
+-                if transient && attempt < MAX_SEND_ATTEMPTS {
++                if transient && attempt + 1 < MAX_SEND_ATTEMPTS {
+                     tracing::warn!(
+                         label = label,
+                         attempt = attempt,

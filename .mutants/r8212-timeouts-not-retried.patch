@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/client.rs b/src/capability/executor/client.rs
+index cc11b4145..3364c8174 100644
+--- a/src/capability/executor/client.rs
++++ b/src/capability/executor/client.rs
+@@ -173,7 +173,7 @@ pub(super) async fn send_with_retry(
+                 if let Some(refused) = crate::security::http_diagnostics::ssrf_refusal(&e) {
+                     return Err(refused);
+                 }
+-                let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
++                let transient = e.is_connect();
+                 let e = redact_url(e);
+                 if transient && attempt < MAX_SEND_ATTEMPTS {
+                     tracing::warn!(

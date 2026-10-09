@@ -1,0 +1,7 @@
+head_sha	63080e500fbaf105c22915dcdad57eba55b86a98
+# MIK-8212 timeout-retry row
+r8212-timeouts-not-retried	linux	r8212-timeouts-not-retried.patch	--all-features --lib -- capability::executor::tests::body_content_type::send_with_retry_recovers_from_transient_timeouts
+r8212-two-attempts	linux	r8212-two-attempts.patch	--all-features --lib -- capability::executor::tests::body_content_type::send_with_retry_recovers_from_transient_timeouts
+r8212-last-retry-skipped	linux	r8212-last-retry-skipped.patch	--all-features --lib -- capability::executor::tests::body_content_type::send_with_retry_recovers_from_transient_timeouts
+r8212-success-not-recorded-after-retry	linux	r8212-success-not-recorded-after-retry.patch	--all-features --lib -- capability::executor::tests::body_content_type::send_with_retry_recovers_from_transient_timeouts
+r8212-retry-counted-as-failure	linux	r8212-retry-counted-as-failure.patch	--all-features --lib -- capability::executor::tests::body_content_type::send_with_retry_recovers_from_transient_timeouts

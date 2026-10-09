@@ -1,0 +1,12 @@
+diff --git a/src/capability/executor/client.rs b/src/capability/executor/client.rs
+index cc11b4145..651f6a4cc 100644
+--- a/src/capability/executor/client.rs
++++ b/src/capability/executor/client.rs
+@@ -183,6 +183,7 @@ pub(super) async fn send_with_retry(
+                         error = %e,
+                         "transient outbound transport error; retrying"
+                     );
++                    health.record_failure();
+                     tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                     backoff_ms *= 2;
+                     continue;
