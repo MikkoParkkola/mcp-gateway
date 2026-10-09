@@ -151,14 +151,29 @@ async fn egress_an_a2a_agent_credential_is_screened_by_the_task_worker() {
         call["params"]["arguments"]["arguments"] = json!({"message": "hi"});
         let created = post(&state, "key-a", call).await;
         let task = task_id(&created);
-        let settled = poll_until_terminal(&state, "key-a", &task).await;
+        // The committed record is the oracle: a `tasks/get` rescans, and
+        // refuses, whatever the worker left unscreened, so it can't be.
+        let owner = admission_principal();
+        let committed = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Ok(committed) = state.tasks.get(&owner, &task) {
+                    use crate::protocol::tasks::TaskStatus;
+                    if matches!(
+                        committed.task.status(),
+                        TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+                    ) {
+                        return committed;
+                    }
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{at}: the task never settled"));
+        let settled = get_task(&state, "key-a", &task).await;
         if sends.load(std::sync::atomic::Ordering::SeqCst) != 1 {
             failures.push(format!("{at}: the agent was not reached once: {created}"));
         }
-        let committed = state
-            .tasks
-            .get(&admission_principal(), &task)
-            .expect("the settled task is committed");
         let stored = format!(
             "{}{}",
             serde_json::to_string(&committed.backend_result()).unwrap_or_default(),
