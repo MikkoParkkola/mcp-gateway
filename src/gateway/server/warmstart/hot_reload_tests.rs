@@ -230,8 +230,8 @@ async fn a_backend_replaced_by_hot_reload_is_warmed_again() {
 }
 
 /// `MIK-8054` wiring (HTTP): an edit the config watcher picks up warms the
-/// backend it adds. Linux-only, as the other real-watcher rows (inotify).
-#[cfg(target_os = "linux")]
+/// backend it adds. Linux and macOS, as the other real-watcher rows (MIK-8181).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test]
 async fn http_a_backend_added_by_a_watched_edit_is_warmed() {
     let dir = tempfile::tempdir().unwrap();
