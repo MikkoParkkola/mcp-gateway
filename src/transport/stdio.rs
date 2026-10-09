@@ -538,7 +538,7 @@ impl StdioTransport {
     fn handle_response(&self, line: &str) -> Result<()> {
         let line_len = line.len();
         debug!(line_len, "Parsing response");
-        let response = match serde_json::from_str::<JsonRpcMessage>(line)? {
+        let response = match JsonRpcMessage::from_line(line)? {
             JsonRpcMessage::Response(response) => response,
             JsonRpcMessage::Notification(notification) => {
                 self.capture_notification(notification);
