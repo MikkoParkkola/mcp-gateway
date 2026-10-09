@@ -176,6 +176,11 @@ impl TaskService {
     }
 
     /// The rows the store skipped when it opened (MIK-8023).
+    /// Admit no further store mutation (see [`super::store::TaskStore::stop_serving`]).
+    pub(crate) fn stop_serving(&self) {
+        self.store.stop_serving();
+    }
+
     pub(crate) fn skipped_records(&self) -> super::store::SkippedRecords {
         self.store.skipped_records()
     }

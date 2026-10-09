@@ -95,8 +95,7 @@ async fn a_dropped_stdio_session_stops_its_task_workers() {
     let (service, _executor) = loop {
         match reopen(&config).await {
             Ok(opened) => break opened,
-            Err(error) if tokio::time::Instant::now() < deadline => {
-                drop(error);
+            Err(_) if tokio::time::Instant::now() < deadline => {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
             Err(error) => panic!("the dropped session still holds the store: {error:?}"),

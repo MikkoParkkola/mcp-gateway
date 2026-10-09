@@ -480,7 +480,19 @@ impl TaskExecutor {
         // COLLUDE.1: every worker collects its relay receipts on its own
         // task; task-locals do not cross `tokio::spawn`.
         let worker = crate::gateway::meta_mcp::invoke::relay::collecting(worker);
-        tokio::spawn(self.shutdown.clone().run_until_cancelled_owned(worker));
+        // Cancellation first on every poll (MIK-7839.CANCEL.3): tokio-util's
+        // `run_until_cancelled_owned` polls the worker before the token, so a
+        // worker cancelled while its runtime sat idle would take one more step
+        // (and could dispatch to a backend) before noticing.
+        let token = self.shutdown.clone();
+        tokio::spawn(async move {
+            tokio::pin!(worker);
+            tokio::select! {
+                biased;
+                () = token.cancelled() => {}
+                () = &mut worker => {}
+            }
+        });
     }
 
     fn cancel_signal(&self, id: &str) {
