@@ -142,6 +142,25 @@ class CheckMacosExclusions(unittest.TestCase):
             ],
         )
 
+    def test_the_macos_cfg_evaluator(self) -> None:
+        on = mac.runs_on_macos
+        # Truth tables, nesting, trailing commas.
+        self.assertTrue(on('#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]'))
+        self.assertTrue(on('#[cfg(any(target_os = "macos", not(target_vendor = "apple"),))]'))
+        self.assertFalse(on('#[cfg(all(unix, not(target_os = "macos")))]'))
+        self.assertFalse(on('#[cfg(all(test, target_os = "linux"))]'))
+        self.assertTrue(on('#[cfg(not(windows))]'))
+        # A declared feature is on (--all-features); an undeclared one never is.
+        self.assertTrue(on('#[cfg(all(test, any(target_os = "linux", feature = "webui")))]'))
+        self.assertFalse(on('#[cfg(all(test, any(target_os = "linux", feature = "missing")))]'))
+        # A comment, an unresolved atom or broken syntax counts as off.
+        self.assertFalse(
+            on('#[cfg(all(test, any(target_os = "linux", /* target_os = "macos", */ windows)))]')
+        )
+        self.assertFalse(on('#[cfg(all(test, any(target_os = "linux", panic = "abort")))]'))
+        self.assertFalse(on('#[cfg(all(test, any(target_os = "macos"))]'))
+        self.assertFalse(on("#[cfg(not())]"))
+
     def test_the_release_tree_passes(self) -> None:
         self.assertEqual(mac.problems(HERE.parents[1]), [])
 
