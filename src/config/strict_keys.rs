@@ -688,3 +688,13 @@ mod tests {
         );
     }
 }
+
+// MIK-8219 red row (throwaway, never merged): a test naming a feature-gated
+// item without its gate must fail the no-default feature combos.
+#[cfg(test)]
+mod combo_red_row {
+    #[test]
+    fn an_ungated_firewall_use() {
+        let _ = crate::security::firewall::FirewallConfig::default();
+    }
+}
