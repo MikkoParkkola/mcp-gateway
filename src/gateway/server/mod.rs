@@ -1223,8 +1223,6 @@ impl Gateway {
             data_dir,
             ..
         } = self.build_meta_mcp().await?;
-        #[cfg(test)]
-        self.test_seams.report_stdio_meta_mcp(&meta_mcp);
         // Held for the whole serve: it owns the governance store's lease.
         let grant_sink = identity_grants::stdio_identity_grants(
             &self.config,
@@ -1383,12 +1381,7 @@ impl Gateway {
         // reading must stall its producers rather than grow this queue. An
         // unbounded queue would turn a stalled reader into operator-process
         // memory growth.
-        // MIK-8176 invariant: an answer (a Response or Answer frame) enters this
-        // queue only through `Cancelled::send_unless_cancelled` or
-        // `StdioReads::batch_of`, which attach the continuation holds it
-        // carries. A new enqueue path for an answer must go through one of
-        // them, or a delivered question's slot is freed and its retry refused.
-        let (writer, queue) = tokio::sync::mpsc::channel::<OutboundFrame>(STDOUT_QUEUE_DEPTH);
+        let (writer, queue) = self.stdout_queue(&meta_mcp);
         let mut writer_task = tokio::spawn(Self::run_stdout_writer(output, queue));
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)

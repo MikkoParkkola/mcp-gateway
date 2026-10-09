@@ -8,6 +8,31 @@ use tracing::{debug, warn};
 use super::Gateway;
 
 impl Gateway {
+    /// The stdout writer's queue, `STDOUT_QUEUE_DEPTH` deep.
+    ///
+    /// MIK-8176 invariant: an answer (a Response or Answer frame) enters this
+    /// queue only through `Cancelled::send_unless_cancelled` or
+    /// `StdioReads::batch_of`, which attach the continuation holds it
+    /// carries. A new enqueue path for an answer must go through one of
+    /// them, or a delivered question's slot is freed and its retry refused.
+    ///
+    /// Test builds also hand `meta_mcp` to a test that asked for the stdio
+    /// session's Meta-MCP, so it can read the continuation table.
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    pub(super) fn stdout_queue(
+        &self,
+        #[cfg_attr(not(test), allow(unused_variables))] meta_mcp: &std::sync::Arc<
+            crate::gateway::meta_mcp::MetaMcp,
+        >,
+    ) -> (
+        tokio::sync::mpsc::Sender<crate::gateway::outbound::OutboundFrame>,
+        tokio::sync::mpsc::Receiver<crate::gateway::outbound::OutboundFrame>,
+    ) {
+        #[cfg(test)]
+        self.test_seams.report_stdio_meta_mcp(meta_mcp);
+        tokio::sync::mpsc::channel(super::STDOUT_QUEUE_DEPTH)
+    }
+
     /// Drain `queue` onto `sink`, closing the queue once the sink is gone.
     ///
     /// A dead sink ends the writer: staying open would let the dispatch tasks
