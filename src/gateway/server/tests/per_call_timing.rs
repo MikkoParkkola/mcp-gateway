@@ -64,6 +64,15 @@ fn search_tool() -> serde_json::Value {
     })
 }
 
+/// `tools/call`s the harness backend has answered: each timed sample must move
+/// it by exactly its call count, so a cached or refused answer cannot be
+/// priced as a dispatch (design M6).
+static DISPATCHED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn dispatched() -> usize {
+    DISPATCHED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// A backend that answers every call at once and keeps nothing.
 struct Answer;
 
@@ -78,6 +87,7 @@ impl crate::transport::Transport for Answer {
             "tools/list" => json!({"tools": [search_tool()]}),
             "tools/call" => {
                 negative_control_stage();
+                DISPATCHED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 json!({"content": []})
             }
             _ => json!({}),
@@ -135,6 +145,7 @@ async fn median_ns(state: &Arc<crate::gateway::router::AppState>, blob: usize) -
             .body(axum::body::Body::from(body.clone()))
             .expect("request");
         let router = create_router(Arc::clone(state));
+        let before = dispatched();
         let start = Instant::now();
         let response = router.oneshot(request).await.expect("router");
         let elapsed = start.elapsed().as_nanos();
@@ -143,8 +154,10 @@ async fn median_ns(state: &Arc<crate::gateway::router::AppState>, blob: usize) -
             .expect("body");
         let text = String::from_utf8_lossy(&bytes);
         assert!(
-            !text.contains("\"isError\":true"),
-            "round {round}: the timed call must reach the backend: {text}"
+            dispatched() - before == 1
+                && text.contains("\"result\"")
+                && !text.contains("\"isError\":true"),
+            "round {round}: the timed call must reach the backend once: {text}"
         );
         if round >= WARMUP {
             samples.push(elapsed);
@@ -172,6 +185,7 @@ impl StdioLoop {
         let yaml = format!(
             "backends:\n  bench:\n    http_url: \"http://127.0.0.1:9/\"\n\
              failsafe:\n  rate_limit:\n    enabled: false\n  circuit_breaker:\n    enabled: false\n\
+             cache:\n  enabled: false\n\
              tasks:\n  store_dir: {}\n",
             serde_json::to_string(&dir.path().join("tasks").display().to_string())
                 .expect("a JSON string")
@@ -249,6 +263,7 @@ async fn stdio_median_ns(stdio: &mut StdioLoop, batch: usize) -> u128 {
             )
             .to_string()
         };
+        let before = dispatched();
         let start = Instant::now();
         let answer = stdio.round_trip(&line).await;
         let elapsed = start.elapsed().as_nanos();
@@ -257,7 +272,8 @@ async fn stdio_median_ns(stdio: &mut StdioLoop, batch: usize) -> u128 {
             single => vec![single],
         };
         assert!(
-            answers.len() == batch
+            dispatched() - before == batch
+                && answers.len() == batch
                 && answers
                     .iter()
                     .all(|a| a.get("result").is_some() && a["result"]["isError"] != json!(true)),
