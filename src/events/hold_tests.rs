@@ -440,3 +440,6 @@ async fn a_refresh_whose_type_goes_while_it_waits_refreshes_as_held() {
     let answer = answer.expect("refreshed as held");
     assert!(answer["held"]["reason"].is_string(), "{answer}");
 }
+
+#[path = "reconcile_table_hook_tests.rs"]
+mod reconcile_table;

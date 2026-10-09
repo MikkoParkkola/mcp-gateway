@@ -336,6 +336,10 @@ impl Backend {
                             &self.name, "per_user",
                         ));
                     }
+                    // Observed before it is published, so no store escapes it,
+                    // and under this shard's write guard, which `attach_nudges`
+                    // relies on to never miss a slot opened while it runs.
+                    self.observe_slot(key, &entry);
                     created = true;
                     vacant.insert(Arc::new(entry))
                 }

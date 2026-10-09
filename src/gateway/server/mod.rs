@@ -3427,18 +3427,14 @@ impl Gateway {
                     Err(refusal) => break 'tool_call *refusal,
                 }
             }
-            // A task is admitted durably by its handoff, as on HTTP.
-            let admission = if caller.task.is_some() || caller.awaits_signing_admission() {
-                Ok(super::meta_mcp::admission::SyncAdmission::Unprotected)
-            } else {
-                meta_mcp.admit_meta_sync(
-                    &caller,
-                    &tool_name,
-                    arguments.as_ref(),
-                    Some(session_id),
-                    &id,
-                )
-            };
+            let admission = meta_mcp.admit_meta_sync(
+                super::meta_mcp::AdmissionOwner::local_operator(),
+                &caller,
+                &tool_name,
+                arguments.as_ref(),
+                Some(session_id),
+                &id,
+            );
             execution = match admission {
                 Ok(super::meta_mcp::admission::SyncAdmission::Unprotected) => None,
                 Ok(super::meta_mcp::admission::SyncAdmission::Owned(lease)) => Some(lease),

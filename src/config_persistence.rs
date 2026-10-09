@@ -75,6 +75,9 @@ mod splice;
 #[path = "config_persistence_url.rs"]
 mod url_spelling;
 
+#[path = "config_persistence_eol.rs"]
+mod eol;
+
 #[path = "config_persistence_lock.rs"]
 pub(crate) mod lock;
 

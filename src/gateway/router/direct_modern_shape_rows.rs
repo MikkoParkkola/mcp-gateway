@@ -66,34 +66,25 @@ async fn every_modern_cacheable_result_carries_the_cache_pair() {
     }
 }
 
-/// The rollback gate: with `server.modern_protocol: false` the default
-/// posture relays a modern request as before, unshaped, since `/mcp` would
-/// refuse it rather than answer in that revision (codex P1 on #3327).
+/// The rollback gate: with `server.modern_protocol: false` a modern request
+/// is refused as `/mcp` refuses it, on every backend, never relayed and so
+/// never answered in a revision the gateway turned off (MIK-8040; before it,
+/// relayed unshaped, codex P1 on #3327).
 #[tokio::test]
-async fn the_rollback_gate_leaves_a_modern_request_unshaped() {
+async fn the_rollback_gate_refuses_a_modern_request() {
     let fx = fixture_modern_off(Answer::Ok).await;
-    let list = modern(&fx, "alpha", "tools/list", json!({})).await;
-    assert!(list["result"]["tools"].is_array(), "a listing: {list}");
-    for key in ["resultType", "ttlMs", "cacheScope"] {
-        assert!(
-            list["result"].get(key).is_none(),
-            "list gained {key}: {list}"
-        );
-    }
     for backend in BACKENDS {
-        let call = modern(&fx, backend, "tools/call", call_params()).await;
-        assert!(call["result"]["content"].is_array(), "{backend}: {call}");
-        assert!(
-            call["result"].get("resultType").is_none(),
-            "{backend}: {call}"
-        );
-        assert!(
-            call["result"]["_meta"]
-                .get(crate::protocol::meta::KEY_SERVER_INFO)
-                .is_none(),
-            "{backend}: {call}"
-        );
+        for (method, params) in [("tools/list", json!({})), ("tools/call", call_params())] {
+            let body = post(&fx, (backend, method), (true, 7), params, json!({})).await;
+            assert_eq!(body["error"]["code"], -32022, "{backend} {method}: {body}");
+            assert!(body.get("result").is_none(), "{backend} {method}: {body}");
+        }
     }
+    assert_eq!(
+        fx.calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "relayed"
+    );
 }
 
 /// DIRECT.3: a legacy client gains none of the fields on any method, and a
