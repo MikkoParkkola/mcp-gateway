@@ -4,6 +4,8 @@
 //! readable after the next expiry sweep, without a restart. A live row goes
 //! through the recovery a restart applies; a terminal row reads as stored.
 
+use std::ops::ControlFlow::{Break, Continue};
+
 use super::*;
 
 /// `MIK-8121.READ.1` and `.READ.2`: repair a sealed in-flight row, a sealed
@@ -60,13 +62,16 @@ async fn a_repaired_row_is_readable_without_a_restart() {
             .filter(|row| row.expected.is_some())
             .all(|row| heard.contains(&row.id))
     };
-    let deadline = std::time::Instant::now() + BUDGET;
-    while restored.skipped_records().sealed != 0 || !announced(&seeded) {
-        if std::time::Instant::now() >= deadline {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    // Past the bound the report below names each row not re-read or announced.
+    let _ = crate::test_wait::wait_until(BUDGET, || {
+        let done = restored.skipped_records().sealed == 0 && announced(&seeded);
+        std::future::ready(if done {
+            Break(())
+        } else {
+            Continue(String::new())
+        })
+    })
+    .await;
     assert_eq!(
         restored.skipped_records().sealed,
         0,
