@@ -1212,7 +1212,7 @@
         "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:179",
         "src/gateway/meta_mcp/response_security.rs:91",
         "src/gateway/task_service/execution/worker.rs:462",
-        "src/gateway/router/handlers.rs:1411"
+        "src/gateway/router/handlers.rs:1399"
       ],
       "note": "Closed by #2390 (da78488b1, fixes #2358). stdio: counted fixtures drive the real stdio serving path; a blocked tool call, a surfaced tools/list, the discovery lists and gateway_invoke are refused with exactly one inspection (stdio_refuses_blocked_responses_with_one_inspection), and allowed ones are served with exactly one (stdio_serves_allowed_responses_with_one_inspection). Discovery responses are inspected once, on their raw value: a server-owned marker (discovery_inspected, never serialised) set only after the meta-tool match makes the router pass, the delivery finalizer and task settlement skip them; HTTP pinned by allowed_discovery_listings_are_inspected_once. Mutants NOFLAG, ROUTERSKIP, FINALSKIP, ANYTOOL caught (runs 36620547421 and 36627286348). Coverage follow-up (retry under a discovery name, task-mode discovery): #2431, 4.0.1.\n\n--- prior note follows ---\nBuilt, not proven. stdio responses reach the shared finalizer (server/mod.rs finalize_response_for_delivery, Required inspection), which refuses on Block. Open: no counted stdio serving-path test drives a blocked call or list end to end; and discovery tools are inspected twice (raw value, then served form), so 'one content scan and one response audit per response' does not hold for them (#2358, filed 4.0.1)."
     },
@@ -1241,7 +1241,7 @@
       "evidence": [
         "src/gateway/meta_mcp/response_security/delivery_record.rs:57",
         "src/gateway/router/judged_answer.rs:18",
-        "src/gateway/router/handlers.rs:1624",
+        "src/gateway/router/handlers.rs:1612",
         "src/gateway/server/stdio_delivery.rs:102",
         "src/gateway/server/stdio_delivery.rs:141",
         "src/gateway/router/mod.rs:113",
