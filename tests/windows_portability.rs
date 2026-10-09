@@ -77,17 +77,32 @@ fn every_windows_sensitive_helper_round_trips_a_hostile_path() {
     }
 }
 
-/// `line` without its comment: a `//` outside a string literal ends the code.
-fn code_of(line: &str) -> &str {
-    let mut quotes = 0usize;
-    for (at, c) in line.char_indices() {
-        if c == '"' {
-            quotes += 1;
-        } else if quotes.is_multiple_of(2) && line[at..].starts_with("//") {
-            return line[..at].trim_start();
+/// `line` as code: string literal contents blanked to `""`, and a `//`
+/// outside a literal ends it. Lexical, per the design's stop rule.
+fn code_of(line: &str) -> String {
+    let mut code = String::new();
+    let mut chars = line.trim_start().chars().peekable();
+    let mut in_string = false;
+    while let Some(c) = chars.next() {
+        if in_string {
+            match c {
+                '\\' => {
+                    chars.next();
+                }
+                '"' => {
+                    in_string = false;
+                    code.push('"');
+                }
+                _ => {}
+            }
+        } else if c == '/' && chars.peek() == Some(&'/') {
+            break;
+        } else {
+            in_string = c == '"';
+            code.push(c);
         }
     }
-    line.trim_start()
+    code
 }
 
 /// Code lines in `text` that define one of [`HELPERS`]: comments and string
@@ -100,8 +115,7 @@ fn helper_copies(file: &str, text: &str) -> Vec<String> {
             let def = format!("fn {name}");
             let defines = code.match_indices(&def).any(|(at, _)| {
                 let next = code[at + def.len()..].chars().next();
-                code[..at].matches('"').count().is_multiple_of(2)
-                    && !next.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                !next.is_some_and(|c| c.is_alphanumeric() || c == '_')
             });
             if defines {
                 found.push(format!("{file}:{} defines {name}", n + 1));
@@ -248,4 +262,12 @@ fn the_portability_scanners_reject_a_copy_and_pass_a_mention() {
     assert_eq!(stray.get(&key("mcp.rs", "bound_roots")), Some(&vec![2]));
     assert!(!allowed_sites().contains_key(&key("mcp.rs", "bound_roots")));
     assert!(canonicalize_sites("cli.rs", "// canonicalize(x)").is_empty());
+    let quoted = "fn save() {\n log(\"fn other canonicalize(p) failed\");\n canonicalize(p);\n}";
+    let sites = canonicalize_sites("save_file.rs", quoted);
+    assert_eq!(
+        sites.get(&key("save_file.rs", "save")),
+        Some(&vec![3]),
+        "{sites:?}"
+    );
+    assert_eq!(sites.len(), 1, "{sites:?}");
 }
