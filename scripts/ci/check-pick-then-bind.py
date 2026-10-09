@@ -23,6 +23,16 @@ introduced into CI or `.config/` without revisiting `src/test_ports.rs`.
 
 A line that must keep one of these shapes carries
 `// port-check: <reason>` on the bind line; the reason is required.
+
+Threat model and stop rule: this is a guard against forgetting, not against
+intent. It reads one function at a time and matches exactly the three shapes
+above, spelled as `let <socket> = ...bind(... port 0 ...)`, a port read from
+`<socket>.local_addr()`, and `drop(<socket>)`. It does not follow a socket or
+a port through another variable, another function, a struct field or a
+macro, and it does not notice a socket that dies at the end of a block
+without an explicit `drop`. A review that names another spelling is not a
+defect in this check: the fix for a racy test is the pattern in
+`src/test_ports.rs`, and this check is not extended to chase spellings.
 """
 import re
 import sys

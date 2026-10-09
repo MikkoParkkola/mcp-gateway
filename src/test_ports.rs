@@ -28,6 +28,11 @@ static HANDED_OUT: AtomicU16 = AtomicU16::new(0);
 /// process, and free when returned (a port some long-lived process already
 /// holds is skipped).
 ///
+/// Assumes each OS's default ephemeral range: Linux 32768-60999, macOS and
+/// Windows 49152-65535. A host whose range was lowered into 20000-29999 could
+/// give a port-0 bind one of these ports. On Linux the test below reads the
+/// live range and fails if it overlaps.
+///
 /// # Panics
 /// When every port in the range is taken.
 pub(crate) fn reserved_port() -> u16 {
@@ -46,6 +51,27 @@ pub(crate) fn reserved_port() -> u16 {
 #[cfg(test)]
 mod tests {
     use super::{FIRST, SPAN, reserved_port};
+
+    /// The reserved range sits outside this host's ephemeral range, so no
+    /// port-0 bind can be given a reserved port. Linux only: it is the one
+    /// OS whose live range a test can read without privileges.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_reserved_range_is_outside_the_ephemeral_range() {
+        let text = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+            .expect("the ephemeral range is readable");
+        let bounds: Vec<u16> = text
+            .split_whitespace()
+            .map(|n| n.parse().expect("a port number"))
+            .collect();
+        let (low, high) = (bounds[0], bounds[1]);
+        let last = FIRST + SPAN - 1;
+        assert!(
+            high < FIRST || low > last,
+            "this host's ephemeral range {low}-{high} overlaps the reserved \
+             range {FIRST}-{last}: port-0 binds can take reserved ports"
+        );
+    }
 
     /// Ports come from the reserved range, and two calls never share one.
     #[test]
