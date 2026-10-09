@@ -1,0 +1,12 @@
+diff --git a/src/gateway/server/tools_changed/views.rs b/src/gateway/server/tools_changed/views.rs
+index 22a3db7c4..1fc9fc840 100644
+--- a/src/gateway/server/tools_changed/views.rs
++++ b/src/gateway/server/tools_changed/views.rs
+@@ -215,6 +215,7 @@ impl Views {
+             && let Some((kept_generation, kept_revision)) = &kept.lease
+             && kept_generation == generation
+             && kept_revision > revision
++            && false
+         {
+             return false;
+         }

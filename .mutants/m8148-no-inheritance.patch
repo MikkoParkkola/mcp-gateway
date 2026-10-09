@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/tools_changed/views.rs b/src/gateway/server/tools_changed/views.rs
+index 22a3db7c4..1c50f3fc3 100644
+--- a/src/gateway/server/tools_changed/views.rs
++++ b/src/gateway/server/tools_changed/views.rs
+@@ -179,7 +179,7 @@ impl Views {
+     /// slot of the same caller last showed (K2), else nothing.
+     fn baseline(&mut self, binding: &str) -> Option<u64> {
+         let tomb = self.tombstones.remove(audience(binding));
+-        if let Some(me) = acct(binding) {
++        if let Some(me) = acct(binding).filter(|_| false) {
+             let live = self.live.iter().filter_map(|(other, &shown)| {
+                 let o = acct(other)?;
+                 (o.audience == me.audience && o.generation == me.generation)

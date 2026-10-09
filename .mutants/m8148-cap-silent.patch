@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/tools_changed/views.rs b/src/gateway/server/tools_changed/views.rs
+index 22a3db7c4..8170abf3b 100644
+--- a/src/gateway/server/tools_changed/views.rs
++++ b/src/gateway/server/tools_changed/views.rs
+@@ -238,7 +238,7 @@ impl Views {
+         if let Some(oldest) = oldest {
+             self.tombstones.remove(&oldest);
+         }
+-        true
++        false
+     }
+ }
+ 

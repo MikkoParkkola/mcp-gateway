@@ -1,0 +1,15 @@
+head_sha	713dd323ce367de2f220b63ac8cac1be14c8c91c
+m8148-adopt-silent	linux	m8148-adopt-silent.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-cap-silent	linux	m8148-cap-silent.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-filter-ignored	linux	m8148-filter-ignored.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-generation-silent	linux	m8148-generation-silent.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-no-coalesce	linux	m8148-no-coalesce.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-no-compare	linux	m8148-no-compare.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-no-inheritance	linux	m8148-no-inheritance.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-no-slot-observer	linux	m8148-no-slot-observer.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-no-take	linux	m8148-no-take.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-no-tombstone	linux	m8148-no-tombstone.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-older-lease-overwrites	linux	m8148-older-lease-overwrites.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-revoke-silent	linux	m8148-revoke-silent.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-walk-before-feed	linux	m8148-walk-before-feed.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-webhook-fires	linux	m8148-webhook-fires.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::

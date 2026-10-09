@@ -1,0 +1,13 @@
+diff --git a/src/backend/tools_nudge.rs b/src/backend/tools_nudge.rs
+index 00aa6dcc1..7e59df86d 100644
+--- a/src/backend/tools_nudge.rs
++++ b/src/backend/tools_nudge.rs
+@@ -136,7 +136,7 @@ impl super::Backend {
+         entry.tools_cache.observe_stores(Arc::new(move || {
+             // Coalesced: a store while one is queued adds nothing, because the
+             // drain reads the slot as it is when it gets there.
+-            if !pending.lock().insert(binding.clone()) {
++            if !pending.lock().insert(binding.clone()) && false {
+                 return;
+             }
+             let _ = feed.send(ToolsNudge::Binding {

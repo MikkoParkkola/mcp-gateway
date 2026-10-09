@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/tools_changed.rs b/src/gateway/server/tools_changed.rs
+index 082a9c5c4..345233149 100644
+--- a/src/gateway/server/tools_changed.rs
++++ b/src/gateway/server/tools_changed.rs
+@@ -262,7 +262,7 @@ fn decide(
+             {
+                 return None;
+             }
+-            (name, Reach::View)
++            (name, Reach::Tools)
+         }
+         ToolsNudge::Catalogue { name } => {
+             // A capability reload also refreshes webhook event routes,

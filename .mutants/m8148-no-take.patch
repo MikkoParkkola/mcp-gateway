@@ -1,0 +1,12 @@
+diff --git a/src/gateway/server/tools_changed.rs b/src/gateway/server/tools_changed.rs
+index 082a9c5c4..c1d9f347b 100644
+--- a/src/gateway/server/tools_changed.rs
++++ b/src/gateway/server/tools_changed.rs
+@@ -254,7 +254,6 @@ fn decide(
+                 .backends
+                 .get(&name)
+                 .filter(|b| b.instance() == instance)?;
+-            backend.take_slot_nudge(&binding);
+             let seen = slot_seen(backend.per_user_view(&binding));
+             if !announced
+                 .lock()
