@@ -125,6 +125,10 @@ impl EventsHub {
                 .read()
                 .iter()
                 .find_map(|s| s.row_key(&sub).map(|key| (s.kind(), key)));
+            // Any other held row keeps no key (design r3 K rule, MIK-8179).
+            if owned.is_none() && self.store.held(&sub.id).is_some() {
+                continue;
+            }
             let key = owned.or_else(|| {
                 self.source_offering(&sub.name).map(|source| {
                     (

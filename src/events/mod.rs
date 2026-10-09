@@ -27,6 +27,7 @@ mod limiter;
 mod operational_source;
 mod outbox;
 mod rate;
+mod reconcile;
 mod records;
 mod reload;
 mod rpc;
@@ -69,6 +70,8 @@ use types::EventDescriptor;
 
 /// The events core: configuration, store, callback client and catalogue.
 pub(crate) struct EventsHub {
+    /// This hub, so a synchronous change can post its key reconcile.
+    me: std::sync::Weak<EventsHub>,
     config: EventsConfig,
     store: Arc<store::Store>,
     client: client::CallbackClient,
@@ -100,6 +103,10 @@ pub(crate) struct EventsHub {
     /// Test-only: one attempt pauses just before its send admission.
     #[cfg(test)]
     before_send: crate::test_pause::Slot,
+    /// Test-only: one withdraw pauses between judging its rows and deleting
+    /// them (reconcile table T07).
+    #[cfg(test)]
+    before_withdraw: crate::test_pause::Slot,
 }
 
 /// One producer of events (design §4). The core knows sources only through
@@ -179,6 +186,15 @@ pub(crate) trait EventSource: Send + Sync {
     fn charges(&self, _name: &str) -> bool {
         true
     }
+    /// Backend `backend`'s registration or configuration changed: wake
+    /// whatever upstream work was waiting on it (design r3 L2).
+    fn backend_changed(&self, _backend: &str) {}
+    /// Upstream listener tasks this source spawned, so a hub-level test can
+    /// see upstream work start (reconcile table, design r3 section 6).
+    #[cfg(test)]
+    fn upstream_starts(&self) -> usize {
+        0
+    }
 }
 
 /// Distinct callback hosts the verification limiter tracks before it sheds
@@ -227,7 +243,8 @@ impl EventsHub {
         let store = store::Store::open(store_dir, now, tail_policy(config)).map_err(|e| {
             crate::Error::Config(format!("events store {}: {e}", store_dir.display()))
         })?;
-        Ok(Arc::new(Self {
+        Ok(Arc::new_cyclic(|me| Self {
+            me: me.clone(),
             config: config.clone(),
             store: Arc::new(store),
             client,
@@ -250,6 +267,8 @@ impl EventsHub {
             before_receipts: crate::test_pause::Slot::default(),
             #[cfg(test)]
             before_send: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            before_withdraw: crate::test_pause::Slot::default(),
         }))
     }
 

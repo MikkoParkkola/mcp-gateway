@@ -492,6 +492,8 @@ impl EventsHub {
         let existing = self.store.get(&id).filter(|s| s.live(now));
         let grace = rotation_grace(self);
         let record = Subscription {
+            generation: 0,
+            incarnation: 0,
             v: 1,
             id: id.clone(),
             principal,

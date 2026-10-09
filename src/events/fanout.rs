@@ -239,15 +239,32 @@ impl EventsHub {
     /// Delete every subscription to an event type a reload removed; their
     /// pending records go with them (design §9). Synchronous, inside the
     /// reload, so a later reload that restores the type cannot interleave.
-    ///
     /// `false` when a subscription could not be removed.
     pub(crate) fn withdraw(&self, names: &[String]) -> bool {
+        let judged: Vec<Subscription> = self
+            .store
+            .subscriptions()
+            .into_iter()
+            .filter(|sub| names.contains(&sub.name))
+            .collect();
+        self.withdraw_rows(&judged)
+    }
+
+    /// Delete each judged row. A row written since (a delivery status, a
+    /// hold stamp) is the same subscription and still goes; a row re-made
+    /// under the same id (a new grant, a new incarnation) is left to the
+    /// cause that made it (design r3 G3). `false` when a subscription could not be removed.
+    pub(crate) fn withdraw_rows(&self, judged: &[Subscription]) -> bool {
         let tail = super::tail_policy(&self.config);
         let now = Utc::now();
+        #[cfg(test)]
+        self.before_withdraw.pause_blocking();
         let mut all_removed = true;
-        for sub in self.store.subscriptions() {
-            if names.contains(&sub.name)
-                && let Err(error) = self.store.remove(&sub.id, now, tail)
+        for sub in judged {
+            let incarnation = sub.incarnation;
+            if let Err(error) = self
+                .store
+                .remove_where(&sub.id, now, tail, |row| row.incarnation == incarnation)
             {
                 tracing::warn!(%error, "events: withdrawn subscription not removed");
                 all_removed = false;
@@ -419,6 +436,9 @@ impl EventsHub {
         {
             tracing::warn!(%error, "events: a held subscription's stamp was not written; retried at the next refresh");
         }
+        // A held row keeps no key, a resumed one gets its key back (design
+        // r3 K rule), without waiting for the sweep.
+        self.reconcile_keys_soon(super::types::SourceKind::Webhook);
     }
 
     /// The longest a hold keeps a row: the maximum lease.
@@ -440,7 +460,9 @@ impl EventsHub {
         let removed = self
             .blocking(move |store| {
                 store.remove_where(&snapshot.id, Utc::now(), tail, |row| {
-                    row.credential_principal == snapshot.credential_principal
+                    // A re-grant under the same id is not the row judged.
+                    row.incarnation == snapshot.incarnation
+                        && row.credential_principal == snapshot.credential_principal
                         && row.binding == snapshot.binding
                         && row.api_key == snapshot.api_key
                 })
