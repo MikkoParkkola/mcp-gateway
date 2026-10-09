@@ -198,7 +198,8 @@ backend" and "fails a capability file" first.**
 | 171 | With agent authentication on, a listen or GET /mcp stream opened with an agent token is checked again at every delivery and ends, with no closing message, once the token expires, the agent leaves the registry or its key changes. A GET /mcp stream also checks each queued notification when it writes it, for every credential kind. With gateway authentication on, a valid agent token can listen on a public `/mcp`. `AuthState` gains `agent_auth` | Clients: re-subscribe with a fresh token when a stream ends. Library users building `AuthState` with a struct literal set `agent_auth` to the `AgentAuthState` the router's agent middleware uses (or `AgentAuthState::new(false, ...)` without agent auth) |
 | 172 | `/.well-known/oauth-protected-resource` answers 404 when the gateway names no authorization server (auth off, API keys only, or agent auth); it answered 200 with a document naming none, or 503 on a wildcard bind without `server.public_url` | None. A client that probes the path now uses the API key it was given instead of attempting an OAuth sign-in that could not complete. With `key_server.delegated_bearer` on, the document is served as before |
 | 173 | `meta_mcp.cache_tools` is retired: nothing ever read it. A config that sets it loads and logs one warning; `upgrade` removes it, or names it when it cannot do so safely, and `init` no longer writes it | Run `mcp-gateway upgrade`, or delete the key. To change how long tool lists are cached, set `meta_mcp.cache_ttl` |
-| 174 | The per-backend route `POST /mcp/{name}` refuses what `/mcp` refuses under every security posture, with the same code and status: a malformed request, a contradicted or doubled protocol header, an unsupported revision, or a 2026-07-28 request missing its required `_meta`. Before, only `hardened` checked these; elsewhere the route forwarded them to the backend | None for a client whose requests `/mcp` accepts. A client that sent such a request to `/mcp/{name}` gets the refusal `/mcp` gives it and fixes the request |
+| 174 | Every frame a backend's text reaches a client in passes one screen (content inspection, context integrity, response firewall) on every route. Over HTTP `/mcp` an interim question the firewall would rewrite is refused (-32600), as over stdio, instead of delivered redacted; backend errors, `prompts/get` and `resources/read` bodies, catalogue listings and notifications streamed during a call can now arrive redacted or be refused | None by default. To allow flagged text in a prompt, resource or listing, add a firewall rule whose `tool_match` names the method (`prompts/get`, `resources/read`, ...) |
+| 175 | The per-backend route `POST /mcp/{name}` refuses what `/mcp` refuses under every security posture, with the same code and status: a malformed request, a contradicted or doubled protocol header, an unsupported revision, or a 2026-07-28 request missing its required `_meta`. Before, only `hardened` checked these; elsewhere the route forwarded them to the backend | None for a client whose requests `/mcp` accepts. A client that sent such a request to `/mcp/{name}` gets the refusal `/mcp` gives it and fixes the request |
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -4520,7 +4521,44 @@ same defaults. When the key cannot go alone (written as `meta_mcp: {...}`, or un
 `meta_mcp:` line that carries a comment), upgrade leaves the file as it is and says to delete
 the key by hand. `mcp-gateway init` no longer writes the key. To change how long tool lists are cached, set `meta_mcp.cache_ttl`.
 
-## 174. The per-backend route refuses what `/mcp` refuses
+## 174. Every frame a backend sends passes the response firewall
+
+**Startup:** no notice
+
+The response firewall used to read only a tool result, so some backend text
+reached clients unscreened, and one route judged an interim question
+differently from another. Now every frame a backend's text reaches a client
+in passes one screen (content inspection, context integrity and the response
+firewall), on `/mcp`, `/mcp/{name}`, stdio and the task routes.
+
+What you lose:
+
+- **An interim question carrying a finding is refused, not redacted.** Over
+  HTTP `/mcp`, a backend question (`inputRequests`) or its `requestState`
+  that the firewall would rewrite used to arrive with the finding redacted.
+  It now arrives as the firewall's refusal (JSON-RPC -32600, "Response blocked
+  by security firewall"), as it already did over stdio: a rewritten question
+  could ask the user something the backend never asked.
+- **Backend text that used to pass is now screened.** A backend's JSON-RPC
+  error message and `data`, a `prompts/get` or `resources/read` body, the
+  descriptions in `prompts/list`, `resources/list` and
+  `resources/templates/list`, and a notification a backend streams during a
+  call (a progress message or any other method) can now arrive redacted, or
+  be refused (a notification is dropped). Under the default policy a
+  credential in any of them blocks the frame.
+
+What you gain: a credential or injected instruction in any of those frames
+no longer reaches the model or the user, and one answer gets the same
+outcome on every route and transport.
+
+What you do: nothing by default. If a backend legitimately returns text the
+firewall flags in a prompt, resource or listing, add a firewall rule for it:
+the rule's `tool_match` names the method (`prompts/get`, `resources/read`,
+`prompts/list`, ...), not the prompt or resource name. Backend failure logs
+now carry the error code rather than the backend's text; read the backend's
+own log for the text.
+
+## 175. The per-backend route refuses what `/mcp` refuses
 
 **Startup:** no notice
 

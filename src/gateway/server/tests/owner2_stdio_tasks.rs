@@ -307,6 +307,7 @@ async fn reads(tasks: &StdioTasks, owner: &TaskOwnerText, id: &str) -> bool {
             Some(&json!({"taskId": id})),
             |_| std::future::ready(()),
             |_| None,
+            |_, _| {},
         )
         .await;
     answer.error.is_none()

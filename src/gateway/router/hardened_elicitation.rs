@@ -10,6 +10,7 @@
 //! is kept. The direct route keeps no session at all, so it serves no legacy
 //! request other than a declaring `initialize`.
 
+use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use axum::Json;
 use axum::http::{HeaderMap, StatusCode};
 use serde_json::Value;
@@ -100,7 +101,7 @@ pub(super) fn direct_refusal(
         params,
         id,
     ) {
-        return Some(build_http_response(&rpc, status));
+        return Some(build_http_response(&Egressed::gateway_own(rpc), status));
     }
     (is_hardened(state) && shape.era() == Era::Legacy && !declares_elicitation(request))
         .then(refusal)

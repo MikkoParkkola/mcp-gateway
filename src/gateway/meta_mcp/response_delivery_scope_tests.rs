@@ -3,11 +3,9 @@
 //! MIK-7211.PARENT.6 test 9 (firewall legs): the pre-sign clamp neither
 //! rescues a blocked response nor triggers a second inspection.
 
-use super::super::DeliveryInspection;
 use super::{Fixture, INJECTION, REFUSAL, ResponseDeliveryContext, correlation, targets};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::firewall::FirewallAction;
-use crate::security::response_policy::ResponseMutationPolicy;
 use serde_json::json;
 
 fn public_response(text: &str) -> JsonRpcResponse {
@@ -21,12 +19,7 @@ fn public_response(text: &str) -> JsonRpcResponse {
 fn a_blocked_public_response_stays_result_free() {
     let fixture = Fixture::new(FirewallAction::Block, true, true, false);
 
-    let response = fixture.finalize(
-        "tools/call",
-        public_response(INJECTION),
-        &targets(),
-        ResponseMutationPolicy::Redact,
-    );
+    let response = fixture.finalize("tools/call", public_response(INJECTION), &targets());
 
     assert!(response.result.is_none());
     assert_eq!(
@@ -43,18 +36,20 @@ fn an_already_inspected_public_response_is_clamped_without_a_second_scan() {
         method: "tools/call",
         targets: &targets,
         correlation: correlation(),
-        mutation: ResponseMutationPolicy::Redact,
         signing: None,
         chain_source: crate::gateway::meta_mcp::response_security::ChainSource::NotEligible,
         chain_nonce: None,
     };
     let runtime = tokio::runtime::Runtime::new().unwrap();
 
-    let delivered = runtime.block_on(fixture.meta.finalize_response_after_inspection(
-        public_response(INJECTION),
-        &context,
-        DeliveryInspection::AlreadyInspected,
-    ));
+    // A frame an earlier exit already screened carries the egress mark.
+    let mut screened = public_response(INJECTION);
+    screened.egress_scanned = true;
+    let delivered = runtime.block_on(
+        fixture
+            .meta
+            .finalize_response_for_delivery(screened, &context),
+    );
 
     assert!(delivered.error.is_none(), "no second inspection may refuse");
     let result = delivered.result.expect("delivered with its result");

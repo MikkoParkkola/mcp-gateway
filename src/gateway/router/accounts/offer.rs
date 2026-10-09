@@ -13,6 +13,7 @@
 //! adapter and `accounts.hosted` configured. Without it the refusal passes
 //! through untouched, so its text and code are exactly today's.
 
+use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use std::sync::Arc;
 
 use axum::Json;
@@ -158,6 +159,8 @@ impl MetaMcp {
             }
             _ => JsonRpcResponse::error(id, -32003, text),
         };
-        build_http_response(&rpc, StatusCode::FORBIDDEN)
+        // The account refusal re-reads a failure the egress scan left
+        // clean (`DirectFailure::answer` and the meta post-dispatch marker).
+        build_http_response(&Egressed::gateway_own(rpc), StatusCode::FORBIDDEN)
     }
 }

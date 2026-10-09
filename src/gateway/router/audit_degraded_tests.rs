@@ -367,9 +367,7 @@ async fn best_effort_stall_delivers_result_and_stays_ready() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delivery_attempt_append_is_bounded() {
     use crate::gateway::meta_mcp::response_security::ResponseDeliveryContext;
-    use crate::security::response_policy::{
-        ResponseCorrelation, ResponseMutationPolicy, ResponsePolicyTarget,
-    };
+    use crate::security::response_policy::{ResponseCorrelation, ResponsePolicyTarget};
     let fx = fixture(AuditFailurePolicy::FailClosed).await;
     let release = fx.log.stall_next_write_for_test(F20_BOUND);
     let response = fx
@@ -390,7 +388,6 @@ async fn delivery_attempt_append_is_bounded() {
                     external_tool: "gateway_invoke",
                     subject: None,
                 },
-                mutation: ResponseMutationPolicy::Redact,
                 signing: None,
                 chain_source: crate::gateway::meta_mcp::response_security::ChainSource::NotEligible,
                 chain_nonce: None,
@@ -411,9 +408,7 @@ async fn delivery_attempt_append_is_bounded() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn withheld_call_leaves_no_delivery_attempt_row() {
     use crate::gateway::meta_mcp::response_security::ResponseDeliveryContext;
-    use crate::security::response_policy::{
-        ResponseCorrelation, ResponseMutationPolicy, ResponsePolicyTarget,
-    };
+    use crate::security::response_policy::{ResponseCorrelation, ResponsePolicyTarget};
     let fx = fixture(AuditFailurePolicy::FailClosed).await;
     let release = fx.log.stall_next_write_for_test(F20_BOUND);
     let withheld = invoke(&fx, 1).await;
@@ -441,7 +436,6 @@ async fn withheld_call_leaves_no_delivery_attempt_row() {
                     external_tool: "gateway_invoke",
                     subject: None,
                 },
-                mutation: ResponseMutationPolicy::Redact,
                 signing: None,
                 chain_source: crate::gateway::meta_mcp::response_security::ChainSource::NotEligible,
                 chain_nonce: None,
