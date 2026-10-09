@@ -13,7 +13,7 @@ use crate::security::response_policy::{
     InvalidResponseTargets, ResponseArtifactKind, ResponseCorrelation, ResponseMutationPolicy,
     ResponsePolicyTarget,
 };
-use audit::{assert_legacy_field_compatibility, assert_v2_event, capture_warnings};
+use audit::{assert_legacy_field_compatibility, assert_response_event, capture_warnings};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -84,7 +84,7 @@ fn assert_counts(firewall: &Firewall, inspections: usize, prompt_scans: usize, r
 /// MIK-7407.RESPONSE.3/.4; FWR-14. Actual public single-target API must
 /// delegate to the same v2 artifact audit contract as the new multi-target API.
 #[test]
-fn firewall_response_single_target_audit_has_v2_contract() {
+fn firewall_response_single_target_audit_has_the_response_contract() {
     let (firewall, _dir, path) = response_fixture(FirewallConfig {
         rules: vec![response_rule("inspect_me", FirewallAction::Block)],
         ..FirewallConfig::default()
@@ -399,7 +399,7 @@ fn firewall_response_multitarget_block_dominates_in_both_orders() {
         assert_counts(&firewall, 1, 1, 1);
         let events = audit_entries(&path);
         assert_eq!(events.len(), 1);
-        assert_v2_event(
+        assert_response_event(
             &events[0],
             &correlation(),
             &targets,
@@ -452,7 +452,7 @@ fn firewall_response_multitarget_warn_dominates_allow_in_both_orders() {
         assert_counts(&firewall, 1, 1, 1);
         let events = audit_entries(&path);
         assert_eq!(events.len(), 1);
-        assert_v2_event(
+        assert_response_event(
             &events[0],
             &correlation(),
             &targets,
@@ -488,7 +488,7 @@ fn firewall_response_audit_targets_are_sorted_unique_and_external_label_preserve
     assert_counts(&firewall, 1, 1, 1);
     let events = audit_entries(&path);
     assert_eq!(events.len(), 1);
-    assert_v2_event(
+    assert_response_event(
         &events[0],
         &correlation(),
         &targets,
@@ -569,7 +569,7 @@ fn firewall_response_immutable_challenge_mutation_is_audited_as_block() {
         assert_counts(&firewall, 1, 1, 1);
         let events = audit_entries(&path);
         assert_eq!(events.len(), 1);
-        assert_v2_event(
+        assert_response_event(
             &events[0],
             &correlation(),
             &[target("backend-a", "inspect_me")],
@@ -605,7 +605,7 @@ fn firewall_response_immutable_challenge_unchanged_and_disabled_controls() {
         assert_counts(&firewall, 1, 1, 1);
         let events = audit_entries(&path);
         assert_eq!(events.len(), 1);
-        assert_v2_event(
+        assert_response_event(
             &events[0],
             &correlation(),
             &[target("backend-a", "inspect_me")],
@@ -673,7 +673,7 @@ fn firewall_response_modern_input_required_protects_state_and_questions() {
         assert_counts(&firewall, 1, 1, 1);
         let events = audit_entries(&path);
         assert_eq!(events.len(), 1);
-        assert_v2_event(
+        assert_response_event(
             &events[0],
             &correlation(),
             &[target("backend-a", "inspect_me")],
@@ -706,7 +706,7 @@ fn firewall_response_modern_input_required_protects_state_and_questions() {
     assert_counts(&firewall, 1, 1, 1);
     let events = audit_entries(&path);
     assert_eq!(events.len(), 1);
-    assert_v2_event(
+    assert_response_event(
         &events[0],
         &correlation(),
         &[target("backend-a", "inspect_me")],

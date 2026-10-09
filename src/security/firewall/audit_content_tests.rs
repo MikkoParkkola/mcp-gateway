@@ -24,13 +24,24 @@ fn marked() -> FirewallVerdict {
     FirewallVerdict {
         allowed: false,
         action: FirewallAction::Block,
-        findings: vec![Finding {
-            scan_type: ScanType::ShellInjection,
-            severity: Severity::High,
-            description: format!("Shell injection pattern in argument '{KEY}'"),
-            matched: FRAGMENT.to_owned(),
-            location: FindingLocation::RequestArgs,
-        }],
+        findings: vec![
+            Finding {
+                scan_type: ScanType::ShellInjection,
+                severity: Severity::High,
+                description: format!("Shell injection pattern in argument '{KEY}'"),
+                matched: FRAGMENT.to_owned(),
+                location: FindingLocation::RequestArgs,
+            },
+            // A second, different finding (gpt i1): a writer that drops,
+            // duplicates or hard-codes findings fails the shape check.
+            Finding {
+                scan_type: ScanType::Credentials,
+                severity: Severity::Medium,
+                description: format!("Credential in field '{KEY}'"),
+                matched: format!("{FRAGMENT}-2"),
+                location: FindingLocation::ResponseContent,
+            },
+        ],
         anomaly_score: None,
     }
 }
@@ -68,30 +79,42 @@ fn assert_content_free(writer: &str, row: &Value) {
         !text.contains(KEY),
         "{writer}: an argument key was logged: {text}"
     );
-    assert_eq!(row["findings_count"], 1, "{writer}: {text}");
+    assert_eq!(row["findings_count"], 2, "{writer}: {text}");
     assert_eq!(row["schema_version"], 3, "{writer}: {text}");
-    let finding = row["findings"][0]
-        .as_object()
-        .unwrap_or_else(|| panic!("{writer}: one finding kept: {text}"));
-    let keys: BTreeSet<&str> = finding.keys().map(String::as_str).collect();
-    assert_eq!(
-        keys,
-        BTreeSet::from(["location", "scan_type", "severity"]),
-        "{writer}: {text}"
-    );
-    assert_eq!(
+    let findings = row["findings"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{writer}: findings kept: {text}"));
+    let shape = BTreeSet::from(["location", "scan_type", "severity"]);
+    let projected: Vec<(&Value, &Value, &Value)> = findings
+        .iter()
+        .map(|finding| {
+            let object = finding
+                .as_object()
+                .unwrap_or_else(|| panic!("{writer}: a finding object: {text}"));
+            let keys: BTreeSet<&str> = object.keys().map(String::as_str).collect();
+            assert_eq!(keys, shape, "{writer}: {text}");
+            (
+                &finding["scan_type"],
+                &finding["severity"],
+                &finding["location"],
+            )
+        })
+        .collect();
+    let expected = [
         (
-            &finding["scan_type"],
-            &finding["severity"],
-            &finding["location"]
+            json!("shell_injection"),
+            json!("high"),
+            json!("request_args"),
         ),
         (
-            &json!("shell_injection"),
-            &json!("high"),
-            &json!("request_args")
+            json!("credentials"),
+            json!("medium"),
+            json!("response_content"),
         ),
-        "{writer}: {text}"
-    );
+    ];
+    let expected: Vec<(&Value, &Value, &Value)> =
+        expected.iter().map(|(a, b, c)| (a, b, c)).collect();
+    assert_eq!(projected, expected, "{writer}: {text}");
 }
 
 /// C1.
