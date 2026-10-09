@@ -350,8 +350,11 @@ async fn per_subscription_burst_goes_at_once_and_the_next_is_held() {
         fire(&gw, &format!("d-27b-{n}"), "o/r").await;
     }
     events_at_least(&rx, 10).await;
+    // The same budget the deliveries had: a slow status read under load waits
+    // for `throttled`, it does not fail after the burst already arrived.
+    let until = tokio::time::Instant::now() + DEADLINE;
     let mut status = json!(null);
-    for _ in 0..100 {
+    while tokio::time::Instant::now() < until {
         status = delivery::delivery_status(&gw, ALICE, &rx.url, &secret, json!({})).await;
         if status["throttled"] == true {
             break;

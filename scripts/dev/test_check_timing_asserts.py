@@ -11,6 +11,9 @@ allowlist's stale, ambiguous and shrink-only checks.
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -84,6 +87,29 @@ class Windows(unittest.TestCase):
         consts = {"BOUND": [("src/a.rs", "Duration::from_secs(10)"), ("src/b.rs", "Duration::from_millis(200)")]}
         self.assertRefused("assert!(start.elapsed() < BOUND);", consts=consts, rule="unresolvable window")
 
+    def test_a_qualifier_names_the_defining_module_or_nothing_resolves(self):
+        consts = {"BOUND": [("src/pins.rs", "Duration::from_secs(10)")]}
+        self.assertPasses("assert!(start.elapsed() < crate::pins::BOUND);", consts=consts)
+        # A qualifier that names another module must not borrow this one's value.
+        self.assertRefused("assert!(start.elapsed() < crate::other::BOUND);", consts=consts, rule="unresolvable window")
+
+    def test_an_imported_const_is_evaluated_in_its_own_file(self):
+        # `B = A` in pins.rs means pins.rs's 100 ms `A`, not the caller's 10 s `A`.
+        consts = {
+            "A": [("src/pins.rs", "Duration::from_millis(100)"), (PATH, "Duration::from_secs(10)")],
+            "B": [("src/pins.rs", "A")],
+        }
+        prelude = "const A: Duration = Duration::from_secs(10);"
+        self.assertRefused("assert!(start.elapsed() < pins::B);", prelude, consts=consts, rule="under 5 s")
+
+    def test_an_unqualified_name_resolves_only_through_an_import_or_an_ancestor(self):
+        consts = {"BOUND": [("src/far/y.rs", "Duration::from_secs(10)")]}
+        self.assertRefused("assert!(start.elapsed() < BOUND);", consts=consts, rule="unresolvable window")
+        self.assertPasses("assert!(start.elapsed() < BOUND);", "use crate::far::y::BOUND;", consts=consts)
+        self.assertPasses("assert!(start.elapsed() < BOUND);", "use crate::far::y::{OTHER, BOUND};", consts=consts)
+        ancestor = {"BOUND": [("src/lib.rs", "Duration::from_secs(10)")]}
+        self.assertPasses("assert!(start.elapsed() < BOUND);", consts=ancestor)
+
     def test_arithmetic_is_evaluated(self):
         body = "let bound = Duration::from_millis(200);\nassert!(start.elapsed() < bound * 5);"
         self.assertRefused(body)
@@ -150,6 +176,47 @@ class Allowlist(unittest.TestCase):
 
     def test_a_row_round_trips_through_the_file_format(self):
         self.assertEqual(guard.parse_allowlist(guard.format_row(self.row) + "\n"), [self.row])
+
+
+class BaseRef(unittest.TestCase):
+    """`--base` reads the list at a commit; only a commit without one skips."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        root = Path(self.dir.name)
+        self.saved = guard.ROOT, guard.ALLOWLIST
+        guard.ROOT, guard.ALLOWLIST = root, root / "scripts/dev/timing-asserts-allowlist.tsv"
+
+        def git(*args):
+            env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+                   "GIT_COMMITTER_EMAIL": "t@t", "PATH": os.environ["PATH"], "HOME": self.dir.name}
+            return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True, env=env).stdout.strip()
+
+        git("init", "-q")
+        (root / "README").write_text("x\n")
+        git("add", "README")
+        git("commit", "-q", "-m", "no list yet")
+        self.cutover = git("rev-parse", "HEAD")
+        guard.ALLOWLIST.parent.mkdir(parents=True)
+        self.row = guard.Row(PATH, "case", "assert!(x)", "reason")
+        guard.ALLOWLIST.write_text(guard.format_row(self.row) + "\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "list")
+        self.listed = git("rev-parse", "HEAD")
+
+    def tearDown(self):
+        guard.ROOT, guard.ALLOWLIST = self.saved
+        self.dir.cleanup()
+
+    def test_the_list_at_the_base_is_read(self):
+        self.assertEqual(guard.read_base(self.listed), [self.row])
+
+    def test_a_base_without_the_list_is_the_cutover(self):
+        self.assertIsNone(guard.read_base(self.cutover))
+
+    def test_an_unreadable_base_fails_rather_than_skipping(self):
+        with self.assertRaises(SystemExit):
+            guard.read_base("no-such-ref")
 
 
 if __name__ == "__main__":

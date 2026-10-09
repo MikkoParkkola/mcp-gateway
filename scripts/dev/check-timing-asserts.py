@@ -59,6 +59,10 @@ class Row(NamedTuple):
     reason: str
 
 
+RAW_OPEN = re.compile(r'b?r(#*)"')
+CHAR = re.compile(r"'(?:\\.|[^\\'])'")
+
+
 def blank_strings_and_comments(text: str) -> str:
     """`text` with comments and string literals blanked, newlines kept.
 
@@ -75,9 +79,9 @@ def blank_strings_and_comments(text: str) -> str:
             j = n if j < 0 else j + 2
             out.append("\n" * text.count("\n", i, j))
             i = j
-        elif (m := re.match(r"b?r(#*)\"", text[i:])) and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")):
+        elif (m := RAW_OPEN.match(text, i)) and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")):
             end = '"' + m.group(1)
-            j = text.find(end, i + m.end())
+            j = text.find(end, m.end())
             j = n if j < 0 else j + len(end)
             out.append('""' + "\n" * text.count("\n", i, j))
             i = j
@@ -87,9 +91,9 @@ def blank_strings_and_comments(text: str) -> str:
                 j += 2 if text[j] == "\\" else 1
             out.append('""' + "\n" * text.count("\n", i, j))
             i = j + 1
-        elif c == "'" and (m := re.match(r"'(?:\\.|[^\\'])'", text[i:])):
+        elif c == "'" and (m := CHAR.match(text, i)):
             out.append("' '")
-            i += m.end()
+            i = m.end()
         else:
             out.append(c)
             i += 1
@@ -136,36 +140,70 @@ CONST = re.compile(r"\b(pub(?:\([^)]*\))?\s+)?const\s+([A-Z][A-Z0-9_]*)\s*:\s*[^
 class Scope(NamedTuple):
     """What a name can resolve to: fn-local lets, file consts, then tree consts.
 
-    A tree const is taken from the defining module nearest the asserting file
-    (`super::X`, a sibling's `pub` const); two nearest definitions that
-    disagree resolve to nothing, which fails closed.
+    A const from another file is found the way Rust finds it, or not at all:
+    through a qualifier (`pins::B`) or a `use` path naming its module, or,
+    unqualified, from an ancestor module (`use super::*`). It is evaluated in
+    its own file, so `B = A` reads that file's `A`. Two candidate
+    definitions that disagree resolve to nothing, which fails closed.
     """
 
     path: str
     lets: dict[str, str]
     file_consts: dict[str, str]
     tree_consts: dict[str, list[tuple[str, str]]]
+    imports: dict[str, str]
+
+
+USE_ONE = re.compile(r"\buse\s+((?:\w+::)+)(\w+)\s*;")
+USE_GROUP = re.compile(r"\buse\s+((?:\w+::)+)\{([^{}]*)\}\s*;")
+PATH_WORDS = {"crate", "self", "super"}
+
+
+def imports_of(code: str) -> dict[str, str]:
+    """Names a file imports by an explicit `use`, mapped to their module path."""
+    found = {}
+    for m in USE_ONE.finditer(code):
+        found[m.group(2)] = m.group(1).rstrip(":")
+    for m in USE_GROUP.finditer(code):
+        for item in m.group(2).split(","):
+            if re.fullmatch(r"\s*\w+\s*", item):
+                found[item.strip()] = m.group(1).rstrip(":")
+    return found
 
 
 def module_parts(path: str) -> list[str]:
+    """The module path a file holds, from its location: `a/mod.rs` and a crate
+    root `src/lib.rs` / `src/main.rs` name their directory."""
     parts = path.removesuffix(".rs").split("/")
-    return parts[:-1] if parts[-1] == "mod" else parts
+    if parts[-1] == "mod" or (len(parts) == 2 and parts[-1] in ("lib", "main")):
+        return parts[:-1]
+    return parts
 
 
-def nearest(entries: list[tuple[str, str]], path: str) -> str | None:
+def ancestors(path: str) -> list[list[str]]:
+    """Modules whose items `use super::*` can reach from `path`, nearest first.
+
+    A `x_tests.rs` file is attached under `x` by `#[path]`, so `x` counts too.
+    """
     here = module_parts(path)
+    found = [here[:n] for n in range(len(here) - 1, 0, -1)]
+    if here[-1].endswith("_tests"):
+        found.insert(0, here[:-1] + [here[-1].removesuffix("_tests")])
+    return found
 
-    def shared(other: str) -> int:
-        n = 0
-        for a, b in zip(module_parts(other), here):
-            if a != b:
-                break
-            n += 1
-        return n
 
-    best = max(shared(p) for p, _ in entries)
-    exprs = {e for p, e in entries if shared(p) == best}
-    return exprs.pop() if len(exprs) == 1 else None
+def candidates(name: str, qualifier: str, scope: Scope) -> list[tuple[str, str]]:
+    """The definitions of `name` that the reference can mean."""
+    entries = scope.tree_consts.get(name, [])
+    module = [w for w in qualifier.split("::") if w and w not in PATH_WORDS]
+    if module:
+        return [(p, e) for p, e in entries if module_parts(p)[-len(module) :] == module]
+    # A bare name, or only `super::` / `crate::` words: an ancestor's.
+    for level in ancestors(scope.path):
+        hits = [(p, e) for p, e in entries if module_parts(p) == level]
+        if hits:
+            return hits
+    return []
 
 
 def wrapped(expr: str) -> bool:
@@ -213,12 +251,17 @@ def resolve(expr: str, scope: Scope, depth: int = 0) -> tuple[float, bool] | Non
     if re.fullmatch(r"\w+", expr) and expr in scope.lets:
         return resolve(scope.lets[expr], scope, depth + 1)
     if re.fullmatch(r"(?:\w+::)*[A-Z][A-Z0-9_]*", expr):
-        name = expr.rsplit("::", 1)[-1]
-        if "::" not in expr and name in scope.file_consts:
+        qualifier, _, name = expr.rpartition("::")
+        if not qualifier and name in scope.file_consts:
             return resolve(scope.file_consts[name], scope, depth + 1)
-        if entries := scope.tree_consts.get(name):
-            found = nearest(entries, scope.path)
-            return None if found is None else resolve(found, scope, depth + 1)
+        if not qualifier:
+            qualifier = scope.imports.get(name, "")
+        found = candidates(name, qualifier, scope)
+        if len({e for _, e in found}) != 1 or len({p for p, _ in found}) != 1:
+            return None
+        defining = found[0][0]
+        own = {n: e for n, es in scope.tree_consts.items() for p, e in es if p == defining}
+        return resolve(found[0][1], Scope(defining, {}, own, scope.tree_consts, {}), depth + 1)
     return None
 
 
@@ -291,6 +334,7 @@ def scan_text(path: str, text: str, tree_consts: dict[str, list[tuple[str, str]]
     """Every assert in `text` that bounds a measured time under 5 s, or by a window that does not resolve."""
     code = blank_strings_and_comments(text)
     file_consts = {m.group(2): m.group(3) for m in CONST.finditer(code)}
+    imports = imports_of(code)
     found = []
     for offset, equality, args in calls(code):
         fns = list(FN.finditer(code, 0, offset))
@@ -300,7 +344,7 @@ def scan_text(path: str, text: str, tree_consts: dict[str, list[tuple[str, str]]
         if hit is None:
             continue
         expr, side = hit
-        value = resolve(expr, Scope(path, lets, file_consts, tree_consts))
+        value = resolve(expr, Scope(path, lets, file_consts, tree_consts, imports))
         if value is not None:
             seconds = value[0] if value[1] else value[0] * unit_of(side, names)
             if seconds >= THRESHOLD_S:
