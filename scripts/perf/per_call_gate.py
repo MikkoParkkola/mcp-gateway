@@ -31,6 +31,8 @@ import sys
 import tempfile
 
 CEILING_NS = 4000
+# The bench host also builds other work; a run under load is VOID, never PASS.
+MAX_LOAD = 4.0
 TEST = "gateway::server::signing_allocation_tests::per_call_timing::per_call_timing"
 # Test-only files the harness needs; overlaid onto BASE so both arms run it.
 HARNESS = [
@@ -118,6 +120,7 @@ def main():
     os.makedirs(os.path.dirname(LOCK), exist_ok=True)
     with open(LOCK, "w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        load_start = os.getloadavg()[0]
         rng = random.Random(a.seed)
         print(f"seed {a.seed}; K={a.k} (per-row false-alarm ~{1 / (a.k + 1):.0%}); blocks={a.blocks}")
         with tempfile.TemporaryDirectory() as work:
@@ -138,6 +141,11 @@ def main():
                 if failed:
                     print(f"FAIL: {failed} over budget twice")
                     return 1
+            load_end = os.getloadavg()[0]
+            print(f"host load: start {load_start:.1f}, end {load_end:.1f} (max {MAX_LOAD})")
+            if max(load_start, load_end) > MAX_LOAD:
+                print("VOID: the bench host was busy; rerun when it is quiet")
+                return 2
             if "VOID" in verdict.values():
                 print("VOID: a row's budget exceeds the ceiling; rerun on a quieter host")
                 return 2
