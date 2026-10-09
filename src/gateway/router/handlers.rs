@@ -471,20 +471,25 @@ pub(super) async fn meta_mcp_handler(
     let guard_for_scope = guard.clone();
     // MIK-8161: a backend's mid-call notifications meet the egress scan too.
     let screen = Some(state.meta_mcp.notification_screen("http", ""));
-    let dispatch = crate::gateway::meta_mcp::grant_audit::slot_http(
-        logger.clone(),
-        // COLLUDE.1: one relay-receipt collector spans dispatch and finalize.
-        Box::pin(async move {
-            crate::gateway::outbound::read_scoped(
-                guard_for_scope,
-                Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting_http(
-                    Arc::clone(&state.meta_mcp),
-                    meta_mcp_dispatch(state, http_request),
-                )),
-            )
-            .await
-            .0
-        }),
+    // MIK-8176: the slots this request's mints take are owned here, outside
+    // the grant-audit replacer, and by the dispatch future itself, so a
+    // stream that polls it after this handler returns still has its scope.
+    let dispatch = crate::gateway::meta_mcp::sealed_hold::scoped(
+        crate::gateway::meta_mcp::grant_audit::slot_http(
+            logger.clone(),
+            // COLLUDE.1: one relay-receipt collector spans dispatch and finalize.
+            Box::pin(async move {
+                crate::gateway::outbound::read_scoped(
+                    guard_for_scope,
+                    Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting_http(
+                        Arc::clone(&state.meta_mcp),
+                        meta_mcp_dispatch(state, http_request),
+                    )),
+                )
+                .await
+                .0
+            }),
+        ),
     );
 
     if let Some(audit) = audit {

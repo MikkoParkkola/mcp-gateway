@@ -53,6 +53,9 @@ pub(crate) enum Part {
     /// `requestState` is the planted text (an envelope stolen from another
     /// exchange). Not in [`Part::ALL`].
     InterimStolenState,
+    /// A state-only interim round (`requestState`, no questions) whose
+    /// `extra.note` is the planted text (MIK-8177). Not in [`Part::ALL`].
+    InterimStateOnly,
     /// A parameter name in the tool's input schema: a call with an undeclared
     /// key is refused with a text listing the declared names. Not in
     /// [`Part::ALL`]: the call never reaches the backend.
@@ -229,6 +232,11 @@ impl Planted {
             }
             Part::SchemaKey => JsonRpcResponse::success(id, clean()),
             Part::InterimStolenState => JsonRpcResponse::success(id, interim(&secret(), &s)),
+            Part::InterimStateOnly => JsonRpcResponse::success(
+                id,
+                json!({"resultType": "input_required", "requestState": "state-1",
+                       "extra": {"note": s}}),
+            ),
             Part::CustomNote => {
                 crate::transport::notification_sink::publish(vec![notification(
                     "notifications/backend_note",

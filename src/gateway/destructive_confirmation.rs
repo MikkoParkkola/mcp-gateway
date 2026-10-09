@@ -156,7 +156,7 @@ pub enum ConfirmationChannel<'a> {
     InBand {
         /// Mints the envelope the answer comes back on, and opens it again on
         /// the retry.
-        continuation: &'a crate::protocol::continuation::ContinuationState,
+        continuation: &'a std::sync::Arc<crate::protocol::continuation::ContinuationState>,
     },
     /// No asker can exist on this transport. The action is refused; nothing
     /// is elicited.
