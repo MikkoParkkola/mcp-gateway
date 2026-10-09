@@ -98,14 +98,7 @@ fn with_logs<T>(run: impl FnOnce() -> T) -> (T, String) {
     }
     // A process-wide registry keeps every callsite's interest open, so a
     // record is never filtered out before the scoped subscriber sees it.
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        use tracing_subscriber::prelude::*;
-        let _ = tracing::subscriber::set_global_default(
-            tracing_subscriber::Registry::default()
-                .with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
+    crate::test_log_capture::keep_interest_open();
     let sink = Sink::default();
     let writer = sink.clone();
     let subscriber = tracing_subscriber::fmt()
