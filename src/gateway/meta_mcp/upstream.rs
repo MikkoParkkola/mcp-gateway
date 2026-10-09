@@ -479,10 +479,11 @@ impl MetaMcp {
     /// The ordinary post-dispatch processing for a FAILURE that arrived late.
     ///
     /// A peer's `error.message` and its nested `error.data` are upstream text
-    /// like any recovered result, so they face the same configured gates —
-    /// response contract, anomaly screening, context integrity — carried in the
-    /// shape those gates read. Refusal or content rewriting withholds the raw
-    /// content; observe-mode annotations retain the configured pass-through.
+    /// like any recovered result, so they face the screen every route's
+    /// backend error shares (MIK-8139): anomaly screening, context integrity
+    /// and the configured response firewall, not a result's output contract.
+    /// A refusal withholds the raw content; a redaction is stored in place;
+    /// observe-mode findings retain the configured pass-through.
     ///
     /// The outcome stays a failure and keeps the peer's `code`: there is no
     /// return path here through which an error could become a result.
@@ -498,21 +499,25 @@ impl MetaMcp {
         trace_id: &str,
         error: JsonRpcError,
     ) -> (JsonRpcError, crate::gateway::task_service::ErrorAuthor) {
+        // MIK-8139: the egress scan's error step (content inspection, context
+        // integrity, the configured firewall). An annotation alone is not a
+        // refusal, preserving the operator's observe mode.
+        let mut error = error;
+        // MIK-7116.MIN.1: the tenants the failure names, noted as the
+        // response gates note a result's.
         let mut content = vec![json!({"type": "text", "text": error.message})];
         if let Some(data) = &error.data {
-            // Inspected too: a gate shown only the message would let the same
-            // secret through one field over.
             content.push(json!({"type": "text", "text": data.to_string()}));
         }
-        let carrier = json!({"content": content, "isError": true});
-        let submitted = crate::security::response_inspect::extract_text_from_result(&carrier);
-        let gated = self.apply_response_gates(server, tool, api_key_name, trace_id, carrier);
-        let clean = gated.as_ref().is_ok_and(|value| {
-            // An annotation alone is not a refusal. Preserve the operator's
-            // observe mode, but never persist content that a gate rewrote.
-            crate::security::response_inspect::extract_text_from_result(value) == submitted
-        });
+        let (_, raw_read) =
+            super::invoke::audit::noted_response(self, json!({ "content": content }));
+        let screened = self.scan_backend_error((server, tool, trace_id), api_key_name, &mut error);
+        // A redaction is written back in place and stored, as a redacted task
+        // result is; only a refusal withholds the peer's text.
+        let clean = screened != super::invoke::egress::EgressOutcome::Refused;
         if clean {
+            // MIN.2: past every gate, so this reading counts.
+            crate::security::tenant_reads::note_attribution(raw_read);
             (error, crate::gateway::task_service::ErrorAuthor::Peer)
         } else {
             tracing::warn!(
