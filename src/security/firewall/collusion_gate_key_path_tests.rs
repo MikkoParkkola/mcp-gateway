@@ -235,7 +235,9 @@ fn joins_never_push_leaf_evidence_out() {
     let missed: Vec<usize> = (0..TEXTS)
         .filter(|&i| {
             let tool = format!("read{i}");
-            let items: Vec<String> = (0..60).map(|k| text(i * 1_000 + k)[..60].to_owned()).collect();
+            let items: Vec<String> = (0..60)
+                .map(|k| text(i * 1_000 + k)[..60].to_owned())
+                .collect();
             let tail = text(i * 1_000 + 999);
             let mut result = content_items(&items);
             result["tail"] = Value::String(tail.clone());
@@ -263,13 +265,19 @@ fn interleaved(pieces: &[String]) -> Value {
         .iter()
         .map(|p| json!({"type": "text", "text": p}))
         .collect();
-    items.insert(1, json!({"type": "text", "text": "a note another step put here"}));
+    items.insert(
+        1,
+        json!({"type": "text", "text": "a note another step put here"}),
+    );
     json!({ "content": items })
 }
 
 /// The texts whose plan-step holder is reported for re-joining, after a step
 /// delivered them as `step` and the plan's answer delivered `answer`.
-fn plan_holders_reported(step: fn(&[String]) -> Value, answer: fn(&[String]) -> Value) -> Vec<usize> {
+fn plan_holders_reported(
+    step: fn(&[String]) -> Value,
+    answer: fn(&[String]) -> Value,
+) -> Vec<usize> {
     let fw = observing();
     (0..TEXTS)
         .filter(|&i| {

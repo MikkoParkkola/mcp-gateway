@@ -276,7 +276,10 @@ async fn a_key_path_join_across_chain_steps_is_seam_evidence_and_excuse() {
         "r fathers brought forth on this ",
     ];
     let joined = parts.concat();
-    assert!(parts.iter().all(|p| p.len() < 48), "premise: no part is a k-gram");
+    assert!(
+        parts.iter().all(|p| p.len() < 48),
+        "premise: no part is a k-gram"
+    );
     let mock = MockBackend::answering(Answer::Sequence(
         parts
             .iter()
@@ -293,7 +296,10 @@ async fn a_key_path_join_across_chain_steps_is_seam_evidence_and_excuse() {
         false,
     );
     let read = post(&state, "key-a", plan).await;
-    assert!(read.get("error").is_none(), "base: the chain is delivered: {read}");
+    assert!(
+        read.get("error").is_none(),
+        "base: the chain is delivered: {read}"
+    );
     let relayed = post(&state, "key-b", sync_invoke(2, json!({"text": joined}))).await;
     assert_eq!(
         relayed["error"]["code"], -32002,
