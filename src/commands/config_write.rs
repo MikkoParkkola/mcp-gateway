@@ -209,4 +209,43 @@ mod tests {
             ]
         );
     }
+
+    /// MIK-8042: `upgrade`'s text rewrite overlapping a gateway's locked
+    /// mutation reads the file under the lock, so both changes survive.
+    #[tokio::test]
+    async fn upgrade_racing_a_gateway_mutation_keeps_both_changes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        mcp_gateway::gateway::test_helpers::write_owner_only(
+            &path,
+            "backends:\n  a:\n    http_url: \"https://a.example.test/mcp\"\n",
+        )
+        .expect("write");
+        let at = path.clone();
+        let mutated = mcp_gateway::config_reload::mutate_config_and_reload(&path, None, |config| {
+            let cli = std::thread::spawn(move || {
+                super::rewrite_url_aliases_in(&at, super::RewriteMode::Apply).map(drop)
+            });
+            // Long enough for `upgrade` to read and queue on the lock.
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let x = serde_yaml::from_str("command: x\n").expect("backend");
+            config.backends.insert("x".into(), x);
+            Ok::<_, String>(cli)
+        })
+        .await;
+        let Ok(mcp_gateway::config_reload::ConfigMutation::Applied(cli, _)) = mutated else {
+            panic!("mutation not applied");
+        };
+        cli.join().expect("upgrade thread").expect("upgrade wrote");
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            !text.contains("http_url"),
+            "upgrade's rewrite was lost: {text}"
+        );
+        let config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
+        assert!(
+            config.backends.contains_key("x"),
+            "the mutation was lost: {text}"
+        );
+    }
 }

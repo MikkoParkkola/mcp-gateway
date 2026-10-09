@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use super::{CommentLoss, Edited, edit_config_with};
+use super::{CommentLoss, Edited, edit_config_text_with, edit_config_with};
 use crate::config::{BackendConfig, Config};
 
 fn backend(command: &str) -> BackendConfig {
@@ -117,6 +117,35 @@ fn a_forced_rewrite_racing_an_add_keeps_the_add() {
     assert_eq!(config.server.port, 39_999);
     assert_eq!(names(&path), vec!["a".to_string(), "x".to_string()]);
     assert_eq!(edited, Edited::Rewritten);
+}
+
+/// `upgrade`'s byte-keeping rewrite reads the text under the lock.
+#[test]
+fn a_text_rewrite_racing_an_add_keeps_the_add() {
+    let (_dir, path) = config_file("# note\nbackends:\n  a:\n    command: a-server\n");
+    with_a_concurrent_add(&path, |go| {
+        edit_config_text_with(&path, |current| {
+            release(go);
+            Ok(current.map(|text| text.replace("# note", "# renamed")))
+        })
+        .expect("ours written")
+    });
+    let text = std::fs::read_to_string(&path).expect("read");
+    assert!(text.contains("# renamed"), "{text}");
+    assert!(names(&path).contains(&"x".to_string()), "{text}");
+}
+
+/// `init` creates only: a file that exists by the time it holds the lock is
+/// refused and left as it is.
+#[test]
+fn a_create_only_text_write_refuses_an_existing_file() {
+    let (_dir, path) = config_file("backends:\n  a:\n    command: a-server\n");
+    let refused = edit_config_text_with(&path, |current| match current {
+        None => Ok(Some("backends: {}\n".to_string())),
+        Some(_) => Err("already exists".to_string()),
+    });
+    assert_eq!(refused, Err("already exists".to_string()));
+    assert_eq!(names(&path), vec!["a".to_string()]);
 }
 
 /// MIK-8051 AC4: a removal names the comment lines inside the removed entry,

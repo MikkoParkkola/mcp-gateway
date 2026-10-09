@@ -263,6 +263,23 @@ where
     })
 }
 
+/// Read `path`'s text (`None` when absent), and write what `edit` returns
+/// (`None` writes nothing). For `init` and `upgrade` (MIK-8042).
+///
+/// RED SEAM: today's behaviour; the text is read before the lock is taken.
+#[allow(dead_code)] // red seam
+pub(crate) fn edit_config_text_with<F>(path: &Path, edit: F) -> Result<bool, String>
+where
+    F: FnOnce(Option<&str>) -> Result<Option<String>, String>,
+{
+    let current = std::fs::read_to_string(path).ok();
+    let Some(text) = edit(current.as_deref())? else {
+        return Ok(false);
+    };
+    write_config_text(path, &text)?;
+    Ok(true)
+}
+
 /// How many backends one splice may change.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Splice {
