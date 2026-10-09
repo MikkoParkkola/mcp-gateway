@@ -79,7 +79,7 @@ pub(super) async fn final_cost_save(
         warn!("stdio: final cost snapshot skipped: the periodic saver is still running");
         return;
     }
-    bounded_blocking(deadline, "final cost save", move || {
+    bounded_blocking(deadline, super::persistence::COST_SAVE_STEP, move || {
         super::persistence::save_costs(&enforcer, &data_dir);
     })
     .await;

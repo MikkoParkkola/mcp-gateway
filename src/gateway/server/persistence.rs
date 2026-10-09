@@ -57,6 +57,11 @@ pub(super) fn save_with_logging<F, E>(
     }
 }
 
+/// The shutdown step that writes today's spend, as an abandoned step is logged
+/// at ERROR: it names the file an operator will find stale (MIK-8157.SAVE.3).
+#[cfg(feature = "cost-governance")]
+pub(super) const COST_SAVE_STEP: &str = "final cost save (costs.json)";
+
 /// Build the cost registry and budget enforcer when governance is enabled,
 /// seeded from `costs.json` in `data_dir` so a restart keeps today's spend.
 ///
@@ -288,7 +293,7 @@ pub(super) async fn save_state_on_shutdown(
     #[cfg(feature = "cost-governance")]
     if let Some((enforcer, data_dir)) = cost {
         saves.push((
-            "final cost save",
+            COST_SAVE_STEP,
             Box::new(move || save_costs(&enforcer, &data_dir)),
         ));
     }
@@ -438,6 +443,14 @@ mod tests {
             1,
             "stop returned while the aborted task still held its state"
         );
+    }
+
+    /// `MIK-8157.SAVE.3`: an abandoned cost save is logged by its step name,
+    /// so that name must point the operator at the file left stale.
+    #[cfg(feature = "cost-governance")]
+    #[test]
+    fn an_abandoned_cost_save_names_costs_json() {
+        assert!(COST_SAVE_STEP.contains("costs.json"));
     }
 
     /// `MIK-8157.SAVE.1` and `.2`: a shutdown save stuck on a stalled mount is
