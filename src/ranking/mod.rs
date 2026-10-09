@@ -22,7 +22,7 @@ use rank_key::sort_by_rank;
 pub use scoring::{expand_synonyms, is_schema_field_match};
 // In-crate only: the gateway filter needs it, the public surface does not.
 pub(crate) use scoring::expand_abbreviations;
-use scoring::score_text_relevance;
+use scoring::{backend_name_score, score_text_relevance};
 
 #[cfg(test)]
 use scoring::{
