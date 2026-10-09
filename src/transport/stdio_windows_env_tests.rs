@@ -97,6 +97,24 @@ async fn windows_backend_receives_the_allowlist_and_nothing_else() {
     );
 }
 
+/// The child's keys that neither the Windows allowlist, the always-set keys,
+/// the dump switch nor a forwarded npm setting accounts for.
+fn keys_outside_allowlist(child: &BTreeMap<String, String>) -> Vec<&String> {
+    let permitted: BTreeSet<&str> = ALWAYS_SET
+        .iter()
+        .chain(WINDOWS_ALLOWLIST.iter())
+        .chain([DUMP_ENV].iter())
+        .copied()
+        .collect();
+    child
+        .keys()
+        .filter(|key| {
+            !permitted.contains(key.as_str())
+                && !FORWARDED_NPM_SETTINGS.contains(&key.to_ascii_lowercase().as_str())
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn windows_child_environment_scenario() {
     if std::env::var_os(SCENARIO_ENV).is_none() {
@@ -148,19 +166,7 @@ async fn windows_child_environment_scenario() {
         !child.contains_key(PARENT_SECRET_ENV) && !child.values().any(|v| v == PARENT_SECRET),
         "a secret in the gateway's environment reached the backend: {child:?}"
     );
-    let permitted: BTreeSet<&str> = ALWAYS_SET
-        .iter()
-        .chain(WINDOWS_ALLOWLIST.iter())
-        .chain([DUMP_ENV].iter())
-        .copied()
-        .collect();
-    let unexpected: Vec<&String> = child
-        .keys()
-        .filter(|key| {
-            !permitted.contains(key.as_str())
-                && !FORWARDED_NPM_SETTINGS.contains(&key.to_ascii_lowercase().as_str())
-        })
-        .collect();
+    let unexpected = keys_outside_allowlist(&child);
     assert!(
         unexpected.is_empty(),
         "the backend received keys outside the allowlist: {unexpected:?}"
