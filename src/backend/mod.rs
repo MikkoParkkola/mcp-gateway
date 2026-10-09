@@ -263,6 +263,12 @@ pub struct Backend {
     /// Where this instance's nudges go, set when a registry with a change feed
     /// holds it.
     nudge_feed: std::sync::OnceLock<tools_nudge::NudgeFeed>,
+    /// Whether a per-user store nudge is queued and unread (`MIK-8148`).
+    views_dirty: tools_nudge::ViewsDirty,
+    /// A tool the next drain snapshot blocks between reading the descriptor
+    /// filter and reading the slots, so a test can land a verdict there.
+    #[cfg(test)]
+    snapshot_seam: parking_lot::Mutex<Option<String>>,
 }
 
 /// Where a test backend's OAuth client keeps tokens, and who plays the
