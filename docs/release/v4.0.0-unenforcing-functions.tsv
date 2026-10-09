@@ -44,7 +44,6 @@ src/oauth/client/mod.rs	fmt	3	Redacting Debug for OAuthClientConfig; hides the c
 src/oauth/client/mod.rs	backend_name	1	Accessor returning the backend name for logs and errors.
 src/oauth/client/mod.rs	needs_proactive_refresh	1	Timing heuristic: remaining lifetime under the refresh buffer; decides when to refresh, not whether access is allowed.
 src/oauth/client/mod.rs	generate_client_id	1	Random public client_id fallback when DCR is unavailable; the id is not a secret and gates nothing.
-src/oauth/client/renewal.rs	refused	1	Logs the policy refusal and returns Renewal::Refused; the classification is made by its caller.
 src/oauth/client/renewal.rs	spawn_refresh_task	1	Spawns refresh_loop with a fixed 60 s period; plumbing.
 src/oauth/login_gate.rs	outcome	1	Accessor for the cohort's recorded login outcome; login sharing, not access control.
 src/oauth/login_gate.rs	finished	1	Waits on the watch channel for a login's end and returns its outcome; plumbing.
@@ -53,7 +52,6 @@ src/oauth/login_gate.rs	take_listeners_guard	1	Hands over the callback-listener 
 src/oauth/login_gate.rs	end	1	Lead::end marks the lead ended and forwards its result to LoginGate::end; records an outcome, decides nothing.
 src/oauth/login_gate.rs	drop	1	Abandoned-lead cleanup: releases the attempt as Cancelled once listeners close; lifecycle.
 src/oauth/login_gate.rs	cohort	1	Accessor returning the current cohort a caller captures before queueing; login sharing.
-src/oauth/login_gate.rs	in_flight	1	Reports whether a login is in flight (restart uses it to answer a non-interactive caller); lifecycle query.
 src/oauth/login_gate.rs	pending_in	1	Reports whether a cohort's login is in flight, used only to classify a deadline error.
 src/oauth/login_gate.rs	end	2	LoginGate::end maps the lead's error to an outcome and calls release; records, decides nothing.
 src/oauth/login_gate.rs	release	1	Clears the attempt, sets the cohort outcome and notifies joiners; lifecycle bookkeeping.
@@ -69,7 +67,6 @@ src/personal_accounts/journey/mod.rs	witness	2	cfg(not(test)) no-op; the test va
 src/personal_accounts/journey/ops.rs	storage	1	Wraps an AccountError as JourneyError::Storage; error mapping.
 src/personal_accounts/journey/ops.rs	view	1	Projects a record into the status view; formatting.
 src/personal_accounts/journey/ops.rs	journey_status	1	Unscoped status read by id; its only production caller (worker arm) runs after start_journey's owner check, and owner-scoped reads use journey_status_owned.
-src/personal_accounts/journey/persist.rs	write_journeys	1	Seals and durably replaces journeys.json, marking the slot Stale on a post-rename failure; persistence.
 src/gateway/router/mod.rs	announce_backend_view_changed	1	Per-user change hint (MIK-8148): calls the existing backend-scoped broadcasts, which make the access decision
 src/gateway/server/tools_changed.rs	revoked	1	Per-user change hint: always announces a revoked grant; the revocation itself is enforced elsewhere
 src/gateway/server/tools_changed.rs	backend_views	1	Per-user change hint: recomputes per-user views after a backend-wide nudge

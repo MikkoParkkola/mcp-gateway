@@ -338,11 +338,11 @@ src/oauth/client/destination.rs	refresh_client_for	1	critical	b,d	OAuthClient::r
 src/oauth/client/destination.rs	loopback_cleartext	1	critical	b,d	OAuthClient::loopback_cleartext	Decides the cleartext loopback exception client_for and refresh_client_for rest on
 src/oauth/client/grants.rs	authorize_until	1	critical	b	OAuthClient::authorize_until	Issuer check enforced before redeeming the authorization code
 src/oauth/client/grants.rs	authorize	1	standard	borderline	OAuthClient::authorize	Forwards to authorize_until; a mistake would skip its issuer check
-src/oauth/client/grants.rs	authorize_shared	1	standard	borderline	OAuthClient::authorize_shared	Refuses a non-interactive start and a refused login gate before any login opens
+src/oauth/client/grants.rs	authorize_shared	1	critical	a,d	OAuthClient::authorize_shared	Refuses a non-interactive caller and a cancelled login attempt before the interactive authorization runs.
 src/oauth/client/grants.rs	adopt_stored_login	1	critical	c	OAuthClient::adopt_stored_login	Accepts a stored credential only when it is unexpired and stored under this client's own key and resource
 src/oauth/client/grants.rs	build_authorize_url	1	standard	borderline	OAuthClient::build_authorize_url	Sets state, S256 challenge and resource
 src/oauth/client/grants.rs	refresh_token	1	standard	borderline	OAuthClient::refresh_token	Maps refresh_stored's outcome for an MCP backend; the refusals live in refresh_stored
-src/oauth/client/grants.rs	adopt_if_fresher	1	standard	borderline	OAuthClient::adopt_if_fresher	Adopts an unexpired stored credential through adopt_stored_login
+src/oauth/client/grants.rs	adopt_if_fresher	1	critical	b	OAuthClient::adopt_if_fresher	Checks a stored credential's expiry before adopting it as this client's token.
 src/oauth/client/grants.rs	save_issued	1	standard	borderline	OAuthClient::save_issued	Saves a login's token under the refresh flight and repairs a damaged sidecar, which no lost marker can tie to the new token
 src/oauth/client/grants.rs	request	1	standard	borderline	OAuthClient::request	Builds an MCP backend's refresh request through refresh_client_for, which holds the cleartext and redirect refusals
 src/oauth/client/grants.rs	adopt	1	standard	borderline	OAuthClient::adopt	Forwards to adopt_if_fresher for the shared refresh flight
@@ -353,7 +353,7 @@ src/oauth/client/mod.rs	has_valid_token	1	critical	b	has_valid_token	Decides whe
 src/oauth/client/mod.rs	validate_issuer	1	critical	b	validate_issuer	RFC 9207: a present iss must exactly equal the recorded issuer
 src/oauth/client/mod.rs	generate_pkce	1	standard	borderline	generate_pkce	PKCE verifier randomness and S256 derivation
 src/oauth/client/mod.rs	generate_state	1	standard	borderline	generate_state	CSRF state randomness
-src/oauth/client/mod.rs	initialize	1	standard	borderline	OAuthClient::initialize	Orchestrates destination and issuer checks before keeping metadata
+src/oauth/client/mod.rs	initialize	1	critical	d	OAuthClient::initialize	Stops discovery on a destination-policy (SSRF) refusal instead of walking past it to a fallback.
 src/oauth/client/mod.rs	storage_key	1	standard	borderline	storage_key	Issuer-keyed credential storage
 src/oauth/client/refresh_flight.rs	is_spent	1	critical	d	Flight::is_spent	Decides whether a refresh token may be sent again
 src/oauth/client/refresh_flight.rs	spend	3	critical	d	spend	Marks a possibly consumed refresh token spent and compare-and-clears it from storage
@@ -438,13 +438,13 @@ src/personal_accounts/journey/mod.rs	digests_equal	1	critical	b	digests_equal	Co
 src/personal_accounts/journey/mod.rs	keyed_digest	1	standard	borderline	keyed_digest	HKDF+HMAC used by state/binding verification
 src/personal_accounts/journey/mod.rs	principal_digest	1	standard	borderline	principal_digest	Principal key used for owner-scoped status/supersede
 src/personal_accounts/journey/mod.rs	random_secret	1	standard	borderline	random_secret	256-bit state/binding/verifier randomness
-src/personal_accounts/journey/offer.rs	offer_journey	1	standard	borderline	PersonalAccountStore::offer_journey	Reuse limited to own predecessors
+src/personal_accounts/journey/offer.rs	offer_journey	1	critical	d	PersonalAccountStore::offer_journey	Refuses oversized journey input before any store access, as create_journey does.
 src/personal_accounts/journey/ops.rs	arm	1	critical	a/c	arm	Owner-digest match (constant-time); only pending or unconsumed-started journeys
 src/personal_accounts/journey/ops.rs	journey_status_owned	1	critical	c	PersonalAccountStore::journey_status_owned	Status only for the owning principal; others get NotFound
 src/personal_accounts/journey/ops.rs	predecessors	1	critical	c	predecessors	Supersede/reuse scoped to the same principal and account
 src/personal_accounts/journey/ops.rs	start_journey	1	critical	a	PersonalAccountStore::start_journey	Owner digest checked by arm before secrets are armed
 src/personal_accounts/journey/ops.rs	within_caps	1	critical	d	within_caps	Field caps refused before store access
-src/personal_accounts/journey/ops.rs	finish_journey	1	standard	borderline	PersonalAccountStore::finish_journey	Terminal records never rewritten
+src/personal_accounts/journey/ops.rs	finish_journey	1	critical	d	PersonalAccountStore::finish_journey	Refuses a transition to an active state and any mutation of a terminal journey.
 src/personal_accounts/journey/ops.rs	mint	1	standard	borderline	mint	Mints secrets and their digests under the current key
 src/personal_accounts/journey/persist.rs	read_journeys	1	critical	b	read_journeys	AEAD-authenticates journeys.json; unknown key id refuses
 src/personal_accounts/journey/persist.rs	journey_transition_with_authority	1	standard	borderline	PersonalAccountStore::journey_transition_with_authority	Sweep runs before every operation; poisons on failure
@@ -563,18 +563,18 @@ src/transport/stdio.rs	start	1	critical	d	StdioTransport::start	Refuses invalid 
 src/transport/stdio.rs	spawn_command	1	critical	d	StdioTransport::spawn_command	Refuses invalid quoting or an empty command before spawn; builds the child with the scrubbed environment
 src/oauth/client/destination.rs	with_destination	1	standard	borderline	OAuthClient::with_destination	Installs the backend destination policy and the owned refresh route; a mistake leaves the Configured policy in place and silently skips the SSRF refusals.
 src/oauth/client/destination.rs	cleartext_refusal	1	standard	borderline	cleartext_refusal	Builds the cleartext refusal with the SSRF_BLOCKED prefix is_ssrf_refusal matches; dropping it would turn the refusal into a generic error callers walk past into a login.
-src/oauth/client/grants.rs	try_client_credentials	1	standard	borderline	OAuthClient::try_client_credentials	Sends the client_credentials grant through client_for, which holds the cleartext and destination refusals, and saves under the issuer-keyed flight; its own grant_types check is capability, not security.
+src/oauth/client/grants.rs	try_client_credentials	1	critical	a	OAuthClient::try_client_credentials	Performs the client-credentials grant and publishes the issued credential.
 src/oauth/client/grants.rs	resource_indicator	1	standard	borderline	OAuthClient::resource_indicator	Chooses the RFC 8707 resource value every grant sends to audience-bind the token; a wrong value silently loses the audience binding.
 src/oauth/client/grants.rs	token_exchange_params	1	standard	borderline	OAuthClient::token_exchange_params	Builds the code exchange form with the PKCE code_verifier and resource indicator; omitting either silently disables PKCE or audience binding.
 src/oauth/client/grants.rs	refresh_params	1	standard	borderline	OAuthClient::refresh_params	Builds the refresh form with the resource indicator that keeps the refreshed token audience-bound.
 src/oauth/client/grants.rs	client_credentials_params	1	standard	borderline	OAuthClient::client_credentials_params	Builds the client_credentials form with scope and the resource indicator that audience-binds the token.
-src/oauth/client/grants.rs	exchange_code	1	standard	borderline	OAuthClient::exchange_code	Redeems the code through client_for (cleartext and destination refusals live there) with the PKCE verifier; it makes no decision of its own.
+src/oauth/client/grants.rs	exchange_code	1	critical	a	OAuthClient::exchange_code	Performs the authorization-code exchange and accepts its token response.
 src/oauth/client/grants.rs	with_login_gate	1	standard	borderline	OAuthClient::with_login_gate	Installs the backend's shared login gate; a missing gate skips LoginGate::begin's refusal after a stop or cancel.
 src/oauth/client/grants.rs	login_epoch	1	standard	borderline	OAuthClient::login_epoch	Supplies the cancel epoch a start passes as since to LoginGate::begin; a None skips the stale-epoch refusal.
 src/oauth/client/grants.rs	reload_registered_client_id	1	critical	d	OAuthClient::reload_registered_client_id	Provenance rule: replaces only a Registered client_id from the disk record and never overrides an operator-configured one (same call as purge_client_id_if_invalid).
 src/oauth/client/mod.rs	registration_body	1	standard	borderline	registration_body	Builds the DCR body that registers the redirect_uri, native application_type and auth method the authorization server binds codes to.
 src/oauth/client/mod.rs	new	1	standard	borderline	OAuthClient::new	Builds the client with the Configured destination policy, loopback client and Configured client_id provenance that purge relies on; a wrong default silently disables those checks.
-src/oauth/client/mod.rs	restore_persisted_client_id	1	standard	borderline	OAuthClient::restore_persisted_client_id	Loads the issuer-keyed client_id and marks it Registered, the provenance purge_client_id_if_invalid gates on.
+src/oauth/client/mod.rs	restore_persisted_client_id	1	critical	a	OAuthClient::restore_persisted_client_id	Binds the persisted registered client id only when no operator-configured identity exists; never overwrites it.
 src/oauth/client/refresh_flight.rs	of	1	standard	borderline	Flight::of	Selects the per-token-path flight whose lock and spent set is_spent reads; a wrong key would let a spent token be resent.
 src/oauth/client/refresh_flight.rs	fingerprint	1	standard	borderline	fingerprint	SHA-256 key of the spent set Flight::is_spent decides on; a nondeterministic or colliding value silently disables the spent check.
 src/oauth/client/refresh_flight.rs	fingerprint_hex	1	standard	borderline	fingerprint_hex	Hex in-flight marker refresh_stored compares to retire a possibly consumed token; a wrong value silently skips the retirement.
@@ -582,7 +582,7 @@ src/oauth/client/refresh_flight.rs	spawn	1	standard	borderline	Exchange::spawn	D
 src/oauth/client/refresh_flight.rs	spend	2	standard	borderline	Exchange::spend	Forwards to the critical free spend; its result decides in run whether the in-flight marker is cleared.
 src/oauth/client/registration.rs	ensure_client_id_with_redirect	1	critical	d	OAuthClient::ensure_client_id_with_redirect	Stops on an SSRF refusal from registration instead of falling back to a generated id; persists the id under the issuer-keyed credential.
 src/oauth/client/registration.rs	purge_client_id_if_invalid	1	critical	d	OAuthClient::purge_client_id_if_invalid	Lets an untrusted AS invalid_client answer purge only a Registered client_id, never an operator-configured one.
-src/oauth/client/registration.rs	register_client	1	standard	borderline	OAuthClient::register_client	Posts the DCR request through client_for, which holds the cleartext and destination refusals; binds the client identity but decides nothing itself.
+src/oauth/client/registration.rs	register_client	1	critical	a	OAuthClient::register_client	Performs dynamic client registration and accepts the issued client identity.
 src/oauth/client/renewal.rs	attempt_background_renewal	1	critical	d	OAuthClient::attempt_background_renewal	Stops at a destination-policy (SSRF) refusal instead of falling through to the next grant.
 src/oauth/client/renewal.rs	refresh_loop	1	critical	d	OAuthClient::refresh_loop	Ends background renewal for good on Renewal::Refused, so a policy-denied endpoint is not retried; gates later backend calls.
 src/oauth/login_gate.rs	of	1	standard	borderline	LoginOutcome::of	Keeps a Protocol (destination-policy) refusal typed as Refused so joiners get it back as Protocol; a wrong mapping would let callers walk past an SSRF refusal.
@@ -620,3 +620,6 @@ src/personal_accounts/journey/sweep.rs	evict_for_insert	1	critical	d	evict_for_i
 src/oauth/client/browser.rs	launchable	1	critical	d	launchable	Refuses an authorization URL that is not https or loopback http, or that a launcher would quote, before any browser launcher runs (MIK-8197).
 src/oauth/client/browser.rs	launch_command	1	standard	borderline	launch_command	Builds the shell-free launcher with closed stdin/stdout; a cmd.exe launcher here would reopen the injection (MIK-8197).
 src/oauth/client/browser.rs	open_browser	1	standard	borderline	open_browser	Runs launchable before any spawn; skipping it would hand an unchecked URL to the launcher (MIK-8197).
+src/oauth/client/renewal.rs	refused	1	standard	borderline	OAuthClient::refused	Builds the policy-refusal outcome that stops the refresh task; a wrong outcome would keep retrying a refused destination.
+src/oauth/login_gate.rs	in_flight	1	critical	d	LoginGate::in_flight	Decides whether a login is in flight, the predicate a non-interactive backend restart is refused on (src/backend/restart.rs).
+src/personal_accounts/journey/persist.rs	write_journeys	1	standard	borderline	write_journeys	Seals and replaces journeys.json and marks the slot Stale after a post-rename failure, which stops reuse of outdated journey state.
