@@ -42,6 +42,19 @@ pub(super) use backend::{Answer, GateHandle, MockBackend, TOOL};
 /// The backend name every row dispatches to.
 pub(super) const BACKEND: &str = "mock";
 
+/// The task owner `key-a` submits as: its verified identity, for the rows
+/// that read a committed task back from the store.
+pub(super) fn admission_principal() -> String {
+    crate::key_server::oidc::VerifiedIdentity {
+        subject: "alice".to_string(),
+        email: "alice@adapter.test".to_string(),
+        name: None,
+        groups: Vec::new(),
+        issuer: "https://idp.adapter.test".to_string(),
+    }
+    .stable_actor_id()
+}
+
 /// A second registered backend that no key in [`two_principal_auth`] may reach.
 /// Used by the rows that need a refusal which is real rather than arranged.
 pub(super) const FORBIDDEN_BACKEND: &str = "vault";

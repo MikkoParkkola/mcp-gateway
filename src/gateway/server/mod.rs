@@ -2004,16 +2004,15 @@ impl Gateway {
             // state cannot move an accepted call's provenance. The mapping is fed
             // the routing keys alone (same servers, tools, sort, dedup and
             // discovery handling), never a copy of the call arguments.
+            // Declared out here: the targets borrow it past the branch.
+            let routing_keys;
             let (external_tool, backend_targets) = if method == "tools/call" {
                 let empty_arguments = serde_json::Value::Object(serde_json::Map::new());
                 let (tool, arguments) = extract_tools_call_params_ref(params);
+                routing_keys = stdio_routing_keys_only(arguments.unwrap_or(&empty_arguments));
                 (
                     tool.to_string(),
-                    super::router::backend_tool_targets_for_call(
-                        meta_mcp,
-                        tool,
-                        &stdio_routing_keys_only(arguments.unwrap_or(&empty_arguments)),
-                    ),
+                    super::router::backend_tool_targets_for_call(meta_mcp, tool, &routing_keys),
                 )
             } else {
                 (method.clone(), Vec::new())
@@ -2489,13 +2488,12 @@ impl Gateway {
                 }
             };
             caller.execution = execution.as_ref();
-            // The one copy this path still makes, taken past every refusal
-            // above — signing, nonce, admission, replay — because only an
-            // executing call needs to own its arguments.
-            Box::pin(meta_mcp.handle_tools_call(
+            // Handed down borrowed (MIK-8014): only a task, which stores
+            // the call, copies it.
+            Box::pin(meta_mcp.handle_tools_call_ref(
                 id,
                 &tool_name,
-                arguments.into_owned(),
+                arguments,
                 Some(session_id),
                 caller,
             ))

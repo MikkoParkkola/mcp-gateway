@@ -519,7 +519,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
         .dispatch_below_gate(
             crate::protocol::RequestId::Number(2),
             "gateway_list_tools",
-            json!({}),
+            std::borrow::Cow::Owned(json!({})),
             Some("session-1"),
             &caller,
             false,

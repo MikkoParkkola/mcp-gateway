@@ -306,6 +306,10 @@ fn stop_all(children: Vec<Child>) {
     // entered but never driven, and a stop spawned there would never run.
     let current = tokio::runtime::Handle::try_current().ok();
     for child in children {
+        // First, synchronously and without any runtime: end every process tree
+        // the child's backend owns, pooled or held by a busy caller. The async
+        // stop below may never run on an idle or dropped runtime (MIK-7923).
+        child.backend.retire_now();
         let Some(handle) = child.runtime.clone().or_else(|| current.clone()) else {
             continue;
         };
@@ -550,24 +554,6 @@ async fn call_tool(backend: &Backend, tool: &str, args: Map<String, Value>) -> R
         .unwrap_or(result))
 }
 
-/// A prepare result as an object: `structuredContent` as is, or the first
-/// text content block parsed as JSON.
-fn prepare_object(result: Value) -> Option<Map<String, Value>> {
-    match result {
-        Value::Object(map) => Some(map),
-        Value::Array(blocks) => blocks
-            .first()
-            .and_then(|b| b.get("text"))
-            .and_then(Value::as_str)
-            .and_then(|t| serde_json::from_str::<Value>(t).ok())
-            .and_then(|v| match v {
-                Value::Object(map) => Some(map),
-                _ => None,
-            }),
-        _ => None,
-    }
-}
-
 impl CapabilityExecutor {
     pub(super) async fn execute_mcp(
         &self,
@@ -629,33 +615,21 @@ impl CapabilityExecutor {
         let call_ends = ends_after(deadline)?;
         let outcome = tokio::time::timeout(deadline, async {
             let mut args = arguments(template, &params)?;
+            // Once any round has reached the backend, a later round's refusal
+            // is never "nothing was sent" (MIK-7923, design M9).
+            let mut dispatched = false;
             if let Some(prepare) = prepare {
-                let first = call_tool(
-                    &backend,
-                    &prepare.tool,
-                    arguments(prepare.arguments.as_ref(), &params)?,
-                )
-                .await?;
-                let object = prepare_object(first).ok_or_else(|| {
-                    Error::Protocol(format!(
-                        "prepare tool '{}' returned no object",
-                        prepare.tool
-                    ))
-                })?;
-                for (arg, field) in &prepare.bind {
-                    let value = object.get(field).cloned().ok_or_else(|| {
-                        Error::Protocol(format!(
-                            "prepare tool '{}' returned no '{field}'",
-                            prepare.tool
-                        ))
-                    })?;
-                    args.insert(arg.clone(), value);
-                }
+                run_prepare(&backend, prepare, &params, &mut args).await?;
+                dispatched = true;
             }
-            let result = call_tool(&backend, tool, args).await?;
+            let result = call_tool(&backend, tool, args)
+                .await
+                .map_err(|error| after_dispatch(error, dispatched))?;
             match wait {
                 Some(wait) => {
-                    let ready = wait_ready(&backend, wait, &params, call_ends).await?;
+                    let ready = wait_ready(&backend, wait, &params, call_ends)
+                        .await
+                        .map_err(|error| after_dispatch(error, true))?;
                     Ok(json!({ "result": result, "ready": ready }))
                 }
                 None => Ok(result),
@@ -776,6 +750,10 @@ fn bound_roots(config: &McpConfig, files: &crate::config::FileRoots) -> Vec<(Str
         })
         .collect()
 }
+
+#[path = "mcp_rounds.rs"]
+mod rounds;
+use rounds::{after_dispatch, run_prepare};
 
 #[cfg(test)]
 #[path = "mcp_tests.rs"]
