@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/cli_run.rs b/src/capability/executor/cli_run.rs
+index d348d5572..cc2a4795b 100644
+--- a/src/capability/executor/cli_run.rs
++++ b/src/capability/executor/cli_run.rs
+@@ -311,7 +311,7 @@ pub(crate) async fn run(
+             (ProcessEnd::ObservationFailed, Err(Error::Protocol(message)))
+         }
+         Err(_) => (
+-            ProcessEnd::TimedOut,
++            ProcessEnd::ObservationFailed,
+             Err(Error::BackendTimeout(format!(
+                 "'{}' did not finish within {}s",
+                 invocation.command,

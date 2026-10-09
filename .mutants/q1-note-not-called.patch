@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/cli_run.rs b/src/capability/executor/cli_run.rs
+index d348d5572..eebb56385 100644
+--- a/src/capability/executor/cli_run.rs
++++ b/src/capability/executor/cli_run.rs
+@@ -323,7 +323,7 @@ pub(crate) async fn run(
+         .as_ref()
+         .ok()
+         .map(|o| (o.stdout.len(), o.stderr.len()));
+-    crate::gateway::note_process(ProcessNote {
++    let _ = (ProcessNote {
+         ended,
+         duration: started.elapsed(),
+         bytes,

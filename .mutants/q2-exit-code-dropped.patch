@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/cli_run.rs b/src/capability/executor/cli_run.rs
+index d348d5572..e2a8c7e4c 100644
+--- a/src/capability/executor/cli_run.rs
++++ b/src/capability/executor/cli_run.rs
+@@ -349,7 +349,7 @@ pub(crate) enum ProcessEnd {
+ 
+ impl ProcessEnd {
+     fn of(status: ExitStatus) -> Self {
+-        status.code().map_or(Self::Signalled, Self::Exited)
++        status.code().map_or(Self::Signalled, |_| Self::Exited(0))
+     }
+ }
+ 

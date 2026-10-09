@@ -1,0 +1,7 @@
+head_sha	a2bf1c4d57a0fc5af585dd388147cce2042a4c90
+q1-note-not-called	linux	q1-note-not-called.patch	--lib -- a_clean_exit_records_its_code_duration_and_byte_counts
+q2-exit-code-dropped	linux	q2-exit-code-dropped.patch	--lib -- a_failing_exit_records_its_code_and_stderr_bytes
+q3-timeout-as-observation	linux	q3-timeout-as-observation.patch	--lib -- a_timeout_is_recorded_as_one
+q4-bound-removed	linux	q4-bound-removed.patch	--lib -- many_children_are_bounded_and_counted
+q5-empty-list-added	linux	q5-empty-list-added.patch	--lib -- a_call_without_a_child_adds_no_field
+q6-overflow-as-exit	linux	q6-overflow-as-exit.patch	--lib -- output_past_the_cap_is_recorded_as_an_overflow

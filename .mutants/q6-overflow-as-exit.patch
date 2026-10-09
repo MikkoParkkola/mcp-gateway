@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/cli_run.rs b/src/capability/executor/cli_run.rs
+index d348d5572..870381053 100644
+--- a/src/capability/executor/cli_run.rs
++++ b/src/capability/executor/cli_run.rs
+@@ -302,7 +302,7 @@ pub(crate) async fn run(
+     let (ended, result) = match collected {
+         Ok(Ok(outcome)) => (ProcessEnd::of(outcome.status), Ok(outcome)),
+         Ok(Err(Failure::Overflow(max))) => (
+-            ProcessEnd::OutputOverflow,
++            ProcessEnd::Exited(0),
+             Err(Error::Protocol(format!(
+                 "child output passed the {max}-byte limit"
+             ))),

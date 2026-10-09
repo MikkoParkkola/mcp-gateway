@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/audit.rs b/src/gateway/meta_mcp/invoke/audit.rs
+index 515173844..f9cac17ee 100644
+--- a/src/gateway/meta_mcp/invoke/audit.rs
++++ b/src/gateway/meta_mcp/invoke/audit.rs
+@@ -272,7 +272,7 @@ impl DispatchNotes {
+             tenants.extend(self.response_tenants.iter().cloned());
+         }
+         let mut fields = Map::new();
+-        if !self.process.is_empty() {
++        if true {
+             let process: Vec<Value> = self.process.iter().map(|p| p.to_json()).collect();
+             fields.insert("process".into(), process.into());
+             if self.process_total > self.process.len() {

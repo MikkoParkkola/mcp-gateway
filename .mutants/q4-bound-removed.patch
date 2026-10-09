@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/audit.rs b/src/gateway/meta_mcp/invoke/audit.rs
+index 515173844..43f5ee9c8 100644
+--- a/src/gateway/meta_mcp/invoke/audit.rs
++++ b/src/gateway/meta_mcp/invoke/audit.rs
+@@ -83,7 +83,7 @@ const MAX_PROCESS_NOTES: usize = 16;
+ pub(crate) fn note_process(process: ProcessNote) {
+     note(|notes| {
+         notes.process_total += 1;
+-        if notes.process.len() < MAX_PROCESS_NOTES {
++        if notes.process.len() < usize::MAX {
+             notes.process.push(process);
+         }
+     });
