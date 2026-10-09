@@ -17,13 +17,10 @@
 //! issuer, so each task owner is a verified identity. Static API keys own
 //! tasks too (by credential, MIK-7967); this file exercises the OIDC owner.
 //!
-//! Unix-non-Apple only: `Gateway::kill` is a unix `SIGKILL`, and the child can
-//! be told to trust the temporary issuer's CA only through `SSL_CERT_FILE`,
-//! which the gateway's TLS verifier honours on that branch alone (see
-//! `task_upstream_recovery_sdk/pins.rs`). macOS CI builds tests without
-//! running them.
-// Unix-non-Apple only: SIGKILL and SSL_CERT_FILE; see the module header.
-#![cfg(all(unix, not(target_vendor = "apple")))]
+//! Unix only: `Gateway::kill` is a unix `SIGKILL`. The child trusts the
+//! temporary issuer's CA through `SSL_CERT_FILE` (Linux) and the debug-only
+//! `MCP_GATEWAY_TEST_TRUST_CA` (every platform; MIK-8188).
+#![cfg(unix)]
 
 #[path = "task_upstream_recovery/helper.rs"]
 #[allow(
@@ -104,7 +101,12 @@ impl Principals {
         log_name: &str,
         extra: &[(&str, &str)],
     ) -> Gateway {
-        let mut env = vec![("SSL_CERT_FILE", self.ca.as_str())];
+        // SSL_CERT_FILE for Linux's verifier; the debug-only test root for
+        // every platform (macOS reads its keychain; MIK-8188).
+        let mut env = vec![
+            ("SSL_CERT_FILE", self.ca.as_str()),
+            ("MCP_GATEWAY_TEST_TRUST_CA", self.ca.as_str()),
+        ];
         env.extend_from_slice(extra);
         Gateway::start_with_env(root, config, log_name, &env)
     }

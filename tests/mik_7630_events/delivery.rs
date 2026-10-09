@@ -42,8 +42,8 @@ pub async fn start_cfg_env(
     cfg: Value,
     extra: &[(&str, &str)],
 ) -> Gateway {
-    let (k, v) = receiver.trust_env();
-    let mut env = vec![(k, v.as_str())];
+    let trust = receiver.trust_env();
+    let mut env: Vec<(&str, &str)> = trust.iter().map(|(k, v)| (*k, v.as_str())).collect();
     env.extend_from_slice(extra);
     let gw = Gateway::start_with_env(root, cfg, &env).await;
     gw.event_names(Some(ALICE), Some(EVENT)).await;

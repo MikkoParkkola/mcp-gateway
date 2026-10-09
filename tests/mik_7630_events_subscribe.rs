@@ -5,12 +5,11 @@
 //! challenge and tail clauses, T48, T51).
 //!
 //! The receiver speaks real TLS under a temporary CA, handed to the gateway
-//! child through `SSL_CERT_FILE`. The gateway's client resolves roots through
-//! rustls-platform-verifier, which honours that variable only on Unix other
-//! than Apple, so these rows run there (the same limit as
-//! `tests/task_upstream_recovery_sdk/pins.rs`); no test-only trust knob is
-//! added to the product.
-#![cfg(all(unix, not(target_vendor = "apple")))]
+//! child through `Receiver::trust_env`: `SSL_CERT_FILE`, which the
+//! platform verifier reads on Linux, and the debug-only
+//! `MCP_GATEWAY_TEST_TRUST_CA`, which `src/test_trust.rs` honours on every
+//! platform (macOS reads its keychain; MIK-8188).
+#![cfg(unix)]
 
 #[path = "mik_7630_events/gateway.rs"]
 #[allow(dead_code, reason = "shared harness; each binary uses a subset")]
@@ -29,8 +28,9 @@ use serde_json::{Value, json};
 async fn start(root: &Path, receiver: &Receiver, events: Value) -> Gateway {
     let mut events = events;
     events["callback_allow_private"] = json!(["127.0.0.0/8"]);
-    let (k, v) = receiver.trust_env();
-    let gw = Gateway::start_with_env(root, config(root, &events), &[(k, &v)]).await;
+    let trust = receiver.trust_env();
+    let env = trust.each_ref().map(|(k, v)| (*k, v.as_str()));
+    let gw = Gateway::start_with_env(root, config(root, &events), &env).await;
     gw.event_names(Some(ALICE), Some(EVENT)).await;
     gw
 }

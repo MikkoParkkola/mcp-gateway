@@ -178,6 +178,10 @@ fn verification_reply(shared: &Shared, headers: HeaderMap, body: &Bytes) -> (Sta
     }
 }
 
+/// The debug-only variable naming extra test roots the gateway trusts on
+/// every platform (MIK-8188); `src/test_trust.rs` reads it.
+pub const TRUST_CA: &str = "MCP_GATEWAY_TEST_TRUST_CA";
+
 impl Receiver {
     /// Generate a CA and a `127.0.0.1` / `localhost` leaf, serve, and write the CA to
     /// `root/receiver-ca.pem` for the gateway child's `SSL_CERT_FILE`.
@@ -283,9 +287,13 @@ impl Receiver {
             .collect()
     }
 
-    /// `SSL_CERT_FILE` for a gateway child that must trust this receiver.
-    pub fn trust_env(&self) -> (&'static str, String) {
-        ("SSL_CERT_FILE", self.ca_file.to_string_lossy().into_owned())
+    /// The environment for a gateway child that must trust this receiver:
+    /// `SSL_CERT_FILE`, which the verifier reads on Linux, and the debug-only
+    /// `MCP_GATEWAY_TEST_TRUST_CA`, which it honours everywhere (macOS reads
+    /// its keychain, not `SSL_CERT_FILE`; MIK-8188).
+    pub fn trust_env(&self) -> [(&'static str, String); 2] {
+        let file = self.ca_file.to_string_lossy().into_owned();
+        [("SSL_CERT_FILE", file.clone()), (TRUST_CA, file)]
     }
 }
 
