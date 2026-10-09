@@ -246,6 +246,7 @@ fn default_hebb_max_entries() -> usize {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CheckpointPolicy {
     /// Interval between snapshots, in seconds.
+    #[serde(deserialize_with = "crate::duration_bound::secs")]
     pub interval_secs: u64,
 
     /// Maximum number of snapshots to retain.

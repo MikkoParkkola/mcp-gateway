@@ -427,6 +427,16 @@ fn select<'a>(config: &'a McpConfig, params: &Value) -> Result<Selected<'a>> {
     }
 }
 
+/// `deadline` from now. MIK-8207: the parser bounds a provider timeout, and a
+/// deadline no clock can hold is still refused rather than added unchecked.
+fn ends_after(deadline: Duration) -> Result<Instant> {
+    Instant::now().checked_add(deadline).ok_or_else(|| {
+        Error::Config(crate::duration_bound::too_long(
+            "the capability's provider timeout",
+        ))
+    })
+}
+
 /// Poll `wait.tool` until `until` holds, `max_wait_s` passes, or the call's
 /// own deadline cuts in. A poll that errors or does not match yet is "not
 /// ready", never fatal: the server answers an absent or unfinished item with
@@ -452,11 +462,12 @@ async fn wait_ready(
     // Absolute: the configured wait, cut short by what is left of the call's own
     // deadline (less a second), so running out here is the non-evicting wait
     // timeout and never the outer timeout that discards the child.
-    let ends = (Instant::now() + Duration::from_secs(wait.max_wait_s)).min(
-        call_ends
-            .checked_sub(Duration::from_secs(1))
-            .unwrap_or_else(Instant::now),
-    );
+    let cap = call_ends
+        .checked_sub(Duration::from_secs(1))
+        .unwrap_or_else(Instant::now);
+    let ends = Instant::now()
+        .checked_add(Duration::from_secs(wait.max_wait_s))
+        .map_or(cap, |wait_ends| wait_ends.min(cap));
     let interval = Duration::from_millis(wait.interval_ms);
     loop {
         let poll = tokio::time::timeout_at(
@@ -482,7 +493,10 @@ async fn wait_ready(
         {
             return Ok(found.clone());
         }
-        if Instant::now() + interval >= ends {
+        if Instant::now()
+            .checked_add(interval)
+            .is_none_or(|next| next >= ends)
+        {
             return Err(Error::BackendTimeout(
                 "not finished within the wait; poll again to keep waiting".to_string(),
             ));
@@ -598,7 +612,7 @@ impl CapabilityExecutor {
         let backend = lease.backend;
         let _busy = lease.busy;
         let child_id = lease.id;
-        let call_ends = Instant::now() + deadline;
+        let call_ends = ends_after(deadline)?;
         let outcome = tokio::time::timeout(deadline, async {
             let mut args = arguments(template, &params)?;
             // Once any round has reached the backend, a later round's refusal

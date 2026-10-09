@@ -33,6 +33,7 @@ mod qualification;
 mod reread;
 mod sealed;
 mod skipped;
+mod stop_serving;
 mod support;
 mod targets;
 #[cfg(windows)]

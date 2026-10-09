@@ -284,7 +284,10 @@ pub struct WaitStep {
     /// When to stop polling.
     pub until: WaitUntil,
     /// Pause between polls, 200 to 5000 ms.
-    #[serde(default = "default_wait_interval_ms")]
+    #[serde(
+        default = "default_wait_interval_ms",
+        deserialize_with = "crate::duration_bound::millis"
+    )]
     pub interval_ms: u64,
     /// Longest the wait may last, in seconds; at most the provider timeout
     /// minus 10 s.

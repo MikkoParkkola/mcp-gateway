@@ -354,6 +354,8 @@ async fn a_refused_credential_is_the_typed_unauthorized_error() {
         crate::security::http_diagnostics::is_upstream_unauthorized(&err),
         "{err}"
     );
+    // The caller still sees the code a CLI refusal has always carried.
+    assert_eq!(err.to_rpc_code(), 401, "{err}");
 }
 
 #[test]

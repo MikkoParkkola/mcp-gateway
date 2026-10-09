@@ -389,13 +389,20 @@ impl IdentityPropagation for TokenExchangeStrategy {
             .expires_in
             .unwrap_or(DEFAULT_EXCHANGED_TOKEN_TTL_SECS)
             .max(1);
-        // saturating_add: a hostile/compromised STS returning `expires_in` near
-        // `i64::MAX` must not overflow (debug panic; release wraps to
-        // instantly-expired) — MIK-6729 review L2. Saturating to `i64::MAX`
-        // is safe: it only ever makes the cache entry live *longer* under
-        // attack, which `reap_expired`/IDP.6 already bound via
-        // `MAX_CACHE_ENTRIES`, never a security downgrade.
-        let expires_at = now.saturating_add(ttl);
+        // A hostile or broken STS answering `expires_in` near `i64::MAX` must
+        // not overflow (MIK-6729 review L2), nor be trusted for centuries: an
+        // answer above the 100-year bound is malformed and refused (MIK-8207).
+        let expires_at = u64::try_from(now)
+            .ok()
+            .and_then(|now| crate::duration_bound::expiry_from_expires_in(now, ttl.unsigned_abs()))
+            .and_then(|at| i64::try_from(at).ok())
+            .ok_or_else(|| {
+                PropagationError::Refuse(format!(
+                    "token-exchange endpoint {} answered expires_in {ttl}, \
+                     more than 100 years; the answer is refused as malformed",
+                    crate::security::sanitize::redact_url_for_diagnostics(endpoint)
+                ))
+            })?;
         let scopes: Vec<String> = body
             .scope
             .unwrap_or_default()
@@ -459,11 +466,12 @@ mod tests {
     // L2 (MIK-6729 review): a hostile/compromised STS returning `expires_in`
     // at `i64::MAX` must not panic (debug builds overflow-check `now + ttl`)
     // or silently wrap to an instantly-expired credential (release builds).
-    // `now.saturating_add(ttl)` clamps to `i64::MAX` instead — a real HTTP
-    // round trip against a minimal in-process server standing in for the
-    // hostile STS, not a unit test of `i64::saturating_add` in isolation.
+    // MIK-8207: nor is it trusted for centuries; an `expires_in` above the
+    // 100-year bound is a malformed answer and the exchange is refused. A
+    // real HTTP round trip against a minimal in-process server standing in
+    // for the hostile STS.
     #[tokio::test]
-    async fn hostile_expires_in_i64_max_does_not_overflow() {
+    async fn hostile_expires_in_i64_max_is_refused() {
         use axum::{Json, Router, routing::post};
         use tokio::net::TcpListener;
 
@@ -492,15 +500,12 @@ mod tests {
         );
         let endpoint = format!("http://{addr}/token");
 
-        let cred = s
+        let refused = s
             .propagate(&identity("alice"), &backend(Some(&endpoint)))
             .await
-            .expect("a hostile but well-formed expires_in must not panic or refuse");
-        assert_eq!(
-            cred.expires_at,
-            i64::MAX,
-            "must saturate to i64::MAX, never overflow/panic/wrap"
-        );
+            .map(|cred| cred.expires_at)
+            .expect_err("an expires_in above 100 years is refused, never trusted");
+        assert!(refused.to_string().contains("expires_in"), "{refused}");
 
         server.abort();
     }
