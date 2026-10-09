@@ -26,14 +26,21 @@ enum DocSource {
 /// The source `UPGRADING_DOC`'s value selects. Takes the value, not the
 /// environment, so both branches are tested without setting a variable.
 fn doc_source(var: Option<std::ffi::OsString>) -> DocSource {
-    var.map_or(DocSource::Committed, |_| DocSource::Committed)
+    match var {
+        Some(path) if !path.is_empty() => DocSource::Assembled(path.into()),
+        _ => DocSource::Committed,
+    }
 }
 
 /// The guide text for `source`, line endings normalised: a Windows checkout
 /// reads it with CRLF.
 fn read_doc(source: &DocSource) -> String {
-    let _ = source;
-    DOC.replace("\r\n", "\n")
+    match source {
+        DocSource::Committed => DOC.replace("\r\n", "\n"),
+        DocSource::Assembled(path) => std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("UPGRADING_DOC={}: {e}", path.display()))
+            .replace("\r\n", "\n"),
+    }
 }
 
 /// The item numbers in the summary table: the `| N |` rows between the
@@ -509,7 +516,33 @@ fn superseded_items_point_at_their_successor() {
                 "item {n} names item {later} as superseding it; it must be a later item"
             );
         }
+        // MIK-8185: a successor still in `upgrading.d/` is named by its title.
+        for line in body.lines() {
+            let Some(rest) = line.strip_prefix("> Superseded in part by ") else {
+                continue;
+            };
+            if rest.starts_with("item") {
+                continue;
+            }
+            let name = rest.split_once(':').map_or(rest, |(name, _)| name).trim();
+            resolve_successor(&GUIDE, &pending_titles(), *n, name)
+                .unwrap_or_else(|e| panic!("{e}"));
+        }
     }
+}
+
+/// Titles of the pending fragments the checks see: none when `UPGRADING_DOC`
+/// names an assembled guide, which already holds them as numbered items.
+fn pending_titles() -> Vec<String> {
+    if doc_source(std::env::var_os("UPGRADING_DOC")) != DocSource::Committed {
+        return Vec::new();
+    }
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("upgrading.d");
+    pending_fragments(&dir)
+        .iter()
+        .filter_map(|(_, text)| text.lines().find_map(|l| l.strip_prefix("## ")))
+        .map(|t| t.trim().to_string())
+        .collect()
 }
 
 /// The walkthrough section.
@@ -615,16 +648,31 @@ fn read_doc_reads_the_selected_guide() {
 /// The pending `upgrading.d/` fragments, by file name, CRLF normalised. None in
 /// a tree without the directory.
 fn pending_fragments(dir: &std::path::Path) -> Vec<(String, String)> {
-    let _ = dir;
-    Vec::new()
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(String, String)> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".md"))
+        .map(|name| {
+            let text = std::fs::read_to_string(dir.join(&name))
+                .unwrap_or_else(|e| panic!("upgrading.d/{name}: {e}"))
+                .replace("\r\n", "\n");
+            (name, text)
+        })
+        .collect();
+    found.sort();
+    found
 }
 
 /// A fragment's startup marker text: the first non-blank line after its one
 /// `## ` title, which must start with `**Startup:** `.
 fn fragment_marker<'a>(name: &str, text: &'a str) -> Result<&'a str, String> {
-    text.lines()
-        .last()
-        .ok_or_else(|| format!("upgrading.d/{name}: empty"))
+    let mut after_title = text.lines().skip_while(|l| !l.starts_with("## ")).skip(1);
+    let line = after_title.find(|l| !l.trim().is_empty()).unwrap_or("");
+    line.strip_prefix(MARKER)
+        .ok_or_else(|| format!("upgrading.d/{name}: the first line after the title must start with `{MARKER}`: {line:?}"))
 }
 
 /// MIK-8185: every pending fragment's marker obeys the same grammar as a
@@ -685,11 +733,41 @@ fn resolve_successor(
     from: u32,
     name: &str,
 ) -> Result<(), String> {
-    let _ = (doc, fragment_titles, from);
-    if name.is_empty() {
-        return Err("an empty successor".to_string());
+    let later = |n: u32| {
+        if n > from {
+            Ok(())
+        } else {
+            Err(format!(
+                "item {from} names item {n} as superseding it; it must be a later item"
+            ))
+        }
+    };
+    if let Some(n) = name
+        .strip_prefix("item ")
+        .and_then(|n| n.parse::<u32>().ok())
+    {
+        return if sections(doc).contains(&n) {
+            later(n)
+        } else {
+            Err(format!(
+                "item {from} names item {n}, and there is no item {n}"
+            ))
+        };
     }
-    Ok(())
+    for line in doc.lines() {
+        if let Some((n, title)) = line.strip_prefix("## ").and_then(|r| r.split_once(". "))
+            && title.trim() == name
+            && let Ok(n) = n.parse::<u32>()
+        {
+            return later(n);
+        }
+    }
+    if fragment_titles.iter().any(|t| t == name) {
+        return Ok(()); // a pending entry is numbered after every committed one
+    }
+    Err(format!(
+        "item {from} names `{name}`, which is no item or pending entry"
+    ))
 }
 
 #[test]
