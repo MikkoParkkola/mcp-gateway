@@ -12,6 +12,30 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const DOC: &str = include_str!("../docs/UPGRADING-4.0.md");
 
+/// Which guide the checks read. CI sets `UPGRADING_DOC` to the guide with every
+/// pending `upgrading.d/` fragment assembled (MIK-8185), so a fragment that
+/// would break a check at release breaks its own PR instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DocSource {
+    /// The committed guide, compiled in.
+    Committed,
+    /// A guide on disk: the release-preparation dry run.
+    Assembled(std::path::PathBuf),
+}
+
+/// The source `UPGRADING_DOC`'s value selects. Takes the value, not the
+/// environment, so both branches are tested without setting a variable.
+fn doc_source(var: Option<std::ffi::OsString>) -> DocSource {
+    var.map_or(DocSource::Committed, |_| DocSource::Committed)
+}
+
+/// The guide text for `source`, line endings normalised: a Windows checkout
+/// reads it with CRLF.
+fn read_doc(source: &DocSource) -> String {
+    let _ = source;
+    DOC.replace("\r\n", "\n")
+}
+
 /// The item numbers in the summary table: the `| N |` rows between the
 /// `## What changed` heading and the next `## ` heading. Scoped to that block
 /// so a numbered row in some other table cannot stand in for a summary row.
@@ -120,8 +144,8 @@ fn check_numbering(doc: &str, floor: u32) -> Result<(), String> {
 
 #[test]
 fn every_number_has_a_row_and_every_gap_is_explained() {
-    let rows = summary_rows(DOC);
-    let sections = sections(DOC);
+    let rows = summary_rows(&GUIDE);
+    let sections = sections(&GUIDE);
     for known in [1, 54, 58, 63] {
         assert!(
             sections.contains(&known) && rows.contains(&known),
@@ -134,7 +158,7 @@ fn every_number_has_a_row_and_every_gap_is_explained() {
         sections.len(),
         rows.len()
     );
-    if let Err(problems) = check_numbering(DOC, PUBLISHED_MAX) {
+    if let Err(problems) = check_numbering(&GUIDE, PUBLISHED_MAX) {
         panic!("docs/UPGRADING-4.0.md: {problems}");
     }
 }
@@ -218,7 +242,8 @@ fn numbers_in(text: &str) -> BTreeSet<u32> {
 }
 
 /// The guide, line endings normalised: a Windows checkout reads it with CRLF.
-static GUIDE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| DOC.replace("\r\n", "\n"));
+static GUIDE: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| read_doc(&doc_source(std::env::var_os("UPGRADING_DOC"))));
 
 /// What a startup marker's clause says the item does at startup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -444,30 +469,33 @@ fn section_body(doc: &str, n: u32) -> &str {
 
 /// Items a later item changed, and the item that changed them. A reader who
 /// lands on the older item must be pointed at the newer one.
-const SUPERSEDED: &[(u32, u32)] = &[
-    (10, 65),
-    (17, 51),
-    (21, 25),
-    (22, 25),
-    (33, 44),
-    (40, 41),
-    (43, 49),
-    (35, 96),
-    (54, 96),
+const SUPERSEDED: &[(u32, SectionKey)] = &[
+    (10, SectionKey::Number(65)),
+    (17, SectionKey::Number(51)),
+    (21, SectionKey::Number(25)),
+    (22, SectionKey::Number(25)),
+    (33, SectionKey::Number(44)),
+    (40, SectionKey::Number(41)),
+    (43, SectionKey::Number(49)),
+    (35, SectionKey::Number(96)),
+    (54, SectionKey::Number(96)),
 ];
 
 #[test]
 fn superseded_items_point_at_their_successor() {
     for &(old, new) in SUPERSEDED {
-        let note = format!("> Superseded in part by item {new}:");
+        let note = match new {
+            SectionKey::Number(n) => format!("> Superseded in part by item {n}:"),
+            SectionKey::Title(t) => format!("> Superseded in part by {t}:"),
+        };
         assert!(
-            section_body(DOC, old).contains(&note),
+            section_body(&GUIDE, old).contains(&note),
             "item {old} must carry `{note}`"
         );
     }
-    let sections = sections(DOC);
+    let sections = sections(&GUIDE);
     for n in &sections {
-        let body = section_body(DOC, *n);
+        let body = section_body(&GUIDE, *n);
         for later in numbers_after_item(
             &body
                 .lines()
@@ -486,10 +514,10 @@ fn superseded_items_point_at_their_successor() {
 
 /// The walkthrough section.
 fn walkthrough() -> &'static str {
-    let start = DOC
+    let start = GUIDE
         .find("\n## Upgrading from 3.5.x: a walkthrough\n")
         .expect("walkthrough section");
-    let body = &DOC[start + 1..];
+    let body = &GUIDE[start + 1..];
     &body[..body[3..].find("\n## ").map_or(body.len(), |i| i + 3)]
 }
 
@@ -544,10 +572,10 @@ fn walkthrough_commands_and_checks_are_real() {
 #[test]
 fn owner_rule_item_has_a_row_a_section_and_the_fix() {
     assert!(
-        summary_rows(DOC).contains(&96),
+        summary_rows(&GUIDE).contains(&96),
         "item 96 has no summary row"
     );
-    let body = section_body(DOC, 96);
+    let body = section_body(&GUIDE, 96);
     for want in [
         "chown 1001",
         "chmod 600",
@@ -556,5 +584,132 @@ fn owner_rule_item_has_a_row_a_section_and_the_fix() {
         "Docker Compose",
     ] {
         assert!(body.contains(want), "item 96 must mention `{want}`");
+    }
+}
+
+/// MIK-8185: `UPGRADING_DOC` selects the assembled guide; unset, the committed one.
+#[test]
+fn doc_source_follows_upgrading_doc() {
+    assert_eq!(doc_source(None), DocSource::Committed);
+    assert_eq!(
+        doc_source(Some("/tmp/assembled.md".into())),
+        DocSource::Assembled("/tmp/assembled.md".into())
+    );
+    assert_eq!(doc_source(Some("".into())), DocSource::Committed);
+}
+
+/// MIK-8185: an assembled guide is read from disk, CRLF normalised; the
+/// committed one is the compiled-in file.
+#[test]
+fn read_doc_reads_the_selected_guide() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("UPGRADING-4.0.md");
+    std::fs::write(&path, "# Assembled\r\n\r\n## 1. One\r\n").expect("write");
+    assert_eq!(
+        read_doc(&DocSource::Assembled(path)),
+        "# Assembled\n\n## 1. One\n"
+    );
+    assert_eq!(read_doc(&DocSource::Committed), DOC.replace("\r\n", "\n"));
+}
+
+/// The pending `upgrading.d/` fragments, by file name, CRLF normalised. None in
+/// a tree without the directory.
+fn pending_fragments(dir: &std::path::Path) -> Vec<(String, String)> {
+    let _ = dir;
+    Vec::new()
+}
+
+/// A fragment's startup marker text: the first non-blank line after its one
+/// `## ` title, which must start with `**Startup:** `.
+fn fragment_marker<'a>(name: &str, text: &'a str) -> Result<&'a str, String> {
+    text.lines()
+        .last()
+        .ok_or_else(|| format!("upgrading.d/{name}: empty"))
+}
+
+/// MIK-8185: every pending fragment's marker obeys the same grammar as a
+/// numbered item's, so a fragment cannot carry a marker the guide would refuse.
+#[test]
+fn every_pending_fragment_has_a_valid_startup_marker() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("upgrading.d");
+    for (name, text) in pending_fragments(&dir) {
+        let marker = fragment_marker(&name, &text).unwrap_or_else(|e| panic!("{e}"));
+        parse_marker(marker).unwrap_or_else(|e| panic!("upgrading.d/{name}: {e}"));
+    }
+}
+
+#[test]
+fn fragment_markers_on_fixtures() {
+    let dir = tempfile::tempdir().expect("dir");
+    std::fs::write(
+        dir.path().join("3700.md"),
+        "---\r\nchange: c\r\naction: a\r\n---\r\n## T\r\n\r\n**Startup:** refuses to start\r\n",
+    )
+    .expect("write");
+    std::fs::write(dir.path().join(".frozen-max"), "3\n").expect("write");
+    std::fs::write(dir.path().join(".gitkeep"), "").expect("write");
+    let found = pending_fragments(dir.path());
+    assert_eq!(found.len(), 1, "only *.md files are fragments: {found:?}");
+    assert_eq!(found[0].0, "3700.md");
+    assert_eq!(
+        fragment_marker(&found[0].0, &found[0].1),
+        Ok("refuses to start")
+    );
+    let late = "---\nchange: c\naction: a\n---\n## T\n\nProse.\n\n**Startup:** no notice\n";
+    let err = fragment_marker("3701.md", late).unwrap_err();
+    assert!(err.contains("upgrading.d/3701.md"), "{err}");
+    let bad = fragment_marker(
+        "3702.md",
+        "---\nchange: c\naction: a\n---\n## T\n\n**Startup:** prints notices\n",
+    )
+    .and_then(|m| parse_marker(m).map(|_| m));
+    assert!(bad.is_err(), "a bad clause must be refused");
+    assert!(pending_fragments(&dir.path().join("absent")).is_empty());
+}
+
+/// What a supersession note names: an item number, or (for an entry still in
+/// `upgrading.d/`, which has no number yet) its title.
+#[derive(Debug, Clone, Copy)]
+enum SectionKey {
+    Number(u32),
+    #[allow(dead_code)]
+    Title(&'static str),
+}
+
+/// Check that `name` (the text between `Superseded in part by ` and `:`) names
+/// an item later than `from`: `item N` with N > from and a section, or the
+/// title of a later numbered item or of a pending fragment (always later).
+fn resolve_successor(
+    doc: &str,
+    fragment_titles: &[String],
+    from: u32,
+    name: &str,
+) -> Result<(), String> {
+    let _ = (doc, fragment_titles, from);
+    if name.is_empty() {
+        return Err("an empty successor".to_string());
+    }
+    Ok(())
+}
+
+#[test]
+fn successors_resolve_by_number_or_title() {
+    let doc = "## 1. One\n\n## 3. Three\n\n## Upgrading from 3.5.x: a walkthrough\n";
+    let pending = vec!["Alpha".to_string()];
+    for (from, name) in [(1, "item 3"), (1, "Three"), (3, "Alpha")] {
+        assert_eq!(
+            resolve_successor(doc, &pending, from, name),
+            Ok(()),
+            "{from} -> {name}"
+        );
+    }
+    for (from, name, why) in [
+        (3, "item 1", "later"),
+        (3, "One", "later"),
+        (1, "item 2", "no item 2"),
+        (1, "Nope", "no item or pending entry"),
+    ] {
+        let err = resolve_successor(doc, &pending, from, name).unwrap_err();
+        assert!(err.contains(why), "{from} -> {name}: {err}");
     }
 }

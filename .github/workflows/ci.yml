@@ -1002,6 +1002,8 @@ jobs:
         run: python3 scripts/release/test_c6_mutation_sample.py
       - name: Every user-facing surface item is classified (MIK-8044)
         run: python3 scripts/release/test_check_surface_inventory.py
+      - name: Test the UPGRADING fragment assembler (MIK-8185)
+        run: python3 scripts/release/test_upgrading_fragments.py
       # Proves the workflow-wiring assertions still discriminate: each case
       # breaks one rule, or restates it in an equivalent spelling, and the
       # suite has to return the stated verdict. Runs against a copy of the

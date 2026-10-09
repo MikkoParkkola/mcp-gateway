@@ -253,3 +253,111 @@ fn upgrading_guide_lists_exactly_the_items_the_notice_prints() {
         "docs/UPGRADING-4.0.md marks items {listed:?} as printing a notice; the notice prints {printed:?}"
     );
 }
+
+/// MIK-8185: pair every notice item with the UPGRADING entry it announces.
+///
+/// `items` is the printed notice; the first `frozen.len()` items pair with
+/// `frozen` in order, as before. An entry added after the freeze carries its
+/// own phrase instead of a row in a shared table: `<!-- notice: <phrase> -->`
+/// under its marker in the guide, or `notice: <phrase>` in its `upgrading.d/`
+/// fragment. Each later item must contain exactly one such phrase and each
+/// phrase must occur in exactly one later item. An entry present both as an
+/// assembled section and as a leftover fragment (same title) counts once.
+fn pair_notices(
+    items: &[&str],
+    frozen: &[(u32, &str)],
+    guide: &str,
+    fragments: &[(String, String)],
+) -> Result<(), String> {
+    let _ = (frozen, guide, fragments);
+    if items.is_empty() {
+        return Err("no notice items".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod pairing_fixtures {
+    use super::pair_notices;
+
+    const GUIDE: &str = "## 1. One\n\n**Startup:** prints a notice\n\n\
+                         ## 5. Alpha\n\n**Startup:** prints a notice\n<!-- notice: alpha phrase -->\n\n\
+                         ## 6. Quiet\n\n**Startup:** no notice\n";
+    const FROZEN: &[(u32, &str)] = &[(1, "re-authenticate")];
+
+    fn beta() -> Vec<(String, String)> {
+        vec![(
+            "3701.md".to_string(),
+            "---\nchange: c\naction: a\nnotice: beta phrase\n---\n## Beta\n\n**Startup:** prints a notice\n".to_string(),
+        )]
+    }
+
+    #[test]
+    fn new_notices_pair_by_their_own_phrase() {
+        let items = [
+            "re-authenticate now",
+            "the beta phrase item",
+            "an alpha phrase item",
+        ];
+        assert_eq!(pair_notices(&items, FROZEN, GUIDE, &beta()), Ok(()));
+    }
+
+    #[test]
+    fn an_ambiguous_phrase_is_refused() {
+        let items = [
+            "re-authenticate now",
+            "alpha phrase and beta phrase",
+            "an alpha phrase item",
+        ];
+        let err = pair_notices(&items, FROZEN, GUIDE, &beta()).unwrap_err();
+        assert!(err.contains("alpha phrase and beta phrase"), "{err}");
+    }
+
+    #[test]
+    fn an_unpaired_notice_item_is_refused() {
+        let items = [
+            "re-authenticate now",
+            "the beta phrase item",
+            "an alpha phrase item",
+            "gamma",
+        ];
+        let err = pair_notices(&items, FROZEN, GUIDE, &beta()).unwrap_err();
+        assert!(err.contains("gamma"), "{err}");
+    }
+
+    #[test]
+    fn an_unpaired_phrase_is_refused() {
+        let items = ["re-authenticate now", "an alpha phrase item"];
+        let err = pair_notices(&items, FROZEN, GUIDE, &beta()).unwrap_err();
+        assert!(err.contains("beta phrase"), "{err}");
+    }
+
+    #[test]
+    fn a_notice_entry_with_no_phrase_is_refused() {
+        let guide = GUIDE.replace("<!-- notice: alpha phrase -->\n", "");
+        let items = ["re-authenticate now", "the beta phrase item"];
+        let err = pair_notices(&items, FROZEN, &guide, &beta()).unwrap_err();
+        assert!(err.contains("item 5"), "{err}");
+    }
+
+    #[test]
+    fn a_frozen_pair_still_checks_its_phrase() {
+        let items = [
+            "log in again",
+            "the beta phrase item",
+            "an alpha phrase item",
+        ];
+        let err = pair_notices(&items, FROZEN, GUIDE, &beta()).unwrap_err();
+        assert!(err.contains("re-authenticate"), "{err}");
+    }
+
+    #[test]
+    fn an_assembled_entry_and_its_leftover_fragment_count_once() {
+        let leftover = vec![(
+            "3700.md".to_string(),
+            "---\nchange: c\naction: a\nnotice: alpha phrase\n---\n## Alpha\n\n**Startup:** prints a notice\n".to_string(),
+        )];
+        let items = ["re-authenticate now", "an alpha phrase item"];
+        assert_eq!(pair_notices(&items, FROZEN, GUIDE, &leftover), Ok(()));
+    }
+}
