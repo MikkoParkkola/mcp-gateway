@@ -98,6 +98,8 @@ mod direct_notification_slot_tests;
 #[cfg(test)]
 mod direct_notification_wire_tests;
 #[cfg(test)]
+mod direct_request_checks_tests;
+#[cfg(test)]
 mod direct_sole_operator_tests;
 #[cfg(test)]
 mod direct_tasks_owner_tests;
