@@ -569,3 +569,22 @@ async fn a_clock_before_the_epoch_never_reaches_the_token_endpoint() {
         "an unreadable clock sent the authorization code to the provider"
     );
 }
+
+/// MIK-8202: a refresh on a clock before 1970 never reaches the token
+/// endpoint, so a rotated refresh token is never issued and then lost.
+#[tokio::test]
+async fn a_clock_before_the_epoch_never_sends_a_refresh() {
+    let (trace, provider) = google_rig(token_ok(""), false, NOW).await;
+    let _clock = crate::clock::test_clock::before_epoch();
+    let refreshed = RefreshProvider::refresh(
+        &provider,
+        &account("workspace", GOOGLE_ISSUER, RESOURCE),
+        &grant(),
+    )
+    .await;
+    assert!(refreshed.is_err(), "an unreadable clock refreshed a grant");
+    assert!(
+        trace.token_calls().is_empty(),
+        "an unreadable clock sent a refresh to the provider"
+    );
+}

@@ -458,9 +458,12 @@ fn closed_at(task: &Task, record: &Record, now: DateTime<Utc>) -> Option<RoundCl
             .ok()
             .is_none_or(|now| now >= deadline)
     };
+    // The task's lifetime too: a 1969 `now` would read a finite TTL as never
+    // reached, so it counts as elapsed (MIK-8202).
+    let before_epoch = now.timestamp() < 0;
     match deadline {
         Some(deadline) if passed(deadline) => Some(RoundClosed::Continuation(deadline)),
-        _ if task.retention_elapsed(now) => Some(RoundClosed::Ttl),
+        _ if before_epoch || task.retention_elapsed(now) => Some(RoundClosed::Ttl),
         _ => None,
     }
 }

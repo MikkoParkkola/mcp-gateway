@@ -87,10 +87,12 @@ impl EventsHub {
         key: (SourceKind, String),
     ) {
         // A commit that failed after inserting its row (a durability error)
-        // leaves a live holder: the key stays started.
+        // leaves a live holder: the key stays started. A clock that cannot be
+        // read cannot tell, so the key stays too, for reconciliation to decide
+        // once it reads (MIK-8202).
         if self
             .live_keys()
-            .is_some_and(|keys| keys.iter().any(|(live, ..)| *live == key))
+            .is_none_or(|keys| keys.iter().any(|(live, ..)| *live == key))
         {
             return;
         }

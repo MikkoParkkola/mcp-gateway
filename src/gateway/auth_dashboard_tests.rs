@@ -288,6 +288,29 @@ fn a_backward_wall_step_does_not_extend() {
     );
 }
 
+/// MIK-8202: a wall clock stepped before 1970 refuses a dashboard session,
+/// even one with no credential cap that is inside its idle limit: the
+/// monotonic clock alone stops while the host sleeps.
+#[test]
+fn a_session_on_a_clock_before_the_epoch_is_refused() {
+    let before_epoch = std::time::UNIX_EPOCH - Duration::from_secs(1);
+    let (b, h, t0) = issued();
+    assert_eq!(
+        b.check_session(&h, at(t0, JUST_IDLE), &LIMITS, Touch::No),
+        SessionCheck::Valid,
+        "control: inside the idle limit on a readable clock"
+    );
+    let stepped = Now {
+        mono: t0.mono + JUST_IDLE,
+        wall: before_epoch,
+    };
+    assert_eq!(
+        b.check_session(&h, stepped, &LIMITS, Touch::Yes),
+        SessionCheck::Expired,
+        "a clock before 1970 kept a dashboard session"
+    );
+}
+
 /// Revocation removes the handle; a second revocation reports nothing.
 #[test]
 fn revoke_ends_a_session_once() {

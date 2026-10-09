@@ -345,7 +345,12 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
         if send_resource {
             form.push(("resource".to_string(), resource.to_string()));
         }
-
+        // Clock first (MIK-8202): a refresh that rotates the refresh token on
+        // a clock we cannot read would lose the new one when its expiry is
+        // stamped. Only a clock stepping back mid-call can still do that.
+        self.clock
+            .now_unix()
+            .map_err(|_| ProviderRefreshError::Unavailable)?;
         let response = self
             .http
             .post_token(token_endpoint, &form)

@@ -62,12 +62,21 @@ struct SessionTimes {
 }
 
 impl SessionTimes {
-    /// Past the idle or the absolute limit by either clock, or past the cap.
+    /// Past the idle or the absolute limit by either clock, past the cap, or
+    /// judged on a wall clock that reads before 1970.
     fn expired(&self, now: Now, limits: &SessionLimits) -> bool {
-        exceeds(self.last_seen, now, limits.idle)
+        wall_unreadable(now)
+            || exceeds(self.last_seen, now, limits.idle)
             || exceeds(self.issued, now, limits.absolute)
             || self.not_after.is_some_and(|cap| cap_reached(now, cap))
     }
+}
+
+/// A wall clock before 1970 refuses every dashboard credential (MIK-8202):
+/// without it a session would rest on the monotonic clock alone, which stops
+/// while the host sleeps, so a suspend would outlive the idle limit.
+fn wall_unreadable(now: Now) -> bool {
+    now.wall.duration_since(std::time::UNIX_EPOCH).is_err()
 }
 
 /// Whether `now` is at or past the minting credential's expiry `cap`. A wall
@@ -278,7 +287,8 @@ impl DashboardBootstrap {
         let (expired, matches) = {
             let live = slot.as_ref()?;
             (
-                exceeds(live.minted, now, HANDOFF_TTL)
+                wall_unreadable(now)
+                    || exceeds(live.minted, now, HANDOFF_TTL)
                     || live.cap.is_some_and(|cap| cap_reached(now, cap)),
                 bool::from(live.value.as_bytes().ct_eq(candidate.as_bytes())),
             )
