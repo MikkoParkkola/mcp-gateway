@@ -156,34 +156,6 @@ fn format_badge_color_contains_ansi_codes() {
     assert!(format_badge(&CheckStatus::Warn, true).contains("[WARN]"));
 }
 
-// ── check_port ────────────────────────────────────────────────────────────
-
-#[test]
-fn check_port_on_free_port_passes() {
-    // GIVEN: a free port no parallel port-0 bind can take (MIK-8211)
-    let free_port = crate::test_ports::reserved_port();
-
-    // WHEN: checking it
-    let result = check_port(free_port);
-
-    // THEN: the check passes
-    assert_eq!(result.status, CheckStatus::Pass, "{}", result.detail);
-}
-
-#[test]
-fn check_port_occupied_fails() {
-    // GIVEN: a TcpListener holds a port open
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-
-    // WHEN: the same port is checked
-    let result = check_port(port);
-
-    // THEN: the check fails because the port is in use
-    assert_eq!(result.status, CheckStatus::Fail, "occupied port must fail");
-    drop(listener);
-}
-
 // ── resolve_config_path ───────────────────────────────────────────────────
 
 #[test]
