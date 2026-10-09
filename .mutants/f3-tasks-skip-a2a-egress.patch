@@ -1,0 +1,18 @@
+diff --git a/src/gateway/task_service/execution/worker.rs b/src/gateway/task_service/execution/worker.rs
+index 05f05044d..d760c5597 100644
+--- a/src/gateway/task_service/execution/worker.rs
++++ b/src/gateway/task_service/execution/worker.rs
+@@ -531,6 +531,13 @@ pub(super) fn inspect_settled(
+     if response.error.is_some() || response.egress_scanned {
+         return response;
+     }
++    if crate::gateway::router::backend_tool_targets_for_call(state.meta_mcp(), &call.tool, &call.arguments)
++        .iter()
++        .any(|target| target.tool == "send_message")
++    {
++        response.egress_scanned = true;
++        return response;
++    }
+     // MIK-8131: a sealed question this refuses gives its slot back (the async
+     // caller releases it).
+     let sealed = state.meta_mcp().sealed_question("tools/call", &response);

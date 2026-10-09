@@ -1,0 +1,17 @@
+diff --git a/src/gateway/meta_mcp/response_security.rs b/src/gateway/meta_mcp/response_security.rs
+index 39170ac8f..e173f58dc 100644
+--- a/src/gateway/meta_mcp/response_security.rs
++++ b/src/gateway/meta_mcp/response_security.rs
+@@ -218,7 +218,11 @@ impl super::MetaMcp {
+             api_key_name: None,
+             firewall,
+         };
+-        self.scan_egress(&mut response, &at);
++        if context.targets.iter().any(|target| target.tool == "send_message") {
++            response.egress_scanned = true;
++        } else {
++            self.scan_egress(&mut response, &at);
++        }
+         // MIK-7211.PARENT.6: the scope is settled before the chain link and the
+         // MAC, which authenticate this in-memory result; a clamp left to the
+         // serializer would change bytes they already cover.

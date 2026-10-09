@@ -1,0 +1,5 @@
+head_sha	8ec13350c46af1ffde23047d5a2e909df908ccbb
+# MIK-8139 FW.3: egress skipped for A2A, per route
+f1-meta-skips-a2a-egress	linux	f1-meta-skips-a2a-egress.patch	--lib -- gateway::router::errscan_a2a_tests::fw3_an_a2a_answer_with_a_credential_is_screened_on_both_routes
+f2-direct-skips-a2a-egress	linux	f2-direct-skips-a2a-egress.patch	--lib -- gateway::router::errscan_a2a_tests::fw3_an_a2a_answer_with_a_credential_is_screened_on_both_routes
+f3-tasks-skip-a2a-egress	linux	f3-tasks-skip-a2a-egress.patch	--lib -- gateway::router::tests::task_execution_adapter::egress_task::egress_an_a2a_agent_credential_is_screened_by_the_task_worker
