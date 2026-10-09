@@ -1,0 +1,21 @@
+diff --git a/src/gateway/task_service/execution.rs b/src/gateway/task_service/execution.rs
+index 9269813e9..75f379376 100644
+--- a/src/gateway/task_service/execution.rs
++++ b/src/gateway/task_service/execution.rs
+@@ -484,15 +484,7 @@ impl TaskExecutor {
+         // `run_until_cancelled_owned` polls the worker before the token, so a
+         // worker cancelled while its runtime sat idle would take one more step
+         // (and could dispatch to a backend) before noticing.
+-        let token = self.shutdown.clone();
+-        tokio::spawn(async move {
+-            tokio::pin!(worker);
+-            tokio::select! {
+-                biased;
+-                () = token.cancelled() => {}
+-                () = &mut worker => {}
+-            }
+-        });
++        tokio::spawn(self.shutdown.clone().run_until_cancelled_owned(worker));
+     }
+ 
+     fn cancel_signal(&self, id: &str) {
