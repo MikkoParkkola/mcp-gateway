@@ -59,7 +59,7 @@ struct GatedPeer {
 
 impl GatedPeer {
     /// The answers every fixture peer gives outside the submission.
-    fn plain(method: &str, _params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+    fn plain(method: &str) -> JsonRpcResponse {
         let body = match method {
             "initialize" => json!({
                 "protocolVersion": "2025-06-18",
@@ -71,25 +71,29 @@ impl GatedPeer {
             }),
             _ => json!({}),
         };
-        Ok(JsonRpcResponse::success(RequestId::Number(1), body))
+        JsonRpcResponse::success(RequestId::Number(1), body)
     }
 }
 
 #[async_trait::async_trait]
 impl Transport for GatedPeer {
-    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
-        Self::plain(method, params)
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
+        Ok(Self::plain(method))
     }
 
     async fn request_with_task_capability(
         &self,
         method: &str,
-        params: Option<Value>,
+        _params: Option<Value>,
         _extra_headers: &[(String, String)],
         _identity_key: Option<&str>,
     ) -> crate::Result<JsonRpcResponse> {
         if method != "tools/call" {
-            return Self::plain(method, params);
+            return Ok(Self::plain(method));
         }
         // The HTTP transport's contract, played here: the mark is set once the
         // response head is in, never before.
@@ -220,7 +224,7 @@ async fn rig(head: Head, reply: Reply, release: Release) -> Rig {
             .task_executor
             .install_recovery(Arc::new(Recovery(Arc::clone(&cancels))))
     );
-    let (releaser, held) = match release {
+    let (releaser, keep_open) = match release {
         Release::OnCancel => (Some(open), None),
         Release::Never => (None, Some(open)),
         Release::Immediately => {
@@ -238,7 +242,7 @@ async fn rig(head: Head, reply: Reply, release: Release) -> Rig {
         delivered,
         dropped,
         cancels,
-        _held: held,
+        _held: keep_open,
     }
 }
 
@@ -389,13 +393,13 @@ impl CommitObserver for CancelAtCapture {
         if stage != CommitStage::BeforeCapture || self.fired.swap(true, Ordering::SeqCst) {
             return;
         }
-        let state = self
+        let app = self
             .state
             .lock()
             .upgrade()
             .expect("the suite state is alive");
         let cancelled = post(
-            &state,
+            &app,
             "key-a",
             task_method(3, "tasks/cancel", json!({ "taskId": task_id })),
         )
