@@ -1,0 +1,2 @@
+head_sha	547bf59290231b62645c825b3568c1b6cfde0303
+mc1-challenge-clock-fail-open	linux	mc1-challenge-clock-fail-open.patch	--lib -- a_destructive_call_on_a_clock_before_the_epoch_is_refused

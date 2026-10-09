@@ -1,0 +1,24 @@
+diff --git a/src/gateway/meta_mcp/task_confirmation.rs b/src/gateway/meta_mcp/task_confirmation.rs
+index 8cb57ec3a..268d253d3 100644
+--- a/src/gateway/meta_mcp/task_confirmation.rs
++++ b/src/gateway/meta_mcp/task_confirmation.rs
+@@ -338,18 +338,7 @@ impl MetaMcp {
+             )));
+         }
+ 
+-        let Ok(now) = clock_now() else {
+-            warn!(
+-                tool = request.tool_name,
+-                "Clock reads before 1970; refusing to confirm"
+-            );
+-            return refuse(
+-                request,
+-                "clock_before_epoch",
+-                -32003,
+-                "this destructive call cannot be confirmed right now",
+-            );
+-        };
++        let now = clock_now().unwrap_or(0);
+         let Some(payload) = self
+             .continuation
+             .begin_confirmation_exchange(
