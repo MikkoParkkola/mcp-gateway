@@ -369,16 +369,6 @@ async fn dispatch_in_scope(
     propagated_headers: &[(String, String)],
     identity_key: Option<&str>,
 ) -> crate::Result<JsonRpcResponse> {
-    // `method` here is client-chosen, so this funnel refuses whatever the
-    // peer's era removed before it reaches the wire (MIK-7217, OUTBOUND.1),
-    // with the caller's own id: an `id: null` error cannot be correlated.
-    if crate::gateway::meta_mcp::era_removed_method(backend, method).await {
-        return Ok(JsonRpcResponse::error(
-            Some(id.clone()),
-            crate::protocol::era::METHOD_NOT_FOUND_CODE,
-            format!("{method} was removed in protocol revision 2026-07-28"),
-        ));
-    }
     // Collected and discarded unread: nothing reaches a client, so no screen.
     let (response, _discarded) = crate::transport::notification_sink::collect(None, async {
         if propagated_headers.is_empty() && identity_key.is_none() {
@@ -390,6 +380,19 @@ async fn dispatch_in_scope(
         }
     })
     .await;
+    // `method` is client-chosen. The backend refuses whatever the dispatched
+    // slot's era removed, before the wire (MIK-7217 OUTBOUND.1, MIK-8186); the
+    // refusal is answered here with the caller's own id, since an `id: null`
+    // error cannot be correlated.
+    if let Err(error) = &response
+        && let Some(message) = crate::backend::removed_method_refusal_message(error)
+    {
+        return Ok(JsonRpcResponse::error(
+            Some(id.clone()),
+            crate::protocol::era::METHOD_NOT_FOUND_CODE,
+            message.to_string(),
+        ));
+    }
     // MIK-7116.MIN.2: what the backend sent counts as read here, before a
     // list drain, filter or normalisation drops fields. `tools/call` notes
     // its result at its gates instead, once they pass.

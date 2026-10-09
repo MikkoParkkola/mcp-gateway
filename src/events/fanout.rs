@@ -129,10 +129,7 @@ impl EventsHub {
                 self.offer(services, event, &sub).await;
                 continue;
             }
-            match source
-                .authorize(&sub.principal, &sub.name, &sub.arguments)
-                .await
-            {
+            match source.authorize_row(&sub).await {
                 Ok(()) => {}
                 // The source no longer lets the principal hold this: the
                 // subscription ends, so its upstream work can stop.
