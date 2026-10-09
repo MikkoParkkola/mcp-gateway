@@ -1,0 +1,11 @@
+diff --git a/src/gateway/meta_mcp/invoke/nonce_settle.rs b/src/gateway/meta_mcp/invoke/nonce_settle.rs
+index 3c3e095..4ff19e6 100644
+--- a/src/gateway/meta_mcp/invoke/nonce_settle.rs
++++ b/src/gateway/meta_mcp/invoke/nonce_settle.rs
+@@ -35,5 +35,5 @@ pub(crate) fn give_back_unsent(
+     if let Some(reservation) = reservation.as_mut() {
+         reservation.release();
+     }
+-    ask_refund(caller);
++    let _ = caller;
+ }

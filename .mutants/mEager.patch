@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index 98ed262..91522d2 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -417,7 +417,7 @@ impl MetaMcp {
+                 trace_id,
+                 caller_key: None,
+             })
+-            .inspect_err(|_| nonce_settle::ask_refund(caller))?;
++            .inspect_err(|_| self.release_unasked_nonce(caller))?;
+         #[cfg(feature = "cost-governance")]
+         let cost_warnings = std::mem::take(&mut admission.warnings);
+         #[cfg(not(feature = "cost-governance"))]
