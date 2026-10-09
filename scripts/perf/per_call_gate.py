@@ -62,9 +62,16 @@ def sh(cmd, cwd=None, env=None, timeout=None):
     return done.stdout
 
 
-def build(repo, ref, work, overlay_from=None):
+def build(repo, ref, work, key, overlay_from=None):
+    """The release lib test binary for `ref`, at work/<key>.bin. `key` names
+    the exact source (commit SHAs), so a binary already there is reused."""
+    tree = os.path.join(work, key)
+    binary = os.path.join(work, key + ".bin")
+    if os.path.exists(binary):
+        print(f"reusing {binary}")
+        return tree, binary
+    shutil.rmtree(tree, ignore_errors=True)
     # An export, not a checkout: nothing is registered in the host's clone.
-    tree = os.path.join(work, ref.replace("/", "_"))
     os.makedirs(tree)
     archive = subprocess.run(["git", "archive", ref], cwd=repo, capture_output=True)
     if archive.returncode != 0:
@@ -81,8 +88,8 @@ def build(repo, ref, work, overlay_from=None):
     exe = [m.group(1) for m in re.finditer(r'"executable":"([^"]+mcp_gateway-[^"]+)"', out)]
     if not exe:
         raise Void(f"no lib test binary for {ref}")
-    binary = os.path.join(work, ref.replace("/", "_") + ".bin")
-    shutil.copy(exe[-1], binary)
+    shutil.copy(exe[-1], binary + ".partial")
+    os.replace(binary + ".partial", binary)
     return tree, binary
 
 
@@ -144,26 +151,48 @@ def main():
     p.add_argument("--k", type=int, default=19)
     p.add_argument("--blocks", type=int, default=4)
     p.add_argument("--seed", type=int, default=random.randrange(1 << 30))
+    p.add_argument("--work", help="keep the builds here and reuse them (default: a temp dir)")
+    p.add_argument("--build-only", action="store_true",
+                   help="build both binaries into --work and stop; takes no bench lock")
     a = p.parse_args()
     if a.k < 1 or a.blocks < 1:
         p.error("--k and --blocks must be at least 1")
+    if a.build_only and not a.work:
+        p.error("--build-only needs --work")
     repo = sh(["git", "rev-parse", "--show-toplevel"]).strip()
-    os.makedirs(os.path.dirname(LOCK), exist_ok=True)
-    with open(LOCK, "w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        rng = random.Random(a.seed)
-        print(f"seed {a.seed}; K={a.k} (per-row false-alarm ~{1 / (a.k + 1):.0%}); blocks={a.blocks}")
-        with tempfile.TemporaryDirectory() as work:
-            try:
-                return measure(repo, a, rng, work)
-            except Void as why:
-                print(f"VOID: {why}")
-                return 2
+    try:
+        if a.build_only:
+            os.makedirs(a.work, exist_ok=True)
+            for binary in builds(repo, a, a.work):
+                print(f"built {binary}")
+            return 0
+        os.makedirs(os.path.dirname(LOCK), exist_ok=True)
+        with open(LOCK, "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            rng = random.Random(a.seed)
+            print(f"seed {a.seed}; K={a.k} (per-row false-alarm ~{1 / (a.k + 1):.0%}); blocks={a.blocks}")
+            if a.work:
+                os.makedirs(a.work, exist_ok=True)
+                return measure(a, rng, builds(repo, a, a.work))
+            with tempfile.TemporaryDirectory() as work:
+                return measure(a, rng, builds(repo, a, work))
+    except Void as why:
+        print(f"VOID: {why}")
+        return 2
 
 
-def measure(repo, a, rng, work):
-    head_tree, head = build(repo, a.head, work)
-    _, base = build(repo, a.base, work, overlay_from=head_tree)
+def builds(repo, a, work):
+    """(base, head) binaries. BASE carries HEAD's harness files, so its key
+    names both commits."""
+    base_sha, head_sha = (sh(["git", "rev-parse", "--verify", f"{r}^{{commit}}"], cwd=repo).strip()
+                          for r in (a.base, a.head))
+    head_tree, head = build(repo, head_sha, work, head_sha[:12])
+    _, base = build(repo, base_sha, work, f"{base_sha[:12]}+{head_sha[:12]}", overlay_from=head_tree)
+    return base, head
+
+
+def measure(a, rng, binaries):
+    base, head = binaries
     # Read after the builds: their load must not be what the run starts in.
     load_start = os.getloadavg()[0]
 

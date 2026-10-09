@@ -80,5 +80,19 @@ class Errors(unittest.TestCase):
             gate.sh(["sleep", "5"], timeout=0.2)
 
 
+class Builds(unittest.TestCase):
+    def test_a_binary_already_built_for_the_key_is_reused(self):
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as work:
+            binary = os.path.join(work, "abc.bin")
+            open(binary, "w").close()
+            with contextlib.redirect_stdout(io.StringIO()):
+                # No repo and no cargo: a rebuild would fail.
+                _, got = gate.build(None, "abc", work, "abc")
+            self.assertEqual(got, binary)
+
+
 if __name__ == "__main__":
     unittest.main()
