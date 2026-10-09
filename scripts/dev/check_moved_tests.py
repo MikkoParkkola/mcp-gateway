@@ -79,7 +79,10 @@ def items(text: str) -> list[str]:
             depth += 1
         elif t in ")]}":
             depth -= 1
-        if depth == 0 and t in (";", "}"):
+        if depth == 0 and t == ";" and cur == [";"] and out:
+            out[-1] += " ;"  # `use a::{b, c};` is one item, not `{..}` and `;`
+            cur = []
+        elif depth == 0 and t in (";", "}"):
             out.append(" ".join(cur))
             cur = []
     assert not cur and depth == 0, "unbalanced module body"
