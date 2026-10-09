@@ -972,6 +972,10 @@ fn sync_parent_directory(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "a no-op off unix that keeps the unix signature"
+)]
 fn sync_parent_directory(_path: &Path) -> io::Result<()> {
     Ok(())
 }
@@ -983,6 +987,10 @@ fn force_directory_owner_only(path: &Path) -> io::Result<()> {
 }
 
 #[cfg(not(unix))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "a no-op off unix that keeps the unix signature"
+)]
 fn force_directory_owner_only(_path: &Path) -> io::Result<()> {
     Ok(())
 }

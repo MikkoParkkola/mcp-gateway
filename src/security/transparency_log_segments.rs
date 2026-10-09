@@ -142,6 +142,13 @@ pub fn list_segments(path: &Path) -> io::Result<Vec<Segment>> {
 
 /// `fsync` the directory holding `path`, so a rename, create or unlink is
 /// durable. Unix only; elsewhere a no-op.
+#[cfg_attr(
+    not(unix),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "a no-op off unix that keeps the unix signature"
+    )
+)]
 pub(crate) fn sync_dir(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     if let Some(parent) = path.parent() {
