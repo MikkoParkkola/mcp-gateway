@@ -1,0 +1,15 @@
+diff --git a/src/registry/server_registry_entries.rs b/src/registry/server_registry_entries.rs
+index 32e87a39e..2f08f6e4b 100644
+--- a/src/registry/server_registry_entries.rs
++++ b/src/registry/server_registry_entries.rs
+@@ -480,9 +480,7 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
+         reach: Reach::Arbitrary {
+             reason: ARBITRARY_REACH_REASON,
+         },
+-        setup: Setup::NeedsService {
+-            hint: "a local Chrome install, current stable or newer",
+-        },
++        setup: Setup::Ready,
+     },
+     RegistryEntry {
+         name: "grafana",

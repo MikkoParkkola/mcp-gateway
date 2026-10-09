@@ -1,0 +1,4 @@
+head_sha	af1e641140abc4be3ad6a7816de2013e6fca7feb
+# #3594 MIK-7876: chrome-devtools setup note
+r7876-setup-ready	linux	r7876-setup-ready.patch	--lib -- registry::server_registry::tests::chrome_devtools_names_its_chrome_prerequisite
+r7876-hint-unnamed	linux	r7876-hint-unnamed.patch	--lib -- registry::server_registry::tests::chrome_devtools_names_its_chrome_prerequisite

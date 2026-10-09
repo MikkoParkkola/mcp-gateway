@@ -1,0 +1,13 @@
+diff --git a/src/registry/server_registry_entries.rs b/src/registry/server_registry_entries.rs
+index 32e87a39e..e8d4c6123 100644
+--- a/src/registry/server_registry_entries.rs
++++ b/src/registry/server_registry_entries.rs
+@@ -481,7 +481,7 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
+             reason: ARBITRARY_REACH_REASON,
+         },
+         setup: Setup::NeedsService {
+-            hint: "a local Chrome install, current stable or newer",
++            hint: "a local browser install",
+         },
+     },
+     RegistryEntry {
