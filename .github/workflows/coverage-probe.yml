@@ -1,0 +1,199 @@
+# SPDX-FileCopyrightText: 2026 Mikko Parkkola
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# The C5 / MIK-7324.COV.3 grade run (MIK-8217). It grades every push to the release line on
+# Linux and Windows, and pull requests that touch a COV.3 path, an inventory or a grader on
+# Linux only. scripts/release/coverage_grade.sh also pushes it onto a throwaway/coverage-*
+# branch with any revision under grade. The contract is docs/release/v4.0.0-critical-path-coverage.md
+# ("The command", "In CI", "What closing C5 requires"): no --ignore-run-fail, the pinned task SDK.
+name: Coverage probe
+
+on:
+  push:
+    branches: ["throwaway/coverage-*", docs/ranking-1-release-line]
+  pull_request:
+    branches: [docs/ranking-1-release-line]
+    # The COV.3 prefixes of scripts/release/check_inventory_rows.py (PREFIXES), plus what
+    # the grade reads. test_check_inventory_rows.py keeps the two lists in step.
+    paths:
+      - "src/gateway/server/**"
+      - "src/oauth/**"
+      - "src/transport/http/**"
+      - "src/gateway/router/**"
+      - "src/transport/stdio.rs"
+      - "src/transport/command_split.rs"
+      - "src/gateway/input_bridge.rs"
+      - "src/gateway/task_service/**"
+      - "src/gateway/meta_mcp/task_confirmation.rs"
+      - "src/gateway/meta_mcp/task_confirmation/**"
+      - "src/personal_accounts/**"
+      - "src/config/account_bindings.rs"
+      - "src/identity_propagation/**"
+      - "docs/release/v4.0.0-critical-functions.tsv"
+      - "docs/release/v4.0.0-unenforcing-functions.tsv"
+      - "scripts/release/critical_function_coverage.py"
+      - "scripts/release/critical_path_coverage.py"
+      - ".github/workflows/coverage-probe.yml"
+  workflow_dispatch:
+
+# A newer push to a pull request supersedes its older grade. Every other run has a group of
+# its own: a group keeps one pending run and replaces it with the next, so a shared
+# release-line group would drop grades when merges queue.
+concurrency:
+  group: coverage-probe-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Instrumented frames overflow the 2 MiB default test-thread stack.
+  RUST_MIN_STACK: "8388608"
+
+jobs:
+  linux-grade:
+    name: llvm-cov Linux, grade
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      - name: Pinned task SDK and Redis
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-venv
+          python3 -m venv "$RUNNER_TEMP/sdk"
+          "$RUNNER_TEMP/sdk/bin/python" -m pip install --disable-pip-version-check \
+            'fastmcp==4.0.3' 'fastmcp-tasks==4.0.3' 'pydocket==0.25.0'
+          echo "MCP_GATEWAY_TASK_SDK_PYTHON=$RUNNER_TEMP/sdk/bin/python" >> "$GITHUB_ENV"
+          c="$(docker run --detach --rm --publish 127.0.0.1::6379 \
+            redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf \
+            redis-server --save '' --appendonly no)"
+          port="$(docker inspect --format '{{(index (index .NetworkSettings.Ports "6379/tcp") 0).HostPort}}' "$c")"
+          echo "MCP_GATEWAY_TASK_SDK_REDIS_URL=redis://127.0.0.1:$port/0" >> "$GITHUB_ENV"
+      - name: SDK journey alone, single-threaded
+        run: |
+          set -o pipefail
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov --no-report --all-features --test task_upstream_recovery_sdk -- --test-threads 1 2>&1 | tee sdk-run.log
+      - name: Every other test target
+        run: |
+          set -o pipefail
+          cargo llvm-cov --no-report --all-features --tests -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result 2>&1 | tee all-run.log
+      - name: Reports
+        run: |
+          cargo llvm-cov report --summary-only --json --output-path cov.json
+          cargo llvm-cov report --lcov --output-path linux.lcov
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          retention-days: 14
+          name: coverage-linux
+          path: |
+            cov.json
+            linux.lcov
+            all-run.log
+            sdk-run.log
+
+  windows-grade:
+    name: llvm-cov Windows, grade
+    runs-on: windows-2025
+    # Pull requests grade Linux only (runner budget); every release-line push grades
+    # Windows too, so a Windows-only shortfall is caught at most one merge later.
+    if: github.event_name != 'pull_request'
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      - name: Allow symlink creation
+        shell: pwsh
+        run: >-
+          New-ItemProperty -Force -PropertyType DWORD -Value 1 -Name AllowDevelopmentWithoutDevLicense
+          -Path HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock
+      # A failed test on Windows drops that process's profile (MIK-7780), so this step
+      # must end with no failure; there is no --ignore-run-fail.
+      - name: Every test target
+        shell: pwsh
+        run: |
+          cargo llvm-cov --all-features --tests --lcov --output-path windows.lcov 2>&1 | Tee-Object windows-run.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          retention-days: 14
+          name: coverage-windows
+          path: |
+            windows.lcov
+            windows-run.log
+
+  grade:
+    name: Critical coverage grade
+    needs: [linux-grade, windows-grade]
+    # Runs whatever the platform jobs did, so it is never skipped: a skipped job would
+    # read as passing if this check were ever made required.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Both platform runs must have passed every test; on a pull request the Windows run
+      # is skipped by design and the grade covers Linux alone.
+      - name: Every platform run passed
+        env:
+          EVENT: ${{ github.event_name }}
+          LINUX: ${{ needs.linux-grade.result }}
+          WINDOWS: ${{ needs.windows-grade.result }}
+        run: |
+          echo "linux=$LINUX windows=$WINDOWS event=$EVENT"
+          [ "$LINUX" = success ] || { echo "::error::the Linux coverage run did not succeed ($LINUX)"; exit 1; }
+          [ "$WINDOWS" = success ] || { [ "$EVENT" = pull_request ] && [ "$WINDOWS" = skipped ]; } \
+            || { echo "::error::the Windows coverage run did not succeed ($WINDOWS)"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # By name, each into its own directory: downloading "all" puts a single artifact
+      # (a pull request has only the Linux one) straight into the target directory.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-linux
+          path: art/coverage-linux
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: github.event_name != 'pull_request'
+        with:
+          name: coverage-windows
+          path: art/coverage-windows
+      - name: Grade the Critical rows and the paths
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            set -- --scope linux-only --lcov art/coverage-linux/linux.lcov
+          else
+            set -- --lcov art/coverage-linux/linux.lcov --lcov art/coverage-windows/windows.lcov
+          fi
+          status=0
+          # stderr too, so a grader that cannot run shows why in the summary.
+          python3 scripts/release/critical_function_coverage.py "$@" > functions.txt 2>&1 || status=1
+          python3 scripts/release/critical_path_coverage.py art/coverage-linux/cov.json > paths.txt 2>&1 || status=1
+          {
+            echo "## Critical coverage grade ($EVENT): $([ $status = 0 ] && echo PASS || echo FAIL)"
+            echo '```'
+            grep -v '^ok' functions.txt || true
+            cat paths.txt
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          retention-days: 14
+          name: coverage-grade
+          path: |
+            functions.txt
+            paths.txt
