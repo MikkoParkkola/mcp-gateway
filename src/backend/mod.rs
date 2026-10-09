@@ -67,6 +67,7 @@ pub(crate) use pool::PoolKey;
 #[cfg(not(test))]
 use pool::PoolKey;
 use pool::PooledEntry;
+pub(crate) use probe::HealthTicker;
 
 pub(crate) use annotations::prepare_tool_metadata;
 // Read only by the `firewall`-gated direct-route redaction rows.
@@ -249,6 +250,20 @@ pub struct Backend {
     /// published (the publish order of MIK-7897 LIFE.3a).
     #[cfg(test)]
     pub(crate) publish_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
+    /// How many forced restarts reached their rebuild: a test's observable
+    /// for "the probe restarted", which a failed rebuild that keeps the old
+    /// transport pooled cannot show through the slot (MIK-8012).
+    #[cfg(test)]
+    pub(crate) rebuilds_attempted: std::sync::atomic::AtomicUsize,
+    /// Run once by the next publish between its era install and its slot
+    /// write: where a concurrent era writer must not land (MIK-8012 HOLD.1).
+    #[cfg(test)]
+    pub(crate) between_install_and_write: parking_lot::Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// The slot's era (`cached_now`) just before each publish makes a
+    /// transport reachable: the dialect its first request is shaped in
+    /// (MIK-8012 boundary rows).
+    #[cfg(test)]
+    pub(crate) era_at_publish: parking_lot::Mutex<Vec<Option<crate::protocol::era::Era>>>,
     /// A test's stand-ins for the user's token store and browser, used by the
     /// OAuth client [`Backend::create_oauth_client`] builds.
     #[cfg(test)]

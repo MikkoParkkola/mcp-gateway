@@ -59,9 +59,17 @@ impl Transport for HttpTransport {
             // A stream open's 404 dropped the shared session; heal it first.
             let _ = self.reinit_if_needed().await;
         }
-        let era = self
-            .outbound_era()
-            .or_else(|| is_era_probe(method).then_some(Era::Modern));
+        // A transport still starting has not been told its peer's era: the
+        // cache it reads may hold the verdict of the transport it is about to
+        // replace (a build-first restart, MIK-8012), and after an upgrade that
+        // verdict is Legacy. Its own probe goes out in the dialect the probe
+        // exists in. A started transport keeps the rule above.
+        let era = if is_era_probe(method) && !self.connected.load(Ordering::Relaxed) {
+            Some(Era::Modern)
+        } else {
+            self.outbound_era()
+                .or_else(|| is_era_probe(method).then_some(Era::Modern))
+        };
         let params = if era == Some(Era::Modern) {
             with_modern_meta(method, params)?
         } else {

@@ -235,6 +235,10 @@ mod determination {
     }
 }
 
+#[path = "era_install.rs"]
+mod install;
+pub(crate) use install::DetachedProbe;
+
 impl EraCache {
     /// A cache whose records name `backend`.
     #[must_use]
@@ -503,55 +507,8 @@ impl EraCache {
         Fut: std::future::Future<Output = ProbeOutcome>,
         I: FnOnce(&mut dyn FnMut()) -> bool,
     {
-        let started = std::time::Instant::now();
-        let outcome = probe().await;
-        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let observation = EraObservation::from_outcome(&outcome, trigger, chrono::Utc::now());
-
-        if !install(&mut || guard.set(observation)) {
-            // The probed peer is gone: what it said is about a process no longer on
-            // the wire. Same fields as the probe record, minus `error_code`, plus why.
-            tracing::info!(
-                target: "mcp_gateway::observed",
-                backend = %self.name,
-                slot = self.slot,
-                reason = "transport_replaced",
-                outcome = outcome.outcome_label(observation.era),
-                evidence = observation.evidence.as_str(),
-                duration_ms,
-                trigger = trigger.as_str(),
-            );
-            // What this probe decided, not what the cache holds: the caller asked
-            // about its own peer (MIK-8056).
-            return observation.era;
-        }
-
-        // Two call sites rather than an optional field: `error_code` is absent
-        // on the non-error rows, and `tracing` has no way to omit a field.
-        if let ProbeOutcome::Error(code) = &outcome {
-            tracing::info!(
-                target: "mcp_gateway::observed",
-                backend = %self.name,
-                slot = self.slot,
-                outcome = outcome.outcome_label(observation.era),
-                evidence = observation.evidence.as_str(),
-                error_code = code,
-                duration_ms,
-                trigger = trigger.as_str(),
-            );
-        } else {
-            tracing::info!(
-                target: "mcp_gateway::observed",
-                backend = %self.name,
-                slot = self.slot,
-                outcome = outcome.outcome_label(observation.era),
-                evidence = observation.evidence.as_str(),
-                duration_ms,
-                trigger = trigger.as_str(),
-            );
-        }
-
-        observation.era
+        let probe = Self::probe_detached(probe).await;
+        self.store(guard, trigger, probe, install)
     }
 }
 
@@ -559,7 +516,7 @@ impl EraCache {
 /// its transport cannot be replaced underneath it. A per-user slot can still be removed by
 /// a revocation, which takes no start lock; that start path uses
 /// [`EraCache::restart_while_serving`].
-fn install_always(store: &mut dyn FnMut()) -> bool {
+pub(super) fn install_always(store: &mut dyn FnMut()) -> bool {
     store();
     true
 }
@@ -752,6 +709,12 @@ impl EraObservation {
             trigger: Some(trigger),
             probed_at: Some(probed_at),
         }
+    }
+
+    /// [`Self::from_outcome`] stamped with the current time: the era
+    /// module's one clock read (MIK-8202 baseline).
+    pub(super) fn observed_now(outcome: &ProbeOutcome, trigger: ProbeTrigger) -> Self {
+        Self::from_outcome(outcome, trigger, chrono::Utc::now())
     }
 
     /// The operator-facing fields, for merging into a `gateway_list_servers`
