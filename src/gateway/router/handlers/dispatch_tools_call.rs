@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
+#[cfg(feature = "firewall")]
 use tracing::warn;
 
 use super::dispatch_intake::Intake;
