@@ -43,7 +43,7 @@ async fn an_unoffered_type_is_held_then_sent_once_offered() {
 
         assert_eq!(accepted.load(Ordering::SeqCst), 0, "{name}: no POST");
         assert_eq!(hub.store.subscriptions().len(), 1, "{name}: kept");
-        let later = Utc::now() + chrono::Duration::minutes(5);
+        let later = Utc::now() + crate::duration_bound::delta!(minutes, 5);
         let due = hub
             .store
             .due(later, &std::collections::HashSet::new(), hub.dead_policy())

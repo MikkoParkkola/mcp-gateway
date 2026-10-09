@@ -127,7 +127,8 @@ fn fires_too_often(cron: &str) -> bool {
         .unwrap_or_default();
     let mut previous: Option<i64> = None;
     for minute in 0..2 * 24 * 60 {
-        if daily.matches(&(start + Duration::minutes(minute))) {
+        // Two days of minutes: always in range.
+        if Duration::try_minutes(minute).is_some_and(|offset| daily.matches(&(start + offset))) {
             if previous.is_some_and(|p| minute - p < FLOOR_MINUTES) {
                 return true;
             }
@@ -145,16 +146,16 @@ fn fires_too_often(cron: &str) -> bool {
 fn due(timer: &Timer, minute: DateTime<Utc>) -> bool {
     let local = |at: DateTime<Utc>| at.with_timezone(&timer.zone).naive_local();
     let now = local(minute);
-    let before = local(minute - Duration::minutes(1));
+    let before = local(minute - crate::duration_bound::delta!(minutes, 1));
     // Wall-clock fields only: the naive local time read as if it were UTC.
     let matches = |naive: chrono::NaiveDateTime| timer.cron.matches(&Utc.from_utc_datetime(&naive));
-    if now - before > Duration::minutes(1) {
-        let mut skipped = before + Duration::minutes(1);
+    if now - before > crate::duration_bound::delta!(minutes, 1) {
+        let mut skipped = before + crate::duration_bound::delta!(minutes, 1);
         while skipped <= now {
             if matches(skipped) {
                 return true;
             }
-            skipped += Duration::minutes(1);
+            skipped += crate::duration_bound::delta!(minutes, 1);
         }
         return false;
     }
@@ -229,7 +230,9 @@ impl ScheduleSource {
         let Some(hub) = self.hub.upgrade() else {
             return;
         };
-        let minute = now.duration_trunc(Duration::minutes(1)).unwrap_or(now);
+        let minute = now
+            .duration_trunc(crate::duration_bound::delta!(minutes, 1))
+            .unwrap_or(now);
         let firing: Vec<(String, String)> = self
             .timers
             .lock()
@@ -248,10 +251,9 @@ impl ScheduleSource {
             // The floor holds in UTC too: a daylight-saving jump can bring a
             // collapsed tick within minutes of a regular one, and the later
             // is dropped. It also stops a second tick in the same minute.
-            if last
-                .get(&key)
-                .is_some_and(|at| minute - *at < Duration::minutes(FLOOR_MINUTES))
-            {
+            if last.get(&key).is_some_and(|at| {
+                minute - *at < crate::duration_bound::delta!(minutes, FLOOR_MINUTES)
+            }) {
                 continue;
             }
             last.insert(key.clone(), minute);
@@ -292,7 +294,9 @@ impl ScheduleSource {
         let timers = self.timers.lock();
         let stale: Vec<String> = last
             .iter()
-            .filter(|(key, at)| !timers.contains_key(*key) && now - **at > Duration::days(1))
+            .filter(|(key, at)| {
+                !timers.contains_key(*key) && now - **at > crate::duration_bound::delta!(days, 1)
+            })
             .map(|(key, _)| key.clone())
             .collect();
         drop(timers);
@@ -506,8 +510,10 @@ impl EventsHub {
         tokio::spawn(async move {
             loop {
                 let now = Utc::now();
-                let next =
-                    now.duration_trunc(Duration::minutes(1)).unwrap_or(now) + Duration::minutes(1);
+                let next = now
+                    .duration_trunc(crate::duration_bound::delta!(minutes, 1))
+                    .unwrap_or(now)
+                    + crate::duration_bound::delta!(minutes, 1);
                 let wait = (next - now).to_std().unwrap_or_default();
                 tokio::time::sleep(wait).await;
                 let Some(source) = ticker.upgrade() else {

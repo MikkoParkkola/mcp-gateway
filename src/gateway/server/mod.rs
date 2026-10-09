@@ -3791,7 +3791,7 @@ mod stdio_forward_path_tests;
 mod tests {
     use std::sync::Arc;
 
-    use chrono::{Duration, Utc};
+    use chrono::Utc;
     use serde_json::json;
 
     use super::{
@@ -4115,7 +4115,7 @@ mod tests {
             tool: Some("read_day".to_string()),
             scope: GrantScope::Read,
             owner: Some(subject),
-            expires_at: Some(Utc::now() + Duration::hours(1)),
+            expires_at: Some(Utc::now() + crate::duration_bound::delta!(hours, 1)),
             revoked_at: None,
             provenance: "test://startup".to_string(),
             reason: "prove startup grant loading".to_string(),

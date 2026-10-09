@@ -99,7 +99,8 @@ fn an_eviction_that_fails_part_way_still_reports_the_ones_it_made() {
     let now = Utc::now();
     let store = open_with(dir.path(), now, &["s1"]);
     for (n, id) in ["x", "y"].iter().enumerate() {
-        let at = now + chrono::Duration::seconds(i64::try_from(n).expect("small"));
+        let at = now
+            + chrono::TimeDelta::try_seconds(i64::try_from(n).expect("small")).expect("in range");
         store
             .dead_letter(record(id, "s1", at), DeadReason::Gone, at, ROOMY)
             .expect("io");
@@ -112,7 +113,7 @@ fn an_eviction_that_fails_part_way_still_reports_the_ones_it_made() {
         max_records: 1,
         ..ROOMY
     };
-    let at = now + chrono::Duration::seconds(5);
+    let at = now + crate::duration_bound::delta!(seconds, 5);
     let settled = store
         .dead_letter(record("z", "s1", at), DeadReason::Gone, at, policy)
         .expect("the burial stands");

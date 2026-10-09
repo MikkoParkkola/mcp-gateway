@@ -73,7 +73,7 @@ fn the_live_key_must_match_by_secret_be_unexpired_and_grant_the_backend() {
         !services(vec![key("alice", "s2", None)]).admits(Some(&alice), "x"),
         "replaced under the same name"
     );
-    let past = chrono::Utc::now() - chrono::Duration::seconds(1);
+    let past = chrono::Utc::now() - crate::duration_bound::delta!(seconds, 1);
     assert!(
         !services(vec![key("alice", "s1", Some(past))]).admits(Some(&alice), "x"),
         "expired"

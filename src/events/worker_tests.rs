@@ -43,7 +43,11 @@ fn other_failures_retry_with_bounded_backoff_then_exhaust() {
     let Settle::Retry { next, .. } = settle else {
         panic!("retried");
     };
-    assert_eq!(next - now, chrono::Duration::seconds(30), "base x 3");
+    assert_eq!(
+        next - now,
+        crate::duration_bound::delta!(seconds, 30),
+        "base x 3"
+    );
     let (settle, category) = judge(&Err(CallbackFailure::Timeout), 5, now, now, POLICY, 0.0);
     assert_eq!(category, "timeout");
     assert!(matches!(
@@ -53,7 +57,7 @@ fn other_failures_retry_with_bounded_backoff_then_exhaust() {
             ..
         }
     ));
-    let late = now + chrono::Duration::seconds(900);
+    let late = now + crate::duration_bound::delta!(seconds, 900);
     let (settle, _) = judge(&status(307), 1, now, late, POLICY, 0.0);
     assert!(
         matches!(
@@ -81,7 +85,7 @@ fn retry_after_is_honoured_inside_the_window() {
     };
     assert_eq!(
         next - now,
-        chrono::Duration::seconds(900),
+        crate::duration_bound::delta!(seconds, 900),
         "clamped to the window"
     );
 }
@@ -89,8 +93,8 @@ fn retry_after_is_honoured_inside_the_window() {
 #[test]
 fn an_attempt_past_its_bounds_is_overdue_before_it_is_sent() {
     let first = Utc::now();
-    let inside = first + chrono::Duration::seconds(899);
-    let after = first + chrono::Duration::seconds(900);
+    let inside = first + crate::duration_bound::delta!(seconds, 899);
+    let after = first + crate::duration_bound::delta!(seconds, 900);
     assert!(
         !overdue(1, 1, first, after, POLICY),
         "a first attempt always goes"
@@ -179,7 +183,7 @@ fn queued_with(
         previous_secret: None,
         previous_until: None,
         granted_at: now,
-        expires_at: Some(now + chrono::Duration::hours(1)),
+        expires_at: Some(now + crate::duration_bound::delta!(hours, 1)),
         active: true,
         failed_since: None,
         last_delivery_at: None,
@@ -319,7 +323,7 @@ async fn an_attempt_the_audit_log_refuses_is_not_sent() {
         0,
         "no POST without a record"
     );
-    let later = Utc::now() + chrono::Duration::minutes(5);
+    let later = Utc::now() + crate::duration_bound::delta!(minutes, 5);
     let due = hub
         .store
         .due(later, &std::collections::HashSet::new(), hub.dead_policy())
@@ -437,7 +441,7 @@ async fn an_overdue_ending_the_audit_log_refuses_is_retried_not_buried() {
     queued(&hub, 9, "evt_overdue");
     log.set_append_failure_for_test(true);
     hub.attempt(&services, "evt_overdue").await;
-    let later = Utc::now() + chrono::Duration::minutes(5);
+    let later = Utc::now() + crate::duration_bound::delta!(minutes, 5);
     let due = hub
         .store
         .due(later, &std::collections::HashSet::new(), hub.dead_policy())
@@ -515,7 +519,7 @@ async fn a_burial_the_caps_evict_at_once_still_leaves_its_record() {
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
     let services = logged_services(dir.path());
     queued(&hub, 9, "evt_evicted");
-    let later = Utc::now() + chrono::Duration::minutes(5);
+    let later = Utc::now() + crate::duration_bound::delta!(minutes, 5);
     let record = hub
         .store
         .due(later, &std::collections::HashSet::new(), hub.dead_policy())

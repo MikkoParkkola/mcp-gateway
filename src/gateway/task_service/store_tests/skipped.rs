@@ -236,7 +236,7 @@ async fn expiry_never_reaches_a_skipped_row() {
     unrestorable(&record);
     let skipped_id = record.file_stem().unwrap().to_str().unwrap().to_owned();
     let store = assert_skipped(&path, &kept, "expiry").await;
-    let later = chrono::Utc::now() + chrono::Duration::days(3650);
+    let later = chrono::Utc::now() + crate::duration_bound::delta!(days, 3650);
     assert!(
         store
             .expired_candidates(later)

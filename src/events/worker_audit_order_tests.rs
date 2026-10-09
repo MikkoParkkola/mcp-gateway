@@ -37,7 +37,7 @@ fn assert_burial_first(dir: &std::path::Path, event_id: &str) {
 
 /// The first pending record, as the worker would claim it.
 fn pending(hub: &EventsHub, event_id: &str) -> crate::events::outbox::OutboxRecord {
-    let later = Utc::now() + chrono::Duration::minutes(5);
+    let later = Utc::now() + crate::duration_bound::delta!(minutes, 5);
     hub.store
         .due(later, &std::collections::HashSet::new(), hub.dead_policy())
         .expect("io")
@@ -323,7 +323,7 @@ async fn a_self_evicting_expiry_burial_is_receipted_before_its_eviction() {
     });
     let now = Utc::now();
     let mut row = hub.store.subscriptions().remove(0);
-    row.expires_at = Some(now - chrono::Duration::seconds(1));
+    row.expires_at = Some(now - crate::duration_bound::delta!(seconds, 1));
     let caps = crate::events::store::Caps {
         per_principal: 10,
         global: 10,
@@ -351,7 +351,7 @@ async fn a_dead_letter_record_names_the_host_stamped_on_the_occurrence() {
     let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
     let services = logged_services(dir.path());
     queued(&hub, 9, "evt_hosted");
-    let later = Utc::now() + chrono::Duration::minutes(5);
+    let later = Utc::now() + crate::duration_bound::delta!(minutes, 5);
     let mut record = hub
         .store
         .due(later, &std::collections::HashSet::new(), hub.dead_policy())
