@@ -64,7 +64,7 @@ fn a_clock_before_the_epoch_closes_a_round_without_a_deadline() {
         "control: a round inside its TTL closed"
     );
 
-    let before_epoch = DateTime::<Utc>::UNIX_EPOCH - Duration::seconds(1);
+    let before_epoch = DateTime::<Utc>::from_timestamp(-1, 0).expect("one second before 1970");
     assert_eq!(
         closed_at(&task, &record, before_epoch),
         Some(RoundClosed::Ttl),

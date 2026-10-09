@@ -558,3 +558,8 @@ src/transport/stdio.rs	handle_response	1	critical	d	StdioTransport::handle_respo
 src/transport/stdio.rs	register_progress_token	1	critical	c	StdioTransport::register_progress_token	Fails closed on a colliding token, so one call's progress cannot reach another call
 src/transport/stdio.rs	start	1	critical	d	StdioTransport::start	Refuses invalid quoting or an empty command before spawn; applies the scrubbed environment
 src/transport/stdio.rs	spawn_command	1	critical	d	StdioTransport::spawn_command	Refuses invalid quoting or an empty command before spawn; builds the child with the scrubbed environment
+src/gateway/server/start_checks.rs	clock	1	critical	d	start_checks::clock	Refuses to start on a clock before 1970 (MIK-8202)
+src/identity_propagation/mod.rs	now_secs	1	critical	d	SignedAssertionStrategy::now_secs	Refuses to mint or judge an assertion on a clock before 1970
+src/personal_accounts/provider.rs	now_unix	2	critical	d	SystemClock::now_unix	Reports a clock before 1970 as an error so token expiry is never judged on it
+src/personal_accounts/provider/grant_flow.rs	now_unix	1	critical	d	PersonalOAuthRefresh::now_unix	The journey and grant expiry time base; an error refuses the journey
+src/personal_accounts/worker_journeys.rs	now_seconds	1	critical	d	now_seconds	Refuses a journey step as expired on a clock before 1970
