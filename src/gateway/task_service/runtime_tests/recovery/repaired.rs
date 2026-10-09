@@ -49,14 +49,29 @@ async fn a_repaired_row_is_readable_without_a_restart() {
     for (record, original) in &originals {
         std::fs::write(record, original).unwrap();
     }
+    // The seal lifts inside the sweep's blocking re-read; the announcement
+    // follows when the sweep resumes on the runtime (execution.rs
+    // `reread_sealed`). Wait for both, within BUDGET (5 s): a slow runner
+    // (Windows' coarse timer) can see the seal gone before the announcement.
+    let announced = |seeded: &[Seeded]| {
+        let heard = heard.lock();
+        seeded
+            .iter()
+            .filter(|row| row.expected.is_some())
+            .all(|row| heard.contains(&row.id))
+    };
     let deadline = std::time::Instant::now() + BUDGET;
-    while restored.skipped_records().sealed != 0 {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the expiry sweep never re-read the repaired rows"
-        );
+    while restored.skipped_records().sealed != 0 || !announced(&seeded) {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    assert_eq!(
+        restored.skipped_records().sealed,
+        0,
+        "the expiry sweep never re-read the repaired rows"
+    );
 
     let mut problems = Vec::new();
     for row in &seeded {
