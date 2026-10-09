@@ -283,3 +283,13 @@ fn revoking_an_account_clears_its_tombstone() {
     assert!(views.revoked("acct:v1:d:"));
     assert!(!views.any_shown());
 }
+
+#[test]
+fn a_slot_evicted_between_listing_and_reading_still_counts_for_a_filter_change() {
+    // Listed, then gone when read: a present Absent, buried in this same pass.
+    let mut views = Views::new(1);
+    let x = [tool("x", "")];
+    assert!(views.slot(U1, holds(&x)));
+    assert!(!views.recompute(&[(U1.to_string(), holds(&x))], 7));
+    assert!(views.recompute(&[(U1.to_string(), SlotSeen::Absent)], 8));
+}

@@ -117,7 +117,7 @@ impl Backend {
             oauth_test_seam: parking_lot::Mutex::new(None),
             instance: super::tools_nudge::next_instance(),
             nudge_feed: std::sync::OnceLock::new(),
-            pending_slot_nudges: std::sync::Arc::default(),
+            views_dirty: std::sync::Arc::default(),
         }
     }
 

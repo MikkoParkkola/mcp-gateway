@@ -145,11 +145,12 @@ impl Views {
         for binding in gone {
             changed |= self.slot(&binding, SlotSeen::Absent);
         }
-        // After burying: a view evicted since the last look counts too.
-        changed |= filter_moved && self.tombstones.values().any(|tomb| tomb.shown != empty);
         for (binding, seen) in present {
             changed |= self.slot(binding, *seen);
         }
+        // LAST, after every bury: a view evicted since the last look, or
+        // between listing the slots and reading one (a present Absent), counts.
+        changed |= filter_moved && self.tombstones.values().any(|tomb| tomb.shown != empty);
         changed
     }
 

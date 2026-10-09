@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use crate::backend::tools_nudge::{NudgeKind, SlotEvent, SlotView, ToolsNudge};
+use crate::backend::tools_nudge::{NudgeKind, SlotView, ToolsNudge};
 use crate::gateway::router::AppState;
 use crate::protocol::Tool;
 
@@ -122,26 +122,16 @@ impl Announced {
         true
     }
 
-    /// `MIK-8148`: whether backend `name`'s audience must hear that per-user
-    /// slot `binding` changed after `event`, given what it holds now.
-    pub(super) fn binding(
-        &mut self,
-        name: &str,
-        instance: u64,
-        binding: &str,
-        event: SlotEvent,
-        seen: views::SlotSeen,
-    ) -> bool {
+    /// `MIK-8148`: a grant on backend `name` was revoked. Always announced:
+    /// its callers lose what they were shown, which this drain may never
+    /// have seen.
+    pub(super) fn revoked(&mut self, name: &str, instance: u64, prefix: &str) -> bool {
         let views = self
             .views
             .entry(name.to_string())
             .or_insert_with(|| views::Views::new(instance));
-        let overflow = views.adopt(instance);
-        let changed = match event {
-            SlotEvent::Revoked => views.revoked(binding),
-            SlotEvent::Stored => views.slot(binding, seen),
-        };
-        overflow | changed
+        views.adopt(instance);
+        views.revoked(prefix)
     }
 
     /// `MIK-8148`: after a backend-wide nudge, whether any per-user view of
@@ -228,7 +218,12 @@ fn decide(
             let present = backend
                 .as_ref()
                 .filter(|b| b.instance() == instance)
-                .map(|b| per_user_seen(b));
+                .map(|b| {
+                    // Cleared BEFORE the read: a store from now on queues a
+                    // fresh nudge, so none is lost between this and the read.
+                    b.clear_views_dirty();
+                    per_user_seen(b)
+                });
             let mut told = announced.lock();
             let shared = told.backend(&name, instance, kind, &seen);
             let private = match (&backend, present) {
@@ -243,23 +238,17 @@ fn decide(
                 (false, false) => return None,
             }
         }
-        ToolsNudge::Binding {
+        ToolsNudge::Revoked {
             name,
             instance,
-            binding,
-            event,
+            prefix,
         } => {
             // A replaced instance's late nudge: its successor's own follow.
-            let backend = state
+            state
                 .backends
                 .get(&name)
                 .filter(|b| b.instance() == instance)?;
-            backend.take_slot_nudge(&binding);
-            let seen = slot_seen(backend.per_user_view(&binding));
-            if !announced
-                .lock()
-                .binding(&name, instance, &binding, event, seen)
-            {
+            if !announced.lock().revoked(&name, instance, &prefix) {
                 return None;
             }
             (name, Reach::View)
@@ -358,11 +347,11 @@ mod tests {
         let backend = state.backends.get("demo").expect("fixture backend");
         let announced = parking_lot::Mutex::new(Announced::default());
         let user = "idp:1:u:1:a";
-        let nudge = |instance: u64| ToolsNudge::Binding {
+        // What a per-user store sends: a backend nudge (coalesced per backend).
+        let nudge = |instance: u64| ToolsNudge::Backend {
             name: "demo".into(),
             instance,
-            binding: user.into(),
-            event: SlotEvent::Stored,
+            kind: NudgeKind::Changed,
         };
         let tool: Tool = serde_json::from_value(serde_json::json!({
             "name": "x", "description": "one", "inputSchema": { "type": "object" }
@@ -387,8 +376,8 @@ mod tests {
         );
     }
 
-    // MIK-8148: the drain clears a slot's queued flag when it reads the slot,
-    // so a later store queues a fresh nudge. Real feed, real drain decision.
+    // MIK-8148: the drain clears the backend's queued flag before it reads the
+    // slots, so a later store queues a fresh nudge. Real feed, real decision.
     #[tokio::test]
     async fn a_store_after_the_drain_read_reaches_the_drain_again() {
         let (state, _store) = crate::gateway::router::tests::direct_route_state_with_identity(

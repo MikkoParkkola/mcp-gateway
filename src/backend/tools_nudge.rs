@@ -42,12 +42,13 @@ pub(crate) enum ToolsNudge {
         instance: u64,
         kind: NudgeKind,
     },
-    /// One per-user slot of a registry backend (`MIK-8148`), by binding.
-    Binding {
+    /// A grant on a registry backend was revoked (`MIK-8148`): every caller
+    /// whose binding starts with `prefix` lost its view. One per revocation,
+    /// which admin and grant events drive, not traffic, so it is not coalesced.
+    Revoked {
         name: String,
         instance: u64,
-        binding: String,
-        event: SlotEvent,
+        prefix: String,
     },
     /// The capability catalogue, which is not a registry backend.
     Catalogue { name: String },
@@ -63,18 +64,10 @@ pub(crate) enum SlotView {
     Holds(Arc<Vec<Tool>>),
 }
 
-/// What happened to a per-user slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SlotEvent {
-    /// It stored a list.
-    Stored,
-    /// Its caller's grant was revoked; `binding` is then the revoked prefix,
-    /// which may match no slot at all. What that caller sees did change.
-    Revoked,
-}
-
-/// Bindings whose store nudge is queued and unread.
-pub(crate) type PendingSlots = Arc<parking_lot::Mutex<std::collections::HashSet<String>>>;
+/// Set by any per-user slot's store while a nudge for it is queued and
+/// unread; cleared by the drain before it reads the slots. So the feed holds
+/// at most ONE store nudge per backend, however many callers store meanwhile.
+pub(crate) type ViewsDirty = Arc<std::sync::atomic::AtomicBool>;
 
 /// The sending half of the change feed.
 pub(crate) type NudgeFeed = tokio::sync::mpsc::UnboundedSender<ToolsNudge>;
@@ -121,45 +114,38 @@ impl super::Backend {
     /// for the shared slot, which `attach_nudges` observes, and before a feed
     /// is attached.
     pub(super) fn observe_slot(&self, key: &super::PoolKey, entry: &super::pool::PooledEntry) {
-        let (super::PoolKey::PerUser { binding }, Some(feed)) = (key, self.nudge_feed.get()) else {
+        let (super::PoolKey::PerUser { .. }, Some(feed)) = (key, self.nudge_feed.get()) else {
             return;
         };
-        let (feed, name, instance, binding) = (
-            feed.clone(),
-            self.name.clone(),
-            self.instance,
-            binding.clone(),
-        );
-        let pending = Arc::clone(&self.pending_slot_nudges);
+        let (feed, name, instance) = (feed.clone(), self.name.clone(), self.instance);
+        let dirty = Arc::clone(&self.views_dirty);
         entry.tools_cache.observe_stores(Arc::new(move || {
-            // Coalesced: a store while one is queued adds nothing, because the
-            // drain reads the slot as it is when it gets there.
-            if !pending.lock().insert(binding.clone()) {
+            // Coalesced per backend: while a nudge is queued, a store adds
+            // nothing, because the drain reads every slot as it is then.
+            if dirty.swap(true, Ordering::SeqCst) {
                 return;
             }
-            let _ = feed.send(ToolsNudge::Binding {
+            let _ = feed.send(ToolsNudge::Backend {
                 name: name.clone(),
                 instance,
-                binding: binding.clone(),
-                event: SlotEvent::Stored,
+                kind: NudgeKind::Changed,
             });
         }));
     }
 
-    /// The drain is about to read slot `binding`: a store from now on queues
-    /// a fresh nudge, so none is lost between this and the read.
-    pub(crate) fn take_slot_nudge(&self, binding: &str) {
-        self.pending_slot_nudges.lock().remove(binding);
+    /// The drain is about to read every per-user slot: a store from now on
+    /// queues a fresh nudge, so none is lost between this and the read.
+    pub(crate) fn clear_views_dirty(&self) {
+        self.views_dirty.store(false, Ordering::SeqCst);
     }
 
     /// Nudge the drain that the grant behind `binding_prefix` was revoked.
     pub(super) fn nudge_revoked(&self, binding_prefix: &str) {
         if let Some(feed) = self.nudge_feed.get() {
-            let _ = feed.send(ToolsNudge::Binding {
+            let _ = feed.send(ToolsNudge::Revoked {
                 name: self.name.clone(),
                 instance: self.instance,
-                binding: binding_prefix.to_string(),
-                event: SlotEvent::Revoked,
+                prefix: binding_prefix.to_string(),
             });
         }
     }
@@ -317,7 +303,7 @@ mod tests {
             slot.tools_cache.replace(Vec::new(), || ());
         }
         assert_eq!(std::iter::from_fn(|| nudges.try_recv().ok()).count(), 1);
-        backend.take_slot_nudge("idp:u1");
+        backend.clear_views_dirty();
         slot.tools_cache.replace(Vec::new(), || ());
         assert_eq!(
             std::iter::from_fn(|| nudges.try_recv().ok()).count(),
@@ -377,6 +363,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn many_callers_storing_while_the_drain_is_held_queue_one_nudge() {
+        // The bound the change feed relies on: one store nudge per backend
+        // until the drain reads, however many distinct callers store.
+        let backend = backend("a");
+        let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
+        backend.attach_nudges(&feed);
+        for n in 0..64 {
+            backend
+                .pooled_entry(&per_user(&format!("idp:u{n}")))
+                .expect("admitted")
+                .tools_cache
+                .replace(Vec::new(), || ());
+        }
+        assert_eq!(std::iter::from_fn(|| nudges.try_recv().ok()).count(), 1);
+    }
+
+    #[tokio::test]
     async fn an_idle_sweep_sends_one_nudge_however_many_slots_close() {
         let backend = backend("a");
         for user in ["idp:u1", "idp:u2", "idp:u3"] {
@@ -399,11 +402,10 @@ mod tests {
         assert_eq!(backend.evict_identity_slots("idp:9:nobody:"), 0);
         assert_eq!(
             nudges.try_recv().ok(),
-            Some(ToolsNudge::Binding {
+            Some(ToolsNudge::Revoked {
                 name: "a".to_string(),
                 instance: backend.instance(),
-                binding: "idp:9:nobody:".to_string(),
-                event: super::SlotEvent::Revoked,
+                prefix: "idp:9:nobody:".to_string(),
             })
         );
     }

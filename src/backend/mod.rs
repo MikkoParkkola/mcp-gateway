@@ -259,9 +259,8 @@ pub struct Backend {
     /// Where this instance's nudges go, set when a registry with a change feed
     /// holds it.
     nudge_feed: std::sync::OnceLock<tools_nudge::NudgeFeed>,
-    /// Per-user bindings with a store nudge the drain has not read yet
-    /// (`MIK-8148`): at most one queued per slot, however often it stores.
-    pending_slot_nudges: tools_nudge::PendingSlots,
+    /// Whether a per-user store nudge is queued and unread (`MIK-8148`).
+    views_dirty: tools_nudge::ViewsDirty,
 }
 
 /// Where a test backend's OAuth client keeps tokens, and who plays the
