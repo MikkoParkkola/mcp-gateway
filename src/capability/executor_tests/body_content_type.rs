@@ -465,3 +465,42 @@ async fn a_real_capability_429_is_excluded_by_the_shared_rate_limit_predicate() 
         errors[1]
     );
 }
+
+// MIK-8212 throwaway control: the row as it was on base (400 ms hang, 120 ms
+// timeout). Never merged.
+#[tokio::test]
+async fn mik_8212_old_row_control() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+    let addr = listener.local_addr().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_srv = Arc::clone(&counter);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let n = counter_srv.fetch_add(1, Ordering::SeqCst);
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                if n < 2 {
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                } else {
+                    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+                    let _ = stream.flush();
+                }
+            });
+        }
+    });
+    let client = reqwest::Client::new();
+    let req = client
+        .get(format!("http://{addr}/"))
+        .timeout(std::time::Duration::from_millis(120));
+    let health = crate::failsafe::HealthTracker::new("test");
+    let resp = send_with_retry(req, "test", true, &health).await;
+    assert!(resp.is_ok(), "control: {resp:?}");
+    assert_eq!(counter.load(Ordering::SeqCst), 3);
+}
