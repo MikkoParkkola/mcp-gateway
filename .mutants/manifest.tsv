@@ -1,0 +1,14 @@
+head_sha	d007303a189ab104950e6ecaf5061f4a3ad8009a
+# MIK-7642.PR.B on the #3531/#3565 stdio structure: the 11-row batch plus b12 (stdio guard never disarmed)
+b1-http-never-armed	linux	b1-http-never-armed.patch	--lib -- cancel_on_drop mik7642_backend_cancel mik7642_disconnect
+b2-http-never-disarmed	linux	b2-http-never-disarmed.patch	--lib -- cancel_on_drop mik7642_backend_cancel
+b3-http-initialize-cancelled	linux	b3-http-initialize-cancelled.patch	--lib -- cancel_on_drop
+b4-http-modern-cancelled	linux	b4-http-modern-cancelled.patch	--lib -- cancel_on_drop
+b5-ws-writer-ignores-claim	linux	b5-ws-writer-ignores-claim.patch	--lib -- websocket::cancel_tests
+b6-ws-no-arbitration	linux	b6-ws-no-arbitration.patch	--lib -- websocket::cancel_tests
+b7-ws-initialize-cancelled	linux	b7-ws-initialize-cancelled.patch	--lib -- websocket::cancel_tests
+b8-ws-never-armed	linux	b8-ws-never-armed.patch	--lib -- websocket::cancel_tests
+b9-stdio-never-armed	linux	b9-stdio-never-armed.patch	--lib -- stdio::frame_tests stdio::eof_request_tests
+b10-stdio-initialize-cancelled	linux	b10-stdio-initialize-cancelled.patch	--lib -- stdio::frame_tests stdio::eof_request_tests
+b11-ws-claim-kept-when-unarmed	linux	b11-ws-claim-kept-when-unarmed.patch	--lib -- websocket::cancel_tests
+b12-stdio-never-disarmed	linux	b12-stdio-never-disarmed.patch	--lib -- stdio::eof_request_tests stdio::frame_tests

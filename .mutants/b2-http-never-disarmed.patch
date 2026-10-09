@@ -1,0 +1,13 @@
+diff --git a/src/transport/http/requests.rs b/src/transport/http/requests.rs
+index 79c1938ba..68dae4531 100644
+--- a/src/transport/http/requests.rs
++++ b/src/transport/http/requests.rs
+@@ -230,7 +230,7 @@ impl HttpTransport {
+         let result = self
+             .post_and_read(request, headers, &message_url, identity_key)
+             .await;
+-        cancel.disarm();
++        drop(cancel);
+         result
+     }
+ 

@@ -1,0 +1,13 @@
+diff --git a/src/transport/websocket_cancel.rs b/src/transport/websocket_cancel.rs
+index 3de6ed909..6a5d2b4ea 100644
+--- a/src/transport/websocket_cancel.rs
++++ b/src/transport/websocket_cancel.rs
+@@ -49,7 +49,7 @@ impl Drop for CancelUnanswered {
+         let answered = self.inner.pending.remove(&self.key).is_none();
+         // On EVERY exit, armed or not: a frame still queued when its caller
+         // stopped waiting (a timeout, an `initialize`) is never written.
+-        let written = self.claim.abandon();
++        let written = self.armed && self.claim.abandon();
+         if !self.armed || answered || !written {
+             return;
+         }

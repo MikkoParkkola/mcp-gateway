@@ -1,0 +1,13 @@
+diff --git a/src/transport/websocket.rs b/src/transport/websocket.rs
+index 55bafcd64..482230c09 100644
+--- a/src/transport/websocket.rs
++++ b/src/transport/websocket.rs
+@@ -567,7 +567,7 @@ async fn run_io_loop(
+                 if let Some((msg, claim)) = maybe_out {
+                     // A request whose caller gave up while it was queued is
+                     // never written (`MIK-7642.PR.B`).
+-                    if claim.is_some_and(|claim| !claim.claim_write()) {
++                    if claim.is_some_and(|claim| !claim.claim_write() && false) {
+                         continue;
+                     }
+                     if let Err(e) = ws_sink.send(msg).await {

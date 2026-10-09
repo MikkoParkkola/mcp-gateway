@@ -1,0 +1,13 @@
+diff --git a/src/transport/stdio_tree.rs b/src/transport/stdio_tree.rs
+index 4d774d4ee..cf225d171 100644
+--- a/src/transport/stdio_tree.rs
++++ b/src/transport/stdio_tree.rs
+@@ -112,7 +112,7 @@ impl<'a> CancelUnanswered<'a> {
+             key: request.id.to_string(),
+             id: request.id.clone(),
+             claim: std::sync::Arc::clone(claim),
+-            armed: request.method != "initialize",
++            armed: !request.method.is_empty(),
+         }
+     }
+ 

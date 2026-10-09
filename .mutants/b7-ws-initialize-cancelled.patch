@@ -1,0 +1,13 @@
+diff --git a/src/transport/websocket_cancel.rs b/src/transport/websocket_cancel.rs
+index ef1c56b55..39e200276 100644
+--- a/src/transport/websocket_cancel.rs
++++ b/src/transport/websocket_cancel.rs
+@@ -33,7 +33,7 @@ impl CancelUnanswered {
+             key: request.id.to_string(),
+             id: request.id.clone(),
+             claim: Arc::clone(claim),
+-            armed: request.method != "initialize",
++            armed: !request.method.is_empty(),
+         }
+     }
+ 

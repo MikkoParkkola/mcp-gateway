@@ -1,0 +1,13 @@
+diff --git a/src/transport/http/cancel_guard.rs b/src/transport/http/cancel_guard.rs
+index 785da297d..3e784ed87 100644
+--- a/src/transport/http/cancel_guard.rs
++++ b/src/transport/http/cancel_guard.rs
+@@ -42,7 +42,7 @@ impl CancelOnDrop {
+         request: &JsonRpcRequest,
+         era: Option<Era>,
+     ) -> Self {
+-        if era == Some(Era::Modern) || request.method == "initialize" {
++        if true || era == Some(Era::Modern) || request.method == "initialize" {
+             return Self(None);
+         }
+         Self(Some(CancelPost {

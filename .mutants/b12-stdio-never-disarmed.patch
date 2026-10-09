@@ -1,0 +1,13 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index 595ac78bb..339de0c79 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -655,7 +655,7 @@ impl Transport for StdioTransport {
+         let mut cancel = tree::CancelUnanswered::arm(self, &request, &claim);
+         // The guards drop after this value: the pending entry and progress go.
+         let outcome = self.exchange(message, rx, Some(&claim)).await;
+-        cancel.disarm();
++        let _ = &mut cancel;
+         outcome
+     }
+ 
