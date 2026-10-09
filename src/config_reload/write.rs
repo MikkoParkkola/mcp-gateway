@@ -108,11 +108,20 @@ impl From<MutateError> for ConfigWriteError {
 ///
 /// [`ConfigWriteError::Busy`] when a reload held the lock too long, and
 /// [`ConfigWriteError::Failed`] on serialization, write, rename, or reload failure.
+///
+/// Deprecated: the file is replaced from the caller's snapshot with no
+/// concurrency check, so a change made after the snapshot is lost. Use
+/// [`mutate_config_and_reload`]. Removal is planned for 5.0.
+#[deprecated(
+    since = "4.0.0",
+    note = "replaces gateway.yaml from the caller's snapshot with no concurrency check; use mutate_config_and_reload"
+)]
 pub async fn write_config_and_reload(
     path: &Path,
     config: &Config,
     reload_context: Option<&ReloadContext>,
 ) -> std::result::Result<(), ConfigWriteError> {
+    #[allow(deprecated)] // the deprecated pair: one delegates to the other
     write_config_and_reload_outcome(path, config, reload_context)
         .await
         .map(|_| ())
@@ -124,6 +133,14 @@ pub async fn write_config_and_reload(
 ///
 /// [`ConfigWriteError::Busy`] when a reload held the lock too long, and
 /// [`ConfigWriteError::Failed`] on serialization, write, rename, or reload failure.
+///
+/// Deprecated: the file is replaced from the caller's snapshot with no
+/// concurrency check, so a change made after the snapshot is lost. Use
+/// [`mutate_config_and_reload`]. Removal is planned for 5.0.
+#[deprecated(
+    since = "4.0.0",
+    note = "replaces gateway.yaml from the caller's snapshot with no concurrency check; use mutate_config_and_reload"
+)]
 pub async fn write_config_and_reload_outcome(
     path: &Path,
     config: &Config,

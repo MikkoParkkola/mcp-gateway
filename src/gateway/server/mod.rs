@@ -1381,7 +1381,7 @@ impl Gateway {
         // reading must stall its producers rather than grow this queue. An
         // unbounded queue would turn a stalled reader into operator-process
         // memory growth.
-        let (writer, queue) = tokio::sync::mpsc::channel::<OutboundFrame>(STDOUT_QUEUE_DEPTH);
+        let (writer, queue) = self.stdout_queue(&meta_mcp);
         let mut writer_task = tokio::spawn(Self::run_stdout_writer(output, queue));
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
@@ -1546,7 +1546,7 @@ impl Gateway {
                     // MIK-8176: the batch's slots are owned here, from
                     // dispatch through the writer queue.
                     Box::pin(crate::gateway::meta_mcp::sealed_hold::scoped(
-                        crate::gateway::meta_mcp::sealed_hold::HoldPolicy::CountOnly,
+                        crate::gateway::meta_mcp::sealed_hold::HoldPolicy::Release,
                         async {
                             // Boxed: the dispatch future is tens of kilobytes.
                             let (responses, _) = Self::dispatch_streaming_notifications(
@@ -1643,7 +1643,7 @@ impl Gateway {
                 // MIK-8176: this request's slots are owned by its task, from
                 // dispatch through the writer queue.
                 Box::pin(crate::gateway::meta_mcp::sealed_hold::scoped(
-                    crate::gateway::meta_mcp::sealed_hold::HoldPolicy::CountOnly,
+                    crate::gateway::meta_mcp::sealed_hold::HoldPolicy::Release,
                     async move {
                         let ((response, staged), hidden) = Self::dispatch_streaming_notifications(
                             Box::pin(Self::dispatch_single_staged(

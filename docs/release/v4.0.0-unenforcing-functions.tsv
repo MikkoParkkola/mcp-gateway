@@ -105,3 +105,4 @@ src/gateway/router/handlers/dispatch_intake.rs	params	1	Returns the request para
 src/gateway/server/run_steps.rs	webhook_routes	1	Builds the webhook routes the router puts behind its origin gate; the gate decides (MIK-8144)
 src/gateway/server/run_steps.rs	generate_gateway_key_pair	1	Generates the JWKS signing key pair; makes no access decision (MIK-8144)
 src/gateway/server/run_steps.rs	managed_recovery_adapters	1	Lists the recovery adapters that are configured backends; makes no access decision (MIK-8144)
+src/gateway/server/stdio_writer.rs	stdout_queue	1	Queue construction (MIK-8176): creates the stdout writer's bounded queue and, in test builds only, reports the stdio session's Meta-MCP to a test seam; it decides nothing

@@ -98,15 +98,15 @@ pub struct ConfigWatcher {
     /// the gateway shuts down.
     _chain: Arc<watch_chain::ChainWatch>,
     /// What the reload task did with `EnvFile` triggers.
-    // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
-    #[cfg(all(test, target_os = "linux"))]
+    // Linux and macOS (MIK-8181), as the real-watcher rows (see `watch_chain_tests.rs`).
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     env_reloads: Arc<env_poll::EnvReloadCounts>,
 }
 
 impl ConfigWatcher {
     /// The chain watch, for tests that wait on its ledger and counters.
-    // Only the linux-gated real-watcher tests read it.
-    #[cfg(all(test, target_os = "linux"))]
+    // Only the real-watcher tests (Linux and macOS) read it.
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     #[expect(
         clippy::used_underscore_binding,
         reason = "the field is named for keeping the watch alive; only tests read it"
@@ -116,8 +116,8 @@ impl ConfigWatcher {
     }
 
     /// What the reload task did with `EnvFile` triggers so far.
-    // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
-    #[cfg(all(test, target_os = "linux"))]
+    // Linux and macOS (MIK-8181), as the real-watcher rows (see `watch_chain_tests.rs`).
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     pub(super) fn env_reloads(&self) -> &env_poll::EnvReloadCounts {
         &self.env_reloads
     }
@@ -221,8 +221,8 @@ impl ConfigWatcher {
 
         Ok(Self {
             _chain: chain,
-            // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
-            #[cfg(all(test, target_os = "linux"))]
+            // Linux and macOS (MIK-8181), as the real-watcher rows (see `watch_chain_tests.rs`).
+            #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
             env_reloads,
         })
     }
