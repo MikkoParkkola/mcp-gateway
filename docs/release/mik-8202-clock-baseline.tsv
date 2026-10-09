@@ -114,7 +114,7 @@ src/gateway/router/tests/task_execution_adapter/query_serialization.rs	1
 src/gateway/router/tests/task_execution_adapter/signing_joint/policy.rs	6
 src/gateway/server/attestation_start_tests.rs	1
 src/gateway/server/identity_grants.rs	2
-src/gateway/server/mod.rs	1
+src/gateway/server/tests/boot.rs	1
 src/gateway/session_lifecycle.rs	2
 src/gateway/streaming_tests/listen_graceful.rs	2
 src/gateway/task_service/execution/expiry.rs	1

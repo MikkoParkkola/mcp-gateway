@@ -621,41 +621,6 @@ impl Gateway {
         self.config_path.as_ref().or(self.watched_config.as_ref())
     }
 
-    /// Create a gateway from an already evaluated config and the environment it
-    /// was evaluated against, bringing up managed account custody if the config
-    /// asks for one.
-    ///
-    /// The constructor a deployment uses: the ordinary construction every
-    /// caller gets, against THIS environment rather than the process
-    /// environment, plus one further step. `new_with_path` stays as it was for
-    /// callers that build a `Config` in memory and want no custody — it is the
-    /// same construction with an empty overlay. The further step is what makes a
-    /// gateway READY: it returns only after every managed descriptor's issuer
-    /// metadata has been validated and pinned AND the custody store's two
-    /// exclusive locks are held.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if backend registration fails, if the `accounts` block
-    /// is invalid, if a managed descriptor's issuer metadata is unacceptable, or
-    /// if custody cannot be brought up — a store another owner holds is a
-    /// startup failure, never a degraded start.
-    pub async fn new_evaluated(
-        config: Config,
-        env: Arc<crate::config::LiveEnv>,
-        config_path: Option<std::path::PathBuf>,
-    ) -> Result<Self> {
-        start_checks::clock()?;
-        Self::new_evaluated_inner(
-            config,
-            env,
-            config_path,
-            #[cfg(test)]
-            None,
-        )
-        .await
-    }
-
     /// [`Self::new_evaluated`] with the account transport supplied.
     ///
     /// Not a second constructor: it calls the SAME body with `Some(http)` where
