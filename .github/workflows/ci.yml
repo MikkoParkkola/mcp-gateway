@@ -999,6 +999,8 @@ jobs:
         run: python3 scripts/release/test_check_inventory_rows.py
       - name: Test the macOS exclusion check (MIK-8174)
         run: python3 scripts/release/test_check_macos_exclusions.py
+      - name: Test the release-binary test-hook check, and that every workflow calls it
+        run: python3 scripts/release/test_grep_no_test_hook.py
       - name: Test the tag/manifest publish gate
         run: python3 scripts/release/test_check_tag_manifest.py
       - name: Test the burndown summary drift check
