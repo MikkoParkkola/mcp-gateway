@@ -167,3 +167,38 @@ async fn runtime_probe_reports_auth_blocked_mcp_as_auth_warning() {
             .contains("Authorization")
     );
 }
+
+/// MIK-8242: the shipped free-port branch. A bind to port 0 always succeeds,
+/// so nothing can take the port this row checks, and the branch's output does
+/// not depend on the port number.
+#[tokio::test]
+async fn a_free_port_passes_and_reports_no_running_gateway() {
+    let mut config = Config::default();
+    config.server.host = "127.0.0.1".to_string();
+    config.server.port = 0;
+
+    let results = check_port_and_gateway_runtime(&config).await;
+
+    assert_check(&results, "Port", &CheckStatus::Pass);
+    assert_check(&results, "Gateway runtime", &CheckStatus::Warn);
+    let runtime = results
+        .iter()
+        .find(|result| result.label == "Gateway runtime")
+        .expect("a Gateway runtime result");
+    assert_eq!(runtime.detail, "not running on configured address");
+}
+
+/// MIK-8242: a port held by something that is not a gateway fails the check.
+/// The listener is held for the whole call, so the bind cannot succeed.
+#[tokio::test]
+async fn a_port_held_by_a_non_gateway_fails() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let mut config = Config::default();
+    config.server.host = "127.0.0.1".to_string();
+    config.server.port = listener.local_addr().expect("local addr").port();
+
+    let results = check_port_and_gateway_runtime(&config).await;
+
+    drop(listener);
+    assert_check(&results, "Port", &CheckStatus::Fail);
+}
