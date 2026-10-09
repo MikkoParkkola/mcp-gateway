@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/sealed_hold.rs b/src/gateway/meta_mcp/sealed_hold.rs
+index 8653fe977..9bb73cb7b 100644
+--- a/src/gateway/meta_mcp/sealed_hold.rs
++++ b/src/gateway/meta_mcp/sealed_hold.rs
+@@ -182,7 +182,7 @@ fn contains(value: &Value, needle: &str) -> bool {
+ /// it would free a slot the answer may still carry (MIK-8202).
+ fn reopens(hold: &SealedHold, token: Option<&str>) -> bool {
+     let Ok(now) = crate::clock::unix_secs() else {
+-        return token.is_some();
++        return false;
+     };
+     token.is_some_and(|token| {
+         hold.continuation
