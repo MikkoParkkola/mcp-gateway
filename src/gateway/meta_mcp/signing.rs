@@ -507,13 +507,9 @@ impl super::MetaMcp {
         let nonce = context
             .nonce_value()
             .inspect_err(|_| record_nonce_rejection(NONCE_REASON_INVALID))?;
-        context.nonce_stamp = self.admit_signing_nonce_stamped(
-            nonce,
-            caller.authorizer.quota_principal().map_or(
-                "anonymous",
-                crate::gateway::auth::QuotaPrincipal::as_store_key,
-            ),
-        )?;
+        // The same key the refund reads (`nonce_principal`), so the two
+        // cannot drift apart.
+        context.nonce_stamp = self.admit_signing_nonce_stamped(nonce, nonce_principal(caller))?;
         if context.origin == Origin::GatewayInvoke {
             context.prepared_target = Some((
                 extract_required_str(arguments, "server")?.to_owned(),

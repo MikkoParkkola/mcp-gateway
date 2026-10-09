@@ -192,6 +192,18 @@ steps:
         )
     };
     let (_, first) = send().await;
+    let report: Value = first["result"]["content"][0]["text"]
+        .as_str()
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or_else(|| panic!("premise: the playbook reports its steps: {first}"));
+    assert_eq!(report["steps_failed"], json!(["read"]), "{report}");
+    assert!(
+        report["step_errors"]["read"]
+            .as_str()
+            .is_some_and(|e| e.contains("-32003")),
+        "premise: the budget refused the read: {report}"
+    );
+    assert_eq!(report["steps_completed"], json!(["note"]), "{report}");
     assert_eq!(
         dispatched(&fx),
         2,
