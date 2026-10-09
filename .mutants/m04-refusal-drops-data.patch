@@ -1,0 +1,17 @@
+diff --git a/src/gateway/router/direct_guards.rs b/src/gateway/router/direct_guards.rs
+index 10a57d2d7..969c04486 100644
+--- a/src/gateway/router/direct_guards.rs
++++ b/src/gateway/router/direct_guards.rs
+@@ -138,10 +138,8 @@ impl DirectRouteGuards {
+                 Err(e) => {
+                     let id = response.id.clone();
+                     let placeholder = crate::protocol::RequestId::Number(0);
+-                    let mut refused = crate::gateway::meta_mcp::error_response_preserving_status(
+-                        id.clone().unwrap_or(placeholder),
+-                        &e,
+-                    );
++                    let _ = placeholder;
++                    let mut refused = refusal(id.clone(), &e);
+                     refused.id = id;
+                     return Ok(refused);
+                 }

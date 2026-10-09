@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/continuation.rs b/src/gateway/meta_mcp/invoke/continuation.rs
+index 96e9fa72c..8c60b8db3 100644
+--- a/src/gateway/meta_mcp/invoke/continuation.rs
++++ b/src/gateway/meta_mcp/invoke/continuation.rs
+@@ -598,7 +598,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
+         // The meta route's reading of what the result asks (MIK-8117): a
+         // round `from_result` declines still puts its readable questions to
+         // the client, so they face the same gate.
+-        let asked = super::undeclared_gate::asked_requests(result);
++        let asked = crate::protocol::mrtr::InputRequired::from_result(result);
+         if let Some(refused) = asked.as_ref().and_then(|a| a.undeclared(declared)) {
+             return Err(super::undeclared_gate::refusal(
+                 &refused, server, tool, "direct",

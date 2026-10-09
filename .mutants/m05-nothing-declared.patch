@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_caller.rs b/src/gateway/router/backend_handlers/direct_caller.rs
+index c6fad3d39..13a27efe8 100644
+--- a/src/gateway/router/backend_handlers/direct_caller.rs
++++ b/src/gateway/router/backend_handlers/direct_caller.rs
+@@ -278,7 +278,7 @@ pub(super) async fn read_envelope(
+     // its reading is the era `/mcp` would answer in.
+     let era = reading.0.era();
+     let declared = if era == crate::protocol::meta::Era::Modern {
+-        reading.0.declared_capabilities()
++        crate::protocol::meta::Declared::NONE
+     } else {
+         crate::protocol::meta::Declared::NONE
+     };

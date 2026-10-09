@@ -1,0 +1,7 @@
+head_sha	4b6bf03104ede18f6ee56a5de20c431d60cfde44
+# MIK-8089 rows (#3660)
+m01-no-undeclared-gate	linux	m01-no-undeclared-gate.patch	--lib -- direct_capability_tests
+m02-legacy-declares	linux	m02-legacy-declares.patch	--lib -- direct_capability_tests::g4
+m03-parsed-rounds-only	linux	m03-parsed-rounds-only.patch	--lib -- direct_capability_tests::g7
+m04-refusal-drops-data	linux	m04-refusal-drops-data.patch	--lib -- direct_capability_tests
+m05-nothing-declared	linux	m05-nothing-declared.patch	--lib -- direct_capability_tests::g3
