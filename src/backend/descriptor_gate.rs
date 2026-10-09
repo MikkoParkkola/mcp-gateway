@@ -320,6 +320,19 @@ impl Backend {
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// A digest of the filter [`Self::without_blocked`] applies: the blocked
+    /// names and saturation. `MIK-8148`: it lets the change drain tell a filter
+    /// change, which alters what an evicted caller would be shown, from a store.
+    pub(crate) fn visibility_filter_fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.gate_saturated().hash(&mut hasher);
+        for name in self.descriptor_gate.blocked.read().keys() {
+            name.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     /// `tools` without the names this backend has blocked since they were
     /// cached: a slot filled before another caller's listing blocked a name
     /// must not keep serving it. The same `Arc` when nothing is blocked.

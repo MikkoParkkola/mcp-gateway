@@ -202,6 +202,8 @@ backend" and "fails a capability file" first.**
 | 175 | The per-backend route `POST /mcp/{name}` refuses what `/mcp` refuses under every security posture, with the same code and status: a malformed request, a contradicted or doubled protocol header, an unsupported revision, or a 2026-07-28 request missing its required `_meta`. Before, only `hardened` checked these; elsewhere the route forwarded them to the backend | None for a client whose requests `/mcp` accepts. A client that sent such a request to `/mcp/{name}` gets the refusal `/mcp` gives it and fixes the request |
 | 176 | An HTTP or WebSocket backend's address takes one `url` key; its scheme picks the transport (`http://` or `https://` for HTTP, `ws://` or `wss://` for WebSocket). An A2A backend keeps `a2a_url`. `http_url` and `ws_url` still load, and every writer saves `url` for a backend it adds. A backend that ends up with two transport keys once the file and the environment merge no longer loads; the second key was dropped without a word | None to keep working. Run `mcp-gateway upgrade` to rewrite `http_url` and `ws_url` as `url`, comments kept. If a backend has one transport key in the file and the other in the environment, keep one |
 
+Changes not yet numbered wait in `upgrading.d/` at the repository root, one file per pull request; release preparation numbers them into this list.
+
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -3386,7 +3388,8 @@ task; it never leaves delivered content unrecorded. The record is written before
 a commit that then loses (to a cancel that lands first, or a store failure) leaves a record for
 a recovery that did not land. A live call has the same window: its record is written
 (`src/gateway/meta_mcp/invoke.rs:1219-1221`) before its result is stored for delivery
-(`src/gateway/router/handlers.rs:1798`), and stands if that delivery then fails.
+(`execution.complete_delivery` in `meta_mcp_dispatch`, `src/gateway/router/handlers.rs`), and stands
+if that delivery then fails.
 
 ## 114. Hardened can name backends that may reach private networks
 
