@@ -111,7 +111,6 @@ src/gateway/task_service/execution.rs	fail_marker	1	Test seam: asks the observer
 src/gateway/task_service/execution.rs	fail_state_upgrade	1	Test seam: asks the observer to inject a host-upgrade failure
 src/gateway/task_service/execution.rs	into_response	1	Maps a BeginOutcome to its JSON-RPC response; the refusals it renders were decided by admission
 src/gateway/task_service/execution.rs	is_terminal	1	Status predicate for the three terminal states
-src/gateway/task_service/execution.rs	new	1	TaskExecutor constructor; builds the worker semaphore and empty registries with no checks
 src/gateway/task_service/execution.rs	notify_observer	1	Test seam: tells the commit observer a stage was reached
 src/gateway/task_service/execution.rs	observe_commits	1	Test/debug seam installing a commit observer
 src/gateway/task_service/execution.rs	on_publication	1	Installs the write-once publication callback for the events source
@@ -123,7 +122,6 @@ src/gateway/task_service/execution.rs	spawn_worker	1	Spawns a worker under the s
 src/gateway/task_service/execution/context.rs	authorizer	1	Getter for the captured router authorizer
 src/gateway/task_service/execution/context.rs	dispatch_log	1	Getter for the dispatch log
 src/gateway/task_service/execution/context.rs	host	1	Getter for the task host
-src/gateway/task_service/execution/context.rs	new	2	OwnedAdmissionRequest constructor; stores fields with no checks
 src/gateway/task_service/execution/context.rs	principal	1	Getter for the admission principal
 src/gateway/task_service/execution/context.rs	session_id	1	Getter for the session id
 src/gateway/task_service/execution/context.rs	with_caller_key	1	Sets the caller key used for hints, A/B arm and key holds; not an authorization identity
@@ -206,3 +204,7 @@ src/gateway/task_service/store_targets.rs	add_targets	1	Async hop to add_targets
 src/gateway/task_service/store_targets.rs	settle_bounded_by	1	Async hop to settle_bounded_blocking, where ownership and revision are checked
 src/gateway/task_service/store_unix.rs	sync_dir	1	fsync of the store directory
 src/gateway/task_service/store_unix.rs	sync_file	1	fsync of a record file
+src/gateway/task_service/execution/worker.rs	settle_interrupted	1	Builds the not_executed payload and settles through settle_cas; run_dispatched decides the host is gone
+src/gateway/task_service/execution/worker.rs	settle_descriptor_refused	1	Builds the descriptor-refusal payload and settles through settle_cas; run_dispatched decides the refusal
+src/gateway/task_service/execution/input_round.rs	settle_interrupted	1	Builds the not_executed payload and settles through settle_cas; resume_flow decides the host is gone
+src/gateway/task_service/execution/input_round.rs	input_outcome_of	1	Maps StoreError variants to InputOutcome; the store decides NotFound, including for a foreign task

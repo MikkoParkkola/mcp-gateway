@@ -223,7 +223,6 @@ src/gateway/task_service/execution/context.rs	hold_caller_key	1	standard	borderl
 src/gateway/task_service/execution/input_round.rs	provide_input	1	critical	c	TaskExecutor::provide_input	Scopes task/update answers to the owner; foreign or absent task returns NotFound
 src/gateway/task_service/execution/input_round.rs	resume	1	critical	d	resume	Closes a round whose continuation deadline has passed, and one refused for expiry, instead of resuming it
 src/gateway/task_service/execution/input_round.rs	resume_flow	1	critical	d	resume_flow	Closes a round whose continuation deadline has passed, and one refused for expiry, instead of resuming it
-src/gateway/task_service/execution/input_round.rs	settle_interrupted	1	critical	d	settle_interrupted	Settles a resumed task interrupted when its host is gone, instead of dispatching without one
 src/gateway/task_service/execution/input_round.rs	proceed_unless_late	1	critical	d	TaskExecutor::proceed_unless_late	The one place both late-deadline checks of a resume close the round
 src/gateway/task_service/execution/input_round.rs	round_deadline	1	critical	borderline	round_deadline	Opens the sealed continuation (authenticates) to derive the deadline; refuses unopenable ones
 src/gateway/task_service/execution/input_round.rs	dispatch	1	standard	borderline	dispatch	Builds the worker's authorizer and caller context for the resume dispatch
@@ -237,7 +236,6 @@ src/gateway/task_service/execution/upstream.rs	recover_upstream_read	1	critical	
 src/gateway/task_service/execution/upstream.rs	recovery_target	1	critical	c	TaskExecutor::recovery_target	Returns the recovery descriptor only to the owner; foreign or terminal returns NotRecoverable
 src/gateway/task_service/execution/worker.rs	inspect_settled	1	critical	d	inspect_settled	Runs the response firewall on the task result; settles on a refusal when blocked
 src/gateway/task_service/execution/worker.rs	upstream_descriptor_fits	1	critical	c	TaskExecutor::upstream_descriptor_fits	Preflight refuses when no owner-scoped descriptor measurement resolves
-src/gateway/task_service/execution/worker.rs	run_dispatched	1	standard	borderline	run_dispatched	Arms the upstream job only if the adapter claims the backend; builds the worker authorizer
 src/gateway/task_service/execution/worker.rs	stored_backend_output	1	critical	borderline	stored_backend_output	Decides whether a settled row holds backend output that a receipt may describe as the peer's.
 src/gateway/task_service/host.rs	admits_backend	1	standard	borderline	HostAuthorizer::admits_backend	Delegates the backend-admission decision
 src/gateway/task_service/host.rs	authorizer	1	standard	borderline	LiveHost::authorizer	Picks the transport authorizer; a wrong pick applies the wrong policy
@@ -632,7 +630,6 @@ src/oauth/client/browser.rs	open_browser	1	standard	borderline	open_browser	Runs
 src/oauth/client/renewal.rs	refused	1	standard	borderline	OAuthClient::refused	Builds the policy-refusal outcome that stops the refresh task; a wrong outcome would keep retrying a refused destination.
 src/oauth/login_gate.rs	in_flight	1	critical	d	LoginGate::in_flight	Decides whether a login is in flight, the predicate a non-interactive backend restart is refused on (src/backend/restart.rs).
 src/personal_accounts/journey/persist.rs	write_journeys	1	standard	borderline	write_journeys	Seals and replaces journeys.json and marks the slot Stale after a post-rename failure, which stops reuse of outdated journey state.
-src/gateway/task_service/execution.rs	commit_create	1	standard	borderline	TaskExecutor::commit_create	Forwards the caller's admission request (principal, key) to the owner-scoped create; a wrong request would bind the task to the wrong owner
 src/gateway/task_service/execution.rs	commit_transition	1	critical	c	TaskExecutor::commit_transition	Routes Settle and Cancel through principal hashing and only startup Recover to the digest write, which keeps request writes owner-scoped
 src/gateway/task_service/execution/context.rs	borrow	1	standard	borderline	OwnedAdmissionRequest::borrow	Builds the admission Request (principal, key, Mode::Task) that owner scoping and the per-principal quota key on
 src/gateway/task_service/execution/context.rs	continuation	1	standard	borderline	OwnedCallerContext::continuation	Builds the retry fields carrying the sealed requestState and the attestation token the funnel re-validates
@@ -641,7 +638,6 @@ src/gateway/task_service/execution/context.rs	new	1	standard	borderline	OwnedCal
 src/gateway/task_service/execution/expiry.rs	start_expiry	1	standard	borderline	TaskExecutor::start_expiry	Installs the periodic sweep that closes input rounds past their continuation deadline; a sweep not started leaves expired rounds open
 src/gateway/task_service/execution/expiry.rs	sweep	1	standard	borderline	sweep	Drives closing of expired input rounds and retention deletion; the expiry decisions are closed_at and expire_blocking
 src/gateway/task_service/execution/input_round.rs	close_late_round	1	critical	c,d	TaskExecutor::close_late_round	Hashes the principal to its owner and closes a resumed round that passed its continuation deadline
-src/gateway/task_service/execution/input_round.rs	input_outcome_of	1	standard	borderline	input_outcome_of	Narrows store refusals so a foreign task reads as NotFound, the same as an absent one
 src/gateway/task_service/execution/input_round.rs	park	1	critical	c,d	Settling::park	Parks a round only on the owner's row and only with a continuation that opens and is not yet due; otherwise settles abandoned
 src/gateway/task_service/execution/input_round.rs	park_targets	1	critical	c	Settling::park_targets	Hashes the principal to its owner and writes targets only through the owner-scoped add_targets; refuses to park when the owner cannot be hashed
 src/gateway/task_service/execution/input_round.rs	plan_targets	1	standard	borderline	Settling::plan_targets	Builds the plan's dispatched targets that stored-result delivery re-authorizes against; a missed target skips that check
@@ -657,8 +653,6 @@ src/gateway/task_service/execution/worker.rs	follow_upstream_job	1	critical	c,d	
 src/gateway/task_service/execution/worker.rs	mark_dispatched	1	critical	c	TaskExecutor::mark_dispatched	Hashes the principal to its owner before the owner-scoped dispatch-marker write
 src/gateway/task_service/execution/worker.rs	poll_to_terminal	1	critical	b,d	poll_to_terminal	Queries the peer only while the handle still matches the durable descriptor and bounds the follow by WORKER_POLL_BUDGET
 src/gateway/task_service/execution/worker.rs	settle_cas_by	1	critical	c	TaskExecutor::settle_cas_by	Settles through the principal-hashed transition and retries only after an owner-scoped re-read; returns whether a receipt may be committed
-src/gateway/task_service/execution/worker.rs	settle_descriptor_refused	1	critical	d	settle_descriptor_refused	Settles the refusal of a candidate whose recovery descriptor does not fit the record budget, with zero backend effect
-src/gateway/task_service/execution/worker.rs	settle_interrupted	1	critical	d	settle_interrupted	Settles not_executed when the host is gone instead of dispatching without one (as the input_round twin)
 src/gateway/task_service/host.rs	caller_name	1	standard	borderline	HostAuthorizer::caller_name	Delegates the caller identity name to the HTTP or stdio authorizer
 src/gateway/task_service/host.rs	quota_principal	1	standard	borderline	HostAuthorizer::quota_principal	Delegates the per-principal quota identity to the HTTP or stdio authorizer
 src/gateway/task_service/host.rs	transport	1	standard	borderline	HostAuthorizer::transport	Delegates the transport label the policy and audit use to the HTTP or stdio authorizer
@@ -678,7 +672,11 @@ src/gateway/task_service/store.rs	open	1	standard	borderline	TaskStore::open	Ins
 src/gateway/task_service/store.rs	record_name	1	standard	borderline	record_name	Builds the file name load's name-equals-own-id check compares against; a wrong builder would let a renamed record rebind
 src/gateway/task_service/store_disk.rs	open_blocking	1	critical	d	open_blocking	Refuses a store whose directory identity changed while it was opened, after prepare_dir, lease and load
 src/gateway/task_service/store_expiry.rs	apply_reread	1	critical	d	Shared::apply_reread	Keeps a repaired sealed row sealed when it would exceed its owner's cap, duplicates a served task or key, or admission refuses its key
-src/gateway/task_service/store_expiry.rs	expire_blocking	1	standard	borderline	Shared::expire_blocking	Deletes only a terminal row at the expected revision whose dedupe entry names this task, under the admission guard
 src/gateway/task_service/store_expiry.rs	interrupted_of	1	critical	b	interrupted_of	Offers an upstream descriptor to recovery only on a v3+ row whose descriptor matches the record's admitted operation
 src/gateway/task_service/store_input.rs	expired_input_rounds	1	standard	borderline	TaskStore::expired_input_rounds	Selects rounds closed_at says are past their continuation deadline or TTL for the sweep to close
 src/gateway/task_service/store_targets.rs	settle_durable	1	critical	d	Shared::settle_durable	Falls back to the output-free bounded failure when the outcome exceeds the record budget, and strips unrecorded gateway members so they are never receipted as peer text
+src/gateway/task_service/execution/worker.rs	run_dispatched	1	critical	d	run_dispatched	Returns before the backend call when the recovery descriptor does not fit the record budget or the dispatch marker is refused
+src/gateway/task_service/execution.rs	commit_create	1	critical	d	TaskExecutor::commit_create	Admits a create only when a worker permit is free (the capacity closure handed to create_targeted) and binds it to the caller's admission request
+src/gateway/task_service/store_expiry.rs	expire_blocking	1	critical	c,d	Shared::expire_blocking	Deletes a terminal row and frees its key only when the key's entry names this task at the expected revision, under the admission guard
+src/gateway/task_service/execution.rs	new	1	standard	borderline	TaskExecutor::new	Installs the worker semaphore whose permits decide task admission in commit_create
+src/gateway/task_service/execution/context.rs	new	2	standard	borderline	OwnedAdmissionRequest::new	Captures the principal and admission key that borrow and owner-scoped admission consume
