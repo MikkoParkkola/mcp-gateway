@@ -63,6 +63,14 @@ pub fn load_existing_or_default(path: &Path) -> crate::Result<Config> {
 /// Takes the cross-process config lock first ([`lock`]), waiting up to
 /// [`CLI_LOCK_WAIT`] while another writer holds it; this blocks the calling
 /// thread, so an async caller uses the reload module's write API instead.
+///
+/// Deprecated: it replaces the file from the caller's snapshot with no
+/// concurrency check, so a change another writer made after the snapshot
+/// was taken is lost. Use [`edit_config`]. Removal is planned for 5.0.
+#[deprecated(
+    since = "4.0.0",
+    note = "replaces gateway.yaml from the caller's snapshot with no concurrency check; use edit_config"
+)]
 pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
     let held = lock_for_cli(path)?;
     write_config_with(path, config, CommentLoss::Rewrite, &held).map_err(|e| match e {
@@ -459,13 +467,20 @@ const SCRATCH_ATTEMPTS: u64 = 8;
 /// the one no test covered.
 /// Write pre-rendered config text through the same secure path as [`write_config`].
 ///
-/// Exposed for `init`, which renders a starter config as text rather than
-/// serialising a `Config`. It must not use `std::fs::write`: the starter config
-/// carries a generated admin credential.
+/// It must not be replaced by `std::fs::write`: a starter config carries a
+/// generated admin credential.
+///
+/// Deprecated: it takes no config lock and checks nothing, so it replaces
+/// whatever another writer put there. Use [`edit_config_text`]. Removal is
+/// planned for 5.0.
 ///
 /// # Errors
 ///
 /// Returns an error when the file cannot be created or replaced.
+#[deprecated(
+    since = "4.0.0",
+    note = "writes gateway.yaml with no config lock and no check; use edit_config_text"
+)]
 pub fn write_config_text(path: &Path, yaml: &str) -> Result<(), String> {
     write_yaml(path, yaml)
 }

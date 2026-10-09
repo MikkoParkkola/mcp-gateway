@@ -25,7 +25,7 @@ fn a_written_config_is_not_readable_by_other_users() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    write_config(&path, &Config::default()).expect("write");
+    crate::gateway::test_helpers::write_config_fixture(&path, &Config::default()).expect("write");
 
     let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "config wrote mode {mode:o}, expected 600");
@@ -54,7 +54,7 @@ fn write_config_persists_yaml() {
     let path = dir.path().join("gateway.yaml");
     let config = Config::default();
 
-    write_config(&path, &config).unwrap();
+    crate::gateway::test_helpers::write_config_fixture(&path, &config).unwrap();
 
     assert!(path.exists());
     let loaded = Config::load(Some(&path)).unwrap();
@@ -75,7 +75,7 @@ fn a_config_write_leaves_no_scratch_file_on_any_platform() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("gateway.yaml");
 
-    write_config(&path, &Config::default()).unwrap();
+    crate::gateway::test_helpers::write_config_fixture(&path, &Config::default()).unwrap();
 
     assert!(Config::load(Some(&path)).is_ok(), "config is not parseable");
     let leftovers: Vec<_> = std::fs::read_dir(dir.path())
@@ -211,7 +211,14 @@ fn concurrent_config_writes_do_not_lose_the_temp_file() {
             let path = &path;
             let config_for = &config_for;
             let handles: Vec<_> = (0..8)
-                .map(|writer| scope.spawn(move || write_config(path, &config_for(writer))))
+                .map(|writer| {
+                    scope.spawn(move || {
+                        crate::gateway::test_helpers::write_config_fixture(
+                            path,
+                            &config_for(writer),
+                        )
+                    })
+                })
                 .collect();
             handles
                 .into_iter()
@@ -266,7 +273,7 @@ fn write_config_rejects_invalid_config() {
         },
     );
 
-    let result = write_config(&path, &config);
+    let result = crate::gateway::test_helpers::write_config_fixture(&path, &config);
 
     assert!(matches!(result, Err(msg) if msg.contains("Failed to validate config")));
     assert!(!path.exists());
@@ -298,7 +305,7 @@ fn a_config_rewrite_keeps_secret_references_unresolved() {
 
     let mut config = load_config_or_default(&path);
     config.server.port = 9191;
-    write_config(&path, &config).expect("rewrite the config");
+    crate::gateway::test_helpers::write_config_fixture(&path, &config).expect("rewrite the config");
 
     let written = std::fs::read_to_string(&path).expect("read the config back");
     assert!(
@@ -325,7 +332,8 @@ fn a_written_config_is_owner_only_even_in_an_open_directory() {
     let dir = everyone_full_dir("1718-W1");
     let path = dir.path().join("gateway.yaml");
 
-    write_config_text(&path, "server:\n  port: 1\n").expect("write");
+    crate::gateway::test_helpers::write_config_text_fixture(&path, "server:\n  port: 1\n")
+        .expect("write");
 
     // Relies on `create_file_private(.., Share::Exclusive)`: owner-only from creation, not repaired after.
     assert_owner_only("1718-W1", &path, false);
@@ -350,7 +358,10 @@ fn a_cli_write_refuses_a_config_that_no_longer_loads() {
             })
             .map(drop),
         ),
-        ("--force", write_config(&path, &config)),
+        (
+            "--force",
+            crate::gateway::test_helpers::write_config_fixture(&path, &config),
+        ),
     ] {
         let error = result.expect_err(name);
         assert!(error.starts_with("Failed to load"), "{name}: {error}");

@@ -107,7 +107,8 @@ fn remove_keeps_hand_written_comments() {
 #[test]
 fn a_file_another_writer_broke_is_refused_not_replaced() {
     use mcp_gateway::config::BackendConfig;
-    use mcp_gateway::config_persistence::{load_existing_or_default, write_config};
+    use mcp_gateway::config_persistence::load_existing_or_default;
+    use mcp_gateway::gateway::test_helpers::write_config_fixture;
 
     let home = tempfile::tempdir().expect("home");
     let path = home.path().join("gateway.yaml");
@@ -124,7 +125,7 @@ fn a_file_another_writer_broke_is_refused_not_replaced() {
     .expect("write");
 
     // Replacing it would erase that writer's change with `add`'s older copy.
-    let error = write_config(&path, &config).expect_err("refused");
+    let error = write_config_fixture(&path, &config).expect_err("refused");
     assert!(error.starts_with("Failed to load"), "{error}");
     assert_eq!(
         std::fs::read_to_string(&path).expect("read"),
@@ -135,7 +136,8 @@ fn a_file_another_writer_broke_is_refused_not_replaced() {
 #[test]
 fn an_invalid_config_is_refused_and_left_unwritten() {
     use mcp_gateway::config::BackendConfig;
-    use mcp_gateway::config_persistence::{load_existing_or_default, write_config};
+    use mcp_gateway::config_persistence::load_existing_or_default;
+    use mcp_gateway::gateway::test_helpers::write_config_fixture;
 
     let home = tempfile::tempdir().expect("home");
     let path = home.path().join("gateway.yaml");
@@ -147,7 +149,7 @@ fn an_invalid_config_is_refused_and_left_unwritten() {
         serde_yaml::from_str("command: echo\nruntime_profile: nosuch\n").expect("backend");
     config.backends.insert("new".into(), backend);
 
-    assert!(write_config(&path, &config).is_err());
+    assert!(write_config_fixture(&path, &config).is_err());
     assert_eq!(
         std::fs::read_to_string(&path).expect("read"),
         "# mine\nbackends: {}\n"
@@ -156,10 +158,11 @@ fn an_invalid_config_is_refused_and_left_unwritten() {
 
 /// The web UI and admin write through `backend_ops::write_config`.
 fn ui_write(path: &Path, change: impl FnOnce(&mut mcp_gateway::config::Config)) -> String {
-    use mcp_gateway::gateway::ui::backend_ops::{load_config_or_default, write_config};
+    use mcp_gateway::gateway::test_helpers::write_config_fixture;
+    use mcp_gateway::gateway::ui::backend_ops::load_config_or_default;
     let mut config = load_config_or_default(path);
     change(&mut config);
-    write_config(path, &config).expect("write config");
+    write_config_fixture(path, &config).expect("write config");
     std::fs::read_to_string(path).expect("read")
 }
 
