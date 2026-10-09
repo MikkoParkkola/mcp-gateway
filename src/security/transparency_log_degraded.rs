@@ -44,6 +44,12 @@ fn cause_index(cause: &str) -> usize {
 /// hanging the call or the readiness check (Revision 3).
 pub const AUDIT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// How long a test waits for the log to recover after a heal: each probe is
+/// bounded at [`AUDIT_PROBE_TIMEOUT`], so this allows at least 14 probes on a
+/// loaded runner (MIK-8171).
+#[cfg(test)]
+pub(crate) const HEAL_BOUND_FOR_TEST: Duration = Duration::from_secs(30);
+
 impl TransparencyLogger {
     /// Set what a failed append does (D1-f). The server picks `FailClosed`
     /// when auth is on.
@@ -75,6 +81,14 @@ impl TransparencyLogger {
     #[cfg(test)]
     pub(crate) fn set_append_failure_for_test(&self, on: bool) {
         self.fail_appends.store(on, Ordering::Release);
+    }
+
+    /// Clear the injected failure, then wait until a probe admits a call
+    /// (see [`until_recovered`], MIK-8171).
+    #[cfg(test)]
+    pub(crate) async fn heal_for_test(self: &std::sync::Arc<Self>) {
+        self.set_append_failure_for_test(false);
+        until_recovered(self, || self.admit()).await;
     }
 
     /// Count a failed append, and under `FailClosed` mark the logger degraded;
@@ -174,6 +188,10 @@ impl TransparencyLogger {
         // F20: a stalled fail-closed log refuses at once, with no probe and
         // no thread; a best-effort one keeps serving, as D1 left it.
         if self.is_stalled() {
+            #[cfg(test)]
+            self.bound
+                .stall_answers
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             return if fail_closed {
                 Err(crate::Error::AuditUnavailable)
             } else {
@@ -194,6 +212,53 @@ impl TransparencyLogger {
             Ok(()) => Ok(()),
             Err(_) => Err(crate::Error::AuditUnavailable),
         }
+    }
+}
+
+/// Run `attempt` until it succeeds, for at most [`HEAL_BOUND_FOR_TEST`]; its
+/// value. After a heal, the first probe can overrun [`AUDIT_PROBE_TIMEOUT`]
+/// on a loaded runner and answer "stalled" until its write lands, so one try
+/// proves nothing (MIK-8171). A failure is retried only when that attempt
+/// timed out or was refused while stalled; a refusal with no stall behind it,
+/// or a counted failed append, fails at once, naming the answer.
+#[cfg(test)]
+pub(crate) async fn until_recovered<T, E, F, Fut>(log: &TransparencyLogger, mut attempt: F) -> T
+where
+    E: std::fmt::Debug,
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, E>>,
+{
+    let failures = log.append_failures();
+    let stalls = std::cell::Cell::new(log.stall_answers_for_test());
+    let waited = crate::test_wait::wait_until(HEAL_BOUND_FOR_TEST, || {
+        let pending = attempt();
+        let stalls = &stalls;
+        async move {
+            let answer = pending.await;
+            // Only a stall may be retried: this attempt timed out or was
+            // refused while stalled. A stalled write that lands as a failure
+            // is counted even when a later attempt succeeds.
+            let now = log.stall_answers_for_test();
+            let stalled = now > stalls.replace(now);
+            assert_eq!(
+                log.append_failures(),
+                failures,
+                "an append failed, not a stall: {:?}",
+                answer.as_ref().err()
+            );
+            match answer {
+                Ok(value) => std::ops::ControlFlow::Break(value),
+                Err(refused) => {
+                    assert!(stalled, "refused without a stall: {refused:?}");
+                    std::ops::ControlFlow::Continue(format!("{refused:?}"))
+                }
+            }
+        }
+    })
+    .await;
+    match waited {
+        Ok(value) => value,
+        Err(last) => panic!("not recovered within {HEAL_BOUND_FOR_TEST:?}: {last}"),
     }
 }
 

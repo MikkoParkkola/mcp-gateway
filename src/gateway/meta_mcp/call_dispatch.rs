@@ -426,11 +426,13 @@ impl MetaMcp {
             _ => Err(self.no_such_meta_tool(tool_name, caller)),
         };
 
-        let inspected = self.marks_discovery(tool_name, result.is_ok());
+        // A discovery answer the canonical pass refused was scanned too.
+        let scanned = matches!(result, Ok(_) | Err(crate::Error::ResponseFirewallRefused));
+        let inspected = self.marks_discovery(tool_name, scanned);
         let (declared, chain) = (caller.input_capabilities, (source, upstream));
         let mut response =
             response_security::shape_meta_result(id, tool_name, result, shape, declared, chain);
-        response.discovery_inspected = inspected && response.error.is_none();
+        response.egress_scanned = inspected;
         response
     }
 }

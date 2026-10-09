@@ -28,7 +28,8 @@ async fn an_unterminated_quote_is_a_config_error() {
 
 // A file that exists and may be executed but is no program the OS can
 // load (ENOEXEC) is neither of the two kinds `start` treats as permanent,
-// so it stays a retryable transport failure.
+// so it stays a retryable transport failure. Linux refuses the spawn; macOS
+// spawns it and the child exits 126 before initialize. Both are Transport.
 #[cfg(unix)]
 #[tokio::test]
 async fn a_file_the_os_cannot_execute_is_a_transport_error() {
@@ -45,10 +46,14 @@ async fn a_file_the_os_cannot_execute_is_a_transport_error() {
         None,
     );
     let err = transport.start().await.expect_err("nothing to run");
-    assert!(
-        matches!(&err, Error::Transport(m) if m.starts_with("Failed to spawn")),
-        "got {err:?}"
-    );
+    let Error::Transport(message) = &err else {
+        panic!("got {err:?}");
+    };
+    if cfg!(target_os = "macos") {
+        assert!(message.contains("exit status: 126"), "got {err:?}");
+    } else {
+        assert!(message.starts_with("Failed to spawn"), "got {err:?}");
+    }
 }
 
 #[tokio::test]

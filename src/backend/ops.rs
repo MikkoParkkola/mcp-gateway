@@ -425,13 +425,13 @@ impl Backend {
             super::fill_check::record_request_failure(entry, &error.to_string(), latency);
         if rate_limited {
             tracing::warn!(
-                error = %error,
+                code = error.to_rpc_code(),
                 latency_ms = latency.as_millis(),
                 "{exchange} rate limited"
             );
         } else {
             tracing::error!(
-                error = %error,
+                code = error.to_rpc_code(),
                 latency_ms = latency.as_millis(),
                 "{exchange} failed"
             );
