@@ -138,11 +138,13 @@ pub(super) fn route_owners(
 ) -> (String, String, String) {
     let owner_key = task_owner_key(subject, cert, client);
     let proven = super::super::identity::subject_key(subject, cert);
-    let route = |agent: Option<&OAuthAgentIdentity>| match (agent, &proven) {
+    // `via_agent` is the agent arm this owner may use: the task owner passes
+    // the request's agent, the events owner never does (MIK-8055 K6).
+    let route = |via_agent: Option<&OAuthAgentIdentity>| match (via_agent, &proven) {
         (None, Some(subject)) if !state.auth_config.enabled && verified_identity.is_none() => {
             subject.clone()
         }
-        _ => route_task_owner(state, verified_identity, agent, &owner_key),
+        _ => route_task_owner(state, verified_identity, via_agent, &owner_key),
     };
     let owner = route(agent);
     let admission = if owner == AUTH_DISABLED_TASK_OWNER {
