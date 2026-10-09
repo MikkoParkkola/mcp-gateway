@@ -55,8 +55,8 @@ fn row(write: impl FnOnce(&AuditLogger)) -> Value {
     serde_json::from_str(line).unwrap()
 }
 
-/// The content-free shape: the finding is exactly {scan_type, severity,
-/// location} with the source's values, the count is kept, the row is
+/// The content-free shape: the finding is exactly `{scan_type, severity,
+/// location}` with the source's values, the count is kept, the row is
 /// `schema_version` 3, and neither marker appears anywhere in it.
 fn assert_content_free(writer: &str, row: &Value) {
     let text = row.to_string();
@@ -106,7 +106,7 @@ fn c1_a_request_row_carries_no_content() {
 fn c2_an_attributed_request_row_carries_no_content() {
     let tenants = BTreeSet::from(["tenant-a".to_owned()]);
     let row = row(|log| {
-        log.log_request_attributed(&correlation(), &json!({KEY: "x"}), &marked(), &tenants)
+        log.log_request_attributed(&correlation(), &json!({KEY: "x"}), &marked(), &tenants);
     });
     assert_content_free("log_request_attributed", &row);
 }
