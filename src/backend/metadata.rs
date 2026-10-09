@@ -20,6 +20,7 @@ use super::list_drain::drain_list_pages;
 use super::pool::PoolKey;
 use crate::Error;
 use crate::Result;
+use crate::oauth::login_gate::{Provenance, fill_scope};
 use crate::protocol::{
     Prompt, PromptsListResult, Resource, ResourceTemplate, ResourcesListResult,
     ResourcesTemplatesListResult, Tool, ToolsListResult,
@@ -301,82 +302,81 @@ impl Backend {
         // `Option`, and both sites where a `None` binding arises return empty
         // headers with it. `stateless_tools_slot_tests` keeps a cell that fails
         // if this is deleted, because every other cell would still pass.
-        let fetch_headers: &[(String, String)] = match identity_key {
-            Some(_) => extra_headers,
-            None => &[],
-        };
+        let fetch_headers: &[(String, String)] = identity_key.map_or(&[], |_| extra_headers);
         // Resolve the slot ONCE and keep it for both the cache and the fetch.
         let lease = self.begin_internal_activity_for(&key)?;
         let entry = Arc::clone(lease.entry());
         select(&entry)
             .get_or_fetch_shared_then(
                 self.cache_ttl,
-                || async {
-                    // F13: breaker, cooldown, token, in that order, before the
-                    // guard is armed, so a refusal here never stamps.
-                    let refresh_failed = || entry.tools_refresh_failed_at.lock();
-                    if family.stale_hit
-                        && refresh_failed().is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN)
-                    {
-                        return Err(Error::BackendUnavailable(format!(
-                            "{}: a stale tools refresh failed within the last {}s",
-                            self.name,
-                            LIST_FILL_COOLDOWN.as_secs()
-                        )));
-                    }
-                    admit_fill(&entry, &self.name, bound, family.cooldown)?;
-                    let mut guard = family.cooldown.then(|| FillGuard::arm(Arc::clone(&entry)));
-                    let drained = run_bounded(&entry, &self.name, bound, async {
-                        // A cold fill on the dispatch path has sent no tools/call
-                        // yet, so a failed start is a pre-send refusal (MIK-7979).
-                        let transport = self
-                            .ensure_entry_started(&key)
-                            .await
-                            .map_err(|e| super::lifecycle::pre_send_start_error(&self.name, e))?;
-                        crate::oauth::login_gate::Provenance::mark_started();
-                        let (merged, truncated) = drain_list_pages(
-                            transport.as_ref(),
-                            &self.name,
-                            &family,
-                            fetch_headers,
-                            identity_key,
-                        )
-                        .await?;
-                        let (items, prepared) = match merged {
-                            Some(result) => parse(result)?,
-                            None => (Vec::new(), None),
+                |mark| {
+                    fill_scope(mark, async {
+                        // F13: breaker, cooldown, token, in that order, before the
+                        // guard is armed, so a refusal here never stamps.
+                        let refresh_failed = || entry.tools_refresh_failed_at.lock();
+                        if family.stale_hit
+                            && refresh_failed().is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN)
+                        {
+                            return Err(Error::BackendUnavailable(format!(
+                                "{}: a stale tools refresh failed within the last {}s",
+                                self.name,
+                                LIST_FILL_COOLDOWN.as_secs()
+                            )));
+                        }
+                        admit_fill(&entry, &self.name, bound, family.cooldown)?;
+                        let mut guard = family.cooldown.then(|| FillGuard::arm(Arc::clone(&entry)));
+                        let drained = run_bounded(&entry, &self.name, bound, async {
+                            // A cold fill on the dispatch path has sent no tools/call
+                            // yet, so a failed start is a pre-send refusal (MIK-7979).
+                            let transport = self.ensure_entry_started(&key).await.map_err(|e| {
+                                super::lifecycle::pre_send_start_error(&self.name, e)
+                            })?;
+                            Provenance::mark_started();
+                            let (merged, truncated) = drain_list_pages(
+                                transport.as_ref(),
+                                &self.name,
+                                &family,
+                                fetch_headers,
+                                identity_key,
+                            )
+                            .await?;
+                            let (items, prepared) = match merged {
+                                Some(result) => parse(result)?,
+                                None => (Vec::new(), None),
+                            };
+                            Ok((items, truncated, prepared))
+                        })
+                        .await;
+                        let end = match &drained {
+                            Ok(_) => FillEnd::Drained,
+                            // A login in progress stamps no cooldown (MIK-7982).
+                            Err(e) if e.is_authorization_wait() => FillEnd::Pending,
+                            Err(e) => match super::fill_check::Replay::of(e) {
+                                None if super::fill_check::is_transport_failure(e) => {
+                                    FillEnd::Unreplayable
+                                }
+                                transport => FillEnd::Failed { transport },
+                            },
                         };
-                        Ok((items, truncated, prepared))
+                        if family.stale_hit && drained.is_err() && !matches!(end, FillEnd::Pending)
+                        {
+                            *refresh_failed() = Some(tokio::time::Instant::now());
+                        }
+                        if let Some(guard) = guard.as_mut() {
+                            guard.end(end);
+                        }
+                        let (items, truncated, prepared) = drained?;
+
+                        debug!(
+                            backend = %self.name,
+                            kind = family.kind,
+                            count = items.len(),
+                            per_user = identity_key.is_some(),
+                            "Backend metadata cached"
+                        );
+
+                        Ok((items, (truncated, guard, prepared)))
                     })
-                    .await;
-                    let end = match &drained {
-                        Ok(_) => FillEnd::Drained,
-                        // A login in progress stamps no cooldown (MIK-7982).
-                        Err(e) if e.is_authorization_wait() => FillEnd::Pending,
-                        Err(e) => match super::fill_check::Replay::of(e) {
-                            None if super::fill_check::is_transport_failure(e) => {
-                                FillEnd::Unreplayable
-                            }
-                            transport => FillEnd::Failed { transport },
-                        },
-                    };
-                    if family.stale_hit && drained.is_err() && !matches!(end, FillEnd::Pending) {
-                        *refresh_failed() = Some(tokio::time::Instant::now());
-                    }
-                    if let Some(guard) = guard.as_mut() {
-                        guard.end(end);
-                    }
-                    let (items, truncated, prepared) = drained?;
-
-                    debug!(
-                        backend = %self.name,
-                        kind = family.kind,
-                        count = items.len(),
-                        per_user = identity_key.is_some(),
-                        "Backend metadata cached"
-                    );
-
-                    Ok((items, (truncated, guard, prepared)))
                 },
                 |(truncated, guard, prepared)| {
                     // Written only once the store is accepted, and on every
@@ -405,6 +405,8 @@ impl Backend {
                         guard.end(FillEnd::Stored);
                     }
                 },
+                // A joiner classifies its deadline by this fill (MIK-8046).
+                Provenance::joined,
             )
             .await
     }
@@ -525,13 +527,13 @@ impl Backend {
             tokio::time::timeout(limit + super::fill_check::LIST_FILL_WAIT_GRACE, fill)
                 .await
                 .unwrap_or_else(|_| {
-                    Err(crate::oauth::login_gate::Provenance::expired(
+                    Err(Provenance::expired(
                         &self.name,
                         super::fill_check::list_timeout(&self.name, limit),
                     ))
                 })
         };
-        let tools = crate::oauth::login_gate::Provenance::scope(&self.login_gate, bounded).await?;
+        let tools = Provenance::scope(&self.login_gate, bounded).await?;
         let slot = self.tools_slot(binding);
         let completeness = slot.tools_cache.with_cached(|current| match current {
             Some(held) if Arc::ptr_eq(held, &tools) => {
