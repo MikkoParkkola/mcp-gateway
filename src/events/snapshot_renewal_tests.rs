@@ -169,3 +169,109 @@ async fn t34_a_read_begun_before_a_renewal_does_not_revoke_it() {
         "the renewal survives a delivery judged against the older read"
     );
 }
+
+/// A peer whose first `resources/list` lists only `file:///a` and every later
+/// one `file:///a` and `file:///x`: the URI appeared after the first read.
+async fn upstream_x_appears() -> String {
+    let lists = Arc::new(AtomicUsize::new(0));
+    let app = axum::Router::new().fallback(move |axum::Json(message): axum::Json<Value>| {
+        let lists = Arc::clone(&lists);
+        async move {
+            let Some(id) = message.get("id").cloned() else {
+                return StatusCode::ACCEPTED.into_response();
+            };
+            let body = match message["method"].as_str() {
+                Some("initialize") => json!({"jsonrpc": "2.0", "id": id, "result": {
+                    "protocolVersion": crate::protocol::PROTOCOL_VERSION,
+                    "capabilities": {"resources": {}},
+                    "serverInfo": {"name": "b", "version": "0"}}}),
+                Some("resources/list") => {
+                    let mut listed = vec![json!({"uri": "file:///a", "name": "a"})];
+                    if lists.fetch_add(1, Ordering::SeqCst) > 0 {
+                        listed.push(json!({"uri": "file:///x", "name": "x"}));
+                    }
+                    json!({"jsonrpc": "2.0", "id": id, "result": {"resources": listed}})
+                }
+                _ => json!({"jsonrpc": "2.0", "id": id,
+                    "error": {"code": -32601, "message": "method not found"}}),
+            };
+            axum::Json(body).into_response()
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let url = format!("http://{}/mcp", listener.local_addr().expect("addr"));
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    url
+}
+
+/// MIK-8194, no-snapshot half (#3625 review CRITICAL): with no listener
+/// snapshot, delivery reads the catalogue itself; a cached list from before
+/// the renewal, without the URI, must not revoke it when the URI exists now.
+#[tokio::test]
+async fn t34_a_cached_list_from_before_a_renewal_does_not_revoke_it() {
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(Arc::new(Backend::new(
+        "b",
+        BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: upstream_x_appears().await,
+                streamable_http: Some(true),
+                protocol_version: None,
+            },
+            timeout: Duration::from_secs(10),
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ))));
+    // An earlier read fills the shared catalogue cache, before the URI exists.
+    let cached = registry
+        .get("b")
+        .expect("b")
+        .read_resource_snapshot(false)
+        .await
+        .expect("first read");
+    assert!(
+        !cached.uris.contains("file:///x"),
+        "premise: cached without x"
+    );
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    hub.install_backend_source_with_upstream(
+        Arc::new(|| vec!["b".to_owned()]),
+        Arc::clone(&registry),
+        Arc::new(std::collections::BTreeSet::new),
+    );
+    subscribe(&hub);
+    let event = crate::events::fanout::SourceEvent {
+        kind: crate::events::types::SourceKind::BackendNotification,
+        name: "backend.b.resource_updated".into(),
+        backend: "b".into(),
+        scope: crate::events::types::Visibility::Backend("b".into()),
+        owner: None,
+        upstream_id: "n2".into(),
+        occurred_at: chrono::Utc::now(),
+        data: json!({"uri": "file:///x"}),
+        lifecycle_key: None,
+    };
+    let services = crate::events::Services {
+        live: Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
+        #[cfg(feature = "firewall")]
+        firewall: None,
+        audit: None,
+        provenance: None,
+        #[cfg(feature = "cost-governance")]
+        budget: None,
+        credentials: crate::events::LiveCredentials::default(),
+    };
+    hub.fan_out(&services, &event).await;
+    assert_eq!(
+        hub.store.subscriptions().len(),
+        1,
+        "the renewal survives a delivery judged against the stale cache"
+    );
+}
