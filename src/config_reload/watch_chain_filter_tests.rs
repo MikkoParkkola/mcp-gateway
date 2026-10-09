@@ -153,6 +153,25 @@ fn a_broken_chain_keeps_only_watched_paths_on_record() {
     assert_eq!(chain.names.take_gone(), BTreeSet::from([on_ledger]));
 }
 
+/// MIK-8181: a chain unresolvable at startup, named through a linked
+/// directory, is watched at its directory's canonical name, as every resolved
+/// chain directory is (`/var` and `/private/var` on macOS are one directory).
+#[cfg(unix)]
+#[test]
+fn a_broken_chain_named_through_a_link_starts_on_the_canonical_directory() {
+    let root = tempfile::tempdir().expect("root");
+    let c = root.path().join("real").join("c");
+    std::fs::create_dir_all(&c).unwrap();
+    crate::test_symlink::symlink(root.path().join("real"), root.path().join("alias")).unwrap();
+    crate::test_symlink::symlink(root.path().join("missing.yaml"), c.join("l")).unwrap();
+    let named = root.path().join("alias").join("c").join("l");
+    assert!(
+        resolve_chain(&named).is_err(),
+        "premise: the chain is broken"
+    );
+    assert_eq!(super::startup_dirs(&named), BTreeSet::from([canonical(&c)]));
+}
+
 // Linux and macOS (MIK-8181), as the other real-watcher rows.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod real_watcher {
@@ -233,8 +252,12 @@ mod real_watcher {
             );
         } else {
             assert_eq!(dropped, 0, "the path filter is off outside Linux");
+            let unrelated = |path: &std::path::PathBuf| {
+                path.file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("perf-"))
+            };
             assert!(
-                passed.iter().any(|paths| !paths.contains(&config)),
+                passed.iter().flatten().any(unrelated),
                 "unrelated writes wake the task outside Linux: {passed:?}"
             );
         }

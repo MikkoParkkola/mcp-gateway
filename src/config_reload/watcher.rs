@@ -105,7 +105,7 @@ pub struct ConfigWatcher {
 
 impl ConfigWatcher {
     /// The chain watch, for tests that wait on its ledger and counters.
-    // Only the linux-gated real-watcher tests read it.
+    // Only the real-watcher tests (Linux and macOS) read it.
     #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     #[expect(
         clippy::used_underscore_binding,
