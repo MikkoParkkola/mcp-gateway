@@ -75,3 +75,17 @@ async fn t28_a_dropped_route_holds_the_row_then_resumes() {
     refresh(&hub, &registry, &full());
     assert!(hub.store.held(&id).is_none(), "resumed");
 }
+
+/// T11, still-offered half (R1a mutants): a row held because the route does
+/// not serve its filter, while its type is offered, keeps no key either (the
+/// held check in `live_keys`, not the type's absence).
+#[tokio::test]
+async fn t11_a_row_held_by_a_narrowed_route_releases_its_key() {
+    let (_dir, hub, _registry) = restarted(json!({"ref": "main"}), &narrower()).await;
+    let answer = subscribe(&hub, json!({"ref": "main"})).await.expect("held");
+    assert_eq!(
+        answer["held"]["key"], "ref",
+        "premise: held, type offered: {answer}"
+    );
+    assert!(keys_settle(&hub, 0).await, "a held row keeps no key");
+}
