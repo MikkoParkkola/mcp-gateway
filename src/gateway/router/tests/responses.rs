@@ -161,12 +161,14 @@ async fn parse_sampling_params_missing_returns_bad_request_with_session_header()
     assert_eq!(json["id"], json!(9));
 }
 
-/// MIK-8195: malformed sampling params are refused with the parse error.
+/// MIK-8195: params valid in every field but the required `messages` are
+/// refused, and the refusal names `messages`, so the row cannot pass on
+/// another field's refusal.
 #[tokio::test]
 async fn parse_sampling_params_invalid_returns_bad_request_with_context() {
     let response = parse_sampling_params(
         RequestId::String("req-1".to_string()),
-        Some(json!({"messages": 42})),
+        Some(json!({"maxTokens": 16})),
         "sess-sample",
     )
     .unwrap_err();
@@ -182,6 +184,13 @@ async fn parse_sampling_params_invalid_returns_bad_request_with_context() {
             .as_str()
             .unwrap()
             .starts_with("Invalid sampling params:")
+    );
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("messages"),
+        "the refusal names the missing field: {json}"
     );
     assert_eq!(json["id"], json!("req-1"));
 }

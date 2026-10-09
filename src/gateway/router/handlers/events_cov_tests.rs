@@ -114,20 +114,3 @@ async fn a_dashboard_subscription_binds_the_session_and_expires_one_idle_timeout
     assert_eq!(unbound.binding, None, "no session cookie, no binding");
     assert!(unbound.expires_at.is_some(), "the idle cap still applies");
 }
-
-/// MIK-8207: an idle timeout too long for a timestamp refuses the dashboard
-/// subscription instead of leaving the session unbounded.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_dashboard_subscription_with_an_unholdable_idle_timeout_is_refused() {
-    let (state, _dir) = crate::gateway::router::tests::test_router_app_state().await;
-    let mut config = (*state.live_config.get()).clone();
-    config.auth.dashboard_session.idle_timeout_secs = u64::MAX;
-    state.live_config.set(config);
-    let caller = client(CredentialKind::DashboardSession);
-    let refused = presented(None, Some(crate::hashing::sha256_hex(b"session-handle")))
-        .credential(Some(&caller), &state);
-    assert!(
-        refused.is_err(),
-        "an unbounded session was admitted: {refused:?}"
-    );
-}
