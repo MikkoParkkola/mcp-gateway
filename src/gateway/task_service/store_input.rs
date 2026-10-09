@@ -302,15 +302,24 @@ impl Shared {
         record.version = record.version.max(INPUT_ROUND_VERSION);
         record.input_round = Some(round);
         // A round that leaves no room for even its shortest answer could never
-        // be completed: refused now, while it can still settle.
+        // be completed: refused now, while it can still settle. Measured as
+        // `provide_input` writes that answer, through the same transition, so
+        // the probe and the real write never disagree at the cap (MIK-7661).
         let shortest = task
             .input_requests()
             .and_then(|requests| requests.keys().min_by_key(|key| key.len()))
             .cloned()
             .unwrap_or_default();
-        let mut probe = record.clone();
+        let (mut answered, mut probe) = (task.clone(), record.clone());
+        let mut minimal = Map::new();
+        minimal.insert(shortest, json!({}));
+        let change = answered
+            .transition(TaskTransition::ProvideInput(Value::Object(minimal)), at)
+            .map_err(|_| StoreError::InvalidTransition)?;
+        probe.revision = probe.revision.checked_add(1).ok_or(StoreError::Capacity)?;
+        probe.model = answered.snapshot();
         if let Some(open) = probe.input_round.as_mut() {
-            open.accepted_inputs.insert(shortest, json!({}));
+            open.accepted_inputs.extend(change.accepted_inputs);
         }
         self.fits_cap(&probe)?;
         // The round's keys stay on the model, which the bounded failure keeps:
