@@ -59,7 +59,7 @@ async fn state() -> (Arc<AppState>, tempfile::TempDir) {
             "description": "probe",
             "inputSchema": {
                 "type": "object",
-                "properties": {"blob": {"type": "string"}}
+                "properties": {"blob": {"type": "string"}, "n": {"type": "number"}}
             }
         })],
     );
@@ -87,10 +87,16 @@ async fn dispatch_bytes(state: &Arc<AppState>, size: usize) -> u64 {
     let (router, request) = (create_router(Arc::clone(state)), request(size));
     let (response, measured) = measure_async(|| router.oneshot(request)).await;
     let response = response.expect("router");
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let body = String::from_utf8_lossy(&body);
+    // A refusal is an HTTP 200 carrying isError: the copies under test would
+    // never have run.
     assert!(
-        response.status().is_success(),
-        "the invoke must succeed, or the copies under test never ran: {}",
-        response.status()
+        status.is_success() && !body.contains("\"isError\":true"),
+        "the invoke must reach the backend: {status} {body}"
     );
     measured.bytes
 }
@@ -128,5 +134,97 @@ fn one_invoke_copies_its_arguments_at_most_twice() {
              (dispatch {dispatch} B over one clone {unit} B, less the body parse); \
              the bound is {MAX_COPIES} (MIK-8014)"
         );
+    });
+}
+
+/// A backend that records the `arguments` each `tools/call` carries.
+struct Capture(std::sync::Mutex<Vec<Value>>);
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Capture {
+    async fn request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method == "tools/call" {
+            let sent = params.and_then(|p| p.get("arguments").cloned());
+            self.0
+                .lock()
+                .expect("capture")
+                .push(sent.unwrap_or(Value::Null));
+        }
+        Ok(crate::protocol::JsonRpcResponse::success_serialized(
+            crate::protocol::RequestId::Number(1),
+            json!({"content": []}),
+        ))
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// MIK-8014, time of check vs time of use: admission now judges the request's
+/// arguments by borrow and the invoke parses its own working copy, so the
+/// value dispatched must be exactly the one in the request (with the gateway's
+/// own `_full`/`_claim` controls removed), in every argument form.
+#[test]
+fn the_dispatched_arguments_are_the_admitted_ones() {
+    runtime().block_on(async {
+        let (state, _store) = state().await;
+        let capture = Arc::new(Capture(std::sync::Mutex::new(Vec::new())));
+        state
+            .backends
+            .get("demo")
+            .expect("fixture backend")
+            .set_transport_for_test(Arc::clone(&capture) as Arc<dyn crate::transport::Transport>);
+        let cases = [
+            (json!({"blob": "v", "n": 1}), json!({"blob": "v", "n": 1})),
+            (json!("{\"blob\":\"v\"}"), json!({"blob": "v"})),
+            (
+                json!({"blob": "v", "_full": true, "_claim": "c"}),
+                json!({"blob": "v"}),
+            ),
+        ];
+        for (sent, expected) in cases {
+            let body = json!({
+                "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                "params": {"name": "gateway_invoke", "arguments": {
+                    "server": "demo", "tool": "search", "arguments": sent,
+                }},
+            })
+            .to_string();
+            let request = axum::http::Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(body))
+                .expect("request");
+            let response = create_router(Arc::clone(&state))
+                .oneshot(request)
+                .await
+                .expect("router");
+            let status = response.status();
+            let text = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body");
+            let text = String::from_utf8_lossy(&text);
+            assert!(
+                status.is_success() && !text.contains("\"isError\":true"),
+                "{status}: {text}"
+            );
+            let dispatched = capture.0.lock().expect("capture").pop();
+            assert!(
+                dispatched.is_some(),
+                "nothing reached the backend; answer: {text}"
+            );
+            assert_eq!(dispatched, Some(expected), "sent {sent}");
+        }
     });
 }
