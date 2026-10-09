@@ -91,7 +91,13 @@ changed="$(git diff --name-only "$rev" "$head_sha")"
   || refuse "probed $head_sha with a $PROBE_PATH that is not the pinned probe"
 
 until [[ "$(gh run view "$run" -R "$REPO" --json status -q .status)" == completed ]]; do sleep 120; done
-conclusion="$(gh run view "$run" -R "$REPO" --json conclusion -q .conclusion)"
+# The two platform jobs, not the run: since MIK-8217 the run also holds CI's own
+# grade job, which can fail where this script's grade differs (an older <rev>
+# without critical_path_coverage.py uses the fallback below). Both jobs must
+# have succeeded: no test failed and each report was produced.
+conclusion="$(gh run view "$run" -R "$REPO" --json jobs -q \
+  '[.jobs[] | select(.name == "llvm-cov Linux, grade" or .name == "llvm-cov Windows, grade") | .conclusion]
+   | if length == 2 and all(. == "success") then "success" else "failure" end')"
 
 out="$(git rev-parse --path-format=absolute --git-common-dir)/coverage-grade/$run"
 rm -rf "$out"; mkdir -p "$out/src"

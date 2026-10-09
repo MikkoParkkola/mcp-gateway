@@ -193,7 +193,7 @@ class CoverageGradeTrigger(unittest.TestCase):
         text = (HERE.parent.parent / ".github/workflows/coverage-probe.yml").read_text()
         block = text.split("  pull_request:", 1)[1].split("  workflow_dispatch:", 1)[0]
         listed = {line.strip()[3:-1] for line in block.splitlines()
-                  if line.strip().startswith('- "src/')}
+                  if line.strip().startswith('- "')}
         wanted = set()
         for prefix in rows.PREFIXES:
             if prefix.endswith("/"):
@@ -202,6 +202,14 @@ class CoverageGradeTrigger(unittest.TestCase):
                 wanted.add(prefix)
             else:
                 wanted |= {prefix + ".rs", prefix + "/**"}
+        # What the grade itself reads: a change to any of these is graded too.
+        wanted |= {
+            "docs/release/v4.0.0-critical-functions.tsv",
+            "docs/release/v4.0.0-unenforcing-functions.tsv",
+            "scripts/release/critical_function_coverage.py",
+            "scripts/release/critical_path_coverage.py",
+            ".github/workflows/coverage-probe.yml",
+        }
         self.assertEqual(listed, wanted)
 
 
