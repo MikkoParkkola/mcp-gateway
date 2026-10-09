@@ -14,12 +14,14 @@ use serde_json::Value;
 
 use super::collusion::{
     CAPACITY_METRIC, CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams,
-    RelayReason,
+    RelayReason, SeamForms,
 };
 #[cfg(test)]
 pub(super) use super::collusion_digest::delivery_leaves;
 pub(super) use super::collusion_digest::delivery_parts;
-use super::collusion_digest::{DELIVERED_SET_CAP, key_path_joins, key_path_run_indices};
+use super::collusion_digest::{
+    DELIVERED_SET_CAP, key_path_joins, key_path_run_indices, key_path_runs,
+};
 pub(crate) use super::collusion_digest::{Delivered, DeliveryDigest};
 use super::{
     Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType, Severity,
@@ -570,7 +572,7 @@ impl Firewall {
     ) -> Option<Delivered<'v>> {
         self.relay_detector()?;
         let (leaves, values) = delivery_parts(answer);
-        let delivered = Delivered::of_parts(leaves, values);
+        let delivered = Delivered::of_parts(leaves, values).map(|d| d.with_answer(answer));
         if delivered.is_none() {
             match staged {
                 Some(staged) => self.count_plan_drop_once(staged),
@@ -592,7 +594,9 @@ impl Firewall {
     ) -> Option<Delivered<'v>> {
         self.relay_detector()?;
         let (leaves, values) = delivery_parts(answer);
-        Delivered::of_parts(leaves, values).or_else(|| self.delivered_for_plan(fallback, staged))
+        Delivered::of_parts(leaves, values)
+            .map(|d| d.with_answer(answer))
+            .or_else(|| self.delivered_for_plan(fallback, staged))
     }
 
     /// [`Self::count_plan_drop`] unless this delivery already counted one:
@@ -681,6 +685,31 @@ impl Firewall {
         self.relay_detector()
             .map(|detector| detector.seam_fingerprints(parts))
             .unwrap_or_default()
+    }
+
+    /// `MIK-8209` K6: the seam fingerprints of each key-path join of a
+    /// plan's `answer` whose pieces belong to two or more steps, read run
+    /// together as the join was delivered. `step_of` names the step that owns
+    /// a piece, by the piece's identity in `answer`: owned only while that
+    /// step's receipt keeps it whole, as the leaf pass decides.
+    pub(crate) fn join_seam_fingerprints(
+        &self,
+        answer: &Value,
+        step_of: &dyn Fn(&str) -> Option<u32>,
+    ) -> Vec<super::collusion::SeamFingerprint> {
+        let Some(detector) = self.relay_detector() else {
+            return Vec::new();
+        };
+        let mut seams = Vec::new();
+        for run in key_path_runs(answer) {
+            let parts: Vec<(&str, Option<u32>)> = run.iter().map(|p| (*p, step_of(p))).collect();
+            let owners: std::collections::BTreeSet<u32> =
+                parts.iter().filter_map(|p| p.1).collect();
+            if owners.len() >= 2 {
+                seams.extend(detector.seam_fingerprints_in(&parts, SeamForms::RunTogether));
+            }
+        }
+        seams
     }
 
     /// The `allowed_flows` mask of each of `sources`, in order: a seam's flow

@@ -741,7 +741,7 @@ mod seam;
 mod seam_tests;
 #[path = "collusion_sketch.rs"]
 pub(super) mod sketch;
-pub(crate) use seam::SeamFingerprint;
+pub(crate) use seam::{SeamFingerprint, SeamForms};
 
 #[cfg(test)]
 #[path = "collusion_holders_tests.rs"]

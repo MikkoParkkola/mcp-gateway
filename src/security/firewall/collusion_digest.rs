@@ -10,7 +10,6 @@
 //! and the original runs' fingerprints stay where their k-gram is in a
 //! delivered leaf or across adjacent kept leaves.
 
-use std::cell::OnceCell;
 use std::collections::HashSet;
 
 use serde_json::Value;
@@ -18,9 +17,12 @@ use serde_json::Value;
 use super::collusion::{CollusionDetector, K};
 use super::collusion_gate::RECORD_CAP;
 
+#[path = "collusion_delivered.rs"]
+mod delivered;
+pub(crate) use delivered::Delivered;
 #[path = "collusion_key_path.rs"]
 mod key_path;
-pub(super) use key_path::{key_path_joins, key_path_run_indices};
+pub(super) use key_path::{key_path_joins, key_path_run_indices, key_path_runs};
 
 /// The delivered text a plan's receipts are kept against, at most. A larger
 /// answer drops them, as before this check existed (under-receipt, never a
@@ -698,65 +700,6 @@ fn run_forms(run: &[&Segment]) -> Vec<String> {
         forms.push(values.concat());
     }
     forms
-}
-
-/// The string leaves of a plan's final answer, and every k-gram hash in them,
-/// taken leaf by leaf when first needed. With the kept runs' own k-grams they
-/// decide which fingerprints a receipt keeps.
-pub(crate) struct Delivered<'v> {
-    values: HashSet<&'v str>,
-    keys: HashSet<&'v str>,
-    all: Vec<&'v str>,
-    /// How many of `all`, from the front, are values (the rest are keys).
-    values_len: usize,
-    found: OnceCell<HashSet<u64>>,
-}
-
-impl<'v> Delivered<'v> {
-    /// [`Self::of_parts`] with every leaf a value (tests only).
-    #[cfg(test)]
-    pub(super) fn of_leaves(all: Vec<&'v str>) -> Option<Self> {
-        let values = all.len();
-        Self::of_parts(all, values)
-    }
-
-    /// `all` as [`delivery_parts`] returns it, the first `values` of them
-    /// values and the rest keys. `None` over [`DELIVERED_SET_CAP`] of text
-    /// plus one segment per leaf: a deferred receipt kept to it owns a
-    /// segment per delivered leaf it matches, so many empty leaves must not
-    /// pass as free.
-    pub(super) fn of_parts(all: Vec<&'v str>, values: usize) -> Option<Self> {
-        let per_leaf = std::mem::size_of::<Segment>();
-        let total: usize = all.iter().map(|l| l.len() + per_leaf).sum();
-        (total <= DELIVERED_SET_CAP).then(|| Self {
-            values: all[..values].iter().copied().collect(),
-            keys: all[values..].iter().copied().collect(),
-            all,
-            values_len: values,
-            found: OnceCell::new(),
-        })
-    }
-
-    /// Whether `segment` is a whole leaf delivered verbatim as the same kind:
-    /// a value the answer carries only as a key is not, as egress never runs
-    /// keys together (MIK-7773).
-    fn holds(&self, segment: &Segment) -> bool {
-        let leaves = if segment.key {
-            &self.keys
-        } else {
-            &self.values
-        };
-        segment.whole && leaves.contains(segment.text.as_str())
-    }
-
-    fn kgrams(&self, detector: &CollusionDetector) -> &HashSet<u64> {
-        self.found.get_or_init(|| {
-            self.all
-                .iter()
-                .flat_map(|leaf| detector.kgram_hashes(leaf))
-                .collect()
-        })
-    }
 }
 
 /// The leaves of [`delivery_parts`] (tests only).

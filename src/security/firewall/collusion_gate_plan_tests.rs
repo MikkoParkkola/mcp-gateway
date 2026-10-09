@@ -167,15 +167,17 @@ fn a_split_run_keeps_exactly_its_original_delivered_fingerprints() {
         // Each kept run in both forms, newline-joined and run together. A
         // deferred receipt keeps leaves in delivered order (MIK-7992), so its
         // run is the answer's: left beside right, as the caller received it.
-        let mut forms = vec![
+        // The answer's own values forms are delivered text too (`MIK-8209`
+        // K3), so a k-gram the answer carries across left and right is
+        // delivered whichever receipt shape kept the leaves.
+        let forms = [
             left.join("\n"),
             left.concat(),
             right.join("\n"),
             right.concat(),
+            shown.join("\n"),
+            shown.concat(),
         ];
-        if round % 2 == 1 {
-            forms.extend([shown.join("\n"), shown.concat()]);
-        }
         let allowed: HashSet<u64> = forms
             .iter()
             .flat_map(|run| detector.kgram_hashes(run))

@@ -95,7 +95,7 @@ pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, an
     {
         return;
     }
-    let seams = fw.seam_fingerprints(&parts);
+    let seams = seam_fingerprints(fw, &parts, answer);
     let Some(caller) = receipts.iter().find(|r| r.in_plan) else {
         return;
     };
@@ -151,6 +151,24 @@ pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, an
     for ((sensitive, _), (names, fps)) in overflow {
         receipts.push(composite(&seam, names, Group { sensitive, fps }));
     }
+}
+
+/// The seam fingerprints of `parts`, the answer's leaves with their owning
+/// steps, and (`MIK-8209` K6) of each key-path join whose pieces several
+/// steps produced, read run together as delivered. A piece's step is the one
+/// the leaf pass gave that same leaf, by identity, so ownership never differs.
+fn seam_fingerprints(
+    fw: &Firewall,
+    parts: &[(&str, Option<u32>)],
+    answer: &Value,
+) -> Vec<(u64, Vec<u32>)> {
+    let mut seams = fw.seam_fingerprints(parts);
+    let owner: HashMap<*const u8, u32> = parts
+        .iter()
+        .filter_map(|(text, label)| Some((text.as_ptr(), (*label)?)))
+        .collect();
+    seams.extend(fw.join_seam_fingerprints(answer, &|piece| owner.get(&piece.as_ptr()).copied()));
+    seams
 }
 
 /// The composite receipt of a seam joining `names`: its identity names
