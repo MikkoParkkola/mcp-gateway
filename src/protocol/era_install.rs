@@ -57,7 +57,7 @@ impl EraCache {
             outcome,
             duration_ms,
         } = probe;
-        let observation = EraObservation::from_outcome(&outcome, trigger, chrono::Utc::now());
+        let observation = EraObservation::observed_now(&outcome, trigger);
 
         if !install(&mut || guard.set(observation)) {
             // The probed peer is gone: what it said is about a process no longer on

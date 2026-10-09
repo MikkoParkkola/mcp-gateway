@@ -711,6 +711,12 @@ impl EraObservation {
         }
     }
 
+    /// [`Self::from_outcome`] stamped with the current time: the era
+    /// module's one clock read (MIK-8202 baseline).
+    pub(super) fn observed_now(outcome: &ProbeOutcome, trigger: ProbeTrigger) -> Self {
+        Self::from_outcome(outcome, trigger, chrono::Utc::now())
+    }
+
     /// The operator-facing fields, for merging into a `gateway_list_servers`
     /// entry.
     ///
