@@ -36,6 +36,9 @@ enum Kind {
     Question,
     /// A round with `requestState` and no questions (`MIK-8177.STATE.1`).
     StateOnly,
+    /// A question that follows a progress notification, so on `/mcp` it
+    /// leaves on the stream's streaming arm, not the buffered one.
+    ProgressFirst,
 }
 
 /// The backend answer for `kind` taking `path`: a credential makes the
@@ -53,17 +56,20 @@ fn part(kind: Kind) -> Part {
     match kind {
         Kind::Question => Part::InterimQuestion,
         Kind::StateOnly => Part::InterimStateOnly,
+        Kind::ProgressFirst => Part::ProgressThenQuestion,
     }
 }
 
 /// The cells this stage covers. Paths the design names whose fixtures arrive
 /// with their stage (read judge, delivery audit, `slot_http`, SSE, stdio,
 /// tasks, confirmations, co-owners) are added there, with red proof each.
-const CELLS: [(Path, Kind); 4] = [
+const CELLS: [(Path, Kind); 6] = [
     (Path::Delivered, Kind::Question),
     (Path::FirewallRefused, Kind::Question),
     (Path::Delivered, Kind::StateOnly),
     (Path::FirewallRefused, Kind::StateOnly),
+    (Path::Delivered, Kind::ProgressFirst),
+    (Path::FirewallRefused, Kind::ProgressFirst),
 ];
 
 /// Cells that leak their slot on this tree, each with the stage that fixes it.
@@ -129,6 +135,10 @@ async fn slot_release_matrix() {
             let before = counts(&continuation);
             let (uri, sent, mut params) = request(route, "tools/call", part(kind));
             params["_meta"] = answering_client();
+            if kind == Kind::ProgressFirst {
+                // Maps the backend's notification back to this request.
+                params["_meta"]["progressToken"] = serde_json::json!("p1");
+            }
             let body = post_as(&fx, (uri, sent), &params, Some("alice")).await;
             // The cell only counts if its path really happened.
             let want = match path {
@@ -137,6 +147,17 @@ async fn slot_release_matrix() {
             };
             if !took(path, &body) {
                 failures.push(format!("{label}: did not take its path: {body}"));
+            }
+            // On `/mcp` the notification goes first, so the answer leaves on
+            // the stream's streaming arm; without it the cell would test the
+            // buffered arm instead.
+            if kind == Kind::ProgressFirst
+                && route == Route::Meta
+                && !body.contains("notifications/progress")
+            {
+                failures.push(format!(
+                    "{label}: the notification did not go first: {body}"
+                ));
             }
             let known_leak = KNOWN_LEAK.contains(&(route, path, kind));
             let want = if known_leak { want + 1 } else { want };

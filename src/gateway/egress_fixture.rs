@@ -55,6 +55,10 @@ pub(crate) enum Part {
     InterimStolenState,
     /// A state-only interim round (`requestState`, no questions) whose
     /// `extra.note` is the planted text (MIK-8177). Not in [`Part::ALL`].
+    /// A harmless `notifications/progress` streamed first, then an interim
+    /// answer whose question carries the planted text: the answer leaves on
+    /// a stream's streaming arm (MIK-8176). Not in [`Part::ALL`].
+    ProgressThenQuestion,
     InterimStateOnly,
     /// A parameter name in the tool's input schema: a call with an undeclared
     /// key is refused with a text listing the declared names. Not in
@@ -229,6 +233,17 @@ impl Planted {
                     json!({"progressToken": token, "progress": 1, "message": s}),
                 )]);
                 JsonRpcResponse::success(id, clean())
+            }
+            Part::ProgressThenQuestion => {
+                let token = params
+                    .and_then(|p| p.pointer("/_meta/progressToken"))
+                    .cloned()
+                    .unwrap_or_else(|| json!("p1"));
+                crate::transport::notification_sink::publish(vec![notification(
+                    "notifications/progress",
+                    json!({"progressToken": token, "progress": 1, "message": "working"}),
+                )]);
+                JsonRpcResponse::success(id, interim(&s, "state-1"))
             }
             Part::SchemaKey => JsonRpcResponse::success(id, clean()),
             Part::InterimStolenState => JsonRpcResponse::success(id, interim(&secret(), &s)),

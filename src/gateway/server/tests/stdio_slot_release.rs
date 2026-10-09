@@ -301,7 +301,16 @@ async fn a_stdio_question_still_queued_at_session_end_gives_its_slot_back() {
     let mut session = open(Setup::Plain, 256).await;
     session.send(&call(5, ASKING, "t1")).await;
     session.send(&call(6, ASKING, "t1")).await;
-    tokio::time::sleep(Duration::from_millis(800)).await;
+    // Both questions sealed before the session ends: one is with the writer,
+    // the other can only be in the queue behind it.
+    let deadline = tokio::time::Instant::now() + ARRIVAL;
+    while session.held().await < 2 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "both questions are sealed"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
     let Session {
         stdin,
         stdout,
@@ -311,7 +320,11 @@ async fn a_stdio_question_still_queued_at_session_end_gives_its_slot_back() {
     } = session;
     drop(stdin);
     drop(stdout);
-    let _ = timeout(Duration::from_secs(20), task).await;
+    timeout(Duration::from_secs(20), task)
+        .await
+        .expect("the session ends within its bound")
+        .expect("the serve task does not panic")
+        .expect("run_stdio_on returns Ok");
     let now = crate::protocol::continuation::now_unix_secs();
     assert_eq!(
         meta.continuation().in_flight().len(now).await,
