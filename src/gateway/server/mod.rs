@@ -2231,6 +2231,8 @@ impl Gateway {
             data_dir,
             ..
         } = self.build_meta_mcp().await?;
+        #[cfg(test)]
+        self.test_seams.report_stdio_meta_mcp(&meta_mcp);
         // Held for the whole serve: it owns the governance store's lease.
         let grant_sink = identity_grants::stdio_identity_grants(
             &self.config,

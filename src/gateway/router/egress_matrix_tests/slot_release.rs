@@ -67,10 +67,9 @@ const CELLS: [(Path, Kind); 4] = [
 ];
 
 /// Cells that leak their slot on this tree, each with the stage that fixes it.
-const KNOWN_LEAK: [(Route, Path, Kind); 1] = [
-    // MIK-8177.STATE.1: stage 2's handoff release frees it.
-    (Route::Meta, Path::FirewallRefused, Kind::StateOnly),
-];
+/// Empty since stage 3: `MIK-8177.STATE.1` (`/mcp`, refused state-only, over
+/// SSE) is freed once SSE answers release unless handed off.
+const KNOWN_LEAK: [(Route, Path, Kind); 0] = [];
 
 /// The JSON-RPC message a reply carries: the last SSE `data:` line, or the
 /// whole body when the reply is plain JSON.

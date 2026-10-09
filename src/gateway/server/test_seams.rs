@@ -20,6 +20,13 @@ pub(super) struct TestSeams {
     /// open across the drain (MIK-8156).
     #[cfg(test)]
     inflight: Option<oneshot::Sender<std::sync::Arc<tokio::sync::Semaphore>>>,
+    /// Receives the stdio session's Meta-MCP, so a test can read the
+    /// continuation table that session holds (MIK-8176). A mutex because
+    /// `run_stdio_on` reports it through `&self`.
+    #[cfg(test)]
+    stdio_meta_mcp: std::sync::Mutex<
+        Option<oneshot::Sender<std::sync::Arc<crate::gateway::meta_mcp::MetaMcp>>>,
+    >,
 }
 
 impl TestSeams {
@@ -41,6 +48,22 @@ impl TestSeams {
     #[cfg(test)]
     pub(super) fn take_shutdown_trigger(&mut self) -> Option<oneshot::Receiver<()>> {
         self.shutdown.take()
+    }
+
+    /// Hand the stdio session's Meta-MCP to the test that asked for it.
+    #[cfg(test)]
+    pub(super) fn report_stdio_meta_mcp(
+        &self,
+        meta_mcp: &std::sync::Arc<crate::gateway::meta_mcp::MetaMcp>,
+    ) {
+        let sender = self
+            .stdio_meta_mcp
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(sender) = sender {
+            sender.send(std::sync::Arc::clone(meta_mcp)).ok();
+        }
     }
 
     /// Hand `run`'s in-flight request gate to the test that asked for it.
@@ -92,6 +115,20 @@ impl super::Gateway {
     ) -> oneshot::Receiver<std::sync::Arc<tokio::sync::Semaphore>> {
         let (sender, receiver) = oneshot::channel();
         self.test_seams.inflight = Some(sender);
+        receiver
+    }
+
+    /// The stdio session's Meta-MCP, sent once `run_stdio_on` builds it.
+    #[cfg(test)]
+    pub(super) fn stdio_meta_mcp_for_test(
+        &mut self,
+    ) -> oneshot::Receiver<std::sync::Arc<crate::gateway::meta_mcp::MetaMcp>> {
+        let (sender, receiver) = oneshot::channel();
+        *self
+            .test_seams
+            .stdio_meta_mcp
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(sender);
         receiver
     }
 

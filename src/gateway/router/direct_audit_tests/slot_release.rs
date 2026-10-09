@@ -139,12 +139,9 @@ const PATHS: [Path; 4] = [
     Path::InvocationRecordRefused,
 ];
 
-/// Rows that still leak after stage 2: the SSE arm is count-only until stage 3
-/// gives it its yield-point handoff (MIK-8176 SLOT.1, SLOT.2 SSE arms).
-const KNOWN_LEAK: [(Arm, Path); 2] = [
-    (Arm::MetaSse, Path::DeliveryRecordRefused),
-    (Arm::MetaSse, Path::ReadJudgeWithheld),
-];
+/// Rows that still leak. Empty since stage 3, when the SSE arm gained its
+/// yield-point handoff (MIK-8176 SLOT.1, SLOT.2 SSE arms).
+const KNOWN_LEAK: [(Arm, Path); 0] = [];
 
 /// Slots a row must leave held: the delivered first read keeps one.
 fn want(arm: Arm, path: Path) -> usize {
