@@ -38,14 +38,18 @@ async fn a_good_snapshot_decides_authorization() {
             .read(set.clone(), complete);
     };
     read(true);
-    assert!(hub.authorize_uri("b", "file:///a").await.is_ok());
+    assert!(hub.authorize_uri("b", "file:///a", None).await.is_ok());
     let refused = hub
-        .authorize_uri("b", "file:///missing")
+        .authorize_uri("b", "file:///missing", None)
         .await
         .expect_err("absent");
     assert_eq!(refused.code, -32012);
     read(false);
-    assert!(hub.authorize_uri("b", "file:///missing").await.is_ok());
+    assert!(
+        hub.authorize_uri("b", "file:///missing", None)
+            .await
+            .is_ok()
+    );
 }
 
 /// The last key to leave stops the task and forgets the backend.

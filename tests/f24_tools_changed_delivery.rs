@@ -140,6 +140,33 @@ async fn legacy_stream(gateway: &HttpGateway) -> Events {
     }
 }
 
+/// Both listeners, opened only after the boot warm-up settled, with anything
+/// already queued drained.
+///
+/// The boot warm-up's first fill announces once (MIK-8127). A listener opened
+/// before it while the other opened after read (2,1) on a slow Windows runner
+/// (#3620). The wait matches the message text only: the log formatter colours
+/// field names with ANSI codes, so "backend=alpha" is not a literal substring
+/// on every platform. alpha is the only backend at boot.
+async fn listeners_after_boot(gateway: &HttpGateway) -> (Events, Events) {
+    let settled = std::time::Instant::now() + Duration::from_secs(60);
+    while !gateway.logs().contains("Warm-started + tools cached") {
+        assert!(
+            std::time::Instant::now() < settled,
+            "alpha's boot warm-up never settled; logs: {}",
+            gateway.logs()
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let mut modern = modern_listen(gateway).await;
+    let mut legacy = legacy_stream(gateway).await;
+    let _ = (
+        modern.count_list_changed().await,
+        legacy.count_list_changed().await,
+    );
+    (modern, legacy)
+}
+
 fn write_config(gateway: &HttpGateway, config: &Value) {
     mcp_gateway::gateway::test_helpers::write_owner_only(
         gateway.config_path(),
@@ -181,8 +208,7 @@ async fn every_tool_set_change_reaches_both_eras_once() {
     )
     .expect("yaml")["server"]["port"]
         .clone();
-    let mut modern = modern_listen(&gateway).await;
-    let mut legacy = legacy_stream(&gateway).await;
+    let (mut modern, mut legacy) = listeners_after_boot(&gateway).await;
 
     // MIK-8127: one announcement per change of the tool set discovery shows,
     // never per backend event, so a step that leaves it unchanged expects none.

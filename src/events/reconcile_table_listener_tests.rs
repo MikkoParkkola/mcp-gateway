@@ -34,13 +34,19 @@ async fn t05_a_replaced_backend_is_not_judged_by_the_old_snapshot() {
     listeners.add("b", &watched("file:///a")).expect("room");
     read_only_a(&listeners);
     assert!(
-        listeners.authorize_uri("b", "file:///new").await.is_err(),
+        listeners
+            .authorize_uri("b", "file:///new", None)
+            .await
+            .is_err(),
         "premise: the snapshot refuses an absent URI"
     );
     assert!(registry.remove("b"));
     assert!(registry.register(offline("b")));
     assert!(
-        listeners.authorize_uri("b", "file:///new").await.is_ok(),
+        listeners
+            .authorize_uri("b", "file:///new", None)
+            .await
+            .is_ok(),
         "the replaced instance is read live, not by the old snapshot"
     );
 }
@@ -59,7 +65,7 @@ async fn t06_a_snapshot_left_by_the_last_uri_interest_does_not_answer() {
         "premise: prompts keep the listener"
     );
     assert!(
-        hub.authorize_uri("b", "file:///new").await.is_ok(),
+        hub.authorize_uri("b", "file:///new", None).await.is_ok(),
         "a stale snapshot does not refuse a new URI"
     );
 }
@@ -82,7 +88,10 @@ async fn t05_a_ledger_swap_drops_the_old_snapshot() {
     let shared = listeners.backends.lock()["b"].clone();
     shared.refresh_ledger();
     assert!(
-        listeners.authorize_uri("b", "file:///new").await.is_ok(),
+        listeners
+            .authorize_uri("b", "file:///new", None)
+            .await
+            .is_ok(),
         "the new instance is judged live after the swap"
     );
 }
@@ -96,8 +105,67 @@ fn t06_a_read_begun_before_a_clear_is_dropped() {
     snapshot.read(["file:///a".to_owned()].into(), true);
     snapshot.clear();
     assert!(
-        !snapshot.read_at(begun, ["file:///a".to_owned()].into(), true),
+        !snapshot.read_at(begun, (["file:///a".to_owned()].into(), true), u64::MAX),
         "the stale read is dropped"
     );
     assert!(!snapshot.is_known(), "the snapshot stays empty");
+}
+
+/// T34 (MIK-8194 SNAPAUTH.1): a snapshot whose read began at generation 5
+/// revokes an absent URI only for a grant it covered; a renewal granted at
+/// 6, after the read began, is admitted until a newer read judges it.
+#[tokio::test]
+async fn t34_a_snapshot_does_not_revoke_a_later_grant() {
+    let hub = listeners();
+    hub.add("b", &watched("file:///a")).expect("room");
+    let epoch = hub.backends.lock()["b"].snapshot.lock().epoch();
+    assert!(
+        hub.backends.lock()["b"].snapshot.lock().read_at(
+            epoch,
+            (["file:///a".to_owned()].into(), true),
+            5
+        ),
+        "premise: the read is applied"
+    );
+    assert!(
+        hub.authorize_uri("b", "file:///x", Some(6)).await.is_ok(),
+        "a grant after the read began is not revoked by it"
+    );
+    assert!(
+        hub.authorize_uri("b", "file:///x", Some(5)).await.is_err(),
+        "a grant the read covered is"
+    );
+    assert!(
+        hub.authorize_uri("b", "file:///x", None).await.is_err(),
+        "a subscribe (no grant yet) is judged by the snapshot as before"
+    );
+}
+
+/// MIK-8194 bound (lead ruling on #3625): at most one confirming catalogue
+/// read per backend per `CONFIRM_EVERY`, so a backend answering "absent"
+/// cannot drive a read per delivery.
+#[test]
+fn a_backend_gets_one_confirming_read_per_window() {
+    let hub = listeners();
+    assert!(hub.may_confirm("b"), "the first confirm runs");
+    assert!(!hub.may_confirm("b"), "a second within the window does not");
+    assert!(hub.may_confirm("c"), "another backend has its own window");
+}
+
+/// MIK-8194 bound, prune half (#3625 d1 LOW): windows that closed are
+/// dropped, so the map holds only open ones.
+#[tokio::test(start_paused = true)]
+async fn a_closed_confirm_window_leaves_the_map() {
+    let hub = listeners();
+    assert!(hub.may_confirm("b"));
+    tokio::time::advance(std::time::Duration::from_secs(6)).await;
+    assert!(
+        hub.may_confirm("c"),
+        "another backend, after b's window closed"
+    );
+    assert_eq!(
+        hub.confirmed.lock().len(),
+        1,
+        "only c's open window is kept"
+    );
 }
