@@ -51,6 +51,12 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
          Calls are bounded by the per-backend `timeout`. Remove server.request_timeout",
     ),
     (
+        &["meta_mcp", "cache_tools"],
+        "nothing ever read it, so tool lists were cached the same way whatever it said; \
+         `meta_mcp.cache_ttl` sets how long they are kept. Delete it, or run `mcp-gateway upgrade`, \
+         which removes it or says why it cannot",
+    ),
+    (
         &["marketplace"],
         "the `plugin` command was removed in 4.0, and nothing else read this block: no \
          gateway path loaded the plugins it installed. Remove the marketplace block",
@@ -628,6 +634,39 @@ mod tests {
         });
         let retired = "`marketplace` is ignored since 4.0";
         assert_eq!(count(&logs, "WARN", retired), 1, "{logs:?}");
+    }
+
+    /// MIK-8064: `meta_mcp.cache_tools` was read by nothing; a config that
+    /// still sets it loads, and says once that the key does nothing.
+    #[test]
+    fn retired_cache_tools_loads_and_warns_once() {
+        use crate::test_log_capture::{count, records};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("gateway.yaml");
+        crate::gateway::test_helpers::write_owner_only(&path, "meta_mcp:\n  cache_tools: false\n")
+            .expect("write config");
+        let logs = records(|| {
+            crate::config::Config::load(Some(&path)).expect("loads");
+            crate::config::Config::load(Some(&path)).expect("reloads");
+        });
+        let retired = "`meta_mcp.cache_tools` is ignored since 4.0";
+        assert_eq!(count(&logs, "WARN", retired), 1, "{logs:?}");
+    }
+
+    /// MIK-8064: UPGRADING quotes the `cache_tools` warning verbatim.
+    #[test]
+    fn upgrading_quotes_the_cache_tools_warning() {
+        let why = RETIRED_KEYS
+            .iter()
+            .find(|(path, _)| *path == ["meta_mcp", "cache_tools"])
+            .map(|(_, why)| *why);
+        let quote = why.map(|why| retired_warning("meta_mcp.cache_tools", why));
+        assert!(
+            quote
+                .as_deref()
+                .is_some_and(|quote| include_str!("../../docs/UPGRADING-4.0.md").contains(quote)),
+            "UPGRADING must quote the cache_tools warning: {quote:?}"
+        );
     }
 
     /// UPGRADING quotes the `marketplace` warning verbatim.
