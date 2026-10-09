@@ -455,7 +455,7 @@ impl MetaMcp {
         stats: Option<Arc<UsageStats>>,
         ranker: Option<Arc<SearchRanker>>,
         default_cache_ttl: Duration,
-        clock: Arc<dyn Fn() -> u64 + Send + Sync>,
+        clock: Arc<dyn Fn() -> Result<u64, crate::clock::ClockBeforeEpoch> + Send + Sync>,
     ) -> Self {
         Self {
             backends,
@@ -466,7 +466,9 @@ impl MetaMcp {
             default_cache_ttl,
             idempotency_cache: None,
             grant_repeats: Arc::default(),
-            execution_admission: crate::idempotency::admission::ExecutionAdmission::new(clock),
+            execution_admission: crate::idempotency::admission::ExecutionAdmission::new_fallible(
+                clock,
+            ),
             idempotency_config: RwLock::new(crate::config::IdempotencyConfig::default()),
             unkeyed: admission::UnkeyedPolicy::default(),
             continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
@@ -551,10 +553,7 @@ impl MetaMcp {
             stats,
             ranker,
             default_ttl,
-            // Retention: completed entries age out by this clock. On a clock
-            // before 1970 nothing is reclaimed, rather than every entry an
-            // early answer would delete (MIK-8202 D2).
-            Arc::new(|| crate::clock::unix_secs().unwrap_or(0)),
+            Arc::new(crate::clock::unix_secs),
         )
     }
 
@@ -565,7 +564,7 @@ impl MetaMcp {
         stats: Option<Arc<UsageStats>>,
         ranker: Option<Arc<SearchRanker>>,
         default_ttl: Duration,
-        clock: Arc<dyn Fn() -> u64 + Send + Sync>,
+        clock: Arc<dyn Fn() -> Result<u64, crate::clock::ClockBeforeEpoch> + Send + Sync>,
     ) -> Self {
         Self::build(backends, cache, stats, ranker, default_ttl, clock)
     }

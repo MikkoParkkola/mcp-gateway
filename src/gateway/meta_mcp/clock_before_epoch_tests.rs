@@ -101,3 +101,43 @@ async fn a_clock_before_the_epoch_keeps_an_idempotency_entry() {
         "an unreadable clock readmitted a completed call to run again"
     );
 }
+
+/// MIK-8202: an entry settled on a clock before 1970 is not dated from 0, so
+/// once the clock recovers it has not "expired" decades ago: a retry of the
+/// completed call is still refused rather than run a second time.
+#[tokio::test]
+async fn an_entry_settled_on_a_clock_before_the_epoch_outlives_the_recovery() {
+    use crate::idempotency::admission::{Admission, Mode, Request};
+
+    let meta = crate::gateway::meta_mcp::MetaMcp::new(std::sync::Arc::new(
+        crate::backend::BackendRegistry::new(),
+    ));
+    let admission = meta.execution_admission();
+    let operation = serde_json::json!({"backend": "orders", "tool": "create"});
+    let representation = serde_json::json!({"full": false});
+    let request = || Request {
+        principal: "owner",
+        key: "key",
+        operation: &operation,
+        representation: &representation,
+        mode: Mode::Sync,
+    };
+    {
+        let _clock = test_clock::before_epoch();
+        let Ok(Admission::Owned(mut lease)) = admission.admit(request()) else {
+            panic!("control: the first call owns its execution");
+        };
+        lease.mark_dispatched();
+        let _ = lease.complete_secured(&serde_json::json!({"done": true}));
+    }
+    // The clock reads again.
+    assert_eq!(
+        admission.reclaim_completed(),
+        0,
+        "a call settled on an unreadable clock aged out at once"
+    );
+    assert!(
+        !matches!(admission.admit(request()), Ok(Admission::Owned(_))),
+        "a call settled on an unreadable clock ran a second time"
+    );
+}
