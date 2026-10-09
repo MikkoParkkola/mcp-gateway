@@ -7,22 +7,60 @@ use super::{
     TaskConfirmationRequest, Value, canonical_json, json, sha256_hex,
 };
 
+/// The principal an execution is admitted under (`MIK-8193`). The synchronous
+/// lease and task admission share one store keyed `(principal, key)`, so they
+/// must spell the caller alike, or one key admits the same operation twice:
+/// once in each spelling. HTTP mints it from the request's routed task owner
+/// (`route_owners`: verified identity, agent, proven subject or credential;
+/// the pooled anonymous owner is no principal), stdio from its reserved owner.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AdmissionOwner<'a>(Option<&'a str>);
+
+impl<'a> AdmissionOwner<'a> {
+    /// An HTTP caller's routed task owner; empty is no owner (refused when
+    /// keyed, unless its proven subject admits it).
+    pub(crate) fn routed(owner: &'a str) -> Self {
+        Self((!owner.is_empty()).then_some(owner))
+    }
+
+    /// The stdio transport's reserved owner (MIK-7272.OWNER.3).
+    pub(crate) const fn local_operator() -> Self {
+        Self(Some(crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL))
+    }
+
+    /// A test's owner, written as the production paths would mint it.
+    #[cfg(test)]
+    pub(crate) const fn for_test(principal: Option<&'a str>) -> Self {
+        Self(principal)
+    }
+
+    pub(crate) const fn principal(self) -> Option<&'a str> {
+        self.0
+    }
+}
+
 /// The admission identity a task-augmented `tools/call` is admitted under.
 ///
 /// One builder, so the gate's read-only lookup and the admitting call site
 /// cannot render the same call two different ways — a drift that would be
 /// invisible until a committed replay quietly started a second task.
+///
+/// The fingerprint reads the operation, never the client's per-request
+/// `_meta` (MIK-8192), as the synchronous lease does; the dispatch still gets
+/// the arguments as sent.
 pub(crate) fn task_admission_request(
     principal: String,
     key: String,
     tool_name: &str,
     arguments: &Value,
 ) -> OwnedAdmissionRequest {
+    use crate::gateway::meta_mcp::admission::{OPERATION_DEFINING_META, operation_arguments};
+    let operation = operation_arguments(arguments, OPERATION_DEFINING_META);
     OwnedAdmissionRequest::new(
         principal,
         key,
-        json!({ "name": tool_name, "arguments": arguments }),
-        arguments.clone(),
+        json!({ "name": tool_name, "arguments": operation }),
+        operation,
     )
 }
 
@@ -117,4 +155,18 @@ pub(super) fn refuse(
 pub(super) fn record(outcome: &'static str) {
     telemetry_metrics::counter!("destructive_confirmation_total", "outcome" => outcome)
         .increment(1);
+}
+
+#[cfg(test)]
+impl crate::gateway::meta_mcp::MetaMcp {
+    /// Test-only: admit against `other`'s store, as production shares one
+    /// authority between this surface and the task runtime
+    /// (`server/task_runtime.rs`). A fixture that rebuilds the surface must
+    /// keep the store the task runtime already holds.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn admitting_as(mut self, other: &Self) -> Self {
+        self.execution_admission = std::sync::Arc::clone(&other.execution_admission);
+        self
+    }
 }

@@ -54,6 +54,7 @@ fn bytes_for(meta: &MetaMcp) -> u64 {
     });
     let (result, measured) = measure(|| {
         meta.admit_meta_sync(
+            crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
             &caller,
             "gateway_invoke",
             &args,
