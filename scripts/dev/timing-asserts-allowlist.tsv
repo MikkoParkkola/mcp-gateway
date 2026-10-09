@@ -1,0 +1,6 @@
+# Timing asserts the guard refuses that are allowed to stay, for now.
+# Shrink-only: a row may be deleted, never added (check-timing-asserts.py --base).
+# path<TAB>enclosing fn<TAB>normalised assert<TAB>reason
+src/cost_accounting/enforcer_tests.rs	enforcer_check_performance_under_100us	assert!( elapsed.as_secs() < 1, "" )	perf AC, CPU-only
+src/test_wait.rs	a_late_os_thread_write_is_waited_for_on_a_still_clock	assert_eq!( moved, Duration::ZERO, "" )	paused clock: asserts the virtual clock did not move, not a wall-clock window
+tests/mik_5223_acs.rs	ac_5_forgery_detected_and_logged_within_100ms_over_100_cases	assert!( elapsed.as_millis() < 100, "" )	perf AC, CPU-only

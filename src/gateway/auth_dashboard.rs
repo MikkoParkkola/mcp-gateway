@@ -62,12 +62,28 @@ struct SessionTimes {
 }
 
 impl SessionTimes {
-    /// Past the idle or the absolute limit by either clock, or past the cap.
+    /// Past the idle or the absolute limit by either clock, past the cap, or
+    /// judged on a wall clock that reads before 1970.
     fn expired(&self, now: Now, limits: &SessionLimits) -> bool {
-        exceeds(self.last_seen, now, limits.idle)
+        wall_unreadable(now)
+            || exceeds(self.last_seen, now, limits.idle)
             || exceeds(self.issued, now, limits.absolute)
-            || self.not_after.is_some_and(|cap| now.wall >= cap)
+            || self.not_after.is_some_and(|cap| cap_reached(now, cap))
     }
+}
+
+/// A wall clock before 1970 refuses every dashboard credential (MIK-8202):
+/// without it a session would rest on the monotonic clock alone, which stops
+/// while the host sleeps, so a suspend would outlive the idle limit.
+fn wall_unreadable(now: Now) -> bool {
+    now.wall.duration_since(std::time::UNIX_EPOCH).is_err()
+}
+
+/// Whether `now` is at or past the minting credential's expiry `cap`. A wall
+/// clock reading before 1970 cannot be placed against a real expiry, so the
+/// cap counts as reached (MIK-8202); the monotonic limits are unchanged.
+fn cap_reached(now: Now, cap: SystemTime) -> bool {
+    now.wall.duration_since(std::time::UNIX_EPOCH).is_err() || now.wall >= cap
 }
 
 /// `true` when more than `limit` separates `since` from `now` on EITHER clock.
@@ -107,7 +123,11 @@ impl DashboardBootstrap {
         if let Ok(mut sessions) = self.sessions.lock() {
             // Sweep on issue: the only way the map grows, so it is the one
             // place that has to shrink it.
-            sessions.retain(|_, times| !times.expired(now, limits));
+            // Not on an unreadable wall clock: every session would read as
+            // expired and be deleted (MIK-8202).
+            if !wall_unreadable(now) {
+                sessions.retain(|_, times| !times.expired(now, limits));
+            }
             sessions.insert(
                 handle.clone(),
                 SessionTimes {
@@ -205,6 +225,9 @@ impl DashboardBootstrap {
         let Some(times) = sessions.get_mut(handle) else {
             return SessionCheck::Unknown;
         };
+        if wall_unreadable(now) {
+            return SessionCheck::ClockUnreadable;
+        }
         if times.expired(now, limits) {
             sessions.remove(handle);
             return SessionCheck::Expired;
@@ -271,13 +294,18 @@ impl DashboardBootstrap {
         let (expired, matches) = {
             let live = slot.as_ref()?;
             (
-                exceeds(live.minted, now, HANDOFF_TTL)
-                    || live.cap.is_some_and(|cap| now.wall >= cap),
+                wall_unreadable(now)
+                    || exceeds(live.minted, now, HANDOFF_TTL)
+                    || live.cap.is_some_and(|cap| cap_reached(now, cap)),
                 bool::from(live.value.as_bytes().ct_eq(candidate.as_bytes())),
             )
         };
         if expired {
-            *slot = None;
+            // An unreadable wall clock refuses the code but keeps it
+            // (MIK-8202).
+            if !wall_unreadable(now) {
+                *slot = None;
+            }
             return None;
         }
         if !matches {
@@ -320,7 +348,7 @@ impl DashboardBootstrap {
 
     /// Test seam: move both clocks of `handle` back by `by`, the same as `by`
     /// passing with no activity.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "webui"))]
     pub(crate) fn backdate(&self, handle: &str, by: Duration) {
         let back = |t: Now| Now {
             mono: t
@@ -414,6 +442,9 @@ pub(crate) enum SessionCheck {
     Expired,
     /// Never issued here, already removed, or from before a restart.
     Unknown,
+    /// Not judged: the wall clock reads before 1970. Refused for now and
+    /// kept, since it may be live once the clock reads (MIK-8202).
+    ClockUnreadable,
 }
 
 impl Default for DashboardBootstrap {

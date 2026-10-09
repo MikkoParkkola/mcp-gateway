@@ -1652,8 +1652,8 @@ class WorkflowWiring(unittest.TestCase):
         # still only checks.
         self.assertRegex(body, r'(?m)^            cargo \+"\$TOOLCHAIN" build --release --locked --bin mcp-gateway$')
         self.assertRegex(body, r'(?m)^            cargo \+"\$TOOLCHAIN" check --release --locked$')
-        self.assertIn("if: matrix.source == 'dockerfile'", body, "the trust-roots grep must run on the built row")
-        self.assertIn("grep -qa MCP_GATEWAY_TEST_TRUST_CA", body, "the release binary is no longer grepped")
+        self.assertIn("if: matrix.source == 'dockerfile'", body, "the test-hook check must run on the built row")
+        self.assertIn("scripts/release/grep_no_test_hook.sh target/release/mcp-gateway", body, "the release binary is no longer checked")
         self.assertNotRegex(body, r"continue-on-error:\s*true", "the compile must be fatal")
         scope = jobs("docker.yml")["scope"]
         self.assertRegex(scope, r"compile_check: \$\{\{ steps\.decide\.outputs\.compile_check \}\}")
@@ -2469,6 +2469,7 @@ class WorkflowWiring(unittest.TestCase):
             "test_check_tag_manifest.py",
             "test_check_nfr_demo_1_recordings.py",
             "test_workflow_wiring_mutations.py",
+            "test_grep_no_test_hook.py",
         )
         body = jobs("ci.yml").get("release-script-tests")
         self.assertIsNotNone(body, "ci.yml has no release-script-tests job")

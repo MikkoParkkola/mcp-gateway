@@ -88,3 +88,22 @@ async fn t12_a_poisoned_tool_with_a_bad_header_is_still_refused() {
     let (direct, meta) = call_both(&e, POISONED).await;
     assert_withheld(&e, &direct, &meta);
 }
+
+/// #1441: an upstream error frame that also carries a `result` is forwarded
+/// as an error only; its unjudged tool list never reaches the client.
+#[tokio::test]
+async fn an_error_frame_never_carries_an_unjudged_tool_list() {
+    let e = env().await;
+    e.upstream
+        .error_frame
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let (_, listed) = post(&e.router, "/mcp/evil", None, "tools/list", json!({})).await;
+    assert!(
+        listed.get("error").is_some(),
+        "premise: an error frame: {listed}"
+    );
+    assert!(
+        listed.get("result").is_none(),
+        "an error frame carried an unjudged tool list: {listed}"
+    );
+}

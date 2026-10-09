@@ -107,7 +107,8 @@ fn remove_keeps_hand_written_comments() {
 #[test]
 fn a_file_another_writer_broke_is_refused_not_replaced() {
     use mcp_gateway::config::BackendConfig;
-    use mcp_gateway::config_persistence::{load_existing_or_default, write_config};
+    use mcp_gateway::config_persistence::load_existing_or_default;
+    use mcp_gateway::gateway::test_helpers::write_config_fixture;
 
     let home = tempfile::tempdir().expect("home");
     let path = home.path().join("gateway.yaml");
@@ -124,7 +125,7 @@ fn a_file_another_writer_broke_is_refused_not_replaced() {
     .expect("write");
 
     // Replacing it would erase that writer's change with `add`'s older copy.
-    let error = write_config(&path, &config).expect_err("refused");
+    let error = write_config_fixture(&path, &config).expect_err("refused");
     assert!(error.starts_with("Failed to load"), "{error}");
     assert_eq!(
         std::fs::read_to_string(&path).expect("read"),
@@ -135,7 +136,8 @@ fn a_file_another_writer_broke_is_refused_not_replaced() {
 #[test]
 fn an_invalid_config_is_refused_and_left_unwritten() {
     use mcp_gateway::config::BackendConfig;
-    use mcp_gateway::config_persistence::{load_existing_or_default, write_config};
+    use mcp_gateway::config_persistence::load_existing_or_default;
+    use mcp_gateway::gateway::test_helpers::write_config_fixture;
 
     let home = tempfile::tempdir().expect("home");
     let path = home.path().join("gateway.yaml");
@@ -147,7 +149,7 @@ fn an_invalid_config_is_refused_and_left_unwritten() {
         serde_yaml::from_str("command: echo\nruntime_profile: nosuch\n").expect("backend");
     config.backends.insert("new".into(), backend);
 
-    assert!(write_config(&path, &config).is_err());
+    assert!(write_config_fixture(&path, &config).is_err());
     assert_eq!(
         std::fs::read_to_string(&path).expect("read"),
         "# mine\nbackends: {}\n"
@@ -155,11 +157,13 @@ fn an_invalid_config_is_refused_and_left_unwritten() {
 }
 
 /// The web UI and admin write through `backend_ops::write_config`.
+#[cfg(feature = "webui")]
 fn ui_write(path: &Path, change: impl FnOnce(&mut mcp_gateway::config::Config)) -> String {
-    use mcp_gateway::gateway::ui::backend_ops::{load_config_or_default, write_config};
+    use mcp_gateway::gateway::test_helpers::write_config_fixture;
+    use mcp_gateway::gateway::ui::backend_ops::load_config_or_default;
     let mut config = load_config_or_default(path);
     change(&mut config);
-    write_config(path, &config).expect("write config");
+    write_config_fixture(path, &config).expect("write config");
     std::fs::read_to_string(path).expect("read")
 }
 
@@ -169,6 +173,7 @@ fn echo_backend() -> mcp_gateway::config::BackendConfig {
 
 const NOTED: &str = "# kept by hand\nbackends:\n  # why old exists\n  old:\n    command: x\n";
 
+#[cfg(feature = "webui")]
 #[test]
 fn a_single_backend_add_and_remove_through_the_ui_writer_keep_comments() {
     let home = tempfile::tempdir().expect("home");
@@ -194,6 +199,7 @@ fn a_single_backend_add_and_remove_through_the_ui_writer_keep_comments() {
     assert!(!removed.contains("new:"), "{removed}");
 }
 
+#[cfg(feature = "webui")]
 #[test]
 fn a_change_outside_backends_takes_the_full_rewrite() {
     let home = tempfile::tempdir().expect("home");
@@ -217,7 +223,15 @@ fn several_backends_at_once_keep_comments() {
     let mut config = mcp_gateway::config::Config::load_literal(Some(&path)).expect("loads");
     config.backends.insert("one".into(), echo_backend());
     config.backends.insert("two".into(), echo_backend());
-    let kept = mcp_gateway::config_persistence::write_config_preserving(&path, &config);
+    let kept = mcp_gateway::config_persistence::edit_config(
+        &path,
+        mcp_gateway::config_persistence::CommentLoss::Refuse,
+        |c| {
+            *c = config.clone();
+            Ok(())
+        },
+    )
+    .map(drop);
     assert_eq!(kept, Ok(()));
     let written = std::fs::read_to_string(&path).expect("read");
     assert!(written.contains("# kept by hand"), "{written}");
@@ -231,7 +245,7 @@ fn several_backends_at_once_keep_comments() {
 /// a removal plus an addition: it is refused, never spliced over `c`.
 #[test]
 fn a_stale_multi_change_is_refused_not_spliced() {
-    use mcp_gateway::config_persistence::write_config_preserving;
+    use mcp_gateway::config_persistence::edit_config;
     let home = tempfile::tempdir().expect("home");
     let path = home.path().join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, NOTED).expect("write");
@@ -239,7 +253,16 @@ fn a_stale_multi_change_is_refused_not_spliced() {
     stale.backends.insert("b".into(), echo_backend());
     let current = format!("{NOTED}  c:\n    command: c\n");
     mcp_gateway::gateway::test_helpers::write_owner_only(&path, &current).expect("write");
-    let refusal = write_config_preserving(&path, &stale).expect_err("refused");
+    let refusal = edit_config(
+        &path,
+        mcp_gateway::config_persistence::CommentLoss::Refuse,
+        |c| {
+            *c = stale.clone();
+            Ok(())
+        },
+    )
+    .map(drop)
+    .expect_err("refused");
     assert!(
         refusal.starts_with("Not saved") && refusal.contains("--force"),
         "{refusal}"

@@ -18,7 +18,7 @@ use std::time::Duration;
 use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
 
 use super::super::{PROTOCOL_VERSION, StdioTransport};
-use super::{ChildTree, Counts, Leader, Reap, native_child};
+use super::{ChildTree, Counts, Leader, REAP_DEADLINE, Reap, native_child};
 use crate::transport::Transport;
 
 const ROW_LIMIT: Duration = Duration::from_secs(5);
@@ -377,8 +377,13 @@ async fn a_stepped_tree_signals_each_phase_once_then_reaps_natively() {
     gone(child).await;
 }
 
-/// A5's wait ends when the killed leader exits, not after its 1 s grace:
-/// ten live backends closed one after another take well under ten graces.
+/// A5's wait ends when the killed leader exits, not after its grace: ten
+/// live backends closed one after another each settle on the exit.
+///
+/// Each tree's grace is stretched past `REAP_DEADLINE`, so a wait that sat
+/// out the grace instead of ending on the exit reaches the deadline, sends no
+/// A5 signal and is dropped unreaped: `assert_settled` refuses it at once.
+/// The oracle is that outcome, not ten closes against a stopwatch (MIK-8222).
 #[tokio::test]
 async fn closing_ten_live_backends_does_not_add_a_grace_each() {
     let mut started_ones = Vec::new();
@@ -387,15 +392,18 @@ async fn closing_ten_live_backends_does_not_add_a_grace_each() {
     }
     let mut pids = Vec::new();
     for (_w, t) in &started_ones {
+        with_tree(t, |c| c.grace_for_test = Some(REAP_DEADLINE * 4)).await;
         pids.push(leader(t).await);
     }
-    let began = std::time::Instant::now();
     for ((_w, t), pid) in started_ones.iter().zip(&pids) {
         t.close().await.expect("close");
-        assert_settled(sent_after(*pid).await);
+        let counts = finished(*pid).await;
+        assert!(
+            counts.status.is_some(),
+            "reaped, not dropped at the deadline"
+        );
+        assert_settled((counts.sent, counts.refused));
     }
-    let took = began.elapsed();
-    assert!(took < Duration::from_secs(3), "ten closes took {took:?}");
 }
 
 /// T5: a start that times out after the leader died (a descendant holds
@@ -595,4 +603,59 @@ async fn gone_or_zombie(mut child: std::process::Child) {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+/// MIK-8229: `start`'s install refusal. A retire that lands between the
+/// spawn and the install (one from another thread can) refuses a restart,
+/// installs nothing, and drops the previous start's stdin, so no later write
+/// can reach a stale child.
+#[tokio::test]
+async fn a_retire_between_spawn_and_install_refuses_the_start() {
+    let (_w, t) = started("while IFS= read -r l; do :; done", None).await;
+    assert!(
+        t.writer.lock().await.is_some(),
+        "precondition: the first start's stdin"
+    );
+    t.retire_after_spawn_for_test();
+    let refused = t.start().await;
+    assert!(
+        matches!(&refused, Err(crate::Error::BackendNotFound(m)) if m.contains("while it started")),
+        "refused at install: {refused:?}"
+    );
+    assert!(
+        t.writer.lock().await.is_none(),
+        "the old stdin was released"
+    );
+    assert!(t.child.lock().tree.is_none(), "nothing was installed");
+}
+
+/// The reader's dropped-transport exit (MIK-8229): a member that escaped the
+/// group keeps stdout and writes after the transport is gone, so the reader
+/// gets a line it can no longer deliver, logs why, and stops. Handshaked, not
+/// timed: the member records its pid only once it has left the group, and
+/// writes only after the drop, when the test creates `go`. The record is
+/// awaited on this thread, where the reader task runs.
+#[test]
+fn a_line_after_the_transport_dropped_stops_the_reader() {
+    let late = "perl -MPOSIX -e 'setsid; exec @ARGV' sh -c \
+                'echo $$ > d.pid; while [ ! -e go ]; do sleep 0.05; done; echo \"{}\"' \
+                </dev/null 2>/dev/null &\nwhile IFS= read -r l; do :; done";
+    let (_capture, mut seen) =
+        crate::test_log_capture::live_count("Transport dropped while reading");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let (w, t) = started(late, None).await;
+        let writer = descendant(w.path()).await;
+        drop(Arc::into_inner(t).expect("the only handle"));
+        std::fs::write(w.path().join("go"), b"").expect("release the writer");
+        let logged = tokio::time::timeout(ROW_LIMIT, seen.wait_for(|n| *n >= 1)).await;
+        let _ = rustix::process::kill_process(writer, rustix::process::Signal::KILL);
+        assert!(
+            logged.is_ok(),
+            "the reader saw a line after the drop and stopped"
+        );
+    });
 }

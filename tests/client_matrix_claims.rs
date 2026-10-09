@@ -6,14 +6,21 @@
 //! The exporter's client list and path helpers are binary-private, so they are
 //! read as source text; `ExportTarget` is public and is read through clap.
 
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(feature = "config-export")]
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+// The export rows read `mcp-gateway export`, a `config-export` subcommand.
+#[cfg(feature = "config-export")]
 use clap::{Parser as _, ValueEnum as _};
+#[cfg(feature = "config-export")]
 use mcp_gateway::cli::{Cli, ExportTarget};
 
 const DOC: &str = include_str!("../docs/CLIENTS.md");
+#[cfg(feature = "config-export")]
 const EXPORT_SRC: &str = include_str!("../src/commands/config_export/mod.rs");
+#[cfg(feature = "config-export")]
 const PATHS_SRC: &str = include_str!("../src/commands/paths.rs");
 const MATRIX: &str = include_str!("../docs/release/v4.0.0-supported-matrix.md");
 
@@ -59,6 +66,7 @@ fn export_rows() -> Vec<(String, String, String, String, String)> {
 }
 
 /// The body of `fn name(` in `src`, up to the closing brace at column 0.
+#[cfg(feature = "config-export")]
 fn fn_body<'a>(src: &'a str, name: &str) -> &'a str {
     let body = src
         .split(&format!("fn {name}("))
@@ -70,6 +78,7 @@ fn fn_body<'a>(src: &'a str, name: &str) -> &'a str {
 }
 
 /// Quoted literals after `open` in `src`, each prefixed.
+#[cfg(feature = "config-export")]
 fn literals(src: &str, open: &str, prefix: &str) -> BTreeSet<String> {
     src.split(open)
         .skip(1)
@@ -80,6 +89,7 @@ fn literals(src: &str, open: &str, prefix: &str) -> BTreeSet<String> {
 /// What the exporter does per client: label -> (config key, paths written).
 /// A path is a `home_path("…")` (shown as `~/…`) or `cwd.join("…")` literal,
 /// or a helper in `src/commands/paths.rs` whose literals are all its paths.
+#[cfg(feature = "config-export")]
 fn exporter_clients() -> BTreeMap<String, (String, BTreeSet<String>)> {
     let specs = fn_body(EXPORT_SRC, "client_specs");
     let helpers = PATHS_SRC.split("#[cfg(test)]").next().unwrap();
@@ -126,6 +136,7 @@ fn exporter_clients() -> BTreeMap<String, (String, BTreeSet<String>)> {
 
 /// (platform word, path) for every platform-specific literal in the path
 /// helpers, from the `#[cfg]` line above each `return`.
+#[cfg(feature = "config-export")]
 fn platform_paths() -> Vec<(&'static str, String)> {
     platform_paths_in(PATHS_SRC.split("#[cfg(test)]").next().unwrap())
 }
@@ -133,6 +144,7 @@ fn platform_paths() -> Vec<(&'static str, String)> {
 /// As [`platform_paths`], for one helper body. A `config_dir_path("…")` is
 /// the OS config directory: `$XDG_CONFIG_HOME/…` on Linux, `%APPDATA%/…` on
 /// Windows.
+#[cfg(feature = "config-export")]
 fn platform_paths_in(src: &str) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
     let mut cfg = "";
@@ -170,6 +182,7 @@ fn platform_paths_in(src: &str) -> Vec<(&'static str, String)> {
 }
 
 /// `--target` value -> client label, from the exporter's `match target` arms.
+#[cfg(feature = "config-export")]
 fn target_labels() -> BTreeMap<String, String> {
     let specs = fn_body(EXPORT_SRC, "client_specs");
     let mut out = BTreeMap::new();
@@ -198,6 +211,7 @@ fn label_of(client: &str) -> String {
     client.split(" (").next().unwrap().to_string()
 }
 
+#[cfg(feature = "config-export")]
 #[test]
 fn every_export_target_has_a_row_and_parses() {
     let rows = export_rows();
@@ -223,6 +237,7 @@ fn every_export_target_has_a_row_and_parses() {
 
 /// Each row's target, config key and locations are the exporter's for that
 /// client, compared per row so a swapped mapping fails too.
+#[cfg(feature = "config-export")]
 #[test]
 fn each_row_matches_the_exporter_for_that_client() {
     let clients = exporter_clients();

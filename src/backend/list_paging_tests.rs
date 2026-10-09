@@ -4,7 +4,9 @@
 //! (F3 design §5 cells #1, #4-#11; the meta-route cells live in
 //! `meta_mcp/list_paging_e2e.rs`).
 
-use super::{Backend, LIST_MAX_PAGES};
+use super::Backend;
+#[cfg(feature = "metrics")]
+use super::LIST_MAX_PAGES;
 use crate::config::{BackendConfig, FailsafeConfig};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use async_trait::async_trait;

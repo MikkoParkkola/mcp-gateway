@@ -14,7 +14,7 @@ use crate::personal_accounts::config::{AccountDescriptor, AccountsLimits};
 use crate::personal_accounts::provider::{Clock, PersonalOAuthRefresh, ProviderHttp, SecretSource};
 use crate::personal_accounts::service::CredentialReleaseObserver;
 use crate::personal_accounts::storage::journey::{
-    JourneyError, JourneyId, JourneyLimits, JourneyView, START_WINDOW, StartSecrets,
+    JourneyError, JourneyId, JourneyLimits, JourneyRefusal, JourneyView, START_WINDOW, StartSecrets,
 };
 use crate::personal_accounts::{AccountError, PersonalAccountStore};
 
@@ -109,7 +109,10 @@ where
         return_path: String,
     ) -> JourneyResult<JourneyCreated> {
         self.offload(move |service| {
-            let now = now_seconds();
+            let now = match now_seconds() {
+                Ok(now) => now,
+                Err(error) => return Ok(Err(error)),
+            };
             Ok(service
                 .store()
                 .create_connect_journey(now, &limits, owner, &descriptor, return_path)
@@ -129,13 +132,15 @@ where
         return_path: String,
     ) -> JourneyResult<JourneyCreated> {
         self.offload(move |service| {
-            Ok(service
-                .store()
-                .offer_connect_journey(now_seconds(), &limits, owner, &descriptor, return_path)
-                .map(|(journey_id, expires_at)| JourneyCreated {
-                    journey_id,
-                    expires_at,
-                }))
+            Ok(now_seconds().and_then(|now| {
+                service
+                    .store()
+                    .offer_connect_journey(now, &limits, owner, &descriptor, return_path)
+                    .map(|(journey_id, expires_at)| JourneyCreated {
+                        journey_id,
+                        expires_at,
+                    })
+            }))
         })
         .await
     }
@@ -148,18 +153,19 @@ where
     ) -> JourneyResult<JourneyView> {
         self.offload(move |service| {
             let parts = (principal.0.as_str(), principal.1.as_str());
-            Ok(service
-                .store()
-                .journey_status_owned(now_seconds(), &limits, &id, parts))
+            Ok(now_seconds().and_then(|now| {
+                service
+                    .store()
+                    .journey_status_owned(now, &limits, &id, parts)
+            }))
         })
         .await
     }
 
     async fn account_of(&self, limits: JourneyLimits, id: String) -> JourneyResult<String> {
         self.offload(move |service| {
-            Ok(service
-                .store()
-                .active_journey_account(now_seconds(), &limits, &id))
+            Ok(now_seconds()
+                .and_then(|now| service.store().active_journey_account(now, &limits, &id)))
         })
         .await
     }
@@ -204,7 +210,7 @@ fn arm(
     id: &str,
     owner: &AccountKey,
 ) -> Result<(StartSecrets, u64), JourneyError> {
-    let now = now_seconds();
+    let now = now_seconds()?;
     let secrets = store.start_journey(now, limits, id, owner)?;
     let deadline = store.journey_status(now, limits, id)?.expires_at;
     Ok((secrets, deadline.unwrap_or(now).saturating_sub(now)))
@@ -221,8 +227,9 @@ impl From<&AccountsLimits> for JourneyLimits {
     }
 }
 
-fn now_seconds() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs())
+/// Every journey step judges a deadline (or sets one) against this. A clock
+/// before 1970 refuses the step as an expired journey (MIK-8202): no journey
+/// is offered, started or read, and no binding cookie is issued.
+fn now_seconds() -> Result<u64, JourneyError> {
+    crate::clock::unix_secs().map_err(|_| JourneyError::Refused(JourneyRefusal::Expired))
 }

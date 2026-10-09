@@ -15,7 +15,6 @@ use super::config_write::CommentLoss;
 
 use mcp_gateway::{
     config::TransportConfig,
-    config_persistence::load_existing_or_default,
     gateway::ui::backend_ops::{
         self, add_backend, get_backend, list_backends, parse_env_vars, remove_backend,
         resolve_backend,
@@ -74,25 +73,15 @@ pub async fn run_add_command(
     // credential is not generated here on purpose; minting one as a side effect
     // of adding a backend is a surprise. Saying so is not.
     let creating_config = !config.exists();
-    let mut gateway_config = match load_existing_or_default(config) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("Error: Failed to load {}: {e}", config.display());
-            return ExitCode::FAILURE;
-        }
-    };
 
-    // ── Insert backend ─────────────────────────────────────────────────────
-    let notes = match add_backend(&mut gateway_config, name, resolved) {
-        Ok(notes) => notes,
-        Err(msg) => {
-            eprintln!("Error: {msg} (in {})", config.display());
-            return ExitCode::FAILURE;
-        }
-    };
-
-    // ── Write config ───────────────────────────────────────────────────────
-    if let Err(e) = super::config_write::write(config, &gateway_config, mode) {
+    // ── Insert backend and write, under one config lock hold ───────────────
+    let mut notes = Vec::new();
+    let written = super::config_write::write(config, mode, |gateway_config| {
+        notes = add_backend(gateway_config, name, resolved)
+            .map_err(|msg| format!("{msg} (in {})", config.display()))?;
+        Ok(())
+    });
+    if let Err(e) = written {
         eprintln!("Error: {e}");
         return ExitCode::FAILURE;
     }
@@ -128,14 +117,11 @@ pub async fn run_add_command(
 
 /// Run `mcp-gateway remove`.
 pub fn run_remove_command(name: &str, config: &Path, mode: CommentLoss) -> ExitCode {
-    let mut gateway_config = backend_ops::load_config_or_default(config);
-
-    if let Err(msg) = remove_backend(&mut gateway_config, name) {
-        eprintln!("Error: {msg} (in {})", config.display());
-        return ExitCode::FAILURE;
-    }
-
-    if let Err(e) = super::config_write::write(config, &gateway_config, mode) {
+    let written = super::config_write::write(config, mode, |gateway_config| {
+        remove_backend(gateway_config, name)
+            .map_err(|msg| format!("{msg} (in {})", config.display()))
+    });
+    if let Err(e) = written {
         eprintln!("Error: {e}");
         return ExitCode::FAILURE;
     }
@@ -289,6 +275,44 @@ mod tests {
         (dir, path)
     }
 
+    /// MIK-8042: `remove` overlapping a gateway's locked mutation loads the
+    /// file under the same lock it writes with, so the backend the mutation
+    /// added survives the removal.
+    #[tokio::test]
+    async fn remove_racing_a_gateway_mutation_keeps_its_add() {
+        let (_dir, path) = temp_config();
+        mcp_gateway::gateway::test_helpers::write_owner_only(
+            &path,
+            "backends:\n  a:\n    command: a\n  b:\n    command: b\n",
+        )
+        .expect("write");
+        let at = path.clone();
+        let mutated = mcp_gateway::config_reload::mutate_config_and_reload(&path, None, |config| {
+            let queued = mcp_gateway::gateway::test_helpers::when_waiting_for_config_lock(&at);
+            let remove = at.clone();
+            let cli =
+                std::thread::spawn(move || run_remove_command("b", &remove, CommentLoss::Refuse));
+            assert!(
+                queued
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .is_ok(),
+                "remove never waited for the config lock"
+            );
+            let x = serde_yaml::from_str("command: x\n").expect("backend");
+            config.backends.insert("x".into(), x);
+            Ok::<_, String>(cli)
+        })
+        .await;
+        let Ok(mcp_gateway::config_reload::ConfigMutation::Applied(cli, _)) = mutated else {
+            panic!("mutation not applied");
+        };
+        assert_eq!(cli.join().expect("cli thread"), ExitCode::SUCCESS);
+        let config = Config::load_literal(Some(&path)).expect("loads");
+        let mut names: Vec<_> = config.backends.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["a", "x"]);
+    }
+
     // ── add round-trip ────────────────────────────────────────────────────────
 
     #[tokio::test]
@@ -438,9 +462,9 @@ mod tests {
     /// no CLI verb updates a backend, and the web UI's PATCH goes through the
     /// async reload API, never this blocking writer.
     fn run_update_backend(name: &str, update: BackendUpdate, config: &Path) -> Result<(), String> {
-        let mut gateway_config = backend_ops::load_config_or_default(config);
-        update_backend(&mut gateway_config, name, update)?;
-        super::super::config_write::write(config, &gateway_config, CommentLoss::Refuse)
+        super::super::config_write::write(config, CommentLoss::Refuse, |gateway_config| {
+            update_backend(gateway_config, name, update)
+        })
     }
 
     #[tokio::test]

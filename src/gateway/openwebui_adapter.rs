@@ -42,6 +42,7 @@ use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use serde::Deserialize;
 use tracing::warn;
 
+use crate::clock::{self, JwtClaimTime, Validity};
 use crate::config::Config;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::personal_accounts::config::{
@@ -361,7 +362,11 @@ fn verify(
     // `exp` would otherwise be an eternal one.
     validation.set_required_spec_claims(&["sub", "iat", "exp", "iss"]);
     validation.set_issuer(&[runtime.issuer.as_str()]);
-    validation.validate_exp = true;
+    // The library never reads the clock (MIK-8202): it would panic on one
+    // before 1970. `exp` stays required above and is judged just below, with
+    // the same leeway; `nbf` was never checked here and still is not.
+    validation.validate_exp = false;
+    validation.validate_nbf = false;
     // No audience is configured for these assertions, and leaving `aud`
     // validation on with an empty expected set rejects everything.
     validation.validate_aud = false;
@@ -370,6 +375,10 @@ fn verify(
     let claims = decode::<AssertionClaims>(token, key, &validation)
         .map_err(|_| Refusal::Invalid("signature or claim validation failed"))?
         .claims;
+    let exp = u64::try_from(claims.exp).map_or(JwtClaimTime::Malformed, JwtClaimTime::At);
+    if clock::jwt_window(exp, JwtClaimTime::Absent, validation.leeway) == Validity::Expired {
+        return Err(Refusal::Invalid("signature or claim validation failed"));
+    }
 
     if claims.sub.is_empty() {
         return Err(Refusal::Invalid("empty subject"));
@@ -393,7 +402,8 @@ fn verify(
 
     // Future-dated issuance, beyond the configured skew, is refused: it is how
     // a token's effective lifetime gets extended past the bound just checked.
-    let now = now_seconds();
+    // A clock it cannot read refuses (MIK-8202).
+    let now = now_seconds().map_err(|_| Refusal::Invalid("clock reads before 1970"))?;
     let skew = i64::try_from(runtime.clock_skew_seconds)
         .map_err(|_| Refusal::Invalid("configured clock skew out of range"))?;
     if claims.iat > now.saturating_add(skew) {
@@ -442,10 +452,8 @@ pub(crate) fn session_principal(installation_id: &str, user_id: &str) -> (String
     (namespaced_issuer(installation_id), user_id.to_owned())
 }
 
-fn now_seconds() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+fn now_seconds() -> Result<i64, clock::ClockBeforeEpoch> {
+    clock::unix_secs().map(|secs| i64::try_from(secs).unwrap_or(i64::MAX))
 }
 
 /// One status and one body for every refusal.
@@ -480,7 +488,7 @@ mod tests {
     }
 
     fn claims(subject: &str) -> Value {
-        let now = now_seconds();
+        let now = now_seconds().expect("the test host clock reads after 1970");
         json!({"iss":"open-webui", "sub":subject, "iat":now, "exp":now+120,
             "email":"untrusted@example.invalid", "roles":["admin"], "groups":["admin"]})
     }
@@ -585,7 +593,7 @@ mod tests {
                 "missing {field}"
             );
         }
-        let now = now_seconds();
+        let now = now_seconds().expect("the test host clock reads after 1970");
         for (field, value) in [
             ("sub", json!("")),
             ("iss", json!("attacker")),

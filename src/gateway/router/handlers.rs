@@ -126,14 +126,9 @@ pub(super) async fn meta_mcp_handler(
     // MIK-8176: the slots this request's mints take are owned here, outside
     // the grant-audit replacer, and by the dispatch future itself, so a
     // stream that polls it after this handler returns still has its scope.
-    // MIK-8176 stage 2: a JSON answer is handed off by its reply, so its
-    // unsent slots are given back; a stream's handoff lands in stage 3, so a
-    // request offering one only counts until then.
-    let policy = if offers_event_stream {
-        crate::gateway::meta_mcp::sealed_hold::HoldPolicy::CountOnly
-    } else {
-        crate::gateway::meta_mcp::sealed_hold::HoldPolicy::Release
-    };
+    // MIK-8176: every answer is handed off where its bytes leave (the JSON
+    // reply, or the stream's answer event), so unsent slots are given back.
+    let policy = crate::gateway::meta_mcp::sealed_hold::HoldPolicy::Release;
     let dispatch = crate::gateway::meta_mcp::sealed_hold::scoped(
         policy,
         crate::gateway::meta_mcp::grant_audit::slot_http(

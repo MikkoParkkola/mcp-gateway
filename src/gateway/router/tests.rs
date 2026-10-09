@@ -4,6 +4,7 @@ use super::helpers::{
     attach_session_header, build_accepted_response, build_error_response,
     build_http_error_response, build_json_response, extract_request_id, extract_tools_call_params,
     is_notification_method, merge_client_meta, parse_elicitation_params, parse_request,
+    parse_sampling_params,
 };
 use super::{AppState, create_router, create_router_with};
 use super::{authorization, handlers, helpers};
@@ -66,6 +67,7 @@ mod origin_gate;
 mod playbook_authz;
 /// MIK-8158: no authorization server, no protected-resource metadata.
 mod prm_without_issuer;
+mod quota_principal;
 mod request_parsing;
 mod responses;
 mod session_hold_direct;

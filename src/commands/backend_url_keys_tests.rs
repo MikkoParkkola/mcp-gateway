@@ -112,8 +112,11 @@ fn a_cli_write_saves_a_new_backend_with_url() {
     );
     super::super::config_write::write(
         &path,
-        &config,
         super::super::config_write::CommentLoss::Refuse,
+        |c| {
+            *c = config;
+            Ok(())
+        },
     )
     .expect("write succeeds");
     let text = std::fs::read_to_string(&path).expect("read back");
@@ -159,8 +162,11 @@ fn a_cli_write_keeps_url_on_a_backend_that_already_had_it() {
     );
     super::super::config_write::write(
         &path,
-        &config,
         super::super::config_write::CommentLoss::Refuse,
+        |c| {
+            *c = config;
+            Ok(())
+        },
     )
     .expect("write succeeds");
     let text = std::fs::read_to_string(&path).expect("read back");
@@ -247,7 +253,9 @@ fn the_scheme_table_agrees_with_the_loader() {
             .map(|c| match c.backends["b"].transport {
                 TransportConfig::Http { .. } => "http_url",
                 TransportConfig::WebSocket { .. } => "ws_url",
-                _ => "another transport",
+                TransportConfig::Stdio { .. } => "another transport",
+                #[cfg(feature = "a2a")]
+                TransportConfig::A2a { .. } => "another transport",
             });
         assert_eq!(transport_key_for(address), loaded, "{address}");
     }

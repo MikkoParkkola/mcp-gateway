@@ -43,7 +43,9 @@ pub(super) use backend::{Answer, GateHandle, MockBackend, TOOL};
 pub(super) const BACKEND: &str = "mock";
 
 /// The task owner `key-a` submits as: its verified identity, for the rows
-/// that read a committed task back from the store.
+/// that read a committed task back from the store. Its readers
+/// (`settlement_record`, `egress_task`) are `firewall`-gated.
+#[cfg(feature = "firewall")]
 pub(super) fn admission_principal() -> String {
     crate::key_server::oidc::VerifiedIdentity {
         subject: "alice".to_string(),
@@ -273,7 +275,10 @@ pub(super) fn task_method(id: i64, method: &str, params: Value) -> Value {
 /// `Mcp-Name` is derived from `mcp_name_body_field` — the production rule — so a
 /// request is never refused by the header/body mirror check for a reason no row
 /// is about.
-fn http_request(principal: Option<&str>, body: &Value) -> axum::http::Request<axum::body::Body> {
+pub(super) fn http_request(
+    principal: Option<&str>,
+    body: &Value,
+) -> axum::http::Request<axum::body::Body> {
     let method = body["method"].as_str().unwrap_or_default().to_string();
     let mut builder = axum::http::Request::builder()
         .method("POST")

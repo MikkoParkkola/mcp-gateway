@@ -493,7 +493,7 @@ fn a_literal_load_leaves_an_env_file_override_out_of_the_config() {
         "a rewrite path must see the port the file spells, not the one the env file overrides"
     );
 
-    crate::config_persistence::write_config(&config_path, &literal).expect("rewrite");
+    crate::gateway::test_helpers::write_config_fixture(&config_path, &literal).expect("rewrite");
     let rewritten = std::fs::read_to_string(&config_path).expect("read back");
     assert!(
         !rewritten.contains("9090"),

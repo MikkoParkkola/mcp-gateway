@@ -177,6 +177,8 @@ impl StdioTransport {
             ));
         }
         let mut child = spawn_in_own_tree(cmd)?;
+        #[cfg(all(test, unix))]
+        self.after_spawn_for_test();
 
         let stdin = child
             .stdin()
@@ -291,9 +293,7 @@ impl StdioTransport {
                 self.settle_child_exit().await;
                 Some(stderr_tail.0)
             };
-            if let Err(close_error) = self.close().await {
-                warn!(error = %close_error, "Failed to clean up stdio process after initialization error");
-            }
+            self.shut().await;
             if let Some(reader) = late_reader {
                 // The child `close` just killed: record that ending, so the
                 // failure is not reported as a child still running.
@@ -713,18 +713,7 @@ impl Transport for StdioTransport {
     }
 
     async fn close(&self) -> Result<()> {
-        self.connected.store(false, Ordering::Relaxed);
-
-        // A write stuck on a peer that stopped reading holds stdin; the kill ends it.
-        if let Ok(mut writer) = self.writer.try_lock() {
-            *writer = None;
-        }
-        // The per-start stdin token first, then the tree to the reaper,
-        // waited for (bounded) with any reap a retire started earlier.
-        self.shutdown.lock().cancel();
-        self.end_tree().await;
-        tree::clear_writer(&self.writer).await;
-
+        self.shut().await;
         Ok(())
     }
 }

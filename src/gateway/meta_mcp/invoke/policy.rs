@@ -72,17 +72,19 @@ impl MetaMcp {
         // the earliest point at which the target is known, so nothing has yet
         // happened that a refused call is not entitled to: no nonce consumed,
         // no cache read, no idempotency entry, no credential minted, no budget
-        // consulted. And the router builds its own target from the same raw
-        // arguments, so a policy that one day reads them cannot give the two
-        // layers two answers.
+        // consulted. And the router builds its own target from the same
+        // arguments (`judged_arguments`), so a policy that one day reads them
+        // cannot give the two layers two answers.
         // `{}` and not `Null`: the router's own target builder defaults a
         // missing inner `arguments` to an empty object, and two gates that see
         // different targets are two gates that can disagree.
-        let empty_args = serde_json::json!({});
+        // The arguments as dispatched (a JSON-string form parsed), the same
+        // value the router's target builder judges (MIK-8137 b1).
+        let judged = crate::gateway::authz::judged_arguments(args);
         let target = crate::gateway::authz::ToolTarget {
             server,
             tool,
-            arguments: args.get("arguments").unwrap_or(&empty_args),
+            arguments: &judged,
         };
         let authorizer = caller.authorizer;
         // The admin-capability rule is refused and audited like the authorizer.
@@ -170,7 +172,18 @@ impl MetaMcp {
             }
             crate::attestation::validator::AttestationScope::AuthenticOnly => None,
         };
-        match validator.validate_boundary_call(token, boundary, required, chrono::Utc::now()) {
+        // A clock before 1970 can judge no expiry: the token is treated as an
+        // expired one, refused under enforce and logged under observe
+        // (MIK-8202). Nothing is dated on it, so the audit ring is not written.
+        let verdict = match crate::clock::utc_now() {
+            Ok(now) => validator.validate_boundary_call(token, boundary, required, now),
+            Err(clock) => Err(
+                crate::attestation::validator::AttestationRejection::Expired {
+                    expires_at: format!("a time that cannot be read: {clock}"),
+                },
+            ),
+        };
+        match verdict {
             Ok(_claims) => Ok(()),
             Err(rejection) => match self.attestation_mode {
                 crate::attestation::AttestationMode::Enforce => Err(Error::json_rpc(

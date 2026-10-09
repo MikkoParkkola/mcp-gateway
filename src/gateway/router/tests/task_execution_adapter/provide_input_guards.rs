@@ -3,7 +3,8 @@
 //! `TaskExecutor::provide_input`'s own refusals, driven directly: the route
 //! checks the same facts first, so only a race reaches them over HTTP.
 use super::super::*;
-use super::input_round::{STATE_1, answer, ask, done, parked, update};
+use super::input_round::{STATE_1, answer, ask, create, done, parked, update, wait_input_required};
+use super::input_round_races::{HANG_GUARD, STRETCHED_WAIT};
 use super::support::*;
 
 use crate::gateway::router::OwnedRouterAuthorizer;
@@ -233,4 +234,86 @@ async fn provide_input_after_a_shutdown_cancel_runs_nothing() {
     assert!(matches!(outcome, InputOutcome::Unavailable));
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     std::assert_eq!(mock.calls(), 1, "nothing resumed after the shutdown");
+}
+
+/// An answer that reaches the executor while the row is `working` is refused,
+/// even when the resume then asks again and releases the handoff while that
+/// update would still be waiting (#3678). The route read the row first, so
+/// only this window reaches the executor's own round-state check.
+///
+/// The update carries round 2's key: a later round cannot reuse an earlier
+/// round's key (that round is invalid), so a key-for-key stale round-1 answer
+/// is refused by the store anyway.
+///
+/// Two checks refuse it, and either alone is enough: the executor's own
+/// round-state read, and the wait's `keep_waiting` read on its first pass,
+/// which returns `Moved` without parking. Mutant: both removed, so the update
+/// waits for the handoff and is applied to round 2 when it opens. Removing
+/// only the first leaves the outcome unchanged at every input but a commit
+/// landing between two back-to-back reads with no await between them, where
+/// it answers as for an update an instant later (#3678).
+#[tokio::test]
+async fn an_answer_sent_while_the_resume_runs_is_not_held_for_the_next_round() {
+    let (mock, mut gate) = MockBackend::holding(Answer::Sequence(vec![
+        ask("confirm", STATE_1),
+        ask("again", "backend-state-2"),
+        done(),
+    ]));
+    let (state, _store) = state_with(&mock).await;
+    // Long past the hang guard: an early update that waits for the handoff is
+    // still waiting when round 2 opens, never timed out first.
+    state
+        .task_executor
+        .stretch_produce_seam_wait_for_test(STRETCHED_WAIT);
+    let owner = alice();
+    let id = task_id(&post(&state, "key-a", create(1, "early-answer")).await);
+    gate.wait_for_dispatch().await;
+    gate.release();
+    wait_input_required(&state, &id).await;
+
+    // Round 1 answered: the resume owns the handoff, the row reads `working`,
+    // and its backend call is held.
+    let won = post(
+        &state,
+        "key-a",
+        update(2, &id, json!({ "confirm": answer() })),
+    )
+    .await;
+    std::assert!(won.get("error").is_none(), "{won}");
+    gate.wait_for_dispatch().await;
+
+    let early = {
+        let (state, owner, id) = (Arc::clone(&state), owner.clone(), id.clone());
+        tokio::spawn(async move {
+            let for_round_2 = answers(&json!({ "again": answer() }));
+            state
+                .task_executor
+                .provide_input(live(&state, &owner), &owner, &id, for_round_2)
+                .await
+        })
+    };
+    // Either it was refused at once, or it parked behind the resume.
+    let decided_by = tokio::time::Instant::now() + HANG_GUARD;
+    while !early.is_finished() && state.task_executor.release_waiters_for_test() == 0 {
+        std::assert!(
+            tokio::time::Instant::now() < decided_by,
+            "the early update neither answered nor parked"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+
+    // The resume asks again: round 2 opens and the handoff is released.
+    gate.release();
+    let outcome = tokio::time::timeout(HANG_GUARD, early)
+        .await
+        .expect("the early update answers")
+        .expect("the early update joins");
+    std::assert!(
+        matches!(outcome, InputOutcome::NotOutstanding),
+        "an answer sent while no round was open must not be held for round 2"
+    );
+    let round_2 = wait_input_required(&state, &id).await;
+    std::assert_eq!(status_of(&round_2), "input_required", "{round_2}");
+    std::assert_eq!(mock.calls(), 2, "round 2 waits for its own answer");
+    gate.release_all();
 }
