@@ -1,0 +1,8 @@
+head_sha	205a2618f05bb710b2d90e4981a65b7a717f99c2
+m8148-cap-silent	linux	m8148-cap-silent.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-no-compare	linux	m8148-no-compare.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-no-inheritance	linux	m8148-no-inheritance.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-no-slot-observer	linux	m8148-no-slot-observer.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-no-tombstone	linux	m8148-no-tombstone.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-revoke-silent	linux	m8148-revoke-silent.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::
+m8148-webhook-fires	linux	m8148-webhook-fires.patch	--lib -- backend::tools_nudge:: gateway::server::tools_changed::

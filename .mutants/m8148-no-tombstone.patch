@@ -1,0 +1,14 @@
+diff --git a/src/gateway/server/tools_changed/views.rs b/src/gateway/server/tools_changed/views.rs
+index 6013888ef..689aab65f 100644
+--- a/src/gateway/server/tools_changed/views.rs
++++ b/src/gateway/server/tools_changed/views.rs
+@@ -175,6 +175,9 @@ impl Views {
+     /// the drop itself is announced instead of risking a silent change.
+     fn bury(&mut self, binding: &str, shown: u64) -> bool {
+         self.stamp += 1;
++        if self.stamp > 0 {
++            return false;
++        }
+         self.tombstones
+             .insert(audience(binding).to_string(), (shown, self.stamp));
+         if self.tombstones.len() <= TOMBSTONE_CAP {

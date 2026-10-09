@@ -1,0 +1,14 @@
+diff --git a/src/gateway/server/tools_changed/views.rs b/src/gateway/server/tools_changed/views.rs
+index 6013888ef..76b54ec68 100644
+--- a/src/gateway/server/tools_changed/views.rs
++++ b/src/gateway/server/tools_changed/views.rs
+@@ -107,7 +107,8 @@ impl Views {
+                     None => self.baseline(binding),
+                 };
+                 self.live.insert(binding.to_string(), visible);
+-                visible != before
++                let _ = before;
++                true
+             }
+         }
+     }

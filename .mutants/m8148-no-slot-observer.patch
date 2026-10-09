@@ -1,0 +1,13 @@
+diff --git a/src/backend/tools_nudge.rs b/src/backend/tools_nudge.rs
+index 095a583b3..042ef7b69 100644
+--- a/src/backend/tools_nudge.rs
++++ b/src/backend/tools_nudge.rs
+@@ -114,7 +114,7 @@ impl super::Backend {
+     /// for the shared slot, which `attach_nudges` observes, and before a feed
+     /// is attached.
+     pub(super) fn observe_slot(&self, key: &super::PoolKey, entry: &super::pool::PooledEntry) {
+-        let (super::PoolKey::PerUser { binding }, Some(feed)) = (key, self.nudge_feed.get()) else {
++        let (super::PoolKey::PerUser { binding }, Some(feed), false) = (key, self.nudge_feed.get(), true) else {
+             return;
+         };
+         let (feed, name, instance, binding) = (

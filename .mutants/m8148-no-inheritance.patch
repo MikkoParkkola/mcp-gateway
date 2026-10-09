@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/tools_changed/views.rs b/src/gateway/server/tools_changed/views.rs
+index 6013888ef..9bf26ea9a 100644
+--- a/src/gateway/server/tools_changed/views.rs
++++ b/src/gateway/server/tools_changed/views.rs
+@@ -151,7 +151,7 @@ impl Views {
+     /// present (K1), so a refresh that changes nothing stays silent; else from
+     /// what an evicted slot of the same caller last showed (K2); else nothing.
+     fn baseline(&mut self, binding: &str) -> u64 {
+-        if let Some(me) = acct(binding) {
++        if let Some(me) = acct(binding).filter(|_| false) {
+             let predecessor = self
+                 .live
+                 .iter()

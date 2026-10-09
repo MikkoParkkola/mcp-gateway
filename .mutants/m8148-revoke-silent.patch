@@ -1,0 +1,14 @@
+diff --git a/src/gateway/server/tools_changed/views.rs b/src/gateway/server/tools_changed/views.rs
+index 6013888ef..0c5a2fb31 100644
+--- a/src/gateway/server/tools_changed/views.rs
++++ b/src/gateway/server/tools_changed/views.rs
+@@ -136,7 +136,8 @@ impl Views {
+     pub(super) fn revoked(&mut self, binding: &str) -> bool {
+         let empty = fingerprint(&[]);
+         self.tombstones.remove(audience(binding));
+-        matches!(self.live.remove(binding), Some(shown) if shown != empty)
++        let _ = (self.live.remove(binding), empty);
++        false
+     }
+ 
+     /// Whether any per-user view last showed tools: removing the backend
