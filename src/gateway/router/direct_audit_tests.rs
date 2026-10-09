@@ -32,6 +32,8 @@ mod meta_replay;
 #[cfg(feature = "firewall")]
 mod session_less;
 #[cfg(feature = "firewall")]
+mod slot_release;
+#[cfg(feature = "firewall")]
 mod tenants;
 
 /// A backend that answers `tools/list` with its one tool `t` and anything
@@ -142,6 +144,14 @@ struct Setup {
     /// Response firewall rules (YAML) beside the tenant guard; `None`, none.
     #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     response_rules: Option<&'static str>,
+    /// The read judge beside `tenant_limit`: `Block` withholds a caller's
+    /// second tenant (MIK-8176 SLOT.1). Default observe.
+    #[cfg(feature = "firewall")]
+    cross_tenant_reads: crate::security::firewall::tenant_guard::CrossTenantReads,
+    /// Relay detection on both routes' firewalls, with `alpha:t` as its
+    /// source (MIK-8176 SLOT.6). Needs `tenant_limit`.
+    #[cfg(feature = "firewall")]
+    relay: Relay,
     meta_mode: MetaMode,
     /// The backends refuse every notification (L1254).
     notify_refused: bool,
@@ -150,6 +160,15 @@ struct Setup {
     chain: crate::config::ChainMode,
     /// `security.caller_identity` (MIK-7938 ATTR.4).
     caller_identity: Option<crate::security::caller_identity::CallerIdentityConfig>,
+}
+
+/// Whether both routes' firewalls run relay detection (MIK-8176 SLOT.6).
+#[cfg(feature = "firewall")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Relay {
+    #[default]
+    Off,
+    On,
 }
 
 /// One optional meta-layer switch a cell turns on (MIK-7116.MIN.1 cells).
@@ -255,7 +274,12 @@ async fn fixture(setup: Setup) -> Fixture {
     }
     #[cfg(feature = "firewall")]
     if let Some(limit) = setup.tenant_limit {
-        tenants::guard_tenants(state_mut, &mut meta, (limit, setup.response_rules));
+        tenants::guard_tenants(
+            state_mut,
+            &mut meta,
+            (limit, setup.response_rules),
+            (setup.cross_tenant_reads, setup.relay),
+        );
     }
     if let Some(config) = setup.caller_identity {
         meta = meta.with_caller_identity(config);
