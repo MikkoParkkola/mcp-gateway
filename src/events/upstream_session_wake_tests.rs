@@ -164,17 +164,22 @@ async fn t35_filter_churn_neither_cuts_nor_extends_the_backoff() {
         let next = Arc::clone(&next);
         async move { next.notified().await }
     });
-    for _ in 0..5 {
+    // Churn every 200 ms, past the longest backoff (2.5 s): it never cuts
+    // the wait, and never holds it open.
+    let mut reconnected_at = None;
+    for tick in 1..=20u32 {
         tokio::time::sleep(Duration::from_millis(200)).await;
+        if waiting.is_finished() {
+            reconnected_at = Some(tick * 200);
+            break;
+        }
         shared.wake.send_modify(|n| *n += 1);
     }
-    let early = waiting.is_finished();
-    let on_time = tokio::time::timeout(Duration::from_millis(2_500), waiting).await;
     shared.stop.cancel();
     let _ = task.await;
-    assert!(!early, "1 s of filter changes did not cut a 1.5 s+ backoff");
+    let at = reconnected_at.expect("the backoff ends by its own deadline while churn goes on");
     assert!(
-        on_time.is_ok(),
-        "the backoff still ends by its own deadline"
+        at > 1_000,
+        "filter changes did not cut a 1.5 s+ backoff (reconnected at {at} ms)"
     );
 }
