@@ -41,9 +41,11 @@ impl Backend {
         }
         on_publish();
         *entry.listen.write() = listen;
-        *entry.transport.write() = Some(Arc::clone(transport));
+        // The verdict a reader of the slot will see the instant the transport
+        // lands in it, read before the write so nothing after it can mask it.
         #[cfg(test)]
         self.era_at_publish.lock().push(entry.era.cached_now());
+        *entry.transport.write() = Some(Arc::clone(transport));
         Ok(())
     }
 }

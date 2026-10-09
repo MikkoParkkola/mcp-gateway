@@ -255,7 +255,7 @@ pub struct Backend {
     /// transport pooled cannot show through the slot (MIK-8012).
     #[cfg(test)]
     pub(crate) rebuilds_attempted: std::sync::atomic::AtomicUsize,
-    /// The slot's era (`cached_now`) at the instant each publish made a
+    /// The slot's era (`cached_now`) just before each publish makes a
     /// transport reachable: the dialect its first request is shaped in
     /// (MIK-8012 boundary rows).
     #[cfg(test)]
