@@ -2469,6 +2469,7 @@ class WorkflowWiring(unittest.TestCase):
             "test_check_tag_manifest.py",
             "test_check_nfr_demo_1_recordings.py",
             "test_workflow_wiring_mutations.py",
+            "test_grep_no_test_hook.py",
         )
         body = jobs("ci.yml").get("release-script-tests")
         self.assertIsNotNone(body, "ci.yml has no release-script-tests job")

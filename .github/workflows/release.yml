@@ -290,7 +290,7 @@ jobs:
           cp target/${{ matrix.target }}/release/mcp-gateway${{ matrix.suffix }} ${{ matrix.artifact }}${{ matrix.suffix }}
           # Every debug-only test hook must be compiled out of a release binary;
           # the script holds the list and the fail-closed grep.
-          scripts/release/grep_no_test_hook.sh ${{ matrix.artifact }}${{ matrix.suffix }}
+          scripts/release/grep_no_test_hook.sh "${{ matrix.artifact }}${{ matrix.suffix }}"
           if [ "${{ matrix.suffix }}" = "" ]; then
             chmod +x ${{ matrix.artifact }}
           fi

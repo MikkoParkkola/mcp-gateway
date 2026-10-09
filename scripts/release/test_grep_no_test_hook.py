@@ -90,24 +90,75 @@ class Inventory(unittest.TestCase):
         self.assertEqual(sorted(hooks_in_script()), sorted(rows))
 
 
+CALL = "scripts/release/grep_no_test_hook.sh"
+
+
+def workflows() -> list[Path]:
+    return sorted([*WORKFLOWS.glob("*.yml"), *WORKFLOWS.glob("*.yaml")])
+
+
+def live_calls(path: Path) -> list[tuple[str, str]]:
+    """(call line, its step's text) for each call of the script in `path`
+    that is not commented out."""
+    lines = path.read_text().splitlines()
+    out = []
+    for n, line in enumerate(lines):
+        if CALL not in line or line.lstrip().startswith("#"):
+            continue
+        start = next(i for i in range(n, -1, -1) if re.match(r"^\s*- (name|uses|run):", lines[i]))
+        indent = len(lines[start]) - len(lines[start].lstrip())
+        end = next(
+            (i for i in range(n + 1, len(lines))
+             if lines[i].strip() and len(lines[i]) - len(lines[i].lstrip()) <= indent),
+            len(lines),
+        )
+        out.append((line, "\n".join(lines[start:end])))
+    return out
+
+
 class Wiring(unittest.TestCase):
     def test_no_workflow_names_a_hook(self):
         names = hooks_in_script()
         offenders = [
             f"{path.name}:{n}"
-            for path in sorted(WORKFLOWS.glob("*.yml"))
+            for path in workflows()
             for n, line in enumerate(path.read_text().splitlines(), 1)
             if any(name in line for name in names) or "MCP_GATEWAY_TEST_" in line
         ]
-        self.assertEqual(offenders, [], "call scripts/release/grep_no_test_hook.sh instead")
+        self.assertEqual(offenders, [], f"call {CALL} instead")
 
     def test_each_release_binary_site_calls_the_script(self):
-        call = "scripts/release/grep_no_test_hook.sh"
-        release = (WORKFLOWS / "release.yml").read_text()
-        docker = (WORKFLOWS / "docker.yml").read_text()
-        self.assertIn(f"{call} ${{{{ matrix.artifact }}}}${{{{ matrix.suffix }}}}", release)
-        self.assertIn(f"{call} target/release/mcp-gateway", docker)
-        self.assertIn(f"{call} image-mcp-gateway", docker)
+        # A live call: not commented out, its failure not masked by `||` or
+        # by `continue-on-error` on its step. Threat model: forgetting, not
+        # intent; a step-level `if:` is not judged (the per-PR row has one).
+        expected = {
+            "release.yml": f'{CALL} "${{{{ matrix.artifact }}}}${{{{ matrix.suffix }}}}"',
+            "docker.yml": f"{CALL} target/release/mcp-gateway",
+            "docker.yml ": f"{CALL} image-mcp-gateway",
+        }
+        for label, call in expected.items():
+            with self.subTest(site=label.strip()):
+                found = [
+                    (line, step)
+                    for line, step in live_calls(WORKFLOWS / label.strip())
+                    if call in line
+                ]
+                self.assertEqual(len(found), 1, f"{label.strip()}: no live `{call}`")
+                line, step = found[0]
+                self.assertNotIn("||", line.split(CALL, 1)[1], "the call's failure is masked")
+                self.assertNotRegex(step, r"continue-on-error:\s*true", "the step's failure is masked")
+
+    def test_a_commented_or_masked_call_is_not_live(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "w.yml"
+            path.write_text(
+                "jobs:\n  j:\n    steps:\n"
+                f"      - name: off\n        run: |\n          # {CALL} bin\n"
+                f"      - name: masked\n        continue-on-error: true\n        run: {CALL} bin\n"
+            )
+            calls = live_calls(path)
+            self.assertEqual(len(calls), 1, "a commented-out call is not live")
+            self.assertRegex(calls[0][1], r"continue-on-error:\s*true")
 
 
 if __name__ == "__main__":
