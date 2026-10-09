@@ -291,10 +291,8 @@ fn interpret(
         };
     }
     if unauthorized(outcome) {
-        return Err(Error::JsonRpc {
-            code: crate::security::http_diagnostics::CLI_UNAUTHORIZED,
+        return Err(Error::CliCredentialRefused {
             message: format!("'{}' refused its credential", invocation.command),
-            data: None,
         });
     }
     let code = outcome

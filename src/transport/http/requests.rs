@@ -14,8 +14,8 @@ use super::cancel_guard::CancelOnDrop;
 use super::extra_headers::merge_extra_headers;
 use super::modern_meta::{finalise_modern_headers, is_era_probe, with_modern_meta};
 use super::{
-    HTTP_TARGET, HeaderMode, HttpTransport, bearer_header_value, peer_refusal,
-    require_secure_oauth_target,
+    HTTP_TARGET, HeaderMode, HttpTransport, bearer_header_value, is_session_expired_error,
+    peer_refusal, require_secure_oauth_target,
 };
 use crate::gateway::trace;
 use crate::protocol::era::Era;
@@ -25,7 +25,8 @@ use crate::protocol::{
     is_version_mismatch_error, parse_supported_versions_from_error,
 };
 use crate::security::http_diagnostics::{
-    RedirectEvidence, safe_request_error, safe_request_error_for, status_refusal,
+    RedirectEvidence, is_deterministic_refusal, safe_request_error, safe_request_error_for,
+    status_refusal,
 };
 use crate::{Error, Result};
 
@@ -336,6 +337,18 @@ impl HttpTransport {
                 return Err(Error::ProtocolVersionRejected { supported });
             }
             if let Some(refusal) = peer_refusal(&body, &request.id, status) {
+                // A11-b: a credential refusal is typed by its status, whatever
+                // the peer wrote, so the managed-account refresh sees it
+                // (MIK-7717). Only an expiry, judged by the classifier that
+                // performs the recovery, keeps the peer's answer. The typed
+                // status is returned directly: a body-text scan must not
+                // overrule the parsed verdict.
+                if is_deterministic_refusal(status)
+                    && !is_session_expired_error(&refusal)
+                    && let Some(typed) = typed
+                {
+                    return Err(Error::Http(typed.without_url()));
+                }
                 return Err(refusal);
             }
             return Err(status_refusal(typed, status, &body));
