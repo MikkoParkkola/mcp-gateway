@@ -63,6 +63,8 @@ mod tests {
         high < FIRST || low > FIRST + SPAN - 1
     }
 
+    // Read only by the Linux and macOS live-range rows.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn assert_outside(a: u16, b: u16, source: &str) {
         let last = FIRST + SPAN - 1;
         assert!(
