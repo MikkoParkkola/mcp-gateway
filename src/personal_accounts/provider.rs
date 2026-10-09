@@ -53,6 +53,8 @@ pub(in crate::personal_accounts) use grant_flow::{ProviderRevocation, TokenTypeH
 #[cfg(test)]
 mod provider_accept_tests;
 #[cfg(test)]
+mod provider_bound_tests;
+#[cfg(test)]
 mod provider_tests;
 #[cfg(test)]
 mod wire_tests;
