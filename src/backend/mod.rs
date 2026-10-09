@@ -67,6 +67,7 @@ pub(crate) use pool::PoolKey;
 #[cfg(not(test))]
 use pool::PoolKey;
 use pool::PooledEntry;
+pub(crate) use probe::HealthTicker;
 
 pub(crate) use annotations::prepare_tool_metadata;
 #[cfg(test)]
@@ -248,6 +249,11 @@ pub struct Backend {
     /// published (the publish order of MIK-7897 LIFE.3a).
     #[cfg(test)]
     pub(crate) publish_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
+    /// How many forced restarts reached their rebuild: a test's observable
+    /// for "the probe restarted", which a failed rebuild that keeps the old
+    /// transport pooled cannot show through the slot (MIK-8012).
+    #[cfg(test)]
+    pub(crate) rebuilds_attempted: std::sync::atomic::AtomicUsize,
     /// A test's stand-ins for the user's token store and browser, used by the
     /// OAuth client [`Backend::create_oauth_client`] builds.
     #[cfg(test)]

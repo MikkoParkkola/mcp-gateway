@@ -236,3 +236,21 @@ impl Backend {
         let _ = crate::oauth::login_gate::non_interactive(self.force_restart()).await;
     }
 }
+
+/// Paces the health loop: one pass per tick of a fixed-period interval.
+pub(crate) struct HealthTicker {
+    interval: tokio::time::Interval,
+}
+
+impl HealthTicker {
+    pub(crate) fn new(period: Duration) -> Self {
+        Self {
+            interval: tokio::time::interval(period),
+        }
+    }
+
+    /// Wait for the next pass.
+    pub(crate) async fn tick(&mut self) {
+        self.interval.tick().await;
+    }
+}

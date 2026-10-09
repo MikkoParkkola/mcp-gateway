@@ -3614,11 +3614,11 @@ fn spawn_health_loop(
             return;
         }
         let mut shutdown = shutdown;
-        let mut interval = tokio::time::interval(tick);
+        let mut ticker = crate::backend::HealthTicker::new(tick);
 
         loop {
             tokio::select! {
-                _ = interval.tick() => {
+                () = ticker.tick() => {
                     for backend in backends.all() {
                         // Probe running backends (liveness) AND backends whose
                         // breaker is tripped (recovery). The old guard only
