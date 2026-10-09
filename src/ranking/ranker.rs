@@ -3,9 +3,9 @@
 
 use super::{
     AtomicU64, DashMap, Ordering, Path, RankingEvalCase, RankingEvalCaseResult, RankingEvalReport,
-    RankingExplanation, SearchRanker, SearchResult, UsageEntry, baseline_top_tool,
-    build_eval_case_result, exclusion_for, explanation_for, improvement_targets_for,
-    json_to_search_result, ratio, score_text_relevance, sort_by_rank,
+    RankingExplanation, SearchRanker, SearchResult, UsageEntry, backend_name_score,
+    baseline_top_tool, build_eval_case_result, exclusion_for, explanation_for,
+    improvement_targets_for, json_to_search_result, ratio, score_text_relevance, sort_by_rank,
 };
 
 impl SearchRanker {
@@ -74,7 +74,8 @@ impl SearchRanker {
             }
 
             let text_relevance =
-                score_text_relevance(&result.tool, &result.description, &query_lower, &words);
+                score_text_relevance(&result.tool, &result.description, &query_lower, &words)
+                    .max(backend_name_score(&result.server, &words));
 
             let usage = self.usage_count(&result.server, &result.tool);
             #[allow(clippy::cast_precision_loss)]
