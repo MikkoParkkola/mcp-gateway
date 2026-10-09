@@ -114,6 +114,8 @@ async fn a_slow_pass_is_followed_by_a_full_period() {
 const DISCOVER_MODERN: u8 = 0;
 const DISCOVER_HELD: u8 = 1;
 const DISCOVER_LEGACY: u8 = 2;
+/// A strict modern peer: answers only a probe that carries `_meta`.
+const DISCOVER_STRICT: u8 = 3;
 
 /// Control of an [`era_stub`]: its discovery answer, how many probes and
 /// which `tools/list` requests (by whether they carried `_meta`) it saw.
@@ -122,6 +124,9 @@ struct EraStub {
     release: Arc<tokio::sync::Notify>,
     discovers: Arc<AtomicUsize>,
     lists: Arc<std::sync::Mutex<Vec<bool>>>,
+    /// When set, `initialize` is refused: a candidate that needs the
+    /// handshake cannot start.
+    refuse_initialize: Arc<AtomicBool>,
 }
 
 /// An MCP server on loopback whose era probe answers as [`EraStub::mode`] says.
@@ -133,19 +138,22 @@ async fn era_stub() -> (String, EraStub) {
         release: Arc::new(tokio::sync::Notify::new()),
         discovers: Arc::new(AtomicUsize::new(0)),
         lists: Arc::new(std::sync::Mutex::new(Vec::new())),
+        refuse_initialize: Arc::new(AtomicBool::new(false)),
     };
-    let (mode, release, discovers, lists) = (
+    let (mode, release, discovers, lists, refuse) = (
         Arc::clone(&stub.mode),
         Arc::clone(&stub.release),
         Arc::clone(&stub.discovers),
         Arc::clone(&stub.lists),
+        Arc::clone(&stub.refuse_initialize),
     );
     let app = axum::Router::new().fallback(move |axum::Json(message): axum::Json<Value>| {
-        let (mode, release, discovers, lists) = (
+        let (mode, release, discovers, lists, refuse) = (
             Arc::clone(&mode),
             Arc::clone(&release),
             Arc::clone(&discovers),
             Arc::clone(&lists),
+            Arc::clone(&refuse),
         );
         async move {
             let Some(id) = message.get("id").cloned() else {
@@ -165,8 +173,16 @@ async fn era_stub() -> (String, EraStub) {
                         }
                         DISCOVER_LEGACY => json!({ "jsonrpc": "2.0", "id": id,
                             "error": { "code": -32601, "message": "method not found" } }),
+                        DISCOVER_STRICT if message["params"].get("_meta").is_none() => {
+                            json!({ "jsonrpc": "2.0", "id": id,
+                                "error": { "code": -32600, "message": "not a 2026 request" } })
+                        }
                         _ => modern_answer,
                     }
+                }
+                "initialize" if refuse.load(Ordering::SeqCst) => {
+                    json!({ "jsonrpc": "2.0", "id": id,
+                    "error": { "code": -32603, "message": "initialize refused" } })
                 }
                 "initialize" => json!({ "jsonrpc": "2.0", "id": id, "result": {
                     "protocolVersion": crate::protocol::PROTOCOL_VERSION,
@@ -320,4 +336,66 @@ async fn a_probe_timeout_whose_replacement_cannot_start_keeps_the_transport() {
         "a rebuild whose replacement failed replaced the working transport"
     );
     gate.notify_waiters();
+}
+
+/// ERA.3 (upgrade): the peer was legacy and is now a strict 2026 server that
+/// answers only a well-formed 2026 probe. The candidate's probe must not
+/// inherit the serving transport's Legacy verdict, or the upgrade is never
+/// noticed by a probe rebuild.
+#[tokio::test]
+async fn a_candidate_probes_an_upgraded_peer_in_the_2026_dialect() {
+    use crate::protocol::era::Era;
+    let (url, stub) = era_stub().await;
+    stub.mode.store(DISCOVER_LEGACY, Ordering::SeqCst);
+    let backend = http_backend(url);
+    backend.start().await.expect("premise: the backend starts");
+    let entry = backend.shared_entry();
+    assert_eq!(
+        entry.era.cached().await,
+        Some(Era::Legacy),
+        "premise: legacy"
+    );
+
+    stub.mode.store(DISCOVER_STRICT, Ordering::SeqCst);
+    let outcome = within("the restart", non_interactive_restart(&backend))
+        .await
+        .expect("restart task")
+        .expect("the candidate starts");
+    assert!(matches!(outcome, RestartOutcome::Rebuilt), "{outcome:?}");
+    assert_eq!(
+        entry.era.cached().await,
+        Some(Era::Modern),
+        "the candidate asked a strict 2026 peer in the 2025 dialect"
+    );
+}
+
+/// ERA.4: a candidate that probes and then fails to start installs nothing;
+/// the serving transport keeps the verdict it had.
+#[tokio::test]
+async fn a_failed_candidate_leaves_the_verdict_alone() {
+    use crate::protocol::era::Era;
+    let (url, stub) = era_stub().await;
+    let backend = http_backend(url);
+    backend.start().await.expect("premise: the backend starts");
+    let entry = backend.shared_entry();
+    assert_eq!(
+        entry.era.cached().await,
+        Some(Era::Modern),
+        "premise: modern"
+    );
+    let old = pooled(&backend).expect("premise: pooled");
+
+    stub.mode.store(DISCOVER_LEGACY, Ordering::SeqCst);
+    stub.refuse_initialize.store(true, Ordering::SeqCst);
+    within("the restart", non_interactive_restart(&backend))
+        .await
+        .expect("restart task")
+        .expect_err("the candidate's handshake is refused");
+
+    assert!(Arc::ptr_eq(&old, &pooled(&backend).unwrap()), "kept");
+    assert_eq!(
+        entry.era.cached().await,
+        Some(Era::Modern),
+        "a candidate that never replaced the transport changed its verdict"
+    );
 }
