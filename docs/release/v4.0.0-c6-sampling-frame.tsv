@@ -100,7 +100,7 @@ src/gateway/server/cleartext.rs	serve_refusal	1	critical	d	serve_refusal	Everyth
 src/gateway/server/identity_grants.rs	audit_startup	1	critical	a	audit_startup	Reconciles, records and snapshots grants under the journal lock; the rows returned are the rows recorded
 src/gateway/server/identity_grants.rs	start_identity_grant_audit	1	critical	a	start_identity_grant_audit	Decides which identity grants go live; fails closed when reconciliation or its audit cannot be recorded
 src/gateway/server/mod.rs	prepare_signing	1	critical	b,d	Gateway::prepare_signing	stdio first step: refuses a malformed chain nonce or signing envelope
-src/gateway/server/build_meta.rs	response_firewall	1	critical	d	Gateway::response_firewall	Builds the firewall both transports enforce with; anomaly blocking depends on it
+src/gateway/server/mod.rs	response_firewall	1	critical	d	Gateway::response_firewall	Builds the firewall both transports enforce with; anomaly blocking depends on it
 src/gateway/server/stdio_channel.rs	reply_id	1	critical	b	StdioClientChannel::reply_id	Treats a frame as a reply only without `method`, so a client request is never routed as one
 src/gateway/server/stdio_channel.rs	resolve	1	critical	b	StdioClientChannel::resolve	Sends a reply only to the pending one-shot entry for that id; consumes it
 src/gateway/server/support.rs	accept	1	critical	a,b	PeerCertIdentityAcceptor::accept	Completes the handshake and hands auth the peer certificate's identity
