@@ -331,3 +331,7 @@ async fn read_capped<R: AsyncRead + Unpin>(stream: Option<R>, max: usize) -> Res
 #[cfg(test)]
 #[path = "cli_run_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cli_audit_tests.rs"]
+mod audit_tests;
