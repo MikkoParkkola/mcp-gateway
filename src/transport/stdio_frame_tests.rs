@@ -695,6 +695,11 @@ fn a_restart_parked_on_the_writer_lock_spawns_nothing_a_retire_misses() {
         matches!(refused, Err(crate::Error::BackendNotFound(_))),
         "a retired transport installed a fresh tree: {refused:?}"
     );
+    assert_eq!(
+        all.len(),
+        1,
+        "the retired restart spawned a child once driven"
+    );
     assert!(fresh_gone, "the refused start's tree outlived the retire");
 }
 
@@ -732,4 +737,3 @@ async fn a_dropped_initialize_is_never_cancelled() {
     );
     assert!(!frames.contains("notifications/cancelled"), "{frames}");
 }
-

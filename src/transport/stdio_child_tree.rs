@@ -333,8 +333,10 @@ mod tests;
 mod windows_tests;
 
 impl Drop for ChildTree {
-    /// The single kill owner on drop: a dropped transport, a slot replaced by
-    /// a restart, or a retry all end the group here, before tokio reaps.
+    /// The fallback kill, never the normal path: a dropped transport and a
+    /// replaced slot hand their tree to the reaper (MIK-7923), so this runs
+    /// for a tree the reaper finished (its gate already closed) or one it
+    /// could not take. Gated like every other group signal.
     fn drop(&mut self) {
         self.start_kill();
     }
