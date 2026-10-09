@@ -1,0 +1,13 @@
+diff --git a/src/config_persistence.rs b/src/config_persistence.rs
+index 34abfd3f7..a34f273fc 100644
+--- a/src/config_persistence.rs
++++ b/src/config_persistence.rs
+@@ -427,7 +427,7 @@ fn render(
+     }
+     let yaml = url_spelling::render(config, text)?;
+     let dropped = commented
+-        .map(|text| comments::dropped_comment_lines(text, &yaml))
++        .map(|_| Vec::new())
+         .unwrap_or_default();
+     Ok(Some((yaml, dropped)))
+ }

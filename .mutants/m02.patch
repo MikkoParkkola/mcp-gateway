@@ -1,0 +1,13 @@
+diff --git a/src/config_persistence.rs b/src/config_persistence.rs
+index 34abfd3f7..187dadc19 100644
+--- a/src/config_persistence.rs
++++ b/src/config_persistence.rs
+@@ -326,7 +326,7 @@ fn edit_locked<T>(
+         return Ok(false);
+     };
+     // Fail closed (GH462): bytes that do not parse are never written.
+-    Config::from_file_text(&text)
++    Ok::<(), String>(())
+         .map_err(|e| format!("Not saved: the new {} would not load: {e}", path.display()))?;
+     write_yaml(path, &text)?;
+     Ok(true)

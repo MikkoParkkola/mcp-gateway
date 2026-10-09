@@ -1,0 +1,12 @@
+diff --git a/src/config_persistence.rs b/src/config_persistence.rs
+index 34abfd3f7..ee8846e6b 100644
+--- a/src/config_persistence.rs
++++ b/src/config_persistence.rs
+@@ -321,7 +321,6 @@ fn edit_locked<T>(
+     read: impl FnOnce(&Path) -> Result<T, String>,
+     edit: impl FnOnce(T) -> Result<Option<String>, String>,
+ ) -> Result<bool, String> {
+-    let _held = cli_lock(path)?;
+     let Some(text) = edit(read(path)?)? else {
+         return Ok(false);
+     };

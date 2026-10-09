@@ -1,0 +1,13 @@
+diff --git a/src/config_persistence.rs b/src/config_persistence.rs
+index 34abfd3f7..d431817e6 100644
+--- a/src/config_persistence.rs
++++ b/src/config_persistence.rs
+@@ -267,8 +267,6 @@ where
+     // Advisory only: a file that does not load is refused before the lock
+     // file is made, so the refusal leaves the directory as it was. The load
+     // under the lock is the authoritative one.
+-    load_existing_or_default(path)
+-        .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
+     let mut dropped = Vec::new();
+     edit_locked(path, read_config, |current| {
+         let mut config = current

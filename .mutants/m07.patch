@@ -1,0 +1,12 @@
+diff --git a/src/config_persistence.rs b/src/config_persistence.rs
+index 34abfd3f7..c3e1d5f42 100644
+--- a/src/config_persistence.rs
++++ b/src/config_persistence.rs
+@@ -354,7 +354,6 @@ fn read_text(path: &Path) -> Result<Option<String>, String> {
+     match std::fs::metadata(path) {
+         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+         Err(e) => Err(failed(&e)),
+-        Ok(meta) if !meta.is_file() => Err(failed(&"not a regular file")),
+         Ok(_) => std::fs::read_to_string(path)
+             .map(Some)
+             .map_err(|e| failed(&e)),

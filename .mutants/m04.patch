@@ -1,0 +1,13 @@
+diff --git a/src/config_persistence.rs b/src/config_persistence.rs
+index 34abfd3f7..5d2f08e9c 100644
+--- a/src/config_persistence.rs
++++ b/src/config_persistence.rs
+@@ -415,7 +415,7 @@ fn render(
+             return Ok(None);
+         }
+         if let Some(edited) = splice::with_backends_edited(text, before, config, scope) {
+-            let dropped = comments::dropped_comment_lines(text, &edited);
++            let dropped = Vec::new();
+             return Ok(Some((edited, dropped)));
+         }
+     }

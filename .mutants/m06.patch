@@ -1,0 +1,13 @@
+diff --git a/src/commands/config_write.rs b/src/commands/config_write.rs
+index fae5cee2a..1abd46afa 100644
+--- a/src/commands/config_write.rs
++++ b/src/commands/config_write.rs
+@@ -36,7 +36,7 @@ where
+     F: FnOnce(&mut Config) -> Result<(), String>,
+ {
+     let dropped = edit_config(path, mode, edit)?;
+-    if !dropped.is_empty() {
++    if false {
+         // A removed entry, or a `--force` full rewrite, takes comments with
+         // it; say which lines, never their text.
+         eprintln!(

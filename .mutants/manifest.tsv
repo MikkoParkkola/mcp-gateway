@@ -1,0 +1,8 @@
+head_sha	69d679b1a783150062e06618298399a7189670a7
+m01	linux	m01.patch	--test gh462_config_preservation gh462_add_
+m02	linux	m02.patch	--lib config_persistence::edit_tests::a_text_write_that_would_not_load_is_refused
+m03	linux	m03.patch	--lib config_persistence::edit_tests::an_add_racing_another_add_keeps_both
+m04	linux	m04.patch	--lib config_persistence::edit_tests::a_removal_names_the_comments_it_took
+m05	linux	m05.patch	--test add_keeps_comments with_force_rewrites
+m06	linux	m06.patch	--test add_keeps_comments remove_names_the_comments_that_went_with_the_entry
+m07	linux	m07.patch	--lib config_persistence::edit_tests::a_text_edit_of_a_non_file_is_refused
