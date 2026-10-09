@@ -80,18 +80,49 @@ class Errors(unittest.TestCase):
             gate.sh(["sleep", "5"], timeout=0.2)
 
 
-class Builds(unittest.TestCase):
-    def test_a_binary_already_built_for_the_key_is_reused(self):
+class Prebuilt(unittest.TestCase):
+    """--measure-only measures only binaries whose manifest names the
+    requested commits and whose bytes still match it."""
+
+    def setUp(self):
         import os
         import tempfile
 
-        with tempfile.TemporaryDirectory() as work:
-            binary = os.path.join(work, "abc.bin")
-            open(binary, "w").close()
-            with contextlib.redirect_stdout(io.StringIO()):
-                # No repo and no cargo: a rebuild would fail.
-                _, got = gate.build(None, "abc", work, "abc")
-            self.assertEqual(got, binary)
+        self.dir = tempfile.TemporaryDirectory()
+        self.binary = os.path.join(self.dir.name, "abc.bin")
+        with open(self.binary, "wb") as f:
+            f.write(b"built")
+        gate.write_manifest(self.binary, ["a" * 40])
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_matching_commits_are_accepted(self):
+        self.assertEqual(gate.verified(self.binary, ["a" * 40]), self.binary)
+
+    def test_a_binary_built_from_another_commit_is_refused(self):
+        with self.assertRaises(gate.Void) as raised:
+            gate.verified(self.binary, ["b" * 40])
+        self.assertIn("was built from", str(raised.exception))
+
+    def test_a_binary_changed_after_its_build_is_refused(self):
+        with open(self.binary, "ab") as f:
+            f.write(b"tampered")
+        with self.assertRaises(gate.Void):
+            gate.verified(self.binary, ["a" * 40])
+
+    def test_a_binary_without_a_manifest_is_refused(self):
+        import os
+
+        os.remove(self.binary + ".json")
+        with self.assertRaises(gate.Void):
+            gate.verified(self.binary, ["a" * 40])
+
+    def test_build_reuses_a_verified_binary_without_building(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            # No repo and no cargo: a rebuild would fail.
+            _, got = gate.build(None, "a" * 40, self.dir.name, "abc", ["a" * 40])
+        self.assertEqual(got, self.binary)
 
 
 if __name__ == "__main__":

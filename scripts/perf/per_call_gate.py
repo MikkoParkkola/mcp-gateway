@@ -23,6 +23,8 @@ null arm. Else PASS (exit 0). The whole job holds one bench lock.
 
 import argparse
 import fcntl
+import hashlib
+import json
 import os
 import random
 import re
@@ -62,14 +64,18 @@ def sh(cmd, cwd=None, env=None, timeout=None):
     return done.stdout
 
 
-def build(repo, ref, work, key, overlay_from=None):
+def build(repo, ref, work, key, commits, overlay_from=None):
     """The release lib test binary for `ref`, at work/<key>.bin. `key` names
     the exact source (commit SHAs), so a binary already there is reused."""
     tree = os.path.join(work, key)
     binary = os.path.join(work, key + ".bin")
     if os.path.exists(binary):
-        print(f"reusing {binary}")
-        return tree, binary
+        try:
+            verified(binary, commits)
+            print(f"reusing {binary}")
+            return tree, binary
+        except Void:
+            pass  # stale or unrecorded: rebuild
     shutil.rmtree(tree, ignore_errors=True)
     # An export, not a checkout: nothing is registered in the host's clone.
     os.makedirs(tree)
@@ -90,7 +96,36 @@ def build(repo, ref, work, key, overlay_from=None):
         raise Void(f"no lib test binary for {ref}")
     shutil.copy(exe[-1], binary + ".partial")
     os.replace(binary + ".partial", binary)
+    write_manifest(binary, commits)
     return tree, binary
+
+
+def digest(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def write_manifest(binary, commits):
+    with open(binary + ".json", "w") as f:
+        json.dump({"commits": commits, "sha256": digest(binary)}, f)
+
+
+def verified(binary, commits):
+    """`binary` if its manifest names exactly `commits` and its bytes still
+    hash to the recorded digest; else Void (a measure-only run never builds)."""
+    try:
+        with open(binary + ".json") as f:
+            manifest = json.load(f)
+    except (OSError, ValueError):
+        raise Void(f"no prebuilt binary for {commits} (run --prebuild-only first)") from None
+    if manifest.get("commits") != commits:
+        raise Void(f"{binary} was built from {manifest.get('commits')}, not {commits}")
+    if not os.path.exists(binary) or manifest.get("sha256") != digest(binary):
+        raise Void(f"{binary} does not match its manifest")
+    return binary
 
 
 def run(binary, negative=False):
@@ -151,17 +186,21 @@ def main():
     p.add_argument("--k", type=int, default=19)
     p.add_argument("--blocks", type=int, default=4)
     p.add_argument("--seed", type=int, default=random.randrange(1 << 30))
-    p.add_argument("--work", help="keep the builds here and reuse them (default: a temp dir)")
-    p.add_argument("--build-only", action="store_true",
+    p.add_argument("--work", help="where the binaries live (default: a temp dir)")
+    p.add_argument("--prebuild-only", action="store_true",
                    help="build both binaries into --work and stop; takes no bench lock")
+    p.add_argument("--measure-only", action="store_true",
+                   help="measure the binaries in --work; refuse unless their manifests match")
     a = p.parse_args()
     if a.k < 1 or a.blocks < 1:
         p.error("--k and --blocks must be at least 1")
-    if a.build_only and not a.work:
-        p.error("--build-only needs --work")
+    if (a.prebuild_only or a.measure_only) and not a.work:
+        p.error("--prebuild-only and --measure-only need --work")
+    if a.prebuild_only and a.measure_only:
+        p.error("choose one of --prebuild-only and --measure-only")
     repo = sh(["git", "rev-parse", "--show-toplevel"]).strip()
     try:
-        if a.build_only:
+        if a.prebuild_only:
             os.makedirs(a.work, exist_ok=True)
             for binary in builds(repo, a, a.work):
                 print(f"built {binary}")
@@ -171,6 +210,8 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX)
             rng = random.Random(a.seed)
             print(f"seed {a.seed}; K={a.k} (per-row false-alarm ~{1 / (a.k + 1):.0%}); blocks={a.blocks}")
+            if a.measure_only:
+                return measure(a, rng, prebuilt(repo, a, a.work))
             if a.work:
                 os.makedirs(a.work, exist_ok=True)
                 return measure(a, rng, builds(repo, a, a.work))
@@ -181,14 +222,31 @@ def main():
         return 2
 
 
+def shas(repo, a):
+    return tuple(sh(["git", "rev-parse", "--verify", f"{r}^{{commit}}"], cwd=repo).strip()
+                 for r in (a.base, a.head))
+
+
+def keys(base_sha, head_sha):
+    """BASE carries HEAD's harness files, so its key and manifest name both."""
+    return (f"{base_sha[:12]}+{head_sha[:12]}", [base_sha, head_sha]), (head_sha[:12], [head_sha])
+
+
 def builds(repo, a, work):
-    """(base, head) binaries. BASE carries HEAD's harness files, so its key
-    names both commits."""
-    base_sha, head_sha = (sh(["git", "rev-parse", "--verify", f"{r}^{{commit}}"], cwd=repo).strip()
-                          for r in (a.base, a.head))
-    head_tree, head = build(repo, head_sha, work, head_sha[:12])
-    _, base = build(repo, base_sha, work, f"{base_sha[:12]}+{head_sha[:12]}", overlay_from=head_tree)
+    """(base, head) binaries, built or reused."""
+    base_sha, head_sha = shas(repo, a)
+    (base_key, base_commits), (head_key, head_commits) = keys(base_sha, head_sha)
+    head_tree, head = build(repo, head_sha, work, head_key, head_commits)
+    _, base = build(repo, base_sha, work, base_key, base_commits, overlay_from=head_tree)
     return base, head
+
+
+def prebuilt(repo, a, work):
+    """(base, head) from --work, each checked against its manifest; never builds."""
+    base_sha, head_sha = shas(repo, a)
+    (base_key, base_commits), (head_key, head_commits) = keys(base_sha, head_sha)
+    return (verified(os.path.join(work, base_key + ".bin"), base_commits),
+            verified(os.path.join(work, head_key + ".bin"), head_commits))
 
 
 def measure(a, rng, binaries):
