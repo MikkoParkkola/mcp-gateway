@@ -10,7 +10,7 @@
 #   coverage_grade.sh --self-check       grade the 2026-10-06 baseline run and
 #                                        require its known FAIL
 #
-# A probe is <rev>'s tree plus scripts/release/coverage-probe.yml as a workflow,
+# A probe is <rev>'s tree plus this checkout's .github/workflows/coverage-probe.yml,
 # committed with plumbing (no checkout is touched) and pushed to
 # throwaway/coverage-grade-<tag>. Grading reads the source, inventory and grader
 # of <rev> itself, so line ranges match the report. PASS needs all three: the run
@@ -29,10 +29,12 @@ SELF_REV=409e95619a608d638735a3dc0ca44942e922cf08
 SELF_ROW=$'BELOW\t 91.67%\t55/60\tsrc/gateway/task_service/execution/upstream.rs:query_and_commit#1'
 
 # The probe workflow a graded run must have executed, byte for byte: this
-# checkout's coverage-probe.yml, or for the self-check the definition that
+# checkout's .github/workflows/coverage-probe.yml (MIK-8217 moved it there; CI
+# runs the same file), or for the self-check the definition that
 # baseline run used (it predates this script).
 PROBE_PATH=.github/workflows/coverage-probe.yml
-PROBE_BLOB="$(git hash-object "$HERE/coverage-probe.yml")"
+PROBE_FILE="$(git rev-parse --show-toplevel)/$PROBE_PATH"
+PROBE_BLOB="$(git hash-object "$PROBE_FILE")"
 
 self_check=""
 case "${1:-}" in
@@ -49,7 +51,7 @@ case "${1:-}" in
     [[ "$tag" =~ ^[A-Za-z0-9-]+$ ]] || { echo "tag must match [A-Za-z0-9-]+" >&2; exit 2; }
     index="$(mktemp)"; trap 'rm -f "$index"' EXIT
     GIT_INDEX_FILE="$index" git read-tree "$rev"
-    blob="$(git hash-object -w "$HERE/coverage-probe.yml")"
+    blob="$(git hash-object -w "$PROBE_FILE")"
     GIT_INDEX_FILE="$index" git update-index --add --cacheinfo "100644,$blob,$PROBE_PATH"
     tree="$(GIT_INDEX_FILE="$index" git write-tree)"
     probe="$(git commit-tree "$tree" -p "$rev" -m "ci(throwaway): coverage grade of ${rev:0:9}")"
@@ -80,7 +82,10 @@ refuse() { echo "run $run: $*" >&2; exit 4; }
 head_sha="$(gh run view "$run" -R "$REPO" --json headSha -q .headSha)"
 git cat-file -e "$head_sha^{commit}" 2>/dev/null || git fetch -q origin "$head_sha"
 [[ "$(git rev-parse "$head_sha^")" == "$rev" ]] || refuse "probed $head_sha, whose parent is not $rev"
-[[ "$(git diff --name-only "$rev" "$head_sha")" == "$PROBE_PATH" ]] \
+# Empty when <rev> already carries the pinned workflow; the blob check below
+# still pins its content.
+changed="$(git diff --name-only "$rev" "$head_sha")"
+[[ -z "$changed" || "$changed" == "$PROBE_PATH" ]] \
   || refuse "probed $head_sha, which changes more than $PROBE_PATH"
 [[ "$(git rev-parse "$head_sha:$PROBE_PATH")" == "$PROBE_BLOB" ]] \
   || refuse "probed $head_sha with a $PROBE_PATH that is not the pinned probe"

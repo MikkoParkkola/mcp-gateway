@@ -183,5 +183,27 @@ class CheckInventoryRows(unittest.TestCase):
         self.assertEqual(self.repo.missing(), ["helper"])
 
 
+class CoverageGradeTrigger(unittest.TestCase):
+    """The CI grade's pull_request paths name exactly the COV.3 prefixes
+    (MIK-8217): a prefix missing there lets a PR on that path merge ungraded.
+    A GitHub `*` does not cross `/`, so a bare stem needs both its file and
+    its directory form."""
+
+    def test_the_pull_request_paths_cover_every_cov3_prefix(self) -> None:
+        text = (HERE.parent.parent / ".github/workflows/coverage-probe.yml").read_text()
+        block = text.split("  pull_request:", 1)[1].split("  workflow_dispatch:", 1)[0]
+        listed = {line.strip()[3:-1] for line in block.splitlines()
+                  if line.strip().startswith('- "src/')}
+        wanted = set()
+        for prefix in rows.PREFIXES:
+            if prefix.endswith("/"):
+                wanted.add(prefix + "**")
+            elif prefix.endswith(".rs"):
+                wanted.add(prefix)
+            else:
+                wanted |= {prefix + ".rs", prefix + "/**"}
+        self.assertEqual(listed, wanted)
+
+
 if __name__ == "__main__":
     sys.exit(0 if unittest.main(exit=False).result.wasSuccessful() else 1)

@@ -1,14 +1,45 @@
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-# The C5 / MIK-7324.COV.3 grade run. Kept here, outside .github/workflows, so it never runs
-# on the release line: scripts/release/coverage_grade.sh commits it onto a throwaway/coverage-*
-# branch with the revision under grade. The contract is docs/release/v4.0.0-critical-path-coverage.md
-# ("The command", "What closing C5 requires"): no --ignore-run-fail, a clean tree, the pinned task SDK.
+# The C5 / MIK-7324.COV.3 grade run (MIK-8217). It grades every push to the release line on
+# Linux and Windows, and pull requests that touch a COV.3 path, an inventory or a grader on
+# Linux only. scripts/release/coverage_grade.sh also pushes it onto a throwaway/coverage-*
+# branch with any revision under grade. The contract is docs/release/v4.0.0-critical-path-coverage.md
+# ("The command", "In CI", "What closing C5 requires"): no --ignore-run-fail, the pinned task SDK.
 name: Coverage probe
 
 on:
   push:
-    branches: ["throwaway/coverage-*"]
+    branches: ["throwaway/coverage-*", docs/ranking-1-release-line]
+  pull_request:
+    branches: [docs/ranking-1-release-line]
+    # The COV.3 prefixes of scripts/release/check_inventory_rows.py (PREFIXES), plus what
+    # the grade reads. test_check_inventory_rows.py keeps the two lists in step.
+    paths:
+      - "src/gateway/server/**"
+      - "src/oauth/**"
+      - "src/transport/http/**"
+      - "src/gateway/router/**"
+      - "src/transport/stdio.rs"
+      - "src/transport/command_split.rs"
+      - "src/gateway/input_bridge.rs"
+      - "src/gateway/task_service/**"
+      - "src/gateway/meta_mcp/task_confirmation.rs"
+      - "src/gateway/meta_mcp/task_confirmation/**"
+      - "src/personal_accounts/**"
+      - "src/config/account_bindings.rs"
+      - "src/identity_propagation/**"
+      - "docs/release/v4.0.0-critical-functions.tsv"
+      - "docs/release/v4.0.0-unenforcing-functions.tsv"
+      - "scripts/release/critical_function_coverage.py"
+      - "scripts/release/critical_path_coverage.py"
+      - ".github/workflows/coverage-probe.yml"
+  workflow_dispatch:
+
+# A newer push to a pull request supersedes its older grade; release-line runs all finish,
+# each grading its own commit.
+concurrency:
+  group: coverage-probe-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -69,6 +100,9 @@ jobs:
   windows-grade:
     name: llvm-cov Windows, grade
     runs-on: windows-2025
+    # Pull requests grade Linux only (runner budget); every release-line push grades
+    # Windows too, so a Windows-only shortfall is caught at most one merge later.
+    if: github.event_name != 'pull_request'
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -97,3 +131,47 @@ jobs:
           path: |
             windows.lcov
             windows-run.log
+
+  grade:
+    name: Critical coverage grade
+    needs: [linux-grade, windows-grade]
+    # Both platform runs must have passed every test; on a pull request the Windows run
+    # is skipped by design and the grade covers Linux alone.
+    if: >-
+      !cancelled() && needs.linux-grade.result == 'success' &&
+      (needs.windows-grade.result == 'success' ||
+      (github.event_name == 'pull_request' && needs.windows-grade.result == 'skipped'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: art
+      - name: Grade the Critical rows and the paths
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            set -- --scope linux-only --lcov art/coverage-linux/linux.lcov
+          else
+            set -- --lcov art/coverage-linux/linux.lcov --lcov art/coverage-windows/windows.lcov
+          fi
+          status=0
+          python3 scripts/release/critical_function_coverage.py "$@" > functions.txt || status=1
+          python3 scripts/release/critical_path_coverage.py art/coverage-linux/cov.json > paths.txt || status=1
+          {
+            echo "## Critical coverage grade ($EVENT): $([ $status = 0 ] && echo PASS || echo FAIL)"
+            echo '```'
+            grep -v '^ok' functions.txt || true
+            cat paths.txt
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: coverage-grade
+          path: |
+            functions.txt
+            paths.txt
