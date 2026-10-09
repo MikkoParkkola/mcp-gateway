@@ -259,6 +259,32 @@ mod tests {
         assert!((global - 0.25).abs() < 1e-9, "the next boot reads {global}");
     }
 
+    /// MIK-8202: a save on a clock before 1970 leaves the last valid snapshot,
+    /// so the next boot on the real clock keeps the day's spend.
+    #[cfg(feature = "cost-governance")]
+    #[test]
+    fn a_clock_before_the_epoch_keeps_the_last_valid_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let enforcer = enforcer_with_spend(0.25);
+        save_costs(&enforcer, dir.path());
+        let global = restored_global(dir.path());
+        assert!(
+            (global - 0.25).abs() < 1e-9,
+            "control: the next boot reads {global}, not the saved 0.25"
+        );
+
+        enforcer.record_spend("tool", Some("key"), 0.15);
+        {
+            let _clock = crate::clock::test_clock::before_epoch();
+            save_costs(&enforcer, dir.path());
+        }
+        let global = restored_global(dir.path());
+        assert!(
+            (global - 0.25).abs() < 1e-9,
+            "an unreadable clock overwrote the last valid snapshot: the next boot reads {global}"
+        );
+    }
+
     /// The saver writes on its interval and ends when shutdown is sent.
     #[cfg(feature = "cost-governance")]
     #[tokio::test]

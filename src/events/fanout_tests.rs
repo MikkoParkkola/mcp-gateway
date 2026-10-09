@@ -491,3 +491,71 @@ async fn an_operator_record_asks_no_backend_grant() {
     assert_eq!(due.ready.len(), 1);
     assert!(due.ready[0].owner_scoped, "no backend grant is asked");
 }
+
+/// MIK-8202: a clock before 1970 delivers nothing to a subscription whose lease
+/// the real clock still holds live.
+#[tokio::test]
+async fn a_clock_before_the_epoch_delivers_nothing_on_a_live_lease() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    hub.register_source(Arc::new(PerPrincipal));
+    let name = "watch.cap.changed";
+    // The fixture's lease ends one hour from now.
+    let mut row = subscription(name);
+    row.credential_kind = Some(crate::security::audit::CredentialKind::None);
+    hub.store
+        .admit(
+            row,
+            true,
+            super::super::store::Caps {
+                per_principal: 10,
+                global: 10,
+            },
+            chrono::Duration::zero(),
+            Utc::now(),
+            super::super::tail_policy(&config),
+        )
+        .expect("io")
+        .expect("admitted");
+    let services = Services {
+        live: Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
+        #[cfg(feature = "firewall")]
+        firewall: None,
+        audit: None,
+        provenance: None,
+        #[cfg(feature = "cost-governance")]
+        budget: None,
+        credentials: super::super::LiveCredentials::default(),
+    };
+    let event = |upstream_id: &str| SourceEvent {
+        kind: SourceKind::RestWatch,
+        name: name.into(),
+        backend: "cap".into(),
+        scope: Visibility::Owner,
+        owner: None,
+        upstream_id: upstream_id.into(),
+        occurred_at: Utc::now(),
+        data: json!({}),
+        lifecycle_key: None,
+    };
+    let outbox = |dir: &std::path::Path| {
+        std::fs::read_dir(dir.join("outbox")).map_or(0, |entries| entries.flatten().count())
+    };
+    hub.fan_out(&services, &event("t1")).await;
+    assert_eq!(
+        outbox(dir.path()),
+        1,
+        "control: a live lease receives the event on the real clock"
+    );
+
+    let _clock = crate::clock::test_clock::before_epoch();
+    hub.fan_out(&services, &event("t2")).await;
+    assert_eq!(
+        outbox(dir.path()),
+        1,
+        "an unreadable clock delivered an event on a lease it cannot date"
+    );
+}

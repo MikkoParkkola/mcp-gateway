@@ -560,4 +560,24 @@ mod tests {
         // THEN: is_expired returns false
         assert!(!token.is_expired());
     }
+
+    /// MIK-8202: a clock that reads before 1970 refuses a bearer token the
+    /// real clock still admits; it never reads an expiry as still ahead.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_clock_before_the_epoch_refuses_a_live_bearer_token() {
+        let store = InMemoryTokenStore::new();
+        let token = make_token("sub", "alice@company.com", 3600);
+        let bearer = token.token.clone();
+        store.insert(token).await;
+        assert!(
+            store.get(&bearer).await.is_some(),
+            "control: live on the real clock"
+        );
+
+        let _clock = crate::clock::test_clock::before_epoch();
+        assert!(
+            store.get(&bearer).await.is_none(),
+            "an unreadable clock admitted a bearer token"
+        );
+    }
 }

@@ -634,3 +634,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
         release_unless_carried(&self.continuation, sealed, delivered).await;
     }
 }
+
+#[cfg(test)]
+#[path = "continuation_clock_tests.rs"]
+mod clock_before_epoch_tests;

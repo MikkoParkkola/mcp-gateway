@@ -683,4 +683,28 @@ mod tests {
             "the refusal must be an audience failure, not an incidental one: {err:?}"
         );
     }
+
+    /// MIK-8202: a clock before 1970 refuses a live agent token, and never panics.
+    #[test]
+    fn a_clock_before_the_epoch_refuses_a_live_agent_token() {
+        let reg = AgentRegistry::new();
+        reg.register(make_hs256_agent("agent-1", "my-secret"));
+        let token = hs256_token("agent-1", "my-secret", 3600);
+        assert!(
+            validate_agent_token(&token, &reg).is_ok(),
+            "control: a token expiring in an hour validates on the real clock"
+        );
+
+        let _clock = crate::clock::test_clock::before_epoch();
+        let judged = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            validate_agent_token(&token, &reg)
+        }));
+        let Ok(judged) = judged else {
+            panic!("an unreadable clock panicked the token decoder");
+        };
+        assert!(
+            judged.is_err(),
+            "an unreadable clock admitted an agent token"
+        );
+    }
 }
