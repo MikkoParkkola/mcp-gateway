@@ -12,6 +12,10 @@
 //! no callsite is ever cached off.
 
 /// Install the global TRACE registry once; later calls do nothing.
+///
+/// It does not install the `log` crate bridge: a capture that must see records
+/// a dependency writes through `log` (tungstenite, for one) still calls
+/// `tracing_log::LogTracer::init()` itself.
 pub(crate) fn keep_interest_open() {
     use tracing_subscriber::prelude::*;
     static INTEREST: std::sync::Once = std::sync::Once::new();

@@ -254,6 +254,9 @@ mod diagnostics {
         // Keep callsite interest live across tests that log without a scoped
         // subscriber (see `security::firewall::response_tests::capture`).
         crate::test_log_capture::keep_interest_open();
+        // tungstenite logs through `log`; bridge it as production does. The
+        // keeper does not install this bridge.
+        let _ = tracing_log::LogTracer::init();
         let buffer = Buffer::default();
         let writer = buffer.clone();
         let subscriber = tracing_subscriber::registry()
