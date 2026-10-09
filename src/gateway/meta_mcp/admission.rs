@@ -269,6 +269,15 @@ pub(crate) fn execution_arguments(arguments: &mut Value) -> bool {
     full
 }
 
+/// [`execution_arguments`] on a possibly borrowed value: it is copied only
+/// when there is a control key to strip (MIK-8014).
+fn execution_arguments_cow(arguments: &mut std::borrow::Cow<'_, Value>) -> bool {
+    if arguments.get("_full").is_some() || arguments.get("_claim").is_some() {
+        return execution_arguments(arguments.to_mut());
+    }
+    false
+}
+
 impl MetaMcp {
     pub(crate) fn read_only_target(&self, server: &str, tool: &str) -> bool {
         if let Some(context) = self.reload_context() {
@@ -433,7 +442,7 @@ impl MetaMcp {
         tool_name: &'v str,
         arguments: &'v Value,
         session: Option<&str>,
-    ) -> Result<Option<(&'v str, &'v str, Value)>> {
+    ) -> Result<Option<(&'v str, &'v str, std::borrow::Cow<'v, Value>)>> {
         let target = if tool_name == "gateway_invoke" {
             let server =
                 crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server")?;
@@ -441,11 +450,11 @@ impl MetaMcp {
             Some((
                 server,
                 tool,
-                crate::gateway::meta_mcp_helpers::parse_tool_arguments(arguments)?,
+                crate::gateway::meta_mcp_helpers::parse_tool_arguments_cow(arguments)?,
             ))
         } else {
             self.surfaced_tool_server(tool_name)
-                .map(|server| (server, tool_name, arguments.clone()))
+                .map(|server| (server, tool_name, std::borrow::Cow::Borrowed(arguments)))
         };
         if let Some((server, tool, operation_arguments)) = &target {
             let (server, tool) = (*server, *tool);
@@ -540,7 +549,7 @@ impl MetaMcp {
         if let Some((server, tool, mut operation_arguments)) =
             self.check_target_policy(caller, tool_name, arguments, session)?
         {
-            let full = execution_arguments(&mut operation_arguments);
+            let full = execution_arguments_cow(&mut operation_arguments);
             return self.admit_sync(
                 is_modern,
                 verified_identity,
