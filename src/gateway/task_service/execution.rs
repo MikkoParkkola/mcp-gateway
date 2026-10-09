@@ -482,7 +482,10 @@ impl TaskExecutor {
         let worker = crate::gateway::meta_mcp::invoke::relay::collecting(worker);
         // MIK-8176: and owns the slots its mints take, through the durable
         // write of what it settles.
-        let worker = crate::gateway::meta_mcp::sealed_hold::scoped(worker);
+        let worker = crate::gateway::meta_mcp::sealed_hold::scoped(
+            crate::gateway::meta_mcp::sealed_hold::HoldPolicy::CountOnly,
+            worker,
+        );
         tokio::spawn(self.shutdown.clone().run_until_cancelled_owned(worker));
     }
 

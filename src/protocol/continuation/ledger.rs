@@ -306,6 +306,14 @@ impl InFlight {
         removed
     }
 
+    /// [`Self::complete`] without waiting: `None` when the table is locked, so
+    /// a caller that cannot await (a `Drop`) can fall back to the async path.
+    pub(crate) fn try_complete(&self, key: &str) -> Option<bool> {
+        let removed = self.held.try_lock().ok()?.remove(key).is_some();
+        self.steps.lock().remove(key);
+        Some(removed)
+    }
+
     /// Remember the chain step paused on its exchange (MIK-8168): its request
     /// digest, which binds the backend instance that asked. Synchronous
     /// because the chain driver seals a stop synchronously; the entry goes

@@ -137,6 +137,16 @@ pub(crate) fn to_http(
         .map(|a| a.record_fields(frame.key.as_deref()))
         .filter(|fields| !fields.is_empty());
     let held_id = pending.as_ref().map(|_| frame.answer_id());
+    // MIK-8176: the holds this answer carries ride on the response until its
+    // reply hands them off; a replacer's new response leaves them behind.
+    let carried = match &frame.payload {
+        Payload::Response(answer) => answer
+            .result
+            .as_ref()
+            .map(crate::gateway::meta_mcp::sealed_hold::carried),
+        Payload::Answer(answer) => Some(crate::gateway::meta_mcp::sealed_hold::carried(answer)),
+        _ => None,
+    };
     let mut response = match frame.ticket {
         None => match frame.payload {
             Payload::Response(answer) => axum::Json(answer).into_response(),
@@ -148,6 +158,9 @@ pub(crate) fn to_http(
     };
     *response.status_mut() = status;
     crate::gateway::router::helpers::attach_session_header(response.headers_mut(), session_id);
+    if let Some(carried) = carried {
+        response.extensions_mut().insert(carried);
+    }
     if let Some(fields) = pending {
         response.extensions_mut().insert(PendingRecord(fields));
         if let Some(id) = held_id {
