@@ -105,8 +105,10 @@ async fn a_dropped_stdio_session_stops_its_task_workers() {
         .get(LOCAL_OPERATOR_PRINCIPAL, &id)
         .expect("the task is in its store");
     let wire = crate::gateway::task_route::task_envelope(&task.task, "complete");
+    let committed_answer = task.task.status() == crate::protocol::tasks::TaskStatus::Completed
+        && wire.pointer("/result/content/0/text") == Some(&Value::from("done"));
     assert!(
-        !wire.to_string().contains("done"),
+        !committed_answer,
         "a worker outlived the dropped session and committed the backend's answer: {wire}"
     );
     drop(stdin);

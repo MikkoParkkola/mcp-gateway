@@ -175,12 +175,13 @@ impl TaskService {
         self.move_seal(self.store.skipped_records().sealed);
     }
 
-    /// The rows the store skipped when it opened (MIK-8023).
-    /// Admit no further store mutation (see [`super::store::TaskStore::stop_serving`]).
+    /// Admit no further store mutation (MIK-7839.CANCEL.3); see
+    /// [`super::store::TaskStore::stop_serving`].
     pub(crate) fn stop_serving(&self) {
         self.store.stop_serving();
     }
 
+    /// The rows the store skipped when it opened (MIK-8023).
     pub(crate) fn skipped_records(&self) -> super::store::SkippedRecords {
         self.store.skipped_records()
     }

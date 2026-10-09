@@ -50,7 +50,8 @@ impl StdioTasks {
     }
 }
 
-/// See [`StdioTasks::stop_on_drop`].
+/// See [`StdioTasks::stop_on_drop`]. Unbound, it would seal the session at once.
+#[must_use = "the guard stops the task workers when dropped; bind it for the whole session"]
 pub(super) struct TasksDropGuard {
     executor: Arc<TaskExecutor>,
     service: Arc<TaskService>,
