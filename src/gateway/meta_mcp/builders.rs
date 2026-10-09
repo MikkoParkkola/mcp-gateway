@@ -83,7 +83,7 @@ impl MetaMcp {
     ///
     /// Defaults to [`crate::projection::ProjectionMode::Off`]. Set `on` to
     /// project whenever a capability declares a spec, or `experimental` to run
-    /// the sticky-per-session A/B split.
+    /// the A/B split, sticky per caller key.
     #[must_use]
     pub fn with_projection_mode(mut self, mode: crate::projection::ProjectionMode) -> Self {
         self.projection_mode = mode;

@@ -44,7 +44,7 @@ pub struct ProjectionDecision {
     pub arm: &'static str,
 }
 
-/// Deterministic session-bucketing hash: FNV-1a accumulation followed by the
+/// Deterministic bucketing hash of the experiment key: FNV-1a accumulation followed by the
 /// `MurmurHash3` `fmix64` finalizer.
 ///
 /// Stable across process restarts (no random seed, unlike
@@ -53,8 +53,8 @@ pub struct ProjectionDecision {
 /// bit reduces to input byte-parity (the prime is odd), and even its high bit
 /// skews badly (empirically ~80/20 on `mcp-session-N`-style ids). `fmix64`
 /// diffuses every input bit across all 64 output bits, so the low-bit split in
-/// [`projection_decision`] is an unbiased ~50/50 for arbitrary session ids.
-fn session_hash(bytes: &[u8]) -> u64 {
+/// [`projection_decision`] is an unbiased ~50/50 for arbitrary keys.
+fn key_hash(bytes: &[u8]) -> u64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
     let mut h = OFFSET;
@@ -79,8 +79,13 @@ fn session_hash(bytes: &[u8]) -> u64 {
 /// - [`ProjectionMode::Experimental`] → sticky 50/50 split by experiment key
 ///   (`MetaMcpCallerContext::experiment_key`); a missing key is assigned to
 ///   `control` (no projection), so a keyless call never silently changes shape.
+///
+/// `experiment_key` is the caller key, never a session id (MIK-7997).
 #[must_use]
-pub fn projection_decision(mode: ProjectionMode, session_id: Option<&str>) -> ProjectionDecision {
+pub fn projection_decision(
+    mode: ProjectionMode,
+    experiment_key: Option<&str>,
+) -> ProjectionDecision {
     match mode {
         ProjectionMode::Off => ProjectionDecision {
             project: false,
@@ -90,9 +95,9 @@ pub fn projection_decision(mode: ProjectionMode, session_id: Option<&str>) -> Pr
             project: true,
             arm: "on",
         },
-        // Split on the low bit of the fully-avalanched hash (see `session_hash`).
-        ProjectionMode::Experimental => match session_id {
-            Some(sid) if (session_hash(sid.as_bytes()) & 1) == 0 => ProjectionDecision {
+        // Split on the low bit of the fully-avalanched hash (see `key_hash`).
+        ProjectionMode::Experimental => match experiment_key {
+            Some(key) if (key_hash(key.as_bytes()) & 1) == 0 => ProjectionDecision {
                 project: true,
                 arm: "treatment",
             },
@@ -112,12 +117,13 @@ pub fn projection_decision(mode: ProjectionMode, session_id: Option<&str>) -> Pr
 /// key is otherwise just `server:tool:hash(args)`, so one arm's shape would be
 /// served to the other. This returns `"#arm=treatment"` / `"#arm=control"` to
 /// append to those keys, isolating arms while still deduping within an arm.
-/// `off` / `on` return an empty string, leaving their keys byte-identical.
+/// `off` / `on` return an empty string, leaving their keys byte-identical. The
+/// arm is the one [`projection_decision`] gives the same experiment key.
 #[must_use]
-pub fn projection_key_suffix(mode: ProjectionMode, session_id: Option<&str>) -> String {
+pub fn projection_key_suffix(mode: ProjectionMode, experiment_key: Option<&str>) -> String {
     match mode {
         ProjectionMode::Experimental => {
-            format!("#arm={}", projection_decision(mode, session_id).arm)
+            format!("#arm={}", projection_decision(mode, experiment_key).arm)
         }
         ProjectionMode::Off | ProjectionMode::On => String::new(),
     }
@@ -194,7 +200,7 @@ mod tests {
 
     #[test]
     fn experimental_is_sticky_per_session() {
-        // Same session id -> same arm, every time (deterministic hash).
+        // Same key -> same arm, every time (deterministic hash).
         let first = projection_decision(ProjectionMode::Experimental, Some("session-abc"));
         for _ in 0..100 {
             let again = projection_decision(ProjectionMode::Experimental, Some("session-abc"));
@@ -228,7 +234,7 @@ mod tests {
 
     #[test]
     fn experimental_without_session_is_control() {
-        // No session id -> conservative control: never silently changes shape.
+        // No key -> conservative control: never silently changes shape.
         let d = projection_decision(ProjectionMode::Experimental, None);
         assert!(!d.project);
         assert_eq!(d.arm, "control");
@@ -323,7 +329,7 @@ mod tests {
 
     #[test]
     fn ab_classification_treatment_projects_unless_full() {
-        // Find a treatment-arm session id.
+        // Find a treatment-arm key.
         let sid = (0..1000)
             .map(|i| format!("t{i}"))
             .find(|s| projection_decision(ProjectionMode::Experimental, Some(s)).arm == "treatment")
