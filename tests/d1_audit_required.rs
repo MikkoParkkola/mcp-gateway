@@ -190,7 +190,7 @@ fn the_environment_sets_the_audit_switch_both_ways() {
     let config = |auth: &str, value: &str| {
         let dir = tempfile::tempdir().unwrap();
         let env = dir.path().join("audit.env");
-        mcp_gateway::gateway::test_helpers::write_owner_only(&env, &format!("{env_var}={value}\n"))
+        mcp_gateway::gateway::test_helpers::write_owner_only(&env, format!("{env_var}={value}\n"))
             .expect("write env file");
         let body = format!("env_files:\n  - {}\n{auth}", env.display());
         let path = write_config(&dir, &body);
