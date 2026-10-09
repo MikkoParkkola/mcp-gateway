@@ -568,6 +568,8 @@ async fn row_10b_an_escalation_clears_the_count_it_acted_on() {
     );
 
     backend.set_transport_for_test(Arc::clone(&mock) as Arc<dyn Transport>);
+    // Re-wired: the restart observable starts again from zero too.
+    backend.rebuilds_attempted.store(0, Ordering::SeqCst);
     for _ in 0..2 {
         let _ = backend.health_probe(Duration::from_secs(5)).await;
     }
