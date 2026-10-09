@@ -1,0 +1,13 @@
+diff --git a/src/config_persistence_eol.rs b/src/config_persistence_eol.rs
+index f6f45614e..c34bf42f4 100644
+--- a/src/config_persistence_eol.rs
++++ b/src/config_persistence_eol.rs
+@@ -50,7 +50,7 @@ pub(super) fn render(original: &str, out: &[Line]) -> String {
+             break;
+         }
+         let ending = if ending.is_empty() {
+-            before.unwrap_or(after[at])
++            after[at]
+         } else {
+             ending
+         };
