@@ -306,11 +306,15 @@ impl InFlight {
         removed
     }
 
-    /// [`Self::complete`] without waiting: `None` when the table is locked, so
-    /// a caller that cannot await (a `Drop`) can fall back to the async path.
+    /// [`Self::complete`] without waiting or blocking: `None` when the table is
+    /// locked, so a caller that cannot await (a `Drop`) can fall back to the
+    /// async path. A busy step map keeps the key's step entry, which the next
+    /// reclaim drops with every entry whose hold is gone.
     pub(crate) fn try_complete(&self, key: &str) -> Option<bool> {
         let removed = self.held.try_lock().ok()?.remove(key).is_some();
-        self.steps.lock().remove(key);
+        if let Some(mut steps) = self.steps.try_lock() {
+            steps.remove(key);
+        }
         Some(removed)
     }
 

@@ -144,7 +144,10 @@ pub(crate) fn to_http(
             .result
             .as_ref()
             .map(crate::gateway::meta_mcp::sealed_hold::carried),
-        Payload::Answer(answer) => Some(crate::gateway::meta_mcp::sealed_hold::carried(answer)),
+        // The direct route's whole JSON-RPC document: judge its `result`.
+        Payload::Answer(answer) => answer
+            .get("result")
+            .map(crate::gateway::meta_mcp::sealed_hold::carried),
         _ => None,
     };
     let mut response = match frame.ticket {

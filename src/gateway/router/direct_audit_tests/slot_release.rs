@@ -39,6 +39,12 @@ fn question(tenant: &str) -> Value {
 /// the verified subject `alice`, reading `tenant`. Returns the body as text
 /// (JSON or SSE).
 async fn call(fx: &Fixture, arm: Arm, id: u64, tenant: &str) -> String {
+    call_with(fx, arm, id, tenant, &json!({})).await
+}
+
+/// [`call`] with `extra` merged into the call's params (a retry's
+/// `requestState` and `inputResponses`).
+async fn call_with(fx: &Fixture, arm: Arm, id: u64, tenant: &str, extra: &Value) -> String {
     let meta = json!({
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
         "io.modelcontextprotocol/clientCapabilities": {"elicitation": {}},
@@ -58,6 +64,10 @@ async fn call(fx: &Fixture, arm: Arm, id: u64, tenant: &str) -> String {
             json!({"name": "t", "_meta": meta, "arguments": {"customer_id": tenant}}),
         ),
     };
+    let mut params = params;
+    if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
+        params.extend(extra.clone());
+    }
     let accept = if arm == Arm::MetaSse {
         "application/json, text/event-stream"
     } else {
@@ -211,6 +221,53 @@ async fn a_question_withheld_after_finalization_gives_its_slot_back() {
                     failures.push(failure);
                 }
             }
+        }
+    }
+    report(&failures);
+}
+
+/// The sealed state a delivered JSON answer carries for the retry.
+fn state_of(body: &str) -> Option<String> {
+    let reply: Value = serde_json::from_str(body).ok()?;
+    reply["result"]["requestState"].as_str().map(str::to_owned)
+}
+
+/// The control the design asks for (r5b O): a delivered question is not only
+/// still held, it is redeemable. The retry is accepted (the backend asks
+/// again, so one slot is held after it, the new one), and the spent envelope
+/// is refused on a second retry.
+#[tokio::test]
+async fn a_delivered_question_is_redeemed_once() {
+    let mut failures = Vec::new();
+    for arm in [Arm::MetaJson, Arm::Direct] {
+        let fx = fixture(Setup {
+            reply: Some(question("t1")),
+            tenant_limit: Some(0),
+            ..Setup::default()
+        })
+        .await;
+        let asked = call(&fx, arm, 5, "t1").await;
+        let Some(state) = state_of(&asked) else {
+            failures.push(format!("{arm:?}: no sealed state to retry with: {asked}"));
+            continue;
+        };
+        let answers = json!({"k1": {"action": "accept", "content": {"account": "work"}}});
+        let retry = json!({"requestState": state, "inputResponses": answers});
+        let done = call_with(&fx, arm, 6, "t1", &retry).await;
+        if done.contains("\"error\"") {
+            failures.push(format!("{arm:?}: the retry was refused: {done}"));
+        }
+        if fx.calls.load(Ordering::SeqCst) != 2 {
+            failures.push(format!("{arm:?}: the retry was not dispatched: {done}"));
+        }
+        if held(&fx).await != 1 {
+            failures.push(format!("{arm:?}: want the retry's own slot only: {done}"));
+        }
+        let again = call_with(&fx, arm, 7, "t1", &retry).await;
+        if !again.contains("\"error\"") {
+            failures.push(format!(
+                "{arm:?}: a spent envelope was redeemed twice: {again}"
+            ));
         }
     }
     report(&failures);

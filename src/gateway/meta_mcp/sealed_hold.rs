@@ -316,4 +316,53 @@ mod tests {
         })
         .await;
     }
+
+    /// The bridge: holds an answer carries outlive the scope that minted them
+    /// (the reply is finalized after it ends). Not handed off (finalization
+    /// cancelled or replaced) they give the slot back; handed off, they keep it.
+    #[tokio::test]
+    async fn carried_holds_outlive_their_scope_until_handed_off_or_dropped() {
+        let continuation = Arc::new(ContinuationState::new());
+        let (sent, lost) = (slot(&continuation).await, slot(&continuation).await);
+        let (delivered, cancelled) = scoped(HoldPolicy::Release, async {
+            register(&continuation, &sent, "env-sent");
+            register(&continuation, &lost, "env-lost");
+            (
+                carried(&json!({"requestState": "env-sent"})),
+                carried(&json!({"requestState": "env-lost"})),
+            )
+        })
+        .await;
+        assert_eq!(
+            held(&continuation).await,
+            2,
+            "carried holds survive the scope"
+        );
+        drop(cancelled);
+        assert_eq!(held(&continuation).await, 1, "a dropped carrier releases");
+        hand_off(&delivered);
+        drop(delivered);
+        assert_eq!(
+            held(&continuation).await,
+            1,
+            "a handed-off carrier keeps its slot"
+        );
+    }
+
+    /// A `Release` request dropped mid-flight gives back every real slot it
+    /// registered.
+    #[tokio::test]
+    async fn a_cancelled_release_request_gives_its_slots_back() {
+        let continuation = Arc::new(ContinuationState::new());
+        let (one, two) = (slot(&continuation).await, slot(&continuation).await);
+        let mut request = Box::pin(scoped(HoldPolicy::Release, async {
+            register(&continuation, &one, "env-1");
+            register(&continuation, &two, "env-2");
+            std::future::pending::<()>().await;
+        }));
+        assert!((&mut request).now_or_never().is_none());
+        assert_eq!(held(&continuation).await, 2);
+        drop(request);
+        assert_eq!(held(&continuation).await, 0);
+    }
 }
