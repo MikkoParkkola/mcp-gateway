@@ -1,0 +1,16 @@
+diff --git a/src/debug_trust_roots.rs b/src/debug_trust_roots.rs
+index 95b6c424c..10ec8abe8 100644
+--- a/src/debug_trust_roots.rs
++++ b/src/debug_trust_roots.rs
+@@ -60,11 +60,6 @@ fn with_roots_from(
+         .unwrap_or_else(|error| panic!("{VAR}: cannot read {}: {error}", path.display()));
+     let roots = reqwest::Certificate::from_pem_bundle(&pem)
+         .unwrap_or_else(|error| panic!("{VAR}: {} is not PEM: {error}", path.display()));
+-    assert!(
+-        !roots.is_empty(),
+-        "{VAR}: {} holds no certificate",
+-        path.display()
+-    );
+     for root in roots {
+         builder = builder.add_root_certificate(root);
+     }
