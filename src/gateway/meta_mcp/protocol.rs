@@ -335,16 +335,15 @@ impl MetaMcp {
             if self.meta_route_isolation_refused(&backend) {
                 continue;
             }
-            // The 2026-07-28 revision removed this method. Its peers are
-            // skipped rather than refused: the caller asked the gateway to set
-            // its own level, which it did, and one backend that cannot be told
-            // is not a failed request.
-            if super::era_removed_method(&backend, "logging/setLevel").await {
-                continue;
-            }
+            // The 2026-07-28 revision removed this method, and the backend
+            // refuses it before the wire for a peer that speaks it (MIK-8186:
+            // judged after that slot's own start). Such peers are skipped
+            // quietly: the caller asked the gateway to set its own level, which
+            // it did, and one backend that cannot be told is not a failure.
             if let Err(e) = backend
                 .request("logging/setLevel", Some(forward_params.clone()))
                 .await
+                && crate::backend::removed_method_refusal_message(&e).is_none()
             {
                 warn!(
                     backend = %backend.name,
