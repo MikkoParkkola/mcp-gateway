@@ -15,17 +15,13 @@ use std::time::{Duration, Instant};
 const BOUND: Duration = Duration::from_secs(20);
 
 fn serve(root: &Path, clock: Option<&str>) -> (Child, std::path::PathBuf) {
-    std::fs::write(root.join("gateway.yaml"), "server:\n  host: 127.0.0.1\n").expect("config");
-    // The gateway refuses a config file other users can read.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(
-            root.join("gateway.yaml"),
-            std::fs::Permissions::from_mode(0o600),
-        )
-        .expect("config mode");
-    }
+    // The gateway refuses a config file other users can read: owner-only on
+    // Unix, a protected owner-only ACL on Windows.
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        root.join("gateway.yaml"),
+        "server:\n  host: 127.0.0.1\n",
+    )
+    .expect("config");
     let log = root.join("serve.log");
     let out = std::fs::File::create(&log).expect("serve log");
     let err = out.try_clone().expect("log handle");
