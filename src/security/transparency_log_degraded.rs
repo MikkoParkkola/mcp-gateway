@@ -188,6 +188,10 @@ impl TransparencyLogger {
         // F20: a stalled fail-closed log refuses at once, with no probe and
         // no thread; a best-effort one keeps serving, as D1 left it.
         if self.is_stalled() {
+            #[cfg(test)]
+            self.bound
+                .stall_answers
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             return if fail_closed {
                 Err(crate::Error::AuditUnavailable)
             } else {
@@ -214,9 +218,9 @@ impl TransparencyLogger {
 /// Run `attempt` until it succeeds, for at most [`HEAL_BOUND_FOR_TEST`]; its
 /// value. After a heal, the first probe can overrun [`AUDIT_PROBE_TIMEOUT`]
 /// on a loaded runner and answer "stalled" until its write lands, so one try
-/// proves nothing (MIK-8171). A failure is retried only while it is such a
-/// stall: `log` has counted no failed append since the first try. A write
-/// error fails at once, naming the answer, so the two are told apart.
+/// proves nothing (MIK-8171). A failure is retried only when that attempt
+/// timed out or was refused while stalled; a refusal with no stall behind it,
+/// or a counted failed append, fails at once, naming the answer.
 #[cfg(test)]
 pub(crate) async fn until_recovered<T, E, F, Fut>(log: &TransparencyLogger, mut attempt: F) -> T
 where
@@ -225,9 +229,19 @@ where
     Fut: std::future::Future<Output = Result<T, E>>,
 {
     let failures = log.append_failures();
+    let mut stalls = log.stall_answers_for_test();
     let deadline = tokio::time::Instant::now() + HEAL_BOUND_FOR_TEST;
     loop {
         let answer = attempt().await;
+        // Only a stall may be retried: this attempt timed out or was refused
+        // while stalled. A refusal with no stall behind it fails at once.
+        let stalled = log.stall_answers_for_test() > stalls;
+        stalls = log.stall_answers_for_test();
+        assert!(
+            answer.is_ok() || stalled,
+            "refused without a stall: {:?}",
+            answer.as_ref().err()
+        );
         // A stalled write that lands as a failure is counted here even when
         // a later attempt succeeds.
         assert_eq!(
