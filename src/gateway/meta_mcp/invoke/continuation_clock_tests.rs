@@ -3,13 +3,15 @@
 //! MIK-8202, minting: a clock that reads before 1970 mints no continuation;
 //! the real clock mints as today.
 
+use std::sync::Arc;
+
 use serde_json::json;
 
 use super::mint_continuation;
 use crate::protocol::continuation::ContinuationState;
 use crate::protocol::mrtr::PrincipalSource;
 
-async fn mint(state: &ContinuationState) -> Option<(String, String)> {
+async fn mint(state: &Arc<ContinuationState>) -> Option<(String, String)> {
     mint_continuation(
         state,
         PrincipalSource::Key("caller".into()),
@@ -24,7 +26,7 @@ async fn mint(state: &ContinuationState) -> Option<(String, String)> {
 /// MIK-8202: a clock before 1970 refuses to mint, never stamping `issued_at = 0`.
 #[tokio::test]
 async fn a_clock_before_the_epoch_mints_no_continuation() {
-    let state = ContinuationState::new();
+    let state = Arc::new(ContinuationState::new());
     assert!(
         mint(&state).await.is_some(),
         "control: the real clock mints a continuation"
