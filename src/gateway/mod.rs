@@ -11,6 +11,9 @@ mod differential;
 mod http_error;
 pub mod input_bridge;
 mod meta_mcp;
+/// Where the CLI runner notes a child it started for the call's invocation
+/// record (MIK-7926.FIX.2), without `meta_mcp` becoming crate-visible.
+pub(crate) use meta_mcp::invoke::audit::note_process;
 /// The per-delivery write record, shared with the response and idempotency
 /// caches that store it beside an answer (MIK-7991).
 pub(crate) use meta_mcp::invoke::gateway_writes;
@@ -19,6 +22,10 @@ pub(crate) use meta_mcp::invoke::gateway_writes;
 /// Same shape as `STDIO_CREDENTIAL_PRINCIPAL`. A second copy of those four
 /// lines is how the `Release` ordering gets dropped in a later edit.
 pub(crate) use meta_mcp::publish_identity_grants;
+/// The notes scope and the gateway, for the CLI process audit rows
+/// (MIK-7926.FIX.2), which run a real child in `capability::executor`.
+#[cfg(test)]
+pub(crate) use meta_mcp::{MetaMcp, invoke::audit::with_dispatch_scope};
 mod meta_mcp_helpers;
 mod meta_mcp_helpers_text;
 mod meta_mcp_search_schema;
