@@ -42,6 +42,7 @@ mod side_effect_markers;
 mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
 pub(crate) mod audit;
+mod chokepoint; // MIK-8137 b1: the dispatch chokepoint every send passes
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
 pub(crate) mod egress;
 mod nonce_settle; // MIK-8150: refund requests and dispatch marks of a signed execution
@@ -417,6 +418,15 @@ impl MetaMcp {
         };
         let reservation = idem_reservation.as_mut();
         self.refuse_relay(caller, session_id, (server, tool), &egress, reservation)?;
+        // MIK-8137 b1: the chokepoint, before anything marks this send.
+        let answers = outbound_retry.input_responses.as_ref();
+        let outbound = chokepoint::Outbound {
+            arguments: &arguments,
+            answers,
+        };
+        let source = chokepoint::Source::of_call(answers);
+        let permit = (self.chokepoint(caller, session_id, (server, tool), &outbound, source))
+            .inspect_err(|_| nonce_settle::give_back_unsent(caller, &mut idem_reservation))?;
         nonce_settle::mark_dispatched(caller);
         // Boxed: the dispatch future is the largest thing this frame ever
         // holds, and inlining it puts `invoke_tool_traced` over
@@ -451,6 +461,7 @@ impl MetaMcp {
             backend.clone(),
             &chain_slot,
             &admission,
+            Some(permit),
         ))
         .await;
         // The spend is settled; an unsettled reservation is given back here.

@@ -69,6 +69,10 @@ struct AuditEntry<'a> {
     /// of the id, sorted; absent when it names none.
     #[serde(skip_serializing_if = "Option::is_none")]
     tenants: Option<Vec<String>>,
+    /// MIK-8137 P1-route-b1: where a dispatch-chokepoint decision's send came
+    /// from (`invoke`, `step`, `retry`, `bridged`). Absent on every other row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<&'a str>,
 }
 
 impl AuditLogger {
@@ -160,6 +164,37 @@ impl AuditLogger {
             artifact_kind: None,
             policy_targets: None,
             tenants,
+            source: None,
+        };
+        self.write_entry(&entry);
+    }
+
+    /// A dispatch-chokepoint decision (Warn or Block): one `dispatch` row
+    /// naming the send's `source`. Arguments are hashed, never written.
+    pub(crate) fn log_dispatch(
+        &self,
+        correlation: &ResponseCorrelation<'_>,
+        args: &Value,
+        verdict: &FirewallVerdict,
+        source: &'static str,
+    ) {
+        let entry = AuditEntry {
+            timestamp: Utc::now().to_rfc3339(),
+            event: "dispatch",
+            session_id: session_fp(correlation.session_id),
+            server: correlation.external_server,
+            tool: correlation.external_tool,
+            caller: correlation.caller,
+            args_hash: Some(hash_argument(args)),
+            action: action_str(verdict.action),
+            findings_count: verdict.findings.len(),
+            findings: &verdict.findings,
+            anomaly_score: verdict.anomaly_score,
+            schema_version: None,
+            artifact_kind: None,
+            policy_targets: None,
+            tenants: None,
+            source: Some(source),
         };
         self.write_entry(&entry);
     }
@@ -214,6 +249,7 @@ impl AuditLogger {
             artifact_kind: Some(artifact),
             policy_targets: Some(targets),
             tenants: None,
+            source: None,
         };
         self.write_entry(&entry);
     }

@@ -426,10 +426,7 @@ fn target_from_invoke_arguments(arguments: &Value) -> Option<OwnedToolTarget> {
     Some(OwnedToolTarget {
         server: arguments.get("server")?.as_str()?.to_string(),
         tool: arguments.get("tool")?.as_str()?.to_string(),
-        arguments: arguments
-            .get("arguments")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({})),
+        arguments: crate::gateway::meta_mcp_helpers::judged_arguments(arguments).into_owned(),
     })
 }
 
@@ -443,10 +440,8 @@ fn targets_from_code_mode_arguments(arguments: &Value) -> Vec<OwnedToolTarget> {
                 Some(OwnedToolTarget {
                     server: server.to_string(),
                     tool: tool.to_string(),
-                    arguments: step
-                        .get("arguments")
-                        .cloned()
-                        .unwrap_or_else(|| serde_json::json!({})),
+                    arguments: crate::gateway::meta_mcp_helpers::judged_arguments(step)
+                        .into_owned(),
                 })
             })
             .collect();
@@ -462,10 +457,7 @@ fn targets_from_code_mode_arguments(arguments: &Value) -> Vec<OwnedToolTarget> {
     vec![OwnedToolTarget {
         server: server.to_string(),
         tool: tool.to_string(),
-        arguments: arguments
-            .get("arguments")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({})),
+        arguments: crate::gateway::meta_mcp_helpers::judged_arguments(arguments).into_owned(),
     }]
 }
 

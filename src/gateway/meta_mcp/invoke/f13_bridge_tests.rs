@@ -131,6 +131,7 @@ async fn f13_t9c_a_bridged_round_fills_as_its_own_caller() {
     )];
     let round = BridgeDispatcher {
         meta: &meta,
+        caller: &crate::gateway::meta_mcp::authz_tests::ctx(&crate::gateway::authz::AllowAll),
         server: "edits",
         tool: "edit",
         arguments: &arguments,
@@ -205,6 +206,7 @@ async fn f13_a3_a_bridged_fill_failure_is_not_admitted() {
     let arguments = json!({"edits": []});
     let round = BridgeDispatcher {
         meta: &meta,
+        caller: &crate::gateway::meta_mcp::authz_tests::ctx(&crate::gateway::authz::AllowAll),
         server: "edits",
         tool: "edit",
         arguments: &arguments,
@@ -264,6 +266,7 @@ async fn mik_1989_a_bridged_round_after_the_server_is_killed_is_not_admitted() {
     let arguments = json!({"edits": []});
     let round = BridgeDispatcher {
         meta: &meta,
+        caller: &crate::gateway::meta_mcp::authz_tests::ctx(&crate::gateway::authz::AllowAll),
         server: "edits",
         tool: "edit",
         arguments: &arguments,
@@ -325,6 +328,7 @@ async fn mik_1989_a_kill_during_the_schema_check_stops_the_round() {
     let arguments = json!({"edits": []});
     let round = BridgeDispatcher {
         meta: &meta,
+        caller: &crate::gateway::meta_mcp::authz_tests::ctx(&crate::gateway::authz::AllowAll),
         server: "edits",
         tool: "edit",
         arguments: &arguments,
@@ -393,6 +397,7 @@ fn the_challenge_gate_scans_a_prompt_as_it_is_delivered() {
     let arguments = json!({});
     let round = BridgeDispatcher {
         meta: &meta,
+        caller: &crate::gateway::meta_mcp::authz_tests::ctx(&crate::gateway::authz::AllowAll),
         server: "origin-backend",
         tool: "ask_user",
         arguments: &arguments,
