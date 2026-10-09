@@ -324,10 +324,7 @@ async fn follow_upstream_job(
     cancel_rx: &mut watch::Receiver<bool>,
 ) {
     let (job, handle, relay) = dispatched;
-    let Some(captured) = capture_or_claim(executor, (principal, id, revision), &job, &handle).await
-    else {
-        return;
-    };
+    let captured = capture_handle(executor, (principal, id, revision), &job, &handle).await;
 
     let Some(adapter) = executor.recovery() else {
         return;
@@ -347,7 +344,8 @@ async fn follow_upstream_job(
     let followed = tokio::select! {
         biased;
         _ = cancel_rx.changed() => {
-            // Offered in case a capture refused for another reason left the claim untaken.
+            // The capture-side sender: a capture refused (the row cancelled
+            // meanwhile, or a failed write) left the claim to this handle.
             cancel_held_upstream(executor, principal, id, &job, upstream.handle.clone()).await;
             return;
         }
@@ -432,16 +430,16 @@ async fn follow_upstream_job(
     lease.release(executor, id).await;
 }
 
-/// Make `handle` durable, before anything else is done with it. A capture
-/// refused because the row was cancelled meanwhile takes the row's one cancel
-/// claim instead (design r8 R8.4): `None` then, and nothing is left to follow.
-/// Any other refusal is not the claim's, and the job is followed as before.
-async fn capture_or_claim(
+/// Make `handle` durable, before anything else is done with it. A refusal
+/// does not stop the job: it is followed either way, and a cancel that lands
+/// meanwhile is seen by the follow's cancel arm, which offers the handle to the
+/// row's one cancel claim (design r8 R8.4, the capture-side case).
+async fn capture_handle(
     executor: &Arc<TaskExecutor>,
     (principal, id, revision): (&str, &str, u64),
     job: &crate::gateway::meta_mcp::upstream::DirectJob,
     handle: &str,
-) -> Option<bool> {
+) -> bool {
     executor
         .notify_observer(super::CommitStage::BeforeCapture, id)
         .await;
@@ -451,13 +449,9 @@ async fn capture_or_claim(
         arguments: job.arguments.clone(),
         handle: handle.to_owned(),
     };
-    let captured = executor
+    executor
         .capture_upstream(principal, id, revision, capture)
-        .await;
-    if !captured && cancel_held_upstream(executor, principal, id, job, handle.to_owned()).await {
-        return None;
-    }
-    Some(captured)
+        .await
 }
 
 /// Offer a handle this worker holds, for a row cancelled under it, to the

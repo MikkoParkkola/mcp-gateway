@@ -77,6 +77,10 @@ async fn one_sender_claims_a_cancelled_rows_upstream_cancel() {
     );
     let record = record_json(&path, &id);
     assert_eq!(record["upstreamCancelSent"], json!(true));
+    assert!(
+        record.get("upstream").is_none(),
+        "the claim takes the descriptor off the row: {record}"
+    );
     assert_eq!(record["version"], json!(7));
     assert_eq!(record["revision"], json!(2), "the claim moves no revision");
     // Every later sender, with or without a handle, is told it was taken.

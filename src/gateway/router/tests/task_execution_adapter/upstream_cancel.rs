@@ -409,9 +409,9 @@ impl CommitObserver for CancelAtCapture {
 }
 
 /// T1: the cancel transition finds no descriptor (none was captured yet), so
-/// it claims nothing; the capture, refused on the cancelled row, offers the
-/// handle and sends the one upstream `tasks/cancel`. Mutant "no capture-side
-/// sender" sends none.
+/// it claims nothing; the capture is refused on the cancelled row, and the
+/// follow's cancel arm offers the handle and sends the one upstream
+/// `tasks/cancel`. Mutant "the follow arm does not offer" sends none.
 #[tokio::test]
 async fn a_cancel_between_the_task_answer_and_its_capture_cancels_once() {
     let rig = rig(Head::Received, Reply::Task, Release::Immediately).await;

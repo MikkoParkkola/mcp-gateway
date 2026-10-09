@@ -95,6 +95,10 @@ impl Shared {
         // The descriptor leaves the row with the claim. A terminal row is never
         // queried again, and taking it off is what guarantees the marker fits:
         // the cancelled row already met its budget with the descriptor on it.
+        // A legacy row named its call only through the descriptor: keep that
+        // provenance as targets before the descriptor leaves (the row is raised
+        // past the version that reads targets).
+        let _ = super::targets::keep_provenance(&task, &mut record);
         record.upstream = None;
         record.upstream_cancel_sent = true;
         record.version = record.version.max(UPSTREAM_CANCEL_VERSION);

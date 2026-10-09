@@ -457,7 +457,7 @@ pub(super) fn fallback_bytes(
 /// current version no longer consults, so raising it bare would read as
 /// "dispatched nothing" and skip the delivery check. `false` when a legacy row
 /// has no call to keep: its authorship is then not recorded (fail closed).
-fn keep_provenance(task: &crate::protocol::tasks::Task, record: &mut Record) -> bool {
+pub(super) fn keep_provenance(task: &crate::protocol::tasks::Task, record: &mut Record) -> bool {
     if record.version >= TARGET_VERSION {
         return true;
     }
