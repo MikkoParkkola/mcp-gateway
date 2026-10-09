@@ -13,7 +13,9 @@ use std::path::PathBuf;
 #[must_use]
 pub fn gateway_data_dir() -> PathBuf {
     absolutize(resolve_gateway_data_dir(
-        std::env::var("MCP_GATEWAY_CONFIG_DIR").ok(),
+        // `var_os`: a directory that is not UTF-8 is still the operator's
+        // (MIK-8147); `var` would drop it for the default under home.
+        std::env::var_os("MCP_GATEWAY_CONFIG_DIR"),
         crate::home_dir::home_dir(),
     ))
 }
@@ -24,7 +26,10 @@ fn absolutize(path: PathBuf) -> PathBuf {
     std::path::absolute(&path).unwrap_or(path)
 }
 
-fn resolve_gateway_data_dir(configured: Option<String>, home: Option<PathBuf>) -> PathBuf {
+fn resolve_gateway_data_dir(
+    configured: Option<std::ffi::OsString>,
+    home: Option<PathBuf>,
+) -> PathBuf {
     configured.map_or_else(
         || {
             home.unwrap_or_else(|| PathBuf::from("."))

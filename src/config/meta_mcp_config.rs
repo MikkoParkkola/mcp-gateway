@@ -36,8 +36,6 @@ pub struct SurfacedToolConfig {
 pub struct MetaMcpConfig {
     /// Enable Meta-MCP mode.
     pub enabled: bool,
-    /// Cache tool lists.
-    pub cache_tools: bool,
     /// Tool cache TTL.
     #[serde(with = "humantime_serde")]
     pub cache_ttl: Duration,
@@ -102,7 +100,6 @@ impl Default for MetaMcpConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            cache_tools: true,
             cache_ttl: Duration::from_secs(300),
             prompts_resources_fetch_timeout: Duration::from_secs(10),
             warm_start: Vec::new(),

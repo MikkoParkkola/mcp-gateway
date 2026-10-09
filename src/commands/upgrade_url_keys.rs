@@ -13,6 +13,7 @@ use std::process::ExitCode;
 
 use super::super::backend_url_keys::UrlRewrite;
 use super::super::config_write::{RewriteMode, rewrite_url_aliases_in};
+use super::super::retired_config_keys::Retired;
 
 /// `mcp-gateway upgrade`: rewrite the backend URL keys in the config at
 /// `config` (or the one found in the working directory), then run the
@@ -59,8 +60,30 @@ pub fn run_upgrade_with_config(
 pub(super) fn url_report(path: &Path, rewrite: &UrlRewrite, mode: RewriteMode) -> Vec<String> {
     let at = path.display();
     let mut out = Vec::new();
+    match rewrite.retired {
+        Retired::Removed { line, block } => {
+            let verb = match mode {
+                RewriteMode::Apply => "removed",
+                RewriteMode::DryRun => "upgrade would remove",
+            };
+            let block = block
+                .map(|h| format!(" and the `meta_mcp:` (line {h}) it was alone under"))
+                .unwrap_or_default();
+            out.push(format!(
+                "{at}: {verb} `meta_mcp.cache_tools` (line {line}){block}; nothing ever read it."
+            ));
+        }
+        Retired::Left => out.push(format!(
+            "{at}: kept `meta_mcp.cache_tools`: upgrade removes it only as its own line under a \
+             block-style `meta_mcp:`. Nothing reads it; delete it by hand."
+        )),
+        Retired::Absent => {}
+    }
     if rewrite.changed.is_empty() {
-        if rewrite.skipped.is_empty() && rewrite.kept.is_empty() {
+        if rewrite.skipped.is_empty()
+            && rewrite.kept.is_empty()
+            && rewrite.retired == Retired::Absent
+        {
             out.push(format!(
                 "{at}: no `http_url` or `ws_url` to rewrite; nothing changed."
             ));
