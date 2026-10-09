@@ -497,6 +497,10 @@ mod era_retired_slot_tests;
 #[path = "era_start_own_probe_tests.rs"]
 mod era_start_own_probe_tests;
 
+#[cfg(test)]
+#[path = "era_per_slot_tests.rs"]
+mod era_per_slot_tests;
+
 #[cfg(all(test, unix))]
 #[path = "frame_limit_start_tests.rs"]
 mod frame_limit_start_tests;
