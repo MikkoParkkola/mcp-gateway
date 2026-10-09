@@ -16,10 +16,8 @@ row that no longer matches an item (a stale exclusion)."""
 
 from __future__ import annotations
 
-import functools
 import re
 import sys
-import tomllib
 from pathlib import Path
 
 LIST = "docs/release/macos-test-exclusions.tsv"
@@ -32,108 +30,11 @@ OFF_MACOS = re.compile(
     r'|target_os = "linux").*\)\)\]'
     r'|#\[cfg_attr\(target_os = "macos", ignore'
 )
-# The truth of each `cfg` atom on the macOS CI job (`cargo test
-# --all-features`). An atom not in this table is unresolved, and a gate whose
-# answer rests on one counts as off macOS: the safe side for an exclusion list.
-MACOS_CFG = {
-    "test": True,
-    "unix": True,
-    "windows": False,
-    "debug_assertions": True,
-    'target_os = "macos"': True,
-    'target_vendor = "apple"': True,
-    'target_family = "unix"': True,
-    'target_family = "windows"': False,
-}
-CFG_TOKEN = re.compile(r'\s*(?:(\w+)\s*=\s*"([^"]*)"|(\w+)|([(),]))')
-
-
-@functools.cache
-def declared_features() -> frozenset[str]:
-    """The crate's features, all on in the macOS job (`--all-features`): its
-    `[features]` table and its optional dependencies. A `feature = "x"` atom
-    naming anything else is never on."""
-    manifest = Path(__file__).resolve().parents[2] / "Cargo.toml"
-    data = tomllib.loads(manifest.read_text())
-    optional = {
-        name
-        for name, spec in data.get("dependencies", {}).items()
-        if isinstance(spec, dict) and spec.get("optional")
-    }
-    return frozenset(data.get("features", {})) | optional
-
-
-def cfg_tokens(text: str) -> list[re.Match] | None:
-    """The predicate's tokens, or None when any character is not one: a
-    comment or other syntax this reader does not model."""
-    tokens, pos = [], 0
-    while pos < len(text):
-        if text[pos:].strip() == "":
-            break
-        m = CFG_TOKEN.match(text, pos)
-        if not m or m.end() == pos:
-            return None
-        tokens.append(m)
-        pos = m.end()
-    return tokens
-
-
-def runs_on_macos(gate: str) -> bool:
-    """Whether a `#[cfg(...)]` or `#![cfg(...)]` gate is true on macOS (MIK-8181).
-
-    Evaluates the whole predicate (`all`, `any`, `not`), so a gate that names
-    macOS but also requires Linux, or excludes Apple, is still off macOS. A
-    gate that cannot be parsed, or rests on an unresolved atom, is off."""
-    body = re.match(r"#!?\[cfg\((.*)\)\]\s*$", gate)
-    if not body:
-        return False
-    tokens = cfg_tokens(body.group(1))
-    if not tokens:
-        return False
-    pos = 0
-
-    def atom(m: re.Match) -> bool | None:
-        key, val, ident = m.group(1), m.group(2), m.group(3)
-        if key == "feature":
-            return val in declared_features()
-        if key is not None:
-            if f'{key} = "{val}"' in MACOS_CFG:
-                return MACOS_CFG[f'{key} = "{val}"']
-            # Any other target_os, target_vendor or target_family is false.
-            return False if key in ("target_os", "target_vendor", "target_family") else None
-        return MACOS_CFG.get(ident)
-
-    def pred() -> bool | None:
-        nonlocal pos
-        m = tokens[pos]
-        pos += 1
-        op = m.group(3)
-        if op in ("all", "any", "not") and pos < len(tokens) and tokens[pos].group(4) == "(":
-            pos += 1
-            args = []
-            while tokens[pos].group(4) != ")":
-                args.append(pred())
-                if tokens[pos].group(4) == ",":
-                    pos += 1
-            pos += 1
-            if op == "not":
-                if len(args) != 1:
-                    raise ValueError("not takes one predicate")
-                return None if args[0] is None else not args[0]
-            if op == "all":
-                return False if False in args else (None if None in args else True)
-            return True if True in args else (None if None in args else False)
-        if m.group(4):
-            raise ValueError("unexpected punctuation")
-        return atom(m)
-
-    try:
-        result = pred()
-    except (ValueError, IndexError):
-        return False
-    return pos == len(tokens) and result is True
-
-
+# The real-watcher gate (MIK-8181): Linux and macOS, so on macOS although it
+# names Linux. Matched exactly; reading cfg in general is a separate change.
+ON_MACOS_GATES = frozenset(
+    {'#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]'}
+)
 TEST_ATTR = re.compile(r"#\[(tokio::)?test\b")
 ITEM = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(fn|mod)\s+(\w+)")
 TEST_CFG = re.compile(r"#\[cfg\((?:all\()?test\b")
@@ -149,9 +50,7 @@ def excluded(root: Path) -> set[tuple[str, str]]:
             continue
         lines = [line.strip() for line in file.read_text(errors="replace").splitlines()]
         for n, line in enumerate(lines):
-            if not OFF_MACOS.match(line) or (
-                not line.startswith("#[cfg_attr") and runs_on_macos(line)
-            ):
+            if not OFF_MACOS.match(line) or line in ON_MACOS_GATES:
                 continue
             if line.startswith("#!["):
                 found.add((rel, "*"))

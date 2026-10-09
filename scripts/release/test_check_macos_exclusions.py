@@ -107,11 +107,13 @@ class CheckMacosExclusions(unittest.TestCase):
         rust = '#[cfg(target_os = "linux")]\nfn read_proc() {}\n#[cfg(target_os = "linux")]\nmod inotify;\n'
         self.assertEqual(self.tree(rust, path="src/watch.rs"), [])
 
-    def test_a_gate_that_names_macos_keeps_the_item_on_macos(self) -> None:
-        # MIK-8181: `any(linux, macos)` inside `all(test, ...)` runs on macOS.
+    def test_the_linux_and_macos_gate_runs_on_macos(self) -> None:
+        # MIK-8181: the exact real-watcher gate is on macOS; a gate that names
+        # macOS but still requires Linux, or excludes Apple, stays off.
         rust = (
             '#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]\nmod e2e_tests;\n'
-            '#[cfg(all(unix, not(target_os = "macos")))]\n#[test]\nfn off() {}\n'
+            '#[cfg(all(test, target_os = "linux", any(feature = "foo", target_os = "macos")))]\n'
+            "mod linux_and_mac_tests;\n"
             '#[cfg(all(test, any(target_os = "linux", target_os = "macos"), '
             'not(target_vendor = "apple")))]\nmod apple_off_tests;\n'
         )
@@ -119,47 +121,9 @@ class CheckMacosExclusions(unittest.TestCase):
             self.tree(rust, path="src/reload/mod.rs"),
             [
                 "not run on macOS and not listed: src/reload/mod.rs apple_off_tests",
-                "not run on macOS and not listed: src/reload/mod.rs off",
-            ],
-        )
-
-    def test_a_gate_is_evaluated_as_a_whole_on_macos(self) -> None:
-        # MIK-8181: names macOS but requires Linux, so never on macOS; names
-        # macOS inside any(..., not(apple)), so on macOS.
-        rust = (
-            '#[cfg(all(test, target_os = "linux", any(feature = "foo", target_os = "macos")))]\n'
-            "mod linux_and_mac_tests;\n"
-            '#[cfg(all(test, any(target_os = "macos", not(target_vendor = "apple")), '
-            'target_os = "linux"))]\nmod nested_tests;\n'
-            '#[cfg(all(test, any(target_os = "linux", target_os = "macos", not(unix))))]\n'
-            "mod on_mac_tests;\n"
-        )
-        self.assertEqual(
-            self.tree(rust, path="src/reload/mod.rs"),
-            [
                 "not run on macOS and not listed: src/reload/mod.rs linux_and_mac_tests",
-                "not run on macOS and not listed: src/reload/mod.rs nested_tests",
             ],
         )
-
-    def test_the_macos_cfg_evaluator(self) -> None:
-        on = mac.runs_on_macos
-        # Truth tables, nesting, trailing commas.
-        self.assertTrue(on('#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]'))
-        self.assertTrue(on('#[cfg(any(target_os = "macos", not(target_vendor = "apple"),))]'))
-        self.assertFalse(on('#[cfg(all(unix, not(target_os = "macos")))]'))
-        self.assertFalse(on('#[cfg(all(test, target_os = "linux"))]'))
-        self.assertTrue(on('#[cfg(not(windows))]'))
-        # A declared feature is on (--all-features); an undeclared one never is.
-        self.assertTrue(on('#[cfg(all(test, any(target_os = "linux", feature = "webui")))]'))
-        self.assertFalse(on('#[cfg(all(test, any(target_os = "linux", feature = "missing")))]'))
-        # A comment, an unresolved atom or broken syntax counts as off.
-        self.assertFalse(
-            on('#[cfg(all(test, any(target_os = "linux", /* target_os = "macos", */ windows)))]')
-        )
-        self.assertFalse(on('#[cfg(all(test, any(target_os = "linux", panic = "abort")))]'))
-        self.assertFalse(on('#[cfg(all(test, any(target_os = "macos"))]'))
-        self.assertFalse(on("#[cfg(not())]"))
 
     def test_the_release_tree_passes(self) -> None:
         self.assertEqual(mac.problems(HERE.parents[1]), [])
