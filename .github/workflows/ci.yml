@@ -645,24 +645,7 @@ jobs:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
       #   release.yml `verify` needs it green on the released revision.
-      # MIK-8212 throwaway: 50 consecutive runs of the executor test module
-      # under CPU load (one busy loop per core). Never merged.
-      - run: |
-          set -uo pipefail
-          cargo test --all-features --lib --no-run
-          for c in $(seq "$(nproc)"); do (while :; do :; done) & done
-          ok=0; control_fail=0
-          for i in $(seq 50); do
-            if cargo test --all-features --lib -q -- capability::executor::tests --skip mik_8212_old_row_control > run.log 2>&1; then
-              ok=$((ok+1)); grep -h "test result" run.log | sed "s/^/MIK8212 run $i: /"
-            else
-              echo "MIK8212 run $i FAILED"; cat run.log; break
-            fi
-            cargo test --all-features --lib -q -- mik_8212_old_row_control > ctl.log 2>&1 || { control_fail=$((control_fail+1)); grep -h "control:" ctl.log | head -1; }
-          done
-          kill $(jobs -p) 2>/dev/null
-          echo "MIK8212 MODULE GREEN $ok/50 CONSECUTIVE; OLD ROW CONTROL FAILED $control_fail of the runs it got"
-          test "$ok" -eq 50
+      - run: cargo test --all-features --no-fail-fast -- --skip a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result --skip mik_7479_full_burst
 
   # Same run on the self-hosted arm64 runner. Mutation evidence asks whether a
   # named test fails on a mutant and passes on the fix; that is logic, not

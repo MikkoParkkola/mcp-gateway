@@ -1,0 +1,38 @@
+# MIK-8212 throwaway proof: 50 consecutive runs of the executor test module
+# under CPU load (one busy loop per core). Never merged.
+name: MIK-8212 proof
+on:
+  push:
+    branches: ["throwaway/mik-8212-*"]
+permissions:
+  contents: read
+jobs:
+  loop:
+    name: MIK-8212 50 module runs under load
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          save-if: false
+      - run: |
+          set -uo pipefail
+          cargo test --all-features --lib --no-run
+          for c in $(seq "$(nproc)"); do (while :; do :; done) & done
+          ok=0; control_fail=0; control_runs=0
+          for i in $(seq 50); do
+            if cargo test --all-features --lib -q -- capability::executor::tests --skip mik_8212_old_row_control > run.log 2>&1; then
+              ok=$((ok+1)); grep -h "test result" run.log | sed "s/^/MIK8212 run $i: /"
+            else
+              echo "MIK8212 run $i FAILED"; cat run.log; break
+            fi
+            control_runs=$((control_runs+1))
+            cargo test --all-features --lib -q -- mik_8212_old_row_control > ctl.log 2>&1 || { control_fail=$((control_fail+1)); grep -h "control:" ctl.log | head -1; }
+          done
+          kill $(jobs -p) 2>/dev/null
+          echo "MIK8212 MODULE GREEN $ok/50 CONSECUTIVE; OLD ROW CONTROL FAILED $control_fail/$control_runs"
+          test "$ok" -eq 50
