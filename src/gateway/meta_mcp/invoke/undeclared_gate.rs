@@ -86,8 +86,11 @@ pub(super) fn bridge_refusal(
 /// The questions a result puts to the client: the parsed interim when it
 /// parses, else the `inputRequests` object of a result that claims
 /// `input_required` but is malformed elsewhere. Only for judging entries;
-/// nothing here is minted or relayed.
-fn asked_requests(result: &serde_json::Value) -> Option<crate::protocol::mrtr::InputRequired> {
+/// nothing here is minted or relayed. Shared with the direct route's seal
+/// (MIK-8089), so both routes read a round alike.
+pub(super) fn asked_requests(
+    result: &serde_json::Value,
+) -> Option<crate::protocol::mrtr::InputRequired> {
     use crate::protocol::mrtr::InputRequired;
     if let Some(interim) = InputRequired::from_result(result) {
         return Some(interim);
