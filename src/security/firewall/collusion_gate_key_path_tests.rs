@@ -201,3 +201,115 @@ fn a_rejoined_column_is_evidence_and_its_holders_excuse() {
         .collect();
     assert!(wrong.is_empty(), "column join mishandled: {wrong:?}");
 }
+
+/// `CUT.1` (design §14.1, MIK-8066): one text over the record cap and the
+/// per-delivery fingerprint bound, delivered flat to one holder and as
+/// content items to another: each forwarding it whole is not reported while
+/// a third caller holds a sensitive flat copy.
+#[test]
+fn flat_and_split_receipts_over_the_cap_both_excuse() {
+    let fw = observing();
+    let refused: Vec<usize> = (0..4)
+        .filter(|&i| {
+            let tool = format!("big{i}");
+            let text: String = (0..24).map(|k| text(i * 100 + k)).collect();
+            assert!(text.len() > 6 * 1024, "premise: over the record cap");
+            deliver(&fw, "alice", &tool, &flat(&text));
+            deliver(&fw, "bob", &tool, &flat(&text));
+            deliver(&fw, "carol", &tool, &content_items(&pieces(&text)));
+            assert!(reported(&fw, "dave", &text), "control: text {i} is a relay");
+            reported(&fw, "bob", &text) || reported(&fw, "carol", &text)
+        })
+        .collect();
+    assert!(refused.is_empty(), "over-cap holders reported: {refused:?}");
+}
+
+/// `CUT.1` budget guard (K2): joins have a budget of their own. A delivery of
+/// ~3.6 KiB of distinct content items (joins take as much again) and then a
+/// `tail` field, the walk's last leaf and in no join, keeps the tail as
+/// evidence: a non-holder relaying it is reported. With one shared budget
+/// the joins would push it out.
+#[test]
+fn joins_never_push_leaf_evidence_out() {
+    let fw = observing();
+    let missed: Vec<usize> = (0..TEXTS)
+        .filter(|&i| {
+            let tool = format!("read{i}");
+            let items: Vec<String> = (0..60).map(|k| text(i * 1_000 + k)[..60].to_owned()).collect();
+            let tail = text(i * 1_000 + 999);
+            let mut result = content_items(&items);
+            result["tail"] = Value::String(tail.clone());
+            deliver(&fw, "alice", &tool, &result);
+            !reported(&fw, "dave", &tail)
+        })
+        .collect();
+    assert!(missed.is_empty(), "the tail lost its evidence: {missed:?}");
+}
+
+/// A plan step through the design §14.6 path: staged, kept to `answer`,
+/// capped and recorded for `who` from `alpha:{tool}`.
+fn deliver_plan_step(fw: &Firewall, who: &str, tool: &str, step: &Value, answer: &Value) {
+    let staged = fw
+        .receipt_digest("alpha", tool, step, Some(&std::cell::Cell::new(0)))
+        .expect("relay detection is on");
+    let delivered = fw.delivered_for_plan(answer, None).expect("bounded");
+    let kept = fw.cap_kept(fw.retain_delivered(staged, &delivered));
+    fw.record_digest(RelayCaller::Keyed(who), "alpha", tool, &kept);
+}
+
+/// `pieces` as content items with a note item after the first piece.
+fn interleaved(pieces: &[String]) -> Value {
+    let mut items: Vec<Value> = pieces
+        .iter()
+        .map(|p| json!({"type": "text", "text": p}))
+        .collect();
+    items.insert(1, json!({"type": "text", "text": "a note another step put here"}));
+    json!({ "content": items })
+}
+
+/// The texts whose plan-step holder is reported for re-joining, after a step
+/// delivered them as `step` and the plan's answer delivered `answer`.
+fn plan_holders_reported(step: fn(&[String]) -> Value, answer: fn(&[String]) -> Value) -> Vec<usize> {
+    let fw = observing();
+    (0..TEXTS)
+        .filter(|&i| {
+            let (text, tool) = (text(i), format!("read{i}"));
+            let pieces = pieces(&text);
+            deliver(&fw, "alice", &tool, &flat(&text));
+            deliver_plan_step(&fw, "bob", &tool, &step(&pieces), &answer(&pieces));
+            assert!(reported(&fw, "dave", &text), "control: text {i} is a relay");
+            reported(&fw, "bob", &text)
+        })
+        .collect()
+}
+
+/// `PLAN.1` (S2): a step's content items, delivered by the answer as they
+/// came, keep their join: the holder re-joining them is not reported.
+#[test]
+fn a_plan_answer_of_content_items_keeps_the_steps_join() {
+    let refused = plan_holders_reported(content_items, content_items);
+    assert!(refused.is_empty(), "plan holders reported: {refused:?}");
+}
+
+/// `PLAN.1` (design r3.1, grok's r3 input): the answer interleaves the
+/// step's under-K pieces with another leaf; each piece is still delivered
+/// whole, so the step's join is kept.
+#[test]
+fn an_interleaved_step_join_of_under_k_pieces_is_kept() {
+    let refused = plan_holders_reported(content_items, interleaved);
+    assert!(refused.is_empty(), "plan holders reported: {refused:?}");
+}
+
+/// `PLAN.1` negative (gpt): an answer that left the middle piece out
+/// breaks the step's run there, so the holder forwarding the whole text,
+/// middle included, is reported.
+#[test]
+fn an_undelivered_middle_piece_breaks_the_steps_join() {
+    fn without_middle(pieces: &[String]) -> Value {
+        let mut kept = pieces.to_vec();
+        kept.remove(pieces.len() / 2);
+        content_items(&kept)
+    }
+    let excused = (0..TEXTS).count() - plan_holders_reported(content_items, without_middle).len();
+    assert_eq!(excused, 0, "a missing middle piece was excused");
+}
