@@ -31,6 +31,8 @@ fn cert(quota: &str) -> CertIdentity {
 async fn a_quota_is_charged_to_the_strongest_authenticated_credential() {
     let (state, _store) = test_router_app_state_with_agent_auth_enabled().await;
     let key = AuthenticatedClient {
+        // MIK-6704.IDENT.1a: a synthetic fixture, not an authorization path.
+        principal: "key".to_string(),
         authenticated: true,
         quota_principal: Some(QuotaPrincipal::configured_bearer("key")),
         ..anonymous_client()
