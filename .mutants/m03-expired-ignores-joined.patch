@@ -1,0 +1,13 @@
+diff --git a/src/oauth/login_gate.rs b/src/oauth/login_gate.rs
+index 82e5270be..c8f3cf353 100644
+--- a/src/oauth/login_gate.rs
++++ b/src/oauth/login_gate.rs
+@@ -425,7 +425,7 @@ impl Provenance {
+                     .as_ref()
+                     .is_some_and(|fill| fill.load(Ordering::SeqCst));
+                 !p.dispatched.load(Ordering::SeqCst)
+-                    && !joined_dispatched
++
+                     && (p.waited.load(Ordering::SeqCst)
+                         || p.gate.pending_in(&p.cohort)
+                         || p.cohort.outcome().is_some())

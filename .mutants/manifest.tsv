@@ -1,0 +1,7 @@
+head_sha	bc3eba04b22107db110d95066943ecb2681f79e8
+m01-join-hook-ignored	linux	m01-join-hook-ignored.patch	--lib -- backend::tests::login_join backend::cached_metadata
+m02-fill-mark-never-set	linux	m02-fill-mark-never-set.patch	--lib -- backend::tests::login_join backend::cached_metadata
+m03-expired-ignores-joined	linux	m03-expired-ignores-joined.patch	--lib -- backend::tests::login_join backend::cached_metadata
+m04-fill-mark-gated-on-started	linux	m04-fill-mark-gated-on-started.patch	--lib -- backend::tests::login_join backend::cached_metadata
+m05-owner-not-told	linux	m05-owner-not-told.patch	--lib -- backend::tests::login_join backend::cached_metadata
+m06-waiter-gets-fresh-mark	linux	m06-waiter-gets-fresh-mark.patch	--lib -- backend::tests::login_join backend::cached_metadata

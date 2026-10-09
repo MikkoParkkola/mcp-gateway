@@ -1,0 +1,13 @@
+diff --git a/src/oauth/login_gate.rs b/src/oauth/login_gate.rs
+index 82e5270be..e42a1a05d 100644
+--- a/src/oauth/login_gate.rs
++++ b/src/oauth/login_gate.rs
+@@ -395,7 +395,7 @@ impl Provenance {
+         // fill that got past its token step (handshake or page) had its token,
+         // so the fill was waiting on the backend, not on a login. Gating it as
+         // above would leave a joined discovery fill unmarked (MIK-8046).
+-        let _ = FILL.try_with(|mark| mark.store(true, Ordering::SeqCst));
++
+     }
+ 
+     /// The scope now waits on the shared fill marked `fill` (`None`: it runs

@@ -1,0 +1,13 @@
+diff --git a/src/backend/metadata.rs b/src/backend/metadata.rs
+index 4f1fdf3f2..58ab336d2 100644
+--- a/src/backend/metadata.rs
++++ b/src/backend/metadata.rs
+@@ -406,7 +406,7 @@ impl Backend {
+                     }
+                 },
+                 // A joiner classifies its deadline by this fill (MIK-8046).
+-                Provenance::joined,
++                |_| {},
+             )
+             .await
+     }

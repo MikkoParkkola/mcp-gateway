@@ -1,0 +1,14 @@
+diff --git a/src/backend/cached_metadata.rs b/src/backend/cached_metadata.rs
+index 804437eed..716a86477 100644
+--- a/src/backend/cached_metadata.rs
++++ b/src/backend/cached_metadata.rs
+@@ -276,7 +276,8 @@ impl<T> CachedMetadata<T> {
+             match self.acquire(ttl) {
+                 CacheFetchState::Cached(value) => return Ok(value),
+                 CacheFetchState::Wait(mut receiver, mark) => {
+-                    waiting(Some(mark));
++                    let _ = mark;
++                    waiting(Some(FillMark::default()));
+                     let _ = receiver.changed().await;
+                 }
+                 CacheFetchState::Fetch(permit) => {

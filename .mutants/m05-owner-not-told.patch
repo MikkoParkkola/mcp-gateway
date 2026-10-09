@@ -1,0 +1,12 @@
+diff --git a/src/backend/cached_metadata.rs b/src/backend/cached_metadata.rs
+index 804437eed..cff690c3f 100644
+--- a/src/backend/cached_metadata.rs
++++ b/src/backend/cached_metadata.rs
+@@ -280,7 +280,6 @@ impl<T> CachedMetadata<T> {
+                     let _ = receiver.changed().await;
+                 }
+                 CacheFetchState::Fetch(permit) => {
+-                    waiting(None);
+                     let result = fetch(Arc::clone(&permit.mark)).await;
+                     let result = result.map(|(value, side)| {
+                         let value = Arc::new(value);
