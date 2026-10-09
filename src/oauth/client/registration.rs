@@ -167,3 +167,7 @@ impl OAuthClient {
         Ok(reg_response.client_id)
     }
 }
+
+#[cfg(test)]
+#[path = "registration_tests.rs"]
+mod tests;

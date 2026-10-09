@@ -724,3 +724,6 @@ mod sharing;
 
 #[path = "refresh_flight_outcome_tests.rs"]
 mod outcome;
+
+#[path = "refresh_flight_renewal_tests.rs"]
+mod renewal;
