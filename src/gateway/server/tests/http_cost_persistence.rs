@@ -20,7 +20,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::config::Config;
 use crate::cost_accounting::persistence::{self as cost_persistence, PersistedCosts, ToolTotal};
 use crate::gateway::Gateway;
-use crate::gateway::server::persistence::{COST_SAVE_INTERVAL, boot_cost_governance};
+use crate::gateway::server::persistence::{
+    COST_SAVE_INTERVAL, boot_cost_governance, periodic_save_landed,
+};
 
 async fn answers_livez(port: u16) -> bool {
     let Ok(mut stream) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await else {
@@ -87,14 +89,8 @@ async fn http_saves_spend_periodically_while_serving() {
     std::fs::remove_file(&costs).expect("remove costs.json; only a save can bring it back");
     tokio::time::pause();
     tokio::time::advance(COST_SAVE_INTERVAL + Duration::from_secs(1)).await;
-    for _ in 0..1000 {
-        if costs.exists() {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
     // Read on the paused clock, so only the advanced interval can explain it.
-    let saved = costs.exists();
+    let saved = periodic_save_landed(&costs).await;
     tokio::time::resume();
     // Still serving: a server that had stopped would have made its shutdown
     // save, which must not pass for the periodic one.

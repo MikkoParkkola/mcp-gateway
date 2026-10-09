@@ -168,7 +168,11 @@ pub(super) fn spawn_cost_saver(
                     let (enforcer, data_dir) = (Arc::clone(&enforcer), data_dir.clone());
                     let spawned = std::thread::Builder::new()
                         .name("cost save".to_owned())
-                        .spawn(move || save_costs_unless_busy(&enforcer, &data_dir));
+                        .spawn(move || {
+                            #[cfg(test)]
+                            hold_save_for_test(&data_dir);
+                            save_costs_unless_busy(&enforcer, &data_dir);
+                        });
                     if let Err(error) = spawned {
                         warn!(%error, "periodic cost save could not start a thread; skipped");
                     }
@@ -177,6 +181,40 @@ pub(super) fn spawn_cost_saver(
             }
         }
     })
+}
+
+/// Data directories whose periodic save thread a test holds back, and for how
+/// long (MIK-8216): a slow runner, made deterministic. Keyed by directory so a
+/// test running beside it is never slowed.
+#[cfg(all(test, feature = "cost-governance"))]
+static HELD_SAVES: std::sync::Mutex<Vec<(PathBuf, std::time::Duration)>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(all(test, feature = "cost-governance"))]
+fn hold_save_for_test(data_dir: &Path) {
+    let held = HELD_SAVES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .find(|(dir, _)| dir == data_dir)
+        .map(|(_, hold)| *hold);
+    if let Some(hold) = held {
+        std::thread::sleep(hold);
+    }
+}
+
+/// Whether a periodic save has written `costs`, for the tests that advance a
+/// paused clock past [`COST_SAVE_INTERVAL`] (MIK-8216). The save runs on its
+/// own OS thread (MIK-8157), which a paused clock does not schedule.
+#[cfg(test)]
+pub(super) async fn periodic_save_landed(costs: &Path) -> bool {
+    for _ in 0..1000 {
+        if costs.exists() {
+            return true;
+        }
+        tokio::task::yield_now().await;
+    }
+    costs.exists()
 }
 
 impl super::Gateway {
@@ -368,6 +406,44 @@ mod tests {
         let enforcer = Arc::new(BudgetEnforcer::new(cfg, registry));
         enforcer.record_spend("tool", Some("key"), usd);
         enforcer
+    }
+
+    /// MIK-8216: a save thread a busy runner schedules late is still waited
+    /// for. The thread is held well past what 1000 scheduler turns take, so the
+    /// wait must be measured in real time, not in turns of a paused clock.
+    #[cfg(feature = "cost-governance")]
+    #[tokio::test]
+    async fn a_late_save_thread_is_still_awaited() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let costs = dir.path().join("costs.json");
+        HELD_SAVES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((
+                dir.path().to_path_buf(),
+                std::time::Duration::from_millis(300),
+            ));
+        tokio::time::pause();
+        let saver = spawn_cost_saver(
+            enforcer_with_spend(0.4),
+            dir.path().to_path_buf(),
+            COST_SAVE_INTERVAL,
+            None,
+        );
+        // Let the saver consume its immediate first tick before the advance.
+        tokio::task::yield_now().await;
+        tokio::time::advance(COST_SAVE_INTERVAL + std::time::Duration::from_secs(1)).await;
+        let landed = periodic_save_landed(&costs).await;
+        saver.abort();
+        HELD_SAVES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|(held, _)| held != dir.path());
+        assert!(landed, "the late save thread's write was not waited for");
+        assert!(
+            (restored_global(dir.path()) - 0.4).abs() < 1e-9,
+            "the late save wrote the wrong spend"
+        );
     }
 
     /// What `boot_cost_governance` would restore from `dir`, as global spend.
