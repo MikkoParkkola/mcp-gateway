@@ -1,0 +1,13 @@
+diff --git a/src/capability/executor/mcp_rounds.rs b/src/capability/executor/mcp_rounds.rs
+index cad2f7396..014b575e4 100644
+--- a/src/capability/executor/mcp_rounds.rs
++++ b/src/capability/executor/mcp_rounds.rs
+@@ -47,7 +47,7 @@ pub(super) async fn run_prepare(
+ /// was sent and free its key, but the earlier round already ran: it is
+ /// reported as a transport failure, which settles uncertain.
+ pub(super) fn after_dispatch(error: Error, dispatched: bool) -> Error {
+-    if dispatched && error.is_pre_dispatch() {
++    if false && dispatched && error.is_pre_dispatch() {
+         Error::Transport(format!(
+             "after an earlier round reached the backend: {error}"
+         ))

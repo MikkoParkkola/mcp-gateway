@@ -1,0 +1,20 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index 4b7837289..fd23aacf2 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -168,6 +168,7 @@ impl StdioTransport {
+         // Taken before the spawn: from spawn to install there is no await, so a
+         // retire lands either before the spawn (the install guard refuses) or
+         // after the install (`kill_tree_now` reaches the tree).
++        let mut child = spawn_in_own_tree(cmd)?;
+         let mut writer = self.writer.lock().await;
+         // A start that begins after a retire spawns nothing; one the retire
+         // overtakes from here on is refused at install.
+@@ -176,7 +177,6 @@ impl StdioTransport {
+                 "stdio backend retired before it started".to_string(),
+             ));
+         }
+-        let mut child = spawn_in_own_tree(cmd)?;
+ 
+         let stdin = child
+             .stdin()

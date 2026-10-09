@@ -1,0 +1,15 @@
+diff --git a/src/backend/stop.rs b/src/backend/stop.rs
+index 2ebb65f52..58f8a7cc9 100644
+--- a/src/backend/stop.rs
++++ b/src/backend/stop.rs
+@@ -30,9 +30,7 @@ impl Backend {
+                 .filter_map(std::sync::Weak::upgrade)
+                 .collect()
+         };
+-        for transport in live {
+-            transport.kill_tree_now();
+-        }
++        drop(live);
+     }
+ 
+     /// Stop the backend, draining every pooled transport slot.

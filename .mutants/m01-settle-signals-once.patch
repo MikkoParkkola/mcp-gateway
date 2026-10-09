@@ -1,0 +1,15 @@
+diff --git a/src/transport/stdio_child_tree.rs b/src/transport/stdio_child_tree.rs
+index 79d9c6687..4249e0cf4 100644
+--- a/src/transport/stdio_child_tree.rs
++++ b/src/transport/stdio_child_tree.rs
+@@ -235,7 +235,9 @@ impl ChildTree {
+         #[cfg(unix)]
+         if let Some((_, ReapPhase::Settle { since })) = self.reaping {
+             if matches!(self.leader_state(), Leader::Running | Leader::Zombie) {
+-                self.send_group_signal();
++                if now == since {
++                    self.send_group_signal();
++                }
+                 if now.saturating_duration_since(since) < PRE_REAP_SETTLE {
+                     return Reap::Pending;
+                 }
