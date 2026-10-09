@@ -17,10 +17,13 @@ impl Backend {
     /// so a transport is either published before it walks the pool, and it
     /// takes it, or refused. A start that read no policy and finishes after a
     /// pairing stamped one is refused here rather than published unpinned.
+    ///
+    /// The listen handle goes in first, so a reader that sees the transport
+    /// always sees its event stream (MIK-7897 LIFE.3a).
     pub(super) fn publish(
         &self,
         entry: &PooledEntry,
-        transport: &Arc<dyn Transport>,
+        (transport, listen): (&Arc<dyn Transport>, Option<super::listen::ListenHandle>),
         built_under: crate::security::ssrf::DestinationPolicy,
     ) -> std::result::Result<(), &'static str> {
         let cleanups = self.replaced_transport_cleanups.lock();
@@ -30,6 +33,7 @@ impl Backend {
         if self.destination_bound() && self.destination() != built_under {
             return Err("the destination policy changed while it was starting");
         }
+        *entry.listen.write() = listen;
         *entry.transport.write() = Some(Arc::clone(transport));
         Ok(())
     }

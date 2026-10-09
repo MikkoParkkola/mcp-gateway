@@ -572,3 +572,48 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
         "the delivery pass inspects the retry's result exactly once"
     );
 }
+
+/// Every round asks `roots/list` (declared) except the last, which asks for
+/// sampling (undeclared): the bridge refuses the handed-back round (#2173).
+const ROOTS_THEN_SAMPLING: fn(usize) -> Option<&'static str> = |n| {
+    Some(if n >= last_round() {
+        "sampling/createMessage"
+    } else {
+        "roots/list"
+    })
+};
+
+/// MIK-8191 on the legacy bridge (gpt i1): a bridged exchange whose last round
+/// asks an undeclared question is refused, and the execution lease does not
+/// keep that refusal: a keyed retry is admitted afresh, never replayed.
+/// Mutant: the bridge's undeclared refusal leaving the dispatch marked.
+#[tokio::test]
+async fn t4_a_bridged_undeclared_last_round_is_not_kept_by_the_lease() {
+    use crate::gateway::meta_mcp::admission::SyncAdmission;
+    use crate::gateway::meta_mcp::{AdmissionOwner, error_response_preserving_status};
+    let (m, _calls) = meta_that_always_asks(ROOTS_THEN_SAMPLING);
+    let channel = Answering::default();
+    let retry = keyed("bridge-op");
+    let caller = legacy_caller(&channel, &retry);
+    let owner = AdmissionOwner::for_test(caller.owner_principal());
+    let id = crate::protocol::RequestId::Number(1);
+    let Ok(SyncAdmission::Owned(lease)) =
+        m.admit_meta_sync(owner, &caller, "gateway_invoke", &args(), None, &id)
+    else {
+        panic!("a keyed call takes the lease");
+    };
+    let leased = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        execution: Some(&lease),
+        ..legacy_caller(&channel, &retry)
+    };
+    let error = m
+        .invoke_tool(&args(), Some("session-1"), &leased)
+        .await
+        .expect_err("the undeclared last round is refused");
+    lease.complete_secured(&error_response_preserving_status(id.clone(), &error));
+    let again = m.admit_meta_sync(owner, &caller, "gateway_invoke", &args(), None, &id);
+    assert!(
+        matches!(again, Ok(SyncAdmission::Owned(_))),
+        "the refusal was kept by the lease and would be replayed"
+    );
+}

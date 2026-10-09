@@ -81,6 +81,7 @@ mod relay_upstream;
 mod grant_decision_tasks;
 mod grant_decisions;
 
+mod admission_identity;
 /// MIK-7570.ATTEST.1 part 3: surfaced-tool tasks carry their attestation token.
 mod attestation_tasks;
 /// MIK-7828.FIX.2: a running task's caller key outlives the idle TTL.
