@@ -186,11 +186,31 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
                 backoff(failures)
             }
         };
-        tokio::select! {
-            () = shared.stop.cancelled() => return,
-            () = tokio::time::sleep(delay) => {}
+        #[cfg(test)]
+        shared.before_backoff.pause().await;
+        // A revival cuts the wait; a filter change does not, so churn on the
+        // subscriptions cannot reconnect a failing backend early (T35).
+        let deadline = tokio::time::Instant::now() + delay;
+        loop {
+            tokio::select! {
+                () = shared.stop.cancelled() => return,
+                () = tokio::time::sleep_until(deadline) => break,
+                _ = wake.changed() => {
+                    if registered_anew(&registry, &shared.name, &backend) {
+                        break;
+                    }
+                }
+            }
         }
     }
+}
+
+/// Whether the registry no longer holds `ended` under `name`: the backend
+/// was removed or replaced since its session ended.
+fn registered_anew(registry: &BackendRegistry, name: &str, ended: &Arc<Backend>) -> bool {
+    registry
+        .get(name)
+        .is_none_or(|now| !Arc::ptr_eq(&now, ended))
 }
 
 fn requested(shared: &Shared) -> Requested {

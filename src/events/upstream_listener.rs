@@ -60,6 +60,9 @@ pub(super) struct Shared {
     /// Test pause between a task finding its backend gone and parking (T35).
     #[cfg(test)]
     pub before_park: Arc<crate::test_pause::Slot>,
+    /// Test pause as a task starts its reconnect backoff (T35).
+    #[cfg(test)]
+    pub before_backoff: Arc<crate::test_pause::Slot>,
 }
 
 impl Shared {
@@ -588,6 +591,8 @@ impl UpstreamListeners {
             tools: Mutex::default(),
             #[cfg(test)]
             before_park: Arc::clone(&self.before_park),
+            #[cfg(test)]
+            before_backoff: Arc::default(),
         })
     }
 }

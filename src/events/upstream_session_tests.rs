@@ -27,6 +27,7 @@ fn shared_with(ineligible: crate::events::backend_source::Ineligible) -> Arc<Sha
         ineligible,
         tools: Mutex::default(),
         before_park: Arc::default(),
+        before_backoff: Arc::default(),
     })
 }
 
