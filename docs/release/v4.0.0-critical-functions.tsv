@@ -143,6 +143,7 @@ src/gateway/router/handlers/tasks.rs	agent_task_owner	1	critical	c	agent_task_ow
 src/gateway/router/hardened_elicitation.rs	declares_elicitation	1	critical	a	declares_elicitation	Decides whether an initialize declares elicitation, the condition the hardened refusal rests on
 src/gateway/router/hardened_elicitation.rs	direct_refusal	1	critical	a,d	direct_refusal	Hardened posture: refuses on the direct route any legacy request but a declaring initialize
 src/gateway/router/hardened_elicitation.rs	is_hardened	1	standard	borderline	is_hardened	Reads the hardened posture; a wrong answer silently disables the elicitation refusal
+src/gateway/router/hardened_elicitation.rs	refuse	1	critical	d	refuse	Hardened posture on /mcp: refuses a body-declared malformed modern request naming what it omitted (400 / -32602), else the elicitation refusal (MIK-8162)
 src/gateway/router/hardened_elicitation.rs	classify_direct	1	critical	a,d	classify_direct	The direct route's one reading of the declared revision; a doubled header reads modern so the hardened refusal applies
 src/gateway/router/hardened_identity.rs	hardened_identity_refusal	1	critical	a	hardened_identity_refusal	Hardened posture: 403 without a per-caller identity.
 src/gateway/router/helpers.rs	read_body	1	standard	borderline	read_body	Maps the max_body_size limit to a 413 refusal.
