@@ -236,3 +236,131 @@ fn the_dispatched_arguments_are_the_admitted_ones() {
         }
     });
 }
+
+/// A backend that answers at once and never touches what it is sent.
+struct Answer;
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Answer {
+    async fn request(
+        &self,
+        _method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        Ok(crate::protocol::JsonRpcResponse::success_serialized(
+            crate::protocol::RequestId::Number(1),
+            json!({"content": []}),
+        ))
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// The stdio dispatcher over one in-process backend, `bench`, listing `search`.
+fn stdio_stack() -> (
+    Arc<crate::gateway::meta_mcp::MetaMcp>,
+    Arc<crate::security::ToolPolicy>,
+    Arc<crate::mtls::MtlsPolicy>,
+) {
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let mut failsafe = crate::config::FailsafeConfig::default();
+    failsafe.rate_limit.enabled = false;
+    let backend = Arc::new(crate::backend::Backend::new(
+        "bench",
+        crate::config::BackendConfig::default(),
+        &failsafe,
+        std::time::Duration::from_secs(60),
+    ));
+    backend.set_transport_for_test(Arc::new(Answer));
+    backend.remember_listed_tools(
+        None,
+        false,
+        &[json!({
+            "name": "search",
+            "description": "probe",
+            "inputSchema": {"type": "object", "properties": {"blob": {"type": "string"}}}
+        })],
+    );
+    assert!(registry.register(backend));
+    let meta = Arc::new(crate::gateway::meta_mcp::MetaMcp::new(registry));
+    let policy = Arc::new(crate::security::ToolPolicy::from_config(
+        &crate::security::ToolPolicyConfig::default(),
+    ));
+    let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
+        &crate::mtls::MtlsConfig::default(),
+    ));
+    (meta, policy, mtls)
+}
+
+/// Bytes one stdio dispatch allocates; the request is built before the scope.
+async fn stdio_dispatch_bytes(
+    (meta, policy, mtls): &(
+        Arc<crate::gateway::meta_mcp::MetaMcp>,
+        Arc<crate::security::ToolPolicy>,
+        Arc<crate::mtls::MtlsPolicy>,
+    ),
+    size: usize,
+) -> u64 {
+    let request = json!({
+        "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+        "params": {"name": "gateway_invoke", "arguments": {
+            "server": "bench", "tool": "search", "arguments": arguments(size),
+        }},
+    });
+    let telemetry = super::super::StdioTelemetry::default();
+    let (response, measured) = measure_async(|| {
+        super::super::Gateway::dispatch_single_with_sink(
+            meta,
+            policy,
+            mtls,
+            request,
+            super::super::StdioClient {
+                session_id: "copies",
+                channel: &crate::gateway::input_bridge::NoClientChannel,
+                handshake_capabilities: crate::protocol::meta::Declared::NONE,
+                tasks: None,
+                modern: false,
+            },
+            &telemetry,
+        )
+    })
+    .await;
+    let text = response.map(|r| r.to_string()).unwrap_or_default();
+    assert!(
+        !text.contains("\"error\"") && !text.contains("\"isError\":true"),
+        "the stdio invoke must reach the backend: {text}"
+    );
+    measured.bytes
+}
+
+/// The stdio half of site 1: the stdio path hands the request's arguments
+/// down borrowed too. No body parse here: the request is already a value.
+#[test]
+fn one_stdio_invoke_copies_its_arguments_at_most_twice() {
+    if isolate(&test_path(
+        "one_stdio_invoke_copies_its_arguments_at_most_twice",
+    )) {
+        return;
+    }
+    runtime().block_on(async {
+        let stack = stdio_stack();
+        stdio_dispatch_bytes(&stack, SMALL).await;
+        stdio_dispatch_bytes(&stack, LARGE).await;
+        let dispatch = exact(stdio_dispatch_bytes(&stack, LARGE).await)
+            - exact(stdio_dispatch_bytes(&stack, SMALL).await);
+        let unit = exact(clone_bytes(LARGE)) - exact(clone_bytes(SMALL));
+        let copies = dispatch / unit;
+        assert!(
+            copies <= MAX_COPIES + 0.25,
+            "one stdio gateway_invoke deep-copied its arguments {copies:.2} times \
+             (dispatch {dispatch} B over one clone {unit} B); the bound is {MAX_COPIES} (MIK-8014)"
+        );
+    });
+}
