@@ -558,3 +558,6 @@ src/transport/stdio.rs	handle_response	1	critical	d	StdioTransport::handle_respo
 src/transport/stdio.rs	register_progress_token	1	critical	c	StdioTransport::register_progress_token	Fails closed on a colliding token, so one call's progress cannot reach another call
 src/transport/stdio.rs	start	1	critical	d	StdioTransport::start	Refuses invalid quoting or an empty command before spawn; applies the scrubbed environment
 src/transport/stdio.rs	spawn_command	1	critical	d	StdioTransport::spawn_command	Refuses invalid quoting or an empty command before spawn; builds the child with the scrubbed environment
+src/oauth/client/browser.rs	launchable	1	critical	d	launchable	Refuses an authorization URL that is not https or loopback http, or that a launcher would quote, before any browser launcher runs (MIK-8197).
+src/oauth/client/browser.rs	launch_command	1	standard	borderline	launch_command	Builds the shell-free launcher with closed stdin/stdout; a cmd.exe launcher here would reopen the injection (MIK-8197).
+src/oauth/client/browser.rs	open_browser	1	standard	borderline	open_browser	Runs launchable before any spawn; skipping it would hand an unchecked URL to the launcher (MIK-8197).
