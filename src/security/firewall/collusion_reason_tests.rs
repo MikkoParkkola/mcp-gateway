@@ -229,16 +229,24 @@ fn the_marker_map_is_capped() {
     assert!(markers.holds((65_536, 0), now), "the newest went");
 }
 
-/// The marker map's memory bound: a marker is one entry in each of two maps,
-/// at most 80 bytes of payload on 64-bit targets; doubled for hash and tree
-/// overhead, 65,536 markers hold at most 10 MiB.
+/// The marker map's memory bound, measured: filling it to its 65,536 cap
+/// allocated 15,878,060 bytes (15.1 MiB), under a 16 MiB bound. An upper
+/// bound on what the full map holds: no frees are subtracted, so the
+/// `HashMap`'s grow-and-copy blocks count too; filling to the cap evicts
+/// nothing, so no tree node is freed.
 #[test]
-fn the_marker_map_is_bounded_in_bytes() {
-    type Pair = (u64, u64);
-    let entry = std::mem::size_of::<(Pair, (Instant, u64))>()
-        + std::mem::size_of::<((Instant, u64), Pair)>();
-    assert!(entry <= 80, "a marker grew to {entry} bytes");
-    assert!(65_536 * entry * 2 <= 10 * 1024 * 1024);
+fn the_marker_map_footprint_at_cap_is_measured() {
+    const MARKER_BOUND: u64 = 16 * 1024 * 1024;
+    let now = Instant::now();
+    let (markers, measured) = crate::gateway::alloc_meter::measure(|| {
+        let mut markers = Markers::default();
+        for i in 0..65_536_u64 {
+            markers.mark((i, 0), now + Duration::from_secs(i));
+        }
+        markers
+    });
+    assert!(markers.holds((0, 0), now), "premise: no marker was evicted");
+    assert!(measured.bytes <= MARKER_BOUND, "{measured}");
 }
 
 /// A sketch that expires was not lost for room: it leaves no marker.

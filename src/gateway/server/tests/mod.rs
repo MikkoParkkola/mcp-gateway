@@ -12,7 +12,7 @@
 //! test module further down that file.
 
 mod admission_allocations;
-mod alloc_meter;
+pub(crate) mod alloc_meter;
 mod input_key_allocations;
 #[cfg(feature = "firewall")]
 mod judge_allocations;

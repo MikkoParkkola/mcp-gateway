@@ -872,9 +872,12 @@ expiry) and `marker_evicted`. `mcp_gateway_collusion_relay_total{action, reason}
 refusal under `relay`, `other_source`, `capacity` or `unkeyed`. A refusal names its reason:
 another tool's copy (MIK-8206), another caller's overflow record, or an excuse of the caller's
 dropped for room. A dropped excuse leaves an "excuse lost" marker per (source, caller) for one
-window (at most 65,536, oldest first, about 10 MiB with map overhead beside the 32 MiB sketch
-budget, never charged to it). Labels never excuse; a marker is source-level, so a genuine relay
-from a source whose other text lost an excuse is labelled `capacity` and still refused.
+window (at most 65,536, oldest first, never charged to the sketch budget). Filling to the cap
+allocates at most 15.1 MiB in total (measured; includes the hash table's growth copies), about
+10 MiB of it retained (derived from bucket sizes, not measured). That is per detector instance;
+a gateway runs one, shared by the meta-MCP and direct paths, and none with relay detection off.
+Labels never excuse; a marker is source-level, so a genuine relay from a source whose other text
+lost an excuse is labelled `capacity` and still refused.
 
 The `other_source` label reads the sender's sketches from other sources through a by-caller index
 (caller to the sources it holds a sketch from), so labelling one refusal visits only the sender's
