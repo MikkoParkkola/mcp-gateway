@@ -287,12 +287,12 @@ impl WatchSource {
     }
 
     /// Live rows of `principal` for `name` with these canonical `arguments`.
+    /// A clock before 1970 reads none live (MIK-8202).
     fn rows(hub: &EventsHub, principal: &str, name: &str, arguments: &Value) -> Vec<Subscription> {
-        let now = Utc::now();
         hub.store
             .subscriptions()
             .into_iter()
-            .filter(|s| s.live(now) && s.principal == principal && s.name == name)
+            .filter(|s| s.live_now() && s.principal == principal && s.name == name)
             .filter(|s| s.arguments == *arguments)
             .collect()
     }
@@ -590,14 +590,14 @@ impl Run {
     }
 
     /// The live rows that hold this poller's key.
+    /// A clock before 1970 reads none live (MIK-8202).
     fn holders(&self, hub: &EventsHub) -> Vec<Subscription> {
-        let now = Utc::now();
         hub.store
             .subscriptions()
             .into_iter()
             // Its own class only: a poller never holds, resumes or polls
             // for a row admitted under another class (MIK-8122).
-            .filter(|s| s.live(now) && self.owns(s))
+            .filter(|s| s.live_now() && self.owns(s))
             .collect()
     }
 
@@ -655,7 +655,11 @@ impl Run {
             Ok(found) => found,
             Err(step) => return step,
         };
-        let now = Utc::now();
+        // No lease is judged on a clock before 1970: the poll is skipped,
+        // nothing is called for and the poller is not retired (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            return Step::Polled;
+        };
         let rows = self.holders(hub);
         let Some(services) = hub.runtime.services.get().cloned() else {
             return Step::Failed;

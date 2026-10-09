@@ -86,7 +86,6 @@ pub(crate) fn body(event_id: &str, event: &SourceEvent, data: &Value, receipt: &
 impl EventsHub {
     /// Fan one occurrence out to every matching subscription.
     pub(super) async fn fan_out(self: &Arc<Self>, services: &Services, event: &SourceEvent) {
-        let now = Utc::now();
         let Some(source) = self.source(event.kind) else {
             return;
         };
@@ -99,7 +98,9 @@ impl EventsHub {
             self.store
                 .subscriptions()
                 .into_iter()
-                .filter(|s| s.name == event.name && s.live(now))
+                // A clock before 1970 reads no lease live: nothing is
+                // delivered on a lease it cannot date (MIK-8202).
+                .filter(|s| s.name == event.name && s.live_now())
                 .filter(|s| self.store.held(&s.id).is_none())
                 // A keyed occurrence belongs to its key's holders alone (MIK-7811).
                 .filter(|s| {

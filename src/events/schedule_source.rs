@@ -309,11 +309,11 @@ impl ScheduleSource {
         let Some(hub) = self.hub.upgrade() else {
             return std::collections::BTreeSet::new();
         };
-        let now = Utc::now();
+        // A clock before 1970 reads none live (MIK-8202).
         hub.store
             .subscriptions()
             .into_iter()
-            .filter(|s| s.name == NAME && s.live(now))
+            .filter(|s| s.name == NAME && s.live_now())
             .filter(|s| parts(&s.arguments).is_ok_and(|p| p.key == key))
             .map(|s| s.principal)
             .collect()
@@ -325,10 +325,10 @@ impl ScheduleSource {
         let Some(hub) = self.hub.upgrade() else {
             return HashMap::new();
         };
-        let now = Utc::now();
         let mut held: HashMap<String, DateTime<Utc>> = HashMap::new();
         for sub in hub.store.subscriptions() {
-            if sub.name != NAME || sub.principal != principal || !sub.live(now) {
+            // A clock before 1970 reads none live (MIK-8202).
+            if sub.name != NAME || sub.principal != principal || !sub.live_now() {
                 continue;
             }
             if let Ok(Parts { key, .. }) = parts(&sub.arguments) {

@@ -72,12 +72,16 @@ impl EventsHub {
         slots: &Arc<Semaphore>,
     ) -> Duration {
         let (held, policy) = (self.runtime.busy.lock().clone(), self.dead_policy());
-        // Expired rows settle every tick, before the reconcile gate (MIK-8061).
+        // Expired rows settle every tick, before the reconcile gate (MIK-8061),
+        // on a clock that reads: before 1970 nothing is judged (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            return IDLE;
+        };
         // Each burial is receipted before the evictions it caused.
         let due = {
             let _ordered = self.receipts.lock().await;
             let mut due = self
-                .blocking(move |store| store.due(Utc::now(), &held, policy))
+                .blocking(move |store| store.due(now, &held, policy))
                 .await;
             if let Some(due) = &mut due {
                 for record in &due.buried {
@@ -139,8 +143,8 @@ impl EventsHub {
         wait
     }
 
-    /// One attempt of record `event_id`, end to end. Its source verdicts
-    /// share one wait on a catalogue that does not answer (MIK-7921).
+    /// One attempt of record `event_id`, end to end, never on a clock before 1970 (MIK-8202).
+    /// Its source verdicts share one wait on a catalogue that does not answer (MIK-7921).
     async fn attempt(self: &Arc<Self>, services: &Services, event_id: &str) {
         let failed = std::cell::Cell::new(false);
         super::upstream_listener::FAILED_LOOKUP
@@ -149,7 +153,9 @@ impl EventsHub {
     }
 
     async fn attempt_once(self: &Arc<Self>, services: &Services, event_id: &str) {
-        let now = Utc::now();
+        let Ok(now) = crate::clock::utc_now() else {
+            return;
+        };
         let claim_id = event_id.to_owned();
         let Some(Claim::Ready(claimed)) = self
             .blocking(move |store| store.claim(&claim_id, now))
@@ -358,9 +364,9 @@ impl EventsHub {
             self.settle(services, record, unsent_now("cancelled")).await;
             return;
         };
-        // An expired row kept for its burials still signs but is not sent to:
-        // unsent, and the next expiry pass settles it (MIK-8061).
-        if !current.live(Utc::now()) {
+        // An expired row kept for its burials still signs but is not sent to: unsent, and the next
+        // expiry pass settles it (MIK-8061). A clock before 1970 reads it expired (MIK-8202).
+        if !current.live_now() {
             services.audit_outcome(&ended("subscription_expired")).await;
             self.settle(services, record, unsent_now("subscription_expired"))
                 .await;
@@ -475,12 +481,9 @@ impl EventsHub {
         frame: OutboundFrame,
         key: Option<&str>,
     ) -> Result<super::client::Answer, CallbackFailure> {
-        let now = Utc::now();
         let current = super::client::decode_whsec(&sub.secret);
         let previous = sub
-            .previous_secret
-            .as_deref()
-            .filter(|_| sub.previous_until.is_some_and(|until| until > now))
+            .previous_secret_now()
             .and_then(super::client::decode_whsec);
         let keys: Vec<&[u8]> = current
             .iter()

@@ -147,7 +147,8 @@ impl Store {
         if !state
             .subs
             .get(&record.subscription_id)
-            .is_some_and(|s| s.live(Utc::now()))
+            // A clock before 1970 reads no lease live (MIK-8202).
+            .is_some_and(Subscription::live_now)
             || state.held.contains_key(&record.subscription_id)
         {
             return Ok(Enqueued::NoSubscription);
@@ -239,11 +240,14 @@ impl Store {
         dead_at: DateTime<Utc>,
         record: OutboxRecord,
         caps: OutboxCaps,
-        clock: impl FnOnce() -> DateTime<Utc>,
+        clock: impl FnOnce() -> Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
     ) -> std::io::Result<Revived> {
         let mut state = self.state.lock();
         // Read under the lock: an expiry that lands while this waits counts.
-        let now = clock();
+        // A clock before 1970 dates no lease: nothing is revived (MIK-8202).
+        let Ok(now) = clock() else {
+            return Ok(Revived::NoSubscription);
+        };
         let Some(stamp) = state
             .dead
             .get(event_id)

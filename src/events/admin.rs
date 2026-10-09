@@ -7,7 +7,6 @@
 use std::sync::Arc;
 
 use base64::Engine as _;
-use chrono::Utc;
 use serde_json::{Value, json};
 
 use super::EventsHub;
@@ -120,7 +119,11 @@ impl EventsHub {
             .store
             .dead_letter_by_id(event_id)
             .ok_or(ReplayRefusal::NotFound)?;
-        let now = Utc::now();
+        // A lease is not judged on a clock before 1970: nothing is replayed
+        // to a subscription it cannot date (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            return Err(ReplayRefusal::SubscriptionGone);
+        };
         let sub = self
             .store
             .subscriptions()
@@ -170,7 +173,7 @@ impl EventsHub {
         let (caps, dead_at) = (self.outbox_caps(), dead.dead_at);
         let id = event_id.to_owned();
         match self
-            .blocking(move |store| store.revive(&id, dead_at, record, caps, Utc::now))
+            .blocking(move |store| store.revive(&id, dead_at, record, caps, crate::clock::utc_now))
             .await
         {
             Some(Revived::Written) => {

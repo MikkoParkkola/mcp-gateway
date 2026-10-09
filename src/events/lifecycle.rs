@@ -15,10 +15,12 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use chrono::Utc;
-
 use super::types::{RpcError, SourceKind};
 use super::{EventSource, EventsHub};
+
+/// A started key, with the principal, name and arguments of one live row
+/// holding it.
+type LiveKey = ((SourceKind, String), String, String, serde_json::Value);
 
 /// `(source kind, lifecycle key)` pairs whose `on_first_subscriber` ran.
 pub(super) type Started = tokio::sync::Mutex<HashSet<(SourceKind, String)>>;
@@ -86,7 +88,10 @@ impl EventsHub {
     ) {
         // A commit that failed after inserting its row (a durability error)
         // leaves a live holder: the key stays started.
-        if self.live_keys().iter().any(|(live, ..)| *live == key) {
+        if self
+            .live_keys()
+            .is_some_and(|keys| keys.iter().any(|(live, ..)| *live == key))
+        {
             return;
         }
         started.remove(&key);
@@ -100,9 +105,10 @@ impl EventsHub {
     }
 
     /// The lifecycle keys of every live subscription, with the principal of
-    /// one subscription holding each.
-    fn live_keys(&self) -> Vec<((SourceKind, String), String, String, serde_json::Value)> {
-        let now = Utc::now();
+    /// one subscription holding each. `None` on a clock before 1970: no lease
+    /// is judged, so nothing is started and no pass stops a key (MIK-8202).
+    fn live_keys(&self) -> Option<Vec<LiveKey>> {
+        let now = crate::clock::utc_now().ok()?;
         let mut keys = Vec::new();
         for sub in self
             .store
@@ -129,14 +135,19 @@ impl EventsHub {
                 keys.push((key, sub.principal, sub.name, sub.arguments));
             }
         }
-        keys
+        Some(keys)
     }
 
     /// Stop every started key no live subscription holds any more.
     pub(crate) async fn reconcile_stops(&self) {
         let mut started = self.lifecycle.lock().await;
+        // Skipped on a clock before 1970: it would stop every key, and only
+        // REST watches are started again each sweep (MIK-8202).
+        let Some(live_keys) = self.live_keys() else {
+            return;
+        };
         let live: HashSet<(SourceKind, String)> =
-            self.live_keys().into_iter().map(|(key, ..)| key).collect();
+            live_keys.into_iter().map(|(key, ..)| key).collect();
         let gone: Vec<_> = started.difference(&live).cloned().collect();
         for key in gone {
             started.remove(&key);
@@ -161,7 +172,7 @@ impl EventsHub {
         }
         // One attempt per key per replay, even when several rows hold it.
         let mut tried = HashSet::new();
-        for (key, principal, name, arguments) in self.live_keys() {
+        for (key, principal, name, arguments) in self.live_keys().unwrap_or_default() {
             if !of(key.0) || started.contains(&key) || !tried.insert(key.clone()) {
                 continue;
             }

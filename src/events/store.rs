@@ -406,7 +406,11 @@ impl Store {
         hold: HoldCommit,
     ) -> std::io::Result<Result<Admitted, CapHit>> {
         let mut state = self.state.lock();
-        let at = Utc::now().max(now);
+        // The opt-in tail and the leases are judged again here: a clock
+        // before 1970 commits nothing (MIK-8202).
+        let at = crate::clock::utc_now()
+            .map_err(std::io::Error::other)?
+            .max(now);
         self.sweep(&mut state, at)?;
         let ends_hold = match state.carry_hold(&mut sub, at, hold) {
             Ok(ends_hold) => ends_hold,

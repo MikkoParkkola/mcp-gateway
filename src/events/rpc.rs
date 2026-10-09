@@ -464,7 +464,12 @@ impl EventsHub {
             ttl: granted_ttl(self, &params)?,
             until: credential_ceiling(&caller.credential, &params)?,
         };
-        let now = Utc::now();
+        // A lease, a cap and the callback opt-in's tail are not judged on a
+        // clock before 1970: an opt-in it cannot date is never reused without
+        // a fresh challenge, so the subscribe is refused (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            return Err(RpcError::internal());
+        };
         let id = subscription_id(&principal, url.as_str(), &descriptor.name, &arguments);
         let caps = self.caps();
         if self.store.get(&id).as_ref().is_none_or(|s| !s.live(now)) {
