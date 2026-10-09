@@ -424,7 +424,7 @@ async fn stdio_streams_a_progress_notification_while_its_call_is_still_running()
     let reader = std::sync::Arc::clone(&transport);
     let (release, held) = tokio::sync::oneshot::channel::<()>();
 
-    let (call, mut rx) = crate::transport::notification_sink::scope(async move {
+    let (call, mut rx) = crate::transport::notification_sink::scope(None, async move {
         let _ = transport.register_progress_token("tok-a");
         tokio::spawn(async move {
             reader
@@ -455,7 +455,7 @@ async fn stdio_streams_a_progress_notification_while_its_call_is_still_running()
 async fn a_message_stamped_with_a_registered_progress_token_is_not_delivered() {
     let transport = make_transport("cat");
     let stamped = r#"{"jsonrpc":"2.0","method":"notifications/message","params":{"progressToken":"tok-a","level":"debug","data":"x"}}"#;
-    let (call, mut rx) = crate::transport::notification_sink::scope(async {
+    let (call, mut rx) = crate::transport::notification_sink::scope(None, async {
         let _ = transport.register_progress_token("tok-a");
         transport
             .handle_response(stamped)
@@ -484,14 +484,14 @@ async fn stdio_routes_a_progress_notification_to_only_the_call_that_supplied_the
     let transport = std::sync::Arc::new(make_transport("cat"));
     let reader = std::sync::Arc::clone(&transport);
 
-    let (call, mut tok_b_rx) = crate::transport::notification_sink::scope(async {
+    let (call, mut tok_b_rx) = crate::transport::notification_sink::scope(None, async {
         // tok-a's caller gets its own scope, so a misroute is visible. Both
         // registrations in one scope share a sender, and a frame delivered
         // to the wrong destination then arrives on the right receiver --
         // the isolation this row exists to prove would be unfalsifiable.
         // The sender is cloned into the map at registration, so it outlives
         // the scope that supplied it.
-        let (tok_a_call, tok_a_rx) = crate::transport::notification_sink::scope(async {
+        let (tok_a_call, tok_a_rx) = crate::transport::notification_sink::scope(None, async {
             let _ = transport.register_progress_token("tok-a");
         });
         tok_a_call.await;
@@ -543,42 +543,44 @@ async fn stdio_refuses_to_reroute_a_progress_token_that_is_already_live() {
     // are distinguishable. Registering twice inside one scope cannot tell
     // a refused insert from an overwriting one -- both would deliver to
     // the same receiver.
-    let (incumbent_call, mut incumbent_rx) = crate::transport::notification_sink::scope(async {
-        let _owner = ProgressRegistrationGuard::register(&transport, "tok-a");
+    let (incumbent_call, mut incumbent_rx) =
+        crate::transport::notification_sink::scope(None, async {
+            let _owner = ProgressRegistrationGuard::register(&transport, "tok-a");
 
-        let (newcomer_call, mut newcomer_rx) = crate::transport::notification_sink::scope(async {
-            let refused = ProgressRegistrationGuard::register(&transport, "tok-a");
+            let (newcomer_call, mut newcomer_rx) =
+                crate::transport::notification_sink::scope(None, async {
+                    let refused = ProgressRegistrationGuard::register(&transport, "tok-a");
+                    assert!(
+                        !refused.owns_registration,
+                        "a token already registered to a live call must be refused"
+                    );
+                });
+            newcomer_call.await;
+
+            // The refused guard has dropped by here. Its cleanup must not
+            // have retired the incumbent's route -- that would silence a
+            // call that is still open, the exact damage the refusal exists
+            // to prevent.
             assert!(
-                !refused.owns_registration,
-                "a token already registered to a live call must be refused"
+                newcomer_rx.try_recv().is_err(),
+                "the refused call must have been routed nothing"
             );
+            assert_eq!(
+                transport.progress_destinations.len(),
+                1,
+                "the refused guard must leave the incumbent's entry in place"
+            );
+
+            // Delivery runs off-scope on purpose: the sender has to travel
+            // in the map, not be read from the ambient task-local.
+            tokio::spawn(async move {
+                reader
+                    .handle_response(&progress_line("tok-a", 3))
+                    .expect("handling a progress frame must succeed");
+            })
+            .await
+            .expect("the reader task must not panic");
         });
-        newcomer_call.await;
-
-        // The refused guard has dropped by here. Its cleanup must not
-        // have retired the incumbent's route -- that would silence a
-        // call that is still open, the exact damage the refusal exists
-        // to prevent.
-        assert!(
-            newcomer_rx.try_recv().is_err(),
-            "the refused call must have been routed nothing"
-        );
-        assert_eq!(
-            transport.progress_destinations.len(),
-            1,
-            "the refused guard must leave the incumbent's entry in place"
-        );
-
-        // Delivery runs off-scope on purpose: the sender has to travel
-        // in the map, not be read from the ambient task-local.
-        tokio::spawn(async move {
-            reader
-                .handle_response(&progress_line("tok-a", 3))
-                .expect("handling a progress frame must succeed");
-        })
-        .await
-        .expect("the reader task must not panic");
-    });
     incumbent_call.await;
 
     let got = incumbent_rx
@@ -621,7 +623,7 @@ async fn stdio_delivers_a_notification_into_the_callers_sink() {
     let t = make_transport("cat");
     let params = serde_json::json!({ "_meta": { "progressToken": "tok-live" } });
 
-    let ((), drained) = crate::transport::notification_sink::collect(async {
+    let ((), drained) = crate::transport::notification_sink::collect(None, async {
         let token = request_progress_token(Some(&params)).expect("token");
         let _ = t.register_progress_token(&token);
         t.handle_response(&progress_line("tok-live", 3)).unwrap();
@@ -638,7 +640,7 @@ async fn stdio_delivers_a_notification_into_the_callers_sink() {
 async fn stdio_never_attributes_a_stray_token_to_an_open_call() {
     let t = make_transport("cat");
 
-    let ((), drained) = crate::transport::notification_sink::collect(async {
+    let ((), drained) = crate::transport::notification_sink::collect(None, async {
         let _ = t.register_progress_token("tok-mine");
         t.handle_response(&progress_line("tok-stray", 1)).unwrap();
     })
@@ -658,7 +660,7 @@ async fn stdio_request_retires_its_registration_even_when_the_write_fails() {
     let t = make_transport("cat"); // never connected: the write fails
     let params = serde_json::json!({ "_meta": { "progressToken": "tok-leak" } });
 
-    let (result, drained) = crate::transport::notification_sink::collect(async {
+    let (result, drained) = crate::transport::notification_sink::collect(None, async {
         t.request("tools/call", Some(params)).await
     })
     .await;
@@ -686,7 +688,7 @@ async fn stdio_request_retires_its_registration_even_when_the_write_fails() {
 async fn a_dropped_progress_registration_retires_its_destination() {
     // GIVEN a registration holding one captured notification.
     let t = make_transport("cat");
-    let ((), drained) = crate::transport::notification_sink::collect(async {
+    let ((), drained) = crate::transport::notification_sink::collect(None, async {
         let guard = ProgressRegistrationGuard::register(&t, "tok-cancel");
         t.handle_response(&progress_line("tok-cancel", 1)).unwrap();
 
@@ -714,7 +716,7 @@ async fn a_dropped_progress_registration_retires_its_destination() {
 async fn stdio_drops_a_progress_notification_no_caller_asked_for() {
     let t = make_transport("cat");
 
-    let ((), drained) = crate::transport::notification_sink::collect(async {
+    let ((), drained) = crate::transport::notification_sink::collect(None, async {
         let _ = t.register_progress_token("tok-a");
         t.handle_response(&progress_line("tok-stray", 3)).unwrap();
     })

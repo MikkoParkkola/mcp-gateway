@@ -80,6 +80,16 @@ pub(crate) enum Answer {
     NonNumeric(u64),
     /// Like `Ok`, claiming `cacheScope: "public"` for the call's answer.
     PublicScope,
+    /// JSON-RPC `error` whose message is the given text (MIK-8139).
+    RpcErrorText(&'static str),
+    /// JSON-RPC `error` with a plain message and the given text in `data`.
+    RpcErrorData(&'static str),
+    /// A failed dispatch: the backend's refusal as `Error::JsonRpc` with the
+    /// given message, as a non-2xx JSON-RPC answer arrives (MIK-8139).
+    FailedWith(&'static str),
+    /// A failed dispatch dressed as an `accounts.v1` account refusal, with
+    /// the given message (MIK-8139: a backend can forge the marker).
+    ForgedAccount(&'static str),
 }
 
 /// The question an `Ask*` answer opens with.
@@ -147,6 +157,10 @@ fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRpcResponse> 
             "rate limit exceeded",
         )),
         Answer::Transport => Err(crate::Error::Transport("connection refused".to_string())),
+        Answer::RpcErrorText(_)
+        | Answer::RpcErrorData(_)
+        | Answer::FailedWith(_)
+        | Answer::ForgedAccount(_) => error_answer(answer, id),
         Answer::Unreachable => Err(crate::Error::TransportConnect("no route".to_string())),
         Answer::AskOnce
         | Answer::AskNoState
@@ -383,6 +397,13 @@ pub(crate) async fn fixture_firewalled_with(
     fx
 }
 
+#[path = "direct_guards_fixture_egress.rs"]
+mod egress;
+pub(crate) use egress::fixture_inspecting_on;
+use egress::{backend_transport, error_answer};
+#[cfg(feature = "firewall")]
+pub(crate) use egress::{fixture_audited_on, fixture_firewalled_on, meta_firewall};
+
 pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
 
 /// The fixture under `security.posture: hardened` (personal keys) with message
@@ -470,6 +491,9 @@ pub(crate) async fn fixture_firewalled_anomaly(answer: Answer) -> Fx {
 thread_local! {
     static HARDENED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MODERN_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// A transport that replaces the scripted backend (the egress matrix).
+    static TRANSPORT: std::cell::RefCell<Option<Arc<dyn Transport>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(feature = "firewall")]
@@ -479,6 +503,10 @@ thread_local! {
     static CLIENT_BREAKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static ANOMALY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static RELAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static META_FIREWALL: std::cell::RefCell<Option<Arc<crate::security::firewall::Firewall>>> =
+        const { std::cell::RefCell::new(None) };
+    static AUDIT_LOG: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// The auth the fixture serves: four keys, plus a client breaker when asked.
@@ -545,12 +573,7 @@ async fn fixture_inner(
             &FailsafeConfig::default(),
             Duration::from_secs(60),
         ));
-        let transport = CountingBackend {
-            calls: Arc::clone(&calls),
-            seen: Arc::clone(&seen),
-            answer,
-        };
-        backend.set_transport_for_test(Arc::new(transport));
+        backend.set_transport_for_test(backend_transport((&calls, &seen), answer));
         assert!(state_mut.backends.register(backend), "fixture registration");
     }
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends)).admitting_as(&state_mut.meta_mcp);
@@ -586,6 +609,7 @@ async fn fixture_inner(
             scan_responses: true,
             credential_redaction: true,
             rules,
+            audit_log: AUDIT_LOG.with(|a| a.borrow().clone()),
             anomaly_detection: anomaly,
             anomaly_threshold: 0.7,
             anomaly_block_threshold: anomaly.then_some(0.9),
@@ -605,7 +629,9 @@ async fn fixture_inner(
             config.clone(),
             tracker.clone(),
         )));
-        meta.set_firewall(Some(Arc::new(Firewall::from_config(config, tracker))));
+        let meta_firewall = Arc::new(Firewall::from_config(config, tracker));
+        META_FIREWALL.with(|f| *f.borrow_mut() = Some(Arc::clone(&meta_firewall)));
+        meta.set_firewall(Some(meta_firewall));
     }
     state_mut.meta_mcp = Arc::new(build(meta));
     let router = create_router(Arc::clone(&state));

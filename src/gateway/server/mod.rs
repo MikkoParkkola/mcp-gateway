@@ -2570,6 +2570,7 @@ impl Gateway {
                         )),
                         &writer,
                         &reads,
+                        Some(meta_mcp.notification_screen("stdio", session_id)),
                     )
                     .await;
                     Self::persist_stdio_protocol_telemetry(&telemetry);
@@ -2661,6 +2662,7 @@ impl Gateway {
                         )),
                         &writer,
                         &reads,
+                        Some(meta_mcp.notification_screen("stdio", session_id)),
                     )
                     .await;
                     Self::persist_stdio_protocol_telemetry(&telemetry);
@@ -3069,7 +3071,7 @@ impl Gateway {
             super::meta_mcp::invoke::relay::GatewayStamps::Legacy
         };
         let chain_source = response.chain_source;
-        let response = meta_mcp.finalize_content(
+        let mut response = meta_mcp.finalize_content(
             response,
             &super::meta_mcp::response_security::ResponseDeliveryContext {
                 method: &method,
@@ -3081,14 +3083,12 @@ impl Gateway {
                     external_tool: &external_tool,
                     subject: None,
                 },
-                mutation:
-                    crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
                 signing: signing_context.as_ref(),
                 chain_source,
                 chain_nonce: chain_nonce.as_deref(),
             },
-            super::meta_mcp::response_security::DeliveryInspection::Required,
         );
+        meta_mcp.release_unsent_hold(&mut response).await; // MIK-8131
         // MIK-7887.RECEIPT.4: the receipt describes the delivered answer, with
         // the stamps its era got; the judge can only replace the answer.
         {
@@ -3406,7 +3406,7 @@ impl Gateway {
                     &caller,
                 )
             {
-                break 'tool_call JsonRpcResponse::error(
+                break 'tool_call JsonRpcResponse::gateway_error(
                     Some(id),
                     error.to_rpc_code(),
                     super::meta_mcp::signing::wire_error_message(&error),

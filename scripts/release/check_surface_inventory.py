@@ -866,12 +866,26 @@ def check(doc_text: str, extracted: dict[str, list[Entry]]) -> list[str]:
         for e in entries:
             r = listed.pop(e.id, None)
             if r is None:
-                errors.append(f"{surface}: unclassified {e.id!r} ({e.file}:{e.line})")
+                if surface not in MEMBERSHIP_ELSEWHERE:
+                    errors.append(f"{surface}: unclassified {e.id!r} ({e.file}:{e.line})")
             elif r.defined.split(":")[0] != e.file:
                 errors.append(f"line {r.lineno}: {e.id!r} is defined in {e.file}, doc says {r.defined!r}")
         for r in listed.values():
+            if surface in MEMBERSHIP_ELSEWHERE:
+                # Rows clap reports but this walker cannot see (generated flags,
+                # aliases): membership is the Rust test's; the place is still checked.
+                if not r.defined.startswith(MEMBERSHIP_ELSEWHERE[surface]):
+                    errors.append(f"line {r.lineno}: {surface} item {r.id!r} is defined at {r.defined!r}, want {MEMBERSHIP_ELSEWHERE[surface]}...")
+                continue
             errors.append(f"line {r.lineno}: {surface} item {r.id!r} no longer exists in the code")
     return errors
+
+
+# Surfaces whose membership (missing and stale rows) another check owns, with the
+# path prefix their rows must still name. cli: clap's own built Command, walked by
+# tests/cli_surface_inventory.rs (MIK-8170), so an unmodelled clap feature cannot
+# hide a flag; this walker still checks class, reason, migration and file.
+MEMBERSHIP_ELSEWHERE = {"cli": "src/cli/"}
 
 
 def extract_all() -> dict[str, list[Entry]]:

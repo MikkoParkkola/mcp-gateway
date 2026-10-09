@@ -44,6 +44,10 @@ pub(crate) struct Bound {
     /// Appends that reached the permit wait (MIK-7912).
     #[cfg(test)]
     pub(crate) permit_waits: std::sync::atomic::AtomicUsize,
+    /// Answers given because of a stall: a timed-out append, or a call or
+    /// append refused while stalled (MIK-8171).
+    #[cfg(test)]
+    pub(crate) stall_answers: std::sync::atomic::AtomicUsize,
     /// D3-a R4: one-shot fault for the next append of this `kind`.
     #[cfg(test)]
     pub(crate) fail_next_kind: std::sync::Mutex<Option<String>>,
@@ -65,6 +69,8 @@ impl Default for Bound {
             refused_under_stall: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             permit_waits: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            stall_answers: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             fail_next_kind: std::sync::Mutex::new(None),
             limit: std::sync::Mutex::new(AUDIT_APPEND_TIMEOUT),
@@ -127,9 +133,14 @@ impl TransparencyLogger {
         // thread; a best-effort caller logs it and serves anyway.
         if self.is_stalled() {
             #[cfg(test)]
-            self.bound
-                .refused_under_stall
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            {
+                self.bound
+                    .refused_under_stall
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.bound
+                    .stall_answers
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
             return Err(timed_out());
         }
         let limit = cap.map_or(self.append_timeout(), |c| c.min(self.append_timeout()));
@@ -191,6 +202,8 @@ impl TransparencyLogger {
     /// already cleared `in_flight`, so the flag cannot stick (F20 r3).
     fn mark_stalled(&self, generation: Option<u64>) -> io::Error {
         #[cfg(test)]
+        self.bound.stall_answers.fetch_add(1, Ordering::SeqCst);
+        #[cfg(test)]
         {
             let hook = self.bound.before_mark.lock().expect("hook lock").take();
             if let Some(f) = hook {
@@ -230,6 +243,11 @@ impl TransparencyLogger {
     pub(crate) fn lift_append_bound_for_test(&self) {
         assert!(self.is_stalled(), "lift the bound only while stalled");
         *self.bound.limit.lock().expect("limit lock") = super::rotation::StallGate::DEADLINE * 2;
+    }
+
+    /// Answers given because of a stall so far (MIK-8171).
+    pub(crate) fn stall_answers_for_test(&self) -> usize {
+        self.bound.stall_answers.load(Ordering::SeqCst)
     }
 
     /// Appends that reached the permit wait: a test holding the permit with a

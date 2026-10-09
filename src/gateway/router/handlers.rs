@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Axum request handlers for the MCP gateway.
 
+use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use std::sync::Arc;
 
 use axum::{
@@ -27,7 +28,6 @@ use super::helpers::{
 use super::meta_refusal_audit::Refused;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::relay::{self, CatalogueCaller};
-use crate::gateway::meta_mcp::response_security::DeliveryInspection;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::gateway::outbound::{OutboundReply, gateway_reply, judged_reply, stream_reply};
@@ -180,7 +180,7 @@ fn get_era_refusal(state: &AppState, headers: &HeaderMap) -> Option<axum::respon
     // refuses this same version, so it gets the POST path's answer instead.
     Some(
         build_http_response(
-            &unsupported_version_error(None, version, modern_enabled),
+            &Egressed::gateway_own(unsupported_version_error(None, version, modern_enabled)),
             StatusCode::BAD_REQUEST,
         )
         .into_response(),
@@ -364,7 +364,7 @@ pub(super) async fn mcp_delete_handler(
 /// Deprecated SSE endpoint handler - surfaces a clear error instead of silent 404
 pub(super) async fn sse_deprecated_handler() -> impl IntoResponse {
     build_http_response(
-        &JsonRpcResponse::error_with_data(
+        &Egressed::gateway_own(JsonRpcResponse::error_with_data(
             None,
             -32600,
             "SSE transport is deprecated. Use Streamable HTTP (POST /mcp) instead.",
@@ -372,7 +372,7 @@ pub(super) async fn sse_deprecated_handler() -> impl IntoResponse {
                 "migration": "In settings.json, change: \"type\": \"sse\" -> \"type\": \"http\" and \"url\": \"http://localhost:39400/sse\" -> \"url\": \"http://localhost:39400/mcp\"",
                 "spec": "https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http"
             }),
-        ),
+        )),
         StatusCode::GONE,
     )
 }
@@ -469,6 +469,8 @@ pub(super) async fn meta_mcp_handler(
     let guard = super::helpers::read_guard(&state);
     let audit = offers_event_stream.then(|| state.meta_mcp.rejection_audit());
     let guard_for_scope = guard.clone();
+    // MIK-8161: a backend's mid-call notifications meet the egress scan too.
+    let screen = Some(state.meta_mcp.notification_screen("http", ""));
     let dispatch = crate::gateway::meta_mcp::grant_audit::slot_http(
         logger.clone(),
         // COLLUDE.1: one relay-receipt collector spans dispatch and finalize.
@@ -493,14 +495,14 @@ pub(super) async fn meta_mcp_handler(
             guard, audit, logger,
         ));
         let (scoped, rx) =
-            crate::transport::notification_sink::scope_judged(dispatch, Arc::clone(&judge));
+            crate::transport::notification_sink::scope_judged(screen, dispatch, Arc::clone(&judge));
         stream_reply(crate::gateway::streaming::first_event_wins_stream(scoped, rx, judge).await)
     } else {
         // Still scoped, and still drained alongside: `publish` sheds on a full
         // sink, and a client that did not offer a stream must not make a
         // backend's notifications count against that depth.
         let (response, _notifications) =
-            crate::transport::notification_sink::collect(dispatch).await;
+            crate::transport::notification_sink::collect(screen, dispatch).await;
         // The answer's read record, written after every late replacer.
         judged_reply(response, logger.as_ref()).await
     }
@@ -691,6 +693,9 @@ async fn meta_mcp_dispatch(
     let session_id = opened
         .as_ref()
         .map_or_else(String::new, |id| id.expose_secret().to_owned());
+    // MIK-8161: the notification screen's verdicts name this caller and session.
+    let screen_caller = client.as_ref().map_or("anonymous", |c| c.name.as_str());
+    crate::transport::notification_sink::bind_screen(screen_caller, &session_id);
 
     let raw_id = crate::protocol::mrtr::raw_request_id(&request);
     // A failed grant-decision write refuses under this id (MIK-7663.GH2409.3).
@@ -1043,7 +1048,6 @@ async fn meta_mcp_dispatch(
     // Fail-closed default: delivery inspects unless the `tools/call` arm below
     // proves it already inspected this exact artifact.
     #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
-    let mut delivery_inspection = DeliveryInspection::Required;
     // The scope and identity the resource and prompt arms forward under.
     let (scope, identity) = (client.as_ref(), verified_identity.as_ref());
     // The one derivation of what this caller may invoke, shared by
@@ -1715,9 +1719,8 @@ async fn meta_mcp_dispatch(
             };
             execution = owned_execution;
             caller.execution = execution.as_ref();
-            // `call_response` is mutated only by the firewall response scan below.
-            #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
-            let mut call_response = if let Some((response, audit)) = replay {
+            // Screened at delivery, in `finalize_content`, with every other frame.
+            if let Some((response, audit)) = replay {
                 // #2472: a replay is a delivered call, recorded as its first run was.
                 let session = Some(session_id.as_str());
                 (state.meta_mcp)
@@ -1732,49 +1735,7 @@ async fn meta_mcp_dispatch(
                     caller,
                 ))
                 .await
-            };
-
-            // Firewall: post-invocation response scan + credential redaction.
-            // A refusing verdict must stop the scan and replace the result here:
-            // this pass mutates the artifact under `Redact`, so letting a refused
-            // response continue would launder it past the delivery chokepoint.
-            //
-            // ONE inspection for the whole artifact, then the strongest action
-            // over EVERY authenticated target. Scanning per target in a loop was
-            // order-dependent under `Redact`: the first target's pass redacts the
-            // credential in place, so a later target whose policy blocks on that
-            // finding inspects an already-cleaned artifact and returns Allow —
-            // the block silently depended on which target sorted first.
-            // A discovery result the Meta-MCP already inspected on its
-            // canonical value is not scanned again (MIK-7407.RESPONSE.3).
-            #[cfg(feature = "firewall")]
-            if call_response.discovery_inspected {
-                delivery_inspection = DeliveryInspection::AlreadyInspected;
-            } else {
-                let snapshot = (call_response.result.as_ref())
-                    .and_then(|result| state.meta_mcp.relay_snapshot(result));
-                delivery_inspection = super::response_pass::inspect_tools_call_response(
-                    state.firewall.as_deref(),
-                    &mut call_response,
-                    &response_targets,
-                    &crate::security::response_policy::ResponseCorrelation {
-                        session_id: &session_id,
-                        caller: client.as_ref().map_or("anonymous", |c| c.name.as_str()),
-                        external_server: "gateway",
-                        external_tool: &external_tool,
-                        subject: grant_subject.as_ref(),
-                    },
-                );
-                // A redaction changed the delivery: its receipt is rebuilt from what goes out.
-                let delivered = call_response.result.as_ref();
-                let shape =
-                    crate::gateway::meta_mcp::invoke::relay::AnswerShape::of(&external_tool);
-                state
-                    .meta_mcp
-                    .restage_if_changed(snapshot, delivered, shape);
             }
-
-            call_response
         }
         // Resources
         "resources/list" => {
@@ -1937,12 +1898,16 @@ async fn meta_mcp_dispatch(
             external_tool: &external_tool,
             subject: grant_subject.as_ref(),
         },
-        mutation: crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
         signing: signing_context.as_ref(),
         chain_source: response.chain_source,
         chain_nonce: chain_nonce.as_deref(),
     };
-    let response = (state.meta_mcp).finalize_content(response, &delivery, delivery_inspection);
+    #[cfg(feature = "firewall")]
+    let router = state.firewall.as_deref();
+    #[cfg(not(feature = "firewall"))]
+    let router = None;
+    let mut response = (state.meta_mcp).finalize_routed(response, &delivery, router);
+    state.meta_mcp.release_unsent_hold(&mut response).await; // MIK-8131
     // Kept for the stored delivery (cloned only when an execution stores it).
     let finalized = execution.as_ref().map(|_| response.clone());
     // MIN.2: judged on the finalized answer; the verdict rides its delivery
