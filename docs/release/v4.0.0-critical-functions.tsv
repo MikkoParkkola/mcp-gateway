@@ -62,6 +62,8 @@ src/gateway/router/authorization.rs	backend_tool_targets_for_call	1	standard	bor
 src/gateway/router/authorization.rs	capture	1	standard	borderline	OwnedRouterAuthorizer::capture	Captures identity for background workers; a wrong capture authorizes the wrong caller.
 src/gateway/router/authorization.rs	decide	1	standard	borderline	RouterAuthorizer::decide	Trait entry that hands the meta layer to `decide_tool_target`.
 src/gateway/router/authorization.rs	of_client	1	standard	borderline	CallerStanding::of_client	Derives admin standing from the client flag; feeds `permits`.
+src/gateway/router/authorization.rs	target_from_invoke_arguments	1	standard	borderline	target_from_invoke_arguments	Extracts the gateway_invoke target to authorize; a missing server or tool yields no target.
+src/gateway/router/authorization.rs	targets_from_code_mode_arguments	1	standard	borderline	targets_from_code_mode_arguments	Extracts the gateway_execute targets to authorize; an unparsed step yields no target.
 src/gateway/router/backend_handlers.rs	apply_backend_tool_call_security	1	critical	a,d	apply_backend_tool_call_security	Direct route: name validation, authorization, firewall verdict, R2 key check, sanitization.
 src/gateway/router/backend_handlers.rs	backend_handler	1	critical	d	backend_handler	Refuses the direct route with 503 while the audit log is down (D1-f).
 src/gateway/router/backend_handlers.rs	backend_handler_inner	1	critical	a,b,c,d	backend_handler_inner	Direct-route gate chain: identity, hardened, scope, session owner, attestation, OAuth isolation, firewall.
