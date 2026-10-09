@@ -3,7 +3,7 @@
 //! MIK-8197: the authorization URL reaches the browser as one verbatim
 //! argument, through no shell, and only when it is https or loopback http.
 
-use super::{launch_command, launchable};
+use super::{launch_command, launchable, open_browser};
 
 const AUTHORIZE: &str =
     "https://as.example/authorize?response_type=code&client_id=c&state=s&echo=pwned&c=%41^x,y%22";
@@ -19,8 +19,11 @@ fn a_url_that_is_not_https_or_loopback_http_is_never_launched() {
         "javascript:alert(1)",
         "ms-settings:privacy",
         "http://as.example/authorize",
+        "",
+        "not a url",
     ] {
         assert!(launchable(url).is_err(), "{url} must not reach a launcher");
+        assert!(!open_browser(url), "{url} was handed to a launcher");
     }
 }
 
@@ -64,8 +67,38 @@ fn windows_opens_the_url_without_a_shell() {
 fn unix_hands_the_url_as_its_one_argument() {
     let url = launchable(AUTHORIZE).unwrap();
     let command = launch_command(&url);
+    let expected = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    assert_eq!(command.get_program(), expected, "no shell as the launcher");
     let args: Vec<_> = command.get_args().collect();
     assert_eq!(args, [AUTHORIZE]);
+}
+
+/// `MIK-8197.PROMPT`: the "visit this URL" prompt is shown whether or not a
+/// launcher started (one an endpoint-security tool stops leaves no failed
+/// spawn), on stderr. clippy's `print_stdout` deny in grants.rs keeps it off
+/// stdout; this pins that it is printed unconditionally, outside the
+/// failed-launch branch.
+#[test]
+fn the_manual_prompt_is_always_printed() {
+    let grants = include_str!("grants.rs");
+    let launch = grants
+        .find("(self.open_browser)(&auth_url_str)")
+        .expect("the launch call");
+    let rest = &grants[launch..];
+    let branch_end = rest
+        .find("\n        }\n")
+        .expect("the failed-launch branch ends");
+    let prompt = rest
+        .find("eprintln!(\"\\nIf no browser opened, authorize this client by visiting:")
+        .expect("the prompt");
+    assert!(
+        prompt > branch_end,
+        "the prompt sits after the failed-launch branch, not inside it"
+    );
 }
 
 /// `MIK-8197.INVARIANT`: whatever reaches `launchable`, a URL it accepts
