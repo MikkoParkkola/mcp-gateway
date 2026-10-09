@@ -143,3 +143,29 @@ async fn fp4_a_task_retry_of_a_sync_call_is_refused() {
     );
     assert_eq!(dispatched(&fx), 1);
 }
+
+/// FP6 (`MIK-8192` on the task path, gpt i1): a keyed task retried with a
+/// fresh `progressToken` is the same task. It is answered with the handle it
+/// already owns, not refused as another request. Mutant: task admission
+/// fingerprinting the raw `_meta`.
+#[tokio::test]
+async fn fp6_a_fresh_meta_retry_of_a_task_is_the_same_task() {
+    let fx = fixture(Answer::Ok, |_| {}).await;
+    let meta = |token: &str| {
+        json!({
+            "progressToken": token,
+            "io.modelcontextprotocol/clientCapabilities": {
+                "extensions": {"io.modelcontextprotocol/tasks": {}}
+            }
+        })
+    };
+    let task = json!({"task": {}});
+    let first = keyed_meta(&fx, "gateway_invoke", invoke(), meta("p-1"), task.clone()).await;
+    let task_id = first["result"]["taskId"].clone();
+    assert!(task_id.is_string(), "a task was created: {first}");
+    let retried = keyed_meta(&fx, "gateway_invoke", invoke(), meta("p-2"), task).await;
+    assert_eq!(
+        retried["result"]["taskId"], task_id,
+        "the same task: {retried}"
+    );
+}

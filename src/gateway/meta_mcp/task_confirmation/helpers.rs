@@ -43,17 +43,23 @@ impl<'a> AdmissionOwner<'a> {
 /// One builder, so the gate's read-only lookup and the admitting call site
 /// cannot render the same call two different ways — a drift that would be
 /// invisible until a committed replay quietly started a second task.
+///
+/// The fingerprint reads the operation, never the client's per-request
+/// `_meta` (MIK-8192), as the synchronous lease does; the dispatch still gets
+/// the arguments as sent.
 pub(crate) fn task_admission_request(
     principal: String,
     key: String,
     tool_name: &str,
     arguments: &Value,
 ) -> OwnedAdmissionRequest {
+    use crate::gateway::meta_mcp::admission::{OPERATION_DEFINING_META, operation_arguments};
+    let operation = operation_arguments(arguments, OPERATION_DEFINING_META);
     OwnedAdmissionRequest::new(
         principal,
         key,
-        json!({ "name": tool_name, "arguments": arguments }),
-        arguments.clone(),
+        json!({ "name": tool_name, "arguments": operation }),
+        operation,
     )
 }
 
