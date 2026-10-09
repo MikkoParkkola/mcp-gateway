@@ -681,3 +681,5 @@ fn commit_to_service(error: CommitFailure) -> ServiceError {
 
 #[cfg(test)]
 mod scope_tests;
+#[cfg(test)]
+mod spawn_tests;
