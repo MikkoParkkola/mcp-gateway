@@ -183,8 +183,8 @@ src/gateway/router/origin_guard_hosted.rs	scope	1	critical	b	scope	Limits the ho
 src/gateway/router/origin_guard_hosted.rs	from_config	1	standard	borderline	HostedOrigin::from_config	Builds the hosted-origin opening.
 src/gateway/router/watch_poll.rs	may_invoke	1	critical	a	GatewayWatchHost::may_invoke	Authorizes each watch poll: the holder's key must still be allowed to invoke the capability
 src/gateway/router/watch_poll.rs	client	1	critical	a	GatewayWatchHost::client	Decides for may_invoke whether the holder's key still authenticates; a gone, expired or re-issued key is none
-src/gateway/router/watch_poll.rs	poll_capability	1	critical	d	poll_capability	Refuses a poll past the key's own /mcp rate bucket before it calls the capability as that key
-src/gateway/router/watch_poll.rs	poll	1	standard	borderline	GatewayWatchHost::poll	Forwards to poll_capability; a mistake would bypass its rate refusal
+src/gateway/router/watch_poll.rs	poll_capability	1	critical	d	poll_capability	Refuses a poll past the key's own /mcp rate bucket or blocked by the request firewall before it calls the capability as that key, and an answer the response firewall blocks
+src/gateway/router/watch_poll.rs	poll	1	critical	a,d	GatewayWatchHost::poll	Refuses a watch poll whose holder's key no longer authenticates, then runs it through every /mcp control, the request firewall among them
 src/gateway/router/well_known.rs	is_loopback_host	1	critical	borderline	is_loopback_host	Loopback classifier shared by the origin gate and the cleartext-OAuth guard.
 src/gateway/router/well_known.rs	sanitize_public_url	1	critical	b,d	sanitize_public_url	Refuses non-TLS, rewritten, userinfo-bearing or otherwise unsafe origins before publishing OAuth metadata
 src/gateway/router/well_known.rs	authorization_servers	1	critical	b,d	authorization_servers	Advertises no issuer unless delegated bearer auth would accept its tokens (not under agent auth), and only publishable ones (MIK-7941).
