@@ -316,3 +316,60 @@ async fn a_refused_admission_starts_no_slot_for_a_removed_method() {
         seen.lock().unwrap()
     );
 }
+
+/// PERSLOT.3a, attachment: a per-user HTTP slot's frames are shaped by its own
+/// slot's verdict. The Shared slot is never started, so a transport attached
+/// the Shared cache would read no verdict and send legacy frames.
+#[tokio::test]
+async fn a_per_user_transport_is_shaped_by_its_own_slots_verdict() {
+    let (url, seen) = upstream(true).await;
+    let backend = backend_at(url);
+
+    let _ = backend
+        .request_with_headers("tools/list", None, &[], Some(USER))
+        .await;
+
+    assert!(
+        backend.shared_entry().transport.read().is_none(),
+        "premise: the Shared slot stayed cold"
+    );
+    let seen = seen.lock().unwrap().clone();
+    let list: Vec<_> = seen.iter().filter(|s| s.method == "tools/list").collect();
+    assert!(
+        !list.is_empty(),
+        "premise: tools/list reached the server: {seen:?}"
+    );
+    assert!(
+        list.iter().all(|s| s.modern),
+        "the per-user slot's modern peer was sent a legacy frame: {seen:?}"
+    );
+}
+
+/// PERSLOT.3a, re-probe target: with the Shared slot not yet probed, a
+/// per-user slot's re-probe re-resolves that slot only; the Shared view stays
+/// unresolved.
+#[tokio::test]
+async fn a_per_user_reprobe_does_not_resolve_a_cold_shared_slot() {
+    let backend = backend_at("http://127.0.0.1:9/mcp".to_string());
+    let (peer, _handles) = Peer::new(Answer::Modern);
+    let peer: Arc<dyn Transport> = peer;
+    backend.set_pooled_transport_for_test(&slot(USER), Arc::clone(&peer));
+    let per_user = Arc::clone(backend.pool.get(&slot(USER)).expect("the slot").value());
+    backend.resolve_era_for_entry_test(&peer, &per_user).await;
+
+    backend
+        .reprobe_if_code_contradicts(
+            "server/discover",
+            crate::protocol::era::METHOD_NOT_FOUND_CODE,
+            &peer,
+        )
+        .await;
+    let _ = tokio::time::timeout(Duration::from_secs(20), per_user.era.cached()).await;
+
+    assert_eq!(
+        per_user.era.cached().await,
+        Some(Era::Modern),
+        "re-resolved"
+    );
+    assert_eq!(backend.cached_era().await, None);
+}
