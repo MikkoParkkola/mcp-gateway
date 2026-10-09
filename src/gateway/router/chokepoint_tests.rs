@@ -5,14 +5,22 @@
 //! request firewall on the bytes actually sent, against the policy in force at
 //! dispatch, whoever asked for the send.
 
+#[cfg(feature = "firewall")]
 use axum::http::StatusCode;
-use serde_json::{Value, json};
+#[cfg(feature = "firewall")]
+use serde_json::Value;
+use serde_json::json;
 
-use super::direct_continuation_tests::{BACKENDS, code, dispatched, state_of};
-use super::direct_guards_fixture::{Answer, Fx, send_with_headers};
+use super::direct_continuation_tests::dispatched;
+#[cfg(feature = "firewall")]
+use super::direct_continuation_tests::{BACKENDS, code, state_of};
+use super::direct_guards_fixture::Answer;
+#[cfg(feature = "firewall")]
+use super::direct_guards_fixture::{Fx, send_with_headers};
 
 /// `gateway_invoke read` on `/mcp` as `key`, a modern request declaring form
 /// elicitation, with `extra` in the params.
+#[cfg(feature = "firewall")]
 async fn invoke(fx: &Fx, (key, backend): (&str, &str), extra: Value) -> (StatusCode, Value) {
     let mut params = json!({
         "name": "gateway_invoke",
@@ -34,9 +42,11 @@ async fn invoke(fx: &Fx, (key, backend): (&str, &str), extra: Value) -> (StatusC
 }
 
 /// A shell-injection argument the input scanner blocks (a High finding).
+#[cfg(feature = "firewall")]
 const BLOCKED: &str = "; rm -rf / ";
 
 /// The answers to the fixture's one question, `k1`, accepting `account`.
+#[cfg(feature = "firewall")]
 fn answering(account: &str) -> Value {
     json!({"k1": {"action": "accept", "content": {"account": account}}})
 }

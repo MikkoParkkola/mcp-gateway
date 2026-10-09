@@ -445,6 +445,7 @@ fn the_challenge_gate_scans_a_prompt_as_it_is_delivered() {
 /// refusal waits in `relay_refused` for the call site, and no `tools/call`
 /// goes out. Control: the same round answering cleanly is sent. Mutant: the
 /// round skipping the chokepoint's answer scan.
+#[cfg(feature = "firewall")]
 #[tokio::test]
 async fn a_bridged_round_whose_answers_the_firewall_blocks_is_not_sent() {
     use crate::security::firewall::{Firewall, FirewallConfig};

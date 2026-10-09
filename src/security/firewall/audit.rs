@@ -190,15 +190,15 @@ impl AuditLogger {
         // gpt + kimi, over the `crate::clock` recorder default): stamped with
         // the epoch and marked `clock_invalid`, so a refused send never
         // vanishes from the log. The send's verdict does not depend on it.
-        let (now, clock_invalid) = match crate::clock::utc_now() {
-            Ok(now) => (now, None),
-            Err(_) => {
-                tracing::warn!(
-                    source,
-                    "Firewall: dispatch audit row stamped with the epoch, the host clock reads before 1970"
-                );
-                (chrono::DateTime::<Utc>::default(), Some(true)) // the epoch, a constant: no clock read
-            }
+        let (now, clock_invalid) = if let Ok(now) = crate::clock::utc_now() {
+            (now, None)
+        } else {
+            tracing::warn!(
+                source,
+                "Firewall: dispatch audit row stamped with the epoch, the host clock reads before 1970"
+            );
+            // The epoch as a constant, not a clock read.
+            (chrono::DateTime::<Utc>::default(), Some(true))
         };
         // Built from the allowed fields only: never the caller's fragment or
         // its key-naming description.
