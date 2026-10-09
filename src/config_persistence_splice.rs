@@ -754,7 +754,7 @@ mod tests {
     #[test]
     fn the_preserving_writer_reports_each_outcome() {
         use crate::config::Config;
-        use crate::config_persistence::write_config_preserving;
+        use crate::config_persistence::edit_config;
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gateway.yaml");
         // Owner-only, as the loader requires (CONFIG.2): a file it refuses to
@@ -764,7 +764,12 @@ mod tests {
         write(&path, flow).expect("write");
         let two: Config = serde_yaml::from_str("backends:\n  a: {command: a}\n  b: {command: b}\n")
             .expect("config");
-        let refusal = write_config_preserving(&path, &two).expect_err("refused");
+        let refusal = edit_config(&path, crate::config_persistence::CommentLoss::Refuse, |c| {
+            *c = two.clone();
+            Ok(())
+        })
+        .map(drop)
+        .expect_err("refused");
         assert!(
             refusal.starts_with("Not saved:") && refusal.contains("line 1"),
             "{refusal}"
@@ -772,7 +777,14 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).expect("read"), flow);
         let block = "backends:\n  a:  # kept by hand\n    command: a\n";
         write(&path, block).expect("write");
-        assert_eq!(write_config_preserving(&path, &two), Ok(()));
+        assert_eq!(
+            edit_config(&path, crate::config_persistence::CommentLoss::Refuse, |c| {
+                *c = two.clone();
+                Ok(())
+            })
+            .map(drop),
+            Ok(())
+        );
         assert!(
             std::fs::read_to_string(&path)
                 .expect("read")

@@ -213,7 +213,7 @@ async fn t10a_reload_waits_for_the_cli_append() {
 async fn t2c_watcher_reload_records_the_change() {
     let r = Reload::new();
     let config_path = r.grants.with_file_name("gateway.yaml");
-    crate::config_persistence::write_config(&config_path, &Config::default()).unwrap();
+    crate::gateway::test_helpers::write_config_fixture(&config_path, &Config::default()).unwrap();
     r.cli(add(row("g1", "r"))).await;
 
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(4);

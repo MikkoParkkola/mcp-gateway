@@ -275,7 +275,10 @@ pub(super) fn task_method(id: i64, method: &str, params: Value) -> Value {
 /// `Mcp-Name` is derived from `mcp_name_body_field` — the production rule — so a
 /// request is never refused by the header/body mirror check for a reason no row
 /// is about.
-fn http_request(principal: Option<&str>, body: &Value) -> axum::http::Request<axum::body::Body> {
+pub(super) fn http_request(
+    principal: Option<&str>,
+    body: &Value,
+) -> axum::http::Request<axum::body::Body> {
     let method = body["method"].as_str().unwrap_or_default().to_string();
     let mut builder = axum::http::Request::builder()
         .method("POST")

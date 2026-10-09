@@ -303,9 +303,16 @@ fn write_init_files(
 
     // Through the config writer, not `std::fs::write`: this file now carries a
     // generated admin credential, and a plain write leaves it at the umask for
-    // any other local account to read.
-    mcp_gateway::config_persistence::write_config_text(output, config_content)
-        .map_err(std::io::Error::other)?;
+    // any other local account to read. Under the config lock, create only: a
+    // config another writer made after the exists check is kept (MIK-8042).
+    mcp_gateway::config_persistence::edit_config_text(output, |current| match current {
+        None => Ok(Some(config_content.to_owned())),
+        Some(_) => Err(format!(
+            "{} was created while init ran; it is left as it is",
+            output.display()
+        )),
+    })
+    .map_err(std::io::Error::other)?;
 
     for (path, content) in sample_files {
         std::fs::write(path, content)?;
