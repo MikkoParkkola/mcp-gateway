@@ -1,0 +1,24 @@
+diff --git a/src/gateway/server/persistence.rs b/src/gateway/server/persistence.rs
+index e08f8708d..b164aa0cf 100644
+--- a/src/gateway/server/persistence.rs
++++ b/src/gateway/server/persistence.rs
+@@ -227,7 +227,7 @@ pub(super) type ShutdownSave = (&'static str, Box<dyn FnOnce() + Send>);
+ /// name; being off the blocking pool, it holds neither the shutdown nor the
+ /// runtime's drop after it.
+ pub(super) async fn run_shutdown_saves(deadline: tokio::time::Instant, saves: Vec<ShutdownSave>) {
+-    let mut running = Vec::new();
++    let mut running: Vec<(&'static str, tokio::sync::oneshot::Receiver<()>)> = Vec::new();
+     for (step, save) in saves {
+         let (done, finished) = tokio::sync::oneshot::channel();
+         let spawned = std::thread::Builder::new()
+@@ -237,7 +237,9 @@ pub(super) async fn run_shutdown_saves(deadline: tokio::time::Instant, saves: Ve
+                 let _ = done.send(());
+             });
+         match spawned {
+-            Ok(_) => running.push((step, finished)),
++            Ok(_) => {
++                super::stdio_shutdown::bounded_step(deadline, step, finished).await;
++            }
+             Err(error) => warn!(step, %error, "shutdown save could not start a thread; skipped"),
+         }
+     }
