@@ -127,7 +127,9 @@ mod source_checks {
         // and listed. Not caught: a new writer inside a listed file, or a key
         // built without the literal; the wire tests below cover delivery.
         let allowed = [
-            "src/gateway/router/handlers.rs",
+            // MIK-8143: the cacheable-field tests, moved out of handlers.rs;
+            // they read the key from built responses.
+            "src/gateway/router/handlers/cacheable_field_tests.rs",
             "src/protocol/cacheable.rs",
             // MIK-8025: the shaper's own module notes the hints it wrote, and
             // the write record names the path to strip it; neither writes it.
