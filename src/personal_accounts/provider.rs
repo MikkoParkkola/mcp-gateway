@@ -33,7 +33,6 @@
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 use url::Url;
@@ -129,9 +128,10 @@ pub(crate) trait ProviderHttp: Send + Sync {
 }
 
 /// Wall clock seam. `expires_at` is absolute, so a test that pins the clock
-/// pins the mapped value exactly.
+/// pins the mapped value exactly. A clock before 1970 is an error, never 0
+/// (MIK-8202): each caller refuses on it.
 pub(crate) trait Clock: Send + Sync {
-    fn now_unix(&self) -> u64;
+    fn now_unix(&self) -> Result<u64, crate::clock::ClockBeforeEpoch>;
 }
 
 /// Production clock.
@@ -139,10 +139,8 @@ pub(crate) trait Clock: Send + Sync {
 pub(crate) struct SystemClock;
 
 impl Clock for SystemClock {
-    fn now_unix(&self) -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs())
+    fn now_unix(&self) -> Result<u64, crate::clock::ClockBeforeEpoch> {
+        crate::clock::unix_secs()
     }
 }
 
@@ -349,7 +347,12 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
         if send_resource {
             form.push(("resource".to_string(), resource.to_string()));
         }
-
+        // Clock first (MIK-8202): a refresh that rotates the refresh token on
+        // a clock we cannot read would lose the new one when its expiry is
+        // stamped. Only a clock stepping back mid-call can still do that.
+        self.clock
+            .now_unix()
+            .map_err(|_| ProviderRefreshError::Unavailable)?;
         let response = self
             .http
             .post_token(token_endpoint, &form)
@@ -402,11 +405,15 @@ impl<H: ProviderHttp, C: Clock, S: SecretSource> PersonalOAuthRefresh<H, C, S> {
         // optional: `TokenRefresh` has no spelling for "unknown", and inventing
         // a default lifetime would let a stale token be served as fresh.
         let expires_in = body.expires_in.ok_or(ProviderRefreshError::Unavailable)?;
+        // A recorder: an unreadable clock writes no expiry (MIK-8202).
+        let now = self
+            .clock
+            .now_unix()
+            .map_err(|_| ProviderRefreshError::Unavailable)?;
         // MIK-8207: one rule with every other token answer; an `expires_in`
         // above 100 years, or one that overflows, is refused.
-        let expires_at =
-            crate::duration_bound::expiry_from_expires_in(self.clock.now_unix(), expires_in)
-                .ok_or(ProviderRefreshError::Unavailable)?;
+        let expires_at = crate::duration_bound::expiry_from_expires_in(now, expires_in)
+            .ok_or(ProviderRefreshError::Unavailable)?;
         Ok(TokenRefresh {
             access_token: body.access_token,
             // None is preserved, never rewritten to the current token: the

@@ -12,6 +12,7 @@ use std::time::Duration;
 use axum::http::{HeaderMap, header};
 use serde::Deserialize;
 
+use crate::clock::{Validity, expired_by};
 use crate::config::Config;
 use crate::gateway::openwebui_adapter::session_principal;
 use crate::key_server::oidc::VerifiedIdentity;
@@ -128,7 +129,17 @@ impl OwuiSessionBridge {
             body.extend_from_slice(&chunk);
         }
         let user: SessionUser = serde_json::from_slice(&body).ok()?;
-        let unexpired = user.expires_at.is_none_or(|at| at >= unix_now());
+        // A session with an expiry is refused when the clock cannot be read
+        // (MIK-8202); one without an expiry never needs the clock.
+        let unexpired = user.expires_at.is_none_or(|at| {
+            expired_by(|now| {
+                if at >= i64::try_from(now).unwrap_or(i64::MAX) {
+                    Validity::Live
+                } else {
+                    Validity::Expired
+                }
+            }) == Validity::Live
+        });
         unexpired.then_some(user.id)
     }
 }
@@ -148,14 +159,6 @@ fn sole_cookie<'h>(headers: &'h HeaderMap, name: &str) -> Option<&'h str> {
         }
     }
     found.filter(|value| !value.is_empty())
-}
-
-fn unix_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| {
-            i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX)
-        })
 }
 
 #[cfg(test)]

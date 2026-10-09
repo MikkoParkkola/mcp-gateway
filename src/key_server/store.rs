@@ -15,7 +15,9 @@
 
 use std::net::IpAddr;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
 use rand::RngExt;
@@ -64,12 +66,23 @@ impl std::fmt::Debug for TemporaryToken {
 impl TemporaryToken {
     /// Returns `true` if the token has passed its expiry time.
     #[must_use]
+    /// A clock it cannot read counts as expired (MIK-8202).
     pub fn is_expired(&self) -> bool {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::ZERO)
-            .as_secs();
-        now >= self.exp
+        use crate::clock::{Validity, expired_by};
+        expired_by(|now| {
+            if now >= self.exp {
+                Validity::Expired
+            } else {
+                Validity::Live
+            }
+        }) == Validity::Expired
+    }
+
+    /// Past its expiry on a clock that reads: what eviction, reaping and the
+    /// per-identity count go by. A clock it cannot read ages nothing out, so
+    /// nothing is deleted on it (MIK-8202); access still refuses.
+    fn aged_out(&self) -> bool {
+        crate::clock::unix_secs().is_ok_and(|now| now >= self.exp)
     }
 }
 
@@ -183,10 +196,12 @@ impl TokenStore for InMemoryTokenStore {
         drop(entry);
 
         if token.is_expired() {
-            // Lazy eviction: remove on access
-            self.by_bearer.remove(bearer);
-            self.by_jti.remove(&token.jti);
-            debug!(jti = %token.jti, "Lazy-evicted expired token");
+            // Lazy eviction: remove on access, once really past its expiry.
+            if token.aged_out() {
+                self.by_bearer.remove(bearer);
+                self.by_jti.remove(&token.jti);
+                debug!(jti = %token.jti, "Lazy-evicted expired token");
+            }
             return None;
         }
 
@@ -233,7 +248,7 @@ impl TokenStore for InMemoryTokenStore {
             .iter()
             .filter(|e| {
                 let identity = &e.value().identity;
-                identity.issuer == issuer && identity.subject == subject && !e.value().is_expired()
+                identity.issuer == issuer && identity.subject == subject && !e.value().aged_out()
             })
             .count()
     }
@@ -242,7 +257,7 @@ impl TokenStore for InMemoryTokenStore {
         let expired_bearers: Vec<String> = self
             .by_bearer
             .iter()
-            .filter(|e| e.value().is_expired())
+            .filter(|e| e.value().aged_out())
             .map(|e| e.key().clone())
             .collect();
 
@@ -559,5 +574,36 @@ mod tests {
 
         // THEN: is_expired returns false
         assert!(!token.is_expired());
+    }
+
+    /// MIK-8202: a clock that reads before 1970 refuses a bearer token the
+    /// real clock still admits; it never reads an expiry as still ahead.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_clock_before_the_epoch_refuses_a_live_bearer_token() {
+        let store = InMemoryTokenStore::new();
+        let token = make_token("sub", "alice@company.com", 3600);
+        let bearer = token.token.clone();
+        store.insert(token).await;
+        assert!(
+            store.get(&bearer).await.is_some(),
+            "control: live on the real clock"
+        );
+
+        {
+            let _clock = crate::clock::test_clock::before_epoch();
+            assert!(
+                store.get(&bearer).await.is_none(),
+                "an unreadable clock admitted a bearer token"
+            );
+            assert_eq!(
+                store.reap_expired().await,
+                0,
+                "an unreadable clock reaped a token"
+            );
+        }
+        assert!(
+            store.get(&bearer).await.is_some(),
+            "a refusal on an unreadable clock deleted the token for good"
+        );
     }
 }
