@@ -371,6 +371,7 @@ async fn mik_1989_a_kill_during_the_schema_check_stops_the_round() {
 /// MIK-7910: the challenge gate scans a round's prompts as the client receives
 /// them. A backend's copy of the reserved chain member is not delivered, so a
 /// marker only there does not refuse the exchange; one in the prompt does.
+#[cfg(feature = "firewall")]
 #[test]
 fn the_challenge_gate_scans_a_prompt_as_it_is_delivered() {
     use crate::gateway::input_bridge::ChallengeGate as _;

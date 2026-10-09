@@ -283,9 +283,10 @@ mod answers;
 mod egress;
 use answers::{call_answer, listing, question};
 use egress::backend_transport;
-pub(crate) use egress::fixture_inspecting_on;
 #[cfg(feature = "firewall")]
-pub(crate) use egress::{fixture_audited_on, fixture_firewalled_on, meta_firewall};
+pub(crate) use egress::{
+    fixture_audited_on, fixture_firewalled_on, fixture_inspecting_on, meta_firewall,
+};
 
 pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
 

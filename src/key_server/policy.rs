@@ -624,7 +624,7 @@ mod tests {
 
     #[test]
     fn policy_rule_without_backends_warns_at_load() {
-        let (_, logs) = crate::security::firewall::response_tests::audit::capture_warnings(|| {
+        let (_, logs) = crate::test_log_capture::capture_warnings(|| {
             make_engine(vec![rule_with_backends(&["*"]), rule_with_backends(&[])])
         });
         assert_eq!(logs.matches("grants no backends").count(), 1, "{logs}");

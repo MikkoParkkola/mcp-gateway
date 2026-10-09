@@ -7,7 +7,6 @@
 use std::collections::HashMap;
 
 use super::super::{BackendConfig, Config, OAuthConfig, TransportConfig};
-use crate::gateway::ui::backend_ops::resolve_parts;
 use crate::identity_propagation::IdentityPropagationConfig;
 use crate::secret_injection::CredentialRule;
 
@@ -219,8 +218,10 @@ fn t11_for_url_selects_websocket_by_scheme_in_any_case() {
     }
 }
 
+#[cfg(feature = "webui")]
 #[test]
 fn t11_admin_ui_and_cli_add_store_a_pasted_wss_url_as_websocket() {
+    use crate::gateway::ui::backend_ops::resolve_parts;
     for url in ["wss://h/mcp", "WS://h/mcp"] {
         let (transport, _) = resolve_parts("rt", None, Some(url), None).unwrap();
         match transport {

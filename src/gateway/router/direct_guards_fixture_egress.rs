@@ -12,7 +12,9 @@ use serde_json::{Value, json};
 
 #[cfg(feature = "firewall")]
 use super::{AUDIT_LOG, FIREWALL_RULE, META_FIREWALL};
-use super::{Answer, CountingBackend, Fx, TRANSPORT, fixture_inner};
+use super::{Answer, CountingBackend, TRANSPORT};
+#[cfg(feature = "firewall")]
+use super::{Fx, fixture_inner};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::transport::Transport;
 
@@ -46,6 +48,8 @@ pub(crate) async fn fixture_audited_on(
 
 /// `transport` behind no firewall, with response inspection in action mode:
 /// only the content inspection can withhold what it answers.
+// Its only consumer is the egress matrix, which is `firewall`-gated.
+#[cfg(feature = "firewall")]
 pub(crate) async fn fixture_inspecting_on(transport: Arc<dyn Transport>) -> Fx {
     TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
     let fx = fixture_inner(Answer::Ok, false, |mut meta| {
