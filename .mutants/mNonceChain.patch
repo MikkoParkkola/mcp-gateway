@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/signing.rs b/src/gateway/meta_mcp/signing.rs
+index c6a57ec..a772a65 100644
+--- a/src/gateway/meta_mcp/signing.rs
++++ b/src/gateway/meta_mcp/signing.rs
+@@ -122,7 +122,7 @@ impl SigningInvocationContext {
+     /// A step asked for the nonce back and no step dispatched.
+     fn refund_due(&self) -> bool {
+         use std::sync::atomic::Ordering::SeqCst;
+-        self.refund.wanted.load(SeqCst) && !self.refund.dispatched.load(SeqCst)
++        self.refund.wanted.load(SeqCst)
+     }
+ 
+     /// Move protocol metadata out of the raw request. Invalid nonce values are

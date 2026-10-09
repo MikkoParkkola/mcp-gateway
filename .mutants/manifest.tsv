@@ -1,0 +1,10 @@
+head_sha	72e8353c6389113e130cd912f6d4cd94737d3386
+# MIK-8137 P1-route-a (#3626)
+m8162	linux	m8162.patch	--lib gateway::router::tests::mcp_malformed_hardened::a_body_declared_malformed_request_is_told_what_it_omitted
+m8117	linux	m8117.patch	--lib gateway::meta_mcp::tests::input_requests::a_malformed_round_asking_an_undeclared_question_is_refused_alike
+mN1a	linux	mN1a.patch	--lib gateway::router::mcp_nonce_tests::n1a_a_refused_continuation_consumes_no_nonce_on_mcp
+mN1b	linux	mN1b.patch	--lib gateway::router::mcp_nonce_tests::n1b_a_spend_refusal_consumes_no_nonce_on_mcp
+mSettle	linux	mSettle.patch	--lib gateway::router::mcp_nonce_tests::n1b_a_spend_refusal_consumes_no_nonce_on_mcp
+mEager	linux	mEager.patch	--lib gateway::router::mcp_nonce_tests::n1d_a_playbook_continuing_past_a_refused_step_keeps_its_nonce
+mNonceChain	linux	mNonceChain.patch	--lib gateway::router::mcp_nonce_tests::n1c_a_signed_chain_that_ran_a_step_keeps_its_nonce
+mCompleted	linux	mCompleted.patch	--lib gateway::meta_mcp::tests::input_requests::a_completed_result_carrying_input_requests_is_not_refused
