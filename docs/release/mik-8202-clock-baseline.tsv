@@ -51,7 +51,7 @@ src/events/store_pending_tests.rs	21
 src/events/store_revive_tests.rs	3
 src/events/store_tests.rs	17
 src/events/upstream_listener.rs	1
-src/events/upstream_session.rs	1
+src/events/upstream_session_notes.rs	1
 src/events/upstream_session_tests.rs	1
 src/events/watch_hold_tests.rs	1
 src/events/watch_source.rs	1
