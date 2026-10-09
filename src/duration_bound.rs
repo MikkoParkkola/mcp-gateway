@@ -60,7 +60,7 @@ pub(crate) fn millis<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, 
     Ok(millis)
 }
 
-/// A chrono [`TimeDelta`](chrono::TimeDelta) from a constant, checked when
+/// A chrono `TimeDelta` from a constant, checked when
 /// the crate compiles (MIK-8207): `delta!(seconds, 30)`, `delta!(days, 1)`.
 ///
 /// The constructors it replaces (`TimeDelta::seconds` and the like) panic
