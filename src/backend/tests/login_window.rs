@@ -145,12 +145,6 @@ fn spawn_start(backend: &Arc<Backend>) -> tokio::task::JoinHandle<Result<()>> {
     tokio::spawn(async move { backend.ensure_started().await })
 }
 
-/// A loopback port nothing listens on.
-async fn free_port() -> u16 {
-    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    probe.local_addr().unwrap().port()
-}
-
 /// The callback listener on `port` is gone: the port binds again.
 async fn assert_port_released(port: u16, what: &str) {
     within(what, async {
@@ -247,7 +241,9 @@ async fn stop_ends_a_pending_login_and_frees_its_port() {
     let origin = authorization_server().await;
     let dir = tempfile::tempdir().unwrap();
     let browser = Browser::new();
-    let port = free_port().await;
+    // The release is proved by binding the port again, so it comes from the
+    // reserved range no parallel port-0 bind can take first (MIK-8211).
+    let port = crate::test_ports::reserved_port();
     let backend = login_backend(
         &origin,
         dir.path(),
@@ -282,7 +278,9 @@ async fn a_forced_restart_ends_the_pending_login_before_binding_again() {
     let origin = authorization_server().await;
     let dir = tempfile::tempdir().unwrap();
     let browser = Browser::new();
-    let port = free_port().await;
+    // A fixed port is the subject here, so it comes from the reserved range
+    // no port-0 bind can take (MIK-8211).
+    let port = crate::test_ports::reserved_port();
     let backend = login_backend(
         &origin,
         dir.path(),
@@ -516,6 +514,9 @@ pub(super) enum Upstream {
     Plain,
     /// A first `tools/list` page after the delay, then one that never comes.
     ListStalls(Duration),
+    /// As `ListStalls`, counting each first-page request (MIK-8046: proves a
+    /// joiner sent none of its own). One test owns each counter.
+    ListStallsCounted(Duration, &'static AtomicUsize),
     /// Hands out a session at the handshake, and answers every later request
     /// after the delay with "session not found".
     SessionExpires(Duration),
@@ -564,7 +565,15 @@ async fn issuing_server(expires_in: u64, upstream: Upstream) -> String {
                     json!({"jsonrpc": "2.0", "id": id,
                         "result": {"tools": [], "nextCursor": "page-2"}})
                 }
-                (Upstream::ListStalls(_), Some(_)) => std::future::pending().await,
+                (Upstream::ListStallsCounted(first, pages), None) => {
+                    pages.fetch_add(1, Ordering::SeqCst);
+                    sleep(first).await;
+                    json!({"jsonrpc": "2.0", "id": id,
+                        "result": {"tools": [], "nextCursor": "page-2"}})
+                }
+                (Upstream::ListStalls(_) | Upstream::ListStallsCounted(..), Some(_)) => {
+                    std::future::pending().await
+                }
                 _ => json!({"jsonrpc": "2.0", "id": id, "result": {"tools": []}}),
             },
             _ => json!({"jsonrpc": "2.0", "id": id,

@@ -2112,30 +2112,21 @@ impl Gateway {
         let std_listener = listener.into_std()?;
         listener::serve(app, std_listener, addr, &self.config, shutdown).await?;
 
-        // Save search ranker usage data
-        persistence::save_with_logging(
-            &ranker_path,
-            |path| ranker_for_shutdown.save(path),
-            "Failed to save search ranker usage data",
-            "Saved search ranking usage data",
-        );
-
-        // Save transition tracking data
-        persistence::save_with_logging(
-            &transition_path,
-            |path| tracker_for_shutdown.save(path),
-            "Failed to save transition tracking data",
-            "Saved transition tracking data",
-        );
-
+        // Saved under one deadline, off the runtime's threads (MIK-8157).
         #[cfg(feature = "cost-governance")]
-        if let Some(ref enforcer) = meta_mcp_for_shutdown.budget_enforcer {
-            // A periodic save still running must not land after this one.
-            if let Some(saver) = cost_saver {
-                drop(saver.await);
-            }
-            persistence::save_costs(enforcer, &data_dir);
-        }
+        let cost = meta_mcp_for_shutdown
+            .budget_enforcer
+            .clone()
+            .map(|enforcer| (enforcer, data_dir.clone()));
+        // It ends on the shutdown broadcast; a write in flight finishes or
+        // is abandoned on its own thread.
+        #[cfg(feature = "cost-governance")]
+        drop(cost_saver);
+        #[cfg(not(feature = "cost-governance"))]
+        let cost = None;
+        let (ranker, tracker) = (ranker_for_shutdown, tracker_for_shutdown);
+        let paths = (ranker_path.clone(), transition_path.clone());
+        persistence::save_state_on_shutdown(ranker, paths.0, tracker, paths.1, cost).await;
 
         // Graceful drain: wait for in-flight requests to complete.
         // The semaphore has 10,000 permits; each in-flight request holds one.
@@ -2570,6 +2561,7 @@ impl Gateway {
                         )),
                         &writer,
                         &reads,
+                        Some(meta_mcp.notification_screen("stdio", session_id)),
                     )
                     .await;
                     Self::persist_stdio_protocol_telemetry(&telemetry);
@@ -2661,6 +2653,7 @@ impl Gateway {
                         )),
                         &writer,
                         &reads,
+                        Some(meta_mcp.notification_screen("stdio", session_id)),
                     )
                     .await;
                     Self::persist_stdio_protocol_telemetry(&telemetry);
@@ -3069,7 +3062,7 @@ impl Gateway {
             super::meta_mcp::invoke::relay::GatewayStamps::Legacy
         };
         let chain_source = response.chain_source;
-        let response = meta_mcp.finalize_content(
+        let mut response = meta_mcp.finalize_content(
             response,
             &super::meta_mcp::response_security::ResponseDeliveryContext {
                 method: &method,
@@ -3081,14 +3074,12 @@ impl Gateway {
                     external_tool: &external_tool,
                     subject: None,
                 },
-                mutation:
-                    crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
                 signing: signing_context.as_ref(),
                 chain_source,
                 chain_nonce: chain_nonce.as_deref(),
             },
-            super::meta_mcp::response_security::DeliveryInspection::Required,
         );
+        meta_mcp.release_unsent_hold(&mut response).await; // MIK-8131
         // MIK-7887.RECEIPT.4: the receipt describes the delivered answer, with
         // the stamps its era got; the judge can only replace the answer.
         {
@@ -3406,7 +3397,7 @@ impl Gateway {
                     &caller,
                 )
             {
-                break 'tool_call JsonRpcResponse::error(
+                break 'tool_call JsonRpcResponse::gateway_error(
                     Some(id),
                     error.to_rpc_code(),
                     super::meta_mcp::signing::wire_error_message(&error),
@@ -3427,18 +3418,14 @@ impl Gateway {
                     Err(refusal) => break 'tool_call *refusal,
                 }
             }
-            // A task is admitted durably by its handoff, as on HTTP.
-            let admission = if caller.task.is_some() || caller.awaits_signing_admission() {
-                Ok(super::meta_mcp::admission::SyncAdmission::Unprotected)
-            } else {
-                meta_mcp.admit_meta_sync(
-                    &caller,
-                    &tool_name,
-                    arguments.as_ref(),
-                    Some(session_id),
-                    &id,
-                )
-            };
+            let admission = meta_mcp.admit_meta_sync(
+                super::meta_mcp::AdmissionOwner::local_operator(),
+                &caller,
+                &tool_name,
+                arguments.as_ref(),
+                Some(session_id),
+                &id,
+            );
             execution = match admission {
                 Ok(super::meta_mcp::admission::SyncAdmission::Unprotected) => None,
                 Ok(super::meta_mcp::admission::SyncAdmission::Owned(lease)) => Some(lease),

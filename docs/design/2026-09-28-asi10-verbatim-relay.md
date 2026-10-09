@@ -122,6 +122,8 @@ entry; the metric is the rate to watch before `block`.
 
 ## 5. Limits and evasion (these keep ASI10 PARTIAL)
 
+Which of these are accepted, and the numeric budget, are fixed by §14.
+
 - **Missed:** re-encoding, paraphrase, splits under 48 chars, about 1 in 1,000 copies of 79 chars
   (fewer for longer ones, §3), and anything past a delivery's first 4,096 fingerprints
   (`source_truncated`).
@@ -403,12 +405,12 @@ The source is `server:tool`.
   tail-only excerpt still matches. The cap sits under the detector's 4,096-fingerprint keep
   limit (about 8K characters in each of a split copy's two forms, kept in text order); the
   64 KiB first proposed would have
-  dropped every tail fingerprint. Each cut is counted; the middle of a larger result is the
-  known, observable residual.
+  dropped every tail fingerprint. Each cut is counted. The middle of a larger result is an
+  in-model gap, not a stated residual: §14.5 (MIK-8066 CAP.2) governs.
 - **Evasion bound (stated for operators and the final review).** Per delivered result, only its
   first and last 3 KiB of text are compared, at most 4,096 fingerprints. Content taken only from
-  the rest of a larger result is never detected, so a source that pads a result can move content
-  out of view. The egress side has no cap: every string of the forwarded params is checked, so
+  the rest of a larger result is never detected today, so a source that pads a result can move
+  content out of view; this is an open in-model gap (§14.5, MIK-8066 CAP.2), not an accepted bound. The egress side has no cap: every string of the forwarded params is checked, so
   padding the relayed payload hides nothing. Below the fingerprint size nothing matches: a shared
   run under 48 characters never counts, a longer run keeps about 1 in 4 of its k-grams (§3), and
   `min_matches` (default 2) are needed. Acceptable for `observe`; whether `block` needs sampling
@@ -748,3 +750,167 @@ delivery path is the staged-receipts path of 13.3/13.4).
   routes. Members the gateway wrote on that route (its chain, the clamped `cacheScope`, a modern
   answer's `serverInfo`) are left out, since they are not backend text; a legacy answer's backend
   `serverInfo` reaches the caller and stays in. A `gateway_invoke` answer is read decoded.
+
+## 14. Threat model and stop rule (MIK-8035, 2026-10-09)
+
+Relay detection kept producing tickets because each review found another way to spell the same
+text: a lexical matcher under adversarial review never runs out of spellings. This section fixes
+which inputs the control must handle, which it does not, how much it may miss by, and the rule
+that decides any future finding without another design round. Three review rounds by two
+independent reviewers; maintainer decisions are marked.
+
+### 14.1 Three error directions
+
+| Direction | Harmed | In model | Out of model |
+|---|---|---|---|
+| **D1 missed relay** | data owner | Principal B sends a contiguous run (after NFC and whitespace collapse) that a sensitive delivery to A carried; B holds no same-source copy; same replica; inside the window. Where the run sat in the delivery is not a reason to exclude it: the cuts and caps are gaps to close or to state in the budget (14.3). | Transforms the matcher cannot see: re-encoding, paraphrase, translation, case or punctuation changes, interleaving, splits under 48 chars, homoglyphs, and invisible characters the sanitizer does not strip (U+2060, U+00AD and others; U+200B-U+200D and U+FEFF are stripped before matching). Also §5 and §9. |
+| **D2 false refusal of an honest holder** (block; a false finding under observe) | legitimate caller | A delivery in shapes S1-S4, forwarded honestly: verbatim, its pieces re-joined in delivered order, or a subset of whole pieces. | Text the holder did not receive from that source; a copy spread over leaves of different key paths or interleaved with other text; the bounds in 14.3. |
+| **D3 false excuse** | data owner | An excuse covers only text the excused caller received from the same source, except the bounded Bloom rate B3, confined to the holder's own (source, caller) pair. | n/a |
+
+**Delivery shapes in model for D2:**
+- S1 one text leaf;
+- S2 MCP content items: an array of objects whose text sits under one key (`text`);
+- S3a a copy split over the values of one object's fields (the existing all-values forms);
+- S3b a copy split over the string values that share one key path across a consecutive run of array
+  elements (e.g. `[{"part": p1, "kind": "chunk"}, ...]`, key path `part`);
+- S4 a plan step or a plan's final answer built from S1-S3.
+
+**Key path**: the object keys from the delivery root to a leaf, with array indices elided. Elements
+are taken in array order, and fields in `serde_json::Map` order (sorted by key, since the crate does
+not enable `preserve_order`). A run is a maximal sequence of consecutive sibling elements whose leaf
+at that key path is a string.
+
+**Join rule** (MIK-8209, residuals 1, 3, 4 split from MIK-8035): besides the all-values forms, a delivery records, for
+each key path, the run-together of each run's values in order. A verbatim forward matches the
+all-values form; a re-join of one key path's pieces matches only the per-key-path form. No list of
+metadata keys is needed. The per-key-path form is text the caller received, so it is valid as
+evidence and as excuse. The mid-word evasion row (A3c) must stay red on revert.
+
+**Subsets.** A subset forward of whole pieces is excused for every k-gram inside a kept piece or a
+delivered join of consecutive kept pieces. A k-gram spanning a seam the forward created is evidence
+only if some other caller was delivered that exact join. A source is a tool name (`{server}:{tool}`,
+`collusion_gate.rs:612`), so one tool may return one text split on one call and joined on another.
+If it delivered another caller the exact join of the kept pieces, sensitively, the holder's subset
+forward is refused. That is an in-model defect: MIK-8205.
+
+### 14.2 Cross-tool copies: the per-source excuse is load-bearing (MIK-8206)
+
+An honest caller delivered the same text verbatim by a second tool is refused, because the excuse
+needs the copy from the same source. The rule closes an in-model laundering path:
+1. A, delivered sensitive P by `docs:read`, writes P with `notes:write`. That passes: the check skips
+   the sender's own records (`collusion.rs:631`), as it must.
+2. B reads P with `notes:read`.
+3. B sends P with `mail:send`. B holds P only from `notes:read`, so B is refused and the relay is
+   caught. With a per-caller excuse it would leave unseen (row `shared_store_relay_not_excused`).
+
+Saving what one read and forwarding what one found are both ordinary, so the path is in model.
+**Decision:** the per-source rule stays, as a stated bound. Refusals where the sender holds the text
+from another tool are counted in an exported metric and the refusal names that reason (MIK-8206).
+
+**Rejected: an egress ledger** that excuses a cross-tool copy unless another caller sent the text
+out before the copy arrived (exact records, ordered by a sequence number under the detector lock,
+kept in the fingerprint's entry). Both reviewers showed it unsound:
+1. A writes P to `notes:write`; the ledger records it.
+2. Traffic sweeps or evicts P's entry (§5, flush), and the ledger goes with it.
+3. B reads P from `notes:read`.
+4. A reads P from `docs:read` again: evidence returns with an empty ledger.
+5. B sends P and is excused.
+
+The store outlives the detector's memory; history kept elsewhere fails the same way at its own bound.
+
+### 14.3 Budget: what the control may miss or refuse
+
+A finding that shows only a budgeted effect, at or under its stated rate, is not a defect. A change
+that makes a budgeted rate worse is a regression and is in model.
+
+**B1 sampling (D1).** Let n be the number of distinct k-grams of the forwarded run not excused for
+the sender. It is missed when fewer than 2 are kept: P_miss(n) = (3/4)^n (1 + n/3). Length gives
+only an upper bound on n (a copy of L chars has at most L - 47 distinct k-grams, an unreceived tail
+of s chars at most s); repetitive text has fewer (100 repeated "a" chars: one k-gram, always missed).
+The examples assume no repeated k-grams.
+
+| n | Example | Per text | 1 in | Per 100 texts |
+|---|---|---|---|---|
+| 19 | 20-char unreceived tail, one k-gram held through the join (MIK-8196 measurement) | 3.10e-02 | 32 | 9.57e-01 |
+| 32 | 79-char copy, or 32-char tail | 1.17e-03 | 853 | 1.11e-01 |
+| 40 | 87-char copy, or 40-char tail | 1.44e-04 | 6,937 | 1.43e-02 |
+| 53 | 100-char copy, or 53-char tail | 4.46e-06 | 224,226 | 4.46e-04 |
+| 55 | 56-char tail (MIK-8196 failing row) | 2.60e-06 | 384,879 | 2.60e-04 |
+| 80 | 127-char copy, or 80-char tail | 2.80e-09 | 357,389,749 | 2.80e-07 |
+
+"Per 100 texts" is 1 - (1 - P)^100: how often a 100-text row fails if it asserts "always".
+**Acceptance test** (B1 only): over N >= 10,000 independent texts of one n, the miss count M is within budget
+when M <= N·P + 3·sqrt(N·P·(1 - P)). MIK-8196 measured M = 625 at N = 20,000, n = 19, against a
+bound of 694; with every k-gram kept, 0.
+
+**Determinism.** The sampling key is drawn once per process (`collusion.rs:303-305`), so which
+k-grams are kept cannot be predicted from outside. Inside one process a text always gets the same
+verdict, so a retry cannot draw a new sample (row `a_retried_relay_gets_the_same_verdict`). A row
+that depends on the draw keeps every k-gram or asserts the B1 rate.
+
+**B2 capacity bounds.** Each is accepted only if an operator can see it as a metric and a refusal it
+causes names it (MIK-8201):
+- 4,096 fingerprints per delivery: D1 past that point (a standing bound).
+- 250,000 tracked fingerprints, oldest evicted: D1 for evidence older than the effective window.
+- 64 records per caller per fingerprint and a 65,536-record pool: a sensitive record that does not
+  fit becomes overflow, which refuses any other caller's egress of that text even with a
+  same-source copy (D2). Needs one text delivered to one caller from over 64 sources, or the pool
+  exhausted, inside one window.
+- The per-source excuse (14.2), with its own metric and named refusal (MIK-8206).
+- Not a bound: a fifth cut delivery from one source evicting a holder's sketch (MIK-8066), which
+  then refuses the holder's own copy. Ordinary use; an in-model defect: MIK-8200. The fix keeps a
+  sketch while conflicting evidence can still live, bounded by memory (bound stated here when it
+  lands), keeps the B3 aggregate, and has a red row of 5+ cut deliveries from one source followed by
+  egress of the first one's middle. It lands before CAP.2's thinned sample.
+
+**B3 Bloom false excuse (D3).** A cut delivery's sketch says "held" for an absent fingerprint at most
+0.25% of the time, at most 1% across a pair's 4 live sketches; only for the holder's own (source,
+caller) pair. A relay with exactly 2 matches is lost if either is falsely excused: about 2%. Keeping
+more sketches per pair (MIK-8200) must keep this aggregate.
+
+### 14.4 Falsifier
+
+The model must keep what already proved real. MIK-8113 (a run across a seam missed, D1), MIK-8123
+(fan-out dropped holder records, D2 and D1) and MIK-8066's merged excuse (a holder refused for the
+middle of its own long answer, D2) are all in model.
+
+### 14.5 Members classified
+
+| Ticket | Direction | Class | Disposition |
+|---|---|---|---|
+| MIK-8066 CAP.2: the middle of a delivery over 6 KiB is never receipted | D1 | in model | Fix: a thinned sample of the cut middle as evidence, safe for holders because the cut-delivery sketch excuses their own copy; its miss rate is stated in B1 terms when it lands; after MIK-8200 |
+| MIK-8066 BIG.3 and remainder: plan answers or steps over 1 MiB lose receipts and excuses | D1, D2 | in model | Fix: streaming sketch build; the thinned sample |
+| MIK-8209 (from MIK-8035) residuals 1, 3: content items, labelled parts | D2 | in model | Fix: the per-key-path join |
+| MIK-8209 (from MIK-8035) residual 4: plan path has no run-together form | D2 and D1 | in model | Fix: the per-key-path join applied to the plan answer's k-grams |
+| MIK-8209 (from MIK-8035) residual 2: over the cap, flat and split receipts cut differently | D2 | in model | Pin with one row; likely met by MIK-8066's sketch |
+| MIK-8196: a 56-char tail missed once on one platform | D1 | in model, inside B1 | Row keeps every k-gram; determinism row added |
+| MIK-8200: sketch eviction refuses a holder | D2 | in model | Fix (High): see B2 |
+| MIK-8201: capacity bounds not metered or named | B2 visibility | in model | Fix |
+| MIK-8205: subset forward refused against the same tool's exact join | D2 | in model | Fix |
+| MIK-8206: cross-tool verbatim copy refused | D2 | stated bound (14.2) | Fix: metric and named refusal |
+| MIK-8136 (1): a run of over 256 bytes of combining marks without a starter may normalize differently near the forced cut | D1 only | out of model | Pathological input; a miss, never a refusal |
+| MIK-8136 (2): cut rule not checked against the Unicode corpus | none | not a finding | No concrete input |
+
+### 14.6 Stop rule
+
+A relay finding blocks a PR, reopens a ticket, or creates one only if it carries all four:
+1. a concrete input (bytes, not a description);
+2. an in-model case under 14.1. The accepted misses stay out of model by name: `Common` poisoning by
+   colluders who control `common_principals` identities, flushing the fingerprint map,
+   cross-replica relay, and the rest of §5 and §9;
+3. its direction. An unbudgeted D1 or D2 has zero tolerance: one deterministic reproduction suffices.
+   A budgeted rate needs a measured rate over the 14.3 bound, or a regression raising a stated rate;
+4. a red row at a production path: recording through `Firewall::delivery_digest` or
+   `receipt_digest`, plan retention through `retain_delivered` and `cap_kept`, seams through
+   `seam_fingerprints`, then `record_digest`; egress through `check_relay` or
+   `relay_block_message`. A gateway-level reproduction through `router/backend_handlers/relay.rs`
+   or `meta_mcp/invoke/relay*.rs` also counts.
+   `record_delivery` is a test shorthand for `delivery_digest` plus `record_digest`.
+
+Anything else gets one line in the ledger below and no ticket. Reviews of relay PRs receive this
+section and grade their own findings against it.
+
+| Date | Finding | Failed item |
+|---|---|---|
+| 2026-10-09 | MIK-8136 (1): combining-mark run over 256 bytes | 2 |
+| 2026-10-09 | MIK-8136 (2): Unicode corpus coverage | 1, 4 |

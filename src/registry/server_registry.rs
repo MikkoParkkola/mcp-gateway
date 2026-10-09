@@ -90,7 +90,8 @@ pub enum Setup {
         /// What to append.
         hint: &'static str,
     },
-    /// Needs another service running to point at (a database server).
+    /// Needs something outside the gateway: a service running to point at (a
+    /// database server), or a program the server launches (a browser).
     NeedsService {
         /// What it connects to.
         hint: &'static str,

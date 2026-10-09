@@ -46,6 +46,7 @@ async fn a_notification_is_written_before_its_dispatch_returns() {
             },
             &writer,
             &plain_reads(),
+            None,
         )
         .await
         .0
@@ -77,6 +78,7 @@ async fn a_dispatch_runs_inside_a_notification_scope() {
         async { notification_sink::mint_progress_token(&json!(7)) },
         &writer,
         &plain_reads(),
+        None,
     )
     .await
     .0;
@@ -97,6 +99,7 @@ async fn a_late_notification_is_drained_before_the_response() {
         },
         &writer,
         &plain_reads(),
+        None,
     )
     .await;
     let late = queue

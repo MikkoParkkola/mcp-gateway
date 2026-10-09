@@ -307,6 +307,7 @@ async fn reads(tasks: &StdioTasks, owner: &TaskOwnerText, id: &str) -> bool {
             Some(&json!({"taskId": id})),
             |_| std::future::ready(()),
             |_| None,
+            |_, _| {},
         )
         .await;
     answer.error.is_none()
@@ -658,4 +659,40 @@ async fn eof_drains_a_running_task_before_returning() {
         wire.to_string().contains("done") && !wire.to_string().contains("gateway_restart"),
         "settled by its own worker with the backend's result, not by recovery: {wire}"
     );
+}
+
+/// `MIK-7638.GH2543.2`: stdio serves no listener route, so its task store does
+/// not depend on the gateway's auth configuration. A bearer token whose
+/// secret reference cannot be resolved leaves the store open.
+#[tokio::test]
+async fn an_unresolvable_auth_config_leaves_the_stdio_store_open() {
+    let fixture = Box::pin(fixture(None)).await;
+    let store = tempfile::tempdir().expect("store root");
+    let mut config = Config::default();
+    config.tasks.store_dir = store.path().display().to_string();
+    config.auth.bearer_token = Some("env:MIK_7638_UNSET_FIXTURE_TOKEN".to_string());
+    assert!(
+        crate::gateway::auth::ResolvedAuthConfig::try_from_config(
+            &config.auth,
+            &crate::config::EnvOverlay::default()
+        )
+        .is_err(),
+        "premise: the fixture's auth secret must not resolve"
+    );
+    let opened = stdio_tasks::open(
+        &config,
+        &crate::config::EnvOverlay::default(),
+        &fixture.meta,
+        &fixture.policy,
+    )
+    .await;
+    assert!(
+        opened.is_some(),
+        "an auth secret stdio never uses turned its task store off"
+    );
+    if let Some((tasks, expiry)) = opened {
+        let window = std::time::Duration::from_secs(5);
+        let budget = super::super::task_runtime::ShutdownBudget::within(window, window);
+        stdio_tasks::shutdown(&tasks, expiry, budget).await;
+    }
 }

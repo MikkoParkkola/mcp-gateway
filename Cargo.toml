@@ -49,6 +49,7 @@ include = [
     "codebase-map.md",
     "docs/blog/security-aware-mcp-gateway.md",
     "docs/design/RFC-0081-intelligent-tool-surfacing.md",
+    "docs/design/surface-4.0.md",
     "docs/legal/dependency-licenses.tsv",
     "CLAUDE.md",
     "homebrew/mcp-gateway.rb",
@@ -110,6 +111,9 @@ include = [
     "docs/TEAM_DEPLOYMENT.md",
     "docs/trustcard.md",
     "docs/UPGRADING-4.0.md",
+    # The one glob here: pending UPGRADING entries are one file per PR and
+    # leave at release preparation, so no exact path can name them (MIK-8185).
+    "upgrading.d/*.md",
     "gateway.example.yaml",
     "scripts/release/nfr_upgrade_1_rehearsal.sh",
     "server.json",
@@ -290,6 +294,12 @@ runtime-substrate = []
 [[bin]]
 name = "mcp-gateway"
 path = "src/main.rs"
+
+[[test]]
+name = "cli_surface_inventory"
+path = "tests/cli_surface_inventory.rs"
+# Every feature that gates a CLI subcommand, so the table is checked whole.
+required-features = ["runtime-substrate", "config-export", "discovery"]
 
 [[test]]
 name = "task_upstream_recovery_sdk"

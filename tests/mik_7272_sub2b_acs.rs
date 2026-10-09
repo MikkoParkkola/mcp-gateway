@@ -88,6 +88,19 @@ struct FixtureState {
     /// batch of parked calls all resume on one release. Counting releases is
     /// the whole point here: two gates need two of them.
     releases: Arc<Semaphore>,
+    /// Held by a [`SLOW_TOOL`] call from before it is recorded until its
+    /// answer ends, under [`Handling::Serialised`].
+    serial: Option<Arc<tokio::sync::Mutex<()>>>,
+}
+
+/// How the fixture takes concurrent [`SLOW_TOOL`] calls (MIK-8199).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Handling {
+    /// Each call is taken as it arrives.
+    Concurrent,
+    /// A call is taken only once the previous one is answered: a planted
+    /// serialisation a concurrency row must catch.
+    Serialised,
 }
 
 /// The token the gateway minted for this call, read back off the wire.
@@ -191,7 +204,12 @@ fn unary_answer(request: &Value, state: &FixtureState) -> Value {
 /// together would let an implementation that flushes at the end pass a row
 /// written to catch exactly that — ADR-014 row 4's *"a design that buffers and
 /// flushes at the end deadlocks here instead of passing"*.
-fn slow_stream(request: &Value, state: &FixtureState, message: Option<String>) -> Response {
+fn slow_stream(
+    request: &Value,
+    state: &FixtureState,
+    message: Option<String>,
+    hold: Option<tokio::sync::OwnedMutexGuard<()>>,
+) -> Response {
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let token = minted_token(request);
     let gate = Arc::clone(&state.gate);
@@ -200,6 +218,8 @@ fn slow_stream(request: &Value, state: &FixtureState, message: Option<String>) -
         .pointer("/params/arguments/gates")
         .and_then(Value::as_u64);
     let body = async_stream::stream! {
+        // Held until this answer ends (Handling::Serialised).
+        let _hold = hold;
         let first = match &message {
             Some(marker) => message_frame(marker),
             None => progress_frame(&token),
@@ -242,7 +262,13 @@ fn slow_stream(request: &Value, state: &FixtureState, message: Option<String>) -
 /// is still parked. Rows with two calls genuinely in flight keep using
 /// [`RELEASE_TOOL`].
 async fn spawn_fixture_backend() -> (String, Received, Arc<Semaphore>) {
+    spawn_fixture_backend_handling(Handling::Concurrent).await
+}
+
+/// [`spawn_fixture_backend`] taking concurrent slow calls as `handling` says.
+async fn spawn_fixture_backend_handling(handling: Handling) -> (String, Received, Arc<Semaphore>) {
     let state = FixtureState {
+        serial: (handling == Handling::Serialised).then(|| Arc::new(tokio::sync::Mutex::new(()))),
         received: Arc::new(Mutex::new(Vec::new())),
         gate: Arc::new(Semaphore::new(0)),
         releases: Arc::new(Semaphore::new(0)),
@@ -254,17 +280,22 @@ async fn spawn_fixture_backend() -> (String, Received, Arc<Semaphore>) {
         axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
             let state = state.clone();
             async move {
+                let slow = tool_name(&request).as_deref() == Some(SLOW_TOOL);
+                let hold = match (&state.serial, slow) {
+                    (Some(serial), true) => Some(Arc::clone(serial).lock_owned().await),
+                    _ => None,
+                };
                 state
                     .received
                     .lock()
                     .expect("fixture sink poisoned")
                     .push(request.clone());
-                if tool_name(&request).as_deref() == Some(SLOW_TOOL) {
+                if slow {
                     let marker = request
                         .pointer("/params/arguments/message_marker")
                         .and_then(Value::as_str)
                         .map(str::to_owned);
-                    return slow_stream(&request, &state, marker);
+                    return slow_stream(&request, &state, marker, hold);
                 }
                 axum::Json(unary_answer(&request, &state)).into_response()
             }

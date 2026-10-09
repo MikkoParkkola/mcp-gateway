@@ -37,6 +37,17 @@ fn extract_request_id_zero() {
     assert_eq!(id, RequestId::Number(0));
 }
 
+/// An id above `i64::MAX` is unrecognised rather than wrapped into a
+/// negative id that would answer a different request.
+#[test]
+fn extract_request_id_beyond_i64_is_unrecognised() {
+    assert!(extract_request_id(&json!(u64::MAX)).is_none());
+    assert_eq!(
+        extract_request_id(&json!(i64::MAX)),
+        Some(RequestId::Number(i64::MAX))
+    );
+}
+
 #[test]
 fn extract_request_id_null_returns_none() {
     let val = json!(null);

@@ -12,6 +12,42 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const DOC: &str = include_str!("../docs/UPGRADING-4.0.md");
 
+// MIK-8185: pending `upgrading.d/` fragments, and supersession by title.
+#[path = "common/upgrading_fragments.rs"]
+mod fragments;
+use fragments::{SectionKey, pending_titles, resolve_successor, successor_name};
+
+/// Which guide the checks read. CI sets `UPGRADING_DOC` to the guide with every
+/// pending `upgrading.d/` fragment assembled (MIK-8185), so a fragment that
+/// would break a check at release breaks its own PR instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DocSource {
+    /// The committed guide, compiled in.
+    Committed,
+    /// A guide on disk: the release-preparation dry run.
+    Assembled(std::path::PathBuf),
+}
+
+/// The source `UPGRADING_DOC`'s value selects. Takes the value, not the
+/// environment, so both branches are tested without setting a variable.
+fn doc_source(var: Option<std::ffi::OsString>) -> DocSource {
+    match var {
+        Some(path) if !path.is_empty() => DocSource::Assembled(path.into()),
+        _ => DocSource::Committed,
+    }
+}
+
+/// The guide text for `source`, line endings normalised: a Windows checkout
+/// reads it with CRLF.
+fn read_doc(source: &DocSource) -> String {
+    match source {
+        DocSource::Committed => DOC.replace("\r\n", "\n"),
+        DocSource::Assembled(path) => std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("UPGRADING_DOC={}: {e}", path.display()))
+            .replace("\r\n", "\n"),
+    }
+}
+
 /// The item numbers in the summary table: the `| N |` rows between the
 /// `## What changed` heading and the next `## ` heading. Scoped to that block
 /// so a numbered row in some other table cannot stand in for a summary row.
@@ -120,8 +156,8 @@ fn check_numbering(doc: &str, floor: u32) -> Result<(), String> {
 
 #[test]
 fn every_number_has_a_row_and_every_gap_is_explained() {
-    let rows = summary_rows(DOC);
-    let sections = sections(DOC);
+    let rows = summary_rows(&GUIDE);
+    let sections = sections(&GUIDE);
     for known in [1, 54, 58, 63] {
         assert!(
             sections.contains(&known) && rows.contains(&known),
@@ -134,7 +170,7 @@ fn every_number_has_a_row_and_every_gap_is_explained() {
         sections.len(),
         rows.len()
     );
-    if let Err(problems) = check_numbering(DOC, PUBLISHED_MAX) {
+    if let Err(problems) = check_numbering(&GUIDE, PUBLISHED_MAX) {
         panic!("docs/UPGRADING-4.0.md: {problems}");
     }
 }
@@ -218,7 +254,8 @@ fn numbers_in(text: &str) -> BTreeSet<u32> {
 }
 
 /// The guide, line endings normalised: a Windows checkout reads it with CRLF.
-static GUIDE: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| DOC.replace("\r\n", "\n"));
+static GUIDE: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| read_doc(&doc_source(std::env::var_os("UPGRADING_DOC"))));
 
 /// What a startup marker's clause says the item does at startup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -444,30 +481,33 @@ fn section_body(doc: &str, n: u32) -> &str {
 
 /// Items a later item changed, and the item that changed them. A reader who
 /// lands on the older item must be pointed at the newer one.
-const SUPERSEDED: &[(u32, u32)] = &[
-    (10, 65),
-    (17, 51),
-    (21, 25),
-    (22, 25),
-    (33, 44),
-    (40, 41),
-    (43, 49),
-    (35, 96),
-    (54, 96),
+const SUPERSEDED: &[(u32, SectionKey)] = &[
+    (10, SectionKey::Number(65)),
+    (17, SectionKey::Number(51)),
+    (21, SectionKey::Number(25)),
+    (22, SectionKey::Number(25)),
+    (33, SectionKey::Number(44)),
+    (40, SectionKey::Number(41)),
+    (43, SectionKey::Number(49)),
+    (35, SectionKey::Number(96)),
+    (54, SectionKey::Number(96)),
 ];
 
 #[test]
 fn superseded_items_point_at_their_successor() {
     for &(old, new) in SUPERSEDED {
-        let note = format!("> Superseded in part by item {new}:");
+        let note = match new {
+            SectionKey::Number(n) => format!("> Superseded in part by item {n}:"),
+            SectionKey::Title(t) => format!("> Superseded in part by {t}:"),
+        };
         assert!(
-            section_body(DOC, old).contains(&note),
+            section_body(&GUIDE, old).contains(&note),
             "item {old} must carry `{note}`"
         );
     }
-    let sections = sections(DOC);
+    let sections = sections(&GUIDE);
     for n in &sections {
-        let body = section_body(DOC, *n);
+        let body = section_body(&GUIDE, *n);
         for later in numbers_after_item(
             &body
                 .lines()
@@ -481,15 +521,27 @@ fn superseded_items_point_at_their_successor() {
                 "item {n} names item {later} as superseding it; it must be a later item"
             );
         }
+        // MIK-8185: a successor still in `upgrading.d/` is named by its title.
+        let pending = pending_titles();
+        for line in body.lines() {
+            let Some(rest) = line.strip_prefix("> Superseded in part by ") else {
+                continue;
+            };
+            if rest.starts_with("item") {
+                continue;
+            }
+            let name = successor_name(rest, &GUIDE, &pending);
+            resolve_successor(&GUIDE, &pending, *n, name).unwrap_or_else(|e| panic!("{e}"));
+        }
     }
 }
 
 /// The walkthrough section.
 fn walkthrough() -> &'static str {
-    let start = DOC
+    let start = GUIDE
         .find("\n## Upgrading from 3.5.x: a walkthrough\n")
         .expect("walkthrough section");
-    let body = &DOC[start + 1..];
+    let body = &GUIDE[start + 1..];
     &body[..body[3..].find("\n## ").map_or(body.len(), |i| i + 3)]
 }
 
@@ -544,10 +596,10 @@ fn walkthrough_commands_and_checks_are_real() {
 #[test]
 fn owner_rule_item_has_a_row_a_section_and_the_fix() {
     assert!(
-        summary_rows(DOC).contains(&96),
+        summary_rows(&GUIDE).contains(&96),
         "item 96 has no summary row"
     );
-    let body = section_body(DOC, 96);
+    let body = section_body(&GUIDE, 96);
     for want in [
         "chown 1001",
         "chmod 600",

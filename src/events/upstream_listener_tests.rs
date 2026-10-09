@@ -364,3 +364,6 @@ async fn a_running_task_takes_the_replaced_backends_ledger_at_session_start() {
 
 #[path = "upstream_listener_revive_tests.rs"]
 mod revive;
+
+#[path = "reconcile_table_listener_tests.rs"]
+mod reconcile_table;
