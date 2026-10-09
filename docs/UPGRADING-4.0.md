@@ -201,6 +201,8 @@ backend" and "fails a capability file" first.**
 | 174 | Every frame a backend's text reaches a client in passes one screen (content inspection, context integrity, response firewall) on every route. Over HTTP `/mcp` an interim question the firewall would rewrite is refused (-32600), as over stdio, instead of delivered redacted; backend errors, `prompts/get` and `resources/read` bodies, catalogue listings and notifications streamed during a call can now arrive redacted or be refused | None by default. To allow flagged text in a prompt, resource or listing, add a firewall rule whose `tool_match` names the method (`prompts/get`, `resources/read`, ...) |
 | 175 | The per-backend route `POST /mcp/{name}` refuses what `/mcp` refuses under every security posture, with the same code and status: a malformed request, a contradicted or doubled protocol header, an unsupported revision, or a 2026-07-28 request missing its required `_meta`. Before, only `hardened` checked these; elsewhere the route forwarded them to the backend | None for a client whose requests `/mcp` accepts. A client that sent such a request to `/mcp/{name}` gets the refusal `/mcp` gives it and fixes the request |
 
+Changes not yet numbered wait in `upgrading.d/` at the repository root, one file per pull request; release preparation numbers them into this list.
+
 
 ## 1. OAuth credentials are stored per issuer
 
@@ -3385,7 +3387,8 @@ task; it never leaves delivered content unrecorded. The record is written before
 a commit that then loses (to a cancel that lands first, or a store failure) leaves a record for
 a recovery that did not land. A live call has the same window: its record is written
 (`src/gateway/meta_mcp/invoke.rs:1219-1221`) before its result is stored for delivery
-(`src/gateway/router/handlers.rs:1798`), and stands if that delivery then fails.
+(`execution.complete_delivery` in `meta_mcp_dispatch`, `src/gateway/router/handlers.rs`), and stands
+if that delivery then fails.
 
 ## 114. Hardened can name backends that may reach private networks
 
