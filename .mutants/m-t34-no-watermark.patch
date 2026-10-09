@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_need.rs b/src/events/upstream_need.rs
+index 1cd0442e3..78e167dc1 100644
+--- a/src/events/upstream_need.rs
++++ b/src/events/upstream_need.rs
+@@ -247,7 +247,7 @@ impl Snapshot {
+     pub(crate) fn verdict_for(&self, uri: &str, granted: Option<u64>) -> Verdict {
+         match &self.good {
+             Some((uris, _)) if uris.contains(uri) => Verdict::Deliver,
+-            Some((_, true)) if granted.is_none_or(|g| g <= self.covers) => Verdict::Revoke,
++            Some((_, true)) if granted.is_none_or(|_| true) => Verdict::Revoke,
+             _ => Verdict::Skip,
+         }
+     }
