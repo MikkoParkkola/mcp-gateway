@@ -135,33 +135,42 @@ mod tests {
     #[test]
     fn the_cli_writes_only_through_the_locked_editors() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let mut found = Vec::new();
-        for dir in ["src/commands", "src/cli"] {
-            for entry in std::fs::read_dir(root.join(dir)).expect("dir") {
+        let mut files = vec![root.join("src/main.rs")];
+        let mut dirs = vec![root.join("src/commands"), root.join("src/cli")];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).expect("dir") {
                 let path = entry.expect("entry").path();
-                let name = path
-                    .file_name()
-                    .expect("name")
-                    .to_string_lossy()
-                    .into_owned();
-                if name.ends_with("_tests.rs") || path.extension().is_none_or(|e| e != "rs") {
-                    continue;
+                if path.is_dir() {
+                    dirs.push(path);
+                } else {
+                    files.push(path);
                 }
-                let text = std::fs::read_to_string(&path)
-                    .expect("read")
-                    .replace("\r\n", "\n");
-                // Production code only: a file's own test module comes last.
-                let code = text.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
-                for call in ["write_config(", "write_config_text("] {
-                    let calls = code
-                        .match_indices(call)
-                        .filter(|(at, _)| {
-                            !code[..*at].ends_with(|c: char| c == '_' || c.is_alphanumeric())
-                        })
-                        .filter(|(at, _)| !code[..*at].ends_with("fn "))
-                        .count();
-                    found.extend(std::iter::repeat_n(format!("{name}:{call}"), calls));
-                }
+            }
+        }
+        let mut found = Vec::new();
+        for path in files {
+            let name = path
+                .strip_prefix(root)
+                .expect("under root")
+                .display()
+                .to_string();
+            if name.ends_with("_tests.rs") || path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path)
+                .expect("read")
+                .replace("\r\n", "\n");
+            // Production code only: a file's own test module comes last.
+            let code = text.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
+            for call in ["write_config(", "write_config_text("] {
+                let calls = code
+                    .match_indices(call)
+                    .filter(|(at, _)| {
+                        !code[..*at].ends_with(|c: char| c == '_' || c.is_alphanumeric())
+                    })
+                    .filter(|(at, _)| !code[..*at].ends_with("fn "))
+                    .count();
+                found.extend(std::iter::repeat_n(format!("{name}:{call}"), calls));
             }
         }
         assert!(found.is_empty(), "{found:?}");

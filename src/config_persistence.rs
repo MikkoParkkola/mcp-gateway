@@ -199,8 +199,9 @@ impl From<String> for Unwritten {
 /// exact text is the one edited when `config` differs from it by exactly one
 /// backend added, removed or edited. A file that does not load, or that
 /// another writer changed into something more than one backend away, is
-/// rewritten in full, or refused. An edit landing after that read is
-/// overwritten by the rename, as the full rewrite overwrites it.
+/// rewritten in full, or refused. The caller holds the config lock across
+/// its load and this write, so no writer that takes the lock lands between
+/// them; an edit that ignores the lock (a hand edit) is overwritten.
 ///
 /// # Errors
 ///
@@ -251,6 +252,10 @@ pub(crate) fn comments_a_write_drops(path: &Path, config: &Config) -> Vec<String
 /// Returns the comment lines (as `line N`, never their text) the write
 /// dropped: those inside a removed entry, or under
 /// [`CommentLoss::Rewrite`] every comment a full rewrite lost.
+///
+/// `edit` must change the `Config` it is given. Replacing it with a copy
+/// loaded earlier writes that old copy back and loses what other writers
+/// saved since, which is exactly what this function exists to prevent.
 ///
 /// Takes the lock blocking, waiting up to [`CLI_LOCK_WAIT`]; an async caller
 /// uses the reload module's write API instead.
@@ -326,8 +331,12 @@ fn edit_locked<T>(
         return Ok(false);
     };
     // Fail closed (GH462): bytes that do not parse are never written.
-    Config::from_file_text(&text)
-        .map_err(|e| format!("Not saved: the new {} would not load: {e}", path.display()))?;
+    Config::from_file_text(&text).map_err(|e| {
+        format!(
+            "Not saved: the new {} does not parse as a config: {e}",
+            path.display()
+        )
+    })?;
     write_yaml(path, &text)?;
     Ok(true)
 }
@@ -348,17 +357,44 @@ fn read_config(path: &Path) -> Result<Option<(Config, String)>, String> {
 }
 
 /// `path`'s text, or `None` when there is no file. A FIFO or a device would
-/// block the read or never end it, so only a regular file is read.
+/// block the read or never end it, so the file is opened without blocking
+/// and the handle itself must be a regular file before it is read.
 fn read_text(path: &Path) -> Result<Option<String>, String> {
+    use std::io::Read as _;
     let failed = |e: &dyn std::fmt::Display| format!("Failed to read {}: {e}", path.display());
-    match std::fs::metadata(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(failed(&e)),
-        Ok(meta) if !meta.is_file() => Err(failed(&"not a regular file")),
-        Ok(_) => std::fs::read_to_string(path)
-            .map(Some)
-            .map_err(|e| failed(&e)),
+    let mut file = match open_nonblocking(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        // Windows refuses to open a directory at all: name the cause the same.
+        Err(_) if std::fs::metadata(path).is_ok_and(|m| !m.is_file()) => {
+            return Err(failed(&"not a regular file"));
+        }
+        Err(e) => return Err(failed(&e)),
+        Ok(file) => file,
+    };
+    if !file.metadata().map_err(|e| failed(&e))?.is_file() {
+        return Err(failed(&"not a regular file"));
     }
+    let mut text = String::new();
+    file.read_to_string(&mut text).map_err(|e| failed(&e))?;
+    Ok(Some(text))
+}
+
+#[cfg(unix)]
+fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(
+            (rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY)
+                .bits()
+                .cast_signed(),
+        )
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
 }
 
 /// How many backends one splice may change.

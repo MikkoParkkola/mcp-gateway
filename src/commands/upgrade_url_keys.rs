@@ -4,9 +4,8 @@
 //! `url` in the operator's config, keeping every comment, and says which
 //! lines it changed. A second run changes nothing and says so.
 //!
-//! This whole-file write does not take a config file lock; it runs only when
-//! the operator runs `upgrade`. It joins a lock only if that lock's write API
-//! gains a way to replace an existing file.
+//! The rewrite reads and writes the file under one hold of the config lock
+//! (`edit_config_text`), so a change another writer saved first is kept.
 
 use std::path::Path;
 use std::process::ExitCode;

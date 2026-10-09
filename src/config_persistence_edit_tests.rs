@@ -177,6 +177,38 @@ fn a_text_edit_of_a_non_file_is_refused() {
     assert!(error.contains("not a regular file"), "{error}");
 }
 
+/// A FIFO at the config path is refused at once as "not a regular file":
+/// the locked read opens without blocking and checks the open handle, so no
+/// writer can hang while it holds the config lock.
+#[cfg(unix)]
+#[test]
+fn a_text_edit_of_a_fifo_is_refused_without_hanging() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&path)
+        .status()
+        .expect("mkfifo");
+    assert!(made.success(), "mkfifo failed");
+    let (tell, told) = mpsc::channel();
+    let at = path.clone();
+    std::thread::spawn(move || {
+        let _ = tell.send(edit_config_text(&at, |_| Ok(None)));
+    });
+    let Ok(result) = told.recv_timeout(Duration::from_secs(5)) else {
+        // Release a reader blocked on the FIFO so the suite can finish. A
+        // non-blocking open never waits: with no reader left it just fails.
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let _ = std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
+            .open(&path);
+        panic!("a locked read of a FIFO hung instead of refusing it");
+    };
+    let error = result.expect_err("refused");
+    assert!(error.contains("not a regular file"), "{error}");
+}
+
 /// MIK-8051 AC4: a removal names the comment lines inside the removed entry,
 /// from the one shared helper.
 #[test]
