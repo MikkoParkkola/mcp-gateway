@@ -107,6 +107,24 @@ class CheckMacosExclusions(unittest.TestCase):
         rust = '#[cfg(target_os = "linux")]\nfn read_proc() {}\n#[cfg(target_os = "linux")]\nmod inotify;\n'
         self.assertEqual(self.tree(rust, path="src/watch.rs"), [])
 
+    def test_the_linux_and_macos_gate_runs_on_macos(self) -> None:
+        # MIK-8181: the exact real-watcher gate is on macOS; a gate that names
+        # macOS but still requires Linux, or excludes Apple, stays off.
+        rust = (
+            '#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]\nmod e2e_tests;\n'
+            '#[cfg(all(test, target_os = "linux", any(feature = "foo", target_os = "macos")))]\n'
+            "mod linux_and_mac_tests;\n"
+            '#[cfg(all(test, any(target_os = "linux", target_os = "macos"), '
+            'not(target_vendor = "apple")))]\nmod apple_off_tests;\n'
+        )
+        self.assertEqual(
+            self.tree(rust, path="src/reload/mod.rs"),
+            [
+                "not run on macOS and not listed: src/reload/mod.rs apple_off_tests",
+                "not run on macOS and not listed: src/reload/mod.rs linux_and_mac_tests",
+            ],
+        )
+
     def test_the_release_tree_passes(self) -> None:
         self.assertEqual(mac.problems(HERE.parents[1]), [])
 

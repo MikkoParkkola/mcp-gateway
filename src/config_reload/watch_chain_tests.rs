@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The config watcher follows its link chain (#453).
 //!
-//! The real-watcher rows run on Linux only: inotify is what the `ConfigMap`
-//! deployment runs on, and macOS `FSEvents` ignores `NonRecursive`, so a green
-//! there could come from a directory the design never asked to watch.
+//! The real-watcher rows run on Linux and macOS (MIK-8181). macOS `FSEvents`
+//! ignores `NonRecursive`, so there a row that only waits for an event can
+//! pass on a directory the design never asked to watch; the rows that read
+//! the ledger (`watched()`) are what prove a watch on both.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -22,8 +23,8 @@ fn set(dirs: &[&Path]) -> BTreeSet<PathBuf> {
 
 /// Point `link` at `target` atomically, the way a deploy does: a new link
 /// renamed over the old one.
-#[cfg(target_os = "linux")]
-fn retarget(link: &Path, target: &Path) {
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) fn retarget(link: &Path, target: &Path) {
     // Named from the whole file name, not `with_extension`: for a dot-led
     // name like `..data` that can land on the link itself.
     let name = link.file_name().expect("link name").to_string_lossy();
@@ -203,8 +204,8 @@ fn t14_the_named_config_path_keeps_its_directory_link() {
     assert_eq!(super::named_config_path(named.clone()), named);
 }
 
-// Linux-only (W-L9): the real-watcher rows run on inotify (see the module header).
-#[cfg(target_os = "linux")]
+// Linux and macOS (MIK-8181; see the module header).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod real_watcher {
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
@@ -294,7 +295,7 @@ pub(crate) mod real_watcher {
         }
 
         /// Wait until the ledger holds `dir`: the watch is in place.
-        async fn wait_watched(&self, dir: &Path) {
+        pub(crate) async fn wait_watched(&self, dir: &Path) {
             let dir = canonical(dir);
             tokio::time::timeout(Duration::from_secs(10), async {
                 while !self.chain.watched().contains(&dir) {
@@ -570,7 +571,17 @@ pub(crate) mod real_watcher {
             loaded.is_ok(),
             "the initial resolve did not leave the named release loaded"
         );
-        assert_eq!(g.watcher.chain().wakes_handled.load(Ordering::SeqCst), 1);
+        // Exactly one resolve is start's own: proven on Linux, where no
+        // fixture write reaches the watcher. macOS `FSEvents` can report the
+        // fixture's writes from just before the watch began, and their wakes
+        // coalesce, so a count there cannot single out start's resolve; it
+        // asserts only that the resolve ran (MIK-8181). Same product path.
+        let wakes = g.watcher.chain().wakes_handled.load(Ordering::SeqCst);
+        if cfg!(target_os = "linux") {
+            assert_eq!(wakes, 1);
+        } else {
+            assert!(wakes >= 1, "start resolved: {wakes} wakes");
+        }
     }
 
     /// T18: a chain that cannot be resolved at startup (the target missing

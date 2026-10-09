@@ -288,19 +288,9 @@ jobs:
         shell: bash
         run: |
           cp target/${{ matrix.target }}/release/mcp-gateway${{ matrix.suffix }} ${{ matrix.artifact }}${{ matrix.suffix }}
-          # The debug-only commit pause (#2298) must be compiled out of a release binary.
-          if grep -qa MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED ${{ matrix.artifact }}${{ matrix.suffix }}; then echo "::error::release binary carries the debug commit pause"; exit 1; fi
-          if grep -qa MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN ${{ matrix.artifact }}${{ matrix.suffix }}; then echo "::error::release binary carries the debug scan hold"; exit 1; fi
-          if grep -qa MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS ${{ matrix.artifact }}${{ matrix.suffix }}; then echo "::error::release binary carries the debug era probe cap"; exit 1; fi
-          if grep -qa MCP_GATEWAY_TEST_HOME_DIR ${{ matrix.artifact }}${{ matrix.suffix }}; then echo "::error::release binary carries the debug home override"; exit 1; fi
-          if grep -qa MCP_GATEWAY_TEST_CLOCK ${{ matrix.artifact }}${{ matrix.suffix }}; then echo "::error::release binary carries the debug clock override"; exit 1; fi
-          # The debug-only test trust roots (MIK-8188, src/debug_trust_roots.rs) must be
-          # compiled out. A grep that cannot see the binary's content would pass
-          # it, so the crate name must be found first; then only "no match"
-          # (exit 1) passes, never "unreadable" (exit 2).
-          grep -qa mcp-gateway ${{ matrix.artifact }}${{ matrix.suffix }} || { echo "::error::the release binary could not be inspected"; exit 1; }
-          set +e; grep -qa MCP_GATEWAY_TEST_TRUST_CA ${{ matrix.artifact }}${{ matrix.suffix }}; found=$?; set -e
-          if [ "$found" -ne 1 ]; then echo "::error::release binary carries the debug test trust roots, or could not be read (grep exit $found)"; exit 1; fi
+          # Every debug-only test hook must be compiled out of a release binary;
+          # the script holds the list and the fail-closed grep.
+          scripts/release/grep_no_test_hook.sh "${{ matrix.artifact }}${{ matrix.suffix }}"
           if [ "${{ matrix.suffix }}" = "" ]; then
             chmod +x ${{ matrix.artifact }}
           fi
