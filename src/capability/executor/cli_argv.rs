@@ -154,8 +154,31 @@ fn render_element(
     input_schema: &Value,
     after_end_of_options: bool,
 ) -> Result<String> {
-    let Some((start, end, name)) = single_placeholder(template)? else {
+    let Some((start, end, name)) = element_placeholder(template, after_end_of_options)? else {
         return Ok(template.to_owned());
+    };
+    let value = required_text(params, name)?;
+    refuse_nul(&value, name)?;
+    if value.contains(['\n', '\r']) && !is_multiline(input_schema, name) {
+        return Err(invalid_params(format!(
+            "parameter '{name}' must not contain a line break"
+        )));
+    }
+    Ok(format!("{}{value}{}", &template[..start], &template[end..]))
+}
+
+/// The one placeholder of an argv element, checked against the element rule.
+///
+/// # Errors
+///
+/// `Error::Config` for more than one placeholder, or for a parameter outside
+/// an option value before "--".
+fn element_placeholder(
+    template: &str,
+    after_end_of_options: bool,
+) -> Result<Option<(usize, usize, &str)>> {
+    let Some((start, end, name)) = single_placeholder(template)? else {
+        return Ok(None);
     };
     // Before "--" a parameter may only be the VALUE of a fixed option, bound
     // with '=' ("--to={to}"): anywhere else it could start an element and be
@@ -168,22 +191,11 @@ fn render_element(
              before \"--\""
         )));
     }
-    let value = required_text(params, name)?;
-    refuse_nul(&value, name)?;
-    if value.contains(['\n', '\r']) && !is_multiline(input_schema, name) {
-        return Err(invalid_params(format!(
-            "parameter '{name}' must not contain a line break"
-        )));
-    }
-    Ok(format!("{}{value}{}", &template[..start], &template[end..]))
+    Ok(Some((start, end, name)))
 }
 
-fn push_each(
-    args: &mut Vec<String>,
-    each: &crate::capability::definition::EachArg,
-    params: &Value,
-    input_schema: &Value,
-) -> Result<()> {
+/// `Error::Config` unless `each.arg` is one bound `--x={item}` element.
+fn check_each(each: &crate::capability::definition::EachArg) -> Result<()> {
     let bound = each.arg.starts_with("--")
         && each
             .arg
@@ -195,6 +207,57 @@ fn push_each(
             each.arg
         )));
     }
+    Ok(())
+}
+
+/// Every template rule [`build_cli_invocation`] enforces, checked without
+/// parameters, so a definition that would fail every call is refused when it
+/// is validated (MIK-7926.FIX.3). The walk mirrors the builder's: a literal
+/// "--" switches to operands, a conditional never does.
+///
+/// # Errors
+///
+/// The `Error::Config` the first call would have returned.
+pub(crate) fn check_cli_templates(config: &CliConfig) -> Result<()> {
+    let mut after_end_of_options = false;
+    for item in &config.args {
+        match item {
+            CliArg::Literal(template) => {
+                element_placeholder(template, after_end_of_options)?;
+                if template == "--" {
+                    after_end_of_options = true;
+                }
+            }
+            CliArg::Conditional(cond) => {
+                element_placeholder(&cond.arg, after_end_of_options)?;
+            }
+            CliArg::Each(each) => check_each(each)?,
+            CliArg::Json(json) => check_json(&json.value)?,
+        }
+    }
+    if let Some(template) = &config.stdin {
+        single_placeholder(template)?;
+    }
+    Ok(())
+}
+
+/// [`render_json`]'s template rule on every string in `template`.
+fn check_json(template: &Value) -> Result<()> {
+    match template {
+        Value::String(s) => single_placeholder(s).map(|_| ()),
+        Value::Object(map) => map.values().try_for_each(check_json),
+        Value::Array(items) => items.iter().try_for_each(check_json),
+        _ => Ok(()),
+    }
+}
+
+fn push_each(
+    args: &mut Vec<String>,
+    each: &crate::capability::definition::EachArg,
+    params: &Value,
+    input_schema: &Value,
+) -> Result<()> {
+    check_each(each)?;
     let Some(items) = params.get(&each.each).filter(|v| !v.is_null()) else {
         return Ok(());
     };
