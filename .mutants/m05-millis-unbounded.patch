@@ -1,0 +1,13 @@
+diff --git a/src/duration_bound.rs b/src/duration_bound.rs
+index d2da7128d..19d5c5ca1 100644
+--- a/src/duration_bound.rs
++++ b/src/duration_bound.rs
+@@ -54,7 +54,7 @@ pub(crate) fn nonzero_secs<'de, D: Deserializer<'de>>(deserializer: D) -> Result
+ /// As [`secs`], for a whole number of milliseconds.
+ pub(crate) fn millis<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+     let millis = u64::deserialize(deserializer)?;
+-    if Duration::from_millis(millis) > MAX_DURATION {
++    if false {
+         return Err(serde::de::Error::custom(too_long(&format!("{millis} ms"))));
+     }
+     Ok(millis)

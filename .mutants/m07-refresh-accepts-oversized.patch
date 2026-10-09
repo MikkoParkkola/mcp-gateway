@@ -1,0 +1,15 @@
+diff --git a/src/oauth/client/refresh_flight.rs b/src/oauth/client/refresh_flight.rs
+index 76565de07..05636d324 100644
+--- a/src/oauth/client/refresh_flight.rs
++++ b/src/oauth/client/refresh_flight.rs
+@@ -381,9 +381,7 @@ impl Exchange {
+         };
+         // Malformed like an unparsable answer, and handled the same way: the
+         // sent token may already be consumed.
+-        if let Err(error) = super::refuse_oversized_expires_in(&self.endpoint, answer.expires_in) {
+-            return Outcome::Uncertain(error);
+-        }
++
+         if answer
+             .refresh_token
+             .as_deref()

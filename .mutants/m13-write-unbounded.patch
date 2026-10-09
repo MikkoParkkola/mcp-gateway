@@ -1,0 +1,13 @@
+diff --git a/src/config/humantime_serde.rs b/src/config/humantime_serde.rs
+index b1771ec75..636c5dc70 100644
+--- a/src/config/humantime_serde.rs
++++ b/src/config/humantime_serde.rs
+@@ -53,7 +53,7 @@ where
+     S: Serializer,
+ {
+     // MIK-8207: what is written must load again; the parser refuses more.
+-    if *duration > crate::duration_bound::MAX_DURATION {
++    if false {
+         return Err(serde::ser::Error::custom(crate::duration_bound::too_long(
+             &format!("{}s", duration.as_secs()),
+         )));

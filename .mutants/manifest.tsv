@@ -1,0 +1,14 @@
+head_sha	e45b35878d3edd41fd6519a0b428b7b7ce730c5a
+m01-unchecked-minutes	linux	m01-unchecked-minutes.patch	--lib -- duration_bound::tests::a_human_duration_above_the_bound_is_refused_at_load
+m02-parse-unbounded	linux	m02-parse-unbounded.patch	--lib -- duration_bound::tests::a_human_duration_above_the_bound_is_refused_at_load
+m03-nested-field-unbounded	linux	m03-nested-field-unbounded.patch	--lib -- duration_bound::tests::an_integer_duration_above_the_bound_is_refused_at_load
+m04-secs-unbounded	linux	m04-secs-unbounded.patch	--lib -- duration_bound::tests::an_integer_duration_above_the_bound_is_refused_at_load
+m05-millis-unbounded	linux	m05-millis-unbounded.patch	--lib -- duration_bound::tests::an_integer_duration_above_the_bound_is_refused_at_load
+m06-expiry-unbounded	linux	m06-expiry-unbounded.patch	--lib -- duration_bound::tests::an_expires_in_above_the_bound_is_refused
+m07-refresh-accepts-oversized	linux	m07-refresh-accepts-oversized.patch	--lib -- oauth::client::refresh_flight_tests::an_oversized_expires_in_is_refused
+m08-idle-overflow-unbounded	linux	m08-idle-overflow-unbounded.patch	--lib -- gateway::router::handlers::events::tests::an_oversized_dashboard_idle_timeout_is_refused
+m09-ttl-unchecked-add	linux	m09-ttl-unchecked-add.patch	--bin mcp-gateway -- a_ttl_too_large_for_a_timestamp_is_refused
+m10-zero-cleanup-allowed	linux	m10-zero-cleanup-allowed.patch	--lib -- duration_bound::tests::a_zero_interval_is_refused
+m11-zero-cleanup-always	linux	m11-zero-cleanup-always.patch	--lib -- duration_bound::tests::a_zero_interval_is_refused
+m12-zero-timeout-allowed	linux	m12-zero-timeout-allowed.patch	--lib -- duration_bound::tests::a_capability_duration_above_the_bound_is_refused
+m13-write-unbounded	linux	m13-write-unbounded.patch	--lib -- duration_bound::tests::a_duration_above_the_bound_is_never_written

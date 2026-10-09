@@ -1,0 +1,13 @@
+diff --git a/src/config/validation.rs b/src/config/validation.rs
+index 7f6ef6716..d89d0ab5e 100644
+--- a/src/config/validation.rs
++++ b/src/config/validation.rs
+@@ -33,7 +33,7 @@ impl Config {
+         for (key, zero) in [
+             (
+                 "key_server.cleanup_interval_secs",
+-                self.key_server.enabled && self.key_server.cleanup_interval_secs == 0,
++                self.key_server.cleanup_interval_secs == 0,
+             ),
+             (
+                 "streaming.session_reaper_interval",

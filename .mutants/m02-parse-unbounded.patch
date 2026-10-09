@@ -1,0 +1,12 @@
+diff --git a/src/config/humantime_serde.rs b/src/config/humantime_serde.rs
+index b1771ec75..13ba43334 100644
+--- a/src/config/humantime_serde.rs
++++ b/src/config/humantime_serde.rs
+@@ -36,7 +36,6 @@ fn parse(text: &str) -> Result<Duration, String> {
+         .parse::<u64>()
+         .map_err(|e| format!("invalid duration {text:?}: {e}"))?;
+     scale(n)
+-        .filter(|d| *d <= crate::duration_bound::MAX_DURATION)
+         .ok_or_else(|| crate::duration_bound::too_long(&format!("duration {text:?}")))
+ }
+ 

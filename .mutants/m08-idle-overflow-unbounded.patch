@@ -1,0 +1,17 @@
+diff --git a/src/gateway/router/handlers/events.rs b/src/gateway/router/handlers/events.rs
+index dc2005ae5..08c5a70b0 100644
+--- a/src/gateway/router/handlers/events.rs
++++ b/src/gateway/router/handlers/events.rs
+@@ -84,11 +84,7 @@ impl Presented {
+                     .ok()
+                     .and_then(chrono::TimeDelta::try_seconds)
+                     .and_then(|idle| chrono::Utc::now().checked_add_signed(idle));
+-                Some(ends.ok_or_else(|| {
+-                    crate::duration_bound::too_long(&format!(
+-                        "auth.dashboard_session.idle_timeout_secs ({idle})"
+-                    ))
+-                })?)
++                ends
+             }
+             _ => facts.expires_at,
+         };
