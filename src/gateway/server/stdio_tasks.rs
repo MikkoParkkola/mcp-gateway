@@ -43,10 +43,7 @@ impl StdioTasks {
     /// stops the task workers there. On a normal return it repeats what the
     /// teardown already did.
     pub(super) fn stop_on_drop(&self) -> TasksDropGuard {
-        TasksDropGuard {
-            executor: Arc::clone(&self.executor),
-            service: Arc::clone(&self.service),
-        }
+        TasksDropGuard::new(&self.executor, &self.service)
     }
 }
 
@@ -55,6 +52,15 @@ impl StdioTasks {
 pub(super) struct TasksDropGuard {
     executor: Arc<TaskExecutor>,
     service: Arc<TaskService>,
+}
+
+impl TasksDropGuard {
+    pub(super) fn new(executor: &Arc<TaskExecutor>, service: &Arc<TaskService>) -> Self {
+        Self {
+            executor: Arc::clone(executor),
+            service: Arc::clone(service),
+        }
+    }
 }
 
 impl Drop for TasksDropGuard {

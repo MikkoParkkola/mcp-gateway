@@ -113,3 +113,22 @@ async fn a_dropped_stdio_session_stops_its_task_workers() {
     );
     drop(stdin);
 }
+
+/// The guard itself seals the executor. The row above cannot see the seal:
+/// `stop_serving` alone already refuses the late commit, so a guard that only
+/// stopped the store passed it (mutant m02 survived). Here the executor is
+/// observed directly.
+#[tokio::test]
+async fn dropping_the_tasks_guard_seals_the_executor() {
+    let store = tempfile::tempdir().expect("store root");
+    let mut config = Config::default();
+    config.tasks.store_dir = store.path().display().to_string();
+    let (service, executor) = reopen(&config).await.expect("the store opens");
+    let guard = super::super::stdio_tasks::TasksDropGuard::new(&executor, &service);
+    assert!(!executor.is_sealed(), "precondition: serving");
+    drop(guard);
+    assert!(
+        executor.is_sealed(),
+        "the dropped guard sealed the executor"
+    );
+}
