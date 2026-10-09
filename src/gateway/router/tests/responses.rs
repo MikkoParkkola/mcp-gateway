@@ -145,6 +145,47 @@ async fn parse_elicitation_params_invalid_returns_bad_request_with_context() {
     assert_eq!(json["id"], json!("req-1"));
 }
 
+/// MIK-8195: a sampling request with no params is refused before it is
+/// forwarded, as an elicitation request is.
+#[tokio::test]
+async fn parse_sampling_params_missing_returns_bad_request_with_session_header() {
+    let response = parse_sampling_params(RequestId::Number(9), None, "sess-sample").unwrap_err();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.headers()["mcp-session-id"], "sess-sample");
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], -32602);
+    assert_eq!(json["error"]["message"], "Missing sampling params");
+    assert_eq!(json["id"], json!(9));
+}
+
+/// MIK-8195: malformed sampling params are refused with the parse error.
+#[tokio::test]
+async fn parse_sampling_params_invalid_returns_bad_request_with_context() {
+    let response = parse_sampling_params(
+        RequestId::String("req-1".to_string()),
+        Some(json!({"messages": 42})),
+        "sess-sample",
+    )
+    .unwrap_err();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(response.headers()["mcp-session-id"], "sess-sample");
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], -32602);
+    assert!(
+        json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Invalid sampling params:")
+    );
+    assert_eq!(json["id"], json!("req-1"));
+}
+
 #[tokio::test]
 async fn backend_handler_invalid_json_returns_jsonrpc_parse_error() {
     let (state, _store) = test_router_app_state().await;
