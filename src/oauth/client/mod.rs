@@ -308,7 +308,7 @@ impl OAuthClient {
             client_id_source: RwLock::new(client_id_source),
             client_secret: cfg.client_secret,
             callback_host: cfg.callback_host,
-            open_browser: Box::new(open_browser),
+            open_browser: Box::new(browser::open_browser),
             callback_port: cfg.callback_port,
             callback_path: cfg.callback_path,
             token_refresh_buffer_secs: cfg.token_refresh_buffer_secs,
@@ -591,30 +591,9 @@ fn generate_client_id() -> String {
     URL_SAFE_NO_PAD.encode(id_bytes)
 }
 
-/// Open a URL in the system default browser.
-///
-/// Uses `open` on macOS, `xdg-open` on Linux, and `start` on Windows.
-/// Returns `true` if the command was spawned successfully.
-fn open_browser(url: &str) -> bool {
-    #[cfg(target_os = "macos")]
-    let cmd = "open";
-    #[cfg(target_os = "linux")]
-    let cmd = "xdg-open";
-    #[cfg(target_os = "windows")]
-    let cmd = "cmd";
-
-    #[cfg(target_os = "windows")]
-    let result = std::process::Command::new(cmd)
-        .args(["/c", "start", url])
-        .spawn();
-    #[cfg(not(target_os = "windows"))]
-    let result = std::process::Command::new(cmd).arg(url).spawn();
-
-    result.is_ok()
-}
-
 #[cfg(test)]
 mod authorize_tests;
+mod browser;
 pub(crate) mod destination;
 #[cfg(test)]
 mod refresh_flight_tests;
