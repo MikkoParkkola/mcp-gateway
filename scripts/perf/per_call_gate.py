@@ -67,8 +67,12 @@ def run(binary, negative=False):
         env["PER_CALL_NEGATIVE_CONTROL"] = "1"
     out = sh([binary, "--ignored", "--exact", TEST, "--nocapture", "--test-threads=1"], env=env)
     rows = dict(re.findall(r"PER_CALL_NS (\S+) (\d+)", out))
-    if not rows:
-        sys.exit(f"the harness printed no rows:\n{out}")
+    stages = set(re.findall(r'"([^"]+)"', re.search(
+        r"const STAGES: &\[&str\] = &\[(.*?)\];",
+        open(os.path.join(os.path.dirname(__file__), "../../src/gateway/server/tests/per_call_timing.rs")).read(),
+        re.S).group(1)))
+    if set(rows) != stages:
+        sys.exit(f"every STAGES row must be measured: printed {sorted(rows)}, table {sorted(stages)}")
     return {k: int(v) for k, v in rows.items()}
 
 
