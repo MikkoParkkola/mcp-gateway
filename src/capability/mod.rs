@@ -66,6 +66,7 @@ pub(crate) use execution_context::{
     validate_oauth_isolation, validate_personal_capability_identity,
 };
 pub use executor::CapabilityExecutor;
+pub(crate) use executor::ProcessNote;
 pub use executor::graphql::GraphqlExecutor;
 pub use executor::jsonrpc::JsonRpcExecutor;
 pub use executor::rest::{ExecutionContext, ProtocolExecutor};

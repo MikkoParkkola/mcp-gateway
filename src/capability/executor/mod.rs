@@ -31,6 +31,7 @@ mod readiness;
 pub mod rest;
 mod save_file;
 pub(crate) use cli_argv::check_cli_templates;
+pub(crate) use cli_run::ProcessNote;
 pub use save_file::SaveFileSpec;
 mod xml;
 

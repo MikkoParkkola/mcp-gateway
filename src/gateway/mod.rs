@@ -11,6 +11,9 @@ mod differential;
 mod http_error;
 pub mod input_bridge;
 mod meta_mcp;
+/// Where the CLI runner notes a child it started for the call's invocation
+/// record (MIK-7926.FIX.2), without `meta_mcp` becoming crate-visible.
+pub(crate) use meta_mcp::invoke::audit::note_process;
 /// The per-delivery write record, shared with the response and idempotency
 /// caches that store it beside an answer (MIK-7991).
 pub(crate) use meta_mcp::invoke::gateway_writes;
