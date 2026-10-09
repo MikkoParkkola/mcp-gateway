@@ -174,6 +174,14 @@ pub(super) async fn send_with_retry(
                     return Err(refused);
                 }
                 let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
+                let diag = format!(
+                    " [8212 attempt={attempt} timeout={} connect={} request={} elapsed_ms={} source={:?}]",
+                    e.is_timeout(),
+                    e.is_connect(),
+                    e.is_request(),
+                    started.elapsed().as_millis(),
+                    std::error::Error::source(&e).map(ToString::to_string)
+                );
                 let e = redact_url(e);
                 if transient && attempt < MAX_SEND_ATTEMPTS {
                     tracing::warn!(
@@ -188,7 +196,7 @@ pub(super) async fn send_with_retry(
                     continue;
                 }
                 health.record_failure();
-                return Err(Error::Transport(format!("{label} failed: {e}")));
+                return Err(Error::Transport(format!("{label} failed: {e}{diag}")));
             }
         }
     }

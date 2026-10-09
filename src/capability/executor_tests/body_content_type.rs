@@ -458,3 +458,96 @@ async fn a_real_capability_429_is_excluded_by_the_shared_rate_limit_predicate() 
         errors[1]
     );
 }
+
+// MIK-8212 throwaway reproduction: never merged.
+async fn mik_8212_one(answer_delay_ms: u64) -> std::result::Result<(), String> {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+    let addr = listener.local_addr().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_srv = Arc::clone(&counter);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let n = counter_srv.fetch_add(1, Ordering::SeqCst);
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                if n < 2 {
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(answer_delay_ms));
+                    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+                    let _ = stream.flush();
+                }
+            });
+        }
+    });
+    let client = reqwest::Client::new();
+    let req = client
+        .get(format!("http://{addr}/"))
+        .timeout(std::time::Duration::from_millis(120));
+    let health = crate::failsafe::HealthTracker::new("test");
+    let started = std::time::Instant::now();
+    match send_with_retry(req, "test", true, &health).await {
+        Ok(_) => {
+            let n = counter.load(Ordering::SeqCst);
+            if n == 3 {
+                Ok(())
+            } else {
+                Err(format!("ok but {n} connections"))
+            }
+        }
+        Err(e) => Err(format!(
+            "{e} conns={} total_ms={}",
+            counter.load(Ordering::SeqCst),
+            started.elapsed().as_millis()
+        )),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mik_8212_repro_loop_under_load() {
+    // Slowed server: the answering connection is late past the 120 ms timeout.
+    let slowed = mik_8212_one(300).await;
+    let mut fails = Vec::new();
+    let mut total = 0;
+    for _round in 0..10 {
+        let mut set = tokio::task::JoinSet::new();
+        for _ in 0..48 {
+            set.spawn(mik_8212_one(0));
+        }
+        // CPU burners so the scheduler is loaded the way a full suite loads it.
+        let burn: Vec<_> = (0..8)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    let t = std::time::Instant::now();
+                    let mut x = 0u64;
+                    while t.elapsed() < std::time::Duration::from_millis(1500) {
+                        x = x.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+                    }
+                    x
+                })
+            })
+            .collect();
+        while let Some(r) = set.join_next().await {
+            total += 1;
+            if let Err(e) = r.unwrap() {
+                fails.push(e);
+            }
+        }
+        for b in burn {
+            let _ = b.join();
+        }
+    }
+    fails.sort();
+    panic!(
+        "MIK8212 SLOWED={slowed:?}\nMIK8212 FAILS {}/{total}\n{}",
+        fails.len(),
+        fails.join("\n")
+    );
+}
