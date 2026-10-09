@@ -13,7 +13,7 @@ const OUTBOX: OutboxCaps = OutboxCaps {
 
 /// Past the expiry `sub` grants.
 fn past_expiry(now: DateTime<Utc>) -> DateTime<Utc> {
-    now + chrono::Duration::hours(2)
+    now + crate::duration_bound::delta!(hours, 2)
 }
 
 /// The reason of the dead letter for `event`, if there is one.
@@ -33,7 +33,7 @@ fn a_replay_frozen_by_a_suspension_is_buried_at_expiry() {
         .expect("io");
     assert_eq!(
         store
-            .revive("e1", now, record("e1", "s1", now), OUTBOX, || now)
+            .revive("e1", now, record("e1", "s1", now), OUTBOX, || Ok(now))
             .expect("io"),
         Revived::Written
     );
@@ -113,7 +113,7 @@ fn a_resubscribe_over_a_kept_expired_row_waits_for_its_burials() {
     let renewed = || Subscription {
         secret: "whsec_second".into(),
         granted_at: later,
-        expires_at: Some(later + chrono::Duration::hours(1)),
+        expires_at: Some(later + crate::duration_bound::delta!(hours, 1)),
         ..sub("s1", later)
     };
     let early = store
@@ -121,7 +121,7 @@ fn a_resubscribe_over_a_kept_expired_row_waits_for_its_burials() {
             renewed(),
             true,
             CAPS,
-            chrono::Duration::hours(1),
+            crate::duration_bound::delta!(hours, 1),
             later,
             TAIL,
         )
@@ -136,7 +136,7 @@ fn a_resubscribe_over_a_kept_expired_row_waits_for_its_burials() {
             renewed(),
             true,
             CAPS,
-            chrono::Duration::hours(1),
+            crate::duration_bound::delta!(hours, 1),
             later,
             TAIL,
         )
@@ -163,7 +163,7 @@ fn an_unsubscribe_still_drops_a_replayed_record() {
         .dead_letter(record("e1", "s1", now), DeadReason::Exhausted, now, ROOMY)
         .expect("io");
     store
-        .revive("e1", now, record("e1", "s1", now), OUTBOX, || now)
+        .revive("e1", now, record("e1", "s1", now), OUTBOX, || Ok(now))
         .expect("io");
     assert!(store.remove("s1", now, TAIL).expect("io"), "unsubscribed");
     assert_eq!(dead_reason(&store, "e1"), None, "dropped, as before");
@@ -183,16 +183,16 @@ fn a_row_removed_by_the_worker_stamps_its_tail_at_expiry() {
         ..record("e1", "s1", now)
     };
     store.enqueue(tried, OUTBOX).expect("io");
-    let expiry = now + chrono::Duration::hours(1);
-    let removal = expiry + chrono::Duration::minutes(50);
+    let expiry = now + crate::duration_bound::delta!(hours, 1);
+    let removal = expiry + crate::duration_bound::delta!(minutes, 50);
     store.due(removal, &HashSet::new(), ROOMY).expect("io");
     assert!(store.get("s1").is_none(), "the worker removed the row");
-    let within = expiry + chrono::Duration::minutes(55);
+    let within = expiry + crate::duration_bound::delta!(minutes, 55);
     assert!(
         store.is_verified("p", "https://h/s1", within, TAIL),
         "the tail began at expiry, not at the opt-in"
     );
-    let after = expiry + chrono::Duration::minutes(61);
+    let after = expiry + crate::duration_bound::delta!(minutes, 61);
     assert!(
         !store.is_verified("p", "https://h/s1", after, TAIL),
         "the tail began at expiry and has run out"
@@ -303,10 +303,10 @@ fn unsubscribing_a_kept_expired_row_does_not_restart_its_tail() {
         ..record("e1", "s1", now)
     };
     store.enqueue(tried, OUTBOX).expect("io");
-    let expiry = now + chrono::Duration::hours(1);
-    let late = expiry + chrono::Duration::minutes(30);
+    let expiry = now + crate::duration_bound::delta!(hours, 1);
+    let late = expiry + crate::duration_bound::delta!(minutes, 30);
     assert!(store.remove("s1", late, TAIL).expect("io"), "unsubscribed");
-    let after = expiry + chrono::Duration::minutes(61);
+    let after = expiry + crate::duration_bound::delta!(minutes, 61);
     assert!(
         !store.is_verified("p", "https://h/s1", after, TAIL),
         "the tail began at the expiry, not at the unsubscribe"
@@ -485,18 +485,18 @@ fn a_lapsed_hold_buries_its_records_and_starts_the_tail_at_its_bound() {
             ..Judged::default()
         })
     };
-    let bound = now + chrono::Duration::hours(1);
+    let bound = now + crate::duration_bound::delta!(hours, 1);
     store
-        .apply_holds(&held, now, chrono::Duration::hours(1))
+        .apply_holds(&held, now, crate::duration_bound::delta!(hours, 1))
         .expect("io");
-    let past = bound + chrono::Duration::minutes(10);
+    let past = bound + crate::duration_bound::delta!(minutes, 10);
     store.due(past, &HashSet::new(), ROOMY).expect("io");
     assert_eq!(
         dead_reason(&store, "e1").as_deref(),
         Some("subscription_expired"),
         "the hold's bound ended the row"
     );
-    let within = bound + chrono::Duration::minutes(30);
+    let within = bound + crate::duration_bound::delta!(minutes, 30);
     assert!(
         store.is_verified("p", "https://h/s1", within, TAIL),
         "the tail started at the hold's bound"

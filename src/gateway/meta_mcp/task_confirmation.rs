@@ -37,7 +37,7 @@ use crate::gateway::task_service::OwnedAdmissionRequest;
 use crate::hashing::{canonical_json, sha256_hex};
 use crate::idempotency::admission::ExecutionAdmission;
 use crate::key_server::oidc::VerifiedIdentity;
-use crate::protocol::continuation::{ContinuationPurpose, Payload, now_unix_secs};
+use crate::protocol::continuation::{ContinuationPurpose, Payload, clock_now};
 use crate::protocol::meta::Declared;
 use crate::protocol::mrtr::{RetryFields, principal_fingerprint};
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -288,7 +288,7 @@ impl MetaMcp {
         request.retry.request_state.as_deref().is_some_and(|token| {
             self.continuation
                 .keyring()
-                .open(token, now_unix_secs())
+                .open_now(token)
                 .is_ok_and(|payload| {
                     payload
                         .require_purpose(ContinuationPurpose::DestructiveConfirm)
@@ -338,6 +338,18 @@ impl MetaMcp {
             )));
         }
 
+        let Ok(now) = clock_now() else {
+            warn!(
+                tool = request.tool_name,
+                "Clock reads before 1970; refusing to confirm"
+            );
+            return refuse(
+                request,
+                "clock_before_epoch",
+                -32003,
+                "this destructive call cannot be confirmed right now",
+            );
+        };
         let Some(payload) = self
             .continuation
             .begin_confirmation_exchange(
@@ -348,7 +360,7 @@ impl MetaMcp {
                 None,
                 fingerprint,
                 digest,
-                now_unix_secs(),
+                now,
             )
             .await
         else {
@@ -363,7 +375,6 @@ impl MetaMcp {
                 "this destructive call cannot be confirmed right now",
             );
         };
-        super::sealed_hold::register(&self.continuation);
         let issued_key = challenge_key(&payload);
         let envelope = match self.continuation.keyring().mint(&payload) {
             Ok(envelope) => envelope,
@@ -378,6 +389,7 @@ impl MetaMcp {
                 );
             }
         };
+        super::sealed_hold::register(&self.continuation, &payload.hold_key, &envelope);
 
         record("challenged");
         TaskConfirmation::Answer(Box::new(JsonRpcResponse::success(
@@ -412,9 +424,10 @@ impl MetaMcp {
         digest: &str,
         key: &str,
     ) -> TaskConfirmation {
-        let now = now_unix_secs();
-        let payload = match self.continuation.keyring().open(token, now) {
-            Ok(payload) => payload,
+        let opened =
+            clock_now().and_then(|now| Ok((self.continuation.keyring().open(token, now)?, now)));
+        let (payload, now) = match opened {
+            Ok(opened) => opened,
             Err(error) => {
                 let tool = request.tool_name;
                 warn!(tool, %error, "Confirmation grant refused");

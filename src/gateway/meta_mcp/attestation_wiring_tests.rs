@@ -7,7 +7,7 @@ use super::*;
 use crate::attestation::{
     AttestationMode, AttestationValidator, BnautAttestationSigner, TokenRequest,
 };
-use chrono::{TimeDelta, Utc};
+use chrono::Utc;
 use uuid::Uuid;
 
 const KEY: &[u8] = b"gateway-invoke-wiring-key";
@@ -32,7 +32,7 @@ fn token_with(capabilities: Vec<String>) -> String {
                 capabilities,
             },
             Utc::now(),
-            TimeDelta::minutes(5),
+            crate::duration_bound::delta!(minutes, 5),
         )
         .encoded()
         .to_string()

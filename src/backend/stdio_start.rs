@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use super::Backend;
-use crate::Result;
 use crate::transport::{StdioTransport, assigned_package_cache_dir, isolated_package_manager_env};
+use crate::{Error, Result};
 
 impl Backend {
     /// Spawn the backend's process and complete the MCP handshake.
@@ -31,6 +31,21 @@ impl Backend {
         );
         if let Some(bytes) = self.config.max_frame_bytes {
             transport.set_max_frame_bytes(bytes);
+        }
+        // Registered before anything is spawned, under the lock `stop` and
+        // `retire_now` latch under: a retire either sees this transport or this
+        // start sees `stopping` and spawns nothing (MIK-7923, design M1).
+        {
+            let mut cleanups = self.replaced_transport_cleanups.lock();
+            if cleanups.stopping {
+                return Err(Error::BackendNotFound(format!(
+                    "backend {} is stopping",
+                    self.name
+                )));
+            }
+            cleanups.live.retain(|weak| weak.strong_count() > 0);
+            let registered: Arc<dyn crate::transport::Transport> = transport.clone();
+            cleanups.live.push(Arc::downgrade(&registered));
         }
         super::package_cache::start_with_repair(&transport).await?;
         Ok(transport)

@@ -113,7 +113,7 @@ async fn dropping_a_live_transport_takes_its_descendants_with_it() {
     let mut cmd = tokio::process::Command::new("sh");
     cmd.arg("-c")
         .arg(format!("sleep 120 & echo $! > {}; wait", pidfile.display()));
-    *transport.child.lock().await = Some(super::ChildTree::new(
+    transport.child.lock().tree = Some(super::ChildTree::new(
         super::spawn_in_own_tree(cmd).unwrap(),
     ));
     let mut pid = String::new();
@@ -310,10 +310,10 @@ async fn close_returns_while_a_write_is_stuck_on_a_peer_that_stopped_reading() {
 }
 
 /// Kills the process whose pid the file holds, if any, when dropped.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 struct KillEscapedOnDrop(std::path::PathBuf);
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 impl Drop for KillEscapedOnDrop {
     fn drop(&mut self) {
         let pid = std::fs::read_to_string(&self.0).unwrap_or_default();
@@ -328,8 +328,10 @@ impl Drop for KillEscapedOnDrop {
 /// MIK-8079: `close()` returns even when a reader that escaped the process
 /// group (a daemonized descendant still holding stdin) keeps a write stuck.
 /// The pipe goes through fd 3: a background job's own stdin is `/dev/null`
-/// in a non-interactive shell, so `<&0` would not hand it the pipe.
-#[cfg(target_os = "linux")]
+/// in a non-interactive shell, so `<&0` would not hand it the pipe. The
+/// reader leaves the group through perl's `setsid`, since macOS ships no
+/// `setsid` command (MIK-8183).
+#[cfg(unix)]
 #[tokio::test]
 async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
     use crate::transport::Transport as _;
@@ -344,7 +346,7 @@ async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
         "while IFS= read -r line; do\n\
          case \"$line\" in\n\
          *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
-         *'notifications/initialized'*) exec 3<&0; setsid sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
+         *'notifications/initialized'*) exec 3<&0; perl -MPOSIX -e 'setsid; exec @ARGV' sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
          esac\ndone\n",
         pid = pidfile.display()
     );
@@ -406,7 +408,7 @@ async fn close_returns_when_an_escaped_reader_keeps_a_write_stuck() {
 
 /// MIK-8079 (codex P2): a transport dropped without `close()` while a write is
 /// stuck on an escaped reader still ends that write and frees stdin.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[tokio::test]
 async fn dropping_the_transport_ends_a_write_stuck_on_an_escaped_reader() {
     use crate::transport::Transport as _;
@@ -421,7 +423,7 @@ async fn dropping_the_transport_ends_a_write_stuck_on_an_escaped_reader() {
         "while IFS= read -r line; do\n\
          case \"$line\" in\n\
          *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
-         *'notifications/initialized'*) exec 3<&0; setsid sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
+         *'notifications/initialized'*) exec 3<&0; perl -MPOSIX -e 'setsid; exec @ARGV' sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
          esac\ndone\n",
         pid = pidfile.display()
     );
@@ -470,39 +472,68 @@ async fn dropping_the_transport_ends_a_write_stuck_on_an_escaped_reader() {
     );
 }
 
-/// `MIK-7642.PR.B`: an `initialize` dropped before its answer is never
-/// cancelled; the protocol forbids it.
+/// MIK-7923 T1-stdin: a retire, with the transport still held and no close,
+/// ends a write stuck on an escaped reader and frees stdin. The request fails
+/// at the stdout-closed latch either way; the write itself holds stdin until
+/// the per-start token is cancelled, which `kill_tree_now` does.
 #[cfg(unix)]
 #[tokio::test]
-async fn a_dropped_initialize_is_never_cancelled() {
+async fn a_retire_frees_a_write_stuck_on_an_escaped_reader() {
+    use crate::transport::Transport as _;
     use std::collections::HashMap;
     let dir = tempfile::tempdir().unwrap();
-    let log = dir.path().join("frames.log");
+    let pidfile = dir.path().join("escaped.pid");
+    let _reaper = KillEscapedOnDrop(pidfile.clone());
+    let reply = r#"'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'"#;
     let script = format!(
-        "while IFS= read -r line; do printf '%s\\n' \"$line\" >> \"{}\"; done\n",
-        log.display()
+        "while IFS= read -r line; do\n\
+         case \"$line\" in\n\
+         *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
+         *'notifications/initialized'*) exec 3<&0; perl -MPOSIX -e 'setsid; exec @ARGV' sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
+         esac\ndone\n",
+        pid = pidfile.display()
     );
-    std::fs::write(dir.path().join("deaf.sh"), script).unwrap();
+    std::fs::write(dir.path().join("escape.sh"), script).unwrap();
     let transport = super::StdioTransport::new(
-        "sh deaf.sh",
+        "sh escape.sh",
         HashMap::new(),
         Some(dir.path().to_string_lossy().into_owned()),
         std::time::Duration::from_secs(30),
         None,
     );
-    let started =
-        tokio::time::timeout(std::time::Duration::from_millis(500), transport.start()).await;
-    assert!(
-        started.is_err(),
-        "precondition: initialize was still waiting"
-    );
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    let frames = std::fs::read_to_string(&log).unwrap_or_default();
-    assert!(
-        frames.contains("\"method\":\"initialize\""),
-        "precondition: sent: {frames}"
-    );
-    assert!(!frames.contains("notifications/cancelled"), "{frames}");
+    transport.start().await.expect("start");
+    let writer = std::sync::Arc::clone(&transport.writer);
+    let big = serde_json::json!({ "name": "x", "arguments": { "blob": "a".repeat(256 * 1024) } });
+    let stuck = {
+        let transport = std::sync::Arc::clone(&transport);
+        tokio::spawn(async move { transport.request("tools/call", Some(big)).await })
+    };
+    for _ in 0..100 {
+        if !std::fs::read_to_string(&pidfile)
+            .unwrap_or_default()
+            .trim()
+            .is_empty()
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let held = writer.try_lock().is_err();
+    transport.kill_tree_now();
+    let mut freed = false;
+    for _ in 0..50 {
+        if writer.try_lock().is_ok() {
+            freed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    stuck.abort();
+    let _ = stuck.await;
+    assert!(held, "precondition: the write holds stdin");
+    assert!(freed, "a retire left a stuck write holding stdin");
+    drop(transport);
 }
 
 /// `MIK-8099.ROW.1`: a write queued behind the stdin lock while the shutdown
@@ -559,4 +590,163 @@ async fn a_write_queued_across_a_token_renewal_takes_the_new_token() {
         matches!(written, Ok(Ok(()))),
         "the old token's cancel ended a write queued before the renewal: {written:?}"
     );
+}
+
+/// Whether the second launch logged (a restart's fresh child), if any, is
+/// gone within 5 s; then every logged launch is killed, so none outlives
+/// the row.
+#[cfg(unix)]
+fn second_launch_gone_then_kill_all(all: &[String]) -> bool {
+    let alive = |pid: &str| {
+        std::process::Command::new("kill")
+            .args(["-0", pid])
+            .status()
+            .is_ok_and(|status| status.success())
+    };
+    let mut gone = false;
+    for _ in 0..50 {
+        if all.get(1).is_none_or(|pid| !alive(pid)) {
+            gone = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    for pid in all {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", pid])
+            .status();
+    }
+    gone
+}
+
+/// MIK-7923 T1-install: a restart parked at the writer lock on an idle runtime
+/// has spawned nothing, so a retire there misses no child. The server logs
+/// each launch; while the runtime idles there is still only the first. Driven
+/// again, the restart finds the transport retired and spawns nothing (a start
+/// the retire overtakes after that check is refused at install instead).
+#[cfg(unix)]
+#[test]
+fn a_restart_parked_on_the_writer_lock_spawns_nothing_a_retire_misses() {
+    use crate::transport::Transport as _;
+    use std::collections::HashMap;
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("escaped.pid");
+    let launch_log = dir.path().join("launches");
+    let _reaper = KillEscapedOnDrop(pidfile.clone());
+    let reply = r#"'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'"#;
+    let script = format!(
+        "echo $$ >> \"{launches}\"\n\
+         while IFS= read -r line; do\n\
+         case \"$line\" in\n\
+         *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
+         *'notifications/initialized'*) exec 3<&0; perl -MPOSIX -e 'setsid; exec @ARGV' sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
+         esac\ndone\n",
+        pid = pidfile.display(),
+        launches = launch_log.display()
+    );
+    std::fs::write(dir.path().join("escape.sh"), script).unwrap();
+    let launched = || -> Vec<String> {
+        std::fs::read_to_string(&launch_log)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let transport = super::StdioTransport::new(
+        "sh escape.sh",
+        HashMap::new(),
+        Some(dir.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(30),
+        None,
+    );
+    runtime.block_on(async {
+        transport.start().await.expect("first start");
+        // A write stuck on the escaped reader holds the writer lock.
+        let big =
+            serde_json::json!({ "name": "x", "arguments": { "blob": "a".repeat(256 * 1024) } });
+        let writing = std::sync::Arc::clone(&transport);
+        tokio::spawn(async move { writing.request("tools/call", Some(big)).await });
+        while transport.writer.try_lock().is_ok() {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    });
+    let restarting = std::sync::Arc::clone(&transport);
+    let restart = runtime.spawn(async move { restarting.start().await });
+    // Let the restart run up to the writer lock and park there.
+    runtime.block_on(async { tokio::time::sleep(std::time::Duration::from_millis(300)).await });
+    // The runtime idles from here until the restart is driven again.
+    let first = launched();
+    transport.kill_tree_now();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let while_idle = launched();
+    let outcome = runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(10), restart).await
+    });
+    let all = launched();
+    let fresh_gone = second_launch_gone_then_kill_all(&all);
+    drop(runtime);
+    assert_eq!(
+        first.len(),
+        1,
+        "a restart parked at the writer lock had already spawned"
+    );
+    assert_eq!(
+        while_idle.len(),
+        1,
+        "the parked restart spawned before taking the writer lock"
+    );
+    let refused = outcome
+        .expect("the restart finished once driven")
+        .expect("no panic");
+    // Decided by the gateway, not by the child's own log line: a child the
+    // install guard kills may never get to write that line (MIK-7923, m08).
+    assert!(
+        matches!(&refused, Err(crate::Error::BackendNotFound(m)) if m.contains("before it started")),
+        "the retired restart was refused only at install, after spawning: {refused:?}"
+    );
+    assert_eq!(
+        all.len(),
+        1,
+        "the retired restart spawned a child once driven"
+    );
+    assert!(fresh_gone, "the refused start's tree outlived the retire");
+}
+
+/// `MIK-7642.PR.B`: an `initialize` dropped before its answer is never
+/// cancelled; the protocol forbids it.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_dropped_initialize_is_never_cancelled() {
+    use std::collections::HashMap;
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("frames.log");
+    let script = format!(
+        "while IFS= read -r line; do printf '%s\\n' \"$line\" >> \"{}\"; done\n",
+        log.display()
+    );
+    std::fs::write(dir.path().join("deaf.sh"), script).unwrap();
+    let transport = super::StdioTransport::new(
+        "sh deaf.sh",
+        HashMap::new(),
+        Some(dir.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(30),
+        None,
+    );
+    let started =
+        tokio::time::timeout(std::time::Duration::from_millis(500), transport.start()).await;
+    assert!(
+        started.is_err(),
+        "precondition: initialize was still waiting"
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let frames = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        frames.contains("\"method\":\"initialize\""),
+        "precondition: sent: {frames}"
+    );
+    assert!(!frames.contains("notifications/cancelled"), "{frames}");
 }

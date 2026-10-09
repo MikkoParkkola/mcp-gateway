@@ -74,8 +74,8 @@ fn sources() -> Vec<(String, String)> {
 fn adm_sweep_every_admission_uses_one_owner_spelling() {
     let expected_sync: BTreeMap<&str, &str> = [
         (
-            "gateway/router/handlers.rs",
-            "AdmissionOwner::routed(&admission_owner)",
+            "gateway/router/handlers/dispatch_tools_call.rs",
+            "AdmissionOwner::routed(admission_owner)",
         ),
         ("gateway/server/mod.rs", "AdmissionOwner::local_operator()"),
     ]

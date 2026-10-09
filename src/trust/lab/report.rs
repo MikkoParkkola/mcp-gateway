@@ -4,7 +4,7 @@
 
 use crate::hashing::canonical_json_sha256;
 use crate::trust::{TrustCard, TrustFinding};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -272,7 +272,9 @@ impl TrustLabCertification {
             issued_at,
             expires_at: match policy.profile {
                 TrustLabProfile::LocalOneShot => None,
-                TrustLabProfile::EnterpriseContinuous => Some(issued_at + Duration::days(30)),
+                TrustLabProfile::EnterpriseContinuous => {
+                    Some(issued_at + crate::duration_bound::delta!(days, 30))
+                }
             },
         }
     }

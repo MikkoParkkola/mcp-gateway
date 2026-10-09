@@ -53,11 +53,21 @@ async fn call_as(
     if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
         params.extend(extra.clone());
     }
+    // A modern request that declares form elicitation, so the question is one
+    // it may be asked (MRTR.9, MIK-8089).
+    let meta = params["_meta"].as_object().cloned().unwrap_or_default();
+    params["_meta"] = Value::Object(meta);
+    params["_meta"]["io.modelcontextprotocol/protocolVersion"] = json!("2026-07-28");
+    params["_meta"]["io.modelcontextprotocol/clientCapabilities"] =
+        json!({"elicitation": {"form": {}}});
     let mut request = axum::http::Request::builder()
         .method("POST")
         .uri(format!("/mcp/{backend}"))
         .header("authorization", format!("Bearer {key}"))
         .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "read")
         .body(axum::body::Body::from(
             json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params})
                 .to_string(),
@@ -689,9 +699,18 @@ async fn r19_the_propagated_binding_binds_ahead_of_the_identity() {
             "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}}},
         "requestState": BACKEND_STATE
     });
-    meta.seal_direct_interim(who("binding-a"), ("alpha", None, Some(&sent)), &mut asked)
-        .await
-        .expect("sealed");
+    // A client that declared form elicitation, so the question may be asked
+    // (MRTR.9, MIK-8089).
+    let declared = crate::protocol::meta::Declared::from_handshake(Some(
+        &json!({"elicitation": {"form": {}}}),
+    ));
+    meta.seal_direct_interim(
+        who("binding-a"),
+        ("alpha", None, Some(&sent), declared),
+        &mut asked,
+    )
+    .await
+    .expect("sealed");
     let retry = json!({"name": "read", "arguments": {},
         "requestState": asked["requestState"], "inputResponses": answers()});
     let mut outbound = retry.clone();

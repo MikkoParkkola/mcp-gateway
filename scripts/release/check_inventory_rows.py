@@ -15,10 +15,14 @@ Usage:
   check_inventory_rows.py <base> [<head>]   fail when a function <head> (default
                                             HEAD) adds since its merge-base with
                                             <base> has no row in <head>
+  check_inventory_rows.py --all [<head>]    fail when any function on the paths
+                                            in <head> has no row (MIK-8195): a
+                                            gap older than the diff check
 """
 
 from __future__ import annotations
 
+import functools
 import re
 import subprocess
 import sys
@@ -27,6 +31,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 INVENTORY = "docs/release/v4.0.0-critical-functions.tsv"
 UNENFORCING = "docs/release/v4.0.0-unenforcing-functions.tsv"
+ALL = "--all"
+# MIK-8195: the areas whose every function is classified. `--all` enforces only
+# these while the waves land, and the last wave deletes this list.
+SWEPT_AREAS = (
+    "src/oauth/login_gate.rs",
+    "src/oauth/client/",
+    "src/personal_accounts/journey/",
+)
+# Diffing against git's empty tree reads every line of <head> as added.
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 # The seven paths, as scripts/release coverage grading names them.
 PREFIXES = (
@@ -121,8 +135,10 @@ def test_lines(lines: list[str]) -> set[int]:
     return inside
 
 
+@functools.lru_cache(maxsize=None)
 def show(rev: str, path: str) -> str | None:
-    """`path` as `rev` has it; None when it does not exist there."""
+    """`path` as `rev` has it; None when it does not exist there. Cached:
+    callers pass a resolved commit, never a moving name like HEAD."""
     done = subprocess.run(
         ["git", "show", f"{rev}:{path}"], cwd=ROOT, capture_output=True, text=True
     )
@@ -168,6 +184,7 @@ def under_cfg_test(lines: list[str], n: int) -> bool:
     return False
 
 
+@functools.lru_cache(maxsize=None)
 def declared_for_tests(head: str, path: str, depth: int = 0) -> bool:
     """Whether every declaration of `path` at `head` compiles only under test.
 
@@ -197,7 +214,7 @@ def declared_for_tests(head: str, path: str, depth: int = 0) -> bool:
 
 
 def added_functions(base: str, head: str) -> list[tuple[str, str, int, int]]:
-    merge_base = git("merge-base", base, head).strip()
+    merge_base = EMPTY_TREE if base == ALL else git("merge-base", base, head).strip()
     diff = git("diff", "-U0", "--no-renames", merge_base, head, "--", *PREFIXES)
     found: list[tuple[str, str, int, int]] = []
     path = None
@@ -230,8 +247,10 @@ def added_functions(base: str, head: str) -> list[tuple[str, str, int, int]]:
 def missing_rows(base: str, head: str) -> list[tuple[str, str, int, int]]:
     """Functions `head` adds since its merge-base with `base` that have no row
     in `head`: (file, fn, line, occurrence)."""
+    head = git("rev-parse", head).strip()
     known = rows(head, INVENTORY) | rows(head, UNENFORCING)
-    return [f for f in added_functions(base, head) if (f[0], f[1], f[3]) not in known]
+    found = [f for f in added_functions(base, head) if (f[0], f[1], f[3]) not in known]
+    return [f for f in found if base != ALL or f[0].startswith(SWEPT_AREAS)]
 
 
 def main(argv: list[str]) -> int:
@@ -244,11 +263,12 @@ def main(argv: list[str]) -> int:
         print(f"no inventory row: {path}:{line} fn {name} (occurrence {nth})")
     if missing:
         print(
-            f"{len(missing)} added function(s) on the COV.3 paths have no row. Add each to "
+            f"{len(missing)} function(s) on the COV.3 paths have no row. Add each to "
             f"{INVENTORY} (it enforces) or {UNENFORCING} (it does not, with a reason)."
         )
         return 1
-    print("every added function on the COV.3 paths has a row")
+    scope = "in the swept COV.3 areas" if argv[1] == ALL else "added on the COV.3 paths"
+    print(f"every function {scope} has a row")
     return 0
 
 

@@ -66,6 +66,7 @@ pub(crate) struct RelayFinding {
     pub(crate) sender: u64,
     pub(crate) tool: u64,
     pub(crate) matches: usize,
+    pub(crate) reason: RelayReason,
 }
 
 /// Characters per k-gram. Nothing shorter than this can ever match.
@@ -88,72 +89,6 @@ pub(super) const MAX_COMMON_PRINCIPALS: usize = 9;
 /// in [`SAMPLE`] positions; crafted text can exceed it, costing only an
 /// excuse).
 const MAX_SOURCE_FINGERPRINTS: usize = 4 * 1_024;
-
-/// Delivery instants kept per pair; see [`Copies`].
-const MAX_COPIES: usize = 3;
-
-/// When one pair received a fingerprint: up to [`MAX_COPIES`] delivery
-/// instants, ascending. Calls reach the lock out of time order, so a copy
-/// stamped after an egress can already be here when that egress is checked,
-/// and the earliest and latest alone cannot say whether a copy was held in
-/// the window at that instant (MIK-7881).
-///
-/// A copy whose neighbours are at most a window apart is dropped: a window
-/// that contains it contains one of them, so no answer changes. Past the cap
-/// the oldest is dropped; an egress checked more than about a window before
-/// the pair's latest copy can then miss an older one, which turns an excuse
-/// into a finding and can drop a witness.
-#[derive(Clone, Copy)]
-struct Copies {
-    at: [Instant; MAX_COPIES],
-    len: usize,
-}
-
-impl Copies {
-    fn one(at: Instant) -> Self {
-        Self {
-            at: [at; MAX_COPIES],
-            len: 1,
-        }
-    }
-
-    fn all(&self) -> &[Instant] {
-        &self.at[..self.len]
-    }
-
-    fn latest(&self) -> Instant {
-        self.at[self.len - 1]
-    }
-
-    fn add(&mut self, other: &Self, window: Duration) {
-        for &at in other.all() {
-            let mut all = [at; MAX_COPIES + 1];
-            all[..self.len].copy_from_slice(self.all());
-            let mut n = self.len + 1;
-            all[..n].sort_unstable();
-            let mut i = 1;
-            while i + 1 < n {
-                if all[i + 1].saturating_duration_since(all[i - 1]) <= window {
-                    all.copy_within(i + 1..n, i);
-                    n -= 1;
-                    i = (i - 1).max(1);
-                } else {
-                    i += 1;
-                }
-            }
-            let oldest = n.saturating_sub(MAX_COPIES);
-            self.len = n - oldest;
-            self.at[..self.len].copy_from_slice(&all[oldest..n]);
-        }
-    }
-
-    /// A copy delivered by `now` and within `window` of it.
-    fn held(&self, now: Instant, window: Duration) -> bool {
-        self.all()
-            .iter()
-            .any(|&at| at <= now && now.saturating_duration_since(at) <= window)
-    }
-}
 
 /// One (source, principal) pair that received a fingerprint.
 struct Holder {
@@ -235,6 +170,8 @@ struct State {
     /// What cut deliveries carried, by (source, caller): excuse only
     /// (`MIK-8066.EXCUSE.1`).
     sketches: sketch::SketchStore,
+    /// "Excuse lost" markers, apart from the sketches (`MIK-8201`).
+    markers: sketch::Markers,
 }
 
 impl State {
@@ -247,6 +184,7 @@ impl State {
             self.remove(fp);
         }
         self.sketches.sweep(now, window);
+        self.markers.sweep(now);
     }
 
     /// Remove `fp`'s entry, releasing its pool records: every removal goes
@@ -527,10 +465,10 @@ impl CollusionDetector {
         // caller's own copy, so it is sketched, one sketch per delivery.
         let mut sketched: Vec<u64> = cut.as_deref().map(<[u64]>::to_vec).unwrap_or_default();
         if fps.len() > MAX_SOURCE_FINGERPRINTS {
-            self.source_truncated.fetch_add(
-                count(fps.len() - MAX_SOURCE_FINGERPRINTS),
-                Ordering::Relaxed,
-            );
+            let cut_off = count(fps.len() - MAX_SOURCE_FINGERPRINTS);
+            self.source_truncated.fetch_add(cut_off, Ordering::Relaxed);
+            telemetry_metrics::counter!(CAPACITY_METRIC, "bound" => "receipt_truncated")
+                .increment(cut_off);
             sketched.extend_from_slice(&fps);
             fps.truncate(MAX_SOURCE_FINGERPRINTS);
         }
@@ -548,6 +486,11 @@ impl CollusionDetector {
             let mut state = self.state.lock();
             state.sweep(now, window);
             pending.reservation = state.sketches.reserve(pair, sketched.len());
+            // A loss is marked under the lock that caused it, so no egress
+            // checked during the build sees it unmarked (`MIK-8201`).
+            for lost in state.sketches.take_lost() {
+                state.markers.mark(lost, now + window);
+            }
         }
         let built = pending
             .reservation
@@ -565,6 +508,11 @@ impl CollusionDetector {
         if let (Some(reservation), Some(sketch)) = (pending.reservation.take(), built) {
             state.sketches.publish(&reservation, sketch, now);
         }
+        let until = now + window;
+        for lost in state.sketches.take_lost() {
+            state.markers.mark(lost, until);
+        }
+        let me = self.digest(principal);
         for fp in fps {
             // Calls can reach the lock out of time order; an entry's age only
             // ever moves forward.
@@ -579,11 +527,16 @@ impl CollusionDetector {
                 {
                     state.remove(oldest);
                     self.evicted.fetch_add(1, Ordering::Relaxed);
+                    telemetry_metrics::counter!(CAPACITY_METRIC, "bound" => "fingerprint_evicted")
+                        .increment(1);
                 }
                 Holders::Tracked(holders::Tracked::default())
             };
             let room = self.pool_capacity.saturating_sub(state.pool);
-            let holders = self.add(holders, holder(now), now, room);
+            let (holders, lost) = self.add(holders, holder(now), now, room);
+            if let Some(source) = lost {
+                state.markers.mark((source, me), until);
+            }
             let order = state.stamp(touched, fp);
             state.insert(fp, Entry { holders, order });
         }
@@ -591,25 +544,37 @@ impl CollusionDetector {
 
     /// `new` added to `holders`; `room` is how many pool records this
     /// fingerprint may hold in all (`MIK-8123`).
-    fn add(&self, holders: Holders, new: Holder, now: Instant, room: usize) -> Holders {
+    /// Also the source whose excuse of the caller was dropped for room, if
+    /// any (`MIK-8201`); an overflowed copy is read per fingerprint instead.
+    fn add(
+        &self,
+        holders: Holders,
+        new: Holder,
+        now: Instant,
+        room: usize,
+    ) -> (Holders, Option<u64>) {
         let Holders::Tracked(mut tracked) = holders else {
-            return holders;
+            return (holders, None);
         };
         let window = self.params.window;
         tracked.expire(now, window);
-        match tracked.add(new, now, window, room) {
-            holders::Added::Kept => {}
-            holders::Added::PlainDropped
-            | holders::Added::PlainReplaced
-            | holders::Added::Overflowed => {
-                self.capped.fetch_add(1, Ordering::Relaxed);
-            }
+        let new_source = new.source;
+        let (bound, lost) = match tracked.add(new, now, window, room) {
+            holders::Added::Kept => (None, None),
+            holders::Added::PlainDropped => (Some("record_dropped"), Some(new_source)),
+            holders::Added::PlainReplaced { source } => (Some("record_replaced"), Some(source)),
+            holders::Added::Overflowed => (Some("record_overflow"), None),
+        };
+        if let Some(bound) = bound {
+            self.capped.fetch_add(1, Ordering::Relaxed);
+            telemetry_metrics::counter!(CAPACITY_METRIC, "bound" => bound).increment(1);
         }
-        if tracked.callers() >= self.params.common_principals {
+        let holders = if tracked.callers() >= self.params.common_principals {
             Holders::Common
         } else {
             Holders::Tracked(tracked)
-        }
+        };
+        (holders, lost)
     }
 
     /// The relay predicate for `principal` sending `args` through `tool`.
@@ -649,7 +614,7 @@ impl CollusionDetector {
         let mut state = self.state.lock();
         state.sweep(now, window);
         let mut matches = 0;
-        let mut first = None;
+        let (mut plain, mut overflow, mut lost, mut elsewhere) = (None, None, None, None);
         for fp in fps {
             let Some(Entry {
                 holders: Holders::Tracked(tracked),
@@ -670,25 +635,68 @@ impl CollusionDetector {
             };
             let sensitive =
                 |t: &&Holder| t.sensitive.is_some_and(|copies| copies.held(now, window));
-            if let Some(t) = tuples.iter().filter(sensitive).find(|t| {
-                t.principal != sender && !excused(t.source) && !t.flows.allows(egress_flows)
-            }) {
+            // `MIK-8201`: which reason a witness supports. Capacity first,
+            // then another source; labels only, never excuses.
+            let classify = |t: &Holder| {
+                if tracked.overflowed(sender, now, window)
+                    || state.markers.holds((t.source, sender), now)
+                {
+                    1
+                } else if tuples
+                    .iter()
+                    .filter(live)
+                    .any(|h| h.principal == sender && h.source != t.source)
+                    || state
+                        .sketches
+                        .held_from_elsewhere((t.source, sender), fp, now, window)
+                {
+                    2
+                } else {
+                    0
+                }
+            };
+            // Every qualifying witness is classified, so delivery order never
+            // hides a plain one behind a bound (0 plain, 1 lost, 2 elsewhere).
+            if let Some((class, t)) = tuples
+                .iter()
+                .filter(sensitive)
+                .filter(|t| {
+                    t.principal != sender && !excused(t.source) && !t.flows.allows(egress_flows)
+                })
+                .map(|t| (classify(t), t))
+                .min_by_key(|(class, _)| *class)
+            {
                 matches += 1;
-                first.get_or_insert((t.source, t.principal));
+                let witness = (t.source, t.principal);
+                match class {
+                    0 => &mut plain,
+                    1 => &mut lost,
+                    _ => &mut elsewhere,
+                }
+                .get_or_insert(witness);
             } else if let Some(receiver) = tracked.overflow_witness(sender, now, window) {
                 // `MIK-8123`: a sensitive record past the cap has no source
                 // left to excuse it or flow to allow it.
                 matches += 1;
-                first.get_or_insert((OVERFLOW_SOURCE, receiver));
+                overflow.get_or_insert((OVERFLOW_SOURCE, receiver));
             }
         }
-        let (source, receiver) = first?;
+        // Plain detection wins; a stated bound is named only without one.
+        let (reason, (source, receiver)) = [
+            (RelayReason::Relay, plain),
+            (RelayReason::OverflowWitness, overflow),
+            (RelayReason::ExcuseLost, lost),
+            (RelayReason::OtherSource, elsewhere),
+        ]
+        .into_iter()
+        .find_map(|(reason, witness)| witness.map(|w| (reason, w)))?;
         (matches >= self.params.min_matches).then(|| RelayFinding {
             source,
             receiver,
             sender,
             tool: self.digest(tool),
             matches,
+            reason,
         })
     }
 
@@ -714,8 +722,18 @@ impl CollusionDetector {
     }
 }
 
+#[path = "collusion_copies.rs"]
+mod copies;
+use copies::Copies;
 #[path = "collusion_holders.rs"]
 mod holders;
+#[path = "collusion_reason.rs"]
+mod reason;
+#[cfg(test)]
+#[path = "collusion_reason_tests.rs"]
+mod reason_tests;
+use reason::CAPACITY_METRIC;
+pub(crate) use reason::RelayReason;
 #[path = "collusion_seam.rs"]
 mod seam;
 #[cfg(test)]

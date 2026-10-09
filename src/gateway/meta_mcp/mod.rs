@@ -452,7 +452,9 @@ impl MetaMcp {
         stats: Option<Arc<UsageStats>>,
         ranker: Option<Arc<SearchRanker>>,
         default_cache_ttl: Duration,
-        clock: Arc<dyn Fn() -> u64 + Send + Sync>,
+        clock: Arc<
+            dyn Fn() -> std::result::Result<u64, crate::clock::ClockBeforeEpoch> + Send + Sync,
+        >,
     ) -> Self {
         Self {
             backends,
@@ -463,7 +465,9 @@ impl MetaMcp {
             default_cache_ttl,
             idempotency_cache: None,
             grant_repeats: Arc::default(),
-            execution_admission: crate::idempotency::admission::ExecutionAdmission::new(clock),
+            execution_admission: crate::idempotency::admission::ExecutionAdmission::new_fallible(
+                clock,
+            ),
             idempotency_config: RwLock::new(crate::config::IdempotencyConfig::default()),
             unkeyed: admission::UnkeyedPolicy::default(),
             continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
@@ -547,7 +551,7 @@ impl MetaMcp {
             stats,
             ranker,
             default_ttl,
-            Arc::new(crate::protocol::continuation::now_unix_secs),
+            Arc::new(crate::clock::unix_secs),
         )
     }
 
@@ -558,7 +562,9 @@ impl MetaMcp {
         stats: Option<Arc<UsageStats>>,
         ranker: Option<Arc<SearchRanker>>,
         default_ttl: Duration,
-        clock: Arc<dyn Fn() -> u64 + Send + Sync>,
+        clock: Arc<
+            dyn Fn() -> std::result::Result<u64, crate::clock::ClockBeforeEpoch> + Send + Sync,
+        >,
     ) -> Self {
         Self::build(backends, cache, stats, ranker, default_ttl, clock)
     }
@@ -651,7 +657,8 @@ const NO_SESSION_FOR_STATE: &str = "The workflow state is per-session, and this 
 struct DispatchTarget<'a> {
     id: RequestId,
     tool_name: &'a str,
-    arguments: Value,
+    // MIK-8014: borrowed from the request where the caller still owns it.
+    arguments: std::borrow::Cow<'a, Value>,
     session_id: Option<&'a str>,
     caller: &'a MetaMcpCallerContext<'a>,
 }

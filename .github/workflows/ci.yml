@@ -122,6 +122,15 @@ jobs:
       - name: Every added COV.3 function has an inventory row (MIK-8169)
         if: github.event_name == 'pull_request'
         run: python3 scripts/release/check_inventory_rows.py "origin/${{ github.base_ref }}"
+      # A clock before 1970 makes a raw read admit what expired; new code reads
+      # the wall clock through crate::clock only (MIK-8202).
+      - name: No new raw wall-clock read (MIK-8202)
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/release/check_clock_baseline.py "origin/${{ github.base_ref }}"
+      # Every function in the swept areas has a row, whenever it was added
+      # (MIK-8195); the area list grows with each wave until it is removed.
+      - name: Every function in a swept COV.3 area has an inventory row (MIK-8195)
+        run: python3 scripts/release/check_inventory_rows.py --all
       - name: Validate tracked public docs boundary
         run: scripts/dev/check-public-repo-hygiene.sh
       - name: Enforce the Noncommercial license header on every source file
@@ -997,6 +1006,8 @@ jobs:
         run: python3 scripts/release/test_critical_function_coverage.py
       - name: Test the inventory-row check (MIK-8169)
         run: python3 scripts/release/test_check_inventory_rows.py
+      - name: Test the raw clock-read check (MIK-8202)
+        run: python3 scripts/release/test_check_clock_baseline.py
       - name: Test the macOS exclusion check (MIK-8174)
         run: python3 scripts/release/test_check_macos_exclusions.py
       - name: Test the release-binary test-hook check, and that every workflow calls it

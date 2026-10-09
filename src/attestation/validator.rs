@@ -299,7 +299,7 @@ impl AttestationValidator {
         Self::with_settings(
             signer,
             DEFAULT_AUDIT_CAPACITY,
-            TimeDelta::seconds(DEFAULT_ROTATION_GRACE_SECS),
+            crate::duration_bound::delta!(seconds, DEFAULT_ROTATION_GRACE_SECS),
         )
     }
 

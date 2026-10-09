@@ -93,7 +93,7 @@ fn token_with(capabilities: &[&str]) -> String {
                 capabilities: capabilities.iter().map(|c| (*c).to_string()).collect(),
             },
             chrono::Utc::now(),
-            chrono::TimeDelta::minutes(5),
+            crate::duration_bound::delta!(minutes, 5),
         )
         .encoded()
         .to_string()
@@ -302,7 +302,7 @@ async fn a_token_minted_for_another_audience_is_refused_on_both_routes() {
                 capabilities: vec![TOOL.to_string()],
             },
             chrono::Utc::now(),
-            chrono::TimeDelta::minutes(5),
+            crate::duration_bound::delta!(minutes, 5),
         )
         .encoded()
         .to_string();

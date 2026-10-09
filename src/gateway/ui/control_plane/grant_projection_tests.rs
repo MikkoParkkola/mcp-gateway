@@ -3,7 +3,7 @@
 use super::control_plane_grant_from_identity;
 use crate::control_plane::ControlPlaneGrantStatus;
 use crate::identity_grants::{GrantAgent, GrantScope, GrantSubject, IdentityGrant};
-use chrono::{Duration, Utc};
+use chrono::Utc;
 
 fn grant() -> IdentityGrant {
     IdentityGrant {
@@ -44,7 +44,7 @@ fn revoked_grant_projects_as_revoked() {
 #[test]
 fn expired_grant_projects_as_revoked() {
     let mut g = grant();
-    g.expires_at = Some(Utc::now() - Duration::hours(1));
+    g.expires_at = Some(Utc::now() - crate::duration_bound::delta!(hours, 1));
     assert_eq!(
         control_plane_grant_from_identity(g, Utc::now()).status,
         ControlPlaneGrantStatus::Revoked
