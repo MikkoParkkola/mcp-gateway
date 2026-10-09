@@ -101,3 +101,34 @@ src/gateway/router/handlers/health.rs	backends_overall_healthy	1	Folds backend s
 src/gateway/router/handlers/session_end.rs	sse_deprecated_handler	1	Answers the retired /sse route with a fixed 410 migration notice; reads no request data
 src/gateway/router/handlers/sse.rs	unsupported_version_error	1	Builds the unsupported-version JSON-RPC error; the refusal is decided by its callers
 src/gateway/router/handlers/dispatch_intake.rs	params	1	Returns the request params or the narrowed listen copy; decides nothing
+src/gateway/router/helpers.rs	bodiless_accepted	1	Strips the placeholder body from a 202 direct answer and passes every other answer through unchanged.
+src/gateway/router/helpers.rs	parse_sampling_params	1	Deserializes sampling parameters and returns a protocol-level invalid-params error when they are missing or malformed.
+src/gateway/router/helpers.rs	parse_elicitation_params	1	Deserializes elicitation parameters and returns a protocol-level invalid-params error when they are missing or malformed.
+src/gateway/router/helpers.rs	extract_request_id	1	Converts a JSON string or integer into a request id, nothing else.
+src/gateway/router/helpers.rs	is_notification_method	1	Reports whether a method name is in the notifications namespace, used to decide whether a request id is required.
+src/gateway/router/helpers.rs	merge_client_meta	1	Copies the client's self-asserted request metadata, never an authorization input, into a meta-tool's arguments.
+src/gateway/router/helpers.rs	insert_client_meta	1	Inserts the client's metadata object into the arguments unless one is already present.
+src/gateway/router/helpers.rs	client_meta_insert_required	1	Reports whether the metadata merge would insert anything, a pure precondition over non-authorizing metadata.
+src/gateway/router/helpers.rs	merge_client_meta_ref	1	Borrowed form of the metadata merge that copies only when an insertion is needed.
+src/gateway/router/helpers.rs	parse_request	1	Owned wrapper that copies method and params out of the borrowed JSON-RPC parse.
+src/gateway/router/helpers.rs	parse_request_ref	1	Validates JSON-RPC framing (version, method, id presence) and returns protocol errors, a syntactic check rather than a security refusal [unenforcing vs critical].
+src/gateway/router/accounts/complete.rs	list	1	Formats the caller's already-scoped connection rows into HTML with escaped descriptor ids.
+src/gateway/router/watch_poll.rs	application_value	1	Extracts the structured content or first text item from an already-gated tool result.
+src/gateway/router/watch_poll.rs	new	1	Stores a weak handle to the gateway state for the watch host.
+src/gateway/router/authorization.rs	transport	1	Returns the constant HTTP transport label written into refusal audit lines.
+src/gateway/router/handlers.rs	unsupported_version_error	1	Builds the protocol-version error frame listing the revisions the client may retry on.
+src/gateway/router/handlers.rs	sse_deprecated_handler	1	Answers the retired SSE endpoint with a fixed 410 migration message.
+src/gateway/router/handlers.rs	backends_overall_healthy	1	Computes overall gateway health from backend breaker and health-tracker status.
+src/gateway/router/mod.rs	probe_ok	1	Answers the liveness probe with a constant ok.
+src/gateway/router/backend_handlers.rs	dispatch_armed	1	Arms the idempotency reservation for a disconnect and awaits the dispatch, plumbing with no security decision.
+src/gateway/router/accounts/offer.rs	new	1	Stores the journey facade and live config in the offer holder, a plain constructor.
+src/gateway/router/accounts/offer.rs	envelope	1	Formats the accounts.v1 data object for an already-decided refusal.
+src/gateway/router/accounts/offer.rs	install_connect_offers	1	Installs the optional connect-offer holder; without it refusals pass unchanged, so no enforcer depends on it.
+src/gateway/router/accounts/offer.rs	offers	1	Reads the installed connect-offer holder, an accessor.
+src/gateway/router/identity.rs	reason	1	Names the refusal rule as a fixed string for metrics, logs and the refusal text.
+src/gateway/router/identity.rs	ignored	1	Increments the ignored-identity-header counter.
+src/gateway/router/backend_handlers/direct_audit.rs	sha256_of	1	Formats the canonical SHA-256 of the request params for the audit record.
+src/gateway/router/backend_handlers/direct_audit.rs	direct_outcome	1	Classifies an already-sent direct-route answer into an audit outcome label.
+src/gateway/router/accounts/envelope.rs	body	1	Formats the accounts.v1 error body with the code as its message.
+src/gateway/router/accounts/envelope.rs	body_with_message	1	Formats the accounts.v1 error body JSON.
+src/gateway/router/trace_span.rs	span_for	1	Builds a debug tracing span from the method and matched route only.
