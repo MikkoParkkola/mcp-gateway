@@ -154,7 +154,7 @@ fn a_broken_chain_keeps_only_watched_paths_on_record() {
 }
 
 // Linux-only (W-L9): the real-watcher rows run on inotify.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod real_watcher {
     use std::path::Path;
     use std::sync::atomic::Ordering;

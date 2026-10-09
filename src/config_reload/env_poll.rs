@@ -109,7 +109,7 @@ pub(super) struct EnvPoller {
     spawn: SpawnRead,
     /// Ticks started, for tests that count loop iterations.
     // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     ticks: Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -125,14 +125,14 @@ impl EnvPoller {
             read: env_poll,
             spawn: spawn_detached,
             // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
-            #[cfg(all(test, target_os = "linux"))]
+            #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
             ticks: Arc::default(),
         }
     }
 
     /// A handle on the count of ticks started.
     // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     pub(super) fn ticks(&self) -> Arc<std::sync::atomic::AtomicUsize> {
         Arc::clone(&self.ticks)
     }
@@ -163,7 +163,7 @@ impl EnvPoller {
     /// read, so the caller always gets back to its shutdown check.
     pub(super) async fn tick(&mut self, wait: std::time::Duration) -> Option<ReloadTrigger> {
         // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
-        #[cfg(all(test, target_os = "linux"))]
+        #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
         self.ticks.fetch_add(1, Ordering::SeqCst);
         if self.pending.is_none() && self.env.env_paths().as_paths().is_empty() {
             // No env files, the default: nothing to read, so no thread.
@@ -300,7 +300,7 @@ pub(super) struct EnvReloadCounts {
 impl EnvReloadCounts {
     /// Whether the last reload failed.
     // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     pub(super) fn failed(&self) -> bool {
         self.failed.load(Ordering::SeqCst)
     }

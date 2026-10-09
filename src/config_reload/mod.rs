@@ -417,7 +417,7 @@ mod diff;
 mod reload_context;
 mod reload_warm_hook;
 // Linux-only, as the other real-watcher rows (inotify).
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod reload_warm_hook_tests;
 pub(crate) use reload_warm_hook::{OnRegistered, RegisteredChange};
 mod watcher;
@@ -448,7 +448,7 @@ pub(crate) use write::{MutateError, mutate_config_and_reload_detached};
 
 mod env_poll;
 // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod env_poll_e2e_tests;
 pub(crate) mod grant_audit;
 mod grant_audit_plan;

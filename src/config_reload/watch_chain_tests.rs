@@ -22,7 +22,7 @@ fn set(dirs: &[&Path]) -> BTreeSet<PathBuf> {
 
 /// Point `link` at `target` atomically, the way a deploy does: a new link
 /// renamed over the old one.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn retarget(link: &Path, target: &Path) {
     // Named from the whole file name, not `with_extension`: for a dot-led
     // name like `..data` that can land on the link itself.
@@ -204,7 +204,7 @@ fn t14_the_named_config_path_keeps_its_directory_link() {
 }
 
 // Linux-only (W-L9): the real-watcher rows run on inotify (see the module header).
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod real_watcher {
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
