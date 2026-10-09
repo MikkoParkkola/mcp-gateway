@@ -258,6 +258,10 @@ pub struct Backend {
     /// The slot's era (`cached_now`) just before each publish makes a
     /// transport reachable: the dialect its first request is shaped in
     /// (MIK-8012 boundary rows).
+    /// Run once by the next publish between its era install and its slot
+    /// write: where a concurrent era writer must not land (MIK-8012 HOLD.1).
+    #[cfg(test)]
+    pub(crate) between_install_and_write: parking_lot::Mutex<Option<Box<dyn FnOnce() + Send>>>,
     #[cfg(test)]
     pub(crate) era_at_publish: parking_lot::Mutex<Vec<Option<crate::protocol::era::Era>>>,
     /// A test's stand-ins for the user's token store and browser, used by the

@@ -117,6 +117,8 @@ impl Backend {
             #[cfg(test)]
             rebuilds_attempted: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
+            between_install_and_write: parking_lot::Mutex::new(None),
+            #[cfg(test)]
             era_at_publish: parking_lot::Mutex::new(Vec::new()),
             #[cfg(test)]
             oauth_test_seam: parking_lot::Mutex::new(None),

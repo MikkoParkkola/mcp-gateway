@@ -40,6 +40,10 @@ impl Backend {
             return Err("the destination policy changed while it was starting");
         }
         on_publish();
+        #[cfg(test)]
+        if let Some(between) = self.between_install_and_write.lock().take() {
+            between();
+        }
         *entry.listen.write() = listen;
         // The verdict a reader of the slot will see the instant the transport
         // lands in it, read before the write so nothing after it can mask it.
