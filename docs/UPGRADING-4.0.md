@@ -3384,7 +3384,8 @@ task; it never leaves delivered content unrecorded. The record is written before
 a commit that then loses (to a cancel that lands first, or a store failure) leaves a record for
 a recovery that did not land. A live call has the same window: its record is written
 (`src/gateway/meta_mcp/invoke.rs:1219-1221`) before its result is stored for delivery
-(`src/gateway/router/handlers.rs:1798`), and stands if that delivery then fails.
+(`execution.complete_delivery` in `meta_mcp_dispatch`, `src/gateway/router/handlers.rs`), and stands
+if that delivery then fails.
 
 ## 114. Hardened can name backends that may reach private networks
 
