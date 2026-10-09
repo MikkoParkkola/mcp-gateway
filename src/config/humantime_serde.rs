@@ -44,13 +44,20 @@ fn parse(text: &str) -> Result<Duration, String> {
 ///
 /// # Errors
 ///
-/// Returns a serialization error if the serializer fails, the duration has
+/// Returns a serialization error if the serializer fails, the duration is
+/// longer than 100 years (the parser would refuse it on the next load), it has
 /// sub-millisecond precision, or its millisecond total exceeds `u64` when
 /// fractional seconds require the millisecond encoding.
 pub fn serialize<S>(duration: &Duration, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
+    // MIK-8207: what is written must load again; the parser refuses more.
+    if *duration > crate::duration_bound::MAX_DURATION {
+        return Err(serde::ser::Error::custom(crate::duration_bound::too_long(
+            &format!("{}s", duration.as_secs()),
+        )));
+    }
     if duration.subsec_nanos() == 0 {
         return serializer.serialize_str(&format!("{}s", duration.as_secs()));
     }

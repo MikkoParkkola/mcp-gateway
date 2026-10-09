@@ -489,7 +489,10 @@ async fn wait_ready(
         {
             return Ok(found.clone());
         }
-        if Instant::now() + interval >= ends {
+        if Instant::now()
+            .checked_add(interval)
+            .is_none_or(|next| next >= ends)
+        {
             return Err(Error::BackendTimeout(
                 "not finished within the wait; poll again to keep waiting".to_string(),
             ));

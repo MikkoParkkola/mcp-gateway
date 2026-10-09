@@ -53,6 +53,18 @@ fn a_human_duration_above_the_bound_is_refused_at_load() {
     }
 }
 
+/// What is written must load again: a duration the parser would refuse is
+/// never written (a dashboard edit, say, would leave an unloadable file).
+#[test]
+fn a_duration_above_the_bound_is_never_written() {
+    let mut cache = Config::default().cache;
+    cache.default_ttl = MAX_DURATION + Duration::from_secs(1);
+    assert!(serde_yaml::to_string(&cache).is_err());
+    cache.default_ttl = MAX_DURATION;
+    let written = serde_yaml::to_string(&cache).expect("at the bound");
+    assert!(written.contains("3155760000s"), "{written}");
+}
+
 #[test]
 fn an_integer_duration_above_the_bound_is_refused_at_load() {
     let over = MAX_SECS + 1;
@@ -183,8 +195,16 @@ fn every_integer_duration_read_from_input_is_bounded() {
             if !derive.is_some_and(|d| d.contains("Deserialize")) {
                 continue;
             }
+            // The field's attributes and docs: every line up to the previous
+            // field or the struct's opening brace, so an attribute rustfmt
+            // splits over several lines is read whole.
             let attributes = lines[..at].iter().rev().take_while(|l| {
-                l.trim_start().starts_with("#[") || l.trim_start().starts_with("///")
+                let l = l.trim();
+                let previous_field = l.ends_with(',')
+                    && !l.contains('=')
+                    && !l.starts_with('#')
+                    && !l.starts_with("//");
+                !(l.ends_with('{') || l == "}" || previous_field)
             });
             if !attributes
                 .into_iter()

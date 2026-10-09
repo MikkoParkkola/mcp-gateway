@@ -398,8 +398,9 @@ impl IdentityPropagation for TokenExchangeStrategy {
             .and_then(|at| i64::try_from(at).ok())
             .ok_or_else(|| {
                 PropagationError::Refuse(format!(
-                    "token-exchange endpoint {endpoint} answered expires_in {ttl}, \
-                     more than 100 years; the answer is refused as malformed"
+                    "token-exchange endpoint {} answered expires_in {ttl}, \
+                     more than 100 years; the answer is refused as malformed",
+                    crate::security::sanitize::redact_url_for_diagnostics(endpoint)
                 ))
             })?;
         let scopes: Vec<String> = body
