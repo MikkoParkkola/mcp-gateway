@@ -85,7 +85,8 @@ impl TransparencyLogger {
 
     /// Clear the injected failure, then wait until a probe admits a call
     /// (see [`until_recovered`], MIK-8171).
-    #[cfg(test)]
+    // Read by the webui admin-action and firewall settlement rows only.
+    #[cfg(all(test, any(feature = "webui", feature = "firewall")))]
     pub(crate) async fn heal_for_test(self: &std::sync::Arc<Self>) {
         self.set_append_failure_for_test(false);
         until_recovered(self, || self.admit()).await;

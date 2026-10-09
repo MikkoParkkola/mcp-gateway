@@ -201,6 +201,7 @@ async fn a_legacy_clients_question_is_bridged_from_the_invoke_path() {
 // error — losing that type would report the gateway's own refusal as the
 // client's fault and count against the client's circuit breaker — and the
 // backend is never called a third time.
+#[cfg(feature = "firewall")]
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn a_dispatched_round_refused_by_the_firewall_settles_the_key_as_a_refusal() {
