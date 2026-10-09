@@ -10,19 +10,26 @@ use tracing::debug;
 
 use super::{StdioTransport, tree};
 use crate::protocol::JsonRpcResponse;
+use crate::transport::write_claim::WriteClaim;
 use crate::{Error, Result};
 
 impl StdioTransport {
     /// Write one frame to stdin, cancel-safely: see [`tree::write_frame`].
     pub(super) async fn write_message(&self, message: String) -> Result<()> {
-        self.write_frame(message, &AtomicBool::new(false)).await
+        self.write_frame(message, &AtomicBool::new(false), None)
+            .await
     }
 
     /// [`Self::write_message`], recording in `began` the moment the frame is
     /// committed to go out whole: a call that fails before it sent nothing.
-    pub(super) async fn write_frame(&self, message: String, began: &AtomicBool) -> Result<()> {
+    pub(super) async fn write_frame(
+        &self,
+        message: String,
+        began: &AtomicBool,
+        claim: Option<&WriteClaim>,
+    ) -> Result<()> {
         debug!(message_len = message.len(), "Writing to stdin");
-        tree::write_frame(&self.writer, &self.shutdown, message, began).await?;
+        tree::write_frame(&self.writer, &self.shutdown, message, began, claim).await?;
         tokio::task::yield_now().await;
         debug!("Write complete and flushed");
         Ok(())
@@ -35,6 +42,7 @@ impl StdioTransport {
         &self,
         message: String,
         mut rx: oneshot::Receiver<JsonRpcResponse>,
+        claim: Option<&WriteClaim>,
     ) -> Result<JsonRpcResponse> {
         // MIK-7871: stdout may have closed, and `pending` been cleared, before
         // the caller registered this reply. The reader trips the latch before it clears, so
@@ -48,7 +56,7 @@ impl StdioTransport {
         // One deadline for the write and the reply: a child that stopped
         // reading stdin cannot hold the call past it.
         let exchange = tokio::time::timeout(self.request_timeout, async {
-            self.write_frame(message, &began).await?;
+            self.write_frame(message, &began, claim).await?;
             (&mut rx)
                 .await
                 .map_err(|_| Error::Transport("Response channel closed".to_string()))

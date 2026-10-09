@@ -217,3 +217,26 @@ fn a_holder_of_a_delivery_over_a_mebibyte_is_excused() {
         "a holder of a large delivery was refused for its middle"
     );
 }
+
+/// `MIK-8200.EVICT.1`: five long answers from one tool inside the window
+/// keep the first one's sketch. Alice's first answer carried P in its middle
+/// (cut from her receipt); four more cut answers follow. Carol holds P whole,
+/// so alice forwarding P is excused only while her first sketch lives.
+#[test]
+fn a_fifth_cut_delivery_keeps_the_first_ones_excuse() {
+    let fw = firewall();
+    deliver(&fw, "carol", "read", P);
+    deliver(&fw, "alice", "read", &long_answer());
+    for i in 0..4 {
+        let more = format!("{} {}", filler(30 + i, 10_000), filler(40 + i, 10_000));
+        deliver(&fw, "alice", "read", &more);
+    }
+    assert!(
+        relays(&fw, "bob", P),
+        "control: bob without a copy is a relay"
+    );
+    assert!(
+        !relays(&fw, "alice", P),
+        "alice was refused for her first answer's middle after four more"
+    );
+}
