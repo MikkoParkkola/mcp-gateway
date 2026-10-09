@@ -292,13 +292,16 @@ async fn a_stdio_question_cancelled_before_it_is_queued_gives_its_slot_back() {
 }
 
 /// SLOT.7: a question still queued for the writer when the session ends
-/// never reaches the client, so its slot is given back.
+/// never reaches the client, so its slot is given back. Two questions on a
+/// stdout too shallow for either: the writer takes one (handed off, kept,
+/// though its write never completes) and blocks on it, so the other is still
+/// queued when the session ends, and gives its slot back.
 #[tokio::test]
 async fn a_stdio_question_still_queued_at_session_end_gives_its_slot_back() {
-    // Too shallow for the answer frame: the writer stalls on it unread.
     let mut session = open(Setup::Plain, 256).await;
     session.send(&call(5, ASKING, "t1")).await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    session.send(&call(6, ASKING, "t1")).await;
+    tokio::time::sleep(Duration::from_millis(800)).await;
     let Session {
         stdin,
         stdout,
@@ -312,7 +315,7 @@ async fn a_stdio_question_still_queued_at_session_end_gives_its_slot_back() {
     let now = crate::protocol::continuation::now_unix_secs();
     assert_eq!(
         meta.continuation().in_flight().len(now).await,
-        0,
-        "the undelivered question kept its slot"
+        1,
+        "want the taken question's slot only: the queued one never left"
     );
 }

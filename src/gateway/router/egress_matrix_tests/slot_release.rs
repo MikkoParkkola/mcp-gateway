@@ -152,13 +152,13 @@ async fn slot_release_matrix() {
                 ));
             }
             // One hold registered in the route's scope, none minted outside
-            // one. A delivered answer the route hands off (the direct route's
-            // JSON reply; this matrix's `/mcp` cells are streams, handed off
-            // from stage 3) drops no unhanded hold; every other hold is gone
-            // unhanded with the request.
+            // one. A delivered answer is handed off where its bytes leave (the
+            // direct reply, or the stream's answer event on `/mcp`), so it
+            // drops no unhanded hold; every other hold is gone unhanded with
+            // the request.
             let after = counts(&continuation);
             let delta: Vec<u64> = after.iter().zip(before).map(|(a, b)| a - b).collect();
-            let handed = path == Path::Delivered && route == Route::Direct;
+            let handed = path == Path::Delivered;
             let want_delta = [1, 0, u64::from(!handed)];
             if delta != want_delta {
                 failures.push(format!(

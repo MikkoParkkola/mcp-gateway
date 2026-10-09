@@ -23,6 +23,10 @@ impl Gateway {
             let Some(value) = frame.stdio_value() else {
                 continue;
             };
+            // MIK-8176: the writer has taken the answer, so its slots stay
+            // for the client's retry. A frame still queued when the session
+            // ends is dropped instead, and gives them back.
+            frame.hand_off_holds();
             if !Self::write_response(&mut sink, &value).await {
                 queue.close();
                 break;
