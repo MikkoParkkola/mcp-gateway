@@ -199,14 +199,14 @@ async fn t19_a_failed_stamp_write_is_retried_without_a_reload() {
 #[tokio::test]
 async fn t18_a_crash_before_the_stamp_write_delays_the_hold_end_by_the_downtime() {
     use std::os::unix::fs::PermissionsExt;
-    let (dir, hub, registry) = restarted(json!({"ref": "main"}), &full()).await;
+    // Held durably first, at a restart whose route no longer serves `ref`
+    // (a live reload that narrows a type is refused, T52).
+    let (dir, hub, registry) = restarted(json!({"ref": "main"}), &narrower()).await;
     let early = id_of(
         &subscribe(&hub, json!({"ref": "main"}))
             .await
             .expect("refresh"),
     );
-    // Held durably first: the route stops serving `ref`.
-    refresh(&hub, &registry, &narrower());
     let early_until = hub.store.get(&early).and_then(|r| r.held_until);
     assert!(early_until.is_some(), "premise: stamped");
     // Granted under the narrower route, so that route does not hold it.
