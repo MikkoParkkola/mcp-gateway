@@ -145,10 +145,15 @@ fn spawn_start(backend: &Arc<Backend>) -> tokio::task::JoinHandle<Result<()>> {
     tokio::spawn(async move { backend.ensure_started().await })
 }
 
-/// A loopback port nothing listens on.
-async fn free_port() -> u16 {
-    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    probe.local_addr().unwrap().port()
+/// The callback port the authorization URL `url` redirects to: the port the
+/// login bound, read back rather than picked in advance (MIK-8211).
+fn callback_port_of(url: &str) -> u16 {
+    let parsed = url::Url::parse(url).unwrap();
+    let query: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
+    url::Url::parse(&query["redirect_uri"])
+        .unwrap()
+        .port()
+        .expect("a callback port")
 }
 
 /// The callback listener on `port` is gone: the port binds again.
@@ -247,16 +252,10 @@ async fn stop_ends_a_pending_login_and_frees_its_port() {
     let origin = authorization_server().await;
     let dir = tempfile::tempdir().unwrap();
     let browser = Browser::new();
-    let port = free_port().await;
-    let backend = login_backend(
-        &origin,
-        dir.path(),
-        &browser,
-        Duration::from_secs(30),
-        Some(port),
-    );
+    // No fixed port: the login binds port 0 and the URL names what it got.
+    let backend = login_backend(&origin, dir.path(), &browser, Duration::from_secs(30), None);
     let start = spawn_start(&backend);
-    browser.opened(1, "the start opening the browser").await;
+    let port = callback_port_of(&browser.opened(1, "the start opening the browser").await);
 
     tokio::time::timeout(Duration::from_secs(60), backend.stop())
         .await
@@ -282,7 +281,9 @@ async fn a_forced_restart_ends_the_pending_login_before_binding_again() {
     let origin = authorization_server().await;
     let dir = tempfile::tempdir().unwrap();
     let browser = Browser::new();
-    let port = free_port().await;
+    // A fixed port is the subject here, so it comes from the reserved range
+    // no port-0 bind can take (MIK-8211).
+    let port = crate::test_ports::reserved_port();
     let backend = login_backend(
         &origin,
         dir.path(),
