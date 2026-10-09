@@ -237,20 +237,32 @@ impl Backend {
     }
 }
 
-/// Paces the health loop: one pass per tick of a fixed-period interval.
+/// Paces the health loop (MIK-8012 PACE): the first tick returns at once, and
+/// every later one a full `period` after the previous pass ENDED.
+///
+/// A `tokio::time::interval` schedules on a fixed grid, so after a pass slower
+/// than the period (a failing rebuild can spend two discovery timeouts) the
+/// next tick is already due and the rebuild is retried with no gap.
+/// `MissedTickBehavior::Delay` still fires that overdue tick at once. The loop
+/// creates this future after each pass, so the sleep starts when the pass ends.
 pub(crate) struct HealthTicker {
-    interval: tokio::time::Interval,
+    period: Duration,
+    first: bool,
 }
 
 impl HealthTicker {
-    pub(crate) fn new(period: Duration) -> Self {
+    pub(crate) const fn new(period: Duration) -> Self {
         Self {
-            interval: tokio::time::interval(period),
+            period,
+            first: true,
         }
     }
 
     /// Wait for the next pass.
     pub(crate) async fn tick(&mut self) {
-        self.interval.tick().await;
+        if std::mem::take(&mut self.first) {
+            return;
+        }
+        tokio::time::sleep(self.period).await;
     }
 }

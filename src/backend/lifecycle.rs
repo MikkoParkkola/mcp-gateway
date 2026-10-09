@@ -379,6 +379,18 @@ impl Backend {
         key: &PoolKey,
         entry: &PooledEntry,
     ) -> Result<Arc<dyn Transport>> {
+        self.start_entry_as(key, entry, EraResolution::Shared).await
+    }
+
+    /// [`Self::start_entry`], resolving the slot's era as `era` says.
+    pub(super) async fn start_entry_as(
+        &self,
+        key: &PoolKey,
+        entry: &PooledEntry,
+        era: EraResolution,
+    ) -> Result<Arc<dyn Transport>> {
+        let era_mode = era;
+        let mut deferred = None;
         // Held for the whole start. From the moment a process is spawned until
         // it is either published or closed, shutdown must not consider itself
         // finished - the process is alive either way.
@@ -470,7 +482,15 @@ impl Backend {
                 // `Backend::resolve_era` and `EraCache`. This path chooses when
                 // to ask, never what the answer means.
                 let peer: Arc<dyn Transport> = transport.clone();
-                let era = self.resolve_era(&peer, entry).await;
+                let era = match era_mode {
+                    EraResolution::Shared => self.resolve_era(&peer, entry).await,
+                    EraResolution::Deferred => {
+                        let probe = self.probe_candidate_era(&peer).await;
+                        let era = probe.era();
+                        deferred = Some(probe);
+                        era
+                    }
+                };
                 #[cfg(test)]
                 self.hold_at_era_decision().await;
                 // Only a determined `Modern` skips the handshake. A legacy
@@ -510,6 +530,27 @@ impl Backend {
             }
         };
 
+        self.publish_started(entry, &transport, listen, built_under, deferred)
+            .await?;
+
+        // Note: Tools are fetched lazily on first get_tools() call
+        // We can't pre-cache here because get_tools() -> ensure_started() -> start()
+        // would create infinite async recursion
+
+        Ok(transport)
+    }
+
+    /// Publish a started transport over `entry`, or close it when the backend
+    /// shut down or its destination policy moved while it started. A
+    /// `deferred` era probe is installed with the publish (MIK-8012).
+    async fn publish_started(
+        &self,
+        entry: &PooledEntry,
+        transport: &Arc<dyn Transport>,
+        listen: Option<super::listen::ListenHandle>,
+        built_under: crate::security::ssrf::DestinationPolicy,
+        deferred: Option<crate::protocol::era::DetachedProbe>,
+    ) -> Result<()> {
         // Publishing is where shutdown has to be enforced, because this is the
         // ONE place a transport becomes reachable - `ensure_entry_started`,
         // warm start and `force_restart` all land here. Checking in the callers
@@ -523,7 +564,14 @@ impl Backend {
         // traversal finds it, or shutdown latches first and this refuses. There
         // is no third case, which is what the previous check-then-publish could
         // not say.
-        if let Err(refusal) = self.publish(entry, (&transport, listen), built_under) {
+        // A deferred era is installed under the cache's lock taken BEFORE the
+        // publish, so no reader sees the new transport with the old verdict.
+        let install = match deferred {
+            Some(_) => Some(entry.era.lock_for_install().await),
+            None => None,
+        };
+        if let Err(refusal) = self.publish(entry, (transport, listen), built_under) {
+            drop(install);
             warn!(
                 backend = %self.name,
                 %refusal,
@@ -536,14 +584,13 @@ impl Backend {
             }
             return Err(Error::BackendUnavailable(self.name.clone()));
         }
+        if let (Some(install), Some(probe)) = (install, deferred) {
+            install.install(probe);
+        }
         #[cfg(test)]
         hold_at(&self.publish_gate).await;
 
-        // Note: Tools are fetched lazily on first get_tools() call
-        // We can't pre-cache here because get_tools() -> ensure_started() -> start()
-        // would create infinite async recursion
-
-        Ok(transport)
+        Ok(())
     }
 }
 
@@ -604,4 +651,15 @@ pub(super) fn pre_send_start_error(backend: &str, error: Error) -> Error {
         }
         other => other,
     }
+}
+
+/// How a start resolves its slot's era (MIK-8012).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EraResolution {
+    /// Discard and probe under the slot cache's lock: nothing else serves
+    /// from the slot while it starts.
+    Shared,
+    /// Probe without the lock and install at the publish: the transport being
+    /// replaced still serves from the slot (a build-first restart).
+    Deferred,
 }

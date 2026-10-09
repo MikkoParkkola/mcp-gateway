@@ -11,6 +11,7 @@ use tracing::{debug, warn};
 use super::pool::PoolKey;
 use super::{Backend, RestartOutcome};
 
+use crate::config::TransportConfig;
 use crate::transport::Transport;
 use crate::{Error, Result};
 
@@ -90,6 +91,40 @@ impl Backend {
         #[cfg(test)]
         self.rebuilds_attempted
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // A non-interactive HTTP restart builds its replacement BEFORE it lets
+        // go of the pooled transport (MIK-8012, MIK-8016): it cannot log in,
+        // so a replacement whose credential lapsed cannot start, and taking
+        // first would leave the slot empty with nothing to put back. On success
+        // `publish` writes the new transport over the slot and the old one is
+        // closed once its last caller lets go; on failure nothing was removed
+        // and the old one keeps serving. `start_lock` is held throughout, so no
+        // other start publishes in between. Interactive restarts can log in,
+        // and stdio keeps take-then-start: two children of one server at once
+        // can fight over a port or lock file.
+        if !interactive && matches!(self.config.transport, TransportConfig::Http { .. }) {
+            let old = entry.transport.read().clone();
+            return match crate::oauth::login_gate::set_out(
+                set_out,
+                self.start_entry_as(
+                    &PoolKey::Shared,
+                    &entry,
+                    super::lifecycle::EraResolution::Deferred,
+                ),
+            )
+            .await
+            {
+                Ok(new) => {
+                    if let Some(old) = old.filter(|old| !Arc::ptr_eq(old, &new)) {
+                        self.close_after_last_owner(old);
+                    }
+                    Ok(RestartOutcome::Rebuilt)
+                }
+                Err(_) if self.replaced_transport_cleanups.lock().stopping => {
+                    Ok(RestartOutcome::SkippedStopping)
+                }
+                Err(error) => Err(error),
+            };
+        }
         // Take the transport out and drop the RwLock write guard *before*
         // awaiting close() -- a parking_lot guard is not Send across an await.
         // in_flight is read under that same guard so the answer cannot change
