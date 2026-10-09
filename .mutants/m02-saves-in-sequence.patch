@@ -1,0 +1,13 @@
+--- a/src/gateway/server/persistence.rs
++++ b/src/gateway/server/persistence.rs
+@@ -232,7 +232,9 @@
+                 let _ = done.send(());
+             });
+         match spawned {
+-            Ok(_) => running.push((step, finished)),
++            Ok(_) => {
++                let _ = super::stdio_shutdown::bounded_step(deadline, step, finished).await;
++            }
+             Err(error) => warn!(step, %error, "shutdown save could not start a thread; skipped"),
+         }
+     }
