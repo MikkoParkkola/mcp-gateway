@@ -324,28 +324,10 @@ async fn follow_upstream_job(
     cancel_rx: &mut watch::Receiver<bool>,
 ) {
     let (job, handle, relay) = dispatched;
-    executor
-        .notify_observer(super::CommitStage::BeforeCapture, id)
-        .await;
-    let captured = executor
-        .capture_upstream(
-            principal,
-            id,
-            revision,
-            UpstreamCapture {
-                backend: job.server.clone(),
-                tool: job.tool.clone(),
-                arguments: job.arguments.clone(),
-                handle: handle.clone(),
-            },
-        )
-        .await;
-    // Capture-side sender (design r8 R8.4): a capture refused because the row
-    // was cancelled meanwhile offers the handle to the row's one cancel claim.
-    // Any other refusal is not ours, and the job is followed as before.
-    if !captured && cancel_held_upstream(executor, principal, id, &job, handle.clone()).await {
+    let Some(captured) = capture_or_claim(executor, (principal, id, revision), &job, &handle).await
+    else {
         return;
-    }
+    };
 
     let Some(adapter) = executor.recovery() else {
         return;
@@ -365,9 +347,7 @@ async fn follow_upstream_job(
     let followed = tokio::select! {
         biased;
         _ = cancel_rx.changed() => {
-            // A capture refused for another reason left the transition no
-            // descriptor to claim: offer the handle held here. When the
-            // transition already claimed, this finds the claim taken.
+            // Offered in case a capture refused for another reason left the claim untaken.
             cancel_held_upstream(executor, principal, id, &job, upstream.handle.clone()).await;
             return;
         }
@@ -450,6 +430,34 @@ async fn follow_upstream_job(
         settle_followed(executor, state, &followed, (outcome, writes), &notes).await;
     }
     lease.release(executor, id).await;
+}
+
+/// Make `handle` durable, before anything else is done with it. A capture
+/// refused because the row was cancelled meanwhile takes the row's one cancel
+/// claim instead (design r8 R8.4): `None` then, and nothing is left to follow.
+/// Any other refusal is not the claim's, and the job is followed as before.
+async fn capture_or_claim(
+    executor: &Arc<TaskExecutor>,
+    (principal, id, revision): (&str, &str, u64),
+    job: &crate::gateway::meta_mcp::upstream::DirectJob,
+    handle: &str,
+) -> Option<bool> {
+    executor
+        .notify_observer(super::CommitStage::BeforeCapture, id)
+        .await;
+    let capture = UpstreamCapture {
+        backend: job.server.clone(),
+        tool: job.tool.clone(),
+        arguments: job.arguments.clone(),
+        handle: handle.to_owned(),
+    };
+    let captured = executor
+        .capture_upstream(principal, id, revision, capture)
+        .await;
+    if !captured && cancel_held_upstream(executor, principal, id, job, handle.to_owned()).await {
+        return None;
+    }
+    Some(captured)
 }
 
 /// Offer a handle this worker holds, for a row cancelled under it, to the

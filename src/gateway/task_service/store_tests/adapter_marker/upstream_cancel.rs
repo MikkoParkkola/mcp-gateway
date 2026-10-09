@@ -203,7 +203,7 @@ async fn a_row_admitted_at_the_tightest_budget_still_takes_the_cancel_claim() {
         64 * 1024,
     );
     while low < high {
-        let mid = (low + high) / 2;
+        let mid = low.midpoint(high);
         let store = at_cap(mid)
             .await
             .expect("the row loads at any cap above its size");
