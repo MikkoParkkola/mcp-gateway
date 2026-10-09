@@ -473,18 +473,6 @@ async fn code_mode_ranks_before_truncating() {
     );
 }
 
-/// A backend whose *name* contains `QUERY`, so Code Mode admits every tool on
-/// it through the `server:tool` reference match at `search.rs:186`.
-const QUERY_NAMED_BACKEND: &str = "zebracorn_hub";
-
-/// Fixtures for the zero-relevance case: `sprocket_sorter` shares no token with
-/// `QUERY`, so `score_text_relevance` gives it 0.0, yet Code Mode admits it
-/// because the backend name matches.
-const ZERO_RELEVANCE_FIXTURES: &[(&str, &str)] = &[
-    ("sprocket_sorter", "sorting sprockets by colour"),
-    ("weak_match", "a zebracorn adjacent helper"),
-];
-
 /// The poisoned-feedback pairing the criterion's test row specifies: a
 /// heavily used tool competing against an allowed relevant one under a low
 /// limit. `weak_match` carries 10^12 uses, which is enough to beat the exact

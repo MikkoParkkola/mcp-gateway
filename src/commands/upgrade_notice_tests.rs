@@ -15,8 +15,10 @@ use super::NOTICE_4_0_0_ITEMS;
 /// drop one: an operator reads this once.
 #[test]
 fn notice_4_0_0_carries_all_thirty_items() {
-    assert_eq!(NOTICE_4_0_0_ITEMS.len(), 30);
-    let all = NOTICE_4_0_0_ITEMS.join(" ").to_ascii_lowercase();
+    // At least thirty: later items pair through their entry's own phrase
+    // (MIK-8185). The phrases below pin the first thirty.
+    assert!(NOTICE_4_0_0_ITEMS.len() >= 30);
+    let all = NOTICE_4_0_0_ITEMS[..30].join(" ").to_ascii_lowercase();
     for expected in [
         "re-authenticate",
         "fails startup",
@@ -219,27 +221,47 @@ fn guide_notice_items_reads_crlf() {
     );
 }
 
-/// The guide's list of notice items matches the notice. A notice item the list
-/// omits is a startup message the upgrade guide does not tell an operator to
-/// expect; a listed item the notice does not print is a promise it breaks.
+/// The guide the pairing reads, and the pending fragments it adds: with
+/// `UPGRADING_DOC` set (CI's assembled dry run) that file alone, since it
+/// already numbers every fragment; otherwise the committed guide plus
+/// `upgrading.d/*.md`.
+fn notice_sources() -> (String, Vec<(String, String)>) {
+    if let Some(path) = std::env::var_os("UPGRADING_DOC").filter(|p| !p.is_empty()) {
+        let guide = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("UPGRADING_DOC={}: {e}", path.to_string_lossy()));
+        return (guide.replace("\r\n", "\n"), Vec::new());
+    }
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("upgrading.d");
+    let mut fragments: Vec<(String, String)> = std::fs::read_dir(&dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|name| {
+                    std::path::Path::new(name)
+                        .extension()
+                        .is_some_and(|e| e == "md")
+                })
+                .map(|name| {
+                    let text = std::fs::read_to_string(dir.join(&name))
+                        .unwrap_or_else(|e| panic!("upgrading.d/{name}: {e}"));
+                    (name, text.replace("\r\n", "\n"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    fragments.sort();
+    (
+        include_str!("../../docs/UPGRADING-4.0.md").replace("\r\n", "\n"),
+        fragments,
+    )
+}
+
+/// The guide's notice entries match the notice. A notice item no entry
+/// announces is a startup message the guide does not tell an operator to
+/// expect; an entry the notice does not print is a promise it breaks.
 #[test]
 fn upgrading_guide_lists_exactly_the_items_the_notice_prints() {
-    assert_eq!(
-        NOTICE_ITEM_SECTIONS.len(),
-        NOTICE_4_0_0_ITEMS.len(),
-        "a notice item was added or removed: pair it with its UPGRADING-4.0 item here"
-    );
-    for (i, ((n, phrase), text)) in NOTICE_ITEM_SECTIONS
-        .iter()
-        .zip(NOTICE_4_0_0_ITEMS)
-        .enumerate()
-    {
-        assert!(
-            text.to_ascii_lowercase().contains(phrase),
-            "notice item {} is paired with UPGRADING item {n} but lacks {phrase:?}: {text}",
-            i + 1
-        );
-    }
     let printed: std::collections::BTreeSet<u32> =
         NOTICE_ITEM_SECTIONS.iter().map(|(n, _)| *n).collect();
     assert_eq!(
@@ -247,9 +269,199 @@ fn upgrading_guide_lists_exactly_the_items_the_notice_prints() {
         NOTICE_ITEM_SECTIONS.len(),
         "two notice items are paired with the same UPGRADING-4.0 item"
     );
-    let listed = guide_notice_items(include_str!("../../docs/UPGRADING-4.0.md"));
-    assert_eq!(
-        listed, printed,
-        "docs/UPGRADING-4.0.md marks items {listed:?} as printing a notice; the notice prints {printed:?}"
-    );
+    let (guide, fragments) = notice_sources();
+    pair_notices(NOTICE_4_0_0_ITEMS, NOTICE_ITEM_SECTIONS, &guide, &fragments)
+        .unwrap_or_else(|e| panic!("{e}"));
+}
+
+/// MIK-8185: pair every notice item with the UPGRADING entry it announces.
+///
+/// `items` is the printed notice; the first `frozen.len()` items pair with
+/// `frozen` in order, as before. An entry added after the freeze carries its
+/// own phrase instead of a row in a shared table: `<!-- notice: <phrase> -->`
+/// under its marker in the guide, or `notice: <phrase>` in its `upgrading.d/`
+/// fragment. Each later item must contain exactly one such phrase and each
+/// phrase must occur in exactly one later item. An entry present both as an
+/// assembled section and as a leftover fragment (same title) counts once.
+fn pair_notices(
+    items: &[&str],
+    frozen: &[(u32, &str)],
+    guide: &str,
+    fragments: &[(String, String)],
+) -> Result<(), String> {
+    if items.len() < frozen.len() {
+        return Err(format!(
+            "the notice prints {} items; {} are paired with UPGRADING items",
+            items.len(),
+            frozen.len()
+        ));
+    }
+    for (i, ((n, phrase), text)) in frozen.iter().zip(items).enumerate() {
+        if !text.to_ascii_lowercase().contains(phrase) {
+            return Err(format!(
+                "notice item {} is paired with UPGRADING item {n} but lacks {phrase:?}: {text}",
+                i + 1
+            ));
+        }
+    }
+    // Sections are split on "\n## ": a guide that opens with one must not lose it.
+    let guide = &format!("\n{guide}");
+    let marked = guide_notice_items(guide);
+    if let Some((n, _)) = frozen.iter().find(|(n, _)| !marked.contains(n)) {
+        return Err(format!(
+            "the notice prints UPGRADING item {n}, whose marker does not say `prints a notice`"
+        ));
+    }
+    // (title, phrase) of every entry added after the freeze.
+    let mut phrases: Vec<(String, String)> = Vec::new();
+    for section in guide.split("\n## ").skip(1) {
+        let Some((number, rest)) = section.split_once(". ") else {
+            continue;
+        };
+        let Ok(n) = number.parse::<u32>() else {
+            continue;
+        };
+        if !marked.contains(&n) || frozen.iter().any(|(f, _)| *f == n) {
+            continue;
+        }
+        let title = rest.lines().next().unwrap_or("").trim().to_string();
+        let phrase = rest
+            .lines()
+            .find_map(|l| l.strip_prefix("<!-- notice: "))
+            .and_then(|l| l.strip_suffix(" -->"))
+            .ok_or_else(|| {
+                format!("item {n} prints a notice but carries no `<!-- notice: ... -->` phrase")
+            })?;
+        phrases.push((title, phrase.to_string()));
+    }
+    for (name, text) in fragments {
+        let title = text
+            .lines()
+            .find_map(|l| l.strip_prefix("## "))
+            .unwrap_or("")
+            .trim();
+        if phrases.iter().any(|(t, _)| t == title) {
+            continue;
+        }
+        if let Some(phrase) = text.lines().find_map(|l| l.strip_prefix("notice: ")) {
+            phrases.push((title.to_string(), phrase.trim().to_string()));
+        } else if text.contains("**Startup:** prints a notice") {
+            return Err(format!(
+                "upgrading.d/{name} prints a notice but carries no `notice:` phrase"
+            ));
+        }
+    }
+    let later = &items[frozen.len()..];
+    for item in later {
+        let lower = item.to_ascii_lowercase();
+        let hits: Vec<&str> = phrases
+            .iter()
+            .filter(|(_, p)| lower.contains(&p.to_ascii_lowercase()))
+            .map(|(t, _)| t.as_str())
+            .collect();
+        if hits.len() != 1 {
+            return Err(format!(
+                "notice item {item:?} must name exactly one UPGRADING entry's phrase; it names {hits:?}"
+            ));
+        }
+    }
+    for (title, phrase) in &phrases {
+        let lower = phrase.to_ascii_lowercase();
+        let count = later
+            .iter()
+            .filter(|i| i.to_ascii_lowercase().contains(&lower))
+            .count();
+        if count != 1 {
+            return Err(format!(
+                "UPGRADING entry `{title}` has notice phrase {phrase:?}, found in {count} notice items; it must be in exactly one"
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod pairing_fixtures {
+    use super::pair_notices;
+
+    const GUIDE: &str = "## 1. One\n\n**Startup:** prints a notice\n\n\
+                         ## 5. Alpha\n\n**Startup:** prints a notice\n<!-- notice: alpha phrase -->\n\n\
+                         ## 6. Quiet\n\n**Startup:** no notice\n";
+    const FROZEN: &[(u32, &str)] = &[(1, "re-authenticate")];
+
+    fn beta() -> Vec<(String, String)> {
+        vec![(
+            "3701.md".to_string(),
+            "---\nchange: c\naction: a\nnotice: beta phrase\n---\n## Beta\n\n**Startup:** prints a notice\n".to_string(),
+        )]
+    }
+
+    #[test]
+    fn new_notices_pair_by_their_own_phrase() {
+        let items = [
+            "re-authenticate now",
+            "the beta phrase item",
+            "an alpha phrase item",
+        ];
+        assert_eq!(pair_notices(&items, FROZEN, GUIDE, &beta()), Ok(()));
+    }
+
+    #[test]
+    fn an_ambiguous_phrase_is_refused() {
+        let items = [
+            "re-authenticate now",
+            "alpha phrase and beta phrase",
+            "an alpha phrase item",
+        ];
+        let err = pair_notices(&items, FROZEN, GUIDE, &beta()).unwrap_err();
+        assert!(err.contains("alpha phrase and beta phrase"), "{err}");
+    }
+
+    #[test]
+    fn an_unpaired_notice_item_is_refused() {
+        let items = [
+            "re-authenticate now",
+            "the beta phrase item",
+            "an alpha phrase item",
+            "gamma",
+        ];
+        let err = pair_notices(&items, FROZEN, GUIDE, &beta()).unwrap_err();
+        assert!(err.contains("gamma"), "{err}");
+    }
+
+    #[test]
+    fn an_unpaired_phrase_is_refused() {
+        let items = ["re-authenticate now", "an alpha phrase item"];
+        let err = pair_notices(&items, FROZEN, GUIDE, &beta()).unwrap_err();
+        assert!(err.contains("beta phrase"), "{err}");
+    }
+
+    #[test]
+    fn a_notice_entry_with_no_phrase_is_refused() {
+        let guide = GUIDE.replace("<!-- notice: alpha phrase -->\n", "");
+        let items = ["re-authenticate now", "the beta phrase item"];
+        let err = pair_notices(&items, FROZEN, &guide, &beta()).unwrap_err();
+        assert!(err.contains("item 5"), "{err}");
+    }
+
+    #[test]
+    fn a_frozen_pair_still_checks_its_phrase() {
+        let items = [
+            "log in again",
+            "the beta phrase item",
+            "an alpha phrase item",
+        ];
+        let err = pair_notices(&items, FROZEN, GUIDE, &beta()).unwrap_err();
+        assert!(err.contains("re-authenticate"), "{err}");
+    }
+
+    #[test]
+    fn an_assembled_entry_and_its_leftover_fragment_count_once() {
+        let leftover = vec![(
+            "3700.md".to_string(),
+            "---\nchange: c\naction: a\nnotice: alpha phrase\n---\n## Alpha\n\n**Startup:** prints a notice\n".to_string(),
+        )];
+        let items = ["re-authenticate now", "an alpha phrase item"];
+        assert_eq!(pair_notices(&items, FROZEN, GUIDE, &leftover), Ok(()));
+    }
 }
