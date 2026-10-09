@@ -321,3 +321,42 @@ fn an_undelivered_middle_piece_breaks_the_steps_join() {
     let excused = (0..TEXTS).count() - plan_holders_reported(content_items, without_middle).len();
     assert_eq!(excused, 0, "a missing middle piece was excused");
 }
+
+/// The value of `capacity_total{bound="record_text_cut"}`, 0 while absent.
+#[cfg(feature = "metrics")]
+fn text_cuts_exported() -> u64 {
+    crate::metrics::install();
+    let prefix = "mcp_gateway_collusion_capacity_total{bound=\"record_text_cut\"} ";
+    crate::metrics::render()
+        .lines()
+        .find_map(|l| l.strip_prefix(prefix).and_then(|v| v.trim().parse().ok()))
+        .unwrap_or(0)
+}
+
+/// `MIK-8201` VIS.1 residual, closed here: a delivery cut by either text
+/// budget is exported as `record_text_cut`, once per delivery even when
+/// both cut. (Joins never outgrow the leaves: each piece is in one key path,
+/// so a join cut comes with a leaf cut, and is counted with it.)
+#[cfg(feature = "metrics")]
+#[test]
+fn a_text_cut_is_counted_once_per_delivery() {
+    let fw = observing();
+    let big: String = (0..24).map(text).collect();
+    assert!(big.len() > 6 * 1024, "premise: over the record cap");
+    let exported = text_cuts_exported();
+    let own = fw.relay_text_cuts();
+    deliver(&fw, "alice", "big", &flat(&big));
+    assert_eq!(fw.relay_text_cuts(), own + 1, "a leaf cut was not counted");
+    // Both budgets cut: leaves over the cap, and their joins over theirs.
+    let rows: Vec<Value> = pieces(&big[..3_000])
+        .iter()
+        .zip(pieces(&big[3_000..6_000]))
+        .map(|(a, b)| json!({"a": a, "b": b, "c": format!("{a}{b}")}))
+        .collect();
+    deliver(&fw, "alice", "cols", &json!({ "rows": rows }));
+    assert_eq!(fw.relay_text_cuts(), own + 2, "one cut per delivery");
+    assert!(
+        text_cuts_exported() >= exported + 2,
+        "the cut was not exported"
+    );
+}

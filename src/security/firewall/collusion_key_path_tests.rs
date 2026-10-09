@@ -52,3 +52,79 @@ fn keys_order_as_key_sequences_and_the_gateway_slot_is_skipped() {
     // ["a", "b"] sorts before ["a.b"].
     assert_eq!(key_path_joins(&value), vec!["rs", "pq"]);
 }
+
+mod digest {
+    //! `MIK-8209` K2/K2a: how a digest carries its joins.
+    use super::super::super::{Delivered, DeliveryDigest, Joins};
+    use crate::security::firewall::collusion::{CollusionDetector, RelayParams};
+
+    const LEAF: &str = "a leaf long enough to carry several k-grams of its own text";
+    const JOIN: &str = "QUIRKY ZEBRAS VAULT OVER NINE MOSSY FJORDS EACH WINTER DAWN";
+
+    fn detector() -> CollusionDetector {
+        let mut detector = CollusionDetector::new(RelayParams::default());
+        detector.keep_every_kgram();
+        detector
+    }
+
+    /// Segment forms, then retained, then joins, so the per-delivery bound
+    /// keeps leaf evidence first.
+    #[test]
+    fn fingerprints_order_is_segments_retained_joins() {
+        let detector = detector();
+        let (mut digest, _) = DeliveryDigest::of_leaves(&[LEAF], false);
+        digest.retained = vec![42];
+        let (digest, cut) = digest.with_joins(vec![JOIN.to_owned()]);
+        assert!(!cut, "premise: the join fits its budget");
+        let fps = digest.fingerprints(&detector);
+        let at = |fp: u64| fps.iter().position(|f| *f == fp).expect("present");
+        let retained = at(42);
+        assert!(
+            detector
+                .fingerprints(LEAF)
+                .iter()
+                .all(|f| at(*f) < retained)
+        );
+        assert!(
+            detector
+                .fingerprints(JOIN)
+                .iter()
+                .all(|f| at(*f) > retained)
+        );
+    }
+
+    /// `capped()` carries the join slot over: staged runs become their text.
+    #[test]
+    fn capped_carries_the_join_slot() {
+        let (p1, p2) = ("first piece ", "second piece");
+        let (staged, _) = DeliveryDigest::of_plan_step_leaves(&[p1, "kind", p2], false);
+        let staged = staged.with_join_runs(vec![vec![0, 2].into()]);
+        let (capped, _) = staged.capped().expect("deferred");
+        match capped.joins {
+            Joins::Text(joins) => assert_eq!(&*joins, &[format!("{p1}{p2}")]),
+            _ => panic!("the join slot was dropped"),
+        }
+    }
+
+    /// Retention leaves only fingerprints in the join slot (never runs or
+    /// text), and keeps the join's fingerprints when its pieces were delivered.
+    #[test]
+    fn retention_leaves_only_join_fingerprints() {
+        let detector = detector();
+        let (p1, p2) = (
+            "abcdefghijklmnopqrstuvwxyz0123",
+            "456789ABCDEFGHIJKLMNOPQRSTUV",
+        );
+        let (staged, _) = DeliveryDigest::of_plan_step_leaves(&[p1, "kind", p2], false);
+        let staged = staged.with_join_runs(vec![vec![0, 2].into()]);
+        let delivered = Delivered::of_leaves(vec![p1, "kind", p2]).expect("bounded");
+        let kept = staged.retaining_for(&detector, &delivered, None);
+        assert!(
+            matches!(kept.joins, Joins::Fps(_)),
+            "the slot is not fingerprints"
+        );
+        let fps = kept.fingerprints(&detector);
+        let join = detector.fingerprints(&format!("{p1}{p2}"));
+        assert!(join.iter().all(|f| fps.contains(f)), "the join was lost");
+    }
+}

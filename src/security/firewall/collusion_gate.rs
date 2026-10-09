@@ -483,11 +483,10 @@ impl Firewall {
         } else {
             // A plan step is sketched only once kept to the plan's answer
             // (`MIK-8066` E1''): capped here, its cut text gets no sketch.
-            let digest = self
-                .digest_with(server, tool, result, DeliveryDigest::of_parts)?
-                .0;
+            let (digest, cut) = self.digest_with(server, tool, result, DeliveryDigest::of_parts)?;
             let (digest, joins_cut) = digest.with_joins(key_path_joins(result));
-            self.count_cut(joins_cut);
+            // One cut per delivery: a join cut comes with a leaf cut.
+            self.count_cut(joins_cut && !cut);
             digest
         };
         staged.set(total + digest.staged_len());
