@@ -391,9 +391,10 @@ pub(super) async fn propagate_identity(
         typed,
     } = resolve_headers(state, name, caller, route, idp_cfg).await;
     propagation.identity_key = identity_key;
-    // MIK-8063: this route forwards a backend's requestState as it is, so an
-    // A2A agent's question (an opaque, one-shot token) is bound to the caller
-    // this gateway authenticated whenever no propagated identity names them.
+    // MIK-8063: an A2A agent's question (an opaque, one-shot token) is bound
+    // to the caller this gateway authenticated whenever no propagated identity
+    // names them. The continuation seal (MIK-8078) binds the same callers; this
+    // keeps the agent's own token bound even if the seal's rule changes.
     if propagation.identity_key.is_none() && route.backend.is_a2a() {
         propagation.identity_key = a2a_round_binding(caller);
     }
