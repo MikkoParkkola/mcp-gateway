@@ -325,9 +325,10 @@ async fn a_per_user_transport_is_shaped_by_its_own_slots_verdict() {
     let (url, seen) = upstream(true).await;
     let backend = backend_at(url);
 
-    let _ = backend
+    backend
         .request_with_headers("tools/list", None, &[], Some(USER))
-        .await;
+        .await
+        .expect("the per-user slot answers tools/list");
 
     assert!(
         backend.shared_entry().transport.read().is_none(),
@@ -351,12 +352,15 @@ async fn a_per_user_transport_is_shaped_by_its_own_slots_verdict() {
 #[tokio::test]
 async fn a_per_user_reprobe_does_not_resolve_a_cold_shared_slot() {
     let backend = backend_at("http://127.0.0.1:9/mcp".to_string());
-    let (peer, _handles) = Peer::new(Answer::Modern);
-    let peer: Arc<dyn Transport> = peer;
+    let (held, mut handles) = Peer::new(Answer::Modern);
+    let peer: Arc<dyn Transport> = held.clone();
     backend.set_pooled_transport_for_test(&slot(USER), Arc::clone(&peer));
     let per_user = Arc::clone(backend.pool.get(&slot(USER)).expect("the slot").value());
     backend.resolve_era_for_entry_test(&peer, &per_user).await;
 
+    // Held, so the detached re-probe is known to be running (and holding the
+    // slot's era lock) before anything is read.
+    held.hold.store(true, std::sync::atomic::Ordering::SeqCst);
     backend
         .reprobe_if_code_contradicts(
             "server/discover",
@@ -364,12 +368,15 @@ async fn a_per_user_reprobe_does_not_resolve_a_cold_shared_slot() {
             &peer,
         )
         .await;
-    let _ = tokio::time::timeout(Duration::from_secs(20), per_user.era.cached()).await;
+    tokio::time::timeout(Duration::from_secs(20), &mut handles.started)
+        .await
+        .expect("the re-probe reached the peer in time")
+        .expect("the re-probe reaches the peer");
+    let _ = handles.release.send(());
+    let era = tokio::time::timeout(Duration::from_secs(20), per_user.era.cached())
+        .await
+        .expect("the re-probe decided in time");
 
-    assert_eq!(
-        per_user.era.cached().await,
-        Some(Era::Modern),
-        "re-resolved"
-    );
+    assert_eq!(era, Some(Era::Modern), "re-resolved");
     assert_eq!(backend.cached_era().await, None);
 }
