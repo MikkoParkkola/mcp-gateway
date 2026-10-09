@@ -737,10 +737,12 @@ async fn a_completed_result_carrying_input_requests_is_not_refused() {
         let outcome = meta
             .invoke_tool(&book_flight(), Some("session-1"), &ctx)
             .await;
+        let relayed = outcome.unwrap_or_else(|error| {
+            panic!("a completed result ({result_type:?}) must be relayed: {error}")
+        });
         assert!(
-            outcome.is_ok(),
-            "a completed result ({result_type:?}) must be relayed: {:?}",
-            outcome.err()
+            relayed.to_string().contains("booked"),
+            "the relayed result keeps its payload: {relayed}"
         );
     }
 }

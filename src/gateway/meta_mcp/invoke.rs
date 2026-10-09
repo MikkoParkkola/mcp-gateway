@@ -416,7 +416,9 @@ impl MetaMcp {
                 trace_id,
                 caller_key: None,
             })
-            .inspect_err(|_| self.release_unasked_nonce(caller))?;
+            .inspect_err(|_| {
+                caller.signing.inspect(|signing| signing.want_refund());
+            })?;
         #[cfg(feature = "cost-governance")]
         let cost_warnings = std::mem::take(&mut admission.warnings);
         #[cfg(not(feature = "cost-governance"))]
@@ -444,8 +446,8 @@ impl MetaMcp {
                     // Refused before the backend was reached, so it has not
                     // acted: the key is released rather than settled (settling
                     // would answer an honest retry with a side effect nothing
-                    // performed), and the signing nonce is given back.
-                    self.give_back_unsent(caller, &mut idem_reservation);
+                    // performed), and the signing nonce is asked back.
+                    dispatch_guards::give_back_unsent(caller, &mut idem_reservation);
                     return Err(error);
                 }
             };

@@ -132,3 +132,72 @@ async fn n1c_a_signed_chain_that_ran_a_step_keeps_its_nonce() {
     assert_eq!(code(&again), Some(-32001), "replay refused: {again}");
     assert_eq!(dispatched(&fx), 1, "step 1 ran twice");
 }
+
+/// N1d (gpt d1 CRIT): a signed playbook that continues past a refused step
+/// keeps its nonce spent once a later step runs. `k-budget` spends its read on
+/// a first call; the playbook's `read` step is then refused by the budget and,
+/// under `on_error: continue`, its free `note` step runs. Re-sent under that
+/// nonce, the playbook is refused as a replay and `note` never runs twice.
+/// Mutant: the nonce given back at the refused step instead of when the call
+/// returns.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn n1d_a_playbook_continuing_past_a_refused_step_keeps_its_nonce() {
+    use super::direct_continuation_tests::budget;
+    use super::direct_guards_fixture::fixture_hardened_signed_built;
+    const PLAYBOOK: &str = r"
+name: onward
+description: a refused read, then a free note
+on_error: continue
+steps:
+  - name: read
+    server: alpha
+    tool: read
+  - name: note
+    server: alpha
+    tool: note
+";
+    let fx = fixture_hardened_signed_built(Answer::WithNote, true, |meta| {
+        let meta = budget(meta);
+        let mut engine = crate::playbook::PlaybookEngine::new();
+        engine.register(serde_yaml::from_str(PLAYBOOK).expect("the playbook parses"));
+        meta.set_playbook_engine(engine);
+        meta
+    })
+    .await;
+    let (_, spent) = signed_invoke(&fx, ("k-budget", "alpha"), "pb-n0", json!({})).await;
+    assert!(
+        spent.get("error").is_none(),
+        "premise: the read is paid: {spent}"
+    );
+    let params = json!({"name": "gateway_run_playbook", "arguments": {"name": "onward"}, "_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+        crate::gateway::meta_mcp::signing::NONCE_META: "pb-n1"
+    }});
+    let headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tools/call"),
+        ("mcp-name", "gateway_run_playbook"),
+    ];
+    let send = || {
+        send_with_headers(
+            &fx,
+            "/mcp",
+            "k-budget",
+            "tools/call",
+            params.clone(),
+            None,
+            &headers,
+        )
+    };
+    let (_, first) = send().await;
+    assert_eq!(
+        dispatched(&fx),
+        2,
+        "premise: read refused, note ran: {first}"
+    );
+    let (_, again) = send().await;
+    assert_eq!(code(&again), Some(-32001), "replay refused: {again}");
+    assert_eq!(dispatched(&fx), 2, "note ran twice: {again}");
+}
