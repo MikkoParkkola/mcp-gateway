@@ -4,8 +4,9 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::gateway::auth::QuotaPrincipal;
 use crate::gateway::authz::{
-    AllowAll, AuthorizationError, Decision, QuotaPrincipal, ToolAuthorizer, ToolTarget, Transport,
+    AllowAll, AuthorizationError, Decision, ToolAuthorizer, ToolTarget, Transport,
 };
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::authz_tests::{counted_backend, ctx, invoke_args};
