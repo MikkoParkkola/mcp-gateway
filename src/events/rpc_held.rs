@@ -6,7 +6,6 @@
 
 use std::sync::Arc;
 
-use chrono::Utc;
 use serde_json::{Value, json};
 
 use super::{
@@ -49,7 +48,11 @@ impl EventsHub {
             .cloned()
             .unwrap_or_else(|| json!({}));
         let id = subscription_id(principal, url.as_str(), name, &arguments);
-        let now = Utc::now();
+        // A lease, and the callback opt-in it may reuse, are not judged on a
+        // clock before 1970: refused before any change (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            return Err(RpcError::internal());
+        };
         let (Some(_), Some(existing)) = (
             self.store.held(&id),
             self.store.get(&id).filter(|s| s.live(now)),
