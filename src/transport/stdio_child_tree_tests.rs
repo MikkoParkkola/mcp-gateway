@@ -493,3 +493,69 @@ async fn twenty_handed_over_trees_each_finish_within_their_deadline() {
         );
     }
 }
+
+/// MIK-8213, deterministic: a member that joins the group after the first
+/// pre-reap signal (as a fork that completes late does) is still ended,
+/// because the pre-reap signal repeats until the group settles. The test
+/// drives `reap_step` by hand and puts the late member into the group
+/// between two steps with `process_group`, so no race decides the row.
+#[tokio::test]
+async fn a_member_joining_after_the_first_pre_reap_signal_is_still_ended() {
+    use std::os::unix::process::CommandExt as _;
+    let (_w, t) = started("while IFS= read -r l; do :; done", None).await;
+    let pgid = leader(&t).await;
+    let mut tree = t.child.lock().tree.take().expect("a started tree");
+    let t0 = std::time::Instant::now();
+    assert!(
+        matches!(tree.reap_step(t0), Reap::Pending),
+        "close signal sent"
+    );
+    poll_until("the killed leader exits", || {
+        kernel_view(pgid) == Some(true)
+    })
+    .await;
+    // Leader exited: this step enters the settle window and signals once.
+    let settle_start = std::time::Instant::now();
+    assert!(matches!(tree.reap_step(settle_start), Reap::Pending));
+    let after_first = tree.group_signals_sent;
+    // A member arrives after that signal, in the same group.
+    let mut late = std::process::Command::new("sleep");
+    late.arg("60").process_group(pgid.as_raw_nonzero().get());
+    let late = late.spawn().expect("a late member joins the group");
+    // Still inside the window: the next step signals the group again.
+    let _ = tree.reap_step(settle_start + Duration::from_millis(10));
+    assert!(
+        tree.group_signals_sent > after_first,
+        "the group was signalled again"
+    );
+    gone_or_zombie(late).await;
+    // Past the window: the gate closes and the leader is reaped.
+    let mut now = settle_start + super::PRE_REAP_SETTLE + Duration::from_millis(1);
+    let status = loop {
+        match tree.reap_step(now) {
+            Reap::Done(status) => break status,
+            Reap::Pending => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                now += Duration::from_millis(10);
+            }
+        }
+    };
+    assert!(status.is_some(), "the leader is reaped");
+}
+
+/// The late member is our own child here, so the test reaps it itself:
+/// gone means it was killed (a zombie the test then collects).
+async fn gone_or_zombie(mut child: std::process::Child) {
+    let deadline = std::time::Instant::now() + ROW_LIMIT;
+    loop {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            assert!(!status.success(), "the late member was killed, not done");
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the late member outlived the settle"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
