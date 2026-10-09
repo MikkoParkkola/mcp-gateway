@@ -1,0 +1,14 @@
+diff --git a/src/security/firewall/collusion_sketch.rs b/src/security/firewall/collusion_sketch.rs
+index 107b36cff..994317b61 100644
+--- a/src/security/firewall/collusion_sketch.rs
++++ b/src/security/firewall/collusion_sketch.rs
+@@ -127,7 +127,8 @@ fn splitmix(mut z: u64) -> u64 {
+ fn positions(fp: u64, bits: usize, probes: u32) -> impl Iterator<Item = usize> {
+     let len = u64::try_from(bits).unwrap_or(u64::MAX);
+     (1..=u64::from(probes)).map(move |j| {
+-        let at = splitmix(fp ^ j.wrapping_mul(PROBE_STEP)) % len;
++        let x = fp.wrapping_add(j.wrapping_mul(PROBE_STEP));
++        let at = (x ^ (x >> 31)).wrapping_mul(0x9E37_79B9_7F4A_7C15) % len;
+         usize::try_from(at).unwrap_or(0)
+     })
+ }

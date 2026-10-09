@@ -1,0 +1,20 @@
+diff --git a/src/security/firewall/collusion_sketch.rs b/src/security/firewall/collusion_sketch.rs
+index 107b36cff..c86515c70 100644
+--- a/src/security/firewall/collusion_sketch.rs
++++ b/src/security/firewall/collusion_sketch.rs
+@@ -82,13 +82,13 @@ fn sized(n: usize, position: usize) -> (Shape, usize) {
+         clippy::cast_precision_loss,
+         reason = "a positive, bounded word count"
+     )]
+-    let mut words = ((n.max(1) as f64 * per_fp / 64.0).ceil() as usize).clamp(MIN_WORDS, MAX_WORDS);
++    let mut words = ((n.max(1) as f64 * per_fp / 64.0).ceil() as usize).max(MIN_WORDS);
+     // Grows by about 1/64 per step, so at most a few hundred steps up to the
+     // cap: this runs under the detector lock (`reserve`).
+     for steps in 0.. {
+         let bits = words * 64;
+         let probes = best_probes(n, bits);
+-        if n == 0 || words >= MAX_WORDS || ln_rate(n, bits, probes) <= ln_target {
++        if n == 0 || ln_rate(n, bits, probes) <= ln_target {
+             return (Shape { words, probes }, steps);
+         }
+         words = (words + words.div_ceil(64)).min(MAX_WORDS);

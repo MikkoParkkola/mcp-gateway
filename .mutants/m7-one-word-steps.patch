@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_sketch.rs b/src/security/firewall/collusion_sketch.rs
+index 107b36cff..fa08d009c 100644
+--- a/src/security/firewall/collusion_sketch.rs
++++ b/src/security/firewall/collusion_sketch.rs
+@@ -91,7 +91,7 @@ fn sized(n: usize, position: usize) -> (Shape, usize) {
+         if n == 0 || words >= MAX_WORDS || ln_rate(n, bits, probes) <= ln_target {
+             return (Shape { words, probes }, steps);
+         }
+-        words = (words + words.div_ceil(64)).min(MAX_WORDS);
++        words = (words + 1).min(MAX_WORDS);
+     }
+     unreachable!("the word count reaches MAX_WORDS")
+ }

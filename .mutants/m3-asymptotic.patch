@@ -1,0 +1,29 @@
+diff --git a/src/security/firewall/collusion_sketch.rs b/src/security/firewall/collusion_sketch.rs
+index 107b36cff..b0b566a7a 100644
+--- a/src/security/firewall/collusion_sketch.rs
++++ b/src/security/firewall/collusion_sketch.rs
+@@ -83,6 +83,11 @@ fn sized(n: usize, position: usize) -> (Shape, usize) {
+         reason = "a positive, bounded word count"
+     )]
+     let mut words = ((n.max(1) as f64 * per_fp / 64.0).ceil() as usize).clamp(MIN_WORDS, MAX_WORDS);
++    #[expect(clippy::cast_precision_loss, reason = "mutant")]
++    let ln_rate = |n: usize, bits: usize, k: u32| {
++        let k = f64::from(k);
++        k * (-((-(k * n as f64 / bits as f64)).exp())).ln_1p()
++    };
+     // Grows by about 1/64 per step, so at most a few hundred steps up to the
+     // cap: this runs under the detector lock (`reserve`).
+     for steps in 0.. {
+@@ -109,6 +114,12 @@ fn best_probes(n: usize, bits: usize) -> u32 {
+     let k0 = ((bits as f64 / n.max(1) as f64) * std::f64::consts::LN_2)
+         .round()
+         .clamp(1.0, f64::from(MAX_PROBES)) as u32;
++    #[expect(clippy::cast_precision_loss, reason = "mutant")]
++    let ln_rate = |n: usize, bits: usize, k: u32| {
++        let k = f64::from(k);
++        k * (-((-(k * n as f64 / bits as f64)).exp())).ln_1p()
++    };
++
+     (k0.saturating_sub(2).max(1)..=(k0 + 2).min(MAX_PROBES))
+         .min_by(|a, b| ln_rate(n, bits, *a).total_cmp(&ln_rate(n, bits, *b)))
+         .unwrap_or(k0)

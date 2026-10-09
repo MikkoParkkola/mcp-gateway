@@ -1,0 +1,15 @@
+diff --git a/src/security/firewall/collusion_sketch.rs b/src/security/firewall/collusion_sketch.rs
+index 107b36cff..c98b022ab 100644
+--- a/src/security/firewall/collusion_sketch.rs
++++ b/src/security/firewall/collusion_sketch.rs
+@@ -197,9 +197,7 @@ impl PairState {
+     /// their count always is.
+     fn lowest_free(&self) -> usize {
+         let held = self.live.len() + self.pending.len();
+-        (0..=held)
+-            .find(|p| !self.pending.contains(p) && !self.live.iter().any(|l| l.position == *p))
+-            .unwrap_or(held)
++        held
+     }
+ }
+ 

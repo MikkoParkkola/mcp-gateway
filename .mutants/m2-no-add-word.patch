@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_sketch.rs b/src/security/firewall/collusion_sketch.rs
+index 107b36cff..606c08348 100644
+--- a/src/security/firewall/collusion_sketch.rs
++++ b/src/security/firewall/collusion_sketch.rs
+@@ -88,7 +88,7 @@ fn sized(n: usize, position: usize) -> (Shape, usize) {
+     for steps in 0.. {
+         let bits = words * 64;
+         let probes = best_probes(n, bits);
+-        if n == 0 || words >= MAX_WORDS || ln_rate(n, bits, probes) <= ln_target {
++        if n == 0 || words >= MAX_WORDS || ln_rate(n, bits, probes) <= f64::INFINITY {
+             return (Shape { words, probes }, steps);
+         }
+         words = (words + words.div_ceil(64)).min(MAX_WORDS);

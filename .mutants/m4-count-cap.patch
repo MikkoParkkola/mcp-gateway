@@ -1,0 +1,14 @@
+diff --git a/src/security/firewall/collusion_sketch.rs b/src/security/firewall/collusion_sketch.rs
+index 107b36cff..cc06607a7 100644
+--- a/src/security/firewall/collusion_sketch.rs
++++ b/src/security/firewall/collusion_sketch.rs
+@@ -263,6 +263,9 @@ impl SketchStore {
+     pub(super) fn reserve(&mut self, pair: Pair, n: usize) -> Option<Reservation> {
+         let pair_cap = self.pair_cap;
+         loop {
++            if self.by_pair.get(&pair).is_some_and(|s| s.live.len() >= 4) {
++                self.pop_oldest_of(pair);
++            }
+             let state = self.by_pair.entry(pair).or_default();
+             let position = state.lowest_free();
+             let shape = shape(n, position);
