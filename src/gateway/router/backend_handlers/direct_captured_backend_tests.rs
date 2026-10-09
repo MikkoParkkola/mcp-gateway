@@ -221,7 +221,9 @@ async fn an_a2a_question_on_this_route_is_bound_to_the_key_holder() {
         let mut caller = anonymous();
         caller.client = principal.map(|principal| crate::gateway::auth::AuthenticatedClient {
             quota_principal: None,
-            name: principal.to_string(),
+            // One display name for every key holder: binding by name would
+            // make them one caller.
+            name: "key-holder".to_string(),
             rate_limit: 0,
             backends: vec!["*".to_string()],
             allowed_tools: None,
@@ -253,6 +255,10 @@ async fn an_a2a_question_on_this_route_is_bound_to_the_key_holder() {
         Some(crate::hashing::sha256_hex(b"a2a-client:alice-digest").as_str()),
         "the key holder who was asked"
     );
-    assert_ne!(keys[0], keys[1], "another key holder is another caller");
+    assert_eq!(
+        keys[1].as_deref(),
+        Some(crate::hashing::sha256_hex(b"a2a-client:bob-digest").as_str()),
+        "another key holder under the same name is another caller"
+    );
     assert_eq!(keys[2], None, "an anonymous caller binds to nothing");
 }
