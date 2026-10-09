@@ -36,7 +36,7 @@ fn presented(facts: Option<CredentialFacts>, session_sha256: Option<String>) -> 
 /// Facts that name `jti` and an expiry a day out.
 fn facts(jti: Option<&str>) -> CredentialFacts {
     CredentialFacts {
-        expires_at: Some(chrono::Utc::now() + chrono::Duration::days(1)),
+        expires_at: Some(chrono::Utc::now() + crate::duration_bound::delta!(days, 1)),
         jti: jti.map(str::to_owned),
         issued_at: None,
         provider_sha256: None,
@@ -83,7 +83,7 @@ async fn a_dashboard_subscription_binds_the_session_and_expires_one_idle_timeout
     state.live_config.set(config);
     let caller = client(CredentialKind::DashboardSession);
     let digest = crate::hashing::sha256_hex(b"session-handle");
-    let idle = chrono::Duration::seconds(600);
+    let idle = crate::duration_bound::delta!(seconds, 600);
     // WHEN
     let before = chrono::Utc::now();
     let credential = presented(Some(facts(Some("ignored"))), Some(digest.clone()))
