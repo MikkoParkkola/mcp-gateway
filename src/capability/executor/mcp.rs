@@ -540,6 +540,38 @@ async fn call_tool(backend: &Backend, tool: &str, args: Map<String, Value>) -> R
         .unwrap_or(result))
 }
 
+/// The optional prepare round: call it, then bind the named fields of its
+/// object result into `args`.
+async fn run_prepare(
+    backend: &Backend,
+    prepare: &crate::capability::definition::PrepareCall,
+    params: &Value,
+    args: &mut Map<String, Value>,
+) -> Result<()> {
+    let first = call_tool(
+        backend,
+        &prepare.tool,
+        arguments(prepare.arguments.as_ref(), params)?,
+    )
+    .await?;
+    let object = prepare_object(first).ok_or_else(|| {
+        Error::Protocol(format!(
+            "prepare tool '{}' returned no object",
+            prepare.tool
+        ))
+    })?;
+    for (arg, field) in &prepare.bind {
+        let value = object.get(field).cloned().ok_or_else(|| {
+            Error::Protocol(format!(
+                "prepare tool '{}' returned no '{field}'",
+                prepare.tool
+            ))
+        })?;
+        args.insert(arg.clone(), value);
+    }
+    Ok(())
+}
+
 /// A later round's error once an earlier round reached the backend
 /// (MIK-7923, design M9). A pre-dispatch refusal (the backend retired between
 /// rounds, a connect error, a missing backend) would tell the caller nothing
@@ -638,28 +670,8 @@ impl CapabilityExecutor {
             // is never "nothing was sent" (MIK-7923, design M9).
             let mut dispatched = false;
             if let Some(prepare) = prepare {
-                let first = call_tool(
-                    &backend,
-                    &prepare.tool,
-                    arguments(prepare.arguments.as_ref(), &params)?,
-                )
-                .await?;
+                run_prepare(&backend, prepare, &params, &mut args).await?;
                 dispatched = true;
-                let object = prepare_object(first).ok_or_else(|| {
-                    Error::Protocol(format!(
-                        "prepare tool '{}' returned no object",
-                        prepare.tool
-                    ))
-                })?;
-                for (arg, field) in &prepare.bind {
-                    let value = object.get(field).cloned().ok_or_else(|| {
-                        Error::Protocol(format!(
-                            "prepare tool '{}' returned no '{field}'",
-                            prepare.tool
-                        ))
-                    })?;
-                    args.insert(arg.clone(), value);
-                }
             }
             let result = call_tool(&backend, tool, args)
                 .await

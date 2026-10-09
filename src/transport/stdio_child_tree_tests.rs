@@ -313,8 +313,16 @@ async fn close_ends_a_group_that_keeps_forking() {
     };
     poll_until("the member forks", || registered().len() >= 10).await;
     t.close().await.expect("close");
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let pids = registered();
+    // A deadline poll, not a fixed sleep (MIK-8213): on macOS a killed member
+    // stays a zombie until launchd reaps it, and `kill(pid, 0)` still answers
+    // for a zombie, so a loaded runner can show a dead member as alive for a
+    // while. A member that truly survives is still alive at the deadline.
+    let deadline = tokio::time::Instant::now() + ROW_LIMIT;
+    let mut pids = registered();
+    while tokio::time::Instant::now() < deadline && pids.iter().any(|p| alive(*p)) {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        pids = registered();
+    }
     let survivors: Vec<Pid> = pids.iter().copied().filter(|p| alive(*p)).collect();
     for pid in &survivors {
         let _ = rustix::process::kill_process(*pid, rustix::process::Signal::KILL);

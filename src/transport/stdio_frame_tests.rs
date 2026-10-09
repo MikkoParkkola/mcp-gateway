@@ -590,7 +590,7 @@ fn a_restart_parked_on_the_writer_lock_spawns_nothing_a_retire_misses() {
     use std::collections::HashMap;
     let dir = tempfile::tempdir().unwrap();
     let pidfile = dir.path().join("escaped.pid");
-    let launches = dir.path().join("launches");
+    let launch_log = dir.path().join("launches");
     let _reaper = KillEscapedOnDrop(pidfile.clone());
     let reply = r#"'{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25"}}'"#;
     let script = format!(
@@ -601,11 +601,11 @@ fn a_restart_parked_on_the_writer_lock_spawns_nothing_a_retire_misses() {
          *'notifications/initialized'*) exec 3<&0; setsid sleep 1000 <&3 3<&- >/dev/null 2>&1 & echo $! > \"{pid}\"; exec sleep 1000 ;;\n\
          esac\ndone\n",
         pid = pidfile.display(),
-        launches = launches.display()
+        launches = launch_log.display()
     );
     std::fs::write(dir.path().join("escape.sh"), script).unwrap();
     let launched = || -> Vec<String> {
-        std::fs::read_to_string(&launches)
+        std::fs::read_to_string(&launch_log)
             .unwrap_or_default()
             .lines()
             .map(str::to_owned)
@@ -622,7 +622,7 @@ fn a_restart_parked_on_the_writer_lock_spawns_nothing_a_retire_misses() {
         std::time::Duration::from_secs(30),
         None,
     );
-    let restart = runtime.block_on(async {
+    runtime.block_on(async {
         transport.start().await.expect("first start");
         // A write stuck on the escaped reader holds the writer lock.
         let big =
@@ -632,12 +632,11 @@ fn a_restart_parked_on_the_writer_lock_spawns_nothing_a_retire_misses() {
         while transport.writer.try_lock().is_ok() {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        let restarting = std::sync::Arc::clone(&transport);
-        let restart = tokio::spawn(async move { restarting.start().await });
-        // Let the restart run up to the writer lock and park there.
-        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-        restart
     });
+    let restarting = std::sync::Arc::clone(&transport);
+    let restart = runtime.spawn(async move { restarting.start().await });
+    // Let the restart run up to the writer lock and park there.
+    runtime.block_on(async { tokio::time::sleep(std::time::Duration::from_millis(300)).await });
     // The runtime idles from here until the restart is driven again.
     let first = launched();
     transport.kill_tree_now();
