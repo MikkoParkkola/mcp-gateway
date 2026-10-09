@@ -11,12 +11,18 @@ use crate::config::Config;
 /// Auth on, and the log path's parent is a regular file, so the open fails
 /// for every user including root.
 async fn gateway(auth: bool, dir: &tempfile::TempDir) -> Gateway {
+    gateway_with(auth, Some(true), dir).await
+}
+
+/// [`gateway`] with the audit switch as given, so the unset row (MIK-8044
+/// P2c2) shares the blocked-path fixture with the explicit one.
+async fn gateway_with(auth: bool, enabled: Option<bool>, dir: &tempfile::TempDir) -> Gateway {
     let blocker = dir.path().join("not-a-dir");
     std::fs::write(&blocker, b"x").expect("blocker file");
     let mut config = Config::default();
     config.auth.enabled = auth;
     config.auth.bearer_token = Some("d1-start-test-token-0123456789abcdef".to_string());
-    config.security.transparency_log.enabled = Some(true);
+    config.security.transparency_log.enabled = enabled;
     config.security.transparency_log.path =
         blocker.join("audit.jsonl").to_string_lossy().into_owned();
     Gateway::new(config)
@@ -40,18 +46,14 @@ async fn audit_log_open_failure_refuses_serve_with_auth() {
 #[tokio::test]
 async fn an_unset_audit_switch_opens_the_log_with_auth() {
     let dir = tempfile::tempdir().unwrap();
-    let blocker = dir.path().join("not-a-dir");
-    std::fs::write(&blocker, b"x").expect("blocker file");
-    let mut config = Config::default();
-    config.auth.enabled = true;
-    config.auth.bearer_token = Some("d1-start-test-token-0123456789abcdef".to_string());
-    assert_eq!(config.security.transparency_log.enabled, None, "left unset");
-    config.security.transparency_log.path =
-        blocker.join("audit.jsonl").to_string_lossy().into_owned();
-    let gateway = Gateway::new(config).await.expect("the config is valid");
+    let gateway = gateway_with(true, None, &dir).await;
+    let err = match gateway.build_meta_mcp().await {
+        Ok(_) => panic!("auth is on and the switch unset, so the log must open (and fail here)"),
+        Err(e) => e.to_string(),
+    };
     assert!(
-        gateway.build_meta_mcp().await.is_err(),
-        "auth is on and the switch unset, so the log must open (and fail here)"
+        err.contains("security.transparency_log"),
+        "failed for another reason than the audit log: {err}"
     );
 }
 

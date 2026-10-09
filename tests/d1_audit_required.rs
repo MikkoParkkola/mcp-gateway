@@ -172,6 +172,10 @@ fn a_rewrite_does_not_write_the_derived_audit_default() {
         reloaded.server.port, 39_401,
         "the rewrite happened:\n{text}"
     );
+    assert_eq!(
+        reloaded.security.transparency_log.enabled, None,
+        "the reload materialised the switch:\n{text}"
+    );
     assert!(
         reloaded
             .security
