@@ -219,5 +219,34 @@ class BaseRef(unittest.TestCase):
             guard.read_base("no-such-ref")
 
 
+class Lexer(unittest.TestCase):
+    """The literal and comment blanking the scan stands on (MIK-8222)."""
+
+    blank = staticmethod(guard.blank_strings_and_comments)
+
+    def test_strings_and_comments_blank_and_code_survives(self):
+        self.assertEqual(self.blank('a("x") // c\nb'), 'a("") \nb')
+        self.assertEqual(self.blank("a /* x\ny */ b"), "a \n b")
+
+    def test_an_escaped_quote_does_not_end_the_string(self):
+        self.assertEqual(self.blank(r'f("a\"elapsed()\"b"); g'), 'f(""); g')
+
+    def test_raw_and_raw_byte_strings_blank_to_their_closing_hashes(self):
+        self.assertEqual(self.blank('x(r#"a "q" elapsed()"#); y'), 'x(""); y')
+        self.assertEqual(self.blank('x(br"elapsed()"); y'), 'x(""); y')
+
+    def test_an_identifier_ending_in_r_is_not_a_raw_prefix(self):
+        # `bar` then a plain string, not a raw string opened by its last `r`.
+        self.assertEqual(self.blank('bar"x" + y'), 'bar"" + y')
+
+    def test_a_lifetime_is_not_a_char_literal(self):
+        self.assertEqual(self.blank("fn f<'a>(s: &'a str) { g('x') }"), "fn f<'a>(s: &'a str) { g(' ') }")
+
+    def test_line_numbers_survive_multiline_literals(self):
+        code = 'let s = "one\ntwo";\n/* a\nb */\nassert!(start.elapsed() < Duration::from_millis(1));'
+        found = guard.scan_text(PATH, "fn case() {\n    let start = Instant::now();\n" + code + "\n}\n", {})
+        self.assertEqual([f.line for f in found], [7])
+
+
 if __name__ == "__main__":
     unittest.main()
