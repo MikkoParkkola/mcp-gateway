@@ -143,14 +143,30 @@ async fn expiry_words_in_a_refusals_data_do_not_override_its_status() {
 /// re-initialization path, by code and by message.
 #[tokio::test]
 async fn a_401_json_rpc_session_expiry_keeps_session_recovery() {
-    for body in [
-        r#"{"jsonrpc":"2.0","id":{id},"error":{"code":-32015,"message":"Session not found"}}"#,
-        r#"{"jsonrpc":"2.0","id":{id},"error":{"code":-32001,"message":"Session expired"}}"#,
+    for (body, code) in [
+        (
+            r#"{"jsonrpc":"2.0","id":{id},"error":{"code":-32015,"message":"Session not found"}}"#,
+            -32015,
+        ),
+        // By code alone: a neutral message must not decide it.
+        (
+            r#"{"jsonrpc":"2.0","id":{id},"error":{"code":-32015,"message":"gone"}}"#,
+            -32015,
+        ),
+        (
+            r#"{"jsonrpc":"2.0","id":{id},"error":{"code":-32001,"message":"Session expired"}}"#,
+            -32001,
+        ),
     ] {
         let (err, _) = refusal_of(axum::http::StatusCode::UNAUTHORIZED, body).await;
         assert!(
             is_session_expired_error(&err),
             "{body} must re-initialize the session, got: {err:?}"
+        );
+        // The parsed refusal keeps the peer's own code.
+        assert!(
+            matches!(err, Error::JsonRpc { code: c, .. } if c == code),
+            "{body}: {err:?}"
         );
     }
 }
