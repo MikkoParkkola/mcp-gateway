@@ -169,8 +169,28 @@ async fn unsubscribe(hub: &Arc<EventsHub>, principal: &str) {
         .expect("unsubscribe");
 }
 
+/// Committed outbox records. A rewrite stages a hidden `.{name}.tmp` file
+/// beside its record until the rename (`records::write_record`), so a raw
+/// count reads one too many while the worker settles an attempt (MIK-8184).
 fn outbox_files(dir: &std::path::Path) -> usize {
-    std::fs::read_dir(dir.join("outbox")).map_or(0, Iterator::count)
+    std::fs::read_dir(dir.join("outbox")).map_or(0, |entries| {
+        entries
+            .filter_map(Result::ok)
+            .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+            .count()
+    })
+}
+
+/// MIK-8184: a rewrite staged beside its record is not a second record.
+#[test]
+fn a_staged_rewrite_is_not_an_outbox_record() {
+    let dir = tempfile::tempdir().expect("dir");
+    let outbox = dir.path().join("outbox");
+    std::fs::create_dir(&outbox).expect("outbox");
+    for name in ["a.json", "b.json", ".a.json.7.tmp"] {
+        std::fs::write(outbox.join(name), b"{}").expect("write");
+    }
+    assert_eq!(outbox_files(dir.path()), 2);
 }
 
 #[tokio::test]
@@ -210,13 +230,15 @@ async fn a_test_source_plugs_in_without_core_changes() {
     // reconcile (MIK-8076).
     assert!(hub.reconcile_catalogue(fanout::CatalogueScan::Complete));
     hub.emit(event);
+    let mut records = outbox_files(dir.path());
     for _ in 0..100 {
-        if outbox_files(dir.path()) == 2 {
+        if records == 2 {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        records = outbox_files(dir.path());
     }
-    assert_eq!(outbox_files(dir.path()), 2, "one record per subscriber");
+    assert_eq!(records, 2, "one record per subscriber");
     unsubscribe(&hub, "p1").await;
     assert_eq!(probe.last.load(Ordering::SeqCst), 0, "one subscriber left");
     unsubscribe(&hub, "p2").await;
@@ -541,3 +563,6 @@ mod hold;
 #[cfg(test)]
 #[path = "subscribe_order_tests.rs"]
 mod subscribe_order;
+
+#[path = "reconcile_table_lifecycle_tests.rs"]
+mod reconcile_table;

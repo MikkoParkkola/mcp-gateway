@@ -257,13 +257,17 @@ struct Poller {
     owner: String,
 }
 
+/// The running pollers by key, shared with each poller so a retiring one
+/// takes its own entry out (MIK-8179 STARTED.3).
+type Pollers = Arc<parking_lot::Mutex<HashMap<String, Poller>>>;
+
 /// The REST capability watch source.
 pub(crate) struct WatchSource {
     hub: Weak<EventsHub>,
     host: Arc<dyn WatchHost>,
     max_pollers: usize,
     max_per_principal: usize,
-    pollers: parking_lot::Mutex<HashMap<String, Poller>>,
+    pollers: Pollers,
 }
 
 impl WatchSource {
@@ -273,7 +277,7 @@ impl WatchSource {
             host,
             max_pollers: hub.config.watch.max_pollers,
             max_per_principal: hub.config.watch.max_pollers_per_principal,
-            pollers: parking_lot::Mutex::new(HashMap::new()),
+            pollers: Arc::default(),
         }
     }
 
@@ -486,6 +490,7 @@ impl EventSource for WatchSource {
         let stop = Arc::new(AtomicBool::new(false));
         let run = Run {
             stop: Arc::clone(&stop),
+            pollers: Arc::downgrade(&self.pollers),
             hub: self.hub.clone(),
             host: Arc::clone(&self.host),
             key: key.to_owned(),
@@ -529,6 +534,7 @@ enum Step {
 struct Run {
     /// Set when the last subscription for the key went away.
     stop: Arc<AtomicBool>,
+    pollers: Weak<parking_lot::Mutex<HashMap<String, Poller>>>,
     hub: Weak<EventsHub>,
     host: Arc<dyn WatchHost>,
     key: String,
@@ -612,6 +618,15 @@ impl Run {
         }
         started.remove(&(SourceKind::RestWatch, self.key.clone()));
         self.stop.store(true, Ordering::Release);
+        if let Some(pollers) = self.pollers.upgrade() {
+            let mut pollers = pollers.lock();
+            if pollers
+                .get(&self.key)
+                .is_some_and(|p| Arc::ptr_eq(&p.stop, &self.stop))
+            {
+                pollers.remove(&self.key);
+            }
+        }
         Step::Stop
     }
 

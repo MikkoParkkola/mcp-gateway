@@ -12,7 +12,6 @@ auth:
   - /health
 meta_mcp:
   enabled: true
-  cache_tools: true
   cache_ttl: 300s
   warm_start: []
   surfaced_tools: []

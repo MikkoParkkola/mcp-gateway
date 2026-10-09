@@ -488,11 +488,29 @@ async fn handle_expiring_at(meta: &MetaMcp, expires_at: u64, now: u64) -> String
         .hold("srv", expires_at, now)
         .await
         .expect("the in-flight table has room for one exchange");
+    let fingerprint = crate::protocol::mrtr::principal_fingerprint(Some(&identity()))
+        .expect("the caller has a fingerprint");
+    // What the chain driver's seal records for the stopped step (MIK-8168):
+    // its digest over the backend object that asked, length-prefixed name.
+    let instance = meta.backends.get("srv").expect("registered").instance();
+    let asked = crate::protocol::continuation::Payload::mint(
+        "srv".into(),
+        None,
+        fingerprint.clone(),
+        crate::protocol::mrtr::original_request_digest(
+            &format!("3:srv:{instance}"),
+            "ask",
+            &json!({}),
+        ),
+        "replica-a".into(),
+        hold.clone(),
+        now,
+    );
+    state.in_flight().bind_step(&asked);
     let mut payload = crate::protocol::continuation::Payload::mint(
         "srv".into(),
         Some("backend-state-1".into()),
-        crate::protocol::mrtr::principal_fingerprint(Some(&identity()))
-            .expect("the caller has a fingerprint"),
+        fingerprint,
         super::chain_interim::chain_digest(chain().as_array().expect("the chain is an array")),
         "replica-a".into(),
         hold,
@@ -535,5 +553,40 @@ async fn mrtr_12_a_later_stop_keeps_the_exchange_deadline() {
     assert_eq!(
         payload.expires_at, deadline,
         "a later stop extended the deadline the exchange opened with"
+    );
+}
+
+/// `MIK-8168`: a chain paused on a question, whose backend is replaced under
+/// the same name before the caller answers, is refused at resume (-32602, a
+/// continuation refusal, not an internal error) and the replacement never
+/// receives the old backend's state or the answers. The unchanged-backend
+/// control is `mrtr_12_resume_applies_the_answers_to_the_pending_step`.
+#[tokio::test]
+async fn a_chain_resume_after_its_backend_is_replaced_is_refused() {
+    let registry = Arc::new(BackendRegistry::new());
+    let swap_in = |stub: Arc<AsksOnce>| {
+        let backend = Arc::new(Backend::new(
+            "srv",
+            BackendConfig::r2_off(),
+            &FailsafeConfig::default(),
+            std::time::Duration::from_secs(300),
+        ));
+        backend.set_transport_for_test(stub);
+        let _ = registry.register(backend);
+    };
+    swap_in(Arc::new(AsksOnce::default()));
+    let meta = MetaMcp::new(Arc::clone(&registry));
+    let (who, caps) = (identity(), elicitation_caps());
+    let stop = execute(&meta, 1, &who, &caps, &crate::protocol::mrtr::NO_RETRY).await;
+
+    let replacement = Arc::new(AsksOnce::default());
+    swap_in(Arc::clone(&replacement));
+    let resumed = execute(&meta, 2, &who, &caps, &answers(&handle_in(&stop))).await;
+
+    assert_eq!(resumed["error"]["code"], json!(-32602), "{resumed}");
+    assert!(
+        replacement.calls().is_empty(),
+        "the replacement received the old round: {:?}",
+        replacement.calls()
     );
 }

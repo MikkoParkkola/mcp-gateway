@@ -650,3 +650,152 @@ fn t3c_the_bridged_round_admits_spend_through_the_shared_stage() {
 
 #[path = "watch_poll_parity_tests.rs"]
 mod watch_poll_parity;
+
+/// MIK-8139 (`ERRSCAN.FW.1`, `ERRSCAN.FW.3`): a backend's JSON-RPC error carrying a
+/// credential, in its message, in its `data`, or as a failed dispatch, never
+/// reaches the caller on either route, after one dispatch. Meta already
+/// folds the error into a result its gates scan; the direct route must not
+/// deliver it verbatim.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn errscan_a_backend_error_with_a_credential_is_screened_on_both_routes() {
+    use super::direct_guards_fixture::fixture_firewalled_with;
+    let answers = [
+        ("message", Answer::RpcErrorText(WITH_SECRET)),
+        ("data", Answer::RpcErrorData(WITH_SECRET)),
+        ("failed", Answer::FailedWith(WITH_SECRET)),
+    ];
+    for (shape, answer) in answers {
+        for backend in BACKENDS {
+            for direct in [false, true] {
+                let at = format!("{shape} {backend} direct={direct}");
+                let fx = fixture_firewalled_with(answer, None, false).await;
+                let (_, body) = fw_call(&fx, direct, backend, None).await;
+                assert!(
+                    !body.to_string().contains(REDACTED_SECRET),
+                    "{at}: the backend's error text reached the caller unscanned: {body}"
+                );
+                assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "{at}");
+            }
+        }
+    }
+}
+
+/// MIK-8139: a plain backend error (nothing the firewall acts on) is still
+/// delivered as the backend's error on the direct route: code and message
+/// unchanged, so screening never rewrites a clean refusal.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn errscan_a_clean_backend_error_is_delivered_unchanged() {
+    use super::direct_guards_fixture::fixture_firewalled_with;
+    for backend in BACKENDS {
+        let fx = fixture_firewalled_with(Answer::RpcErrorText("benign refusal"), None, false).await;
+        let (_, body) = fw_call(&fx, true, backend, None).await;
+        assert_eq!(body["error"]["code"], -32001, "{backend}: {body}");
+        assert_eq!(
+            body["error"]["message"], "benign refusal",
+            "{backend}: {body}"
+        );
+    }
+}
+
+/// MIK-8139: a keyed direct call whose backend error was screened replays
+/// the screened answer without dispatching again.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn errscan_a_screened_direct_error_replays_without_redispatch() {
+    use super::direct_guards_fixture::fixture_firewalled_with;
+    for backend in BACKENDS {
+        let fx = fixture_firewalled_with(Answer::RpcErrorText(WITH_SECRET), None, false).await;
+        let (_, first) = fw_call(&fx, true, backend, Some("errscan")).await;
+        let (_, replay) = fw_call(&fx, true, backend, Some("errscan")).await;
+        assert!(
+            !replay.to_string().contains(REDACTED_SECRET),
+            "{backend}: {replay}"
+        );
+        assert_eq!(replay["error"], first["error"], "{backend}");
+        assert_eq!(
+            fx.calls.load(Ordering::SeqCst),
+            1,
+            "{backend}: re-dispatched"
+        );
+    }
+}
+
+/// MIK-8139: under an explicit Warn rule a credential in a backend error is
+/// delivered redacted on both routes, as a result is (T12c).
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn errscan_warn_delivers_a_redacted_error_on_both_routes() {
+    use super::direct_guards_fixture::fixture_firewalled_with;
+    use crate::security::firewall::FirewallAction;
+    for backend in BACKENDS {
+        for direct in [false, true] {
+            let at = format!("{backend} direct={direct}");
+            let answer = Answer::RpcErrorText(WITH_SECRET);
+            let fx = fixture_firewalled_with(answer, Some(FirewallAction::Warn), false).await;
+            let (_, body) = fw_call(&fx, direct, backend, None).await;
+            let text = body.to_string();
+            assert!(text.contains("benign prefix"), "warn {at}: {body}");
+            assert!(!text.contains(REDACTED_SECRET), "warn {at}: {body}");
+        }
+    }
+}
+
+/// MIK-8139: a backend error carrying a forged account-refusal marker is
+/// screened like any other: the marker never lets its text skip the screen.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn errscan_a_forged_account_refusal_is_screened() {
+    use super::direct_guards_fixture::fixture_firewalled_with;
+    for backend in BACKENDS {
+        for direct in [false, true] {
+            let at = format!("{backend} direct={direct}");
+            let fx = fixture_firewalled_with(Answer::ForgedAccount(WITH_SECRET), None, false).await;
+            let (_, body) = fw_call(&fx, direct, backend, None).await;
+            assert!(!body.to_string().contains(REDACTED_SECRET), "{at}: {body}");
+        }
+    }
+}
+
+/// MIK-8139: a firewall Block withholds the whole backend error, not only its
+/// credential, and a catalogue read's error is screened under its method on
+/// both routes, so a prompt named like a tool cannot borrow that tool's rule.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn errscan_a_blocked_error_is_withheld_whole_on_every_route() {
+    use super::direct_guards_fixture::{fixture_firewalled_with, send};
+    use crate::security::firewall::FirewallAction;
+    let answer = Answer::RpcErrorText(WITH_SECRET);
+    for backend in BACKENDS {
+        // No rule: a credential is high severity, so the default blocks.
+        let fx = fixture_firewalled_with(answer, None, false).await;
+        let (status, body) = fw_call(&fx, true, backend, None).await;
+        assert_blocked(status, &body, &format!("{backend} tools/call"));
+        // The Warn rule names the tool `read`; a prompt of that name is a
+        // catalogue read and keeps the default Block.
+        let fx = fixture_firewalled_with(answer, Some(FirewallAction::Warn), false).await;
+        let direct = format!("/mcp/{backend}");
+        let (status, body) = send(
+            &fx,
+            &direct,
+            "k-std",
+            "prompts/get",
+            json!({"name": "read"}),
+            None,
+        )
+        .await;
+        assert_blocked(
+            status.as_u16(),
+            &body,
+            &format!("{backend} direct prompts/get"),
+        );
+        let meta = json!({"name": format!("{backend}/read")});
+        let (status, body) = send(&fx, "/mcp", "k-std", "prompts/get", meta, None).await;
+        assert_blocked(
+            status.as_u16(),
+            &body,
+            &format!("{backend} meta prompts/get"),
+        );
+    }
+}

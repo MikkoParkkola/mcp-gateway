@@ -2444,7 +2444,7 @@ class WorkflowWiring(unittest.TestCase):
         # that read repository files deliberately kept out of the crate.
         script = (pathlib.Path(__file__).parents[2] / "scripts" / "ci" / "packaged-tests.sh").read_text(encoding="utf-8")
         test_cmd = " ".join(c for b in steps("ci.yml", "test") for c in joined(b))
-        packaged_only = {"mik_5843_"}  # repo-only docs
+        packaged_only: set[str] = set()  # none: every file the suite reads ships (MIK-8163)
         self.assertEqual(
             set(re.findall(r"--skip\s+(\S+)", script)),
             set(re.findall(r"--skip\s+(\S+)", test_cmd)) | packaged_only,

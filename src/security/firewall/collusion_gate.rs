@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::collusion::sketch::Sketch;
 use super::collusion::{CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams};
 use super::collusion_digest::DELIVERED_SET_CAP;
 #[cfg(test)]
@@ -427,7 +428,13 @@ impl Firewall {
         tool: &str,
         result: &Value,
     ) -> Option<DeliveryDigest> {
-        self.digest_with(server, tool, result, DeliveryDigest::of_parts)
+        let (mut digest, cut) = self.digest_with(server, tool, result, DeliveryDigest::of_parts)?;
+        if cut {
+            // `MIK-8066.EXCUSE.1`: the whole delivered value, as received.
+            let (leaves, values) = delivery_parts(result);
+            digest.cut_sketch = self.sketch_of_leaves(&leaves, values);
+        }
+        Some(digest)
     }
 
     /// [`Self::delivery_digest`], or for a plan step (`plan`: what its
@@ -454,8 +461,12 @@ impl Firewall {
         }
         let digest = if total < DELIVERED_SET_CAP {
             self.digest_with(server, tool, result, DeliveryDigest::of_plan_step_parts)?
+                .0
         } else {
-            self.delivery_digest(server, tool, result)?
+            // A plan step is sketched only once kept to the plan's answer
+            // (`MIK-8066` E1''): capped here, its cut text gets no sketch.
+            self.digest_with(server, tool, result, DeliveryDigest::of_parts)?
+                .0
         };
         staged.set(total + digest.staged_len());
         Some(digest)
@@ -467,7 +478,7 @@ impl Firewall {
         tool: &str,
         result: &Value,
         of_parts: fn(&[&str], usize, bool) -> (DeliveryDigest, bool),
-    ) -> Option<DeliveryDigest> {
+    ) -> Option<(DeliveryDigest, bool)> {
         self.relay_detector()?;
         let source = format!("{server}:{tool}");
         let sensitive = self.relay.sources.iter().any(|p| p.matches(&source))
@@ -475,15 +486,41 @@ impl Firewall {
         let (leaves, values) = delivery_parts(result);
         let (digest, cut) = of_parts(&leaves, values, sensitive);
         self.count_cut(cut);
-        Some(digest)
+        Some((digest, cut))
     }
 
     /// A copy of `digest` with its deferred cap applied, a cut counted;
     /// `None` when it was capped at staging.
     fn capped(&self, digest: &DeliveryDigest) -> Option<DeliveryDigest> {
-        let (digest, cut) = digest.capped()?;
+        let (mut capped, cut) = digest.capped()?;
         self.count_cut(cut);
-        Some(digest)
+        if cut {
+            capped.cut_sketch = self.sketch_of(digest);
+        }
+        Some(capped)
+    }
+
+    /// `MIK-8066.EXCUSE.1`: the sketch of every fingerprint of a delivered
+    /// value's leaves, values joined as a delivery walk reads them (both
+    /// forms) and each key, all of it text the caller received.
+    fn sketch_of_leaves(&self, leaves: &[&str], values: usize) -> Option<Arc<Sketch>> {
+        let detector = self.relay_detector()?;
+        let (vals, keys) = leaves.split_at(values.min(leaves.len()));
+        let mut fps = detector.fingerprints(&vals.join("\n"));
+        if vals.len() > 1 {
+            fps.extend(detector.fingerprints(&vals.concat()));
+        }
+        for key in keys {
+            fps.extend(detector.fingerprints(key));
+        }
+        Some(Arc::new(Sketch::of(&fps)))
+    }
+
+    /// `MIK-8066.EXCUSE.1`: the sketch of every fingerprint of `whole`, the
+    /// receipt before its cut: what the holder received, kept to excuse it.
+    fn sketch_of(&self, whole: &DeliveryDigest) -> Option<Arc<Sketch>> {
+        let detector = self.relay_detector()?;
+        Some(Arc::new(Sketch::of(&whole.fingerprints(detector))))
     }
 
     fn count_cut(&self, cut: bool) {
@@ -591,13 +628,17 @@ impl Firewall {
         // receipt never kept to its plan's answer is recorded capped too.
         let capped = self.capped(digest);
         let digest = capped.as_ref().unwrap_or(digest);
+        let now = Instant::now();
         detector.record_fingerprints_at(
             &source,
             caller.key(),
             (digest.sensitive, flows),
             digest.fingerprints(detector),
-            Instant::now(),
+            now,
         );
+        if let Some(sketch) = &digest.cut_sketch {
+            detector.record_sketch_at(&source, caller.key(), Arc::clone(sketch), now);
+        }
     }
 }
 

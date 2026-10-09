@@ -1,14 +1,17 @@
 diff --git a/src/gateway/router/direct_guards.rs b/src/gateway/router/direct_guards.rs
-index a295312fc..656067690 100644
+index f319bd90a..6c1caf2c6 100644
 --- a/src/gateway/router/direct_guards.rs
 +++ b/src/gateway/router/direct_guards.rs
-@@ -172,7 +172,8 @@ fn response_blocked(
-             "Firewall: direct backend response warning"
-         );
-     }
--    !verdict.allowed
-+    let _ = !verdict.allowed;
-+    false
+@@ -258,5 +258,11 @@ pub(super) fn scan_direct_egress(
+         // The router's own instance judges the direct route (MIK-7669).
+         firewall: state.firewall.as_deref(),
+     };
+-    state.meta_mcp.scan_egress(response, &at)
++    let before = response.clone();
++    let outcome = state.meta_mcp.scan_egress(response, &at);
++    if outcome == EgressOutcome::Refused {
++        *response = before;
++        response.egress_scanned = true;
++    }
++    outcome
  }
- 
- #[cfg(not(feature = "firewall"))]

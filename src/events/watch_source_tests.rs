@@ -170,6 +170,7 @@ fn run(
         .any(|t| event_name(&t.capability) == name && t.credential == CredentialUse::Free);
     Run {
         stop: Arc::default(),
+        pollers: std::sync::Weak::new(),
         hub: Arc::downgrade(hub),
         host: Arc::clone(host) as Arc<dyn WatchHost>,
         key,
@@ -789,3 +790,6 @@ mod partial;
 
 #[path = "watch_hold_tests.rs"]
 mod hold;
+
+#[path = "reconcile_table_watch_tests.rs"]
+mod reconcile_table;
