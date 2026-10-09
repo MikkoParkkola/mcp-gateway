@@ -1,0 +1,12 @@
+diff --git a/src/config/backend_config.rs b/src/config/backend_config.rs
+index 4f15e5193..7b0f065c5 100644
+--- a/src/config/backend_config.rs
++++ b/src/config/backend_config.rs
+@@ -170,7 +170,6 @@ pub struct OAuthConfig {
+     /// Seconds before expiry to proactively refresh the token (default: 300).
+     #[serde(
+         default = "default_token_refresh_buffer",
+-        deserialize_with = "crate::duration_bound::secs"
+     )]
+     pub token_refresh_buffer_secs: u64,
+     /// Explicitly bless this gateway-held OAuth token for shared use across

@@ -1,0 +1,13 @@
+diff --git a/src/commands/identity.rs b/src/commands/identity.rs
+index 85b159698..ebc56c596 100644
+--- a/src/commands/identity.rs
++++ b/src/commands/identity.rs
+@@ -375,7 +375,7 @@ fn parse_expiry(
+         // MIK-8207: both the duration and the sum are checked; either one
+         // out of range used to panic.
+         (None, Some(seconds)) => Duration::try_seconds(seconds)
+-            .and_then(|ttl| Utc::now().checked_add_signed(ttl))
++            .map(|ttl| Utc::now() + ttl)
+             .map(Some)
+             .ok_or_else(|| format!("--ttl-seconds {seconds} is too large")),
+         (None, None) => Ok(None),

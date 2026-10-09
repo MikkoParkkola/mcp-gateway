@@ -1,0 +1,13 @@
+diff --git a/src/config/humantime_serde.rs b/src/config/humantime_serde.rs
+index b1771ec75..a6aad7238 100644
+--- a/src/config/humantime_serde.rs
++++ b/src/config/humantime_serde.rs
+@@ -26,7 +26,7 @@ fn parse(text: &str) -> Result<Duration, String> {
+     } else if let Some(secs) = text.strip_suffix('s') {
+         (secs, |n| Some(Duration::from_secs(n)))
+     } else if let Some(mins) = text.strip_suffix('m') {
+-        (mins, |n| n.checked_mul(60).map(Duration::from_secs))
++        (mins, |n| Some(Duration::from_secs(n.wrapping_mul(60))))
+     } else if let Some(hours) = text.strip_suffix('h') {
+         (hours, |n| n.checked_mul(3600).map(Duration::from_secs))
+     } else {

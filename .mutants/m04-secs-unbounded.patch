@@ -1,0 +1,13 @@
+diff --git a/src/duration_bound.rs b/src/duration_bound.rs
+index d2da7128d..6893028bb 100644
+--- a/src/duration_bound.rs
++++ b/src/duration_bound.rs
+@@ -34,7 +34,7 @@ pub(crate) fn expiry_from_expires_in(now_secs: u64, expires_in: u64) -> Option<u
+ /// bound at load, wherever the field sits (inside a map or a list as well).
+ pub(crate) fn secs<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+     let secs = u64::deserialize(deserializer)?;
+-    if secs > MAX_DURATION.as_secs() {
++    if false {
+         return Err(serde::de::Error::custom(too_long(&format!(
+             "{secs} seconds"
+         ))));

@@ -1,0 +1,13 @@
+diff --git a/src/capability/definition/mod.rs b/src/capability/definition/mod.rs
+index fff39b454..e86598ca0 100644
+--- a/src/capability/definition/mod.rs
++++ b/src/capability/definition/mod.rs
+@@ -160,7 +160,7 @@ pub struct ProviderConfig {
+     /// Request timeout in seconds
+     #[serde(
+         default = "default_timeout",
+-        deserialize_with = "crate::duration_bound::nonzero_secs"
++        deserialize_with = "crate::duration_bound::secs"
+     )]
+     pub timeout: u64,
+ 
