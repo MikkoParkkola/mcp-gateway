@@ -70,7 +70,7 @@ fn key() -> AccountKey {
 /// plus any `extra` backend lines (already indented under `backends:`).
 fn config(extra: &str) -> Config {
     serde_yaml::from_str(&format!(
-        r#"
+        r"
 backends:
   {BOUND}:
     http_url: https://ledger.fixture.test/mcp
@@ -100,7 +100,7 @@ accounts:
       provider: fixture
       resource: {RESOURCE}
       issuer: {ISSUER}
-"#
+"
     ))
     .expect("fixture config parses")
 }
