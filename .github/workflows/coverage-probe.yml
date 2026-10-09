@@ -35,10 +35,11 @@ on:
       - ".github/workflows/coverage-probe.yml"
   workflow_dispatch:
 
-# A newer push to a pull request supersedes its older grade; release-line runs all finish,
-# each grading its own commit.
+# A newer push to a pull request supersedes its older grade. Every other run has a group of
+# its own: a group keeps one pending run and replaces it with the next, so a shared
+# release-line group would drop grades when merges queue.
 concurrency:
-  group: coverage-probe-${{ github.ref }}
+  group: coverage-probe-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -135,15 +136,24 @@ jobs:
   grade:
     name: Critical coverage grade
     needs: [linux-grade, windows-grade]
-    # Both platform runs must have passed every test; on a pull request the Windows run
-    # is skipped by design and the grade covers Linux alone.
-    if: >-
-      !cancelled() && needs.linux-grade.result == 'success' &&
-      (needs.windows-grade.result == 'success' ||
-      (github.event_name == 'pull_request' && needs.windows-grade.result == 'skipped'))
+    # Runs whatever the platform jobs did, so it is never skipped: a skipped job would
+    # read as passing if this check were ever made required.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # Both platform runs must have passed every test; on a pull request the Windows run
+      # is skipped by design and the grade covers Linux alone.
+      - name: Every platform run passed
+        env:
+          EVENT: ${{ github.event_name }}
+          LINUX: ${{ needs.linux-grade.result }}
+          WINDOWS: ${{ needs.windows-grade.result }}
+        run: |
+          echo "linux=$LINUX windows=$WINDOWS event=$EVENT"
+          [ "$LINUX" = success ] || { echo "::error::the Linux coverage run did not succeed ($LINUX)"; exit 1; }
+          [ "$WINDOWS" = success ] || { [ "$EVENT" = pull_request ] && [ "$WINDOWS" = skipped ]; } \
+            || { echo "::error::the Windows coverage run did not succeed ($WINDOWS)"; exit 1; }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
