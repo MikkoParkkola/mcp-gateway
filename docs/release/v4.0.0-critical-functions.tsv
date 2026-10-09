@@ -206,6 +206,8 @@ src/gateway/server/support.rs	client_identity_from_peer_chain	1	critical	a,b	cli
 src/gateway/server/support.rs	network_bind_refusal	1	critical	a,d	network_bind_refusal	The single definition of the unauthenticated network exposure: None means this configuration may serve
 src/gateway/server/support.rs	serve_tls	1	critical	a	serve_tls	The mTLS listener: decides which client certificates may connect
 src/gateway/server/support.rs	start_refusal	1	critical	a,d	start_refusal	Every refusal Gateway::run asks before it binds, in order; reload restart advice asks the same
+src/gateway/server/stdio_tasks.rs	new	1	critical	c	TasksDropGuard::new	Binds the guard to the session's own executor and store, so its drop seals the workers that session started (MIK-7839.CANCEL.3)
+src/gateway/server/stdio_tasks.rs	drop	1	critical	c	TasksDropGuard::drop	Seals the executor so no worker takes another step, then stops store admission, when the session future is dropped (MIK-7839.CANCEL.3)
 src/gateway/task_service/execution.rs	cancel	1	critical	c	TaskExecutor::cancel	Cancel is a write scoped to the owner via the principal; signals the worker only after it commits
 src/gateway/task_service/execution.rs	cancel_lost_the_revision	1	critical	c	TaskExecutor::cancel_lost_the_revision	Retries cancel only after re-reading the task through the owner-scoped service.get
 src/gateway/task_service/execution.rs	transition_write	1	critical	c	TaskExecutor::transition_write	Hashes the request principal to an owner
