@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8080 W1: on Windows the Job is ended by its handle even after the
-//! leader exited, so a descendant left in the Job dies, and `finish` (whose
-//! `JobObject` wait blocks until the Job is empty) returns the leader's status.
+//! leader exited, so a descendant left in the Job dies, and the reaper's
+//! `reap_step` (MIK-7923) returns the leader's status.
 //!
 //! The descendant is checked through a process handle (`Get-Process` plus its
 //! start time), so a reused pid cannot pass for it.
@@ -11,7 +11,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use super::super::spawn_in_own_tree;
-use super::{ChildTree, wait_exited};
+use super::{ChildTree, Reap};
 
 const LIMIT: Duration = Duration::from_secs(20);
 
@@ -27,6 +27,28 @@ fn powershell(script: &str, dir: &Path) -> tokio::process::Command {
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null());
     cmd
+}
+
+/// Poll `exited()` (never reaps) for up to `limit`.
+async fn wait_exited(tree: &mut ChildTree, limit: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + limit;
+    while !tree.exited() {
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    true
+}
+
+/// Step the tree as the reaper does until it is done.
+async fn reap(tree: &mut ChildTree) -> Option<std::process::ExitStatus> {
+    loop {
+        match tree.reap_step(std::time::Instant::now()) {
+            Reap::Done(status) => return status,
+            Reap::Pending => tokio::time::sleep(Duration::from_millis(10)).await,
+        }
+    }
 }
 
 /// The leader has exited (observed, not waited on); its descendant is alive.
@@ -69,17 +91,17 @@ async fn dies(descendant: &str, dir: &Path) -> bool {
 }
 
 #[tokio::test]
-async fn finish_after_the_exit_ends_the_job() {
+async fn a_reap_after_the_exit_ends_the_job() {
     let dir = tempfile::tempdir().expect("dir");
     let (mut tree, descendant) = exited_leader(dir.path()).await;
-    let status = tokio::time::timeout(LIMIT, tree.finish())
+    let status = tokio::time::timeout(LIMIT, reap(&mut tree))
         .await
-        .expect("finish returns once the Job is ended");
+        .expect("the reap returns once the Job is ended");
     assert_eq!(status.and_then(|s| s.code()), Some(3));
     assert_eq!(tree.group_signals_sent, 1);
     assert!(
         dies(&descendant, dir.path()).await,
-        "the Job outlived finish"
+        "the Job outlived the reap"
     );
 }
 

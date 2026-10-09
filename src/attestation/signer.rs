@@ -246,7 +246,11 @@ mod tests {
     #[test]
     fn issued_token_verifies_and_carries_bnaut_issuer() {
         let s = signer();
-        let token = s.issue(&request(), Utc::now(), TimeDelta::minutes(5));
+        let token = s.issue(
+            &request(),
+            Utc::now(),
+            crate::duration_bound::delta!(minutes, 5),
+        );
         let (payload, sig) = AttestationToken::split_unverified(token.encoded()).unwrap();
         assert!(s.verify_bytes(&payload, &sig));
         assert_eq!(token.claims().issuer, BNAUT_ISSUER);
@@ -255,7 +259,11 @@ mod tests {
 
     #[test]
     fn verify_rejects_wrong_key() {
-        let token = signer().issue(&request(), Utc::now(), TimeDelta::minutes(5));
+        let token = signer().issue(
+            &request(),
+            Utc::now(),
+            crate::duration_bound::delta!(minutes, 5),
+        );
         let other = BnautAttestationSigner::new(b"different-key".to_vec(), "other")
             .with_audience("test-gateway");
         let (payload, sig) = AttestationToken::split_unverified(token.encoded()).unwrap();
@@ -301,8 +309,12 @@ mod tests {
     fn rotation_links_predecessor_and_gets_fresh_id() {
         let s = signer();
         let now = Utc::now();
-        let first = s.issue(&request(), now, TimeDelta::minutes(5));
-        let second = s.rotate(first.claims(), now, TimeDelta::minutes(5));
+        let first = s.issue(&request(), now, crate::duration_bound::delta!(minutes, 5));
+        let second = s.rotate(
+            first.claims(),
+            now,
+            crate::duration_bound::delta!(minutes, 5),
+        );
         assert_eq!(
             second.claims().rotation_of.as_deref(),
             Some(first.claims().token_id.as_str())

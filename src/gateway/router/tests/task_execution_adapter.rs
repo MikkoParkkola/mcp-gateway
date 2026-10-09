@@ -80,6 +80,7 @@ mod relay_upstream;
 /// D3-a: grant decision records at the route.
 mod grant_decision_tasks;
 mod grant_decisions;
+mod grant_slot_release;
 
 mod admission_identity;
 /// MIK-7570.ATTEST.1 part 3: surfaced-tool tasks carry their attestation token.

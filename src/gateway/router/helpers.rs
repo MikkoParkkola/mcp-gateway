@@ -9,7 +9,7 @@ use axum::{
     response::IntoResponse,
 };
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tracing::warn;
 
 use crate::protocol::{
@@ -236,9 +236,15 @@ pub(crate) fn is_notification_method(method: &str) -> bool {
 ///
 /// Returns `("", {})` when the expected fields are absent so callers never
 /// need to deal with `Option`.
+// MIK-8014: no request path takes the owned form any more; the tests keep it
+// as the reference for what the borrowed form selects.
+#[cfg(test)]
 pub(crate) fn extract_tools_call_params(params: Option<&Value>) -> (&str, Value) {
     let (tool_name, arguments) = extract_tools_call_params_ref(params);
-    (tool_name, arguments.cloned().unwrap_or_else(|| json!({})))
+    (
+        tool_name,
+        arguments.cloned().unwrap_or_else(|| serde_json::json!({})),
+    )
 }
 
 /// Borrowed form of [`extract_tools_call_params`]: same field selection, no

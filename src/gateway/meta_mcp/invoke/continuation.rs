@@ -39,6 +39,11 @@ pub(super) async fn mint_continuation(
     arguments: &Value,
     backend_request_state: Option<String>,
 ) -> Option<(String, String)> {
+    let Ok(now) = crate::protocol::continuation::clock_now() else {
+        warn!(server, tool, "Clock reads before 1970; refusing to mint");
+        record_continuation_mint("clock_before_epoch");
+        return None;
+    };
     let Some(payload) = continuation
         .begin_exchange(
             server.to_string(),
@@ -49,7 +54,7 @@ pub(super) async fn mint_continuation(
                 tool,
                 arguments,
             ),
-            crate::protocol::continuation::now_unix_secs(),
+            now,
         )
         .await
     else {
@@ -57,10 +62,16 @@ pub(super) async fn mint_continuation(
         record_continuation_mint("no_slot");
         return None;
     };
-    crate::gateway::meta_mcp::sealed_hold::register(continuation);
     match continuation.keyring().mint(&payload) {
         Ok(envelope) => {
             record_continuation_mint("ok");
+            // MIK-8176: the hold carries the envelope, so the answer that
+            // delivers it can be recognised and hand the slot off.
+            crate::gateway::meta_mcp::sealed_hold::register(
+                continuation,
+                &payload.hold_key,
+                &envelope,
+            );
             Some((envelope, payload.hold_key))
         }
         Err(error) => {
@@ -80,7 +91,10 @@ async fn release_unsent(
     hold_key: Option<&str>,
 ) {
     if let Some(hold_key) = hold_key {
-        let now = crate::protocol::continuation::now_unix_secs();
+        // Freeing a slot is retention work: on a clock before 1970 it still
+        // frees this one, and 0 lets the reclaim of others it cannot date
+        // skip its pass (MIK-8202 D2).
+        let now = crate::clock::unix_secs().unwrap_or(0);
         continuation.in_flight().complete(hold_key, now).await;
     }
 }
@@ -259,8 +273,7 @@ pub(in crate::gateway::meta_mcp) fn retry_origin_backend(
     retry: &crate::protocol::mrtr::RetryFields,
 ) -> Option<Result<String>> {
     let token = retry.request_state.as_deref()?;
-    let now = crate::protocol::continuation::now_unix_secs();
-    let payload = match continuation.keyring().open(token, now) {
+    let payload = match continuation.keyring().open_now(token) {
         Ok(payload) => payload,
         Err(error) => {
             warn!(%error, "Continuation refused before routing");
@@ -324,12 +337,13 @@ pub(super) async fn redeem_retry(
         });
     };
 
-    let now = crate::protocol::continuation::now_unix_secs();
-    let payload = continuation.keyring().open(token, now).map_err(|error| {
+    let refuse = |error: ContinuationError| {
         warn!(server, tool, %error, "Continuation refused");
         record_continuation_rejection(continuation_error_reason(&error));
         rejected_continuation(&error)
-    })?;
+    };
+    let now = crate::protocol::continuation::clock_now().map_err(refuse)?;
+    let payload = continuation.keyring().open(token, now).map_err(refuse)?;
 
     // Which domain the envelope was sealed for, before anything is read out of
     // it and before the hold or the ledger is touched.
@@ -574,21 +588,40 @@ impl crate::gateway::meta_mcp::MetaMcp {
     /// Returns the sealed envelope and its hold key, for
     /// [`Self::release_direct_hold`] once the answer that leaves is known.
     ///
+    /// MRTR.9 and 9a first (MIK-8089): a question the client did not declare
+    /// it can answer is refused before anything is minted, as on `/mcp`.
+    ///
     /// # Errors
     ///
-    /// `-32003` when no continuation can be bound to this caller, or the mint
-    /// is refused: the backend's own state is never sent in its place.
+    /// The MRTR.9 capability refusal (`-32021`, naming what to declare) for an
+    /// undeclared question; `-32003` when no continuation can be bound to this
+    /// caller, or the mint is refused: the backend's own state is never sent in
+    /// its place.
     pub(crate) async fn seal_direct_interim(
         &self,
         who: DirectCaller<'_>,
-        (server, instance, sent): (&str, Option<u64>, Option<&Value>),
+        (server, instance, sent, declared): (
+            &str,
+            Option<u64>,
+            Option<&Value>,
+            crate::protocol::meta::Declared,
+        ),
         result: &mut Value,
     ) -> Result<Option<(String, String)>> {
+        let (tool, arguments) = direct_call_parts(sent);
+        // The meta route's reading of what the result asks (MIK-8117): a
+        // round `from_result` declines still puts its readable questions to
+        // the client, so they face the same gate.
+        let asked = super::undeclared_gate::asked_requests(result);
+        if let Some(refused) = asked.as_ref().and_then(|a| a.undeclared(declared)) {
+            return Err(super::undeclared_gate::refusal(
+                &refused, server, tool, "direct",
+            ));
+        }
         let Some(interim) = crate::protocol::mrtr::InputRequired::from_result(result) else {
             withhold_unsealed_state(result);
             return Ok(None);
         };
-        let (tool, arguments) = direct_call_parts(sent);
         let source = direct_source(who);
         let Some((envelope, hold_key)) = mint_continuation(
             &self.continuation,
@@ -635,3 +668,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
         release_unless_carried(&self.continuation, sealed, delivered).await;
     }
 }
+
+#[cfg(test)]
+#[path = "continuation_clock_tests.rs"]
+mod clock_before_epoch_tests;

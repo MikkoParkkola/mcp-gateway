@@ -659,15 +659,23 @@ pub(crate) fn extract_required_str<'a>(args: &'a Value, key: &str) -> Result<&'a
 /// Handles both JSON objects and stringified JSON objects (OpenAI-style).
 /// Returns an error if arguments are neither.
 pub(crate) fn parse_tool_arguments(args: &Value) -> Result<Value> {
-    let mut arguments = args.get("arguments").cloned().unwrap_or(json!({}));
+    parse_tool_arguments_cow(args).map(std::borrow::Cow::into_owned)
+}
 
-    // Accept OpenAI-style tool arguments passed as a JSON string.
-    if let Value::String(raw) = &arguments {
-        let parsed: Value = serde_json::from_str(raw).map_err(|e| {
-            Error::json_rpc(-32602, format!("Invalid 'arguments' JSON string: {e}"))
-        })?;
-        arguments = parsed;
-    }
+/// [`parse_tool_arguments`] without copying an object that is already there
+/// (MIK-8014): borrowed when `arguments` is an object, owned only when it had
+/// to be built (absent, or a JSON string parsed into an object).
+pub(crate) fn parse_tool_arguments_cow(args: &Value) -> Result<std::borrow::Cow<'_, Value>> {
+    let arguments = match args.get("arguments") {
+        None => std::borrow::Cow::Owned(json!({})),
+        // Accept OpenAI-style tool arguments passed as a JSON string.
+        Some(Value::String(raw)) => {
+            std::borrow::Cow::Owned(serde_json::from_str(raw).map_err(|e| {
+                Error::json_rpc(-32602, format!("Invalid 'arguments' JSON string: {e}"))
+            })?)
+        }
+        Some(present) => std::borrow::Cow::Borrowed(present),
+    };
 
     if !arguments.is_object() {
         return Err(Error::json_rpc(

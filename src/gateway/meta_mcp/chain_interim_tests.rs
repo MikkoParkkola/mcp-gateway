@@ -771,3 +771,7 @@ async fn a_steps_gateway_notes_follow_it_into_results() {
         );
     }
 }
+
+/// MIK-8202: the same routing gate on a clock that reads before 1970.
+#[path = "clock_before_epoch_tests.rs"]
+mod clock_before_epoch;

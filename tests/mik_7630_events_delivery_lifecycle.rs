@@ -214,7 +214,11 @@ async fn a_slow_challenge_does_not_eat_a_short_ttl() {
     };
     let row = records(root.path(), "subs")[0].clone();
     let (granted, expires) = (time(&row["granted_at"]), time(&row["expires_at"]));
-    assert_eq!(expires - granted, chrono::Duration::seconds(7), "{row}");
+    assert_eq!(
+        expires - granted,
+        chrono::TimeDelta::try_seconds(7).expect("in range"),
+        "{row}"
+    );
     assert!(expires > answered, "the row outlives the answer: {row}");
     assert_eq!(
         time(&answer["result"]["refreshBefore"]).timestamp(),

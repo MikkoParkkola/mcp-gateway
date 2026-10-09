@@ -69,7 +69,8 @@ use pool::PoolKey;
 use pool::PooledEntry;
 
 pub(crate) use annotations::prepare_tool_metadata;
-#[cfg(test)]
+// Read only by the `firewall`-gated direct-route redaction rows.
+#[cfg(all(test, feature = "firewall"))]
 pub(crate) use descriptor_gate::descriptor_digest;
 pub(crate) use descriptor_gate::{Judging, Listing};
 pub(crate) use fill_check::{LIST_FILL_COOLDOWN, text_absent};
@@ -456,6 +457,11 @@ pub(crate) struct CleanupState {
     pub(crate) stopping: bool,
     /// Cleanup tasks awaiting their transport's last owner.
     pub(crate) handles: Vec<tokio::task::JoinHandle<()>>,
+    /// Every stdio transport this backend started, pooled or not (MIK-7923,
+    /// design M1): a replaced transport held by a busy caller or an orphaned
+    /// entry is still here, so [`Backend::retire_now`] reaches it. An entry
+    /// dies with its last strong reference; the next registration prunes it.
+    pub(crate) live: Vec<std::sync::Weak<dyn crate::transport::Transport>>,
 }
 
 // The cells read counters from a local Prometheus render.

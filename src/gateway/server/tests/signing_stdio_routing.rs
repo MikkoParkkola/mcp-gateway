@@ -96,11 +96,11 @@ async fn stdio_followup_routing_projection_preserves_backend_target_identity() {
             "projection leaked payload: {serialized}"
         );
         for target in &projected {
-            assert_eq!(target.arguments, json!({}));
+            assert_eq!(*target.arguments, json!({}));
         }
         if !expected.is_empty() {
             assert!(
-                full.iter().any(|t| t.arguments != json!({})),
+                full.iter().any(|t| *t.arguments != json!({})),
                 "valid full targets must retain payload: {full_ids:?}"
             );
         }

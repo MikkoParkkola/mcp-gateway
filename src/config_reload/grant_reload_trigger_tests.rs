@@ -46,7 +46,7 @@ fn grant(grant_id: &str, subject: &str, capability: &str) -> IdentityGrant {
 }
 
 fn revoked(mut row: IdentityGrant) -> IdentityGrant {
-    row.revoked_at = Some(Utc::now() - chrono::Duration::seconds(1));
+    row.revoked_at = Some(Utc::now() - crate::duration_bound::delta!(seconds, 1));
     row
 }
 
@@ -203,7 +203,7 @@ async fn t10b_a_busy_refusal_publishes_nothing_and_the_retry_applies() {
 async fn w_a_watcher_driven_config_reload_applies_a_revocation() {
     let dir = tempfile::tempdir().expect("tempdir");
     let config_path = dir.path().join("gateway.yaml");
-    crate::config_persistence::write_config(&config_path, &Config::default())
+    crate::gateway::test_helpers::write_config_fixture(&config_path, &Config::default())
         .expect("write config");
     let grants_path = dir.path().join("grants.json");
     let (store, _epoch, sink) = live_store(&grants_path);

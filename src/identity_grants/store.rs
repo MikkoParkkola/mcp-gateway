@@ -333,7 +333,12 @@ fn build_lease_proposal(
         tool: request.tool.clone(),
         scope: request.scope.clone(),
         owner: Some(owner.clone()),
-        expires_at: request.now + Duration::seconds(lease_seconds),
+        // Clamped to MAX_GRANT_LEASE_SECONDS above, so always in range.
+        expires_at: request.now
+            + Duration::try_seconds(lease_seconds).unwrap_or(crate::duration_bound::delta!(
+                seconds,
+                MAX_GRANT_LEASE_SECONDS
+            )),
         reason: request.reason.clone(),
         provenance: "identity_grant.recommendation".to_string(),
     }

@@ -41,22 +41,6 @@ while IFS= read -r line; do
 done
 "#;
 
-/// A temporary home whose path holds a space and an apostrophe, so a path
-/// left unquoted (or unescaped in YAML) in the peer script or its `command:`
-/// line breaks and the row fails.
-fn spaced_home() -> tempfile::TempDir {
-    tempfile::Builder::new()
-        .prefix("home o'space ")
-        .tempdir()
-        .expect("temporary home")
-}
-
-/// A path as `sh` reads it: double-quoted so a space cannot split it, with
-/// forward slashes because a Windows backslash is a shell escape.
-fn sh_path(path: &Path) -> String {
-    format!("\"{}\"", path.display().to_string().replace('\\', "/"))
-}
-
 /// Write `gateway.yaml` pointing the backend at a `command:` peer, and return
 /// the release path the peer waits on.
 fn write_command_config(home: &Path) -> std::path::PathBuf {
@@ -72,9 +56,8 @@ fn write_command_config(home: &Path) -> std::path::PathBuf {
     mcp_gateway::gateway::test_helpers::write_owner_only(
         home.join("gateway.yaml"),
         format!(
-            "backends:\n  {BACKEND}:\n    command: 'sh {}'\n",
-            // A single-quoted YAML scalar writes an apostrophe as two.
-            sh_path(&script).replace('\'', "''")
+            "backends:\n  {BACKEND}:\n    command: {}\n",
+            yaml_single_quoted(&format!("sh {}", sh_path(&script)))
         ),
     )
     .expect("write gateway.yaml");
@@ -103,7 +86,7 @@ fn frames_logged(home: &Path) -> String {
 #[tokio::test]
 async fn s02_progress_from_a_command_backend_reaches_the_client_before_the_result() {
     // GIVEN
-    let home = spaced_home();
+    let home = hostile_home();
     let release = write_command_config(home.path());
     let mut session = stdio_session(home.path()).await;
 
@@ -155,7 +138,7 @@ async fn s02_progress_from_a_command_backend_reaches_the_client_before_the_resul
 #[tokio::test]
 async fn s02_a_numeric_progress_token_comes_back_numeric_from_a_command_backend() {
     // GIVEN
-    let home = spaced_home();
+    let home = hostile_home();
     let release = write_command_config(home.path());
     let mut session = stdio_session(home.path()).await;
 
@@ -202,7 +185,7 @@ async fn s02_a_numeric_progress_token_comes_back_numeric_from_a_command_backend(
 #[tokio::test]
 async fn a_command_backend_notification_with_no_client_token_is_not_forwarded() {
     // GIVEN
-    let home = spaced_home();
+    let home = hostile_home();
     let release = write_command_config(home.path());
     let mut session = stdio_session(home.path()).await;
 

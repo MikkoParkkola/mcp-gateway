@@ -192,8 +192,8 @@ struct IdTokenClaims {
     /// Audience (may be a single string or an array)
     #[serde(default)]
     aud: serde_json::Value,
-    /// Expiry (Unix timestamp) — validated by jsonwebtoken internally
-    #[allow(dead_code)]
+    /// Expiry (Unix timestamp): required by the decoder, judged by
+    /// `clock::jwt_window` after it (MIK-8202).
     exp: u64,
     /// Issued-at (Unix timestamp)
     iat: u64,
@@ -489,12 +489,11 @@ impl OidcVerifier {
         }
 
         // Replay protection: check token age against the caller's cap. The
-        // `ExpOnly` arm leaves `exp` (checked in `decode` below) as the bound.
+        // `ExpOnly` arm leaves `exp` (judged after `decode` below) as the bound.
         if let TokenAgeCap::MaxIat(max_age_secs) = config.token_age {
-            let now_secs = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or(Duration::ZERO)
-                .as_secs();
+            // A clock that reads before 1970 refuses, as an expired token
+            // would (MIK-8202): the token's age cannot be known.
+            let now_secs = crate::clock::unix_secs().map_err(|_| expired_signature())?;
             let iat_ago = now_secs.saturating_sub(unverified_claims.iat);
             if iat_ago > max_age_secs {
                 return Err(OidcError::TokenTooOld {
@@ -532,11 +531,22 @@ impl OidcVerifier {
         // Disable standard audience validation — we handle it manually below
         // to support both single-string and array forms, and to give a clear error.
         validation.validate_aud = false;
+        // The library never reads the clock (MIK-8202): it would panic on one
+        // before 1970. `exp` stays required and is judged just below on one
+        // clock sample, with the same leeway; `nbf` was never checked here.
+        validation.validate_exp = false;
+        validation.validate_nbf = false;
 
-        // Verify signature + exp/iat claims
+        // Verify signature, then exp.
         let token_data: TokenData<IdTokenClaims> =
             jsonwebtoken::decode(token, &decoding_key, &validation)?;
         let claims = token_data.claims;
+        let exp = crate::clock::JwtClaimTime::At(claims.exp);
+        let nbf = crate::clock::JwtClaimTime::Absent;
+        if crate::clock::jwt_window(exp, nbf, validation.leeway) == crate::clock::Validity::Expired
+        {
+            return Err(expired_signature());
+        }
 
         // Manual audience check. For an enabled key server, `audiences` is
         // guaranteed non-empty by `KeyServerConfig::validate` (MIK-6784, GW.4),
@@ -674,6 +684,12 @@ pub(crate) fn cloudflare_access_provider(
         audiences: config.audiences.clone(),
         allowed_domains: Vec::new(),
     }
+}
+
+/// The refusal jsonwebtoken gave an expired token, also given when the clock
+/// reads before 1970 and a token's age cannot be judged (MIK-8202).
+fn expired_signature() -> OidcError {
+    OidcError::JwtError(jsonwebtoken::errors::ErrorKind::ExpiredSignature.into())
 }
 
 /// Build a [`Validation`] from the JWT header algorithm.

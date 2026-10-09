@@ -122,6 +122,15 @@ jobs:
       - name: Every added COV.3 function has an inventory row (MIK-8169)
         if: github.event_name == 'pull_request'
         run: python3 scripts/release/check_inventory_rows.py "origin/${{ github.base_ref }}"
+      # A clock before 1970 makes a raw read admit what expired; new code reads
+      # the wall clock through crate::clock only (MIK-8202).
+      - name: No new raw wall-clock read (MIK-8202)
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/release/check_clock_baseline.py "origin/${{ github.base_ref }}"
+      # Every function in the swept areas has a row, whenever it was added
+      # (MIK-8195); the area list grows with each wave until it is removed.
+      - name: Every function in a swept COV.3 area has an inventory row (MIK-8195)
+        run: python3 scripts/release/check_inventory_rows.py --all
       - name: Validate tracked public docs boundary
         run: scripts/dev/check-public-repo-hygiene.sh
       - name: Enforce the Noncommercial license header on every source file
@@ -997,8 +1006,12 @@ jobs:
         run: python3 scripts/release/test_critical_function_coverage.py
       - name: Test the inventory-row check (MIK-8169)
         run: python3 scripts/release/test_check_inventory_rows.py
+      - name: Test the raw clock-read check (MIK-8202)
+        run: python3 scripts/release/test_check_clock_baseline.py
       - name: Test the macOS exclusion check (MIK-8174)
         run: python3 scripts/release/test_check_macos_exclusions.py
+      - name: Test the release-binary test-hook check, and that every workflow calls it
+        run: python3 scripts/release/test_grep_no_test_hook.py
       - name: Test the tag/manifest publish gate
         run: python3 scripts/release/test_check_tag_manifest.py
       - name: Test the burndown summary drift check
@@ -1173,6 +1186,36 @@ jobs:
       - name: Check this change against its base
         if: github.event_name == 'pull_request'
         run: python3 scripts/dev/check-event-source-scope.py "origin/${{ github.base_ref }}"
+
+  timing-asserts:
+    name: No wall-clock windows under 5 s in tests (MIK-8222)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    # A test that tells two outcomes apart by elapsed time against a short
+    # window goes red on a loaded runner, on a change that touched nothing
+    # near it. Such a test waits on an event instead. The allowlist only
+    # shrinks: against the base, a new row fails.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check the guard refuses what it claims to
+        run: python3 scripts/dev/test_check_timing_asserts.py
+      - name: Check the tree and the allowlist against the previous tip
+        if: github.event_name != 'pull_request'
+        # The frozen design's base outside a PR: the tip this push replaced,
+        # else the parent. A new branch or a dispatch has no previous tip.
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          base="$BEFORE"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="HEAD^"
+          fi
+          python3 scripts/dev/check-timing-asserts.py --base "$base"
+      - name: Check the tree and the allowlist against the base
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}"
 
   orphan-test-modules:
     name: Orphan test modules (MIK-7538)

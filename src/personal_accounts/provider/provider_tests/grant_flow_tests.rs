@@ -548,3 +548,43 @@ async fn an_arc_shared_provider_refreshes_through_the_same_pinned_snapshot() {
     assert_eq!(trace.token_calls()[0].0, GOOGLE_TOKEN);
     assert_eq!(trace.metadata_calls().len(), fetched);
 }
+
+/// MIK-8202: on a clock before 1970 the authorization code is never sent, so
+/// the provider issues nothing the gateway would have to drop or revoke.
+/// (`FixedClock` answers its fixed time only while the real clock reads.)
+#[tokio::test]
+async fn a_clock_before_the_epoch_never_reaches_the_token_endpoint() {
+    let issued = token_ok(r#","refresh_token":"fresh-refresh""#);
+    let (trace, provider) = google_rig(issued, false, NOW).await;
+    let _clock = crate::clock::test_clock::before_epoch();
+    assert!(
+        provider
+            .exchange_code("workspace", "code-xyz", "verifier-abc")
+            .await
+            .is_err(),
+        "an unreadable clock exchanged a code"
+    );
+    assert!(
+        trace.token_calls().is_empty(),
+        "an unreadable clock sent the authorization code to the provider"
+    );
+}
+
+/// MIK-8202: a refresh on a clock before 1970 never reaches the token
+/// endpoint, so a rotated refresh token is never issued and then lost.
+#[tokio::test]
+async fn a_clock_before_the_epoch_never_sends_a_refresh() {
+    let (trace, provider) = google_rig(token_ok(""), false, NOW).await;
+    let _clock = crate::clock::test_clock::before_epoch();
+    let refreshed = RefreshProvider::refresh(
+        &provider,
+        &account("workspace", GOOGLE_ISSUER, RESOURCE),
+        &grant(),
+    )
+    .await;
+    assert!(refreshed.is_err(), "an unreadable clock refreshed a grant");
+    assert!(
+        trace.token_calls().is_empty(),
+        "an unreadable clock sent a refresh to the provider"
+    );
+}

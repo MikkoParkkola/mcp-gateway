@@ -8,19 +8,35 @@ use super::*;
 use crate::security::hash_argument;
 
 /// MIK-7116.MIN.1: both routes' firewalls read `customer_id` as a tenant,
-/// the guard refusing past `limit` tenants (0 = attribution only).
+/// the guard refusing past `limit` tenants (0 = attribution only), the read
+/// judge in `reads` mode, and relay detection on `alpha:t` when `relay`.
 pub(super) fn guard_tenants(
     state: &mut super::super::AppState,
     meta: &mut MetaMcp,
     (limit, rules): (usize, Option<&str>),
+    (reads, relay): (
+        crate::security::firewall::tenant_guard::CrossTenantReads,
+        super::Relay,
+    ),
 ) {
+    let collusion = if relay == super::Relay::On {
+        crate::security::firewall::CollusionConfig {
+            action: crate::security::firewall::CollusionAction::Block,
+            sources: vec!["alpha:t".into()],
+            ..crate::security::firewall::CollusionConfig::default()
+        }
+    } else {
+        crate::security::firewall::CollusionConfig::default()
+    };
     let mut config = crate::security::firewall::FirewallConfig {
         tenant_guard: crate::security::firewall::tenant_guard::TenantGuardConfig {
             enabled: limit > 0,
             max_tenants_per_window: limit,
             arg_keys: vec!["customer_id".to_string()],
+            cross_tenant_reads: reads,
             ..Default::default()
         },
+        collusion,
         ..crate::security::firewall::FirewallConfig::default()
     };
     if let Some(rules) = rules {

@@ -152,7 +152,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
-| `env` | 19 | `MCP_GATEWAY_CAPABILITIES` |  | `MCP_GATEWAY_KIND_CLUSTER`; `MCP_GATEWAY_KIND_KEEP`; `MCP_GATEWAY_KIND_NAMESPACE`; `MCP_GATEWAY_ROLLOUT_TIMEOUT`; `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_SMOKE`; `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`; `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`; `MCP_GATEWAY_TEST_HOME_DIR`; `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED`; `MCP_GATEWAY_TEST_TRUST_CA` |  |
+| `env` | 19 | `MCP_GATEWAY_CAPABILITIES` |  | `MCP_GATEWAY_KIND_CLUSTER`; `MCP_GATEWAY_KIND_KEEP`; `MCP_GATEWAY_KIND_NAMESPACE`; `MCP_GATEWAY_ROLLOUT_TIMEOUT`; `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE`; `MCP_GATEWAY_RUNTIME_DOCKER_SMOKE`; `MCP_GATEWAY_TEST_CLOCK`; `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`; `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`; `MCP_GATEWAY_TEST_HOME_DIR`; `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED`; `MCP_GATEWAY_TEST_TRUST_CA` |  |
 
 ### routes
 
@@ -1327,6 +1327,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `MCP_GATEWAY_SERVER__PORT` | KEEP | documented overlay spelling of a KEEP `server` key | - | docs/DEPLOYMENT.md:335 |
 | `MCP_GATEWAY_SERVER__PUBLIC_URL` | KEEP | documented overlay spelling of a KEEP `server` key | - | deploy/single-node/docker-compose.yaml:50 |
 | `MCP_GATEWAY_SKILLS_REGISTRY` | KEEP | env form of `skills --registry` | - | src/cli/skills.rs:97 |
+| `MCP_GATEWAY_TEST_CLOCK` | INTERNAL | test hook compiled into debug builds only (`cfg(debug_assertions)`); absent from release binaries | test-only | src/clock.rs:65 |
 | `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS` | INTERNAL | test hook compiled into debug builds only (`cfg(debug_assertions)`); absent from release binaries | test-only | src/backend/era.rs:311 |
 | `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN` | INTERNAL | test hook compiled into debug builds only (`cfg(debug_assertions)`); absent from release binaries | test-only | src/capability/backend/initial_scan.rs:109 |
 | `MCP_GATEWAY_TEST_HOME_DIR` | INTERNAL | test hook compiled into debug builds only (`cfg(debug_assertions)`); absent from release binaries | test-only | src/home_dir.rs:23 |

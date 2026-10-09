@@ -63,6 +63,14 @@ pub fn load_existing_or_default(path: &Path) -> crate::Result<Config> {
 /// Takes the cross-process config lock first ([`lock`]), waiting up to
 /// [`CLI_LOCK_WAIT`] while another writer holds it; this blocks the calling
 /// thread, so an async caller uses the reload module's write API instead.
+///
+/// Deprecated: it replaces the file from the caller's snapshot with no
+/// concurrency check, so a change another writer made after the snapshot
+/// was taken is lost. Use [`edit_config`]. Removal is planned for 5.0.
+#[deprecated(
+    since = "4.0.0",
+    note = "replaces gateway.yaml from the caller's snapshot with no concurrency check; use edit_config"
+)]
 pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
     let held = lock_for_cli(path)?;
     write_config_with(path, config, CommentLoss::Rewrite, &held).map_err(|e| match e {
@@ -81,11 +89,17 @@ mod eol;
 #[path = "config_persistence_lock.rs"]
 pub(crate) mod lock;
 
-// Only the web UI names a write's dropped comments from the library; the
-// CLI keeps its own copy until MIK-8042's API change (MIK-8051).
-#[cfg(feature = "webui")]
+// Names the comments a write drops, for the web UI and the CLI (MIK-8051).
 #[path = "config_persistence_comments.rs"]
 pub(crate) mod comments;
+
+/// Take the config lock for a CLI write, waiting up to [`CLI_LOCK_WAIT`].
+fn cli_lock(path: &Path) -> Result<ExclusiveFileLock, String> {
+    lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
+        say_waiting(path, lock);
+    })
+    .map_err(|e| not_locked(path, e))
+}
 
 /// How long a synchronous writer (the CLI) waits for another writer's
 /// config lock: long enough to outlast a gateway's write and reload.
@@ -97,10 +111,7 @@ pub(crate) const CLI_LOCK_WAIT: Duration = Duration::from_secs(30);
 /// no longer loads was changed meanwhile: it is refused, not replaced by the
 /// command's older copy. A missing file is still created.
 fn lock_for_cli(path: &Path) -> Result<ExclusiveFileLock, String> {
-    let held = lock::lock_config_blocking(path, Instant::now() + CLI_LOCK_WAIT, |lock| {
-        say_waiting(path, lock);
-    })
-    .map_err(|e| not_locked(path, e))?;
+    let held = cli_lock(path)?;
     load_existing_or_default(path)
         .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
     Ok(held)
@@ -113,6 +124,34 @@ fn say_waiting(config: &Path, lock: &Path) {
         config.display(),
         lock.display()
     );
+    let mut waiters = LOCK_WAITERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    waiters.retain(|(path, tell)| {
+        if path != config {
+            return true;
+        }
+        // Told once; a test that stopped listening is not an error.
+        let _ = tell.send(());
+        false
+    });
+}
+
+/// Who wants to know that a CLI writer started waiting for a config's lock:
+/// the concurrency tests, which overlap writers by this signal rather than a
+/// fixed sleep. Each sender is told once. Touched only when a writer waits.
+static LOCK_WAITERS: std::sync::Mutex<Vec<(PathBuf, std::sync::mpsc::Sender<()>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// A receiver told once when a CLI writer next starts waiting for `config`'s
+/// lock (for tests; see [`LOCK_WAITERS`]).
+pub(crate) fn when_waiting_for_lock(config: &Path) -> std::sync::mpsc::Receiver<()> {
+    let (tell, told) = std::sync::mpsc::channel();
+    LOCK_WAITERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push((config.to_path_buf(), tell));
+    told
 }
 
 /// A lock that was not taken, as a message ready to print.
@@ -128,7 +167,7 @@ fn not_locked(path: &Path, e: lock::NotLocked) -> String {
 
 /// What a write does when it cannot keep the file's comments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CommentLoss {
+pub enum CommentLoss {
     /// Re-serialise the whole file (a CLI write given `--force`, and the
     /// reload module's public write API).
     Rewrite,
@@ -160,8 +199,9 @@ impl From<String> for Unwritten {
 /// exact text is the one edited when `config` differs from it by exactly one
 /// backend added, removed or edited. A file that does not load, or that
 /// another writer changed into something more than one backend away, is
-/// rewritten in full, or refused. An edit landing after that read is
-/// overwritten by the rename, as the full rewrite overwrites it.
+/// rewritten in full, or refused. The caller holds the config lock across
+/// its load and this write, so no writer that takes the lock lands between
+/// them; an edit that ignores the lock (a hand edit) is overwritten.
 ///
 /// # Errors
 ///
@@ -195,26 +235,166 @@ pub(crate) fn comments_a_write_drops(path: &Path, config: &Config) -> Vec<String
         .unwrap_or_default()
 }
 
-/// Write `config` to `path` for a CLI command, keeping the file's comments.
+/// Load `path`, apply `edit`, and write the result, keeping the file's
+/// comments (MIK-8042).
 ///
-/// The file's text is edited in place when `config` differs from it in
-/// `backends` alone: one backend added, removed or edited, or several added or
-/// edited (setup and discovery import). A write that would drop comments is
-/// refused, and the refusal names the comment lines; [`write_config`] (the
-/// CLI's `--force`) rewrites the file in full when it cannot splice. A `config`
-/// that is what the file already loads as writes nothing.
+/// The load, the edit and the write run under one hold of the config lock
+/// ([`lock`]), so a change another writer made before it is never
+/// overwritten: `edit` sees the file as it is. The file's text is edited in
+/// place when the result differs from it in `backends` alone (several
+/// backends added or edited, or one removed). Otherwise the file is
+/// rewritten in full under [`CommentLoss::Rewrite`], or, under
+/// [`CommentLoss::Refuse`], a file with comments is left as it is and the
+/// refusal names the comment lines. A result that is what the file already
+/// loads as writes nothing under [`CommentLoss::Refuse`]. A missing file is
+/// created.
+///
+/// Returns the comment lines (as `line N`, never their text) the write
+/// dropped: those inside a removed entry, or under
+/// [`CommentLoss::Rewrite`] every comment a full rewrite lost.
+///
+/// `edit` must change the `Config` it is given. Replacing it with a copy
+/// loaded earlier writes that old copy back and loses what other writers
+/// saved since, which is exactly what this function exists to prevent.
+///
+/// Takes the lock blocking, waiting up to [`CLI_LOCK_WAIT`]; an async caller
+/// uses the reload module's write API instead.
 ///
 /// # Errors
 ///
-/// The refusal, which starts with `Not saved:`; an existing file that no
-/// longer loads; or a validation, serialisation or I/O failure. Each is a
-/// message ready to print.
-pub fn write_config_preserving(path: &Path, config: &Config) -> Result<(), String> {
-    let _held = lock_for_cli(path)?;
-    write_spliced(path, config, CommentLoss::Refuse, Splice::NoRemoval).map_err(|e| match e {
-        Unwritten::CommentLoss(message) => message,
-        Unwritten::Failed(message) => format!("Failed to write {}: {message}", path.display()),
-    })
+/// `edit`'s own error; the refusal, which starts with `Not saved:`; a lock
+/// that cannot be taken; an existing file that does not load; or a
+/// validation, serialisation or I/O failure. Each is a message ready to print.
+pub fn edit_config<F>(path: &Path, mode: CommentLoss, edit: F) -> Result<Vec<String>, String>
+where
+    F: FnOnce(&mut Config) -> Result<(), String>,
+{
+    // Advisory only: a file that does not load is refused before the lock
+    // file is made, so the refusal leaves the directory as it was. The load
+    // under the lock is the authoritative one.
+    load_existing_or_default(path)
+        .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
+    let mut dropped = Vec::new();
+    edit_locked(path, read_config, |current| {
+        let mut config = current
+            .as_ref()
+            .map_or_else(Config::default, |(c, _)| c.clone());
+        edit(&mut config)?;
+        let (before, text) = current.as_ref().map(|(c, t)| (c, t.as_str())).unzip();
+        let rendered =
+            render(path, before, text, &config, mode, Splice::NoRemoval).map_err(|e| match e {
+                Unwritten::CommentLoss(message) => message,
+                Unwritten::Failed(message) => {
+                    format!("Failed to write {}: {message}", path.display())
+                }
+            })?;
+        Ok(rendered.map(|(yaml, lines)| {
+            dropped = lines;
+            yaml
+        }))
+    })?;
+    Ok(dropped)
+}
+
+/// Read `path`'s text (`None` when it does not exist) and write what `edit`
+/// returns (`None` writes nothing), under one hold of the config lock, so a
+/// change another writer made before it is never overwritten (MIK-8042).
+/// For a command that edits the file as text: `init` (create only: its
+/// `edit` refuses `Some`) and `upgrade` (a byte-keeping rewrite). Text that
+/// does not parse as a config is refused, never written.
+///
+/// Returns whether the file was written.
+///
+/// # Errors
+///
+/// `edit`'s own error; a lock that cannot be taken; a path that is not a
+/// regular file; text that does not parse as a config; or a read or write
+/// failure. Each is a message ready to print.
+pub fn edit_config_text<F>(path: &Path, edit: F) -> Result<bool, String>
+where
+    F: FnOnce(Option<&str>) -> Result<Option<String>, String>,
+{
+    edit_locked(path, read_text, |current| edit(current.as_deref()))
+}
+
+/// The one locked write path: take the config lock, `read` the file, let
+/// `edit` give its new text (`None` writes nothing), prove that text parses
+/// as a config, and write it atomically, all in one hold. Returns whether
+/// the file was written.
+fn edit_locked<T>(
+    path: &Path,
+    read: impl FnOnce(&Path) -> Result<T, String>,
+    edit: impl FnOnce(T) -> Result<Option<String>, String>,
+) -> Result<bool, String> {
+    let _held = cli_lock(path)?;
+    let Some(text) = edit(read(path)?)? else {
+        return Ok(false);
+    };
+    // Fail closed (GH462): bytes that do not parse are never written.
+    Config::from_file_text(&text).map_err(|e| {
+        format!(
+            "Not saved: the new {} does not parse as a config: {e}",
+            path.display()
+        )
+    })?;
+    write_yaml(path, &text)?;
+    Ok(true)
+}
+
+/// The config at `path` and the text it loaded from, or `None` when there is
+/// no file. A dangling symlink is an existing entry, not absence.
+fn read_config(path: &Path) -> Result<Option<(Config, String)>, String> {
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!(
+            "Cannot inspect config file {}: {e}",
+            path.display()
+        )),
+        Ok(_) => Config::load_literal_with_text(path)
+            .map(Some)
+            .map_err(|e| format!("Failed to load {}: {e}", path.display())),
+    }
+}
+
+/// `path`'s text, or `None` when there is no file. A FIFO or a device would
+/// block the read or never end it, so the file is opened without blocking
+/// and the handle itself must be a regular file before it is read.
+fn read_text(path: &Path) -> Result<Option<String>, String> {
+    use std::io::Read as _;
+    let failed = |e: &dyn std::fmt::Display| format!("Failed to read {}: {e}", path.display());
+    let mut file = match open_nonblocking(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        // Windows refuses to open a directory at all: name the cause the same.
+        Err(_) if std::fs::metadata(path).is_ok_and(|m| !m.is_file()) => {
+            return Err(failed(&"not a regular file"));
+        }
+        Err(e) => return Err(failed(&e)),
+        Ok(file) => file,
+    };
+    if !file.metadata().map_err(|e| failed(&e))?.is_file() {
+        return Err(failed(&"not a regular file"));
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text).map_err(|e| failed(&e))?;
+    Ok(Some(text))
+}
+
+#[cfg(unix)]
+fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(
+            (rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::NOCTTY)
+                .bits()
+                .cast_signed(),
+        )
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_nonblocking(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
 }
 
 /// How many backends one splice may change.
@@ -235,29 +415,57 @@ fn write_spliced(
     mode: CommentLoss,
     scope: Splice,
 ) -> Result<(), Unwritten> {
+    let current = Config::load_literal_with_text(path).ok();
+    let (before, text) = current.as_ref().map(|(c, t)| (c, t.as_str())).unzip();
+    // A file that does not load is still read, so its comments are refused.
+    let unloaded = text
+        .is_none()
+        .then(|| std::fs::read_to_string(path).ok())
+        .flatten();
+    let text = text.or(unloaded.as_deref());
+    if let Some((yaml, _)) = render(path, before, text, config, mode, scope)? {
+        write_yaml(path, &yaml)?;
+    }
+    Ok(())
+}
+
+/// The text a write of `config` over `text` (which loads as `before`, when
+/// it loads) should leave, and the comment lines it drops; `None` when
+/// nothing needs writing. The text is spliced when `config` differs from
+/// `before` in `backends` alone, within `scope`; otherwise it is rendered in
+/// full, which under [`CommentLoss::Refuse`] a file with comments refuses.
+fn render(
+    path: &Path,
+    before: Option<&Config>,
+    text: Option<&str>,
+    config: &Config,
+    mode: CommentLoss,
+    scope: Splice,
+) -> Result<Option<(String, Vec<String>)>, Unwritten> {
     config
         .validate_with_env(&config.env_overlay())
         .map_err(|e| format!("Failed to validate config: {e}"))?;
-    let current = Config::load_literal_with_text(path).ok();
-    if let Some((before, text)) = &current {
+    if let (Some(before), Some(text)) = (before, text) {
         let value = |c: &Config| serde_json::to_value(c).ok();
         if mode == CommentLoss::Refuse && value(before) == value(config) {
-            return Ok(());
+            return Ok(None);
         }
         if let Some(edited) = splice::with_backends_edited(text, before, config, scope) {
-            return Ok(write_yaml(path, &edited)?);
+            let dropped = comments::dropped_comment_lines(text, &edited);
+            return Ok(Some((edited, dropped)));
         }
     }
-    let existing = current
-        .map(|(_, text)| text)
-        .or_else(|| std::fs::read_to_string(path).ok());
+    let commented = text.filter(|t| t.contains('#'));
     if mode == CommentLoss::Refuse
-        && let Some(text) = existing.as_ref().filter(|t| t.contains('#'))
+        && let Some(text) = commented
     {
         return Err(Unwritten::CommentLoss(splice::comment_loss(path, text)));
     }
-    let yaml = url_spelling::render(config, existing.as_deref())?;
-    Ok(write_yaml(path, &yaml)?)
+    let yaml = url_spelling::render(config, text)?;
+    let dropped = commented
+        .map(|text| comments::dropped_comment_lines(text, &yaml))
+        .unwrap_or_default();
+    Ok(Some((yaml, dropped)))
 }
 
 /// How many times a rename is retried before the write is reported failed.
@@ -295,13 +503,20 @@ const SCRATCH_ATTEMPTS: u64 = 8;
 /// the one no test covered.
 /// Write pre-rendered config text through the same secure path as [`write_config`].
 ///
-/// Exposed for `init`, which renders a starter config as text rather than
-/// serialising a `Config`. It must not use `std::fs::write`: the starter config
-/// carries a generated admin credential.
+/// It must not be replaced by `std::fs::write`: a starter config carries a
+/// generated admin credential.
+///
+/// Deprecated: it takes no config lock and checks nothing, so it replaces
+/// whatever another writer put there. Use [`edit_config_text`]. Removal is
+/// planned for 5.0.
 ///
 /// # Errors
 ///
 /// Returns an error when the file cannot be created or replaced.
+#[deprecated(
+    since = "4.0.0",
+    note = "writes gateway.yaml with no config lock and no check; use edit_config_text"
+)]
 pub fn write_config_text(path: &Path, yaml: &str) -> Result<(), String> {
     write_yaml(path, yaml)
 }
@@ -505,3 +720,7 @@ fn scratch_candidate(path: &Path, seed: u64) -> PathBuf {
 #[cfg(test)]
 #[path = "config_persistence_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_persistence_edit_tests.rs"]
+mod edit_tests;

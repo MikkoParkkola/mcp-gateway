@@ -30,6 +30,11 @@ OFF_MACOS = re.compile(
     r'|target_os = "linux").*\)\)\]'
     r'|#\[cfg_attr\(target_os = "macos", ignore'
 )
+# The real-watcher gate (MIK-8181): Linux and macOS, so on macOS although it
+# names Linux. Matched exactly; reading cfg in general is a separate change.
+ON_MACOS_GATES = frozenset(
+    {'#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]'}
+)
 TEST_ATTR = re.compile(r"#\[(tokio::)?test\b")
 ITEM = re.compile(r"^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(fn|mod)\s+(\w+)")
 TEST_CFG = re.compile(r"#\[cfg\((?:all\()?test\b")
@@ -45,7 +50,7 @@ def excluded(root: Path) -> set[tuple[str, str]]:
             continue
         lines = [line.strip() for line in file.read_text(errors="replace").splitlines()]
         for n, line in enumerate(lines):
-            if not OFF_MACOS.match(line):
+            if not OFF_MACOS.match(line) or line in ON_MACOS_GATES:
                 continue
             if line.startswith("#!["):
                 found.add((rel, "*"))

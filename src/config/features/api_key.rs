@@ -147,6 +147,12 @@ impl ApiKeyConfig {
     pub(crate) fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
         api_key_expired(self.expires_at, now)
     }
+
+    /// [`api_key_expired_now`] for this key.
+    #[must_use]
+    pub(crate) fn is_expired_now(&self) -> bool {
+        api_key_expired_now(self.expires_at)
+    }
 }
 
 /// The one expiry boundary, shared by the load-time warning and the request
@@ -154,6 +160,23 @@ impl ApiKeyConfig {
 #[must_use]
 pub(crate) fn api_key_expired(expires_at: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
     expires_at.is_some_and(|at| now >= at)
+}
+
+/// [`api_key_expired`] on the wall clock, for the request path. A key with an
+/// expiry is expired when the clock cannot be read (MIK-8202); a key without
+/// one never needs the clock.
+#[must_use]
+pub(crate) fn api_key_expired_now(expires_at: Option<DateTime<Utc>>) -> bool {
+    use crate::clock::{Validity, expired_by_utc};
+    expires_at.is_some_and(|_| {
+        expired_by_utc(|now| {
+            if api_key_expired(expires_at, now) {
+                Validity::Expired
+            } else {
+                Validity::Live
+            }
+        }) == Validity::Expired
+    })
 }
 
 fn malformed(name: &str, spec: &str) -> Error {

@@ -37,7 +37,7 @@ fn assert_burial_first(dir: &std::path::Path, event_id: &str) {
 
 /// The first pending record, as the worker would claim it.
 fn pending(hub: &EventsHub, event_id: &str) -> crate::events::outbox::OutboxRecord {
-    let later = Utc::now() + chrono::Duration::minutes(5);
+    let later = Utc::now() + crate::duration_bound::delta!(minutes, 5);
     hub.store
         .due(later, &std::collections::HashSet::new(), hub.dead_policy())
         .expect("io")
@@ -285,6 +285,37 @@ async fn an_eviction_by_the_sweep_follows_the_burials_receipt() {
     assert_burial_first(dir.path(), "evt_x");
 }
 
+/// MIK-8202, retention-sweep rule: a sweep that cannot date the dead letters
+/// on a clock before 1970 skips its pass and evicts nothing; on a clock it
+/// can read, the same sweep evicts.
+#[tokio::test]
+async fn a_pre_1970_clock_sweeps_nothing() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        dead_letter_retention: Duration::from_secs(1),
+        ..crate::config::EventsConfig::default()
+    };
+    let (hub, services, x) = buried_setup(dir.path(), &config);
+    hub.settle(&services, &x, gone()).await;
+    assert_eq!(hub.store.dead_summaries().len(), 1, "premise: buried");
+    // Past the retention.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    {
+        let _clock = crate::clock::test_clock::before_epoch();
+        hub.sweep_dead_letters(&services).await;
+    }
+    assert_eq!(
+        hub.store.dead_summaries().len(),
+        1,
+        "a sweep on an unreadable clock evicted a dead letter"
+    );
+    hub.sweep_dead_letters(&services).await;
+    assert!(
+        hub.store.dead_summaries().is_empty(),
+        "control: on a readable clock the sweep evicts"
+    );
+}
+
 /// .2: the attempt limit and the backoff count sends, so a failure after
 /// unsent claims is retried, not buried `exhausted`.
 #[tokio::test]
@@ -323,7 +354,7 @@ async fn a_self_evicting_expiry_burial_is_receipted_before_its_eviction() {
     });
     let now = Utc::now();
     let mut row = hub.store.subscriptions().remove(0);
-    row.expires_at = Some(now - chrono::Duration::seconds(1));
+    row.expires_at = Some(now - crate::duration_bound::delta!(seconds, 1));
     let caps = crate::events::store::Caps {
         per_principal: 10,
         global: 10,
@@ -351,7 +382,7 @@ async fn a_dead_letter_record_names_the_host_stamped_on_the_occurrence() {
     let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
     let services = logged_services(dir.path());
     queued(&hub, 9, "evt_hosted");
-    let later = Utc::now() + chrono::Duration::minutes(5);
+    let later = Utc::now() + crate::duration_bound::delta!(minutes, 5);
     let mut record = hub
         .store
         .due(later, &std::collections::HashSet::new(), hub.dead_policy())

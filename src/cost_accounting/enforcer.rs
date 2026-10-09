@@ -653,7 +653,10 @@ impl BudgetEnforcer {
     /// counted have already reset. The global total is the sum of the per-tool
     /// totals, because every recorded spend lands in both.
     pub fn restore(&self, persisted: &super::persistence::PersistedCosts) {
-        if persisted.saved_at / 86_400 != current_day() {
+        // A clock it cannot read keeps the saved spend counting (MIK-8202):
+        // discarding it would restart the budgets at zero.
+        let today = crate::clock::unix_secs().map(|now| now / 86_400);
+        if today.is_ok_and(|today| persisted.saved_at / 86_400 != today) {
             tracing::info!(
                 saved_at = persisted.saved_at,
                 "Persisted cost data is from an earlier UTC day; budgets start at zero"
@@ -703,10 +706,22 @@ impl BudgetEnforcer {
         )
     }
 
-    /// Snapshot current accumulator state for persistence and the UI endpoint.
+    /// Snapshot current accumulator state for the UI endpoint.
     #[must_use]
     pub fn snapshot(&self) -> EnforcerSnapshot {
-        let taken_at = super::persistence::now_secs();
+        self.snapshot_at(super::persistence::now_secs())
+    }
+
+    /// A snapshot to persist, stamped from the wall clock. On a clock before
+    /// 1970 there is none (MIK-8202): a snapshot stamped 0 would read as an
+    /// earlier day on the next boot, which would throw the day's spend away.
+    pub(crate) fn snapshot_for_save(
+        &self,
+    ) -> Result<EnforcerSnapshot, crate::clock::ClockBeforeEpoch> {
+        crate::clock::unix_secs().map(|taken_at| self.snapshot_at(taken_at))
+    }
+
+    fn snapshot_at(&self, taken_at: u64) -> EnforcerSnapshot {
         #[allow(clippy::cast_precision_loss)]
         let global_daily_usd = self.global_daily.current() as f64 / 1_000_000.0;
 

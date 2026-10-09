@@ -16,7 +16,9 @@ use super::config_write::CommentLoss;
 #[cfg(feature = "config-export")]
 use mcp_gateway::cli::{ConnectionMode, ExportTarget};
 #[cfg(test)]
-use mcp_gateway::config_persistence::{load_config_or_default, write_config};
+use mcp_gateway::config_persistence::load_config_or_default;
+#[cfg(test)]
+use mcp_gateway::gateway::test_helpers::write_config_fixture;
 use mcp_gateway::security::sanitize::redact_url_for_diagnostics;
 use mcp_gateway::{
     cli::InitProfile,
@@ -90,16 +92,12 @@ pub async fn run_setup_command(
     }
 
     // ── 4. Merge into config ───────────────────────────────────────────────
-    let mut config = match load_existing_or_default(output) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("Error: Failed to load {}: {e}", output.display());
-            return ExitCode::FAILURE;
-        }
-    };
-    let added = merge_servers_into_config(&mut config, &selected);
-
-    if let Err(e) = super::config_write::write(output, &config, mode) {
+    let mut added = 0;
+    let written = super::config_write::write(output, mode, |config| {
+        added = merge_servers_into_config(config, &selected);
+        Ok(())
+    });
+    if let Err(e) = written {
         eprintln!("Error: {e}");
         return ExitCode::FAILURE;
     }
@@ -471,7 +469,7 @@ mod tests {
         let mut config = load_config_or_default(&path);
         let selected = vec![&server];
         let added = merge_servers_into_config(&mut config, &selected);
-        write_config(&path, &config).unwrap();
+        write_config_fixture(&path, &config).unwrap();
 
         let reloaded = Config::load(Some(&path)).unwrap();
         assert_eq!(added, 1);
@@ -531,7 +529,7 @@ mod tests {
         );
 
         // WHEN: writing to disk
-        write_config(&path, &config).expect("write must succeed");
+        write_config_fixture(&path, &config).expect("write must succeed");
 
         // THEN: the file can be re-loaded and contains the backend
         let loaded = Config::load(Some(&path)).expect("must reload");

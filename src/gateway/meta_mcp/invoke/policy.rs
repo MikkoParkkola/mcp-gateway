@@ -170,7 +170,18 @@ impl MetaMcp {
             }
             crate::attestation::validator::AttestationScope::AuthenticOnly => None,
         };
-        match validator.validate_boundary_call(token, boundary, required, chrono::Utc::now()) {
+        // A clock before 1970 can judge no expiry: the token is treated as an
+        // expired one, refused under enforce and logged under observe
+        // (MIK-8202). Nothing is dated on it, so the audit ring is not written.
+        let verdict = match crate::clock::utc_now() {
+            Ok(now) => validator.validate_boundary_call(token, boundary, required, now),
+            Err(clock) => Err(
+                crate::attestation::validator::AttestationRejection::Expired {
+                    expires_at: format!("a time that cannot be read: {clock}"),
+                },
+            ),
+        };
+        match verdict {
             Ok(_claims) => Ok(()),
             Err(rejection) => match self.attestation_mode {
                 crate::attestation::AttestationMode::Enforce => Err(Error::json_rpc(

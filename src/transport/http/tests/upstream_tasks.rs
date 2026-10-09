@@ -71,6 +71,37 @@ fn only_request_meta(bodies: &RecordedBodies) -> serde_json::Value {
     bodies[0]["params"]["_meta"].clone()
 }
 
+/// MIK-8218 ERASNAP.2: while another holder has the era lock, a request to a
+/// peer determined Modern still goes out modern-shaped. Before the fix the
+/// held lock read as "no verdict" and the request went out legacy (no `_meta`).
+#[tokio::test]
+async fn a_held_era_lock_still_sends_a_modern_request() {
+    let (url, bodies, server) = spawn_body_recorder().await;
+    let transport = make_modern_transport(&url).await;
+    let era = Arc::clone(transport.era.get().expect("the fixture attaches an era"));
+    let held = era.hold_for_test().await;
+
+    let sent = transport.request_with_headers(
+        "tools/call",
+        Some(serde_json::json!({"name": "read"})),
+        &[],
+        None,
+        ResendPermission::Denied,
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(10), sent)
+        .await
+        .expect("the request path never waits on the era lock")
+        .expect("the recorder answers a well-formed result");
+    drop(held);
+
+    assert_eq!(
+        only_request_meta(&bodies)[KEY_PROTOCOL_VERSION],
+        MODERN_VERSIONS[0],
+        "a held era lock shaped a request to a modern peer legacy"
+    );
+    server.abort();
+}
+
 /// The typed path is the only one that declares the extension, and it declares
 /// exactly one — the implemented `tasks`, not whatever the caller passed.
 #[tokio::test]

@@ -101,9 +101,11 @@ pub(super) async fn redeem_confirmation(
     principal: &str,
     digest: &str,
 ) -> std::result::Result<(), ()> {
-    use crate::protocol::continuation::{ContinuationPurpose, now_unix_secs};
+    use crate::protocol::continuation::{ContinuationPurpose, clock_now};
 
-    let now = now_unix_secs();
+    let now = clock_now().map_err(|error| {
+        warn!(%error, "Confirmation envelope refused");
+    })?;
     let payload = continuation.keyring().open(token, now).map_err(|error| {
         warn!(%error, "Confirmation envelope refused");
     })?;
@@ -300,6 +302,10 @@ pub(super) async fn destructive_confirmation_gate(
                 ));
             }
 
+            let Ok(now) = crate::protocol::continuation::clock_now() else {
+                warn!(tool = %tool_name, "Clock reads before 1970; no confirmation minted");
+                return GateOutcome::refuse(refused(&action_desc));
+            };
             let Some(payload) = continuation
                 .begin_confirmation_exchange(
                     tool_name.to_owned(),
@@ -309,18 +315,18 @@ pub(super) async fn destructive_confirmation_gate(
                     None,
                     principal,
                     digest,
-                    crate::protocol::continuation::now_unix_secs(),
+                    now,
                 )
                 .await
             else {
                 warn!(tool = %tool_name, "No slot to hold this confirmation open");
                 return GateOutcome::refuse(refused(&action_desc));
             };
-            super::sealed_hold::register(continuation);
             let Ok(envelope) = continuation.keyring().mint(&payload) else {
                 warn!(tool = %tool_name, "Confirmation envelope mint refused");
                 return GateOutcome::refuse(refused(&action_desc));
             };
+            super::sealed_hold::register(continuation, &payload.hold_key, &envelope);
             return GateOutcome::refuse(JsonRpcResponse::success(
                 id.clone(),
                 json!({
