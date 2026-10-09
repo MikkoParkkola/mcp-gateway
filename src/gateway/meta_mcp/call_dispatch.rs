@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `MetaMcp` `tools/call` routing and the dispatch below the gate.
 
+use std::borrow::Cow;
+
 use super::{
     Arc, CallerStanding, ChainSource, DispatchTarget, Error, GateOutcome, JsonRpcResponse, MetaMcp,
     MetaMcpCallerContext, RequestId, ResultShape, Value, admission, destructive_confirmation_gate,
@@ -152,6 +154,29 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
+        Box::pin(self.handle_tools_call_ref(
+            id,
+            tool_name,
+            Cow::Owned(arguments),
+            session_id,
+            caller,
+        ))
+        .await
+    }
+
+    /// [`Self::handle_tools_call`] on arguments the caller may still own.
+    ///
+    /// MIK-8014: the HTTP and stdio request paths hand the request's own
+    /// argument object down borrowed. Every tool arm reads it by reference,
+    /// so the only branch that copies it is a task, which must store it.
+    pub(crate) async fn handle_tools_call_ref(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        arguments: Cow<'_, Value>,
+        session_id: Option<&str>,
+        caller: MetaMcpCallerContext<'_>,
+    ) -> JsonRpcResponse {
         // MIK-8150: a signed execution's nonce is given back here, once, after
         // every step has run or been refused, never at a step's refusal.
         let settle =
@@ -170,7 +195,7 @@ impl MetaMcp {
         &self,
         id: RequestId,
         tool_name: &str,
-        arguments: Value,
+        arguments: Cow<'_, Value>,
         session_id: Option<&str>,
         mut caller: MetaMcpCallerContext<'_>,
     ) -> JsonRpcResponse {
@@ -244,7 +269,13 @@ impl MetaMcp {
                 return error_response_preserving_status(id, &error);
             }
             return self
-                .begin_task(id, tool_name, arguments, intent, (session_id, &caller))
+                .begin_task(
+                    id,
+                    tool_name,
+                    arguments.into_owned(),
+                    intent,
+                    (session_id, &caller),
+                )
                 .await;
         }
 
@@ -315,7 +346,7 @@ impl MetaMcp {
         &self,
         id: RequestId,
         tool_name: &str,
-        arguments: Value,
+        arguments: Cow<'_, Value>,
         session_id: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
         confirmed_in_band: bool,
@@ -363,7 +394,7 @@ impl MetaMcp {
             DispatchTarget {
                 id,
                 tool_name,
-                arguments,
+                arguments: Cow::Owned(arguments),
                 session_id,
                 caller,
             },

@@ -3462,13 +3462,12 @@ impl Gateway {
                 }
             };
             caller.execution = execution.as_ref();
-            // The one copy this path still makes, taken past every refusal
-            // above — signing, nonce, admission, replay — because only an
-            // executing call needs to own its arguments.
-            Box::pin(meta_mcp.handle_tools_call(
+            // Handed down borrowed (MIK-8014): only a task, which stores
+            // the call, copies it.
+            Box::pin(meta_mcp.handle_tools_call_ref(
                 id,
                 &tool_name,
-                arguments.into_owned(),
+                arguments,
                 Some(session_id),
                 caller,
             ))
