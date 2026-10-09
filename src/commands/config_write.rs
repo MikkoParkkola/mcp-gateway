@@ -136,7 +136,8 @@ mod tests {
     fn a_lock_refusal_under_force_is_not_overridden() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gateway.yaml");
-        std::fs::write(&path, "backends: {}\n").expect("write");
+        mcp_gateway::gateway::test_helpers::write_owner_only(&path, "backends: {}\n")
+            .expect("write");
         std::fs::create_dir(dir.path().join(".gateway.yaml.lock")).expect("dir in the way");
         let error =
             super::write(&path, super::CommentLoss::Rewrite, |_| Ok(())).expect_err("fails");
