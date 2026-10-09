@@ -20,6 +20,7 @@ use crate::transport::Transport;
 use crate::{Error, Result};
 
 mod breaker_and_status;
+mod build_first;
 mod era_probe;
 mod login_join;
 mod login_probe;
