@@ -602,7 +602,8 @@ fn a_reported_relay_increments_the_metric() {
     ] {
         let (fw, _dir) = observing(|c| c.action = action);
         delivered(&fw, "alice");
-        let series = format!("mcp_gateway_collusion_relay_total{{action=\"{label}\"}}");
+        let series =
+            format!("mcp_gateway_collusion_relay_total{{action=\"{label}\",reason=\"relay\"}}");
         let before = rendered_count(&series);
         let _ = egress(&fw, RelayCaller::Keyed("bob"));
         assert!(rendered_count(&series) > before, "{label}: not counted");
@@ -636,7 +637,7 @@ fn a_keyless_egress_increments_the_unkeyed_metric() {
 #[cfg(feature = "metrics")]
 #[test]
 fn an_unkeyed_block_increments_the_relay_metric() {
-    let series = "mcp_gateway_collusion_relay_total{action=\"block\"}";
+    let series = "mcp_gateway_collusion_relay_total{action=\"block\",reason=\"unkeyed\"}";
     let (fw, _dir) = observing(|c| c.action = CollusionAction::Block);
     let before = rendered_count(series);
     let verdict = egress(&fw, RelayCaller::Unkeyed("direct:alpha"));

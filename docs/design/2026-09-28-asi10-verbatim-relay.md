@@ -864,6 +864,17 @@ causes names it (MIK-8201):
   not built: the delivery is recorded without one, and the refusal is counted. A 1 MiB delivery's
   sketch is about 735 KiB, so 7 fit one pair's budget.
 
+Metered (MIK-8201): `mcp_gateway_collusion_capacity_total{bound}` counts each bound at its event:
+`receipt_truncated` (adds the fingerprints cut), `fingerprint_evicted`, `record_dropped`,
+`record_replaced`, `record_overflow`, `sketch_refused`, `sketch_evicted` (for room, never on
+expiry) and `marker_evicted`. `mcp_gateway_collusion_relay_total{action, reason}` counts each
+refusal under `relay`, `other_source`, `capacity` or `unkeyed`. A refusal names its reason:
+another tool's copy (MIK-8206), another caller's overflow record, or an excuse of the caller's
+dropped for room. A dropped excuse leaves an "excuse lost" marker per (source, caller) for one
+window (at most 65,536, oldest first; never charged to the sketch budget). Labels never excuse;
+a marker is source-level, so a genuine relay from a source whose other text lost an excuse is
+labelled `capacity` and still refused.
+
 **B3 Bloom false excuse (D3).** A pair's sketch at position i is sized for a target rate of
 0.35% × 2^-i, using the classic ideal-hash rate with independent per-probe mixing (splitmix64);
 sizing is bounded by the byte cap. The guarantee is the measured aggregate across all of a pair's

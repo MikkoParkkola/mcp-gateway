@@ -227,6 +227,9 @@ pub(super) struct SketchStore {
     pair_cap: usize,
     /// Deliveries whose sketch did not fit and were recorded without one.
     pub(super) refused: u64,
+    /// Pairs whose sketch a cap refused or evicted since the last
+    /// [`Self::take_lost`]: their excuse was dropped for room (`MIK-8201`).
+    lost: Vec<Pair>,
 }
 
 impl Default for SketchStore {
@@ -239,6 +242,7 @@ impl Default for SketchStore {
             cap: SKETCH_BYTES,
             pair_cap: SKETCH_BYTES / 4,
             refused: 0,
+            lost: Vec::new(),
         }
     }
 }
@@ -271,12 +275,14 @@ impl SketchStore {
                 if self.pop_oldest_of(pair).is_none() {
                     break;
                 }
+                self.evicted_for_room(pair);
                 continue;
             }
             if self.bytes + bytes > self.cap {
-                if self.pop_oldest().is_none() {
+                let Some(gone) = self.pop_oldest() else {
                     break;
-                }
+                };
+                self.evicted_for_room(gone);
                 continue;
             }
             let state = self.by_pair.entry(pair).or_default();
@@ -290,8 +296,23 @@ impl SketchStore {
             });
         }
         self.refused += 1;
+        telemetry_metrics::counter!(super::CAPACITY_METRIC, "bound" => "sketch_refused")
+            .increment(1);
+        self.lost.push(pair);
         self.drop_if_empty(pair);
         None
+    }
+
+    /// A live sketch of `pair` evicted by a byte cap (never by expiry).
+    fn evicted_for_room(&mut self, pair: Pair) {
+        telemetry_metrics::counter!(super::CAPACITY_METRIC, "bound" => "sketch_evicted")
+            .increment(1);
+        self.lost.push(pair);
+    }
+
+    /// The pairs that lost a sketch to a cap since the last call.
+    pub(super) fn take_lost(&mut self) -> Vec<Pair> {
+        std::mem::take(&mut self.lost)
     }
 
     /// Make `sketch`, built in `reservation`'s shape, live at `at`.
@@ -350,10 +371,10 @@ impl SketchStore {
         }
     }
 
-    fn pop_oldest(&mut self) -> Option<()> {
+    fn pop_oldest(&mut self) -> Option<Pair> {
         let ((_, seq), pair) = self.order.pop_first()?;
         self.remove_live(pair, seq);
-        Some(())
+        Some(pair)
     }
 
     fn pop_oldest_of(&mut self, pair: Pair) -> Option<()> {
@@ -386,6 +407,22 @@ impl SketchStore {
         }
     }
 
+    /// Whether a live sketch `caller` holds from a source other than
+    /// `source` may hold `fp`: a label only (`MIK-8206`), never an excuse.
+    /// ponytail: scans every pair; an index by caller if findings get hot.
+    pub(super) fn held_from_elsewhere(
+        &self,
+        (source, caller): Pair,
+        fp: u64,
+        now: Instant,
+        window: Duration,
+    ) -> bool {
+        self.by_pair
+            .keys()
+            .filter(|(s, c)| *c == caller && *s != source)
+            .any(|pair| self.holds(*pair, fp, now, window))
+    }
+
     /// Whether a live sketch of `pair` at `now` holds `fp`.
     pub(super) fn holds(&self, pair: Pair, fp: u64, now: Instant, window: Duration) -> bool {
         self.by_pair.get(&pair).is_some_and(|state| {
@@ -393,6 +430,62 @@ impl SketchStore {
                 l.at <= now && now.saturating_duration_since(l.at) <= window && l.sketch.holds(fp)
             })
         })
+    }
+}
+
+/// Most "excuse lost" markers kept (`MIK-8201`).
+const MAX_MARKERS: usize = 65_536;
+
+/// "Excuse lost" markers: (source, caller) pairs some excuse of which
+/// capacity dropped, until when. Kept apart from the sketches: never charged
+/// to their budget, never evicting one; losing a marker only loses a label.
+#[derive(Default)]
+pub(super) struct Markers {
+    until: HashMap<Pair, (Instant, u64)>,
+    order: BTreeMap<(Instant, u64), Pair>,
+    next: u64,
+}
+
+impl Markers {
+    /// Mark `pair` until `until`, keeping the later time.
+    pub(super) fn mark(&mut self, pair: Pair, until: Instant) {
+        if let Some(&(held, seq)) = self.until.get(&pair) {
+            if held >= until {
+                return;
+            }
+            self.order.remove(&(held, seq));
+        }
+        let seq = self.next;
+        self.next += 1;
+        self.until.insert(pair, (until, seq));
+        self.order.insert((until, seq), pair);
+        while self.until.len() > MAX_MARKERS {
+            let Some((_, gone)) = self.order.pop_first() else {
+                break;
+            };
+            self.until.remove(&gone);
+            telemetry_metrics::counter!(super::CAPACITY_METRIC, "bound" => "marker_evicted")
+                .increment(1);
+        }
+    }
+
+    /// Drop markers that ended before `now`.
+    pub(super) fn sweep(&mut self, now: Instant) {
+        while let Some((&(until, _), _)) = self.order.first_key_value() {
+            if until >= now {
+                break;
+            }
+            if let Some((_, gone)) = self.order.pop_first() {
+                self.until.remove(&gone);
+            }
+        }
+    }
+
+    /// Whether `pair` holds a marker at `now`.
+    pub(super) fn holds(&self, pair: Pair, now: Instant) -> bool {
+        self.until
+            .get(&pair)
+            .is_some_and(|(until, _)| *until >= now)
     }
 }
 

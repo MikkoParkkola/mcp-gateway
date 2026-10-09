@@ -12,7 +12,9 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::collusion::{CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams};
+use super::collusion::{
+    CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams, RelayReason,
+};
 use super::collusion_digest::DELIVERED_SET_CAP;
 #[cfg(test)]
 pub(super) use super::collusion_digest::delivery_leaves;
@@ -334,9 +336,12 @@ impl Firewall {
             telemetry_metrics::counter!(UNKEYED_METRIC, "action" => label).increment(1);
         }
         let finding = match caller {
-            RelayCaller::Unkeyed(_) if block => Some(relay_finding(
-                "relay check needs an authenticated caller".to_string(),
-                String::new(),
+            RelayCaller::Unkeyed(_) if block => Some((
+                "unkeyed",
+                relay_finding(
+                    "relay check needs an authenticated caller".to_string(),
+                    String::new(),
+                ),
             )),
             _ => detector
                 .check_egress_flows_at(
@@ -346,21 +351,23 @@ impl Firewall {
                     Instant::now(),
                 )
                 .map(|f| {
-                    relay_finding(
-                        "content delivered to another caller is leaving through this call"
-                            .to_string(),
+                    let finding = relay_finding(
+                        relay_description(f.reason).to_string(),
                         format!(
                             "source={:016x} receiver={:016x} sender={:016x} matches={}",
                             f.source, f.receiver, f.sender, f.matches
                         ),
-                    )
+                    );
+                    (f.reason.label(), finding)
                 }),
         };
-        let Some(finding) = finding else {
+        let Some((reason, finding)) = finding else {
             return FirewallVerdict::allow();
         };
-        // Every reported relay counts, the unkeyed block included (MIK-7873).
-        telemetry_metrics::counter!(RELAY_METRIC, "action" => label).increment(1);
+        // Every reported relay counts, the unkeyed block included (MIK-7873),
+        // under the reason it was reported for (MIK-8201).
+        telemetry_metrics::counter!(RELAY_METRIC, "action" => label, "reason" => reason)
+            .increment(1);
         // The configured action alone decides: no rule may soften a relay.
         let action = if block {
             FirewallAction::Block
@@ -657,6 +664,27 @@ impl Firewall {
     /// policy beside its sensitivity (`MIK-8113`).
     pub(crate) fn source_masks(&self, sources: &[String]) -> Vec<u64> {
         sources.iter().map(|s| self.relay.source_flows(s)).collect()
+    }
+}
+
+/// What a refusal tells its caller, by reason (`MIK-8201`, `MIK-8206`). None
+/// claims more than the detector recorded: the capacity texts never say this
+/// text's own copy was dropped.
+fn relay_description(reason: RelayReason) -> &'static str {
+    match reason {
+        RelayReason::Relay => "content delivered to another caller is leaving through this call",
+        RelayReason::OtherSource => {
+            "this text matches what the detector recorded as reaching you from a different tool, \
+             and that does not excuse this relay"
+        }
+        RelayReason::OverflowWitness => {
+            "another caller's copy of this text was kept past the relay detector's capacity, so no \
+             copy of yours can excuse it"
+        }
+        RelayReason::ExcuseLost => {
+            "the relay detector ran out of room for text you received from this tool, so it could \
+             not tell whether your own copy covers this"
+        }
     }
 }
 
