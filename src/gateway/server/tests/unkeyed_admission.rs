@@ -5,20 +5,16 @@
 //!
 //! Driven through the production stdio dispatcher (T9), which reaches the same
 //! `admit_meta_sync` → `admit_operation` refusal point as the HTTP meta route.
-//! Counter rows (`metrics` only; the warn row runs in every build) read a
-//! scoped Prometheus recorder, so the tests stay on the
+//! Every row runs in every build; its counter assertions (`metrics` only)
+//! read a scoped Prometheus recorder, so the tests stay on the
 //! current-thread runtime and await dispatch inline.
 
 #[cfg(feature = "metrics")]
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use serde_json::{Value, json};
 
-#[cfg(feature = "metrics")]
-use super::signing_nonce_allocations_support::error_of;
-use super::signing_nonce_allocations_support::{Fixture, SESSION, Target, invoke};
-use crate::config::IdempotencyKeyMode::Optional;
-#[cfg(feature = "metrics")]
-use crate::config::IdempotencyKeyMode::Required;
+use super::signing_nonce_allocations_support::{Fixture, SESSION, Target, error_of, invoke};
+use crate::config::IdempotencyKeyMode::{Optional, Required};
 
 #[cfg(feature = "metrics")]
 const COUNTER: &str = "mcp_unkeyed_calls_total";
@@ -99,7 +95,6 @@ fn assert_ok(phase: &str, response: &Value) {
     );
 }
 
-#[cfg(feature = "metrics")]
 fn assert_invalid_params(phase: &str, response: &Value) -> String {
     let (code, message) = error_of(response);
     assert_eq!(code, -32602, "{phase} must be -32602, got {response}");
@@ -118,18 +113,21 @@ fn recorder() -> (
 
 /// T1 + T9: the default admits an un-keyed modern mutation, once, counted with
 /// exactly `{era, gateway_read_only}` and no principal label.
-#[cfg(feature = "metrics")]
 #[tokio::test]
 async fn t1_unkeyed_modern_mutation_is_admitted_by_default() {
     let fixture = Fixture::start_keyed_mode(Target::MutatingUncached, Optional).await;
+    #[cfg(feature = "metrics")]
     let (recorder, handle) = recorder();
+    #[cfg(feature = "metrics")]
     let _guard = telemetry_metrics::set_default_local_recorder(&recorder);
 
     let response = dispatch(&fixture, invoke("t1", None, json!({}))).await;
 
     assert_ok("an un-keyed modern mutation under optional", &response);
     assert_eq!(fixture.backend.tools_call_count(), 1);
+    #[cfg(feature = "metrics")]
     assert_eq!(count(&handle, "modern", false), 1, "{}", handle.render());
+    #[cfg(feature = "metrics")]
     for (labels, _) in samples(&handle) {
         let names: Vec<&str> = labels
             .iter()
@@ -141,11 +139,12 @@ async fn t1_unkeyed_modern_mutation_is_admitted_by_default() {
 
 /// T2 + T9: `required` restores the refusal, names the key, and neither
 /// reaches the backend nor moves the counter.
-#[cfg(feature = "metrics")]
 #[tokio::test]
 async fn t2_required_refuses_unkeyed_modern_mutation() {
     let fixture = Fixture::start_keyed_mode(Target::MutatingUncached, Required).await;
+    #[cfg(feature = "metrics")]
     let (recorder, handle) = recorder();
+    #[cfg(feature = "metrics")]
     let _guard = telemetry_metrics::set_default_local_recorder(&recorder);
 
     let response = dispatch(&fixture, invoke("t2", None, json!({}))).await;
@@ -156,64 +155,73 @@ async fn t2_required_refuses_unkeyed_modern_mutation() {
         "the refusal must name the key: {message}"
     );
     assert_eq!(fixture.backend.tools_call_count(), 0);
+    #[cfg(feature = "metrics")]
     assert_eq!(total(&handle), 0, "{}", handle.render());
 }
 
 /// T3: a keyed call re-issued under a new request id executes once, in both
 /// modes (existing guarantee).
-#[cfg(feature = "metrics")]
 #[tokio::test]
 async fn t3_keyed_reissue_executes_once() {
     for mode in [Optional, Required] {
         let fixture = Fixture::start_keyed_mode(Target::MutatingUncached, mode).await;
+        #[cfg(feature = "metrics")]
         let (recorder, handle) = recorder();
+        #[cfg(feature = "metrics")]
         let _guard = telemetry_metrics::set_default_local_recorder(&recorder);
         for id in ["t3-a", "t3-b"] {
             let request = with_key(invoke(id, None, json!({})), json!("t3-key"));
             assert_ok("a keyed call", &dispatch(&fixture, request).await);
         }
         assert_eq!(fixture.backend.tools_call_count(), 1, "{mode:?}");
+        #[cfg(feature = "metrics")]
         assert_eq!(total(&handle), 0, "a keyed call is not un-keyed");
     }
 }
 
 /// T4: a malformed key is -32602 in both modes, before execution.
-#[cfg(feature = "metrics")]
 #[tokio::test]
 async fn t4_malformed_key_is_refused_in_both_modes() {
     for mode in [Optional, Required] {
         let fixture = Fixture::start_keyed_mode(Target::MutatingUncached, mode).await;
+        #[cfg(feature = "metrics")]
         let (recorder, handle) = recorder();
+        #[cfg(feature = "metrics")]
         let _guard = telemetry_metrics::set_default_local_recorder(&recorder);
         let request = with_key(invoke("t4", None, json!({})), json!(42));
         assert_invalid_params("a malformed key", &dispatch(&fixture, request).await);
         assert_eq!(fixture.backend.tools_call_count(), 0, "{mode:?}");
+        #[cfg(feature = "metrics")]
         assert_eq!(total(&handle), 0, "a refusal is not an admission");
     }
 }
 
 /// T5: a read-only-marked tool, un-keyed, is admitted and counted as such.
-#[cfg(feature = "metrics")]
 #[tokio::test]
 async fn t5_unkeyed_read_only_call_is_counted_read_only() {
     let fixture = Fixture::start_keyed_mode(Target::ReadOnlyCached, Optional).await;
+    #[cfg(feature = "metrics")]
     let (recorder, handle) = recorder();
+    #[cfg(feature = "metrics")]
     let _guard = telemetry_metrics::set_default_local_recorder(&recorder);
 
     let response = dispatch(&fixture, invoke("t5", None, json!({}))).await;
 
     assert_ok("an un-keyed read-only call", &response);
+    #[cfg(feature = "metrics")]
     assert_eq!(count(&handle, "modern", true), 1, "{}", handle.render());
+    #[cfg(feature = "metrics")]
     assert_eq!(total(&handle), 1);
 }
 
 /// T7: the accepted exposure. An un-keyed re-issue cannot be recognised, so it
 /// executes twice and counts twice.
-#[cfg(feature = "metrics")]
 #[tokio::test]
 async fn t7_unkeyed_reissue_executes_twice_by_default() {
     let fixture = Fixture::start_keyed_mode(Target::MutatingUncached, Optional).await;
+    #[cfg(feature = "metrics")]
     let (recorder, handle) = recorder();
+    #[cfg(feature = "metrics")]
     let _guard = telemetry_metrics::set_default_local_recorder(&recorder);
 
     for id in ["t7-a", "t7-b"] {
@@ -224,24 +232,28 @@ async fn t7_unkeyed_reissue_executes_twice_by_default() {
     }
 
     assert_eq!(fixture.backend.tools_call_count(), 2);
+    #[cfg(feature = "metrics")]
     assert_eq!(count(&handle, "modern", false), 2, "{}", handle.render());
 }
 
 /// T8: `required` refuses neither a legacy frame nor a read-only-marked tool.
-#[cfg(feature = "metrics")]
 #[tokio::test]
 async fn t8_required_scope_excludes_legacy_and_read_only() {
     let fixture = Fixture::start_keyed_mode(Target::MutatingUncached, Required).await;
+    #[cfg(feature = "metrics")]
     let (recorder, handle) = recorder();
+    #[cfg(feature = "metrics")]
     let _guard = telemetry_metrics::set_default_local_recorder(&recorder);
     let response = dispatch(&fixture, legacy(invoke("t8-legacy", None, json!({})))).await;
     assert_ok("an un-keyed legacy mutation under required", &response);
     assert_eq!(fixture.backend.tools_call_count(), 1);
+    #[cfg(feature = "metrics")]
     assert_eq!(count(&handle, "legacy", false), 1, "{}", handle.render());
 
     let fixture = Fixture::start_keyed_mode(Target::ReadOnlyCached, Required).await;
     let response = dispatch(&fixture, invoke("t8-read", None, json!({}))).await;
     assert_ok("an un-keyed read-only call under required", &response);
+    #[cfg(feature = "metrics")]
     assert_eq!(count(&handle, "modern", true), 1, "{}", handle.render());
 }
 

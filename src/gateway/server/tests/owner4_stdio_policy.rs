@@ -322,6 +322,16 @@ fn stdio_answers_policy_before_a_malformed_invoke_nonce() {
     };
 
     let denied = call(&stdio.denying, "n1", DENIED);
+    assert!(!succeeded(&denied), "{denied}");
+    assert_ne!(
+        denied["error"]["code"],
+        json!(-32602),
+        "policy answers first: {denied}"
+    );
+    assert!(
+        !denied.to_string().contains("Invalid signing nonce"),
+        "{denied}"
+    );
     assert!(
         denied.to_string().contains(&format!(
             "Tool '{DENIED}' on server '{BACKEND}' is blocked by security policy"
