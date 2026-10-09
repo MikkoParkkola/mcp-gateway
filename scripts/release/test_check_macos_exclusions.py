@@ -123,6 +123,25 @@ class CheckMacosExclusions(unittest.TestCase):
             ],
         )
 
+    def test_a_gate_is_evaluated_as_a_whole_on_macos(self) -> None:
+        # MIK-8181: names macOS but requires Linux, so never on macOS; names
+        # macOS inside any(..., not(apple)), so on macOS.
+        rust = (
+            '#[cfg(all(test, target_os = "linux", any(feature = "foo", target_os = "macos")))]\n'
+            "mod linux_and_mac_tests;\n"
+            '#[cfg(all(test, any(target_os = "macos", not(target_vendor = "apple")), '
+            'target_os = "linux"))]\nmod nested_tests;\n'
+            '#[cfg(all(test, any(target_os = "linux", target_os = "macos", not(unix))))]\n'
+            "mod on_mac_tests;\n"
+        )
+        self.assertEqual(
+            self.tree(rust, path="src/reload/mod.rs"),
+            [
+                "not run on macOS and not listed: src/reload/mod.rs linux_and_mac_tests",
+                "not run on macOS and not listed: src/reload/mod.rs nested_tests",
+            ],
+        )
+
     def test_the_release_tree_passes(self) -> None:
         self.assertEqual(mac.problems(HERE.parents[1]), [])
 
