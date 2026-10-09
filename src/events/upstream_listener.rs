@@ -26,6 +26,10 @@ use crate::backend::{Backend, BackendRegistry};
 /// ponytail: up to this long between a backend turning eligible and its
 /// listener starting; a push from reload and transport detection would cut it.
 const REVIVE_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
+/// At most one confirming catalogue read per backend this often (MIK-8194):
+/// a delivery that would need another within it is admitted, as an
+/// unconfirmed absence proves nothing (design section 7).
+const CONFIRM_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// What one backend's task and the event source share.
 pub(super) struct Shared {
@@ -76,6 +80,9 @@ impl Shared {
         let need = self.need.lock();
         let mut slot = self.ledger.lock();
         if !Arc::ptr_eq(&slot, &fresh) {
+            // The snapshot was read from the instance this ledger replaces:
+            // cleared first, so no reader sees the new ledger with it.
+            self.snapshot.lock().clear();
             fresh.lock().want_all(need.filter().1);
             *slot = fresh;
         }
@@ -131,8 +138,10 @@ pub(crate) struct UpstreamListeners {
     /// Tasks `start` has spawned: a task started wrongly for a refused
     /// backend cancels itself at once, so its entry alone cannot show it.
     #[cfg(test)]
-    starts: std::sync::atomic::AtomicUsize,
+    pub(super) starts: std::sync::atomic::AtomicUsize,
     me: Weak<UpstreamListeners>,
+    /// When each backend's last confirming read began (`CONFIRM_EVERY`).
+    confirmed: Mutex<HashMap<String, tokio::time::Instant>>,
 }
 
 impl Drop for UpstreamListeners {
@@ -145,10 +154,13 @@ impl EventsHub {
     /// A complete read of `backend`'s catalogue lacks some watched URIs: end
     /// those `resource_updated` subscriptions now, freeing their interest
     /// and URI budget instead of waiting for an occurrence (parent F9, §7).
+    /// Only rows granted by `granted_by` (the generation when the read
+    /// began) are judged: a later grant was not covered by this read.
     pub(super) async fn revoke_absent_uris(
         self: &Arc<Self>,
         backend: &str,
         listed: &std::collections::HashSet<String>,
+        granted_by: u64,
     ) {
         let name = format!("backend.{backend}.resource_updated");
         let now = chrono::Utc::now();
@@ -156,7 +168,7 @@ impl EventsHub {
             .store
             .subscriptions()
             .into_iter()
-            .filter(|s| s.name == name && s.live(now))
+            .filter(|s| s.name == name && s.live(now) && s.incarnation <= granted_by)
             .filter(|s| {
                 s.arguments
                     .get("uri")
@@ -190,6 +202,7 @@ impl UpstreamListeners {
             backends: Mutex::new(HashMap::new()),
             gates: Mutex::new(HashMap::new()),
             ledgers: Mutex::new(HashMap::new()),
+            confirmed: Mutex::new(HashMap::new()),
             stop: CancellationToken::new(),
             #[cfg(test)]
             starts: std::sync::atomic::AtomicUsize::new(0),
@@ -307,11 +320,25 @@ impl UpstreamListeners {
     /// loop head. Collect and replace share one hold of the map lock that
     /// `add` and `remove` take, so no key changes in between.
     fn revive(&self) {
+        self.revive_where(|_| true);
+    }
+
+    /// Revive backend `name` now rather than at the sweep: its registration
+    /// changed (design r3 L2).
+    pub(crate) fn revive_backend(&self, name: &str) {
+        self.revive_where(|of| of == name);
+        // A task parked while its backend was gone retries now, not in 30 s.
+        if let Some(shared) = self.backends.lock().get(name) {
+            shared.wake.send_modify(|n| *n += 1);
+        }
+    }
+
+    fn revive_where(&self, only: impl Fn(&str) -> bool) {
         let refused = (self.ineligible)();
         let mut map = self.backends.lock();
         let due: Vec<String> = map
             .iter()
-            .filter(|(name, shared)| self.revivable(name, shared, &refused))
+            .filter(|(name, shared)| only(name) && self.revivable(name, shared, &refused))
             .map(|(name, _)| name.clone())
             .collect();
         for name in due {
@@ -338,7 +365,7 @@ impl UpstreamListeners {
         let Some(shared) = map.get(backend).cloned() else {
             return;
         };
-        let changed = {
+        let (changed, no_uris) = {
             let mut need = shared.need.lock();
             let changed = need.remove(interest);
             if let Interest::ResourceUpdated(uri) = interest
@@ -346,8 +373,13 @@ impl UpstreamListeners {
             {
                 shared.ledger().lock().unwant(uri);
             }
-            changed
+            (changed, !need.watches_any())
         };
+        // With no URI watched the snapshot is no longer read, so it stops
+        // answering for a new URI (design r3 L4, MIK-7897 LIFE.3b).
+        if no_uris {
+            shared.snapshot.lock().clear();
+        }
         if shared.is_idle() {
             shared.stop.cancel();
             map.remove(backend);
@@ -358,19 +390,44 @@ impl UpstreamListeners {
 
     /// What the backend's last good catalogue read says about `uri`;
     /// `Skip` while no listener holds one.
-    pub(crate) fn verdict(&self, backend: &str, uri: &str) -> Verdict {
-        self.backends
-            .lock()
-            .get(backend)
-            .map_or(Verdict::Skip, |s| s.snapshot.lock().verdict(uri))
+    pub(crate) fn verdict(&self, backend: &str, uri: &str, granted: Option<u64>) -> Verdict {
+        self.answering(backend).map_or(Verdict::Skip, |s| {
+            s.snapshot.lock().verdict_for(uri, granted)
+        })
     }
 
     /// Whether a listener task holds a good snapshot for `backend`.
     pub(crate) fn has_snapshot(&self, backend: &str) -> bool {
-        self.backends
+        self.answering(backend)
+            .is_some_and(|s| s.snapshot.lock().is_known())
+    }
+
+    /// The entry whose snapshot may answer for `backend`: none when its
+    /// ledger was made for an instance the registry no longer holds, so a
+    /// replaced backend is judged live (design r3 L4, MIK-7897 LIFE.3b).
+    fn answering(&self, backend: &str) -> Option<Arc<Shared>> {
+        let entry = self.backends.lock().get(backend).cloned()?;
+        let now = self.registry.get(backend);
+        let current = entry.ledger();
+        // Replaced: the ledgers map holds another instance, or the entry has
+        // not yet taken the map's ledger (a swap in progress).
+        let replaced = self
+            .ledgers
             .lock()
             .get(backend)
-            .is_some_and(|s| s.snapshot.lock().is_known())
+            .is_some_and(|(made_for, ledger)| {
+                !Arc::ptr_eq(ledger, &current)
+                    || now
+                        .as_ref()
+                        .is_none_or(|b| !std::ptr::eq(made_for.as_ptr(), Arc::as_ptr(b)))
+            });
+        (!replaced).then_some(entry)
+    }
+
+    /// The entry for `backend`, so a session-level test can drive it.
+    #[cfg(test)]
+    pub(super) fn entry_of(&self, backend: &str) -> Option<Arc<Shared>> {
+        self.backends.lock().get(backend).cloned()
     }
 
     /// Whether a registered backend called `name` exists.
@@ -382,9 +439,17 @@ impl UpstreamListeners {
     /// answers; with none (subscribe time) the catalogue is read, filling
     /// it, and a backend that cannot be read admits (design §7, offline
     /// rule). `-32012` only on confirmed absence from a complete read.
-    pub(crate) async fn authorize_uri(&self, backend: &str, uri: &str) -> Result<(), RpcError> {
+    /// `granted` is the subscription's incarnation when one exists (a
+    /// delivery), `None` at subscribe: a snapshot does not revoke a grant
+    /// made after its read began (MIK-8194).
+    pub(crate) async fn authorize_uri(
+        &self,
+        backend: &str,
+        uri: &str,
+        granted: Option<u64>,
+    ) -> Result<(), RpcError> {
         if self.has_snapshot(backend) {
-            return match self.verdict(backend, uri) {
+            return match self.verdict(backend, uri, granted) {
                 Verdict::Revoke => Err(RpcError::forbidden()),
                 Verdict::Deliver | Verdict::Skip => Ok(()),
             };
@@ -407,7 +472,31 @@ impl UpstreamListeners {
         .await;
         match read {
             Ok(Ok(snapshot)) if snapshot.complete && !snapshot.uris.contains(uri) => {
-                Err(RpcError::forbidden())
+                // A cached list may predate the grant (MIK-8194): an absence
+                // is confirmed by a read begun now, after it, before revoking.
+                if granted.is_none() {
+                    return Err(RpcError::forbidden());
+                }
+                if !self.may_confirm(backend) {
+                    return Ok(());
+                }
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    found.read_resource_snapshot(true),
+                )
+                .await
+                {
+                    Ok(Ok(now)) if now.complete && !now.uris.contains(uri) => {
+                        Err(RpcError::forbidden())
+                    }
+                    Ok(Ok(_)) => Ok(()),
+                    // A failed confirm counts like the first lookup's failure:
+                    // the attempt does not wait on the catalogue again.
+                    _ => {
+                        let _ = FAILED_LOOKUP.try_with(|failed| failed.set(true));
+                        Ok(())
+                    }
+                }
             }
             Ok(Ok(_)) => Ok(()),
             // An error is not absence (§7): admitted, as before.
@@ -416,6 +505,22 @@ impl UpstreamListeners {
                 Ok(())
             }
         }
+    }
+
+    /// Whether `backend` may take a confirming read now; records it if so.
+    pub(super) fn may_confirm(&self, backend: &str) -> bool {
+        let now = tokio::time::Instant::now();
+        let mut confirmed = self.confirmed.lock();
+        // Only windows still open are kept, so the map never outgrows them.
+        confirmed.retain(|_, at| now.duration_since(*at) < CONFIRM_EVERY);
+        if confirmed
+            .get(backend)
+            .is_some_and(|at| now.duration_since(*at) < CONFIRM_EVERY)
+        {
+            return false;
+        }
+        confirmed.insert(backend.to_owned(), now);
+        true
     }
 
     /// The backend's ledger, fresh when the registry holds another `Backend`

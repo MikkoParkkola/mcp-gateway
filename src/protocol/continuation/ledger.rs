@@ -362,6 +362,20 @@ pub struct ContinuationState {
     keyring: Keyring,
     ledger: ConsumedLedger,
     in_flight: InFlight,
+    holds: HoldCounts,
+}
+
+/// What became of the sealed holds the gateway registered against this state
+/// (MIK-8176, family continuation-slot-release). Per state, not per process,
+/// so a test reads its own fixture's counts.
+#[derive(Debug, Default)]
+pub(crate) struct HoldCounts {
+    /// Mints registered under an open request scope.
+    pub(crate) registered: std::sync::atomic::AtomicU64,
+    /// Mints made outside any request scope: a route boundary opened none.
+    pub(crate) unscoped: std::sync::atomic::AtomicU64,
+    /// Holds whose last copy dropped without reaching a transport.
+    pub(crate) unhanded_drops: std::sync::atomic::AtomicU64,
 }
 
 /// How many spent continuations one process remembers at once.
@@ -405,6 +419,7 @@ impl ContinuationState {
             ledger: ConsumedLedger::new(CONSUMED_LEDGER_CAPACITY),
             in_flight: InFlight::new(&replica, IN_FLIGHT_CAPACITY),
             replica,
+            holds: HoldCounts::default(),
         }
     }
 
@@ -499,6 +514,11 @@ impl ContinuationState {
     #[must_use]
     pub fn in_flight(&self) -> &InFlight {
         &self.in_flight
+    }
+
+    /// What became of the sealed holds registered against this state.
+    pub(crate) fn hold_counts(&self) -> &HoldCounts {
+        &self.holds
     }
 
     /// What this process calls itself in a minted `origin_replica`.

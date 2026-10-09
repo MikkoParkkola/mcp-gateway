@@ -188,6 +188,9 @@ fn return_type(sig: &str) -> Option<&str> {
 fn signature(name: &str) -> String {
     for file in [
         "src/gateway/router/handlers.rs",
+        "src/gateway/router/handlers/sse.rs",
+        "src/gateway/router/handlers/session_end.rs",
+        "src/gateway/router/handlers/health.rs",
         "src/gateway/router/backend_handlers.rs",
     ] {
         let source = read(file);

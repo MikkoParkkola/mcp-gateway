@@ -98,7 +98,14 @@ async fn playbook_and_code_mode_refused_under_enforce_keyed() {
     caller.retry = &retry;
     for (tool, args) in plans() {
         let error = meta
-            .admit_meta_sync(&caller, tool, &args, None, &RequestId::Number(2))
+            .admit_meta_sync(
+                crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
+                &caller,
+                tool,
+                &args,
+                None,
+                &RequestId::Number(2),
+            )
             .err()
             .unwrap_or_else(|| panic!("{tool}: a keyed plan must be refused under enforce"));
         assert_plan_refusal(tool, i64::from(error.to_rpc_code()), &error.to_string());

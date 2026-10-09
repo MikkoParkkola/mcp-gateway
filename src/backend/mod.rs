@@ -61,6 +61,7 @@ impl Backend {
     }
 }
 
+pub(crate) use era::removed_method_refusal_message;
 #[cfg(test)]
 pub(crate) use pool::PoolKey;
 #[cfg(not(test))]
@@ -102,11 +103,6 @@ pub struct Backend {
     /// fix 1). The per-backend `Failsafe` this replaced is gone; every slot,
     /// including Shared, now owns one.
     failsafe_config: crate::config::FailsafeConfig,
-    /// Protocol era of the peer on the other end of this backend's
-    /// transport (MIK-7217). Resolved once per start by a `server/discover`
-    /// probe and shared with the detached re-probe task, which outlives the
-    /// request that triggered it — hence `Arc`.
-    era: Arc<crate::protocol::era::EraCache>,
     /// Test-only: one re-probe pauses between finding its slot and discarding
     /// the era, so a removal can land inside that window (MIK-7643).
     #[cfg(test)]
@@ -248,6 +244,10 @@ pub struct Backend {
     /// the handshake shape is chosen (MIK-8056).
     #[cfg(test)]
     era_decision_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
+    /// A test's pause point in a start, just after its transport is
+    /// published (the publish order of MIK-7897 LIFE.3a).
+    #[cfg(test)]
+    pub(crate) publish_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
     /// A test's stand-ins for the user's token store and browser, used by the
     /// OAuth client [`Backend::create_oauth_client`] builds.
     #[cfg(test)]
@@ -259,6 +259,16 @@ pub struct Backend {
     /// Where this instance's nudges go, set when a registry with a change feed
     /// holds it.
     nudge_feed: std::sync::OnceLock<tools_nudge::NudgeFeed>,
+    /// Whether a per-user store nudge is queued and unread (`MIK-8148`).
+    views_dirty: tools_nudge::ViewsDirty,
+    /// A tool the next drain snapshot blocks between reading the descriptor
+    /// filter and reading the slots, so a test can land a verdict there.
+    #[cfg(test)]
+    snapshot_seam: parking_lot::Mutex<Option<String>>,
+    /// A list the next drain stores into the shared slot right after reading
+    /// it, so a test can land a store between that read and the next.
+    #[cfg(test)]
+    shared_read_seam: parking_lot::Mutex<Option<Vec<crate::protocol::Tool>>>,
 }
 
 /// Where a test backend's OAuth client keeps tokens, and who plays the
@@ -274,9 +284,9 @@ pub(crate) struct OAuthTestSeam {
 /// and waits for `release`.
 #[cfg(test)]
 #[derive(Default)]
-struct MarkWindowGate {
-    reached: tokio::sync::Notify,
-    release: tokio::sync::Notify,
+pub(crate) struct MarkWindowGate {
+    pub(crate) reached: tokio::sync::Notify,
+    pub(crate) release: tokio::sync::Notify,
 }
 
 impl Backend {
@@ -497,6 +507,10 @@ mod era_retired_slot_tests;
 #[path = "era_start_own_probe_tests.rs"]
 mod era_start_own_probe_tests;
 
+#[cfg(test)]
+#[path = "era_per_slot_tests.rs"]
+mod era_per_slot_tests;
+
 #[cfg(all(test, unix))]
 #[path = "frame_limit_start_tests.rs"]
 mod frame_limit_start_tests;
@@ -512,6 +526,9 @@ mod websocket_backend_tests;
 #[cfg(test)]
 mod destination_tests;
 
+#[cfg(test)]
+#[path = "publish_order_tests.rs"]
+mod publish_order_tests;
 #[cfg(test)]
 #[path = "stop_race_tests.rs"]
 mod stop_race_tests;

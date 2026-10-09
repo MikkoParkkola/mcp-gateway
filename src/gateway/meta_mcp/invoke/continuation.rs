@@ -32,7 +32,7 @@ use crate::{Error, Result};
 /// back ([`release_unless_carried`]) when a later step keeps the envelope from
 /// the client.
 pub(super) async fn mint_continuation(
-    continuation: &crate::protocol::continuation::ContinuationState,
+    continuation: &std::sync::Arc<crate::protocol::continuation::ContinuationState>,
     source: crate::protocol::mrtr::PrincipalSource<'_>,
     (server, instance): (&str, Option<u64>),
     tool: &str,
@@ -57,6 +57,7 @@ pub(super) async fn mint_continuation(
         record_continuation_mint("no_slot");
         return None;
     };
+    crate::gateway::meta_mcp::sealed_hold::register(continuation);
     match continuation.keyring().mint(&payload) {
         Ok(envelope) => {
             record_continuation_mint("ok");
@@ -623,9 +624,9 @@ impl crate::gateway::meta_mcp::MetaMcp {
         self.continuation = std::sync::Arc::new(state);
     }
 
-    /// Give back the slot of a question sealed on the direct route unless
-    /// `delivered`, the answer that leaves, still carries it
-    /// ([`release_unless_carried`]).
+    /// Give back the slot of a sealed question unless `delivered`, the answer
+    /// that leaves, still carries it ([`release_unless_carried`]): the direct
+    /// route after its tail, `/mcp` and stdio after their delivery scan.
     pub(crate) async fn release_direct_hold(
         &self,
         sealed: Option<(String, String)>,

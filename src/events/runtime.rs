@@ -22,6 +22,17 @@ use super::types::SourceKind;
 use super::{EventSource, EventsHub};
 
 /// Runtime state of the delivery pipeline.
+/// The worker's last expiry check (design r3 L5).
+pub(crate) struct ExpirySeen {
+    pub at: chrono::DateTime<chrono::Utc>,
+    /// The earliest deadline after `at`; `None` when no row has one.
+    pub next: Option<chrono::DateTime<chrono::Utc>>,
+    pub removals: u64,
+    /// The store's generation at the last scan: deadlines change only
+    /// with a write, and every write bumps it.
+    pub generation: u64,
+}
+
 pub(crate) struct Runtime {
     queue: mpsc::Sender<SourceEvent>,
     /// Taken by [`EventsHub::start`]; `None` once the pipeline runs.
@@ -41,6 +52,10 @@ pub(crate) struct Runtime {
     /// Set once the stored subscriptions have been reconciled with the
     /// catalogue the startup capability scan built; no attempt starts before.
     pub reconciled: AtomicBool,
+    /// Where the worker's last expiry check ended, the earliest deadline
+    /// after it (no scan is needed before then), and the store's removal
+    /// count then (design r3 L5).
+    pub expiry_seen: Mutex<ExpirySeen>,
     dropped: AtomicU64,
     projection_failed: AtomicU64,
 }
@@ -59,6 +74,12 @@ impl Runtime {
             services: std::sync::OnceLock::new(),
             backends: std::sync::OnceLock::new(),
             reconciled: AtomicBool::new(false),
+            expiry_seen: Mutex::new(ExpirySeen {
+                at: chrono::Utc::now(),
+                next: None,
+                removals: 0,
+                generation: u64::MAX,
+            }),
             dropped: AtomicU64::new(0),
             projection_failed: AtomicU64::new(0),
         }

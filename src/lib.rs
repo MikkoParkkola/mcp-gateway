@@ -85,6 +85,10 @@ pub mod skills;
 pub mod stats;
 #[cfg(test)]
 mod test_pause;
+#[cfg(test)]
+mod test_ports;
+#[cfg(test)]
+mod test_wait;
 #[cfg(feature = "tool-profiles")]
 pub mod tool_profiles;
 pub mod tool_registry;

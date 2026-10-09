@@ -105,6 +105,9 @@ type Pair = (String, String);
 #[derive(Default)]
 struct State {
     subs: HashMap<String, Subscription>,
+    /// Rows removed so far, by any path (design r3 L5: the worker tick
+    /// releases their keys).
+    removals: u64,
     /// Keyed by `verified_file(principal, url)`.
     verified: HashMap<String, Verified>,
     /// Pending deliveries, keyed by event id.
@@ -131,7 +134,9 @@ impl State {
     /// Remove row `id`, with its hold: no hold outlives its row, so the same
     /// key subscribed again is judged afresh (MIK-8057).
     fn drop_row(&mut self, id: &str) {
-        self.subs.remove(id);
+        if self.subs.remove(id).is_some() {
+            self.removals += 1;
+        }
         self.held.remove(id);
         self.hold_unsynced.remove(id);
     }
@@ -236,6 +241,9 @@ pub(crate) struct Store {
     outbox_dir: PathBuf,
     dead_dir: PathBuf,
     state: Mutex<State>,
+    /// The last row generation handed out (design r3 G3); starts above every
+    /// generation loaded, so a re-made row never repeats an old one.
+    generation: std::sync::atomic::AtomicU64,
     /// Test-only: the next dead letter put in place reports its directory
     /// sync as failed, the one way a burial errors after the dead letter is
     /// in memory.
@@ -244,6 +252,22 @@ pub(crate) struct Store {
 }
 
 impl Store {
+    /// The next row generation. Checked: running out is an error, never a
+    /// wrap that could repeat a generation a judgement still holds.
+    pub(super) fn next_generation(&self) -> std::io::Result<u64> {
+        use std::sync::atomic::Ordering;
+        self.generation
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_add(1))
+            .map(|n| n + 1)
+            .map_err(|_| std::io::Error::other("subscription generations exhausted"))
+    }
+
+    /// The last generation handed out: a row whose incarnation is above it
+    /// was granted after this call.
+    pub(crate) fn generation_now(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Open (creating) the store at `root`, sweeping expired subscriptions
     /// and trimming the verification tail.
     pub(crate) fn open(root: &Path, now: DateTime<Utc>, tail: TailPolicy) -> std::io::Result<Self> {
@@ -276,12 +300,14 @@ impl Store {
             }
         }
         pending::load(&mut state, &outbox_dir, &dead_dir, now)?;
+        let loaded = state.subs.values().map(|s| s.generation).max().unwrap_or(0);
         let store = Self {
             subs_dir,
             verified_dir,
             outbox_dir,
             dead_dir,
             state: Mutex::new(state),
+            generation: std::sync::atomic::AtomicU64::new(loaded),
             #[cfg(test)]
             fail_next_dead_sync: std::sync::atomic::AtomicBool::new(false),
         };
@@ -470,6 +496,8 @@ impl Store {
         if let Placed::NotSynced(error) = verified_placed {
             return Err(error);
         }
+        sub.generation = self.next_generation()?;
+        sub.incarnation = sub.generation;
         let name = format!("{}.json", sub.id);
         let placed = match write_record(&self.subs_dir, &name, &sub) {
             Ok(placed) => placed,
@@ -558,6 +586,36 @@ impl Store {
             return Err(CapHit::Global(caps.global));
         }
         Ok(())
+    }
+
+    /// Rows removed so far, by any path.
+    pub(crate) fn removals(&self) -> u64 {
+        self.state.lock().removals
+    }
+
+    /// Whether some subscription's expiry or hold deadline fell in
+    /// `(after, upto]`, the earliest deadline after `upto` (when the next
+    /// check is due), and how many rows were removed so far.
+    pub(crate) fn lapses(
+        &self,
+        after: DateTime<Utc>,
+        upto: DateTime<Utc>,
+    ) -> (bool, Option<DateTime<Utc>>, u64) {
+        let state = self.state.lock();
+        let (mut lapsed, mut next) = (false, None::<DateTime<Utc>>);
+        for at in state
+            .subs
+            .values()
+            .flat_map(|s| [s.expires_at, s.held_until])
+            .flatten()
+        {
+            if after < at && at <= upto {
+                lapsed = true;
+            } else if at > upto {
+                next = Some(next.map_or(at, |n| n.min(at)));
+            }
+        }
+        (lapsed, next, state.removals)
     }
 
     /// Delete subscription `id`. Expired rows are swept first, so an

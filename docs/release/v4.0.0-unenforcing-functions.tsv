@@ -29,6 +29,8 @@ src/gateway/task_service/store_disk.rs	visit_unit	1	A non-object admission membe
 src/gateway/task_service/store_expiry.rs	sealed_files	1	Absolute paths of sealed rows for the operator's startup report
 src/gateway/task_service/store_targets.rs	bounded	1	The constant bounded-failure transition
 src/transport/stdio.rs	diagnostic_command	1	Forwards to summarize_stdio_command for logs
+src/oauth/callback.rs	unbracketed	1	Strips IPv6 brackets before parsing; the loopback decision is loopback_literal (critical row)
+src/oauth/callback.rs	url_host	1	Names the redirect URI host from a literal loopback_literal already validated; binds and refuses nothing (MIK-7739)
 src/transport/http/listen.rs	carried_session	1	Reads the session id header an outgoing stream open carried
 src/transport/http/listen.rs	refused	1	Maps a refused stream-open status; on 404 hands the carried session to the heal
 src/transport/http/listen.rs	session_expired	1	Drops an expired shared session id and re-handshakes; transport recovery, no access decision
@@ -68,3 +70,29 @@ src/personal_accounts/journey/ops.rs	storage	1	Wraps an AccountError as JourneyE
 src/personal_accounts/journey/ops.rs	view	1	Projects a record into the status view; formatting.
 src/personal_accounts/journey/ops.rs	journey_status	1	Unscoped status read by id; its only production caller (worker arm) runs after start_journey's owner check, and owner-scoped reads use journey_status_owned.
 src/personal_accounts/journey/persist.rs	write_journeys	1	Seals and durably replaces journeys.json, marking the slot Stale on a post-rename failure; persistence.
+src/gateway/router/mod.rs	announce_backend_view_changed	1	Per-user change hint (MIK-8148): calls the existing backend-scoped broadcasts, which make the access decision
+src/gateway/server/tools_changed.rs	revoked	1	Per-user change hint: always announces a revoked grant; the revocation itself is enforced elsewhere
+src/gateway/server/tools_changed.rs	backend_views	1	Per-user change hint: recomputes per-user views after a backend-wide nudge
+src/gateway/server/tools_changed.rs	decide	1	Change drain: decides whether and how widely a content-free hint goes; who is admitted is decided at delivery
+src/gateway/server/tools_changed.rs	slot_seen	1	Change drain: fingerprints a per-user slot's served list
+src/gateway/server/tools_changed.rs	per_user_seen	1	Change drain: snapshots every per-user slot and the descriptor filter
+src/gateway/server/tools_changed/views.rs	acct	1	Per-user change hint: parses an account binding's audience and lease revision
+src/gateway/server/tools_changed/views.rs	audience	1	Per-user change hint: names the caller across credential refreshes
+src/gateway/server/tools_changed/views.rs	new	1	Per-user change hint: empty view state for one backend instance
+src/gateway/server/tools_changed/views.rs	adopt	1	Per-user change hint: carries views across a backend replacement
+src/gateway/server/tools_changed/views.rs	slot	1	Per-user change hint: compares one slot with what it last showed
+src/gateway/server/tools_changed/views.rs	recompute	1	Per-user change hint: recomputes every present slot and the filter
+src/gateway/server/tools_changed/views.rs	revoked	1	Per-user change hint: announces a revoked grant's loss; the revocation itself is enforced elsewhere
+src/gateway/server/tools_changed/views.rs	any_shown	1	Per-user change hint: whether removing the backend changes any view
+src/gateway/server/tools_changed/views.rs	baseline	1	Per-user change hint: picks what a first fill is compared with
+src/gateway/server/tools_changed/views.rs	bury	1	Per-user change hint: keeps an evicted view's fingerprint, capped
+src/oauth/login_gate.rs	fill_scope	1	Runs a shared fill under its dispatch mark; affects only which timeout error a joiner reports (MIK-8046).
+src/oauth/login_gate.rs	joined	1	Records which shared fill a deadline scope waits on; affects only which timeout error it reports (MIK-8046).
+src/gateway/router/helpers.rs	build_http_response	1	Serialises a frame already wrapped as Egressed; the scan is decided where the Egressed value is made, not here.
+src/gateway/server/persistence.rs	write_costs	1	Shutdown persistence (MIK-8157): writes today's spend to costs.json under the cost-write lock; the budget decision is the enforcer's
+src/gateway/server/persistence.rs	save_costs_unless_busy	1	Shutdown persistence (MIK-8157): periodic cost save that skips while a previous write runs
+src/gateway/server/persistence.rs	run_shutdown_saves	1	Shutdown persistence (MIK-8157): runs the shutdown saves on detached threads under one deadline
+src/gateway/server/persistence.rs	save_state_on_shutdown	1	Shutdown persistence (MIK-8157): lists the HTTP shutdown saves for run_shutdown_saves
+src/gateway/router/handlers/health.rs	backends_overall_healthy	1	Folds backend statuses into one health bit for /health; admin detail is decided in health_handler
+src/gateway/router/handlers/session_end.rs	sse_deprecated_handler	1	Answers the retired /sse route with a fixed 410 migration notice; reads no request data
+src/gateway/router/handlers/sse.rs	unsupported_version_error	1	Builds the unsupported-version JSON-RPC error; the refusal is decided by its callers

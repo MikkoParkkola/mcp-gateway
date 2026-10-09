@@ -102,6 +102,11 @@ impl Need {
         self.uris.contains_key(uri)
     }
 
+    /// Whether a live key watches any URI.
+    pub(crate) fn watches_any(&self) -> bool {
+        !self.uris.is_empty()
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.resources_changed == 0
             && self.prompts_changed == 0
@@ -185,12 +190,47 @@ pub(crate) enum Verdict {
 #[derive(Debug, Default)]
 pub(crate) struct Snapshot {
     good: Option<(std::collections::HashSet<String>, bool)>,
+    /// Bumped by every clear, so a read begun before it cannot refill it.
+    epoch: u64,
+    /// The store generation when the snapshot's read began: it judges only
+    /// grants at or below it (MIK-8194). A later grant was not covered.
+    covers: u64,
 }
 
 impl Snapshot {
+    /// Forget the snapshot (its instance or its interest is gone).
+    pub(crate) fn clear(&mut self) {
+        self.good = None;
+        self.epoch += 1;
+    }
+
+    /// The epoch a read begins under; see [`Self::read_at`].
+    pub(crate) fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    /// [`Self::read`] unless the snapshot was cleared since `epoch`; `false`
+    /// when the read is stale and was dropped.
+    pub(crate) fn read_at(
+        &mut self,
+        epoch: u64,
+        (uris, complete): (std::collections::HashSet<String>, bool),
+        covers: u64,
+    ) -> bool {
+        if epoch != self.epoch {
+            return false;
+        }
+        self.good = Some((uris, complete));
+        self.covers = covers;
+        true
+    }
+
     /// Record a successful read; `complete` is false when the page cap cut it.
+    /// It judges every grant: a read with no known start.
+    #[cfg(test)]
     pub(crate) fn read(&mut self, uris: std::collections::HashSet<String>, complete: bool) {
         self.good = Some((uris, complete));
+        self.covers = u64::MAX;
     }
 
     /// Whether any read has succeeded yet.
@@ -199,10 +239,16 @@ impl Snapshot {
     }
 
     pub(crate) fn verdict(&self, uri: &str) -> Verdict {
+        self.verdict_for(uri, None)
+    }
+
+    /// [`Self::verdict`] for a subscription granted at `granted`: a grant
+    /// after the read began is not revoked by it (MIK-8194).
+    pub(crate) fn verdict_for(&self, uri: &str, granted: Option<u64>) -> Verdict {
         match &self.good {
             Some((uris, _)) if uris.contains(uri) => Verdict::Deliver,
-            Some((_, true)) => Verdict::Revoke,
-            None | Some((_, false)) => Verdict::Skip,
+            Some((_, true)) if granted.is_none_or(|g| g <= self.covers) => Verdict::Revoke,
+            _ => Verdict::Skip,
         }
     }
 }

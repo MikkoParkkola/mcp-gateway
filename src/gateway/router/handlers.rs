@@ -5,7 +5,6 @@
 use std::sync::Arc;
 
 use axum::{
-    Json,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
@@ -19,20 +18,18 @@ use super::authorization::{
     is_admin_meta_tool, refusal_principal, require_admin_log_level, require_admin_tool_access,
 };
 use super::helpers::{
-    attach_session_header, build_accepted_response, build_error_response,
-    build_error_response_with_data, build_http_error_response, build_http_response, build_response,
-    extract_tools_call_params, extract_tools_call_params_ref, merge_client_meta,
-    parse_elicitation_params, parse_request_ref, parse_sampling_params,
+    build_accepted_response, build_error_response, build_error_response_with_data,
+    build_http_error_response, build_response, extract_tools_call_params,
+    extract_tools_call_params_ref, merge_client_meta, parse_elicitation_params, parse_request_ref,
+    parse_sampling_params,
 };
 use super::meta_refusal_audit::Refused;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::relay::{self, CatalogueCaller};
-use crate::gateway::meta_mcp::response_security::DeliveryInspection;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
-use crate::gateway::outbound::{OutboundReply, gateway_reply, judged_reply, stream_reply};
-use crate::gateway::session_id::{SessionId, session_fp};
-use crate::gateway::streaming::create_sse_response;
+use crate::gateway::outbound::{OutboundReply, judged_reply, stream_reply};
+use crate::gateway::session_id::SessionId;
 use crate::gateway::{recovery::SurfaceRequest, session_lifecycle};
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
@@ -43,23 +40,33 @@ use crate::security::{
     extract_agent_identity, log_agent_identity, sanitize_json_value, validate_agent_identity,
 };
 
+#[cfg(test)]
+mod cacheable_field_tests;
 mod events;
+mod health;
+#[cfg(feature = "metrics")]
+mod metrics_scrape;
 mod modern_response;
 mod owner;
 pub(super) mod request_checks;
+mod session_end;
+mod sse;
 mod tasks;
 
-pub(crate) use modern_response::shape_modern_response;
 #[cfg(test)]
-use modern_response::{CACHEABLE_METHODS, build_modern_response};
+use health::backends_overall_healthy;
+pub(super) use health::health_handler;
+#[cfg(feature = "metrics")]
+pub(super) use metrics_scrape::metrics_handler;
+pub(crate) use modern_response::shape_modern_response;
 pub(super) use owner::owner_of;
 use owner::request_session_owner;
 #[cfg(test)]
 use owner::session_owner;
+pub(super) use session_end::{mcp_delete_handler, sse_deprecated_handler};
+pub(super) use sse::mcp_sse_handler;
+use sse::unsupported_version_error;
 
-/// GET /mcp handler - SSE stream for server→client notifications
-/// Per MCP spec 2025-03-26, servers MAY return SSE stream or 405 Method Not Allowed.
-/// We implement the full streaming support.
 /// The caller's `Mcp-Session-Id`, one rule for every session route: missing,
 /// non-UTF-8, empty and whitespace-only values are all "no session" (F9).
 fn session_id_header(headers: &HeaderMap) -> Option<&str> {
@@ -102,346 +109,6 @@ fn listened_task_ids(params: Option<&Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The stateless path's answer to a protocol version this build cannot serve.
-///
-/// The client is told which revisions it *could* retry on rather than left to
-/// guess. Shared by the POST classifier and the `GET /mcp` era gate so the two
-/// cannot drift into giving one client two different answers.
-fn unsupported_version_error(
-    id: Option<crate::protocol::RequestId>,
-    version: &str,
-    modern_enabled: bool,
-) -> JsonRpcResponse {
-    let supported: &[&str] = if modern_enabled {
-        crate::protocol::meta::MODERN_VERSIONS
-    } else {
-        &[]
-    };
-    JsonRpcResponse::error_with_data(
-        id,
-        crate::protocol::era::UNSUPPORTED_PROTOCOL_VERSION,
-        format!("unsupported protocol version '{version}'"),
-        serde_json::json!({ "supportedVersions": supported }),
-    )
-}
-
-/// The refusal a `GET /mcp` earns from the era it declares, if any.
-///
-/// `None` means the caller did not declare the 2026 era, and keeps the stream
-/// it has always had.
-///
-/// Every token of every field line is examined, and the first that declares the
-/// modern era decides. Two properties fall out of that, and both are the point:
-///
-/// RFC 9110 lets any intermediary fold two field lines into one comma-separated
-/// value, so a caller reaching the modern era through `2025-06-18, 2026-07-28`
-/// must be refused on its second token. Reading only the first, or refusing the
-/// whole request as a duplicate, would either serve it or break the legacy
-/// caller that sends its own version twice -- a path this change does not own.
-///
-/// Tokenising the raw bytes is what makes the scan honest. A `HeaderValue` may
-/// carry `obs-text` (bytes above 0x7F), and `HeaderValue::to_str` refuses the
-/// *whole* value when it does; a caller could then hide a modern token behind
-/// one high byte and be served the legacy stream. Splitting first and decoding
-/// each token separately discards only the token that is actually undecodable.
-fn get_era_refusal(state: &AppState, headers: &HeaderMap) -> Option<axum::response::Response> {
-    let version = headers
-        .get_all("mcp-protocol-version")
-        .iter()
-        .flat_map(|value| value.as_bytes().split(|byte| *byte == b','))
-        .filter_map(|token| std::str::from_utf8(token).ok())
-        .map(str::trim)
-        // Broader than the served list on purpose: a 2026 revision this build
-        // does not serve is still stateless, so it is not a legacy caller.
-        // Which refusal it gets is the served list's question, below.
-        .find(|token| crate::protocol::meta::declares_modern_era(token))?;
-
-    let modern_enabled = state.live_config.running().server.modern_protocol;
-    if modern_enabled && crate::protocol::meta::MODERN_VERSIONS.contains(&version) {
-        // The status is the specification's, not a choice: "HTTP GET or DELETE
-        // to the MCP endpoint: respond with `405 Method Not Allowed`". RFC 9110
-        // then requires a 405 to name the methods that do work, so `Allow`
-        // carries POST rather than leaving the caller to guess.
-        let mut response = build_http_error_response(
-            None,
-            crate::error::rpc_codes::INVALID_REQUEST,
-            "GET /mcp was removed in MCP 2026-07-28; use subscriptions/listen",
-            StatusCode::METHOD_NOT_ALLOWED,
-        )
-        .into_response();
-        response.headers_mut().insert(
-            axum::http::header::ALLOW,
-            axum::http::HeaderValue::from_static("POST"),
-        );
-        return Some(response);
-    }
-
-    // Naming `subscriptions/listen` here would send the caller to a method that
-    // refuses this same version, so it gets the POST path's answer instead.
-    Some(
-        build_http_response(
-            &unsupported_version_error(None, version, modern_enabled),
-            StatusCode::BAD_REQUEST,
-        )
-        .into_response(),
-    )
-}
-
-pub(super) async fn mcp_sse_handler(
-    State(state): State<Arc<AppState>>,
-    client: Option<axum::Extension<AuthenticatedClient>>,
-    headers: HeaderMap,
-    extensions: axum::http::Extensions,
-) -> OutboundReply {
-    let client = client.map(|axum::Extension(c)| c);
-
-    // Before the streaming and Accept checks, and before any session work: a
-    // refusal that ran later would mint a session per refused caller and
-    // overwrite the resumption point of whoever owns the id it presented.
-    if let Some(refusal) = get_era_refusal(&state, &headers) {
-        return gateway_reply(refusal);
-    }
-    // The owner the POST that minted the session used, so a subject resumes
-    // its own stream and nobody else's.
-    let (subject, owner) =
-        match request_session_owner(&state, &headers, &extensions, client.as_ref()).await {
-            Ok(resolved) => resolved,
-            Err(refusal) => return gateway_reply(refusal),
-        };
-    // MIN.2: the caller this stream writes to, keyed as on POST (H7, §4.2).
-    let read_key = state
-        .multiplexer
-        .judges_reads()
-        .then(|| {
-            super::identity::caller_key(
-                subject.as_ref(),
-                extensions.get::<CertIdentity>(),
-                client.as_ref(),
-            )
-        })
-        .filter(|key| !key.is_empty());
-    // Check if streaming is enabled
-    if !state.streaming_config.enabled {
-        return gateway_reply(build_http_error_response(
-            None,
-            -32600,
-            "Streaming not enabled. Use POST to send JSON-RPC requests to /mcp",
-            StatusCode::METHOD_NOT_ALLOWED,
-        ));
-    }
-
-    // Check Accept header - must accept text/event-stream
-    let accept = headers
-        .get("accept")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if !accept.contains("text/event-stream") {
-        return gateway_reply(build_http_error_response(
-            None,
-            -32600,
-            "Must accept text/event-stream for SSE notifications",
-            StatusCode::NOT_ACCEPTABLE,
-        ));
-    }
-
-    let existing_session_id = session_id_header(&headers).map(String::from);
-
-    let last_event_id = headers
-        .get("last-event-id")
-        .and_then(|v| v.to_str().ok())
-        .map(String::from);
-
-    let held = crate::gateway::auth::live::held_credential(&headers);
-    let opened = if super::hardened_elicitation::is_hardened(&state) {
-        // Hardened (row 10): a stream only resumes a session a declaring
-        // `initialize` opened; it never opens one.
-        match state.multiplexer.resume_session_id_scoped(
-            existing_session_id.as_deref(),
-            &owner,
-            held,
-        ) {
-            Some(resumed) => resumed,
-            None => return gateway_reply(super::hardened_elicitation::refusal()),
-        }
-    } else {
-        state.multiplexer.get_or_create_session_id_scoped(
-            existing_session_id.as_deref(),
-            &owner,
-            held,
-        )
-    };
-    let session_id = opened.expose_secret().to_owned();
-
-    if let Some(key) = read_key {
-        state.multiplexer.bind_session_reader(&session_id, key);
-    }
-    // Read before the macro so its count is graded (MIK-7725).
-    let session = opened.fp();
-    info!(session_id = %session, "Client connected to SSE stream");
-
-    // Auto-subscribe to configured backends
-    let multiplexer = Arc::clone(&state.multiplexer);
-    let sid = session_id.clone();
-    tokio::spawn(async move {
-        multiplexer.auto_subscribe(&sid).await;
-    });
-
-    // Clone Arc for the stream (outlives the handler)
-    let multiplexer_for_stream = Arc::clone(&state.multiplexer);
-    let keep_alive = state.streaming_config.keep_alive_interval;
-
-    // Create SSE response with owned data
-    match create_sse_response(
-        multiplexer_for_stream,
-        session_id.clone(),
-        last_event_id,
-        keep_alive,
-    ) {
-        Some(sse) => {
-            // Add session ID header to response
-            let mut response = sse.into_response();
-            attach_session_header(response.headers_mut(), &session_id);
-            stream_reply(response)
-        }
-        None => gateway_reply(build_http_error_response(
-            None,
-            -32603,
-            "Failed to create SSE stream",
-            StatusCode::INTERNAL_SERVER_ERROR,
-        )),
-    }
-}
-
-/// DELETE /mcp handler - Session termination
-/// Per MCP spec 2025-03-26, clients SHOULD send DELETE to terminate session.
-pub(super) async fn mcp_delete_handler(
-    State(state): State<Arc<AppState>>,
-    client: Option<axum::Extension<AuthenticatedClient>>,
-    headers: HeaderMap,
-    extensions: axum::http::Extensions,
-) -> OutboundReply {
-    let client = client.map(|axum::Extension(c)| c);
-    // Public paths may reach this handler without a validated identity even
-    // when authentication is enabled. Their shared anonymous owner is not a
-    // credential, so refuse before inspecting any session identifier.
-    if state.auth_config.enabled
-        && !client
-            .as_ref()
-            .is_some_and(|c| c.authenticated && !c.principal.is_empty())
-    {
-        return gateway_reply(crate::gateway::middleware::bearer_unauthorized_response(
-            "Session termination requires an authenticated credential.",
-        ));
-    }
-    let session_id = session_id_header(&headers);
-    let owner = match request_session_owner(&state, &headers, &extensions, client.as_ref()).await {
-        Ok((_, owner)) => owner,
-        Err(refusal) => return gateway_reply(refusal),
-    };
-
-    let removed = session_id.and_then(|id| state.multiplexer.remove_session_for(id, &owner));
-    let status = match (session_id, removed) {
-        (Some(id), Some(removed)) => {
-            let session = removed.fp();
-            info!(session_id = %session, "Session terminated by client");
-            // The id is dead from here; what was keyed by it goes too.
-            if let Some(ref lifecycle) = state.session_lifecycle {
-                lifecycle.on_disconnect(id);
-            }
-            StatusCode::NO_CONTENT
-        }
-        (Some(id), None) => {
-            let session = session_fp(id);
-            debug!(session_id = %session, "No owned session for DELETE");
-            StatusCode::NOT_FOUND
-        }
-        (None, _) => StatusCode::BAD_REQUEST,
-    };
-    gateway_reply(status)
-}
-
-/// Deprecated SSE endpoint handler - surfaces a clear error instead of silent 404
-pub(super) async fn sse_deprecated_handler() -> impl IntoResponse {
-    build_http_response(
-        &JsonRpcResponse::error_with_data(
-            None,
-            -32600,
-            "SSE transport is deprecated. Use Streamable HTTP (POST /mcp) instead.",
-            json!({
-                "migration": "In settings.json, change: \"type\": \"sse\" -> \"type\": \"http\" and \"url\": \"http://localhost:39400/sse\" -> \"url\": \"http://localhost:39400/mcp\"",
-                "spec": "https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http"
-            }),
-        ),
-        StatusCode::GONE,
-    )
-}
-
-/// Decide overall gateway health from per-backend status.
-///
-/// Overall health must reflect more than the circuit breaker. A backend that is
-/// timing out under load records consecutive failures and the health tracker
-/// flips it unhealthy *before* the breaker trips Open; deriving health from
-/// circuit state alone reports "healthy" while backends are silently failing
-/// (MIK-5080). A backend is considered healthy only when its breaker is not
-/// Open AND the health tracker still considers it live.
-fn backends_overall_healthy(
-    statuses: &std::collections::HashMap<String, crate::backend::BackendStatus>,
-) -> bool {
-    statuses
-        .values()
-        .all(|s| s.circuit_state != crate::failsafe::CircuitState::Open && s.healthy)
-}
-
-/// Health check handler
-///
-/// For unauthenticated (public) clients, backend details are redacted
-/// to avoid leaking internal topology. Only authenticated admin clients
-/// see full backend names and circuit breaker state.
-pub(super) async fn health_handler(
-    State(state): State<Arc<AppState>>,
-    request: axum::http::Request<axum::body::Body>,
-) -> impl IntoResponse {
-    let statuses = state.backends.statuses();
-    // The in-process capability backend is not in the registry: its health (MIK-5080) and its
-    // startup scan (MIK-7268) count here. None configured is healthy (`all` of nothing).
-    let capability_status = state.meta_mcp.get_capabilities().map(|c| c.status());
-    let capability_healthy = capability_status.iter().all(|s| s.healthy && s.loaded);
-    // MIK-8052: a sealed task row degrades health; probes read `/livez`.
-    let sealed_rows = state.tasks.skipped_records().sealed;
-    let healthy = backends_overall_healthy(&statuses) && capability_healthy && sealed_rows == 0;
-
-    // Admin is a grant, not a name. Comparing against "public"/"anonymous"
-    // gave full backend detail to every authenticated non-admin key the moment
-    // an operator removed /health from `auth.public_paths`.
-    let is_admin = request
-        .extensions()
-        .get::<AuthenticatedClient>()
-        .is_some_and(|c| c.admin);
-
-    let status = if healthy { "healthy" } else { "degraded" };
-    // A non-admin gets `status` and `version` only: a backend count is
-    // inventory, and readiness probes read `status` or `/livez`/`/readyz` (A3).
-    let response = if is_admin {
-        json!({
-            "status": status,
-            "version": env!("CARGO_PKG_VERSION"),
-            "backends": serde_json::to_value(&statuses).unwrap_or(json!({})),
-            // Capability-backend health as a sibling field, so the existing
-            // `backends` shape stays backward-compatible.
-            "capability_backend": capability_status
-                .as_ref()
-                .map(|s| serde_json::to_value(s).unwrap_or(json!({}))),
-            "task_store": state.tasks.health_view(),
-        })
-    } else {
-        json!({ "status": status, "version": env!("CARGO_PKG_VERSION") })
-    };
-
-    let code = [StatusCode::SERVICE_UNAVAILABLE, StatusCode::OK][usize::from(healthy)];
-    (code, Json(response))
-}
-
 /// Meta-MCP handler (POST /mcp).
 ///
 /// `Accept` ALONE decides the body shape (S-01): a stream carrying only the
@@ -469,20 +136,27 @@ pub(super) async fn meta_mcp_handler(
     let guard = super::helpers::read_guard(&state);
     let audit = offers_event_stream.then(|| state.meta_mcp.rejection_audit());
     let guard_for_scope = guard.clone();
-    let dispatch = crate::gateway::meta_mcp::grant_audit::slot_http(
-        logger.clone(),
-        // COLLUDE.1: one relay-receipt collector spans dispatch and finalize.
-        Box::pin(async move {
-            crate::gateway::outbound::read_scoped(
-                guard_for_scope,
-                Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting_http(
-                    Arc::clone(&state.meta_mcp),
-                    meta_mcp_dispatch(state, http_request),
-                )),
-            )
-            .await
-            .0
-        }),
+    // MIK-8161: a backend's mid-call notifications meet the egress scan too.
+    let screen = Some(state.meta_mcp.notification_screen("http", ""));
+    // MIK-8176: the slots this request's mints take are owned here, outside
+    // the grant-audit replacer, and by the dispatch future itself, so a
+    // stream that polls it after this handler returns still has its scope.
+    let dispatch = crate::gateway::meta_mcp::sealed_hold::scoped(
+        crate::gateway::meta_mcp::grant_audit::slot_http(
+            logger.clone(),
+            // COLLUDE.1: one relay-receipt collector spans dispatch and finalize.
+            Box::pin(async move {
+                crate::gateway::outbound::read_scoped(
+                    guard_for_scope,
+                    Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting_http(
+                        Arc::clone(&state.meta_mcp),
+                        meta_mcp_dispatch(state, http_request),
+                    )),
+                )
+                .await
+                .0
+            }),
+        ),
     );
 
     if let Some(audit) = audit {
@@ -493,14 +167,14 @@ pub(super) async fn meta_mcp_handler(
             guard, audit, logger,
         ));
         let (scoped, rx) =
-            crate::transport::notification_sink::scope_judged(dispatch, Arc::clone(&judge));
+            crate::transport::notification_sink::scope_judged(screen, dispatch, Arc::clone(&judge));
         stream_reply(crate::gateway::streaming::first_event_wins_stream(scoped, rx, judge).await)
     } else {
         // Still scoped, and still drained alongside: `publish` sheds on a full
         // sink, and a client that did not offer a stream must not make a
         // backend's notifications count against that depth.
         let (response, _notifications) =
-            crate::transport::notification_sink::collect(dispatch).await;
+            crate::transport::notification_sink::collect(screen, dispatch).await;
         // The answer's read record, written after every late replacer.
         judged_reply(response, logger.as_ref()).await
     }
@@ -691,6 +365,9 @@ async fn meta_mcp_dispatch(
     let session_id = opened
         .as_ref()
         .map_or_else(String::new, |id| id.expose_secret().to_owned());
+    // MIK-8161: the notification screen's verdicts name this caller and session.
+    let screen_caller = client.as_ref().map_or("anonymous", |c| c.name.as_str());
+    crate::transport::notification_sink::bind_screen(screen_caller, &session_id);
 
     let raw_id = crate::protocol::mrtr::raw_request_id(&request);
     // A failed grant-decision write refuses under this id (MIK-7663.GH2409.3).
@@ -946,11 +623,11 @@ async fn meta_mcp_dispatch(
 
     // Resolved ONCE, here, and reused by creation, retrieval, cancellation,
     // idempotent replay and subscription ownership below.
-    let (owner, events_owner) = tasks::route_owners(
+    let (owner, events_owner, admission_owner) = tasks::route_owners(
         &state,
         verified_identity.as_ref(),
         oauth_agent_identity.as_ref(),
-        &tasks::task_owner_key(
+        (
             grant_subject.as_ref(),
             cert_identity.as_ref(),
             client.as_ref(),
@@ -1043,7 +720,6 @@ async fn meta_mcp_dispatch(
     // Fail-closed default: delivery inspects unless the `tools/call` arm below
     // proves it already inspected this exact artifact.
     #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
-    let mut delivery_inspection = DeliveryInspection::Required;
     // The scope and identity the resource and prompt arms forward under.
     let (scope, identity) = (client.as_ref(), verified_identity.as_ref());
     // The one derivation of what this caller may invoke, shared by
@@ -1680,26 +1356,14 @@ async fn meta_mcp_dispatch(
                 );
             }
             caller.signing = signing_context.as_ref();
-            // One admission authority per key. A task-augmented call is admitted
-            // durably under `Mode::Task` by the handoff below, on the same
-            // verified principal and explicit key a synchronous lease would
-            // reserve under `Mode::Sync` — taking both is not double protection
-            // but a self-mismatch that refuses every honest task. Nothing is
-            // widened by declining the lease here: this request executes no
-            // backend work, and the invocation policy the sync admission would
-            // have pre-applied is applied again at the dispatch chokepoint that
-            // the worker's own call goes through.
-            let admission = if caller.task.is_some() || caller.awaits_signing_admission() {
-                Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected)
-            } else {
-                state.meta_mcp.admit_meta_sync(
-                    &caller,
-                    tool_name,
-                    &arguments,
-                    Some(&session_id),
-                    &id,
-                )
-            };
+            let admission = state.meta_mcp.admit_meta_sync(
+                crate::gateway::meta_mcp::AdmissionOwner::routed(&admission_owner),
+                &caller,
+                tool_name,
+                &arguments,
+                Some(&session_id),
+                &id,
+            );
             let (owned_execution, replay) = match admission {
                 Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(lease)) => {
                     (Some(lease), None)
@@ -1727,9 +1391,8 @@ async fn meta_mcp_dispatch(
             };
             execution = owned_execution;
             caller.execution = execution.as_ref();
-            // `call_response` is mutated only by the firewall response scan below.
-            #[cfg_attr(not(feature = "firewall"), allow(unused_mut))]
-            let mut call_response = if let Some((response, audit)) = replay {
+            // Screened at delivery, in `finalize_content`, with every other frame.
+            if let Some((response, audit)) = replay {
                 // #2472: a replay is a delivered call, recorded as its first run was.
                 let session = Some(session_id.as_str());
                 (state.meta_mcp)
@@ -1744,49 +1407,7 @@ async fn meta_mcp_dispatch(
                     caller,
                 ))
                 .await
-            };
-
-            // Firewall: post-invocation response scan + credential redaction.
-            // A refusing verdict must stop the scan and replace the result here:
-            // this pass mutates the artifact under `Redact`, so letting a refused
-            // response continue would launder it past the delivery chokepoint.
-            //
-            // ONE inspection for the whole artifact, then the strongest action
-            // over EVERY authenticated target. Scanning per target in a loop was
-            // order-dependent under `Redact`: the first target's pass redacts the
-            // credential in place, so a later target whose policy blocks on that
-            // finding inspects an already-cleaned artifact and returns Allow —
-            // the block silently depended on which target sorted first.
-            // A discovery result the Meta-MCP already inspected on its
-            // canonical value is not scanned again (MIK-7407.RESPONSE.3).
-            #[cfg(feature = "firewall")]
-            if call_response.discovery_inspected {
-                delivery_inspection = DeliveryInspection::AlreadyInspected;
-            } else {
-                let snapshot = (call_response.result.as_ref())
-                    .and_then(|result| state.meta_mcp.relay_snapshot(result));
-                delivery_inspection = super::response_pass::inspect_tools_call_response(
-                    state.firewall.as_deref(),
-                    &mut call_response,
-                    &response_targets,
-                    &crate::security::response_policy::ResponseCorrelation {
-                        session_id: &session_id,
-                        caller: client.as_ref().map_or("anonymous", |c| c.name.as_str()),
-                        external_server: "gateway",
-                        external_tool: &external_tool,
-                        subject: grant_subject.as_ref(),
-                    },
-                );
-                // A redaction changed the delivery: its receipt is rebuilt from what goes out.
-                let delivered = call_response.result.as_ref();
-                let shape =
-                    crate::gateway::meta_mcp::invoke::relay::AnswerShape::of(&external_tool);
-                state
-                    .meta_mcp
-                    .restage_if_changed(snapshot, delivered, shape);
             }
-
-            call_response
         }
         // Resources
         "resources/list" => {
@@ -1949,12 +1570,16 @@ async fn meta_mcp_dispatch(
             external_tool: &external_tool,
             subject: grant_subject.as_ref(),
         },
-        mutation: crate::security::response_policy::ResponseMutationPolicy::PreserveInputRequired,
         signing: signing_context.as_ref(),
         chain_source: response.chain_source,
         chain_nonce: chain_nonce.as_deref(),
     };
-    let response = (state.meta_mcp).finalize_content(response, &delivery, delivery_inspection);
+    #[cfg(feature = "firewall")]
+    let router = state.firewall.as_deref();
+    #[cfg(not(feature = "firewall"))]
+    let router = None;
+    let mut response = (state.meta_mcp).finalize_routed(response, &delivery, router);
+    state.meta_mcp.release_unsent_hold(&mut response).await; // MIK-8131
     // Kept for the stored delivery (cloned only when an execution stores it).
     let finalized = execution.as_ref().map(|_| response.clone());
     // MIN.2: judged on the finalized answer; the verdict rides its delivery
@@ -2059,48 +1684,6 @@ pub(super) fn refusal_status(response: &JsonRpcResponse) -> Option<StatusCode> {
 
 // ── destructive-confirmation helpers ─────────────────────────────────────────
 
-/// GET /metrics — Prometheus text exposition format scrape endpoint.
-///
-/// Answers only `Authorization: Bearer <server.metrics_token>`. Everything
-/// else, the admin bearer included, gets 401 with `WWW-Authenticate: Bearer`,
-/// and with no token configured nobody is admitted. The route sits outside the
-/// main auth middleware on purpose: two credentials, two surfaces, and neither
-/// opens the other. Returns an empty 200 when the recorder is not installed.
-#[cfg(feature = "metrics")]
-pub(super) async fn metrics_handler(
-    State(token): State<Option<Arc<str>>>,
-    headers: HeaderMap,
-) -> axum::response::Response {
-    use axum::http::{HeaderValue, header};
-    use subtle::ConstantTimeEq;
-    let presented = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-    let admitted = match (token.as_deref(), presented) {
-        (Some(expected), Some(presented)) => {
-            bool::from(presented.as_bytes().ct_eq(expected.as_bytes()))
-        }
-        _ => false,
-    };
-    if !admitted {
-        return (
-            StatusCode::UNAUTHORIZED,
-            [(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"))],
-        )
-            .into_response();
-    }
-    (
-        StatusCode::OK,
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static("text/plain; version=0.0.4; charset=utf-8"),
-        )],
-        crate::metrics::render(),
-    )
-        .into_response()
-}
-
 #[cfg(test)]
 #[path = "handlers_health_predicate_tests.rs"]
 mod health_predicate_tests;
@@ -2129,62 +1712,5 @@ fn catalogue_caller(
         keyed,
         name: client.map_or_else(|| "anonymous".to_owned(), |c| c.name.clone()),
         session: session_id.to_owned(),
-    }
-}
-
-#[cfg(test)]
-mod cacheable_field_tests {
-    use super::{CACHEABLE_METHODS, build_modern_response};
-    use crate::protocol::{JsonRpcResponse, RequestId};
-    use axum::http::StatusCode;
-
-    /// CACHE.1a and CACHE.1b claim both fields on **all five** methods. The
-    /// HTTP acceptance test can only reach four of them -- `resources/read`
-    /// needs a backend serving a URI, and an error result carries nothing to
-    /// decorate. Driving the builder directly covers the fifth, and iterating
-    /// the constant rather than a hand-copied list means a sixth method cannot
-    /// be added without this test demanding its fields too.
-    #[tokio::test]
-    async fn every_cacheable_method_gets_both_fields() {
-        // "All five" is half the claim; iterating the constant alone would
-        // still pass if a method were dropped from it.
-        assert_eq!(
-            CACHEABLE_METHODS.len(),
-            6,
-            "five cacheable methods and discovery: {CACHEABLE_METHODS:?}"
-        );
-        for method in CACHEABLE_METHODS {
-            let response = JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({}));
-            let built = build_modern_response(response, StatusCode::OK, method);
-            let bytes = axum::body::to_bytes(built.into_body(), usize::MAX)
-                .await
-                .expect("the builder produces a complete in-memory body");
-            let body: serde_json::Value =
-                serde_json::from_slice(&bytes).expect("the body is JSON-RPC");
-
-            assert!(
-                body["result"]["ttlMs"].as_u64().is_some_and(|ttl| ttl > 0),
-                "{method} must carry a positive ttlMs: {body}"
-            );
-            assert!(
-                body["result"]["cacheScope"].as_str().is_some(),
-                "{method} must carry a cacheScope: {body}"
-            );
-        }
-    }
-
-    /// The mirror: a method outside the list gets neither field. Without this,
-    /// a builder that decorated everything would pass the case above.
-    #[tokio::test]
-    async fn a_non_cacheable_method_gets_neither_field() {
-        let response = JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({}));
-        let built = build_modern_response(response, StatusCode::OK, "tools/call");
-        let bytes = axum::body::to_bytes(built.into_body(), usize::MAX)
-            .await
-            .expect("the builder produces a complete in-memory body");
-        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("the body is JSON-RPC");
-
-        assert!(body["result"].get("ttlMs").is_none(), "{body}");
-        assert!(body["result"].get("cacheScope").is_none(), "{body}");
     }
 }

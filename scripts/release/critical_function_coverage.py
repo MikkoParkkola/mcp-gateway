@@ -344,8 +344,9 @@ def main(argv=None):
 
     failed = graded = 0
     for result in grade(args.root, args.inventory, args.lcov):
-        graded += 1
         status, row = result[0], result[1]
+        # An INDIRECT result is a diagnostic about the tree, not an inventory row.
+        graded += status != "INDIRECT"
         where = f"{row['path']}:{row['fn']}#{row['occurrence']}"
         if status in ("ok", "BELOW"):
             _, _, lo, hi, missed, covered, total, pct, excluded, unverifiable = result

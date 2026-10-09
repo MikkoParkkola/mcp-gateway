@@ -306,10 +306,14 @@ async fn a2a_5_unfinished_tasks_are_tool_errors_with_the_reason() {
 /// A2A.6: credentials in `a2a_url` never reach an error message.
 #[tokio::test]
 async fn a2a_6_url_credentials_are_redacted_from_errors() {
-    // Nothing listens on this port: the card fetch fails and is reported.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve a port");
-    let port = listener.local_addr().expect("port").port();
-    drop(listener);
+    // Nothing listens on this port: the card fetch fails and is reported. The
+    // socket stays bound, never listening, for the whole test, so no parallel
+    // test can bind the port in between (MIK-7981, MIK-8211).
+    let reserved = tokio::net::TcpSocket::new_v4().expect("socket");
+    reserved
+        .bind("127.0.0.1:0".parse().unwrap())
+        .expect("bind without listening");
+    let port = reserved.local_addr().expect("port").port();
     let secret = "hunter2-secret";
     let userinfo = ["operator", secret].join(":");
     let url = format!("http://{userinfo}@127.0.0.1:{port}");
