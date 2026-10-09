@@ -191,19 +191,29 @@ impl Backend {
         }
         // The start may have replaced the claimed entry (an eviction or a
         // revocation in between): judge by the slot that holds the transport
-        // the request will be sent on.
-        let era = if holds(entry, &transport) {
-            Arc::clone(&entry.era)
+        // the request will be sent on. The era is read first and the holding
+        // re-checked after, so a restart in between cannot pair one peer's
+        // transport with its replacement's verdict; then the request is refused
+        // before the wire as a start that must be retried.
+        let replacement = if holds(entry, &transport) {
+            None
         } else {
             self.pool
                 .get(key)
                 .filter(|current| holds(current.value(), &transport))
-                .map_or_else(
-                    || Arc::clone(&entry.era),
-                    |current| Arc::clone(&current.value().era),
-                )
+                .map(|current| Arc::clone(current.value()))
         };
-        if era.cached().await == Some(Era::Modern) {
+        let holder = replacement.as_deref().unwrap_or(entry);
+        let verdict = holder.era.cached().await;
+        if !holds(holder, &transport) {
+            return Err(super::lifecycle::pre_send_start_error(
+                &self.name,
+                crate::Error::BackendUnavailable(
+                    "the slot was replaced while it started; retry the request".to_string(),
+                ),
+            ));
+        }
+        if verdict == Some(Era::Modern) {
             note_removed_method_refused(&self.name, method);
             return Err(removed_method_refusal(method));
         }
