@@ -66,7 +66,7 @@ src/events/worker_tests.rs	9
 src/failsafe/circuit_breaker.rs	2
 src/failsafe/health.rs	5
 src/gateway/auth_api_key_digest_tests.rs	4
-src/gateway/auth_dashboard.rs	3
+src/gateway/auth_dashboard.rs	2
 src/gateway/auth_dashboard_tests.rs	1
 src/gateway/auth_live.rs	2
 src/gateway/auth_resolved.rs	1

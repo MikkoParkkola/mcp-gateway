@@ -415,11 +415,14 @@ pub(crate) struct Now {
 }
 
 impl Now {
-    /// Both clocks, read now.
+    /// Both clocks, read now. The wall clock comes through `crate::clock`
+    /// (MIK-8202): one that reads before 1970 is kept as a time before the
+    /// epoch, which `wall_unreadable` refuses, so a session is never judged
+    /// against it.
     pub(crate) fn read() -> Self {
         Self {
             mono: Instant::now(),
-            wall: SystemTime::now(),
+            wall: crate::clock::system_time_or_before_epoch(),
         }
     }
 }
