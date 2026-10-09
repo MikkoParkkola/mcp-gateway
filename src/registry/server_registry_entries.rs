@@ -481,7 +481,7 @@ pub(super) static REGISTRY: &[RegistryEntry] = &[
             reason: ARBITRARY_REACH_REASON,
         },
         setup: Setup::NeedsService {
-            hint: "a local Chrome or Chromium install",
+            hint: "a local Chrome install, current stable or newer",
         },
     },
     RegistryEntry {
