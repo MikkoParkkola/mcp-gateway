@@ -506,7 +506,7 @@ impl<'a> State<'a> {
                     .shared
                     .snapshot
                     .lock()
-                    .read_at(epoch, read.uris, complete)
+                    .read_at(epoch, (read.uris, complete), granted_by)
                 {
                     return;
                 }

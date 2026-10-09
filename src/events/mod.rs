@@ -138,6 +138,13 @@ pub(crate) trait EventSource: Send + Sync {
     ) -> Result<(), RpcError> {
         Ok(())
     }
+    /// [`Self::authorize`] for a stored subscription, at delivery: a source
+    /// that judges against a catalogue read can tell a grant the read did not
+    /// cover (MIK-8194). The default asks [`Self::authorize`].
+    async fn authorize_row(&self, sub: &records::Subscription) -> Result<(), RpcError> {
+        self.authorize(&sub.principal, &sub.name, &sub.arguments)
+            .await
+    }
     /// Whether an occurrence matches a subscription's `arguments`.
     fn matches(
         &self,
@@ -189,6 +196,11 @@ pub(crate) trait EventSource: Send + Sync {
     /// Backend `backend`'s registration or configuration changed: wake
     /// whatever upstream work was waiting on it (design r3 L2).
     fn backend_changed(&self, _backend: &str) {}
+    /// The upstream listeners this source owns, for session-level tests.
+    #[cfg(test)]
+    fn upstream_listeners(&self) -> Option<Arc<upstream_listener::UpstreamListeners>> {
+        None
+    }
     /// Upstream listener tasks this source spawned, so a hub-level test can
     /// see upstream work start (reconcile table, design r3 section 6).
     #[cfg(test)]
