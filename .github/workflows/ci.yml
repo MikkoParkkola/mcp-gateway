@@ -154,10 +154,6 @@ jobs:
         run: |
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
           python3 scripts/ci/test_feature_shards.py
-      - name: Validate the 800-LOC ratchet
-        run: scripts/ci/check-loc-ceiling.sh --self-test
-      - name: Hold the 800-LOC ceiling deviation at its current count
-        run: scripts/ci/check-loc-ceiling.sh
       - name: Validate the gateway-spawn check against planted spawns
         run: python3 scripts/ci/check-gateway-spawns.py --self-test
       - name: Start the gateway in tests only through its isolating helper
@@ -1128,6 +1124,9 @@ jobs:
     # is sequenced after the release to avoid mass merge conflicts.
     # A module declaration (`mod child;` and the inert attributes above it) is
     # not counted, so attaching an extracted file is not scored as growth (#609).
+    # The one 800-line gate (MIK-8210): test files are held too, and the
+    # baseline ratchets against the base commit, so a PR can neither add a row
+    # nor raise an allowance.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1135,8 +1134,22 @@ jobs:
       # first: a failing tree check would otherwise hide which rule broke.
       - name: Check the gate refuses what it claims to
         run: python3 scripts/dev/test_check_file_size.py
+      # The base: the PR's base on a pull request, the previous tip on a push,
+      # and the parent commit when a push has no previous tip (a new branch or
+      # a tag). An unreadable base fails the gate; it is never skipped.
       - name: Check the 800-line ceiling
-        run: python3 scripts/dev/check-file-size.py
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          base="${BASE_SHA:-}"
+          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then
+            git fetch --no-tags --depth=2 origin "$GITHUB_SHA"
+            base="$(git rev-parse HEAD^)"
+          else
+            git fetch --no-tags --depth=1 origin "$base"
+          fi
+          python3 scripts/dev/check-file-size.py --base "$base"
 
   event-source-scope:
     name: Event source leaves the events core alone (MIK-7720 U10)

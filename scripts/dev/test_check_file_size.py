@@ -245,6 +245,19 @@ class RatchetThroughGit(unittest.TestCase):
         self.assertIn("806", out.getvalue())
 
 
+class Modes(unittest.TestCase):
+    def test_update_and_base_cannot_combine(self):
+        # --update with --base would rewrite the baseline and skip the ratchet.
+        with self.assertRaises(SystemExit) as raised, contextlib.redirect_stderr(io.StringIO()):
+            load_gate(Path("/nonexistent")).main(["--update", "--base", "HEAD"])
+        self.assertNotEqual(raised.exception.code, 0)
+
+    def test_a_misspelled_option_is_refused(self):
+        with self.assertRaises(SystemExit) as raised, contextlib.redirect_stderr(io.StringIO()):
+            load_gate(Path("/nonexistent")).main(["--bse", "HEAD"])
+        self.assertNotEqual(raised.exception.code, 0)
+
+
 class Wiring(unittest.TestCase):
     """MIK-8210: one gate runs in CI, against an explicit base."""
 
