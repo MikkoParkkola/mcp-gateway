@@ -242,6 +242,7 @@ pub struct RuntimeResourcePolicy {
     /// Memory limit in MiB.
     pub memory_mb: u64,
     /// Wall-clock timeout in seconds.
+    #[serde(deserialize_with = "crate::duration_bound::secs")]
     pub timeout_secs: u64,
 }
 
@@ -273,6 +274,7 @@ pub struct RuntimeRestartPolicy {
     /// Maximum restart attempts.
     pub max_restarts: u32,
     /// Backoff between restarts in seconds.
+    #[serde(deserialize_with = "crate::duration_bound::secs")]
     pub backoff_secs: u64,
 }
 

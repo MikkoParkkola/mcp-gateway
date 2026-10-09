@@ -369,12 +369,19 @@ fn duration_serialize_zero_and_max_whole_seconds() {
     cfg.backends
         .get_mut("owned")
         .expect("backend")
-        .stop_when_idle_for = Some(std::time::Duration::from_secs(u64::MAX));
-    let yaml = serde_yaml::to_string(&cfg).expect("serialize max secs");
+        .stop_when_idle_for = Some(crate::duration_bound::MAX_DURATION);
+    let yaml = serde_yaml::to_string(&cfg).expect("serialize the longest duration");
     assert!(
-        yaml.contains(&format!("{u64}s", u64 = u64::MAX)),
-        "max whole seconds stay seconds; got {yaml}"
+        yaml.contains("3155760000s"),
+        "the longest duration stays whole seconds; got {yaml}"
     );
+    // MIK-8207: one second more would not load again, so it is not written.
+    cfg.backends
+        .get_mut("owned")
+        .expect("backend")
+        .stop_when_idle_for =
+        Some(crate::duration_bound::MAX_DURATION + std::time::Duration::from_secs(1));
+    assert!(serde_yaml::to_string(&cfg).is_err());
 }
 
 #[test]
@@ -405,7 +412,7 @@ fn duration_serialize_rejects_sub_ms_and_over_u64_millis() {
     );
     assert!(
         serde_yaml::to_string(&cfg).is_err(),
-        "mixed-seconds millis total over u64 must be a serde error"
+        "a duration no load accepts must be a serde error"
     );
 }
 

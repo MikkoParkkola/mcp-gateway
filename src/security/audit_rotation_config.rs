@@ -34,6 +34,7 @@ pub struct RotationConfig {
     /// Rotate before a write would take the active segment past this size.
     pub max_segment_bytes: u64,
     /// Also rotate once the active segment is this old; 0 = off.
+    #[serde(deserialize_with = "crate::duration_bound::secs")]
     pub max_segment_age_secs: u64,
     /// Sealed segments kept; older ones are recorded and deleted.
     pub retain_segments: u32,
