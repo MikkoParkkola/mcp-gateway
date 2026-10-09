@@ -139,7 +139,7 @@ impl Announced {
         let overflow = views.adopt(instance);
         let changed = match event {
             SlotEvent::Revoked => views.revoked(binding),
-            SlotEvent::Idle | SlotEvent::Stored => views.slot(binding, seen),
+            SlotEvent::Stored => views.slot(binding, seen),
         };
         overflow | changed
     }
@@ -305,6 +305,9 @@ pub(super) struct PerUserNow {
 }
 
 fn per_user_seen(backend: &crate::backend::Backend) -> PerUserNow {
+    // The filter FIRST: a verdict landing during the snapshot then shows as a
+    // change on its own queued nudge, never as a filter already recorded.
+    let filter = backend.visibility_filter_fingerprint();
     let slots = backend
         .per_user_bindings()
         .into_iter()
@@ -313,10 +316,7 @@ fn per_user_seen(backend: &crate::backend::Backend) -> PerUserNow {
             (binding, seen)
         })
         .collect();
-    PerUserNow {
-        slots,
-        filter: backend.visibility_filter_fingerprint(),
-    }
+    PerUserNow { slots, filter }
 }
 
 async fn drain_until<T, F, Fut>(

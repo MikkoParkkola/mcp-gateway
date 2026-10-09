@@ -68,7 +68,6 @@ impl Backend {
                 continue;
             };
             evicted += 1;
-            self.nudge_slot_closed(&key, crate::backend::tools_nudge::SlotEvent::Revoked);
 
             let idle_transport = {
                 let mut transport = entry.transport.write();
@@ -93,6 +92,9 @@ impl Backend {
                 "Identity-keyed slot eviction removed per-user slots"
             );
         }
+        // One hint per revocation, slot or not: an idle-evicted caller, or one
+        // whose first store the drain has not read yet, still loses its view.
+        self.nudge_revoked(binding_prefix);
         evicted
     }
 
@@ -167,8 +169,7 @@ impl Backend {
                         >= cutoff;
                 idle && retire(entry)
             });
-            if let Some((key, entry)) = removed {
-                self.nudge_slot_closed(&key, crate::backend::tools_nudge::SlotEvent::Idle);
+            if let Some((_, entry)) = removed {
                 let transport = entry.transport.write().take();
                 if let Some(transport) = transport {
                     self.close_evicted(&mut cleanups, transport);
@@ -177,6 +178,9 @@ impl Backend {
             }
         }
         if closed > 0 {
+            // ONE nudge per sweep, however many slots closed: the drain
+            // recomputes every slot and buries the ones that are gone.
+            self.nudge_tools(crate::backend::tools_nudge::NudgeKind::Changed);
             // MIK-6735 fix 3: gauge + log the live slot count after eviction,
             // mirroring the creation-side observability in `pooled_entry`.
             #[allow(clippy::cast_precision_loss)] // pool size is never remotely close to 2^52

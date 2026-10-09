@@ -98,7 +98,7 @@ impl Views {
         }
         self.instance = instance;
         let empty = fingerprint(&[]);
-        let mut changed = false;
+        let mut changed = self.tombstones.values().any(|tomb| tomb.shown != empty);
         for (binding, shown) in std::mem::take(&mut self.live) {
             changed |= shown != empty;
             changed |= self.bury(&binding, shown);
@@ -135,7 +135,7 @@ impl Views {
             .filter
             .replace(filter)
             .is_some_and(|before| before != filter);
-        let mut changed = filter_moved && self.tombstones.values().any(|tomb| tomb.shown != empty);
+        let mut changed = false;
         let gone: Vec<String> = self
             .live
             .keys()
@@ -145,6 +145,8 @@ impl Views {
         for binding in gone {
             changed |= self.slot(&binding, SlotSeen::Absent);
         }
+        // After burying: a view evicted since the last look counts too.
+        changed |= filter_moved && self.tombstones.values().any(|tomb| tomb.shown != empty);
         for (binding, seen) in present {
             changed |= self.slot(binding, *seen);
         }
@@ -155,9 +157,12 @@ impl Views {
     /// list this drain never saw (the revocation can overtake the first
     /// store's nudge), so it is always announced. Nothing is kept: a later
     /// grant's first fill compares with nothing.
-    pub(super) fn revoked(&mut self, binding: &str) -> bool {
-        self.tombstones.remove(audience(binding));
-        self.live.remove(binding);
+    pub(super) fn revoked(&mut self, prefix: &str) -> bool {
+        self.live.retain(|binding, _| !binding.starts_with(prefix));
+        // An account tombstone is keyed by the grant, which the prefix extends.
+        self.tombstones.retain(|audience, _| {
+            !audience.starts_with(prefix) && !prefix.starts_with(audience.as_str())
+        });
         true
     }
 
@@ -178,7 +183,8 @@ impl Views {
     /// no order to compare by, so it is announced. Otherwise what an evicted
     /// slot of the same caller last showed (K2), else nothing.
     fn baseline(&mut self, binding: &str) -> Option<u64> {
-        let tomb = self.tombstones.remove(audience(binding));
+        let key = audience(binding).to_string();
+        let tomb = self.tombstones.remove(&key);
         if let Some(me) = acct(binding) {
             let live = self.live.iter().filter_map(|(other, &shown)| {
                 let o = acct(other)?;
@@ -189,7 +195,22 @@ impl Views {
                 let (generation, revision) = t.lease.as_ref()?;
                 (generation == me.generation).then_some((*revision, t.shown))
             });
-            if let Some((_, shown)) = live.chain(buried).max_by_key(|(revision, _)| *revision) {
+            let newest = live.chain(buried).max_by_key(|(revision, _)| *revision);
+            // A late fill from an OLDER lease leaves a newer tombstone in
+            // place, so the next refresh still compares with it.
+            let newer_buried = tomb.as_ref().is_some_and(|t| {
+                t.lease
+                    .as_ref()
+                    .is_some_and(|(g, r)| g == me.generation && *r > me.revision)
+            });
+            if newer_buried {
+                let shown = newest.map(|(_, shown)| shown);
+                if let Some(tomb) = tomb {
+                    self.tombstones.insert(key, tomb);
+                }
+                return shown;
+            }
+            if let Some((_, shown)) = newest {
                 return Some(shown);
             }
             let other_generation_live = self

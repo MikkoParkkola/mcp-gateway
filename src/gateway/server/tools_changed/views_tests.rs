@@ -239,3 +239,47 @@ fn a_generation_with_colons_and_multibyte_text_parses() {
         "the refresh inherits, so the generation was read whole"
     );
 }
+
+#[test]
+fn a_late_older_fill_keeps_the_newer_tombstone() {
+    // r1 {x} live, r2 {y} evicted, a late r0 fills {y}, then r3 {x}: the
+    // caller last saw r2's {y}, so r3 announces.
+    let mut views = Views::new(1);
+    let rev = |n| acct("d", "g", 1, n);
+    let (x, y) = ([tool("x", "")], [tool("y", "")]);
+    assert!(views.slot(&rev(1), holds(&x)));
+    assert!(views.slot(&rev(2), holds(&y)));
+    assert!(!views.slot(&rev(2), SlotSeen::Absent));
+    assert!(!views.slot(&rev(0), holds(&y)), "compared with r2's {{y}}");
+    assert!(views.slot(&rev(3), holds(&x)));
+}
+
+#[test]
+fn a_filter_change_counts_a_view_evicted_since_the_last_look() {
+    let mut views = Views::new(1);
+    let x = [tool("x", "")];
+    assert!(views.slot(U1, holds(&x)));
+    assert!(!views.recompute(&[(U1.to_string(), holds(&x))], 7));
+    assert!(
+        views.recompute(&[], 8),
+        "evicted and the filter moved, one look"
+    );
+}
+
+#[test]
+fn replacing_a_backend_whose_only_shown_view_is_a_tombstone_announces() {
+    let mut views = Views::new(1);
+    assert!(views.slot(U1, holds(&[tool("x", "")])));
+    assert!(!views.slot(U1, SlotSeen::Absent));
+    assert!(views.adopt(2));
+}
+
+#[test]
+fn revoking_an_account_clears_its_tombstone() {
+    let mut views = Views::new(1);
+    let binding = acct("d", "g", 1, 1);
+    assert!(views.slot(&binding, holds(&[tool("x", "")])));
+    assert!(!views.slot(&binding, SlotSeen::Absent));
+    assert!(views.revoked("acct:v1:d:"));
+    assert!(!views.any_shown());
+}

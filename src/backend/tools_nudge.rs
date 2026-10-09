@@ -68,10 +68,8 @@ pub(crate) enum SlotView {
 pub(crate) enum SlotEvent {
     /// It stored a list.
     Stored,
-    /// It was closed for idleness: what its caller sees did not change.
-    Idle,
-    /// It was closed because its caller's grant was revoked: what that caller
-    /// sees did change.
+    /// Its caller's grant was revoked; `binding` is then the revoked prefix,
+    /// which may match no slot at all. What that caller sees did change.
     Revoked,
 }
 
@@ -154,14 +152,14 @@ impl super::Backend {
         self.pending_slot_nudges.lock().remove(binding);
     }
 
-    /// Nudge the drain that per-user slot `key` closed for `event`'s reason.
-    pub(super) fn nudge_slot_closed(&self, key: &super::PoolKey, event: SlotEvent) {
-        if let (super::PoolKey::PerUser { binding }, Some(feed)) = (key, self.nudge_feed.get()) {
+    /// Nudge the drain that the grant behind `binding_prefix` was revoked.
+    pub(super) fn nudge_revoked(&self, binding_prefix: &str) {
+        if let Some(feed) = self.nudge_feed.get() {
             let _ = feed.send(ToolsNudge::Binding {
                 name: self.name.clone(),
                 instance: self.instance,
-                binding: binding.clone(),
-                event,
+                binding: binding_prefix.to_string(),
+                event: SlotEvent::Revoked,
             });
         }
     }
@@ -375,6 +373,38 @@ mod tests {
             std::iter::from_fn(|| nudges.try_recv().ok()).count(),
             1,
             "the slot opened during attach is observed"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_idle_sweep_sends_one_nudge_however_many_slots_close() {
+        let backend = backend("a");
+        for user in ["idp:u1", "idp:u2", "idp:u3"] {
+            backend.pooled_entry(&per_user(user)).expect("admitted");
+        }
+        let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
+        backend.attach_nudges(&feed);
+        assert_eq!(
+            backend.evict_idle_per_user_entries(std::time::Duration::ZERO),
+            3
+        );
+        assert_eq!(std::iter::from_fn(|| nudges.try_recv().ok()).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_revocation_nudges_even_when_no_slot_is_open() {
+        let backend = backend("a");
+        let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
+        backend.attach_nudges(&feed);
+        assert_eq!(backend.evict_identity_slots("idp:9:nobody:"), 0);
+        assert_eq!(
+            nudges.try_recv().ok(),
+            Some(ToolsNudge::Binding {
+                name: "a".to_string(),
+                instance: backend.instance(),
+                binding: "idp:9:nobody:".to_string(),
+                event: super::SlotEvent::Revoked,
+            })
         );
     }
 
