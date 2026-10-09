@@ -89,9 +89,15 @@ macro_rules! delta {
     };
     (@checked $try:ident, $n:expr) => {
         const {
-            match chrono::TimeDelta::$try($n) {
+            match ::chrono::TimeDelta::$try($n) {
                 Some(delta) => delta,
-                None => panic!("delta! is out of chrono's range"),
+                None => panic!(concat!(
+                    "delta!: ",
+                    stringify!($try),
+                    "(",
+                    stringify!($n),
+                    ") is out of chrono's range"
+                )),
             }
         }
     };

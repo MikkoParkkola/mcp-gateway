@@ -10,15 +10,15 @@
 //!
 //! Everything else resolves home through here: `clippy.toml` disallows a direct
 //! `dirs::home_dir` or `dirs::config_dir` anywhere else in the crate (MIK-8001).
-#![allow(
-    clippy::disallowed_methods,
-    reason = "the one place the platform lookups are called"
-)]
 
 use std::path::PathBuf;
 
 /// The user's home directory.
 #[cfg(debug_assertions)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the one place the platform lookups are called"
+)]
 pub(crate) fn home_dir() -> Option<PathBuf> {
     std::env::var_os("MCP_GATEWAY_TEST_HOME_DIR")
         .map(PathBuf::from)
@@ -27,6 +27,10 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
 
 /// The user's home directory.
 #[cfg(not(debug_assertions))]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the one place the platform lookups are called"
+)]
 pub(crate) fn home_dir() -> Option<PathBuf> {
     dirs::home_dir()
 }
@@ -34,6 +38,10 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
 /// The OS config directory. Under the test override it follows
 /// `XDG_CONFIG_HOME` (which Windows `dirs` ignores), else `<home>/.config`.
 #[cfg(all(debug_assertions, not(target_os = "macos")))]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the one place the platform lookups are called"
+)]
 pub(crate) fn config_dir() -> Option<PathBuf> {
     match std::env::var_os("MCP_GATEWAY_TEST_HOME_DIR") {
         Some(home) => Some(
@@ -46,6 +54,10 @@ pub(crate) fn config_dir() -> Option<PathBuf> {
 
 /// The OS config directory.
 #[cfg(all(not(debug_assertions), not(target_os = "macos")))]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the one place the platform lookups are called"
+)]
 pub(crate) fn config_dir() -> Option<PathBuf> {
     dirs::config_dir()
 }
