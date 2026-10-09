@@ -346,6 +346,27 @@ We want your PR to merge fast. Here is what helps.
   affected and what an operator must do, for example
   `  Affects: 3.0.0 up to 3.5.1. Operator action: none.`; the same check runs
   `scripts/release/check_security_fragments.py` over `changelog.d/` and fails without it.
+- [ ] **UPGRADING entry** if the change breaks or changes something an operator upgrading
+  from 3.5.x must act on: add `upgrading.d/<number>.md` (several: `<number>-1.md`, ...).
+  Do not number it or edit the numbered list in `docs/UPGRADING-4.0.md`: two open PRs
+  would take the same number. Release preparation numbers the fragments in file-name order.
+  A fragment is a front-matter block, then the section:
+
+  ```markdown
+  ---
+  change: <the summary row's Change cell, one line, no `|`>
+  action: <the summary row's Action needed cell, one line, no `|`>
+  notice: <only if the marker says `prints a notice`: a phrase the notice item contains>
+  ---
+  ## <Title, no number>
+
+  **Startup:** <marker, same grammar as the numbered items>
+
+  <body>
+  ```
+
+  To point an older item at a pending one, write `> Superseded in part by <Title>:`.
+  `python3 scripts/release/upgrading_fragments.py check` validates the fragments.
 - [ ] **PR description** answers: what problem this solves, the shape of the fix, anything you are unsure about.
 - [ ] **Prefer a config struct** over 5+ function arguments. Keeps future extensions clean.
 - [ ] **Doc comments on user-facing config fields**. They surface in `cargo doc` and in downstream IDE tooltips.

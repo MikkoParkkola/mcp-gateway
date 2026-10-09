@@ -231,6 +231,40 @@ fn best_coverage_score(kw: (f64, bool), schema: f64, text: (f64, bool)) -> (f64,
     }
 }
 
+/// Score for a tool the search found through the name of the backend that
+/// serves it: 4.0 times the share of query words in that name. A word found
+/// only through a synonym or an abbreviation, as the search filter also admits
+/// it, counts at the usual synonym discount. The tier sits above a description
+/// that only mentions the query (2.0) and below a tool whose own name contains
+/// it (5.0), so a direct match still ranks first.
+pub(super) fn backend_name_score(server: &str, words: &[&str]) -> f64 {
+    if words.is_empty() {
+        return 0.0;
+    }
+    let server_lower = server.to_lowercase();
+    let expanded = |w: &str| {
+        expand_synonyms(w)
+            .iter()
+            .chain(expand_abbreviations(w))
+            .any(|alt| *alt != w && server_lower.contains(*alt))
+    };
+    let found: f64 = words
+        .iter()
+        .map(|w| {
+            if server_lower.contains(*w) {
+                1.0
+            } else if expanded(w) {
+                SYNONYM_MULTIPLIER
+            } else {
+                0.0
+            }
+        })
+        .sum();
+    #[allow(clippy::cast_precision_loss)]
+    let share = found / words.len() as f64;
+    4.0 * share
+}
+
 /// Compute text relevance score for a single result against a pre-lowercased query.
 ///
 /// `words` must be `query.split_whitespace().collect()`; passed in to avoid
