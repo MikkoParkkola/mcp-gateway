@@ -1,0 +1,14 @@
+diff --git a/src/config_persistence.rs b/src/config_persistence.rs
+index de103cb05..ef21566fe 100644
+--- a/src/config_persistence.rs
++++ b/src/config_persistence.rs
+@@ -371,9 +371,6 @@ fn read_text(path: &Path) -> Result<Option<String>, String> {
+         Err(e) => return Err(failed(&e)),
+         Ok(file) => file,
+     };
+-    if !file.metadata().map_err(|e| failed(&e))?.is_file() {
+-        return Err(failed(&"not a regular file"));
+-    }
+     let mut text = String::new();
+     file.read_to_string(&mut text).map_err(|e| failed(&e))?;
+     Ok(Some(text))

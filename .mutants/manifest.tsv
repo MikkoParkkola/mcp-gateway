@@ -1,0 +1,3 @@
+head_sha	768ec372bc96cb0fe00032c05f2665c3a321ef09
+m07	linux	m07.patch	--lib config_persistence::edit_tests::a_text_edit_of_a
+m08	linux	m08.patch	--lib config_persistence::edit_tests::a_text_edit_of_a_fifo_is_refused_without_hanging
