@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-7940 finding 9: an owner-scoped occurrence was authorized where it was
-//! made, so the worker does not let its source refuse it after the fact.
+//! MIK-7940 finding 9: owner-scoped occurrences at delivery. The worker asks
+//! the source either way; an expired task is the task source's to admit.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -9,11 +9,13 @@ use std::time::Duration;
 
 use super::{EventsHub, Flipping, counting_callback, logged_services, queued_with};
 
-/// A source that refuses every ask stands in for a task source whose task
-/// record expired. Owner-scoped, the occurrence is still delivered and the
-/// subscription kept; not owner-scoped, it is refused and revoked, as today.
+/// An owner-scoped occurrence is still put to its source at delivery: a source
+/// whose verdict is live standing (an operational source and a demoted admin)
+/// refuses, so nothing is sent and the subscription ends, owner-scoped or not.
+/// A task source's expired record is the source's own exception, not the
+/// worker's (MIK-7940).
 #[tokio::test]
-async fn an_owner_scoped_occurrence_is_not_refused_by_its_source() {
+async fn an_owner_scoped_occurrence_is_refused_by_its_source() {
     for owner_scoped in [false, true] {
         let dir = tempfile::tempdir().expect("dir");
         let config = crate::config::EventsConfig {
@@ -35,20 +37,20 @@ async fn an_owner_scoped_occurrence_is_not_refused_by_its_source() {
         tokio::time::sleep(Duration::from_millis(300)).await;
 
         assert_eq!(
-            accepted.load(Ordering::SeqCst) >= 1,
-            owner_scoped,
-            "delivered only when owner-scoped"
+            accepted.load(Ordering::SeqCst),
+            0,
+            "not sent ({owner_scoped})"
         );
-        assert_eq!(
+        assert!(
             hub.store.subscriptions().is_empty(),
-            !owner_scoped,
-            "revoked only when not owner-scoped"
+            "revoked ({owner_scoped})"
         );
     }
 }
 
-/// Owner-scoped skips only the source's verdict: a caller whose API key is no
-/// longer configured is still refused (access is checked on every attempt).
+/// A source that admits does not excuse the caller: an owner-scoped
+/// occurrence whose API key is no longer configured is still refused (access
+/// is checked on every attempt).
 #[tokio::test]
 async fn an_owner_scoped_occurrence_still_needs_its_callers_access() {
     let dir = tempfile::tempdir().expect("dir");
