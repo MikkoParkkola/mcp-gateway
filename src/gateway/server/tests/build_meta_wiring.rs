@@ -13,6 +13,8 @@
 //! Every test pins its environment with an overlay, so a key in the developer's
 //! own environment cannot decide it.
 
+use base64::Engine as _;
+
 use super::*;
 
 fn info_logging() -> tracing::subscriber::DefaultGuard {
@@ -143,7 +145,6 @@ async fn an_unbounded_response_cache_is_installed() {
 #[tokio::test]
 async fn a_configured_signature_chain_installs_the_chain_signer() {
     let _log = info_logging();
-    use base64::Engine as _;
     let seed = base64::engine::general_purpose::STANDARD.encode([9u8; 32]);
     let mut config = Config::default();
     config.security.signature_chain = Some(
