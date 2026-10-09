@@ -249,6 +249,10 @@ pub(crate) struct Store {
     /// in memory.
     #[cfg(test)]
     fail_next_dead_sync: std::sync::atomic::AtomicBool,
+    /// Test-only: one hold stamp write pauses just before it reaches the
+    /// disk (design r3 P1/P3, T17 and T20).
+    #[cfg(test)]
+    pub(crate) before_hold_write: crate::test_pause::Slot,
 }
 
 impl Store {
@@ -310,6 +314,8 @@ impl Store {
             generation: std::sync::atomic::AtomicU64::new(loaded),
             #[cfg(test)]
             fail_next_dead_sync: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            before_hold_write: crate::test_pause::Slot::default(),
         };
         {
             let mut state = store.state.lock();

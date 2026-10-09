@@ -130,3 +130,36 @@ async fn d1b_a_side_effecting_capability_holds_and_is_not_called() {
     assert!(hub.store.held(&id).is_some(), "held");
     assert!(host.calls.lock().is_empty(), "never called");
 }
+
+/// `p`'s refresh of its watch, as the subscribe commit starts it, and the
+/// started keys after it. The one place these rows reach into the
+/// lifecycle set, so a change to how a commit starts a key is made here.
+async fn refresh_start(hub: &EventsHub) -> (Result<(), String>, usize) {
+    let mut started = hub.lifecycle.lock().await;
+    let refreshed = hub
+        .start_key(&mut started, "p", NAME, &json!({}))
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("{e:?}"));
+    (refreshed, started.len())
+}
+
+/// T21 (MIK-8151 AC2, design r3 L6): a held watch refreshed while the poller
+/// cap is full resumes under its own key and needs no new slot. Here the
+/// capability moved from shared to keyed, so the catalogue's class differs
+/// from the row's.
+#[tokio::test(start_paused = true)]
+async fn t21_a_held_refresh_at_the_cap_needs_no_new_slot() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut config = crate::config::EventsConfig::default();
+    config.watch.max_pollers = 1;
+    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
+    let hub = installed(dir.path(), &config, &host).await;
+    let id = row_id(&hub);
+    *host.targets.lock() = vec![target("weather", true, CredentialUse::Keyed)];
+    one_poll().await;
+    assert!(hub.store.held(&id).is_some(), "premise: held, class moved");
+    let (refreshed, keys) = refresh_start(&hub).await;
+    assert!(refreshed.is_ok(), "no new slot needed: {refreshed:?}");
+    assert_eq!(keys, 1, "one key");
+}

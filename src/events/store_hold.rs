@@ -108,6 +108,8 @@ impl Store {
     fn persist_row(&self, state: &mut State, mut row: Subscription) -> std::io::Result<()> {
         let id = row.id.clone();
         row.generation = self.next_generation()?;
+        #[cfg(test)]
+        self.before_hold_write.pause_blocking();
         let written = write_record(&self.subs_dir, &format!("{id}.json"), &row)
             .and_then(crate::events::records::Placed::durable);
         state.subs.insert(id.clone(), row);
