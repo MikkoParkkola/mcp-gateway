@@ -6,10 +6,6 @@
 use std::io;
 use std::path::Path;
 
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "a no-op off unix that keeps the unix signature"
-)]
 pub(super) fn sync_parent_directory(_path: &Path) -> io::Result<()> {
     Ok(())
 }
