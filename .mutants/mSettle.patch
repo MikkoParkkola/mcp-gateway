@@ -1,0 +1,15 @@
+diff --git a/src/gateway/meta_mcp/call_dispatch.rs b/src/gateway/meta_mcp/call_dispatch.rs
+index b95ae69..b8d88e4 100644
+--- a/src/gateway/meta_mcp/call_dispatch.rs
++++ b/src/gateway/meta_mcp/call_dispatch.rs
+@@ -160,9 +160,7 @@ impl MetaMcp {
+             self.handle_tools_call_unsettled(id, tool_name, arguments, session_id, caller),
+         )
+         .await;
+-        if let Some((context, principal)) = settle {
+-            self.settle_nonce_refund(context, principal);
+-        }
++        let _ = settle;
+         response
+     }
+ 

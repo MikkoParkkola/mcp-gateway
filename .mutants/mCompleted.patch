@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/invoke/undeclared_gate.rs b/src/gateway/meta_mcp/invoke/undeclared_gate.rs
+index 9e72b70..6a7d937 100644
+--- a/src/gateway/meta_mcp/invoke/undeclared_gate.rs
++++ b/src/gateway/meta_mcp/invoke/undeclared_gate.rs
+@@ -92,9 +92,6 @@ fn asked_requests(result: &serde_json::Value) -> Option<crate::protocol::mrtr::I
+     if let Some(interim) = InputRequired::from_result(result) {
+         return Some(interim);
+     }
+-    if !InputRequired::claims_input_required(result) {
+-        return None;
+-    }
+     let requests = result.get("inputRequests")?.as_object()?;
+     Some(InputRequired {
+         requests: requests

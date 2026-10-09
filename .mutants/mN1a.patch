@@ -1,0 +1,11 @@
+diff --git a/src/gateway/meta_mcp/invoke/dispatch_guards.rs b/src/gateway/meta_mcp/invoke/dispatch_guards.rs
+index d160a4b..a9b531e 100644
+--- a/src/gateway/meta_mcp/invoke/dispatch_guards.rs
++++ b/src/gateway/meta_mcp/invoke/dispatch_guards.rs
+@@ -269,5 +269,5 @@ pub(crate) fn give_back_unsent(
+     if let Some(reservation) = reservation.as_mut() {
+         reservation.release();
+     }
+-    caller.signing.inspect(|context| context.want_refund());
++    let _ = caller;
+ }
