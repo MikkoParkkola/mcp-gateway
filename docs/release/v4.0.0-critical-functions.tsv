@@ -75,6 +75,7 @@ src/gateway/router/backend_handlers/direct_preflight.rs	take_nonces	1	critical	b
 src/gateway/router/backend_handlers/direct_preflight.rs	check_attestation	1	critical	b,d	check_attestation	Refuses an unattested call before it mints a per-user credential or writes a mint audit row.
 src/gateway/router/backend_handlers/direct_preflight.rs	propagate_identity	1	critical	a,d	propagate_identity	Resolves the per-user credential and enforces the OAuth-isolation guard (ADR-008 INV-2).
 src/gateway/router/backend_handlers/direct_preflight.rs	resolve_headers	1	critical	a	resolve_headers	Passthrough versus minting credential resolution; binds the upstream session bucket to the caller.
+src/gateway/router/backend_handlers/direct_preflight.rs	a2a_round_binding	1	critical	a	a2a_round_binding	Binds an A2A input round to the caller who was asked (verified identity, else the authenticated client principal), so no other caller can redeem it.
 src/gateway/router/backend_handlers/direct_preflight.rs	audit_mint	1	critical	d	audit_mint	Fails closed when a minted credential has no durable audit record; audits refusals.
 src/gateway/router/backend_handlers/direct_dispatch.rs	admit	1	critical	d	admit	Admission order: dispatch controls, tool-call gate, idempotency guard, then the signing nonce.
 src/gateway/router/backend_handlers/direct_dispatch.rs	guard_and_sanitize	1	critical	d	guard_and_sanitize	Applies the tool-call security gate before the idempotency cache (#2445).
@@ -143,6 +144,7 @@ src/gateway/router/handlers/tasks.rs	agent_task_owner	1	critical	c	agent_task_ow
 src/gateway/router/hardened_elicitation.rs	declares_elicitation	1	critical	a	declares_elicitation	Decides whether an initialize declares elicitation, the condition the hardened refusal rests on
 src/gateway/router/hardened_elicitation.rs	direct_refusal	1	critical	a,d	direct_refusal	Hardened posture: refuses on the direct route any legacy request but a declaring initialize
 src/gateway/router/hardened_elicitation.rs	is_hardened	1	standard	borderline	is_hardened	Reads the hardened posture; a wrong answer silently disables the elicitation refusal
+src/gateway/router/hardened_elicitation.rs	refuse	1	critical	d	refuse	Hardened posture on /mcp: refuses a body-declared malformed modern request naming what it omitted (400 / -32602), else the elicitation refusal (MIK-8162)
 src/gateway/router/hardened_elicitation.rs	classify_direct	1	critical	a,d	classify_direct	The direct route's one reading of the declared revision; a doubled header reads modern so the hardened refusal applies
 src/gateway/router/hardened_identity.rs	hardened_identity_refusal	1	critical	a	hardened_identity_refusal	Hardened posture: 403 without a per-caller identity.
 src/gateway/router/helpers.rs	read_body	1	standard	borderline	read_body	Maps the max_body_size limit to a 413 refusal.
