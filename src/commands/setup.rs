@@ -16,8 +16,6 @@ use super::config_write::CommentLoss;
 #[cfg(feature = "config-export")]
 use mcp_gateway::cli::{ConnectionMode, ExportTarget};
 #[cfg(test)]
-use mcp_gateway::config_persistence::load_config_or_default;
-#[cfg(test)]
 use mcp_gateway::gateway::test_helpers::write_config_fixture;
 use mcp_gateway::security::sanitize::redact_url_for_diagnostics;
 use mcp_gateway::{
@@ -282,14 +280,13 @@ fn interactive_select(servers: &[DiscoveredServer]) -> Result<Vec<&DiscoveredSer
 
 // ── Config mutation ────────────────────────────────────────────────────────────
 
-/// Merge selected servers into `config.backends`, skipping duplicates.
-///
-/// Returns the number of newly-added backends.
-/// Steps 3 and 4 of `setup`: create the first-run config when there is none,
-/// then merge `selected` into it under one hold of the config lock
-/// (`config_write::write` loads the file under that hold). The only write
-/// `run_setup_command` makes to `output`, so the overlap row (MIK-8241) that
-/// drives this function covers the setup import path.
+/// Steps 3 and 4 of `setup`, the import of the selected servers: create the
+/// first-run config when there is none, then merge `selected` into it under
+/// one hold of the config lock (`config_write::write` loads the file under
+/// that hold). It is the only write `run_setup_command` makes for a
+/// selection, so the overlap row (MIK-8241) that drives it covers the import
+/// path. The empty-discovery path (`handle_empty_discovery`) writes on its
+/// own and is not covered by that row.
 fn import_servers(
     output: &Path,
     mode: CommentLoss,
@@ -313,6 +310,9 @@ fn import_servers(
     Ok(added)
 }
 
+/// Merge selected servers into `config.backends`, skipping duplicates.
+///
+/// Returns the number of newly-added backends.
 fn merge_servers_into_config(config: &mut Config, selected: &[&DiscoveredServer]) -> usize {
     let mut added = 0usize;
     for server in selected {
@@ -521,13 +521,9 @@ mod tests {
         let path = dir.path().join("gateway.yaml");
         let server = make_stdio_server("surrealdb", DiscoverySource::RunningProcess);
 
-        let code = bootstrap_local_profile(&path);
-        assert_eq!(code, ExitCode::SUCCESS);
-
-        let mut config = load_config_or_default(&path);
-        let selected = vec![&server];
-        let added = merge_servers_into_config(&mut config, &selected);
-        write_config_fixture(&path, &config).unwrap();
+        // The import step itself: bootstrap the missing file, then the locked
+        // merge write, in that order.
+        let added = import_servers(&path, CommentLoss::Refuse, &[&server]).expect("imports");
 
         let reloaded = Config::load(Some(&path)).unwrap();
         assert_eq!(added, 1);
