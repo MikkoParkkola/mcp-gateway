@@ -90,7 +90,7 @@ pub(crate) struct ChainIdentity {
 /// Map an authenticated external operation to its response-policy targets.
 pub(crate) fn meta_response_targets(
     external_tool: &str,
-    targets: &[crate::gateway::authz::OwnedToolTarget],
+    targets: &[crate::gateway::authz::CallTarget<'_>],
 ) -> Vec<ResponsePolicyTarget> {
     let discovery = matches!(
         external_tool,
