@@ -22,12 +22,9 @@ pub(super) struct ChildTree {
     pid: Option<rustix::process::Pid>,
     /// Set once the close phase has signalled the group (or the leader proved
     /// gone): `start_kill` sends at most one, and nothing signals after the
-    /// reap. The pre-reap phase (A5) has its own latch.
+    /// reap. The pre-reap phase (A5) repeats while the group settles
+    /// (MIK-8213), then closes the gate for good.
     signals_closed: bool,
-    /// The pre-reap phase ran to its probe (A5): at most one signal per
-    /// phase. Set after the grace, so a cancelled grace retries the phase.
-    #[cfg(unix)]
-    pre_reap_done: bool,
     /// The leader's exit, from the single reap.
     status: Option<ExitStatus>,
     /// When the reaper first stepped this tree, and how far it got (MIK-7923).
@@ -67,6 +64,11 @@ enum ReapPhase {
     /// leader to exit before the A5 signal. Windows starts at `Reaping`.
     #[cfg_attr(not(unix), allow(dead_code))]
     Grace,
+    /// Unix (MIK-8213): the leader has exited; the group is signalled again
+    /// on every step until `PRE_REAP_SETTLE` after `since`, catching a member
+    /// whose fork completed after an earlier signal's snapshot of the group.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    Settle { since: std::time::Instant },
     /// The signal gate is closed; reaping the leader.
     Reaping,
 }
@@ -110,8 +112,6 @@ impl ChildTree {
             #[cfg(unix)]
             pid,
             signals_closed: false,
-            #[cfg(unix)]
-            pre_reap_done: false,
             status: None,
             reaping: None,
             #[cfg(test)]
@@ -156,7 +156,8 @@ impl ChildTree {
     }
 
     /// The only place a group signal is sent, always after an ownership check
-    /// (Unix): close once, pre-reap once (A5), never after the reap.
+    /// (Unix): the close signal, then the pre-reap signal (A5) repeated while
+    /// the group settles, never after the reap.
     fn send_group_signal(&mut self) {
         let _ = self.wrapper.start_kill();
         self.signals_closed = true;
@@ -222,13 +223,22 @@ impl ChildTree {
             if !self.exited() && elapsed < PRE_REAP_GRACE {
                 return Reap::Pending;
             }
-            // A5: one more group signal just before the reap. It catches a
-            // member forked after the close signal's snapshot of the group (a
-            // macOS window). Once, and ownership-checked: the unreaped leader
-            // holds the group id, so it cannot name a reused group.
-            self.pre_reap_done = true;
+            self.reaping = Some((started, ReapPhase::Settle { since: now }));
+        }
+        // A5, repeated until the group settles (MIK-8080, MIK-8213): a group
+        // signal on every step for `PRE_REAP_SETTLE` after the leader exits.
+        // One signal is not enough on macOS: a fork already under way when a
+        // signal lands can complete after that signal's snapshot, and its
+        // child is in the group but in no snapshot so far. Each signal is
+        // ownership-checked: the unreaped leader holds the group id, so it
+        // cannot name a reused group. A refusal closes the gate at once.
+        #[cfg(unix)]
+        if let Some((_, ReapPhase::Settle { since })) = self.reaping {
             if matches!(self.leader_state(), Leader::Running | Leader::Zombie) {
                 self.send_group_signal();
+                if now.saturating_duration_since(since) < PRE_REAP_SETTLE {
+                    return Reap::Pending;
+                }
             } else {
                 #[cfg(test)]
                 {
@@ -309,6 +319,11 @@ impl ChildTree {
 /// How long the pre-reap signal waits for a killed leader to exit.
 #[cfg(unix)]
 const PRE_REAP_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How long, after the leader exits, the group keeps being signalled before
+/// the gate closes and the leader is reaped (MIK-8213).
+#[cfg(unix)]
+const PRE_REAP_SETTLE: std::time::Duration = std::time::Duration::from_millis(50);
 
 #[cfg(all(test, unix))]
 #[path = "stdio_child_tree_tests.rs"]

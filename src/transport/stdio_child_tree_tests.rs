@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8080: the group leader is reaped only after the group's last signal.
 //!
-//! A5: one signal per phase, close then pre-reap, so a finish sends two.
+//! A5: the close signal, then the pre-reap signal repeated while the group
+//! settles (MIK-8213), so a reap sends at least two.
 //!
 //! Oracle: `group_signals_sent` (signals actually sent) and `signals_refused`,
 //! read off the tree while it is in the slot, or off the reaper's record once
@@ -143,6 +144,14 @@ async fn sent(t: &StdioTransport) -> (usize, usize) {
     with_tree(t, |c| (c.group_signals_sent, c.signals_refused)).await
 }
 
+/// The close signal and at least one pre-reap signal were sent, and none was
+/// refused (MIK-8080, MIK-8213: the pre-reap signal repeats while the group
+/// settles, so the exact count depends on timing).
+fn assert_settled((sent, refused): (usize, usize)) {
+    assert!(sent >= 2, "close and pre-reap both signalled: sent {sent}");
+    assert_eq!(refused, 0, "no signal was refused");
+}
+
 /// T1: `is_connected` sees the exit without reaping it. The descendant keeps
 /// stdout open, so the reader never clears `connected` and the probe decides.
 #[tokio::test]
@@ -172,7 +181,7 @@ async fn close_after_the_exit_signals_each_phase_once_then_reaps() {
     let child = descendant(w.path()).await;
     let pid = leader_exited(&t).await;
     t.close().await.expect("close");
-    assert_eq!(sent_after(pid).await, (2, 0));
+    assert_settled(sent_after(pid).await);
     assert_eq!(kernel_view(pid), None, "the leader is reaped by close");
     gone(child).await;
 }
@@ -186,7 +195,7 @@ async fn a_second_close_sends_nothing() {
     let first = finished(pid).await.status;
     assert_eq!(first.and_then(|s| s.code()), Some(7));
     t.close().await.expect("second close");
-    assert_eq!(sent_after(pid).await, (2, 0));
+    assert_settled(sent_after(pid).await);
     let raw = u32::try_from(pid.as_raw_nonzero().get()).expect("pid fits");
     let records = super::super::reaper::FINISHED
         .lock()
@@ -242,7 +251,7 @@ async fn a_reader_error_then_close_adds_only_the_pre_reap_signal() {
     })
     .await;
     t.close().await.expect("close");
-    assert_eq!(sent_after(pid).await, (2, 0));
+    assert_settled(sent_after(pid).await);
     assert_eq!(kernel_view(pid), None, "the leader is reaped by close");
     gone(child).await;
 }
@@ -264,7 +273,7 @@ async fn a_cancelled_close_still_ends_the_tree() {
     .await;
     closer.abort();
     let _ = closer.await;
-    assert_eq!(sent_after(pid).await, (2, 0));
+    assert_settled(sent_after(pid).await);
     assert_eq!(kernel_view(pid), None, "the reaper reaped the leader");
     gone(child).await;
 }
@@ -357,7 +366,7 @@ async fn a_stepped_tree_signals_each_phase_once_then_reaps_natively() {
         }
     };
     assert!(status.is_some(), "reaped, not abandoned");
-    assert_eq!((tree.group_signals_sent, tree.signals_refused), (2, 0));
+    assert_settled((tree.group_signals_sent, tree.signals_refused));
     let native = native_child(&mut *tree.wrapper).expect("a tokio child at the bottom");
     assert!(
         native.try_wait().expect("try_wait").is_some(),
@@ -383,11 +392,7 @@ async fn closing_ten_live_backends_does_not_add_a_grace_each() {
     let began = std::time::Instant::now();
     for ((_w, t), pid) in started_ones.iter().zip(&pids) {
         t.close().await.expect("close");
-        assert_eq!(
-            sent_after(*pid).await,
-            (2, 0),
-            "close and pre-reap both signalled"
-        );
+        assert_settled(sent_after(*pid).await);
     }
     let took = began.elapsed();
     assert!(took < Duration::from_secs(3), "ten closes took {took:?}");
@@ -421,11 +426,7 @@ async fn a_failed_start_signals_the_group_before_the_reap() {
         .expect("a pid");
     assert_eq!(t.exit_status().and_then(|s| s.code()), Some(3));
     assert_eq!(kernel_view(pid_of(leader)), None, "the leader is reaped");
-    assert_eq!(
-        sent_after(pid_of(leader)).await,
-        (2, 0),
-        "close and pre-reap, before the reap"
-    );
+    assert_settled(sent_after(pid_of(leader)).await);
     gone(child).await;
 }
 
