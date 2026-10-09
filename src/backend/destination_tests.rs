@@ -526,7 +526,11 @@ fn a_start_built_before_the_stamp_is_not_published() {
     backend.stamp_destination(DestinationPolicy::Public);
     let entry = backend.shared_entry();
     let started: Arc<dyn crate::transport::Transport> = Arc::new(Started(Arc::default()));
-    assert!(backend.publish(&entry, &started, built_under).is_err());
+    assert!(
+        backend
+            .publish(&entry, (&started, None), built_under)
+            .is_err()
+    );
     assert!(
         backend
             .pooled_transport_for_test(&super::PoolKey::Shared)
@@ -534,7 +538,7 @@ fn a_start_built_before_the_stamp_is_not_published() {
     );
     assert!(
         backend
-            .publish(&entry, &started, DestinationPolicy::Public)
+            .publish(&entry, (&started, None), DestinationPolicy::Public)
             .is_ok()
     );
 }

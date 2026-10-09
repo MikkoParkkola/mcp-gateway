@@ -658,6 +658,7 @@ impl Store {
         if same {
             return Ok(());
         }
+        updated.generation = self.next_generation()?;
         let placed = write_record(&self.subs_dir, &format!("{id}.json"), &updated)?;
         state.subs.insert(id.to_owned(), updated);
         placed.durable()

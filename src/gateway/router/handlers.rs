@@ -951,11 +951,11 @@ async fn meta_mcp_dispatch(
 
     // Resolved ONCE, here, and reused by creation, retrieval, cancellation,
     // idempotent replay and subscription ownership below.
-    let (owner, events_owner) = tasks::route_owners(
+    let (owner, events_owner, admission_owner) = tasks::route_owners(
         &state,
         verified_identity.as_ref(),
         oauth_agent_identity.as_ref(),
-        &tasks::task_owner_key(
+        (
             grant_subject.as_ref(),
             cert_identity.as_ref(),
             client.as_ref(),
@@ -1684,26 +1684,14 @@ async fn meta_mcp_dispatch(
                 );
             }
             caller.signing = signing_context.as_ref();
-            // One admission authority per key. A task-augmented call is admitted
-            // durably under `Mode::Task` by the handoff below, on the same
-            // verified principal and explicit key a synchronous lease would
-            // reserve under `Mode::Sync` — taking both is not double protection
-            // but a self-mismatch that refuses every honest task. Nothing is
-            // widened by declining the lease here: this request executes no
-            // backend work, and the invocation policy the sync admission would
-            // have pre-applied is applied again at the dispatch chokepoint that
-            // the worker's own call goes through.
-            let admission = if caller.task.is_some() || caller.awaits_signing_admission() {
-                Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected)
-            } else {
-                state.meta_mcp.admit_meta_sync(
-                    &caller,
-                    tool_name,
-                    &arguments,
-                    Some(&session_id),
-                    &id,
-                )
-            };
+            let admission = state.meta_mcp.admit_meta_sync(
+                crate::gateway::meta_mcp::AdmissionOwner::routed(&admission_owner),
+                &caller,
+                tool_name,
+                &arguments,
+                Some(&session_id),
+                &id,
+            );
             let (owned_execution, replay) = match admission {
                 Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(lease)) => {
                     (Some(lease), None)
