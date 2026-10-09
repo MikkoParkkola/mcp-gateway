@@ -327,7 +327,7 @@ async fn r11_an_unusable_round_does_not_carry_the_state() {
 /// Cost governance at 1.0 a `read`, `k-budget` holding 1.5: one call paid,
 /// the next refused.
 #[cfg(feature = "cost-governance")]
-fn budget(meta: crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp {
+pub(super) fn budget(meta: crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp {
     use crate::cost_accounting::config::CostGovernanceConfig;
     let mut cfg = CostGovernanceConfig {
         enabled: true,
