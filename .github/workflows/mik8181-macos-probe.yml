@@ -19,7 +19,9 @@ jobs:
         with:
           save-if: false
       - name: Real-watcher rows (macOS)
-        run: cargo test --all-features --lib --no-fail-fast -- config_reload:: gateway::server::warmstart::hot_reload_tests 2>&1 | tee probe.log
+        run: |
+          cargo test --all-features --lib --no-fail-fast -- config_reload:: gateway::server::warmstart::hot_reload_tests 2>&1 | tee probe.log
       - name: Summary
         if: ${{ !cancelled() }}
-        run: grep -E "^test .* (FAILED|ok|ignored)$|test result|panicked" probe.log | grep -vE " ok$" || true
+        run: |
+          grep -E "^test .* (FAILED|ok|ignored)$|test result|panicked" probe.log | grep -vE " ok$" || true
