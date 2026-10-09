@@ -2978,16 +2978,15 @@ impl Gateway {
             // state cannot move an accepted call's provenance. The mapping is fed
             // the routing keys alone (same servers, tools, sort, dedup and
             // discovery handling), never a copy of the call arguments.
+            // Declared out here: the targets borrow it past the branch.
+            let routing_keys;
             let (external_tool, backend_targets) = if method == "tools/call" {
                 let empty_arguments = serde_json::Value::Object(serde_json::Map::new());
                 let (tool, arguments) = extract_tools_call_params_ref(params);
+                routing_keys = stdio_routing_keys_only(arguments.unwrap_or(&empty_arguments));
                 (
                     tool.to_string(),
-                    super::router::backend_tool_targets_for_call(
-                        meta_mcp,
-                        tool,
-                        &stdio_routing_keys_only(arguments.unwrap_or(&empty_arguments)),
-                    ),
+                    super::router::backend_tool_targets_for_call(meta_mcp, tool, &routing_keys),
                 )
             } else {
                 (method.clone(), Vec::new())
