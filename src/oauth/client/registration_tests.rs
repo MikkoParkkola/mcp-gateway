@@ -185,3 +185,47 @@ fn a_purge_that_cannot_delete_or_locate_the_file_still_drops_the_id() {
         "dropped without an issuer"
     );
 }
+
+/// A 2xx registration answer that is not a registration response is an OAuth
+/// parse error, not an id.
+#[tokio::test]
+async fn an_unparseable_registration_answer_is_an_oauth_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let endpoint = registration_endpoint(201, r#"{"no_client_id":true}"#).await;
+    let (client, _storage) = registering(dir.path(), Some(&endpoint));
+
+    let refused = client.register_client(&endpoint, REDIRECT).await;
+
+    assert!(
+        matches!(refused, Err(crate::Error::OAuth(ref m)) if m.starts_with("Failed to parse registration response")),
+        "{refused:?}"
+    );
+}
+
+/// A successful registration returns the issued id and logs it.
+#[test]
+fn a_successful_registration_logs_the_issued_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut id = None;
+    let records = crate::test_log_capture::records(|| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        id = Some(runtime.block_on(async {
+            let endpoint = registration_endpoint(201, r#"{"client_id":"reg-logged"}"#).await;
+            let (client, _storage) = registering(dir.path(), Some(&endpoint));
+            client.register_client(&endpoint, REDIRECT).await
+        }));
+    });
+
+    assert_eq!(id.unwrap().unwrap(), "reg-logged");
+    let logged: Vec<_> = records
+        .iter()
+        .filter(|r| r["fields"]["message"] == "Registered OAuth client")
+        .collect();
+    let [one] = logged.as_slice() else {
+        panic!("one registration record: {records:?}");
+    };
+    assert_eq!(one["fields"]["client_id"], "reg-logged");
+}
