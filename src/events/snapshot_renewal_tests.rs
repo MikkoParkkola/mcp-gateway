@@ -275,3 +275,89 @@ async fn t34_a_cached_list_from_before_a_renewal_does_not_revoke_it() {
         "the renewal survives a delivery judged against the stale cache"
     );
 }
+
+/// A peer whose first `resources/list` lists only `file:///a` and whose
+/// later ones fail; `lists` counts every list request.
+async fn upstream_confirm_fails(lists: Arc<AtomicUsize>) -> String {
+    let app = axum::Router::new().fallback(move |axum::Json(message): axum::Json<Value>| {
+        let lists = Arc::clone(&lists);
+        async move {
+            let Some(id) = message.get("id").cloned() else {
+                return StatusCode::ACCEPTED.into_response();
+            };
+            let body = match message["method"].as_str() {
+                Some("initialize") => json!({"jsonrpc": "2.0", "id": id, "result": {
+                    "protocolVersion": crate::protocol::PROTOCOL_VERSION,
+                    "capabilities": {"resources": {}},
+                    "serverInfo": {"name": "b", "version": "0"}}}),
+                Some("resources/list") if lists.fetch_add(1, Ordering::SeqCst) == 0 => {
+                    json!({"jsonrpc": "2.0", "id": id, "result": {
+                        "resources": [{"uri": "file:///a", "name": "a"}]}})
+                }
+                _ => json!({"jsonrpc": "2.0", "id": id,
+                    "error": {"code": -32603, "message": "unavailable"}}),
+            };
+            axum::Json(body).into_response()
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let url = format!("http://{}/mcp", listener.local_addr().expect("addr"));
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    url
+}
+
+/// #3625 d1 MEDIUM: a confirming read that fails marks the attempt's lookup
+/// as failed, so the attempt's next authorization reads no catalogue again.
+#[tokio::test]
+async fn a_failed_confirm_spends_the_attempts_lookup() {
+    let lists = Arc::new(AtomicUsize::new(0));
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(Arc::new(Backend::new(
+        "b",
+        BackendConfig {
+            transport: TransportConfig::Http {
+                http_url: upstream_confirm_fails(Arc::clone(&lists)).await,
+                streamable_http: Some(true),
+                protocol_version: None,
+            },
+            timeout: Duration::from_secs(10),
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ))));
+    let listeners = crate::events::upstream_listener::UpstreamListeners::new(
+        Arc::clone(&registry),
+        Weak::new(),
+        Arc::new(std::collections::BTreeSet::new),
+    );
+    crate::events::upstream_listener::FAILED_LOOKUP
+        .scope(std::cell::Cell::new(false), async {
+            assert!(
+                listeners
+                    .authorize_uri("b", "file:///x", Some(1))
+                    .await
+                    .is_ok(),
+                "a failed confirm admits"
+            );
+            assert_eq!(
+                lists.load(Ordering::SeqCst),
+                2,
+                "premise: the list and the confirm"
+            );
+            assert!(
+                listeners
+                    .authorize_uri("b", "file:///x", Some(1))
+                    .await
+                    .is_ok()
+            );
+            assert_eq!(
+                lists.load(Ordering::SeqCst),
+                2,
+                "the same attempt reads no catalogue again"
+            );
+        })
+        .await;
+}

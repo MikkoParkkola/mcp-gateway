@@ -151,3 +151,21 @@ fn a_backend_gets_one_confirming_read_per_window() {
     assert!(!hub.may_confirm("b"), "a second within the window does not");
     assert!(hub.may_confirm("c"), "another backend has its own window");
 }
+
+/// MIK-8194 bound, prune half (#3625 d1 LOW): windows that closed are
+/// dropped, so the map holds only open ones.
+#[tokio::test(start_paused = true)]
+async fn a_closed_confirm_window_leaves_the_map() {
+    let hub = listeners();
+    assert!(hub.may_confirm("b"));
+    tokio::time::advance(std::time::Duration::from_secs(6)).await;
+    assert!(
+        hub.may_confirm("c"),
+        "another backend, after b's window closed"
+    );
+    assert_eq!(
+        hub.confirmed.lock().len(),
+        1,
+        "only c's open window is kept"
+    );
+}

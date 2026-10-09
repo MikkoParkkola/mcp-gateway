@@ -141,7 +141,7 @@ pub(crate) struct UpstreamListeners {
     pub(super) starts: std::sync::atomic::AtomicUsize,
     me: Weak<UpstreamListeners>,
     /// When each backend's last confirming read began (`CONFIRM_EVERY`).
-    confirmed: Mutex<HashMap<String, std::time::Instant>>,
+    confirmed: Mutex<HashMap<String, tokio::time::Instant>>,
 }
 
 impl Drop for UpstreamListeners {
@@ -489,7 +489,13 @@ impl UpstreamListeners {
                     Ok(Ok(now)) if now.complete && !now.uris.contains(uri) => {
                         Err(RpcError::forbidden())
                     }
-                    _ => Ok(()),
+                    Ok(Ok(_)) => Ok(()),
+                    // A failed confirm counts like the first lookup's failure:
+                    // the attempt does not wait on the catalogue again.
+                    _ => {
+                        let _ = FAILED_LOOKUP.try_with(|failed| failed.set(true));
+                        Ok(())
+                    }
                 }
             }
             Ok(Ok(_)) => Ok(()),
@@ -502,9 +508,11 @@ impl UpstreamListeners {
     }
 
     /// Whether `backend` may take a confirming read now; records it if so.
-    fn may_confirm(&self, backend: &str) -> bool {
-        let now = std::time::Instant::now();
+    pub(super) fn may_confirm(&self, backend: &str) -> bool {
+        let now = tokio::time::Instant::now();
         let mut confirmed = self.confirmed.lock();
+        // Only windows still open are kept, so the map never outgrows them.
+        confirmed.retain(|_, at| now.duration_since(*at) < CONFIRM_EVERY);
         if confirmed
             .get(backend)
             .is_some_and(|at| now.duration_since(*at) < CONFIRM_EVERY)
