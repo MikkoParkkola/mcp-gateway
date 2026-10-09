@@ -1,0 +1,13 @@
+diff --git a/tests/sub2b/http_s03_rows.rs b/tests/sub2b/http_s03_rows.rs
+index 67ae70ed8..3c4161ec8 100644
+--- a/tests/sub2b/http_s03_rows.rs
++++ b/tests/sub2b/http_s03_rows.rs
+@@ -238,7 +238,7 @@ async fn s03_progress_http_isolates_by_stream() {
+     s03_round().await;
+ }
+ 
+-/// MIK-8199 diagnosis: the round 40 times in a row.
++/// MIK-8199 diagnosis: the round 40 times in a row (Windows run).
+ #[tokio::test]
+ async fn s03_round_forty_times() {
+     for round in 0..40 {

@@ -1,0 +1,2 @@
+head_sha	e26114b5407ee60766eb73209ae1f7bc62cf58a2
+w1-windows-s03-loop	windows	w1-windows-s03-loop.patch	--test mik_7272_sub2b_acs s03_round_forty_times
