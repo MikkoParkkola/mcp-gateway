@@ -1,0 +1,14 @@
+diff --git a/src/gateway/task_service/store_input.rs b/src/gateway/task_service/store_input.rs
+index e8486f6b2..f821c28c2 100644
+--- a/src/gateway/task_service/store_input.rs
++++ b/src/gateway/task_service/store_input.rs
+@@ -405,9 +405,6 @@ impl Shared {
+         // A clock before 1970 dates nothing: the update is refused for now,
+         // and the round is not closed, since closing cancels the task for
+         // good on a time it cannot read (MIK-8202).
+-        if now.timestamp() < 0 {
+-            return Err(StoreError::Unavailable);
+-        }
+         if let Some(closed) = closed_at(&task, &record, now) {
+             return Ok(ProvideOutcome::Closed(closed));
+         }
