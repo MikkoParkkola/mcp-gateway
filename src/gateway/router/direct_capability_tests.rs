@@ -167,7 +167,17 @@ async fn g5_a_refused_round_releases_the_key() {
 #[tokio::test]
 async fn g6_a_mixed_round_is_refused_for_its_undeclared_part() {
     for backend in BACKENDS {
-        let fx = fixture(Answer::AskMixed, |_| {}).await;
+        // An elicitation and a sampling in one round.
+        let fx = fixture(
+            Answer::AskEdited(|asked| {
+                asked["inputRequests"]["k2"] = json!({
+                    "method": "sampling/createMessage",
+                    "params": {"messages": [], "maxTokens": 8}
+                });
+            }),
+            |_| {},
+        )
+        .await;
         let body = call(&fx, backend, Some(form()), json!({})).await;
         let data = json!({"requiredCapabilities": ["sampling"]});
         assert_refused(&body, &data, backend);
@@ -180,7 +190,13 @@ async fn g6_a_mixed_round_is_refused_for_its_undeclared_part() {
 #[tokio::test]
 async fn g7_a_malformed_round_with_undeclared_questions_is_refused() {
     for backend in BACKENDS {
-        let fx = fixture(Answer::AskBadState, |_| {}).await;
+        // A valid question beside a non-string state, which
+        // `InputRequired::from_result` declines.
+        let fx = fixture(
+            Answer::AskEdited(|asked| asked["requestState"] = json!(7)),
+            |_| {},
+        )
+        .await;
         let body = call(&fx, backend, Some(json!({})), json!({})).await;
         let data = json!({"requiredCapabilities": ["elicitation"]});
         assert_refused(&body, &data, backend);

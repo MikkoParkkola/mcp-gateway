@@ -68,12 +68,8 @@ pub(crate) enum Answer {
     AskSecond,
     /// The backend cannot be reached: nothing was sent (`TransportConnect`).
     Unreachable,
-    /// Like `AskOnce`, asking an elicitation and a sampling in one round
-    /// (MIK-8089).
-    AskMixed,
-    /// Like `AskOnce`, a valid question beside a non-string state, which
-    /// `InputRequired::from_result` declines (MIK-8089).
-    AskBadState,
+    /// Like `AskOnce`, the question then edited by the function (MIK-8089).
+    AskEdited(fn(&mut Value)),
     /// Like `Ok`, from a 2026-07-28 backend: its `tools/list` carries
     /// `resultType`, `ttlMs` (5000) and `cacheScope` itself, and every other
     /// answer a `ttlMs` of 3000 (MIK-8022).
@@ -100,106 +96,6 @@ pub(crate) enum Answer {
     ForgedAccount(&'static str),
 }
 
-/// The question an `Ask*` answer opens with.
-fn question(answer: Answer) -> Value {
-    let mut asked = json!({
-        "resultType": "input_required",
-        "inputRequests": {
-            "k1": {
-                "method": "elicitation/create",
-                "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
-            }
-        },
-        "requestState": "backend-state-1"
-    });
-    if matches!(answer, Answer::AskNoState) {
-        asked.as_object_mut().unwrap().remove("requestState");
-    }
-    if matches!(answer, Answer::AskMalformed) {
-        asked["inputRequests"] = json!("surprise");
-    }
-    if matches!(answer, Answer::AskBig) {
-        asked["requestState"] = json!("s".repeat(16 * 1024));
-    }
-    if matches!(answer, Answer::AskBadMeta) {
-        asked["_meta"] = json!(5);
-    }
-    if let Answer::AskWith(text) = answer {
-        asked["inputRequests"]["k1"]["params"]["message"] = json!(text);
-        asked["content"] = json!([{"type": "text", "text": text}]);
-    }
-    if matches!(answer, Answer::AskBadState) {
-        asked["requestState"] = json!(7);
-    }
-    if matches!(answer, Answer::AskMixed) {
-        asked["inputRequests"]["k2"] = json!({
-            "method": "sampling/createMessage",
-            "params": {"messages": [], "maxTokens": 8}
-        });
-    }
-    asked
-}
-
-/// What the backend answers a `tools/call` with, past the question rounds.
-fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRpcResponse> {
-    match answer {
-        Answer::DoneWithState => Ok(JsonRpcResponse::success(
-            id,
-            json!({"content": [{"type": "text", "text": "ok"}], "isError": false,
-                   "requestState": "backend-state-1"}),
-        )),
-        Answer::Ok
-        | Answer::WithNote
-        | Answer::Paged(..)
-        | Answer::Unreadable(_)
-        | Answer::NonNumeric(_) => Ok(JsonRpcResponse::success(
-            id,
-            json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
-        )),
-        Answer::ModernList => Ok(JsonRpcResponse::success(
-            id,
-            json!({"content": [{"type": "text", "text": "ok"}], "isError": false, "ttlMs": 3000}),
-        )),
-        Answer::PublicScope => Ok(JsonRpcResponse::success(
-            id,
-            json!({"content": [{"type": "text", "text": "ok"}], "isError": false,
-                   "cacheScope": "public"}),
-        )),
-        Answer::IsError => Ok(JsonRpcResponse::success(
-            id,
-            json!({"content": [{"type": "text", "text": "backend says no"}], "isError": true}),
-        )),
-        Answer::RpcError(code) => Ok(JsonRpcResponse::error(Some(id), code, "backend says no")),
-        Answer::RateLimited => Ok(JsonRpcResponse::error(
-            Some(id),
-            -32000,
-            "rate limit exceeded",
-        )),
-        Answer::Transport => Err(crate::Error::Transport("connection refused".to_string())),
-        Answer::RpcErrorText(_)
-        | Answer::RpcErrorData(_)
-        | Answer::FailedWith(_)
-        | Answer::ForgedAccount(_) => error_answer(answer, id),
-        Answer::Unreachable => Err(crate::Error::TransportConnect("no route".to_string())),
-        Answer::AskOnce
-        | Answer::AskNoState
-        | Answer::AskMalformed
-        | Answer::AskBig
-        | Answer::AskWith(_)
-        | Answer::AskBadMeta
-        | Answer::AskAndError
-        | Answer::AskSecond
-        | Answer::AskMixed
-        | Answer::AskBadState => {
-            unreachable!("answered above")
-        }
-        Answer::Text(text) => Ok(JsonRpcResponse::success(
-            id,
-            json!({"content": [{"type": "text", "text": text}], "isError": false}),
-        )),
-    }
-}
-
 /// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
 /// and counting every `tools/call`. `tools/list` names the one tool the rows
 /// call, `read`, so the direct route's listing check (F13) admits it; a
@@ -209,60 +105,6 @@ struct CountingBackend {
     /// The params of every `tools/call`, in order (MIK-8078).
     seen: Arc<std::sync::Mutex<Vec<Value>>>,
     answer: Answer,
-}
-
-/// The `tools/list` page `answer` scripts for the request carrying `params`.
-fn listing(answer: Answer, params: Option<&Value>) -> Value {
-    let mut result = json!({"tools": [{"name": "read", "inputSchema": {
-        "type": "object",
-        "properties": {"cmd": {"type": "string"}}
-    }}]});
-    match answer {
-        Answer::WithNote => {
-            result["tools"] = json!([
-                {"name": "read", "inputSchema": {"type": "object"}},
-                {"name": "note", "inputSchema": {"type": "object"}}
-            ]);
-        }
-        Answer::ModernList => {
-            result["resultType"] = json!("complete");
-            result["ttlMs"] = json!(5000);
-            result["cacheScope"] = json!("private");
-        }
-        Answer::Paged(first, second) => {
-            let later = params.and_then(|p| p.get("cursor")).is_some();
-            let hint = if later { second } else { first };
-            if later {
-                result["tools"] = json!([]);
-            } else {
-                result["nextCursor"] = json!("page-2");
-            }
-            if let Some(hint) = hint {
-                result["ttlMs"] = json!(hint);
-            }
-        }
-        Answer::NonNumeric(hint) => {
-            if params.and_then(|p| p.get("cursor")).is_some() {
-                result["tools"] = json!([{"name": "later", "inputSchema": {"type": "object"}}]);
-                result["ttlMs"] = json!("soon");
-            } else {
-                result["nextCursor"] = json!("page-2");
-                result["ttlMs"] = json!(hint);
-            }
-        }
-        Answer::Unreadable(hint) => {
-            if params.and_then(|p| p.get("cursor")).is_some() {
-                result["tools"] = json!("not a list");
-            } else {
-                result["nextCursor"] = json!("page-2");
-                if let Some(hint) = hint {
-                    result["ttlMs"] = json!(hint);
-                }
-            }
-        }
-        _ => {}
-    }
-    result
 }
 
 #[async_trait::async_trait]
@@ -290,8 +132,7 @@ impl Transport for CountingBackend {
                 | Answer::AskBadMeta
                 | Answer::AskAndError
                 | Answer::AskSecond
-                | Answer::AskMixed
-                | Answer::AskBadState
+                | Answer::AskEdited(_)
         ) {
             let asks_now = n == usize::from(matches!(self.answer, Answer::AskSecond));
             return Ok(if asks_now {
@@ -426,10 +267,13 @@ pub(crate) async fn fixture_firewalled_with(
     fx
 }
 
+#[path = "direct_guards_fixture_answers.rs"]
+mod answers;
 #[path = "direct_guards_fixture_egress.rs"]
 mod egress;
+use answers::{call_answer, listing, question};
+use egress::backend_transport;
 pub(crate) use egress::fixture_inspecting_on;
-use egress::{backend_transport, error_answer};
 #[cfg(feature = "firewall")]
 pub(crate) use egress::{fixture_audited_on, fixture_firewalled_on, meta_firewall};
 
