@@ -797,7 +797,3 @@ pub(super) fn named_tool_envelope(
     }
     envelope
 }
-
-#[cfg(test)]
-#[path = "admission_owner_tests.rs"]
-mod owner_tests;

@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde_json::json;
 
-use super::{OPERATION_DEFINING_META, operation_arguments};
+use crate::gateway::meta_mcp::admission::{OPERATION_DEFINING_META, operation_arguments};
 
 /// FP5 (`MIK-8192`): the allow-list is the only door a `_meta` key has into
 /// an operation fingerprint. Shipped empty, a call differing only in `_meta`

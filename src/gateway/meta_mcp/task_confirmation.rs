@@ -613,3 +613,7 @@ mod tests {
 
 #[cfg(test)]
 mod slot_tests;
+
+#[cfg(test)]
+#[path = "admission_owner_tests.rs"]
+mod admission_owner_tests;
