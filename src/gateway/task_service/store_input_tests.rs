@@ -3,7 +3,7 @@
 //! MIK-8202: `closed_at` on a clock before 1970. The store's answer path
 //! reads its own clock, so the row calls the decision with `now` directly.
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use serde_json::json;
 
 use super::{RoundClosed, closed_at};
@@ -38,7 +38,7 @@ fn parked() -> (Task, Record) {
             )],
             request_state: None,
         }),
-        created() + Duration::seconds(1),
+        created() + crate::duration_bound::delta!(seconds, 1),
     )
     .expect("a working task takes an input round");
     assert_eq!(task.status(), TaskStatus::InputRequired, "premise");
@@ -59,7 +59,11 @@ fn parked() -> (Task, Record) {
 fn a_clock_before_the_epoch_closes_a_round_without_a_deadline() {
     let (task, record) = parked();
     assert_eq!(
-        closed_at(&task, &record, created() + Duration::hours(1)),
+        closed_at(
+            &task,
+            &record,
+            created() + crate::duration_bound::delta!(hours, 1)
+        ),
         None,
         "control: a round inside its TTL closed"
     );

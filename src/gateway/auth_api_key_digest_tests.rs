@@ -149,7 +149,7 @@ fn resolved_auth_config_debug_shows_no_digest() {
 /// MIK-8202: a clock before 1970 refuses an API key the real clock still admits.
 #[test]
 fn a_clock_before_the_epoch_refuses_a_live_api_key() {
-    let ahead = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    let ahead = (chrono::Utc::now() + crate::duration_bound::delta!(hours, 1)).to_rfc3339();
     let config = digest_key(Some(ahead));
     assert!(
         config.validate_token(KEY).is_some(),
@@ -166,7 +166,7 @@ fn a_clock_before_the_epoch_refuses_a_live_api_key() {
 /// MIK-8202: a clock before 1970 refuses a live key's work done on its behalf.
 #[test]
 fn a_clock_before_the_epoch_refuses_a_live_key_on_its_behalf() {
-    let ahead = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    let ahead = (chrono::Utc::now() + crate::duration_bound::delta!(hours, 1)).to_rfc3339();
     let config = digest_key(Some(ahead));
     let principal = &hex_of(KEY)[..12];
     assert!(

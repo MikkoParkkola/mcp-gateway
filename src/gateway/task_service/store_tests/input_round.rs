@@ -398,7 +398,7 @@ async fn a_clock_before_the_epoch_refuses_an_update_and_keeps_the_round() {
         "an unreadable clock took or closed the update"
     );
 
-    store.set_clock_for_test(Some(at(1) + chrono::Duration::hours(1)));
+    store.set_clock_for_test(Some(at(1) + crate::duration_bound::delta!(hours, 1)));
     let accepted = store
         .provide_input(OWNER, task.id(), update(), || None, at(2))
         .await;
