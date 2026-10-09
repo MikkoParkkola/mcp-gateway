@@ -178,9 +178,10 @@ root's next startup step.
 
 A sourced `.envsh` runs in the entrypoint's shell immediately before the gateway
 is exec'd, so a variable it exports is part of the environment the gateway
-inherits, and one it only assigns is not. It is a startup step, not a
-configuration channel; the gateway's own settings belong in `-e` or the config
-file.
+inherits, and one it only assigns is not. One exception: in a container started
+as root the gateway is exec'd with `HOME=/home/gateway`, so an exported `HOME`
+does not reach it. It is a startup step, not a configuration channel; the
+gateway's own settings belong in `-e` or the config file.
 
 ```bash
 docker pull ghcr.io/mikkoparkkola/mcp-gateway:latest-full

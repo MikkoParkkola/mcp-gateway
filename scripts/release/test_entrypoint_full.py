@@ -96,5 +96,24 @@ class RootStart(unittest.TestCase):
                 self.assertIn("EXTRA_APT_PACKAGES", run.stderr)
 
 
+class Healthcheck(unittest.TestCase):
+    """Only the -full variant waits longer for its first answer: an install
+    runs before the gateway starts there, and nowhere else."""
+
+    def start_period(self, stage):
+        dockerfile = (pathlib.Path(__file__).parents[2] / "Dockerfile").read_text()
+        stages = dockerfile.split("\nFROM ")
+        body = next(s for s in stages if s.split("\n", 1)[0].rstrip().endswith(f" AS {stage}"))
+        found = [line for line in body.splitlines() if line.startswith("HEALTHCHECK")]
+        self.assertEqual(len(found), 1, f"{stage}: {found}")
+        return found[0].split("--start-period=")[1].split()[0]
+
+    def test_the_default_image_keeps_its_start_period(self):
+        self.assertEqual(self.start_period("runtime"), "5s")
+
+    def test_the_full_variant_allows_for_its_install(self):
+        self.assertEqual(self.start_period("runtime-full"), "60s")
+
+
 if __name__ == "__main__":
     unittest.main()

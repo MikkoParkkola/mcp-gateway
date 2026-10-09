@@ -64,6 +64,17 @@ install_declared_packages() {
   # shellcheck disable=SC2086
   set -- ${EXTRA_APT_PACKAGES}
   set +f
+  # A word starting with `-` is an apt option, not a package: `--simulate x`
+  # makes apt exit 0 having installed nothing, and the container would start
+  # without what it declared. Refused before apt runs.
+  for word in "$@"; do
+    case "$word" in
+      -*)
+        echo "entrypoint: EXTRA_APT_PACKAGES holds an apt option ($word); list package names only" >&2
+        exit 1
+        ;;
+    esac
+  done
   export DEBIAN_FRONTEND=noninteractive
   # Bounded because apt is the one startup step that waits on something outside
   # the deployment.

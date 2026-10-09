@@ -176,3 +176,9 @@ COPY --chmod=0755 docker/entrypoint-full.sh /usr/local/bin/entrypoint-full.sh
 # then never exits instead of refusing the way the base stage does.
 ENTRYPOINT ["/usr/local/bin/entrypoint-full.sh"]
 CMD ["--config", "/config.yaml"]
+
+# The variant's own start period: an EXTRA_APT_PACKAGES install runs before
+# the gateway starts, so it gets up to a minute before an unanswered probe
+# counts. The default image keeps the 5s inherited from `runtime`.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD wget --spider -q http://127.0.0.1:39400/livez || exit 1
