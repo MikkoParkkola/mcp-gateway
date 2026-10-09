@@ -199,6 +199,9 @@ backend" and "fails a capability file" first.**
 | 172 | `/.well-known/oauth-protected-resource` answers 404 when the gateway names no authorization server (auth off, API keys only, or agent auth); it answered 200 with a document naming none, or 503 on a wildcard bind without `server.public_url` | None. A client that probes the path now uses the API key it was given instead of attempting an OAuth sign-in that could not complete. With `key_server.delegated_bearer` on, the document is served as before |
 | 173 | `meta_mcp.cache_tools` is retired: nothing ever read it. A config that sets it loads and logs one warning; `upgrade` removes it, or names it when it cannot do so safely, and `init` no longer writes it | Run `mcp-gateway upgrade`, or delete the key. To change how long tool lists are cached, set `meta_mcp.cache_ttl` |
 | 174 | Every frame a backend's text reaches a client in passes one screen (content inspection, context integrity, response firewall) on every route. Over HTTP `/mcp` an interim question the firewall would rewrite is refused (-32600), as over stdio, instead of delivered redacted; backend errors, `prompts/get` and `resources/read` bodies, catalogue listings and notifications streamed during a call can now arrive redacted or be refused | None by default. To allow flagged text in a prompt, resource or listing, add a firewall rule whose `tool_match` names the method (`prompts/get`, `resources/read`, ...) |
+| 175 | The per-backend route `POST /mcp/{name}` refuses what `/mcp` refuses under every security posture, with the same code and status: a malformed request, a contradicted or doubled protocol header, an unsupported revision, or a 2026-07-28 request missing its required `_meta`. Before, only `hardened` checked these; elsewhere the route forwarded them to the backend | None for a client whose requests `/mcp` accepts. A client that sent such a request to `/mcp/{name}` gets the refusal `/mcp` gives it and fixes the request |
+
+Changes not yet numbered wait in `upgrading.d/` at the repository root, one file per pull request; release preparation numbers them into this list.
 
 
 ## 1. OAuth credentials are stored per issuer
@@ -3384,7 +3387,8 @@ task; it never leaves delivered content unrecorded. The record is written before
 a commit that then loses (to a cancel that lands first, or a store failure) leaves a record for
 a recovery that did not land. A live call has the same window: its record is written
 (`src/gateway/meta_mcp/invoke.rs:1219-1221`) before its result is stored for delivery
-(`src/gateway/router/handlers.rs:1798`), and stands if that delivery then fails.
+(`execution.complete_delivery` in `meta_mcp_dispatch`, `src/gateway/router/handlers.rs`), and stands
+if that delivery then fails.
 
 ## 114. Hardened can name backends that may reach private networks
 
@@ -4556,6 +4560,23 @@ the rule's `tool_match` names the method (`prompts/get`, `resources/read`,
 `prompts/list`, ...), not the prompt or resource name. Backend failure logs
 now carry the error code rather than the backend's text; read the backend's
 own log for the text.
+
+## 175. The per-backend route refuses what `/mcp` refuses
+
+**Startup:** no notice
+
+`POST /mcp/{name}` ran the `/mcp` request checks only under the `hardened`
+posture. Under every other posture it forwarded a request `/mcp` would refuse:
+a malformed one, a contradicted or doubled protocol header, an unsupported
+revision, or a 2026-07-28 request missing its required `_meta`. The checks now
+run under every posture, before the backend is looked up, and give the same
+JSON-RPC code and HTTP status `/mcp` gives. A request naming a backend that
+does not exist gets that refusal too, so the answer no longer tells a caller
+which backends exist.
+
+A client whose requests `/mcp` accepts sees no change. Only `hardened` still
+refuses a plain legacy request on this route that is not an `initialize`
+declaring elicitation, as before.
 
 ## Upgrading from 3.5.x: a walkthrough
 

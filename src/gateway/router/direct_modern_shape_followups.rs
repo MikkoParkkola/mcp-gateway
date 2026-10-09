@@ -18,26 +18,19 @@ fn malformed_meta() -> Value {
     json!({"io.modelcontextprotocol/protocolVersion": "2026-07-28"})
 }
 
-/// DIRECT.3: a malformed-modern request on the non-hardened route is relayed
-/// exactly as a legacy request is: the same bytes, nothing shaped.
+/// MIK-8040 (supersedes MIK-8022 DIRECT.3): a malformed-modern request on the
+/// non-hardened route is refused before dispatch, as `/mcp` refuses it.
 #[tokio::test]
-async fn a_malformed_modern_request_is_relayed_as_legacy() {
+async fn a_malformed_modern_request_is_refused_off_hardened() {
     for (backend, method, params) in [
         ("alpha", "tools/list", json!({})),
         ("alpha", "tools/call", call_params()),
         ("alpha-pt", "tools/call", call_params()),
     ] {
         let fx = fixture(Answer::Ok, |_| {}).await;
-        let malformed = post(
-            &fx,
-            (backend, method),
-            (false, 7),
-            params.clone(),
-            malformed_meta(),
-        )
-        .await;
-        let plain = legacy(&fixture(Answer::Ok, |_| {}).await, backend, method, params).await;
-        assert_eq!(malformed, plain, "{backend} {method}");
+        let body = post(&fx, (backend, method), (false, 7), params, malformed_meta()).await;
+        assert_eq!(body["error"]["code"], -32602, "{backend} {method}: {body}");
+        assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "{backend} {method}");
     }
 }
 
@@ -204,11 +197,10 @@ async fn each_replay_signature_answers_its_own_nonce() {
     }
 }
 
-/// Refusal parity: under `hardened` a malformed-modern call is refused before
-/// dispatch, as on `/mcp`; without it the direct route forwards it unrefused
-/// (DIRECT.3, deliberate).
+/// Refusal parity: under every posture a malformed-modern call is refused
+/// before dispatch, as on `/mcp` (MIK-8040, superseding MIK-8022 DIRECT.3).
 #[tokio::test]
-async fn a_malformed_modern_call_is_refused_only_under_hardened() {
+async fn a_malformed_modern_call_is_refused_under_every_posture() {
     use crate::gateway::meta_mcp::signing::NONCE_META;
     for backend in BACKENDS {
         let hardened = fixture_hardened_signed(Answer::Ok, false).await;
@@ -268,8 +260,14 @@ async fn a_malformed_modern_call_is_refused_only_under_hardened() {
             malformed_meta(),
         )
         .await;
-        assert!(body["result"].is_object(), "{backend}: refused: {body}");
-        assert_eq!(open.calls.load(Ordering::SeqCst), 1, "{backend}");
+        assert_eq!(body["error"]["code"], -32602, "{backend}: {body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("clientCapabilities")),
+            "{backend}: refused for the missing field: {body}"
+        );
+        assert_eq!(open.calls.load(Ordering::SeqCst), 0, "{backend}");
     }
 }
 

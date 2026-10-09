@@ -69,12 +69,13 @@ pub(super) fn classify_direct<'h>(
     (shape, declared_version)
 }
 
-/// The direct route's refusal under `hardened`, or `None`.
+/// The direct route's refusal, or `None`.
 ///
-/// `reading` is [`classify_direct`]'s, so a modern header over a legacy body,
-/// a doubled or contradicted header, or an unsupported revision is refused
-/// here as on `/mcp`. What remains legacy is refused unless it is a declaring
-/// `initialize`.
+/// `reading` is [`classify_direct`]'s, so under every posture a malformed
+/// request, a modern header over a legacy body, a doubled or contradicted
+/// header, or an unsupported revision is refused here as on `/mcp`
+/// (MIK-8040). Under `hardened` only, what remains legacy is refused unless
+/// it is a declaring `initialize`.
 pub(super) fn direct_refusal(
     state: &AppState,
     headers: &HeaderMap,
@@ -102,5 +103,6 @@ pub(super) fn direct_refusal(
     ) {
         return Some(build_http_response(&Egressed::gateway_own(rpc), status));
     }
-    (shape.era() == Era::Legacy && !declares_elicitation(request)).then(refusal)
+    (is_hardened(state) && shape.era() == Era::Legacy && !declares_elicitation(request))
+        .then(refusal)
 }
