@@ -68,11 +68,12 @@ install_declared_packages() {
   [ "$#" -gt 0 ] || return 0
   # A word starting with `-` is an apt option, not a package: `--simulate x`
   # makes apt exit 0 having installed nothing, and the container would start
-  # without what it declared. Refused before apt runs.
+  # without what it declared. A word ending in `-` asks apt-get install to
+  # remove that package. Both are refused before apt runs.
   for word in "$@"; do
     case "$word" in
-      -*)
-        echo "entrypoint: EXTRA_APT_PACKAGES holds an apt option ($word); list package names only" >&2
+      -*|*-)
+        echo "entrypoint: EXTRA_APT_PACKAGES holds an apt option or removal ($word); list package names only" >&2
         exit 1
         ;;
     esac

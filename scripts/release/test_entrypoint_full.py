@@ -79,6 +79,17 @@ class RootStart(unittest.TestCase):
                 self.assertNotIn("apt-get install", log)
                 self.assertNotIn("setpriv", log)
 
+    def test_a_removal_suffix_in_the_package_list_is_refused(self):
+        # apt-get install reads `name-` as "remove name": a declared list
+        # could uninstall a package and still start the container.
+        for value in ("wget-", "iproute2 curl-"):
+            with self.subTest(value=value):
+                run, log = self.run_entrypoint(EXTRA_APT_PACKAGES=value)
+                self.assertNotEqual(run.returncode, 0, f"accepted {value!r}")
+                self.assertNotIn("apt-get", log)
+                self.assertNotIn("setpriv", log)
+                self.assertIn("EXTRA_APT_PACKAGES", run.stderr)
+
     def test_a_blank_package_list_installs_nothing(self):
         run, log = self.run_entrypoint(EXTRA_APT_PACKAGES="   ")
         self.assertEqual(run.returncode, 0, run.stderr)
