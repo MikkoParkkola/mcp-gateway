@@ -4,8 +4,8 @@ use super::*;
 use crate::commands::config_write::CommentLoss;
 use mcp_gateway::cli::{Cli, InitProfile};
 use mcp_gateway::config::{BackendConfig, Config, TransportConfig};
-use mcp_gateway::config_persistence::write_config;
 use mcp_gateway::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
+use mcp_gateway::gateway::test_helpers::write_config_fixture;
 #[path = "main_dangling_tests.rs"]
 mod dangling;
 #[path = "main_stack_tests.rs"]
@@ -232,7 +232,7 @@ fn write_discovered_to_config_preserves_existing_backends() {
             ..BackendConfig::default()
         },
     );
-    write_config(&output, &existing).expect("initial write should succeed");
+    write_config_fixture(&output, &existing).expect("initial write should succeed");
 
     let server = make_discovered_server("tavily");
     write_discovered_to_config(&[server], Some(&output), CommentLoss::Refuse)

@@ -285,6 +285,37 @@ async fn an_eviction_by_the_sweep_follows_the_burials_receipt() {
     assert_burial_first(dir.path(), "evt_x");
 }
 
+/// MIK-8202, retention-sweep rule: a sweep that cannot date the dead letters
+/// on a clock before 1970 skips its pass and evicts nothing; on a clock it
+/// can read, the same sweep evicts.
+#[tokio::test]
+async fn a_pre_1970_clock_sweeps_nothing() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        dead_letter_retention: Duration::from_secs(1),
+        ..crate::config::EventsConfig::default()
+    };
+    let (hub, services, x) = buried_setup(dir.path(), &config);
+    hub.settle(&services, &x, gone()).await;
+    assert_eq!(hub.store.dead_summaries().len(), 1, "premise: buried");
+    // Past the retention.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    {
+        let _clock = crate::clock::test_clock::before_epoch();
+        hub.sweep_dead_letters(&services).await;
+    }
+    assert_eq!(
+        hub.store.dead_summaries().len(),
+        1,
+        "a sweep on an unreadable clock evicted a dead letter"
+    );
+    hub.sweep_dead_letters(&services).await;
+    assert!(
+        hub.store.dead_summaries().is_empty(),
+        "control: on a readable clock the sweep evicts"
+    );
+}
+
 /// .2: the attempt limit and the backoff count sends, so a failure after
 /// unsent claims is retried, not buried `exhausted`.
 #[tokio::test]

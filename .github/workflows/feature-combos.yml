@@ -67,6 +67,16 @@ jobs:
               --no-default-features --features tool-profiles
               --no-default-features --features runtime-substrate
               --no-default-features --features webui
+          # Windows target, cross-linted on ubuntu (MIK-8223): code under
+          # cfg(windows) / cfg(not(unix)) is linted here as well as by the
+          # per-PR windows-check. Both ends of the feature range, not the
+          # full product: a Windows-only break that depends on a feature
+          # combination adds rows here when one is found.
+          - shard: windows target
+            target: x86_64-pc-windows-gnu
+            combos: |
+              --all-features --target x86_64-pc-windows-gnu
+              --no-default-features --target x86_64-pc-windows-gnu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -74,13 +84,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           components: clippy
-      # One shared cache (saved by the first shard to finish), not one per
-      # shard: four extra entries would crowd the 10 GB repository cache the
-      # required jobs depend on. The key is explicit so the shards cannot
-      # drift into separate entries.
+          targets: ${{ matrix.target }}
+      # ring and aws-lc-sys build C for the target.
+      - name: Install the mingw C toolchain
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+      # One shared cache for the Linux shards (saved by the first to finish),
+      # not one per shard: extra entries would crowd the 10 GB repository
+      # cache the required jobs depend on. The Windows-target shard keeps its
+      # own key, so cross artifacts never displace the Linux ones.
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
-          shared-key: feature-combos
+          shared-key: ${{ matrix.target && 'feature-combos-windows' || 'feature-combos' }}
       # Every target, tests included: a test names a gated item only under
       # its gate. Every combination runs even after one fails; the step fails
       # at the end, naming them all.

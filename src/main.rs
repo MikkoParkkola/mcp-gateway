@@ -26,7 +26,6 @@ use clap::Parser;
 use mcp_gateway::{
     cli::{AuditCommand, Cli, Command, SetupCommand, SkillsCommand},
     config::{Config, EnvOverlay},
-    config_persistence::load_existing_or_default,
     gateway::Gateway,
     setup_tracing,
     validator::ValidateConfig,
@@ -777,14 +776,14 @@ pub fn write_discovered_to_config(
         std::path::Path::to_path_buf,
     );
 
-    let mut config = load_existing_or_default(&path)?;
-
-    for server in servers {
-        let backend_config = server.to_backend_config();
-        config.backends.insert(server.name.clone(), backend_config);
-    }
-
-    commands::config_write::write(&path, &config, mode).map_err(mcp_gateway::Error::Config)?;
+    commands::config_write::write(&path, mode, |config| {
+        for server in servers {
+            let backend_config = server.to_backend_config();
+            config.backends.insert(server.name.clone(), backend_config);
+        }
+        Ok(())
+    })
+    .map_err(mcp_gateway::Error::Config)?;
 
     Ok(path)
 }
