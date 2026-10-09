@@ -102,6 +102,7 @@ pub(crate) mod response_security;
 pub(crate) use response_security::error_response_preserving_status;
 #[cfg(test)]
 mod response_security_tests;
+pub(crate) mod sealed_hold;
 mod search;
 pub(crate) mod signing;
 #[cfg(feature = "spec-preview")]

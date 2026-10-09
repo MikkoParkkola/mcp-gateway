@@ -532,3 +532,7 @@ async fn egress_a_stolen_envelope_frees_no_other_slot() {
         "the other exchange lost its slot: {body}"
     );
 }
+
+/// The continuation-slot release matrix (MIK-8176 family).
+#[path = "egress_matrix_tests/slot_release.rs"]
+mod slot_release;
