@@ -57,11 +57,12 @@ impl Presented {
     /// session at most one idle timeout from now, since activity alone
     /// extends it. Each kind but an API key carries the binding every
     /// delivery attempt re-checks (design F9).
+    #[allow(clippy::unnecessary_wraps)] // red seam: the fix refuses
     pub(super) fn credential(
         &self,
         client: Option<&crate::gateway::auth::AuthenticatedClient>,
         state: &super::super::AppState,
-    ) -> crate::events::Credential {
+    ) -> Result<crate::events::Credential, String> {
         let kind = CredentialKind::of(client);
         let facts = self.facts.clone().unwrap_or(CredentialFacts {
             expires_at: None,
@@ -99,13 +100,13 @@ impl Presented {
                 .map(|session_sha256| LiveBinding::DashboardSession { session_sha256 }),
             CredentialKind::None | CredentialKind::LocalTransport | CredentialKind::ApiKey => None,
         };
-        crate::events::Credential {
+        Ok(crate::events::Credential {
             kind,
             principal: client.map(|c| c.principal.clone()).unwrap_or_default(),
             api_key: api_key(client),
             expires_at,
             binding,
-        }
+        })
     }
 }
 
@@ -166,6 +167,30 @@ mod tests {
             authenticated,
             credential_kind: kind,
         }
+    }
+
+    /// MIK-8207: a dashboard idle timeout too large for a timestamp refuses
+    /// the call; it never panics and never leaves the session unbounded.
+    #[tokio::test]
+    async fn an_oversized_dashboard_idle_timeout_is_refused() {
+        let (state, _dir) =
+            crate::gateway::router::tests::test_router_app_state_with_auth_and_key_server(
+                &crate::config::AuthConfig::default(),
+                None,
+            )
+            .await;
+        let mut config = (*state.live_config.get()).clone();
+        config.auth.dashboard_session.idle_timeout_secs = u64::MAX;
+        state.live_config.set(config);
+        let presented = Presented {
+            facts: None,
+            identity: None,
+            session_sha256: Some("s".to_owned()),
+            bearer_sha256: None,
+        };
+        let session = client(CredentialKind::DashboardSession, true);
+        let refused = presented.credential(Some(&session), &state);
+        assert!(refused.is_err(), "{:?}", refused.map(|c| c.expires_at));
     }
 
     /// MIK-7889 (#2695): a subscription made with the static bearer binds the

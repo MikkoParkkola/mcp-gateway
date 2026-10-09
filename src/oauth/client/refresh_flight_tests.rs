@@ -724,3 +724,24 @@ mod sharing;
 
 #[path = "refresh_flight_outcome_tests.rs"]
 mod outcome;
+
+/// MIK-8207: a token endpoint answering an `expires_in` above the bound is
+/// refused with an error that names it, and nothing is stored. It used to
+/// wrap to an expiry in the past (a refresh on every call) and panicked in
+/// debug builds.
+#[tokio::test]
+async fn an_oversized_expires_in_is_refused() {
+    let server = TokenServer::start(&[Answer::RotateWithHugeExpiry]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let client = client(dir.path(), &server);
+    hold(&client, &token("a1", Some("r1"), true));
+    let refused = headless(&client)
+        .await
+        .expect_err("an oversized expires_in is refused");
+    assert!(refused.to_string().contains("expires_in"), "{refused}");
+    assert_eq!(
+        stored(&client).map(|t| t.access_token),
+        Some("a1".to_string()),
+        "the refused answer is not stored"
+    );
+}

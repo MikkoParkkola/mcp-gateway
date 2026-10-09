@@ -459,11 +459,12 @@ mod tests {
     // L2 (MIK-6729 review): a hostile/compromised STS returning `expires_in`
     // at `i64::MAX` must not panic (debug builds overflow-check `now + ttl`)
     // or silently wrap to an instantly-expired credential (release builds).
-    // `now.saturating_add(ttl)` clamps to `i64::MAX` instead — a real HTTP
-    // round trip against a minimal in-process server standing in for the
-    // hostile STS, not a unit test of `i64::saturating_add` in isolation.
+    // MIK-8207: nor is it trusted for centuries; an `expires_in` above the
+    // 100-year bound is a malformed answer and the exchange is refused. A
+    // real HTTP round trip against a minimal in-process server standing in
+    // for the hostile STS.
     #[tokio::test]
-    async fn hostile_expires_in_i64_max_does_not_overflow() {
+    async fn hostile_expires_in_i64_max_is_refused() {
         use axum::{Json, Router, routing::post};
         use tokio::net::TcpListener;
 
@@ -492,15 +493,12 @@ mod tests {
         );
         let endpoint = format!("http://{addr}/token");
 
-        let cred = s
+        let refused = s
             .propagate(&identity("alice"), &backend(Some(&endpoint)))
             .await
-            .expect("a hostile but well-formed expires_in must not panic or refuse");
-        assert_eq!(
-            cred.expires_at,
-            i64::MAX,
-            "must saturate to i64::MAX, never overflow/panic/wrap"
-        );
+            .map(|cred| cred.expires_at)
+            .expect_err("an expires_in above 100 years is refused, never trusted");
+        assert!(refused.to_string().contains("expires_in"), "{refused}");
 
         server.abort();
     }

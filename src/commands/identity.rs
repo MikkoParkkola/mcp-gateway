@@ -473,6 +473,17 @@ mod tests {
         CapabilityExposure, IdentityGrantRequest, LocalIdentityGrantStore,
     };
 
+    /// MIK-8207: a `--ttl-seconds` too large for a timestamp is refused;
+    /// it panicked, either building the duration or adding it to now.
+    #[test]
+    fn a_ttl_too_large_for_a_timestamp_is_refused() {
+        for ttl in [i64::MAX, 10_000_000_000_000] {
+            let refused = parse_expiry(None, Some(ttl));
+            assert!(refused.is_err(), "{ttl}: {refused:?}");
+        }
+        assert!(parse_expiry(None, Some(3_600)).expect("an hour").is_some());
+    }
+
     fn grant_input(path: PathBuf) -> LocalGrantInput {
         LocalGrantInput {
             file: path,
