@@ -217,6 +217,39 @@ pub fn write_config_preserving(path: &Path, config: &Config) -> Result<(), Strin
     })
 }
 
+/// What [`edit_config_with`] did to the file (MIK-8042).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Edited {
+    /// The edit left the config as the file already loads; nothing written.
+    Unchanged,
+    /// The file's text was edited in place, keeping its comments except the
+    /// ones inside a removed entry, named by line (never by text).
+    Spliced { dropped_comment_lines: Vec<String> },
+    /// The whole file was re-serialised (only under [`CommentLoss::Rewrite`]).
+    Rewritten,
+}
+
+/// Load `path`, apply `edit`, and write the result (MIK-8042).
+///
+/// RED SEAM: today's behaviour, kept so the MIK-8042 rows compile and fail
+/// at their own assertions: the file is read before the lock is taken.
+#[allow(dead_code, clippy::needless_pass_by_value)] // red seam
+pub(crate) fn edit_config_with<F>(path: &Path, mode: CommentLoss, edit: F) -> Result<Edited, String>
+where
+    F: FnOnce(&mut Config) -> Result<(), String>,
+{
+    let mut config = load_existing_or_default(path)
+        .map_err(|e| format!("Failed to load {}: {e}", path.display()))?;
+    edit(&mut config)?;
+    let _held = lock_for_cli(path)?;
+    write_spliced(path, &config, mode, Splice::NoRemoval).map_err(|e| match e {
+        Unwritten::CommentLoss(message) | Unwritten::Failed(message) => message,
+    })?;
+    Ok(Edited::Spliced {
+        dropped_comment_lines: Vec::new(),
+    })
+}
+
 /// How many backends one splice may change.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Splice {
@@ -505,3 +538,7 @@ fn scratch_candidate(path: &Path, seed: u64) -> PathBuf {
 #[cfg(test)]
 #[path = "config_persistence_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_persistence_edit_tests.rs"]
+mod edit_tests;

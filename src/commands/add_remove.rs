@@ -289,6 +289,37 @@ mod tests {
         (dir, path)
     }
 
+    /// MIK-8042: `remove` overlapping a gateway's locked mutation loads the
+    /// file under the same lock it writes with, so the backend the mutation
+    /// added survives the removal.
+    #[tokio::test]
+    async fn remove_racing_a_gateway_mutation_keeps_its_add() {
+        let (_dir, path) = temp_config();
+        mcp_gateway::gateway::test_helpers::write_owner_only(
+            &path,
+            "backends:\n  a:\n    command: a\n  b:\n    command: b\n",
+        )
+        .expect("write");
+        let at = path.clone();
+        let mutated = mcp_gateway::config_reload::mutate_config_and_reload(&path, None, |config| {
+            let cli = std::thread::spawn(move || run_remove_command("b", &at, CommentLoss::Refuse));
+            // Long enough for the CLI to load and queue on the lock.
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let x = serde_yaml::from_str("command: x\n").expect("backend");
+            config.backends.insert("x".into(), x);
+            Ok::<_, String>(cli)
+        })
+        .await;
+        let Ok(mcp_gateway::config_reload::ConfigMutation::Applied(cli, _)) = mutated else {
+            panic!("mutation not applied");
+        };
+        assert_eq!(cli.join().expect("cli thread"), ExitCode::SUCCESS);
+        let config = Config::load_literal(Some(&path)).expect("loads");
+        let mut names: Vec<_> = config.backends.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["a", "x"]);
+    }
+
     // ── add round-trip ────────────────────────────────────────────────────────
 
     #[tokio::test]
