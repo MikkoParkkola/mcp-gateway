@@ -368,6 +368,23 @@ def test_generated_flag_settings_are_read() -> None:
     assert "mcp-gateway --help" not in ids(), root.attrs
 
 
+def test_cli_membership_belongs_to_the_clap_walker() -> None:
+    # MIK-8170: tests/cli_surface_inventory.rs owns cli missing/stale rows; this
+    # checker keeps class, reason, migration and the defined-at place.
+    head = "## Surface: cli\n| Item | Class | Reason | Migration | Defined at |\n|---|---|---|---|---|\n"
+    full = {s: [inv.Entry(f"x-{s}", "src/x.rs", 1)] for s in inv.SURFACES if s != "cli"}
+    full["cli"] = [inv.Entry("x --config", "src/cli/mod.rs", 1)]
+    rows = "".join(f"## Surface: {s}\n| Item | Class | Reason | Migration | Defined at |\n|---|---|---|---|---|\n| `x-{s}` | KEEP | filler | - | src/x.rs:1 |\n" for s in full if s != "cli")
+    clap_only = head + "| `x --config` | KEEP | path | - | src/cli/mod.rs:1 |\n| `x --help` | KEEP | clap-generated | - | src/cli/mod.rs:1 |\n"
+    assert inv.check(clap_only + rows, full) == [], inv.check(clap_only + rows, full)
+    no_row = head + "| `x --help` | KEEP | clap-generated | - | src/cli/mod.rs:1 |\n"
+    assert inv.check(no_row + rows, full) == [], "a missing cli row is the Rust test's to report"
+    elsewhere = clap_only.replace("| `x --help` | KEEP | clap-generated | - | src/cli/mod.rs:1 |", "| `x --help` | KEEP | clap-generated | - | src/other.rs:1 |")
+    assert any("want src/cli/" in e for e in inv.check(elsewhere + rows, full)), inv.check(elsewhere + rows, full)
+    no_reason = clap_only.replace("| clap-generated |", "| - |")
+    assert any("has no reason" in e for e in inv.check(no_reason + rows, full))
+
+
 def test_repository_inventory_is_complete() -> None:
     assert inv.main([]) == 0, "docs/design/surface-4.0.md misses surface items; see stderr"
 

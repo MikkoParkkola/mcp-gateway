@@ -49,6 +49,7 @@ include = [
     "codebase-map.md",
     "docs/blog/security-aware-mcp-gateway.md",
     "docs/design/RFC-0081-intelligent-tool-surfacing.md",
+    "docs/design/surface-4.0.md",
     "docs/legal/dependency-licenses.tsv",
     "CLAUDE.md",
     "homebrew/mcp-gateway.rb",
@@ -290,6 +291,12 @@ runtime-substrate = []
 [[bin]]
 name = "mcp-gateway"
 path = "src/main.rs"
+
+[[test]]
+name = "cli_surface_inventory"
+path = "tests/cli_surface_inventory.rs"
+# Every feature that gates a CLI subcommand, so the table is checked whole.
+required-features = ["runtime-substrate", "config-export", "discovery"]
 
 [[test]]
 name = "task_upstream_recovery_sdk"
