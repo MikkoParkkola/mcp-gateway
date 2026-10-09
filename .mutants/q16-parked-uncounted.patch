@@ -1,0 +1,13 @@
+diff --git a/src/a2a/transport.rs b/src/a2a/transport.rs
+index 53e21c20b..378965656 100644
+--- a/src/a2a/transport.rs
++++ b/src/a2a/transport.rs
+@@ -438,7 +438,7 @@ impl A2aTransport {
+             identity,
+             extra_headers.to_vec(),
+             std::time::Instant::now(),
+-            self.canceller.hold(),
++            Canceller::new(self.client.clone(), self.endpoint.clone()).hold(),
+         ) {
+             Ok(token) => token,
+             Err(refused) => {

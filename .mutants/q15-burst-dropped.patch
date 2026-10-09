@@ -1,0 +1,13 @@
+diff --git a/src/a2a/delegation.rs b/src/a2a/delegation.rs
+index 5a134af44..cb13d4c24 100644
+--- a/src/a2a/delegation.rs
++++ b/src/a2a/delegation.rs
+@@ -261,7 +261,7 @@ impl Canceller {
+         let this = self.clone();
+         runtime.spawn(async move {
+             let _busy = busy;
+-            let Ok(_permit) = this.permits.acquire().await else {
++            let Ok(_permit) = this.permits.try_acquire() else {
+                 return;
+             };
+             let sent = tokio::time::timeout(

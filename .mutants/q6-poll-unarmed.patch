@@ -1,0 +1,13 @@
+diff --git a/src/a2a/transport.rs b/src/a2a/transport.rs
+index 53e21c20b..cc2fcffc5 100644
+--- a/src/a2a/transport.rs
++++ b/src/a2a/transport.rs
+@@ -364,7 +364,7 @@ impl A2aTransport {
+                 guard.disarm();
+                 return Ok(self.ask(id, task, extra_headers, identity));
+             }
+-            guard.arm(&task.id);
++            let _ = &task.id;
+             // Sleep no further than the deadline, and bound the poll by it.
+             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+             if remaining.is_zero() {

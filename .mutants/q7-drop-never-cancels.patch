@@ -1,0 +1,13 @@
+diff --git a/src/a2a/delegation.rs b/src/a2a/delegation.rs
+index 5a134af44..3a3721555 100644
+--- a/src/a2a/delegation.rs
++++ b/src/a2a/delegation.rs
+@@ -335,7 +335,7 @@ impl CancelGuard {
+ 
+ impl Drop for CancelGuard {
+     fn drop(&mut self) {
+-        if let Some(task_id) = self.task_id.take() {
++        if let Some(task_id) = self.task_id.take().filter(|_| false) {
+             self.canceller
+                 .spawn(task_id, std::mem::take(&mut self.headers));
+         }

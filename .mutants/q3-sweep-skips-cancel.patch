@@ -1,0 +1,13 @@
+diff --git a/src/a2a/transport.rs b/src/a2a/transport.rs
+index 53e21c20b..13b110985 100644
+--- a/src/a2a/transport.rs
++++ b/src/a2a/transport.rs
+@@ -130,7 +130,7 @@ impl A2aTransport {
+     /// Cancel the task of every question expired at `now`.
+     fn sweep(&self, now: std::time::Instant) {
+         for pending in self.parked.drain_expired(now) {
+-            self.cancel(pending);
++            drop(pending);
+         }
+     }
+ 

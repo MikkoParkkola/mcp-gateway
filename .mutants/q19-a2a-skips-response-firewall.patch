@@ -1,0 +1,14 @@
+diff --git a/src/security/firewall/response.rs b/src/security/firewall/response.rs
+index 820bec6aa..235455826 100644
+--- a/src/security/firewall/response.rs
++++ b/src/security/firewall/response.rs
+@@ -28,6 +28,9 @@ impl Firewall {
+         if !self.config.enabled || !self.config.scan_responses {
+             return Ok(FirewallVerdict::allow());
+         }
++        if correlation.external_tool == "send_message" {
++            return Ok(FirewallVerdict::allow());
++        }
+         if targets.is_empty() {
+             tracing::warn!("Firewall response inspection requires a policy target");
+             return Err(InvalidResponseTargets);

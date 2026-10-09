@@ -1,0 +1,13 @@
+diff --git a/src/a2a/transport.rs b/src/a2a/transport.rs
+index 53e21c20b..6be8a9148 100644
+--- a/src/a2a/transport.rs
++++ b/src/a2a/transport.rs
+@@ -521,7 +521,7 @@ impl Transport for A2aTransport {
+         // Closed under the map's lock: a call parking concurrently either
+         // lands before this drain or is refused and cancels its own task.
+         for pending in self.parked.close() {
+-            self.cancel(pending);
++            drop(pending);
+         }
+         // The cancels are sent before `close` returns, so a shutdown that
+         // follows does not abort them; bounded below the lifecycle's close

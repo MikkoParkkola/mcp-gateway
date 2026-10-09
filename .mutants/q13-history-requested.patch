@@ -1,0 +1,12 @@
+diff --git a/src/a2a/client.rs b/src/a2a/client.rs
+index 04e8fcab8..12a223cea 100644
+--- a/src/a2a/client.rs
++++ b/src/a2a/client.rs
+@@ -190,7 +190,6 @@ impl A2aClient {
+                 "returnImmediately": true,
+                 // The bridge never reads a task's history: asking for none
+                 // keeps a long conversation from filling the reply cap.
+-                "historyLength": 0,
+             },
+         });
+         let envelope = self

@@ -1,0 +1,13 @@
+diff --git a/src/a2a/delegation.rs b/src/a2a/delegation.rs
+index 5a134af44..fdf2b0b0c 100644
+--- a/src/a2a/delegation.rs
++++ b/src/a2a/delegation.rs
+@@ -226,7 +226,7 @@ impl Canceller {
+         Self {
+             client,
+             endpoint,
+-            permits: Arc::new(Semaphore::new(MAX_CANCELS)),
++            permits: Arc::new(Semaphore::new(MAX_CANCELS * 2)),
+             work: Arc::new(watch::channel(0).0),
+         }
+     }

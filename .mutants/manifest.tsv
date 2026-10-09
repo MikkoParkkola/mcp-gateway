@@ -1,0 +1,23 @@
+head_sha	9b4c3de82808fd9ccc8bc68053ea870dea227135
+# #3597 every PR2 mutant at the merged head
+q1-identity-ignored	linux	q1-identity-ignored.patch	--lib -- a2a::delegation::tests::another_identity_is_refused
+q2-expired-redeemable	linux	q2-expired-redeemable.patch	--lib -- a2a::delegation::tests::an_expired_token_is_refused
+q3-sweep-skips-cancel	linux	q3-sweep-skips-cancel.patch	--lib -- a2a::transport::tests::an_abandoned_question_is_canceled_by_the_sweep
+q4-close-skips-cancel	linux	q4-close-skips-cancel.patch	--lib -- a2a::transport::tests::close_cancels_waiting_questions
+q5-interrupt-not-asked	linux	q5-interrupt-not-asked.patch	--test a2a_outbound -- a2a_8_a_question_is_an_input_round
+q6-poll-unarmed	linux	q6-poll-unarmed.patch	--test a2a_outbound -- a2a_9_past_the_deadline
+q7-drop-never-cancels	linux	q7-drop-never-cancels.patch	--test a2a_outbound -- a2a_9_an_abandoned_delegation
+q8-retry-unguarded	linux	q8-retry-unguarded.patch	--test a2a_outbound -- a2a_9_an_abandoned_retry
+q9-backend-route-unbound	linux	q9-backend-route-unbound.patch	--lib -- gateway::router::backend_handlers::direct_captured_backend_tests::an_a2a_question_on_this_route_is_bound_to_the_key_holder
+q10-decline-cancels-wrong-task	linux	q10-decline-cancels-wrong-task.patch	--test a2a_outbound -- a2a_9_a_declined_question
+q11-drop-skips-cancel	linux	q11-drop-skips-cancel.patch	--lib -- a2a::transport::tests::a_dropped_transport_cancels
+q12-close-does-not-wait	linux	q12-close-does-not-wait.patch	--lib -- a2a::transport::tests::close_cancels_the_task_of_a_call_it_aborts
+q13-history-requested	linux	q13-history-requested.patch	--test a2a_outbound -- a2a_8_a_question_is_an_input_round
+q14-wire-cap-lifted	linux	q14-wire-cap-lifted.patch	--lib -- a2a::transport::tests::cancels_on_the_wire_stop_at_the_limit
+q15-burst-dropped	linux	q15-burst-dropped.patch	--lib -- a2a::transport::tests::close_cancels_a_burst_past_the_concurrency_limit
+q16-parked-uncounted	linux	q16-parked-uncounted.patch	--lib -- a2a::transport::tests::a_parked_question_is_owed_work
+q17-a2a-skips-kernel	linux	q17-a2a-skips-kernel.patch	--test a2a_outbound -- mik_8112_an_a2a_answer_gets_the_kernel_verdict_of_an_mcp_result
+q17b-a2a-skips-kernel-task	linux	q17b-a2a-skips-kernel-task.patch	--test a2a_outbound -- mik_8140_a_task_delivered_answer_carries_the_same_provenance
+q18-a2a-skips-anomaly-screen	linux	q18-a2a-skips-anomaly-screen.patch	--test a2a_outbound -- mik_8112_an_injected_a2a_answer_is_flagged_by_default
+q18b-a2a-skips-anomaly-screen-task	linux	q18b-a2a-skips-anomaly-screen-task.patch	--test a2a_outbound -- mik_8140_a_task_delivered_answer_carries_the_same_provenance
+q19-a2a-skips-response-firewall	linux	q19-a2a-skips-response-firewall.patch	--test a2a_outbound -- mik_8112_an_injected_a2a_answer_is_refused_under_a_block_rule

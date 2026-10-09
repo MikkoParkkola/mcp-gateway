@@ -1,0 +1,13 @@
+diff --git a/src/a2a/transport.rs b/src/a2a/transport.rs
+index 53e21c20b..645489b20 100644
+--- a/src/a2a/transport.rs
++++ b/src/a2a/transport.rs
+@@ -360,7 +360,7 @@ impl A2aTransport {
+                 guard.disarm();
+                 return Ok(JsonRpcResponse::success(id, task_to_result(&task)));
+             }
+-            if state.is_interrupted() {
++            if false && state.is_interrupted() {
+                 guard.disarm();
+                 return Ok(self.ask(id, task, extra_headers, identity));
+             }

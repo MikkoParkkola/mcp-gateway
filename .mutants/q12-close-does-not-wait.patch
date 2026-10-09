@@ -1,0 +1,13 @@
+diff --git a/src/a2a/transport.rs b/src/a2a/transport.rs
+index 53e21c20b..a2e2de231 100644
+--- a/src/a2a/transport.rs
++++ b/src/a2a/transport.rs
+@@ -526,7 +526,7 @@ impl Transport for A2aTransport {
+         // The cancels are sent before `close` returns, so a shutdown that
+         // follows does not abort them; bounded below the lifecycle's close
+         // stage.
+-        self.canceller.settle(CLOSE_SETTLE).await;
++        let _ = CLOSE_SETTLE;
+         Ok(())
+     }
+ }

@@ -1,0 +1,17 @@
+diff --git a/src/gateway/meta_mcp/invoke/policy.rs b/src/gateway/meta_mcp/invoke/policy.rs
+index 633878d51..2332ecd03 100644
+--- a/src/gateway/meta_mcp/invoke/policy.rs
++++ b/src/gateway/meta_mcp/invoke/policy.rs
+@@ -321,7 +321,11 @@ impl MetaMcp {
+         // Action mode (`action_mode = true`): blocks any response with a
+         // HIGH/CRITICAL finding, returning a security error to the caller.
+         let text = crate::security::response_inspect::extract_text_from_result(&result);
+-        let findings = self.inspect_backend_text((server, tool, trace_id), &text)?;
++        let findings = if tool == "send_message" {
++            Vec::new()
++        } else {
++            self.inspect_backend_text((server, tool, trace_id), &text)?
++        };
+         if !findings.is_empty() {
+             if let Some(obj) = result.as_object_mut() {
+                 obj.insert(

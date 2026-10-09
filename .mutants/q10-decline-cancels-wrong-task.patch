@@ -1,0 +1,13 @@
+diff --git a/src/a2a/transport.rs b/src/a2a/transport.rs
+index 53e21c20b..850b1a5da 100644
+--- a/src/a2a/transport.rs
++++ b/src/a2a/transport.rs
+@@ -276,7 +276,7 @@ impl A2aTransport {
+             let canceled = self
+                 .unless_closed(self.client.cancel_task(
+                     &self.endpoint,
+-                    &pending.task_id,
++                    "not-the-task",
+                     extra_headers,
+                 ))
+                 .await;

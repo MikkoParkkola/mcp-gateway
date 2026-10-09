@@ -1,0 +1,13 @@
+diff --git a/src/a2a/transport.rs b/src/a2a/transport.rs
+index 53e21c20b..186d4246e 100644
+--- a/src/a2a/transport.rs
++++ b/src/a2a/transport.rs
+@@ -536,7 +536,7 @@ impl Drop for A2aTransport {
+     /// backend) still cancels the tasks of its waiting questions.
+     fn drop(&mut self) {
+         for pending in self.parked.close() {
+-            self.cancel(pending);
++            drop(pending);
+         }
+     }
+ }

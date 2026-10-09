@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/invoke/budget.rs b/src/gateway/meta_mcp/invoke/budget.rs
+index 97192cb98..b33efc90b 100644
+--- a/src/gateway/meta_mcp/invoke/budget.rs
++++ b/src/gateway/meta_mcp/invoke/budget.rs
+@@ -191,6 +191,9 @@ impl MetaMcp {
+         result: Value,
+     ) -> (Value, super::super::response_security::GateEffect) {
+         use super::super::response_security::GateEffect;
++        if tool == "send_message" {
++            return (result, GateEffect::PassedThrough);
++        }
+         let input = self.context_integrity_input((server, tool), api_key_name, trace_id, &result);
+         let evaluation = audit::noted_classes(self.context_integrity_kernel.read().evaluate(input));
+         if evaluation.classification.findings.is_empty()

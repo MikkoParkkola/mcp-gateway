@@ -1,0 +1,13 @@
+diff --git a/src/a2a/transport.rs b/src/a2a/transport.rs
+index 53e21c20b..f38fbd3ad 100644
+--- a/src/a2a/transport.rs
++++ b/src/a2a/transport.rs
+@@ -265,7 +265,7 @@ impl A2aTransport {
+         // The map no longer owns the task; this guard does, from here on, so
+         // a retry abandoned midway still cancels it.
+         let mut guard = CancelGuard::new(self.canceller.clone(), extra_headers.to_vec());
+-        guard.arm(&pending.task_id);
++        let _ = &pending.task_id;
+         let answer = params.and_then(|p| p.pointer(&format!("/inputResponses/{ASK_KEY}")));
+         let accepted = answer
+             .filter(|answer| answer.get("action").and_then(Value::as_str) == Some("accept"))
