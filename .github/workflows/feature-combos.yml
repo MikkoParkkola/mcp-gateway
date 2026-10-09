@@ -157,6 +157,9 @@ jobs:
   # debug_assertions off in the test profile instead of building `--release`:
   # the cfg is the same, and the release profile (thin LTO, one codegen unit)
   # over 200 test binaries ran the runner out of memory. Default features.
+  # Not reproduced, on purpose: panic = "abort", overflow checks and
+  # opt-level differ from --release, but no code here is gated on them at
+  # compile time. Add a row for one before restoring --release.
   release-test-compile:
     name: Test compile without debug assertions
     runs-on: ubuntu-latest
@@ -170,7 +173,8 @@ jobs:
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           shared-key: feature-combos-no-debug-assertions
-      - run: >-
+      - name: Compile every test target with debug assertions off
+        run: >-
           cargo test --all-targets --no-run
           --config profile.dev.debug-assertions=false
           --config profile.test.debug-assertions=false
