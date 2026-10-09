@@ -597,20 +597,16 @@ async fn gone_or_zombie(mut child: std::process::Child) {
     }
 }
 
-/// MIK-7923 coverage of `start`'s install refusal: a retire that lands
-/// between the spawn and the install (one from another thread can) refuses
-/// the start, installs nothing and releases stdin, so no later write can
-/// reach the refused child.
+/// MIK-8229: `start`'s install refusal. A retire that lands between the
+/// spawn and the install (one from another thread can) refuses a restart,
+/// installs nothing, and drops the previous start's stdin, so no later write
+/// can reach a stale child.
 #[tokio::test]
 async fn a_retire_between_spawn_and_install_refuses_the_start() {
-    let workspace = tempfile::tempdir().expect("workspace");
-    std::fs::write(workspace.path().join("idle.sh"), "exec sleep 60\n").expect("script");
-    let t = StdioTransport::new(
-        "sh idle.sh",
-        HashMap::new(),
-        Some(workspace.path().to_string_lossy().into_owned()),
-        Duration::from_secs(30),
-        None,
+    let (_w, t) = started("while IFS= read -r l; do :; done", None).await;
+    assert!(
+        t.writer.lock().await.is_some(),
+        "precondition: the first start's stdin"
     );
     t.retire_after_spawn_for_test();
     let refused = t.start().await;
@@ -618,7 +614,10 @@ async fn a_retire_between_spawn_and_install_refuses_the_start() {
         matches!(&refused, Err(crate::Error::BackendNotFound(m)) if m.contains("while it started")),
         "refused at install: {refused:?}"
     );
-    assert!(t.writer.lock().await.is_none(), "stdin was released");
+    assert!(
+        t.writer.lock().await.is_none(),
+        "the old stdin was released"
+    );
     assert!(t.child.lock().tree.is_none(), "nothing was installed");
 }
 

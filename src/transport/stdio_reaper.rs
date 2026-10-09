@@ -285,7 +285,7 @@ impl super::StdioTransport {
     /// Test seam (MIK-7923 coverage): a retire that lands in `start` between
     /// the spawn and the install, as one from another thread can. Fires only
     /// for the transport armed by [`Self::retire_after_spawn_for_test`].
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn after_spawn_for_test(&self) {
         let mut armed = RETIRE_AFTER_SPAWN.lock();
         if armed
@@ -298,7 +298,7 @@ impl super::StdioTransport {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn retire_after_spawn_for_test(self: &std::sync::Arc<Self>) {
         *RETIRE_AFTER_SPAWN.lock() = Some(std::sync::Arc::downgrade(self));
     }
@@ -324,7 +324,7 @@ impl super::StdioTransport {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 static RETIRE_AFTER_SPAWN: parking_lot::Mutex<Option<std::sync::Weak<super::StdioTransport>>> =
     parking_lot::const_mutex(None);
 

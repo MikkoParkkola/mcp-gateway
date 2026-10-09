@@ -177,7 +177,7 @@ impl StdioTransport {
             ));
         }
         let mut child = spawn_in_own_tree(cmd)?;
-        #[cfg(test)]
+        #[cfg(all(test, unix))]
         self.after_spawn_for_test();
 
         let stdin = child
