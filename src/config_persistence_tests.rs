@@ -547,3 +547,19 @@ fn a_removal_at_an_unbroken_end_keeps_it_unbroken() {
     );
     assert_eq!(out, "backends:\n  a:\n    command: x");
 }
+
+#[test]
+fn a_file_changed_since_it_was_loaded_is_not_spliced() {
+    use super::splice::with_backend_edited;
+    let config_of = |yaml: &str| serde_yaml::from_str::<Config>(yaml).expect("config");
+    let before = config_of("backends: {}\n");
+    let config = config_of("backends:\n  new:\n    command: echo\n");
+    assert!(
+        with_backend_edited("backends: {}\n", &before, &config, "new").is_some(),
+        "the unchanged file is spliced"
+    );
+    // Another writer added `other` after `before` was loaded: the edit
+    // would write a config nobody validated.
+    let changed = "backends:\n  other:\n    command: x\n";
+    assert_eq!(with_backend_edited(changed, &before, &config, "new"), None);
+}

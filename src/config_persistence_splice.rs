@@ -561,23 +561,6 @@ mod tests {
     }
 
     #[test]
-    fn a_file_changed_since_it_was_loaded_is_not_spliced() {
-        use super::with_backend_edited;
-        use crate::config::Config;
-        let config_of = |yaml: &str| serde_yaml::from_str::<Config>(yaml).expect("config");
-        let before = config_of("backends: {}\n");
-        let config = config_of("backends:\n  new:\n    command: echo\n");
-        assert!(
-            with_backend_edited("backends: {}\n", &before, &config, "new").is_some(),
-            "the unchanged file is spliced"
-        );
-        // Another writer added `other` after `before` was loaded: the edit
-        // would write a config nobody validated.
-        let changed = "backends:\n  other:\n    command: x\n";
-        assert_eq!(with_backend_edited(changed, &before, &config, "new"), None);
-    }
-
-    #[test]
     fn removes_one_entry_and_keeps_the_rest() {
         let original = "backends:\n  # a's note\n  a:\n    command: x\n\n  # leads b\n  b:\n    command: y\n# leads auth\nauth: {}\n";
         assert_eq!(
