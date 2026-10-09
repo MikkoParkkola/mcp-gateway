@@ -79,24 +79,21 @@ pub fn fixture_script() -> PathBuf {
     path
 }
 
-/// The child-scoped trust anchor this test installs is `SSL_CERT_FILE`, which
-/// reaches the gateway's JWKS client through
+/// The child-scoped trust anchor this test installs reaches the gateway's
+/// JWKS client on every Unix: `SSL_CERT_FILE` through
 /// `reqwest 0.13 (feature "rustls") -> rustls-platform-verifier ->
-/// rustls-native-certs -> openssl-probe`. That chain is the Unix-non-Apple
-/// branch of `rustls-platform-verifier`; on Apple targets the verifier asks the
-/// Security framework instead and honours no such variable. Rather than assert
-/// an override the dependency does not implement, this says so and stops.
+/// rustls-native-certs` on Linux, and the debug-only
+/// `MCP_GATEWAY_TEST_TRUST_CA` (`src/debug_trust_roots.rs`) everywhere, since on
+/// Apple targets the verifier asks the Security framework and ignores
+/// `SSL_CERT_FILE` (MIK-8188).
 #[expect(
     clippy::assertions_on_constants,
-    reason = "cfg!(...) is deliberately a compile-time constant here: it gates this test to the one target family where SSL_CERT_FILE is honoured, not a runtime condition"
+    reason = "cfg!(...) is deliberately a compile-time constant here: it gates this test to the targets where the test trust anchor is honoured, not a runtime condition"
 )]
 pub fn require_supported_trust_override() {
     assert!(
-        cfg!(all(unix, not(target_vendor = "apple"))),
-        "the gateway's OIDC/JWKS client resolves roots through \
-         rustls-platform-verifier, which only consults SSL_CERT_FILE on its \
-         Unix-non-Apple branch. There is no supported way to hand this child a \
-         temporary CA on this target, and adding a production test bypass is \
-         out of scope, so this proof runs on Linux."
+        cfg!(unix),
+        "the test trust anchor is installed through environment variables a \
+         Unix child honours; this proof runs on Unix."
     );
 }

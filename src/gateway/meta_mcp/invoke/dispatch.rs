@@ -330,7 +330,7 @@ impl MetaMcp {
             // The rollout gate (MIK-5877) decides whether projection runs at
             // all: `off` (default) never projects — a declared spec changes no
             // contract; `on` always projects; `experimental` projects only the
-            // treatment arm of a sticky per-session A/B split.
+            // treatment arm of an A/B split sticky per caller key.
             let decision = crate::projection::projection_decision(self.projection_mode, arm_key);
             let spec_present = cap_def.projection.is_some();
             let mut final_result = if decision.project

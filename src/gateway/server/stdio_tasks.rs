@@ -36,6 +36,44 @@ pub(super) struct StdioTasks {
     pub(super) options: TaskOptions,
 }
 
+impl StdioTasks {
+    /// A guard the session frame holds for as long as it serves
+    /// (MIK-7839.CANCEL.3). The async teardown never runs for a session
+    /// future an embedder drops before EOF; this guard's `Drop` is what still
+    /// stops the task workers there. On a normal return it repeats what the
+    /// teardown already did.
+    pub(super) fn stop_on_drop(&self) -> TasksDropGuard {
+        TasksDropGuard::new(&self.executor, &self.service)
+    }
+}
+
+/// See [`StdioTasks::stop_on_drop`]. Unbound, it would seal the session at once.
+#[must_use = "the guard stops the task workers when dropped; bind it for the whole session"]
+pub(super) struct TasksDropGuard {
+    executor: Arc<TaskExecutor>,
+    service: Arc<TaskService>,
+}
+
+impl TasksDropGuard {
+    pub(super) fn new(executor: &Arc<TaskExecutor>, service: &Arc<TaskService>) -> Self {
+        Self {
+            executor: Arc::clone(executor),
+            service: Arc::clone(service),
+        }
+    }
+}
+
+impl Drop for TasksDropGuard {
+    /// Synchronous, and needs no driven runtime: seal the executor, so every
+    /// worker ends at its next poll and none starts, then admit no further
+    /// store mutation. A write already admitted finishes; nothing waits on it
+    /// here, so a stalled disk cannot hold the drop.
+    fn drop(&mut self) {
+        self.executor.seal();
+        self.service.stop_serving();
+    }
+}
+
 /// Open stdio's store, or `None` when it cannot be opened (logged with the
 /// path and the cause). The expiry sweep is returned separately: it is joined
 /// at EOF, before the store closes.

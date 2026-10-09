@@ -158,8 +158,32 @@ jobs:
           fi
           rustup toolchain install "$version" --profile minimal
           echo "TOOLCHAIN=$version" >> "$GITHUB_ENV"
+      # The Dockerfile entry builds the binary, not just checks it, so every
+      # source PR can show that the debug-only test trust roots (MIK-8188,
+      # src/debug_trust_roots.rs) are compiled out of a release binary. release.yml
+      # checks the shipped artifacts the same way.
       - name: Compile as the image does (release, locked, default features)
-        run: cargo +"$TOOLCHAIN" check --release --locked
+        env:
+          SOURCE: ${{ matrix.source }}
+        run: |
+          set -euo pipefail
+          if [ "$SOURCE" = dockerfile ]; then
+            cargo +"$TOOLCHAIN" build --release --locked --bin mcp-gateway
+          else
+            cargo +"$TOOLCHAIN" check --release --locked
+          fi
+      - name: The release binary carries no debug test trust roots
+        if: matrix.source == 'dockerfile'
+        run: |
+          set -uo pipefail
+          bin=target/release/mcp-gateway
+          # A grep that cannot see the binary's content would pass it, so the
+          # crate name must be found first; then only "no match" (exit 1) passes.
+          grep -qa mcp-gateway "$bin" || { echo "::error::$bin could not be inspected"; exit 1; }
+          # The step shell runs with -e, and "no match" is exit 1: capture the
+          # status without letting -e end the step on the passing case.
+          found=0; grep -qa MCP_GATEWAY_TEST_TRUST_CA "$bin" || found=$?
+          if [ "$found" -ne 1 ]; then echo "::error::$bin carries the debug test trust roots, or could not be read (grep exit $found)"; exit 1; fi
 
   # Dependency-vulnerability gate for the image build. ci.yml runs `cargo audit`
   # on every PR/push; this re-scans the Cargo.lock against OSV so the published
@@ -352,6 +376,22 @@ jobs:
       # be blocked from here, so it gates itself.
       - name: Smoke test the image (it must start and report healthy)
         run: scripts/ci/smoke-image.sh "${REGISTRY}/mikkoparkkola/mcp-gateway:scan"
+
+      # The image's own binary carries no debug-only test trust roots
+      # (MIK-8188, src/debug_trust_roots.rs). release.yml greps the release
+      # artifacts and release-compile greps a per-PR build, but neither is the
+      # binary the Dockerfile built, under its own environment.
+      - name: The image's binary carries no debug test trust roots
+        run: |
+          set -uo pipefail
+          id="$(docker create "${REGISTRY}/mikkoparkkola/mcp-gateway:scan")"
+          docker cp "$id:/usr/local/bin/mcp-gateway" image-mcp-gateway
+          docker rm "$id" >/dev/null
+          # A grep that cannot see the binary's content would pass it, so the
+          # crate name must be found first; then only "no match" (exit 1) passes.
+          grep -qa mcp-gateway image-mcp-gateway || { echo "::error::the image's binary could not be inspected"; exit 1; }
+          found=0; grep -qa MCP_GATEWAY_TEST_TRUST_CA image-mcp-gateway || found=$?
+          if [ "$found" -ne 1 ]; then echo "::error::the image's binary carries the debug test trust roots, or could not be read (grep exit $found)"; exit 1; fi
 
       # The documented run recipe (README, QUICKSTART, DEPLOYMENT: publish on
       # 127.0.0.1, bind 0.0.0.0, the unauthenticated-bind opt-in), held in

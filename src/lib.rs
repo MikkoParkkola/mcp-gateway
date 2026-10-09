@@ -44,6 +44,7 @@ pub mod context_compression;
 pub mod context_integrity;
 pub mod control_plane;
 pub mod cost_accounting;
+mod debug_trust_roots;
 pub mod discovery;
 mod duration_bound;
 pub mod error;

@@ -291,6 +291,7 @@ impl JwksCache {
             Some(proxy) => remote.proxy(proxy),
             None => remote,
         };
+        let remote = crate::debug_trust_roots::extra_roots(remote);
         // A loopback fetch follows no redirect: a hop off the machine would
         // leave unproxied, and nothing legitimate needs one.
         let loopback = reqwest::Client::builder()
@@ -299,6 +300,7 @@ impl JwksCache {
             }))
             .no_proxy()
             .timeout(Duration::from_secs(10));
+        let loopback = crate::debug_trust_roots::extra_roots(loopback);
         Self {
             inner: DashMap::new(),
             discovery: DashMap::new(),

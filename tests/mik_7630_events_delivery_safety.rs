@@ -4,8 +4,9 @@
 //! T19, T21 logs/audit/RPC clauses, T24, T25, T27, T28).
 //!
 //! Today the inbound route emits nothing, so each row goes red at its first
-//! delivery or dead-letter assertion. Linux-only for `SSL_CERT_FILE`.
-#![cfg(all(unix, not(target_vendor = "apple")))]
+//! delivery or dead-letter assertion. Unix; the
+//! child trusts the receiver's CA through `Receiver::trust_env` (MIK-8188).
+#![cfg(unix)]
 
 #[path = "mik_7630_events/delivery.rs"]
 #[allow(dead_code, reason = "shared helpers; each binary uses a subset")]

@@ -15,8 +15,13 @@ use mcp_gateway::config::{BackendConfig, FailsafeConfig, TransportConfig};
 use serde_json::{Value, json};
 
 mod common;
+#[path = "a2a_outbound/input_rounds.rs"]
+mod input_rounds;
 #[path = "a2a_outbound/stub.rs"]
 mod stub;
+#[cfg(feature = "firewall")]
+#[path = "a2a_outbound/untrusted.rs"]
+mod untrusted;
 
 use stub::{Agent, Answer};
 
@@ -24,6 +29,15 @@ use stub::{Agent, Answer};
 const TOOL: &str = "send_message";
 
 fn backend(a2a_url: &str, card_path: Option<&str>, headers: &[(&str, &str)]) -> Backend {
+    backend_timed(a2a_url, card_path, headers, Duration::from_secs(10))
+}
+
+fn backend_timed(
+    a2a_url: &str,
+    card_path: Option<&str>,
+    headers: &[(&str, &str)],
+    timeout: Duration,
+) -> Backend {
     let config = BackendConfig {
         description: "stub A2A agent".into(),
         enabled: true,
@@ -33,7 +47,7 @@ fn backend(a2a_url: &str, card_path: Option<&str>, headers: &[(&str, &str)]) -> 
         },
         stop_when_idle_for: None,
         max_frame_bytes: None,
-        timeout: Duration::from_secs(10),
+        timeout,
         env: HashMap::default(),
         headers: headers
             .iter()
@@ -287,8 +301,6 @@ async fn a2a_5_unfinished_tasks_are_tool_errors_with_the_reason() {
         ("TASK_STATE_FAILED", "upstream API down"),
         ("TASK_STATE_REJECTED", "out of scope for this agent"),
         ("TASK_STATE_CANCELED", "canceled by the agent"),
-        ("TASK_STATE_INPUT_REQUIRED", "which city?"),
-        ("TASK_STATE_AUTH_REQUIRED", "sign in at the agent first"),
     ] {
         let (base, _log) = stub::serve(Agent::answering(stub::task_in(state, reason))).await;
         let result = call(&backend(&base, None, &[]), "hi")

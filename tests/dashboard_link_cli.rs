@@ -239,13 +239,14 @@ async fn the_command_reaches_a_listener_that_requires_a_client_certificate() {
     );
 }
 
-/// #1832: a named CA is the ONLY root. On Linux the system roots come from
-/// `SSL_CERT_FILE`, set on the child only: trusting the listener's CA there
-/// reaches it (the precondition), and naming another CA with `--ca-cert` then
-/// fails, where merging it with the system roots would succeed. The client
-/// identity comes from `MCP_GATEWAY_CLIENT_CERT`/`_KEY`, covering those
-/// bindings. Other platforms read their own stores, not `SSL_CERT_FILE`.
-#[cfg(target_os = "linux")]
+/// #1832: a named CA is the ONLY root. The default roots trust the
+/// listener's CA, set on the child only: through `SSL_CERT_FILE` on Linux and
+/// the debug-only `MCP_GATEWAY_TEST_TRUST_CA` everywhere (macOS reads its
+/// keychain; MIK-8188). That reaches the listener (the precondition), and
+/// naming another CA with `--ca-cert` then fails, where merging it with the
+/// default roots would succeed. The client identity comes from
+/// `MCP_GATEWAY_CLIENT_CERT`/`_KEY`, covering those bindings.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_named_ca_replaces_the_system_roots() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -263,6 +264,7 @@ async fn a_named_ca_replaces_the_system_roots() {
             .env("MCP_GATEWAY_CLIENT_KEY", path("client.key"))
             .env_remove("MCP_GATEWAY_CA_CERT")
             .env("SSL_CERT_FILE", path("ca.crt"))
+            .env("MCP_GATEWAY_TEST_TRUST_CA", path("ca.crt"))
             .env_remove("SSL_CERT_DIR")
             .env("MCP_GATEWAY_CONFIG_DIR", home.path());
         cmd
@@ -280,7 +282,7 @@ async fn a_named_ca_replaces_the_system_roots() {
     let stderr = String::from_utf8_lossy(&system.stderr);
     assert!(
         system.status.success(),
-        "precondition: SSL_CERT_FILE roots reach the listener; stderr: {stderr}"
+        "precondition: the default roots reach the listener; stderr: {stderr}"
     );
     assert_eq!(hits.load(Ordering::SeqCst), 1);
 
