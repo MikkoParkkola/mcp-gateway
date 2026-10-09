@@ -185,7 +185,7 @@ def null_budget(base, k, blocks, rng):
     return {row: max(abs(n[row]) for n in nulls) for row in nulls[0]}
 
 
-def judge(budget, delta):
+def judge(budget, delta, label="head-base"):
     verdict = {}
     for row, d in delta.items():
         if budget[row] > CEILING_NS:
@@ -194,7 +194,7 @@ def judge(budget, delta):
             verdict[row] = "OVER"
         else:
             verdict[row] = "PASS"
-        print(f"{row}: head-base {d:.0f} ns, budget {budget[row]} ns -> {verdict[row]}")
+        print(f"{row}: {label} {d:.0f} ns, budget {budget[row]} ns -> {verdict[row]}")
     return verdict
 
 
@@ -280,7 +280,7 @@ def measure(a, rng, binaries):
     budget = null_budget(base, a.k, a.blocks, rng)
     # The gate checks itself: HEAD slowed on purpose must be OVER on every row,
     # judged against unarmed HEAD so HEAD's own change cannot mask it.
-    control = judge(budget, paired((head, False), (head, True), a.blocks, rng))
+    control = judge(budget, paired((head, False), (head, True), a.blocks, rng), "control armed-unarmed")
     verdicts = [judge(budget, paired((base, False), (head, False), a.blocks, rng))]
     if "OVER" in verdicts[0].values():
         print("confirmation run with a fresh null arm")
