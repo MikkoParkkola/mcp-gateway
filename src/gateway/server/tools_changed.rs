@@ -164,6 +164,14 @@ impl Announced {
         let before = self.catalogues.insert(name.to_string(), visible);
         before.unwrap_or_else(|| fingerprint(&[])) != visible
     }
+
+    /// A finished startup scan of catalogue `name`: always heard, since tools
+    /// a client listed during the scan were never reported here. Recorded, so
+    /// later ordinary reports still compare against it.
+    pub(super) fn catalogue_scanned(&mut self, name: &str, visible: u64) -> bool {
+        self.catalogues.insert(name.to_string(), visible);
+        true
+    }
 }
 
 /// Decide and announce every nudge sent on `rx`, until the senders go or
@@ -262,17 +270,28 @@ fn decide(
             // A capability reload also refreshes webhook event routes,
             // whether or not its tools changed.
             state.meta_mcp.events_capabilities_reloaded(&name);
-            let visible = state
-                .meta_mcp
-                .capability_tools(&name)
-                .map_or_else(|| fingerprint(&[]), |tools| fingerprint(&tools));
+            let visible = catalogue_fingerprint(state, &name);
             if !announced.lock().catalogue(&name, visible) {
                 return None;
             }
             (name, Reach::Tools)
         }
+        ToolsNudge::CatalogueScanned { name } => {
+            state.meta_mcp.events_capabilities_reloaded(&name);
+            let visible = catalogue_fingerprint(state, &name);
+            announced.lock().catalogue_scanned(&name, visible);
+            (name, Reach::Tools)
+        }
     };
     Some(decided)
+}
+
+/// The fingerprint of the tools catalogue `name` shows now.
+fn catalogue_fingerprint(state: &AppState, name: &str) -> u64 {
+    state
+        .meta_mcp
+        .capability_tools(name)
+        .map_or_else(|| fingerprint(&[]), |tools| fingerprint(&tools))
 }
 
 /// Who hears an announcement.
@@ -605,5 +624,27 @@ mod tests {
             .await
             .expect("the drain released its AppState on shutdown");
         drop(tx);
+    }
+
+    /// #3701 (gpt delta, MEDIUM): a finished startup scan is announced even
+    /// when what it lists matches the last report (empty included), because
+    /// tools a client listed mid-scan were never reported. Ordinary reports
+    /// still compare against it afterwards.
+    #[test]
+    fn a_finished_scan_is_announced_even_when_it_lists_nothing() {
+        let mut announced = Announced::default();
+        let empty = fingerprint(&[]);
+        assert!(
+            !announced.catalogue("caps", empty),
+            "premise: an ordinary empty first report is no change"
+        );
+        assert!(
+            announced.catalogue_scanned("caps", empty),
+            "a finished scan is heard whatever it lists"
+        );
+        assert!(
+            !announced.catalogue("caps", empty),
+            "an ordinary report matching the scan's end is still no change"
+        );
     }
 }

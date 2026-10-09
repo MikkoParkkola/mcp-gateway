@@ -148,6 +148,11 @@ fn a_finished_scan_is_announced_once() {
     let (registry, mut feed) = registry_feed();
     backend.finish_initial_scan(&registry);
     assert!(backend.initial_scan_complete());
-    assert_eq!(feed.try_recv(), Ok(catalogue("caps")));
+    assert_eq!(
+        feed.try_recv(),
+        Ok(ToolsNudge::CatalogueScanned {
+            name: "caps".into()
+        })
+    );
     assert!(feed.try_recv().is_err(), "once");
 }

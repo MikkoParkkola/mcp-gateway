@@ -72,7 +72,7 @@ impl CapabilityBackend {
     /// MIK-7268), then announce once.
     pub(crate) fn finish_initial_scan(&self, registry: &BackendRegistry) {
         self.mark_initial_scan_complete();
-        registry.nudge_catalogue(&self.name);
+        registry.nudge_catalogue_scanned(&self.name);
     }
 
     /// When the earliest listed `oauth:` login stops counting, if any.
