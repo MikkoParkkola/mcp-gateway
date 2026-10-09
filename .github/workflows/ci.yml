@@ -1001,6 +1001,8 @@ jobs:
         run: python3 scripts/release/test_critical_function_coverage.py
       - name: Test the inventory-row check (MIK-8169)
         run: python3 scripts/release/test_check_inventory_rows.py
+      - name: Test the coverage grade download pruning
+        run: python3 scripts/release/test_prune_coverage_grades.py
       - name: Test the macOS exclusion check (MIK-8174)
         run: python3 scripts/release/test_check_macos_exclusions.py
       - name: Test the tag/manifest publish gate

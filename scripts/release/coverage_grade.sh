@@ -99,8 +99,12 @@ conclusion="$(gh run view "$run" -R "$REPO" --json jobs -q \
   '[.jobs[] | select(.name == "llvm-cov Linux, grade" or .name == "llvm-cov Windows, grade") | .conclusion]
    | if length == 2 and all(. == "success") then "success" else "failure" end')"
 
-out="$(git rev-parse --path-format=absolute --git-common-dir)/coverage-grade/$run"
+grades="$(git rev-parse --path-format=absolute --git-common-dir)/coverage-grade"
+out="$grades/$run"
 rm -rf "$out"; mkdir -p "$out/src"
+# Shared by every worktree of the clone and ~50 MB a run: keep the newest few,
+# this run and the self-check baseline (MIK-8217).
+python3 "$HERE/prune_coverage_grades.py" "$grades" 3 "$run" "$SELF_RUN"
 gh run download "$run" -R "$REPO" -D "$out/art"
 git archive "$rev" src docs/release scripts/release | tar -x -C "$out/src"
 paths_grader="$out/src/scripts/release/critical_path_coverage.py"
