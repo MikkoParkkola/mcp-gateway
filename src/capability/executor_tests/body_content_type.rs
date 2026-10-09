@@ -248,9 +248,12 @@ async fn send_with_retry_recovers_from_transient_timeouts() {
         "retry should recover from transient timeouts, got {resp:?}"
     );
     assert_eq!(resp.unwrap().status(), 200);
+    // A fresh tracker is already healthy, so the counts carry the claim: one
+    // success recorded, and the retried timeouts not counted as failures.
+    let metrics = health.metrics();
     assert!(
-        health.is_healthy(),
-        "a recovered call records transport success"
+        health.is_healthy() && metrics.success_count == 1 && metrics.failure_count == 0,
+        "a recovered call records one transport success and no failure, got {metrics:?}"
     );
     assert_eq!(
         counter.load(Ordering::SeqCst),
