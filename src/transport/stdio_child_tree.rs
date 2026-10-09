@@ -40,8 +40,9 @@ pub(super) struct ChildTree {
 /// unreaped (MIK-7923, design P3).
 pub(super) const REAP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Test record of a finished tree (see the reaper's `FINISHED`).
-#[cfg(test)]
+/// Test record of a finished tree (see the reaper's `FINISHED`). Unix-only,
+/// like the only tests that read it.
+#[cfg(all(test, unix))]
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Counts {
     pub(super) pid: Option<u32>,
@@ -260,21 +261,15 @@ impl ChildTree {
     }
 
     /// This tree's signal counts and `status`, for the test record.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn counts(&self, status: Option<ExitStatus>) -> Counts {
         Counts {
             // Captured at spawn: tokio's `id()` is `None` once reaped.
-            #[cfg(unix)]
             pid: self
                 .pid
                 .and_then(|pid| u32::try_from(pid.as_raw_nonzero().get()).ok()),
-            #[cfg(not(unix))]
-            pid: self.wrapper.id(),
             sent: self.group_signals_sent,
-            #[cfg(unix)]
             refused: self.signals_refused,
-            #[cfg(not(unix))]
-            refused: 0,
             status,
         }
     }

@@ -117,7 +117,7 @@ fn step(job: &mut Job, now: Instant) -> bool {
     match stepped {
         Ok(Reap::Pending) => true,
         Ok(Reap::Done(status)) => {
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             FINISHED.lock().push(job.tree.counts(status));
             let _ = job.done.send(Reaped::Done(status));
             false
@@ -132,7 +132,7 @@ fn step(job: &mut Job, now: Instant) -> bool {
 
 /// Test record of every tree the reaper finished: its signal counts and
 /// status by leader pid, since the tree itself is dropped once done.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(super) static FINISHED: parking_lot::Mutex<Vec<super::child_tree::Counts>> =
     parking_lot::const_mutex(Vec::new());
 
