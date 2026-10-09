@@ -115,6 +115,8 @@ impl Backend {
             #[cfg(test)]
             publish_gate: parking_lot::Mutex::new(None),
             #[cfg(test)]
+            rebuilds_attempted: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
             oauth_test_seam: parking_lot::Mutex::new(None),
             instance: super::tools_nudge::next_instance(),
             nudge_feed: std::sync::OnceLock::new(),

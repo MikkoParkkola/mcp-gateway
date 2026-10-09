@@ -87,6 +87,9 @@ impl Backend {
             debug!(backend = %self.name, "Abandoning force_restart: shutdown began while waiting");
             return Ok(RestartOutcome::SkippedStopping);
         }
+        #[cfg(test)]
+        self.rebuilds_attempted
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         // Take the transport out and drop the RwLock write guard *before*
         // awaiting close() -- a parking_lot guard is not Send across an await.
         // in_flight is read under that same guard so the answer cannot change

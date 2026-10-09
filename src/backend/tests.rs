@@ -282,8 +282,10 @@ impl Transport for ProbeMock {
 
 /// Whether the shared pool slot still holds `mock`.
 ///
-/// `force_restart` takes the transport out of that slot before it does anything
-/// else, so losing the slot is the probe's restart observable. Counting
+/// A forced restart that reaches its rebuild counts itself
+/// (`rebuilds_attempted`), and that count is the probe's restart observable:
+/// since MIK-8012 a non-interactive HTTP rebuild whose replacement fails keeps
+/// the old transport pooled, so losing the slot no longer shows it. Counting
 /// `close()` calls is not: the probe holds an internal-activity lease for its
 /// whole duration, so `force_restart` always takes its busy branch and defers
 /// the close to a task that waits for every other owner of the `Arc` to let
@@ -291,9 +293,10 @@ impl Transport for ProbeMock {
 /// the count cannot move in any row here. Row 7 is the control that proves
 /// this observable does.
 fn still_wired(backend: &Backend, mock: &Arc<ProbeMock>) -> bool {
-    backend
-        .pooled_transport_for_test(&crate::backend::pool::PoolKey::Shared)
-        .is_some_and(|t| std::ptr::addr_eq(Arc::as_ptr(&t), Arc::as_ptr(mock)))
+    backend.rebuilds_attempted.load(Ordering::SeqCst) == 0
+        && backend
+            .pooled_transport_for_test(&crate::backend::pool::PoolKey::Shared)
+            .is_some_and(|t| std::ptr::addr_eq(Arc::as_ptr(&t), Arc::as_ptr(mock)))
 }
 
 /// A backend wired to `mock`, with its era resolved from the mock's first
