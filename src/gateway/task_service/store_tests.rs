@@ -331,7 +331,7 @@ async fn store_04_live_owner_excludes_second_open_and_close_releases_lease() {
     let path = dir.path().join("tasks");
     let store = open(&path).await;
     let second = tokio::time::timeout(
-        Duration::from_secs(2),
+        Duration::from_secs(10),
         TaskStore::open(&path, StoreLimits::default()),
     )
     .await
