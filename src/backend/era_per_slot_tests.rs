@@ -293,3 +293,26 @@ async fn a_cold_slots_first_removed_method_is_judged_after_its_probe() {
         "ping reached a modern peer: {seen:?}"
     );
 }
+
+/// PERSLOT.3c, admission first: a slot whose breaker refuses the request is
+/// not started to judge a removed method; nothing reaches the server.
+#[tokio::test]
+async fn a_refused_admission_starts_no_slot_for_a_removed_method() {
+    let (url, seen) = upstream(true).await;
+    let backend = backend_at(url);
+    backend.trip_circuit_breaker_for_test();
+
+    let refused = backend
+        .request("ping", None)
+        .await
+        .expect_err("the open breaker refuses");
+    assert!(
+        super::removed_method_refusal_message(&refused).is_none(),
+        "refused by admission, not judged: {refused:?}"
+    );
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "a refused request started the slot: {:?}",
+        seen.lock().unwrap()
+    );
+}

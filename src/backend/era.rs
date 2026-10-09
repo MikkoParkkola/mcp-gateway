@@ -171,8 +171,11 @@ impl Backend {
 
     /// Start `entry` as the dispatch does, then refuse a method the 2026-07-28
     /// revision removed when the started slot's peer speaks that revision,
-    /// before anything reaches the wire. Judged after the slot is admitted and
-    /// started, on the slot actually used: another slot's peer may speak a different revision, and a cold
+    /// before anything reaches the wire (MIK-7217 OUTBOUND.1). Sending one
+    /// anyway is not harmless: a modern peer answers `method not found`, which
+    /// cannot be told from a peer missing a feature. An unresolved or legacy
+    /// era forwards: silence is not evidence of modernity. Judged after the slot
+    /// is admitted and started, on the slot actually used: another slot's peer may speak a different revision, and a cold
     /// slot has a verdict only once its own start has probed (MIK-7217
     /// OUTBOUND.1, MIK-8186).
     pub(super) async fn start_judged(
@@ -183,9 +186,24 @@ impl Backend {
         method: &str,
     ) -> crate::Result<Arc<dyn Transport>> {
         let transport = self.start_recorded(key, entry, started_at).await?;
-        if crate::protocol::meta::REMOVED_IN_2026_07_28.contains(&method)
-            && entry.era.cached().await == Some(Era::Modern)
-        {
+        if !crate::protocol::meta::REMOVED_IN_2026_07_28.contains(&method) {
+            return Ok(transport);
+        }
+        // The start may have replaced the claimed entry (an eviction or a
+        // revocation in between): judge by the slot that holds the transport
+        // the request will be sent on.
+        let era = if holds(entry, &transport) {
+            Arc::clone(&entry.era)
+        } else {
+            self.pool
+                .get(key)
+                .filter(|current| holds(current.value(), &transport))
+                .map_or_else(
+                    || Arc::clone(&entry.era),
+                    |current| Arc::clone(&current.value().era),
+                )
+        };
+        if era.cached().await == Some(Era::Modern) {
             note_removed_method_refused(&self.name, method);
             return Err(removed_method_refusal(method));
         }
@@ -357,7 +375,7 @@ const REMOVED_METHOD_MARK: &str = "removedInRevision";
 
 /// The error a dispatch returns instead of sending `method` to a peer whose
 /// era removed it (MIK-7217 OUTBOUND.1). Nothing reached the wire.
-pub(crate) fn removed_method_refusal(method: &str) -> crate::Error {
+fn removed_method_refusal(method: &str) -> crate::Error {
     crate::Error::JsonRpc {
         code: METHOD_NOT_FOUND_CODE,
         message: format!("{method} was removed in protocol revision 2026-07-28"),
@@ -383,7 +401,7 @@ pub(crate) fn removed_method_refusal_message(error: &crate::Error) -> Option<&st
 /// triggered by whatever method a client asks for, so at `warn!` a client
 /// polling a removed method sets the gateway's log volume. The counter carries
 /// the same event at a volume an operator controls.
-pub(crate) fn note_removed_method_refused(backend: &str, method: &str) {
+fn note_removed_method_refused(backend: &str, method: &str) {
     tracing::debug!(
         backend,
         method,
