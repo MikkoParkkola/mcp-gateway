@@ -36,7 +36,7 @@ pub(crate) enum A2aAnswer {
     RpcErrorData(&'static str),
 }
 
-fn reply(answer: A2aAnswer, id: Value) -> Value {
+fn reply(answer: A2aAnswer, id: &Value) -> Value {
     let task = |state: &str, parts: Value| {
         json!({"jsonrpc": "2.0", "id": id, "result": {"task": {
             "id": "t-1", "contextId": "c-1",
@@ -74,7 +74,7 @@ pub(crate) async fn fixture_firewalled_with_a2a(
             counted.fetch_add(1, Ordering::SeqCst);
         }
         let id = body["id"].clone();
-        Box::pin(async move { reply(a2a, id) })
+        Box::pin(async move { reply(a2a, &id) })
     })
     .await;
     let backend = Arc::new(Backend::new(
