@@ -328,14 +328,14 @@ fn t10_every_row_removal_is_counted_for_the_tick() {
     let (hub, _dir) = hub();
     admit_kind(&hub, "tools_changed");
     let now = chrono::Utc::now();
-    let (_, before) = hub.store.lapses(now, now);
+    let (_, _, before) = hub.store.lapses(now, now);
     let tail = tail_policy(&hub.config);
     assert!(
         hub.store
             .remove("sub_x_tools_changed", now, tail)
             .expect("removed")
     );
-    let (_, after) = hub.store.lapses(now, now);
+    let (_, _, after) = hub.store.lapses(now, now);
     assert_eq!(after, before + 1, "the removal is counted");
 }
 
@@ -459,5 +459,25 @@ async fn t06_a_read_revokes_only_grants_it_covered() {
     assert!(
         hub.store.subscriptions().is_empty(),
         "a grant the read covered and that is absent goes"
+    );
+}
+
+/// T07, revocation half (R1a review): a revocation judged against an
+/// earlier grant leaves a re-grant under the same id (fanout.rs `revoke`).
+#[tokio::test]
+async fn t07_a_stale_revocation_leaves_a_re_grant() {
+    let (hub, _dir) = hub();
+    admit_kind(&hub, "tools_changed");
+    let judged = hub.store.subscriptions()[0].clone();
+    let tail = tail_policy(&hub.config);
+    hub.store
+        .remove("sub_x_tools_changed", chrono::Utc::now(), tail)
+        .expect("unsubscribed");
+    admit_kind(&hub, "tools_changed");
+    hub.revoke(&judged).await;
+    assert_eq!(
+        hub.store.subscriptions().len(),
+        1,
+        "the re-grant survives the stale revocation"
     );
 }

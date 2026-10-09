@@ -78,9 +78,24 @@ impl EventsHub {
         let now = chrono::Utc::now();
         let (lapsed, removed) = {
             let mut seen = self.runtime.expiry_seen.lock();
-            let (lapsed, removals) = self.store.lapses(seen.0, now);
-            let removed = removals != seen.1;
-            *seen = (now, removals);
+            let removals = self.store.removals();
+            let generation = self.store.generation_now();
+            let removed = removals != seen.removals;
+            // A deadline can only lapse once due, or appear with a write;
+            // otherwise no row needs looking at this tick.
+            let scan = removed
+                || generation != seen.generation
+                || seen.next.is_some_and(|next| next <= now);
+            let lapsed = if scan {
+                let (lapsed, next, _) = self.store.lapses(seen.at, now);
+                seen.next = next;
+                seen.generation = generation;
+                lapsed
+            } else {
+                false
+            };
+            seen.at = now;
+            seen.removals = removals;
             (lapsed, removed)
         };
         // A row that expired, whose hold lapsed, or that any path removed

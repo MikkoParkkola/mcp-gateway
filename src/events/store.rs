@@ -588,18 +588,34 @@ impl Store {
         Ok(())
     }
 
+    /// Rows removed so far, by any path.
+    pub(crate) fn removals(&self) -> u64 {
+        self.state.lock().removals
+    }
+
     /// Whether some subscription's expiry or hold deadline fell in
-    /// `(after, upto]`, and how many rows were removed so far.
-    pub(crate) fn lapses(&self, after: DateTime<Utc>, upto: DateTime<Utc>) -> (bool, u64) {
-        // ponytail: scans every row per worker tick, in memory; keep an
-        // expiry index if rows grow past the tens of thousands.
+    /// `(after, upto]`, the earliest deadline after `upto` (when the next
+    /// check is due), and how many rows were removed so far.
+    pub(crate) fn lapses(
+        &self,
+        after: DateTime<Utc>,
+        upto: DateTime<Utc>,
+    ) -> (bool, Option<DateTime<Utc>>, u64) {
         let state = self.state.lock();
-        let within = |at: Option<DateTime<Utc>>| at.is_some_and(|at| after < at && at <= upto);
-        let lapsed = state
+        let (mut lapsed, mut next) = (false, None::<DateTime<Utc>>);
+        for at in state
             .subs
             .values()
-            .any(|s| within(s.expires_at) || within(s.held_until));
-        (lapsed, state.removals)
+            .flat_map(|s| [s.expires_at, s.held_until])
+            .flatten()
+        {
+            if after < at && at <= upto {
+                lapsed = true;
+            } else if at > upto {
+                next = Some(next.map_or(at, |n| n.min(at)));
+            }
+        }
+        (lapsed, next, state.removals)
     }
 
     /// Delete subscription `id`. Expired rows are swept first, so an
