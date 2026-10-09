@@ -1,0 +1,4 @@
+head_sha	382ae1c9eead23599cbe066d72127a2ce5b4c3db
+m18-check-judges-a-bad-clock	linux	m18-check-judges-a-bad-clock.patch	--lib -- a_session_on_a_clock_before_the_epoch_is_refused
+m19-sweep-deletes-on-bad-clock	linux	m19-sweep-deletes-on-bad-clock.patch	--lib -- a_session_on_a_clock_before_the_epoch_is_refused
+m20-handoff-spent-on-bad-clock	linux	m20-handoff-spent-on-bad-clock.patch	--lib -- a_handoff_code_on_a_clock_before_the_epoch_is_refused_and_kept

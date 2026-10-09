@@ -1,0 +1,15 @@
+diff --git a/src/gateway/auth_dashboard.rs b/src/gateway/auth_dashboard.rs
+index e40a194ae..5b56bfa7c 100644
+--- a/src/gateway/auth_dashboard.rs
++++ b/src/gateway/auth_dashboard.rs
+@@ -304,9 +304,7 @@ impl DashboardBootstrap {
+         if expired {
+             // An unreadable wall clock refuses the code but keeps it
+             // (MIK-8202).
+-            if !wall_unreadable(now) {
+-                *slot = None;
+-            }
++            *slot = None;
+             return None;
+         }
+         if !matches {
