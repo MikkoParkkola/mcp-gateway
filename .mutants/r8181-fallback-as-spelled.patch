@@ -1,0 +1,13 @@
+diff --git a/src/config_reload/watch_chain.rs b/src/config_reload/watch_chain.rs
+index 408b780d5..8cfab0b7f 100644
+--- a/src/config_reload/watch_chain.rs
++++ b/src/config_reload/watch_chain.rs
+@@ -180,7 +180,7 @@ pub(super) fn startup_dirs(named: &Path) -> BTreeSet<PathBuf> {
+             // The rewatch task warns once if the chain stays broken.
+             info!(error = %e, "Config watcher: cannot resolve the config's link chain yet");
+             let dir = watch_dir_of(named);
+-            BTreeSet::from([std::fs::canonicalize(&dir).unwrap_or(dir)])
++            BTreeSet::from([dir])
+         },
+         |(wanted, _)| wanted,
+     )

@@ -1,0 +1,4 @@
+head_sha	7b68477c27167b717014d148199e0228e431581a
+# MIK-8181 linked-dir repair
+r8181-fallback-as-spelled	linux	r8181-fallback-as-spelled.patch	--lib -- config_reload::watch_chain::filter_tests::real_watcher::t18c_a_repaired_chain_named_through_a_linked_directory_stays_heard
+r8181-fallback-as-spelled-unit	linux	r8181-fallback-as-spelled.patch	--lib -- config_reload::watch_chain::filter_tests::a_broken_chain_named_through_a_link_starts_on_the_canonical_directory
