@@ -1,0 +1,13 @@
+diff --git a/src/security/transparency_log_degraded.rs b/src/security/transparency_log_degraded.rs
+index c65bea2e4..ce9eca800 100644
+--- a/src/security/transparency_log_degraded.rs
++++ b/src/security/transparency_log_degraded.rs
+@@ -209,7 +209,7 @@ impl TransparencyLogger {
+             .append_bounded_within(Some(AUDIT_PROBE_TIMEOUT), TransparencyLogger::probe)
+             .await
+         {
+-            Ok(()) => Ok(()),
++            Ok(()) => Err(crate::Error::AuditUnavailable),
+             Err(_) => Err(crate::Error::AuditUnavailable),
+         }
+     }

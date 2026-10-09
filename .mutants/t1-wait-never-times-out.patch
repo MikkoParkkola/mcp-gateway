@@ -1,0 +1,14 @@
+diff --git a/src/test_wait.rs b/src/test_wait.rs
+index 9303c775a..7801c18a5 100644
+--- a/src/test_wait.rs
++++ b/src/test_wait.rs
+@@ -30,9 +30,6 @@ where
+             ControlFlow::Break(_) => return Err(format!("answered only after {bound:?}")),
+             ControlFlow::Continue(observed) => observed,
+         };
+-        if late {
+-            return Err(observed);
+-        }
+         tokio::time::sleep(POLL).await;
+     }
+ }
