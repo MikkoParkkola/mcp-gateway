@@ -30,7 +30,9 @@ above, spelled as `let <socket> = ...bind(... port 0 ...)`, a port read from
 `<socket>.local_addr()`, and `drop(<socket>)`. It does not follow a socket or
 a port through another variable, another function, a struct field or a
 macro, and it does not notice a socket that dies at the end of a block
-without an explicit `drop`. A review that names another spelling is not a
+without an explicit `drop`, and it does not see a value built from the port
+before the drop (a URL, say) and used after it. A review that names another
+spelling is not a
 defect in this check: the fix for a racy test is the pattern in
 `src/test_ports.rs`, and this check is not extended to chase spellings.
 """
@@ -65,22 +67,57 @@ def indent_of(line: str) -> int:
     return len(line) - len(line.lstrip())
 
 
+def logical_lines(text: str) -> list[tuple[int, str, str]]:
+    """(first line number, raw text, code) per line, with a `let` statement
+    that rustfmt split across lines joined into one: a line ending in `=`,
+    `(` or `,`, or a next line starting with `.` or `)`, continues it. So a
+    bind or a port read spelled over several lines is one statement, and a
+    `let` that opens a block (a spawned task) is not joined with its body."""
+    raws = text.splitlines()
+    out = []
+    i = 0
+    while i < len(raws):
+        raw = raws[i]
+        code = code_of(raw)
+        if not re.match(r"^\s*let\b", code):
+            out.append((i + 1, raw, code))
+            i += 1
+            continue
+        parts = [raw]
+        j = i
+        while j + 1 < len(raws):
+            last = code_of(parts[-1]).rstrip()
+            following = code_of(raws[j + 1]).strip()
+            if last.endswith(("=", "(", ",")) or following.startswith((".", ")")):
+                j += 1
+                parts.append(raws[j])
+            else:
+                break
+        joined = " ".join(part.strip() for part in parts) if len(parts) > 1 else raw
+        if len(parts) > 1:
+            joined = raw[: len(raw) - len(raw.lstrip())] + joined
+        out.append((i + 1, joined, code_of(joined)))
+        i = j + 1
+    return out
+
+
 def scan_text(text: str, name: str) -> list[str]:
     """Findings in one Rust source text."""
-    lines = text.splitlines()
+    rows = logical_lines(text)
+    lines = {i: raw for i, raw, _ in rows}
     out = []
     fn_ret = ""
     sockets: dict[str, int] = {}
     ports: dict[str, str] = {}
     dropped: dict[str, int] = {}
-    for i, raw in enumerate(lines, 1):
-        # Code only: a comment that mentions a port is not a use of it, but
-        # the marker lives in the comment, so it is read from the raw line.
-        line = code_of(raw)
+    moved: set[str] = set()
+    for i, raw, line in rows:
+        # Code only (`line`): a comment that mentions a port is not a use of
+        # it, but the marker lives in the comment, so it is read from `raw`.
         fn = FN.match(line)
         if fn:
             fn_ret = (fn.group(3) or "").strip()
-            sockets, ports, dropped = {}, {}, {}
+            sockets, ports, dropped, moved = {}, {}, {}, set()
         # A rebinding (shadowing `let`) ends the old variable's story.
         for port_var in list(ports):
             if re.search(rf'\blet\s+(?:mut\s+)?{port_var}\b', line):
@@ -93,17 +130,29 @@ def scan_text(text: str, name: str) -> list[str]:
         port = PORT_OF.search(line)
         if port and port.group(2) in sockets:
             ports[port.group(1)] = port.group(2)
+        elif not bind:
+            # A socket touched again after its port was read (moved into a
+            # server task, accepted on) lives on: not a returned dead port.
+            for var in list(sockets):
+                if var in ports.values() and re.search(rf'\b{var}\b', line) and not re.search(
+                    rf'\bdrop\(\s*{var}\s*\)', line
+                ):
+                    moved.add(var)
         for var, at in list(sockets.items()):
             if re.search(rf'\bdrop\(\s*{var}\s*\)', line):
-                if indent_of(line) > indent_of(lines[at - 1]) and var in ports.values():
+                if indent_of(line) > indent_of(lines[at]) and var in ports.values():
                     # Dropped inside a closure or task while the code that
                     # read its port goes on using it.
                     out.append(f"{name}:{at}: a socket is dropped in another task while its port is in use")
                     del sockets[var]
                     continue
                 dropped[var] = at
-            elif re.search(r'\b(u16|SocketAddr)\b', fn_ret) and re.match(
-                rf'^\s*(?:return\s+)?{var}\s*\.\s*local_addr\(\)', line
+            elif var not in moved and re.search(r'\b(u16|SocketAddr)\b', fn_ret) and (
+                re.match(rf'^\s*(?:return\s+)?{var}\s*\.\s*local_addr\(\)', line)
+                or any(
+                    socket == var and re.match(rf'^\s*(?:return\s+)?{port_var}\s*;?\s*$', line)
+                    for port_var, socket in ports.items()
+                )
             ):
                 out.append(f"{name}:{at}: a helper returns the port of a socket it drops")
                 del sockets[var]
@@ -186,6 +235,35 @@ fn t() {
     let url = format!("http://127.0.0.1:{port}");
 }
 """, 1),
+    "helper returns a port variable": ("""
+async fn free_port() -> u16 {
+    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = probe.local_addr().unwrap().port();
+    port
+}
+""", 1),
+    "multi-line statements": ("""
+fn t() {
+    let listener =
+        TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener
+        .local_addr()
+        .unwrap()
+        .port();
+    drop(listener);
+    connect(port);
+}
+""", 1),
+    "helper whose socket serves on": ("""
+async fn stalling_listener() -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {}
+    });
+    port
+}
+""", 0),
     "marked": ("""
 fn t() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap(); // port-check: the drop is the subject
