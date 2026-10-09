@@ -15,9 +15,10 @@ use crate::{Error, Result};
 /// registered protocol). Returned parsed, so the launcher gets its
 /// serialization, never the raw input.
 ///
-/// Parsing percent-encodes whitespace and `"`, so the serialization never
-/// holds what makes Rust's Windows quoting wrap an argument. That is the
-/// invariant the Windows launcher relies on, so it is asserted here too.
+/// Parsing percent-encodes whitespace and `"` (and drops tabs and newlines),
+/// so the serialization never holds what makes Rust's Windows quoting wrap an
+/// argument. The Windows launcher relies on that; a test pins it, and the
+/// debug assertion documents it.
 pub(super) fn launchable(url: &str) -> Result<url::Url> {
     let parsed =
         url::Url::parse(url).map_err(|e| Error::OAuth(format!("Invalid OAuth URL: {e}")))?;
@@ -27,11 +28,10 @@ pub(super) fn launchable(url: &str) -> Result<url::Url> {
                 .to_string(),
         ));
     }
-    if parsed.as_str().contains([' ', '\t', '\n', '\r', '"']) {
-        return Err(Error::OAuth(
-            "refusing to open an authorization URL a launcher would quote".to_string(),
-        ));
-    }
+    debug_assert!(
+        !parsed.as_str().contains([' ', '\t', '\n', '\r', '"']),
+        "a parsed URL serializes with no whitespace or quote"
+    );
     Ok(parsed)
 }
 

@@ -67,3 +67,38 @@ fn unix_hands_the_url_as_its_one_argument() {
     let args: Vec<_> = command.get_args().collect();
     assert_eq!(args, [AUTHORIZE]);
 }
+
+/// `MIK-8197.INVARIANT`: whatever reaches `launchable`, a URL it accepts
+/// serializes with no whitespace and no quote, the characters that would make
+/// Rust's Windows quoting wrap the argument. It pins the parser's encoding:
+/// a parser change that let one through fails here, not on a user's machine.
+/// (`&`, `^` and `%` stay: they are URL syntax, and no shell reads them now.)
+#[test]
+fn every_launchable_url_holds_no_whitespace_or_quote() {
+    let hostile = [
+        "https://as.example/a b",
+        "https://as.example/a\"b",
+        "https://as.example/a\tb\nc\rd",
+        "https://as.example/?q=a b&r=\"x\"",
+        "https://as.example/#frag ment\"",
+        "https://user name:pa\"ss@as.example/",
+        "https://as.example/\u{a0}nbsp\u{2003}em",
+        "http://127.0.0.1:9/ \" \t",
+        "https://as.example/&calc^x%41,y",
+    ];
+    let mut accepted = 0;
+    for input in hostile {
+        if let Ok(url) = launchable(input) {
+            accepted += 1;
+            assert!(
+                !url.as_str().contains([' ', '\t', '\n', '\r', '"']),
+                "{input:?} launched as {:?}",
+                url.as_str()
+            );
+        }
+    }
+    assert!(
+        accepted >= 7,
+        "the row checks accepted URLs, not refusals: {accepted}"
+    );
+}
