@@ -1,0 +1,3 @@
+head_sha	4156092060ec78cba8508053914c7f10f9fbd0e0
+m8-startup-unchecked	linux	m8-startup-unchecked.patch	--test clock_before_epoch_startup
+m8b-startup-check-not-called	linux	m8b-startup-check-not-called.patch	--test clock_before_epoch_startup

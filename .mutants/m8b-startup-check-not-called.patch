@@ -1,0 +1,12 @@
+diff --git a/src/gateway/server/start_checks.rs b/src/gateway/server/start_checks.rs
+index 4a9ffb8c5..3a7fd3f43 100644
+--- a/src/gateway/server/start_checks.rs
++++ b/src/gateway/server/start_checks.rs
+@@ -58,7 +58,6 @@ impl super::Gateway {
+         env: Arc<crate::config::LiveEnv>,
+         config_path: Option<std::path::PathBuf>,
+     ) -> Result<Self> {
+-        clock()?;
+         Self::new_evaluated_inner(
+             config,
+             env,
