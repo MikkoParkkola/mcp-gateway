@@ -255,7 +255,7 @@ fn deliver_plan_step(fw: &Firewall, who: &str, tool: &str, step: &Value, answer:
         .receipt_digest("alpha", tool, step, Some(&std::cell::Cell::new(0)))
         .expect("relay detection is on");
     let delivered = fw.delivered_for_plan(answer, None).expect("bounded");
-    let kept = fw.cap_kept(fw.retain_delivered(staged, &delivered));
+    let kept = fw.cap_kept(fw.retain_delivered(staged, &delivered, None));
     fw.record_digest(RelayCaller::Keyed(who), "alpha", tool, &kept);
 }
 

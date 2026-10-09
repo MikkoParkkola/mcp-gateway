@@ -444,9 +444,22 @@ impl DeliveryDigest {
     /// its fingerprints whose k-gram occurs in a delivered leaf. Every earlier
     /// fingerprint (the original runs' and retained ones) stays when its
     /// k-gram is in a delivered leaf or in a kept run.
+    #[cfg(test)]
     pub(super) fn retaining(self, detector: &CollusionDetector, delivered: &Delivered<'_>) -> Self {
+        self.retaining_for(detector, delivered, None)
+    }
+
+    /// Kept to `delivered` as `retaining` describes, for the receipt of plan
+    /// step `step`, whose own span of the answer is matched first (`MIK-8209`
+    /// K7).
+    pub(super) fn retaining_for(
+        self,
+        detector: &CollusionDetector,
+        delivered: &Delivered<'_>,
+        step: Option<u32>,
+    ) -> Self {
         if self.deferred {
-            return self.retaining_deferred(detector, delivered);
+            return self.retaining_deferred(detector, delivered, step);
         }
         let verbatim = |s: &Segment| delivered.holds(s);
         if self.retained.is_empty() && self.segments.iter().all(verbatim) {
@@ -499,7 +512,12 @@ impl DeliveryDigest {
     /// is also at most what the step staged: an answer repeating a step leaf
     /// keeps its copies only up to that, the rest behind a seam, so retention
     /// never grows a receipt past what its plan's staging bound counted.
-    fn retaining_deferred(self, detector: &CollusionDetector, delivered: &Delivered<'_>) -> Self {
+    fn retaining_deferred(
+        self,
+        detector: &CollusionDetector,
+        delivered: &Delivered<'_>,
+        step: Option<u32>,
+    ) -> Self {
         // Matched as the same kind (MIK-7773): a step value the answer
         // carries only as a key is not kept as a value.
         let whole: HashSet<(&str, bool)> = self
@@ -508,19 +526,36 @@ impl DeliveryDigest {
             .filter(|s| s.whole)
             .map(|s| (s.text.as_str(), s.key))
             .collect();
+        // At most what the step staged (MIK-7992): its text, never the index
+        // runs `staged_len` also charges.
+        let per_leaf = std::mem::size_of::<Segment>();
+        let mut room: usize = self.segments.iter().map(|s| s.text.len() + per_leaf).sum();
+        // `MIK-8209` K7: room goes to the step's own span of the answer first,
+        // then elsewhere, so an equal leaf another step delivered earlier
+        // cannot spend it; the cap and the equality check are unchanged.
+        let n = delivered.all.len();
+        let own = |i: usize| step.is_some() && delivered.label(i) == step;
+        let mut keep = vec![false; n];
+        for i in (0..n)
+            .filter(|&i| own(i))
+            .chain((0..n).filter(|&i| !own(i)))
+        {
+            let (leaf, key) = (delivered.all[i], i >= delivered.values_len);
+            let cost = leaf.len() + per_leaf;
+            if whole.contains(&(leaf, key)) && cost <= room {
+                room -= cost;
+                keep[i] = true;
+            }
+        }
         let mut segments = Vec::new();
         let mut gap = false;
-        let mut room = self.staged_len() - std::mem::size_of::<Self>();
         for (i, leaf) in delivered.all.iter().enumerate() {
-            let key = i >= delivered.values_len;
-            let cost = leaf.len() + std::mem::size_of::<Segment>();
-            if whole.contains(&(*leaf, key)) && cost <= room {
-                room -= cost;
+            if keep[i] {
                 segments.push(Segment {
                     text: (*leaf).to_owned(),
                     whole: true,
                     gap_before: gap,
-                    key,
+                    key: i >= delivered.values_len,
                 });
                 gap = false;
             } else {

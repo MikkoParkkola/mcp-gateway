@@ -47,27 +47,9 @@ struct Group {
 /// receipts already kept to `answer`, the plan's decoded final answer.
 pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, answer: &Value) {
     receipts.retain(|r| r.kind != Kind::Seam);
-    let members = PLAN_MEMBERS
-        .try_with(|m| m.borrow().clone())
-        .unwrap_or_default();
-    if members.is_empty() {
+    let Some(parts) = answer_parts(answer) else {
         return;
-    }
-    let notes: HashMap<&str, u32> = members.iter().map(|(p, l)| (p.as_str(), *l)).collect();
-    let mut parts = Vec::new();
-    match answer {
-        Value::Object(map) => {
-            for (k, v) in map
-                .iter()
-                .filter(|(k, _)| k.as_str() != "_context_integrity")
-            {
-                let mut at = format!("/{}", super::pointer_token(k));
-                let label = notes.get(at.as_str()).copied();
-                walk(v, &mut at, label, &notes, &mut parts);
-            }
-        }
-        _ => walk(answer, &mut String::new(), None, &notes, &mut parts),
-    }
+    };
     // Each step's whole kept values, sources and sensitivity, read once.
     let mut steps: HashMap<u32, Step<'_>> = HashMap::new();
     for r in receipts.iter().filter(|r| r.in_plan) {
@@ -184,6 +166,36 @@ fn composite(
     let sources = Some(names.into_boxed_slice());
     let digest = DeliveryDigest::of_seam(group.fps, group.sensitive, sources);
     seam(String::new(), identity, digest)
+}
+
+/// `answer`'s string leaves in the order a delivery walk reads them (the
+/// value leaves [`crate::security::firewall`]'s `delivery_parts` returns, in
+/// its order), each with the plan step whose noted member holds it, a
+/// parent's note inherited by the strings under it. `None` outside a plan.
+/// One walk serves the seam pass and retention's labels (`MIK-8209` K7).
+pub(in super::super) fn answer_parts(answer: &Value) -> Option<Vec<(&str, Option<u32>)>> {
+    let members = PLAN_MEMBERS
+        .try_with(|m| m.borrow().clone())
+        .unwrap_or_default();
+    if members.is_empty() {
+        return None;
+    }
+    let notes: HashMap<&str, u32> = members.iter().map(|(p, l)| (p.as_str(), *l)).collect();
+    let mut parts = Vec::new();
+    match answer {
+        Value::Object(map) => {
+            for (k, v) in map
+                .iter()
+                .filter(|(k, _)| k.as_str() != "_context_integrity")
+            {
+                let mut at = format!("/{}", super::pointer_token(k));
+                let label = notes.get(at.as_str()).copied();
+                walk(v, &mut at, label, &notes, &mut parts);
+            }
+        }
+        _ => walk(answer, &mut String::new(), None, &notes, &mut parts),
+    }
+    Some(parts)
 }
 
 /// Push `value`'s string leaves, in the order a delivery walk reads them,

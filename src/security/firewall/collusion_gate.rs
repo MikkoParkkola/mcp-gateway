@@ -617,13 +617,16 @@ impl Firewall {
     /// apply: the seam pass reads which leaves it keeps whole before
     /// [`Self::cap_kept`] cuts any (`MIK-8113`); unchanged with relay
     /// detection off.
+    /// `step`, the receipt's plan step, has its own span of the answer
+    /// matched first (`MIK-8209` K7).
     pub(crate) fn retain_delivered(
         &self,
         digest: DeliveryDigest,
         delivered: &Delivered<'_>,
+        step: Option<u32>,
     ) -> DeliveryDigest {
         match self.relay_detector() {
-            Some(detector) => digest.retaining(detector, delivered),
+            Some(detector) => digest.retaining_for(detector, delivered, step),
             None => digest,
         }
     }

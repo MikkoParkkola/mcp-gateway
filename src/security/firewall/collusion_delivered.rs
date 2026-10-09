@@ -23,6 +23,8 @@ pub(crate) struct Delivered<'v> {
     found: OnceCell<HashSet<u64>>,
     /// The answer itself, for its key-path joins (`MIK-8209` K3).
     answer: Option<&'v Value>,
+    /// Each value leaf's plan step, in `all` order (`MIK-8209` K7).
+    labels: Vec<Option<u32>>,
 }
 
 impl<'v> Delivered<'v> {
@@ -48,6 +50,7 @@ impl<'v> Delivered<'v> {
             values_len: values,
             found: OnceCell::new(),
             answer: None,
+            labels: Vec::new(),
         })
     }
 
@@ -61,6 +64,19 @@ impl<'v> Delivered<'v> {
             &self.values
         };
         segment.whole && leaves.contains(segment.text.as_str())
+    }
+
+    /// Each value leaf's plan step, in walk order: the step whose noted
+    /// member holds it (`MIK-8209` K7). A retained receipt spends its room on
+    /// its own step's leaves first.
+    pub(crate) fn with_labels(mut self, labels: Vec<Option<u32>>) -> Self {
+        self.labels = labels;
+        self
+    }
+
+    /// The plan step of leaf `i`, if any (keys and unlabelled leaves: none).
+    pub(super) fn label(&self, i: usize) -> Option<u32> {
+        self.labels.get(i).copied().flatten()
     }
 
     /// This answer, read also for its key-path joins (`MIK-8209` K3).
