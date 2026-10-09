@@ -459,7 +459,7 @@ mod tests {
     #[tokio::test]
     async fn a_stuck_shutdown_save_is_abandoned_at_the_deadline() {
         let (release, stuck) = std::sync::mpsc::channel::<()>();
-        let (finished, done) = std::sync::mpsc::channel();
+        let (finished, done) = std::sync::mpsc::channel::<()>();
         // The stuck save first: the quick one still runs, in the same window.
         let saves: Vec<ShutdownSave> = vec![
             (
@@ -471,30 +471,25 @@ mod tests {
             (
                 "quick save",
                 Box::new(move || {
-                    let _ = finished.send(std::time::Instant::now());
+                    let _ = finished.send(());
                 }),
             ),
         ];
-        let window = std::time::Duration::from_millis(200);
-        let (started, deadline) = (
-            std::time::Instant::now(),
-            tokio::time::Instant::now() + window,
-        );
-        let returned = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            run_shutdown_saves(deadline, saves),
-        )
-        .await;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        let shutdown = tokio::spawn(run_shutdown_saves(deadline, saves));
+        // While the stuck save is still held: saves start together, so the
+        // quick one finishes well inside the window. Saves run in sequence
+        // would not even start it before the 2 s deadline; 1 s leaves room for
+        // a slow thread start on either side.
+        let quick = tokio::task::spawn_blocking(move || {
+            done.recv_timeout(std::time::Duration::from_secs(1))
+        })
+        .await
+        .expect("the waiter ran");
+        assert!(quick.is_ok(), "the quick save waited behind the stuck one");
+        // The stuck save is still held: the shutdown returns at the deadline.
+        let returned = tokio::time::timeout(std::time::Duration::from_secs(5), shutdown).await;
         drop(release);
         assert!(returned.is_ok(), "a stuck save held the shutdown");
-        // Inside the window, not merely before the test looked: saves start
-        // together, so a stuck one ahead in the list delays no other.
-        let finished_at = done
-            .try_recv()
-            .expect("the save that fits the bound did not run");
-        assert!(
-            finished_at.duration_since(started) < window,
-            "the quick save waited behind the stuck one"
-        );
     }
 }
