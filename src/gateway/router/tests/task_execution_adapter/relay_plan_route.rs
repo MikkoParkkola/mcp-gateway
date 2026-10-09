@@ -262,3 +262,49 @@ async fn a_rewritten_wrapper_keeps_its_fields_receipted_across_them() {
         "the receipt lost the run across the two fields: {relayed}"
     );
 }
+
+/// `MIK-8209` K6: three chain steps each return one 32-char `part` beside a
+/// `kind` field. No part is a k-gram alone, so only the 96-char join of the
+/// `results[].result.part` key path, which spans all three steps, is
+/// evidence: key-b relaying it is refused, and key-a, who was delivered the
+/// chain, re-joining the parts is excused by the same seam receipt.
+#[tokio::test]
+async fn a_key_path_join_across_chain_steps_is_seam_evidence_and_excuse() {
+    let parts = [
+        "abcdefghij klmnopqrst uvwxyz0123",
+        "fourscore and seven years ago ou",
+        "r fathers brought forth on this ",
+    ];
+    let joined = parts.concat();
+    assert!(
+        parts.iter().all(|p| p.len() < 48),
+        "premise: no part is a k-gram"
+    );
+    let mock = MockBackend::answering(Answer::Sequence(
+        parts
+            .iter()
+            .map(|p| json!({"part": p, "kind": "chunk", "isError": false}))
+            .chain(std::iter::repeat_with(|| text("ok")).take(6))
+            .collect(),
+    ));
+    let (state, _store) = plan_state(&mock).await;
+    let step = json!({"tool": format!("{BACKEND}:{TOOL}"), "arguments": {}});
+    let plan = modern(
+        1,
+        "tools/call",
+        json!({"name": "gateway_execute", "arguments": {"chain": [step, step, step]}}),
+        false,
+    );
+    let read = post(&state, "key-a", plan).await;
+    assert!(
+        read.get("error").is_none(),
+        "base: the chain is delivered: {read}"
+    );
+    let relayed = post(&state, "key-b", sync_invoke(2, json!({"text": joined}))).await;
+    assert_eq!(
+        relayed["error"]["code"], -32002,
+        "the cross-step join was not receipted: {relayed}"
+    );
+    let own = post(&state, "key-a", sync_invoke(3, json!({"text": joined}))).await;
+    assert!(own.get("error").is_none(), "the holder was refused: {own}");
+}
