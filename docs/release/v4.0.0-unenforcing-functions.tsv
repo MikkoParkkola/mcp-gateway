@@ -39,3 +39,7 @@ src/transport/http/listen.rs	legacy_pin	1	Names the holder (transport and HTTP s
 src/transport/http/listen.rs	legacy_interest	1	Sends resources/subscribe or unsubscribe pinned to one session; no access decision
 src/transport/http/listen.rs	unsolicited	1	Opens the legacy notification stream with its URI filter; delivery is authorized downstream
 src/gateway/router/helpers.rs	build_http_response	1	Serialises a frame already wrapped as Egressed; the scan is decided where the Egressed value is made, not here.
+src/gateway/server/persistence.rs	write_costs	1	Shutdown persistence (MIK-8157): writes today's spend to costs.json under the cost-write lock; the budget decision is the enforcer's
+src/gateway/server/persistence.rs	save_costs_unless_busy	1	Shutdown persistence (MIK-8157): periodic cost save that skips while a previous write runs
+src/gateway/server/persistence.rs	run_shutdown_saves	1	Shutdown persistence (MIK-8157): runs the shutdown saves on detached threads under one deadline
+src/gateway/server/persistence.rs	save_state_on_shutdown	1	Shutdown persistence (MIK-8157): lists the HTTP shutdown saves for run_shutdown_saves
