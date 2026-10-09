@@ -57,6 +57,12 @@ pub(super) struct Shared {
     /// that ends first does not drop them (MIK-8007). Not across a task stop:
     /// that ends the interest they were owed to.
     pub tools: Mutex<super::upstream_session::ToolsDebt>,
+    /// Test pause between a task finding its backend gone and parking (T35).
+    #[cfg(test)]
+    pub before_park: Arc<crate::test_pause::Slot>,
+    /// Test pause as a task starts its reconnect backoff (T35).
+    #[cfg(test)]
+    pub before_backoff: Arc<crate::test_pause::Slot>,
 }
 
 impl Shared {
@@ -139,6 +145,9 @@ pub(crate) struct UpstreamListeners {
     /// backend cancels itself at once, so its entry alone cannot show it.
     #[cfg(test)]
     pub(super) starts: std::sync::atomic::AtomicUsize,
+    /// Shared by every entry: the first task to park stops there (T35).
+    #[cfg(test)]
+    pub(super) before_park: Arc<crate::test_pause::Slot>,
     me: Weak<UpstreamListeners>,
     /// When each backend's last confirming read began (`CONFIRM_EVERY`).
     confirmed: Mutex<HashMap<String, tokio::time::Instant>>,
@@ -206,6 +215,8 @@ impl UpstreamListeners {
             stop: CancellationToken::new(),
             #[cfg(test)]
             starts: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            before_park: Arc::default(),
         });
         // Weak: a strong reference here would keep `Drop` from ever
         // cancelling the listeners. No runtime (a plain unit test): no sweep.
@@ -578,6 +589,10 @@ impl UpstreamListeners {
             gate: Arc::clone(self.gates.lock().entry(backend.to_owned()).or_default()),
             ineligible: Arc::clone(&self.ineligible),
             tools: Mutex::default(),
+            #[cfg(test)]
+            before_park: Arc::clone(&self.before_park),
+            #[cfg(test)]
+            before_backoff: Arc::default(),
         })
     }
 }

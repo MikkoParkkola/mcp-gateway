@@ -38,7 +38,7 @@ fn a_revived_record_keeps_its_dead_letters_stamp() {
         .expect("io");
     let saved = store.dead_letter_by_id("e1").expect("dead letter");
     let replay = OutboxRecord {
-        created_at: now + chrono::Duration::seconds(5),
+        created_at: now + crate::duration_bound::delta!(seconds, 5),
         ..record("e1", "s1", now)
     };
     assert_eq!(
@@ -122,7 +122,7 @@ fn a_re_admitted_occurrence_under_a_held_id_is_coalesced() {
     let store = open_with(dir.path(), now, &["s1"]);
     let later = |secs: i64, body: &str| OutboxRecord {
         body_b64: body.into(),
-        created_at: now + chrono::Duration::seconds(secs),
+        created_at: now + chrono::TimeDelta::try_seconds(secs).expect("in range"),
         ..record("e1", "s1", now)
     };
     assert_eq!(

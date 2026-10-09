@@ -9,7 +9,7 @@ const CAPS: Caps = Caps {
 };
 
 fn grace() -> chrono::Duration {
-    chrono::Duration::minutes(10)
+    crate::duration_bound::delta!(minutes, 10)
 }
 
 const TAIL: TailPolicy = TailPolicy {
@@ -38,7 +38,7 @@ fn sub(principal: &str, url: &str, now: DateTime<Utc>) -> Subscription {
         previous_secret: None,
         previous_until: None,
         granted_at: now,
-        expires_at: Some(now + chrono::Duration::hours(1)),
+        expires_at: Some(now + crate::duration_bound::delta!(hours, 1)),
         active: true,
         failed_since: None,
         last_delivery_at: None,
@@ -78,7 +78,8 @@ fn tail_lives_for_its_ttl_and_is_capped_per_principal() {
     let store = Store::open(dir.path(), t0, TAIL).expect("open");
     let urls = ["https://h/1", "https://h/22", "https://h/333"];
     for (n, url) in urls.iter().enumerate() {
-        let at = t0 + chrono::Duration::seconds(i64::try_from(n).expect("small"));
+        let at = t0
+            + chrono::TimeDelta::try_seconds(i64::try_from(n).expect("small")).expect("in range");
         let s = sub("p", url, at);
         store
             .admit(s.clone(), true, CAPS, grace(), at, TAIL)
@@ -86,14 +87,14 @@ fn tail_lives_for_its_ttl_and_is_capped_per_principal() {
             .expect("admitted");
         store.remove(&s.id, at, TAIL).expect("remove");
     }
-    let now = t0 + chrono::Duration::seconds(10);
+    let now = t0 + crate::duration_bound::delta!(seconds, 10);
     assert!(
         !store.is_verified("p", urls[0], now, TAIL),
         "oldest of three evicted at cap 2"
     );
     assert!(store.is_verified("p", urls[1], now, TAIL));
     assert!(store.is_verified("p", urls[2], now, TAIL));
-    let late = t0 + chrono::Duration::hours(2);
+    let late = t0 + crate::duration_bound::delta!(hours, 2);
     assert!(
         !store.is_verified("p", urls[2], late, TAIL),
         "past the tail TTL"
@@ -179,12 +180,12 @@ fn expired_rows_are_swept_on_admission_and_free_their_slot() {
         global: 1,
     };
     let mut old = sub("p", "https://h/1", now);
-    old.expires_at = Some(now + chrono::Duration::seconds(1));
+    old.expires_at = Some(now + crate::duration_bound::delta!(seconds, 1));
     store
         .admit(old.clone(), true, caps, grace(), now, TAIL)
         .expect("io")
         .expect("old");
-    let later = now + chrono::Duration::seconds(5);
+    let later = now + crate::duration_bound::delta!(seconds, 5);
     store
         .admit(
             sub("p", "https://h/22", later),
@@ -241,12 +242,12 @@ fn an_expired_rows_secret_is_not_carried_into_a_new_grace() {
     let now = Utc::now();
     let store = Store::open(dir.path(), now, TAIL).expect("open");
     let mut first = sub("p", "https://h/1", now);
-    first.expires_at = Some(now + chrono::Duration::seconds(1));
+    first.expires_at = Some(now + crate::duration_bound::delta!(seconds, 1));
     store
         .admit(first.clone(), true, CAPS, grace(), now, TAIL)
         .expect("io")
         .expect("first");
-    let later = now + chrono::Duration::seconds(5);
+    let later = now + crate::duration_bound::delta!(seconds, 5);
     let mut renewed = sub("p", "https://h/1", later);
     renewed.secret = "whsec_second".into();
     store
@@ -265,12 +266,12 @@ fn unsubscribing_an_expired_row_does_not_restart_its_tail() {
     let now = Utc::now();
     let store = Store::open(dir.path(), now, TAIL).expect("open");
     let mut old = sub("p", "https://h/1", now);
-    old.expires_at = Some(now + chrono::Duration::seconds(1));
+    old.expires_at = Some(now + crate::duration_bound::delta!(seconds, 1));
     store
         .admit(old.clone(), true, CAPS, grace(), now, TAIL)
         .expect("io")
         .expect("old");
-    let late = now + chrono::Duration::hours(2);
+    let late = now + crate::duration_bound::delta!(hours, 2);
     assert!(
         !store.remove(&old.id, late, TAIL).expect("io"),
         "already swept"
@@ -306,7 +307,7 @@ fn one_principals_churn_evicts_its_own_tail_before_anothers() {
     let t0 = Utc::now();
     let store = Store::open(dir.path(), t0, TAIL).expect("open");
     let cycle = |principal: &str, url: &str, secs: i64| {
-        let at = t0 + chrono::Duration::seconds(secs);
+        let at = t0 + chrono::TimeDelta::try_seconds(secs).expect("in range");
         let s = sub(principal, url, at);
         store
             .admit(s.clone(), true, CAPS, grace(), at, TAIL)
@@ -318,7 +319,7 @@ fn one_principals_churn_evicts_its_own_tail_before_anothers() {
     cycle("p", "https://h/22", 1);
     cycle("p", "https://h/333", 2);
     cycle("p", "https://h/4444", 3);
-    let now = t0 + chrono::Duration::seconds(10);
+    let now = t0 + crate::duration_bound::delta!(seconds, 10);
     assert!(
         store.is_verified("q", "https://h/1", now, TAIL),
         "q's older tail survives"
@@ -379,7 +380,8 @@ fn an_over_cap_tail_is_trimmed_before_it_is_reused() {
     let store = Store::open(dir.path(), t0, TAIL).expect("open");
     let urls = ["https://h/1", "https://h/22", "https://h/333"];
     for (n, url) in urls.iter().enumerate() {
-        let at = t0 + chrono::Duration::seconds(i64::try_from(n).expect("small"));
+        let at = t0
+            + chrono::TimeDelta::try_seconds(i64::try_from(n).expect("small")).expect("in range");
         let s = sub("q", url, at);
         store
             .admit(s.clone(), true, CAPS, grace(), at, TAIL)
@@ -392,7 +394,7 @@ fn an_over_cap_tail_is_trimmed_before_it_is_reused() {
         max_per_principal: 1,
         ..TAIL
     };
-    let now = t0 + chrono::Duration::seconds(10);
+    let now = t0 + crate::duration_bound::delta!(seconds, 10);
     assert_eq!(
         store
             .admit(sub("q", urls[1], now), false, CAPS, grace(), now, narrow)
@@ -409,7 +411,7 @@ fn an_over_cap_tail_is_trimmed_before_it_is_reused() {
 fn tails_of_rows_that_expire_before_the_commit_are_capped_first() {
     let dir = tempfile::tempdir().expect("dir");
     let real = Utc::now();
-    let asked = real - chrono::Duration::hours(2);
+    let asked = real - crate::duration_bound::delta!(hours, 2);
     let long = TailPolicy {
         ttl: Duration::from_secs(24 * 3600),
         max: 1,
@@ -418,7 +420,7 @@ fn tails_of_rows_that_expire_before_the_commit_are_capped_first() {
     let store = Store::open(dir.path(), asked, long).expect("open");
     for (url, mins) in [("https://h/1", 10), ("https://h/22", 20)] {
         let s = Subscription {
-            expires_at: Some(asked + chrono::Duration::minutes(mins)),
+            expires_at: Some(asked + chrono::TimeDelta::try_minutes(mins).expect("in range")),
             ..sub("q", url, asked)
         };
         store
@@ -442,11 +444,11 @@ fn tails_of_rows_that_expire_before_the_commit_are_capped_first() {
 #[test]
 fn the_grant_is_fixed_at_the_commit_instant() {
     let dir = tempfile::tempdir().expect("dir");
-    let asked = Utc::now() - chrono::Duration::hours(2);
+    let asked = Utc::now() - crate::duration_bound::delta!(hours, 2);
     let store = Store::open(dir.path(), asked, TAIL).expect("open");
     let s = sub("p", "https://h/a", asked);
     let grant = Grant {
-        ttl: Some(chrono::Duration::hours(1)),
+        ttl: Some(crate::duration_bound::delta!(hours, 1)),
         until: None,
     };
     let (_, answered) = store
@@ -468,7 +470,10 @@ fn the_grant_is_fixed_at_the_commit_instant() {
         "the answer is the committed expiry"
     );
     assert!(expires > Utc::now(), "live after the commit: {expires}");
-    assert_eq!(expires - row.granted_at, chrono::Duration::hours(1));
+    assert_eq!(
+        expires - row.granted_at,
+        crate::duration_bound::delta!(hours, 1)
+    );
 }
 
 /// MIK-8122 (design D7): a held refresh never rewrites a watch row's class.
@@ -490,7 +495,7 @@ fn a_held_refresh_keeps_the_rows_watch_class() {
         ..s.clone()
     };
     let grant = Grant {
-        ttl: Some(chrono::Duration::hours(1)),
+        ttl: Some(crate::duration_bound::delta!(hours, 1)),
         until: None,
     };
     store

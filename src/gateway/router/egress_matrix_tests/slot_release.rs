@@ -9,7 +9,8 @@
 //! A cell in [`KNOWN_LEAK`] still leaks on this tree and must keep leaking:
 //! the stage that fixes it removes it, and the last stage asserts the list is
 //! empty. Every cell also checks the hold registry: its mint registered one
-//! hold inside the route's scope, and no hold outlived the request.
+//! hold inside the route's scope, and no hold outlived the request unless
+//! the route handed it off.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -151,13 +152,18 @@ async fn slot_release_matrix() {
                     "{label}: {held} slots held, want {want}{note}: {body}"
                 ));
             }
-            // Stage 1: one hold registered in the route's scope, none minted
-            // outside one, and every hold gone with the request.
+            // One hold registered in the route's scope, none minted outside
+            // one. A delivered answer the route hands off (the direct route's
+            // JSON reply; this matrix's `/mcp` cells are streams, handed off
+            // from stage 3) drops no unhanded hold; every other hold is gone
+            // unhanded with the request.
             let after = counts(&continuation);
             let delta: Vec<u64> = after.iter().zip(before).map(|(a, b)| a - b).collect();
-            if delta != [1, 0, 1] {
+            let handed = path == Path::Delivered && route == Route::Direct;
+            let want_delta = [1, 0, u64::from(!handed)];
+            if delta != want_delta {
                 failures.push(format!(
-                    "{label}: holds registered/unscoped/dropped {delta:?}, want [1, 0, 1]"
+                    "{label}: holds registered/unscoped/dropped {delta:?}, want {want_delta:?}"
                 ));
             }
             if continuation.in_flight().route(&other.hold_key, now).await != Routing::Here {

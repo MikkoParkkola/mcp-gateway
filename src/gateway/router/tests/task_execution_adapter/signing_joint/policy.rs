@@ -20,7 +20,7 @@ use crate::attestation::{
 
 const ATTESTATION_KEY: &[u8] = b"joint-d-attestation-key-at-least-32b";
 const AUDIT_CAPACITY: usize = 8;
-const TTL: TimeDelta = TimeDelta::minutes(5);
+const TTL: TimeDelta = crate::duration_bound::delta!(minutes, 5);
 
 fn attested(mut body: Value, token: &str) -> Value {
     body["params"]["arguments"]["attestation"] = json!(token);
@@ -354,7 +354,7 @@ async fn task_dispatch_enforce_from_config_carries_token() {
             capabilities: vec![TOOL.to_string()],
         },
         Utc::now(),
-        TimeDelta::seconds(2),
+        crate::duration_bound::delta!(seconds, 2),
     );
 
     let created = bounded(

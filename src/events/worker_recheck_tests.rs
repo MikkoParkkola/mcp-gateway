@@ -403,7 +403,7 @@ async fn a_subscription_expiring_during_the_second_verdict_is_not_sent() {
             if expire {
                 let now = chrono::Utc::now();
                 let mut row = hub.store.subscriptions().remove(0);
-                row.expires_at = Some(now - chrono::Duration::seconds(1));
+                row.expires_at = Some(now - crate::duration_bound::delta!(seconds, 1));
                 let caps = crate::events::store::Caps {
                     per_principal: 10,
                     global: 10,

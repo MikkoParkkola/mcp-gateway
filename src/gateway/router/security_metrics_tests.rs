@@ -109,7 +109,7 @@ async fn missing_and_invalid_credential_are_counted_by_kind() {
 /// An expired key is its own kind, and not also an invalid credential.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn expired_api_key_is_counted_once_as_expired() {
-    let past = chrono::Utc::now() - chrono::Duration::seconds(5);
+    let past = chrono::Utc::now() - crate::duration_bound::delta!(seconds, 5);
     let fx = fixture(Setup {
         auth: Some(expiring_key(Some(past), 0)),
         ..Setup::default()

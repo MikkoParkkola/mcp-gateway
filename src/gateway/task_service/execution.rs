@@ -482,7 +482,12 @@ impl TaskExecutor {
         let worker = crate::gateway::meta_mcp::invoke::relay::collecting(worker);
         // MIK-8176: and owns the slots its mints take, through the durable
         // write of what it settles.
-        let worker = crate::gateway::meta_mcp::sealed_hold::scoped(worker);
+        // The scope is inside the future the select drops, so a cancelled
+        // worker drops its holds with it.
+        let worker = crate::gateway::meta_mcp::sealed_hold::scoped(
+            crate::gateway::meta_mcp::sealed_hold::HoldPolicy::CountOnly,
+            worker,
+        );
         // Cancellation first on every poll (MIK-7839.CANCEL.3): tokio-util's
         // `run_until_cancelled_owned` polls the worker before the token, so a
         // worker cancelled while its runtime sat idle would take one more step

@@ -5,8 +5,9 @@
 //! T47, T55).
 //!
 //! Today the inbound route emits nothing, so each row goes red at its first
-//! delivery assertion. Linux-only for `SSL_CERT_FILE`.
-#![cfg(all(unix, not(target_vendor = "apple")))]
+//! delivery assertion. Unix; the child
+//! trusts the receiver's CA through `Receiver::trust_env` (MIK-8188).
+#![cfg(unix)]
 
 #[path = "mik_7630_events/delivery.rs"]
 #[allow(dead_code, reason = "shared helpers; each binary uses a subset")]
@@ -213,7 +214,11 @@ async fn a_slow_challenge_does_not_eat_a_short_ttl() {
     };
     let row = records(root.path(), "subs")[0].clone();
     let (granted, expires) = (time(&row["granted_at"]), time(&row["expires_at"]));
-    assert_eq!(expires - granted, chrono::Duration::seconds(7), "{row}");
+    assert_eq!(
+        expires - granted,
+        chrono::TimeDelta::try_seconds(7).expect("in range"),
+        "{row}"
+    );
     assert!(expires > answered, "the row outlives the answer: {row}");
     assert_eq!(
         time(&answer["result"]["refreshBefore"]).timestamp(),

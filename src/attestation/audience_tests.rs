@@ -5,7 +5,7 @@
 //! side matches nothing, and two gateways that share a signing key do not
 //! accept each other's tokens.
 
-use chrono::{TimeDelta, Utc};
+use chrono::Utc;
 use uuid::Uuid;
 
 use super::wiring::{ATTESTATION_AUDIENCE_ENV, resolve_attestation_wiring};
@@ -32,7 +32,7 @@ fn token_for(audience: Option<&str>) -> AttestationToken {
             capabilities: vec!["read".to_string()],
         },
         Utc::now(),
-        TimeDelta::minutes(5),
+        crate::duration_bound::delta!(minutes, 5),
     )
 }
 
@@ -111,12 +111,20 @@ fn a_token_without_an_audience_claim_is_malformed() {
 fn rotation_keeps_the_destination_of_the_token_it_replaces() {
     let local = validator_for(Some("gateway-a"));
     let own = token_for(Some("gateway-a"));
-    let rotated = local.rotate(own.claims(), Utc::now(), TimeDelta::minutes(5));
+    let rotated = local.rotate(
+        own.claims(),
+        Utc::now(),
+        crate::duration_bound::delta!(minutes, 5),
+    );
     assert_eq!(rotated.claims().audience, "gateway-a");
     assert!(check(&local, &rotated).is_ok());
 
     let foreign = token_for(Some("gateway-b"));
-    let laundered = local.rotate(foreign.claims(), Utc::now(), TimeDelta::minutes(5));
+    let laundered = local.rotate(
+        foreign.claims(),
+        Utc::now(),
+        crate::duration_bound::delta!(minutes, 5),
+    );
     assert_eq!(laundered.claims().audience, "gateway-b");
     assert!(
         matches!(
