@@ -232,10 +232,11 @@ async fn a_reprobe_on_one_slot_leaves_the_other_slots_verdict() {
     assert_eq!(backend.cached_era().await, Some(Era::Legacy));
 }
 
-/// PERSLOT.3c: the era a request is judged by is the one of the slot it is
-/// dispatched to: a legacy per-user peer beside a modern Shared one.
+/// PERSLOT.3c: a removed method is judged by the era of the slot the request
+/// is dispatched to: forwarded to a legacy per-user peer, refused before the
+/// wire for the modern Shared peer beside it.
 #[tokio::test]
-async fn a_request_is_judged_by_its_own_slots_era() {
+async fn a_removed_method_is_judged_by_its_own_slots_era() {
     let backend = backend_at("http://127.0.0.1:9/mcp".to_string());
     let (shared, _h1) = Peer::new(Answer::Modern);
     let shared: Arc<dyn Transport> = shared;
@@ -245,21 +246,50 @@ async fn a_request_is_judged_by_its_own_slots_era() {
         .await;
     per_user_slot_resolved(&backend, Answer::MethodNotFound).await;
 
-    assert_eq!(backend.dispatch_era(Some(USER)).await, Some(Era::Legacy));
-    assert_eq!(backend.dispatch_era(None).await, Some(Era::Modern));
+    let per_user = backend
+        .request_with_headers("ping", None, &[], Some(USER))
+        .await;
+    assert!(
+        per_user.is_ok(),
+        "a legacy per-user peer is sent ping: {per_user:?}"
+    );
+    let shared_refused = backend
+        .request("ping", None)
+        .await
+        .expect_err("the modern Shared peer is not sent ping");
+    assert!(
+        super::removed_method_refusal_message(&shared_refused).is_some(),
+        "{shared_refused:?}"
+    );
 }
 
-/// PERSLOT.3c, cold slot: a slot not yet started is started before its era is
-/// read, so a new caller's first request is judged by its peer's real era,
-/// not by a missing verdict.
+/// PERSLOT.3c, cold slot: a new caller's first removed-method request is
+/// judged after its slot's own start has probed, so a modern peer is never
+/// sent it, even on the first call.
 #[tokio::test]
-async fn a_cold_slot_is_started_before_its_era_is_read() {
-    let (url, _seen) = upstream(true).await;
+async fn a_cold_slots_first_removed_method_is_judged_after_its_probe() {
+    let (url, seen) = upstream(true).await;
     let backend = backend_at(url);
     assert!(
         backend.shared_entry().transport.read().is_none(),
         "premise: cold"
     );
 
-    assert_eq!(backend.dispatch_era(None).await, Some(Era::Modern));
+    let refused = backend
+        .request("ping", None)
+        .await
+        .expect_err("a modern peer is not sent ping");
+    assert!(
+        super::removed_method_refusal_message(&refused).is_some(),
+        "{refused:?}"
+    );
+    let seen = seen.lock().unwrap().clone();
+    assert!(
+        seen.iter().any(|s| s.method == "server/discover"),
+        "premise: the start probed: {seen:?}"
+    );
+    assert!(
+        !seen.iter().any(|s| s.method == "ping"),
+        "ping reached a modern peer: {seen:?}"
+    );
 }

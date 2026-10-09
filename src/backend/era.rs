@@ -155,20 +155,6 @@ impl Backend {
         self.shared_entry().era.cached().await
     }
 
-    /// The era of the slot a request for `identity_key` is dispatched to,
-    /// starting that slot first if it is cold so its own probe has run
-    /// (MIK-8186): a verdict read before the start would be "not yet known" for
-    /// every new user's first call. A start that fails reports `None`; the
-    /// dispatch that follows reports the failure itself.
-    pub(crate) async fn dispatch_era(&self, identity_key: Option<&str>) -> Option<Era> {
-        let key = self.pool_key_for(identity_key);
-        let entry = self.pooled_entry(&key).ok()?;
-        if entry.transport.read().is_none() {
-            let _ = self.ensure_entry_started(&key).await;
-        }
-        entry.era.cached().await
-    }
-
     /// Which liveness method this peer's era answers.
     ///
     /// `ping` was removed in the 2026-07-28 revision, so a peer known to speak
@@ -181,6 +167,29 @@ impl Backend {
             Some(Era::Modern) => DISCOVER_METHOD,
             Some(Era::Legacy) | None => PING_METHOD,
         }
+    }
+
+    /// Start `entry` as the dispatch does, then refuse a method the 2026-07-28
+    /// revision removed when the started slot's peer speaks that revision,
+    /// before anything reaches the wire. Judged after the slot is admitted and
+    /// started, on the slot actually used: another slot's peer may speak a different revision, and a cold
+    /// slot has a verdict only once its own start has probed (MIK-7217
+    /// OUTBOUND.1, MIK-8186).
+    pub(super) async fn start_judged(
+        &self,
+        key: &super::pool::PoolKey,
+        entry: &PooledEntry,
+        started_at: std::time::Instant,
+        method: &str,
+    ) -> crate::Result<Arc<dyn Transport>> {
+        let transport = self.start_recorded(key, entry, started_at).await?;
+        if crate::protocol::meta::REMOVED_IN_2026_07_28.contains(&method)
+            && entry.era.cached().await == Some(Era::Modern)
+        {
+            note_removed_method_refused(&self.name, method);
+            return Err(removed_method_refusal(method));
+        }
+        Ok(transport)
     }
 
     /// Everything an operator can see about this backend's era, for
@@ -340,6 +349,53 @@ fn probe_cap() -> Duration {
 #[cfg(not(debug_assertions))]
 fn probe_cap() -> Duration {
     PROBE_TIMEOUT
+}
+
+/// What a refusal of a method the 2026-07-28 revision removed carries, so the
+/// route that answers the caller can tell it from a peer's own error.
+const REMOVED_METHOD_MARK: &str = "removedInRevision";
+
+/// The error a dispatch returns instead of sending `method` to a peer whose
+/// era removed it (MIK-7217 OUTBOUND.1). Nothing reached the wire.
+pub(crate) fn removed_method_refusal(method: &str) -> crate::Error {
+    crate::Error::JsonRpc {
+        code: METHOD_NOT_FOUND_CODE,
+        message: format!("{method} was removed in protocol revision 2026-07-28"),
+        data: Some(serde_json::json!({ REMOVED_METHOD_MARK: "2026-07-28" })),
+    }
+}
+
+/// The message of a [`removed_method_refusal`], or `None` for any other error.
+pub(crate) fn removed_method_refusal_message(error: &crate::Error) -> Option<&str> {
+    match error {
+        crate::Error::JsonRpc {
+            code,
+            message,
+            data: Some(data),
+        } if *code == METHOD_NOT_FOUND_CODE && data.get(REMOVED_METHOD_MARK).is_some() => {
+            Some(message)
+        }
+        _ => None,
+    }
+}
+
+/// Record one refused removed method. `debug!`, not `warn!`: the refusal is
+/// triggered by whatever method a client asks for, so at `warn!` a client
+/// polling a removed method sets the gateway's log volume. The counter carries
+/// the same event at a volume an operator controls.
+pub(crate) fn note_removed_method_refused(backend: &str, method: &str) {
+    tracing::debug!(
+        backend,
+        method,
+        "Refusing a method the backend's protocol revision removed"
+    );
+    telemetry_metrics::counter!(
+        "mcp_gateway_removed_method_refused_total",
+        "backend" => backend.to_string(),
+        "method" => method.to_string(),
+        "era" => "modern"
+    )
+    .increment(1);
 }
 
 #[cfg(test)]

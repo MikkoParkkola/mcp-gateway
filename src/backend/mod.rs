@@ -61,6 +61,7 @@ impl Backend {
     }
 }
 
+pub(crate) use era::{note_removed_method_refused, removed_method_refusal_message};
 #[cfg(test)]
 pub(crate) use pool::PoolKey;
 #[cfg(not(test))]

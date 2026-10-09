@@ -21,37 +21,19 @@
 /// instead of a second copy of the revision's removed-method list (MIK-7217,
 /// OUTBOUND.1).
 ///
-/// The era read is the one of the slot `identity_key` is dispatched to,
-/// started first if cold (MIK-8186): another slot's peer may speak a
-/// different revision, and a cold slot has no verdict yet. The membership
-/// check runs first, so only a removed method ever starts a slot here.
+/// Reads the Shared slot's era and never starts a slot: the one remaining
+/// caller is the `logging/setLevel` fan-out, which sends through the Shared
+/// slot. A request routed to a slot is gated inside the backend's own
+/// dispatch, after that slot is admitted and started (MIK-8186).
 pub(in crate::gateway) async fn era_removed_method(
     backend: &crate::backend::Backend,
     method: &str,
-    identity_key: Option<&str>,
 ) -> bool {
-    if !crate::protocol::meta::REMOVED_IN_2026_07_28.contains(&method) {
+    if !crate::protocol::meta::REMOVED_IN_2026_07_28.contains(&method)
+        || backend.cached_era().await != Some(crate::protocol::era::Era::Modern)
+    {
         return false;
     }
-    let era = backend.dispatch_era(identity_key).await;
-    if era != Some(crate::protocol::era::Era::Modern) {
-        return false;
-    }
-    // `debug!`, not `warn!`: the refusal is triggered by whatever method a
-    // client asks for, so at `warn!` a client polling a removed method sets
-    // the gateway's log volume. The counter below carries the same event at a
-    // volume an operator controls.
-    tracing::debug!(
-        backend = %backend.name,
-        method,
-        "Refusing a method the backend's protocol revision removed"
-    );
-    telemetry_metrics::counter!(
-        "mcp_gateway_removed_method_refused_total",
-        "backend" => backend.name.clone(),
-        "method" => method.to_string(),
-        "era" => "modern"
-    )
-    .increment(1);
+    crate::backend::note_removed_method_refused(&backend.name, method);
     true
 }
