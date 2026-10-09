@@ -16,14 +16,19 @@
 //!   guards, which judged the logical call once at its route scan.
 //!
 //! A refusal is `Error::Forbidden`: nothing was sent, so the caller gives back
-//! what it took (nonce, idempotency key). A pass mints the [`Permit`] the send
-//! consumes; a send without one is a bug, refused (and a panic under test).
+//! what it took (nonce, idempotency key). A pass mints the [`Permit`] that
+//! `accounted_dispatch` takes by value: only this module can construct one, so
+//! a send that skipped the chokepoint does not compile (MX).
 
 use serde_json::Value;
 
 use crate::gateway::authz::{Emit, ToolTarget};
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
 use crate::{Error, Result};
+
+#[cfg(test)]
+#[path = "chokepoint_tests.rs"]
+mod chokepoint_tests;
 
 /// Proof that one send passed the chokepoint, consumed by that send.
 #[must_use = "a permit is consumed by the send it was minted for"]
@@ -83,6 +88,12 @@ impl MetaMcp {
         outbound: &Outbound<'_>,
         source: Source,
     ) -> Result<Permit> {
+        // Callers pass the parsed object they dispatch (`parse_tool_arguments`),
+        // the value the route judged through `judged_arguments` (kimi i1).
+        debug_assert!(
+            outbound.arguments.is_object(),
+            "the chokepoint judges dispatched objects"
+        );
         self.recheck_target(caller, (server, tool), outbound.arguments)?;
         #[cfg(feature = "firewall")]
         self.rescan_outbound(caller, session_id, (server, tool), outbound, source)?;
@@ -211,18 +222,5 @@ const fn rank(action: crate::security::firewall::FirewallAction) -> u8 {
         FirewallAction::Allow => 0,
         FirewallAction::Warn => 1,
         FirewallAction::Block => 2,
-    }
-}
-
-/// The send's half of the contract: a dispatch without a permit is a bug.
-/// Refused in production (nothing is sent); a panic under test, so a path
-/// that skips the chokepoint fails its own row (MX).
-pub(super) fn require(permit: Option<Permit>) -> Result<Permit> {
-    match permit {
-        Some(permit) => Ok(permit),
-        None if cfg!(test) => panic!("a backend send without a chokepoint permit"),
-        None => Err(Error::Internal(
-            "a backend send reached dispatch without passing the chokepoint".to_owned(),
-        )),
     }
 }

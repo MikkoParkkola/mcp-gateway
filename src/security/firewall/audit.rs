@@ -170,7 +170,10 @@ impl AuditLogger {
     }
 
     /// A dispatch-chokepoint decision (Warn or Block): one `dispatch` row
-    /// naming the send's `source`. Arguments are hashed, never written.
+    /// naming the send's `source`. It carries no caller content: arguments
+    /// as a hash, and each finding as its type, severity and location only.
+    /// A finding's `matched` fragment and its description (which names the
+    /// caller's argument key) are never written (gpt i1 HIGH on #3688).
     pub(crate) fn log_dispatch(
         &self,
         correlation: &ResponseCorrelation<'_>,
@@ -178,8 +181,26 @@ impl AuditLogger {
         verdict: &FirewallVerdict,
         source: &'static str,
     ) {
+        // A recorder stamps a time it can read or writes nothing (MIK-8202,
+        // `crate::clock`): the send is refused all the same; the row is lost.
+        let Ok(now) = crate::clock::utc_now() else {
+            tracing::warn!(
+                source,
+                "Firewall: dispatch audit row skipped, the host clock reads before 1970"
+            );
+            return;
+        };
+        let content_free: Vec<Finding> = verdict
+            .findings
+            .iter()
+            .map(|finding| Finding {
+                description: String::new(),
+                matched: String::new(),
+                ..finding.clone()
+            })
+            .collect();
         let entry = AuditEntry {
-            timestamp: Utc::now().to_rfc3339(),
+            timestamp: now.to_rfc3339(),
             event: "dispatch",
             session_id: session_fp(correlation.session_id),
             server: correlation.external_server,
@@ -188,7 +209,7 @@ impl AuditLogger {
             args_hash: Some(hash_argument(args)),
             action: action_str(verdict.action),
             findings_count: verdict.findings.len(),
-            findings: &verdict.findings,
+            findings: &content_free,
             anomaly_score: verdict.anomaly_score,
             schema_version: None,
             artifact_kind: None,

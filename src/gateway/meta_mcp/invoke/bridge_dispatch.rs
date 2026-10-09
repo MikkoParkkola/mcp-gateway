@@ -325,7 +325,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.captured.clone(),
                 &super::super::response_security::chain_receipt::ChainSlot::default(),
                 &admission,
-                Some(permit),
+                permit,
             )
             .await;
         // The round's spend is settled; an unsettled reservation is given back.

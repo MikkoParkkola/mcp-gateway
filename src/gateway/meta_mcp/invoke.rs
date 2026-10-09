@@ -461,7 +461,7 @@ impl MetaMcp {
             backend.clone(),
             &chain_slot,
             &admission,
-            Some(permit),
+            permit,
         ))
         .await;
         // The spend is settled; an unsettled reservation is given back here.

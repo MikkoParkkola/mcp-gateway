@@ -110,10 +110,11 @@ impl MetaMcp {
         chain: &super::super::response_security::chain_receipt::ChainSlot,
         // The call's admission: its reservation is settled with the spend.
         admission: &dispatch_guards::Admission,
-        // MIK-8137 b1: proof this send passed the chokepoint (MX).
-        permit: Option<super::chokepoint::Permit>,
+        // MIK-8137 b1 (MX): proof this send passed the chokepoint. Only
+        // `chokepoint()` can make one, so a send that skipped it does not
+        // compile.
+        _permit: super::chokepoint::Permit,
     ) -> Result<Value> {
-        let _permit = super::chokepoint::require(permit)?;
         let dispatch_start = Instant::now();
         let dispatch_result = self
             .dispatch_to_backend(
