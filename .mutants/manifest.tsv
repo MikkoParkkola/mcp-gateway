@@ -1,0 +1,3 @@
+head_sha	26935d3af7c14ee618b638e7aa58fc9c31e988fe
+# #3612 MIK-7741: rerun of r7741-too-high against the band test
+r7741-too-high	linux	r7741-too-high.patch	--lib -- ranking::tests::backend_name::a_backend_name_score_sits_between_a_mention_and_a_name_match

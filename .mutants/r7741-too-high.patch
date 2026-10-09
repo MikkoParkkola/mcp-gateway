@@ -1,0 +1,13 @@
+diff --git a/src/ranking/scoring.rs b/src/ranking/scoring.rs
+index e01b50610..1091d5875 100644
+--- a/src/ranking/scoring.rs
++++ b/src/ranking/scoring.rs
+@@ -262,7 +262,7 @@ pub(super) fn backend_name_score(server: &str, words: &[&str]) -> f64 {
+         .sum();
+     #[allow(clippy::cast_precision_loss)]
+     let share = found / words.len() as f64;
+-    4.0 * share
++    6.0 * share
+ }
+ 
+ /// Compute text relevance score for a single result against a pre-lowercased query.
