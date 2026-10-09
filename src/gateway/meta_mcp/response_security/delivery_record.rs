@@ -210,3 +210,7 @@ async fn append_delivery_attempt(
     }
     true
 }
+
+#[cfg(test)]
+#[path = "delivery_record_tests.rs"]
+mod tests;
