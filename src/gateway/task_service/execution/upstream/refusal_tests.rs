@@ -432,3 +432,44 @@ async fn cancel_upstream_once_sends_only_on_its_own_claim() {
     );
     assert_eq!(*sent.lock(), vec!["upstream-9".to_owned()]);
 }
+
+/// MIK-7642: a cancel retry that finds the row already cancelled, by an
+/// attempt whose claim never landed (a crash between the Cancel commit and
+/// the claim), still sends the one upstream cancel. Mutant "the terminal
+/// retry returns without claiming" sends none.
+#[tokio::test]
+async fn a_cancel_retry_on_an_unclaimed_cancelled_row_still_claims() {
+    let f = fixture().await;
+    assert!(
+        f.executor
+            .capture_upstream(OWNER, &f.id, f.revision, capture("upstream-7"))
+            .await
+    );
+    let sent = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    assert!(
+        f.executor
+            .install_recovery(Arc::new(CancelRecorder(Arc::clone(&sent))))
+    );
+    // The earlier attempt: committed, never claimed.
+    f.service
+        .store
+        .transition(
+            &f.owner_digest,
+            &f.id,
+            f.revision,
+            crate::protocol::tasks::TaskTransition::Cancel,
+            chrono::Utc::now(),
+        )
+        .await
+        .expect("the earlier cancel commits");
+    // The retry carries the revision it read before that commit.
+    f.executor
+        .cancel(OWNER, &f.id, f.revision)
+        .await
+        .expect("an already-cancelled row answers its committed view");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while sent.lock().is_empty() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(*sent.lock(), vec!["upstream-7".to_owned()]);
+}
