@@ -153,11 +153,11 @@ async fn every_shipped_capability_file_validates() {
         if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
             continue;
         }
-        let Ok(cap) = super::parse_capability_file(path).await else {
-            // Not every YAML file under capabilities/ is a definition; the
-            // ones that parse are the ones loading would admit or refuse.
-            continue;
-        };
+        // Every YAML file under capabilities/ is a definition: one that no
+        // longer parses (or fails its pin) would vanish from loading silently.
+        let cap = super::parse_capability_file(path)
+            .await
+            .unwrap_or_else(|e| panic!("{} does not load: {e}", path.display()));
         validate_capability(&cap)
             .unwrap_or_else(|e| panic!("{} is refused at load: {e}", path.display()));
         checked += 1;

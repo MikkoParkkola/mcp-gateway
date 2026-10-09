@@ -118,3 +118,28 @@ async fn a_call_without_a_child_adds_no_field() {
     let fields = recorded(&[]).await;
     assert!(fields.get("process").is_none(), "{fields:?}");
 }
+
+/// Byte counts are bytes: a non-ASCII argument echoed on stderr is counted
+/// in UTF-8 bytes, not characters. Unix only: a Windows pipe takes the
+/// child's locale encoding.
+#[cfg(unix)]
+#[tokio::test]
+async fn byte_counts_are_utf8_bytes() {
+    const WORD: &str = "naïve ✓";
+    let cap = capability("fail", "\"3\", \"--\", \"{x}\"", "", 30);
+    let fields = recorded(&[(&cap, json!({ "x": WORD }))]).await;
+    // argv_echo.py `fail`: "argv=<args>\n" then "env=<test values>\n".
+    let expected = format!("argv=3 -- {WORD}\nenv=\n").len();
+    assert_eq!(only_process(&fields)["stderr_bytes"], expected);
+}
+
+/// A child ended by a signal has no exit code and says so.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_signalled_child_is_recorded_as_one() {
+    let cap = capability("signal", "x", "", 30);
+    let fields = recorded(&[(&cap, json!({}))]).await;
+    let process = only_process(&fields);
+    assert_eq!(process["ended"], "signalled", "{process}");
+    assert!(process.get("exit_code").is_none(), "{process}");
+}

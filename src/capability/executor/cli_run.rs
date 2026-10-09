@@ -258,6 +258,8 @@ pub(crate) async fn run(
     #[cfg(windows)]
     wrap.wrap(JobObject);
     wrap.wrap(KillOnDrop);
+    // From just before spawn: the fork and exec are part of what it cost.
+    let started = Instant::now();
     let child = wrap.spawn().map_err(|e| {
         Error::Protocol(format!(
             "could not start '{}': {}",
@@ -266,7 +268,6 @@ pub(crate) async fn run(
         ))
     })?;
     let mut guard = TreeGuard(Some(child));
-    let started = Instant::now();
 
     if let Some(bytes) = invocation.stdin.clone()
         && let Some(mut stdin) = guard.child().stdin().take()
