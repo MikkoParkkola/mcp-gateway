@@ -140,3 +140,14 @@ async fn t34_a_snapshot_does_not_revoke_a_later_grant() {
         "a subscribe (no grant yet) is judged by the snapshot as before"
     );
 }
+
+/// MIK-8194 bound (lead ruling on #3625): at most one confirming catalogue
+/// read per backend per `CONFIRM_EVERY`, so a backend answering "absent"
+/// cannot drive a read per delivery.
+#[test]
+fn a_backend_gets_one_confirming_read_per_window() {
+    let hub = listeners();
+    assert!(hub.may_confirm("b"), "the first confirm runs");
+    assert!(!hub.may_confirm("b"), "a second within the window does not");
+    assert!(hub.may_confirm("c"), "another backend has its own window");
+}

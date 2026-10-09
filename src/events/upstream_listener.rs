@@ -26,6 +26,10 @@ use crate::backend::{Backend, BackendRegistry};
 /// ponytail: up to this long between a backend turning eligible and its
 /// listener starting; a push from reload and transport detection would cut it.
 const REVIVE_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
+/// At most one confirming catalogue read per backend this often (MIK-8194):
+/// a delivery that would need another within it is admitted, as an
+/// unconfirmed absence proves nothing (design section 7).
+const CONFIRM_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// What one backend's task and the event source share.
 pub(super) struct Shared {
@@ -136,6 +140,8 @@ pub(crate) struct UpstreamListeners {
     #[cfg(test)]
     pub(super) starts: std::sync::atomic::AtomicUsize,
     me: Weak<UpstreamListeners>,
+    /// When each backend's last confirming read began (`CONFIRM_EVERY`).
+    confirmed: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 impl Drop for UpstreamListeners {
@@ -196,6 +202,7 @@ impl UpstreamListeners {
             backends: Mutex::new(HashMap::new()),
             gates: Mutex::new(HashMap::new()),
             ledgers: Mutex::new(HashMap::new()),
+            confirmed: Mutex::new(HashMap::new()),
             stop: CancellationToken::new(),
             #[cfg(test)]
             starts: std::sync::atomic::AtomicUsize::new(0),
@@ -465,7 +472,25 @@ impl UpstreamListeners {
         .await;
         match read {
             Ok(Ok(snapshot)) if snapshot.complete && !snapshot.uris.contains(uri) => {
-                Err(RpcError::forbidden())
+                // A cached list may predate the grant (MIK-8194): an absence
+                // is confirmed by a read begun now, after it, before revoking.
+                if granted.is_none() {
+                    return Err(RpcError::forbidden());
+                }
+                if !self.may_confirm(backend) {
+                    return Ok(());
+                }
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    found.read_resource_snapshot(true),
+                )
+                .await
+                {
+                    Ok(Ok(now)) if now.complete && !now.uris.contains(uri) => {
+                        Err(RpcError::forbidden())
+                    }
+                    _ => Ok(()),
+                }
             }
             Ok(Ok(_)) => Ok(()),
             // An error is not absence (§7): admitted, as before.
@@ -474,6 +499,20 @@ impl UpstreamListeners {
                 Ok(())
             }
         }
+    }
+
+    /// Whether `backend` may take a confirming read now; records it if so.
+    fn may_confirm(&self, backend: &str) -> bool {
+        let now = std::time::Instant::now();
+        let mut confirmed = self.confirmed.lock();
+        if confirmed
+            .get(backend)
+            .is_some_and(|at| now.duration_since(*at) < CONFIRM_EVERY)
+        {
+            return false;
+        }
+        confirmed.insert(backend.to_owned(), now);
+        true
     }
 
     /// The backend's ledger, fresh when the registry holds another `Backend`
