@@ -200,7 +200,6 @@ backend" and "fails a capability file" first.**
 | 173 | `meta_mcp.cache_tools` is retired: nothing ever read it. A config that sets it loads and logs one warning; `upgrade` removes it, or names it when it cannot do so safely, and `init` no longer writes it | Run `mcp-gateway upgrade`, or delete the key. To change how long tool lists are cached, set `meta_mcp.cache_ttl` |
 | 174 | Every frame a backend's text reaches a client in passes one screen (content inspection, context integrity, response firewall) on every route. Over HTTP `/mcp` an interim question the firewall would rewrite is refused (-32600), as over stdio, instead of delivered redacted; backend errors, `prompts/get` and `resources/read` bodies, catalogue listings and notifications streamed during a call can now arrive redacted or be refused | None by default. To allow flagged text in a prompt, resource or listing, add a firewall rule whose `tool_match` names the method (`prompts/get`, `resources/read`, ...) |
 | 175 | The per-backend route `POST /mcp/{name}` refuses what `/mcp` refuses under every security posture, with the same code and status: a malformed request, a contradicted or doubled protocol header, an unsupported revision, or a 2026-07-28 request missing its required `_meta`. Before, only `hardened` checked these; elsewhere the route forwarded them to the backend | None for a client whose requests `/mcp` accepts. A client that sent such a request to `/mcp/{name}` gets the refusal `/mcp` gives it and fixes the request |
-| 176 | An HTTP or WebSocket backend's address takes one `url` key; its scheme picks the transport (`http://` or `https://` for HTTP, `ws://` or `wss://` for WebSocket). An A2A backend keeps `a2a_url`. `http_url` and `ws_url` still load, and every writer saves `url` for a backend it adds. A backend that ends up with two transport keys once the file and the environment merge no longer loads; the second key was dropped without a word | None to keep working. Run `mcp-gateway upgrade` to rewrite `http_url` and `ws_url` as `url`, comments kept. If a backend has one transport key in the file and the other in the environment, keep one |
 
 Changes not yet numbered wait in `upgrading.d/` at the repository root, one file per pull request; release preparation numbers them into this list.
 
@@ -4578,44 +4577,6 @@ which backends exist.
 A client whose requests `/mcp` accepts sees no change. Only `hardened` still
 refuses a plain legacy request on this route that is not an `initialize`
 declaring elicitation, as before.
-
-## 176. An HTTP or WebSocket backend's address takes one `url` key
-
-**Startup:** no notice; refuses to start, only for a backend with transport keys in both the file and the environment, or `__URL` in the environment
-
-What you gain: one key for an HTTP or WebSocket backend's address. The
-scheme picks the transport: `http://` or `https://` for HTTP, `ws://` or
-`wss://` for WebSocket. An A2A backend keeps `a2a_url`, and a local server
-keeps `command`.
-
-```yaml
-backends:
-  files:
-    url: "https://files.example.test/mcp"
-```
-
-What you keep: `http_url` and `ws_url` still load as before; `mcp-gateway
-doctor` lists them under advanced settings. `mcp-gateway
-add`, the setup wizard, `init` and the web UI write `url` for a backend they
-add and keep `url` where you wrote it.
-
-What you lose: a backend that ends up with two transport keys once the file
-and the environment merge (say `http_url` in the file and
-`MCP_GATEWAY_BACKENDS__<NAME>__WS_URL` in the environment) no longer loads.
-Before, the second key was dropped without a word; now the error names both.
-`MCP_GATEWAY_BACKENDS__<NAME>__URL` is refused too: set an address from the
-environment with `__HTTP_URL` or `__WS_URL`.
-
-What to do:
-
-- Nothing, to keep working.
-- To move to `url`, preview with `mcp-gateway --config <path> upgrade
-  --dry-run`, then run it without `--dry-run`. It
-  rewrites each `http_url` or `ws_url` in place, keeps every comment and lists
-  the lines it changed. It leaves a value that is not an address of its key's
-  scheme alone, since `url` would change its transport, and names any backend
-  written in a way it cannot edit safely, for you to change by hand.
-- If a backend now fails to load naming two transport keys, keep one.
 
 ## Upgrading from 3.5.x: a walkthrough
 
