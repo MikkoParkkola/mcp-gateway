@@ -29,7 +29,7 @@ pub(crate) async fn judged_reply(
     response: Response,
     log: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
 ) -> OutboundReply {
-    OutboundReply(super::emit_http(response, log).await)
+    judged_reply_checked(response, log).await.0
 }
 
 /// [`judged_reply`], also saying whether the answer went out as built (`false`:
@@ -39,7 +39,24 @@ pub(crate) async fn judged_reply_checked(
     log: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
 ) -> (OutboundReply, bool) {
     let (response, written) = super::emit_http_checked(response, log).await;
+    hand_off_written(&response, written);
     (OutboundReply(response), written)
+}
+
+/// MIK-8176: a JSON answer its delivery record let through is handed off, so
+/// the slots it carries live until redeemed or expired. A refused record
+/// replaced the response, so its holds were left behind and release. The
+/// stream path never comes here: it hands off when its event is yielded.
+fn hand_off_written(response: &Response, written: bool) {
+    if !written {
+        return;
+    }
+    if let Some(carried) = response
+        .extensions()
+        .get::<crate::gateway::meta_mcp::sealed_hold::CarriedHolds>()
+    {
+        crate::gateway::meta_mcp::sealed_hold::hand_off(carried);
+    }
 }
 
 /// A response whose frames are judged one by one by a stream judge (the
