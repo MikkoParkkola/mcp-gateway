@@ -663,14 +663,12 @@ class InventoryResolves(unittest.TestCase):
                 unresolved.append(f"{row['path']}:{row['fn']}#{row['occurrence']}")
         self.assertEqual(unresolved, [], "move these rows to the file that now defines them")
 
-    def test_the_documented_critical_count_matches_the_inventory(self):
-        root = HERE.parent.parent
-        rows = cfc.read_inventory(root / "docs/release/v4.0.0-critical-functions.tsv")
-        critical = sum(row["tier"] == "critical" for row in rows)
-        doc = (root / "docs/release/v4.0.0-critical-path-coverage.md").read_text()
-        stated = re.search(r"(\d+) rows are\s+Critical", doc)
-        self.assertIsNotNone(stated, "the doc no longer states the Critical count")
-        self.assertEqual(int(stated.group(1)), critical, "update the count in the doc")
+    def test_the_doc_states_no_critical_count_of_its_own(self):
+        # MIK-8195: the grader prints the count from the inventory; a copy in
+        # the doc went stale with each wave and conflicted every wave's merge.
+        doc = (HERE.parent.parent / "docs/release/v4.0.0-critical-path-coverage.md").read_text()
+        self.assertIsNone(re.search(r"\d+ rows are\s+Critical", doc), "the count lives in the grader")
+        self.assertIn("critical rows graded", doc)
 
 
 if __name__ == "__main__":
