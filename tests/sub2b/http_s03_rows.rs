@@ -68,10 +68,13 @@ async fn concurrent_slow_bodies(
         .await;
         let answered_a = timeout(READ_TIMEOUT, answering_a).await;
         let answered_b = timeout(READ_TIMEOUT, answering_b).await;
+        let log = std::fs::read_to_string(&session.log).unwrap_or_default();
+        let skip = log.chars().count().saturating_sub(12_000);
+        let tail: String = log.chars().skip(skip).collect();
         panic!(
             "both calls must be in flight at once for this row to observe \
              isolation. The fixture saw {reached_fixture:?}; call A answered \
-             {answered_a:?}; call B answered {answered_b:?}"
+             {answered_a:?}; call B answered {answered_b:?}\ngateway log tail:\n{tail}"
         );
     }
     assert!(
@@ -232,8 +235,21 @@ async fn s03_message_http_isolates_by_stream() {
 /// an inference. ADR-014 row 14.
 #[tokio::test]
 async fn s03_progress_http_isolates_by_stream() {
+    s03_round(Handling::Concurrent).await;
+}
+
+/// MIK-8199 AC3: a backend that takes call B only once call A is answered
+/// fails this row before any token is judged, and the failure carries the
+/// fixture's view and the gateway's log.
+#[tokio::test]
+#[should_panic(expected = "both calls must be in flight")]
+async fn s03_fails_when_the_backend_serialises_the_calls() {
+    s03_round(Handling::Serialised).await;
+}
+
+async fn s03_round(handling: Handling) {
     // GIVEN
-    let (backend_url, received, _gate) = spawn_fixture_backend().await;
+    let (backend_url, received, _gate) = spawn_fixture_backend_handling(handling).await;
     let home = tempfile::tempdir().expect("temp home");
     let session = HttpSession::spawn(home.path(), &backend_url).await;
 
