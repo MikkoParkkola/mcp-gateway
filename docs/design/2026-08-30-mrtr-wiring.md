@@ -759,8 +759,10 @@ never writes a state-only round to the store. That is now the design, for three 
   there is nothing for the byte cap to bound.
 - The count only has to survive as long as the worker. A round that asks the client ends that
   worker, and the next worker starting at zero is the reset the design asked for. A restart
-  settles every interrupted row by the I3 table rather than resuming it, so no later process
-  could ever read a stored count.
+  never resumes a worker's loop: an interrupted row is settled by the I3 table, or, when it is a
+  managed backend's `working` row with an upstream handle, retained as `working` for that
+  backend's own read (`recovery_event`). Neither path continues the state-only loop, so no later
+  process could ever read a stored count.
 - Persisting it would add a record field and a write per state-only round to protect against a
   loop the ceiling already stops within one worker.
 
