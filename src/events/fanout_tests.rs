@@ -591,3 +591,68 @@ async fn a_task_source_admits_at_delivery_after_the_row_expired() {
     );
     source.authorize_row(&sub).await.expect("delivery admits");
 }
+
+/// What a reconcile left: each row's name, whether it is held, and whether
+/// its hold is stamped to lapse.
+fn reconciled_state(scan: CatalogueScan, webhooks_on: bool) -> Vec<(String, bool, bool)> {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig::default();
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let now = crate::clock::utc_now().expect("clock after 1970");
+    let tail = super::super::tail_policy(&config);
+    let caps = super::super::store::Caps {
+        per_principal: 10,
+        global: 10,
+    };
+    for name in ["webhook.gone.route.received", "task.settled"] {
+        hub.store
+            .admit(
+                subscription(name),
+                true,
+                caps,
+                chrono::Duration::zero(),
+                now,
+                tail,
+            )
+            .expect("io")
+            .expect("admitted");
+    }
+    if webhooks_on {
+        hub.set_webhook_registry(std::sync::Arc::new(parking_lot::RwLock::new(
+            crate::gateway::WebhookRegistry::new(crate::config::WebhookConfig::default()),
+        )));
+    }
+    assert!(hub.reconcile_catalogue(scan));
+    let mut state: Vec<_> = hub
+        .store
+        .subscriptions()
+        .into_iter()
+        .map(|s| {
+            let held = hub.store.held(&s.id).is_some();
+            (s.name, held, s.held_until.is_some())
+        })
+        .collect();
+    state.sort();
+    state
+}
+
+/// MIK-8050 (superseded by MIK-8057): a partial catalogue only names itself in
+/// the log. With webhooks on or off, a startup reconcile told `Partial`
+/// leaves the same rows, holds and hold stamps as one told `Complete`; since
+/// MIK-8057 neither withdraws a webhook type it does not see.
+#[test]
+fn a_partial_scan_leaves_what_a_complete_one_does() {
+    for webhooks_on in [false, true] {
+        let complete = reconciled_state(CatalogueScan::Complete, webhooks_on);
+        assert_eq!(
+            complete.len(),
+            2,
+            "premise: nothing deleted ({webhooks_on})"
+        );
+        assert_eq!(
+            reconciled_state(CatalogueScan::Partial, webhooks_on),
+            complete,
+            "Partial changed what the reconcile left (webhooks on: {webhooks_on})"
+        );
+    }
+}
