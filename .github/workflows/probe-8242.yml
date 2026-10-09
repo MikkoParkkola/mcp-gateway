@@ -21,7 +21,7 @@ jobs:
           set -euo pipefail
           sysctl net.inet.ip.portrange.first net.inet.ip.portrange.last net.inet.ip.portrange.hifirst net.inet.ip.portrange.hilast net.inet.ip.portrange.lowfirst net.inet.ip.portrange.lowlast
           echo "listeners in 20000-29999 before tests:"
-          lsof -nP -iTCP -sTCP:LISTEN | awk '{print $9}' | rg -o ':2[0-9]{4}$' || echo none
+          lsof -nP -iTCP -sTCP:LISTEN | awk '$9 ~ /:2[0-9][0-9][0-9][0-9]$/ {print $1, $2, $9}' || true
       - name: Build the bin test binary
         run: cargo test --all-features --bin mcp-gateway --no-run
       - name: Loop the doctor row alone (200)
@@ -31,7 +31,7 @@ jobs:
           fails=0
           for i in $(seq 1 200); do
             if ! cargo test -q --all-features --bin mcp-gateway -- --exact commands::doctor::tests::check_port_on_free_port_passes > /tmp/row.log 2>&1; then
-              fails=$((fails+1)); echo "run $i FAILED"; rg -n 'already in use|panicked' /tmp/row.log || true
+              fails=$((fails+1)); echo "run $i FAILED"; awk '/already in use|panicked/' /tmp/row.log || true
             fi
           done
           echo "alone: $fails/200 failed"
@@ -41,10 +41,10 @@ jobs:
           set -uo pipefail
           fails=0
           for i in $(seq 1 20); do
-            ( while sleep 0.2; do lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | rg ':2[0-9]{4} ' ; done ) > /tmp/holders.$i 2>&1 &
+            ( while sleep 0.2; do lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk '$9 ~ /:2[0-9][0-9][0-9][0-9]$/ {print $1, $2, $9}' ; done ) > /tmp/holders.$i 2>&1 &
             w=$!
             if ! cargo test -q --all-features --bin mcp-gateway > /tmp/bin.$i.log 2>&1; then
-              fails=$((fails+1)); echo "run $i FAILED"; rg -n ' FAILED$|already in use' /tmp/bin.$i.log | head -5 || true
+              fails=$((fails+1)); echo "run $i FAILED"; awk '/ FAILED$|already in use/' /tmp/bin.$i.log | head -5 || true
               echo "holders seen in 20000-29999 during run $i:"; sort -u /tmp/holders.$i | head -20
             fi
             kill $w 2>/dev/null || true
