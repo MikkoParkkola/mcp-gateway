@@ -168,7 +168,10 @@ pub struct OAuthConfig {
     #[serde(default)]
     pub callback_path: Option<String>,
     /// Seconds before expiry to proactively refresh the token (default: 300).
-    #[serde(default = "default_token_refresh_buffer")]
+    #[serde(
+        default = "default_token_refresh_buffer",
+        deserialize_with = "crate::duration_bound::secs"
+    )]
     pub token_refresh_buffer_secs: u64,
     /// Explicitly bless this gateway-held OAuth token for shared use across
     /// every caller on a multi-user gateway (ADR-008 INV-2).

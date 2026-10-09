@@ -39,6 +39,7 @@ use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use super::notification_sink::DeliveryHandle;
+use super::write_claim::WriteClaim;
 use super::{PendingRequestGuard, Transport, sanitize_url_for_diagnostics};
 use crate::protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId, Selectable,
@@ -184,6 +185,9 @@ impl Default for WebSocketSession {
     }
 }
 
+/// A frame for the writer, with the write claim of a request frame.
+type Outbound = (Message, Option<Arc<WriteClaim>>);
+
 // ── Inner (shared state) ──────────────────────────────────────────────────────
 
 /// Shared mutable state accessed by both the public API and the I/O task.
@@ -192,7 +196,7 @@ struct Inner {
     pending: dashmap::DashMap<String, oneshot::Sender<JsonRpcResponse>>,
     /// Sender side of the outbound channel. Taken on close, which ends the
     /// I/O task.
-    outbound_tx: Mutex<Option<Sender<Message>>>,
+    outbound_tx: Mutex<Option<Sender<Outbound>>>,
     /// Session metadata.
     session: Mutex<WebSocketSession>,
     /// Connected flag (set to true after MCP initialisation, false on close).
@@ -351,7 +355,7 @@ impl WebSocketTransport {
 
         debug!(url = %origin, "WebSocket handshake complete");
 
-        let (outbound_tx, outbound_rx) = channel::<Message>(OUTBOUND_QUEUE_DEPTH);
+        let (outbound_tx, outbound_rx) = channel::<Outbound>(OUTBOUND_QUEUE_DEPTH);
 
         // Store the sender so `send_message` can use it.
         *self.inner.outbound_tx.lock().await = Some(outbound_tx);
@@ -415,6 +419,11 @@ impl WebSocketTransport {
 
     /// Enqueue a message for the I/O task to write, applying backpressure.
     async fn send_message(&self, msg: Message) -> Result<()> {
+        self.enqueue((msg, None)).await
+    }
+
+    /// Enqueue a frame with its write claim, if it is a request's.
+    async fn enqueue(&self, out: Outbound) -> Result<()> {
         // Clone the sender out and release the slot before awaiting: a full
         // queue must not keep `close()` waiting on the slot's mutex.
         let tx = self
@@ -425,7 +434,7 @@ impl WebSocketTransport {
             .clone()
             .ok_or_else(|| Error::Transport("WebSocket not connected".to_string()))?;
 
-        tx.send(msg)
+        tx.send(out)
             .await
             .map_err(|_| Error::Transport("WebSocket outbound channel closed".to_string()))
     }
@@ -507,7 +516,7 @@ async fn run_io_loop(
     ws_stream: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
-    mut outbound_rx: Receiver<Message>,
+    mut outbound_rx: Receiver<Outbound>,
 ) {
     use futures::{SinkExt, StreamExt};
 
@@ -555,7 +564,12 @@ async fn run_io_loop(
 
             // Outbound frame from the application.
             maybe_out = outbound_rx.recv() => {
-                if let Some(msg) = maybe_out {
+                if let Some((msg, claim)) = maybe_out {
+                    // A request whose caller gave up while it was queued is
+                    // never written (`MIK-7642.PR.B`).
+                    if claim.is_some_and(|claim| !claim.claim_write()) {
+                        continue;
+                    }
                     if let Err(e) = ws_sink.send(msg).await {
                         error!(error = %e, "WebSocket write error");
                         inner.connected.store(false, Ordering::Relaxed);
@@ -605,15 +619,23 @@ impl Transport for WebSocketTransport {
         // so a request future dropped by an OUTER timeout or task abort does
         // not strand its `pending` entry.
         let _cleanup = PendingRequestGuard::new(&self.inner.pending, &id.to_string());
+        // Declared after `_cleanup`, so it drops first and still finds the
+        // entry of a request nobody answered.
+        let claim = WriteClaim::new();
+        let mut cancel = cancel::CancelUnanswered::arm(&self.inner, &request, &claim);
 
         let msg = McpFrame::Request(request).to_ws_message()?;
         // The timeout covers the enqueue too: a full queue behind a stalled
         // writer must not outlast the configured backend timeout.
         let exchange = async {
-            self.send_message(msg).await?;
+            self.enqueue((msg, Some(claim))).await?;
             Ok::<_, Error>(rx.await)
         };
-        match tokio::time::timeout(self.timeout, exchange).await {
+        let outcome = tokio::time::timeout(self.timeout, exchange).await;
+        // Finished, answered or failed: the transport's own timeout is not a
+        // cancel (design Q1).
+        cancel.disarm();
+        match outcome {
             Ok(Ok(Ok(response))) => Ok(response),
             Ok(Err(e)) => Err(e),
             Ok(Ok(Err(_))) => Err(Error::Transport(
@@ -682,6 +704,8 @@ fn connect_error(error: &tokio_tungstenite::tungstenite::Error) -> String {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+#[path = "websocket_cancel.rs"]
+mod cancel;
 #[path = "websocket_listen.rs"]
 mod listen;
 #[path = "websocket_progress.rs"]
@@ -691,6 +715,10 @@ use progress::{ProgressRegistration, route_progress};
 #[cfg(test)]
 #[path = "websocket_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "websocket_cancel_tests.rs"]
+mod cancel_tests;
 
 #[path = "websocket_pinned.rs"]
 mod pinned;

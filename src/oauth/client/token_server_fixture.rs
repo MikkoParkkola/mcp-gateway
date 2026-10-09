@@ -35,6 +35,8 @@ pub(crate) enum Answer {
     /// Keep the refresh token sent but leave it out of the answer, as RFC 6749
     /// section 6 allows.
     Omit,
+    /// Rotate, with an `expires_in` of `u64::MAX` (MIK-8207).
+    RotateWithHugeExpiry,
 }
 
 /// A rotating token server that records every refresh it is sent.
@@ -130,6 +132,9 @@ impl TokenServer {
             "token_type": "Bearer",
             "expires_in": 3600,
         });
+        if matches!(answer, Answer::RotateWithHugeExpiry) {
+            body["expires_in"] = serde_json::Value::from(u64::MAX);
+        }
         if !matches!(answer, Answer::Omit) {
             body["refresh_token"] =
                 serde_json::Value::from(if keeps { sent } else { format!("r{n}") });
@@ -162,7 +167,7 @@ impl TokenServer {
                     .body(axum::body::Body::from_stream(broken))
                     .unwrap();
             }
-            Answer::Rotate | Answer::Keep | Answer::Omit => {}
+            Answer::Rotate | Answer::Keep | Answer::Omit | Answer::RotateWithHugeExpiry => {}
         }
         Json(body).into_response()
     }
