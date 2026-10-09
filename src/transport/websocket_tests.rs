@@ -545,6 +545,7 @@ async fn ws_delivers_a_progress_notification_to_the_call_that_supplied_the_token
     let t = connected(&url).await;
 
     let (call, mut rx) = crate::transport::notification_sink::scope(
+        None,
         t.request("tools/call", Some(call_params("tok-a"))),
     );
     let response = tokio::time::timeout(WAIT, call)
@@ -593,9 +594,11 @@ async fn ws_does_not_deliver_another_calls_progress_token() {
     let t = connected(&url).await;
 
     let (a_call, mut a_rx) = crate::transport::notification_sink::scope(
+        None,
         t.request("tools/call", Some(call_params("tok-a"))),
     );
     let (b_call, mut b_rx) = crate::transport::notification_sink::scope(
+        None,
         t.request("tools/call", Some(call_params("tok-b"))),
     );
     let (a, b) = tokio::time::timeout(WAIT, async { tokio::join!(a_call, b_call) })
@@ -635,6 +638,7 @@ async fn ws_drops_a_notification_it_cannot_attribute_to_a_call() {
     let t = connected(&url).await;
 
     let (call, mut rx) = crate::transport::notification_sink::scope(
+        None,
         t.request("tools/call", Some(call_params("tok-a"))),
     );
     tokio::time::timeout(WAIT, call)
@@ -660,6 +664,7 @@ async fn ws_a_retired_progress_token_can_be_registered_again() {
     let t = connected(&url).await;
     for round in 0..2 {
         let (call, mut rx) = crate::transport::notification_sink::scope(
+            None,
             t.request("tools/call", Some(call_params("tok-a"))),
         );
         tokio::time::timeout(WAIT, call)
@@ -705,9 +710,10 @@ async fn ws_a_live_token_is_never_rerouted_to_a_second_call() {
     let t = connected(&url).await;
 
     let (a_call, mut a_rx) = crate::transport::notification_sink::scope(
+        None,
         t.request("tools/call", Some(call_params("tok-a"))),
     );
-    let (b_call, mut b_rx) = crate::transport::notification_sink::scope(async {
+    let (b_call, mut b_rx) = crate::transport::notification_sink::scope(None, async {
         // Let A register first, so B is the call that finds the token taken.
         tokio::task::yield_now().await;
         let mut params = call_params("tok-a");

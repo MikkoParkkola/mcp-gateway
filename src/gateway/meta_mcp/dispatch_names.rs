@@ -68,13 +68,13 @@ impl MetaMcp {
     /// (MIK-7407.RESPONSE.3). Asked after the meta-tool match only, never on
     /// the direct-name routes above it.
     #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
-    pub(super) fn marks_discovery(&self, tool_name: &str, ok: bool) -> bool {
+    pub(super) fn marks_discovery(&self, tool_name: &str, scanned: bool) -> bool {
         #[cfg(feature = "firewall")]
         let armed = self.firewall.is_some();
         #[cfg(not(feature = "firewall"))]
         let armed = false;
         armed
-            && ok
+            && scanned
             && matches!(
                 tool_name,
                 "gateway_search" | "gateway_list_tools" | "gateway_search_tools"

@@ -237,6 +237,11 @@ impl MetaMcp {
             if let Some(reservation) = idem_reservation.as_mut() {
                 reservation.release();
             }
+            // The text lists the backend's own parameter names, which no
+            // dispatch gate read: the content checks meet it before it is sealed.
+            if self.content_refuses_value((server, tool), session_id, &refusal) {
+                return Err(crate::Error::ResponseFirewallRefused);
+            }
             return Ok(Some(GuardedValue::sealed_by_guard(refusal)));
         }
         Ok(None)

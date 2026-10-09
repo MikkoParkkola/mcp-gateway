@@ -610,7 +610,8 @@ async fn r6_a_failed_write_under_fail_closed_withholds_the_result() {
             .await;
         // The read above wrote a delivery event too, and was withheld for it.
         // With the log healthy again, read what the settlement committed.
-        fx.log.set_append_failure_for_test(false);
+        // Wait out a first probe that overruns its bound (MIK-8171).
+        fx.log.heal_for_test().await;
         let fetched = get_task(&fx.state, "key-a", &id).await;
         std::assert_eq!(status_of(&fetched), "failed", "{path:?}: {fetched}");
         let body = fetched.to_string();

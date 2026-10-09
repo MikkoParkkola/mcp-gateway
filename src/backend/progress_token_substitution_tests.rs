@@ -14,7 +14,7 @@ fn token_of(params: &Value) -> Value {
 /// value the client sent.
 #[tokio::test]
 async fn inside_a_scope_the_callers_token_never_reaches_the_backend() {
-    let ((), _) = collect(async {
+    let ((), _) = collect(None, async {
         let outbound = substitute_progress_token(Some(json!({ "_meta": { "progressToken": 7 } })))
             .expect("params survive");
         let sent = token_of(&outbound);
@@ -41,7 +41,7 @@ async fn outside_a_scope_params_travel_unchanged() {
 /// The gateway never synthesises a token a client did not ask for.
 #[tokio::test]
 async fn a_call_with_no_token_gains_none() {
-    let ((), _) = collect(async {
+    let ((), _) = collect(None, async {
         let params = json!({ "_meta": { "traceparent": "00-a-b-01" } });
         assert_eq!(
             substitute_progress_token(Some(params.clone())),
@@ -58,7 +58,7 @@ async fn a_call_with_no_token_gains_none() {
 /// it into the same scope.
 #[tokio::test]
 async fn a_minted_token_round_trips_to_the_callers_value() {
-    let ((), drained) = collect(async {
+    let ((), drained) = collect(None, async {
         let outbound = substitute_progress_token(Some(json!({ "_meta": { "progressToken": 7 } })))
             .expect("params survive");
         let mut back = crate::protocol::JsonRpcNotification {

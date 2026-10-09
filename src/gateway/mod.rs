@@ -31,6 +31,8 @@ pub mod oauth;
 // auth layer that must run first.
 #[cfg(test)]
 pub(crate) mod chain_test_support;
+#[cfg(test)]
+pub(crate) mod egress_fixture;
 mod openwebui_adapter;
 pub(crate) mod outbound;
 pub mod proxy;

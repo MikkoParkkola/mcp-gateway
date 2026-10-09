@@ -97,7 +97,7 @@ pub(super) fn note_dispatch_failure(error: &Error) {
 /// Also returns, inside a MIN.2 read scope, the same reading as a read
 /// attribution: the caller notes it into the scope once the call's gates have
 /// passed, so only a delivered dispatch counts (design §4.4).
-pub(super) fn noted_response(
+pub(in crate::gateway::meta_mcp) fn noted_response(
     meta: &MetaMcp,
     result: Value,
 ) -> (
