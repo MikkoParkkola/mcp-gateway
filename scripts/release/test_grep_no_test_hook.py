@@ -27,7 +27,8 @@ SURFACE = ROOT / "docs" / "design" / "surface-4.0.md"
 def hooks_in_script() -> list[str]:
     text = SCRIPT.read_text()
     block = re.search(r"^HOOKS=\(\n(.*?)^\)", text, re.S | re.M)
-    assert block, "grep_no_test_hook.sh has no HOOKS=( ... ) list"
+    if not block:
+        raise AssertionError("grep_no_test_hook.sh has no HOOKS=( ... ) list")
     return [line.strip() for line in block.group(1).splitlines() if line.strip()]
 
 
@@ -131,19 +132,19 @@ class Wiring(unittest.TestCase):
         # A live call: not commented out, its failure not masked by `||` or
         # by `continue-on-error` on its step. Threat model: forgetting, not
         # intent; a step-level `if:` is not judged (the per-PR row has one).
-        expected = {
-            "release.yml": f'{CALL} "${{{{ matrix.artifact }}}}${{{{ matrix.suffix }}}}"',
-            "docker.yml": f"{CALL} target/release/mcp-gateway",
-            "docker.yml ": f"{CALL} image-mcp-gateway",
-        }
-        for label, call in expected.items():
-            with self.subTest(site=label.strip()):
+        expected = [
+            ("release.yml", f'{CALL} "${{{{ matrix.artifact }}}}${{{{ matrix.suffix }}}}"'),
+            ("docker.yml", f"{CALL} target/release/mcp-gateway"),
+            ("docker.yml", f"{CALL} image-mcp-gateway"),
+        ]
+        for workflow, call in expected:
+            with self.subTest(site=f"{workflow}: {call}"):
                 found = [
                     (line, step)
-                    for line, step in live_calls(WORKFLOWS / label.strip())
+                    for line, step in live_calls(WORKFLOWS / workflow)
                     if call in line
                 ]
-                self.assertEqual(len(found), 1, f"{label.strip()}: no live `{call}`")
+                self.assertEqual(len(found), 1, f"{workflow}: no live `{call}`")
                 line, step = found[0]
                 self.assertNotIn("||", line.split(CALL, 1)[1], "the call's failure is masked")
                 self.assertNotRegex(step, r"continue-on-error:\s*true", "the step's failure is masked")
