@@ -77,7 +77,10 @@ async fn run_until(client: OAuthClient, what: &str, reached: impl Fn() -> bool) 
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     };
+    // Biased, loop first: a loop that has returned is seen even when the
+    // awaited event is ready in the same poll.
     tokio::select! {
+        biased;
         () = OAuthClient::refresh_loop(
             Arc::new(tokio::sync::Mutex::new(client)),
             BACKEND.to_string(),
@@ -101,12 +104,17 @@ async fn the_refresh_task_keeps_running_after_a_renewal_or_an_exhausted_one() {
     let mut renewing = client(dir.path(), &server);
     renewing.token_refresh_buffer_secs = 300;
     hold(&renewing, &token("a1", Some("r1"), true));
-    // Renewed, then three more polls (30 ms or more) for the 10 ms loop to
-    // ask again if the fresh token were not taken. Load only gives it fewer
-    // turns: a weaker check, never a false failure.
+    // Reads the shared credential the renewing client writes, from the same
+    // store: the renewal is complete only once the fresh token is stored, not
+    // when its request reaches the server.
+    let observer = client(dir.path(), &server);
+    // Renewed and stored, then three more polls (30 ms or more) for the 10 ms
+    // loop to ask again if the fresh token were not taken. Load only gives it
+    // fewer turns: a weaker check, never a false failure.
     let polls_after = std::sync::atomic::AtomicUsize::new(0);
-    run_until(renewing, "a renewal and three more polls", || {
-        server.requests() >= 1 && polls_after.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 3
+    run_until(renewing, "a stored renewal and three more polls", || {
+        stored(&observer).is_some_and(|t| t.access_token != "a1")
+            && polls_after.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 3
     })
     .await;
     assert_eq!(
