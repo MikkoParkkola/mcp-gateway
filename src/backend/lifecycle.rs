@@ -567,13 +567,18 @@ impl Backend {
         // is no third case, which is what the previous check-then-publish could
         // not say.
         // A deferred era is installed under the cache's lock taken BEFORE the
-        // publish, so no reader sees the new transport with the old verdict.
+        // publish, inside the publish's own step, so no reader sees the new
+        // transport with the old verdict.
         let install = match deferred {
-            Some(_) => Some(entry.era.lock_for_install().await),
+            Some(probe) => Some((entry.era.lock_for_install().await, probe)),
             None => None,
         };
-        if let Err(refusal) = self.publish(entry, (transport, listen), built_under) {
-            drop(install);
+        let on_publish = move || {
+            if let Some((install, probe)) = install {
+                install.install(probe);
+            }
+        };
+        if let Err(refusal) = self.publish(entry, (transport, listen), built_under, on_publish) {
             warn!(
                 backend = %self.name,
                 %refusal,
@@ -585,9 +590,6 @@ impl Backend {
                 return Err(Error::BackendNotFound(self.name.clone()));
             }
             return Err(Error::BackendUnavailable(self.name.clone()));
-        }
-        if let (Some(install), Some(probe)) = (install, deferred) {
-            install.install(probe);
         }
         #[cfg(test)]
         hold_at(&self.publish_gate).await;

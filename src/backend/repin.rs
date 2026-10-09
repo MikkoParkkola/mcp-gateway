@@ -20,11 +20,17 @@ impl Backend {
     ///
     /// The listen handle goes in first, so a reader that sees the transport
     /// always sees its event stream (MIK-7897 LIFE.3a).
+    ///
+    /// `on_publish` runs after both checks pass and just before the slot write,
+    /// in the same synchronous step: a build-first start installs its
+    /// candidate's era there, so the new transport is never reachable with the
+    /// old verdict, and a refused publish installs nothing (MIK-8218).
     pub(super) fn publish(
         &self,
         entry: &PooledEntry,
         (transport, listen): (&Arc<dyn Transport>, Option<super::listen::ListenHandle>),
         built_under: crate::security::ssrf::DestinationPolicy,
+        on_publish: impl FnOnce(),
     ) -> std::result::Result<(), &'static str> {
         let cleanups = self.replaced_transport_cleanups.lock();
         if cleanups.stopping {
@@ -33,6 +39,7 @@ impl Backend {
         if self.destination_bound() && self.destination() != built_under {
             return Err("the destination policy changed while it was starting");
         }
+        on_publish();
         *entry.listen.write() = listen;
         *entry.transport.write() = Some(Arc::clone(transport));
         #[cfg(test)]
