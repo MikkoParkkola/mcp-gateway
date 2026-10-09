@@ -256,7 +256,7 @@ async fn a_notification_arrives_before_the_response_frame() {
         }
     });
 
-    let (scoped, mut rx) = notification_sink::scope(decode_sse_exchange(body));
+    let (scoped, mut rx) = notification_sink::scope(None, decode_sse_exchange(body));
     tokio::pin!(scoped);
 
     let early = tokio::time::timeout(std::time::Duration::from_secs(5), async {

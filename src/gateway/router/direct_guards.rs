@@ -8,6 +8,7 @@ use super::AppState;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::invoke::dispatch_guards::{Admission, BackendCall, DirectOutcome};
+use crate::gateway::meta_mcp::invoke::egress::{ContentChecks, EgressOutcome};
 use crate::gateway::meta_mcp::signing::SigningScope;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::{Error, Result};
@@ -101,7 +102,7 @@ impl DirectRouteGuards {
     /// the slot back unless the answer that leaves still carries it.
     pub(crate) async fn after_dispatch(
         state: &AppState,
-        ((call, challenge), (who, sent)): ((&BackendCall<'_>, Option<&str>), Seal<'_>),
+        ((call, challenge), (who, (sent, instance))): ((&BackendCall<'_>, Option<&str>), Seal<'_>),
         (client, sealed): (Option<&AuthenticatedClient>, &mut Option<(String, String)>),
         admission: &Admission,
         forward: Result<JsonRpcResponse>,
@@ -123,7 +124,7 @@ impl DirectRouteGuards {
         // the client receives.
         if let Some(result) = response.result.as_mut() {
             match meta
-                .seal_direct_interim(who, (call.server, sent), result)
+                .seal_direct_interim(who, (call.server, Some(instance), sent), result)
                 .await
             {
                 Ok(minted) => *sealed = minted,
@@ -156,9 +157,16 @@ impl DirectRouteGuards {
                 Err(e) => response = refusal(response.id.clone(), &e),
             }
         }
-        if response_blocked(state, call, client, &mut response) {
-            response = refusal(response.id.clone(), &Error::ResponseFirewallRefused);
-        } else if warned && let Some(result) = response.result.as_ref() {
+        let outcome = scan_direct_egress(
+            state,
+            (call, ContentChecks::Dispatched),
+            client,
+            &mut response,
+        );
+        if outcome != EgressOutcome::Refused
+            && warned
+            && let Some(result) = response.result.as_ref()
+        {
             // The warnings are the gateway's, as the scan left them (a
             // redaction stays bound to the text the caller gets): noted, so
             // the receipt leaves them out and a replay restores the note.
@@ -186,7 +194,8 @@ pub(crate) struct AdmittedNonce {
 }
 
 /// What an interim answer's continuation is bound to (MIK-8078): the caller's
-/// verified identity and the params as the client sent them.
+/// verified identity, the params as the client sent them and the instance of
+/// the backend object the call went to (MIK-8168).
 pub(crate) type Seal<'a> = (
     (
         Option<&'a crate::key_server::oidc::VerifiedIdentity>,
@@ -196,61 +205,59 @@ pub(crate) type Seal<'a> = (
         ),
         Option<&'a crate::gateway::auth::AuthenticatedClient>,
     ),
-    Option<&'a serde_json::Value>,
+    (Option<&'a serde_json::Value>, u64),
 );
 
 /// The JSON-RPC error a direct-route refusal answers with (HTTP 200). A
 /// firewall refusal carries the delivery-refusal projection, as on meta.
+///
+/// Every caller passes a gate's own error, raised before dispatch or by a
+/// post-dispatch gate, never a backend's: the frame carries gateway text and
+/// is born marked, so no later exit scans it (and no content check records
+/// data classes on a refusal).
 pub(super) fn refusal(id: Option<RequestId>, error: &Error) -> JsonRpcResponse {
-    match error {
+    let mut frame = match error {
         Error::ResponseFirewallRefused => {
             JsonRpcResponse::delivery_refusal_error(id, error.to_rpc_code(), &error.to_string())
         }
         Error::JsonRpc { code, message, .. } => JsonRpcResponse::error(id, *code, message.clone()),
         _ => JsonRpcResponse::error(id, error.to_rpc_code(), error.to_string()),
-    }
+    };
+    frame.egress_scanned = true;
+    frame
 }
 
-/// Response firewall scan of a direct `tools/call` result (redaction in
-/// place). Returns `true` when the verdict blocks delivery.
-#[cfg(feature = "firewall")]
-fn response_blocked(
+/// The egress scan (design `2026-10-08-one-egress-scan.md`) on a direct-route
+/// frame: `call`'s backend and tool (the method, for a non-tool answer) are
+/// the policy target, `content` says whether dispatch already ran the content
+/// checks, and the scan marks the frame so a later exit skips it.
+pub(super) fn scan_direct_egress(
     state: &AppState,
-    call: &BackendCall<'_>,
+    (call, content): (&BackendCall<'_>, ContentChecks),
     client: Option<&AuthenticatedClient>,
     response: &mut JsonRpcResponse,
-) -> bool {
-    use crate::security::firewall::FirewallAction;
-    // The route refuses a `tools/call` without `params.name` before dispatch,
-    // so `call.tool` is the named tool on every path that reaches here.
-    let (backend_name, tool_name) = (call.server, call.tool);
-    let Some(ref fw) = state.firewall else {
-        return false;
+) -> EgressOutcome {
+    use crate::gateway::meta_mcp::invoke::egress::Egress;
+    use crate::security::response_policy::{ResponseCorrelation, ResponsePolicyTarget};
+    let session_id = format!("direct:{}", call.server);
+    let targets = [ResponsePolicyTarget {
+        server: call.server.to_owned(),
+        tool: call.tool.to_owned(),
+    }];
+    let correlation = ResponseCorrelation {
+        session_id: &session_id,
+        caller: client.map_or("anonymous", |c| c.name.as_str()),
+        external_server: call.server,
+        external_tool: call.tool,
+        subject: None,
     };
-    let Some(ref mut result) = response.result else {
-        return false;
+    let at = Egress {
+        content,
+        targets: &targets,
+        correlation: &correlation,
+        api_key_name: client.map(|c| c.name.as_str()),
+        // The router's own instance judges the direct route (MIK-7669).
+        firewall: state.firewall.as_deref(),
     };
-    let caller_name = client.map_or("anonymous", |c| c.name.as_str());
-    let session_id = format!("direct:{backend_name}");
-    let verdict = fw.check_response(&session_id, backend_name, tool_name, result, caller_name);
-    if verdict.action == FirewallAction::Warn {
-        let findings = verdict.findings.len();
-        tracing::warn!(
-            backend = %backend_name,
-            tool = %tool_name,
-            findings,
-            "Firewall: direct backend response warning"
-        );
-    }
-    !verdict.allowed
-}
-
-#[cfg(not(feature = "firewall"))]
-fn response_blocked(
-    _state: &AppState,
-    _call: &BackendCall<'_>,
-    _client: Option<&AuthenticatedClient>,
-    _response: &mut JsonRpcResponse,
-) -> bool {
-    false
+    state.meta_mcp.scan_egress(response, &at)
 }

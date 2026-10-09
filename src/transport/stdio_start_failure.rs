@@ -142,7 +142,14 @@ impl StdioTransport {
         let Some(child) = guard.as_mut() else {
             return;
         };
-        if let Ok(Ok(status)) = tokio::time::timeout(EXIT_DRAIN_GRACE, child.wait()).await {
+        // Exit observed without reaping, then the group ends before the reap
+        // (MIK-8080). After `close`, the status its finish recorded.
+        if child.status().is_none()
+            && !super::child_tree::wait_exited(child, EXIT_DRAIN_GRACE).await
+        {
+            return;
+        }
+        if let Some(status) = child.finish().await {
             self.failure.record_exit(Some(status));
         }
     }

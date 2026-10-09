@@ -470,6 +470,12 @@ impl BackendRegistry {
         removed.is_some()
     }
 
+    /// Whether `stop_all` has begun: the latch it sets before stopping anything.
+    #[cfg(test)]
+    pub(crate) fn is_stopping(&self) -> bool {
+        *self.stopping.lock()
+    }
+
     /// Stop all backends, concurrently.
     ///
     /// Concurrent rather than sequential because `Backend::stop` is bounded but

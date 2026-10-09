@@ -47,7 +47,6 @@ fn firewall_delivery_keeps_a_minted_continuation_and_refuses_a_foreign_one() {
                 }),
             ),
             &targets(),
-            ResponseMutationPolicy::PreserveInputRequired,
         )
     };
 

@@ -50,8 +50,6 @@ mod meta_refusal_audit;
 pub(crate) use identity::grant_subject_from_verified_identity;
 pub(crate) mod helpers;
 mod origin_guard;
-#[cfg(feature = "firewall")]
-mod response_pass;
 mod watch_poll;
 pub(crate) use watch_poll::GatewayWatchHost;
 
@@ -75,6 +73,8 @@ mod body_limit_tests;
 mod callback_admin_denial_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod collusion_direct_tests;
+#[cfg(test)]
+mod continuation_instance_tests;
 #[cfg(test)]
 mod direct_audit_tests;
 #[cfg(test)]
@@ -106,6 +106,8 @@ mod dispatch_parity_tests;
 /// E5: dashboard session expiry, logout and re-entry (MIK-7570.SESSION.1).
 #[cfg(all(test, feature = "webui"))]
 mod e5_dashboard_session_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod egress_matrix_tests;
 #[cfg(test)]
 mod f13_fetch_on_miss_tests;
 #[cfg(test)]

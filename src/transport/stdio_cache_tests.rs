@@ -107,13 +107,15 @@ fn names_that_sanitize_alike_get_distinct_cache_dirs() {
 // #2258
 #[test]
 fn each_runner_gets_the_variable_it_reads() {
-    for (cmd, var) in [
-        ("npx -y pkg", "npm_config_cache"),
-        ("bunx pkg", "BUN_INSTALL_CACHE_DIR"),
-        ("/opt/bin/yarn dlx pkg", "YARN_CACHE_FOLDER"),
+    // Yarn also gets Berry's global cache turned off, or Berry ignores the
+    // folder (MIK-8147 D3b).
+    for (cmd, var, count) in [
+        ("npx -y pkg", "npm_config_cache", 1),
+        ("bunx pkg", "BUN_INSTALL_CACHE_DIR", 1),
+        ("/opt/bin/yarn dlx pkg", "YARN_CACHE_FOLDER", 2),
     ] {
         let out = isolated_package_manager_env("thing", cmd, HashMap::new());
-        assert_eq!(out.len(), 1, "{cmd}: {out:?}");
+        assert_eq!(out.len(), count, "{cmd}: {out:?}");
         assert!(out[var].contains("pkg-cache"), "{cmd} lacked {var}");
     }
     let out = isolated_package_manager_env("thing", "pnpm dlx pkg", HashMap::new());
@@ -179,9 +181,16 @@ fn an_operator_cache_in_either_spelling_is_not_the_gateways() {
 fn only_an_absolute_cache_directory_is_repairable() {
     // Relative, it resolves against the gateway's working directory when
     // removed and against the child's `cwd` when used: two different trees.
-    assert_eq!(cache::absolute("pkg-cache/b".into()), None);
+    assert_eq!(cache::usable("pkg-cache/b".into()), None);
     let absolute = std::env::temp_dir().join("pkg-cache").join("b");
-    assert_eq!(cache::absolute(absolute.clone()), Some(absolute));
+    assert_eq!(
+        cache::usable(absolute.clone()).as_deref(),
+        absolute.to_str()
+    );
+    // npm expands `${VAR}` in a config value: such a path names another tree.
+    assert_eq!(cache::usable(absolute.join("${HOME}")), None);
+    // `..` is text to npm and a symlink walk to the filesystem.
+    assert_eq!(cache::usable(absolute.join("..").join("b")), None);
 }
 
 #[test]

@@ -7,6 +7,7 @@
 //! and it is security-relevant: attestation precedes the propagation mint, so
 //! an unattested call mints nothing and writes no mint audit row.
 
+use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use axum::http::StatusCode;
 
 use super::super::AppState;
@@ -149,7 +150,7 @@ pub(super) fn preflight(
             Ok(minted) => challenge = minted,
             Err(e) => {
                 return Err(build_http_response(
-                    &refusal(Some(id.clone()), &e),
+                    &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
                     StatusCode::OK,
                 ));
             }

@@ -85,6 +85,7 @@ mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
 pub(crate) mod audit;
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
+pub(crate) mod egress;
 mod r2_check;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
 mod bridge_settle;
@@ -233,6 +234,7 @@ impl MetaMcp {
         // so per-user results cache in ISOLATION rather than leaking across users
         // (IDP.3/8) — reused verbatim at dispatch so there is no re-mint or drift.
         let backend = self.backends.get(server);
+        let target = (server, backend.as_ref().map(|backend| backend.instance()));
         let caller_credential = if let Some(idp_cfg) = backend
             .as_ref()
             .and_then(|b| b.identity_propagation_config().cloned())
@@ -434,7 +436,7 @@ impl MetaMcp {
             caller.retry,
         );
         let outbound_retry =
-            match redeem_retry(&self.continuation, source, server, tool, &arguments).await {
+            match redeem_retry(&self.continuation, source, target, tool, &arguments).await {
                 Ok(retry) => retry,
                 Err(error) => {
                     // Refused before the backend was reached, so it has not
@@ -619,7 +621,7 @@ impl MetaMcp {
             let Some((envelope, hold_key)) = mint_continuation(
                 &self.continuation,
                 caller.principal_source(dispatch_binding.as_deref()),
-                server,
+                target,
                 tool,
                 &arguments,
                 interim.request_state,
