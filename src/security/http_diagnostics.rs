@@ -173,15 +173,16 @@ pub(crate) fn status_refusal(
 }
 
 /// A11-b: the backend refused the presented credential. Read from the typed
-/// status only, never from body text (ADR-008, `personal_accounts/refusal.rs`).
+/// status only, never from body text, or from the CLI executor's own refusal
+/// (`personal_accounts/refusal.rs`; MIK-7926.FIX.4).
 pub(crate) fn is_upstream_unauthorized(error: &Error) -> bool {
     matches!(error, Error::Http(e) if e.status() == Some(StatusCode::UNAUTHORIZED))
-        || matches!(error, Error::JsonRpc { code, .. } if *code == CLI_UNAUTHORIZED)
+        || matches!(error, Error::CliCredentialRefused { .. })
 }
 
-/// The code a CLI capability's refusal of its credential is reported with
-/// (gws exits 2 with a JSON error whose code is 401), so the managed-account
-/// refresh runs for CLI calls exactly as for a REST 401 (MIK-7782).
+/// The code a CLI capability's refusal of its credential
+/// ([`Error::CliCredentialRefused`]) is reported to the caller with (gws exits
+/// 2 with a JSON error whose code is 401, MIK-7782).
 pub(crate) const CLI_UNAUTHORIZED: i32 = 401;
 
 /// OAuth token-endpoint / registration failure. Status stays; body does not.
@@ -190,10 +191,16 @@ pub fn safe_oauth_http_error(context: &str, status: StatusCode, body: &str) -> S
     format!("{context}: {}", safe_status_text(status, body))
 }
 
-/// Whether a non-2xx body says the MCP session expired (JSON-RPC `-32015` or
-/// "session not found"), which the transport answers by re-initializing.
+/// Whether a non-2xx body says the MCP session expired (JSON-RPC `-32015`,
+/// "session not found" or "session expired"), which the transport answers by
+/// re-initializing. The phrases are the ones the transport's classifier reads
+/// from a parsed refusal (`transport::http::is_session_expired_error`), so a
+/// peer's expiry is recovered whether or not its body parsed (MIK-7717).
 fn carries_session_expiry(body: &str) -> bool {
-    body.contains("-32015") || body.to_ascii_lowercase().contains("session not found")
+    let lower = body.to_ascii_lowercase();
+    body.contains("-32015")
+        || lower.contains("session not found")
+        || lower.contains(SESSION_EXPIRED_MARKER)
 }
 
 fn safe_status_text(status: StatusCode, body: &str) -> String {
