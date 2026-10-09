@@ -166,6 +166,17 @@ fn a_text_write_that_would_not_load_is_refused() {
     assert_eq!(names(&path), vec!["a".to_string()]);
 }
 
+/// A path that is not a regular file is refused before it is read: a FIFO
+/// would block the read, a device would never end it.
+#[test]
+fn a_text_edit_of_a_non_file_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    std::fs::create_dir(&path).expect("dir in the way");
+    let error = edit_config_text(&path, |_| Ok(None)).expect_err("refused");
+    assert!(error.contains("not a regular file"), "{error}");
+}
+
 /// MIK-8051 AC4: a removal names the comment lines inside the removed entry,
 /// from the one shared helper.
 #[test]
