@@ -1,0 +1,13 @@
+diff --git a/src/events/reconcile.rs b/src/events/reconcile.rs
+index 721e8397e..ca2c1fd58 100644
+--- a/src/events/reconcile.rs
++++ b/src/events/reconcile.rs
+@@ -85,7 +85,7 @@ impl EventsHub {
+         };
+         // A row that expired, whose hold lapsed, or that any path removed
+         // since the last tick no longer holds its key.
+-        if lapsed || removed {
++        if (lapsed || removed) && false {
+             self.reconcile_stops().await;
+         }
+     }

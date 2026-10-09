@@ -1,0 +1,12 @@
+diff --git a/src/events/upstream_listener.rs b/src/events/upstream_listener.rs
+index 7290fdcdd..4436b918c 100644
+--- a/src/events/upstream_listener.rs
++++ b/src/events/upstream_listener.rs
+@@ -78,7 +78,6 @@ impl Shared {
+         if !Arc::ptr_eq(&slot, &fresh) {
+             // The snapshot was read from the instance this ledger replaces:
+             // cleared first, so no reader sees the new ledger with it.
+-            self.snapshot.lock().clear();
+             fresh.lock().want_all(need.filter().1);
+             *slot = fresh;
+         }

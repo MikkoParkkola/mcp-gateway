@@ -1,0 +1,12 @@
+diff --git a/src/events/reconcile.rs b/src/events/reconcile.rs
+index 721e8397e..3e95b7d8d 100644
+--- a/src/events/reconcile.rs
++++ b/src/events/reconcile.rs
+@@ -42,7 +42,6 @@ impl EventsHub {
+         }
+         // A key started while the backend could not be listened to is parked
+         // in the listeners; wake it now, not at the revive sweep.
+-        source.backend_changed(backend);
+         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+             return;
+         };

@@ -1,0 +1,14 @@
+diff --git a/src/events/upstream_listener.rs b/src/events/upstream_listener.rs
+index 7290fdcdd..4dad643e9 100644
+--- a/src/events/upstream_listener.rs
++++ b/src/events/upstream_listener.rs
+@@ -413,7 +413,8 @@ impl UpstreamListeners {
+                         .as_ref()
+                         .is_none_or(|b| !std::ptr::eq(made_for.as_ptr(), Arc::as_ptr(b)))
+             });
+-        (!replaced).then_some(entry)
++        let _ = replaced;
++        Some(entry)
+     }
+ 
+     /// Whether a registered backend called `name` exists.

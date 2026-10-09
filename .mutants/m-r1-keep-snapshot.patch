@@ -1,0 +1,12 @@
+diff --git a/src/events/upstream_listener.rs b/src/events/upstream_listener.rs
+index 7290fdcdd..8c899914b 100644
+--- a/src/events/upstream_listener.rs
++++ b/src/events/upstream_listener.rs
+@@ -371,7 +371,6 @@ impl UpstreamListeners {
+         // With no URI watched the snapshot is no longer read, so it stops
+         // answering for a new URI (design r3 L4, MIK-7897 LIFE.3b).
+         if no_uris {
+-            shared.snapshot.lock().clear();
+         }
+         if shared.is_idle() {
+             shared.stop.cancel();
