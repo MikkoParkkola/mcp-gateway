@@ -85,8 +85,6 @@ mod direct_continuation_tests;
 mod direct_guards_fixture;
 #[cfg(all(test, feature = "a2a", feature = "firewall"))]
 mod direct_guards_fixture_a2a;
-#[cfg(all(test, feature = "a2a", feature = "firewall"))]
-mod errscan_a2a_tests;
 #[cfg(test)]
 mod direct_guards_tests;
 #[cfg(test)]
@@ -114,6 +112,8 @@ mod dispatch_parity_tests;
 mod e5_dashboard_session_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod egress_matrix_tests;
+#[cfg(all(test, feature = "a2a", feature = "firewall"))]
+mod errscan_a2a_tests;
 #[cfg(test)]
 mod f13_fetch_on_miss_tests;
 #[cfg(test)]
