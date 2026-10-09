@@ -132,7 +132,7 @@ impl ResolvedAuthConfig {
         let presented = <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes());
         self.api_keys.iter().any(|k| {
             bool::from(presented.as_slice().ct_eq(k.digest.as_slice()))
-                && crate::config::api_key_expired(k.expires_at, chrono::Utc::now())
+                && crate::config::api_key_expired_now(k.expires_at)
         })
     }
 
@@ -187,7 +187,7 @@ impl ResolvedAuthConfig {
             hit.or(eq.then_some(k))
         })?;
         // After the match: an expired key is never an authenticated caller.
-        if crate::config::api_key_expired(key.expires_at, chrono::Utc::now()) {
+        if crate::config::api_key_expired_now(key.expires_at) {
             warn!(target: AUTH_TARGET, key = %key.name, "expired API key");
             return None;
         }
@@ -232,8 +232,7 @@ impl ResolvedAuthConfig {
             .api_keys
             .iter()
             .find(|k| k.name == name && hex::encode(&k.digest[..6]) == principal)?;
-        (!crate::config::api_key_expired(key.expires_at, chrono::Utc::now()))
-            .then(|| Self::client_of(key))
+        (!crate::config::api_key_expired_now(key.expires_at)).then(|| Self::client_of(key))
     }
 
     /// Check rate limit for a client. Returns true if allowed, false if rate limited.

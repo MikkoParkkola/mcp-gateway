@@ -102,7 +102,10 @@ impl DirectRouteGuards {
     /// the slot back unless the answer that leaves still carries it.
     pub(crate) async fn after_dispatch(
         state: &AppState,
-        ((call, challenge), (who, (sent, instance))): ((&BackendCall<'_>, Option<&str>), Seal<'_>),
+        ((call, challenge), (who, (sent, instance, declared))): (
+            (&BackendCall<'_>, Option<&str>),
+            Seal<'_>,
+        ),
         (client, sealed): (Option<&AuthenticatedClient>, &mut Option<(String, String)>),
         admission: &Admission,
         forward: Result<JsonRpcResponse>,
@@ -124,11 +127,24 @@ impl DirectRouteGuards {
         // the client receives.
         if let Some(result) = response.result.as_mut() {
             match meta
-                .seal_direct_interim(who, (call.server, Some(instance), sent), result)
+                .seal_direct_interim(who, (call.server, Some(instance), sent, declared), result)
                 .await
             {
                 Ok(minted) => *sealed = minted,
-                Err(e) => return Ok(refusal(response.id.clone(), &e)),
+                // The meta route's serializer: a capability refusal keeps the
+                // `data` that names what to declare (MIK-8089). The upstream id
+                // is replaced by the caller's own on delivery, so an id-less
+                // backend answer still gets the data-keeping serializer.
+                Err(e) => {
+                    let id = response.id.clone();
+                    let placeholder = crate::protocol::RequestId::Number(0);
+                    let mut refused = crate::gateway::meta_mcp::error_response_preserving_status(
+                        id.clone().unwrap_or(placeholder),
+                        &e,
+                    );
+                    refused.id = id;
+                    return Ok(refused);
+                }
             }
         }
         let mut warned = false;
@@ -195,7 +211,8 @@ pub(crate) struct AdmittedNonce {
 
 /// What an interim answer's continuation is bound to (MIK-8078): the caller's
 /// verified identity, the params as the client sent them and the instance of
-/// the backend object the call went to (MIK-8168).
+/// the backend object the call went to (MIK-8168); and what the client
+/// declared it can be asked (MIK-8089).
 pub(crate) type Seal<'a> = (
     (
         Option<&'a crate::key_server::oidc::VerifiedIdentity>,
@@ -205,7 +222,11 @@ pub(crate) type Seal<'a> = (
         ),
         Option<&'a crate::gateway::auth::AuthenticatedClient>,
     ),
-    (Option<&'a serde_json::Value>, u64),
+    (
+        Option<&'a serde_json::Value>,
+        u64,
+        crate::protocol::meta::Declared,
+    ),
 );
 
 /// The JSON-RPC error a direct-route refusal answers with (HTTP 200). A

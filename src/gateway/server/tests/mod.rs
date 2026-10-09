@@ -12,8 +12,9 @@
 //! test module further down that file.
 
 mod admission_allocations;
-mod alloc_meter;
+pub(crate) mod alloc_meter;
 mod input_key_allocations;
+mod invoke_argument_copies;
 #[cfg(feature = "firewall")]
 mod judge_allocations;
 mod signing_nonce_allocations;

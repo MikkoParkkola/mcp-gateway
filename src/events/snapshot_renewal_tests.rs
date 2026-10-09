@@ -15,6 +15,12 @@ use super::*;
 use crate::backend::Backend;
 use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
 
+/// Now, through the gateway's one clock (MIK-8202); the test host's clock
+/// reads after 1970.
+fn clock_now() -> chrono::DateTime<chrono::Utc> {
+    crate::clock::utc_now().expect("the test host's clock reads after 1970")
+}
+
 /// The first `resources/list` waits at `held` until `release`.
 #[derive(Default)]
 struct Gate {
@@ -65,7 +71,7 @@ fn subscribe(hub: &EventsHub) {
         "v": 1, "id": "sub_x", "principal": "p", "url": "https://h/x",
         "name": "backend.b.resource_updated", "arguments": {"uri": "file:///x"},
         "secret": "whsec_x", "previous_secret": null, "previous_until": null,
-        "granted_at": chrono::Utc::now(), "expires_at": null, "active": true,
+        "granted_at": clock_now(), "expires_at": null, "active": true,
         "failed_since": null, "last_delivery_at": null, "last_error": null,
         "credential_kind": serde_json::to_value(crate::security::audit::CredentialKind::None)
             .expect("kind"),
@@ -80,7 +86,7 @@ fn subscribe(hub: &EventsHub) {
                 global: 10,
             },
             chrono::Duration::zero(),
-            chrono::Utc::now(),
+            clock_now(),
             crate::events::tail_policy(&config),
         )
         .expect("io")
@@ -146,7 +152,7 @@ async fn t34_a_read_begun_before_a_renewal_does_not_revoke_it() {
         scope: crate::events::types::Visibility::Backend("b".into()),
         owner: None,
         upstream_id: "n1".into(),
-        occurred_at: chrono::Utc::now(),
+        occurred_at: clock_now(),
         data: json!({"uri": "file:///x"}),
         lifecycle_key: None,
     };
@@ -169,7 +175,7 @@ async fn t34_a_read_begun_before_a_renewal_does_not_revoke_it() {
         "the renewal survives a delivery judged against the older read"
     );
     assert!(
-        hub.store.has_due("sub_x", chrono::Utc::now()),
+        hub.store.has_due("sub_x", clock_now()),
         "the renewal keeps its queued event after a delivery judged against the older read"
     );
 }
@@ -256,7 +262,7 @@ async fn t34_a_cached_list_from_before_a_renewal_does_not_revoke_it() {
         scope: crate::events::types::Visibility::Backend("b".into()),
         owner: None,
         upstream_id: "n2".into(),
-        occurred_at: chrono::Utc::now(),
+        occurred_at: clock_now(),
         data: json!({"uri": "file:///x"}),
         lifecycle_key: None,
     };
@@ -279,7 +285,7 @@ async fn t34_a_cached_list_from_before_a_renewal_does_not_revoke_it() {
         "the renewal survives a delivery judged against the stale cache"
     );
     assert!(
-        hub.store.has_due("sub_x", chrono::Utc::now()),
+        hub.store.has_due("sub_x", clock_now()),
         "the renewal keeps its queued event after a delivery judged against the stale cache"
     );
 }

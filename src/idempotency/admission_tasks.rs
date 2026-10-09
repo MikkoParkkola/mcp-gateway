@@ -276,7 +276,9 @@ impl ExecutionAdmission {
         }
         let principal_digest = canonical_json_sha256(&json!([PRINCIPAL_TAG, request.principal]));
         let (identity, mut candidate) = request.prepare()?;
-        let now = (self.clock)();
+        // A clock that cannot be read expires, reclaims and dates nothing
+        // (MIK-8202), as in the synchronous admission.
+        let now = (self.clock)().ok();
         #[cfg(test)]
         self.fire_lock_witness();
         #[cfg(not(test))]
@@ -285,7 +287,7 @@ impl ExecutionAdmission {
         if state
             .entries
             .get(&identity)
-            .is_some_and(|entry| entry.expired(now))
+            .is_some_and(|entry| now.is_some_and(|now| entry.expired(now)))
         {
             state.remove(&identity);
         }
@@ -310,10 +312,12 @@ impl ExecutionAdmission {
         if state.sealed > 0 {
             return Ok(TaskAdmission::Sealed);
         }
-        now.checked_add(RETENTION_SECS)
-            .ok_or(Refusal::ExpiryOverflow)?;
-        if state.entries.len() >= SLOT_LIMIT {
-            state.reclaim(now);
+        if let Some(now) = now {
+            now.checked_add(RETENTION_SECS)
+                .ok_or(Refusal::ExpiryOverflow)?;
+            if state.entries.len() >= SLOT_LIMIT {
+                state.reclaim(now);
+            }
         }
         if state.entries.len() >= SLOT_LIMIT {
             return Err(Refusal::Capacity);

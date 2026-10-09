@@ -102,11 +102,15 @@ impl AgentRegistry {
     /// The time, in Unix seconds, a token is judged at: the wall clock, which
     /// tests may move forward. A method so every judgement reads the clock of
     /// the registry it validates against; only test builds read `self`.
+    ///
+    /// `Err` when the host clock reads before 1970 (MIK-8202): the caller
+    /// refuses the token rather than judge it against a time it cannot know.
     #[cfg_attr(not(test), allow(clippy::unused_self))]
-    pub(crate) fn now(&self) -> u64 {
-        let now = jsonwebtoken::get_current_timestamp();
+    pub(crate) fn now(&self) -> Result<u64, crate::clock::ClockBeforeEpoch> {
+        let now = crate::clock::unix_secs();
         #[cfg(test)]
-        let now = now.saturating_add(self.skew.load(std::sync::atomic::Ordering::SeqCst));
+        let now =
+            now.map(|n| n.saturating_add(self.skew.load(std::sync::atomic::Ordering::SeqCst)));
         now
     }
 

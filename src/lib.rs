@@ -43,6 +43,7 @@ pub mod cache;
 pub mod capability;
 pub mod chains;
 pub mod cli;
+mod clock;
 pub mod config;
 pub mod config_persistence;
 pub mod config_reload;

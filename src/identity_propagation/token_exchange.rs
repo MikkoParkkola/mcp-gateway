@@ -225,7 +225,7 @@ impl TokenExchangeStrategy {
     /// Mint the RFC 7523 `private_key_jwt` client assertion authenticating
     /// the gateway itself to `endpoint`.
     fn mint_client_assertion(&self, endpoint: &str) -> Result<String, PropagationError> {
-        let now = SignedAssertionStrategy::now_secs();
+        let now = SignedAssertionStrategy::now_secs()?;
         let claims = ClientAssertionClaims {
             iss: CLIENT_ID.to_string(),
             sub: CLIENT_ID.to_string(),
@@ -240,7 +240,8 @@ impl TokenExchangeStrategy {
     /// Return a still-valid cached exchange for `binding`, if any.
     fn cached(&self, binding: &str) -> Option<PropagatedCredential> {
         let entry = self.cache.get(binding)?;
-        if entry.expires_at <= SignedAssertionStrategy::now_secs() {
+        // An unreadable clock serves nothing from the cache (MIK-8202).
+        if !SignedAssertionStrategy::now_secs().is_ok_and(|now| now < entry.expires_at) {
             return None;
         }
         Some(PropagatedCredential {
@@ -260,7 +261,11 @@ impl TokenExchangeStrategy {
     /// [`Self::store`] when the map reaches [`MAX_CACHE_ENTRIES`], so an
     /// endless stream of one-shot subjects cannot grow the cache without bound.
     fn reap_expired(&self) {
-        let now = SignedAssertionStrategy::now_secs();
+        // Retention: on an unreadable clock this pass is skipped, never
+        // turned into deleting everything (MIK-8202).
+        let Ok(now) = SignedAssertionStrategy::now_secs() else {
+            return;
+        };
         self.cache.retain(|_, e| e.expires_at > now);
     }
 
@@ -384,7 +389,7 @@ impl IdentityPropagation for TokenExchangeStrategy {
         let (subject_token, _assertion_exp) = self.assertion.mint(identity, &backend.audience)?;
         let body = self.exchange(endpoint, &subject_token, backend).await?;
 
-        let now = SignedAssertionStrategy::now_secs();
+        let now = SignedAssertionStrategy::now_secs()?;
         let ttl = body
             .expires_in
             .unwrap_or(DEFAULT_EXCHANGED_TOKEN_TTL_SECS)
@@ -570,7 +575,7 @@ mod tests {
     #[test]
     fn reap_drops_expired_entries_only() {
         let s = strategy();
-        let now = SignedAssertionStrategy::now_secs();
+        let now = SignedAssertionStrategy::now_secs().unwrap();
         s.cache.insert(
             "live".to_string(),
             CachedExchange {
@@ -653,7 +658,7 @@ mod tests {
     #[test]
     fn cached_lookup_misses_across_distinct_endpoint_or_scope() {
         let s = strategy();
-        let now = SignedAssertionStrategy::now_secs();
+        let now = SignedAssertionStrategy::now_secs().unwrap();
         let key_a = exchange_cache_key(
             "alice",
             "https://mail.internal",

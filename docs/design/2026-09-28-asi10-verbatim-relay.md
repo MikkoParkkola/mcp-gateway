@@ -97,7 +97,7 @@ behaviour, not a bound.
 **Action** (the enum `collusion.action`):
 - `off` (default): no state is kept.
 - `observe`: emit the audit finding `ScanType::CollusionRelay` (Medium; digests of A and B, T, U
-  and the count, never content) and increment `mcp_gateway_collusion_relay_total{action}`.
+  and the count, never content) and increment `mcp_gateway_collusion_relay_total{action, reason}`.
 - `block`: the same, and B's call is refused with `-32002` before dispatch
   (`handlers.rs:1436-1440`).
 
@@ -670,7 +670,8 @@ These amend the r2 text above; where they disagree, r3 wins.
   holder sharing a bit with the egress is skipped when looking for a relay witness. Other holders
   still count, and no state beyond one `u64` per (source, principal) pair is added. Allowing a
   flow never changes what is recorded, so a later non-allowed egress is still checked.
-- `mcp_gateway_collusion_relay_total{action}` (`observe` or `block`) counts every reported relay.
+- `mcp_gateway_collusion_relay_total{action, reason}` (`observe` or `block`; `reason` per B2)
+  counts every reported relay.
   `mcp_gateway_collusion_unkeyed_egress_total{action}` counts egress checks made without an
   authenticated caller (the §13.1 internal counter, now exported).
   `mcp_gateway_collusion_plan_receipts_dropped_total` counts plans whose step receipts were
@@ -863,6 +864,27 @@ causes names it (MIK-8201):
   its 8 MiB). A sketch still being built is never evicted. A sketch that cannot fit even then is
   not built: the delivery is recorded without one, and the refusal is counted. A 1 MiB delivery's
   sketch is about 735 KiB, so 7 fit one pair's budget.
+
+Metered (MIK-8201): `mcp_gateway_collusion_capacity_total{bound}` counts each bound at its event:
+`receipt_truncated` (adds the fingerprints cut), `fingerprint_evicted`, `record_dropped`,
+`record_replaced`, `record_overflow`, `sketch_refused`, `sketch_evicted` (for room, never on
+expiry) and `marker_evicted`. `mcp_gateway_collusion_relay_total{action, reason}` counts each
+refusal under `relay`, `other_source`, `capacity` or `unkeyed`. A refusal names its reason:
+another tool's copy (MIK-8206), another caller's overflow record, or an excuse of the caller's
+dropped for room. A dropped excuse leaves an "excuse lost" marker per (source, caller) for one
+window (at most 65,536, oldest first, never charged to the sketch budget). Filling to the cap
+allocates at most 15.1 MiB in total (measured; includes the hash table's growth copies), about
+10 MiB of it retained (derived from bucket sizes, not measured). That is per detector instance;
+a gateway runs one, shared by the meta-MCP and direct paths, and none with relay detection off.
+Labels never excuse; a marker is source-level, so a genuine relay from a source whose other text
+lost an excuse is labelled `capacity` and still refused.
+
+The `other_source` label reads the sender's sketches from other sources through a by-caller index
+(caller to the sources it holds a sketch from), so labelling one refusal visits only the sender's
+own pairs. This reverses an earlier choice to scan every pair: each pair holds at least one 128 B
+sketch of the 32 MiB budget, so up to 262,144 pairs per scan, run per matched fingerprint under
+the detector lock: a 1 KiB egress has about 256 sampled fingerprints, so about 67M key visits
+with one witness each, and up to 256 times that when each fingerprint has 256 qualifying witnesses.
 
 **B3 Bloom false excuse (D3).** A pair's sketch at position i is sized for a target rate of
 0.35% × 2^-i, using the classic ideal-hash rate with independent per-probe mixing (splitmix64);

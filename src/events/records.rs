@@ -221,6 +221,29 @@ impl Subscription {
     pub(crate) fn live(&self, now: DateTime<Utc>) -> bool {
         self.effective_expiry().is_none_or(|at| at > now)
     }
+
+    /// Live on the wall clock now. A clock that cannot be read (before 1970)
+    /// answers not live: a lease that cannot be dated admits nothing, where
+    /// chrono's 1969 date read every ended lease as live (MIK-8202).
+    pub(crate) fn live_now(&self) -> bool {
+        use crate::clock::Validity;
+        crate::clock::expired_by_utc(|now| {
+            if self.live(now) {
+                Validity::Live
+            } else {
+                Validity::Expired
+            }
+        }) == Validity::Live
+    }
+
+    /// The previous secret, while its rotation grace runs on the wall clock
+    /// now. A clock that cannot be read ends the grace: only the current
+    /// secret signs (MIK-8202).
+    pub(crate) fn previous_secret_now(&self) -> Option<&str> {
+        let until = self.previous_until?;
+        let now = crate::clock::utc_now().ok()?;
+        self.previous_secret.as_deref().filter(|_| until > now)
+    }
 }
 
 /// The recorded opt-in of one `(principal, url)`. `Debug` shows the

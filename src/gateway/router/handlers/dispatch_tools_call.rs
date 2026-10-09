@@ -23,7 +23,7 @@ use crate::gateway::router::authorization::{
     refusal_principal, require_admin_tool_access,
 };
 use crate::gateway::router::helpers::{
-    build_error_response, build_response, extract_tools_call_params, merge_client_meta,
+    build_error_response, build_response, extract_tools_call_params_ref, merge_client_meta_ref,
 };
 use crate::gateway::router::meta_refusal_audit::Refused;
 use crate::gateway::session_lifecycle;
@@ -69,13 +69,16 @@ pub(super) async fn tools_call(
         intake.surface_request,
     );
     let params = intake.params();
-    let (tool_name, arguments) = extract_tools_call_params(params);
+    let (tool_name, arguments) = extract_tools_call_params_ref(params);
+    let empty_arguments = serde_json::Value::Object(serde_json::Map::new());
     // A conforming client's `_meta` is a sibling of `arguments`, and
     // the meta layer reads it off the argument object it is handed.
     // Meta-tool path only -- the direct backend route runs before the
     // meta-tool match and must stay byte-identical.
-    let arguments = merge_client_meta(
-        arguments,
+    // Borrowed from the request (MIK-8014): copied only where `_meta` is
+    // merged in, or where a task stores the call.
+    let arguments = merge_client_meta_ref(
+        arguments.unwrap_or(&empty_arguments),
         params,
         state.meta_mcp.exposes_meta_tool(tool_name),
     );
@@ -147,6 +150,13 @@ pub(super) async fn tools_call(
     }
 
     let backend_targets = backend_tool_targets_for_call(&state.meta_mcp, tool_name, &arguments);
+    // Computed once (MIK-8014): the firewall's per-caller controls and the
+    // caller context below key on the same caller.
+    let caller_key = crate::gateway::router::identity::caller_key(
+        grant_subject.as_ref(),
+        cert_identity.as_ref(),
+        client.as_ref(),
+    );
     *response_targets = crate::gateway::meta_mcp::response_security::meta_response_targets(
         tool_name,
         &backend_targets,
@@ -205,11 +215,7 @@ pub(super) async fn tools_call(
             // never the display name, which every anonymous caller
             // shares. Empty is no identity: refused.
             let control_identity = crate::gateway::router::identity::control_identity(
-                crate::gateway::router::identity::caller_key(
-                    grant_subject.as_ref(),
-                    cert_identity.as_ref(),
-                    client.as_ref(),
-                ),
+                caller_key.clone(),
                 session_id,
                 existing_session_id.as_deref(),
             );
@@ -414,11 +420,6 @@ pub(super) async fn tools_call(
     // The A/B arm and the prefetch hints key on the caller (G4). Its
     // reclaim deadline is renewed here, in every build, because those
     // entries have no session end to reclaim them.
-    let caller_key = crate::gateway::router::identity::caller_key(
-        grant_subject.as_ref(),
-        cert_identity.as_ref(),
-        client.as_ref(),
-    );
     if let Some(ref lifecycle) = state.session_lifecycle
         && !caller_key.is_empty()
     {
@@ -540,7 +541,7 @@ pub(super) async fn tools_call(
             .audit_replay(tool_name, &arguments, session, &caller, response, audit)
             .await
     } else {
-        Box::pin(state.meta_mcp.handle_tools_call(
+        Box::pin(state.meta_mcp.handle_tools_call_ref(
             id,
             tool_name,
             arguments,

@@ -606,21 +606,21 @@ fn revive_moves_a_dead_letter_back_only_while_it_is_the_one_scanned() {
     let stale = now + crate::duration_bound::delta!(seconds, 1);
     assert_eq!(
         store
-            .revive("e1", stale, fresh("e1", "s1"), roomy, || now)
+            .revive("e1", stale, fresh("e1", "s1"), roomy, || Ok(now))
             .expect("io"),
         Revived::Missing,
         "a dead letter buried again since the scan is not revived"
     );
     assert_eq!(
         store
-            .revive("e2", now, fresh("e2", "gone"), roomy, || now)
+            .revive("e2", now, fresh("e2", "gone"), roomy, || Ok(now))
             .expect("io"),
         Revived::NoSubscription
     );
     let later = now + crate::duration_bound::delta!(hours, 2);
     assert_eq!(
         store
-            .revive("e1", now, fresh("e1", "s1"), roomy, || later)
+            .revive("e1", now, fresh("e1", "s1"), roomy, || Ok(later))
             .expect("io"),
         Revived::NoSubscription,
         "an expired subscription takes no replay before its sweep"
@@ -628,7 +628,7 @@ fn revive_moves_a_dead_letter_back_only_while_it_is_the_one_scanned() {
     store.enqueue(record("e3", "s1", now), roomy).expect("io");
     assert_eq!(
         store
-            .revive("e3", now, fresh("e3", "s1"), roomy, || now)
+            .revive("e3", now, fresh("e3", "s1"), roomy, || Ok(now))
             .expect("io"),
         Revived::AlreadyPending,
         "a record already pending under the id is not a replay"
@@ -642,7 +642,7 @@ fn revive_moves_a_dead_letter_back_only_while_it_is_the_one_scanned() {
     };
     assert_eq!(
         store
-            .revive("e3", now, fresh("e3", "s1"), full, || now)
+            .revive("e3", now, fresh("e3", "s1"), full, || Ok(now))
             .expect("io"),
         Revived::Full
     );
@@ -653,7 +653,7 @@ fn revive_moves_a_dead_letter_back_only_while_it_is_the_one_scanned() {
     );
     assert_eq!(
         store
-            .revive("e1", now, fresh("e1", "s1"), roomy, || now)
+            .revive("e1", now, fresh("e1", "s1"), roomy, || Ok(now))
             .expect("io"),
         Revived::Written
     );

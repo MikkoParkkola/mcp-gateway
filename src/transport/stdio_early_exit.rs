@@ -195,6 +195,15 @@ impl StartState {
         self.eof.lock().as_ref().map(|eof| eof.subscribe())
     }
 
+    /// Trip this start's stdout-closed latch now, as the reader does at EOF
+    /// (MIK-7923, design P5): a retire fails waiting requests at once.
+    /// Sync; a second trip is a no-op for watchers.
+    pub(super) fn trip_eof(&self) {
+        if let Some(eof) = self.eof.lock().as_ref() {
+            eof.send_replace(true);
+        }
+    }
+
     pub(super) fn exited_early(&self) -> bool {
         self.exited.swap(false, std::sync::atomic::Ordering::SeqCst)
     }
@@ -266,16 +275,17 @@ impl StdioTransport {
         &self,
         stderr_tail: (tokio::task::JoinHandle<()>, StderrTail),
     ) -> Error {
-        let child = self.child.lock().await.take();
-        let status = match child {
-            Some(mut child) => {
-                // Wait for the exit without reaping, then end the group (any
-                // descendant left in it) and reap, in that order (MIK-8080).
-                let exited = super::child_tree::wait_exited(&mut child, DRAIN).await;
-                let status = child.finish().await;
-                exited.then_some(status).flatten()
-            }
-            None => None,
+        // Wait for the exit without reaping, then end the group (any
+        // descendant left in it) and reap, in that order (MIK-8080). The tree
+        // stays in the slot while waiting, so a retire can still reach it, and
+        // leaves it only for the reaper (MIK-7923).
+        let had_tree = self.child.lock().tree.is_some();
+        let status = if had_tree {
+            let exited = self.wait_exited_in_slot(DRAIN).await;
+            let status = self.end_tree().await;
+            exited.then_some(status).flatten()
+        } else {
+            None
         };
         // Kept for classifying the failure (#1759).
         self.failure.record_exit(status);
