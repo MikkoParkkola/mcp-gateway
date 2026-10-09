@@ -99,7 +99,10 @@ impl EventsHub {
         let mut wait = due
             .next
             .map_or(IDLE, |at| {
-                (at - Utc::now()).to_std().unwrap_or(Duration::ZERO)
+                // A clock gone before 1970 mid-pass: look again after IDLE.
+                crate::clock::utc_now().map_or(IDLE, |clock| {
+                    (at - clock).to_std().unwrap_or(Duration::ZERO)
+                })
             })
             .min(IDLE);
         for record in due.ready {
@@ -498,8 +501,13 @@ impl EventsHub {
     async fn sweep_dead_letters(&self, services: &Services) {
         let policy = self.dead_policy();
         let _ordered = self.receipts.lock().await;
+        // A retention sweep cannot date what it would delete on a clock
+        // before 1970, so it skips its pass (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            return;
+        };
         let evicted = self
-            .blocking(move |store| store.sweep_dead(Utc::now(), policy))
+            .blocking(move |store| store.sweep_dead(now, policy))
             .await;
         services.audit_evictions(evicted.unwrap_or_default()).await;
     }
