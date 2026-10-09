@@ -289,3 +289,87 @@ fn a_reading_over_the_bound_falls_back_to_the_whole_text() {
     assert!(fw.delivered_preferring(&answer, &flat, None).is_some());
     assert_eq!(fw.relay_plan_drops(), drops, "no drop while the text fits");
 }
+
+/// `MIK-8209` K7: two steps each staged a shared `kind` and their own piece;
+/// the answer repeats `kind`. Kept to its own span first, each step keeps its
+/// own piece whole. Control: without labels the earlier step's `kind` spends
+/// the later step's room, and its piece is lost (the crowd-out K7 fixes).
+#[test]
+fn a_repeated_leaf_from_another_step_never_crowds_out_a_steps_own_piece() {
+    let detector = CollusionDetector::new(RelayParams::default());
+    let (a, b) = ("piece of step zero", "piece of step one");
+    let shown = vec!["chunk", a, "chunk", b];
+    let labels = vec![Some(0), Some(0), Some(1), Some(1)];
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&["chunk", b], false);
+    let unlabelled = Delivered::of_leaves(shown.clone()).expect("bounded");
+    let lost = staged.retaining(&detector, &unlabelled);
+    assert!(
+        !lost.whole_values().any(|v| v == b),
+        "premise: the crowd-out reproduces"
+    );
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&["chunk", b], false);
+    let labelled = Delivered::of_leaves(shown)
+        .expect("bounded")
+        .with_labels(labels);
+    let kept = staged.retaining_for(&detector, &labelled, Some(1));
+    assert!(kept.whole_values().any(|v| v == b), "own piece lost");
+}
+
+/// `MIK-8209` K7 keeps the MIK-7992 cap: a step's own long leaf after many
+/// copies of its short staged leaf from another step stays whole, and the
+/// kept receipt stages no more than before.
+#[test]
+fn own_span_first_keeps_the_staging_cap() {
+    let detector = CollusionDetector::new(RelayParams::default());
+    let long = "the long leaf this step delivered, well past one k-gram in length";
+    let mut shown = vec!["x"; 50];
+    let mut labels = vec![Some(0); 50];
+    shown.extend(["x", long]);
+    labels.extend([Some(1), Some(1)]);
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&["x", long], false);
+    let before = staged.staged_len();
+    let delivered = Delivered::of_leaves(shown)
+        .expect("bounded")
+        .with_labels(labels);
+    let kept = staged.retaining_for(&detector, &delivered, Some(1));
+    let whole: Vec<&str> = kept.whole_values().collect();
+    assert!(whole.contains(&long), "own long leaf lost");
+    assert!(kept.staged_len() <= before, "retention grew the receipt");
+}
+
+/// `MIK-8209` K7 with duplicates in the step's own span: the room is still
+/// what the step staged, so the receipt never grows. (Copies inside one span
+/// are still kept in answer order while room lasts, as MIK-7992 keeps them.)
+#[test]
+fn duplicates_in_a_steps_own_span_never_grow_its_receipt() {
+    let detector = CollusionDetector::new(RelayParams::default());
+    let long = "the long leaf this step delivered, well past one k-gram in length";
+    let shown = vec!["x", "x", "x", long];
+    let labels = vec![Some(1); 4];
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&["x", long], false);
+    let before = staged.staged_len();
+    let delivered = Delivered::of_leaves(shown)
+        .expect("bounded")
+        .with_labels(labels);
+    let kept = staged.retaining_for(&detector, &delivered, Some(1));
+    assert!(kept.staged_len() <= before, "retention grew the receipt");
+}
+
+/// `MIK-8251` DUP.1 (red, out of this PR): a step repeating a short leaf
+/// within its own span still keeps its later long piece whole, so the seam
+/// pass can own it. Today the extra copies spend the room first.
+#[test]
+#[ignore = "MIK-8251: copies within a step's own span spend its room first"]
+fn a_repeated_leaf_in_a_steps_own_span_keeps_its_later_piece_whole() {
+    let detector = CollusionDetector::new(RelayParams::default());
+    let long = "the long leaf this step delivered, well past one k-gram in length";
+    let (staged, _) = DeliveryDigest::of_plan_step_leaves(&["x", long], false);
+    let delivered = Delivered::of_leaves(vec!["x", "x", "x", long])
+        .expect("bounded")
+        .with_labels(vec![Some(1); 4]);
+    let kept = staged.retaining_for(&detector, &delivered, Some(1));
+    assert!(
+        kept.whole_values().any(|v| v == long),
+        "own long piece lost"
+    );
+}
