@@ -1,0 +1,13 @@
+diff --git a/src/ranking/ranker.rs b/src/ranking/ranker.rs
+index cff599910..76cfc3a6b 100644
+--- a/src/ranking/ranker.rs
++++ b/src/ranking/ranker.rs
+@@ -77,7 +77,7 @@ impl SearchRanker {
+ 
+             let text_relevance =
+                 score_text_relevance(&result.tool, &result.description, &query_lower, &words)
+-                    .max(backend_name_score(&result.server, &words));
++                    .max(0.0 * backend_name_score(&result.server, &words));
+ 
+             let usage = self.usage_count(&result.server, &result.tool);
+             #[allow(clippy::cast_precision_loss)]

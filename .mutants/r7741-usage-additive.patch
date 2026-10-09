@@ -1,0 +1,13 @@
+diff --git a/src/ranking/ranker.rs b/src/ranking/ranker.rs
+index cff599910..307553202 100644
+--- a/src/ranking/ranker.rs
++++ b/src/ranking/ranker.rs
+@@ -91,7 +91,7 @@ impl SearchRanker {
+             result.signals.usage_count = usage;
+             result.signals.user_feedback = usage_factor;
+ 
+-            result.score = text_relevance * (1.0 + usage_factor) * result.signals.multiplier();
++            result.score = (text_relevance + usage_factor) * result.signals.multiplier();
+             result.explanation = explanation_for(result);
+         }
+ 

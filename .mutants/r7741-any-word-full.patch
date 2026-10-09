@@ -1,0 +1,13 @@
+diff --git a/src/ranking/scoring.rs b/src/ranking/scoring.rs
+index e01b50610..92eb801c3 100644
+--- a/src/ranking/scoring.rs
++++ b/src/ranking/scoring.rs
+@@ -261,7 +261,7 @@ pub(super) fn backend_name_score(server: &str, words: &[&str]) -> f64 {
+         })
+         .sum();
+     #[allow(clippy::cast_precision_loss)]
+-    let share = found / words.len() as f64;
++    let share = f64::from(u8::from(found > 0.0));
+     4.0 * share
+ }
+ 

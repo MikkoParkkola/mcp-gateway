@@ -1,0 +1,10 @@
+head_sha	26935d3af7c14ee618b638e7aa58fc9c31e988fe
+# #3612 MIK-7741: backend-name ranking score
+r7741-not-used	linux	r7741-not-used.patch	--lib -- gateway::meta_mcp::search_ranking_authz_tests::backend_name::a_backend_name_match_ranks_above_a_description_mention
+r7741-too-high	linux	r7741-too-high.patch	--lib -- gateway::meta_mcp::search_ranking_authz_tests::backend_name::a_direct_tool_match_ranks_above_a_backend_name_match
+r7741-too-low	linux	r7741-too-low.patch	--lib -- gateway::meta_mcp::search_ranking_authz_tests::backend_name::a_backend_name_match_ranks_above_a_description_mention
+r7741-any-word-full	linux	r7741-any-word-full.patch	--lib -- ranking::tests::backend_name::a_backend_name_score_counts_the_share_of_words_found
+r7741-case-sensitive	linux	r7741-case-sensitive.patch	--lib -- ranking::tests::backend_name::a_backend_name_score_sits_between_a_mention_and_a_name_match
+r7741-synonym-ignored	linux	r7741-synonym-ignored.patch	--lib -- ranking::tests::backend_name::a_backend_name_found_through_a_synonym_or_abbreviation_scores_at_the_discount
+r7741-synonym-undiscounted	linux	r7741-synonym-undiscounted.patch	--lib -- ranking::tests::backend_name::a_backend_name_found_through_a_synonym_or_abbreviation_scores_at_the_discount
+r7741-usage-additive	linux	r7741-usage-additive.patch	--lib -- ranking::tests::backend_name::usage_cannot_lift_a_zero_relevance_candidate
