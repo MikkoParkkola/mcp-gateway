@@ -164,14 +164,6 @@ impl Announced {
         let before = self.catalogues.insert(name.to_string(), visible);
         before.unwrap_or_else(|| fingerprint(&[])) != visible
     }
-
-    /// A finished startup scan of catalogue `name`: always heard, since tools
-    /// a client listed during the scan were never reported here. Recorded, so
-    /// later ordinary reports still compare against it.
-    pub(super) fn catalogue_scanned(&mut self, name: &str, visible: u64) -> bool {
-        self.catalogues.insert(name.to_string(), visible);
-        true
-    }
 }
 
 /// Decide and announce every nudge sent on `rx`, until the senders go or
@@ -278,8 +270,10 @@ fn decide(
         }
         ToolsNudge::CatalogueScanned { name } => {
             state.meta_mcp.events_capabilities_reloaded(&name);
+            // Always heard: tools a client listed during the scan were never
+            // reported. Recorded, so later reports compare against it.
             let visible = catalogue_fingerprint(state, &name);
-            announced.lock().catalogue_scanned(&name, visible);
+            announced.lock().catalogues.insert(name.clone(), visible);
             (name, Reach::Tools)
         }
     };
@@ -630,20 +624,35 @@ mod tests {
     /// when what it lists matches the last report (empty included), because
     /// tools a client listed mid-scan were never reported. Ordinary reports
     /// still compare against it afterwards.
-    #[test]
-    fn a_finished_scan_is_announced_even_when_it_lists_nothing() {
-        let mut announced = Announced::default();
-        let empty = fingerprint(&[]);
-        assert!(
-            !announced.catalogue("caps", empty),
+    #[tokio::test]
+    async fn a_finished_scan_is_announced_even_when_it_lists_nothing() {
+        let (state, _store) = crate::gateway::router::tests::direct_route_state_with_identity(
+            crate::config::AgentIdentityConfig::default(),
+        )
+        .await;
+        let announced = parking_lot::Mutex::new(Announced::default());
+        let ordinary = || ToolsNudge::Catalogue {
+            name: "caps".into(),
+        };
+        assert_eq!(
+            decide(&state, &announced, ordinary()),
+            None,
             "premise: an ordinary empty first report is no change"
         );
-        assert!(
-            announced.catalogue_scanned("caps", empty),
+        assert_eq!(
+            decide(
+                &state,
+                &announced,
+                ToolsNudge::CatalogueScanned {
+                    name: "caps".into()
+                }
+            ),
+            Some(("caps".to_string(), Reach::Tools)),
             "a finished scan is heard whatever it lists"
         );
-        assert!(
-            !announced.catalogue("caps", empty),
+        assert_eq!(
+            decide(&state, &announced, ordinary()),
+            None,
             "an ordinary report matching the scan's end is still no change"
         );
     }
