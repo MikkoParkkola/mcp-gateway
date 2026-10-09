@@ -89,12 +89,18 @@ def main():
             errors.append(f"{file} {fn}: row '{row}' is not in STAGES {sorted(known)}")
         if row == "-" and not reason.strip():
             errors.append(f"{file} {fn}: off the per-call path needs a reason")
+    present = {}
     for file in PATH_FILES:
         source = (ROOT / file).read_text()
         source = without_test_modules(source)
-        for fn in sorted(set(re.findall(r"\bfn ([a-z_][a-z0-9_]*)", source))):
+        present[file] = set(re.findall(r"\bfn ([a-z_][a-z0-9_]*)", source))
+        for fn in sorted(present[file]):
             if (file, fn) not in rows:
                 errors.append(f"{file} {fn}: no entry in {TABLE.relative_to(ROOT)}")
+    # A row whose function moved or went away would vouch for nothing.
+    for file, fn in rows:
+        if file in present and fn not in present[file]:
+            errors.append(f"{file} {fn}: in the table but not in the file (stale row)")
     if errors:
         print("\n".join(errors))
         print(f"{len(errors)} per-call stage(s) unaccounted for (MIK-8014)")

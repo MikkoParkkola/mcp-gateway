@@ -37,7 +37,6 @@ src/gateway/meta_mcp/call_dispatch.rs	invoke_named_backend_tool	http_invoke_tiny
 src/gateway/meta_mcp/call_dispatch.rs	route_direct_backend_call	-	direct /mcp/{backend} route, not the meta tools/call path
 src/gateway/meta_mcp/call_dispatch.rs	route_retry_to_origin_backend	-	retry-to-origin path only
 src/gateway/meta_mcp/call_dispatch.rs	task_backend_name	-	task-augmented calls only
-src/gateway/meta_mcp/invoke.rs	fmt	-	Debug formatting; not called per call
 src/gateway/meta_mcp/invoke.rs	invoke_tool_traced	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/server/mod.rs	account_custody	-	startup or lifecycle, not per call
 src/gateway/server/mod.rs	build_meta_mcp	-	startup or lifecycle, not per call
@@ -54,7 +53,6 @@ src/gateway/server/mod.rs	drop	-	startup or lifecycle, not per call
 src/gateway/server/mod.rs	expand_home_path	-	startup or lifecycle, not per call
 src/gateway/server/mod.rs	leaky_single_user_backends	-	startup or lifecycle, not per call
 src/gateway/server/mod.rs	new	-	startup or lifecycle, not per call
-src/gateway/server/mod.rs	new_evaluated	-	startup or lifecycle, not per call
 src/gateway/server/mod.rs	new_evaluated_inner	-	startup or lifecycle, not per call
 src/gateway/server/mod.rs	new_evaluated_with_account_http	-	startup or lifecycle, not per call
 src/gateway/server/mod.rs	new_with_env	-	startup or lifecycle, not per call
@@ -65,7 +63,6 @@ src/gateway/server/mod.rs	poll_export_source	-	startup or lifecycle, not per cal
 src/gateway/server/mod.rs	prepare_signing	stdio_invoke_tiny	on the stdio single-request path
 src/gateway/server/mod.rs	reload_path	-	startup or lifecycle, not per call
 src/gateway/server/mod.rs	response_firewall	stdio_invoke_tiny	on the stdio single-request path
-src/gateway/server/mod.rs	run	-	startup or lifecycle, not per call
 src/gateway/server/mod.rs	run_stdio	-	starts the stdio loop once
 src/gateway/server/mod.rs	run_stdio_on	stdio_invoke_tiny	the stdio read loop, the request task's spawn and its CountOnly hold
 src/gateway/server/mod.rs	shutdown_account_custody	-	startup or lifecycle, not per call
