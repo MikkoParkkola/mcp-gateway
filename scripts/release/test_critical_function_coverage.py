@@ -414,9 +414,13 @@ class HeadLineCalls(unittest.TestCase):
                     inventory = root / "inv.tsv"
                     inventory.write_text(HEADER + "src/lib.rs\tlogs\t1\tcritical\td\tlogs\tr\n")
                     statuses = [r[0] for r in cfc.grade(root, inventory, [lcov])]
-                    code = cfc.main(["--root", str(root), "--inventory", str(inventory), "--lcov", str(lcov)])
+                    out = io.StringIO()
+                    with contextlib.redirect_stdout(out):
+                        code = cfc.main(["--root", str(root), "--inventory", str(inventory), "--lcov", str(lcov)])
                 self.assertEqual("INDIRECT" in statuses, expect)
                 self.assertEqual(code, 1 if expect else 0)
+                # MIK-8195: the count is inventory rows; a diagnostic is not one.
+                self.assertIn("critical rows graded: 1\n", out.getvalue())
 
     def test_a_macro_that_is_not_known_safe_is_unverifiable(self):
         # A local macro_rules! (whatever its delimiters or body) or a macro
