@@ -293,6 +293,7 @@ jobs:
           if grep -qa MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN ${{ matrix.artifact }}${{ matrix.suffix }}; then echo "::error::release binary carries the debug scan hold"; exit 1; fi
           if grep -qa MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS ${{ matrix.artifact }}${{ matrix.suffix }}; then echo "::error::release binary carries the debug era probe cap"; exit 1; fi
           if grep -qa MCP_GATEWAY_TEST_HOME_DIR ${{ matrix.artifact }}${{ matrix.suffix }}; then echo "::error::release binary carries the debug home override"; exit 1; fi
+          if grep -qa MCP_GATEWAY_TEST_CLOCK ${{ matrix.artifact }}${{ matrix.suffix }}; then echo "::error::release binary carries the debug clock override"; exit 1; fi
           if [ "${{ matrix.suffix }}" = "" ]; then
             chmod +x ${{ matrix.artifact }}
           fi
