@@ -179,6 +179,29 @@ impl super::Backend {
             .replace(tools, || ());
     }
 
+    /// Withhold tool `name` from every slot's served view, as a descriptor
+    /// verdict does.
+    #[cfg(test)]
+    pub(crate) fn block_tool_for_test(&self, name: &str) {
+        let mut verdicts = super::descriptor_gate::Verdicts::default();
+        verdicts.add_unparseable([(name.to_string(), "digest".to_string())]);
+        self.commit_verdicts("", super::Listing::Complete, verdicts);
+    }
+
+    /// Have the next drain snapshot block tool `name` mid-snapshot.
+    #[cfg(test)]
+    pub(crate) fn block_mid_snapshot_for_test(&self, name: &str) {
+        *self.snapshot_seam.lock() = Some(name.to_string());
+    }
+
+    /// The snapshot seam: commits the verdict a test asked for, once.
+    #[cfg(test)]
+    pub(crate) fn run_snapshot_seam_for_test(&self) {
+        if let Some(name) = self.snapshot_seam.lock().take() {
+            self.block_tool_for_test(&name);
+        }
+    }
+
     /// Every per-user slot's binding, for a backend-wide recompute.
     #[must_use]
     pub(crate) fn per_user_bindings(&self) -> Vec<String> {

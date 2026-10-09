@@ -297,6 +297,8 @@ fn per_user_seen(backend: &crate::backend::Backend) -> PerUserNow {
     // The filter FIRST: a verdict landing during the snapshot then shows as a
     // change on its own queued nudge, never as a filter already recorded.
     let filter = backend.visibility_filter_fingerprint();
+    #[cfg(test)]
+    backend.run_snapshot_seam_for_test();
     let slots = backend
         .per_user_bindings()
         .into_iter()
@@ -412,6 +414,41 @@ mod tests {
         assert_eq!(
             decide(&state, &announced, second),
             Some(("demo".to_string(), Reach::View))
+        );
+    }
+
+    // MIK-8148: a verdict committing between the drain's filter read and its
+    // slot read. Read in that order, the slots already show the verdict, so
+    // the change is announced now; read the other way round, the new filter
+    // would be recorded beside old views and no later nudge could see it.
+    #[tokio::test]
+    async fn a_verdict_landing_mid_snapshot_is_announced() {
+        let (state, _store) = crate::gateway::router::tests::direct_route_state_with_identity(
+            crate::config::AgentIdentityConfig::default(),
+        )
+        .await;
+        let backend = state.backends.get("demo").expect("fixture backend");
+        let announced = parking_lot::Mutex::new(Announced::default());
+        let nudge = || ToolsNudge::Backend {
+            name: "demo".into(),
+            instance: backend.instance(),
+            kind: NudgeKind::Changed,
+        };
+        let x: Tool = serde_json::from_value(serde_json::json!({
+            "name": "x", "description": "", "inputSchema": { "type": "object" }
+        }))
+        .expect("tool");
+
+        backend.store_per_user_tools_for_test("idp:1:u:1:a", vec![x]);
+        assert_eq!(
+            decide(&state, &announced, nudge()),
+            Some(("demo".to_string(), Reach::View))
+        );
+        backend.block_mid_snapshot_for_test("x");
+        assert_eq!(
+            decide(&state, &announced, nudge()),
+            Some(("demo".to_string(), Reach::View)),
+            "the caller's view lost x to a verdict that landed mid-snapshot"
         );
     }
 
