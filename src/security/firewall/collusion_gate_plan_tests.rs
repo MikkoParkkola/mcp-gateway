@@ -373,3 +373,13 @@ fn a_repeated_leaf_in_a_steps_own_span_keeps_its_later_piece_whole() {
         "own long piece lost"
     );
 }
+
+/// `MIK-8209` K3 keeps the delivered-set bound unchanged: the joins are
+/// hashed, never charged to it, so a 600 KiB answer still keeps its plan
+/// receipts.
+#[test]
+fn a_large_answer_keeps_its_receipts_under_the_unchanged_bound() {
+    let leaf = "z".repeat(1_000);
+    let answer = vec![leaf.as_str(); 600];
+    assert!(Delivered::of_leaves(answer).is_some(), "the bound shrank");
+}

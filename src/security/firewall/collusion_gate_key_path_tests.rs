@@ -360,3 +360,76 @@ fn a_text_cut_is_counted_once_per_delivery() {
         "the cut was not exported"
     );
 }
+
+/// `PLAN.1` (residual 4, design K3): a step returned the text flat and the
+/// plan's answer split it into content items. Only the answer's key-path
+/// join matches the step's flat text, so the holder re-joining is excused.
+#[test]
+fn a_flat_step_split_by_the_answer_into_content_items_keeps_its_join() {
+    let refused = plan_holders_reported(|p| flat(&p.concat()), content_items);
+    assert!(refused.is_empty(), "plan holders reported: {refused:?}");
+}
+
+/// `PLAN.1` (S3a, design K3): a flat step whose answer splits it over short
+/// object fields: only the answer's values run together match it.
+#[test]
+fn a_flat_step_split_by_the_answer_into_short_fields_keeps_its_form() {
+    fn fields(pieces: &[String]) -> Value {
+        let map: serde_json::Map<String, Value> = pieces
+            .iter()
+            .enumerate()
+            .map(|(k, p)| (format!("p{k:03}"), Value::String(p.clone())))
+            .collect();
+        Value::Object(map)
+    }
+    let refused = plan_holders_reported(|p| flat(&p.concat()), fields);
+    assert!(refused.is_empty(), "plan holders reported: {refused:?}");
+}
+
+/// D3 (design K2): the cut-delivery sketch holds each join alone. Bob was
+/// delivered an over-cap two-column array; carol, the text where column a's
+/// join meets column b's. Bob never received that boundary contiguously, so
+/// relaying it is reported: his sketch must not run the joins together.
+#[test]
+fn a_join_boundary_is_never_excused_by_the_sketch() {
+    let fw = observing();
+    let excused: Vec<usize> = (0..4)
+        .filter(|&i| {
+            let tool = format!("cols{i}");
+            let a: String = (0..8).map(|k| text(i * 100 + k)).collect();
+            let b: String = (0..8)
+                .map(|k| text(i * 100 + 50 + k))
+                .collect::<String>()
+                .replace('x', "q");
+            let rows: Vec<Value> = pieces(&a)
+                .iter()
+                .zip(pieces(&b))
+                .map(|(x, y)| json!({"a": x, "b": y}))
+                .collect();
+            let (ja, jb): (String, String) = (
+                pieces(&a)
+                    .iter()
+                    .take(rows.len())
+                    .map(String::as_str)
+                    .collect(),
+                pieces(&b)
+                    .iter()
+                    .take(rows.len())
+                    .map(String::as_str)
+                    .collect(),
+            );
+            assert!(
+                ja.len() + jb.len() > 6 * 1024,
+                "premise: over the record cap"
+            );
+            let boundary = format!("{}{}", &ja[ja.len() - 40..], &jb[..40]);
+            deliver(&fw, "bob", &tool, &json!({ "rows": rows }));
+            deliver(&fw, "carol", &tool, &flat(&boundary));
+            !reported(&fw, "bob", &boundary)
+        })
+        .collect();
+    assert!(
+        excused.is_empty(),
+        "a join boundary was excused: {excused:?}"
+    );
+}
