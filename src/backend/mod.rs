@@ -61,6 +61,7 @@ impl Backend {
     }
 }
 
+pub(crate) use era::removed_method_refusal_message;
 #[cfg(test)]
 pub(crate) use pool::PoolKey;
 #[cfg(not(test))]
@@ -102,11 +103,6 @@ pub struct Backend {
     /// fix 1). The per-backend `Failsafe` this replaced is gone; every slot,
     /// including Shared, now owns one.
     failsafe_config: crate::config::FailsafeConfig,
-    /// Protocol era of the peer on the other end of this backend's
-    /// transport (MIK-7217). Resolved once per start by a `server/discover`
-    /// probe and shared with the detached re-probe task, which outlives the
-    /// request that triggered it — hence `Arc`.
-    era: Arc<crate::protocol::era::EraCache>,
     /// Test-only: one re-probe pauses between finding its slot and discarding
     /// the era, so a removal can land inside that window (MIK-7643).
     #[cfg(test)]
@@ -269,6 +265,10 @@ pub struct Backend {
     /// filter and reading the slots, so a test can land a verdict there.
     #[cfg(test)]
     snapshot_seam: parking_lot::Mutex<Option<String>>,
+    /// A list the next drain stores into the shared slot right after reading
+    /// it, so a test can land a store between that read and the next.
+    #[cfg(test)]
+    shared_read_seam: parking_lot::Mutex<Option<Vec<crate::protocol::Tool>>>,
 }
 
 /// Where a test backend's OAuth client keeps tokens, and who plays the
@@ -513,6 +513,10 @@ mod era_retired_slot_tests;
 #[cfg(test)]
 #[path = "era_start_own_probe_tests.rs"]
 mod era_start_own_probe_tests;
+
+#[cfg(test)]
+#[path = "era_per_slot_tests.rs"]
+mod era_per_slot_tests;
 
 #[cfg(all(test, unix))]
 #[path = "frame_limit_start_tests.rs"]

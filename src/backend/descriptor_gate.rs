@@ -290,7 +290,9 @@ impl Backend {
         drop(blocked);
         // The shared view is filtered by this set, so a verdict can change what
         // discovery shows without any list being stored (`MIK-8127`).
-        self.nudge_tools(super::tools_nudge::NudgeKind::Changed);
+        // Coalesced with every store's nudge (`MIK-8208`): a fill per caller
+        // must not queue a nudge per fill.
+        self.nudge_changed_coalesced();
     }
 
     /// Refusal text when `tool` is blocked on this backend.

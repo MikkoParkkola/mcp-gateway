@@ -12,6 +12,9 @@ mod stdout;
 mod allocator;
 mod commands;
 mod home_dir;
+#[cfg(test)]
+#[path = "test_ports.rs"]
+mod test_ports;
 
 use std::{path::Path, process::ExitCode};
 
