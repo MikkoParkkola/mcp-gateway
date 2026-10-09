@@ -127,3 +127,13 @@ pub(crate) fn count(records: &[serde_json::Value], level: &str, text: &str) -> u
         })
         .count()
 }
+
+// MIK-8223 red row (throwaway, never merged): a debug-only item that plain
+// test code uses compiles in debug and must fail the release test compile.
+#[cfg(debug_assertions)]
+fn red_row_debug_only() {}
+
+#[test]
+fn red_row_uses_a_debug_only_item() {
+    red_row_debug_only();
+}
