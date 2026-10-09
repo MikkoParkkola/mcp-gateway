@@ -40,3 +40,4 @@ src/transport/http/listen.rs	legacy_interest	1	Sends resources/subscribe or unsu
 src/transport/http/listen.rs	unsolicited	1	Opens the legacy notification stream with its URI filter; delivery is authorized downstream
 src/oauth/login_gate.rs	fill_scope	1	Runs a shared fill under its dispatch mark; affects only which timeout error a joiner reports (MIK-8046).
 src/oauth/login_gate.rs	joined	1	Records which shared fill a deadline scope waits on; affects only which timeout error it reports (MIK-8046).
+src/gateway/router/helpers.rs	build_http_response	1	Serialises a frame already wrapped as Egressed; the scan is decided where the Egressed value is made, not here.

@@ -1183,9 +1183,9 @@
         "src/gateway/router/tests/meta_firewall_verdict.rs:297",
         "src/gateway/router/dispatch_parity_tests.rs:313",
         "src/gateway/router/direct_guards.rs:101",
-        "src/gateway/router/response_pass.rs:34"
+        "src/gateway/meta_mcp/invoke/egress.rs:73"
       ],
-      "note": "Graded 2026-09-29 against MIK-7407's own AC. Meta HTTP tools/call: the router pass (response_pass.rs:34) replaces a Block or refused verdict with the -32600 refusal carrying the caller's id and no payload, read off the wire by meta_tools_call_refuses_delivery_when_response_firewall_blocks. Direct HTTP tools/call: direct_guards.rs response_blocked refuses on !allowed; t12_response_firewall_block_refuses_on_both_routes drives both routes. Merged before #2361; #2361 adds no change to this path."
+      "note": "Since #3527 (MIK-8139 family) the router pass is the one egress scan, `scan_egress` in egress.rs, run for every method and frame part; the refusal semantics below are unchanged. Graded 2026-09-29 against MIK-7407's own AC. Meta HTTP tools/call: the router pass (response_pass.rs:34, since replaced) replaces a Block or refused verdict with the -32600 refusal carrying the caller's id and no payload, read off the wire by meta_tools_call_refuses_delivery_when_response_firewall_blocks. Direct HTTP tools/call: direct_guards.rs response_blocked refuses on !allowed; t12_response_firewall_block_refuses_on_both_routes drives both routes. Merged before #2361; #2361 adds no change to this path."
     },
     {
       "id": "MIK-7407.RESPONSE.2",

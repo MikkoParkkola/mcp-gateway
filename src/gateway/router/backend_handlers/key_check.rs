@@ -3,6 +3,7 @@
 //! R2's undeclared-key check on the direct route (MIK-7570.SCHEMA.1), with
 //! F13's fetch of the caller's own catalogue when its slot is cold.
 
+use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
@@ -33,14 +34,34 @@ pub(super) async fn key_refusal(
 ) -> Option<BackendRejection> {
     let tool = params.get("name").and_then(Value::as_str).unwrap_or("");
     let arguments = params.get("arguments").unwrap_or(&Value::Null);
+    let call = crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall {
+        server: &backend.name,
+        tool,
+        session_id: None,
+        api_key_name: None,
+        trace_id: tool,
+        caller_key: None,
+    };
     let checked = backend.undeclared_key_refusal(identity_key, headers, tool, arguments);
     match checked.await {
         Ok(None) => None,
         Ok(Some(text)) => {
             let result = json!({ "content": [{ "type": "text", "text": text }], "isError": true });
-            let response = JsonRpcResponse::success(id.clone(), result);
-            Some(build_http_response(&response, StatusCode::OK))
+            let mut response = JsonRpcResponse::success(id.clone(), result);
+            // The text lists the backend's own parameter names, which no
+            // dispatch gate read: it meets the content checks here.
+            let screen = (
+                &call,
+                crate::gateway::meta_mcp::invoke::egress::ContentChecks::Here,
+            );
+            super::super::direct_guards::scan_direct_egress(
+                failed.state,
+                screen,
+                failed.client,
+                &mut response,
+            );
+            Some(build_http_response(&Egressed::of(response), StatusCode::OK))
         }
-        Err(e) => Some(failed.clone().answer(None, e).await),
+        Err(e) => Some(failed.clone().answer(None, e, &call).await),
     }
 }
