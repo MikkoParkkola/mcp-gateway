@@ -44,11 +44,15 @@ fn backend(path: Path, kind: Kind) -> Planted {
         Path::Delivered => "nothing to see".to_string(),
         Path::FirewallRefused => secret(),
     };
-    let part = match kind {
+    Planted::with_text("tools/call", part(kind), text)
+}
+
+/// The fixture part that plants `kind`'s answer.
+fn part(kind: Kind) -> Part {
+    match kind {
         Kind::Question => Part::InterimQuestion,
         Kind::StateOnly => Part::InterimStateOnly,
-    };
-    Planted::with_text("tools/call", part, text)
+    }
 }
 
 /// The cells this stage covers. Paths the design names whose fixtures arrive
@@ -66,6 +70,37 @@ const KNOWN_LEAK: [(Route, Path, Kind); 1] = [
     // MIK-8177.STATE.1: stage 2's handoff release frees it.
     (Route::Meta, Path::FirewallRefused, Kind::StateOnly),
 ];
+
+/// The JSON-RPC message a reply carries: the last SSE `data:` line, or the
+/// whole body when the reply is plain JSON.
+fn rpc(body: &str) -> serde_json::Value {
+    let frame = body
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .next_back()
+        .unwrap_or(body);
+    serde_json::from_str(frame).unwrap_or(serde_json::Value::Null)
+}
+
+/// Whether `body` is the outcome `path` names: a delivered result carrying
+/// the sealed state, or the firewall's own refusal without the credential.
+fn took(path: Path, body: &str) -> bool {
+    let reply = rpc(body);
+    match path {
+        Path::Delivered => {
+            reply.get("error").is_none()
+                && reply["result"].is_object()
+                && body.contains("requestState")
+        }
+        Path::FirewallRefused => {
+            reply["error"]["code"] == -32600
+                && reply["error"]["message"]
+                    .as_str()
+                    .is_some_and(|m| m.contains("firewall"))
+                && !body.contains(&secret())
+        }
+    }
+}
 
 /// The hold registry's counts for one state: registered, unscoped, dropped
 /// without a handoff.
@@ -92,16 +127,15 @@ async fn slot_release_matrix() {
                 .await
                 .expect("an unrelated exchange holds a slot");
             let before = counts(&continuation);
-            let (uri, sent, mut params) = request(route, "tools/call", Part::InterimQuestion);
+            let (uri, sent, mut params) = request(route, "tools/call", part(kind));
             params["_meta"] = answering_client();
             let body = post_as(&fx, (uri, sent), &params, Some("alice")).await;
             // The cell only counts if its path really happened.
-            let text = &body;
-            let (want, took_path) = match path {
-                Path::Delivered => (2, text.contains("requestState")),
-                Path::FirewallRefused => (1, !text.contains(&secret())),
+            let want = match path {
+                Path::Delivered => 2,
+                Path::FirewallRefused => 1,
             };
-            if !took_path {
+            if !took(path, &body) {
                 failures.push(format!("{label}: did not take its path: {body}"));
             }
             let known_leak = KNOWN_LEAK.contains(&(route, path, kind));
