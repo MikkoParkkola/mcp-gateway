@@ -157,10 +157,12 @@ fn a_copy_the_caller_never_received_is_still_a_relay() {
 
 /// MIK-8083: holding the start of a source's text excuses only that start: a
 /// short unreceived suffix forwarded after it is still a relay (the hole a
-/// proximity-based excuse would open).
+/// proximity-based excuse would open). Every k-gram is kept (MIK-8196): with
+/// 1-in-4 sampling a 56-char suffix is missed about 2.6e-6 of the time, so
+/// the row would test the per-process key, not the excuse.
 #[test]
 fn a_held_prefix_never_excuses_an_unreceived_suffix() {
-    let fw = observing();
+    let fw = observing().keeping_every_kgram();
     let missed: Vec<usize> = (0..TEXTS / 10)
         .filter(|&i| {
             let (prefix, tool) = (text(i)[..200].to_string(), format!("read{i}"));
@@ -172,4 +174,31 @@ fn a_held_prefix_never_excuses_an_unreceived_suffix() {
         })
         .collect();
     assert!(missed.is_empty(), "suffixes not reported: {missed:?}");
+}
+
+/// MIK-8196: the sampling key is per process, so one process gives one relay
+/// the same verdict however often it is retried or redelivered: a retry
+/// cannot draw a different sample. Sampling stays on, so a short unreceived
+/// suffix is sometimes missed, and a miss stays a miss too.
+#[test]
+fn a_retried_relay_gets_the_same_verdict() {
+    let fw = observing();
+    for i in 0..TEXTS / 10 {
+        let (prefix, tool) = (text(i)[..200].trim_end().to_string(), format!("read{i}"));
+        let (a, h) = (format!("a{i}"), format!("h{i}"));
+        let whole = format!("{prefix} 0123456789abcdefghi");
+        deliver(&fw, &a, &tool, &whole, false);
+        deliver(&fw, &h, &tool, &prefix, false);
+        let first = reported(&fw, &h, &whole);
+        for retry in 0..20 {
+            if retry % 5 == 0 {
+                deliver(&fw, &a, &tool, &whole, false);
+            }
+            assert_eq!(
+                reported(&fw, &h, &whole),
+                first,
+                "text {i} changed verdict on retry {retry}"
+            );
+        }
+    }
 }

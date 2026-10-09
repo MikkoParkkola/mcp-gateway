@@ -20,7 +20,7 @@ async fn stdio_relays_no_resource_update_so_attestation_expiry_has_nothing_to_en
     })
     .to_string();
 
-    let ((), drained) = crate::transport::notification_sink::collect(async {
+    let ((), drained) = crate::transport::notification_sink::collect(None, async {
         let _ = t.register_progress_token("tok-open-call");
         t.handle_response(&update).unwrap();
     })

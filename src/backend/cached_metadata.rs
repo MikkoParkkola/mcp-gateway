@@ -5,6 +5,7 @@
 
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
@@ -19,13 +20,17 @@ pub(crate) struct CachedMetadata<T> {
     store_observer: std::sync::OnceLock<StoreObserver>,
 }
 
+/// One fill's mark, opaque here: handed to the fill's fetch and to every
+/// caller that waits on that fill, never to another fill (MIK-8046).
+pub(crate) type FillMark = Arc<AtomicBool>;
+
 /// What [`CachedMetadata::observe_stores`] runs after an accepted store.
 pub(crate) type StoreObserver = Arc<dyn Fn() + Send + Sync>;
 
 struct CachedMetadataState<T> {
     value: Option<Arc<T>>,
     cached_at: Option<Instant>,
-    in_flight: Option<watch::Sender<()>>,
+    in_flight: Option<(watch::Sender<()>, FillMark)>,
     /// Bumped by every invalidation. A fill stores its answer only if the
     /// generation it started under is still current, so an invalidation that
     /// lands mid-fill voids that fill instead of being overwritten by it
@@ -49,13 +54,14 @@ impl<T> Default for CachedMetadataState<T> {
 
 enum CacheFetchState<'a, T> {
     Cached(Arc<T>),
-    Wait(watch::Receiver<()>),
+    Wait(watch::Receiver<()>, FillMark),
     Fetch(FetchPermit<'a, T>),
 }
 
 struct FetchPermit<'a, T> {
     cache: &'a CachedMetadata<T>,
     sender: watch::Sender<()>,
+    mark: FillMark,
     /// The generation current when this fetch was authorized.
     generation: u64,
 }
@@ -201,8 +207,8 @@ impl<T> CachedMetadata<T> {
             if let Some(value) = Self::fresh_value(&state, ttl) {
                 return CacheFetchState::Cached(value);
             }
-            if let Some(sender) = state.in_flight.as_ref() {
-                return CacheFetchState::Wait(sender.subscribe());
+            if let Some((sender, mark)) = state.in_flight.as_ref() {
+                return CacheFetchState::Wait(sender.subscribe(), Arc::clone(mark));
             }
         }
 
@@ -210,15 +216,17 @@ impl<T> CachedMetadata<T> {
         if let Some(value) = Self::fresh_value(&state, ttl) {
             return CacheFetchState::Cached(value);
         }
-        if let Some(sender) = state.in_flight.as_ref() {
-            return CacheFetchState::Wait(sender.subscribe());
+        if let Some((sender, mark)) = state.in_flight.as_ref() {
+            return CacheFetchState::Wait(sender.subscribe(), Arc::clone(mark));
         }
 
         let (sender, _receiver) = watch::channel(());
-        state.in_flight = Some(sender.clone());
+        let mark = FillMark::default();
+        state.in_flight = Some((sender.clone(), Arc::clone(&mark)));
         CacheFetchState::Fetch(FetchPermit {
             cache: self,
             sender,
+            mark,
             generation: state.generation,
         })
     }
@@ -236,8 +244,9 @@ impl<T> CachedMetadata<T> {
         let fetch = &fetch;
         self.get_or_fetch_shared_then(
             ttl,
-            || async move { fetch().await.map(|v| (v, ())) },
+            |_| async move { fetch().await.map(|v| (v, ())) },
             |()| {},
+            |_| {},
         )
         .await
     }
@@ -246,25 +255,33 @@ impl<T> CachedMetadata<T> {
     /// handed to `on_stored` ONLY when the generation check accepted the
     /// store. State derived from a fill (the tools-truncated flag) is then
     /// voided by the same mid-fill invalidation that voids the value.
-    pub(crate) async fn get_or_fetch_shared_then<A, F, Fut, S>(
+    ///
+    /// `fetch` gets its fill's [`FillMark`]; `waiting` is told, before each
+    /// wait, the mark of the fill this caller now waits on, and `None` when
+    /// it runs the fill itself, so it never reads a fill it left (MIK-8046).
+    pub(crate) async fn get_or_fetch_shared_then<A, F, Fut, S, W>(
         &self,
         ttl: Duration,
         fetch: F,
         on_stored: S,
+        waiting: W,
     ) -> Result<Arc<T>>
     where
-        F: Fn() -> Fut,
+        F: Fn(FillMark) -> Fut,
         Fut: Future<Output = Result<(T, A)>>,
         S: FnOnce(A),
+        W: Fn(Option<FillMark>),
     {
         loop {
             match self.acquire(ttl) {
                 CacheFetchState::Cached(value) => return Ok(value),
-                CacheFetchState::Wait(mut receiver) => {
+                CacheFetchState::Wait(mut receiver, mark) => {
+                    waiting(Some(mark));
                     let _ = receiver.changed().await;
                 }
                 CacheFetchState::Fetch(permit) => {
-                    let result = fetch().await;
+                    waiting(None);
+                    let result = fetch(Arc::clone(&permit.mark)).await;
                     let result = result.map(|(value, side)| {
                         let value = Arc::new(value);
                         self.store_if_current(Arc::clone(&value), permit.generation, || {
@@ -486,5 +503,82 @@ mod tests {
             "the next reader must re-ask, not be served"
         );
         assert_eq!(calls.load(Ordering::SeqCst), 2, "the re-ask must be real");
+    }
+
+    /// `MIK-8046`: a waiter is told the mark of the fill it waits on, the
+    /// same mark that fill's fetch holds; the owner is told it waits on none,
+    /// and the next fill gets a fresh mark.
+    #[tokio::test]
+    async fn a_waiter_reads_the_mark_of_the_fill_it_waits_on() {
+        let cache: CachedMetadata<Vec<u8>> = CachedMetadata::new();
+        let first_mark = parking_lot::Mutex::new(None);
+        let heard = parking_lot::Mutex::new(Vec::new());
+        let owner = cache.get_or_fetch_shared_then(
+            LONG_TTL,
+            |mark| {
+                *first_mark.lock() = Some(Arc::clone(&mark));
+                async move {
+                    mark.store(true, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    Ok((vec![1u8], ()))
+                }
+            },
+            |()| {},
+            |mark| heard.lock().push(("owner", mark)),
+        );
+        let waiter = async {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            cache
+                .get_or_fetch_shared_then(
+                    LONG_TTL,
+                    |_| async { Ok((vec![2u8], ())) },
+                    |()| {},
+                    |mark| heard.lock().push(("waiter", mark)),
+                )
+                .await
+        };
+        let (owner, waiter) = tokio::join!(owner, waiter);
+        assert_eq!(*owner.unwrap(), vec![1u8]);
+        assert_eq!(*waiter.unwrap(), vec![1u8], "the waiter joined the fill");
+        let first_mark = first_mark.lock().clone().expect("the owner's fetch ran");
+        {
+            let heard = heard.lock();
+            assert!(
+                matches!(heard[0], ("owner", None)),
+                "the owner waits on no fill"
+            );
+            let ("waiter", Some(mark)) = &heard[1] else {
+                panic!("the waiter hears which fill it waits on");
+            };
+            assert!(
+                Arc::ptr_eq(mark, &first_mark),
+                "the waiter reads that fill's own mark"
+            );
+            assert!(mark.load(Ordering::SeqCst), "and sees what the fill set");
+        }
+
+        cache.invalidate_if(|_| true);
+        let later = parking_lot::Mutex::new(None);
+        cache
+            .get_or_fetch_shared_then(
+                LONG_TTL,
+                |mark| {
+                    *later.lock() = Some(mark);
+                    async { Ok((vec![3u8], ())) }
+                },
+                |()| {},
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let later = later.lock().clone().expect("the later fetch ran");
+        assert!(
+            !Arc::ptr_eq(&later, &first_mark),
+            "a later fill gets its own mark"
+        );
+        assert!(
+            !later.load(Ordering::SeqCst),
+            "unset until that fill sets it"
+        );
     }
 }

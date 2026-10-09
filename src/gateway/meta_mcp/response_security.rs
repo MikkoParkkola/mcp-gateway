@@ -119,24 +119,6 @@ pub(crate) fn meta_response_targets(
     targets
 }
 
-/// Whether delivery must inspect the result, or an earlier pass on the same
-/// dispatch already inspected this exact artifact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DeliveryInspection {
-    /// Inspect at delivery. Every caller that cannot prove an earlier pass.
-    /// The stdio caller (`server/mod.rs`) has no router pre-pass and relies
-    /// on this: delivery is its only inspection.
-    Required,
-    /// The HTTP `tools/call` arm ran the response firewall on this artifact
-    /// and resolved its verdict; a second pass here re-ran the detectors on
-    /// the already-sanitized result and could not change the outcome.
-    #[cfg_attr(
-        not(feature = "firewall"),
-        expect(dead_code, reason = "only the firewall-gated router pass inspects")
-    )]
-    AlreadyInspected,
-}
-
 pub(crate) use crate::protocol::{ChainSource, UpstreamState};
 
 /// Server-owned delivery metadata supplied after wrapping and protocol shaping.
@@ -144,7 +126,6 @@ pub(crate) struct ResponseDeliveryContext<'a> {
     pub method: &'a str,
     pub targets: &'a [ResponsePolicyTarget],
     pub correlation: ResponseCorrelation<'a>,
-    pub mutation: crate::security::response_policy::ResponseMutationPolicy,
     pub signing: Option<&'a super::signing::SigningInvocationContext>,
     /// Eligibility of this result for a chain link.
     pub chain_source: ChainSource,
@@ -192,21 +173,7 @@ impl super::MetaMcp {
         response: crate::protocol::JsonRpcResponse,
         context: &ResponseDeliveryContext<'_>,
     ) -> crate::protocol::JsonRpcResponse {
-        self.finalize_response_after_inspection(response, context, DeliveryInspection::Required)
-            .await
-    }
-
-    /// [`Self::finalize_response_for_delivery`] for a caller that may already
-    /// have run the response firewall on this exact artifact.
-    /// Test-only since stdio records after its judge (MIK-7920).
-    #[cfg(test)]
-    pub(crate) async fn finalize_response_after_inspection(
-        &self,
-        response: crate::protocol::JsonRpcResponse,
-        context: &ResponseDeliveryContext<'_>,
-        inspection: DeliveryInspection,
-    ) -> crate::protocol::JsonRpcResponse {
-        let response = self.finalize_content(response, context, inspection);
+        let response = self.finalize_content(response, context);
         self.record_delivery(response, &context.correlation, None)
             .await
     }
@@ -215,53 +182,43 @@ impl super::MetaMcp {
     /// firewall, scope clamp, chain, signing. The delivery record is not
     /// written here, so a caller can judge the finalized answer first and put
     /// its verdict in that record (MIK-7799).
-    #[allow(clippy::too_many_lines)]
     pub(crate) fn finalize_content(
+        &self,
+        response: crate::protocol::JsonRpcResponse,
+        context: &ResponseDeliveryContext<'_>,
+    ) -> crate::protocol::JsonRpcResponse {
+        self.finalize_routed(response, context, None)
+    }
+
+    /// [`Self::finalize_content`] on the HTTP route: a `tools/call` is
+    /// scanned by the router's own instance, which keeps that session's
+    /// firewall state; every other method by this one (NFR.WORKLOAD.1).
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn finalize_routed(
         &self,
         mut response: crate::protocol::JsonRpcResponse,
         context: &ResponseDeliveryContext<'_>,
-        inspection: DeliveryInspection,
+        router: Option<&super::invoke::egress::Firewall>,
     ) -> crate::protocol::JsonRpcResponse {
         use crate::protocol::JsonRpcResponse;
 
-        #[cfg(feature = "firewall")]
-        if matches!(context.method, "tools/call" | "tools/list")
-            && inspection == DeliveryInspection::Required
-            && !response.discovery_inspected
-            && response.error.is_none()
-            && let Some(result) = response.result.as_mut()
-            && let Some(firewall) = &self.firewall
-        {
-            use crate::security::firewall::FirewallAction;
-            use crate::security::response_policy::ResponseArtifactKind;
+        let own = self.firewall.as_deref();
+        let firewall = match context.method {
+            "tools/call" => router.or(own),
+            _ => own,
+        };
 
-            let snapshot = self.relay_snapshot(result);
-            let verdict = firewall.check_response_artifact(
-                result,
-                context.targets,
-                &context.correlation,
-                ResponseArtifactKind::FinalResponse,
-                context.mutation,
-            );
-            let shape = super::invoke::relay::AnswerShape::of(context.correlation.external_tool);
-            self.restage_if_changed(snapshot, Some(&*result), shape);
-            if !verdict
-                .is_ok_and(|verdict| verdict.allowed && verdict.action != FirewallAction::Block)
-            {
-                response = JsonRpcResponse::delivery_refusal_error(
-                    response.id,
-                    -32600,
-                    "Response blocked by security firewall",
-                );
-            }
-        }
-        #[cfg(not(feature = "firewall"))]
-        let _ = (
-            context.method,
-            context.targets,
-            context.mutation,
-            inspection,
-        );
+        let sealed = self.sealed_question(context.method, &response);
+        // One egress scan, every method and every part (MIK-8139 family):
+        // a frame another pass already screened carries the mark.
+        let at = super::invoke::egress::Egress {
+            content: super::invoke::egress::ContentChecks::for_method(context.method),
+            targets: context.targets,
+            correlation: &context.correlation,
+            api_key_name: None,
+            firewall,
+        };
+        self.scan_egress(&mut response, &at);
         // MIK-7211.PARENT.6: the scope is settled before the chain link and the
         // MAC, which authenticate this in-memory result; a clamp left to the
         // serializer would change bytes they already cover.
@@ -310,59 +267,57 @@ impl super::MetaMcp {
                 );
             }
         }
-
+        // MIK-8131: a sealed question this finalization did not let out
+        // (refused or replaced) leaves its slot for the caller to give back.
+        if let Some((envelope, hold_key)) = sealed {
+            let state = response.result.as_ref().and_then(|r| r.get("requestState"));
+            if state.and_then(serde_json::Value::as_str) != Some(envelope.as_str()) {
+                response.unsent_hold = Some(hold_key);
+            }
+        }
         response
     }
 }
 
 impl super::MetaMcp {
     /// Inspect a task's result once, at settlement, under the targets the
-    /// synchronous call would have used (#2351). `tasks/get` serves what is
-    /// settled, so a refusal here is what every read sees.
+    /// synchronous call would have used (#2351), through the egress scan's
+    /// result step: an interim task result keeps its question and handle
+    /// whole. `tasks/get` serves what is settled, so a refusal here is what
+    /// every read sees.
     ///
     /// # Errors
     /// [`crate::Error::ResponseFirewallRefused`] when the verdict refuses.
-    #[cfg_attr(
-        not(feature = "firewall"),
-        allow(clippy::unused_self, clippy::unnecessary_wraps)
-    )]
     pub(crate) fn inspect_task_result(
         &self,
         targets: &[ResponsePolicyTarget],
         task_id: &str,
         result: &mut serde_json::Value,
     ) -> crate::Result<()> {
-        #[cfg(feature = "firewall")]
-        if let Some(firewall) = &self.firewall {
-            use crate::security::firewall::FirewallAction;
-            use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
-
-            let (server, tool) = targets.first().map_or(("gateway", "tasks/get"), |t| {
-                (t.server.as_str(), t.tool.as_str())
-            });
-            let correlation = ResponseCorrelation {
-                session_id: task_id,
-                caller: "task",
-                external_server: server,
-                external_tool: tool,
-                subject: None,
-            };
-            let verdict = firewall
-                .check_response_artifact(
-                    result,
-                    targets,
-                    &correlation,
-                    ResponseArtifactKind::FinalResponse,
-                    ResponseMutationPolicy::Redact,
-                )
-                .map_err(|_| crate::Error::ResponseFirewallRefused)?;
-            if !verdict.allowed || verdict.action == FirewallAction::Block {
-                tracing::warn!(task_id, "Firewall: task result blocked");
-                return Err(crate::Error::ResponseFirewallRefused);
-            }
+        use super::invoke::egress::{Egress, EgressOutcome, firewall_result};
+        let (server, tool) = targets.first().map_or(("gateway", "tasks/get"), |t| {
+            (t.server.as_str(), t.tool.as_str())
+        });
+        let correlation = ResponseCorrelation {
+            session_id: task_id,
+            caller: "task",
+            external_server: server,
+            external_tool: tool,
+            subject: None,
+        };
+        // A task's result is a `tools/call` result: its content gates ran at
+        // dispatch.
+        let at = Egress {
+            content: super::invoke::egress::ContentChecks::Dispatched,
+            targets,
+            correlation: &correlation,
+            api_key_name: None,
+            firewall: self.firewall.as_deref(),
+        };
+        if firewall_result(result, &at) == EgressOutcome::Refused {
+            tracing::warn!(task_id, "Firewall: task result blocked");
+            return Err(crate::Error::ResponseFirewallRefused);
         }
-        #[cfg(not(feature = "firewall"))]
-        let _ = (targets, task_id, result);
         Ok(())
     }
 

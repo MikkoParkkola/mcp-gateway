@@ -30,11 +30,13 @@ impl Gateway {
         fut: F,
         writer: &Sender<OutboundFrame>,
         reads: &StdioReads,
+        screen: crate::transport::notification_sink::Screen,
     ) -> (F::Output, Option<ReadAttribution>)
     where
         F: Future,
     {
         let (scoped, mut notifications) = crate::transport::notification_sink::scope(
+            screen,
             crate::gateway::outbound::read_scoped(reads.guard(), fut),
         );
         tokio::pin!(scoped);
