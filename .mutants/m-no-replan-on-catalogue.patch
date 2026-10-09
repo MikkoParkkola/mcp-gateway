@@ -1,0 +1,12 @@
+diff --git a/src/capability/backend_listing.rs b/src/capability/backend_listing.rs
+index effd37490..dbbc5fbc9 100644
+--- a/src/capability/backend_listing.rs
++++ b/src/capability/backend_listing.rs
+@@ -63,7 +63,6 @@ impl CapabilityBackend {
+     /// one), [`Self::finish_initial_scan`] for the startup scan.
+     pub(super) fn catalogue_changed(&self) {
+         *self.listing.lock() = Some(self.listed_names());
+-        self.listing_wake.notify_one();
+     }
+ 
+     /// The startup scan loaded every directory. A client served while it ran

@@ -1,0 +1,14 @@
+diff --git a/src/config_reload/watcher.rs b/src/config_reload/watcher.rs
+index bad094def..1b78d144b 100644
+--- a/src/config_reload/watcher.rs
++++ b/src/config_reload/watcher.rs
+@@ -322,7 +322,8 @@ impl ConfigWatcher {
+                     let ctx = ctx
+                         .with_env(env)
+                         .with_identity_grant_sink_opt(identity_grants)
+-                        .with_capabilities(capabilities);
++;
++                    let _ = capabilities;
+                     match on_registered {
+                         Some(hook) => ctx.with_on_registered(hook),
+                         None => ctx,

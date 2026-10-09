@@ -1,0 +1,12 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index 347536f52..a91cbd461 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -148,7 +148,6 @@ impl EventsHub {
+     ) -> Verdict {
+         let backend = sub.name.starts_with(super::backend_source::NAME_PREFIX);
+         match self.source_offering(&sub.name) {
+-            Some(_) if record.owner_scoped && !backend => Verdict::Admits,
+             Some(source) => match source.authorize_row(sub).await {
+                 Err(e) if e.code == -32012 => Verdict::Refuses,
+                 // Not found now (a catalogue that could not read the type,

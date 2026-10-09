@@ -1,0 +1,6 @@
+head_sha	d8dbdf9cadff3fd87219ea99176889fb4d9cceff
+m-owner-asks-source	linux	m-owner-asks-source.patch	--lib events::worker
+m-watcher-no-capabilities	linux	m-watcher-no-capabilities.patch	--lib config_reload::
+m-no-replan-on-catalogue	linux	m-no-replan-on-catalogue.patch	--lib capability::
+m-expiry-watch-silent	linux	m-expiry-watch-silent.patch	--lib capability::
+m-silent-scan-end	linux	m-silent-scan-end.patch	--lib capability::
