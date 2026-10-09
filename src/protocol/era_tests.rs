@@ -123,3 +123,36 @@ async fn an_accepting_install_stores_the_answer() {
     assert_eq!(era, Era::Modern);
     assert_eq!(cache.cached().await, Some(Era::Modern));
 }
+
+/// MIK-8218 ERASNAP.1 and ERASNAP.3: the outbound path's non-blocking read
+/// (`cached_now`) sees a determined verdict even while another holder has the
+/// lock, as a parked `observation()` reader does. Cold start, a discard and a
+/// restart's own probe still read undetermined, held or not.
+#[tokio::test]
+async fn a_held_lock_still_reads_the_determined_verdict() {
+    let cache = Arc::new(EraCache::for_backend("held-lock"));
+    assert_eq!(cache.cached_now(), None, "a cold start reads undetermined");
+
+    cache.resolve_with(|| async { modern_document() }).await;
+    {
+        let _held = cache.observation.lock().await;
+        assert_eq!(
+            cache.cached_now(),
+            Some(Era::Modern),
+            "a held lock hid the determined verdict from the outbound path"
+        );
+    }
+
+    let during = Arc::clone(&cache);
+    cache
+        .restart_with(|| async move {
+            assert_eq!(during.cached_now(), None, "a restart probes undetermined");
+            modern_document()
+        })
+        .await;
+    assert_eq!(cache.cached_now(), Some(Era::Modern));
+
+    cache.invalidate().await;
+    let _held = cache.observation.lock().await;
+    assert_eq!(cache.cached_now(), None, "a discard reads undetermined");
+}

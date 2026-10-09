@@ -190,6 +190,12 @@ impl EraCache {
         (observation.source == EraSource::Probed).then_some(observation.era)
     }
 
+    /// Test support: hold the era lock as a parked reader does (MIK-8218).
+    #[cfg(test)]
+    pub(crate) async fn hold_for_test(&self) -> tokio::sync::MutexGuard<'_, EraObservation> {
+        self.observation.lock().await
+    }
+
     /// The era, if one has been determined and not since invalidated.
     pub async fn cached(&self) -> Option<Era> {
         let observation = *self.observation.lock().await;
