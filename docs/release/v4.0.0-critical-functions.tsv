@@ -25,6 +25,9 @@ src/gateway/meta_mcp/task_confirmation/helpers.rs	challenge_key	1	standard	borde
 src/gateway/meta_mcp/task_confirmation/helpers.rs	cleared	1	standard	borderline	cleared	Strips the grant and answers before dispatch; wrong would forward the gateway's requestState to the backend
 src/gateway/meta_mcp/task_confirmation/helpers.rs	operation_digest	1	standard	borderline	operation_digest	Computes the grant binding digest; omitting a field silently widens the grant
 src/gateway/meta_mcp/task_confirmation/helpers.rs	task_admission_request	1	standard	borderline	task_admission_request	Single builder for admission identity; drift would break replay and owner match
+src/gateway/meta_mcp/task_confirmation/helpers.rs	routed	1	critical	c	AdmissionOwner::routed	Spells an HTTP caller's admission principal from its routed task owner; the pooled anonymous owner is no principal, so a keyed call is refused (MIK-8193)
+src/gateway/meta_mcp/task_confirmation/helpers.rs	local_operator	1	critical	c	AdmissionOwner::local_operator	The stdio transport's reserved admission principal, shared by the sync lease and task admission (MIK-8193)
+src/gateway/meta_mcp/task_confirmation/helpers.rs	principal	1	critical	c	AdmissionOwner::principal	The one principal both admissions key an execution on; a second spelling admits one key twice (MIK-8193)
 src/gateway/router/accounts.rs	own_key	1	critical	c	own_key	Derives the account key from the caller's identity; returns 404 for descriptors that are not the caller's.
 src/gateway/router/accounts.rs	revoke_for	1	critical	c	revoke_for	Revokes only the account key derived from the caller's own verified identity.
 src/gateway/router/accounts.rs	browser_routes	1	standard	borderline	browser_routes	Merged outside auth on purpose; correctness depends on each handler's own checks.
@@ -553,7 +556,7 @@ src/transport/http/listen.rs	read_stream	1	critical	d	read_stream	Caps each list
 src/transport/http/listen.rs	unsolicited_frame	1	critical	d	unsolicited_frame	Admits only the three notifications from an untrusted legacy stream; everything else is dropped
 src/transport/http/listen.rs	next_events	1	critical	d	next_events	Turns an oversized frame or a read error from the untrusted backend into the end of the stream
 src/transport/stdio.rs	capture_notification	1	critical	c	StdioTransport::capture_notification	Routes only notifications/progress to the call that registered the token; drops the rest
-src/transport/stdio_env.rs	configure_child_environment	1	critical	d	configure_child_environment	Clears the env; passes only PATH/HOME/TMPDIR (plus Windows basics) and backend env, so no secret leakage
+src/transport/stdio_env.rs	configure_child_environment	1	critical	d	configure_child_environment	Clears the env; passes only PATH/HOME/TMPDIR (plus Windows basics), six allowlisted non-secret npm settings a backend has not named itself (npm spelling folded), and backend env, so no secret leakage
 src/transport/stdio.rs	drop	1	critical	c	ProgressRegistrationGuard::drop	Deregisters a progress token only for the registration's owner
 src/transport/stdio.rs	handle_response	1	critical	d	StdioTransport::handle_response	Refuses a peer request on the response stream; delivers a response only to the pending id
 src/transport/stdio.rs	register_progress_token	1	critical	c	StdioTransport::register_progress_token	Fails closed on a colliding token, so one call's progress cannot reach another call

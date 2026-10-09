@@ -30,6 +30,16 @@ impl Slot {
             release.notified().await;
         }
     }
+
+    /// [`Self::pause`] for synchronous code on a blocking thread. Only an
+    /// armed point blocks, so an unarmed caller on a runtime thread passes.
+    pub(crate) fn pause_blocking(&self) {
+        let armed = self.0.lock().take();
+        if let Some((reached, release)) = armed {
+            reached.notify_one();
+            tokio::runtime::Handle::current().block_on(release.notified());
+        }
+    }
 }
 
 /// Await `step`, failing the test after 30 s so a broken handshake shows as
