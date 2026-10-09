@@ -284,6 +284,22 @@ impl Fixture {
         .await
     }
 
+    /// The default stack with the failsafe rate limit and circuit breaker off,
+    /// for the per-call timing harness (MIK-8014): thousands of calls must all
+    /// be dispatches, not refusals priced as calls.
+    pub(super) async fn start_unthrottled() -> Self {
+        Self::start_with(
+            |url, require_nonce| {
+                let mut config = signing_config(url, require_nonce);
+                config.failsafe.rate_limit.enabled = false;
+                config.failsafe.circuit_breaker.enabled = false;
+                config
+            },
+            false,
+        )
+        .await
+    }
+
     /// A fixture whose target is mutating and uncached, for the rows that
     /// observe the keyed admission arms.
     pub(super) async fn start_mutating() -> Self {

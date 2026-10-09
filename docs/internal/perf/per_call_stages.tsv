@@ -39,3 +39,43 @@ src/gateway/meta_mcp/call_dispatch.rs	route_retry_to_origin_backend	-	retry-to-o
 src/gateway/meta_mcp/call_dispatch.rs	task_backend_name	-	task-augmented calls only
 src/gateway/meta_mcp/invoke.rs	fmt	-	Debug formatting; not called per call
 src/gateway/meta_mcp/invoke.rs	invoke_tool_traced	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/server/mod.rs	account_custody	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	build_meta_mcp	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	build_stdio_caller_context	stdio_invoke_tiny	on the stdio single-request path
+src/gateway/server/mod.rs	config_installs_minting_strategy	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	configured_minting_strategy_kind	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	dispatch_batch	-	batch frames: no row yet (stated limit)
+src/gateway/server/mod.rs	dispatch_relay_scoped	-	relay egress scope: only when a relay is active
+src/gateway/server/mod.rs	dispatch_single	stdio_invoke_tiny	on the stdio single-request path
+src/gateway/server/mod.rs	dispatch_single_staged	stdio_invoke_tiny	on the stdio single-request path
+src/gateway/server/mod.rs	dispatch_single_with_sink	stdio_invoke_tiny	on the stdio single-request path
+src/gateway/server/mod.rs	dispatch_tools_call	stdio_invoke_tiny	on the stdio single-request path
+src/gateway/server/mod.rs	drop	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	expand_home_path	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	leaky_single_user_backends	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	new	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	new_evaluated	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	new_evaluated_inner	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	new_evaluated_with_account_http	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	new_with_env	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	new_with_path	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	observe_stdio_inbound	stdio_invoke_tiny	on the stdio single-request path
+src/gateway/server/mod.rs	parse_and_observe	stdio_invoke_tiny	on the stdio single-request path
+src/gateway/server/mod.rs	poll_export_source	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	prepare_signing	stdio_invoke_tiny	on the stdio single-request path
+src/gateway/server/mod.rs	reload_path	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	response_firewall	stdio_invoke_tiny	on the stdio single-request path
+src/gateway/server/mod.rs	run	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	run_stdio	-	starts the stdio loop once
+src/gateway/server/mod.rs	run_stdio_on	-	the stdio read loop and its per-request spawn wrap (#3645): not on the timed path until the row moves to the wrapped entry after #3645 merges
+src/gateway/server/mod.rs	shutdown_account_custody	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	spawn_export_task	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	spawn_health_loop	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	spawn_idle_reaper	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	start_account_custody	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	start_account_custody_inner	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	stdio_caller_context	stdio_invoke_tiny	on the stdio single-request path
+src/gateway/server/mod.rs	stdio_routing_keys_only	stdio_invoke_tiny	on the stdio single-request path
+src/gateway/server/mod.rs	stdio_take_merged_client_meta	stdio_invoke_tiny	on the stdio single-request path
+src/gateway/server/mod.rs	with_env	-	startup or lifecycle, not per call
+src/gateway/server/mod.rs	with_watched_config	-	startup or lifecycle, not per call

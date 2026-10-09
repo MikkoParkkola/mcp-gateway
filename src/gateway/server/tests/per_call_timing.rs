@@ -23,7 +23,7 @@ use crate::gateway::router::create_router;
 /// The rows this harness measures, one per per-call stage the family gates.
 /// `scripts/ci/check_per_call_stages.py` keeps this table in step with the
 /// tools/call path.
-pub(crate) const STAGES: &[&str] = &["http_invoke_tiny", "http_invoke_64k"];
+pub(crate) const STAGES: &[&str] = &["http_invoke_tiny", "http_invoke_64k", "stdio_invoke_tiny"];
 
 const WARMUP: usize = 200;
 const CALLS: usize = 2000;
@@ -137,6 +137,47 @@ async fn median_ns(state: &Arc<crate::gateway::router::AppState>, blob: usize) -
     samples[samples.len() / 2]
 }
 
+/// The stdio row: the production stdio dispatcher, called as `run_stdio`
+/// calls it, against the fixture's echo backend.
+async fn stdio_median_ns(fixture: &super::signing_nonce_allocations_support::Fixture) -> u128 {
+    let arguments = json!({"blob": "x".repeat(16)});
+    let mut samples = Vec::with_capacity(CALLS);
+    for round in 0..WARMUP + CALLS {
+        let request = super::signing_nonce_allocations_support::invoke(
+            &format!("t{round}"),
+            None,
+            arguments.clone(),
+        );
+        let start = Instant::now();
+        let response = super::super::Gateway::dispatch_single_with_sink(
+            &fixture.meta,
+            &fixture.tool_policy,
+            &fixture.mtls_policy,
+            request,
+            super::super::StdioClient {
+                session_id: "per-call-timing",
+                channel: &crate::gateway::input_bridge::NoClientChannel,
+                handshake_capabilities: crate::protocol::meta::Declared::NONE,
+                tasks: None,
+                modern: false,
+            },
+            &super::super::StdioTelemetry::default(),
+        )
+        .await;
+        let elapsed = start.elapsed().as_nanos();
+        let text = response.map(|r| r.to_string()).unwrap_or_default();
+        assert!(
+            !text.contains("\"error\"") && !text.contains("\"isError\":true"),
+            "round {round}: the timed stdio call must reach the backend: {text}"
+        );
+        if round >= WARMUP {
+            samples.push(elapsed);
+        }
+    }
+    samples.sort_unstable();
+    samples[samples.len() / 2]
+}
+
 #[test]
 #[ignore = "timing harness: run by scripts/perf/per_call_gate.py on the bench host"]
 fn per_call_timing() {
@@ -148,5 +189,10 @@ fn per_call_timing() {
         for (stage, blob) in STAGES.iter().zip([16, 64 * 1024]) {
             println!("PER_CALL_NS {stage} {}", median_ns(&state, blob).await);
         }
+        let stdio = super::signing_nonce_allocations_support::Fixture::start_unthrottled().await;
+        println!(
+            "PER_CALL_NS stdio_invoke_tiny {}",
+            stdio_median_ns(&stdio).await
+        );
     });
 }
