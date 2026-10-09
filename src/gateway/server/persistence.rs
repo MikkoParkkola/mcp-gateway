@@ -471,11 +471,15 @@ mod tests {
             (
                 "quick save",
                 Box::new(move || {
-                    let _ = finished.send(());
+                    let _ = finished.send(std::time::Instant::now());
                 }),
             ),
         ];
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(200);
+        let window = std::time::Duration::from_millis(200);
+        let (started, deadline) = (
+            std::time::Instant::now(),
+            tokio::time::Instant::now() + window,
+        );
         let returned = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             run_shutdown_saves(deadline, saves),
@@ -483,9 +487,14 @@ mod tests {
         .await;
         drop(release);
         assert!(returned.is_ok(), "a stuck save held the shutdown");
+        // Inside the window, not merely before the test looked: saves start
+        // together, so a stuck one ahead in the list delays no other.
+        let finished_at = done
+            .try_recv()
+            .expect("the save that fits the bound did not run");
         assert!(
-            done.try_recv().is_ok(),
-            "the save that fits the bound did not run to completion"
+            finished_at.duration_since(started) < window,
+            "the quick save waited behind the stuck one"
         );
     }
 }
