@@ -10,14 +10,15 @@
 //! extra roots beside the platform's. It replaces none.
 //!
 //! A release build compiles none of this: no read and no variable name. CI
-//! greps every release binary for the name (release.yml, ci.yml), as for
+//! greps release binaries for the name (release.yml on each shipped artifact,
+//! docker.yml on a pull request), as for
 //! `MCP_GATEWAY_TEST_CLOCK`. Forcing debug assertions on in a release build
 //! brings the hook back; whoever does that already controls the binary, and
 //! a Linux release honours `SSL_CERT_FILE` from the same environment anyway
 //! (design-8188 section 8, seat ruling kimi-20261009T080254Z-92689).
 
 /// The variable naming the PEM file of extra test roots. The grep in
-/// release.yml and ci.yml spells it out; keep the three in step.
+/// release.yml and docker.yml spells it out; keep the three in step.
 #[cfg(debug_assertions)]
 const VAR: &str = "MCP_GATEWAY_TEST_TRUST_CA";
 
