@@ -360,3 +360,75 @@ async fn the_descriptor_preflight_refuses_what_it_cannot_measure_or_fit() {
     let huge = job(json!({"blob": "x".repeat(StoreLimits::default().record_bytes)}));
     assert!(!f.executor.upstream_descriptor_fits(OWNER, &f.id, &huge));
 }
+
+/// Records every handle it is asked to cancel (MIK-7642).
+struct CancelRecorder(Arc<parking_lot::Mutex<Vec<String>>>);
+
+#[async_trait::async_trait]
+impl UpstreamRecovery for CancelRecorder {
+    async fn cancel(&self, handle: &UpstreamHandle, _deadline: Duration) {
+        self.0.lock().push(handle.handle.clone());
+    }
+
+    async fn claims(&self, backend: &str) -> bool {
+        backend == BACKEND
+    }
+
+    async fn query(&self, _handle: &UpstreamHandle, _deadline: Duration) -> UpstreamAnswer {
+        UpstreamAnswer::Live
+    }
+}
+
+/// MIK-7642: the one-sender helper sends nothing without an adapter, nothing
+/// for a row the store cannot claim (the error arm), and exactly once for the
+/// caller's own cancelled row whose descriptor is durable.
+#[tokio::test]
+async fn cancel_upstream_once_sends_only_on_its_own_claim() {
+    use super::CancelSend;
+    let f = fixture().await;
+    assert!(
+        f.executor
+            .capture_upstream(OWNER, &f.id, f.revision, capture("upstream-9"))
+            .await
+    );
+    cancel(&f).await;
+    // No adapter: nothing is claimed, so an adapter installed later can still send.
+    assert!(
+        !f.executor
+            .cancel_upstream_once(&f.owner_digest, &f.id, None, CancelSend::Inline)
+            .await
+    );
+    let sent = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    assert!(
+        f.executor
+            .install_recovery(Arc::new(CancelRecorder(Arc::clone(&sent))))
+    );
+    // An absent row is a store error: refused, logged, nothing sent.
+    let (claimed, logged) = crate::test_log_capture::capture_warnings(|| {
+        futures::executor::block_on(f.executor.cancel_upstream_once(
+            &f.owner_digest,
+            "task-absent",
+            None,
+            CancelSend::Inline,
+        ))
+    });
+    assert!(!claimed);
+    assert!(
+        logged.contains("upstream cancel claim not written"),
+        "the refusal says why nothing was sent: {logged}"
+    );
+    assert!(sent.lock().is_empty());
+    assert!(
+        f.executor
+            .cancel_upstream_once(&f.owner_digest, &f.id, None, CancelSend::Inline)
+            .await,
+        "the owner's cancelled row with a durable descriptor is claimed"
+    );
+    assert!(
+        !f.executor
+            .cancel_upstream_once(&f.owner_digest, &f.id, None, CancelSend::Inline)
+            .await,
+        "and only once"
+    );
+    assert_eq!(*sent.lock(), vec!["upstream-9".to_owned()]);
+}

@@ -226,7 +226,6 @@ src/gateway/task_service/execution.rs	cancel	1	critical	c	TaskExecutor::cancel	C
 src/gateway/task_service/execution.rs	cancel_lost_the_revision	1	critical	c	TaskExecutor::cancel_lost_the_revision	Retries cancel only after re-reading the task through the owner-scoped service.get
 src/gateway/task_service/execution.rs	transition_write	1	critical	c	TaskExecutor::transition_write	Hashes the request principal to an owner
 src/gateway/task_service/execution.rs	install_recovery	1	standard	borderline	TaskExecutor::install_recovery	Installs the trusted upstream adapter that gates recovery queries
-src/gateway/task_service/execution.rs	cancel_upstream_after_transition	1	critical	c	TaskExecutor::cancel_upstream_after_transition	Claims an upstream cancel only for a row whose Cancel just committed, under that row's own owner digest
 src/gateway/task_service/execution/context.rs	dispatch_context_retrying	1	standard	borderline	OwnedCallerContext::dispatch_context_retrying	signing: None keeps check_invocation_policy running; wrong value silently skips re-auth
 src/gateway/task_service/execution/context.rs	hold_caller_key	1	standard	borderline	OwnedCallerContext::hold_caller_key	Holds the caller key through a backend call; a miss lets an idle sweep reclaim the key the task writes under
 src/gateway/task_service/execution/input_round.rs	provide_input	1	critical	c	TaskExecutor::provide_input	Scopes task/update answers to the owner; foreign or absent task returns NotFound
@@ -250,7 +249,7 @@ src/gateway/task_service/execution/worker.rs	inspect_settled	1	critical	d	inspec
 src/gateway/task_service/execution/worker.rs	upstream_descriptor_fits	1	critical	c	TaskExecutor::upstream_descriptor_fits	Preflight refuses when no owner-scoped descriptor measurement resolves
 src/gateway/task_service/execution/worker.rs	run_dispatched	1	standard	borderline	run_dispatched	Arms the upstream job only if the adapter claims the backend; builds the worker authorizer
 src/gateway/task_service/execution/worker.rs	stored_backend_output	1	critical	borderline	stored_backend_output	Decides whether a settled row holds backend output that a receipt may describe as the peer's.
-src/gateway/task_service/execution/worker.rs	cancel_held_upstream	1	critical	b	cancel_held_upstream	Offers a held handle only to the caller's own row, resolved through admission's hasher
+src/gateway/task_service/execution/worker.rs	cancel_held_upstream	1	standard	borderline	cancel_held_upstream	Resolves the caller's own owner digest for the claim; claim_upstream_cancel_blocking carries the checks
 src/gateway/task_service/host.rs	admits_backend	1	standard	borderline	HostAuthorizer::admits_backend	Delegates the backend-admission decision
 src/gateway/task_service/host.rs	authorizer	1	standard	borderline	LiveHost::authorizer	Picks the transport authorizer; a wrong pick applies the wrong policy
 src/gateway/task_service/host.rs	decide	1	standard	borderline	HostAuthorizer::decide	Delegates the authz Decision to the HTTP or stdio authorizer

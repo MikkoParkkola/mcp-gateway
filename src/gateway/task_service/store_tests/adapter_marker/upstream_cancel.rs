@@ -123,3 +123,41 @@ async fn the_durable_handle_wins_over_an_offered_one() {
     );
     store.close().await.unwrap();
 }
+
+/// A claim whose descriptor would take the row over its byte budget is
+/// refused with `Capacity` and writes nothing: no send is claimed for a row
+/// that could not record it.
+#[tokio::test]
+async fn a_claim_over_the_record_budget_is_refused_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let (row, binding) = admitted_with(&store, &services(), "cancel-cap", padding()).await;
+    let owner = binding.principal_digest().to_owned();
+    let id = row.id().to_owned();
+    store
+        .transition(&owner, &id, 1, TaskTransition::Cancel, at(1))
+        .await
+        .unwrap();
+    store.close().await.unwrap();
+    let size = fs::read(path.join(format!("{id}.json"))).unwrap().len();
+    let store = TaskStore::open(
+        &path,
+        StoreLimits {
+            record_bytes: size,
+            ..StoreLimits::default()
+        },
+    )
+    .await
+    .expect("the loader accepts a record exactly at the byte cap");
+    let before = files(&path);
+    assert_eq!(
+        store
+            .claim_upstream_cancel(&owner, &id, Some(descriptor(&binding, "job-a")))
+            .await
+            .unwrap_err(),
+        StoreError::Capacity
+    );
+    assert_eq!(files(&path), before, "a refused claim writes nothing");
+    store.close().await.unwrap();
+}

@@ -302,20 +302,13 @@ impl TaskExecutor {
             Err(error) => return Err(commit_to_service(error)),
         };
         self.cancel_signal(id);
-        self.cancel_upstream_after_transition(&task, id).await;
-        Ok(task)
-    }
-
-    /// The transition-side sender (design r8 R8.4): a row that already held
-    /// its upstream descriptor when the cancel committed claims and sends its
-    /// one `tasks/cancel` here. A worker still holding an uncaptured handle
-    /// finds the claim taken, or takes it itself when this finds no descriptor.
-    async fn cancel_upstream_after_transition(&self, task: &CommittedTask, id: &str) {
-        if task.task.status() != TaskStatus::Cancelled {
-            return;
-        }
+        // The transition-side sender (design r8 R8.4): a row that already held
+        // its upstream descriptor when the cancel committed claims and sends
+        // its one `tasks/cancel` here. A worker still holding an uncaptured
+        // handle finds the claim taken, or takes it when this finds none.
         self.cancel_upstream_once(&task.owner_digest, id, None, upstream::CancelSend::Detach)
             .await;
+        Ok(task)
     }
 
     /// One bounded re-read after a cancel lost its revision, mirroring what
@@ -347,7 +340,14 @@ impl TaskExecutor {
         {
             Ok(task) => {
                 self.cancel_signal(id);
-                self.cancel_upstream_after_transition(&task, id).await;
+                // The same transition-side sender as `cancel` above.
+                self.cancel_upstream_once(
+                    &task.owner_digest,
+                    id,
+                    None,
+                    upstream::CancelSend::Detach,
+                )
+                .await;
                 Ok(task)
             }
             // Bounded: the record moved again. If that move was terminal the
