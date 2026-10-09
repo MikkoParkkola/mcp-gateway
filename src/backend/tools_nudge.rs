@@ -488,6 +488,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn every_producer_shares_one_queued_nudge_per_backend() {
+        // Shared stores, per-user stores and verdicts, interleaved.
+        let backend = backend("a");
+        let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
+        backend.attach_nudges(&feed);
+        for n in 0..16 {
+            backend.store_shared_tools_for_test(Vec::new());
+            backend
+                .pooled_entry(&per_user(&format!("idp:u{n}")))
+                .expect("admitted")
+                .tools_cache
+                .replace(Vec::new(), || ());
+            backend.block_tool_for_test(&format!("t{n}"));
+        }
+        assert_eq!(std::iter::from_fn(|| nudges.try_recv().ok()).count(), 1);
+    }
+
+    #[tokio::test]
     async fn many_shared_stores_while_the_drain_is_held_queue_one_nudge() {
         let backend = backend("a");
         let (feed, mut nudges) = tokio::sync::mpsc::unbounded_channel();
