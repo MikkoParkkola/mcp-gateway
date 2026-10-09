@@ -468,3 +468,105 @@ async fn a_real_capability_429_is_excluded_by_the_shared_rate_limit_predicate() 
         errors[1]
     );
 }
+
+// MIK-8212 throwaway, never merged: the old row shape and the new one at the
+// same injected delay on the answering connection.
+#[derive(Clone, Copy, Debug)]
+enum Mik8212Shape {
+    Old,
+    New,
+}
+
+async fn mik_8212_shape(
+    shape: Mik8212Shape,
+    answer_delay_ms: u64,
+) -> std::result::Result<(), String> {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+    let addr = listener.local_addr().unwrap();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_srv = Arc::clone(&counter);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let n = counter_srv.fetch_add(1, Ordering::SeqCst);
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                if n < 2 {
+                    match shape {
+                        Mik8212Shape::Old => {
+                            std::thread::sleep(std::time::Duration::from_millis(400));
+                        }
+                        Mik8212Shape::New => {
+                            let _ =
+                                stream.set_read_timeout(Some(std::time::Duration::from_secs(30)));
+                            while matches!(stream.read(&mut buf), Ok(k) if k > 0) {}
+                        }
+                    }
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(answer_delay_ms));
+                    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
+                    let _ = stream.flush();
+                }
+            });
+        }
+    });
+    let timeout = match shape {
+        Mik8212Shape::Old => std::time::Duration::from_millis(120),
+        Mik8212Shape::New => std::time::Duration::from_secs(1),
+    };
+    let client = reqwest::Client::new();
+    let req = client.get(format!("http://{addr}/")).timeout(timeout);
+    let health = crate::failsafe::HealthTracker::new("test");
+    let resp = send_with_retry(req, "test", true, &health).await;
+    let m = health.metrics();
+    let conns = counter.load(Ordering::SeqCst);
+    match resp {
+        Ok(_) if conns == 3 && m.success_count == 1 && m.failure_count == 0 => Ok(()),
+        Ok(_) => Err(format!("ok but conns={conns} metrics={m:?}")),
+        Err(e) => Err(format!("{e} conns={conns}")),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn mik_8212_delay_ab() {
+    let mut lines = Vec::new();
+    let mut expected = true;
+    for delay in [300u64, 700] {
+        for shape in [Mik8212Shape::Old, Mik8212Shape::New] {
+            let mut set = tokio::task::JoinSet::new();
+            for _ in 0..20 {
+                set.spawn(mik_8212_shape(shape, delay));
+            }
+            let (mut green, mut red, mut sample) = (0, 0, String::new());
+            while let Some(r) = set.join_next().await {
+                match r.unwrap() {
+                    Ok(()) => green += 1,
+                    Err(e) => {
+                        red += 1;
+                        sample = e;
+                    }
+                }
+            }
+            let want_green = matches!(shape, Mik8212Shape::New);
+            expected &= if want_green { green == 20 } else { red == 20 };
+            lines.push(format!(
+                "MIK8212AB delay={delay}ms shape={shape:?} green={green}/20 red={red}/20 sample_err={sample}"
+            ));
+        }
+    }
+    println!("{}", lines.join("\n"));
+    assert!(expected, "A/B off expectation:\n{}", lines.join("\n"));
+}
+
+// MIK-8212 throwaway control: the row as it was on base. Never merged.
+#[tokio::test]
+async fn mik_8212_old_row_control() {
+    let r = mik_8212_shape(Mik8212Shape::Old, 0).await;
+    assert!(r.is_ok(), "control: {r:?}");
+}
