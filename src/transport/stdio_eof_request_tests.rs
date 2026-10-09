@@ -38,10 +38,13 @@ AFTER
         "sh server.sh",
         HashMap::new(),
         Some(workspace.path().to_string_lossy().into_owned()),
-        request_timeout,
+        REQUEST_TIMEOUT,
         None,
     );
     transport.start().await.expect("handshake");
+    // Shortened only now: the window a row tests is its requests', and a
+    // loaded runner can take longer than that to spawn and answer (MIK-8253).
+    transport.set_request_timeout(request_timeout);
     (workspace, transport)
 }
 

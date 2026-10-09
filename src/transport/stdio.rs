@@ -56,8 +56,9 @@ pub struct StdioTransport {
     env: HashMap<String, String>,
     /// Working directory
     cwd: Option<String>,
-    /// Request timeout for initialize and JSON-RPC calls
-    request_timeout: std::time::Duration,
+    /// Request timeout for initialize and JSON-RPC calls, in nanoseconds.
+    /// Atomic only so a test can shorten it after the handshake.
+    request_timeout: AtomicU64,
     /// Writer handle
     writer: Arc<Mutex<Option<tokio::process::ChildStdin>>>,
     /// Cancelled by `close()`, renewed by `start()`: ends a write stuck on a reader.
