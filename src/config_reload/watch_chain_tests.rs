@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The config watcher follows its link chain (#453).
 //!
-//! The real-watcher rows run on Linux only: inotify is what the `ConfigMap`
-//! deployment runs on, and macOS `FSEvents` ignores `NonRecursive`, so a green
-//! there could come from a directory the design never asked to watch.
+//! The real-watcher rows run on Linux and macOS (MIK-8181). macOS `FSEvents`
+//! ignores `NonRecursive`, so there a row that only waits for an event can
+//! pass on a directory the design never asked to watch; the rows that read
+//! the ledger (`watched()`) are what prove a watch on both.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -203,7 +204,7 @@ fn t14_the_named_config_path_keeps_its_directory_link() {
     assert_eq!(super::named_config_path(named.clone()), named);
 }
 
-// Linux-only (W-L9): the real-watcher rows run on inotify (see the module header).
+// Linux and macOS (MIK-8181; see the module header).
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod real_watcher {
     use std::sync::Arc;
@@ -612,6 +613,37 @@ pub(crate) mod real_watcher {
         );
         std::fs::write(a.join("cfg.yaml"), "a: 1\n").unwrap();
         h.wait_watched(&a).await;
+        let _ = h.shutdown.send(());
+    }
+
+    /// T18c (MIK-8181): a chain broken at startup, named through a linked
+    /// directory higher up (macOS `/var` is one), stays heard after its
+    /// repair. The startup watch must be the directory's canonical name, as
+    /// every other ledger entry is; a second spelling of one directory is one
+    /// inotify watch, and unwatching the stale spelling would drop the watch
+    /// the repaired chain still needs.
+    #[tokio::test]
+    async fn t18c_a_repaired_chain_named_through_a_linked_directory_stays_heard() {
+        let root = tempfile::tempdir().expect("root");
+        let real = root.path().join("real");
+        let (a, b, c) = (real.join("a"), real.join("b"), real.join("c"));
+        for dir in [&a, &b, &c] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(b.join("cfg.yaml"), "b: 1\n").unwrap();
+        symlink(&real, root.path().join("alias")).unwrap();
+        symlink(a.join("cfg.yaml"), c.join("l")).unwrap();
+        let mut h = start(&root.path().join("alias").join("c").join("l"));
+        h.wait_wakes_above(0).await;
+        std::fs::write(a.join("cfg.yaml"), "a: 1\n").unwrap();
+        h.wait_watched(&a).await;
+        h.drain_idle().await;
+
+        retarget(&c.join("l"), &b.join("cfg.yaml"));
+        assert!(
+            h.triggered_within(10).await,
+            "a retarget in the link's directory was not heard after the repair"
+        );
         let _ = h.shutdown.send(());
     }
 

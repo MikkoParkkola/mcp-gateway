@@ -371,7 +371,7 @@ impl ChainWatch {
         self.ledger.lock().clone()
     }
 
-    // Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
+    // Linux and macOS (MIK-8181), as the real-watcher rows (see `watch_chain_tests.rs`).
     #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
     pub(super) fn watched(&self) -> BTreeSet<PathBuf> {
         self.watched_now()

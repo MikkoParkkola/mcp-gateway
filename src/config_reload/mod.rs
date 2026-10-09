@@ -416,7 +416,7 @@ pub async fn apply_patch(
 mod diff;
 mod reload_context;
 mod reload_warm_hook;
-// Linux-only, as the other real-watcher rows (inotify).
+// Linux and macOS, as the other real-watcher rows (MIK-8181).
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod reload_warm_hook_tests;
 pub(crate) use reload_warm_hook::{OnRegistered, RegisteredChange};
@@ -447,7 +447,7 @@ use write::mutate_config_and_reload_with;
 pub(crate) use write::{MutateError, mutate_config_and_reload_detached};
 
 mod env_poll;
-// Linux-only (W-L9): the real-watcher rows run on inotify (see `watch_chain_tests.rs`).
+// Linux and macOS (MIK-8181), as the real-watcher rows (see `watch_chain_tests.rs`).
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod env_poll_e2e_tests;
 pub(crate) mod grant_audit;
