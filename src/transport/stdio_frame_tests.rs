@@ -695,6 +695,12 @@ fn a_restart_parked_on_the_writer_lock_spawns_nothing_a_retire_misses() {
         matches!(refused, Err(crate::Error::BackendNotFound(_))),
         "a retired transport installed a fresh tree: {refused:?}"
     );
+    // Decided by the gateway, not by the child's own log line: a child the
+    // install guard kills may never get to write that line (MIK-7923, m08).
+    assert!(
+        matches!(&refused, Err(crate::Error::BackendNotFound(m)) if m.contains("before it started")),
+        "the retired restart was refused only at install, after spawning: {refused:?}"
+    );
     assert_eq!(
         all.len(),
         1,
