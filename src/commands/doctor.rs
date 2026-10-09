@@ -383,10 +383,24 @@ fn check_port(port: u16) -> CheckResult {
     let addr = format!("127.0.0.1:{port}");
     match TcpListener::bind(&addr) {
         Ok(_) => CheckResult::pass("Port", format!("{port} available")).with_category("port"),
-        Err(e) => CheckResult::fail("Port", format!("{port} already in use (probe: {:?} {e})", e.kind()))
+        Err(e) => {
+            // Throwaway probe (MIK-8242): name the holder at the failing instant.
+            let holder = std::process::Command::new("lsof")
+                .args(["-nP", &format!("-iTCP:{port}")])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .unwrap_or_default();
+            CheckResult::fail(
+                "Port",
+                format!(
+                    "{port} already in use (probe: {:?} {e}; holder: {holder:?})",
+                    e.kind()
+                ),
+            )
             .with_category("port")
             .with_hint("Another process is listening on this port")
-            .with_manual_fix(format!("lsof -nP -iTCP:{port} -sTCP:LISTEN")),
+            .with_manual_fix(format!("lsof -nP -iTCP:{port} -sTCP:LISTEN"))
+        }
     }
 }
 
