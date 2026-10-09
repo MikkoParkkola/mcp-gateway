@@ -41,6 +41,12 @@ async fn one_sender_claims_a_cancelled_rows_upstream_cancel() {
         .transition(&owner, &id, 1, TaskTransition::Cancel, at(1))
         .await
         .unwrap();
+    // A settled row has no cancel to make room for: the preflight measures the
+    // descriptor alone.
+    assert_eq!(
+        store.admits_upstream_descriptor(&owner, &id, "orders", "create", &json!({"sku": "x"})),
+        Ok(true)
+    );
     let before = files(&path);
     // Cancelled, but no handle known: nothing claimed, so a later offer can win.
     assert_eq!(
@@ -159,5 +165,70 @@ async fn a_claim_over_the_record_budget_is_refused_and_writes_nothing() {
         StoreError::Capacity
     );
     assert_eq!(files(&path), before, "a refused claim writes nothing");
+    store.close().await.unwrap();
+}
+
+/// A row the dispatch preflight admits at the tightest budget, holding the
+/// widest descriptor, can still be cancelled (which grows it) and still takes
+/// the cancel claim. Mutant "the preflight measures only the working row"
+/// admits a budget the cancel overflows: in production that cancel settles as
+/// the bounded failure, the descriptor is discarded and nothing is sent.
+#[tokio::test]
+async fn a_row_admitted_at_the_tightest_budget_still_takes_the_cancel_claim() {
+    use crate::gateway::task_service::record::widest_handle_reservation;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let (row, binding) = admitted_with(&store, &services(), "cancel-room", padding()).await;
+    let owner = binding.principal_digest().to_owned();
+    let id = row.id().to_owned();
+    store.close().await.unwrap();
+    let at_cap = |record_bytes| {
+        TaskStore::open(
+            &path,
+            StoreLimits {
+                record_bytes,
+                ..StoreLimits::default()
+            },
+        )
+    };
+    let admits = |store: &TaskStore| {
+        store
+            .admits_upstream_descriptor(&owner, &id, "orders", "create", &json!({"sku": "x"}))
+            .unwrap()
+    };
+    // The tightest budget the preflight admits the descriptor at.
+    let (mut low, mut high) = (
+        fs::read(path.join(format!("{id}.json"))).unwrap().len(),
+        64 * 1024,
+    );
+    while low < high {
+        let mid = (low + high) / 2;
+        let store = at_cap(mid)
+            .await
+            .expect("the row loads at any cap above its size");
+        let fits = admits(&store);
+        store.close().await.unwrap();
+        if fits { high = mid } else { low = mid + 1 }
+    }
+    let store = at_cap(low).await.unwrap();
+    assert!(admits(&store), "precondition: admitted at {low} bytes");
+    let mut widest = descriptor(&binding, "x");
+    widest.handle = widest_handle_reservation();
+    store
+        .mark_upstream(&owner, &id, 1, widest.clone())
+        .await
+        .unwrap();
+    store
+        .transition(&owner, &id, 1, TaskTransition::Cancel, at(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .claim_upstream_cancel(&owner, &id, None)
+            .await
+            .unwrap(),
+        CancelClaim::Claimed(widest)
+    );
     store.close().await.unwrap();
 }

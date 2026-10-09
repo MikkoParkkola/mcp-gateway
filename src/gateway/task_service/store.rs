@@ -28,6 +28,8 @@ use disk::acquire_lease;
 #[cfg(test)]
 pub(super) use disk::read_bounded;
 use disk::{Fault, fire, open_blocking, write_record};
+#[path = "store_cancel.rs"]
+pub(crate) mod cancel;
 #[path = "store_disk.rs"]
 mod disk;
 #[path = "store_expiry.rs"]
@@ -45,8 +47,6 @@ mod platform;
 mod platform;
 #[path = "store_targets.rs"]
 pub(crate) mod targets;
-#[path = "store_cancel.rs"]
-pub(crate) mod cancel;
 #[cfg(test)]
 use crate::protocol::tasks::TaskTransition;
 use crate::protocol::tasks::{Task, TaskStatus};
@@ -339,12 +339,13 @@ impl TaskStore {
         tool: &str,
         arguments: &serde_json::Value,
     ) -> Result<bool, StoreError> {
-        let mut candidate = {
+        let (task, mut candidate) = {
             let state = self.0.state();
             if !state.ready {
                 return Err(StoreError::Unavailable);
             }
-            owned(&state, owner, id)?.record.clone()
+            let entry = owned(&state, owner, id)?;
+            (entry.task.clone(), entry.record.clone())
         };
         // The record's OWN admitted digest, exactly as `capture_upstream` binds
         // it: measuring against a digest derived a second time would measure a
@@ -358,7 +359,10 @@ impl TaskStore {
             operation_digest,
         });
         candidate.version = candidate.version.max(UPSTREAM_VERSION);
-        Ok(serialize(&candidate)?.len() <= self.0.limits.record_bytes)
+        let budget = self.0.limits.record_bytes;
+        // And once cancelled (MIK-7642): see `targets::cancelled_bytes`.
+        Ok(serialize(&candidate)?.len() <= budget
+            && targets::cancelled_bytes(&task, &candidate, chrono::Utc::now())? <= budget)
     }
 
     /// Test-only: the durable recovery descriptor of `id`, whatever owner holds

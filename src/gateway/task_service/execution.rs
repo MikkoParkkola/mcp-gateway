@@ -327,6 +327,16 @@ impl TaskExecutor {
     ) -> Result<CommittedTask, ServiceError> {
         let current = self.service.get(principal, id)?;
         if is_terminal(current.task.status()) {
+            // A row cancelled by an earlier attempt whose claim never landed
+            // still gets its one upstream cancel; any other terminal row is
+            // not the claim's to take (NotOurs).
+            self.cancel_upstream_once(
+                &current.owner_digest,
+                id,
+                None,
+                upstream::CancelSend::Detach,
+            )
+            .await;
             return Ok(current);
         }
         self.notify_observer(CommitStage::CancelRetry, id).await;

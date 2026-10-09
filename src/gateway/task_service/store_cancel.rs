@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use super::{Shared, StoreError, TaskStore, owned, record_name, serialize};
 use crate::gateway::task_service::record::{
-    MAX_UPSTREAM_HANDLE_BYTES, UPSTREAM_CANCEL_VERSION, UPSTREAM_VERSION, UpstreamRecord,
+    MAX_UPSTREAM_HANDLE_BYTES, UPSTREAM_CANCEL_VERSION, UpstreamRecord,
 };
 use crate::protocol::tasks::TaskStatus;
 
@@ -35,8 +35,10 @@ impl TaskStore {
     /// `offered` is the descriptor a sender holds but the row may not: the
     /// worker that has a handle the capture never made durable. A descriptor
     /// already on the row wins over it (first handle wins), and an offered one
-    /// must name the row's own admitted operation. The revision is not bumped:
-    /// like `mark_upstream`, no reader's compare-and-set depends on this field.
+    /// must name the row's own admitted operation. The winning descriptor is
+    /// returned to the sender and taken off the row. The revision is not
+    /// bumped: like `mark_upstream`, no reader's compare-and-set depends on
+    /// this field.
     ///
     /// # Errors
     /// `NotFound` for a foreign or absent row; `Capacity` when the descriptor
@@ -90,12 +92,12 @@ impl Shared {
         let Some(descriptor) = durable.or(offered) else {
             return Ok(CancelClaim::NotOurs);
         };
-        record.upstream = Some(descriptor.clone());
+        // The descriptor leaves the row with the claim. A terminal row is never
+        // queried again, and taking it off is what guarantees the marker fits:
+        // the cancelled row already met its budget with the descriptor on it.
+        record.upstream = None;
         record.upstream_cancel_sent = true;
-        record.version = record
-            .version
-            .max(UPSTREAM_VERSION)
-            .max(UPSTREAM_CANCEL_VERSION);
+        record.version = record.version.max(UPSTREAM_CANCEL_VERSION);
         let bytes = serialize(&record)?;
         if bytes.len() > self.limits.record_bytes {
             return Err(StoreError::Capacity);

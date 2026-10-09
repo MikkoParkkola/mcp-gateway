@@ -122,11 +122,12 @@ fn failed_answer(error: Option<&Value>) -> UpstreamAnswer {
     }
 }
 
-/// The trusted, query-only adapter.
+/// The trusted recovery adapter.
 ///
 /// It holds a backend registry and a set of configured names, and its whole
-/// vocabulary is one `tasks/get`. It cannot name a tool or arguments, so it
-/// could not resubmit the original operation if it tried to.
+/// vocabulary is one read, `tasks/get`, and one write, `tasks/cancel` of a
+/// handle whose task the owner cancelled (MIK-7642). It cannot name a tool or
+/// arguments, so it could not resubmit the original operation if it tried to.
 pub(crate) struct NativeUpstreamTasks {
     backends: Arc<BackendRegistry>,
     /// Names from `tasks.recovery_adapters`. Read on every claim, so an

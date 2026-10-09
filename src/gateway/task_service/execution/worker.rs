@@ -364,7 +364,13 @@ async fn follow_upstream_job(
     };
     let followed = tokio::select! {
         biased;
-        _ = cancel_rx.changed() => return,
+        _ = cancel_rx.changed() => {
+            // A capture refused for another reason left the transition no
+            // descriptor to claim: offer the handle held here. When the
+            // transition already claimed, this finds the claim taken.
+            cancel_held_upstream(executor, principal, id, &job, upstream.handle.clone()).await;
+            return;
+        }
         followed = poll_to_terminal(executor, owner_digest, id, adapter, &upstream) => followed,
     };
     // The lease is still held for a terminal answer, and released only after

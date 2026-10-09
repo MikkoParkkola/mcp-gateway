@@ -309,6 +309,7 @@ src/gateway/task_service/store_targets.rs	settle_bounded_blocking	1	critical	c	S
 src/gateway/task_service/store_targets.rs	settle_attempt	1	critical	d	Shared::settle_attempt	Refuses a settlement whose record exceeds the per-record byte budget and records only the peer's authorship.
 src/gateway/task_service/store_targets.rs	keep_provenance	1	critical	borderline	keep_provenance	Leaves a legacy row's error unattributed when it has no stored call to keep (fail closed).
 src/gateway/task_service/store_targets.rs	fallback_bytes	1	critical	d	fallback_bytes	The bytes the record-budget check refuses on: room every live record keeps for the bounded failure
+src/gateway/task_service/store_targets.rs	cancelled_bytes	1	critical	d	cancelled_bytes	The bytes the descriptor preflight refuses on: a row that could not be cancelled without overflowing is never armed (MIK-7642)
 src/gateway/task_service/store_targets.rs	settled	1	standard	borderline	settled	Builds the settled record settle_attempt and fallback_bytes measure
 src/gateway/task_service/store_windows.rs	judge_store_dir	1	critical	d	judge_store_dir	Windows: refuses a store directory whose DACL, reparse point or locality is not private
 src/gateway/task_service/store_windows.rs	open_record	1	critical	d	open_record	Windows: opens without following reparse points; refuses a record that is not private

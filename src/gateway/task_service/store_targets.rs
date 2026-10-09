@@ -383,6 +383,38 @@ fn settled(
     Ok(Some((task, record)))
 }
 
+/// The encoded size of `record` cancelled, at its widest: the largest
+/// revision and a nine-digit settle instant (MIK-7642). The dispatch preflight
+/// admits an upstream descriptor only if the row still fits once cancelled:
+/// a cancel that overflowed would settle as the bounded failure instead,
+/// discarding the descriptor its one upstream `tasks/cancel` is sent from.
+/// 0 for a settled row.
+pub(super) fn cancelled_bytes(
+    task: &Task,
+    record: &Record,
+    now: DateTime<Utc>,
+) -> Result<usize, StoreError> {
+    let at = now.max(task.last_updated_at());
+    let at = at.with_nanosecond(999_999_999).unwrap_or(at);
+    let Some((_, mut cancelled)) = settled(
+        task,
+        record,
+        (
+            TaskTransition::Cancel,
+            None,
+            false,
+            ErrorAuthor::Gateway,
+            WriteRecord::default(),
+        ),
+        at,
+    )?
+    else {
+        return Ok(0);
+    };
+    cancelled.revision = u64::MAX;
+    Ok(serialize(&cancelled)?.len())
+}
+
 /// The encoded size of the bounded failure `record` would settle as, at its
 /// widest: the largest revision, and a settle instant printed with all nine
 /// fractional digits (the serde form trims to 0, 3, 6 or 9). 0 for a settled
