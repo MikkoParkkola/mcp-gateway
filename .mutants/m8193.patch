@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/admission.rs b/src/gateway/meta_mcp/admission.rs
+index 33d32bf54..9fd2345a0 100644
+--- a/src/gateway/meta_mcp/admission.rs
++++ b/src/gateway/meta_mcp/admission.rs
+@@ -533,7 +533,7 @@ impl MetaMcp {
+         // store, one identity per caller. For stdio it is the reserved owner
+         // value (MIK-7272.OWNER.3), never `STDIO_CREDENTIAL_PRINCIPAL`.
+         // No task owner (a certificate or agent alone): its proven subject.
+-        let owner_principal = owner.principal().or_else(|| caller.owner_principal());
++        let owner_principal = { let _ = owner; caller.owner_principal() };
+         let retry = caller.retry;
+         // The arm the dispatch will use, so a retry's representation names it.
+         let arm_key = caller.experiment_key();

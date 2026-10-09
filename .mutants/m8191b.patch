@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/invoke/legacy_bridge.rs b/src/gateway/meta_mcp/invoke/legacy_bridge.rs
+index 71f4bc6cb..2896dea55 100644
+--- a/src/gateway/meta_mcp/invoke/legacy_bridge.rs
++++ b/src/gateway/meta_mcp/invoke/legacy_bridge.rs
+@@ -207,9 +207,6 @@ impl MetaMcp {
+                     // The backend's last round stopped to ask: as at the
+                     // dispatch gate, the lease does not keep this refusal,
+                     // and an earlier round that acted keeps its protection.
+-                    if let Some(execution) = caller.execution {
+-                        execution.withdraw_dispatch();
+-                    }
+                     return Err(undeclared_gate::bridge_refusal(
+                         &key, &method, reason, server, tool, trace_id,
+                     ));

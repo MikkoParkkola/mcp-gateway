@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/admission.rs b/src/gateway/meta_mcp/admission.rs
+index 33d32bf54..186918ec3 100644
+--- a/src/gateway/meta_mcp/admission.rs
++++ b/src/gateway/meta_mcp/admission.rs
+@@ -746,7 +746,7 @@ type WarnedAt = std::collections::HashMap<(String, String), std::time::Instant>;
+ /// capabilities, progress and trace correlation, the key and nonces). The
+ /// operation-defining facts (tool, arguments, `params.task`) live outside
+ /// `_meta`. A key added here enters the fingerprint; nothing else can.
+-pub(crate) const OPERATION_DEFINING_META: &[&str] = &[];
++pub(crate) const OPERATION_DEFINING_META: &[&str] = &["progressToken"];
+ 
+ /// A meta-tool's arguments as its operation fingerprint reads them: the
+ /// client's `_meta` (merged in by `merge_client_meta`) reduced to `allowed`,

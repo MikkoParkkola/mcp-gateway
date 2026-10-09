@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/task_confirmation/helpers.rs b/src/gateway/meta_mcp/task_confirmation/helpers.rs
+index 46cc56e9a..4a743ae3d 100644
+--- a/src/gateway/meta_mcp/task_confirmation/helpers.rs
++++ b/src/gateway/meta_mcp/task_confirmation/helpers.rs
+@@ -55,7 +55,7 @@ pub(crate) fn task_admission_request(
+     arguments: &Value,
+ ) -> OwnedAdmissionRequest {
+     use crate::gateway::meta_mcp::admission::{OPERATION_DEFINING_META, operation_arguments};
+-    let operation = operation_arguments(arguments, OPERATION_DEFINING_META);
++    let operation = { let _ = (operation_arguments, OPERATION_DEFINING_META); arguments.clone() };
+     OwnedAdmissionRequest::new(
+         principal,
+         key,

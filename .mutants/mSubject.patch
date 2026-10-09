@@ -1,0 +1,14 @@
+diff --git a/src/gateway/router/handlers/tasks.rs b/src/gateway/router/handlers/tasks.rs
+index a6898ae10..f6210dd57 100644
+--- a/src/gateway/router/handlers/tasks.rs
++++ b/src/gateway/router/handlers/tasks.rs
+@@ -141,9 +141,6 @@ pub(super) fn route_owners(
+     // `via_agent` is the agent arm this owner may use: the task owner passes
+     // the request's agent, the events owner never does (MIK-8055 K6).
+     let route = |via_agent: Option<&OAuthAgentIdentity>| match (via_agent, &proven) {
+-        (None, Some(subject)) if !state.auth_config.enabled && verified_identity.is_none() => {
+-            subject.clone()
+-        }
+         _ => route_task_owner(state, verified_identity, via_agent, &owner_key),
+     };
+     let owner = route(agent);

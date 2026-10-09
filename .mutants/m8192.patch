@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/admission.rs b/src/gateway/meta_mcp/admission.rs
+index 33d32bf54..49b9a44a5 100644
+--- a/src/gateway/meta_mcp/admission.rs
++++ b/src/gateway/meta_mcp/admission.rs
+@@ -560,7 +560,7 @@ impl MetaMcp {
+         // loading and every target check precede lookup, including mismatches.
+         let playbook = self.authorize_execution_plan(caller, tool_name, arguments, session)?;
+         let mut operation = json!({"kind": "gateway", "tool": tool_name,
+-            "arguments": operation_arguments(arguments, OPERATION_DEFINING_META),
++            "arguments": arguments,
+             "retry": retry.key_discriminator()});
+         if let Some(definition) = &playbook {
+             let value = serde_json::to_value(definition)

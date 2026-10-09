@@ -1,0 +1,13 @@
+head_sha	9e59cf62f12987b4a2790a4df30f3040689b2693
+# MIK-8137 P1-idem (#3603), head after option (a)
+m8193	linux	m8193.patch	--lib gateway::router::meta_fingerprint_tests::fp4_a_task_retry_of_a_sync_call_is_refused
+mAdmKey	linux	mAdmKey.patch	--lib gateway::router::tests::task_execution_adapter::admission_identity::fp4a_an_agent_only_caller_cannot_run_one_key_twice
+mSubject1	linux	mSubject.patch	--lib gateway::router::tests::task_execution_adapter::admission_identity::fp4b_a_certificate_only_caller_cannot_run_one_key_twice_with_auth_off
+mSubject2	linux	mSubject.patch	--lib gateway::router::tests::task_execution_adapter::admission_identity::iso1_two_certificates_cannot_reach_each_others_tasks_with_auth_off
+m8192	linux	m8192.patch	--lib gateway::router::meta_fingerprint_tests::fp1_a_fresh_meta_retry_of_gateway_execute_is_the_same_call
+m8192t	linux	m8192t.patch	--lib gateway::router::meta_fingerprint_tests::fp6_a_fresh_meta_retry_of_a_task_is_the_same_task
+m8191	linux	m8191.patch	--lib gateway::router::mrtr9_lease_tests::m1_a_keyed_retry_after_an_undeclared_refusal_runs_again
+m8191b	linux	m8191b.patch	--lib gateway::meta_mcp::tests::bridge_fallthrough::t4_a_bridged_undeclared_last_round_is_not_kept_by_the_lease
+mG3	linux	mG3.patch	--lib gateway::router::mrtr9_lease_tests::g4_a_keyed_chain_never_repeats_a_step_that_ran
+mFP5	linux	mFP5.patch	--lib gateway::meta_mcp::task_confirmation::admission_owner_tests::fp5_only_the_allow_list_puts_meta_into_the_fingerprint
+mSweep	linux	mSweep.patch	--lib gateway::meta_mcp::task_confirmation::admission_owner_tests::adm_sweep_every_admission_uses_one_owner_spelling

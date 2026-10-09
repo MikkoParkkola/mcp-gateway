@@ -1,0 +1,17 @@
+diff --git a/src/gateway/router/handlers/tasks.rs b/src/gateway/router/handlers/tasks.rs
+index a6898ae10..ad1bcd718 100644
+--- a/src/gateway/router/handlers/tasks.rs
++++ b/src/gateway/router/handlers/tasks.rs
+@@ -147,11 +147,7 @@ pub(super) fn route_owners(
+         _ => route_task_owner(state, verified_identity, via_agent, &owner_key),
+     };
+     let owner = route(agent);
+-    let admission = if owner == AUTH_DISABLED_TASK_OWNER {
+-        String::new()
+-    } else {
+-        owner.clone()
+-    };
++    let admission = owner_key.clone();
+     (owner, route(None), admission)
+ }
+ 
