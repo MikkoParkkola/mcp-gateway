@@ -59,7 +59,11 @@ async fn a_key_the_watcher_picks_up_announces_the_listing() {
     let announced = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             match feed.recv().await {
-                Some(name) if name == "caps" => return true,
+                Some(crate::backend::tools_nudge::ToolsNudge::Catalogue { name })
+                    if name == "caps" =>
+                {
+                    return true;
+                }
                 Some(_) => {}
                 None => return false,
             }

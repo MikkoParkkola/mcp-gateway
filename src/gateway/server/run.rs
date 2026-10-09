@@ -540,6 +540,9 @@ impl Gateway {
         let task_service_for_shutdown = Arc::clone(&task_service);
         let task_executor_for_shutdown = Arc::clone(&task_executor);
 
+        // The config watcher, started below, announces listing changes as
+        // the explicit reload does; `meta_mcp` moves into the state here.
+        let capabilities_for_watcher = meta_mcp.get_capabilities();
         let state = Arc::new(AppState {
             session_lifecycle: Some(Arc::clone(&session_lifecycle)),
             // Shared, not minted: the invoke path mints continuations against
@@ -683,7 +686,7 @@ impl Gateway {
         let _config_watcher: Option<ConfigWatcher> = self.start_config_watcher(
             &live_config,
             identity_grant_sink,
-            meta_mcp.get_capabilities(),
+            capabilities_for_watcher,
             &shutdown_tx,
             &warmer,
         );

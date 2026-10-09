@@ -51,7 +51,7 @@ impl CapabilityBackend {
         let changed = now != before;
         *last = Some(now);
         if changed {
-            registry.announce_change(&self.name);
+            registry.nudge_catalogue(&self.name);
         }
         changed
     }
@@ -72,7 +72,7 @@ impl CapabilityBackend {
     /// MIK-7268), then announce once.
     pub(crate) fn finish_initial_scan(&self, registry: &BackendRegistry) {
         self.mark_initial_scan_complete();
-        registry.announce_change(&self.name);
+        registry.nudge_catalogue(&self.name);
     }
 
     /// When the earliest listed `oauth:` login stops counting, if any.

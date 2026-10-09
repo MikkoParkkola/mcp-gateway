@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use super::super::CapabilityBackend;
 use crate::backend::BackendRegistry;
+use crate::backend::tools_nudge::ToolsNudge;
 use crate::capability::CapabilityExecutor;
 
 const PROVIDER: &str = "mik7940";
@@ -46,12 +47,19 @@ fn backend(expires_in: u64) -> Arc<CapabilityBackend> {
 
 fn registry_feed() -> (
     Arc<BackendRegistry>,
-    tokio::sync::mpsc::UnboundedReceiver<String>,
+    tokio::sync::mpsc::UnboundedReceiver<ToolsNudge>,
 ) {
     let registry = Arc::new(BackendRegistry::new());
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     registry.set_change_feed(tx);
     (registry, rx)
+}
+
+/// The catalogue nudge naming `name`, as the change feed carries it.
+fn catalogue(name: &str) -> ToolsNudge {
+    ToolsNudge::Catalogue {
+        name: name.to_string(),
+    }
 }
 
 /// The flip is the raw expiry less `is_expired`'s 60 s buffer.
@@ -75,7 +83,7 @@ async fn an_expiring_login_is_announced_with_no_reload() {
     let announced = tokio::time::timeout(Duration::from_secs(10), feed.recv())
         .await
         .expect("announced within the buffered deadline");
-    assert_eq!(announced.as_deref(), Some("caps"));
+    assert_eq!(announced, Some(catalogue("caps")));
     assert!(backend.listed_names().is_empty(), "no longer listed");
     assert!(
         tokio::time::timeout(Duration::from_secs(3), feed.recv())
@@ -96,7 +104,7 @@ fn one_transition_is_announced_once() {
     backend.executor.oauth_tokens.read().remove(PROVIDER);
     assert!(backend.announce_listing_change(&registry, || {}));
     assert!(!backend.announce_listing_change(&registry, || {}));
-    assert_eq!(feed.try_recv().as_deref(), Ok("caps"));
+    assert_eq!(feed.try_recv(), Ok(catalogue("caps")));
     assert!(feed.try_recv().is_err(), "once");
 }
 
@@ -124,7 +132,7 @@ async fn a_capability_loaded_later_has_its_expiry_announced() {
     let announced = tokio::time::timeout(Duration::from_secs(10), feed.recv())
         .await
         .expect("the later capability's expiry was announced");
-    assert_eq!(announced.as_deref(), Some("caps"));
+    assert_eq!(announced, Some(catalogue("caps")));
     let _ = shutdown.send(());
 }
 
@@ -140,6 +148,6 @@ fn a_finished_scan_is_announced_once() {
     let (registry, mut feed) = registry_feed();
     backend.finish_initial_scan(&registry);
     assert!(backend.initial_scan_complete());
-    assert_eq!(feed.try_recv().as_deref(), Ok("caps"));
+    assert_eq!(feed.try_recv(), Ok(catalogue("caps")));
     assert!(feed.try_recv().is_err(), "once");
 }

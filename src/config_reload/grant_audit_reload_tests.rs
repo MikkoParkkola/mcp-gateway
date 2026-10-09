@@ -230,6 +230,7 @@ async fn t2c_watcher_reload_records_the_change() {
         )),
         Some(r.sink.clone()),
         None,
+        None,
         event_rx,
         shutdown_rx,
         Arc::new(super::env_poll::EnvReloadCounts::default()),

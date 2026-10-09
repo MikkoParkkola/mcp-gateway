@@ -22,6 +22,7 @@ async fn an_owner_scoped_occurrence_is_not_refused_by_its_source() {
         };
         let hub = EventsHub::open(&config, dir.path()).expect("hub");
         hub.register_source(Arc::new(Flipping {
+            free: &[],
             admits: 0,
             asked: AtomicUsize::new(0),
         }) as Arc<dyn crate::events::EventSource>);
@@ -57,6 +58,7 @@ async fn an_owner_scoped_occurrence_still_needs_its_callers_access() {
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
     hub.register_source(Arc::new(Flipping {
+        free: &[],
         admits: usize::MAX,
         asked: AtomicUsize::new(0),
     }) as Arc<dyn crate::events::EventSource>);
