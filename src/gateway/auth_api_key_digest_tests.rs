@@ -116,7 +116,7 @@ async fn call_protected(config: ResolvedAuthConfig, bearer: &str) -> (StatusCode
 // E4-T5
 #[tokio::test]
 async fn expired_key_is_refused() {
-    let past = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+    let past = (chrono::Utc::now() - crate::duration_bound::delta!(seconds, 1)).to_rfc3339();
     let (status, reached) = call_protected(digest_key(Some(past)), KEY).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(!reached, "an expired key must publish no client");
@@ -125,7 +125,7 @@ async fn expired_key_is_refused() {
 // E4-T6 (positive control against an inverted comparison)
 #[tokio::test]
 async fn unexpired_key_is_accepted() {
-    let ahead = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    let ahead = (chrono::Utc::now() + crate::duration_bound::delta!(hours, 1)).to_rfc3339();
     let (status, reached) = call_protected(digest_key(Some(ahead)), KEY).await;
     assert_eq!(status, StatusCode::OK);
     assert!(reached);

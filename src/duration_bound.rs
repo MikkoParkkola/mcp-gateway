@@ -60,6 +60,53 @@ pub(crate) fn millis<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, 
     Ok(millis)
 }
 
+/// A chrono `TimeDelta` from a constant, checked when
+/// the crate compiles (MIK-8207): `delta!(seconds, 30)`, `delta!(days, 1)`.
+///
+/// The constructors it replaces (`TimeDelta::seconds` and the like) panic
+/// out of range, and clippy refuses them (`clippy.toml`). Here the value is
+/// built in a `const` block, so an out-of-range constant fails the build and
+/// a runtime value does not compile at all: that one goes through
+/// `TimeDelta::try_seconds` and the like, which return `None`.
+macro_rules! delta {
+    (weeks, $n:expr) => {
+        $crate::duration_bound::delta!(@checked try_weeks, $n)
+    };
+    (days, $n:expr) => {
+        $crate::duration_bound::delta!(@checked try_days, $n)
+    };
+    (hours, $n:expr) => {
+        $crate::duration_bound::delta!(@checked try_hours, $n)
+    };
+    (minutes, $n:expr) => {
+        $crate::duration_bound::delta!(@checked try_minutes, $n)
+    };
+    (seconds, $n:expr) => {
+        $crate::duration_bound::delta!(@checked try_seconds, $n)
+    };
+    (milliseconds, $n:expr) => {
+        $crate::duration_bound::delta!(@checked try_milliseconds, $n)
+    };
+    (@checked $try:ident, $n:expr) => {
+        const {
+            match ::chrono::TimeDelta::$try($n) {
+                Some(delta) => delta,
+                None => panic!(
+                    "{}",
+                    concat!(
+                    "delta!: ",
+                    stringify!($try),
+                    "(",
+                    stringify!($n),
+                    ") is out of chrono's range"
+                    )
+                ),
+            }
+        }
+    };
+}
+pub(crate) use delta;
+
 #[cfg(test)]
 #[path = "duration_bound_tests.rs"]
 mod tests;

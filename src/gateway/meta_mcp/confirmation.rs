@@ -322,11 +322,11 @@ pub(super) async fn destructive_confirmation_gate(
                 warn!(tool = %tool_name, "No slot to hold this confirmation open");
                 return GateOutcome::refuse(refused(&action_desc));
             };
-            super::sealed_hold::register(continuation);
             let Ok(envelope) = continuation.keyring().mint(&payload) else {
                 warn!(tool = %tool_name, "Confirmation envelope mint refused");
                 return GateOutcome::refuse(refused(&action_desc));
             };
+            super::sealed_hold::register(continuation, &payload.hold_key, &envelope);
             return GateOutcome::refuse(JsonRpcResponse::success(
                 id.clone(),
                 json!({

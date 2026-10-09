@@ -234,3 +234,39 @@ fn collect_rs(path: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
         }
     }
 }
+
+/// MIK-8207: each `delta!` arm builds its own unit, the value its `try_*`
+/// constructor gives.
+#[test]
+fn delta_builds_each_unit() {
+    use chrono::TimeDelta;
+    let one = |d: Option<TimeDelta>| d.expect("in range");
+    assert_eq!(
+        crate::duration_bound::delta!(weeks, 2),
+        one(TimeDelta::try_weeks(2))
+    );
+    assert_eq!(
+        crate::duration_bound::delta!(days, 3),
+        one(TimeDelta::try_days(3))
+    );
+    assert_eq!(
+        crate::duration_bound::delta!(hours, 4),
+        one(TimeDelta::try_hours(4))
+    );
+    assert_eq!(
+        crate::duration_bound::delta!(minutes, 5),
+        one(TimeDelta::try_minutes(5))
+    );
+    assert_eq!(
+        crate::duration_bound::delta!(seconds, 6),
+        one(TimeDelta::try_seconds(6))
+    );
+    assert_eq!(
+        crate::duration_bound::delta!(milliseconds, 7),
+        one(TimeDelta::try_milliseconds(7))
+    );
+    assert_eq!(
+        crate::duration_bound::delta!(seconds, -6),
+        -one(TimeDelta::try_seconds(6))
+    );
+}

@@ -48,7 +48,7 @@ fn sub(id: &str, now: DateTime<Utc>) -> Subscription {
         previous_secret: None,
         previous_until: None,
         granted_at: now,
-        expires_at: Some(now + chrono::Duration::hours(1)),
+        expires_at: Some(now + crate::duration_bound::delta!(hours, 1)),
         active: true,
         failed_since: None,
         last_delivery_at: None,
@@ -142,7 +142,7 @@ fn claim_settle_and_unsubscribe_cancel() {
         matches!(store.claim("a", now).expect("io"), Claim::Skip),
         "in flight"
     );
-    let next = now + chrono::Duration::seconds(5);
+    let next = now + crate::duration_bound::delta!(seconds, 5);
     let retry = Settle::Retry {
         next,
         status: "http_5xx",
@@ -185,7 +185,7 @@ fn in_flight_returns_to_pending_on_reopen() {
         Claim::Ready(_)
     ));
     drop(store);
-    let later = now + chrono::Duration::seconds(1);
+    let later = now + crate::duration_bound::delta!(seconds, 1);
     let store = Store::open(dir.path(), later, TAIL).expect("reopen");
     let Claim::Ready(claimed) = store.claim("a", later).expect("io") else {
         panic!("recovered");
@@ -203,7 +203,8 @@ fn dead_letters_are_capped_oldest_first() {
         ..ROOMY
     };
     for (n, id) in ["a", "b", "c"].iter().enumerate() {
-        let at = now + chrono::Duration::seconds(i64::try_from(n).expect("small"));
+        let at = now
+            + chrono::TimeDelta::try_seconds(i64::try_from(n).expect("small")).expect("in range");
         let evicted = store
             .dead_letter(record(id, "s1", at), DeadReason::Gone, at, policy)
             .expect("io")
@@ -213,7 +214,7 @@ fn dead_letters_are_capped_oldest_first() {
             assert_eq!(evicted[0].event_id, "a");
         }
     }
-    let later = now + chrono::Duration::hours(2);
+    let later = now + crate::duration_bound::delta!(hours, 2);
     let swept = store.sweep_dead(later, policy).expect("io");
     assert_eq!(swept.len(), 2, "retention sweeps the rest");
 }
@@ -294,7 +295,7 @@ fn records_of_expired_subscriptions_are_cancelled_but_suspended_ones_kept() {
             .count()
     };
     assert_eq!(on_disk(), 2, "the suspended subscription keeps its record");
-    let past_expiry = now + chrono::Duration::hours(2);
+    let past_expiry = now + crate::duration_bound::delta!(hours, 2);
     store.due(past_expiry, &HashSet::new(), ROOMY).expect("io");
     assert_eq!(on_disk(), 0, "expired: their records are cancelled");
 }
@@ -365,7 +366,7 @@ fn evicting_a_dead_letter_takes_a_leftover_outbox_copy_first() {
     store
         .dead_letter(record("a", "s1", now), DeadReason::Gone, now, ROOMY)
         .expect("io");
-    let later = now + chrono::Duration::hours(2);
+    let later = now + crate::duration_bound::delta!(hours, 2);
     assert_eq!(store.sweep_dead(later, ROOMY).expect("io").len(), 1);
     assert!(
         std::fs::read_dir(dir.path().join("outbox"))
@@ -386,7 +387,7 @@ fn a_later_occurrence_under_a_dead_id_is_kept() {
         per_subscription: 10,
     };
     // Dead a day ago; the same upstream id re-admitted after the dedupe window.
-    let old = now - chrono::Duration::days(1);
+    let old = now - crate::duration_bound::delta!(days, 1);
     store
         .dead_letter(record("a", "s1", old), DeadReason::Gone, old, ROOMY)
         .expect("io");
@@ -397,7 +398,7 @@ fn a_later_occurrence_under_a_dead_id_is_kept() {
         matches!(store.claim("a", now).expect("io"), Claim::Ready(_)),
         "the new occurrence survives the reload"
     );
-    let later = now + chrono::Duration::hours(2);
+    let later = now + crate::duration_bound::delta!(hours, 2);
     store.sweep_dead(later, ROOMY).expect("io");
     assert!(
         dir.path().join("outbox").join("a.json").exists(),
@@ -414,7 +415,7 @@ fn a_failed_settlement_ignores_an_older_dead_letter_under_the_same_id() {
         global: 10,
         per_subscription: 10,
     };
-    let old = now - chrono::Duration::days(1);
+    let old = now - crate::duration_bound::delta!(days, 1);
     store
         .dead_letter(record("a", "s1", old), DeadReason::Gone, old, ROOMY)
         .expect("io");
@@ -450,7 +451,7 @@ fn a_resubscribe_after_expiry_inherits_no_pending_record() {
         per_subscription: 10,
     };
     store.enqueue(record("a", "s1", now), caps).expect("io");
-    let later = now + chrono::Duration::hours(2);
+    let later = now + crate::duration_bound::delta!(hours, 2);
     store
         .admit(
             sub("s1", later),
@@ -503,7 +504,7 @@ fn a_cancelled_claim_has_no_signing_row_even_under_a_reused_id() {
         "the cancelled claim is not signed with the new row"
     );
     // Not even once a later occurrence under the same id is in flight.
-    let later = now + chrono::Duration::minutes(30);
+    let later = now + crate::duration_bound::delta!(minutes, 30);
     store.enqueue(record("a", "s1", later), caps).expect("io");
     let Claim::Ready(newer) = store.claim("a", later).expect("io") else {
         panic!("the later occurrence is claimable");
@@ -542,7 +543,7 @@ fn an_old_answer_does_not_settle_a_later_occurrence() {
         )
         .expect("io")
         .expect("admitted");
-    let later = now + chrono::Duration::minutes(30);
+    let later = now + crate::duration_bound::delta!(minutes, 30);
     store.enqueue(record("a", "s1", later), caps).expect("io");
     store
         .settle("a", now, Settle::Delivered, later, ROOMY)
@@ -602,7 +603,7 @@ fn revive_moves_a_dead_letter_back_only_while_it_is_the_one_scanned() {
             .expect("io");
     }
     let fresh = |event: &str, owner: &str| record(event, owner, now);
-    let stale = now + chrono::Duration::seconds(1);
+    let stale = now + crate::duration_bound::delta!(seconds, 1);
     assert_eq!(
         store
             .revive("e1", stale, fresh("e1", "s1"), roomy, || Ok(now))
@@ -616,7 +617,7 @@ fn revive_moves_a_dead_letter_back_only_while_it_is_the_one_scanned() {
             .expect("io"),
         Revived::NoSubscription
     );
-    let later = now + chrono::Duration::hours(2);
+    let later = now + crate::duration_bound::delta!(hours, 2);
     assert_eq!(
         store
             .revive("e1", now, fresh("e1", "s1"), roomy, || Ok(later))
@@ -683,7 +684,7 @@ fn has_due_sees_a_pending_record_behind_one_in_flight() {
     store.enqueue(record("a", "s1", now), caps).expect("io");
     store.enqueue(record("b", "s1", now), caps).expect("io");
     let mut later = record("c", "s2", now);
-    later.next_attempt_at = now + chrono::Duration::hours(1);
+    later.next_attempt_at = now + crate::duration_bound::delta!(hours, 1);
     store.enqueue(later, caps).expect("io");
     assert!(matches!(store.claim("a", now), Ok(Claim::Ready(_))));
     assert!(store.has_due("s1", now), "b waits behind a");

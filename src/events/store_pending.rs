@@ -17,7 +17,7 @@ use crate::events::records::{Subscription, remove_record, remove_record_durable,
 
 /// How long a record whose settlement the disk refused waits to be tried
 /// again.
-const SETTLE_RETRY: chrono::TimeDelta = chrono::TimeDelta::seconds(30);
+const SETTLE_RETRY: chrono::TimeDelta = crate::duration_bound::delta!(seconds, 30);
 
 /// A record the worker may now send, with the subscription as it is now.
 pub(crate) struct Claimed {

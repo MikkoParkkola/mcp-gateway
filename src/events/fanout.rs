@@ -440,7 +440,8 @@ impl EventsHub {
 
     /// The longest a hold keeps a row: the maximum lease.
     pub(super) fn hold_bound(&self) -> chrono::Duration {
-        chrono::Duration::from_std(self.config.max_ttl).unwrap_or(chrono::Duration::days(1))
+        chrono::Duration::from_std(self.config.max_ttl)
+            .unwrap_or(crate::duration_bound::delta!(days, 1))
     }
 
     /// Serializes startup reconciliation with capability reloads.
