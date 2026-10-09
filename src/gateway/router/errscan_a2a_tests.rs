@@ -63,6 +63,11 @@ async fn fw3_an_a2a_answer_with_a_credential_is_screened_on_both_routes() {
                 !body.to_string().contains(REDACTED_SECRET),
                 "{at}: the agent's credential reached the caller unscanned: {body}"
             );
+            // The default Block refused it: screening, not an unrelated error.
+            assert_eq!(
+                body["error"]["message"], "Response blocked by security firewall",
+                "{at}: {body}"
+            );
         }
     }
 }
@@ -161,9 +166,33 @@ async fn fw3_a_screened_a2a_error_replays_without_redispatch() {
 
 /// Discard regression, not egress proof: the A2A client keeps only an agent
 /// error's code and message, so a credential planted in its `data` never
-/// reaches the egress scan, or the caller.
+/// reaches the egress scan, or the caller. Checked on the raw transport
+/// answer first, then on both routes.
 #[tokio::test]
 async fn fw3_an_a2a_error_data_is_discarded_before_egress() {
+    use crate::transport::Transport as _;
+    let base = crate::a2a::test_agent::serve(
+        |body: Value| -> futures::future::BoxFuture<'static, Value> {
+            let reply = json!({"jsonrpc": "2.0", "id": body["id"],
+            "error": {"code": -32001, "message": "benign refusal", "data": WITH_SECRET}});
+            Box::pin(async move { reply })
+        },
+    )
+    .await;
+    let raw = crate::a2a::test_agent::started(&base)
+        .await
+        .request(
+            "tools/call",
+            Some(json!({"name": "send_message", "arguments": {"message": "hi"}})),
+        )
+        .await
+        .expect("the agent answers");
+    let error = raw.error.expect("the agent's error is passed on");
+    assert!(
+        error.data.is_none(),
+        "the transport kept the agent's data: {error:?}"
+    );
+
     for direct in [false, true] {
         let (body, sends) = routed(A2aAnswer::RpcErrorData(WITH_SECRET), None, direct).await;
         assert_eq!(sends, 1, "direct={direct}: {body}");
