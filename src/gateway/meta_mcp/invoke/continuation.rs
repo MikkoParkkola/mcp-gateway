@@ -623,9 +623,9 @@ impl crate::gateway::meta_mcp::MetaMcp {
         self.continuation = std::sync::Arc::new(state);
     }
 
-    /// Give back the slot of a question sealed on the direct route unless
-    /// `delivered`, the answer that leaves, still carries it
-    /// ([`release_unless_carried`]).
+    /// Give back the slot of a sealed question unless `delivered`, the answer
+    /// that leaves, still carries it ([`release_unless_carried`]): the direct
+    /// route after its tail, `/mcp` and stdio after their delivery scan.
     pub(crate) async fn release_direct_hold(
         &self,
         sealed: Option<(String, String)>,
