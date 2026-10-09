@@ -732,7 +732,7 @@ mod reason;
 #[cfg(test)]
 #[path = "collusion_reason_tests.rs"]
 mod reason_tests;
-use reason::CAPACITY_METRIC;
+pub(super) use reason::CAPACITY_METRIC;
 pub(crate) use reason::RelayReason;
 #[path = "collusion_seam.rs"]
 mod seam;

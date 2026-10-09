@@ -13,12 +13,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::collusion::{
-    CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams, RelayReason,
+    CAPACITY_METRIC, CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams,
+    RelayReason,
 };
-use super::collusion_digest::DELIVERED_SET_CAP;
 #[cfg(test)]
 pub(super) use super::collusion_digest::delivery_leaves;
 pub(super) use super::collusion_digest::delivery_parts;
+use super::collusion_digest::{DELIVERED_SET_CAP, key_path_joins, key_path_run_indices};
 pub(crate) use super::collusion_digest::{Delivered, DeliveryDigest};
 use super::{
     Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType, Severity,
@@ -435,11 +436,15 @@ impl Firewall {
         tool: &str,
         result: &Value,
     ) -> Option<DeliveryDigest> {
-        let (mut digest, cut) = self.digest_with(server, tool, result, DeliveryDigest::of_parts)?;
-        if cut {
+        let (digest, cut) = self.digest_with(server, tool, result, DeliveryDigest::of_parts)?;
+        // `MIK-8209`: the key-path joins, on a budget of their own.
+        let joins = key_path_joins(result);
+        let (mut digest, joins_cut) = digest.with_joins(joins.clone());
+        self.count_cut(joins_cut && !cut);
+        if cut || joins_cut {
             // `MIK-8066.EXCUSE.1`: the whole delivered value, as received.
             let (leaves, values) = delivery_parts(result);
-            digest.cut_fps = self.fps_of_leaves(&leaves, values);
+            digest.cut_fps = self.fps_of_leaves(&leaves, values, &joins);
         }
         Some(digest)
     }
@@ -467,13 +472,21 @@ impl Firewall {
             return None;
         }
         let digest = if total < DELIVERED_SET_CAP {
-            self.digest_with(server, tool, result, DeliveryDigest::of_plan_step_parts)?
-                .0
+            let digest = self
+                .digest_with(server, tool, result, DeliveryDigest::of_plan_step_parts)?
+                .0;
+            // `MIK-8209` K2a: the key-path runs, staged as leaf indices.
+            let (leaves, values) = delivery_parts(result);
+            digest.with_join_runs(key_path_run_indices(result, &leaves, values))
         } else {
             // A plan step is sketched only once kept to the plan's answer
             // (`MIK-8066` E1''): capped here, its cut text gets no sketch.
-            self.digest_with(server, tool, result, DeliveryDigest::of_parts)?
-                .0
+            let digest = self
+                .digest_with(server, tool, result, DeliveryDigest::of_parts)?
+                .0;
+            let (digest, joins_cut) = digest.with_joins(key_path_joins(result));
+            self.count_cut(joins_cut);
+            digest
         };
         staged.set(total + digest.staged_len());
         Some(digest)
@@ -511,7 +524,12 @@ impl Firewall {
     /// values joined as a delivery walk reads them (both forms) and each key,
     /// all of it text the caller received; sketched when recorded
     /// (`MIK-8200`).
-    fn fps_of_leaves(&self, leaves: &[&str], values: usize) -> Option<Arc<[u64]>> {
+    fn fps_of_leaves(
+        &self,
+        leaves: &[&str],
+        values: usize,
+        joins: &[String],
+    ) -> Option<Arc<[u64]>> {
         let detector = self.relay_detector()?;
         let (vals, keys) = leaves.split_at(values.min(leaves.len()));
         let mut fps = detector.fingerprints(&vals.join("\n"));
@@ -520,6 +538,10 @@ impl Firewall {
         }
         for key in keys {
             fps.extend(detector.fingerprints(key));
+        }
+        // Each key-path join alone, never run into a neighbour (`MIK-8209`).
+        for join in joins {
+            fps.extend(detector.fingerprints(join));
         }
         Some(fps.into())
     }
@@ -534,6 +556,7 @@ impl Firewall {
     fn count_cut(&self, cut: bool) {
         if cut {
             self.relay.text_cut.fetch_add(1, Ordering::Relaxed);
+            telemetry_metrics::counter!(CAPACITY_METRIC, "bound" => "record_text_cut").increment(1);
         }
     }
 
