@@ -645,6 +645,7 @@ impl Gateway {
         env: Arc<crate::config::LiveEnv>,
         config_path: Option<std::path::PathBuf>,
     ) -> Result<Self> {
+        start_checks::clock()?;
         Self::new_evaluated_inner(
             config,
             env,

@@ -96,7 +96,11 @@ pub(super) const COST_SAVE_INTERVAL: std::time::Duration = std::time::Duration::
 /// Save today's spend to `<data_dir>/costs.json`.
 #[cfg(feature = "cost-governance")]
 pub(super) fn save_costs(enforcer: &BudgetEnforcer, data_dir: &Path) {
-    let persisted = super::support::build_persisted_costs(&enforcer.snapshot());
+    let Ok(snapshot) = enforcer.snapshot_for_save() else {
+        tracing::warn!("Clock reads before 1970; cost save skipped, the last saved spend stands");
+        return;
+    };
+    let persisted = super::support::build_persisted_costs(&snapshot);
     save_with_logging(
         &data_dir.join("costs.json"),
         |path| crate::cost_accounting::persistence::save(path, &persisted),
