@@ -145,12 +145,6 @@ fn spawn_start(backend: &Arc<Backend>) -> tokio::task::JoinHandle<Result<()>> {
     tokio::spawn(async move { backend.ensure_started().await })
 }
 
-/// A loopback port nothing listens on.
-async fn free_port() -> u16 {
-    let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    probe.local_addr().unwrap().port()
-}
-
 /// The callback listener on `port` is gone: the port binds again.
 async fn assert_port_released(port: u16, what: &str) {
     within(what, async {
@@ -247,7 +241,9 @@ async fn stop_ends_a_pending_login_and_frees_its_port() {
     let origin = authorization_server().await;
     let dir = tempfile::tempdir().unwrap();
     let browser = Browser::new();
-    let port = free_port().await;
+    // The release is proved by binding the port again, so it comes from the
+    // reserved range no parallel port-0 bind can take first (MIK-8211).
+    let port = crate::test_ports::reserved_port();
     let backend = login_backend(
         &origin,
         dir.path(),
@@ -282,7 +278,9 @@ async fn a_forced_restart_ends_the_pending_login_before_binding_again() {
     let origin = authorization_server().await;
     let dir = tempfile::tempdir().unwrap();
     let browser = Browser::new();
-    let port = free_port().await;
+    // A fixed port is the subject here, so it comes from the reserved range
+    // no port-0 bind can take (MIK-8211).
+    let port = crate::test_ports::reserved_port();
     let backend = login_backend(
         &origin,
         dir.path(),

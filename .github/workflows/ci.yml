@@ -167,6 +167,10 @@ jobs:
         run: python3 scripts/ci/check-gateway-spawns.py --self-test
       - name: Start the gateway in tests only through its isolating helper
         run: python3 scripts/ci/check-gateway-spawns.py
+      - name: Validate the pick-then-bind check against planted sites
+        run: python3 scripts/ci/check-pick-then-bind.py --self-test
+      - name: No test picks a port, releases it and binds it later (MIK-8211)
+        run: python3 scripts/ci/check-pick-then-bind.py
 
   service-template-smoke:
     name: Service template smoke
