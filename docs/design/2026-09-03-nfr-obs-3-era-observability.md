@@ -34,9 +34,9 @@ quoted here as the thing being audited, **cited not authored**:
 
 | event | fields |
 |---|---|
-| `era_probe` | `backend`, `outcome` ∈ {`modern`, `legacy`, `no_answer`}, `duration_ms`, `trigger` ∈ {`start`, `reprobe`} |
-| `era_cache` | `backend`, `hit` ∈ {`true`, `false`} |
-| `era_invalidated` | `backend`, `reason` ∈ {`restart`, `trigger`} |
+| `era_probe` | `backend`, `slot`, `outcome` ∈ {`modern`, `legacy`, `no_answer`}, `duration_ms`, `trigger` ∈ {`start`, `reprobe`} |
+| `era_cache` | `backend`, `slot`, `hit` ∈ {`true`, `false`} |
+| `era_invalidated` | `backend`, `slot`, `reason` ∈ {`restart`, `trigger`} |
 | `era_probe_discarded` ‡ | `backend` (amended below: the probe record, minus `error_code`) |
 
 ‡ **Nothing produces this record today, and the reason is that nothing discards.** A late outcome
@@ -270,6 +270,7 @@ so a reader never has to reconcile two partial statements of it.
 | field | type | present |
 |---|---|---|
 | `backend` | string | always |
+| `slot` | `shared` \| `per_user` | always (MIK-8186: each pool slot keeps its own era; a backend with per-user sessions emits one row per slot kind, so slots that reach peers of different eras do not read as one flapping value) |
 | `outcome` | `modern` \| `legacy` \| `no_answer` | always |
 | `evidence` | `EraEvidence` (the seven above, minus `never_probed`, which no probe can produce) | always |
 | `error_code` | string | only when `evidence` ∈ {`method_not_found`, `modern_error_code`, `other_error`} — the raw code, for debugging |
