@@ -25,7 +25,10 @@ reason) before its change merges.
 
 - Process trees: one reaper thread per process (`transport/stdio_reaper.rs`), created before any
   stdio child is spawned, steps every handed-over tree with `ChildTree::reap_step` in the MIK-8080
-  order (close signal, A5 pre-reap signal, reap through the native tokio child). A transport's
+  order (close signal, A5 pre-reap signal, reap through the native tokio child). Once the leader
+  exits, the A5 signal repeats on every reaper tick for `PRE_REAP_SETTLE` (50 ms), each send
+  checked against the unreaped leader that pins the group id (MIK-8213): on macOS a fork already
+  under way when one signal lands can finish after it. Do not fold this back to a single signal. A transport's
   tree leaves its slot only for the reaper; `close` waits, bounded, for every reap the slot
   started. `Backend::retire_now` ends every registered stdio tree synchronously and leaves the pool
   for `stop`.
@@ -38,3 +41,7 @@ reason) before its change merges.
 On Windows a tree counts as ended once its leader is reaped and its Job terminated, not once every
 Job process has exited. This matches the release line's earlier async reap; process-wrap exposes no
 safe Job-empty query and the crate denies `unsafe` (lead ruling, 2026-10-09).
+
+On Unix, a group member whose fork completes after the 50 ms settle, once the leader is reaped,
+is no longer reachable by a group signal and can outlive teardown. No such case was seen in 600
+local macOS closes of a group that forks continuously (MIK-8213).

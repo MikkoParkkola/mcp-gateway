@@ -169,6 +169,13 @@ impl StdioTransport {
         // retire lands either before the spawn (the install guard refuses) or
         // after the install (`kill_tree_now` reaches the tree).
         let mut writer = self.writer.lock().await;
+        // A start that begins after a retire spawns nothing; one the retire
+        // overtakes from here on is refused at install.
+        if self.child.lock().retired {
+            return Err(Error::BackendNotFound(
+                "stdio backend retired before it started".to_string(),
+            ));
+        }
         let mut child = spawn_in_own_tree(cmd)?;
 
         let stdin = child
