@@ -179,30 +179,6 @@ pub(super) fn spawn_cost_saver(
     })
 }
 
-/// Whether a periodic save has written `costs`, for the tests that advance a
-/// paused clock past [`COST_SAVE_INTERVAL`] (MIK-8216). The save runs on its
-/// own OS thread (MIK-8157), which a paused clock does not schedule and a busy
-/// runner may start late, so the wait is real time, not a count of turns.
-///
-/// Yielding between polls lets the saver task spawn its thread; the short
-/// blocking sleep is real time, and neither one lets the paused clock move on,
-/// so no second interval can stand in for the one under test.
-#[cfg(test)]
-pub(super) async fn periodic_save_landed(costs: &Path) -> bool {
-    const DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
-    let start = std::time::Instant::now();
-    loop {
-        if costs.exists() {
-            return true;
-        }
-        if start.elapsed() >= DEADLINE {
-            return false;
-        }
-        tokio::task::yield_now().await;
-        std::thread::sleep(std::time::Duration::from_millis(2));
-    }
-}
-
 impl super::Gateway {
     /// Point this gateway's data directory at `dir` (the in-process tests'
     /// tempdir), so a test never reads or writes the developer's own.
@@ -392,39 +368,6 @@ mod tests {
         let enforcer = Arc::new(BudgetEnforcer::new(cfg, registry));
         enforcer.record_spend("tool", Some("key"), usd);
         enforcer
-    }
-
-    /// MIK-8216: a write a busy runner lands late, off the runtime, is still
-    /// waited for. A plain thread stands in for the late save thread: it writes
-    /// well after 1000 scheduler turns are over, so the wait must be measured
-    /// in real time. Isolated from the cost-save lock and from every other
-    /// test, and the paused clock must not move while it waits, so no later
-    /// interval could have written the file instead.
-    #[tokio::test]
-    async fn a_late_save_thread_is_still_awaited() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let costs = dir.path().join("costs.json");
-        tokio::time::pause();
-        // A pending timer, as the periodic saver keeps one: an idle runtime
-        // would auto-advance the paused clock to it, which the wait must never
-        // allow.
-        let pending = tokio::spawn(tokio::time::sleep(COST_SAVE_INTERVAL));
-        let before = tokio::time::Instant::now();
-        let target = costs.clone();
-        let writer = std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            std::fs::write(&target, b"{}").expect("write");
-        });
-        let landed = periodic_save_landed(&costs).await;
-        let moved = tokio::time::Instant::now() - before;
-        writer.join().expect("writer thread");
-        pending.abort();
-        assert!(landed, "the late write was not waited for");
-        assert_eq!(
-            moved,
-            std::time::Duration::ZERO,
-            "the paused clock moved while waiting: a later interval could explain the file"
-        );
     }
 
     /// What `boot_cost_governance` would restore from `dir`, as global spend.

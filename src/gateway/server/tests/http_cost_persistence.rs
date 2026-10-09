@@ -20,9 +20,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::config::Config;
 use crate::cost_accounting::persistence::{self as cost_persistence, PersistedCosts, ToolTotal};
 use crate::gateway::Gateway;
-use crate::gateway::server::persistence::{
-    COST_SAVE_INTERVAL, boot_cost_governance, periodic_save_landed,
-};
+use crate::gateway::server::persistence::{COST_SAVE_INTERVAL, boot_cost_governance};
 
 async fn answers_livez(port: u16) -> bool {
     let Ok(mut stream) = tokio::net::TcpStream::connect(("127.0.0.1", port)).await else {
@@ -90,7 +88,7 @@ async fn http_saves_spend_periodically_while_serving() {
     tokio::time::pause();
     tokio::time::advance(COST_SAVE_INTERVAL + Duration::from_secs(1)).await;
     // Read on the paused clock, so only the advanced interval can explain it.
-    let saved = periodic_save_landed(&costs).await;
+    let saved = crate::test_wait::wait_real_time(Duration::from_secs(30), || costs.exists()).await;
     tokio::time::resume();
     // Still serving: a server that had stopped would have made its shutdown
     // save, which must not pass for the periodic one.
@@ -106,8 +104,9 @@ async fn http_saves_spend_periodically_while_serving() {
         "control: the HTTP gateway stopped serving, so a shutdown save could explain the file"
     );
     assert!(
-        saved,
-        "the HTTP gateway made no periodic save while serving"
+        saved.is_ok(),
+        "the HTTP gateway made no periodic save while serving: the save {}",
+        saved.err().unwrap_or_default()
     );
     let (_, enforcer) = boot_cost_governance(&config.cost_governance, dir.path());
     let global = enforcer

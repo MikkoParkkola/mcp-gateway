@@ -276,9 +276,12 @@ async fn stdio_saves_spend_periodically_before_exit() {
     for round in 1..=2 {
         std::fs::remove_file(&costs).expect("remove costs.json; only a save can bring it back");
         tokio::time::advance(COST_SAVE_INTERVAL + Duration::from_secs(1)).await;
+        let landed =
+            crate::test_wait::wait_real_time(Duration::from_secs(30), || costs.exists()).await;
         assert!(
-            crate::gateway::server::persistence::periodic_save_landed(&costs).await,
-            "no periodic save in interval {round} while stdin stayed open"
+            landed.is_ok(),
+            "no periodic save in interval {round} while stdin stayed open: the save {}",
+            landed.err().unwrap_or_default()
         );
     }
     tokio::time::resume();
