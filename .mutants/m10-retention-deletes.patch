@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/mod.rs b/src/gateway/meta_mcp/mod.rs
+index 76515e14d..9fb34359a 100644
+--- a/src/gateway/meta_mcp/mod.rs
++++ b/src/gateway/meta_mcp/mod.rs
+@@ -554,7 +554,7 @@ impl MetaMcp {
+             // Retention: completed entries age out by this clock. On a clock
+             // before 1970 nothing is reclaimed, rather than every entry an
+             // early answer would delete (MIK-8202 D2).
+-            Arc::new(|| crate::clock::unix_secs().unwrap_or(0)),
++            Arc::new(|| crate::clock::unix_secs().unwrap_or(u64::MAX)),
+         )
+     }
+ 

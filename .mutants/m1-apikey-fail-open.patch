@@ -1,0 +1,13 @@
+diff --git a/src/config/features/api_key.rs b/src/config/features/api_key.rs
+index c47420a72..6a9712646 100644
+--- a/src/config/features/api_key.rs
++++ b/src/config/features/api_key.rs
+@@ -169,7 +169,7 @@ pub(crate) fn api_key_expired(expires_at: Option<DateTime<Utc>>, now: DateTime<U
+ pub(crate) fn api_key_expired_now(expires_at: Option<DateTime<Utc>>) -> bool {
+     use crate::clock::{Validity, expired_by_utc};
+     expires_at.is_some_and(|_| {
+-        expired_by_utc(|now| {
++        crate::clock::utc_now().map_or(Validity::Live, |now| {
+             if api_key_expired(expires_at, now) {
+                 Validity::Expired
+             } else {

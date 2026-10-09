@@ -1,0 +1,11 @@
+head_sha	ad8fe6ac7c64840e499bf98e7121b375343803b8
+m1-apikey-fail-open	linux	m1-apikey-fail-open.patch	--lib -- api_key_digest_tests::a_clock_before_the_epoch
+m2-bearer-fail-open	linux	m2-bearer-fail-open.patch	--lib -- key_server::store::tests::a_clock_before_the_epoch
+m3-continuation-zero	linux	m3-continuation-zero.patch	--lib -- a_clock_before_the_epoch_refuses_a_live_continuation a_clock_before_the_epoch_mints_no_continuation
+m4-jwt-zero	linux	m4-jwt-zero.patch	--lib -- gateway::oauth::jwt::tests::a_clock_before_the_epoch
+m5-lease-fail-open	linux	m5-lease-fail-open.patch	--lib -- events::fanout::tests::a_clock_before_the_epoch
+m6-budget-save-unchecked	linux	m6-budget-save-unchecked.patch	--lib -- persistence::tests::a_clock_before_the_epoch
+m7-bridge-fail-open	linux	m7-bridge-fail-open.patch	--lib -- bridge_tests::a_clock_before_the_epoch
+m8-startup-unchecked	linux	m8-startup-unchecked.patch	--test clock_before_epoch_startup
+m9-exchange-precheck-gone	linux	m9-exchange-precheck-gone.patch	--lib -- a_clock_before_the_epoch_never_reaches_the_token_endpoint
+m10-retention-deletes	linux	m10-retention-deletes.patch	--lib -- a_clock_before_the_epoch_keeps_an_idempotency_entry
