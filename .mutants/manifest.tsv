@@ -1,0 +1,8 @@
+head_sha	df7cc979f12647106f82ca6afd0b81243b5f1e97
+# MIK-8137 P1-idem (#3603)
+m8193	linux	m8193.patch	--lib gateway::router::meta_fingerprint_tests::fp4_a_task_retry_of_a_sync_call_is_refused
+m8192	linux	m8192.patch	--lib gateway::router::meta_fingerprint_tests::fp1_a_fresh_meta_retry_of_gateway_execute_is_the_same_call
+m8191	linux	m8191.patch	--lib gateway::router::mrtr9_lease_tests::m1_a_keyed_retry_after_an_undeclared_refusal_runs_again
+mG3	linux	mG3.patch	--lib gateway::router::mrtr9_lease_tests::g4_a_keyed_chain_never_repeats_a_step_that_ran
+mFP5	linux	mFP5.patch	--lib gateway::meta_mcp::admission::owner_tests::fp5_only_the_allow_list_puts_meta_into_the_fingerprint
+mSweep	linux	mSweep.patch	--lib gateway::meta_mcp::admission::owner_tests::adm_sweep_every_admission_uses_one_owner_spelling

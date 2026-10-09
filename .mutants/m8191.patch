@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/invoke/undeclared_gate.rs b/src/gateway/meta_mcp/invoke/undeclared_gate.rs
+index 836b262a1..578522cba 100644
+--- a/src/gateway/meta_mcp/invoke/undeclared_gate.rs
++++ b/src/gateway/meta_mcp/invoke/undeclared_gate.rs
+@@ -27,9 +27,6 @@ pub(super) fn refuse_undeclared(
+     // that now declares the capability is served it instead of running
+     // (MIK-8191). An earlier step of the same execution that did act keeps
+     // its protection (`withdraw_dispatch`).
+-    if let Some(execution) = caller.execution {
+-        execution.withdraw_dispatch();
+-    }
+     Err(refusal(&refused, server, tool, trace_id))
+ }
+ 

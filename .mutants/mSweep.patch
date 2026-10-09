@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/mod.rs b/src/gateway/server/mod.rs
+index 30799ba45..dee2ac385 100644
+--- a/src/gateway/server/mod.rs
++++ b/src/gateway/server/mod.rs
+@@ -3428,7 +3428,7 @@ impl Gateway {
+                 }
+             }
+             let admission = meta_mcp.admit_meta_sync(
+-                super::meta_mcp::AdmissionOwner::local_operator(),
++                super::meta_mcp::AdmissionOwner::credential(""),
+                 &caller,
+                 &tool_name,
+                 arguments.as_ref(),
