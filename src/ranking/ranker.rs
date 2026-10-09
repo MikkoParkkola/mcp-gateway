@@ -53,6 +53,8 @@ impl SearchRanker {
     /// - 3+2M: M of N words found in name+description (partial, 1/3=5, 2/3=7)
     /// - 6: single-word query matches a schema field name exactly
     /// - 5: name contains the full query as a substring
+    /// - 4×share: the serving backend's name holds the query words (a word
+    ///   matched through a synonym or abbreviation counts at the discount)
     /// - 2: description contains the full query as a substring
     ///
     /// Usage factor: `log2(usage_count + 1) * 0.15` (multiplicative)
