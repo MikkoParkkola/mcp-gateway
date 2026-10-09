@@ -23,10 +23,7 @@ fn oauth_cap() -> crate::capability::CapabilityDefinition {
 }
 
 fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
+    crate::clock::unix_secs().expect("clock after 1970")
 }
 
 /// A backend listing one `oauth:` capability whose cached token's raw expiry

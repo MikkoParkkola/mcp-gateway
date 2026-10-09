@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use super::CapabilityBackend;
 use crate::backend::BackendRegistry;
@@ -100,13 +100,12 @@ impl CapabilityBackend {
             .get_or_insert_with(|| backend.listed_names());
         tokio::spawn(async move {
             loop {
+                // One second past the flip, so it has happened. A clock before
+                // 1970 cannot place the flip: recheck on the usual interval.
                 let wait = backend.next_listing_expiry().map_or(RECHECK, |at| {
-                    let now = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    // One second past the flip, so it has happened.
-                    Duration::from_secs(at.saturating_sub(now) + 1).min(RECHECK)
+                    crate::clock::unix_secs().map_or(RECHECK, |now| {
+                        Duration::from_secs(at.saturating_sub(now) + 1).min(RECHECK)
+                    })
                 });
                 tokio::select! {
                     _ = shutdown.recv() => return,
