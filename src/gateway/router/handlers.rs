@@ -165,18 +165,20 @@ async fn meta_mcp_dispatch(
     State(state): State<Arc<AppState>>,
     http_request: axum::http::Request<axum::body::Body>,
 ) -> impl IntoResponse {
-    // The prelude (MIK-8143). One `let` drops its bindings in reverse, so
-    // `intake` (holding the in-flight permit) drops before `judge` (holding
-    // the read guard), as the two locals did.
-    let (judge, mut signing_context, intake) =
-        match dispatch_intake::intake(&state, http_request).await {
-            Ok(parts) => parts,
-            Err(response) => return response,
-        };
-    let dispatch_intake::JudgeInputs {
-        read_guard,
-        read_key,
-    } = judge;
+    // The prelude (MIK-8143). One `let` pattern drops its bindings in
+    // reverse, so `intake` (holding the in-flight permit) drops before the
+    // read guard and key, bound ahead of it here, as the original locals did.
+    let (
+        dispatch_intake::JudgeInputs {
+            read_guard,
+            read_key,
+        },
+        mut signing_context,
+        intake,
+    ) = match dispatch_intake::intake(&state, http_request).await {
+        Ok(parts) => parts,
+        Err(response) => return response,
+    };
     // The prelude's facts under the names the arms below were written with.
     let (headers, client, cert_identity) = (&intake.headers, &intake.client, &intake.cert_identity);
     let (oauth_agent_identity, verified_identity) =

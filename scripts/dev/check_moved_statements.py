@@ -12,8 +12,9 @@ each early `return x` became `return Err(x)` (applied to <base> too), the
 labelled `break` became `return Ok`, names that became references lost their
 `&` (and `ref`, and a now-redundant `field: field`), `super::` paths became
 `crate::gateway::router::`, the in-flight permit lost its leading underscore,
-and the two outputs the arm writes became `*name`. Comments, whitespace and the
-punctuation rustfmt reshapes (`,` `;` `{` `}`) are ignored. The alias blocks the move added are cut out by their marker lines.
+and the two outputs the arm writes became `*name`. Comments and whitespace are ignored; so are the two shapes rustfmt changes
+with indentation (trailing commas, `=> { x }` arms). Literals, `&&` and
+braces are compared as written. The alias blocks the move added are cut out by their marker lines.
 Exit 0 when the sequences are equal; otherwise print the differing tokens.
 """
 
@@ -104,13 +105,85 @@ def strip_comments(text: str) -> str:
     return "\n".join(out)
 
 
-def normalise(text: str) -> str:
-    text = strip_comments(text)
-    text = text.replace("(ref ", "(").replace("crate::gateway::router::", "super::")
-    text = text.replace("_inflight_permit", "inflight_permit")
-    text = re.sub(r"\s+", "", text).replace("&", "")
-    text = re.sub(r"\b(\w+):\1\b(?=[,}])", r"\1", text)
-    return text.replace("*response_targets=", "response_targets=").replace("*execution=", "execution=")
+TOKEN = re.compile(
+    r'"(?:\\.|[^"\\])*"'  # string literals, kept whole
+    r"|'(?:\\.|[^'\\])'"  # char literals
+    r"|'[A-Za-z_]\w*"  # lifetimes and labels
+    r"|\d[\w.]*|\w+"  # numbers, identifiers
+    r"|::|->|=>|==|!=|<=|>=|&&|\|\||\.\.=?|[^\w\s]"
+)
+VALUE_END = re.compile(r'^(\w+|"|\'|\)|\]|\?)')
+
+
+def normalise(text: str) -> list[str]:
+    """Tokens of `text` with only the move's rewrites and rustfmt's reshaping
+    undone. Literals, `&&`, braces and `;` are kept."""
+    text = strip_comments(text).replace("crate::gateway::router::", "super::")
+    toks = TOKEN.findall(text)
+    out: list[str] = []
+    for k, t in enumerate(toks):
+        nxt = toks[k + 1] if k + 1 < len(toks) else ""
+        if t == "&" and nxt != "mut" and not (out and VALUE_END.match(out[-1])):
+            continue  # a unary borrow on a name that is now a reference
+        if t == "ref":
+            continue  # `Some(ref x)` on what is now a reference
+        if t == "*" and nxt in ("response_targets", "execution") and toks[k + 2] == "=":
+            continue  # the arm writes its two outputs through `&mut`
+        out.append("inflight_permit" if t == "_inflight_permit" else t)
+    out = shorthand(out)
+    return reshape(out)
+
+
+def shorthand(toks: list[str]) -> list[str]:
+    out: list[str] = []
+    k = 0
+    while k < len(toks):
+        if (k + 3 < len(toks) and toks[k + 1] == ":" and toks[k] == toks[k + 2]
+                and re.fullmatch(r"\w+", toks[k]) and toks[k + 3] in (",", "}")):
+            out.append(toks[k])
+            k += 3
+            continue
+        out.append(toks[k])
+        k += 1
+    return out
+
+
+def reshape(toks: list[str]) -> list[str]:
+    """Fold what rustfmt changes with indentation: `=> { x }` and
+    `=> { return x; }` arms become `=> x,`; trailing commas and commas after
+    a block are dropped."""
+    out: list[str] = []
+    k = 0
+    while k < len(toks):
+        if toks[k] == "=>" and k + 1 < len(toks) and toks[k + 1] == "{":
+            depth, end, semis = 0, None, []
+            for m in range(k + 1, len(toks)):
+                if toks[m] in "([{":
+                    depth += 1
+                elif toks[m] in ")]}":
+                    depth -= 1
+                    if depth == 0:
+                        end = m
+                        break
+                elif toks[m] == ";" and depth == 1:
+                    semis.append(m)
+            inner = toks[k + 2 : end]
+            single_return = semis == [end - 1] and inner[:1] == ["return"]
+            if end is not None and (not semis or single_return):
+                out.append("=>")
+                out.extend(inner[:-1] if single_return else inner)
+                out.append(",")
+                k = end + 1
+                continue
+        out.append(toks[k])
+        k += 1
+    cleaned: list[str] = []
+    for k, t in enumerate(out):
+        nxt = out[k + 1] if k + 1 < len(out) else ""
+        if t == "," and (nxt in (")", "]", "}") or (cleaned and cleaned[-1] == "}")):
+            continue
+        cleaned.append(t)
+    return cleaned
 
 
 def region(lines: list[str], first: str, last_test) -> tuple[int, int]:
@@ -119,7 +192,7 @@ def region(lines: list[str], first: str, last_test) -> tuple[int, int]:
     return a, b
 
 
-def base_sequence(ref: str) -> str:
+def base_sequence(ref: str) -> list[str]:
     lines = body(show(ref, DIR + "handlers.rs"), "async fn meta_mcp_dispatch(")
     pa, pb = region(lines, "// Extract headers and authenticated client from request",
                     lambda ls, i: ls[i] == "    };" and "let external_tool" in ls[i - 4])
@@ -133,7 +206,7 @@ def base_sequence(ref: str) -> str:
     return normalise("\n".join(parts))
 
 
-def head_sequence(ref: str) -> str:
+def head_sequence(ref: str) -> list[str]:
     intake = body(show(ref, DIR + "handlers/dispatch_intake.rs"), "pub(super) async fn intake(")
     intake = intake[: next(i for i, line in enumerate(intake) if line == "    Ok((")]
     tools = body(show(ref, DIR + "handlers/dispatch_tools_call.rs"), "pub(super) async fn tools_call(")
@@ -145,31 +218,24 @@ def head_sequence(ref: str) -> str:
     disp = cut(disp, "// The prelude (MIK-8143).", "let id = intake.id.clone();")
     sa, sb = region(disp, '"tools/call" => {', lambda ls, i: ls[i] == "        }")
     text = "\n".join(intake + disp[:sa]) + '\n"tools/call" => {\n' + tools_text + "\n}\n" + "\n".join(disp[sb + 1 :])
-    norm = normalise(text)
-    assert norm.count("};Ok(response)}") == 1, "the arm's tail is not where expected"
-    return norm.replace("};Ok(response)}", "}}", 1)
+    toks = normalise(text)
+    tail = ["}", ";", "Ok", "(", "response", ")", "}"]
+    at = [k for k in range(len(toks)) if toks[k : k + len(tail)] == tail]
+    assert len(at) == 1, "the arm's tail is not where expected"
+    return toks[: at[0]] + ["}", "}"] + toks[at[0] + len(tail) :]
 
 
 def main() -> int:
     if len(sys.argv) != 3:
         print(__doc__)
         return 2
-    base, head = base_sequence(sys.argv[1]), head_sequence(sys.argv[2])
-    a, b = tokens(base), tokens(head)
-    diff = list(difflib.unified_diff(a, b, "base", "head", n=3, lineterm=""))
+    a, b = base_sequence(sys.argv[1]), head_sequence(sys.argv[2])
+    diff = list(difflib.unified_diff(a, b, "base", "head", n=4, lineterm=""))
     if not diff:
         print(f"moved statements equal: {len(a)} tokens, in order")
         return 0
     print("\n".join(diff[:80]))
     return 1
-
-
-def tokens(text: str) -> list[str]:
-    """Every identifier, literal, operator and parenthesis, in order; `,` `;`
-    `{` `}` dropped, since rustfmt reshapes them when indentation changes
-    (trailing commas, `=> x,` versus `=> { x }`). Block structure is the
-    compiler's to check; this checks that no statement moved or changed."""
-    return [t for t in re.findall(r'"(?:\\.|[^"\\])*"|\w+|[^\w\s]', text) if t not in ",;{}"]
 
 
 if __name__ == "__main__":
