@@ -196,7 +196,7 @@ fn signing_config_literal_round_trip_preserves_references_without_keys() {
         let literal = Config::load_literal(Some(&fixture.path)).expect("literal valid config");
         assert_eq!(literal.security.message_signing.shared_secret, current);
         assert_eq!(literal.security.message_signing.previous_secret, previous);
-        mcp_gateway::config_persistence::write_config(&fixture.path, &literal)
+        mcp_gateway::gateway::test_helpers::write_config_fixture(&fixture.path, &literal)
             .expect("production literal config write");
         let serialized = std::fs::read_to_string(&fixture.path).expect("persisted config bytes");
         assert!(!serialized.contains(CURRENT));
