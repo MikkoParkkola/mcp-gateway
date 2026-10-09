@@ -1,0 +1,12 @@
+diff --git a/src/backend/repin.rs b/src/backend/repin.rs
+index 30f874c16..d2974feb3 100644
+--- a/src/backend/repin.rs
++++ b/src/backend/repin.rs
+@@ -33,7 +33,6 @@ impl Backend {
+         if self.destination_bound() && self.destination() != built_under {
+             return Err("the destination policy changed while it was starting");
+         }
+-        *entry.listen.write() = listen;
+         *entry.transport.write() = Some(Arc::clone(transport));
+         Ok(())
+     }

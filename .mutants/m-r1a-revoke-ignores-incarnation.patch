@@ -1,0 +1,13 @@
+diff --git a/src/events/fanout.rs b/src/events/fanout.rs
+index e03f9dae1..8ae38ec8a 100644
+--- a/src/events/fanout.rs
++++ b/src/events/fanout.rs
+@@ -460,7 +460,7 @@ impl EventsHub {
+             .blocking(move |store| {
+                 store.remove_where(&snapshot.id, Utc::now(), tail, |row| {
+                     // A re-grant under the same id is not the row judged.
+-                    row.incarnation == snapshot.incarnation
++                    snapshot.incarnation < u64::MAX
+                         && row.credential_principal == snapshot.credential_principal
+                         && row.binding == snapshot.binding
+                         && row.api_key == snapshot.api_key

@@ -1,0 +1,13 @@
+diff --git a/src/events/upstream_need.rs b/src/events/upstream_need.rs
+index 352c4fec1..35677cfc1 100644
+--- a/src/events/upstream_need.rs
++++ b/src/events/upstream_need.rs
+@@ -214,7 +214,7 @@ impl Snapshot {
+         uris: std::collections::HashSet<String>,
+         complete: bool,
+     ) -> bool {
+-        if epoch != self.epoch {
++        if epoch != epoch {
+             return false;
+         }
+         self.read(uris, complete);

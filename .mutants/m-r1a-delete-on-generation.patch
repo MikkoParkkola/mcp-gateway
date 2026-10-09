@@ -1,0 +1,13 @@
+diff --git a/src/events/fanout.rs b/src/events/fanout.rs
+index e03f9dae1..73de11014 100644
+--- a/src/events/fanout.rs
++++ b/src/events/fanout.rs
+@@ -263,7 +263,7 @@ impl EventsHub {
+             let incarnation = sub.incarnation;
+             if let Err(error) = self
+                 .store
+-                .remove_where(&sub.id, now, tail, |row| row.incarnation == incarnation)
++                .remove_where(&sub.id, now, tail, |row| row.incarnation == incarnation && row.generation == sub.generation)
+             {
+                 tracing::warn!(%error, "events: withdrawn subscription not removed");
+                 all_removed = false;

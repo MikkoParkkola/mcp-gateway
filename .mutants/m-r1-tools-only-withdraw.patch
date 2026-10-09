@@ -1,0 +1,13 @@
+diff --git a/src/events/reconcile.rs b/src/events/reconcile.rs
+index 2acf817af..93e40f6a0 100644
+--- a/src/events/reconcile.rs
++++ b/src/events/reconcile.rs
+@@ -34,7 +34,7 @@ impl EventsHub {
+             .into_iter()
+             .filter(|sub| {
+                 parse_name(&sub.name).is_some_and(|(of, _)| of == backend)
+-                    && !source.admits_now(&sub.name)
++                    && sub.name.ends_with(".tools_changed") && !source.admits_now(&sub.name)
+             })
+             .collect();
+         if !gone.is_empty() {

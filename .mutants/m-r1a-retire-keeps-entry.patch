@@ -1,0 +1,12 @@
+diff --git a/src/events/watch_source.rs b/src/events/watch_source.rs
+index 574b54399..cd22536df 100644
+--- a/src/events/watch_source.rs
++++ b/src/events/watch_source.rs
+@@ -624,7 +624,6 @@ impl Run {
+                 .get(&self.key)
+                 .is_some_and(|p| Arc::ptr_eq(&p.stop, &self.stop))
+             {
+-                pollers.remove(&self.key);
+             }
+         }
+         Step::Stop
