@@ -1,0 +1,17 @@
+diff --git a/src/gateway/router/handlers.rs b/src/gateway/router/handlers.rs
+index f3adf1989..74b83dbf3 100644
+--- a/src/gateway/router/handlers.rs
++++ b/src/gateway/router/handlers.rs
+@@ -128,7 +128,11 @@ pub(super) async fn meta_mcp_handler(
+     // stream that polls it after this handler returns still has its scope.
+     // MIK-8176: every answer is handed off where its bytes leave (the JSON
+     // reply, or the stream's answer event), so unsent slots are given back.
+-    let policy = crate::gateway::meta_mcp::sealed_hold::HoldPolicy::Release;
++    let policy = if offers_event_stream {
++        crate::gateway::meta_mcp::sealed_hold::HoldPolicy::CountOnly
++    } else {
++        crate::gateway::meta_mcp::sealed_hold::HoldPolicy::Release
++    };
+     let dispatch = crate::gateway::meta_mcp::sealed_hold::scoped(
+         policy,
+         crate::gateway::meta_mcp::grant_audit::slot_http(

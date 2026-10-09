@@ -1,0 +1,15 @@
+diff --git a/src/gateway/streaming_sse.rs b/src/gateway/streaming_sse.rs
+index 7006d9821..6a07b99a7 100644
+--- a/src/gateway/streaming_sse.rs
++++ b/src/gateway/streaming_sse.rs
+@@ -420,9 +420,7 @@ pub(crate) async fn request_scoped_event_stream(
+                 yield Ok::<_, Infallible>(axum::body::Bytes::from(event));
+             }
+         }
+-        if let Some(carried) = &carried {
+-            crate::gateway::meta_mcp::sealed_hold::hand_off(carried);
+-        }
++        let _ = &carried;
+         yield Ok(axum::body::Bytes::from_static(b"event: message\ndata: "));
+         let mut result = body.into_data_stream();
+         while let Some(Ok(chunk)) = result.next().await {
