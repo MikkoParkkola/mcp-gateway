@@ -68,10 +68,13 @@ async fn concurrent_slow_bodies(
         .await;
         let answered_a = timeout(READ_TIMEOUT, answering_a).await;
         let answered_b = timeout(READ_TIMEOUT, answering_b).await;
+        let log = std::fs::read_to_string(&session.log).unwrap_or_default();
+        let skip = log.chars().count().saturating_sub(12_000);
+        let tail: String = log.chars().skip(skip).collect();
         panic!(
             "both calls must be in flight at once for this row to observe \
              isolation. The fixture saw {reached_fixture:?}; call A answered \
-             {answered_a:?}; call B answered {answered_b:?}"
+             {answered_a:?}; call B answered {answered_b:?}\ngateway log tail:\n{tail}"
         );
     }
     assert!(
@@ -232,6 +235,19 @@ async fn s03_message_http_isolates_by_stream() {
 /// an inference. ADR-014 row 14.
 #[tokio::test]
 async fn s03_progress_http_isolates_by_stream() {
+    s03_round().await;
+}
+
+/// MIK-8199 diagnosis: the round 40 times in a row.
+#[tokio::test]
+async fn s03_round_forty_times() {
+    for round in 0..40 {
+        eprintln!("s03 round {round}");
+        s03_round().await;
+    }
+}
+
+async fn s03_round() {
     // GIVEN
     let (backend_url, received, _gate) = spawn_fixture_backend().await;
     let home = tempfile::tempdir().expect("temp home");

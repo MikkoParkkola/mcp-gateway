@@ -34,6 +34,8 @@ struct HttpSession {
     /// run each call on a virgin session and would be testing a client the
     /// spec does not describe.
     session: String,
+    /// The gateway's stdout and stderr (MIK-8199 diagnosis).
+    log: std::path::PathBuf,
 }
 
 impl HttpSession {
@@ -49,7 +51,10 @@ impl HttpSession {
             home,
             gateway_bin::Inherit::Environment,
         ));
-        command.arg("serve").current_dir(home);
+        command
+            .arg("serve")
+            .current_dir(home)
+            .env("RUST_LOG", "mcp_gateway=debug");
         let child = command
             .stdin(Stdio::null())
             .stdout(Stdio::from(out))
@@ -131,6 +136,7 @@ impl HttpSession {
             client,
             url,
             session,
+            log,
         }
     }
 
