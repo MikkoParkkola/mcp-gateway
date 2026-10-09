@@ -1,0 +1,13 @@
+diff --git a/src/backend/probe.rs b/src/backend/probe.rs
+index d72704738..7300aeb91 100644
+--- a/src/backend/probe.rs
++++ b/src/backend/probe.rs
+@@ -260,7 +260,7 @@ impl HealthTicker {
+ 
+     /// Wait for the next pass.
+     pub(crate) async fn tick(&mut self) {
+-        if std::mem::take(&mut self.first) {
++        if true {
+             return;
+         }
+         tokio::time::sleep(self.period).await;

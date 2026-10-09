@@ -1,0 +1,13 @@
+diff --git a/src/backend/restart.rs b/src/backend/restart.rs
+index 8357ab3dc..d74cbf6d8 100644
+--- a/src/backend/restart.rs
++++ b/src/backend/restart.rs
+@@ -115,7 +115,7 @@ impl Backend {
+             {
+                 Ok(new) => {
+                     if let Some(old) = old.filter(|old| !Arc::ptr_eq(old, &new)) {
+-                        self.close_after_last_owner(old);
++                        let _ = old.close().await;
+                     }
+                     Ok(RestartOutcome::Rebuilt)
+                 }

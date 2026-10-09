@@ -1,0 +1,13 @@
+diff --git a/src/transport/http/transport_impl.rs b/src/transport/http/transport_impl.rs
+index 3f5f99f67..4510eccd3 100644
+--- a/src/transport/http/transport_impl.rs
++++ b/src/transport/http/transport_impl.rs
+@@ -64,7 +64,7 @@ impl Transport for HttpTransport {
+         // replace (a build-first restart, MIK-8012), and after an upgrade that
+         // verdict is Legacy. Its own probe goes out in the dialect the probe
+         // exists in. A started transport keeps the rule above.
+-        let era = if is_era_probe(method) && !self.connected.load(Ordering::Relaxed) {
++        let era = if false && is_era_probe(method) && !self.connected.load(Ordering::Relaxed) {
+             Some(Era::Modern)
+         } else {
+             self.outbound_era()

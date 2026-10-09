@@ -1,0 +1,13 @@
+diff --git a/src/backend/restart.rs b/src/backend/restart.rs
+index 8357ab3dc..6862cdaf2 100644
+--- a/src/backend/restart.rs
++++ b/src/backend/restart.rs
+@@ -101,7 +101,7 @@ impl Backend {
+         // other start publishes in between. Interactive restarts can log in,
+         // and stdio keeps take-then-start: two children of one server at once
+         // can fight over a port or lock file.
+-        if !interactive && matches!(self.config.transport, TransportConfig::Http { .. }) {
++        if false && !interactive && matches!(self.config.transport, TransportConfig::Http { .. }) {
+             let old = entry.transport.read().clone();
+             return match crate::oauth::login_gate::set_out(
+                 set_out,

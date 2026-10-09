@@ -1,0 +1,15 @@
+diff --git a/src/backend/lifecycle.rs b/src/backend/lifecycle.rs
+index a361ff54f..83c6edd39 100644
+--- a/src/backend/lifecycle.rs
++++ b/src/backend/lifecycle.rs
+@@ -584,9 +584,7 @@ impl Backend {
+             }
+             return Err(Error::BackendUnavailable(self.name.clone()));
+         }
+-        if let (Some(install), Some(probe)) = (install, deferred) {
+-            install.install(probe);
+-        }
++        let _ = (install, deferred);
+         #[cfg(test)]
+         hold_at(&self.publish_gate).await;
+ 

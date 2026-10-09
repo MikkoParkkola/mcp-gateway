@@ -1,0 +1,8 @@
+head_sha	606cbb95c868224eb9686e959a4b839f09e58cc1
+k1-take-first	linux	k1-take-first.patch	--lib -- a_failed_replacement_keeps_serving_the_old_transport
+k2-probe-guard-dropped	linux	k2-probe-guard-dropped.patch	--lib -- a_health_probe_never_begins_a_login
+k3-close-at-once	linux	k3-close-at-once.patch	--lib -- the_old_transport_closes_after_its_last_holder
+k4-ticker-no-gap	linux	k4-ticker-no-gap.patch	--lib -- a_slow_pass_is_followed_by_a_full_period
+k5-era-under-lock	linux	k5-era-under-lock.patch	--lib -- the_old_transport_keeps_its_era_while_the_candidate_probes
+k5b-no-install	linux	k5b-no-install.patch	--lib -- a_successful_swap_installs_the_candidates_era
+k6-candidate-probe-inherits	linux	k6-candidate-probe-inherits.patch	--lib -- a_candidate_probes_an_upgraded_peer_in_the_2026_dialect

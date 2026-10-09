@@ -1,0 +1,18 @@
+diff --git a/src/backend/lifecycle.rs b/src/backend/lifecycle.rs
+index a361ff54f..d058c7898 100644
+--- a/src/backend/lifecycle.rs
++++ b/src/backend/lifecycle.rs
+@@ -484,12 +484,7 @@ impl Backend {
+                 let peer: Arc<dyn Transport> = transport.clone();
+                 let era = match era_mode {
+                     EraResolution::Shared => self.resolve_era(&peer, entry).await,
+-                    EraResolution::Deferred => {
+-                        let probe = self.probe_candidate_era(&peer).await;
+-                        let era = probe.era();
+-                        deferred = Some(probe);
+-                        era
+-                    }
++                    EraResolution::Deferred => self.resolve_era(&peer, entry).await,
+                 };
+                 #[cfg(test)]
+                 self.hold_at_era_decision().await;
