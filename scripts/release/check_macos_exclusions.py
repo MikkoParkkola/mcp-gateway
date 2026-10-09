@@ -16,8 +16,10 @@ row that no longer matches an item (a stale exclusion)."""
 
 from __future__ import annotations
 
+import functools
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 LIST = "docs/release/macos-test-exclusions.tsv"
@@ -46,6 +48,36 @@ MACOS_CFG = {
 CFG_TOKEN = re.compile(r'\s*(?:(\w+)\s*=\s*"([^"]*)"|(\w+)|([(),]))')
 
 
+@functools.cache
+def declared_features() -> frozenset[str]:
+    """The crate's features, all on in the macOS job (`--all-features`): its
+    `[features]` table and its optional dependencies. A `feature = "x"` atom
+    naming anything else is never on."""
+    manifest = Path(__file__).resolve().parents[2] / "Cargo.toml"
+    data = tomllib.loads(manifest.read_text())
+    optional = {
+        name
+        for name, spec in data.get("dependencies", {}).items()
+        if isinstance(spec, dict) and spec.get("optional")
+    }
+    return frozenset(data.get("features", {})) | optional
+
+
+def cfg_tokens(text: str) -> list[re.Match] | None:
+    """The predicate's tokens, or None when any character is not one: a
+    comment or other syntax this reader does not model."""
+    tokens, pos = [], 0
+    while pos < len(text):
+        if text[pos:].strip() == "":
+            break
+        m = CFG_TOKEN.match(text, pos)
+        if not m or m.end() == pos:
+            return None
+        tokens.append(m)
+        pos = m.end()
+    return tokens
+
+
 def runs_on_macos(gate: str) -> bool:
     """Whether a `#[cfg(...)]` or `#![cfg(...)]` gate is true on macOS (MIK-8181).
 
@@ -55,13 +87,15 @@ def runs_on_macos(gate: str) -> bool:
     body = re.match(r"#!?\[cfg\((.*)\)\]\s*$", gate)
     if not body:
         return False
-    tokens = list(CFG_TOKEN.finditer(body.group(1)))
+    tokens = cfg_tokens(body.group(1))
+    if not tokens:
+        return False
     pos = 0
 
     def atom(m: re.Match) -> bool | None:
         key, val, ident = m.group(1), m.group(2), m.group(3)
         if key == "feature":
-            return True
+            return val in declared_features()
         if key is not None:
             if f'{key} = "{val}"' in MACOS_CFG:
                 return MACOS_CFG[f'{key} = "{val}"']
