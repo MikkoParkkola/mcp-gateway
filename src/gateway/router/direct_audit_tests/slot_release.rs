@@ -351,6 +351,9 @@ async fn the_fixtures_firewalls_deliver_a_minted_continuation() {
     };
     // The router's firewall judges a routed `tools/call`; without one, the
     // Meta-MCP's own does.
+    // Without a router firewall the first pass would judge with the
+    // Meta-MCP's, and the row would test one firewall twice.
+    assert!(fx.state.firewall.is_some(), "the fixture's router firewall");
     for (name, router) in [("router", fx.state.firewall.as_deref()), ("meta", None)] {
         let answer = json!({
             "resultType": "input_required",
@@ -365,6 +368,14 @@ async fn the_fixtures_firewalls_deliver_a_minted_continuation() {
         assert!(
             delivered.error.is_none(),
             "the {name} firewall refused the minted handle: {delivered:?}"
+        );
+        assert_eq!(
+            delivered
+                .result
+                .as_ref()
+                .and_then(|r| r.get("requestState")),
+            Some(&json!(token)),
+            "the {name} firewall changed the minted handle"
         );
     }
 }
