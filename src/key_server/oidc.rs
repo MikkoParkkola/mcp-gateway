@@ -15,8 +15,9 @@
 //! # Security properties
 //!
 //! - Discovery and JWKS are fetched only over HTTPS, or plain HTTP to a
-//!   loopback host without any proxy; redirects may only move to HTTPS. A
-//!   cleartext issuer off this machine is refused at load and at verify.
+//!   loopback host without any proxy. A remote redirect may not leave the
+//!   origin (scheme, host, port) of the URL fetched; a loopback fetch follows
+//!   none. A cleartext issuer off this machine is refused at load and at verify.
 //! - Unknown `kid` triggers a single cache refresh before failing; prevents
 //!   indefinite re-fetching if the key truly does not exist.
 //! - Clock leeway of 60 seconds tolerates minor clock skew between the `IdP` and
@@ -117,11 +118,6 @@ pub enum OidcError {
     /// The HTTP client could not be built at startup, so nothing is fetched.
     #[error("OIDC HTTP client is unavailable; see the startup log")]
     ClientUnavailable,
-}
-
-/// A redirect from an `https://` fetch may only move to `https://`.
-fn remote_hop_allowed(next: &url::Url) -> bool {
-    next.scheme() == "https"
 }
 
 /// Keep a built client, or log once and keep none: a fallback client would
@@ -277,15 +273,7 @@ impl JwksCache {
         // Not `https_only`: that would refuse the loopback carve-out too.
         // Every fetch picks its client by URL (`client_for`).
         let remote = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                if attempt.previous().len() > 5 {
-                    attempt.error("OIDC fetch exceeded 5 redirects")
-                } else if remote_hop_allowed(attempt.url()) {
-                    attempt.follow()
-                } else {
-                    attempt.error("OIDC refuses a redirect to a non-HTTPS URL")
-                }
-            }))
+            .redirect(remote_redirect_policy())
             .timeout(Duration::from_secs(10));
         let remote = match proxy {
             Some(proxy) => remote.proxy(proxy),
@@ -789,6 +777,12 @@ fn validate_discovery_document(
     }
     Ok(doc.jwks_uri)
 }
+
+#[path = "oidc_redirect.rs"]
+mod redirect;
+#[cfg(test)]
+use redirect::remote_hop_allowed;
+use redirect::remote_redirect_policy;
 
 #[cfg(test)]
 #[path = "oidc_tests.rs"]
