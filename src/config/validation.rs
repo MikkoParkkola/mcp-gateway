@@ -76,6 +76,9 @@ impl Config {
         }
         self.validate_timer_periods()?;
         self.validate_backend_names()?;
+        // MIK-8298: whatever `enabled` says, so turning a section on never
+        // surfaces an inert rule for the first time.
+        self.validate_pattern_grammar()?;
         self.validate_backend_urls()?;
         self.validate_remote_backend_provenance()?;
         self.validate_required_env_references(overlay)?;
@@ -346,7 +349,9 @@ impl Config {
     }
 
     pub(super) fn validate_backend_names(&self) -> Result<()> {
-        const INVALID_CHARS: &[char] = &['/', '\\', ':'];
+        // `*` (MIK-8298): a name never holds one, so a pattern can never
+        // collide with a literal backend name.
+        const INVALID_CHARS: &[char] = &['/', '\\', ':', '*'];
         for name in self.backends.keys() {
             if name.is_empty() {
                 return Err(Error::ConfigValidation(
