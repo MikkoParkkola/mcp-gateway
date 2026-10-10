@@ -674,7 +674,7 @@ async fn eof_drains_a_running_task_before_returning() {
     let task = service
         .get(LOCAL_OPERATOR_PRINCIPAL, &id)
         .expect("the local operator's task is in its store");
-    let wire = crate::gateway::task_route::task_envelope(&task.task, "complete");
+    let wire = serde_json::to_value(task.task.wire()).expect("the task serializes");
     assert_eq!(
         task.task.status(),
         crate::protocol::tasks::TaskStatus::Completed,

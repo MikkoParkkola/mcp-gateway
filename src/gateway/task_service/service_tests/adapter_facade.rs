@@ -140,6 +140,9 @@ async fn facade_01_one_admission_maps_created_existing_mismatch_and_in_flight() 
         .expect("an identical retry is not a refusal");
     match repeat {
         CreateOutcome::Existing(committed) => {
+            // A store-facade read, outside any request scope: adopts nothing.
+            let committed =
+                committed.deliver(crate::gateway::meta_mcp::sealed_hold::HoldSink::Scope);
             assert_eq!(committed.task.id(), first.id());
             assert_eq!(committed.revision, 1);
             assert_fixture_lifetime(&committed.task);
@@ -250,6 +253,9 @@ async fn facade_02_a_saturated_pool_still_answers_the_original_handle() {
         .expect("a repeat under saturation is answered, not refused");
     match repeat {
         CreateOutcome::Existing(committed) => {
+            // A store-facade read, outside any request scope: adopts nothing.
+            let committed =
+                committed.deliver(crate::gateway::meta_mcp::sealed_hold::HoldSink::Scope);
             assert_eq!(committed.task.id(), first.id());
             assert_eq!(committed.revision, 1);
             assert_fixture_lifetime(&committed.task);

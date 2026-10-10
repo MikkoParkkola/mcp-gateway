@@ -22,6 +22,9 @@ pub(crate) use meta_mcp::invoke::gateway_writes;
 /// Same shape as `STDIO_CREDENTIAL_PRINCIPAL`. A second copy of those four
 /// lines is how the `Release` ordering gets dropped in a later edit.
 pub(crate) use meta_mcp::publish_identity_grants;
+/// MIK-8176: execution admission (`idempotency::admission`) co-owns the holds
+/// of a stored delivery and adopts them on replay.
+pub(crate) use meta_mcp::sealed_hold;
 /// The notes scope and the gateway, for the CLI process audit rows
 /// (MIK-7926.FIX.2), which run a real child in `capability::executor`.
 #[cfg(test)]

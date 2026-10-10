@@ -582,10 +582,10 @@ impl MetaMcp {
         // Minted here, where the capability gate has just decided the question
         // may be asked at all: a continuation for a question the client will
         // never be shown is a redeemable envelope for an exchange that cannot
-        // happen.
-        let mut sealed = None;
+        // happen. Its slot is held in this request's scope: released with the
+        // scope unless the answer carrying it is handed off (MIK-8176).
         if let Some(interim) = interim {
-            let Some((envelope, hold_key)) = mint_continuation(
+            let Some((envelope, _)) = mint_continuation(
                 &self.continuation,
                 caller.principal_source(dispatch_binding.as_deref()),
                 target,
@@ -602,7 +602,6 @@ impl MetaMcp {
                 return Err(unbindable_continuation(server, tool));
             };
             result["requestState"] = json!(&envelope);
-            sealed = Some((envelope, hold_key));
             // MIK-7994: the envelope is the gateway's text, up to 8 KiB, and
             // must not take the receipt's capped budget from the backend's
             // prompt. Noted at the value layer: `tool_value` still reads
@@ -625,10 +624,7 @@ impl MetaMcp {
             trace_id,
             caller_key: None,
         };
-        let gated = self.gate_payload(&call, result);
-        let kept = gated.as_ref().ok().map(|(gated, _)| gated);
-        continuation::release_unless_carried(&self.continuation, sealed, kept).await;
-        let (gated, effect) = gated?;
+        let (gated, effect) = self.gate_payload(&call, result)?;
         result = gated;
         self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
         // A chained backend is eligible only with a checked upstream outcome.

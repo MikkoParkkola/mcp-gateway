@@ -118,11 +118,20 @@ async fn a_frame_carries_the_task_as_it_is_at_delivery() {
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
     };
 
+    let mut expected = serde_json::to_value(stored.task.wire()).expect("the task serializes");
     let pending = meta
-        .task_notification_frame(&working, Some(&stored), |_| false, &subscription)
+        .task_notification_frame(
+            &working,
+            // No sealed question in this task, so no holds to carry.
+            Some(super::sealed_hold::Held::new(
+                stored,
+                super::sealed_hold::CarriedHolds::none(),
+            )),
+            |_| false,
+            &subscription,
+        )
         .await
         .expect("a frame is built");
-    let mut expected = serde_json::to_value(stored.task.wire()).expect("the task serializes");
     expected["_meta"] = pending.frame["params"]["_meta"].clone();
     assert_eq!(
         pending.frame["params"], expected,
