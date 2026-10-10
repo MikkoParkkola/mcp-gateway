@@ -87,6 +87,7 @@ async fn a_dropped_stdio_session_stops_its_task_workers() {
     );
     // The backend answers now. A worker still running would commit `done`.
     release.send_modify(|open| *open = true);
+    // timing: absence
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Custody is free once the dropped future's holders are gone: no worker
