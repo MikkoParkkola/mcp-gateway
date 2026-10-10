@@ -112,6 +112,7 @@ pub(super) fn two_principal_auth() -> AuthConfig {
 /// [`two_principal_auth`] plus `key-c` (`principal-c`), a third ordinary
 /// caller: a row whose non-holder control is key-b can give the competing
 /// holder its own key (`MIK-8205`).
+#[cfg(feature = "firewall")]
 pub(super) fn three_principal_auth() -> AuthConfig {
     let mut auth = two_principal_auth();
     let mut c = auth.api_keys[0].clone();
