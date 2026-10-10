@@ -49,22 +49,14 @@ pub(super) fn confirmation_refusal_response(id: &RequestId, message: String) -> 
 /// itself.
 pub(super) const CONFIRMATION_INPUT_KEY: &str = "io.mcp-gateway.destructive-confirmation.v1";
 
-/// Who a confirmation envelope is bound to.
-///
-/// `principal_fingerprint` answers `None` for a modern stateless caller: that
-/// path authenticates by API key and the fingerprint is written for a verified
-/// backend exchange. Minting on `None` would bind the envelope to nobody, and
-/// refusing on `None` would leave the in-band ask unreachable on the one
-/// transport it exists to serve — so the API-key *name* is the fallback. It
-/// grants nothing new: it is the same authority the admin gate accepted one
-/// frame earlier for this very call, sealing a caller to its own answer to a
-/// question this gateway just asked it. A caller with neither is still refused.
+/// Who a confirmation envelope is bound to: the caller's one binding,
+/// [`MetaMcpCallerContext::principal_source`], the same derivation every
+/// continuation and task confirmation reads (MIK-8137). A key-only caller is
+/// bound by its validated credential, never by the key's configured name: a
+/// key re-issued under the same name is another credential and another caller.
+/// A caller with neither an identity nor a key is still refused.
 pub(super) fn confirmation_principal(caller: &MetaMcpCallerContext<'_>) -> Option<String> {
-    crate::protocol::mrtr::principal_fingerprint(caller.verified_identity).or_else(|| {
-        caller
-            .api_key_name
-            .map(|name| crate::hashing::sha256_hex(format!("apikey-name:{name}").as_bytes()))
-    })
+    crate::protocol::mrtr::source_fingerprint(caller.principal_source(None))
 }
 
 /// Which call a confirmation authorises.
@@ -89,9 +81,8 @@ pub(super) fn confirmation_digest(tool_name: &str, arguments: &Value) -> String 
 /// cannot spend the hold or the redemption belonging to the exchange whose
 /// `jti` it happens to carry; binding before the ledger, so a handle this
 /// gateway will not honour does not burn the caller's one redemption. Not that
-/// function, because the principal differs: it derives the stricter
-/// `principal_fingerprint`, which refuses exactly the API-key caller this
-/// domain must bind (see `confirmation_principal`).
+/// function, because the bound pair differs: a confirmation digests the meta
+/// tool and its arguments, not a backend exchange.
 ///
 /// `std::result::Result` spelled out because this module's bare `Result` is the
 /// crate alias, which fixes the error type and cannot carry the `()` this needs.
@@ -306,6 +297,12 @@ pub(super) async fn destructive_confirmation_gate(
                 warn!(tool = %tool_name, "Clock reads before 1970; no confirmation minted");
                 return GateOutcome::refuse(refused(&action_desc));
             };
+            // The caller the slot is charged to (MIK-8293): the caller, not the
+            // sealed `principal`, so a confirmation and the caller's other
+            // rounds share one cap.
+            let Some(quota) = caller.quota_key() else {
+                return GateOutcome::refuse(refused(&action_desc));
+            };
             let Some(payload) = continuation
                 .begin_confirmation_exchange(
                     tool_name.to_owned(),
@@ -314,6 +311,7 @@ pub(super) async fn destructive_confirmation_gate(
                     // empty string is a state some backend never issued.
                     None,
                     principal,
+                    &quota,
                     digest,
                     now,
                 )
@@ -324,6 +322,12 @@ pub(super) async fn destructive_confirmation_gate(
             };
             let Ok(envelope) = continuation.keyring().mint(&payload) else {
                 warn!(tool = %tool_name, "Confirmation envelope mint refused");
+                // No envelope will ever name this slot, so it is given back now
+                // rather than held until it expires (MIK-8311).
+                continuation
+                    .in_flight()
+                    .complete(&payload.hold_key, now)
+                    .await;
                 return GateOutcome::refuse(refused(&action_desc));
             };
             super::sealed_hold::register(continuation, &payload.hold_key, &envelope);
