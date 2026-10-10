@@ -52,8 +52,8 @@ LINUX = {
     "target_endian": {"little"},
     "target_env": {"gnu"},
 }
-TRUE_FLAGS = {"test", "unix", "debug_assertions"}
-FALSE_FLAGS = {"windows"}
+TRUE_FLAGS = {"test", "unix", "debug_assertions", "true"}
+FALSE_FLAGS = {"windows", "false"}
 UNDECIDED = None
 ATTR = re.compile(r"#!?\[(cfg|cfg_attr)\(")
 TOKEN = re.compile(r'\s*(?:(\w+)|("(?:[^"\\]|\\.)*")|([(),=]))')
@@ -149,6 +149,47 @@ def split_top(text: str) -> list[str]:
     return parts
 
 
+def attribute_span(line: str) -> tuple[str, str] | None:
+    """The arguments of the attribute `line` starts with, and the trimmed text
+    after its closing `)]`; None when it does not close as `)]`."""
+    head = ATTR.match(line)
+    depth, quoted = 1, False
+    for i in range(head.end(), len(line)):
+        ch = line[i]
+        if ch == '"' and line[i - 1] != "\\":
+            quoted = not quoted
+        elif not quoted and ch == "(":
+            depth += 1
+        elif not quoted and ch == ")":
+            depth -= 1
+            if depth == 0:
+                if line[i + 1 : i + 2] != "]":
+                    return None
+                return line[head.end() : i], line[i + 2 :].strip()
+    return None
+
+
+def gated_on_test(attribute: str) -> bool:
+    """Whether a `#[cfg(..)]` names `test` anywhere in its predicate (falling
+    back to the leading-`test` spelling when it cannot be parsed)."""
+    head = ATTR.match(attribute)
+    if not head or head.group(1) != "cfg":
+        return False
+    span = attribute_span(attribute)
+    tree = predicate(span[0]) if span else None
+    if tree is None:
+        return bool(TEST_CFG.search(attribute))
+
+    def names_test(node) -> bool:
+        if node[0] in ("all", "any"):
+            return any(names_test(n) for n in node[1])
+        if node[0] == "not":
+            return False
+        return node == ("flag", "test")
+
+    return names_test(tree)
+
+
 def predicate(text: str):
     """The parsed predicate in `text`, or None when it is not one whole predicate."""
     toks = tokens(text)
@@ -166,9 +207,16 @@ def off_macos(attribute: str, features: set[str]) -> bool:
     predicate counts (it must be listed), and so does one undecided on either
     side. `cfg_attr` counts only when it adds a top-level `ignore`."""
     head = ATTR.match(attribute)
-    if not head or not attribute.endswith(")]"):
+    if not head:
         return False
-    body = attribute[head.end() : -2]
+    span = attribute_span(attribute)
+    if span is None:
+        return True
+    body, rest = span
+    # A trailing `// reason` is fine; any other text after the attribute is
+    # not read, so the attribute counts.
+    if rest and not rest.startswith("//"):
+        return True
     if head.group(1) == "cfg":
         tree, runs_when = predicate(body), True
     else:
@@ -269,7 +317,7 @@ def excluded(root: Path) -> set[tuple[str, str]]:
             kind, name = item.groups()
             # A module is a test module in a test file, or when its own gate
             # says `test` (`cfg(all(test, ...))` in a production mod.rs).
-            test_gated = any(TEST_CFG.search(a) for a in block)
+            test_gated = any(gated_on_test(a) for a in block)
             if (kind == "fn" and any(TEST_ATTR.match(a) for a in block)) or (
                 kind == "mod" and (TEST_FILE.search(rel) or test_gated)
             ):
