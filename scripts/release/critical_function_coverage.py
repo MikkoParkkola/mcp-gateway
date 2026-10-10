@@ -30,10 +30,12 @@ whose function is gone, or that no given report measured, fails.
 """
 
 import argparse
-import csv
 import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import inventory_ledger as ledger  # noqa: E402
 
 FLOOR = 95.0
 
@@ -289,8 +291,9 @@ def read_lcov(paths, root):
 
 
 def read_inventory(path):
-    rows = [line for line in Path(path).read_text().splitlines() if not line.startswith("#")]
-    return list(csv.DictReader(rows, delimiter="\t"))
+    """The critical ledger: `path` plus the `*.critical.tsv` fragments beside it,
+    through inventory_ledger.py (MIK-8279). Raises LedgerError on any bad row."""
+    return ledger.load_files(ledger.CRITICAL, Path(path))
 
 
 def grade(root, inventory, lcovs):
@@ -351,7 +354,14 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     failed = graded = not_here = 0
-    for result in grade(args.root, args.inventory, args.lcov):
+    try:
+        results = grade(args.root, args.inventory, args.lcov)
+    except ledger.LedgerError as error:
+        for problem in error.problems:
+            print(f"inventory: {problem}")
+        print("the inventory could not be read; nothing was graded")
+        return 1
+    for result in results:
         status, row = result[0], result[1]
         # An INDIRECT result is a diagnostic about the tree, not an inventory row.
         graded += status != "INDIRECT"

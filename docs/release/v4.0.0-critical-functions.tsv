@@ -1,6 +1,6 @@
 # MIK-7324.COV.3 function inventory: every security-enforcing function in the seven named paths.
 # tier=critical must clear 95% of its own lines; tier=standard rows are borderline builders kept at the path floor.
-# fn is the bare name; occurrence picks the nth 'fn <name>' in the file (cfg variants, same-named methods).
+# fn is the bare name; occurrence picks the nth 'fn <name>' in the file (cfg variants, same-named methods). New rows go in docs/release/inventory.d/<pr>.critical.tsv (MIK-8279).
 path	fn	occurrence	tier	category	qualified	reason
 src/config/account_bindings.rs	compile	1	critical	d	compile	Refuses raw Vault propagation without an account descriptor
 src/config/account_bindings.rs	compile_one	1	critical	d	compile_one	Refuses an account plus identity_propagation conflict, unresolved descriptor refs, and external without a strategy
