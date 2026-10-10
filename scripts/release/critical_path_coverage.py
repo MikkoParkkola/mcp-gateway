@@ -16,7 +16,6 @@ absent, empty or unreadable: nothing was graded (MIK-8265).
 
 import argparse
 import json
-import os
 import sys
 
 FLOOR = 80.0
@@ -102,12 +101,16 @@ def main(argv=None):
     parser.add_argument("report", help="cargo llvm-cov --summary-only --json output")
     args = parser.parse_args(argv)
     # Absent, empty or unreadable all mean the Linux job uploaded no report.
-    if not os.path.isfile(args.report) or not os.access(args.report, os.R_OK) or os.path.getsize(args.report) == 0:
+    try:
+        with open(args.report, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError:
+        text = ""
+    if not text.strip():
         print(f"input missing: {args.report}")
         print("NOT GRADED: the coverage report is missing, so no path was graded")
         return INPUT_MISSING
-    with open(args.report, encoding="utf-8") as handle:
-        rows = grade(json.load(handle))
+    rows = grade(json.loads(text))
     for name, count, covered, total, percent, failures in rows:
         verdict = "; ".join(failures) if failures else "ok"
         print(f"{name:15} files={count:3} {covered}/{total} {percent:6.2f}%  {verdict}")

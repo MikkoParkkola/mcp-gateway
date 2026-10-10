@@ -108,7 +108,9 @@ rm -rf "$out"; mkdir -p "$out/src"
 # Shared by every worktree of the clone and ~50 MB a run: keep the newest few,
 # this run and the self-check baseline (MIK-8217).
 python3 "$HERE/prune_coverage_grades.py" "$grades" 3 "$run" "$SELF_RUN"
-gh run download "$run" -R "$REPO" -D "$out/art"
+# A failed download is no grade either: the check below names each report it
+# left absent and ends NOT GRADED (MIK-8265).
+gh run download "$run" -R "$REPO" -D "$out/art" || echo "download of run $run failed or was partial"
 git archive "$rev" src docs/release scripts/release | tar -x -C "$out/src"
 paths_grader="$out/src/scripts/release/critical_path_coverage.py"
 [[ -f "$paths_grader" ]] || paths_grader="$HERE/critical_path_coverage.py"

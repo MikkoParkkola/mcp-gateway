@@ -179,12 +179,16 @@ jobs:
           else
             set -- --lcov art/coverage-linux/linux.lcov --lcov art/coverage-windows/windows.lcov
           fi
-          status=0
+          status=0 functions=0 paths=0
           # stderr too, so a grader that cannot run shows why in the summary.
-          python3 scripts/release/critical_function_coverage.py "$@" > functions.txt 2>&1 || status=1
-          python3 scripts/release/critical_path_coverage.py art/coverage-linux/cov.json > paths.txt 2>&1 || status=1
+          python3 scripts/release/critical_function_coverage.py "$@" > functions.txt 2>&1 || functions=$?
+          python3 scripts/release/critical_path_coverage.py art/coverage-linux/cov.json > paths.txt 2>&1 || paths=$?
+          [ "$functions" = 0 ] && [ "$paths" = 0 ] || status=1
+          # A grader's 3 is a missing report: no grade, never a graded FAIL (MIK-8265).
+          verdict=$([ $status = 0 ] && echo PASS || echo FAIL)
+          if [ "$functions" = 3 ] || [ "$paths" = 3 ]; then verdict="NOT GRADED (a coverage report is missing)"; fi
           {
-            echo "## Critical coverage grade ($EVENT): $([ $status = 0 ] && echo PASS || echo FAIL)"
+            echo "## Critical coverage grade ($EVENT): $verdict"
             echo '```'
             grep -v '^ok' functions.txt || true
             cat paths.txt
