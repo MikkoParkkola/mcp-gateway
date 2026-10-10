@@ -1,16 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8202 part 2 (P2), T16: the control-plane grant inventory on a host
-//! clock that reads before 1970. Display only: a grant whose status depends on
-//! the time is shown as undetermined rather than guessed Active or Expired;
-//! one that does not depend on the time reads as it always did.
+//! clock that reads before 1970. Grant status is judged against the time, so
+//! the view is refused with the UI's existing 503 rather than any grant being
+//! guessed active or expired; on a readable clock it reads as it always did.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};
 use axum::extract::ConnectInfo;
-use axum::http::{Request, header};
+use axum::http::{Request, StatusCode, header};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -72,7 +72,7 @@ fn find_grant<'a>(value: &'a Value, id: &str) -> Option<&'a Value> {
     }
 }
 
-async fn statuses(state: &Arc<AppState>) -> [String; 3] {
+async fn fetch(state: &Arc<AppState>) -> (StatusCode, Value) {
     let request = Request::builder()
         .uri("/ui/api/control-plane")
         .header(header::AUTHORIZATION, format!("Bearer {BEARER}"))
@@ -83,8 +83,14 @@ async fn statuses(state: &Arc<AppState>) -> [String; 3] {
         .oneshot(request)
         .await
         .unwrap();
+    let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let body: Value = serde_json::from_slice(&bytes).expect("a JSON snapshot");
+    (status, serde_json::from_slice(&bytes).expect("a JSON body"))
+}
+
+async fn statuses(state: &Arc<AppState>) -> [String; 3] {
+    let (status, body) = fetch(state).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
     ["g-expiring", "g-revoked", "g-open"].map(|id| {
         find_grant(&body, id)
             .and_then(|g| g["status"].as_str())
@@ -93,18 +99,22 @@ async fn statuses(state: &Arc<AppState>) -> [String; 3] {
     })
 }
 
-/// MIK-8202 ADVISORY (display) rule, P2 row 17: on a clock before 1970 a grant
-/// with an expiry is "undetermined"; a revoked grant stays revoked and one
-/// with no expiry stays approved. Mutant: guess expired or active.
+/// MIK-8202 ADVISORY (display) rule, P2 row 17: on a clock before 1970 the
+/// grant view is refused with the existing 503 and a clock message; no grant
+/// is shown, so none is guessed active or expired. Mutant: serve the view on a
+/// guessed time.
 #[tokio::test]
-async fn t16_grant_status_on_an_unreadable_clock_is_undetermined_unless_time_is_irrelevant() {
+async fn t16_the_grant_view_on_an_unreadable_clock_is_refused_not_guessed() {
     let (state, _dir) = state_with_grants().await;
     let clock = crate::clock::test_clock::before_epoch();
-    let [expiring, revoked, open] = statuses(&state).await;
+    let (status, body) = fetch(&state).await;
     drop(clock);
-    assert!(expiring.contains("undetermined"), "{expiring}");
-    assert_eq!(revoked, "revoked");
-    assert_eq!(open, "approved");
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert!(
+        body["error"].as_str().is_some_and(|e| e.contains("clock")),
+        "{body}"
+    );
+    assert!(find_grant(&body, "g-expiring").is_none(), "{body}");
 }
 
 /// T16 control: on a readable clock the same grants read as before.
