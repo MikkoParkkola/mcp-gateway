@@ -714,3 +714,7 @@ fn safe_fragment(fragment: &str) -> String {
 #[cfg(test)]
 #[path = "kernel_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "kernel_memo_tests.rs"]
+mod memo_tests;
