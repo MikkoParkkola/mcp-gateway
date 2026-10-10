@@ -431,3 +431,85 @@ async fn row13_require_chain_refusal_answers_as_absent() {
     let a = decision(direct_task_call(&absent, spec.tool).await);
     assert_eq!(w, a, "row 13: withheld {w} vs absent {a}");
 }
+
+/// A hardened stdio gateway signing every `tools/call` (MIK-7886).
+fn signed(config: &mut crate::config::Config) {
+    config.server.modern_protocol = true;
+    config.security.posture = crate::security::SecurityPosture::Hardened;
+    // The loopback backend is a private address, which hardened refuses unless named.
+    config.security.hardened.private_backends = vec![BACKEND.to_string()];
+    config.security.message_signing.enabled = true;
+    config.security.message_signing.shared_secret =
+        "withheld-parity-signing-secret-of-32-bytes!".to_string();
+    config.security.message_signing.replay_window = 300;
+    config.security.message_signing.key_id = "withheld-parity".to_string();
+}
+
+/// The answer without what each call mints: its trace id and signature.
+fn unminted(mut body: Value) -> Value {
+    if let Some(result) = body["result"].as_object_mut() {
+        result.remove("trace_id");
+    }
+    if let Some(signature) = body["result"]["_signature"].as_object_mut() {
+        signature.remove("sig");
+        signature.remove("ts");
+    }
+    body
+}
+
+/// A refusal of `first` carrying `meta`, then the sibling carrying `meta`,
+/// on a fresh fixture built by `configure`; `None` when that reuse answers as
+/// the sibling's probe on an untouched fixture.
+async fn reuse_after(
+    first: &str,
+    meta: &Value,
+    configure: fn(&mut crate::config::Config),
+) -> Option<String> {
+    use crate::gateway::router::withheld_twin_tests::SIBLING;
+    let spec = Spec::of(Reason::Policy, Side::Withheld);
+    let mut extra = json!({"_meta": modern_meta()});
+    if let (Some(into), Some(more)) = (extra["_meta"].as_object_mut(), meta.as_object()) {
+        into.extend(more.clone());
+    }
+    let probe = twin_with(spec, configure).await.call(SIBLING, &extra).await;
+    assert_eq!(probe.calls, 1, "premise: the probe did not dispatch: {}", probe.body);
+    let fx = twin_with(spec, configure).await;
+    let refused = fx.call(first, &extra).await;
+    assert!(refused.body.get("error").is_some(), "premise: {}", refused.body);
+    let reuse = fx.call(SIBLING, &extra).await;
+    (unminted(reuse.body.clone()) != unminted(probe.body.clone()))
+        .then(|| format!("reuse {} vs untouched {}", reuse.body, probe.body))
+}
+
+/// Row 8 stdio (ORACLE.3): a withheld call and an absent-name call each
+/// leave the idempotency key unspent. GREEN or RED as observed.
+#[tokio::test]
+async fn row8_stdio_refusals_park_no_idempotency_key() {
+    let keyed = json!({"io.mcp-gateway/idempotency-key": "wh-8"});
+    let mut cells = Vec::new();
+    for (label, first) in [("withheld", "read"), ("absent", "no_such_tool")] {
+        if let Some(m) = reuse_after(first, &keyed, |_| {}).await {
+            cells.push(format!("row 8 stdio key ({label} first): {m}"));
+        }
+    }
+    assert_cells("row 8", &cells);
+}
+
+/// Row 8 stdio, nonce half: a withheld call spends no signing nonce. GREEN.
+#[tokio::test]
+async fn row8_stdio_withheld_call_spends_no_signing_nonce() {
+    let nonce = json!({crate::gateway::meta_mcp::signing::NONCE_META: "wh-8-nonce"});
+    if let Some(m) = reuse_after("read", &nonce, signed).await {
+        panic!("row 8 stdio nonce (withheld first): {m}");
+    }
+}
+
+/// Row 8b stdio, design addendum A4: an absent-name refusal gives its signing
+/// nonce back (MIK-8150 rule). RED or GREEN on base as observed.
+#[tokio::test]
+async fn row8b_stdio_absent_name_refusal_refunds_the_signing_nonce() {
+    let nonce = json!({crate::gateway::meta_mcp::signing::NONCE_META: "wh-8-nonce"});
+    if let Some(m) = reuse_after("no_such_tool", &nonce, signed).await {
+        panic!("row 8b stdio (absent first): {m}");
+    }
+}
