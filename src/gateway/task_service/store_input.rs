@@ -72,6 +72,8 @@ pub(super) struct TestSeams {
     clock_after_resume: std::sync::Mutex<Option<DateTime<Utc>>>,
     /// Answer writes that have entered the store, before its ordering lock.
     arrived: std::sync::atomic::AtomicUsize,
+    /// Reads of a frozen clock before 1970, each refused.
+    refused_reads: std::sync::atomic::AtomicUsize,
 }
 
 #[cfg(test)]
@@ -108,6 +110,9 @@ impl Shared {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
         {
             return if frozen.timestamp() < 0 {
+                self.seams
+                    .refused_reads
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Err(crate::clock::ClockBeforeEpoch)
             } else {
                 Ok(frozen)
@@ -142,6 +147,15 @@ impl TaskStore {
             .clock_after_resume
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(at);
+    }
+
+    /// How many reads of a frozen clock before 1970 were refused.
+    #[cfg(test)]
+    pub(crate) fn refused_reads_for_test(&self) -> usize {
+        self.0
+            .seams
+            .refused_reads
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// How many answer writes have reached the store's ordering lock.

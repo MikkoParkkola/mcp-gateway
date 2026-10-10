@@ -184,7 +184,16 @@ impl DashboardBootstrap {
     }
 
     /// Consume the value if it matches, returning the cap it was minted with.
+    /// A wall clock before 1970 refuses it unspent: the session it would
+    /// issue could not be dated, and the operator keeps a working link
+    /// (MIK-8202).
     pub(crate) fn consume_capped(&self, candidate: &str) -> Option<Redemption> {
+        if wall_unreadable(Now::read()) {
+            tracing::warn!(
+                "dashboard bootstrap refused: the host clock reads before 1970; the link is kept"
+            );
+            return None;
+        }
         let mut guard = self.value.lock().ok()?;
         match guard.as_ref() {
             Some((expected, _)) if expected == candidate => {

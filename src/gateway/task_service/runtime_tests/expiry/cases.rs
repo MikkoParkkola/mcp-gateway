@@ -489,6 +489,20 @@ async fn a_clock_before_the_epoch_expires_nothing() {
         swept(&service, &dir, &done.id).await,
         "the sweep did not resume once the clock read"
     );
+    let cancelled = timeout(BUDGET, async {
+        loop {
+            let row = service.get(OWNER, &asking.id);
+            if row.is_ok_and(|row| row.task.status() == TaskStatus::Cancelled) {
+                return;
+            }
+            tokio::time::sleep(TICK / 2).await;
+        }
+    })
+    .await;
+    assert!(
+        cancelled.is_ok(),
+        "the expired round was not cancelled once the clock read"
+    );
     guard.shutdown().await.expect("the sweep stops");
     service.shutdown().await.expect("custody is released");
     drop(executor);

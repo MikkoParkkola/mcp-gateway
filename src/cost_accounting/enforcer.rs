@@ -86,7 +86,13 @@ impl DailyAccumulator {
     /// fresh day). A stored day ahead of this read's clock is still counted,
     /// and so is any day on a clock before 1970 (MIK-8202).
     pub fn current(&self) -> u64 {
-        if self.is_current() { self.lock().1 } else { 0 }
+        let today = current_day();
+        let state = self.lock();
+        if today.is_ok_and(|today| state.0 < today) {
+            0
+        } else {
+            state.1
+        }
     }
 
     /// False once the stored day is before today: [`Self::current`] reads 0.

@@ -103,7 +103,7 @@ impl<'a> Settling<'a> {
                 DispatchSettlement::Input(round) => round,
             };
             if !round.requests.is_empty() {
-                return self.park(round).await;
+                return self.park(round, cancel_rx).await;
             }
             // ponytail: the counter is loop-local, not on the record: a client
             // round ends this worker, so a resumed worker starts at zero,
@@ -202,7 +202,7 @@ impl<'a> Settling<'a> {
 
     /// Commit `input_required` with the continuation, then release: the worker
     /// returns and the row waits with no owner.
-    async fn park(&self, round: InputRequired) {
+    async fn park(&self, round: InputRequired, cancel_rx: &mut watch::Receiver<bool>) {
         if !self.park_targets().await {
             return self
                 .settle(TaskTransition::Complete(abandoned_input_round()), false)
@@ -215,7 +215,10 @@ impl<'a> Settling<'a> {
         };
         // The continuation the resume will redeem dies at its own deadline;
         // a round that could only fail is settled now, never parked.
-        let now = now_secs(&self.executor.service.store);
+        let store = &self.executor.service.store;
+        let Some((at, now)) = readable_now(store, cancel_rx).await else {
+            return;
+        };
         let continuation = self.state.meta_mcp().continuation();
         let Ok(continuation_deadline) =
             round_deadline(continuation.keyring(), round.request_state.as_deref(), now)
@@ -231,17 +234,9 @@ impl<'a> Settling<'a> {
             accepted_inputs: Map::new(),
             continuation_deadline,
         };
-        // Parking stamps the transition: a clock before 1970 cannot, and is
-        // handled as a round that could not be written (MIK-8202).
-        let store = &self.executor.service.store;
-        let parked = match store.now() {
-            Ok(at) => {
-                store
-                    .require_input(owner.as_digest(), self.id, self.revision, round, stored, at)
-                    .await
-            }
-            Err(_) => Err(StoreError::Unavailable),
-        };
+        let parked = store
+            .require_input(owner.as_digest(), self.id, self.revision, round, stored, at)
+            .await;
         match parked {
             Ok(committed) => {
                 self.executor.published(&committed, self.id);
@@ -522,7 +517,8 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     // An answer taken in time can still reach dispatch late; redeeming then
     // could only fail, so the round is closed as the sweep would close it.
     let deadline = round.continuation_deadline;
-    let reached = deadline.is_some_and(|d| now_secs(&executor.service.store) >= d);
+    let (_, now) = readable_now(&executor.service.store, &mut cancel_rx).await?;
+    let reached = deadline.is_some_and(|d| now >= d);
     executor.proceed_unless_late(ids, deadline, reached).await?;
     let call = TaskCall {
         tool: round.tool,
@@ -536,8 +532,8 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     // Preparation inside the funnel can outlast the margin. A continuation
     // refused once its envelope has expired was refused for expiry: close the
     // round with that reason rather than fail the task.
-    let expired = deadline
-        .is_some_and(|d| rejected_after_expiry(&response, d, now_secs(&executor.service.store)));
+    let (_, now) = readable_now(&executor.service.store, &mut cancel_rx).await?;
+    let expired = deadline.is_some_and(|d| rejected_after_expiry(&response, d, now));
     executor.proceed_unless_late(ids, deadline, expired).await?;
     let mut response = inspect_settled(&state, &call, &id, response);
     state.meta_mcp().release_unsent_hold(&mut response).await; // MIK-8131
@@ -590,15 +586,38 @@ fn rejected_after_expiry(response: &JsonRpcResponse, deadline: u64, now: u64) ->
             .is_some_and(|error| error.code == -32602 && error.message == expired.client_message())
 }
 
-/// The store's now in the seconds round deadlines are kept in. Read only to
-/// compare against a deadline, an access check: a clock that cannot be read
-/// reads as past every deadline, never as before them (MIK-8202).
-fn now_secs(store: &crate::gateway::task_service::store::TaskStore) -> u64 {
-    store
-        .now()
-        .ok()
-        .and_then(|at| u64::try_from(at.timestamp()).ok())
-        .unwrap_or(u64::MAX)
+/// How often a worker reads a clock that read before 1970 again.
+const CLOCK_RETRY: Duration = if cfg!(test) {
+    Duration::from_millis(20)
+} else {
+    Duration::from_secs(1)
+};
+
+/// The store's now, and the same instant in the seconds round deadlines are
+/// kept in, waiting out a clock before 1970: a round is neither parked nor
+/// resumed nor closed on a time it cannot read, so nothing is lost while the
+/// clock is wrong (MIK-8202). `None` once the task is cancelled; executor
+/// shutdown drops the worker, wait and all.
+// ponytail: polls on monotonic time and holds this worker's slot while the
+// clock is unreadable; a clock-recovered signal would free it sooner.
+async fn readable_now(
+    store: &crate::gateway::task_service::store::TaskStore,
+    cancel_rx: &mut watch::Receiver<bool>,
+) -> Option<(chrono::DateTime<chrono::Utc>, u64)> {
+    loop {
+        if *cancel_rx.borrow() {
+            return None;
+        }
+        if let Ok(at) = store.now() {
+            return Some((at, u64::try_from(at.timestamp()).unwrap_or_default()));
+        }
+        tokio::select! {
+            biased;
+            // A dropped sender can no longer cancel: stop, as `dispatch` does.
+            changed = cancel_rx.changed() => changed.ok()?,
+            () = tokio::time::sleep(CLOCK_RETRY) => {}
+        }
+    }
 }
 
 impl TaskExecutor {

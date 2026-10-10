@@ -241,7 +241,8 @@ src/gateway/task_service/execution/input_round.rs	resume	1	critical	d	resume	Clo
 src/gateway/task_service/execution/input_round.rs	resume_flow	1	critical	d	resume_flow	Closes a round whose continuation deadline has passed, and one refused for expiry, instead of resuming it
 src/gateway/task_service/execution/input_round.rs	settle_interrupted	1	critical	d	settle_interrupted	Settles a resumed task interrupted when its host is gone, instead of dispatching without one
 src/gateway/task_service/execution/input_round.rs	proceed_unless_late	1	critical	d	TaskExecutor::proceed_unless_late	The one place both late-deadline checks of a resume close the round
-src/gateway/task_service/execution/input_round.rs	now_secs	1	critical	d	now_secs	The now every round deadline check compares against; a clock before 1970 reads as past every deadline
+src/gateway/task_service/execution/input_round.rs	park	1	critical	d	Settling::park	Parks a round only with a deadline it can date; settles a round that could only fail as abandoned
+src/gateway/task_service/execution/input_round.rs	readable_now	1	critical	d	readable_now	The now every round deadline check and park stamp reads; waits out a clock before 1970 so no round is closed, abandoned or stranded on it
 src/gateway/task_service/execution/input_round.rs	round_deadline	1	critical	borderline	round_deadline	Opens the sealed continuation (authenticates) to derive the deadline; refuses unopenable ones
 src/gateway/task_service/execution/input_round.rs	dispatch	1	standard	borderline	dispatch	Builds the worker's authorizer and caller context for the resume dispatch
 src/gateway/task_service/execution/recovery.rs	transition_digest_write	1	standard	borderline	TaskExecutor::transition_digest_write	Digest-level transition that skips principal hashing; safe only if no request path reaches it

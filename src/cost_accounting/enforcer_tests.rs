@@ -509,8 +509,10 @@ fn spend_restored_on_an_unreadable_clock_counts_once_the_clock_reads() {
     let mut saved = PersistedCosts {
         saved_at,
         key_overflow_usd: 0.125,
+        tool_overflow_usd: 0.5,
         ..PersistedCosts::default()
     };
+    saved.key_totals.insert("k".to_owned(), 0.375);
     let total = ToolTotal {
         call_count: 1,
         total_cost_usd: 0.25,
@@ -527,7 +529,9 @@ fn spend_restored_on_an_unreadable_clock_counts_once_the_clock_reads() {
     };
     let _same_day = crate::clock::test_clock::at_secs(saved_at + 60);
     let snap = e.snapshot();
-    assert!((snap.global_daily_usd - 0.25).abs() < 1e-9, "{snap:?}");
+    assert!((snap.global_daily_usd - 0.75).abs() < 1e-9, "{snap:?}");
     assert!((snap.tool_daily["t"] - 0.25).abs() < 1e-9, "{snap:?}");
+    assert!((snap.key_daily["k"] - 0.375).abs() < 1e-9, "{snap:?}");
+    assert!((snap.tool_overflow_usd - 0.5).abs() < 1e-9, "{snap:?}");
     assert!((snap.key_overflow_usd - 0.125).abs() < 1e-9, "{snap:?}");
 }
