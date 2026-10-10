@@ -1,0 +1,4 @@
+src/gateway/outbound/stdio.rs	committing_on_write	1	OutboundFrame::committing_on_write attaches a delivery commit to fire when a sink writes the frame (MIK-7887.RECEIPT.3); receipt timing, no allow or deny.
+src/gateway/outbound/stdio.rs	stdio_written	1	OutboundFrame::stdio_written fires the frame's delivery commit and marks it and each batch item written after stdout took it; bookkeeping after the judge already ran.
+src/gateway/outbound/stdio.rs	fmt	1	StdioReads Debug prints only whether judging is on and holds no secret; formatting.
+src/gateway/outbound/stdio.rs	batch_of	1	StdioReads::batch_of wraps already-judged batch items (each judged right after its own dispatch) in one unjudged batch frame and carries their holds; it judges nothing itself.
