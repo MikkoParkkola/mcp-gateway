@@ -63,6 +63,10 @@ pub(super) struct Shared {
     /// Test pause as a task starts its reconnect backoff (T35).
     #[cfg(test)]
     pub before_backoff: Arc<crate::test_pause::Slot>,
+    /// Whether the task ran where a login may begin, read as it starts
+    /// (MIK-8269): background upkeep must not.
+    #[cfg(test)]
+    pub ran_interactive: Mutex<Option<bool>>,
 }
 
 impl Shared {
@@ -562,10 +566,15 @@ impl UpstreamListeners {
         self.starts
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let shared = self.entry(backend, need, ledger);
-        tokio::spawn(super::upstream_session::run(
-            Arc::clone(&shared),
-            Arc::clone(&self.registry),
-            self.hub.clone(),
+        // Background upkeep never opens a browser (MIK-8269): every bounded
+        // open, refill and subscription the session sends would otherwise lead
+        // a login and end it `Cancelled` when its bound fires.
+        tokio::spawn(crate::oauth::login_gate::non_interactive(
+            super::upstream_session::run(
+                Arc::clone(&shared),
+                Arc::clone(&self.registry),
+                self.hub.clone(),
+            ),
         ));
         shared
     }
@@ -593,6 +602,8 @@ impl UpstreamListeners {
             before_park: Arc::clone(&self.before_park),
             #[cfg(test)]
             before_backoff: Arc::default(),
+            #[cfg(test)]
+            ran_interactive: Mutex::default(),
         })
     }
 }
