@@ -105,19 +105,19 @@ fn u3_a_certificate_subject_is_its_san_uri_then_its_cn() {
 
 #[test]
 fn u3_a_certificate_naming_no_subject_is_no_subject_key() {
-    // What `caller_grant_subject` hands over for it: the display name.
+    // MIK-8286: such a certificate has no grant subject at all.
     let c = cert(None, None, "<unknown>");
-    let resolved = grant_subject_from_cert_identity(&c).unwrap();
-    assert_eq!(
-        caller_key(Some(&resolved), Some(&c), None),
-        "",
-        "no identity at all"
-    );
+    assert_eq!(grant_subject_from_cert_identity(&c), None);
+    assert_eq!(caller_key(None, Some(&c), None), "", "no identity at all");
     let client = credential("k1");
     assert!(
-        caller_key(Some(&resolved), Some(&c), Some(&client)).starts_with("credential:"),
+        caller_key(None, Some(&c), Some(&client)).starts_with("credential:"),
         "it falls through to the credential"
     );
+    // Defence in depth: a placeholder subject handed over with that
+    // certificate is re-derived from the certificate, and still names no one.
+    let placeholder = GrantSubject::new("mtls", "<unknown>", None);
+    assert_eq!(caller_key(Some(&placeholder), Some(&c), None), "");
 }
 
 #[test]
@@ -138,14 +138,12 @@ fn u3_no_identity_is_no_key() {
     assert_eq!(caller_key(None, None, Some(&anonymous_client())), "");
 }
 
-// U4: authorization keeps the display-name fallback the control key drops.
+// U4 (MIK-8286): authorization no longer keeps a display-name fallback:
+// whatever the display name says, a certificate naming no subject has none.
 #[test]
-fn u4_the_grant_subject_still_falls_back_to_the_display_name() {
+fn u4_a_display_name_is_never_a_grant_subject() {
     let c = cert(None, None, "shown");
-    assert_eq!(
-        grant_subject_from_cert_identity(&c).unwrap().subject,
-        "shown"
-    );
+    assert_eq!(grant_subject_from_cert_identity(&c), None);
 }
 
 // GH1942.HARDEN.1 row 9: the bucket half of `CallerKey`.
