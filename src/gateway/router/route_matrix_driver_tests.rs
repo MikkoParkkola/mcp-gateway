@@ -193,3 +193,68 @@ pub(crate) async fn surfaced_firewalled(audit: &Path, args: Value) -> Sent {
     let body = call_surfaced(&fx, args, None).await;
     sent(&fx, body)
 }
+
+/// The params of a modern `tools/call` of `name` declaring form elicitation,
+/// extended by `extra`.
+fn modern(name: &str, arguments: Value, extra: &Value) -> Value {
+    let mut params = serde_json::json!({
+        "name": name,
+        "arguments": arguments,
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}}
+        }
+    });
+    if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
+        params.extend(extra.clone());
+    }
+    params
+}
+
+/// A modern call on `uri` (`/mcp` or `/mcp/alpha`) of `name`.
+async fn modern_call(
+    fx: &super::direct_guards_fixture::Fx,
+    uri: &str,
+    (name, arguments): (&str, Value),
+    extra: &Value,
+) -> Value {
+    let headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tools/call"),
+        ("mcp-name", name),
+    ];
+    let params = modern(name, arguments, extra);
+    super::direct_guards_fixture::send_with_headers(fx, uri, "k-std", "tools/call", params, None, &headers)
+        .await
+        .1
+}
+
+/// The backend asks one question on `uri`; the retry answers it with
+/// `answer`, on the firewalled fixture writing audit rows to `audit`.
+/// Returns the retry's outcome.
+async fn retry_answering(audit: &Path, uri: &str, call: (&str, Value), answer: &str) -> Sent {
+    let fx = super::direct_guards_fixture::fixture_firewalled_audited(
+        Answer::AskOnce,
+        audit.to_path_buf(),
+    )
+    .await;
+    let asked = modern_call(&fx, uri, call.clone(), &serde_json::json!({})).await;
+    let state = super::direct_continuation_tests::state_of(&asked);
+    let retry = serde_json::json!({
+        "requestState": state,
+        "inputResponses": {"k1": {"action": "accept", "content": {"account": answer}}},
+    });
+    let body = modern_call(&fx, uri, call, &retry).await;
+    sent(&fx, body)
+}
+
+/// R1: a continuation retry on `gateway_invoke` whose answer is `answer`.
+pub(crate) async fn invoke_retry_answering(audit: &Path, answer: &str) -> Sent {
+    let call = serde_json::json!({ "server": "alpha", "tool": "read", "arguments": {} });
+    retry_answering(audit, "/mcp", ("gateway_invoke", call), answer).await
+}
+
+/// R3: the same retry on `/mcp/alpha` `read`.
+pub(crate) async fn direct_retry_answering(audit: &Path, answer: &str) -> Sent {
+    retry_answering(audit, "/mcp/alpha", ("read", serde_json::json!({})), answer).await
+}

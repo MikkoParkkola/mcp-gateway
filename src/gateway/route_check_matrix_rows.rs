@@ -287,3 +287,43 @@ async fn chain_link_surfaced_gap_row() {
         sent.body
     );
 }
+
+/// ChokepointRescan, R1 and the R3 gap. A continuation retry whose answer
+/// carries a blocked pattern reaches bytes the route-layer scan never judged.
+/// R1 Applies: the dispatch rescan refuses it with a blocking `event=dispatch`
+/// row and the backend is asked only once (the question). R3 gap (MIK-8154
+/// SAN.3): the direct route never reaches the chokepoint, so no dispatch row
+/// is ever written.
+#[tokio::test]
+async fn chokepoint_rescan_rows() {
+    let row = |route| expect(MethodKind::ToolsCall, route, Stage::ChokepointRescan);
+
+    assert_eq!(row(Route::Invoke), Expect::Applies);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audit = dir.path().join("audit.jsonl");
+    let sent = router::invoke_retry_answering(&audit, BLOCKED).await;
+    let dispatched = audit_rows(&audit, "dispatch");
+    assert!(
+        dispatched.iter().any(|row| row["action"] == "block"),
+        "R1: not refused by the dispatch rescan: {dispatched:?}; {}",
+        sent.body
+    );
+    assert_eq!(sent.body["error"]["code"], -32600, "R1: {}", sent.body);
+    assert_eq!(sent.backend_calls, 1, "R1: the hostile answer was sent: {}", sent.body);
+
+    assert_eq!(row(Route::Direct), Expect::ExpectedGap(super::Ticket::Mik8154));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audit = dir.path().join("audit.jsonl");
+    let sent = router::direct_retry_answering(&audit, BLOCKED).await;
+    let dispatched = audit_rows(&audit, "dispatch");
+    assert!(
+        dispatched.is_empty(),
+        "R3 wrote a dispatch row, so the direct route now passes the chokepoint; \
+         MIK-8154 SAN.3 may have closed this gap, flip the row to Applies: {dispatched:?}"
+    );
+    assert!(
+        sent.backend_calls >= 1,
+        "premise: the direct route ran the first round: {}",
+        sent.body
+    );
+}
