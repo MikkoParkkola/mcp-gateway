@@ -805,6 +805,9 @@ mod grant_decision_audit_tests;
 /// MIK-8340 row 7: a failed grant record on a withheld name answers as absent.
 #[cfg(test)]
 mod grant_withheld_parity_tests;
+/// MIK-8340 row 10: a listing follows the caller's own catalogue.
+#[cfg(test)]
+mod withheld_catalogue_tests;
 #[cfg(test)]
 mod grant_decision_slot_tests;
 #[cfg(test)]

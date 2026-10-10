@@ -104,8 +104,7 @@ fn names(value: &Value, tool: &str) -> bool {
         }
         Value::Array(items) => items.iter().any(|v| names(v, tool)),
         Value::String(text) => serde_json::from_str::<Value>(text)
-            .ok()
-            .is_some_and(|inner| inner.is_object() && names(&inner, tool)),
+            .is_ok_and(|inner| inner.is_object() && names(&inner, tool)),
         _ => false,
     }
 }

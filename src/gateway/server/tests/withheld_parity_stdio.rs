@@ -346,9 +346,18 @@ fn require_chain(config: &mut crate::config::Config) {
         max_links: 8,
         resolved_identity: None,
     });
+    // The upstream origin key the backend's chains must start from.
+    config.security.remote_server_signing.trusted_keys.insert(
+        "gw-up".to_string(),
+        crate::security::remote_provenance::TrustedRemoteServerKeyConfig {
+            algorithm: crate::security::remote_provenance::RemoteServerSignatureAlgorithm::Ed25519,
+            public_key: base64::engine::general_purpose::STANDARD.encode([9u8; 32]),
+        },
+    );
     if let Some(backend) = config.backends.get_mut(BACKEND) {
         backend.signature_chain = crate::config::ChainMode::Require;
-        backend.chain_origins = vec!["gw-self".to_string()];
+        backend.chain_origins = vec!["gw-up".to_string()];
+        backend.chain_signer = Some("gw-up".to_string());
     }
 }
 
@@ -405,7 +414,17 @@ async fn row13_require_chain_refusal_answers_as_absent() {
     );
     let withheld = twin_with(spec, require_chain).await;
     let absent = twin_with(spec.with_side(Side::Absent(Absence::NotSurfaced)), require_chain).await;
-    let w = direct_task_call(&withheld, spec.tool).await;
-    let a = direct_task_call(&absent, spec.tool).await;
+    // The decision is compared, not the task: an id and its clock are minted
+    // per task (test plan r2.1: no task creation compared).
+    let decision = |mut body: Value| {
+        if let Some(result) = body["result"].as_object_mut() {
+            for minted in ["taskId", "createdAt", "lastUpdatedAt"] {
+                result.remove(minted);
+            }
+        }
+        body
+    };
+    let w = decision(direct_task_call(&withheld, spec.tool).await);
+    let a = decision(direct_task_call(&absent, spec.tool).await);
     assert_eq!(w, a, "row 13: withheld {w} vs absent {a}");
 }
