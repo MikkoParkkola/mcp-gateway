@@ -73,6 +73,8 @@ pub struct Peer {
     handles_asked: Mutex<Vec<String>>,
     /// The handle named by every upstream `tasks/cancel` (MIK-7642.PR.D).
     cancels: Mutex<Vec<String>>,
+    /// Notified on every upstream `tasks/cancel`, so a row waits on the event.
+    cancelled: tokio::sync::Notify,
     /// Whether every `tools/call` carried the tasks-extension opt-in.
     optin_seen: AtomicUsize,
     state: Mutex<Upstream>,
@@ -100,6 +102,12 @@ impl Peer {
     /// Every handle an upstream `tasks/cancel` named, in arrival order.
     pub fn cancels(&self) -> Vec<String> {
         self.cancels.lock().clone()
+    }
+
+    /// Wait for an upstream `tasks/cancel` to arrive. A permit stored by one
+    /// that arrived earlier is taken at once.
+    pub async fn cancel_arrived(&self) {
+        self.cancelled.notified().await;
     }
 
     pub fn set(&self, next: Upstream) {
@@ -232,6 +240,7 @@ async fn peer_handler(State(peer): State<Arc<Peer>>, Json(body): Json<Value>) ->
                 .unwrap_or_default()
                 .to_string();
             peer.cancels.lock().push(asked.clone());
+            peer.cancelled.notify_one();
             json!({
                 "resultType": "complete", "taskId": asked, "status": "cancelled",
                 "createdAt": "2026-09-08T00:00:00Z", "lastUpdatedAt": "2026-09-08T00:00:00Z",
@@ -261,6 +270,7 @@ pub async fn serve_peer(initial: Upstream) -> PeerGuard {
         queries: AtomicUsize::new(0),
         handles_asked: Mutex::new(Vec::new()),
         cancels: Mutex::new(Vec::new()),
+        cancelled: tokio::sync::Notify::new(),
         optin_seen: AtomicUsize::new(0),
         state: Mutex::new(initial),
         payload: Mutex::new(json!({

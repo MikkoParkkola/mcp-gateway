@@ -143,12 +143,13 @@ impl Transport for GatedPeer {
 
 /// Claims the fixture backend, answers every follow query `Live`, and records
 /// every handle it is asked to cancel.
-struct Recovery(Arc<Mutex<Vec<String>>>);
+struct Recovery(Arc<Mutex<Vec<String>>>, Arc<tokio::sync::Notify>);
 
 #[async_trait::async_trait]
 impl UpstreamRecovery for Recovery {
     async fn cancel(&self, handle: &UpstreamHandle, _deadline: Duration) {
         self.0.lock().push(handle.handle.clone());
+        self.1.notify_one();
     }
 
     async fn claims(&self, backend: &str) -> bool {
@@ -190,6 +191,8 @@ struct Rig {
     delivered: Arc<AtomicBool>,
     dropped: Arc<AtomicBool>,
     cancels: Arc<Mutex<Vec<String>>>,
+    /// Notified on every upstream cancel the adapter is asked to send.
+    sent: Arc<tokio::sync::Notify>,
     /// Kept alive so a `Never` gate stays pending rather than closing.
     _held: Option<oneshot::Sender<()>>,
 }
@@ -219,10 +222,11 @@ async fn rig(head: Head, reply: Reply, release: Release) -> Rig {
     }));
     std::assert!(state.backends.register(backend));
     let cancels = Arc::new(Mutex::new(Vec::new()));
+    let sent = Arc::new(tokio::sync::Notify::new());
     std::assert!(
         state
             .task_executor
-            .install_recovery(Arc::new(Recovery(Arc::clone(&cancels))))
+            .install_recovery(Arc::new(Recovery(Arc::clone(&cancels), Arc::clone(&sent))))
     );
     let (releaser, keep_open) = match release {
         Release::OnCancel => (Some(open), None),
@@ -242,6 +246,7 @@ async fn rig(head: Head, reply: Reply, release: Release) -> Rig {
         delivered,
         dropped,
         cancels,
+        sent,
         _held: keep_open,
     }
 }
@@ -270,12 +275,23 @@ async fn start_park_cancel(rig: &Rig, before_cancel: impl FnOnce(&str)) -> Strin
         cancelled.get("error").is_none(),
         "precondition: the owner's cancel is accepted: {cancelled}"
     );
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while rig.cancels.lock().is_empty() && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    tokio::time::sleep(Duration::from_millis(200)).await;
     task
+}
+
+/// Waits on events, never a window. By the time this runs, the owner's cancel
+/// post has returned, and the transition's claim is taken inside it. The
+/// executor then drains, so every worker has ended and every claim and inline
+/// send it made is done. A row that expects a send also waits for it to land,
+/// in case the transition won the claim and sent detached. The bounds are hang
+/// guards, not pass/fail windows.
+async fn settle(rig: &Rig, sends: usize) {
+    let drained = rig.state.task_executor.drain(Duration::from_secs(60)).await;
+    std::assert!(!drained.timed_out, "every worker ends");
+    if sends > 0 {
+        tokio::time::timeout(Duration::from_secs(60), rig.sent.notified())
+            .await
+            .expect("the upstream cancel lands");
+    }
 }
 
 /// T2b (covers r7 T2'' too: the rescue poll resumes `dispatch` wherever past
@@ -286,6 +302,7 @@ async fn start_park_cancel(rig: &Rig, before_cancel: impl FnOnce(&str)) -> Strin
 async fn a_cancel_with_the_reply_buffered_cancels_the_upstream_job_once() {
     let rig = rig(Head::Received, Reply::Task, Release::OnCancel).await;
     start_park_cancel(&rig, |_| {}).await;
+    settle(&rig, 1).await;
     std::assert!(
         rig.delivered.load(Ordering::SeqCst),
         "the rescue poll took the reply"
@@ -303,6 +320,7 @@ async fn a_spent_coop_budget_cannot_hide_a_buffered_reply() {
         crate::gateway::task_service::execution::rescue_seam::exhaust_before_rescue(task);
     })
     .await;
+    settle(&rig, 1).await;
     std::assert!(
         crate::gateway::task_service::execution::rescue_seam::was_exhausted(&task),
         "precondition: the budget was spent before the rescue poll"
@@ -317,6 +335,7 @@ async fn a_spent_coop_budget_cannot_hide_a_buffered_reply() {
 async fn a_cancel_before_the_reply_sends_nothing_upstream() {
     let rig = rig(Head::Received, Reply::Task, Release::Never).await;
     let task = start_park_cancel(&rig, |_| {}).await;
+    settle(&rig, 0).await;
     std::assert!(
         rig.dropped.load(Ordering::SeqCst),
         "the submission was dropped"
@@ -339,6 +358,7 @@ async fn a_cancel_before_the_reply_sends_nothing_upstream() {
 async fn a_cancel_before_the_head_makes_no_further_progress() {
     let rig = rig(Head::Held, Reply::Task, Release::OnCancel).await;
     start_park_cancel(&rig, |_| {}).await;
+    settle(&rig, 0).await;
     std::assert!(
         !rig.delivered.load(Ordering::SeqCst),
         "no progress after the cancel"
@@ -354,6 +374,7 @@ async fn a_cancel_before_the_head_makes_no_further_progress() {
 async fn a_refused_reply_with_a_candidate_handle_cancels_nothing() {
     let rig = rig(Head::Received, Reply::ErrorWithCandidate, Release::OnCancel).await;
     start_park_cancel(&rig, |_| {}).await;
+    settle(&rig, 0).await;
     std::assert!(
         rig.delivered.load(Ordering::SeqCst),
         "precondition: the reply was read"
@@ -373,6 +394,7 @@ async fn a_complete_reply_with_a_candidate_handle_cancels_nothing() {
     )
     .await;
     start_park_cancel(&rig, |_| {}).await;
+    settle(&rig, 0).await;
     std::assert!(
         rig.delivered.load(Ordering::SeqCst),
         "precondition: the reply was read"
@@ -429,11 +451,7 @@ async fn a_cancel_between_the_task_answer_and_its_capture_cancels_once() {
     )
     .await;
     let task = task_id(&created);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while rig.cancels.lock().is_empty() && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    settle(&rig, 1).await;
     std::assert_eq!(*rig.cancels.lock(), vec![HANDLE.to_owned()]);
     std::assert_eq!(
         status_of(&get_task(&rig.state, "key-a", &task).await),
@@ -483,10 +501,6 @@ async fn a_cancel_committed_before_its_signal_still_cancels_upstream_once() {
         task_invoke(1, "upstream-cancel-t1b", json!({})),
     )
     .await;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while rig.cancels.lock().is_empty() && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    settle(&rig, 1).await;
     std::assert_eq!(*rig.cancels.lock(), vec![HANDLE.to_owned()]);
 }

@@ -362,12 +362,16 @@ async fn the_descriptor_preflight_refuses_what_it_cannot_measure_or_fit() {
 }
 
 /// Records every handle it is asked to cancel (MIK-7642).
-struct CancelRecorder(Arc<parking_lot::Mutex<Vec<String>>>);
+struct CancelRecorder(
+    Arc<parking_lot::Mutex<Vec<String>>>,
+    Arc<tokio::sync::Notify>,
+);
 
 #[async_trait::async_trait]
 impl UpstreamRecovery for CancelRecorder {
     async fn cancel(&self, handle: &UpstreamHandle, _deadline: Duration) {
         self.0.lock().push(handle.handle.clone());
+        self.1.notify_one();
     }
 
     async fn claims(&self, backend: &str) -> bool {
@@ -399,10 +403,11 @@ async fn cancel_upstream_once_sends_only_on_its_own_claim() {
             .await
     );
     let sent = Arc::new(parking_lot::Mutex::new(Vec::new()));
-    assert!(
-        f.executor
-            .install_recovery(Arc::new(CancelRecorder(Arc::clone(&sent))))
-    );
+    let landed = Arc::new(tokio::sync::Notify::new());
+    assert!(f.executor.install_recovery(Arc::new(CancelRecorder(
+        Arc::clone(&sent),
+        Arc::clone(&landed)
+    ))));
     // An absent row is a store error: refused, logged, nothing sent.
     let (claimed, logged) = crate::test_log_capture::capture_warnings(|| {
         futures::executor::block_on(f.executor.cancel_upstream_once(
@@ -446,10 +451,11 @@ async fn a_cancel_retry_on_an_unclaimed_cancelled_row_still_claims() {
             .await
     );
     let sent = Arc::new(parking_lot::Mutex::new(Vec::new()));
-    assert!(
-        f.executor
-            .install_recovery(Arc::new(CancelRecorder(Arc::clone(&sent))))
-    );
+    let landed = Arc::new(tokio::sync::Notify::new());
+    assert!(f.executor.install_recovery(Arc::new(CancelRecorder(
+        Arc::clone(&sent),
+        Arc::clone(&landed)
+    ))));
     // The earlier attempt: committed, never claimed.
     f.service
         .store
@@ -467,9 +473,10 @@ async fn a_cancel_retry_on_an_unclaimed_cancelled_row_still_claims() {
         .cancel(OWNER, &f.id, f.revision)
         .await
         .expect("an already-cancelled row answers its committed view");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while sent.lock().is_empty() && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    // The transition's send is detached: wait for it to land (a hang guard,
+    // not a window). The claim was taken inside `cancel`, so the count is final.
+    tokio::time::timeout(Duration::from_secs(60), landed.notified())
+        .await
+        .expect("the upstream cancel lands");
     assert_eq!(*sent.lock(), vec!["upstream-7".to_owned()]);
 }

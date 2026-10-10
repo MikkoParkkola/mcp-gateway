@@ -628,13 +628,14 @@ async fn a_cancelled_task_cancels_its_upstream_job_once() {
         cancelled.get("error").is_none() && cancelled.get("result").is_some(),
         "precondition: the owner's cancel is accepted: {cancelled}"
     );
-    let deadline = std::time::Instant::now() + OBSERVE_BOUND;
-    while peer.peer.cancels().is_empty() && std::time::Instant::now() < deadline {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-    // Room for a duplicate to arrive before counting.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    gateway.kill().await;
+    // Events, not windows: the first send arrives (OBSERVE_BOUND is a hang
+    // guard), then the gateway exits, so every send it made has been handled
+    // by the peer before the count is read. The claim that rules out a second
+    // send is pinned at the store (`one_sender_claims_a_cancelled_rows_upstream_cancel`).
+    tokio::time::timeout(OBSERVE_BOUND, peer.peer.cancel_arrived())
+        .await
+        .expect("the upstream tasks/cancel arrives");
+    gateway.terminate().await;
     assert_eq!(
         peer.peer.cancels(),
         vec![HANDLE.to_string()],
@@ -677,15 +678,14 @@ async fn a_cancelled_task_nobody_follows_cancels_its_upstream_job_once() {
         cancelled.get("error").is_none() && cancelled.get("result").is_some(),
         "precondition: the owner's cancel is accepted: {cancelled}"
     );
-    let deadline = std::time::Instant::now() + OBSERVE_BOUND;
-    while peer.peer.cancels().is_empty() && std::time::Instant::now() < deadline {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
+    // Events, not windows (see the follow-phase row above).
+    tokio::time::timeout(OBSERVE_BOUND, peer.peer.cancel_arrived())
+        .await
+        .expect("the upstream tasks/cancel arrives");
     // A second cancel of the settled task must not send another.
     restarted
         .post(&client, &helper::tasks_cancel(952, &task_id))
         .await;
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     restarted.terminate().await;
     assert_eq!(
         peer.peer.cancels(),
@@ -693,7 +693,11 @@ async fn a_cancelled_task_nobody_follows_cancels_its_upstream_job_once() {
         "exactly one upstream tasks/cancel, naming the job's own handle"
     );
     let record = durable_record(root.path(), &task_id);
-    assert_eq!(helper::record_status(&record), Some("cancelled"), "{record}");
+    assert_eq!(
+        helper::record_status(&record),
+        Some("cancelled"),
+        "{record}"
+    );
     assert_eq!(
         record["upstreamCancelSent"],
         serde_json::json!(true),
