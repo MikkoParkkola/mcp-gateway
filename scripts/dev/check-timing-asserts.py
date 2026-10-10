@@ -562,6 +562,37 @@ def comment_on(lines: list[str], line: int, pattern: re.Pattern) -> re.Match | N
     return None
 
 
+def binding_lines(code: str, expr: str) -> list[int]:
+    """Lines binding each plain name in `expr`: a `let` or a `const` in `code`."""
+    found = []
+    for name in set(re.findall(r"\b[A-Za-z_]\w*\b", expr)):
+        last = None
+        for last in re.finditer(rf"\b(?:let\s+(?:mut\s+)?|const\s+){name}\b", code):
+            pass
+        if last:
+            found.append(code.count("\n", 0, last.start()) + 1)
+    return found
+
+
+def oracle_covers(text: str, line: int, expr: str) -> bool:
+    """A well-formed `timing-oracle:` at the window's line or at the binding of
+    a name its window expression uses (C: "at its constant or call")."""
+    raw, code = text.splitlines(), blank_strings_and_comments(text)
+    for n in [line, *binding_lines(code, expr)]:
+        if (m := comment_on(raw, n, ORACLE_LINE)) and not oracle_malformed(m):
+            return True
+    return False
+
+
+def statement_end(code: str, line: int) -> int:
+    """The line of the `;` that ends the statement starting on `line`."""
+    at = 0
+    for _ in range(line - 1):
+        at = code.index("\n", at) + 1
+    end = code.find(";", at)
+    return code.count("\n", 0, end if end >= 0 else len(code)) + 1
+
+
 def oracle_malformed(m: re.Match) -> bool:
     """True when a `timing-oracle:` comment does not name a timer and a ticket."""
     f = ORACLE_FORMAT.match(m.group(1))
@@ -677,15 +708,8 @@ def scan_new(
     def flag(at: int, fn: str, what: str, seconds: float | None, rule: str) -> None:
         found.append(Finding(path, fn, " ".join(what.split()), line_of(at), seconds, rule))
 
-    def def_line(expr: str) -> int | None:
-        m = re.search(rf"\bconst\s+{re.escape(expr.strip())}\s*:", code) if re.fullmatch(r"\s*[A-Z][A-Z0-9_]*\s*", expr) else None
-        return line_of(m.start()) if m else None
-
     def oracle_ok(line: int, expr: str) -> bool:
-        for n in (line, def_line(expr)):
-            if n and (m := comment_on(raw, n, ORACLE_LINE)) and not oracle_malformed(m):
-                return True
-        return False
+        return oracle_covers(text, line, expr)
 
     def tag_ok(line: int) -> bool:
         m = comment_on(raw, line, TAG_LINE)
@@ -693,25 +717,30 @@ def scan_new(
 
     # Comments on new lines: the closed tag set, the oracle format, and the
     # absence tag's binding to an absence collector (v3.2).
-    for n in sorted(added):
-        if n > len(raw):
+    # A tag above a changed statement is judged too: the binding is the pair.
+    for n in sorted(added | {n - 1 for n in added}):
+        if not 1 <= n <= len(raw):
             continue
         if (m := TAG_LINE.search(raw[n - 1])) and line_of(start) <= n:
             token = m.group(1).strip()
             if token not in REASONS:
-                found.append(Finding(path, "", raw[n - 1].strip(), n, None, TAG))
+                if n in added:
+                    found.append(Finding(path, "", raw[n - 1].strip(), n, None, TAG))
             elif token == "absence":
                 stmt = code.splitlines()[n - 1] if code.splitlines()[n - 1].strip() else (code.splitlines()[n:n + 1] or [""])[0]
                 if not (SLEEP_CALL.search(stmt) or TIMEOUT.search(stmt) or "_for_absence(" in stmt):
                     found.append(Finding(path, "", raw[n - 1].strip(), n, None, ABSENCE))
-        if (m := ORACLE_LINE.search(raw[n - 1])) and oracle_malformed(m):
+        if n in added and (m := ORACLE_LINE.search(raw[n - 1])) and oracle_malformed(m):
             found.append(Finding(path, "", raw[n - 1].strip(), n, None, ORACLE))
 
     # A. The floor on the windows the 5 s rule already reads.
     windows = scan_text(path, text, consts, FLOOR_S) + scan_timeouts(path, text, consts, includers, FLOOR_S)
     for f in windows:
-        window = re.match(r"(?:\w+::)*timeout\(\s*([^,]+),", f.assertion)
-        if f.line in added and not HANG_BOUND.search(f.assertion) and not oracle_ok(f.line, window.group(1) if window else ""):
+        # New when any line of the statement changed, or the binding of a name
+        # its window uses (#3746 review).
+        span = range(f.line, statement_end(code, f.line) + 1)
+        new = any(n in added for n in span) or any(n in added for n in binding_lines(code, f.assertion))
+        if new and not HANG_BOUND.search(f.assertion) and not oracle_ok(f.line, f.assertion):
             found.append(f._replace(rule=FLOOR))
     return found + scan_new_shapes(path, code, raw, start, added, Scope(path, {}, file_consts, consts, imports), oracle_ok, tag_ok)
 
@@ -725,13 +754,17 @@ def scan_new_shapes(path, code, raw, start, added, scope, oracle_ok, tag_ok) -> 
         if body_end <= start or paused_clock(code, attr_at, body_end):
             continue
         fn_scope = scope._replace(lets=bindings(code[body_open:body_end])[0])
+
+        def seen_at(at: int):
+            """The scope at `at`: a later `let` cannot excuse an earlier call."""
+            return scope._replace(lets=bindings(code[body_open:at])[0])
         loops = loops_in(code, body_open, body_end)
         asserts = [(at, args) for at, _, args in calls(code[:body_end]) if at > body_open]
 
-        def seconds(expr: str) -> float | None:
+        def seconds(expr: str, at: int) -> float | None:
             if HANG_BOUND.fullmatch(expr.strip()):
                 return float("inf")
-            value = resolve(expr, fn_scope)
+            value = resolve(expr, seen_at(at))
             return None if value is None else value[0]
 
         def exempt(line: int, expr: str) -> bool:
@@ -747,7 +780,7 @@ def scan_new_shapes(path, code, raw, start, added, scope, oracle_ok, tag_ok) -> 
         waited = [(at, e) for at, e in sleeps if not ((lp := innermost(loops, at)) and is_poll(code, lp))]
 
         for at, expr in sleeps:
-            line, value = line_of(at), seconds(expr)
+            line, value = line_of(at), seconds(expr, at)
             loop = innermost(loops, at)
             if loop and is_poll(code, loop):
                 # G. A count-bounded poll that fails after the loop.
@@ -780,7 +813,7 @@ def scan_new_shapes(path, code, raw, start, added, scope, oracle_ok, tag_ok) -> 
             if not errs or not [a for a, _ in asserts if a > errs[0]]:
                 continue
             expr = split_top(args, (",",))[0][1].strip()
-            value, line = seconds(expr), line_of(m.start())
+            value, line = seconds(expr, m.start()), line_of(m.start())
             last = line_of(max(a for a, _ in asserts if a > errs[0]))
             if (value is None or value < FLOOR_S) and touches(line, last) and not exempt(line, expr):
                 found.append(Finding(path, fn, f"timeout({expr}, ..)", line, value, ELAPSE))
@@ -788,8 +821,8 @@ def scan_new_shapes(path, code, raw, start, added, scope, oracle_ok, tag_ok) -> 
         # D. A product timer under the floor plus a real-clock sleep.
         if waited:
             for m in re.finditer(r"\b\w+_(?:ttl|interval|timeout|period)\s*:\s*([^,}\n]+)", code[body_open:body_end]):
-                value = seconds(m.group(1))
                 at = body_open + m.start()
+                value = seconds(m.group(1), at)
                 if value is not None and value < FLOOR_S and touches(line_of(at), line_of(waited[-1][0])):
                     found.append(Finding(path, fn, m.group(0), line_of(at), value, TIMER))
                     break
@@ -904,6 +937,32 @@ def read_base(ref: str) -> list[Row] | None:
     return None
 
 
+def judge_new(found, rows, texts, consts, includers, added):
+    """(findings left for the 5 s rule, new-code errors), given added lines.
+
+    A window on a changed line that carries a well-formed `timing-oracle:` is
+    excused from the 5 s rule too (C), so an oracle under 5 s is possible. A
+    new-code error is dropped only where the 5 s rule already reports the
+    same line as an error; an allowlisted line in a changed span is still
+    judged as new, so the allowlist never covers new code (#3746 review).
+    """
+    kept = [
+        f
+        for f in found
+        if not (f.line in added.get(f.path, ()) and oracle_covers(texts[f.path], f.line, f.assertion))
+    ]
+    listed = {r[:3] for r in rows}
+    reported = {(f.path, f.line) for f in kept if (f.path, f.fn, f.assertion) not in listed}
+    errors = [
+        str(f)
+        for path, lines in sorted(added.items())
+        if path in texts
+        for f in scan_new(path, texts[path], consts, includers, lines)
+        if (f.path, f.line) not in reported
+    ]
+    return kept, errors
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("--base", metavar="REF", help="refuse allowlist rows added since REF")
@@ -914,21 +973,13 @@ def main(argv: list[str] | None = None) -> int:
     found = [f for path, text in texts.items() for f in scan_text(path, text, consts)]
     found += [f for path, text in texts.items() for f in scan_timeouts(path, text, consts, includers)]
     rows = parse_allowlist(ALLOWLIST.read_text(encoding="utf-8")) if ALLOWLIST.exists() else []
-    errors = judge(found, rows, read_base(args.base) if args.base else None)
+    new_errors: list[str] = []
     if args.base:
-        # PR-C: new or changed spans only. A site the 5 s rule already reports
-        # is not reported twice; the allowlist never covers a new span.
-        added = added_lines(args.base)
-        seen = {(f.path, f.line) for f in found}
-        errors += [
-            str(f)
-            for path, lines in sorted(added.items())
-            if path in texts
-            for f in scan_new(path, texts[path], consts, includers, lines)
-            if (f.path, f.line) not in seen
-        ]
+        # PR-C: new or changed spans only (judge_new).
+        found, new_errors = judge_new(found, rows, texts, consts, includers, added_lines(args.base))
     else:
         print("No --base: the new-code rules (10 s floor, sleep windows, poll budgets) were not run.")
+    errors = judge(found, rows, read_base(args.base) if args.base else None) + new_errors
     for line in errors:
         print(line)
     print(f"{len(found)} timing asserts or timeouts under {THRESHOLD_S:g} s or unresolvable, {len(rows)} allowlisted.")

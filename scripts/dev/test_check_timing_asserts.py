@@ -356,6 +356,60 @@ class NewCode(unittest.TestCase):
         self.assertPasses(body, attrs="#[tokio::test(start_paused = true)]")
         self.assertPasses(body.replace("from_millis(150)", "from_secs(10)"))
 
+    # Code review of #3746 (gpt): ways around the rules, each pinned.
+    def test_a_changed_duration_line_inside_a_multiline_timeout_is_new(self):
+        body = 'tokio::time::timeout(\n    Duration::from_secs(1),\n    rx.recv(),\n)\n.await\n.expect("x");'
+        # Text line 4 opens the call; line 5 holds the window.
+        self.assertRefused(body, guard.FLOOR, added={5})
+
+    def test_a_changed_const_makes_its_window_new(self):
+        prelude = "const BOUND: Duration = Duration::from_secs(1);"
+        # Line 1 is the const; the timeout on line 5 is unchanged.
+        self.assertRefused('timeout(BOUND, rx.recv()).await.expect("x");', guard.FLOOR, prelude=prelude, added={1})
+
+    def test_a_later_shadow_does_not_excuse_an_earlier_sleep(self):
+        body = (
+            "let w = Duration::from_millis(100);\ntokio::time::sleep(w).await;\nassert!(done());\n"
+            "let w = Duration::from_secs(30);\nlet _ = w;"
+        )
+        self.assertRefused(body, guard.SLEEP)
+
+    def test_a_changed_collector_under_an_old_absence_tag_is_judged(self):
+        body = "// timing: absence\nlet got = s.drain(Duration::from_millis(300)).await;\nassert!(got.is_empty());"
+        # Line 4 is the old tag; line 5, the collector, changed.
+        self.assertRefused(body, guard.ABSENCE, added={5})
+
+    def test_an_oracle_on_a_const_covers_an_elapsed_bound(self):
+        prelude = "// timing-oracle: vs 150 ms SESSION_TTL (MIK-8280)\nconst ORACLE: Duration = Duration::from_millis(100);"
+        self.assertPasses("assert!(start.elapsed() < ORACLE);", prelude=prelude)
+
+
+class JudgeNew(unittest.TestCase):
+    """How the new-code rules and the 5 s rule share one report (#3746 review)."""
+
+    PATH = "src/x_tests.rs"
+
+    def judge(self, body, rows=(), prelude=""):
+        text = f"{prelude}\n#[tokio::test]\nasync fn case() {{\n{body}\n}}\n"
+        texts = {self.PATH: text}
+        found = guard.scan_text(self.PATH, text, {}) + guard.scan_timeouts(self.PATH, text, {}, {})
+        added = {self.PATH: set(range(1, text.count("\n") + 2))}
+        return guard.judge_new(found, list(rows), texts, {}, {}, added)
+
+    def test_a_well_formed_oracle_excuses_a_new_window_under_five_seconds(self):
+        body = '// timing-oracle: vs 30 s STDIO_DRAIN_TIMEOUT (MIK-8247)\ntimeout(Duration::from_secs(1), run()).await.expect("x");'
+        found, errors = self.judge(body)
+        self.assertEqual(errors, [], errors)
+        self.assertEqual(found, [], "the excused window must not reach the 5 s rule either")
+
+    def test_an_allowlisted_site_in_a_changed_span_is_still_judged_as_new(self):
+        body = 'timeout(Duration::from_secs(1), run()).await.expect("x");'
+        text = f"\n#[tokio::test]\nasync fn case() {{\n{body}\n}}\n"
+        legacy = guard.scan_timeouts(self.PATH, text, {}, {})
+        row = guard.Row(self.PATH, "case", legacy[0].assertion, "kept")
+        _, errors = self.judge(body, rows=[row])
+        self.assertTrue(any(guard.FLOOR in e for e in errors), errors)
+
 
 class Allowlist(unittest.TestCase):
     def setUp(self):
