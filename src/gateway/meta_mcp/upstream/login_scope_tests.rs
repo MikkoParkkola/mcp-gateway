@@ -62,19 +62,24 @@ impl crate::transport::Transport for ScopeWitness {
     }
 }
 
-#[tokio::test]
-async fn task_recovery_requests_never_run_where_a_login_may_begin() {
-    let witness = Arc::new(ScopeWitness::default());
+/// A trusted, registered `peer` whose transport is `witness`.
+fn adapter_over(witness: &Arc<ScopeWitness>) -> NativeUpstreamTasks {
     let backend = Arc::new(Backend::new(
         "peer",
         BackendConfig::default(),
         &FailsafeConfig::default(),
         Duration::from_secs(5),
     ));
-    backend.set_transport_for_test(Arc::clone(&witness) as Arc<dyn crate::transport::Transport>);
+    backend.set_transport_for_test(Arc::clone(witness) as Arc<dyn crate::transport::Transport>);
     let registry = Arc::new(BackendRegistry::new());
     assert!(registry.register(backend), "fixture registration");
-    let adapter = NativeUpstreamTasks::new(registry, &["peer".to_string()]);
+    NativeUpstreamTasks::new(registry, &["peer".to_string()])
+}
+
+#[tokio::test]
+async fn task_recovery_requests_never_run_where_a_login_may_begin() {
+    let witness = Arc::new(ScopeWitness::default());
+    let adapter = adapter_over(&witness);
     let handle = UpstreamHandle {
         backend: "peer".to_string(),
         handle: "t1".to_string(),
@@ -96,5 +101,24 @@ async fn task_recovery_requests_never_run_where_a_login_may_begin() {
     assert!(
         interactive.is_empty(),
         "task recovery sent these where a login may begin: {interactive:?}"
+    );
+}
+
+/// The claim a dispatch asks is not upkeep: it runs where the dispatch's own
+/// `tools/call` will. Under `non_interactive` it was refused while a start held
+/// the backend, and recovery was silently left unarmed for that task.
+#[tokio::test]
+async fn a_dispatch_claim_discovers_in_its_callers_own_scope() {
+    let witness = Arc::new(ScopeWitness::default());
+    let adapter = adapter_over(&witness);
+
+    assert!(crate::oauth::login_gate::interactive(), "premise");
+    assert!(adapter.claims("peer").await, "a declaring peer is claimed");
+
+    let seen = witness.seen.lock().clone();
+    assert_eq!(
+        seen,
+        [("server/discover".to_string(), true)],
+        "the claim's discovery ran outside its caller's scope"
     );
 }
