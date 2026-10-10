@@ -159,9 +159,12 @@ fn get_finds_only_the_backend_of_the_file_its_source_names() {
         for file in ["gateway.yaml", "env.yaml", "flag.yaml"] {
             if file != source.expected() {
                 let other = run(home.path(), source, &["get", marker(file)]);
+                let stderr = String::from_utf8_lossy(&other.stderr);
                 assert!(
-                    !other.status.success(),
-                    "{source:?}: `get` found {file}'s backend, so it read {file}: {}",
+                    !other.status.success()
+                        && stderr.contains(&format!("Backend '{}' not found", marker(file))),
+                    "{source:?}: `get` must answer {file}'s backend as not found, \
+                     so it did not read {file}: {}",
                     text(&other)
                 );
             }
