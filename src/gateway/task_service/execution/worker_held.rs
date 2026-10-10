@@ -4,7 +4,13 @@
 //! one upstream cancel (MIK-7642): capture it, follow it, and when the capture
 //! was refused, offer it to the cancel claim however the follow ended.
 
-use super::*;
+use std::sync::Arc;
+
+use tokio::sync::watch;
+
+use super::super::upstream::CancelSend;
+use super::super::{TaskExecutor, UpstreamCapture};
+use super::follow_handle;
 
 /// Own one live upstream job: make its handle durable, follow it within a
 /// bounded budget, and settle what it eventually says.

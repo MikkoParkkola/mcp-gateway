@@ -15,10 +15,10 @@ use super::settle_followed::{
 use super::settlement::{
     backend_output, interrupted_before_dispatch, interrupted_result, strip_http_status,
 };
-use super::upstream::{CancelSend, QueryLease};
+use super::upstream::QueryLease;
 use super::{
     BeginOutcome, CommittedTask, CreateWrite, Handoff, TaskCall, TaskExecutor, TaskIntent,
-    TransitionWrite, UpstreamAnswer, UpstreamCapture, UpstreamHandle,
+    TransitionWrite, UpstreamAnswer, UpstreamHandle,
 };
 use crate::gateway::meta_mcp::invoke::relay::AnswerShape;
 use crate::gateway::meta_mcp::upstream::UpstreamSubmission;
