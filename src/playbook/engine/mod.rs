@@ -10,11 +10,12 @@ use serde_json::Value;
 use tracing::{debug, warn};
 
 use super::{
-    ErrorStrategy, PlaybookContext, PlaybookDefinition, PlaybookResult, ToolInvoker,
-    evaluate_condition,
+    ErrorStrategy, PlaybookContext, PlaybookDefinition, PlaybookResult, PlaybookStep, ToolInvoker,
+    evaluate_condition, var_refs_in,
 };
 #[cfg(test)]
-use super::{OutputMapping, PlaybookOutput, PlaybookStep, extract_var_refs, is_truthy};
+use super::{OutputMapping, PlaybookOutput, extract_var_refs, is_truthy};
+use crate::protocol::continuation::{PROBE_OPENS_PER_STEP, ProbeBudget, ProbeRefusal};
 
 /// Engine that loads and executes playbooks.
 pub struct PlaybookEngine {
@@ -53,6 +54,12 @@ impl PlaybookEngine {
             if file_path.extension().and_then(|e| e.to_str()) == Some("yaml") {
                 match std::fs::read_to_string(&file_path) {
                     Ok(content) => match serde_yaml::from_str::<PlaybookDefinition>(&content) {
+                        Ok(def) if !def.sealed_state_references().is_empty() => {
+                            for (step, reference) in def.sealed_state_references() {
+                                warn!(path = %file_path.display(), step = %step, reference = %reference,
+                                    "Skipped playbook: a step argument names a sealed requestState");
+                            }
+                        }
                         Ok(def) => {
                             debug!(name = %def.name, path = %file_path.display(), "Loaded playbook");
                             self.definitions.insert(def.name.clone(), def);
@@ -126,6 +133,18 @@ impl PlaybookEngine {
         inputs: Value,
         invoker: &dyn ToolInvoker,
     ) -> crate::Result<PlaybookResult> {
+        // Refused whole, before any step runs: the playbook was written to
+        // hand the gateway's envelope to a backend (MIK-8323).
+        if let Some((step, reference)) = definition.sealed_state_references().into_iter().next() {
+            return Err(crate::Error::Forbidden {
+                code: -32003,
+                status: 403,
+                message: format!(
+                    "playbook '{}' refused: step '{step}' argument {reference} names a sealed requestState",
+                    definition.name
+                ),
+            });
+        }
         let start = Instant::now();
         let timeout = std::time::Duration::from_secs(definition.timeout);
         let mut ctx = PlaybookContext::new(inputs);
@@ -158,81 +177,40 @@ impl PlaybookEngine {
                 continue;
             }
 
-            // Interpolate arguments
-            let arguments = ctx.interpolate(&Value::Object(
-                step.arguments
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect(),
-            ));
-
-            // Execute with retry
-            let mut last_error = None;
             let max_attempts = if definition.on_error == ErrorStrategy::Retry {
                 definition.max_retries.max(1)
             } else {
                 1
             };
-
-            let mut succeeded = false;
-            for attempt in 0..max_attempts {
-                if attempt > 0 {
-                    debug!(step = %step.name, attempt, "Retrying step");
+            // Checked and interpolated once, outside the retry loop: a retry
+            // re-sends the same arguments and must not refill the probe budget.
+            let outcome = match checked_arguments(&ctx, step, invoker) {
+                Ok(arguments) => dispatch(step, label, arguments, max_attempts, invoker).await,
+                Err(refusal) => {
+                    warn!(step = %step.name, error = %refusal, refused = true, "Step failed");
+                    Err(refusal)
                 }
+            };
 
-                match STEP
-                    .scope(
-                        label,
-                        invoker.invoke(&step.server, &step.tool, arguments.clone()),
-                    )
-                    .await
-                {
-                    Ok(result) => {
-                        debug!(step = %step.name, "Step completed");
-                        labels.insert(step.name.clone(), label);
-                        ctx.step_results.insert(step.name.clone(), result);
-                        steps_completed.push(step.name.clone());
-                        succeeded = true;
-                        break;
-                    }
-                    Err(e) => {
-                        // A refusal is not a flaky backend. Retrying it cannot
-                        // change the answer, and `max_retries` would turn one
-                        // denial into N identical ones — waste that reads like
-                        // a brute-force attempt in the audit log. Ordinary
-                        // errors keep retrying: that distinction is the whole
-                        // reason the refusal carries its own variant instead of
-                        // arriving as an opaque error.
-                        let refused = matches!(e, crate::Error::Forbidden { .. });
-                        warn!(step = %step.name, error = %e, refused, "Step failed");
-                        last_error = Some(e);
-                        if refused {
-                            break;
-                        }
-                    }
+            match outcome {
+                Ok(result) => {
+                    debug!(step = %step.name, "Step completed");
+                    labels.insert(step.name.clone(), label);
+                    ctx.step_results.insert(step.name.clone(), result);
+                    steps_completed.push(step.name.clone());
                 }
-            }
-
-            if !succeeded {
-                steps_failed.push(step.name.clone());
-                match definition.on_error {
-                    ErrorStrategy::Abort => {
-                        return Err(last_error.unwrap_or_else(|| {
-                            crate::Error::Internal(format!(
-                                "Step '{}' failed in playbook '{}'",
-                                step.name, definition.name
-                            ))
-                        }));
-                    }
-                    ErrorStrategy::Continue | ErrorStrategy::Retry => {
-                        // Both arms null-fill and carry on, so both must say
-                        // why: a null with no reason is how a caller ends up
-                        // with a partial result that reads like a success.
-                        if let Some(ref e) = last_error {
+                Err(e) => {
+                    steps_failed.push(step.name.clone());
+                    match definition.on_error {
+                        ErrorStrategy::Abort => return Err(e),
+                        ErrorStrategy::Continue | ErrorStrategy::Retry => {
+                            // Both arms null-fill and carry on, so both must say
+                            // why: a null with no reason is how a caller ends up
+                            // with a partial result that reads like a success.
                             step_errors.insert(step.name.clone(), e.to_string());
+                            // Already retried if Retry; continue to next step.
+                            ctx.step_results.insert(step.name.clone(), Value::Null);
                         }
-                        // Already retried if Retry; continue to next step.
-                        ctx.step_results.insert(step.name.clone(), Value::Null);
                     }
                 }
             }
@@ -253,6 +231,84 @@ impl PlaybookEngine {
             provenance,
         })
     }
+}
+
+/// `step`'s arguments, interpolated, or a refusal when a value a reference
+/// resolves to carries the gateway's envelope (MIK-8323). Each resolved value
+/// is checked BEFORE substitution: text glued around it could hide it from a
+/// scan of the rendered string. One probe budget covers the whole step.
+fn checked_arguments(
+    ctx: &PlaybookContext,
+    step: &PlaybookStep,
+    invoker: &dyn ToolInvoker,
+) -> crate::Result<Value> {
+    let raw = Value::Object(
+        step.arguments
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+    );
+    let mut refs = Vec::new();
+    var_refs_in(&raw, &mut refs);
+    let mut budget = ProbeBudget::new(PROBE_OPENS_PER_STEP);
+    for reference in &refs {
+        let why = match invoker.sealed_state_in(&ctx.resolve_var(reference), &mut budget) {
+            Ok(false) => continue,
+            Ok(true) => "carries a sealed continuation state",
+            Err(ProbeRefusal::TooManyCandidates) => {
+                "has too many continuation-shaped values to check"
+            }
+            Err(ProbeRefusal::ClockUnreadable) => "cannot be checked while the clock is unreadable",
+        };
+        return Err(crate::Error::Forbidden {
+            code: -32003,
+            status: 403,
+            message: format!("step '{}' refused: {reference} {why}", step.name),
+        });
+    }
+    Ok(ctx.interpolate(&raw))
+}
+
+/// Invoke `step` up to `max_attempts` times; the last error when none succeeds.
+async fn dispatch(
+    step: &PlaybookStep,
+    label: u32,
+    arguments: Value,
+    max_attempts: u32,
+    invoker: &dyn ToolInvoker,
+) -> crate::Result<Value> {
+    let mut last_error = None;
+    for attempt in 0..max_attempts.max(1) {
+        if attempt > 0 {
+            debug!(step = %step.name, attempt, "Retrying step");
+        }
+        match STEP
+            .scope(
+                label,
+                invoker.invoke(&step.server, &step.tool, arguments.clone()),
+            )
+            .await
+        {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                // A refusal is not a flaky backend. Retrying it cannot change
+                // the answer, and `max_retries` would turn one denial into N
+                // identical ones — waste that reads like a brute-force attempt
+                // in the audit log. Ordinary errors keep retrying: that
+                // distinction is the whole reason the refusal carries its own
+                // variant instead of arriving as an opaque error.
+                let refused = matches!(e, crate::Error::Forbidden { .. });
+                warn!(step = %step.name, error = %e, refused, "Step failed");
+                if refused {
+                    return Err(e);
+                }
+                last_error = Some(e);
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        crate::Error::Internal(format!("Step '{}' was never attempted", step.name))
+    }))
 }
 
 impl Default for PlaybookEngine {
@@ -331,5 +387,7 @@ fn build_output(
 // Tests
 // ============================================================================
 
+#[cfg(test)]
+mod envelope_tests;
 #[cfg(test)]
 mod tests;

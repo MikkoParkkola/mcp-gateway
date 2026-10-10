@@ -373,6 +373,12 @@ impl Keyring {
         Ok(encoded)
     }
 
+    /// Whether a key with `kid` is held, minting or retained: the probe's
+    /// framing gate (MIK-8323) opens only what could be ours.
+    pub(crate) fn holds_kid(&self, kid: u8) -> bool {
+        self.read_ring().keys.iter().any(|held| held.kid == kid)
+    }
+
     /// [`Self::open`] at now: a clock that reads before 1970 refuses as
     /// [`ContinuationError::Expired`] (MIK-8202).
     pub(crate) fn open_now(&self, token: &str) -> Result<Payload, ContinuationError> {
