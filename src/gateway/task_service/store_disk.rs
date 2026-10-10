@@ -619,6 +619,8 @@ pub(in crate::gateway::task_service) mod after_load {
     static SEAMS: LazyLock<Mutex<HashMap<PathBuf, Seam>>> = LazyLock::new(Default::default);
 
     /// Run `seam` once per open of `dir` until it is cleared with `None`.
+    /// Unix-only, like its one caller (`store_tests::repaired_rows`).
+    #[cfg(unix)]
     pub(in crate::gateway::task_service) fn set(dir: &Path, seam: Option<Seam>) {
         let mut seams = SEAMS.lock().unwrap_or_else(PoisonError::into_inner);
         match seam {
@@ -629,6 +631,8 @@ pub(in crate::gateway::task_service) mod after_load {
 
     /// `open_blocking` on this thread, so a test can capture the log it writes
     /// (the async open runs it on a blocking-pool thread); the lease is dropped.
+    /// Unix-only, like its one caller.
+    #[cfg(unix)]
     pub(in crate::gateway::task_service) fn open(
         dir: &Path,
         limits: super::StoreLimits,
