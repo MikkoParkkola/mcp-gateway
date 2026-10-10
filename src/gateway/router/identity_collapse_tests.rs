@@ -350,3 +350,102 @@ async fn a_nameless_certificate_never_replays_another_callers_result() {
     assert!(b.get("error").is_none(), "caller B is served: {b}");
     assert_eq!(dispatched(&fx), 2, "B ran its own call, not A's replay");
 }
+
+/// The first `"pid"` number anywhere in `value`, looking inside JSON text.
+fn find_pid(value: &Value) -> Option<i64> {
+    match value {
+        Value::Object(map) => map
+            .get("pid")
+            .and_then(Value::as_i64)
+            .or_else(|| map.values().find_map(find_pid)),
+        Value::Array(items) => items.iter().find_map(find_pid),
+        Value::String(text) => serde_json::from_str::<Value>(text)
+            .ok()
+            .as_ref()
+            .and_then(find_pid),
+        _ => None,
+    }
+}
+
+/// R2b (the per-caller child site, `capability/executor/mcp.rs`
+/// `principal`): on a multi-user gateway, two callers behind different API
+/// keys who both present a nameless certificate get one stdio child each.
+/// Today both key the child on the shared display-name subject and share one
+/// process. Mutant: the display-name fallback restored.
+#[cfg(unix)]
+#[tokio::test]
+async fn nameless_certificates_never_share_a_per_caller_child() {
+    use crate::capability::{CapabilityBackend, CapabilityExecutor};
+
+    use super::direct_guards_fixture::{Answer, fixture};
+
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cap_exec/fake_mcp.py")
+        .display()
+        .to_string();
+    let yaml = format!(
+        "name: mcp_probe\ndescription: MCP probe.\nschema:\n  input:\n    type: object\n    \
+         properties:\n      operation:\n        type: string\n      text:\n        type: string\n\
+         providers:\n  primary:\n    service: mcp\n    timeout: 20\n    config:\n      \
+         command: 'python3'\n      args: ['{script}']\n      transport: stdio\n      \
+         tool_selector:\n        param: operation\n        tools:\n          \
+         say: {{ tool: echo, arguments: {{ message: \"{{text}}\" }} }}\n"
+    );
+    let dir = tempfile::TempDir::new().unwrap();
+    // Pinned, as `mcp-gateway cap pin` would: a local process runs only
+    // from a verified file.
+    let hash = crate::capability::hash::compute_capability_hash(&yaml);
+    let yaml = crate::capability::hash::rewrite_with_pin(&yaml, &hash);
+    std::fs::write(dir.path().join("mcp_probe.yaml"), yaml).unwrap();
+    // The operator allows this one command, as `capabilities.process_commands`
+    // would.
+    let config = crate::config::CapabilityConfig {
+        process_commands: Some(vec![crate::config::ProcessCommand {
+            command: "python3".to_owned(),
+            args_prefix: vec![script.clone()],
+        }]),
+        ..crate::config::CapabilityConfig::default()
+    };
+    let caps = Arc::new(CapabilityBackend::new(
+        "caps",
+        Arc::new(CapabilityExecutor::for_config(&config)),
+    ));
+    caps.load_from_directory(dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+    let fx = fixture(Answer::Ok, |meta| {
+        meta.set_capabilities(Arc::clone(&caps));
+        meta.set_multi_user(true);
+    })
+    .await;
+
+    let cert = nameless_cert();
+    let mut pids = Vec::new();
+    for key in ["k-std", "k-budget"] {
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("authorization", format!("Bearer {key}"))
+            .header("content-type", "application/json")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("mcp-method", "tools/call")
+            .header("mcp-name", "gateway_invoke")
+            .body(axum::body::Body::from(
+                json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+                    "name": "gateway_invoke",
+                    "arguments": {"server": "caps", "tool": "mcp_probe",
+                                  "arguments": {"operation": "say", "text": key}},
+                    "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                              "io.modelcontextprotocol/clientCapabilities": {}},
+                }})
+                .to_string(),
+            ))
+            .unwrap();
+        request.extensions_mut().insert(cert.clone());
+        let response = fx.router.clone().oneshot(request).await.unwrap();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        pids.push(find_pid(&body).unwrap_or_else(|| panic!("{key}: no pid in {body}")));
+    }
+    assert_ne!(pids[0], pids[1], "two callers shared one child");
+}
