@@ -100,6 +100,24 @@ impl Intake<'_> {
     }
 }
 
+/// The key a `/mcp` caller's explicit cancel of its own call `id` is
+/// registered and looked up under (MIK-7642 PR.C, design r6 PR.C): the route,
+/// the caller's subject or credential principal, its session (none for a
+/// modern-by-header caller, whose session id is empty), and the client's id.
+pub(super) fn mcp_cancel_key(
+    grant_subject: Option<&crate::identity_grants::GrantSubject>,
+    client: Option<&AuthenticatedClient>,
+    session_id: &str,
+    id: &Value,
+) -> Option<crate::gateway::router::inflight_calls::CallKey> {
+    let owner = crate::gateway::router::inflight_calls::cancel_owner(
+        grant_subject,
+        client.map(|client| client.principal.as_str()),
+    );
+    let session = (!session_id.is_empty()).then_some(session_id);
+    crate::gateway::router::inflight_calls::CallKey::new("/mcp", owner.as_deref(), session, id)
+}
+
 /// The prelude, run once per request. `Err` is a finished answer the
 /// dispatcher returns as it is.
 #[allow(
@@ -521,6 +539,18 @@ pub(super) async fn intake(
     // era, version, mirrored-header and removed-method checks ran accepted a
     // malformed or disabled modern notification as though it had been honoured.
     if method.starts_with("notifications/") {
+        // MIK-7642 PR.C: a cancel aborts this caller's own in-flight call
+        // under that id, if one is running; never forwarded (MIK-8072).
+        if method == "notifications/cancelled" {
+            let aborted = request
+                .get("params")
+                .and_then(|params| params.get("requestId"))
+                .and_then(|id| {
+                    mcp_cancel_key(grant_subject.as_ref(), client.as_ref(), &session_id, id)
+                })
+                .is_some_and(|key| state.meta_mcp.inflight_calls().cancel(&key));
+            debug!(aborted, "Client cancel never forwarded");
+        }
         debug!(notification = %method, "Handling notification");
         return Err(build_accepted_response(&session_id));
     }

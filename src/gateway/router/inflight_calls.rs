@@ -23,6 +23,19 @@ use futures::future::{AbortHandle, AbortRegistration};
 use parking_lot::Mutex;
 use serde_json::Value;
 
+/// The owner a call is registered under: the caller's authorized subject, or
+/// its credential principal when it has none (never the slot principal,
+/// which can group several subjects). `None` when it has neither.
+pub(crate) fn cancel_owner(
+    subject: Option<&crate::identity_grants::GrantSubject>,
+    principal: Option<&str>,
+) -> Option<String> {
+    match subject {
+        Some(subject) => Some(format!("{}\u{0}{}", subject.authority, subject.subject)),
+        None => principal.map(str::to_owned),
+    }
+}
+
 /// Whose call, where, and which of their requests.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct CallKey {

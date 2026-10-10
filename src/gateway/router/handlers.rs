@@ -435,8 +435,24 @@ async fn meta_mcp_dispatch(
         // by the same code every other response takes. `Err` is a refusal that
         // already carries the status it must be sent with, returned as it is.
         "tools/call" => {
+            // MIK-7642 PR.C: registered so this caller's own explicit cancel
+            // aborts the call (the transport then cancels it on the backend
+            // by the backend's id); held until the call ends.
+            let (_cancel_entry, cancel_on) = serde_json::to_value(&id)
+                .ok()
+                .and_then(|key_id| {
+                    dispatch_intake::mcp_cancel_key(
+                        grant_subject.as_ref(),
+                        client.as_ref(),
+                        session_id,
+                        &key_id,
+                    )
+                })
+                .and_then(|key| state.meta_mcp.inflight_calls().register(key))
+                .unzip();
+            let answer_id = id.clone();
             // Boxed: an inline future would enlarge this dispatcher's own state.
-            match Box::pin(dispatch_tools_call::tools_call(
+            let call = Box::pin(dispatch_tools_call::tools_call(
                 &state,
                 &intake,
                 id,
@@ -445,11 +461,23 @@ async fn meta_mcp_dispatch(
                 &mut signing_context,
                 &mut response_targets,
                 &mut execution,
-            ))
-            .await
-            {
-                Ok(response) => response,
-                Err(response) => return response,
+            ));
+            let called = match cancel_on {
+                Some(cancel_on) => futures::future::Abortable::new(call, cancel_on).await.ok(),
+                None => Some(call.await),
+            };
+            match called {
+                Some(Ok(response)) => response,
+                Some(Err(response)) => return response,
+                None => {
+                    return build_error_response(
+                        Some(answer_id),
+                        -32800,
+                        "Request cancelled by the client",
+                        session_id,
+                        StatusCode::OK,
+                    );
+                }
             }
         }
         // Resources

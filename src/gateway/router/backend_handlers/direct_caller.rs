@@ -304,13 +304,13 @@ pub(super) fn explicit_cancel_key(
     session: Option<&str>,
     id: &Value,
 ) -> Option<crate::gateway::router::inflight_calls::CallKey> {
-    let owner = match caller.grant_subject.as_ref() {
-        Some(subject) => Some(format!("{}\u{0}{}", subject.authority, subject.subject)),
-        None => caller
+    let owner = crate::gateway::router::inflight_calls::cancel_owner(
+        caller.grant_subject.as_ref(),
+        caller
             .client
             .as_ref()
-            .map(|client| client.principal.clone()),
-    };
+            .map(|client| client.principal.as_str()),
+    );
     crate::gateway::router::inflight_calls::CallKey::new(backend, owner.as_deref(), session, id)
 }
 

@@ -230,3 +230,121 @@ async fn a_duplicate_live_id_leaves_the_first_call_cancellable() {
     let first_backend_id = gw.upstream.calls.lock()[0].clone();
     assert_eq!(*gw.upstream.cancels.lock(), vec![first_backend_id]);
 }
+
+/// POST `message` to `/mcp` as `subject` on `session`; the answer and the
+/// session the gateway names.
+async fn send_mcp(
+    gw: &Gateway,
+    message: Value,
+    subject: &str,
+    session: Option<&str>,
+) -> (StatusCode, Value, Option<String>) {
+    let mut builder = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("accept", "application/json");
+    if let Some(session) = session {
+        builder = builder.header("mcp-session-id", session);
+    }
+    let mut request = builder
+        .body(axum::body::Body::from(message.to_string()))
+        .unwrap();
+    request.extensions_mut().insert(VerifiedIdentity {
+        subject: subject.to_owned(),
+        email: format!("{subject}@example.invalid"),
+        name: None,
+        groups: vec![],
+        issuer: "https://idp.example.invalid".to_owned(),
+    });
+    let response = gw.router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let session = response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body = serde_json::from_slice(&bytes)
+        .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
+    (status, body, session)
+}
+
+/// `subject`'s own session on `/mcp`.
+async fn mcp_session(gw: &Gateway, subject: &str) -> String {
+    let init = json!({ "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
+        "protocolVersion": crate::protocol::PROTOCOL_VERSION, "capabilities": {},
+        "clientInfo": { "name": "c5", "version": "0" } } });
+    let (status, answer, session) = send_mcp(gw, init, subject, None).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    session.expect("the gateway names a session")
+}
+
+fn invoke(id: i64) -> Value {
+    json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
+        "name": "gateway_invoke",
+        "arguments": { "server": "ledger", "tool": "slow", "arguments": {} } } })
+}
+
+/// Start `subject`'s `/mcp` call `id` on `session`; wait until the backend
+/// holds it.
+async fn held_mcp_call(
+    gw: &Arc<Gateway>,
+    id: i64,
+    subject: &'static str,
+    session: &str,
+) -> tokio::task::JoinHandle<(StatusCode, Value, Option<String>)> {
+    let started = {
+        let gw = Arc::clone(gw);
+        let session = session.to_owned();
+        tokio::spawn(async move { send_mcp(&gw, invoke(id), subject, Some(&session)).await })
+    };
+    tokio::time::timeout(Duration::from_secs(30), gw.upstream.arrived.notified())
+        .await
+        .expect("the backend holds the call");
+    started
+}
+
+/// C5: on `/mcp` the caller's own cancel, on its own session, reaches the
+/// backend once by the backend's id, and the call is answered -32800.
+/// Mutant: the `/mcp` cancel lookup removed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_mcp_callers_own_cancel_reaches_the_backend_by_its_own_id() {
+    let gw = Arc::new(gateway().await);
+    let session = mcp_session(&gw, "alpha").await;
+    let pending = held_mcp_call(&gw, 7, "alpha", &session).await;
+    let (status, _, _) = send_mcp(&gw, cancel(7), "alpha", Some(&session)).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    tokio::time::timeout(Duration::from_secs(30), gw.upstream.cancelled.notified())
+        .await
+        .expect("the backend receives a cancel");
+    let (_, answer, _) = pending.await.expect("the call task joins");
+    assert_eq!(answer["error"]["code"], json!(-32800), "{answer}");
+    let backend_id = gw.upstream.calls.lock()[0].clone();
+    assert_eq!(*gw.upstream.cancels.lock(), vec![backend_id]);
+}
+
+/// C5: another caller, on its own session, naming the same id cancels
+/// nothing; the call completes. Mutants: the owner or the session dropped
+/// from the key.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn another_mcp_callers_cancel_of_the_same_id_reaches_nothing() {
+    let gw = Arc::new(gateway().await);
+    let alpha = mcp_session(&gw, "alpha").await;
+    let beta = mcp_session(&gw, "beta").await;
+    let pending = held_mcp_call(&gw, 7, "alpha", &alpha).await;
+    let (status, _, _) = send_mcp(&gw, cancel(7), "beta", Some(&beta)).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    gw.upstream.release.add_permits(1);
+    let (_, answer, _) = pending.await.expect("the call task joins");
+    assert!(
+        answer.get("error").is_none(),
+        "alpha's call completes: {answer}"
+    );
+    assert!(
+        gw.upstream.cancels.lock().is_empty(),
+        "nothing was cancelled"
+    );
+}
