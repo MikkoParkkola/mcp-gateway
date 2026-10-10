@@ -710,36 +710,6 @@ async fn a_destructive_call_on_a_clock_before_the_epoch_is_refused() {
     challenge(&ask(&fx, &fresh(), elicitation()).await);
 }
 
-/// S6b (MIK-8311 CSL.1): a task confirmation whose envelope mint fails gives
-/// its slot back. The keyring refuses every envelope, so the gate takes a
-/// slot, cannot seal the grant, and refuses; the slot must not stay held for
-/// the envelope's lifetime. Red on base: the slot count grows by one.
-/// Mutant m8: the release on the mint-failure path removed.
-#[tokio::test]
-async fn s6b_a_refused_confirmation_mint_gives_its_slot_back() {
-    let mut fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
-    fx.meta.set_continuation_for_test(
-        crate::protocol::continuation::ContinuationState::mint_refusing_for_test(),
-    );
-    let now = crate::protocol::continuation::now_unix_secs();
-    let before = fx.meta.continuation.in_flight().len(now).await;
-
-    let outcome = ask(&fx, &fresh(), elicitation()).await;
-    let TaskConfirmation::Answer(response) = &outcome else {
-        panic!("setup: the gate did not answer: {outcome:?}");
-    };
-    assert!(
-        response.error.is_some(),
-        "setup: a refused mint must refuse, got {response:?}"
-    );
-
-    let after = fx.meta.continuation.in_flight().len(now).await;
-    assert_eq!(
-        after, before,
-        "the refused confirmation kept its slot: {before} held before, {after} after"
-    );
-}
-
 /// S3d (SLOTQ.3, SLOTQ.5): one verified identity has one cap across a tool
 /// call and both confirmation gates. Alice's 64 `gateway_invoke` rounds hold
 /// her cap; a task confirmation and an in-band meta confirmation, on the same
@@ -815,6 +785,7 @@ async fn s3d_one_identity_has_one_cap_across_invoke_and_both_confirmations() {
 }
 
 mod key_quota;
+mod mint_refusal;
 mod replay;
 /// The stdio principal rows (route-check-parity P3, MIK-8160, MIK-8326).
 mod stdio_binding;
