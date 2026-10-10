@@ -1,0 +1,7 @@
+src/gateway/server/tools_changed.rs	decide_on	1	Change drain: the body of decide, extracted so HTTP and stdio decide alike; decides whether a content-free hint goes, who hears it is decided at delivery (classification under review in MIK-8350)
+src/gateway/server/tools_changed/stdio.rs	start	1	Stdio change drain: starts the decide loop and the sender for the session's one client; a content-free hint, the relist returns only that client's view
+src/gateway/server/tools_changed/stdio.rs	initialized	1	Stdio change drain: marks the session ready after notifications/initialized and releases a held hint; decides nothing about access
+src/gateway/server/tools_changed/stdio.rs	shutdown	1	Stdio change drain: hands the session's watchers a stop receiver; decides nothing
+src/gateway/server/tools_changed/stdio.rs	stop	1	Stdio change drain: stops announcing at the end of the read loop; decides nothing about access
+src/gateway/server/tools_changed/stdio.rs	drop	1	Stdio change drain: stops the announcer on every other exit path; decides nothing
+src/gateway/server/tools_changed/stdio.rs	send_when_ready	1	Stdio change drain: turns the one-frame latch into a content-free list_changed frame on the writer queue; decides nothing about access
