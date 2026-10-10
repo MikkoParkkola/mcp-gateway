@@ -6,7 +6,7 @@
 //! refusal the user could act on and never a URL.
 
 use super::revoke_fixture::{ISSUER, RevocationEndpoint, RevokeFixture, descriptor};
-use super::{AccountError, AccountKey, JourneyError, JourneyLimits};
+use super::{AccountError, AccountKey, JourneyError, JourneyLimits, JourneyStatus};
 
 const RESOURCE: &str = "https://api.fixture.test/";
 
@@ -42,8 +42,14 @@ async fn a_url_the_provider_cannot_build_is_a_configuration_fault() {
         .expect("custody admits")
         .expect("the journey table accepts the owner");
 
+    let id = created.journey_id;
+    let principal = (
+        owner.principal_authority.clone(),
+        owner.principal_subject.clone(),
+    );
+
     let started = journeys
-        .start(limits(), created.journey_id, owner)
+        .start(limits(), id.clone(), owner)
         .await
         .expect("custody admits");
     assert!(
@@ -54,4 +60,11 @@ async fn a_url_the_provider_cannot_build_is_a_configuration_fault() {
         "an unbuildable authorize URL is a configuration fault, got {:?}",
         started.map(|s| s.max_age)
     );
+    // The fault is the URL's, after the arm: the journey did reach Started.
+    let view = journeys
+        .status(limits(), id, principal)
+        .await
+        .expect("custody admits")
+        .expect("the owner reads its own journey");
+    assert_eq!(view.status, JourneyStatus::Started);
 }

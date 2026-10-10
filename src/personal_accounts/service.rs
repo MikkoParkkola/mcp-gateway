@@ -184,10 +184,10 @@ pub(crate) enum AccountServiceError {
     LeaseRetired,
     #[error("stale consent was fenced by a later grant or revoke")]
     #[cfg_attr(
-        all(not(test), not(kani)),
+        not(test),
         expect(
             dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
+            reason = "built only by the test-only commit_grant_if; production consent fences in consent::commit_if_unchanged_locked"
         )
     )]
     StaleConsentFenced,
