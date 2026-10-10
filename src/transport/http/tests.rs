@@ -28,6 +28,9 @@ mod unpinned_flavour;
 /// The legacy handshake's protocol-version refusals (MIK-8195 W1).
 mod version_refusals;
 
+/// A peer's error body is surfaced only for its own request (MIK-8195 W1).
+mod peer_refusal;
+
 /// Per-identity MCP-Session-Id partitioning (MIK-6784, GW.1).
 mod session_partition;
 
