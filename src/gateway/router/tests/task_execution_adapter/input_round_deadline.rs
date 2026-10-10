@@ -543,3 +543,33 @@ async fn shutdown_ends_a_round_waiting_for_the_clock() {
         .await;
     std::assert!(outcome.stopped, "the waiting worker outlived shutdown");
 }
+
+/// MIK-8202: an answer on a clock before 1970 is refused for now, the round
+/// stays open, and the same answer is taken once the clock reads. Covers the
+/// answer path's unreadable-clock refusal end to end; the store refuses the
+/// same answer on its own (`a_clock_before_the_epoch_refuses_an_update_and_keeps_the_round`).
+#[tokio::test]
+async fn an_answer_on_a_clock_before_1970_is_refused_and_the_round_stays_open() {
+    let (_mock, state, _dir, id) = parked_round("answer-unreadable").await;
+    let due = deadline(&state, &id);
+    before_epoch(&state);
+    let refused = post(
+        &state,
+        "key-a",
+        update(2, &id, json!({ "confirm": answer() })),
+    )
+    .await;
+    std::assert!(refused.get("error").is_some(), "{refused}");
+    std::assert_eq!(
+        status_of(&get_task(&state, "key-a", &id).await),
+        "input_required"
+    );
+    clock(&state, due - 1);
+    let taken = post(
+        &state,
+        "key-a",
+        update(3, &id, json!({ "confirm": answer() })),
+    )
+    .await;
+    std::assert!(taken.get("error").is_none(), "{taken}");
+}

@@ -404,15 +404,15 @@ impl TaskExecutor {
             // An answer stamped on a clock before 1970 is refused for now, as
             // the store refuses it, and the round stays open (MIK-8202).
             let store = &executor.service.store;
-            let stamp = store.now();
-            let provided = match stamp {
-                Ok(at) => {
-                    store
-                        .provide_input(&digest, &id, answers, move || workers.try_acquire_owned().ok(), at)
-                        .await
-                }
-                Err(_) => Err(StoreError::Unavailable),
+            let Ok(at) = store.now() else {
+                // Released before the answer, as below: a retry finds it free.
+                drop((handoff, cancel_rx));
+                let _ = tx.send(InputOutcome::Unavailable);
+                return;
             };
+            let provided = store
+                .provide_input(&digest, &id, answers, move || workers.try_acquire_owned().ok(), at)
+                .await;
             let outcome = match provided {
                 Ok(ProvideOutcome::Partial(committed)) => {
                     executor.published(&committed, &id);
@@ -425,9 +425,6 @@ impl TaskExecutor {
                     // same way, and the sweep retries a close that fails here.
                     let settled = async {
                         // Closed as of the time the answer was judged at.
-                        let Ok(at) = stamp else {
-                            return Ok(());
-                        };
                         let current = executor
                             .service
                             .store
