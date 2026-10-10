@@ -123,7 +123,11 @@ enum Arrival {
 
 impl Arrival {
     fn when(delivered: bool) -> Self {
-        if delivered { Self::Delivered } else { Self::Withheld }
+        if delivered {
+            Self::Delivered
+        } else {
+            Self::Withheld
+        }
     }
 }
 
@@ -367,7 +371,8 @@ async fn message_webhook_top_level_id_is_judged() {
         for id in [named.clone(), json!(named.to_string())] {
             let body = json!({ "id": id, "kind": "row-78" });
             assert!(
-                message_delivered(CrossTenantReads::Off, &keys, "", &body, Arrival::Delivered).await,
+                message_delivered(CrossTenantReads::Off, &keys, "", &body, Arrival::Delivered)
+                    .await,
                 "control: off delivers {body}"
             );
             let arrival = Arrival::when(tenant == A);
@@ -403,7 +408,8 @@ async fn message_webhook_mapped_top_level_id_is_judged() {
             "control: off delivers the mapped id: {off:?}"
         );
         let arrival = Arrival::when(tenant == A);
-        let got = message_delivered(CrossTenantReads::Block, &keys, transform, &body, arrival).await;
+        let got =
+            message_delivered(CrossTenantReads::Block, &keys, transform, &body, arrival).await;
         assert_eq!(got, tenant == A, "block, mapped id naming {tenant}: {body}");
     }
     // A mapped `id` does not replace the raw scan: B named only in a field the

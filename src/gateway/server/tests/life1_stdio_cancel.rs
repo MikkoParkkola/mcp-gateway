@@ -210,7 +210,10 @@ async fn frames_until(
 async fn until_rounds(served: &Served, n: usize) {
     let deadline = Instant::now() + HANG_BOUND;
     while served.rounds.load(Ordering::SeqCst) < n {
-        assert!(Instant::now() < deadline, "the backend never received round {n}");
+        assert!(
+            Instant::now() < deadline,
+            "the backend never received round {n}"
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
@@ -345,7 +348,10 @@ async fn initialize_is_not_cancelled() {
     let id = json!("init-2");
     let both = format!("{}\n{}", initialize(&id), cancel(&id));
     send(&mut served.stdin, &both).await;
-    let frames = frames_until(&mut served.stdout, ABSENCE_WINDOW, |f| !answers(f, &id).is_empty()).await;
+    let frames = frames_until(&mut served.stdout, ABSENCE_WINDOW, |f| {
+        !answers(f, &id).is_empty()
+    })
+    .await;
     assert_eq!(answers(&frames, &id).len(), 1, "{frames:?}");
     served.task.abort();
 }

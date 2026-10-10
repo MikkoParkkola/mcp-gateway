@@ -10,8 +10,8 @@
 
 use super::listen_graceful::{authorizer, bearer, temporary_token};
 use super::*;
-use futures::StreamExt as _;
 use crate::test_wait::HANG_BOUND;
+use futures::StreamExt as _;
 
 /// A key server holding one live temporary token; its credential and `jti`.
 async fn key_server_with_token() -> (
@@ -67,7 +67,10 @@ const SETTLE: Duration = Duration::from_millis(500);
 /// What the stream writes within `within`, and whether it ended. For a check
 /// that something is NOT written: a positive assert on this result races the
 /// window (MIK-8295), so use [`read_until`] for that.
-async fn read_for_absence(body: &mut axum::body::BodyDataStream, within: Duration) -> (String, bool) {
+async fn read_for_absence(
+    body: &mut axum::body::BodyDataStream,
+    within: Duration,
+) -> (String, bool) {
     let deadline = tokio::time::Instant::now() + within;
     let mut seen = String::new();
     loop {
@@ -219,7 +222,10 @@ async fn prompt_behind_a_frame(
     let (seen, _) = if held == Held::Revoked {
         read_until(&mut body, until_it_ends).await
     } else {
-        read_until(&mut body, |s| s.contains("rows://r11") && s.contains("r11-prompt")).await
+        read_until(&mut body, |s| {
+            s.contains("rows://r11") && s.contains("r11-prompt")
+        })
+        .await
     };
     let answer = tokio::time::timeout(Duration::from_secs(2), &mut asked)
         .await
@@ -304,7 +310,10 @@ async fn lagging_stream(held: Held) -> (String, bool) {
     if held == Held::Revoked {
         read_until(&mut body, until_it_ends).await
     } else {
-        read_until(&mut body, |s| s.contains("lagged") && s.contains("rows://lag-3")).await
+        read_until(&mut body, |s| {
+            s.contains("lagged") && s.contains("rows://lag-3")
+        })
+        .await
     }
 }
 

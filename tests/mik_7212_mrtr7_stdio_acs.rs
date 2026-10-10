@@ -271,7 +271,8 @@ async fn mik_1991_a_handshake_without_elicitation_keeps_the_question_out() {
     // must not be sent would show.
     let lines = session
         .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |f| {
-            f.iter().any(|frame| frame.get("id").and_then(Value::as_i64) == Some(2))
+            f.iter()
+                .any(|frame| frame.get("id").and_then(Value::as_i64) == Some(2))
         })
         .await;
     let frames = frames_lenient(&lines);
