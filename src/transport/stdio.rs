@@ -12,7 +12,10 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+
+#[cfg(unix)]
+use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
 
 use async_trait::async_trait;
 use parking_lot::RwLock;
@@ -38,6 +41,40 @@ const FALLBACK_EXEC_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
 const FALLBACK_EXEC_PATH: &str = r"C:\Windows\System32;C:\Windows";
 #[cfg(not(any(unix, windows)))]
 const FALLBACK_EXEC_PATH: &str = "";
+
+#[cfg(unix)]
+const GROUP_TERM_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Non-reaping exit check: an unreaped leader keeps its group id from reuse.
+#[cfg(unix)]
+fn leader_exited(leader: Pid) -> bool {
+    let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+    matches!(waitid(WaitId::Pid(leader), options), Ok(Some(_)))
+}
+
+#[cfg(unix)]
+async fn terminate_process_group(
+    child: &Mutex<Option<Child>>,
+    pgid: &AtomicI32,
+    grace: std::time::Duration,
+) {
+    let mut child = child.lock().await;
+    let Some(group) = Pid::from_raw(pgid.load(Ordering::Acquire)) else {
+        return;
+    };
+
+    let _ = kill_process_group(group, Signal::TERM);
+    let deadline = tokio::time::Instant::now() + grace;
+    while !leader_exited(group) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    let _ = kill_process_group(group, Signal::KILL);
+
+    pgid.store(0, Ordering::Release);
+    if let Some(child) = child.as_mut() {
+        let _ = child.wait().await;
+    }
+}
 
 fn configure_child_environment(cmd: &mut Command, backend_env: &HashMap<String, String>) {
     cmd.env_clear();
@@ -128,6 +165,9 @@ fn sanitize_cache_component(name: &str) -> String {
 pub struct StdioTransport {
     /// Child process
     child: Mutex<Option<Child>>,
+    /// Process group of the backend tree, led by `child`; 0 once it is reaped.
+    #[cfg(unix)]
+    pgid: AtomicI32,
     /// Pending requests waiting for response
     pending: dashmap::DashMap<String, oneshot::Sender<JsonRpcResponse>>,
     /// Request ID counter
@@ -175,6 +215,8 @@ impl StdioTransport {
     ) -> Arc<Self> {
         Arc::new(Self {
             child: Mutex::new(None),
+            #[cfg(unix)]
+            pgid: AtomicI32::new(0),
             pending: dashmap::DashMap::new(),
             request_id: AtomicU64::new(1),
             connected: AtomicBool::new(false),
@@ -218,6 +260,9 @@ impl StdioTransport {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
+        #[cfg(unix)]
+        cmd.process_group(0);
+
         // Backend processes get only the minimal execution environment plus
         // values explicitly assigned to this backend. In particular, secrets
         // loaded into the gateway process must not be inherited implicitly.
@@ -255,6 +300,9 @@ impl StdioTransport {
             .ok_or_else(|| Error::Transport("Failed to get stderr".to_string()))?;
 
         *self.writer.lock().await = Some(stdin);
+        #[cfg(unix)]
+        self.pgid
+            .store(child.id().map_or(0, u32::cast_signed), Ordering::Relaxed);
         *self.child.lock().await = Some(child);
 
         // Spawn reader task.
@@ -720,6 +768,20 @@ impl<'a> ProgressRegistrationGuard<'a> {
     }
 }
 
+impl Drop for StdioTransport {
+    fn drop(&mut self) {
+        // `kill_on_drop` reaches the leader only.
+        #[cfg(unix)]
+        if let Some(group) = Pid::from_raw(*self.pgid.get_mut()) {
+            let _ = kill_process_group(group, Signal::KILL);
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "stdio_group_tests.rs"]
+mod group_tests;
+
 impl Drop for ProgressRegistrationGuard<'_> {
     fn drop(&mut self) {
         if self.owns_registration {
@@ -792,12 +854,17 @@ impl Transport for StdioTransport {
         // leave the cached flag stale-true. A stale-true flag makes
         // `Backend::ensure_started` a no-op and dispatches requests into a dead
         // pipe — the core reason a tripped breaker never recovered. Confirm real
-        // liveness with a non-blocking waitpid. `try_lock` keeps this sync
-        // method from blocking; on lock contention we trust the flag.
-        if let Ok(mut guard) = self.child.try_lock()
-            && let Some(child) = guard.as_mut()
-            && let Ok(Some(_status)) = child.try_wait()
-        {
+        // liveness with a non-blocking wait, leaving a Unix leader unreaped.
+        // `try_lock` keeps this sync method from blocking; on contention we trust the flag.
+        #[cfg(unix)]
+        let exited = Pid::from_raw(self.pgid.load(Ordering::Acquire)).is_some_and(leader_exited);
+        #[cfg(not(unix))]
+        let exited = self.child.try_lock().is_ok_and(|mut guard| {
+            guard
+                .as_mut()
+                .is_some_and(|child| matches!(child.try_wait(), Ok(Some(_))))
+        });
+        if exited {
             // Child has exited; reconcile the cached flag so callers and future
             // checks see the truth.
             self.connected.store(false, Ordering::Relaxed);
@@ -812,7 +879,11 @@ impl Transport for StdioTransport {
         // Close stdin
         *self.writer.lock().await = None;
 
+        #[cfg(unix)]
+        terminate_process_group(&self.child, &self.pgid, GROUP_TERM_GRACE).await;
+
         // Kill child process
+        #[cfg(not(unix))]
         if let Some(ref mut child) = *self.child.lock().await {
             let _ = child.kill().await;
         }
