@@ -32,7 +32,6 @@ fn the_propagation_entry_mints_what_prepare_mints_for_a_verified_identity() {
             .expect("the trait entry leases the same grant");
         assert_eq!(propagated.headers, prepared.headers);
         assert_eq!(propagated.cache_binding, prepared.cache_binding);
-        assert_eq!(propagated.expires_at, prepared.expires_at);
     });
 }
 

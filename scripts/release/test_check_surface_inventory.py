@@ -413,6 +413,82 @@ def test_hidden_table_matches_internal_and_auto_rows() -> None:
     assert inv.check_hidden_table(HIDDEN_DOC, "no table here") != []
 
 
+
+def _lib_api(text: str, keep: frozenset[str] = frozenset()) -> list[str]:
+    import tempfile
+
+    with tempfile.TemporaryDirectory(dir=inv.ROOT / "src") as tmp:
+        f = Path(tmp) / "planted_api.rs"
+        f.write_text(text, encoding="utf-8")
+        return inv.lib_documented(f, keep)
+
+
+def test_surf5_hidden_crate_root_items_pass() -> None:
+    assert _lib_api("#[doc(hidden)]\npub mod planted_h;\n#[doc(hidden)]\npub use crate::x::{A, B};\n#[doc(hidden)]\npub fn planted_f() {}\n") == []
+
+
+def test_surf5_documented_crate_root_items_fail() -> None:
+    found = _lib_api("pub mod planted_m;\npub use crate::x::{A, B};\npub fn planted_f() {}\n")
+    for name in ("planted_m", "A", "B", "planted_f"):
+        assert any(f"mcp_gateway::{name}" in p for p in found), (name, found)
+
+
+def test_surf5_a_macro_export_anywhere_is_refused() -> None:
+    found = _lib_api("mod inner {\n    #[macro_export]\n    macro_rules! planted { () => {} }\n}\n")
+    assert any("macro_export" in p for p in found), found
+
+
+def test_surf5_a_root_extern_block_is_refused() -> None:
+    found = _lib_api('extern "C" {\n    pub fn planted_ext();\n}\n')
+    assert any("extern" in p for p in found), found
+
+
+def test_surf5_a_root_inline_module_is_refused() -> None:
+    found = _lib_api("#[doc(hidden)]\npub mod planted_inline {\n    pub fn x() {}\n}\n")
+    assert any("inline" in p for p in found), found
+
+
+def test_surf5_a_pub_extern_block_is_refused() -> None:
+    found = _lib_api('pub extern "C" {\n    pub fn planted_ext();\n}\n')
+    assert any("extern" in p for p in found), found
+
+
+def test_surf5_hidden_inside_another_attribute_is_not_hidden() -> None:
+    found = _lib_api('#[deprecated(note = "#[doc(hidden)]")]\npub fn planted_f() {}\n')
+    assert any("mcp_gateway::planted_f" in p for p in found), found
+
+
+def test_surf5_a_root_include_is_refused() -> None:
+    found = _lib_api('include!("planted_exports.rs");\n')
+    assert any("include!" in p for p in found), found
+
+def test_surf5_a_conditional_macro_export_is_refused() -> None:
+    found = _lib_api("#[cfg_attr(windows, macro_export)]\nmacro_rules! planted { () => {} }\n")
+    assert any("macro_export" in p for p in found), found
+
+
+def test_surf5_a_conditional_module_path_is_refused() -> None:
+    found = _lib_api('#[doc(hidden)]\n#[cfg_attr(windows, path = "planted_win.rs")]\npub mod planted_m;\n')
+    assert any("path" in p for p in found), found
+
+
+def test_surf5_hidden_text_in_a_raw_string_is_not_hidden() -> None:
+    found = _lib_api('#[deprecated(note = r#"x "#[doc(hidden)]" y"#)]\npub fn planted_r() {}\n')
+    assert any("mcp_gateway::planted_r" in p for p in found), found
+
+
+def test_surf5_extern_fns_without_or_with_an_unusual_abi_are_seen() -> None:
+    found = _lib_api('pub extern fn planted_e1() {}\npub extern "C-unwind" fn planted_e2() {}\n')
+    for name in ("planted_e1", "planted_e2"):
+        assert any(f"mcp_gateway::{name}" in p for p in found), (name, found)
+
+def test_surf5_a_keep_listed_item_passes() -> None:
+    assert _lib_api("pub fn planted_kept() {}\n", frozenset({"mcp_gateway::planted_kept"})) == []
+
+
+def test_surf5_the_crate_root_documents_no_export() -> None:
+    assert inv.lib_documented() == [], inv.lib_documented()
+
 if __name__ == "__main__":
     failed = 0
     for name, fn in sorted(globals().items()):

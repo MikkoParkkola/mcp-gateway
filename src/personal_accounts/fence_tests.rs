@@ -203,3 +203,15 @@ fn o4_an_unchanged_descriptor_revision_does_not_fence() {
         "and it did not quietly fence the persisted entry either"
     );
 }
+
+/// MIK-8195 W6: an account with no entry has nothing to fence. The fence must
+/// neither refuse nor create a `ReconnectRequired` entry out of nothing.
+#[test]
+fn o4_an_absent_account_is_not_fenced_and_no_entry_appears() {
+    let (_root, settings, store) = empty_store(16);
+    let key = account("alice");
+    assert_eq!(store.mark_reconnect_required(&key, &"b".repeat(64)), Ok(()));
+    assert_eq!(store.lookup(&key), Ok(AccountLookup::Absent));
+    drop(store);
+    assert_eq!(reopen(&settings).lookup(&key), Ok(AccountLookup::Absent));
+}
