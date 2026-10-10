@@ -10,12 +10,12 @@ use crate::gateway::router::route_matrix_driver_tests as router;
 use crate::gateway::server::route_matrix_driver_tests as stdio;
 
 /// A shell-injection argument the request firewall blocks (a High finding).
-const BLOCKED: &str = "; rm -rf / ";
+pub(super) const BLOCKED: &str = "; rm -rf / ";
 
 /// The firewall audit rows of `event` in `path`. Panics on an unreadable
 /// file or a malformed line, so a gap row can never pass because the audit
 /// log was not collected.
-fn audit_rows(path: &std::path::Path, event: &str) -> Vec<Value> {
+pub(super) fn audit_rows(path: &std::path::Path, event: &str) -> Vec<Value> {
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("audit log {} unreadable: {e}", path.display()));
     text.lines()
@@ -28,7 +28,7 @@ fn audit_rows(path: &std::path::Path, event: &str) -> Vec<Value> {
 }
 
 /// One blocked call on `route`, firewalled on every layer.
-async fn blocked_call(route: Route, audit: &std::path::Path) -> (Value, usize) {
+pub(super) async fn blocked_call(route: Route, audit: &std::path::Path) -> (Value, usize) {
     let args = json!({ "cmd": BLOCKED });
     match route {
         Route::Invoke => {
@@ -107,7 +107,7 @@ async fn chokepoint_rescan_stdio_row() {
 }
 
 /// The sanitizer's refusal of a NUL byte (`security/sanitize.rs`).
-const NUL_REFUSED: &str = "Input contains null bytes which are not allowed";
+pub(super) const NUL_REFUSED: &str = "Input contains null bytes which are not allowed";
 
 /// An argument holding a NUL byte, which sanitization refuses.
 fn with_nul() -> Value {
@@ -452,7 +452,7 @@ async fn nonce_give_back_direct_row() {
 
 /// The part of X14's challenge prompt both its variants carry
 /// (`meta_mcp/task_confirmation.rs` `confirmation_prompt`).
-const X14_PROMPT: &str = "It runs as a task once accepted";
+pub(super) const X14_PROMPT: &str = "It runs as a task once accepted";
 
 /// X14's refusal for a caller it cannot bind a confirmation to
 /// (`meta_mcp/task_confirmation.rs`). The fixture's `k-std` is a shared key with
@@ -510,7 +510,7 @@ async fn task_confirm_stdio_gap_row() {
 const LEASE_IN_FLIGHT: &str = "Execution is already in progress";
 
 /// A JSON-RPC answer's error message, or "" when it has none.
-fn message(body: &Value) -> &str {
+pub(super) fn message(body: &Value) -> &str {
     body["error"]["message"].as_str().unwrap_or_default()
 }
 

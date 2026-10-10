@@ -163,6 +163,10 @@ pub(crate) use table::expect;
 #[path = "route_check_matrix_rows_tests.rs"]
 mod rows;
 
+#[cfg(feature = "firewall")]
+#[path = "route_check_matrix_p3_tests.rs"]
+mod p3;
+
 /// `ALL` lists every variant exactly once: each index in `0..N` is hit once.
 /// A length check alone would pass a list that repeats one variant and
 /// misses another.

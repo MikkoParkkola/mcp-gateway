@@ -409,11 +409,35 @@ impl crate::transport::Transport for Destructive {
 /// `/mcp`, declaring form elicitation, where `read` is listed
 /// `destructiveHint: true`, so X14 has a destructive call to decide.
 pub(crate) async fn task_submit_surfaced() -> Sent {
+    task_submit_read_as("k-std", Surfacing::On).await.1
+}
+
+/// Whether the fixture surfaces `read` (P3, MIK-8326).
+#[derive(Clone, Copy)]
+pub(crate) enum Surfacing {
+    /// `read` is surfaced on `/mcp`.
+    On,
+    /// Nothing is surfaced, so the name `read` matches no tool.
+    Off,
+}
+
+/// [`task_submit_surfaced`] sent with the API key `key`, on a fixture that
+/// surfaces `read` per `surfacing`. Returns the HTTP status with the answer.
+/// `k-deny` is the fixture's key denied `read` (P3, MIK-8326).
+pub(crate) async fn task_submit_read_as(
+    key: &str,
+    surfacing_mode: Surfacing,
+) -> (axum::http::StatusCode, Sent) {
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let transport = std::sync::Arc::new(Destructive {
         calls: std::sync::Arc::clone(&calls),
     });
-    let fx = super::direct_guards_fixture::fixture_built_on(transport, surfacing).await;
+    let fx = match surfacing_mode {
+        Surfacing::On => super::direct_guards_fixture::fixture_built_on(transport, surfacing).await,
+        Surfacing::Off => {
+            super::direct_guards_fixture::fixture_built_on(transport, |meta| meta).await
+        }
+    };
     let params = serde_json::json!({
         "name": "read",
         "arguments": {},
@@ -432,21 +456,22 @@ pub(crate) async fn task_submit_surfaced() -> Sent {
         ("mcp-method", "tools/call"),
         ("mcp-name", "read"),
     ];
-    let (_, body) = super::direct_guards_fixture::send_with_headers(
+    let (status, body) = super::direct_guards_fixture::send_with_headers(
         &fx,
         "/mcp",
-        "k-std",
+        key,
         "tools/call",
         params,
         None,
         &headers,
     )
     .await;
-    Sent {
+    let sent = Sent {
         body,
         backend_calls: calls.load(Ordering::SeqCst),
         seen: Vec::new(),
-    }
+    };
+    (status, sent)
 }
 
 /// A backend whose `tools/call` signals `entered`, then waits for `gate`
