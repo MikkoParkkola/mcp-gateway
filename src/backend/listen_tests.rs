@@ -260,6 +260,7 @@ async fn a_listener_reads_only_a_settled_era() {
 /// would be admitted for the length of the swap.
 #[test]
 fn a_transport_swap_is_never_read_as_undetected() {
+    type Read = std::result::Result<Option<bool>, &'static str>;
     let backend = Arc::new(backend());
     let old = http("http://127.0.0.1:9/mcp");
     old.set_detected(Some(false));
@@ -271,7 +272,7 @@ fn a_transport_swap_is_never_read_as_undetected() {
     // Inside the swap, the slot is read without waiting: either a writer
     // holds it (the swap is atomic to readers) or the read lands in the swap
     // and must still see a legacy transport. No thread, no clock.
-    let inside = Arc::new(parking_lot::Mutex::new(None::<Option<Option<bool>>>));
+    let inside = Arc::new(parking_lot::Mutex::new(None::<Read>));
     let (reader, seen) = (Arc::clone(&backend), Arc::clone(&inside));
     *backend.between_listen_and_transport.lock() = Some(Box::new(move || {
         *seen.lock() = Some(reader.try_connected_streamable());
@@ -287,8 +288,8 @@ fn a_transport_swap_is_never_read_as_undetected() {
         )
         .expect("published");
     match inside.lock().take().expect("the swap ran its hook") {
-        None => {} // the swap held the slot: no reader could land in it
-        Some(read) => assert_eq!(
+        Err(_) => {} // the swap held the slot: no reader could land in it
+        Ok(read) => assert_eq!(
             read,
             Some(false),
             "a reader inside the swap saw an undetected transport"

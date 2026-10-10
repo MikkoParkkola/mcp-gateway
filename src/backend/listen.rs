@@ -115,13 +115,18 @@ impl Backend {
         flavour_of(&entry, installed.as_ref())
     }
 
-    /// [`Self::connected_streamable`] without waiting: `None` while a writer
+    /// [`Self::connected_streamable`] without waiting: `Err` while a writer
     /// holds the slot's transport, as a publish does across its swap.
     #[cfg(test)]
-    pub(crate) fn try_connected_streamable(&self) -> Option<Option<bool>> {
+    pub(crate) fn try_connected_streamable(
+        &self,
+    ) -> std::result::Result<Option<bool>, &'static str> {
         let entry = self.shared_entry();
-        let installed = entry.transport.try_read()?;
-        Some(flavour_of(&entry, installed.as_ref()))
+        let installed = entry
+            .transport
+            .try_read()
+            .ok_or("a writer holds the slot")?;
+        Ok(flavour_of(&entry, installed.as_ref()))
     }
 
     /// Install `transport` in the shared slot as a start publishes one.
