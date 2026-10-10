@@ -393,9 +393,10 @@ class MovedRows(unittest.TestCase):
         self.assertTrue(any("src/b.rs" in e for e in errors), errors)
 
     def test_m8_closing_braces_freed_by_deletion_carry_nothing(self):
-        # Trivial lines do not match: deleting code from a listed file frees
-        # its `}` lines, which a fabricated file may not claim.
-        source = [x for i in range(500) for x in (f"    fn f{i}() {{", "    }")]
+        # Deleting a brace-heavy file frees 900 `}` lines; uncapped, they
+        # would fund a fabricated 900-line file of braces. Trivial lines
+        # carry only alongside code carried with them, so it earns nothing.
+        source = [f"    fn f{i}() {{" for i in range(100)] + ["    }"] * 900
         fake = ["}"] * 900
         errors = self.ratchet(
             {"src/a.rs": 1000},
@@ -417,6 +418,19 @@ class MovedRows(unittest.TestCase):
             {"src/b.rs": text(part), "src/z.rs": text(code(7000, 5))},
         )
         self.assertTrue(any("total" in e for e in errors), errors)
+
+    def test_m12_one_moved_file_funds_one_copy(self):
+        # Each moved line is spent once: two copies of a removed file cannot
+        # both carry it. The second copy (by path order) is refused.
+        lines = code(0, 1000)
+        errors = self.ratchet(
+            {"src/a.rs": 1000},
+            {"src/b.rs": 1000, "src/c.rs": 1000},
+            {"src/a.rs": text(lines)},
+            {"src/a.rs": "", "src/b.rs": text(lines), "src/c.rs": text(lines)},
+        )
+        self.assertFalse(any("src/b.rs" in e for e in errors), errors)
+        self.assertTrue(any("src/c.rs" in e and "carries only" in e for e in errors), errors)
 
     def test_m10_a_new_file_carrying_a_handful_of_moved_lines_fails(self):
         # Excess 1, but 796 of its 801 lines are new: a move carries nearly
