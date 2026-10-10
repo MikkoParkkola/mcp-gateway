@@ -53,7 +53,9 @@ impl Idp {
 
     /// An ID token for `sub`, with `claims` merged over the defaults.
     fn token(&self, sub: &str, claims: &Value) -> String {
-        let now = chrono::Utc::now().timestamp();
+        let now =
+            i64::try_from(crate::clock::unix_secs().expect("the test host clock reads after 1970"))
+                .expect("fits");
         let mut body = json!({
             "iss": ISS, "sub": sub, "aud": AUD, "groups": ["staff"],
             "iat": now - 5, "exp": now + 3600,
@@ -206,7 +208,7 @@ async fn unverifiable_input_on_a_public_path_keeps_the_public_fall_through() {
     let mut forged = idp.token("", &json!({}));
     forged.push('x');
     let unknown_issuer = idp.token("", &json!({ "iss": "https://idp-unknown.example" }));
-    let expired = idp.token("", &json!({ "exp": chrono::Utc::now().timestamp() - 600 }));
+    let expired = idp.token("", &json!({ "exp": i64::try_from(crate::clock::unix_secs().expect("clock")).expect("fits") - 600 }));
     for (case, bearer) in [
         ("named stored token", Some(STORED_NAMED)),
         ("named bearer", Some(named.as_str())),
