@@ -75,6 +75,8 @@ SWEPT_AREAS = (
     "src/oauth/storage.rs",
     "src/oauth/token_file.rs",
     "src/gateway/server/stdio",
+    # MIK-8195 W8: the stdio read judge.
+    "src/gateway/outbound/stdio.rs",
 )
 # Diffing against git's empty tree reads every line of <head> as added.
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
@@ -93,6 +95,10 @@ PREFIXES = (
     "src/personal_accounts/",
     "src/config/account_bindings.rs",
     "src/identity_propagation/",
+    # MIK-8195 W8 (lead ruling 2026-10-10): the stdio read judge. The rest of
+    # src/gateway/outbound/ joins under MIK-8321. Inventory and probe surface
+    # only: critical_path_coverage.py PATHS does not grade it as a path.
+    "src/gateway/outbound/stdio.rs",
 )
 
 FN = re.compile(r'^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?(?:extern\s+(?:"[^"]*"\s+)?)?fn\s+([A-Za-z_]\w*)')
