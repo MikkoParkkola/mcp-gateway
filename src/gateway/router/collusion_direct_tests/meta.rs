@@ -544,3 +544,6 @@ async fn meta_grant_decision_failure_leaves_no_receipt() {
 
 #[path = "meta/writes.rs"]
 mod writes;
+/// MIK-8340 row 7 over HTTP.
+#[path = "meta/withheld.rs"]
+mod withheld;

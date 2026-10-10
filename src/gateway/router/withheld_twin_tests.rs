@@ -207,8 +207,26 @@ pub(super) async fn twin(spec: Spec) -> Twin {
     twin_built(spec, |meta| meta).await
 }
 
+/// Which router fixture a twin is built on.
+#[derive(Clone, Copy)]
+pub(super) enum Kind {
+    /// Firewalled, writing audit rows: the default.
+    Audited,
+    /// Hardened posture with message signing armed (personal keys).
+    Signed,
+}
+
 /// [`twin`] with `arm` applied to the Meta-MCP after surfacing.
 pub(super) async fn twin_built(spec: Spec, arm: impl FnOnce(MetaMcp) -> MetaMcp) -> Twin {
+    twin_of(Kind::Audited, spec, arm).await
+}
+
+/// [`twin_built`] on the fixture `kind`.
+pub(super) async fn twin_of(
+    kind: Kind,
+    spec: Spec,
+    arm: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Twin {
     let dir = tempfile::tempdir().expect("tempdir");
     let audit = dir.path().join("audit.jsonl");
     let calls = Arc::new(AtomicUsize::new(0));
@@ -217,10 +235,14 @@ pub(super) async fn twin_built(spec: Spec, arm: impl FnOnce(MetaMcp) -> MetaMcp)
         calls: Arc::clone(&calls),
     });
     let surfaced = spec.surfaced_on("alpha");
-    let fx = fixture_audited_built_on(transport, audit.clone(), move |meta| {
-        arm(meta.with_surfaced_tools(surfaced))
-    })
-    .await;
+    let build = move |meta: MetaMcp| arm(meta.with_surfaced_tools(surfaced));
+    let fx = match kind {
+        Kind::Audited => fixture_audited_built_on(transport, audit.clone(), build).await,
+        Kind::Signed => {
+            super::direct_guards_fixture::fixture_hardened_signed_built_on(transport, false, build)
+                .await
+        }
+    };
     for name in ["alpha", "alpha-pt"] {
         let backend = fx.state.backends.get(name).expect("fixture backend");
         backend.get_tools_shared().await.expect("warm the catalogue");

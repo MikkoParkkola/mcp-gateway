@@ -87,6 +87,9 @@ async fn row3_unsolicited_answers_answer_as_absent() {
 /// Row 2 (ORACLE.1): a well-formed envelope this caller was minted for
 /// another call (the asking tool's question) answers on a withheld name as
 /// on an absent one. RED on base.
+/// The envelope names its server, so the absent twin reaches the policy check
+/// and answers 403 "blocked by client policy"; after the fix the withheld name
+/// answers that same 403.
 #[tokio::test]
 async fn row2_envelope_for_another_call_answers_as_absent() {
     use super::withheld_twin_tests::ASKING;
@@ -306,4 +309,48 @@ async fn row8_withheld_call_parks_no_idempotency_key() {
         reuse.body,
         probe.body
     );
+}
+
+/// Row 8, nonce half (ORACLE.3): on the signed fixture, a withheld call
+/// under signing nonce N, then an allowed call (the sibling) under N, ends as
+/// the same sequence after an absent-name call; and that reuse dispatches as
+/// the sibling's probe under N on an untouched fixture. Withheld and absent
+/// sequences run on fresh fixtures, so each cell names the call that spent N.
+#[tokio::test]
+async fn row8_withheld_call_spends_no_signing_nonce() {
+    use super::withheld_twin_tests::{Kind, SIBLING, twin_of};
+    use crate::gateway::meta_mcp::signing::NONCE_META;
+    let spec = Spec::of(Reason::Policy, Side::Withheld);
+    let signed = json!({"_meta": {NONCE_META: "wh-8-nonce"}});
+    // A trace id is minted per call, and the signature covers it.
+    let untraced = |mut body: Value| {
+        if let Some(result) = body["result"].as_object_mut() {
+            result.remove("trace_id");
+        }
+        if let Some(signature) = body["result"]["_signature"].as_object_mut() {
+            signature.remove("sig");
+        }
+        body
+    };
+    let probe = twin_of(Kind::Signed, spec, |meta| meta)
+        .await
+        .call_modern(SIBLING, &signed)
+        .await;
+    assert_eq!(probe.calls, 1, "premise: the probe did not dispatch: {}", probe.body);
+    let mut cells = Vec::new();
+    for (label, first) in [("withheld", spec.tool), ("absent", "no_such_tool")] {
+        let fx = twin_of(Kind::Signed, spec, |meta| meta).await;
+        let refused = fx.call_modern(first, &signed).await;
+        assert!(refused.body.get("error").is_some(), "premise: {}", refused.body);
+        let reuse = fx.call_modern(SIBLING, &signed).await;
+        if (reuse.status, untraced(reuse.body.clone()))
+            != (probe.status, untraced(probe.body.clone()))
+        {
+            cells.push(format!(
+                "row 8 nonce ({label} first): reuse {} {} vs untouched {}",
+                reuse.status, reuse.body, probe.body
+            ));
+        }
+    }
+    assert_cells("row 8 nonce", &cells);
 }

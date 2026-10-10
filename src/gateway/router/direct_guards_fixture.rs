@@ -396,6 +396,19 @@ pub(crate) async fn fixture_hardened_signed_built(
     fx
 }
 
+/// [`fixture_hardened_signed_built`] with `transport` answering for both
+/// backends (the MIK-8340 twin's signed variant).
+pub(crate) async fn fixture_hardened_signed_built_on(
+    transport: Arc<dyn Transport>,
+    require_nonce: bool,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
+    let fx = fixture_hardened_signed_built(Answer::Ok, require_nonce, build).await;
+    TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
 /// `meta` with message signing armed under [`SIGNING_KEY`].
 fn signing(mut meta: MetaMcp, require_nonce: bool) -> MetaMcp {
     meta.enable_message_signing(

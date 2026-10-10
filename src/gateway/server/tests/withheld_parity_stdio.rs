@@ -214,6 +214,9 @@ async fn row1_stdio_bogus_request_state_answers_as_absent() {
 }
 
 /// Row 2 stdio (ORACLE.1): an envelope minted for the asking tool. RED.
+/// The envelope names its server, so the absent twin reaches the policy check
+/// and answers 403 "blocked by client policy"; after the fix the withheld name
+/// answers that same 403.
 #[tokio::test]
 async fn row2_stdio_envelope_for_another_call_answers_as_absent() {
     let spec = Spec::of(Reason::Policy, Side::Withheld);
