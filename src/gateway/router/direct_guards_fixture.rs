@@ -437,17 +437,12 @@ fn fixture_auth() -> AuthConfig {
     auth
 }
 
-/// The rebuilt Meta-MCP keeps the state's admission store: sync calls and
-/// tasks share one, as `server/task_runtime.rs` wires it.
-async fn fixture_inner(
-    answer: Answer,
-    #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
-    build: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> Fx {
+/// The router state the per-thread knobs ask for.
+async fn fixture_state() -> (Arc<super::AppState>, tempfile::TempDir) {
     let auth = fixture_auth();
     let hardened = HARDENED.with(std::cell::Cell::get);
     let modern_off = MODERN_OFF.with(std::cell::Cell::get);
-    let (mut state, store) = if hardened || modern_off {
+    if hardened || modern_off {
         let mut config = crate::config::Config::default();
         if hardened {
             config.security.posture = crate::security::SecurityPosture::Hardened;
@@ -460,7 +455,17 @@ async fn fixture_inner(
         super::tests::test_router_app_state_with_auth_and_key_server(&auth, Some(key_server)).await
     } else {
         test_router_app_state_with_auth(&auth).await
-    };
+    }
+}
+
+/// The rebuilt Meta-MCP keeps the state's admission store: sync calls and
+/// tasks share one, as `server/task_runtime.rs` wires it.
+async fn fixture_inner(
+    answer: Answer,
+    #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    let (mut state, store) = fixture_state().await;
     let (calls, seen) = (Arc::new(AtomicUsize::new(0)), Arc::default());
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     for (name, passthrough) in [("alpha", false), ("alpha-pt", true)] {

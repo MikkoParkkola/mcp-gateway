@@ -105,7 +105,26 @@ impl KeyServer {
         &self,
         token: &str,
     ) -> Option<(AuthenticatedClient, TemporaryToken)> {
-        let temp = self.store.get(token).await?;
+        self.lookup(token).await.valid()
+    }
+
+    /// [`validate_token`](Self::validate_token) with the reason a presented
+    /// token is not a credential kept (MIK-8286): `Nameless` when the store
+    /// holds it but its identity names no one, so the auth middleware refuses
+    /// it on every path instead of falling through to the anonymous client.
+    /// A stored identity is checked here, when it is read back, never trusted
+    /// because it was valid when written: `TokenStore` is a public trait, so a
+    /// store may hand back anything.
+    pub(crate) async fn lookup(
+        &self,
+        token: &str,
+    ) -> KeyServerLookup<(AuthenticatedClient, TemporaryToken)> {
+        let Some(temp) = self.store.get(token).await else {
+            return KeyServerLookup::Absent;
+        };
+        if !crate::identity_grants::names_someone(&temp.identity.issuer, &temp.identity.subject) {
+            return KeyServerLookup::Nameless;
+        }
 
         let actor = oidc_client_identity_key(&temp.identity);
         let client = AuthenticatedClient {
@@ -133,7 +152,7 @@ impl KeyServer {
         let ev = AuditEvent::used(&temp, None);
         audit::emit(&ev);
 
-        Some((client, temp))
+        KeyServerLookup::Valid((client, temp))
     }
 
     /// Verify a raw OIDC ID token (JWT) presented directly as a bearer
@@ -151,24 +170,48 @@ impl KeyServer {
         &self,
         token: &str,
     ) -> Option<(AuthenticatedClient, VerifiedIdentity)> {
+        self.verify_bearer(token).await.valid()
+    }
+
+    /// [`verify_bearer_identity`](Self::verify_bearer_identity) with the
+    /// reason kept (MIK-8286): `Nameless` only when a configured issuer's key
+    /// verified the signature and the token's identity names no one (the
+    /// verifier's `MissingRequiredClaim("sub")`, raised after the signature
+    /// check). A bad signature, an issuer or key this gateway does not trust,
+    /// an expired token or no matching policy is `Absent`, as before.
+    pub(crate) async fn verify_bearer(
+        &self,
+        token: &str,
+    ) -> KeyServerLookup<(AuthenticatedClient, VerifiedIdentity)> {
         let oidc_config = KeyServerOidcConfig {
             token_age: crate::key_server::TokenAgeCap::MaxIat(self.config.max_oidc_token_age_secs),
         };
         let identity = match self.oidc.verify(token, &oidc_config).await {
             Ok(id) => id,
+            Err(oidc::OidcError::JwtError(e))
+                if matches!(
+                    e.kind(),
+                    jsonwebtoken::errors::ErrorKind::MissingRequiredClaim(claim) if claim == "sub"
+                ) =>
+            {
+                debug!("Delegated OIDC bearer names no subject; refused");
+                return KeyServerLookup::Nameless;
+            }
             Err(e) => {
                 debug!(error = %e, "Delegated OIDC bearer verification failed");
-                return None;
+                return KeyServerLookup::Absent;
             }
         };
 
         // Resolve scopes via the same first-match-wins policy engine. No
         // requested-scope narrowing: a delegated bearer takes the policy's
         // full grant for the identity.
-        let scopes = self
+        let Ok(scopes) = self
             .policy
             .resolve_scopes(&identity, &RequestedScopes::default())
-            .ok()?;
+        else {
+            return KeyServerLookup::Absent;
+        };
 
         let actor = oidc_client_identity_key(&identity);
         let client = AuthenticatedClient {
@@ -191,7 +234,30 @@ impl KeyServer {
             authenticated: true,
             credential_kind: crate::security::audit::CredentialKind::OidcBearer,
         };
-        Some((client, identity))
+        KeyServerLookup::Valid((client, identity))
+    }
+}
+
+/// What a presented key-server credential is (MIK-8286).
+#[derive(Debug)]
+pub(crate) enum KeyServerLookup<T> {
+    /// A credential: who it is.
+    Valid(T),
+    /// A credential this gateway recognises (a stored token, or a JWT a
+    /// configured issuer signed) whose identity names no one: refused as
+    /// unauthenticated on every path, never served as anonymous.
+    Nameless,
+    /// Not a credential this key server knows.
+    Absent,
+}
+
+impl<T> KeyServerLookup<T> {
+    /// The credential, if it is one.
+    pub(crate) fn valid(self) -> Option<T> {
+        match self {
+            Self::Valid(found) => Some(found),
+            Self::Nameless | Self::Absent => None,
+        }
     }
 }
 

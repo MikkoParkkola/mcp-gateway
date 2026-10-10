@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::*;
-use std::convert::Infallible;
-use std::future::{Ready, ready};
 
 use axum::http::Request;
 use rcgen::string::Ia5String;
@@ -55,36 +53,31 @@ fn peer_chain_identity_rejects_malformed_certificate() {
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
 }
 
-#[test]
-fn peer_cert_identity_service_inserts_identity_extension() {
+#[tokio::test]
+async fn peer_cert_identity_service_inserts_identity_extension() {
+    use tower::ServiceExt;
+
     let identity = CertIdentity {
         san_uris: vec!["spiffe://example.test/agent/alpha".to_owned()],
         display_name: "spiffe://example.test/agent/alpha".to_owned(),
         ..CertIdentity::default()
     };
-    let mut service = PeerCertIdentityLayer::new(Some(identity.clone())).layer(EchoIdentity);
-
-    let inserted_identity = futures::executor::block_on(service.call(Request::new(())))
-        .expect("echo service should not fail");
-
-    assert_eq!(inserted_identity, Some(identity));
-}
-
-#[derive(Clone)]
-struct EchoIdentity;
-
-impl Service<Request<()>> for EchoIdentity {
-    type Response = Option<CertIdentity>;
-    type Error = Infallible;
-    type Future = Ready<Result<Self::Response, Self::Error>>;
-
-    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, request: Request<()>) -> Self::Future {
-        ready(Ok(request.extensions().get::<CertIdentity>().cloned()))
-    }
+    let echo = axum::Router::new().route(
+        "/",
+        axum::routing::get(|cert: Option<axum::Extension<CertIdentity>>| async move {
+            cert.map(|axum::Extension(cert)| cert.display_name)
+                .unwrap_or_default()
+        }),
+    );
+    let app = PeerCertIdentityLayer::new(Some(identity.clone())).layer(echo);
+    let response = app
+        .oneshot(Request::get("/").body(axum::body::Body::empty()).unwrap())
+        .await
+        .expect("the router does not fail");
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(bytes, identity.display_name.as_bytes());
 }
 
 /// Behind an HTTPS `public_url` in any letter case, matching the cookie's

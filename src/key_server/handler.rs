@@ -332,14 +332,22 @@ async fn revoke_tokens_by_subject(
             "issuer is required: an OIDC identity is (issuer, subject)",
         );
     };
-    let count = ks.store.revoke_by_subject(&issuer, &params.subject).await;
-    let actor = VerifiedIdentity {
-        subject: params.subject.clone(),
-        email: String::new(),
-        name: None,
-        groups: Vec::new(),
-        issuer: issuer.clone(),
+    // An empty subject names no one: refused before anything is revoked
+    // (MIK-8286).
+    let Some(actor) = VerifiedIdentity::checked(
+        issuer.clone(),
+        params.subject.clone(),
+        String::new(),
+        None,
+        Vec::new(),
+    ) else {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "subject is required: an OIDC identity is (issuer, subject)",
+        );
     };
+    let count = ks.store.revoke_by_subject(&issuer, &params.subject).await;
     let ev = AuditEvent::revoked(&format!("bulk:{}", actor.stable_actor_id()), None);
     audit::emit(&ev);
 

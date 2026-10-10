@@ -150,6 +150,26 @@ pub struct VerifiedIdentity {
 }
 
 impl VerifiedIdentity {
+    /// The only way production code builds a caller's verified identity
+    /// (MIK-8286): `None` when the issuer or the subject is empty, since such
+    /// an identity names nobody and its actor id would merge every such
+    /// caller at the issuer.
+    pub(crate) fn checked(
+        issuer: String,
+        subject: String,
+        email: String,
+        name: Option<String>,
+        groups: Vec<String>,
+    ) -> Option<Self> {
+        crate::identity_grants::names_someone(&issuer, &subject).then_some(Self {
+            subject,
+            email,
+            name,
+            groups,
+            issuer,
+        })
+    }
+
     /// Stable, collision-safe actor identifier derived from `issuer` + `subject`.
     ///
     /// A naive `format!("oidc:{issuer}:{subject}")` collides when an issuer
@@ -588,12 +608,20 @@ impl OidcVerifier {
             }
         }
 
-        Ok(VerifiedIdentity {
-            subject: claims.sub,
+        // An empty `sub` names nobody (OIDC Core requires one): refused as a
+        // missing required claim, so no identity that collapses every such
+        // token at the issuer is ever made (MIK-8287).
+        VerifiedIdentity::checked(
+            claims.iss,
+            claims.sub,
             email,
-            name: claims.name,
-            groups: claims.groups.unwrap_or_default(),
-            issuer: claims.iss,
+            claims.name,
+            claims.groups.unwrap_or_default(),
+        )
+        .ok_or_else(|| {
+            OidcError::JwtError(jsonwebtoken::errors::Error::from(
+                jsonwebtoken::errors::ErrorKind::MissingRequiredClaim("sub".to_owned()),
+            ))
         })
     }
 

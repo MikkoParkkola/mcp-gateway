@@ -514,3 +514,44 @@ fn a_stalled_read_through_the_public_reader_does_not_hold_the_runtime_drop() {
         "dropping the runtime waited on a stalled read from the public reader"
     );
 }
+
+/// MIK-8286 R11: the caller-identity constructors refuse an identity that
+/// names no one (an empty authority or issuer, or an empty subject), accept
+/// any non-empty name (the predicate does not judge names: the certificate
+/// refusal is its own check), and keep a named identity's fields byte for
+/// byte. Mutants: either emptiness test in `names_someone` removed.
+#[test]
+fn caller_identity_constructors_refuse_an_identity_that_names_no_one() {
+    use crate::key_server::oidc::VerifiedIdentity;
+
+    assert!(GrantSubject::checked("", "alice", None).is_none());
+    assert!(GrantSubject::checked("mtls", "", None).is_none());
+    let placeholder = GrantSubject::checked("mtls", "<unknown>", None);
+    assert!(placeholder.is_some(), "a literal name is still a name");
+    let named = GrantSubject::checked("https://idp.example", " alice ", Some("A".into())).unwrap();
+    assert_eq!(named.authority, "https://idp.example");
+    assert_eq!(named.subject, " alice ", "verified bytes are never trimmed");
+    assert_eq!(named.label.as_deref(), Some("A"));
+
+    let id = |issuer: &str, subject: &str| {
+        VerifiedIdentity::checked(
+            issuer.to_owned(),
+            subject.to_owned(),
+            "a@corp.invalid".to_owned(),
+            None,
+            vec!["g".to_owned()],
+        )
+    };
+    assert!(id("", "alice").is_none());
+    assert!(id("https://idp.example", "").is_none());
+    let named = id("https://idp.example", "alice").unwrap();
+    assert_eq!(
+        (
+            named.issuer.as_str(),
+            named.subject.as_str(),
+            named.email.as_str()
+        ),
+        ("https://idp.example", "alice", "a@corp.invalid")
+    );
+    assert_eq!(named.groups, vec!["g".to_owned()]);
+}
