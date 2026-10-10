@@ -36,13 +36,19 @@ Usage:
 
 from __future__ import annotations
 
+import importlib.util
 import re
 import subprocess
 import sys
-from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+# The moved-text matcher, shared with the timing-allowlist ratchet (MIK-8291).
+_SPEC = importlib.util.spec_from_file_location(
+    "ratchet_moves", Path(__file__).resolve().parents[1] / "dev" / "ratchet_moves.py"
+)
+ratchet_moves = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(ratchet_moves)
 BASELINE = "docs/release/mik-8202-clock-baseline.tsv"
 # The one module that may read the wall clock.
 EXEMPT = {"src/clock.rs"}
@@ -158,18 +164,16 @@ def grown(
     out = []
     if sum(baseline.values()) > sum(base.values()):
         out.append(f"the baseline total rose {sum(base.values())} -> {sum(baseline.values())}; it may only shrink")
-    moved: Counter[str] = Counter()
-    for path, n in base.items():
-        if baseline.get(path, 0) < n:
-            moved += Counter(base_lines.get(path, [])) - Counter(head_lines.get(path, []))
+    shrunk = [path for path, n in base.items() if baseline.get(path, 0) < n]
+    moved = ratchet_moves.gone(base_lines, head_lines, shrunk)
+    new_rows = {path: head_lines.get(path, []) for path in baseline if path not in base}
+    carried_by = ratchet_moves.carry(new_rows, moved)
     for path, n in sorted(baseline.items()):
         if path in base:
             if n > base[path]:
                 out.append(f"{path}: baseline {n} > base {base[path]}; the baseline may only shrink")
             continue
-        took = Counter(head_lines.get(path, [])) & moved
-        moved -= took
-        carried = sum(took.values())
+        carried = carried_by[path]
         if n > carried:
             out.append(
                 f"{path}: a new row of {n} carries only {carried} read(s) moved from a shrinking"

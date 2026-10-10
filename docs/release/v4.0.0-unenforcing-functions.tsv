@@ -246,8 +246,6 @@ src/gateway/task_service/store_expiry.rs	expired_candidates	1	Snapshots terminal
 src/gateway/task_service/store_expiry.rs	interrupted	1	Selects non-terminal rows for startup recovery
 src/gateway/task_service/store_expiry.rs	skipped_records	1	Getter for skipped-row counts
 src/gateway/task_service/store_input.rs	close_round	1	Async hop to close_round_blocking, where ownership is checked
-src/gateway/task_service/store_input.rs	now	1	Clock source for deadline decisions (wall time in production)
-src/gateway/task_service/store_input.rs	now	2	Forwards the store clock
 src/gateway/task_service/store_input.rs	provide_input	1	Async hop to provide_input_blocking, where ownership and outstanding keys are checked
 src/gateway/task_service/store_input.rs	reason	1	Formats the round-closed sentence
 src/gateway/task_service/store_input.rs	require_input	1	Async hop to require_input_blocking, where ownership is checked
