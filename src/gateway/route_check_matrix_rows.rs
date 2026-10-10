@@ -199,3 +199,40 @@ async fn response_firewall_rows() {
         );
     }
 }
+
+/// MrtrUndeclared: a backend question of a type the client never declared is
+/// refused with the MRTR.9 capability refusal (-32021, naming the undeclared
+/// capability), after exactly one backend send, on every sending route.
+#[tokio::test]
+async fn mrtr_undeclared_rows() {
+    for route in [Route::Invoke, Route::Direct, Route::Stdio] {
+        assert_eq!(
+            expect(MethodKind::ToolsCall, route, Stage::MrtrUndeclared),
+            Expect::Applies,
+            "{route:?}"
+        );
+        let (body, backend_calls) = match route {
+            Route::Invoke => {
+                let sent = router::invoke_asking().await;
+                (sent.body, sent.backend_calls)
+            }
+            Route::Direct => {
+                let sent = router::direct_asking().await;
+                (sent.body, sent.backend_calls)
+            }
+            Route::Stdio => {
+                let sent = stdio::stdio_asking().await;
+                (sent.body, sent.backend_calls)
+            }
+            other => unreachable!("not driven here: {other:?}"),
+        };
+        assert_eq!(body["error"]["code"], -32021, "{route:?}: {body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("the client did not declare")),
+            "{route:?}: refused, but not by the MRTR.9 gate: {body}"
+        );
+        assert_eq!(backend_calls, 1, "{route:?}: the question was asked once: {body}");
+    }
+}

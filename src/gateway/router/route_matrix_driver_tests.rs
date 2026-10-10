@@ -87,3 +87,20 @@ pub(crate) async fn direct_answering(text: &'static str) -> Sent {
         .await;
     sent(&fx, body)
 }
+
+/// R1 `/mcp` `gateway_invoke alpha read` whose backend asks one elicitation
+/// question the client never declared.
+pub(crate) async fn invoke_asking() -> Sent {
+    let fx = super::direct_guards_fixture::fixture(Answer::AskOnce, |_| {}).await;
+    let (_, body) = post_meta_invoke(&fx, "k-std", "alpha", "read", serde_json::json!({}), None, None)
+        .await;
+    sent(&fx, body)
+}
+
+/// R3 `/mcp/alpha` `tools/call read` whose backend asks the same question.
+pub(crate) async fn direct_asking() -> Sent {
+    let fx = super::direct_guards_fixture::fixture(Answer::AskOnce, |_| {}).await;
+    let (_, body) = post_direct(&fx, "alpha", "k-std", "read", serde_json::json!({}), None, None)
+        .await;
+    sent(&fx, body)
+}

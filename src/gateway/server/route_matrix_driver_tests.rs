@@ -20,8 +20,8 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 struct Counting {
     calls: Arc<AtomicUsize>,
     seen: Arc<std::sync::Mutex<Vec<Value>>>,
-    /// The text every `tools/call` answers.
-    answer: &'static str,
+    /// The result every `tools/call` answers.
+    answer: Value,
 }
 
 #[async_trait::async_trait]
@@ -35,7 +35,7 @@ impl crate::transport::Transport for Counting {
                 .lock()
                 .expect("seen lock")
                 .push(params.unwrap_or_default());
-            json!({ "content": [{ "type": "text", "text": self.answer }], "isError": false })
+            self.answer.clone()
         };
         Ok(JsonRpcResponse::success(RequestId::Number(1), body))
     }
@@ -66,7 +66,7 @@ pub(crate) struct Sent {
 async fn stdio_call(
     firewall: Option<Arc<crate::security::firewall::Firewall>>,
     args: Value,
-    answer: &'static str,
+    answer: Value,
 ) -> Sent {
     let calls = Arc::new(AtomicUsize::new(0));
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -131,10 +131,29 @@ pub(crate) async fn stdio_firewalled_answering(
         },
         None,
     ));
-    stdio_call(Some(firewall), args, answer).await
+    stdio_call(Some(firewall), args, text_result(answer)).await
 }
 
 /// R5 with no firewall: what the stdio route itself does to the arguments.
 pub(crate) async fn stdio_plain(args: Value) -> Sent {
-    stdio_call(None, args, "ok").await
+    stdio_call(None, args, text_result("ok")).await
+}
+
+/// A plain text tool result.
+fn text_result(text: &str) -> Value {
+    json!({ "content": [{ "type": "text", "text": text }], "isError": false })
+}
+
+/// R5 with no firewall, the backend asking one elicitation question the
+/// client never declared.
+pub(crate) async fn stdio_asking() -> Sent {
+    let question = json!({
+        "resultType": "input_required",
+        "inputRequests": { "k1": {
+            "method": "elicitation/create",
+            "params": { "message": "Which account?", "requestedSchema": { "type": "object" } }
+        }},
+        "requestState": "backend-state-1"
+    });
+    stdio_call(None, json!({}), question).await
 }
