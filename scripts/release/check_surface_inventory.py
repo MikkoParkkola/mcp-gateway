@@ -427,8 +427,14 @@ class ConfigWalker:
             name = serde_attr(a, "rename") or rename(f.name, rule)
             fkey = f"{key}.{name}" if key else name
             self.emit(fkey, item.file, f.line, fnote)
-            if serde_attr(a, "with") is None and serde_attr(a, "deserialize_with") is None:
+            if serde_attr(a, "with") is None and serde_attr(a, "deserialize_with") in (None, *SAME_KEYS_DESERIALIZERS):
                 self.walk_type(f.ty, fkey, item.file, f.line, fnote, seen)
+
+
+# Custom deserializers that read the declared type with its own keys, so the
+# walker keeps descending through them: `null_as_default` only maps a YAML null
+# to the default and defers everything else to the type (MIK-8299).
+SAME_KEYS_DESERIALIZERS = ("null_as_default",)
 
 
 def extract_config() -> list[Entry]:
