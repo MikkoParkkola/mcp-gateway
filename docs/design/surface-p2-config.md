@@ -46,7 +46,7 @@ read and validated, out of the reference, listed by `doctor` when set).
 
 With `url`, the ESSENTIAL backend keys become `command`, `url`, `env`, `headers` and `enabled`.
 
-The 13 AUTO rows from the P1 inventory are implemented in the same increment (P2c). Each keeps an
+The 12 AUTO rows from the P1 inventory are implemented in the same increment (P2c). Each keeps an
 explicit value honoured as a hidden key, and each gets a red-first test of the derived value:
 
 | P1 AUTO row | Derivation |
@@ -56,9 +56,17 @@ explicit value honoured as a hidden key, and each gets a red-first test of the d
 | `backends.<name>.protocol_version` | negotiated in `initialize` (already) |
 | `backends.<name>.streamable_http` | detected at connect (already) |
 | `key_server.oidc[].auto_discover` | OIDC discovery first, then `{issuer}/.well-known/jwks.json`; `jwks_uri` still overrides |
-| `meta_mcp.prompts_resources_fetch_timeout` | unset: min(the backend's `timeout`, 10 s) |
 | `--capabilities` on `skills generate` and `tool completions/inspect/invoke/list` (5 rows), `MCP_GATEWAY_CAPABILITIES` | derived from every entry of the loaded config's `capabilities.directories`, in order. Precedence: the flag, then the variable, then the config. Flag and variable stay as hidden overrides |
 | `validate --no-color` | colour follows the terminal and `NO_COLOR`; hidden flag |
+
+`meta_mcp.prompts_resources_fetch_timeout` was the thirteenth AUTO row, derived as
+min(the backend's `timeout`, 10 s) for the whole fetch. MIK-8285 struck that: a prompts or
+resources list drains `nextCursor` pages, one request each, so a backend whose every page answers
+within its `timeout` can still take longer in total, and a whole-fetch deadline at that `timeout`
+would drop it from every list. The key is INTERNAL instead: per request, the backend's `timeout`
+(HTTP session recovery may add one re-initialization and resend); whole fetch, 10 s unless set.
+That is today's behaviour, so P2c builds nothing for it.
+
 ## Kept as operator decisions (challenged and rejected as AUTO)
 
 | Key | Proposed derivation | Why it stays an operator decision |
@@ -124,7 +132,7 @@ One open PR at a time, each merged and closed before the next.
 |---|---|---|
 | P2a | This design, reviewed | none |
 | P2b | Hidden keys: one table in code of every INTERNAL and AUTO config key and variable (generated from the inventory and checked against it), `doctor` lists the ones a config sets, and the validators stay as they are | yes |
-| P2c | Deterministic AUTO: backend `url` with `http_url`/`ws_url` as hidden aliases; `transparency_log.enabled` defaults on with auth; the 13 P1 AUTO rows | yes |
+| P2c | Deterministic AUTO: backend `url` with `http_url`/`ws_url` as hidden aliases; `transparency_log.enabled` defaults on with auth; the 12 P1 AUTO rows | yes |
 | P2d | REMOVE keys refused at load naming the replacement. `upgrade` deletes the dead ones; `auth.api_keys[].key` is migrated, not deleted: `upgrade` writes `key_sha256` from the plaintext (the `hash-key` path) and leaves the entry unchanged if the key cannot be resolved | yes |
 | P2e | Posture A kept: `init` prints one line saying `/mcp` is open to local processes and how to require the token; a tokenless loopback `/mcp` refuses a POST without the MCP `Content-Type` and `Accept` headers | yes |
 | P2f | Docs: tier column in the inventory; the reference, `gateway.example.yaml` and QUICKSTART lead with ESSENTIAL and list no non-KEEP key; `init` writes ESSENTIAL keys plus the posture-A declarations (`single_user`, `public_paths`), which stay although ADVANCED; the minimal setup fits one screen | docs and `init` |

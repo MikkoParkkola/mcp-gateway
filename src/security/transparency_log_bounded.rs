@@ -56,6 +56,10 @@ pub(crate) struct Bound {
     /// Runs once when a timeout is noticed, before the stall lock is taken.
     #[cfg(test)]
     pub(crate) before_mark: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Notified when a write clears its generation, so a test waits for the
+    /// clear itself rather than polling for it (MIK-8294).
+    #[cfg(test)]
+    cleared: std::sync::Condvar,
 }
 
 impl Default for Bound {
@@ -76,6 +80,8 @@ impl Default for Bound {
             limit: std::sync::Mutex::new(AUDIT_APPEND_TIMEOUT),
             #[cfg(test)]
             before_mark: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            cleared: std::sync::Condvar::new(),
         }
     }
 }
@@ -177,6 +183,8 @@ impl TransparencyLogger {
             {
                 s.in_flight = None;
                 s.stalled = false;
+                #[cfg(test)]
+                logger.bound.cleared.notify_all();
             }
             drop(permit);
             result
@@ -264,6 +272,19 @@ impl TransparencyLogger {
             .expect("stall lock")
             .in_flight
             .is_some()
+    }
+
+    /// Block until no write is in the kernel, for at most `bound`; false when
+    /// the bound passed first. Woken by the write's own clear, which runs on
+    /// tokio's blocking pool, so this never needs the thread it blocks.
+    pub(crate) fn wait_write_cleared_for_test(&self, bound: Duration) -> bool {
+        let state = self.bound.state.lock().expect("stall lock");
+        let (state, _) = self
+            .bound
+            .cleared
+            .wait_timeout_while(state, bound, |s| s.in_flight.is_some())
+            .expect("stall lock");
+        state.in_flight.is_none()
     }
 }
 

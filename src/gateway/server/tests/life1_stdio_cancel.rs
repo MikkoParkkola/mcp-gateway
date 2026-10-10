@@ -21,6 +21,7 @@ use tokio::time::{Instant, timeout};
 
 use crate::config::Config;
 use crate::gateway::Gateway;
+use crate::test_wait::HANG_BOUND;
 
 const BACKEND: &str = "fixture";
 /// Answers its first round with one `elicitation/create`, and a round that
@@ -29,8 +30,15 @@ const ASKING: &str = "needs_input";
 /// Answers after [`SLOW_CALL`], so a cancel can land mid-call.
 const SLOW: &str = "slow";
 const SLOW_CALL: Duration = Duration::from_secs(3);
-/// Bound on every wait for a frame, and the window a frame must not appear in.
-const ARRIVAL: Duration = Duration::from_secs(5);
+/// How long a test watches for a frame that must not appear. A short window
+/// only fails safe (the test passes more often under load, never less), so
+/// this is not a hang bound; waits for a frame that must arrive use
+/// `HANG_BOUND`.
+const ABSENCE_WINDOW: Duration = Duration::from_secs(5);
+/// "`run_stdio_on` returns promptly after EOF", told apart from the drain
+/// bound it would otherwise sit out.
+// timing-oracle: vs 30 s STDIO_DRAIN_TIMEOUT (MIK-8247)
+const EOF_RETURN: Duration = Duration::from_secs(5);
 /// The legacy idempotency key field (`protocol::mrtr::IDEMPOTENCY_KEY_META`).
 const KEY_META: &str = crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 
@@ -156,7 +164,7 @@ async fn send(stdin: &mut DuplexStream, line: &str) {
 }
 
 async fn next_frame(stdout: &mut Stdout) -> Value {
-    let line = timeout(ARRIVAL, stdout.next_line())
+    let line = timeout(HANG_BOUND, stdout.next_line())
         .await
         .expect("a frame arrives within the bound")
         .expect("stdout reads")
@@ -164,14 +172,50 @@ async fn next_frame(stdout: &mut Stdout) -> Value {
     serde_json::from_str(&line).unwrap_or_else(|e| panic!("not one JSON frame ({e}): {line:?}"))
 }
 
-/// Every frame written within `window`, or until stdout ends.
-async fn frames_within(stdout: &mut Stdout, window: Duration) -> Vec<Value> {
+/// Every frame written within `window`, or until stdout ends. For a check
+/// that a frame does NOT appear: a positive assert on this result races the
+/// window (MIK-8295), so use [`frames_until`] for that.
+async fn frames_for_absence(stdout: &mut Stdout, window: Duration) -> Vec<Value> {
     let deadline = Instant::now() + window;
     let mut frames = Vec::new();
     while let Ok(Ok(Some(line))) = tokio::time::timeout_at(deadline, stdout.next_line()).await {
         frames.push(serde_json::from_str(&line).unwrap_or_else(|e| panic!("{e}: {line:?}")));
     }
     frames
+}
+
+/// Frames until `enough` holds for them, failing after `HANG_BOUND`, and then
+/// any more within `settle` (the absence half of a check).
+async fn frames_until(
+    stdout: &mut Stdout,
+    settle: Duration,
+    enough: impl Fn(&[Value]) -> bool,
+) -> Vec<Value> {
+    let deadline = Instant::now() + HANG_BOUND;
+    let mut frames = Vec::new();
+    while !enough(&frames) {
+        let line = tokio::time::timeout_at(deadline, stdout.next_line())
+            .await
+            .unwrap_or_else(|_| panic!("the expected frames never arrived: {frames:?}"))
+            .expect("stdout reads")
+            .unwrap_or_else(|| panic!("stdout ended before the expected frames: {frames:?}"));
+        frames.push(serde_json::from_str(&line).unwrap_or_else(|e| panic!("{e}: {line:?}")));
+    }
+    // timing: absence
+    frames.extend(frames_for_absence(stdout, settle).await);
+    frames
+}
+
+/// Wait until the backend has received `n` `tools/call` rounds.
+async fn until_rounds(served: &Served, n: usize) {
+    let deadline = Instant::now() + HANG_BOUND;
+    while served.rounds.load(Ordering::SeqCst) < n {
+        assert!(
+            Instant::now() < deadline,
+            "the backend never received round {n}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 /// A response (not a request) whose id is `id`.
@@ -243,7 +287,8 @@ async fn cancel_releases_the_held_exchange() {
     let prompt = hold(&mut served, &call(&held, ASKING, None)).await;
     send(&mut served.stdin, &cancel(&held)).await;
     send(&mut served.stdin, &answer(&prompt)).await;
-    let frames = frames_within(&mut served.stdout, ARRIVAL).await;
+    // timing: absence
+    let frames = frames_for_absence(&mut served.stdout, ABSENCE_WINDOW).await;
     assert_eq!(
         served.rounds.load(Ordering::SeqCst),
         1,
@@ -262,14 +307,16 @@ async fn a_cancelled_call_is_joined_before_eof_returns() {
     hold(&mut served, &call(&held, ASKING, None)).await;
     send(&mut served.stdin, &cancel(&held)).await;
     // Let the loop read the cancel before stdin closes.
-    let before = frames_within(&mut served.stdout, Duration::from_millis(500)).await;
+    // timing: absence
+    let before = frames_for_absence(&mut served.stdout, Duration::from_millis(500)).await;
     drop(served.stdin);
     returned_ok(
-        timeout(ARRIVAL, &mut served.task)
+        timeout(EOF_RETURN, &mut served.task)
             .await
-            .unwrap_or_else(|_| panic!("run_stdio_on must return within {ARRIVAL:?} of EOF")),
+            .unwrap_or_else(|_| panic!("run_stdio_on must return within {EOF_RETURN:?} of EOF")),
     );
-    let after = frames_within(&mut served.stdout, Duration::from_millis(500)).await;
+    // timing: absence
+    let after = frames_for_absence(&mut served.stdout, Duration::from_millis(500)).await;
     let frames = [before, after].concat();
     assert!(answers(&frames, &held).is_empty(), "{frames:?}");
 }
@@ -282,7 +329,10 @@ async fn an_unknown_cancel_is_ignored() {
     let list = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
         "params": {"name": "gateway_list_servers", "arguments": {}}});
     send(&mut served.stdin, &list.to_string()).await;
-    let frames = frames_within(&mut served.stdout, ARRIVAL).await;
+    let frames = frames_until(&mut served.stdout, ABSENCE_WINDOW, |f| {
+        !answers(f, &json!(7)).is_empty()
+    })
+    .await;
     assert_eq!(answers(&frames, &json!(7)).len(), 1, "{frames:?}");
     assert!(
         answers(&frames, &json!("never-sent")).is_empty(),
@@ -298,7 +348,10 @@ async fn initialize_is_not_cancelled() {
     let id = json!("init-2");
     let both = format!("{}\n{}", initialize(&id), cancel(&id));
     send(&mut served.stdin, &both).await;
-    let frames = frames_within(&mut served.stdout, ARRIVAL).await;
+    let frames = frames_until(&mut served.stdout, ABSENCE_WINDOW, |f| {
+        !answers(f, &id).is_empty()
+    })
+    .await;
     assert_eq!(answers(&frames, &id).len(), 1, "{frames:?}");
     served.task.abort();
 }
@@ -321,14 +374,16 @@ async fn cancelling_a_finished_call_changes_nothing() {
     send(&mut served.stdin, &list(6)).await;
     let second = next_frame(&mut served.stdout).await;
     assert_eq!(second["id"], json!(6), "{second}");
-    // The first call has long finished; give the loop a beat to reap it, so
-    // the reuse below is a new mapping and not an in-flight duplicate.
-    tokio::time::sleep(Duration::from_millis(200)).await;
     // The finished id, reused for a call that is still running when cancelled.
+    // No wait for the loop to reap the first dispatch: marks are keyed by task,
+    // so reuse before the reap is a supported order (`stdio_dispatches.rs`).
     send(&mut served.stdin, &call(&json!(5), SLOW, None).to_string()).await;
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // The cancel lands mid-call: the backend holds the call for SLOW_CALL.
+    until_rounds(&served, 1).await;
     send(&mut served.stdin, &cancel(&json!(5))).await;
-    let frames = frames_within(&mut served.stdout, SLOW_CALL + ARRIVAL).await;
+    // An uncancelled call would answer at SLOW_CALL: watch past it.
+    // timing: absence
+    let frames = frames_for_absence(&mut served.stdout, SLOW_CALL + ABSENCE_WINDOW).await;
     assert!(
         answers(&frames, &json!(5)).is_empty(),
         "the reused id's call was cancelled, and the finished one was not answered twice: {frames:?}"
@@ -345,7 +400,7 @@ async fn cancelling_a_finished_call_changes_nothing() {
 /// Re-issue `request`'s key under fresh ids until the answer is no longer the
 /// in-flight refusal: the aborted task settles its lease asynchronously.
 async fn settled_reissue(served: &mut Served, tool: &str, key: &str) -> Value {
-    let deadline = Instant::now() + ARRIVAL;
+    let deadline = Instant::now() + HANG_BOUND;
     for attempt in 0.. {
         let id = json!(format!("again-{attempt}"));
         send(&mut served.stdin, &call(&id, tool, Some(key)).to_string()).await;
@@ -392,7 +447,13 @@ async fn a_batched_call_cannot_hold() {
     let mut served = serve(1 << 20).await;
     let batch = json!([call(&json!("b1"), ASKING, None)]);
     send(&mut served.stdin, &batch.to_string()).await;
-    let frames = frames_within(&mut served.stdout, ARRIVAL).await;
+    let answered = |f: &[Value]| {
+        f.iter()
+            .filter_map(Value::as_array)
+            .flatten()
+            .any(|item| item["id"] == json!("b1"))
+    };
+    let frames = frames_until(&mut served.stdout, ABSENCE_WINDOW, answered).await;
     assert!(
         !frames
             .iter()

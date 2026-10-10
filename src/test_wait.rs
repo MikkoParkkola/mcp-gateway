@@ -7,6 +7,8 @@
 use std::ops::ControlFlow;
 use std::time::Duration;
 
+pub(crate) use crate::gateway::test_helpers::HANG_BOUND;
+
 /// How often [`wait_until`] polls.
 const POLL: Duration = Duration::from_millis(20);
 

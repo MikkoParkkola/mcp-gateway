@@ -13,6 +13,13 @@ pub(crate) fn bearer_unauthorized_response(message: &str) -> Response {
     )
 }
 
+/// 401 for a presented identity that names nobody (MIK-8286). No
+/// `WWW-Authenticate: Bearer` challenge: a bearer token is not what is
+/// missing.
+pub(crate) fn unauthenticated_response(message: &str) -> Response {
+    jsonrpc_error_response(StatusCode::UNAUTHORIZED, -32000, message, None)
+}
+
 pub(crate) fn forbidden_response(message: &str) -> Response {
     jsonrpc_error_response(StatusCode::FORBIDDEN, -32003, message, None)
 }
