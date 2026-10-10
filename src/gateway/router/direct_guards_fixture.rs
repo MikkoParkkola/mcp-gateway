@@ -370,7 +370,8 @@ use answers::{call_answer, listing, question};
 use egress::backend_transport;
 #[cfg(feature = "firewall")]
 pub(crate) use egress::{
-    fixture_audited_on, fixture_firewalled_on, fixture_inspecting_on, meta_firewall,
+    fixture_audited_built_on, fixture_audited_on, fixture_firewalled_on, fixture_inspecting_on,
+    meta_firewall,
 };
 pub(crate) use quota::fixture_propagating;
 use quota::{fixture_backend_config, fixture_failsafe, leaked_transparency_log};
@@ -514,7 +515,9 @@ fn fixture_auth() -> AuthConfig {
                 ..key("k-rl")
             },
             ApiKeyConfig {
-                denied_tools: Some(vec!["read".to_string()]),
+                // `gateway_invok` is MIK-8340's near-meta-tool name: one edit
+                // from `gateway_invoke`, withheld from this key by policy.
+                denied_tools: Some(vec!["read".to_string(), "gateway_invok".to_string()]),
                 ..key("k-deny")
             },
         ],

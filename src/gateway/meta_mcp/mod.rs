@@ -802,6 +802,9 @@ pub(super) use test_callers::{anonymous_caller, callback_capability, identified_
 pub(super) mod grant_audit_fixture;
 #[cfg(test)]
 mod grant_decision_audit_tests;
+/// MIK-8340 row 7: a failed grant record on a withheld name answers as absent.
+#[cfg(test)]
+mod grant_withheld_parity_tests;
 #[cfg(test)]
 mod grant_decision_slot_tests;
 #[cfg(test)]

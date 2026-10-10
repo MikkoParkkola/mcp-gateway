@@ -46,6 +46,22 @@ pub(crate) async fn fixture_audited_on(
     fx
 }
 
+/// [`fixture_audited_on`] with the replaced `MetaMcp` armed by `build` (the
+/// MIK-8340 withheld/absent twins: surfacing and caller vary, nothing else).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_audited_built_on(
+    transport: Arc<dyn Transport>,
+    audit: std::path::PathBuf,
+    build: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
+) -> Fx {
+    TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
+    AUDIT_LOG.with(|a| *a.borrow_mut() = Some(audit));
+    let fx = fixture_inner(Answer::Ok, true, build).await;
+    AUDIT_LOG.with(|a| *a.borrow_mut() = None);
+    TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
 /// `transport` behind no firewall, with response inspection in action mode:
 /// only the content inspection can withhold what it answers.
 // Its only consumer is the egress matrix, which is `firewall`-gated.
