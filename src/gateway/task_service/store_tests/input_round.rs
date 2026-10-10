@@ -476,6 +476,20 @@ async fn a_close_is_stamped_at_its_callers_time() {
     assert_eq!(closed.task.last_updated_at(), at(31));
 }
 
+/// A readable store clock that disagrees with the caller does not date the
+/// close either. Mutant: the close stamped at a second read.
+#[tokio::test]
+async fn a_close_ignores_a_readable_store_clock_that_disagrees() {
+    let (_dir, store, task) = opened().await;
+    let revision = parked_with(&store, &task, &["confirm"], due(secs(at(30)))).await;
+    store.set_clock_for_test(Some(at(40)));
+    let closed = store
+        .close_round(OWNER, task.id(), revision, "expired".to_owned(), at(31))
+        .await
+        .expect("an open round closes");
+    assert_eq!(closed.task.last_updated_at(), at(31));
+}
+
 /// Mutant: a settled row closed again (a second terminal write and publish).
 #[tokio::test]
 async fn closing_an_already_settled_round_writes_nothing() {
