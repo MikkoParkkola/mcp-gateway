@@ -105,28 +105,6 @@ def exists(ref: str, path: str) -> bool:
                           capture_output=True).returncode == 0
 
 
-def destination(base: str, head: str, path: str, impls: tuple[str, ...]) -> list[str]:
-    """A named file's items at <head>. An item it already had at <base>
-    unchanged is matched as written; every other item is read one module up.
-    So the one-level reading, which reads `super::super::x` and `super::x`
-    alike, only applies to items that can have moved in, and a changed
-    pre-existing item is compared with its <base> form as written."""
-    lifted = items(show(head, path), True, impls)
-    if not exists(base, path):
-        return lifted
-    raw = items(show(head, path), False, impls)
-    assert len(raw) == len(lifted), path
-    same = Counter(items(show(base, path), False, impls)) & Counter(raw)
-    out = []
-    for r, lift_r in zip(raw, lifted):
-        if same[r]:
-            same[r] -= 1
-            out.append(r)
-        else:
-            out.append(lift_r)
-    return out
-
-
 def main() -> int:
     args = sys.argv[1:]
     source, impls = D + "mod.rs", []
@@ -143,20 +121,50 @@ def main() -> int:
     base, head, files = args[0], args[1], args[2:]
     parent = posixpath.dirname(source)
     here = parent + "/" if parent else ""
-    a = Counter(items(show(base, source), False, impls_t))
-    b = Counter(items(show(head, source), False, impls_t))
+
+    def raw(ref: str, path: str) -> list[str]:
+        return items(show(ref, path), False, impls_t)
+
+    # Everything is matched as written except one thing: an item that left the
+    # source may arrive in a named file one module down, so only against
+    # those items is a named file's item read one module up. An item a named
+    # file already had is never read that way (that reading merges
+    # `super::super::x` with `super::x`, and `super::super::super::x` with
+    # `super::super::x`), so a changed pre-existing item is always reported.
+    src_base, src_head = Counter(raw(base, source)), Counter(raw(head, source))
+    left_source = src_base - src_head
+    new_in_source = src_head - src_base
+    dest_base: Counter[str] = Counter()
+    dest_head: list[tuple[str, str]] = []
     for f in files:
-        b.update(destination(base, head, here + f, impls_t))
         if exists(base, here + f):
-            a.update(items(show(base, here + f), False, impls_t))
-    problems = [f"only at base: {x[:150]}" for x in sorted((a - b).elements())]
-    problems += [f"only at head: {x[:150]}" for x in sorted((b - a).elements())]
+            dest_base.update(raw(base, here + f))
+        text = show(head, here + f)
+        as_written, one_up = items(text, False, impls_t), items(text, True, impls_t)
+        assert len(as_written) == len(one_up), f
+        dest_head += list(zip(as_written, one_up))
+    total = sum(src_base.values()) + sum(dest_base.values())
+    kept = dest_base & Counter(w for w, _ in dest_head)
+    only_head = list(new_in_source.elements())
+    moved = 0
+    for written, lifted in dest_head:
+        if kept[written]:
+            kept[written] -= 1
+            dest_base[written] -= 1
+        elif left_source[lifted]:
+            left_source[lifted] -= 1
+            moved += 1
+        else:
+            only_head.append(written)
+    only_base = list(left_source.elements()) + list((+dest_base).elements())
+    problems = [f"only at base: {x[:150]}" for x in sorted(only_base)]
+    problems += [f"only at head: {x[:150]}" for x in sorted(only_head)]
     if problems:
         print("\n".join(problems))
         return 1
-    moved = sum((b - Counter(items(show(head, source), False, impls_t))).values())
-    print(f"items equal: {sum(a.values())} items, {moved} of them in {', '.join(files)}")
+    print(f"items equal: {total} items, {moved} of them moved into {', '.join(files)}")
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())

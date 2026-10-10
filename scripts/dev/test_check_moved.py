@@ -79,6 +79,10 @@ class StripperRegressions(unittest.TestCase):
         self.assertNotEqual(statements.normalise("m!(a/**/b);"),
                             statements.normalise("m!(ab);"))
 
+    def test_a_continued_string_is_one_token(self) -> None:
+        literal = '"x\\\n // p"'
+        self.assertIn(literal, statements.TOKEN.findall(f"let s = {literal};"))
+
     def test_a_continued_string_is_one_literal(self) -> None:
         a = statements.normalise('let s = "x\\\n // p";')
         b = statements.normalise('let s = "x\\\n // q";')
@@ -169,6 +173,13 @@ class EndToEnd(unittest.TestCase):
         # `already` keeps its place but now reaches one module less far up;
         # reading it one module up would make both spellings `super::x`.
         done = self.run_checker(">", "--impl", "Foo", dest_already="super::x()")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("only at head", done.stdout)
+
+    def test_a_level_added_to_an_item_already_in_the_destination_is_reported(self) -> None:
+        # The other direction: one module further up. Reading the head form one
+        # module up would turn it back into the base form.
+        done = self.run_checker(">", "--impl", "Foo", dest_already="super::super::super::x()")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
         self.assertIn("only at head", done.stdout)
 
