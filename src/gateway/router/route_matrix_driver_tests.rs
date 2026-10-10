@@ -258,3 +258,58 @@ pub(crate) async fn invoke_retry_answering(audit: &Path, answer: &str) -> Sent {
 pub(crate) async fn direct_retry_answering(audit: &Path, answer: &str) -> Sent {
     retry_answering(audit, "/mcp/alpha", ("read", serde_json::json!({})), answer).await
 }
+
+/// A hardened, signed `gateway_invoke read` on `/mcp` as `key` under `nonce`,
+/// declaring form elicitation, with `args`.
+async fn signed_invoke(
+    fx: &super::direct_guards_fixture::Fx,
+    key: &str,
+    nonce: &str,
+    args: Value,
+) -> Value {
+    let params = serde_json::json!({
+        "name": "gateway_invoke",
+        "arguments": {"server": "alpha", "tool": "read", "arguments": args, "nonce": nonce},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}}
+        }
+    });
+    let headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tools/call"),
+        ("mcp-name", "gateway_invoke"),
+    ];
+    super::direct_guards_fixture::send_with_headers(fx, "/mcp", key, "tools/call", params, None, &headers)
+        .await
+        .1
+}
+
+/// R1, MIK-8150 NONCE.3: on the signed, relayed fixture whose backend answers
+/// `text`, `k-std` reads it (the receipt), then `k-budget` relays it under
+/// nonce `b1` and is refused, then re-sends a clean call under `b1`. Returns
+/// (the relay refusal, the clean re-send).
+pub(crate) async fn invoke_relay_then_resend(text: &'static str) -> (Value, Value) {
+    let fx = super::direct_guards_fixture::fixture_signed_relayed(Answer::Text(text)).await;
+    let read = signed_invoke(&fx, "k-std", "a1", serde_json::json!({})).await;
+    assert!(read.get("error").is_none(), "premise: the read ran: {read}");
+    let relayed = signed_invoke(&fx, "k-budget", "b1", serde_json::json!({ "cmd": text })).await;
+    let resent = signed_invoke(&fx, "k-budget", "b1", serde_json::json!({})).await;
+    (relayed, resent)
+}
+
+/// R3, R20: on the signed fixture with a spend budget, `k-budget` runs once,
+/// is refused by the budget under nonce `n2`, then re-sends under `n2`.
+/// Returns (the spend refusal, the re-send).
+#[cfg(feature = "cost-governance")]
+pub(crate) async fn direct_spend_then_resend() -> (Value, Value) {
+    use super::direct_continuation_tests::{budget, signed_call};
+    let fx = super::direct_guards_fixture::fixture_hardened_signed_built(Answer::Ok, true, budget)
+        .await;
+    let who = ("k-budget", "alpha");
+    let (_, first) = signed_call(&fx, who, "n1", serde_json::json!({})).await;
+    assert!(first.get("error").is_none(), "premise: the first call ran: {first}");
+    let (_, refused) = signed_call(&fx, who, "n2", serde_json::json!({})).await;
+    let (_, again) = signed_call(&fx, who, "n2", serde_json::json!({})).await;
+    (refused, again)
+}

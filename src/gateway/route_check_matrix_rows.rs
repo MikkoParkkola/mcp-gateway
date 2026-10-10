@@ -327,3 +327,47 @@ async fn chokepoint_rescan_rows() {
         sent.body
     );
 }
+
+/// The nonce store's replay refusal (security/message_signing.rs).
+const REPLAY: &str = "Nonce replay detected";
+
+/// A passage the relayed fixture's backend answers: long enough that the relay
+/// check reads its reuse as a relay.
+const PROSE: &str = "The orchard ledger for the north slope records seven rows of late \
+    pears, the grafting dates for each rootstock, the hours the drip lines ran during the \
+    dry weeks of August, and which crew pruned the older trees after the second frost.";
+
+/// NonceGiveBack, R1 gap (MIK-8150 NONCE.3): a relay refusal after nonce
+/// admission keeps the nonce, so the clean re-send under it is refused as a
+/// replay. The first refusal must be the relay check's own (-32002), so the
+/// row cannot pass on some other refusal.
+#[tokio::test]
+async fn nonce_give_back_invoke_relay_gap_row() {
+    assert_eq!(
+        expect(MethodKind::ToolsCall, Route::Invoke, Stage::NonceGiveBack),
+        Expect::ExpectedGap(super::Ticket::Mik8150)
+    );
+    let (relayed, resent) = router::invoke_relay_then_resend(PROSE).await;
+    assert_eq!(relayed["error"]["code"], -32002, "premise: the relay refusal: {relayed}");
+    assert_eq!(
+        resent["error"]["message"], REPLAY,
+        "the re-send was not refused as a replay, so the relay refusal now gives the \
+         nonce back; MIK-8150 NONCE.3 may have closed this gap, flip the row: {resent}"
+    );
+}
+
+/// NonceGiveBack, R3 Applies (R20): a spend refusal after nonce admission
+/// gives the nonce back, so the re-send meets the budget again (the same
+/// refusal), never the replay refusal.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn nonce_give_back_direct_row() {
+    assert_eq!(
+        expect(MethodKind::ToolsCall, Route::Direct, Stage::NonceGiveBack),
+        Expect::Applies
+    );
+    let (refused, again) = router::direct_spend_then_resend().await;
+    assert!(refused.get("error").is_some(), "premise: the budget refused: {refused}");
+    assert_ne!(again["error"]["message"], REPLAY, "R3 kept the nonce: {again}");
+    assert_eq!(again["error"], refused["error"], "R3: not the same refusal again: {again}");
+}
