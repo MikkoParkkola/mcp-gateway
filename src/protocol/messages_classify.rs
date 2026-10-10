@@ -103,14 +103,41 @@ struct ErrorMember {
 }
 
 impl<'de> Deserialize<'de> for ErrorMember {
+    /// The member is captured as sent. An object is walked here, to see a
+    /// repeated field; every other value goes through `Value`'s own
+    /// deserializer, so its parsing cannot drift from `Value`'s.
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct ErrorVisitor;
-        impl<'de> Visitor<'de> for ErrorVisitor {
-            type Value = ErrorMember;
+        let raw = Box::<serde_json::value::RawValue>::deserialize(deserializer)?;
+        let text = raw.get();
+        // Capture skips the member without a depth limit, so the parse below
+        // is where nesting is checked. The `[ ]` stands in for the frame
+        // object around `error`: the limit then counts the levels the derive
+        // counts, and a member one level too deep is refused here too.
+        let wrapped = format!("[{text}]");
+        let member = if text.starts_with('{') {
+            serde_json::from_str::<(ErrorObject,)>(&wrapped).map(|(object,)| object.0)
+        } else {
+            serde_json::from_str::<(Value,)>(&wrapped).map(|(value,)| ErrorMember {
+                value,
+                repeated_field: false,
+            })
+        };
+        member.map_err(serde::de::Error::custom)
+    }
+}
+
+/// An `error` member that is a JSON object, walked key by key.
+struct ErrorObject(ErrorMember);
+
+impl<'de> Deserialize<'de> for ErrorObject {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ObjectVisitor;
+        impl<'de> Visitor<'de> for ObjectVisitor {
+            type Value = ErrorObject;
             fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str("any JSON value")
+                f.write_str("a JSON object")
             }
-            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<ErrorMember, A::Error> {
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<ErrorObject, A::Error> {
                 let mut object = serde_json::Map::new();
                 let mut repeated_field = false;
                 while let Some(key) = map.next_key::<String>()? {
@@ -122,65 +149,13 @@ impl<'de> Deserialize<'de> for ErrorMember {
                         object.insert(key, value);
                     }
                 }
-                Ok(ErrorMember {
+                Ok(ErrorObject(ErrorMember {
                     value: Value::Object(object),
                     repeated_field,
-                })
-            }
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
-                self,
-                seq: A,
-            ) -> Result<ErrorMember, A::Error> {
-                let value = Value::deserialize(serde::de::value::SeqAccessDeserializer::new(seq))?;
-                Ok(ErrorMember {
-                    value,
-                    repeated_field: false,
-                })
-            }
-            fn visit_bool<E>(self, v: bool) -> Result<ErrorMember, E> {
-                Ok(ErrorMember {
-                    value: Value::Bool(v),
-                    repeated_field: false,
-                })
-            }
-            fn visit_i64<E>(self, v: i64) -> Result<ErrorMember, E> {
-                Ok(ErrorMember {
-                    value: v.into(),
-                    repeated_field: false,
-                })
-            }
-            fn visit_u64<E>(self, v: u64) -> Result<ErrorMember, E> {
-                Ok(ErrorMember {
-                    value: v.into(),
-                    repeated_field: false,
-                })
-            }
-            fn visit_f64<E>(self, v: f64) -> Result<ErrorMember, E> {
-                Ok(ErrorMember {
-                    value: v.into(),
-                    repeated_field: false,
-                })
-            }
-            fn visit_str<E>(self, v: &str) -> Result<ErrorMember, E> {
-                Ok(ErrorMember {
-                    value: Value::String(v.to_owned()),
-                    repeated_field: false,
-                })
-            }
-            fn visit_string<E>(self, v: String) -> Result<ErrorMember, E> {
-                Ok(ErrorMember {
-                    value: Value::String(v),
-                    repeated_field: false,
-                })
-            }
-            fn visit_unit<E>(self) -> Result<ErrorMember, E> {
-                Ok(ErrorMember {
-                    value: Value::Null,
-                    repeated_field: false,
-                })
+                }))
             }
         }
-        deserializer.deserialize_any(ErrorVisitor)
+        deserializer.deserialize_map(ObjectVisitor)
     }
 }
 
