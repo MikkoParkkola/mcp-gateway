@@ -625,6 +625,23 @@ impl Gateway {
         );
     }
 
+    /// [`Self::terminate`], then insist the process has exited: a count read
+    /// after this is final for everything the gateway sent (MIK-7642).
+    pub async fn terminate_confirmed(&mut self) {
+        let pid = self.child.id().expect("the gateway is still running");
+        let signalled = tokio::process::Command::new("kill")
+            .arg("-TERM")
+            .arg(pid.to_string())
+            .status()
+            .await
+            .expect("kill runs");
+        assert!(signalled.success(), "SIGTERM reached the gateway");
+        tokio::time::timeout(EXIT_BOUND, self.child.wait())
+            .await
+            .expect("the gateway exits within the bound")
+            .expect("the gateway's exit is observed");
+    }
+
     pub async fn terminate(&mut self) {
         if let Some(pid) = self.child.id() {
             let _ = tokio::process::Command::new("kill")

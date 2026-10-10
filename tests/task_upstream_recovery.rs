@@ -635,7 +635,7 @@ async fn a_cancelled_task_cancels_its_upstream_job_once() {
     tokio::time::timeout(OBSERVE_BOUND, peer.peer.cancel_arrived())
         .await
         .expect("the upstream tasks/cancel arrives");
-    gateway.terminate().await;
+    gateway.terminate_confirmed().await;
     assert_eq!(
         peer.peer.cancels(),
         vec![HANDLE.to_string()],
@@ -686,7 +686,7 @@ async fn a_cancelled_task_nobody_follows_cancels_its_upstream_job_once() {
     restarted
         .post(&client, &helper::tasks_cancel(952, &task_id))
         .await;
-    restarted.terminate().await;
+    restarted.terminate_confirmed().await;
     assert_eq!(
         peer.peer.cancels(),
         vec![HANDLE.to_string()],

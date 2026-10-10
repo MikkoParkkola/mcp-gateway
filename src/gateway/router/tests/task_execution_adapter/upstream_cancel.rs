@@ -251,8 +251,8 @@ async fn rig(head: Head, reply: Reply, release: Release) -> Rig {
     }
 }
 
-/// Start `key-a`'s task, wait for its submission to park, cancel it, and give
-/// any upstream cancel time to land (and a duplicate time to follow it).
+/// Start `key-a`'s task, wait for its submission to park, and cancel it. The
+/// caller then waits with [`settle`].
 async fn start_park_cancel(rig: &Rig, before_cancel: impl FnOnce(&str)) -> String {
     let created = post(
         &rig.state,

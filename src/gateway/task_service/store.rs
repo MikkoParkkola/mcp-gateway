@@ -358,11 +358,15 @@ impl TaskStore {
         });
         candidate.version = candidate.version.max(UPSTREAM_VERSION);
         let budget = self.0.limits.record_bytes;
-        // And once cancelled (MIK-7642): see `targets::cancelled_bytes`. The
-        // instant only sets the timestamp's width, widened there to nine
-        // fractional digits, so the row's own last update stands in for now.
+        // And once cancelled (MIK-7642): see `targets::cancelled_bytes`. Measured
+        // at the widest instant chrono can encode, so no real cancel's
+        // timestamp is wider, and no clock is read.
         Ok(serialize(&candidate)?.len() <= budget
-            && targets::cancelled_bytes(&task, &candidate, task.last_updated_at())? <= budget)
+            && targets::cancelled_bytes(
+                &task,
+                &candidate,
+                chrono::DateTime::<chrono::Utc>::MAX_UTC,
+            )? <= budget)
     }
 
     /// Test-only: the durable recovery descriptor of `id`, whatever owner holds
