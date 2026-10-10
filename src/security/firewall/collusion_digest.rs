@@ -90,6 +90,11 @@ pub(crate) struct DeliveryDigest {
     pub(super) cut_fps: Option<std::sync::Arc<[u64]>>,
     /// The key-path joins (`MIK-8209`, design §14.1 K2).
     joins: Joins,
+    /// The caller's own subset-forward seams (`MIK-8205`): excuse only. Set by
+    /// `delivery_digest` of a committed delivery, or for a plan by the
+    /// answer's single-receipt runs after capping (`add_seam_excuses`); never
+    /// by staging, so a step's text the answer dropped carries none.
+    pub(super) seam_excuses: Option<std::sync::Arc<[u64]>>,
 }
 
 /// A delivery's key-path joins, each fingerprinted alone after the segment
@@ -221,6 +226,7 @@ impl DeliveryDigest {
             deferred: false,
             seam_sources: None,
             cut_fps: None,
+            seam_excuses: None,
             joins: Joins::None,
         };
         (digest, cut)
@@ -234,6 +240,19 @@ impl DeliveryDigest {
         let (kept, cut) = budget_joins(joins);
         self.joins = Joins::Text(kept);
         (self, cut)
+    }
+
+    /// Add `fps` to this receipt's subset-forward seams (`MIK-8205`, S4:
+    /// a plan answer's single-step runs, attached to their step's receipt).
+    pub(crate) fn add_seam_excuses(&mut self, fps: &[u64]) {
+        if fps.is_empty() {
+            return;
+        }
+        let mut all: Vec<u64> = self.seam_excuses.as_deref().unwrap_or_default().to_vec();
+        all.extend_from_slice(fps);
+        all.sort_unstable();
+        all.dedup();
+        self.seam_excuses = Some(all.into());
     }
 
     /// This staged digest with its key-path runs, as indices into its
@@ -276,6 +295,7 @@ impl DeliveryDigest {
             deferred: true,
             seam_sources: None,
             cut_fps: None,
+            seam_excuses: None,
             joins: Joins::None,
         };
         (digest, false)
@@ -307,6 +327,7 @@ impl DeliveryDigest {
             deferred: false,
             seam_sources: None,
             cut_fps: None,
+            seam_excuses: None,
             joins,
         };
         Some((digest, cut || joins_cut || kept < self.retained.len()))
@@ -502,6 +523,7 @@ impl DeliveryDigest {
             deferred: false,
             seam_sources: None,
             cut_fps: None,
+            seam_excuses: None,
             joins: Joins::None,
         };
         kept.with_original(detector, found, original, retained, &HashSet::new())
@@ -588,6 +610,7 @@ impl DeliveryDigest {
             deferred: true,
             seam_sources: None,
             cut_fps: None,
+            seam_excuses: None,
             joins: Joins::None,
         };
         kept.with_original(detector, found, original, retained, &in_step)

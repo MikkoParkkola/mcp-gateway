@@ -265,6 +265,10 @@ fn keep_plan_receipts(
         let digest = std::mem::take(&mut r.digest);
         r.digest = fw.cap_kept(digest);
     }
+    // `MIK-8205` (S4): after capping, which rebuilds each digest without
+    // seams, and against the capped receipts, so a piece the cap cut is no
+    // step's.
+    super::seams::add_subset_seams(fw, receipts, answer);
 }
 
 /// MIK-7998: the single staged receipt kept to a wrapper the gateway's own
