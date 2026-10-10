@@ -251,10 +251,16 @@ src/gateway/task_service/execution/upstream.rs	handle_still_live	1	critical	b	Ta
 src/gateway/task_service/execution/upstream.rs	query_and_commit	1	critical	c	TaskExecutor::query_and_commit	Rechecks the owner's recovery target and applies output-policy refusals
 src/gateway/task_service/execution/upstream.rs	recover_upstream_read	1	critical	a	TaskExecutor::recover_upstream_read	Refuses with zero queries when not authorized or the adapter does not claim the backend
 src/gateway/task_service/execution/upstream.rs	recovery_target	1	critical	c	TaskExecutor::recovery_target	Returns the recovery descriptor only to the owner; foreign or terminal returns NotRecoverable
+src/gateway/task_service/execution/upstream.rs	cancel_upstream_once	1	critical	b	TaskExecutor::cancel_upstream_once	Sends the one upstream tasks/cancel only for the sender that won the owner-scoped durable claim; nothing without an installed adapter
+src/gateway/task_service/execution/upstream.rs	offered_descriptor	1	standard	borderline	TaskExecutor::offered_descriptor	Builds a worker's offer bound to the record's own admitted operation digest, read owner-scoped
 src/gateway/task_service/execution/worker.rs	inspect_settled	1	critical	d	inspect_settled	Runs the response firewall on the task result; settles on a refusal when blocked
 src/gateway/task_service/execution/worker.rs	upstream_descriptor_fits	1	critical	c	TaskExecutor::upstream_descriptor_fits	Preflight refuses when no owner-scoped descriptor measurement resolves
+src/gateway/task_service/execution/worker.rs	follow_handle	1	standard	borderline	follow_handle	Follows a held handle under the record's query lease; handle_still_live and the settlement path carry the checks
 src/gateway/task_service/execution/worker.rs	run_dispatched	1	standard	borderline	run_dispatched	Arms the upstream job only if the adapter claims the backend; builds the worker authorizer
 src/gateway/task_service/execution/worker.rs	stored_backend_output	1	critical	borderline	stored_backend_output	Decides whether a settled row holds backend output that a receipt may describe as the peer's.
+src/gateway/task_service/execution/worker_held.rs	follow_upstream_job	1	standard	borderline	follow_upstream_job	Sequences capture, follow and the refused-capture offer; mark_upstream_blocking and the cancel claim carry the checks
+src/gateway/task_service/execution/worker_held.rs	capture_handle	1	standard	borderline	capture_handle	Builds the capture of a handle; capture_upstream and mark_upstream_blocking carry the checks
+src/gateway/task_service/execution/worker_held.rs	cancel_held_upstream	1	standard	borderline	cancel_held_upstream	Resolves the caller's own owner digest for the claim; claim_upstream_cancel_blocking carries the checks
 src/gateway/task_service/host.rs	admits_backend	1	standard	borderline	HostAuthorizer::admits_backend	Delegates the backend-admission decision
 src/gateway/task_service/host.rs	authorizer	1	standard	borderline	LiveHost::authorizer	Picks the transport authorizer; a wrong pick applies the wrong policy
 src/gateway/task_service/host.rs	decide	1	standard	borderline	HostAuthorizer::decide	Delegates the authz Decision to the HTTP or stdio authorizer
@@ -273,6 +279,7 @@ src/gateway/task_service/service.rs	update	1	standard	c	TaskService::update	task
 src/gateway/task_service/service.rs	reread_sealed	1	critical	d	TaskService::reread_sealed	Lowers the seal only after a repaired row's key is imported, so that key is never admitted as new in between (MIK-8052)
 src/gateway/task_service/service.rs	move_seal	1	standard	borderline	TaskService::move_seal	Moves this service's share of the admission seal
 src/gateway/task_service/service.rs	release_seal	1	standard	borderline	TaskService::release_seal	Releases this service's share of the admission seal once
+src/gateway/task_service/store_targets.rs	claim_upstream_cancel_blocking	1	critical	c	Shared::claim_upstream_cancel_blocking	Owner-scoped; claims only a cancelled row, once; refuses an offered descriptor not bound to the record's admitted operation or over the handle bound
 src/gateway/task_service/store_disk.rs	acquire_lease	1	critical	d	acquire_lease	Refuses a lease file that is not a private regular file (or, on Windows, has a non-private DACL)
 src/gateway/task_service/store.rs	admit	1	critical	d	admit	Per-principal task quota and record-size limit
 src/gateway/task_service/store.rs	admits_upstream_descriptor	1	critical	c	TaskStore::admits_upstream_descriptor	Reads the candidate record only through the owner filter
@@ -313,6 +320,7 @@ src/gateway/task_service/store_targets.rs	settle_bounded_blocking	1	critical	c	S
 src/gateway/task_service/store_targets.rs	settle_attempt	1	critical	d	Shared::settle_attempt	Refuses a settlement whose record exceeds the per-record byte budget and records only the peer's authorship.
 src/gateway/task_service/store_targets.rs	keep_provenance	1	critical	borderline	keep_provenance	Leaves a legacy row's error unattributed when it has no stored call to keep (fail closed).
 src/gateway/task_service/store_targets.rs	fallback_bytes	1	critical	d	fallback_bytes	The bytes the record-budget check refuses on: room every live record keeps for the bounded failure
+src/gateway/task_service/store_targets.rs	cancelled_bytes	1	critical	d	cancelled_bytes	The bytes the descriptor preflight refuses on: a row that could not be cancelled without overflowing is never armed (MIK-7642)
 src/gateway/task_service/store_targets.rs	settled	1	standard	borderline	settled	Builds the settled record settle_attempt and fallback_bytes measure
 src/gateway/task_service/store_windows.rs	judge_store_dir	1	critical	d	judge_store_dir	Windows: refuses a store directory whose DACL, reparse point or locality is not private
 src/gateway/task_service/store_windows.rs	open_record	1	critical	d	open_record	Windows: opens without following reparse points; refuses a record that is not private

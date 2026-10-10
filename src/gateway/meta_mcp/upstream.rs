@@ -122,11 +122,12 @@ fn failed_answer(error: Option<&Value>) -> UpstreamAnswer {
     }
 }
 
-/// The trusted, query-only adapter.
+/// The trusted recovery adapter.
 ///
 /// It holds a backend registry and a set of configured names, and its whole
-/// vocabulary is one `tasks/get`. It cannot name a tool or arguments, so it
-/// could not resubmit the original operation if it tried to.
+/// vocabulary is one read, `tasks/get`, and one write, `tasks/cancel` of a
+/// handle whose task the owner cancelled (MIK-7642). It cannot name a tool or
+/// arguments, so it could not resubmit the original operation if it tried to.
 pub(crate) struct NativeUpstreamTasks {
     backends: Arc<BackendRegistry>,
     /// Names from `tasks.recovery_adapters`. Read on every claim, so an
@@ -236,6 +237,29 @@ impl UpstreamRecovery for NativeUpstreamTasks {
                 tracing::warn!(backend = %handle.backend, "upstream tasks/get timed out");
                 UpstreamAnswer::Unavailable
             }
+        }
+    }
+
+    async fn cancel(&self, handle: &UpstreamHandle, deadline: Duration) {
+        let Some(backend) = self.eligible(&handle.backend).await else {
+            tracing::warn!(backend = %handle.backend, "upstream tasks/cancel not sent: backend unclaimed");
+            return;
+        };
+        let deadline = deadline.min(backend.request_timeout());
+        // One attempt on the same trusted path `query` uses. The answer is
+        // ignored: the gateway task is already cancelled whatever the peer says.
+        let sent = tokio::time::timeout(
+            deadline,
+            backend.request_with_task_capability(
+                "tasks/cancel",
+                Some(json!({ "taskId": handle.handle })),
+                &[],
+                None,
+            ),
+        )
+        .await;
+        if !matches!(sent, Ok(Ok(_))) {
+            tracing::warn!(backend = %handle.backend, "upstream tasks/cancel not confirmed");
         }
     }
 }

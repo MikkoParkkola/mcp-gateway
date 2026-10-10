@@ -594,3 +594,114 @@ async fn a_read_without_a_task_id_is_refused_before_anything_else() {
         "and causes no upstream call whatsoever"
     );
 }
+
+/// MIK-7642.PR.D, C3 (handle captured, worker following): the owner's
+/// `tasks/cancel` of a task whose upstream job is live sends that backend one
+/// `tasks/cancel` naming the job's own handle. Today it only stops following.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cancelled_task_cancels_its_upstream_job_once() {
+    let root = temp_root("upstream-cancel");
+    let peer = serve_peer(Upstream::Working).await;
+    let config = write_config(
+        root.path(),
+        &Fixture {
+            name: "gateway.yaml",
+            backend_url: &peer.url,
+            adapters: vec![BACKEND.into()],
+            forbid_marker: false,
+        },
+    );
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .expect("bounded fixture HTTP client");
+    let (mut gateway, task_id) =
+        start_live_task(root.path(), &config, "gateway.log", &client).await;
+    // The handle is durable once the follow has queried the job.
+    until_queried(&gateway, &client, &peer.peer, &task_id, 1).await;
+
+    let cancelled = gateway
+        .post(&client, &helper::tasks_cancel(950, &task_id))
+        .await;
+    // A modern tasks/cancel answers an empty `complete` result.
+    assert!(
+        cancelled.get("error").is_none() && cancelled.get("result").is_some(),
+        "precondition: the owner's cancel is accepted: {cancelled}"
+    );
+    // Events, not windows: the first send arrives (OBSERVE_BOUND is a hang
+    // guard), then the gateway exits, so every send it made has been handled
+    // by the peer before the count is read. The claim that rules out a second
+    // send is pinned at the store (`one_sender_claims_a_cancelled_rows_upstream_cancel`).
+    tokio::time::timeout(OBSERVE_BOUND, peer.peer.cancel_arrived())
+        .await
+        .expect("the upstream tasks/cancel arrives");
+    gateway.terminate_confirmed().await;
+    assert_eq!(
+        peer.peer.cancels(),
+        vec![HANDLE.to_string()],
+        "exactly one upstream tasks/cancel, naming the job's own handle"
+    );
+}
+
+/// MIK-7642.PR.D, C3 (handle captured, worker gone): a task whose handle was
+/// made durable by a gateway that has since stopped is cancelled by its owner on
+/// the restarted one. Nothing follows the job any more, so the cancel
+/// transition itself sends the one upstream `tasks/cancel`, and the row records
+/// that claim durably (record version 7) so no later sender repeats it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cancelled_task_nobody_follows_cancels_its_upstream_job_once() {
+    let root = temp_root("upstream-cancel-unfollowed");
+    let peer = serve_peer(Upstream::Working).await;
+    let config = write_config(
+        root.path(),
+        &Fixture {
+            name: "gateway.yaml",
+            backend_url: &peer.url,
+            adapters: vec![BACKEND.into()],
+            forbid_marker: false,
+        },
+    );
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .expect("bounded fixture HTTP client");
+    let (mut gateway, task_id) = start_live_task(root.path(), &config, "first.log", &client).await;
+    until_queried(&gateway, &client, &peer.peer, &task_id, 1).await;
+    gateway.kill().await;
+
+    let mut restarted = Gateway::start(root.path(), &config, "second.log");
+    restarted.wait_until_ready(&client).await;
+    let cancelled = restarted
+        .post(&client, &helper::tasks_cancel(951, &task_id))
+        .await;
+    assert!(
+        cancelled.get("error").is_none() && cancelled.get("result").is_some(),
+        "precondition: the owner's cancel is accepted: {cancelled}"
+    );
+    // Events, not windows (see the follow-phase row above).
+    tokio::time::timeout(OBSERVE_BOUND, peer.peer.cancel_arrived())
+        .await
+        .expect("the upstream tasks/cancel arrives");
+    // A second cancel of the settled task must not send another.
+    restarted
+        .post(&client, &helper::tasks_cancel(952, &task_id))
+        .await;
+    restarted.terminate_confirmed().await;
+    assert_eq!(
+        peer.peer.cancels(),
+        vec![HANDLE.to_string()],
+        "exactly one upstream tasks/cancel, naming the job's own handle"
+    );
+    let record = durable_record(root.path(), &task_id);
+    assert_eq!(
+        helper::record_status(&record),
+        Some("cancelled"),
+        "{record}"
+    );
+    assert_eq!(
+        record["upstreamCancelSent"],
+        serde_json::json!(true),
+        "the one send is claimed durably: {record}"
+    );
+    assert_eq!(record["version"], serde_json::json!(7), "{record}");
+}

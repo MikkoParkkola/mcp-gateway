@@ -207,12 +207,12 @@ async fn task_capability_refuses_a_method_outside_the_vocabulary() {
     let transport = make_modern_transport(&url).await;
 
     let err = transport
-        .request_with_task_capability("tasks/cancel", None, &[], None)
+        .request_with_task_capability("tasks/update", None, &[], None)
         .await
-        .expect_err("`tasks/cancel` is not in this adapter's vocabulary");
+        .expect_err("`tasks/update` is not in this adapter's vocabulary");
 
     assert!(
-        err.to_string().contains("tasks/cancel"),
+        err.to_string().contains("tasks/update"),
         "the refusal must name the method, got: {err}"
     );
     assert!(
@@ -277,4 +277,93 @@ async fn default_task_capability_impl_refuses_without_falling_back() {
         err.to_string().contains("tools/call") && err.to_string().contains("tasks capability"),
         "the refusal must name the method and the reason, got: {err}"
     );
+}
+
+/// MIK-7642 PR.D R10.1: the submit mark is the response head, not the send.
+/// While the peer holds the head, the task POST has reached the wire but the
+/// mark stays unset, so a cancel then gets no rescue poll; it is set once the
+/// head arrives. An ordinary request under the same scope never sets it.
+/// Mutant "mark set before `send()`" is caught by the held-head assertion.
+#[tokio::test]
+async fn the_submit_mark_waits_for_the_response_head() {
+    use crate::transport::submit_mark::{SubmitMark, with_submit_mark};
+    use axum::{Json, Router, extract::State, routing::post};
+
+    #[derive(Clone)]
+    struct Gate {
+        received: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Semaphore>,
+    }
+    async fn held(State(gate): State<Gate>) -> Json<serde_json::Value> {
+        gate.received.notify_one();
+        gate.release
+            .acquire()
+            .await
+            .expect("the gate stays open")
+            .forget();
+        Json(serde_json::json!({"jsonrpc":"2.0","id":1,"result":{}}))
+    }
+    let gate = Gate {
+        received: Arc::new(tokio::sync::Notify::new()),
+        release: Arc::new(tokio::sync::Semaphore::new(0)),
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/messages", post(held))
+        .with_state(gate.clone());
+    let server = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let transport = make_modern_transport(&format!("http://{addr}/messages")).await;
+
+    // An ordinary request under the scope: answered, and the mark untouched.
+    let mark = Arc::new(SubmitMark::default());
+    gate.release.add_permits(1);
+    with_submit_mark(
+        Arc::clone(&mark),
+        transport.request_with_headers(
+            "tools/call",
+            Some(serde_json::json!({ "name": "t", "arguments": {} })),
+            &[],
+            None,
+            ResendPermission::Denied,
+        ),
+    )
+    .await
+    .expect("the ordinary request is answered");
+    assert!(!mark.submitted(), "an ordinary request never sets the mark");
+    // Spend the arrival that request stored, so the wait below is the task POST's.
+    gate.received.notified().await;
+
+    let submission = tokio::spawn({
+        let mark = Arc::clone(&mark);
+        let transport = Arc::clone(&transport);
+        async move {
+            with_submit_mark(
+                mark,
+                transport.request_with_task_capability(
+                    "tools/call",
+                    Some(serde_json::json!({ "name": "t", "arguments": {} })),
+                    &[],
+                    None,
+                ),
+            )
+            .await
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), gate.received.notified())
+        .await
+        .expect("the task POST reached the peer");
+    assert!(
+        !mark.submitted(),
+        "the request is on the wire but its head is held: no mark yet"
+    );
+    gate.release.add_permits(1);
+    submission
+        .await
+        .expect("the submission task joins")
+        .expect("the submission is answered");
+    assert!(mark.submitted(), "the head arrived: the mark is set");
+    server.abort();
 }

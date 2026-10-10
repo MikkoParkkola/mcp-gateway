@@ -18,7 +18,7 @@ use super::settlement::{
 use super::upstream::QueryLease;
 use super::{
     BeginOutcome, CommittedTask, CreateWrite, Handoff, TaskCall, TaskExecutor, TaskIntent,
-    TransitionWrite, UpstreamAnswer, UpstreamCapture, UpstreamHandle,
+    TransitionWrite, UpstreamAnswer, UpstreamHandle,
 };
 use crate::gateway::meta_mcp::invoke::relay::AnswerShape;
 use crate::gateway::meta_mcp::upstream::UpstreamSubmission;
@@ -28,6 +28,8 @@ use crate::gateway::task_service::service::{CreateOutcome, ServiceError};
 use crate::gateway::task_service::store::StoreError;
 use crate::protocol::RequestId;
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
+use crate::transport::submit_mark::{SubmitMark, with_submit_mark};
+use futures::FutureExt as _;
 
 /// The whole life of an owned handoff. `handoff` is the ownership `begin` took
 /// before this future existed; every `return` below, and any panic between
@@ -205,6 +207,9 @@ async fn run_dispatched(
     let submission = job
         .as_ref()
         .map(|job| Arc::new(UpstreamSubmission::armed_for(&job.server, &job.tool, &id)));
+    // Set by the transport when the submission's response head arrives: the
+    // line past which a cancel may still collect the handle (MIK-7642 R10.1).
+    let submit_mark = Arc::new(SubmitMark::default());
 
     // The same tail the request thread takes, asked for the backend's own
     // result rather than the synchronous wrapper: design §4 settles a task on
@@ -223,7 +228,7 @@ async fn run_dispatched(
                 Box::pin(
                     crate::gateway::meta_mcp::upstream::with_upstream_submission(
                         Arc::clone(submission),
-                        dispatch,
+                        with_submit_mark(Arc::clone(&submit_mark), dispatch),
                     ),
                 )
                 .await
@@ -232,10 +237,10 @@ async fn run_dispatched(
         }
     };
 
-    let dispatch = crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
+    let mut dispatch = Box::pin(crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
         Arc::clone(intent.owned.dispatch_log()),
         dispatch,
-    );
+    ));
 
     // Awaited into its own binding so the dispatch future — which borrows both
     // the caller context and the armed slot — is dropped before anything below
@@ -243,11 +248,27 @@ async fn run_dispatched(
     let dispatched = tokio::select! {
         biased;
         _ = cancel_rx.changed() => None,
-        response = dispatch => Some(response),
+        response = &mut dispatch => Some(response),
     };
     let Some(response) = dispatched else {
+        // The cancel arm (design r7 R7.2, r8 R8.1-R8.3). Only past the
+        // receive-only line is `dispatch` polled again, once, outside the coop
+        // budget, so a reply already buffered reaches `offer` and nothing new
+        // is sent. Then the slot is read, `dispatch` dropped, and only then the
+        // durable claim taken.
+        if submit_mark.submitted() {
+            #[cfg(test)]
+            rescue_seam::before_rescue_poll(&id).await;
+            let _ = tokio::task::unconstrained(&mut dispatch).now_or_never();
+        }
+        let held = submission.as_ref().and_then(|slot| slot.handle());
+        drop(dispatch);
+        if let (Some(handle), Some(job)) = (held, job.as_ref()) {
+            cancel_held_upstream(&executor, &principal, &id, job, handle).await;
+        }
         return;
     };
+    drop(dispatch);
 
     // A handle in the slot means the peer really did start a task: the
     // dispatch's own return is the `working` stub, not an answer, and settling
@@ -282,41 +303,23 @@ async fn run_dispatched(
     }
 }
 
-/// Own one live upstream job: make its handle durable, follow it within a
-/// bounded budget, and settle what it eventually says.
-///
-/// Order matters. The handle is made durable BEFORE anything else is done with
-/// it — a row is recoverable only once its handle is on disk, and the window
-/// between the peer's answer and that write stays `unknown`. A refusal there
-/// does not stop the job, which is why the follow below still runs.
-async fn follow_upstream_job(
+/// Follow one handle within the worker's budget and settle what it says.
+async fn follow_handle(
     executor: &Arc<TaskExecutor>,
     state: &crate::gateway::task_service::host::LiveHost,
-    principal: &str,
-    id: &str,
-    revision: u64,
-    dispatched: (
-        crate::gateway::meta_mcp::upstream::DirectJob,
+    (principal, id, revision): (&str, &str, u64),
+    (job, handle, relay, captured): (
+        &crate::gateway::meta_mcp::upstream::DirectJob,
         String,
         crate::gateway::meta_mcp::invoke::relay::RelayKey<'_>,
+        bool,
     ),
     cancel_rx: &mut watch::Receiver<bool>,
 ) {
-    let (job, handle, relay) = dispatched;
-    let captured = executor
-        .capture_upstream(
-            principal,
-            id,
-            revision,
-            UpstreamCapture {
-                backend: job.server.clone(),
-                tool: job.tool.clone(),
-                arguments: job.arguments.clone(),
-                handle: handle.clone(),
-            },
-        )
-        .await;
-
+    // Neither early return below can strand a refused capture's handle: a job
+    // is armed only when an installed adapter claims its backend, and its
+    // principal already hashed at admission. Without an adapter no cancel
+    // could be sent anyway.
     let Some(adapter) = executor.recovery() else {
         return;
     };
@@ -391,7 +394,7 @@ async fn follow_upstream_job(
             )),
             // The failure half of that same processing: the peer's message and
             // nested data are screened before this settles, keeping the code.
-            UpstreamAnswer::Failed(error) => Some(screened_peer_failure(state, &job, id, error)),
+            UpstreamAnswer::Failed(error) => Some(screened_peer_failure(state, job, id, error)),
             // The gateway's own words, never the peer's (MIK-7887.RECEIPT.1).
             UpstreamAnswer::Substituted(error) => Some((
                 TaskTransition::Fail(strip_http_status(error)),
@@ -404,7 +407,7 @@ async fn follow_upstream_job(
     .await;
     if let (Some(outcome), notes) = processed {
         let followed = FollowedJob {
-            job: &job,
+            job,
             relay,
             id,
             principal,
@@ -755,3 +758,11 @@ pub(crate) enum CommitFailure {
     Service(ServiceError),
     RevisionConflict,
 }
+
+#[path = "worker_held.rs"]
+mod held;
+use held::{cancel_held_upstream, follow_upstream_job};
+
+#[cfg(test)]
+#[path = "worker_rescue_seam.rs"]
+pub(crate) mod rescue_seam;
