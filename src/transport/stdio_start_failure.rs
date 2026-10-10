@@ -14,7 +14,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use parking_lot::RwLock;
 use tokio::sync::Mutex;
@@ -81,7 +81,9 @@ impl StdioTransport {
             command: command.to_string(),
             env,
             cwd,
-            request_timeout,
+            request_timeout: AtomicU64::new(
+                u64::try_from(request_timeout.as_nanos()).unwrap_or(u64::MAX),
+            ),
             writer: Arc::new(Mutex::new(None)),
             shutdown: parking_lot::Mutex::new(tokio_util::sync::CancellationToken::new()),
             protocol_version: RwLock::new(protocol_version),
@@ -96,7 +98,15 @@ impl StdioTransport {
 
     /// The per-request timeout, which also bounds the cache repair's waits.
     pub(crate) fn request_timeout(&self) -> std::time::Duration {
-        self.request_timeout
+        std::time::Duration::from_nanos(self.request_timeout.load(Ordering::Relaxed))
+    }
+
+    /// A row that needs a short request timeout sets it after `start`, so the
+    /// handshake is not bounded by it (MIK-8253).
+    #[cfg(all(test, unix))]
+    pub(crate) fn set_request_timeout(&self, timeout: std::time::Duration) {
+        let nanos = u64::try_from(timeout.as_nanos()).unwrap_or(u64::MAX);
+        self.request_timeout.store(nanos, Ordering::Relaxed);
     }
 
     /// The cache directory this gateway assigned, if it assigned one.
