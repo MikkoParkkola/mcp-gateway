@@ -138,3 +138,37 @@ pub(crate) fn sender_found_queue_full() {
 pub(crate) fn queue_full_wakes() -> usize {
     QUEUE_FULL.with(std::cell::Cell::get)
 }
+
+/// A pause armed for one sender, keyed by the address of its stop lock, so no
+/// other session's sender ever waits on it (MIK-8278 race row).
+type FinalSendPause = (
+    usize,
+    std::sync::mpsc::Sender<()>,
+    std::sync::mpsc::Receiver<()>,
+);
+
+static FINAL_SEND: std::sync::Mutex<Option<FinalSendPause>> = std::sync::Mutex::new(None);
+
+/// Arm a pause in the sender keyed `key`: it signals `reached` between its
+/// stop check and its enqueue, then waits for `release`.
+pub(crate) fn arm_final_send_pause(
+    key: usize,
+) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+    let (reached_tx, reached_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    *FINAL_SEND.lock().expect("pause slot") = Some((key, reached_tx, release_rx));
+    (reached_rx, release_tx)
+}
+
+/// Called by a stdio sender between its stop check and its enqueue, holding
+/// its stop lock. Blocks only the sender the pause was armed for.
+pub(crate) fn final_send_pause(key: usize) {
+    let armed = FINAL_SEND
+        .lock()
+        .expect("pause slot")
+        .take_if(|(armed, _, _)| *armed == key);
+    if let Some((_, reached, release)) = armed {
+        drop(reached.send(()));
+        drop(release.recv_timeout(std::time::Duration::from_secs(20)));
+    }
+}

@@ -168,6 +168,8 @@ async fn send_when_ready(
         if *stopped {
             return;
         }
+        #[cfg(test)]
+        crate::gateway::server::stdio_seams::final_send_pause(Arc::as_ptr(&stopping) as usize);
         permit.send(OutboundFrame::gateway_stdio(serde_json::json!({
             "jsonrpc": "2.0",
             "method": "notifications/tools/list_changed",
