@@ -77,7 +77,7 @@ pub(super) async fn write_frame(
     // From here the frame goes out whole even if the caller is dropped, so the
     // call is no longer pre-send (MIK-7979).
     began.store(true, std::sync::atomic::Ordering::Relaxed);
-    tokio::spawn(async move {
+    let mut write = Box::pin(async move {
         let Some(stdin) = writer.as_mut() else {
             return Err(Error::TransportConnect("Not connected".to_string()));
         };
@@ -91,9 +91,17 @@ pub(super) async fn write_frame(
                 Err(Error::Transport("stdio transport closed mid-write".to_string()))
             }
         }
-    })
-    .await
-    .map_err(|e| Error::Transport(e.to_string()))?
+    });
+    // PROTOTYPE (MIK-7536 T' arm, never merged): polled once in place; a frame
+    // that fits the pipe completes here with no task hop. Still pending, it
+    // moves to its own task with no await point in between, so a dropped
+    // caller still cannot cut it mid-frame.
+    if let Some(done) = futures::FutureExt::now_or_never(&mut write) {
+        return done;
+    }
+    tokio::spawn(write)
+        .await
+        .map_err(|e| Error::Transport(e.to_string()))?
 }
 
 /// `MIK-7642.PR.B`: a request dropped before its answer cancels the backend's
