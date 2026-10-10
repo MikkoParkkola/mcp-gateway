@@ -65,6 +65,7 @@ async fn a_watched_reload_reports_its_backends_to_the_hook() {
             ResolvedEnvFiles::default(),
         )),
         None,
+        None,
         shutdown_rx,
         Some(hook),
     )

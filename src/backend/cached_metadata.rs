@@ -196,6 +196,21 @@ impl<T> CachedMetadata<T> {
             // welcome to replace it.
             return;
         }
+        Self::clear_locked(&mut state);
+    }
+
+    /// Forget the value whatever it holds, and run `on_cleared` under the
+    /// same write guard: state derived from the dropped value is cleared with
+    /// it, as [`Self::store_if_current`] publishes such state with a stored
+    /// one. A fill stored right after cannot have its own derived state
+    /// erased by a separate, later clear (MIK-7940).
+    pub(super) fn invalidate_then(&self, on_cleared: impl FnOnce()) {
+        let mut state = self.state.write();
+        Self::clear_locked(&mut state);
+        on_cleared();
+    }
+
+    fn clear_locked(state: &mut CachedMetadataState<T>) {
         state.value = None;
         state.cached_at = None;
         state.generation = state.generation.wrapping_add(1);
@@ -402,6 +417,48 @@ mod tests {
             3,
             "each invalidated round must actually ask the backend again"
         );
+    }
+
+    /// MIK-7940 finding 5: the derived-state clear runs while the cache is
+    /// still write-locked, so no fill can store between the two.
+    #[test]
+    fn invalidate_then_clears_derived_state_under_the_guard() {
+        let cache: CachedMetadata<Vec<u8>> = CachedMetadata::new();
+        let mut locked = false;
+        cache.invalidate_then(|| locked = cache.state.try_read().is_none());
+        assert!(
+            locked,
+            "the derived clear ran under the cache's write guard"
+        );
+    }
+
+    /// MIK-7940 SUBS.5: a store racing `invalidate_then` waits for the whole
+    /// clear, derived state included, so the set it derives survives. Were
+    /// the callback run after the guard, a store could land in between and
+    /// the clear would then wipe the set the new value derived. The racing
+    /// thread probes the guard before it stores, so no timing is involved.
+    #[test]
+    fn a_store_racing_a_clear_keeps_the_state_it_derived() {
+        let cache = Arc::new(CachedMetadata::<Vec<u8>>::new());
+        let derived = Arc::new(parking_lot::Mutex::new(vec![1u8]));
+        let (probed, heard) = std::sync::mpsc::channel();
+        let mut store = None;
+        cache.invalidate_then(|| {
+            let (cache, set) = (Arc::clone(&cache), Arc::clone(&derived));
+            store = Some(std::thread::spawn(move || {
+                probed
+                    .send(cache.state.try_write().is_none())
+                    .expect("send");
+                cache.replace(vec![2], || *set.lock() = vec![2]);
+            }));
+            assert!(
+                heard.recv().expect("probe"),
+                "a store must wait for the clear's guard"
+            );
+            derived.lock().clear();
+        });
+        store.expect("spawned").join().expect("store");
+        assert_eq!(*derived.lock(), [2], "the later store keeps its set");
     }
 
     #[tokio::test]

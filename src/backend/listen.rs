@@ -192,10 +192,12 @@ impl Backend {
     /// reaches the backend instead of the old list (§14).
     pub(crate) fn invalidate_tools(&self) {
         let entry = self.shared_entry();
-        entry.tools_cache.invalidate_if(|_| true);
         // Derived from the list just dropped; a stale set would keep
-        // permitting a resend for a tool that is no longer read-only.
-        entry.resend_permitted.write().clear();
+        // permitting a resend for a tool that is no longer read-only. Cleared
+        // under the cache's guard, so a fill stored after keeps its own set.
+        entry
+            .tools_cache
+            .invalidate_then(|| entry.resend_permitted.write().clear());
     }
 
     /// Test-only: fill the shared slot's tool list, as a reader's read does.

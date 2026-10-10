@@ -497,6 +497,7 @@ pub(crate) mod real_watcher {
             &Config::default(),
             env,
             None,
+            None,
             shutdown_rx,
         )
         .expect("the watcher starts");
