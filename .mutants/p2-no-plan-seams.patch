@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay_delivered.rs b/src/gateway/meta_mcp/invoke/relay_delivered.rs
+index 9d4c43d3a..08243b3fa 100644
+--- a/src/gateway/meta_mcp/invoke/relay_delivered.rs
++++ b/src/gateway/meta_mcp/invoke/relay_delivered.rs
+@@ -268,7 +268,7 @@ fn keep_plan_receipts(
+     // `MIK-8205` (S4): after capping, which rebuilds each digest without
+     // seams, and against the capped receipts, so a piece the cap cut is no
+     // step's.
+-    super::seams::add_subset_seams(fw, receipts, answer);
++    let _ = (&fw, &receipts, &answer);
+ }
+ 
+ /// MIK-7998: the single staged receipt kept to a wrapper the gateway's own

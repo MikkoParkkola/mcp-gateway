@@ -1,0 +1,17 @@
+head_sha	b24b14483d03a15edbc53c9e7dea065bc8acc053
+s1-excuse-ignores-seams	linux	s1-excuse-ignores-seams.patch	--lib -- a_subset_forward_against_its_sources_exact_join_is_not_a_relay an_in_order_subset_is_not_a_relay
+s2-holds-any-caller	linux	s2-holds-any-caller.patch	--lib -- seams_are_confined_to_their_source_and_caller
+s3-holds-no-window	linux	s3-holds-no-window.patch	--lib -- seams_expire_with_the_window
+s4-no-eviction	linux	s4-no-eviction.patch	--lib -- the_seam_store_evicts_only_seams
+c1-no-nfc-check	linux	c1-no-nfc-check.patch	--lib -- a_cap_inside_a_hangul_syllable_never_makes_up_a_window a_stripped_control_is_no_barrier_to_composition cut_context_crosses_piece_boundaries
+c2-no-starter-rule	linux	c2-no-starter-rule.patch	--lib -- a_cut_before_a_mark_is_never_safe
+c3-truncated-end-judged	linux	c3-truncated-end-judged.patch	--lib -- a_run_cut_by_the_piece_cap_makes_up_no_window_at_its_end
+c4-unbounded-scan	linux	c4-unbounded-scan.patch	--lib -- a_control_flood_keeps_the_cut_scans_bounded
+c5-context-after-truncated	linux	c5-context-after-truncated.patch	--lib -- a_run_cut_by_the_piece_cap_makes_up_no_window_at_its_end cut_context_crosses_piece_boundaries
+h1-no-margin	linux	h1-no-margin.patch	--lib -- a_span_hashes_only_the_windows_over_its_boundary large_pieces_read_only_the_boundary a_cap_inside_a_hangul_syllable_never_makes_up_a_window
+h2-hash-every-window	linux	h2-hash-every-window.patch	--lib -- a_span_hashes_only_the_windows_over_its_boundary
+h3-short-artificial-side	linux	h3-short-artificial-side.patch	--lib -- a_collapsing_side_skips_its_span_and_reports_the_cut
+w1-no-span-cap	linux	w1-no-span-cap.patch	--lib -- span_candidates_stop_at_the_cap the_span_cap_counts_spans_when_no_fingerprint_is_kept
+w2-no-piece-quota	linux	w2-no-piece-quota.patch	--lib -- a_long_label_run_does_not_take_the_text_runs_quota empty_pieces_past_the_cap_cost_the_same_at_any_count
+p1-owner-not-unique	linux	p1-owner-not-unique.patch	--lib -- a_plan_steps_staged_receipt_carries_no_seams a_subset_of_a_plan_answers_parts_against_the_tools_exact_join_is_not_refused
+p2-no-plan-seams	linux	p2-no-plan-seams.patch	--lib -- a_subset_of_a_plan_answers_parts_against_the_tools_exact_join_is_not_refused

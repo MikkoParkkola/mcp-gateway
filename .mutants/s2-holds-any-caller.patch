@@ -1,0 +1,17 @@
+diff --git a/src/security/firewall/collusion_seam_excuse.rs b/src/security/firewall/collusion_seam_excuse.rs
+index 0ff74f8ca..43021c8b4 100644
+--- a/src/security/firewall/collusion_seam_excuse.rs
++++ b/src/security/firewall/collusion_seam_excuse.rs
+@@ -122,8 +122,11 @@ impl SeamExcuses {
+         now: Instant,
+         window: Duration,
+     ) -> bool {
++        let _ = principal;
+         self.held
+-            .get(&(source, principal, fp))
++            .iter()
++            .find(|((s, _, f), _)| *s == source && *f == fp)
++            .map(|(_, v)| v)
+             .is_some_and(|(at, _)| now.saturating_duration_since(*at) <= window)
+     }
+ 

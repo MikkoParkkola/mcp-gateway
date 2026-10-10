@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion.rs b/src/security/firewall/collusion.rs
+index a9ddf421d..593a7b709 100644
+--- a/src/security/firewall/collusion.rs
++++ b/src/security/firewall/collusion.rs
+@@ -636,7 +636,7 @@ impl CollusionDetector {
+                     .filter(live)
+                     .any(|t| t.source == source && t.principal == sender)
+                     || state.sketches.holds((source, sender), fp, now, window)
+-                    || state.seams.holds((source, sender), fp, now, window)
++                    || false
+             };
+             let sensitive =
+                 |t: &&Holder| t.sensitive.is_some_and(|copies| copies.held(now, window));

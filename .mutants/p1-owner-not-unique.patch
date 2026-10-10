@@ -1,0 +1,16 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay_seams_record.rs b/src/gateway/meta_mcp/invoke/relay_seams_record.rs
+index b280f8f2f..8ce42cfd8 100644
+--- a/src/gateway/meta_mcp/invoke/relay_seams_record.rs
++++ b/src/gateway/meta_mcp/invoke/relay_seams_record.rs
+@@ -260,9 +260,8 @@ pub(in super::super) fn add_subset_seams(fw: &Firewall, receipts: &mut [Receipt]
+                     .filter(|(_, step, w)| *step == label && w.contains(text))
+                     .map(|(i, _, _)| *i);
+                 let only = holders.next()?;
+-                holders
+-                    .next()
+-                    .is_none()
++                let _ = holders.next();
++                true
+                     .then_some((text.as_ptr(), u32::try_from(only).ok()?))
+             })
+             .collect()

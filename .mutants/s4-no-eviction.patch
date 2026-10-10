@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_seam_excuse.rs b/src/security/firewall/collusion_seam_excuse.rs
+index 0ff74f8ca..19b79d9c8 100644
+--- a/src/security/firewall/collusion_seam_excuse.rs
++++ b/src/security/firewall/collusion_seam_excuse.rs
+@@ -104,7 +104,7 @@ impl SeamExcuses {
+             self.order.insert((now, seq), key);
+         }
+         let mut evicted = 0;
+-        while self.held.len() > MAX_SEAM_EXCUSES {
++        while false && self.held.len() > MAX_SEAM_EXCUSES {
+             let Some((_, key)) = self.order.pop_first() else {
+                 break;
+             };

@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_seam_excuse.rs b/src/security/firewall/collusion_seam_excuse.rs
+index 0ff74f8ca..8f3bf3884 100644
+--- a/src/security/firewall/collusion_seam_excuse.rs
++++ b/src/security/firewall/collusion_seam_excuse.rs
+@@ -272,7 +272,7 @@ impl Props<'_> {
+         let Some(&first) = head.first() else {
+             return false;
+         };
+-        if first.is_whitespace() || self.ccc.get_u8(leading(&self.dec, first)) != 0 {
++        if first.is_whitespace() {
+             return false;
+         }
+         let Some(mut tail) = visible_run(before[1].chars().rev().chain(before[0].chars().rev()), 3)
