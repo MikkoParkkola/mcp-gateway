@@ -380,3 +380,111 @@ async fn t26c_an_expired_redemption_wait_fails_the_task_once() {
     std::assert_eq!(ended, TaskStatus::Failed);
     std::assert_eq!(mock.calls(), 1, "nothing redeemed or dispatched");
 }
+
+/// T27 (reseal finds no slot): a round held for the clock is sealed once the
+/// clock reads; with no continuation slot free, the seal fails and the round
+/// is settled abandoned, never parked and never resumed. Mutant: a failed
+/// seal left unsettled.
+#[tokio::test(start_paused = true)]
+async fn t27_a_held_round_with_no_slot_to_seal_settles_abandoned() {
+    let (mock, mut gate) =
+        MockBackend::holding(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+    let (state, _dir) = state_with(&mock).await;
+    let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
+    let mut meta =
+        Arc::try_unwrap(app.meta_mcp).unwrap_or_else(|_| panic!("fixture meta is exclusive"));
+    meta.set_continuation_for_test(
+        crate::protocol::continuation::ContinuationState::full_for_test(),
+    );
+    app.meta_mcp = Arc::new(meta);
+    let state = Arc::new(app);
+    let id = task_id(&post(&state, "key-a", create(1, "t27")).await);
+    gate.wait_for_dispatch().await;
+    let settled = outcome(&state, &id, &mut gate, None, None).await;
+    std::assert_eq!(status_of(&settled), "completed", "{settled}");
+    std::assert!(
+        settled.to_string().contains("input_round_unavailable"),
+        "abandoned: {settled}"
+    );
+    assert_ended_unparked(&state, &id, &settled, "no slot");
+    std::assert_eq!(mock.calls(), 1, "nothing resumed");
+}
+
+/// A direct call whose round is minted on a readable store clock that then
+/// breaks before the park reads it again; the worker is waiting once the
+/// store refuses it a read.
+async fn breaks_before_park(
+    key: &str,
+) -> (Arc<MockBackend>, Arc<AppState>, tempfile::TempDir, String) {
+    let (mock, mut gate) =
+        MockBackend::holding(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+    let (state, dir) = state_with(&mock).await;
+    let id = task_id(&post(&state, "key-a", create(1, key)).await);
+    gate.wait_for_dispatch().await;
+    let readable = crate::clock::utc_now().expect("the host clock reads");
+    store(&state).set_clock_for_test(Some(readable));
+    // The probe before the mint reads once; the park's read is refused.
+    store(&state).set_clock_unreadable_after_for_test(1);
+    let refused = store(&state).refused_reads_for_test();
+    gate.release_all();
+    while store(&state).refused_reads_for_test() <= refused {
+        tokio::task::yield_now().await;
+    }
+    (mock, state, dir, id)
+}
+
+/// T28 (park waits, then is cancelled): a cancel during the park's clock
+/// wait ends the task cancelled with nothing parked. Mutant: the park's wait
+/// ignores the stop.
+#[tokio::test(start_paused = true)]
+async fn t28_a_park_waiting_for_the_clock_is_cancelled() {
+    let (mock, state, _dir, id) = breaks_before_park("t28").await;
+    std::assert!(
+        !has_round(&state, &id),
+        "not parked while the clock is unreadable"
+    );
+    let cancelled = post(
+        &state,
+        "key-a",
+        task_method(9, "tasks/cancel", json!({ "taskId": id })),
+    )
+    .await;
+    std::assert!(cancelled.get("error").is_none(), "{cancelled}");
+    let ended = loop {
+        let status = stored_status(&state, &id).expect("the task exists");
+        if status != TaskStatus::Working {
+            break status;
+        }
+        tokio::time::sleep(CLOCK_RETRY).await;
+    };
+    std::assert_eq!(ended, TaskStatus::Cancelled);
+    std::assert!(!has_round(&state, &id), "nothing parked");
+    std::assert_eq!(mock.calls(), 1);
+}
+
+/// T28b (park waits past its bound): the clock never recovers, so the task
+/// fails once its ttl has elapsed on monotonic time. Mutant: the park's wait
+/// treats the bound as a stop and leaves the task working.
+#[tokio::test(start_paused = true)]
+async fn t28b_a_park_waiting_past_its_bound_fails_the_task() {
+    let (mock, state, _dir, id) = breaks_before_park("t28b").await;
+    let bound = store(&state)
+        .clock_wait_bound(&id)
+        .expect("the task exists");
+    tokio::time::advance(bound + CLOCK_RETRY).await;
+    let past_bound = store(&state).refused_reads_for_test();
+    let ended = loop {
+        let status = stored_status(&state, &id).expect("the task exists");
+        if status != TaskStatus::Working {
+            break status;
+        }
+        std::assert!(
+            store(&state).refused_reads_for_test() < past_bound + 10,
+            "still working after ten retries past the bound"
+        );
+        tokio::time::sleep(CLOCK_RETRY).await;
+    };
+    std::assert_eq!(ended, TaskStatus::Failed);
+    std::assert!(!has_round(&state, &id), "nothing parked");
+    std::assert_eq!(mock.calls(), 1);
+}

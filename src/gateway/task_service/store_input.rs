@@ -80,6 +80,9 @@ pub(super) struct TestSeams {
     redemption_script: std::sync::Mutex<std::collections::VecDeque<RedemptionRead>>,
     /// Every scripted sample a redemption consumed, in order.
     redemption_consumed: std::sync::Mutex<Vec<RedemptionRead>>,
+    /// Readable reads of the frozen clock left before it reads before 1970:
+    /// a clock that breaks between two reads of one worker.
+    unreadable_after: std::sync::Mutex<Option<usize>>,
 }
 
 /// One scripted redemption sample (MIK-8202 AC13).
@@ -121,12 +124,36 @@ impl Shared {
     )]
     pub(super) fn now(&self) -> Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch> {
         #[cfg(test)]
-        if let Some(frozen) = *self
+        let frozen = *self
             .seams
             .clock
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-        {
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        #[cfg(test)]
+        if let Some(frozen) = frozen {
+            {
+                let mut left = self
+                    .seams
+                    .unreadable_after
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if *left == Some(0) && frozen.timestamp() >= 0 {
+                    *left = None;
+                    *self
+                        .seams
+                        .clock
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                        DateTime::from_timestamp(-1, 0);
+                    self.seams
+                        .refused_reads
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    return Err(crate::clock::ClockBeforeEpoch);
+                }
+                if let Some(n) = left.as_mut().filter(|_| frozen.timestamp() >= 0) {
+                    *n -= 1;
+                }
+            }
             return if frozen.timestamp() < 0 {
                 self.seams
                     .refused_reads
@@ -239,6 +266,19 @@ impl TaskStore {
             .clock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = at;
+    }
+
+    /// After `reads` more readable reads of the frozen clock, it reads before
+    /// 1970 from then on: a clock that breaks between a worker's mint and
+    /// its park.
+    #[cfg(test)]
+    pub(crate) fn set_clock_unreadable_after_for_test(&self, reads: usize) {
+        *self
+            .0
+            .seams
+            .unreadable_after
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(reads);
     }
 
     /// Freeze the clock at `at` right after the next completing write commits.

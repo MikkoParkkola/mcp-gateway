@@ -86,13 +86,13 @@ pub(super) async fn readable_now(
                 Some(_) => {}
             },
         }
-        tokio::select! {
-            biased;
+        // The cancel signal first, then the retry: a timeout polls its inner
+        // future before its timer, as the old biased select did.
+        match tokio::time::timeout(CLOCK_RETRY, cancel_rx.changed()).await {
             // A dropped sender can no longer cancel: stop, as `dispatch` does.
-            changed = cancel_rx.changed() => if changed.is_err() {
-                return ClockWait::Stopped;
-            },
-            () = tokio::time::sleep(CLOCK_RETRY) => {}
+            Ok(Err(_)) => return ClockWait::Stopped,
+            // A change (the loop re-reads the flag) or the retry is due.
+            Ok(Ok(())) | Err(_) => {}
         }
     }
 }
@@ -185,3 +185,7 @@ impl Settling<'_> {
         Resealed::Sealed(Box::new(response), (at, now))
     }
 }
+
+#[cfg(test)]
+#[path = "input_round_clock_tests.rs"]
+mod tests;

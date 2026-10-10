@@ -575,3 +575,35 @@ impl Shared {
         Ok(CancelClaim::Claimed(descriptor))
     }
 }
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::fallback_bytes;
+    use crate::gateway::task_service::record::PreparedTask;
+    use crate::protocol::tasks::{Task, TaskOptions, TaskTransition};
+
+    const OWNER: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+
+    /// A settled row never settles again, so it needs no room for a bounded
+    /// failure: its fallback size is 0 (MIK-8202, read at load). Mutant: the
+    /// settled row measured as if it could still fail.
+    #[test]
+    fn a_settled_row_needs_no_fallback_room() {
+        let at = chrono::DateTime::from_timestamp(1_790_000_000, 0).expect("a time");
+        let mut task = Task::create_at(
+            "tool",
+            at,
+            TaskOptions {
+                ttl_ms: Some(60_000),
+                poll_interval_ms: Some(1_000),
+            },
+        );
+        task.transition(
+            TaskTransition::Complete(serde_json::json!({ "content": [] })),
+            at,
+        )
+        .expect("a working task completes");
+        let record = PreparedTask::for_test(&task, OWNER, 1).record;
+        assert_eq!(fallback_bytes(&task, &record).expect("measured"), 0);
+    }
+}
