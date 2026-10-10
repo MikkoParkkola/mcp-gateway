@@ -77,6 +77,14 @@ SWEPT_AREAS = (
     "src/gateway/server/stdio",
     # MIK-8195 W8: the stdio read judge.
     "src/gateway/outbound/stdio.rs",
+    # MIK-8195 W3: identity propagation, the input bridge and the rest of
+    # personal_accounts (config/ and provider).
+    "src/identity_propagation/",
+    "src/gateway/input_bridge.rs",
+    "src/gateway/meta_mcp/task_confirmation",
+    "src/config/account_bindings.rs",
+    "src/personal_accounts/config/",
+    "src/personal_accounts/provider",
     # MIK-8195 W2: gateway/server outside stdio, mod.rs and persistence.rs
     # (those two are W7), listed one by one.
     "src/gateway/server/cleartext.rs",
