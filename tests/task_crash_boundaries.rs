@@ -131,7 +131,7 @@ fn config_with_two_principals(root: &Path, peer: &PeerGuard, principals: &Princi
     // `/health` only, so `/mcp` demands a credential.
     config.auth.public_paths = vec!["/health".to_string()];
     // Auth on requires an audit log (UPGRADING-4.0 item 43).
-    config.security.transparency_log.enabled = true;
+    config.security.transparency_log.enabled = Some(true);
     config.security.transparency_log.path = root
         .join("audit")
         .join("log.jsonl")

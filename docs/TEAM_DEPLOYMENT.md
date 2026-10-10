@@ -121,8 +121,9 @@ gateway using either runs one replica
 
 ## 4. The audit log
 
-With `auth.enabled`, the tool-call audit log is required: a config without
-`security.transparency_log.enabled` and a non-blank `path` refuses to load
+With `auth.enabled`, the tool-call audit log is required. It is on by default
+when auth is on, so a config needs no line for it; one that sets
+`security.transparency_log.enabled: false`, or a blank `path`, refuses to load
 (UPGRADING-4.0 item 43). Each record names the caller, and tool calls that are
 refused or fail are recorded too. If the log stops appending, calls are refused with 503
 until it recovers (items 43 and 50). A 503 of this kind can arrive after the
@@ -182,7 +183,7 @@ Defaults that matter here:
 | `server.cleartext_http` | `refuse` |
 | `server.replicas` | `1` |
 | `security.caller_identity.mode` | `off` |
-| `security.transparency_log.enabled` | `false` |
+| `security.transparency_log.enabled` | on when `auth.enabled`, else `false` |
 | `key_server.enabled` | `false` |
 
 ## Kubernetes with the Helm chart

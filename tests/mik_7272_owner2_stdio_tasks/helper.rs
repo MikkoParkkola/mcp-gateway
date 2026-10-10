@@ -224,7 +224,7 @@ pub fn write_config(
         // Auth on requires an audit log (UPGRADING-4.0 item 43), and the
         // readiness probe reads `/health` without a credential.
         config.auth.public_paths = vec!["/health".to_string()];
-        config.security.transparency_log.enabled = true;
+        config.security.transparency_log.enabled = Some(true);
         config.security.transparency_log.path = root
             .join(format!("audit-{name}"))
             .join("log.jsonl")
