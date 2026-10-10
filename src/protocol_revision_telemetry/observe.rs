@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+// MIK-6704: label only (imported for telemetry attribution, never a decision).
 use super::{
     CacheScope, ListFilters, META_CLIENT_INFO, META_PROTOCOL_VERSION, SessionAttribution, Snapshot,
     ToolsListShadow, Transport, UNATTRIBUTED_CLIENT, client_info_name, client_label, global,
