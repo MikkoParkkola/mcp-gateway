@@ -28,7 +28,9 @@ if [[ -f Cargo.toml ]]; then
   echo "[pre-push] timing asserts"
   python3 scripts/dev/check-timing-asserts.py --base "$base"
   echo "[pre-push] C6 obligations"
-  python3 scripts/release/c6_resolve.py --tree HEAD
+  # One line per obligation: show them all only when one is unresolved.
+  c6="$(python3 scripts/release/c6_resolve.py --tree HEAD)" || { printf '%s\n' "$c6"; exit 1; }
+  printf '%s\n' "${c6##*$'\n'}"
 
   echo "[pre-push] commit message hygiene"
   # This branch's own commits. With no argument the script falls back to the
