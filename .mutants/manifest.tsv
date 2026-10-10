@@ -1,0 +1,8 @@
+head_sha	df6e46167baf9da5fa5471522ebbda1397f7ca55
+n1-no-2k-threshold	linux	n1-no-2k-threshold.patch	--lib -- short_text_splits_keep_every_window the_margin_starts_at_two_k
+n2-no-drop	linux	n2-no-drop.patch	--lib -- glue_windows_around_a_long_leaf_are_not_kept a_borrowed_edge_char_is_not_a_relay a_whole_join_forward
+n3-inner-space-unowned	linux	n3-inner-space-unowned.patch	--lib -- prose_interior_windows_are_kept
+n4-edge-space-owned	linux	n4-edge-space-owned.patch	--lib -- glue_windows_around_a_long_leaf_are_not_kept
+n5-no-stand-down	linux	n5-no-stand-down.patch	--lib -- composition_across_fields_stands_the_filter_down
+n6-interior-dropped	linux	n6-interior-dropped.patch	--lib -- prose_interior_windows_are_kept a_long_short_split_keeps_the_long_fields_evidence
+n7-no-run-together	linux	n7-no-run-together.patch	--lib -- a_non_holder_splitting_a_flat_copy_is_still_reported

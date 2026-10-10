@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_margin.rs b/src/security/firewall/collusion_margin.rs
+index 2b1f4aaea..dab61af5e 100644
+--- a/src/security/firewall/collusion_margin.rs
++++ b/src/security/firewall/collusion_margin.rs
+@@ -148,7 +148,7 @@ fn tagged(parts: &[(&str, Option<u32>)], norm: &str) -> Option<Vec<Option<u32>>>
+             // An owner's normalisation alone trims its edge whitespace, so a
+             // space is its owner's only with that owner's text on both sides.
+             let own = match space {
+-                Run::Owned(Some(o)) if before == Some(o) && owner == Some(o) => Some(o),
++                Run::Owned(Some(o)) => Some(o),
+                 _ => None,
+             };
+             rebuilt.push(' ');

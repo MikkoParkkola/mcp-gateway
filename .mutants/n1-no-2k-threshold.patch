@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_margin.rs b/src/security/firewall/collusion_margin.rs
+index 2b1f4aaea..a867ddd25 100644
+--- a/src/security/firewall/collusion_margin.rs
++++ b/src/security/firewall/collusion_margin.rs
+@@ -73,7 +73,7 @@ fn glue_windows(
+     let mut long: HashMap<u32, bool> = HashMap::new();
+     for (text, owner) in parts {
+         if let Some(o) = owner {
+-            let is_long = normalized_len(text) >= DOMINANT;
++            let is_long = normalized_len(text) >= DOMINANT || true;
+             long.entry(*o)
+                 .and_modify(|l| *l |= is_long)
+                 .or_insert(is_long);

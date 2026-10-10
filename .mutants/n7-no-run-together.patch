@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_margin.rs b/src/security/firewall/collusion_margin.rs
+index 2b1f4aaea..745f8c19c 100644
+--- a/src/security/firewall/collusion_margin.rs
++++ b/src/security/firewall/collusion_margin.rs
+@@ -187,7 +187,7 @@ pub(crate) fn egress_parts(value: &serde_json::Value) -> Vec<(&str, Option<u32>)
+         .enumerate()
+         .map(|(i, l)| vec![(*l, owner(i))])
+         .collect();
+-    if leaves.len() > 1 {
++    if false && leaves.len() > 1 {
+         slots.push(
+             leaves
+                 .iter()

@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_margin.rs b/src/security/firewall/collusion_margin.rs
+index 2b1f4aaea..50607d0bc 100644
+--- a/src/security/firewall/collusion_margin.rs
++++ b/src/security/firewall/collusion_margin.rs
+@@ -100,7 +100,7 @@ fn glue_windows(
+             .filter_map(|d| tags[i + d * (K - 1) / GLUE])
+             .find(|o| counts.get(o).is_some_and(|&c| c >= K - GLUE));
+         glue.push(dominant.is_some_and(|o| {
+-            counts.get(&o).is_some_and(|&c| c < K) && long.get(&o).copied().unwrap_or(false)
++            counts.get(&o).is_some_and(|&c| c <= K) && long.get(&o).copied().unwrap_or(false)
+         }));
+     }
+     Some(glue)
