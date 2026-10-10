@@ -1,0 +1,1 @@
+src/gateway/server/support.rs	names_nobody	1	critical	c	names_nobody	Refuses a client certificate naming no subject (no SAN URI, no CN) before anything runs (MIK-8286)
