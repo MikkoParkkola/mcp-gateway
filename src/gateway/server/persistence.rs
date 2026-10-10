@@ -292,6 +292,39 @@ pub(super) async fn save_state_on_shutdown(
     run_shutdown_saves(deadline, saves).await;
 }
 
+/// How many ticks a periodic-save test may advance, and how long each may take
+/// to land: together the 30 s the tests gave a single tick before MIK-8216.
+#[cfg(all(test, feature = "cost-governance"))]
+const CATCH_UP_TICKS: u32 = 3;
+#[cfg(all(test, feature = "cost-governance"))]
+const TICK_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Advance the paused clock one cost-save interval at a time until `costs`
+/// exists, giving each tick real time to land, for up to [`CATCH_UP_TICKS`] ticks.
+///
+/// A tick that finds `COST_WRITE` held is skipped, and the next tick catches
+/// up (MIK-8157). Paused time packs intervals into almost no real time, so a
+/// previous save thread, or another test's save in this process, can still
+/// hold the lock at the first tick (MIK-8216). One advance alone cannot
+/// recover from that skip.
+// Test-only and crate-internal. Callers: the stdio and HTTP periodic-save tests
+// (server/tests) and this module's catch-up row (MIK-8216 AC2).
+#[cfg(all(test, feature = "cost-governance"))]
+pub(super) async fn advance_until_saved(costs: &std::path::Path) -> Result<(), String> {
+    for _ in 0..CATCH_UP_TICKS {
+        tokio::time::advance(COST_SAVE_INTERVAL + std::time::Duration::from_secs(1)).await;
+        if crate::test_wait::wait_real_time(TICK_BOUND, || costs.exists())
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "did not land in {CATCH_UP_TICKS} ticks of {TICK_BOUND:?} real time each"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,6 +472,48 @@ mod tests {
         assert!(
             (global - 0.4).abs() < 1e-9,
             "the catch-up save lost spend from the skipped interval: the next boot reads {global}"
+        );
+    }
+
+    /// MIK-8216 AC2: the losing order, forced. Another holder has `COST_WRITE`
+    /// when the first periodic tick fires, so that tick is skipped, and the
+    /// helper's next tick saves. One advance alone would leave no save at all:
+    /// the reported flake.
+    #[cfg(feature = "cost-governance")]
+    #[tokio::test(start_paused = true)]
+    async fn the_catch_up_helper_recovers_a_tick_skipped_under_a_held_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let costs = dir.path().join("costs.json");
+        let enforcer = enforcer_with_spend(0.25);
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _writing = COST_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+            held_tx
+                .send(())
+                .expect("the test waits for the lock to be held");
+            // Past the first tick's save attempt; long before the helper's
+            // second tick, one TICK_BOUND later.
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        });
+        held_rx.recv().expect("the holder took the lock");
+        let saver = spawn_cost_saver(
+            Arc::clone(&enforcer),
+            dir.path().to_path_buf(),
+            COST_SAVE_INTERVAL,
+            None,
+        );
+        let landed = advance_until_saved(&costs).await;
+        holder.join().expect("the holder does not panic");
+        saver.abort();
+        assert!(
+            landed.is_ok(),
+            "the helper did not recover a tick skipped under a held lock: {}",
+            landed.err().unwrap_or_default()
+        );
+        let global = restored_global(dir.path());
+        assert!(
+            (global - 0.25).abs() < 1e-9,
+            "the caught-up save lost spend: the next boot reads {global}"
         );
     }
 

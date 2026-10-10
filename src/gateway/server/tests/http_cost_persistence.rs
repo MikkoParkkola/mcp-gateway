@@ -88,7 +88,7 @@ async fn http_saves_spend_periodically_while_serving() {
     tokio::time::pause();
     // Read on the paused clock, so only an advanced interval can explain it;
     // several ticks: see `advance_until_saved` (MIK-8216).
-    let saved = super::advance_until_saved(&costs).await;
+    let saved = crate::gateway::server::persistence::advance_until_saved(&costs).await;
     tokio::time::resume();
     // Still serving: a server that had stopped would have made its shutdown
     // save, which must not pass for the periodic one.
