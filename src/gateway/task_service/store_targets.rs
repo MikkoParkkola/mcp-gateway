@@ -628,4 +628,29 @@ mod fallback_tests {
         let record = PreparedTask::for_test(&task, OWNER, 1).record;
         assert_eq!(fallback_bytes(&task, &record).expect("measured"), 0);
     }
+
+    /// A live row already at the last revision cannot settle at all, so it
+    /// has no fallback to measure: the bounded failure's revision bump
+    /// overflows and the measure is the store's capacity refusal, never a
+    /// size. The only error the bounded failure's `settled` can return: a Fail
+    /// transition on a live task never refuses. Mutant: the overflow saturates
+    /// (a size is reported for a write that cannot happen).
+    #[test]
+    fn a_row_at_the_last_revision_has_no_fallback_to_measure() {
+        let at = chrono::DateTime::from_timestamp(1_790_000_000, 0).expect("a time");
+        let task = Task::create_at(
+            "tool",
+            at,
+            TaskOptions {
+                ttl_ms: Some(60_000),
+                poll_interval_ms: Some(1_000),
+            },
+        );
+        let mut record = PreparedTask::for_test(&task, OWNER, 1).record;
+        record.revision = u64::MAX;
+        assert!(matches!(
+            fallback_bytes(&task, &record),
+            Err(super::StoreError::Capacity)
+        ));
+    }
 }
