@@ -3,10 +3,11 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Prove items moved out of server/mod.rs into sibling files unchanged.
 
-Usage: check_moved_items.py <base> <head> <file>...
+Usage: check_moved_items.py [--source <path>] <base> <head> <file>...
 
 <file> names the new files under src/gateway/server/ (for example
-background.rs). The items of server/mod.rs at <base> must equal, as a
+background.rs). With `--source <path>`, the items move out of <path> instead
+of server/mod.rs, and each <file> is named relative to <path>'s directory. The items of server/mod.rs at <base> must equal, as a
 multiset, the items of server/mod.rs and the named files at <head>. Each
 method of an `impl Gateway` block counts as an item of its own, so a method
 may move between impl blocks. `use` and `mod` lines are not compared (the
@@ -58,7 +59,18 @@ def split(toks: list[str]) -> list[list[str]]:
 def items(text: str, moved: bool) -> list[str]:
     toks = tp.tokens(text)
     if moved:
-        toks = " ".join(toks).replace("super :: super ::", "super ::").split(" ")
+        # Token-wise, so a string literal with a space stays one token; each
+        # `super :: super ::` is read once, left to right, as before.
+        out: list[str] = []
+        i = 0
+        while i < len(toks):
+            if toks[i : i + 4] == ["super", "::", "super", "::"]:
+                out += ["super", "::"]
+                i += 4
+            else:
+                out.append(toks[i])
+                i += 1
+        toks = out
     toks = tp.moved.reshape(toks)
     found = []
     for it in split(toks):
@@ -81,20 +93,25 @@ def norm(s: str) -> str:
 
 
 def main() -> int:
-    if len(sys.argv) < 4:
+    args = sys.argv[1:]
+    source = D + "mod.rs"
+    if args[:1] == ["--source"] and len(args) > 1:
+        source, args = args[1], args[2:]
+    if len(args) < 3:
         print(__doc__)
         return 2
-    base, head, files = sys.argv[1], sys.argv[2], sys.argv[3:]
-    a = Counter(items(show(base, D + "mod.rs"), False))
-    b = Counter(items(show(head, D + "mod.rs"), False))
+    base, head, files = args[0], args[1], args[2:]
+    here = source.rsplit("/", 1)[0] + "/"
+    a = Counter(items(show(base, source), False))
+    b = Counter(items(show(head, source), False))
     for f in files:
-        b.update(items(show(head, D + f), True))
+        b.update(items(show(head, here + f), True))
     problems = [f"only at base: {x[:150]}" for x in sorted((a - b).elements())]
     problems += [f"only at head: {x[:150]}" for x in sorted((b - a).elements())]
     if problems:
         print("\n".join(problems))
         return 1
-    moved = sum(sum(1 for _ in items(show(head, D + f), True)) for f in files)
+    moved = sum(sum(1 for _ in items(show(head, here + f), True)) for f in files)
     print(f"items equal: {sum(a.values())} items, {moved} of them moved into {', '.join(files)}")
     return 0
 

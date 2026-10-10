@@ -106,7 +106,8 @@ def strip_comments(text: str) -> str:
 
 
 TOKEN = re.compile(
-    r'"(?:\\.|[^"\\])*"'  # string literals, kept whole
+    r'b?r##"[\s\S]*?"##|b?r#"[\s\S]*?"#|b?r"[^"]*"'  # raw strings, kept whole
+    r'|"(?:\\.|[^"\\])*"'  # string literals, kept whole
     r"|'(?:\\.|[^'\\])'"  # char literals
     r"|'[A-Za-z_]\w*"  # lifetimes and labels
     r"|\d[\w.]*|\w+"  # numbers, identifiers
