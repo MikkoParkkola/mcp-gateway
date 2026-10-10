@@ -49,6 +49,16 @@ SWEPT_AREAS = (
     "src/personal_accounts/journey/",
     "src/gateway/task_service/",
     "src/gateway/router/",
+    # MIK-8195 W5 (personal_accounts custody core); W6 replaces these with the directory.
+    "src/personal_accounts/identity.rs",
+    "src/personal_accounts/migration_precondition.rs",
+    "src/personal_accounts/migration_source.rs",
+    "src/personal_accounts/mod.rs",
+    "src/personal_accounts/refusal.rs",
+    "src/personal_accounts/storage.rs",
+    "src/personal_accounts/storage_windows.rs",
+    "src/personal_accounts/vault.rs",
+    "src/personal_accounts/worker_callback.rs",
 )
 # Diffing against git's empty tree reads every line of <head> as added.
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
