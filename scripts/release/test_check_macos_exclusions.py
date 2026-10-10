@@ -117,6 +117,8 @@ class CheckMacosExclusions(unittest.TestCase):
             '#[cfg(all(test, any(target_os = "linux", target_os = "macos"), '
             'not(target_vendor = "apple")))]\nmod apple_off_tests;\n'
         )
+        # `foo` is a real feature: the gate still requires Linux.
+        (Path(self.dir.name) / "Cargo.toml").write_text('[package]\nname = "x"\n[features]\nfoo = []\n')
         self.assertEqual(
             self.tree(rust, path="src/reload/mod.rs"),
             [
@@ -168,29 +170,51 @@ class Predicates(unittest.TestCase):
         self.assert_off('#[cfg(all(test, not(any(target_os = "macos", target_os = "ios"))))]')
 
     def test_p4_feature_atoms_follow_cargo(self) -> None:
-        self.assert_on('#[cfg(feature = "foo")]')
-        self.assert_on('#[cfg(feature = "opt")]')
-        self.assert_off('#[cfg(feature = "nope")]')
-        self.assert_off('#[cfg(feature = "dd")]')
+        # Inside a gate that tells macOS from Linux, a feature is on only when
+        # the crate declares it, or as an optional dependency's implicit
+        # feature unless a feature names that dependency through `dep:`.
+        self.assert_on('#[cfg(any(feature = "foo", target_os = "linux"))]')
+        self.assert_on('#[cfg(any(feature = "opt", target_os = "linux"))]')
+        self.assert_off('#[cfg(any(feature = "nope", target_os = "linux"))]')
+        self.assert_off('#[cfg(any(feature = "dd", target_os = "linux"))]')
 
     def test_p5_a_comment_inside_the_attribute_is_not_a_predicate(self) -> None:
         self.assert_off('#[cfg(all(test, /* linux */ target_os = "macos"))]')
 
-    def test_p6_a_multi_line_attribute_counts_as_off(self) -> None:
+    def test_p6_a_multi_line_attribute_is_read_whole(self) -> None:
         (Path(self.dir.name) / "Cargo.toml").write_text(self.CARGO)
         found = self.tree('#[cfg(all(\n    test,\n    target_os = "macos"\n))]\n#[test]\nfn probe() {}\n')
+        self.assertEqual(found, [])
+        found = self.tree('#[cfg(all(\n    test,\n    target_os = "linux"\n))]\n#[test]\nfn probe() {}\n')
+        self.assertEqual(found, ["not run on macOS and not listed: src/x_tests.rs probe"])
+
+    def test_p6b_a_comment_in_a_multi_line_attribute_counts_as_off(self) -> None:
+        (Path(self.dir.name) / "Cargo.toml").write_text(self.CARGO)
+        found = self.tree('#[cfg(all(\n    test, // macOS too\n    target_os = "macos"\n))]\n#[test]\nfn probe() {}\n')
         self.assertEqual(found, ["not run on macOS and not listed: src/x_tests.rs probe"])
 
     def test_p7_an_undecided_key_counts_as_off(self) -> None:
         self.assert_off('#[cfg(target_has_atomic = "64")]')
 
-    def test_p8_cfg_attr_ignore_under_any_true_predicate_is_off(self) -> None:
-        self.assert_off("#[cfg_attr(unix, ignore)]")
+    def test_p8_cfg_attr_ignore_true_on_macos_only_is_off(self) -> None:
+        self.assert_off('#[cfg_attr(target_vendor = "apple", ignore)]')
+        self.assert_off('#[cfg_attr(not(target_os = "linux"), ignore = "flaky here")]')
+        # Ignored on Linux too, or never: not a macOS gap.
+        self.assert_on("#[cfg_attr(unix, ignore)]")
         self.assert_on('#[cfg_attr(target_os = "linux", ignore)]')
 
     def test_p9_cfg_attr_without_ignore_is_on(self) -> None:
         self.assert_on('#[cfg_attr(target_os = "macos", allow(dead_code))]')
 
+
+    def test_p10_a_windows_only_test_is_not_a_macos_gap(self) -> None:
+        # Off on macOS and on Linux alike: the list is macOS's gap against Linux.
+        self.assert_on("#[cfg(windows)]")
+        self.assert_on('#[cfg(target_os = "windows")]')
+
+    def test_p11_a_lint_cfg_attr_with_a_path_is_on(self) -> None:
+        # Only the predicate is parsed; the attributes after it may hold paths.
+        self.assert_on("#[cfg_attr(not(test), deny(clippy::print_stdout))]")
 
 if __name__ == "__main__":
     unittest.main()
