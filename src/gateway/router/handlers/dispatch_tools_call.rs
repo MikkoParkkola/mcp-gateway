@@ -289,62 +289,6 @@ pub(super) async fn tools_call(
     // beside the proven principal, never instead of it.
     let agent_declared = agent_identity.declared_agent_label();
 
-    // The modern destructive gate (X14). Every authorization, admin and
-    // firewall check above has already run, and nothing below has yet
-    // acted: a challenge mints no task, reserves no idempotency key and
-    // reaches no backend, and neither does a refusal.
-    //
-    // Awaited into its own binding before the match, so the borrow of
-    // `retry` ends with the statement and the `NotRequired` arm can hand
-    // the same fields straight back.
-    let confirmation = state
-        .meta_mcp
-        .confirm_destructive_task(&crate::gateway::meta_mcp::TaskConfirmationRequest {
-            id: id.clone(),
-            // The outer name the client called, never a wrapper's
-            // target, and the same `arguments` binding that reaches
-            // `task_intent_for_call` — that value is both the admission
-            // operation's `arguments` and its representation, so the
-            // grant must digest what admission will key on.
-            tool_name,
-            arguments: &arguments,
-            task: params.and_then(|p| p.get("task")),
-            retry: &retry,
-            verified_identity: verified_identity.as_ref(),
-            input_capabilities: declared_capabilities,
-            is_modern,
-            admission: state.task_executor.service.admission(),
-        })
-        .await;
-    let retry = match confirmation {
-        crate::gateway::meta_mcp::TaskConfirmation::NotRequired => retry,
-        // Confirmed: dispatch the original call, with the confirmation
-        // metadata removed.
-        crate::gateway::meta_mcp::TaskConfirmation::Granted(granted) => granted,
-        // The challenge, or the refusal of a grant that does not
-        // authorise this call. Answered here because there is nothing
-        // below to run.
-        crate::gateway::meta_mcp::TaskConfirmation::Answer(answer) => {
-            // Out through the tail, not around it. A challenge is a
-            // client-visible result like any other: it needs this
-            // revision's metadata shaped onto it *before* the response
-            // security finalizer runs, and it needs that finalizer —
-            // whose `PreserveInputRequired` policy is what leaves the
-            // challenge's own discriminator alone, and whose signing
-            // step is the only one entitled to sign what goes out.
-            // Serialization then follows the request's own era, so a
-            // legacy caller still gets its session header. The status
-            // is re-derived there from this same response, by the same
-            // `refusal_status` call, so a refusal keeps its code.
-            //
-            // Nothing has been admitted at this point — no lease, no
-            // task, no backend — so the tail's execution settlement has
-            // nothing to settle, which is the honest state for a call
-            // that was stopped at the gate.
-            return Ok(*answer);
-        }
-    };
-
     // Destructive-action confirmation is decided at the dispatcher,
     // for every transport. What this edge owns is the one fact the
     // dispatcher cannot see: which era the request was written
@@ -361,77 +305,13 @@ pub(super) async fn tools_call(
         crate::gateway::destructive_confirmation::ConfirmationPolicy::for_legacy()
     };
 
-    // Authorization is handed to the dispatch chokepoint rather than
-    // applied here, so the shapes an edge cannot see — a playbook
-    // step, whose targets are not in the request — face it too. The
-    // authorizer is the one derived above, before the method match.
-
-    // The background-task intent, or a refusal, or nothing at all.
-    //
-    // Built here — after the authorization loop, the firewall scan and
-    // the admin pre-check, and before the dispatch chokepoint that owns
-    // the destructive-confirmation gate — because a handle must not be
-    // minted for a call that is about to be refused. Only a request that
-    // actually carries a `task` member is offered to the builder: an
-    // ordinary `tools/call` must reach the synchronous path unchanged,
-    // and the builder's own refusals (no verified owner, no idempotency
-    // key) are conditions on asking for a task, not on calling a tool.
-    let task_intent = if params.is_some_and(|p| p.get("task").is_some()) {
-        match tasks::task_intent_for_call(
-            state,
-            id.clone(),
-            tasks::TaskIntentRequest {
-                tool_name,
-                arguments: &arguments,
-                is_modern,
-                retry: &retry,
-                verified_identity: verified_identity.as_ref(),
-                owner,
-                client: client.as_ref(),
-                oauth_agent_identity: oauth_agent_identity.as_ref(),
-                cert_identity: cert_identity.as_ref(),
-                api_key_name,
-                agent_id,
-                agent_declared,
-                grant_subject: grant_subject.clone(),
-                is_admin: client.as_ref().is_some_and(|c| c.admin),
-                input_capabilities: declared_capabilities,
-                session_id: Some(session_id.as_str()),
-                protocol_revision: protocol_revision_owned.as_deref(),
-                surface_request,
-            },
-        ) {
-            Ok(intent) => intent,
-            Err(refusal) => {
-                return Err(build_response(
-                    *refusal,
-                    session_id,
-                    StatusCode::BAD_REQUEST,
-                ));
-            }
-        }
-    } else {
-        None
-    };
-
-    // One request owns admission through dispatch and secured delivery.
-    // A route change may conflict on representation, never create a
-    // second owner for the same verified principal and explicit key.
-    // The A/B arm and the prefetch hints key on the caller (G4). Its
-    // reclaim deadline is renewed here, in every build, because those
-    // entries have no session end to reclaim them.
-    if let Some(ref lifecycle) = state.session_lifecycle
-        && !caller_key.is_empty()
-    {
-        lifecycle.track(
-            caller_key.clone(),
-            session_lifecycle::now_unix() + session_lifecycle::IDLE_TTL.as_secs(),
-        );
-    }
+    // The caller, built before the task gate so the gate binds its grant
+    // through this caller's own `principal_source` — the one binding every
+    // continuation reads (MIK-8137) — rather than a second spelling of
+    // who it is. Its task intent and final retry fields are filled in
+    // below, once the gate has decided.
     let mut caller = MetaMcpCallerContext {
-        // Built above, after every gate that can still refuse, and only
-        // carried here: the dispatch chokepoint is what hands it over.
-        task: task_intent,
+        task: None,
         execution: None,
         signing: None,
         is_modern,
@@ -482,6 +362,136 @@ pub(super) async fn tools_call(
             }
         },
     };
+
+    // The modern destructive gate (X14). Every authorization, admin and
+    // firewall check above has already run, and nothing below has yet
+    // acted: a challenge mints no task, reserves no idempotency key and
+    // reaches no backend, and neither does a refusal.
+    let confirmation = state
+        .meta_mcp
+        .confirm_destructive_task(&crate::gateway::meta_mcp::TaskConfirmationRequest {
+            id: id.clone(),
+            // The outer name the client called, never a wrapper's
+            // target, and the same `arguments` binding that reaches
+            // `task_intent_for_call` — that value is both the admission
+            // operation's `arguments` and its representation, so the
+            // grant must digest what admission will key on.
+            tool_name,
+            arguments: &arguments,
+            task: params.and_then(|p| p.get("task")),
+            retry: &retry,
+            verified_identity: verified_identity.as_ref(),
+            principal: crate::protocol::mrtr::source_fingerprint(caller.principal_source(None)),
+            // The owner `task_intent_for_call` admits under below.
+            owner,
+            input_capabilities: declared_capabilities,
+            is_modern,
+            admission: state.task_executor.service.admission(),
+        })
+        .await;
+    let granted = match confirmation {
+        crate::gateway::meta_mcp::TaskConfirmation::NotRequired => None,
+        // Confirmed: dispatch the original call, with the confirmation
+        // metadata removed.
+        crate::gateway::meta_mcp::TaskConfirmation::Granted(granted) => Some(granted),
+        // The challenge, or the refusal of a grant that does not
+        // authorise this call. Answered here because there is nothing
+        // below to run.
+        crate::gateway::meta_mcp::TaskConfirmation::Answer(answer) => {
+            // Out through the tail, not around it. A challenge is a
+            // client-visible result like any other: it needs this
+            // revision's metadata shaped onto it *before* the response
+            // security finalizer runs, and it needs that finalizer —
+            // whose `PreserveInputRequired` policy is what leaves the
+            // challenge's own discriminator alone, and whose signing
+            // step is the only one entitled to sign what goes out.
+            // Serialization then follows the request's own era, so a
+            // legacy caller still gets its session header. The status
+            // is re-derived there from this same response, by the same
+            // `refusal_status` call, so a refusal keeps its code.
+            //
+            // Nothing has been admitted at this point — no lease, no
+            // task, no backend — so the tail's execution settlement has
+            // nothing to settle, which is the honest state for a call
+            // that was stopped at the gate.
+            return Ok(*answer);
+        }
+    };
+    // The fields the call goes on with: the grant's cleared copy when the
+    // gate confirmed it, else the request's own.
+    let retry = granted.as_ref().unwrap_or(&retry);
+    caller.retry = retry;
+
+    // Authorization is handed to the dispatch chokepoint rather than
+    // applied here, so the shapes an edge cannot see — a playbook
+    // step, whose targets are not in the request — face it too. The
+    // authorizer is the one derived above, before the method match.
+
+    // The background-task intent, or a refusal, or nothing at all.
+    //
+    // Built here — after the authorization loop, the firewall scan and
+    // the admin pre-check, and before the dispatch chokepoint that owns
+    // the destructive-confirmation gate — because a handle must not be
+    // minted for a call that is about to be refused. Only a request that
+    // actually carries a `task` member is offered to the builder: an
+    // ordinary `tools/call` must reach the synchronous path unchanged,
+    // and the builder's own refusals (no verified owner, no idempotency
+    // key) are conditions on asking for a task, not on calling a tool.
+    let task_intent = if params.is_some_and(|p| p.get("task").is_some()) {
+        match tasks::task_intent_for_call(
+            state,
+            id.clone(),
+            tasks::TaskIntentRequest {
+                tool_name,
+                arguments: &arguments,
+                is_modern,
+                retry,
+                verified_identity: verified_identity.as_ref(),
+                owner,
+                client: client.as_ref(),
+                oauth_agent_identity: oauth_agent_identity.as_ref(),
+                cert_identity: cert_identity.as_ref(),
+                api_key_name,
+                agent_id,
+                agent_declared,
+                grant_subject: grant_subject.clone(),
+                is_admin: client.as_ref().is_some_and(|c| c.admin),
+                input_capabilities: declared_capabilities,
+                session_id: Some(session_id.as_str()),
+                protocol_revision: protocol_revision_owned.as_deref(),
+                surface_request,
+            },
+        ) {
+            Ok(intent) => intent,
+            Err(refusal) => {
+                return Err(build_response(
+                    *refusal,
+                    session_id,
+                    StatusCode::BAD_REQUEST,
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
+    // One request owns admission through dispatch and secured delivery.
+    // A route change may conflict on representation, never create a
+    // second owner for the same verified principal and explicit key.
+    // The A/B arm and the prefetch hints key on the caller (G4). Its
+    // reclaim deadline is renewed here, in every build, because those
+    // entries have no session end to reclaim them.
+    if let Some(ref lifecycle) = state.session_lifecycle
+        && !caller_key.is_empty()
+    {
+        lifecycle.track(
+            caller_key.clone(),
+            session_lifecycle::now_unix() + session_lifecycle::IDLE_TTL.as_secs(),
+        );
+    }
+    // Built above, after every gate that can still refuse, and only
+    // carried here: the dispatch chokepoint is what hands it over.
+    caller.task = task_intent;
     if let Some(context) = signing_context.as_mut()
         && let Err(error) = state.meta_mcp.prepare_signing_for_call(
             context,

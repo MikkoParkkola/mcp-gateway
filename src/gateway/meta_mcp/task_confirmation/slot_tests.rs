@@ -227,6 +227,17 @@ async fn ask_as(
 ) -> TaskConfirmation {
     let arguments = json!({ "id": 1 });
     let task = json!({ "ttl": 60_000 });
+    // What the HTTP edge hands over for this caller: its binding through
+    // `principal_source` (an identity caller binds by identity) and the task
+    // owner it routes to. No identity here means no key either: unbindable.
+    let principal = who.and_then(|who| {
+        crate::protocol::mrtr::source_fingerprint(
+            crate::protocol::mrtr::PrincipalSource::Credential(Some(who)),
+        )
+    });
+    let owner = who
+        .map(VerifiedIdentity::stable_actor_id)
+        .unwrap_or_default();
     let outcome = fx
         .meta
         .confirm_destructive_task(&TaskConfirmationRequest {
@@ -236,6 +247,8 @@ async fn ask_as(
             task: Some(&task),
             retry,
             verified_identity: who,
+            principal,
+            owner: &owner,
             input_capabilities: declared,
             is_modern: true,
             admission: &fx.admission,
@@ -617,33 +630,38 @@ async fn a_grant_already_spent_is_refused_and_a_fresh_one_is_granted_once() {
     assert_eq!(refusal(&ask(&fx, &retry, elicitation()).await).0, -32602);
 }
 
-/// Mutant: a caller with no verified identity is treated as having an
+/// Mutant: a caller with no routed owner is treated as having an
 /// already-admitted task, or replay recognition is dropped for everyone.
 #[test]
 fn an_unattributable_caller_is_never_an_admitted_replay() {
     let admission = ExecutionAdmission::new(Arc::new(|| 1_000));
     let (arguments, retry) = (json!({ "id": 1 }), fresh());
-    let alice = identity();
-    // The same operation, held under the verified owner's key.
-    let owned =
-        super::task_admission_request(alice.stable_actor_id(), KEY.to_owned(), TOOL, &arguments);
+    let alice = identity().stable_actor_id();
+    // The same operation, held under the routed owner's key.
+    let owned = super::task_admission_request(alice.clone(), KEY.to_owned(), TOOL, &arguments);
     let _held = admission.admit_task(owned.borrow());
-    let request = |who| TaskConfirmationRequest {
+    let request = |owner| TaskConfirmationRequest {
         id: RequestId::Number(7),
         tool_name: TOOL,
         arguments: &arguments,
         task: None,
         retry: &retry,
-        verified_identity: who,
+        verified_identity: None,
+        principal: Some("bound".to_string()),
+        owner,
         input_capabilities: Declared::NONE,
         is_modern: true,
         admission: &admission,
     };
     assert!(
-        MetaMcp::already_admitted(&request(Some(&alice)), KEY),
-        "control: the verified owner's operation is recognised"
+        MetaMcp::already_admitted(&request(&alice), KEY),
+        "control: the routed owner's operation is recognised"
     );
-    assert!(!MetaMcp::already_admitted(&request(None), KEY));
+    assert!(!MetaMcp::already_admitted(&request(""), KEY));
+    assert!(!MetaMcp::already_admitted(
+        &request("credential:other"),
+        KEY
+    ));
 }
 
 /// MIK-8202 (#3616 regression): a destructive call on a clock before 1970 is

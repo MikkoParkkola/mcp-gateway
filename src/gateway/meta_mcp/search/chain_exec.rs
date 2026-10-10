@@ -33,14 +33,9 @@ impl MetaMcp {
         // A presented resume decides where the chain starts and how many rounds
         // this exchange has already spent. Both are sealed, so neither is a
         // number the caller can choose.
-        let resume = presented_resume(
-            &self.continuation,
-            caller.retry,
-            &chain,
-            caller.verified_identity,
-            now,
-        )
-        .await?;
+        let fingerprint = self.resume_fingerprint(&chain, caller, now).await?;
+        let resume =
+            presented_resume(&self.continuation, caller.retry, &chain, fingerprint, now).await?;
         let (start_step, rounds_used) = resume
             .as_ref()
             .map_or((0, 0), |plan| (plan.next_step, plan.rounds_used));
@@ -139,6 +134,50 @@ impl MetaMcp {
         super::super::chain_interim::drive_chain(&chain, start_step, &mut run_step, seal_stop)
             .await
             .inspect(note_chain_members)
+    }
+
+    /// The presenting caller's binding at the step its handle is pending at,
+    /// derived as that step's own dispatch minted it (`step_fingerprint`,
+    /// MIK-8137), or `None` when nothing was presented or the caller has
+    /// neither an identity nor a key.
+    ///
+    /// The handle is opened, not redeemed: nothing is spent until
+    /// `plan_chain_resume` has checked this binding, so a caller refused here
+    /// or there burns nothing. A handle that does not open as a chain resume
+    /// naming a step of this chain gets the step-less binding; the plan
+    /// refuses it either way.
+    async fn resume_fingerprint(
+        &self,
+        chain: &[Value],
+        caller: &super::super::MetaMcpCallerContext<'_>,
+        now: u64,
+    ) -> Result<Option<String>> {
+        use crate::protocol::continuation::ContinuationPurpose;
+
+        let Some(token) = caller.retry.request_state.as_deref() else {
+            return Ok(None);
+        };
+        let pending = self
+            .continuation
+            .keyring()
+            .open(token, now)
+            .ok()
+            .filter(|payload| {
+                payload
+                    .require_purpose(ContinuationPurpose::ChainResume)
+                    .is_ok()
+            })
+            .and_then(|payload| payload.next_step)
+            .and_then(|step| chain.get(step))
+            .and_then(|step| step.get("tool"))
+            .and_then(Value::as_str)
+            .map(parse_code_mode_tool_ref);
+        match pending {
+            Some((tool, Some(server))) => self.step_fingerprint(caller, (server, tool)).await,
+            _ => Ok(crate::protocol::mrtr::source_fingerprint(
+                caller.principal_source(None),
+            )),
+        }
     }
 }
 
