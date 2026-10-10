@@ -77,6 +77,7 @@ mod relay_settlement;
 #[cfg(feature = "firewall")]
 mod relay_upstream;
 
+mod grant_audit_order;
 /// D3-a: grant decision records at the route.
 mod grant_decision_tasks;
 mod grant_decisions;

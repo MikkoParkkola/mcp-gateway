@@ -389,6 +389,13 @@ impl TaskStore {
             .and_then(|entry| entry.record.upstream.clone())
     }
 
+    /// MIK-8204 S5: the committed rows, the ones `get` can return (not
+    /// capacity occupancy, which also counts reserved and sealed files).
+    #[cfg(test)]
+    pub(crate) fn committed_count_for_test(&self) -> usize {
+        self.0.state().entries.len()
+    }
+
     /// Test-only: the owner digest of `id`, whatever owner holds it.
     #[cfg(test)]
     pub(crate) fn owner_digest_for_test(&self, id: &str) -> Option<String> {
