@@ -120,3 +120,25 @@ async fn only_an_aborted_registration_makes_a_failure_the_callers_cancel() {
         "an unregistered call"
     );
 }
+
+/// The round-4 sequence in one row: the backend answers with the gateway's
+/// exact cancel error, the caller's cancel lands after that, and the failure
+/// is still the backend's. Mutant: provenance read from the abort handle.
+#[tokio::test]
+async fn a_late_cancel_after_a_backend_echo_is_not_the_callers_cancel() {
+    let calls = Arc::new(InFlightCalls::default());
+    let (entry, cancel_on) = calls.register(key("alice", None, &json!(1))).unwrap();
+    let echo = || crate::Error::JsonRpc {
+        code: super::CLIENT_CANCELLED_CODE,
+        message: super::CLIENT_CANCELLED_MESSAGE.to_owned(),
+        data: None,
+    };
+    let answered = super::explicitly_cancellable(Some(cancel_on), async { Err::<(), _>(echo()) })
+        .await
+        .expect_err("the backend's own error");
+    assert!(
+        calls.cancel(&key("alice", None, &json!(1))),
+        "the late cancel finds the entry"
+    );
+    assert!(!super::cancelled_by_caller(Some(&entry), Some(&answered)));
+}
