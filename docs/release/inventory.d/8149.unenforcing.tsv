@@ -1,0 +1,1 @@
+src/gateway/server/stdio_single.rs	from_setting	1	Maps the security.sanitize_input boolean to the InputSanitizing mode; decides nothing, the intake that reads the mode does.

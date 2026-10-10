@@ -1,0 +1,1 @@
+src/gateway/server/stdio_route_stage.rs	stdio_route_stage	1	critical	a,b,c,d	Gateway::stdio_route_stage	Refuses a stdio tools/call before admission: the route-stage authorize (a withheld surfaced name answers as a missing one), the request firewall with its stateful controls, and X14 bound to the stdio principal (MIK-8149, MIK-8160, MIK-8326)
