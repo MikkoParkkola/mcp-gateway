@@ -87,6 +87,8 @@ mod direct_continuation_gate_tests;
 #[cfg(test)]
 mod direct_continuation_tests;
 #[cfg(test)]
+mod direct_explicit_cancel_tests;
+#[cfg(test)]
 mod direct_guards_fixture;
 #[cfg(all(test, feature = "a2a", feature = "firewall"))]
 mod direct_guards_fixture_a2a;

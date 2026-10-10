@@ -440,6 +440,9 @@ pub struct MetaMcp {
     /// config as the direct `tools/call` path. `None` (the default, and the
     /// stdio path) disables scanning — a zero-cost no-op on the hot path.
     pub(super) firewall: Option<Arc<invoke::egress::Firewall>>,
+    /// Calls a client may cancel explicitly by its own request id (MIK-7642
+    /// PR.C). Held here because both HTTP routes dispatch through this handler.
+    pub(super) inflight_calls: Arc<crate::gateway::router::inflight_calls::InFlightCalls>,
 }
 
 // ============================================================================
@@ -530,7 +533,15 @@ impl MetaMcp {
             access_verifier: None,
             context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
             firewall: None,
+            inflight_calls: Arc::default(),
         }
+    }
+
+    /// The registry a client's explicit cancel is looked up in.
+    pub(crate) fn inflight_calls(
+        &self,
+    ) -> &Arc<crate::gateway::router::inflight_calls::InFlightCalls> {
+        &self.inflight_calls
     }
 
     /// Create a new Meta-MCP handler.

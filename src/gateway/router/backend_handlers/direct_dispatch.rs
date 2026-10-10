@@ -48,6 +48,11 @@ pub(super) struct Admitted<'a> {
     pub(super) nonce: Option<AdmittedNonce>,
     /// An interim answer's sealed envelope and hold key (MIK-8078).
     pub(super) sealed: Option<(String, String)>,
+    /// MIK-7642 PR.C: this call's explicit-cancel registration, held for the
+    /// request's life so the caller's own cancel can find it.
+    pub(super) _cancel_entry: Option<crate::gateway::router::inflight_calls::Registered>,
+    /// Its abort half, taken by the one dispatch this call makes.
+    pub(super) cancel_on: Option<futures::future::AbortRegistration>,
 }
 
 /// A refusal before dispatch: give back the nonce this call admitted
@@ -236,6 +241,20 @@ pub(super) async fn admit<'a>(
         #[cfg(feature = "firewall")]
         grant_subject: caller.grant_subject.as_ref(),
     };
+    // Registered before the dispatch exists: a cancel that arrives first
+    // aborts it before anything reaches the backend.
+    let (cancel_entry, cancel_on) = serde_json::to_value(scope.id)
+        .ok()
+        .and_then(|id| {
+            super::direct_caller::explicit_cancel_key(
+                scope.name,
+                scope.caller,
+                scope.route.session_id,
+                &id,
+            )
+        })
+        .and_then(|key| scope.state.meta_mcp.inflight_calls().register(key))
+        .unzip();
     let mut admitted = Admitted {
         failed,
         call,
@@ -244,6 +263,8 @@ pub(super) async fn admit<'a>(
         idem_reservation: None,
         nonce: None,
         sealed: None,
+        _cancel_entry: cancel_entry,
+        cancel_on,
     };
     guard_and_sanitize(scope, envelope, propagation, &mut admitted).await?;
     let guarded = idempotency_outcome(scope, envelope, preflight, propagation)?;
@@ -313,15 +334,19 @@ async fn forward_sanitized(
         return refused;
     }
     // Forward the sanitized params to the backend
+    let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(super::dispatch_armed(
         admitted.idem_reservation.as_mut(),
-        super::dispatch_in_scope(
-            &route.backend,
-            &envelope.method,
-            id,
-            Some(sanitized_params),
-            &propagation.headers,
-            propagation.identity_key.as_deref(),
+        explicitly_cancellable(
+            cancel_on,
+            super::dispatch_in_scope(
+                &route.backend,
+                &envelope.method,
+                id,
+                Some(sanitized_params),
+                &propagation.headers,
+                propagation.identity_key.as_deref(),
+            ),
         ),
     ))
     .await;
@@ -415,9 +440,10 @@ async fn forward_plain(
         &propagation.headers,
         propagation.identity_key.as_deref(),
     );
+    let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(super::dispatch_armed(
         admitted.idem_reservation.as_mut(),
-        dispatch,
+        explicitly_cancellable(cancel_on, dispatch),
     ))
     .await;
     let answered = if method == "tools/call" {
@@ -710,6 +736,29 @@ async fn answer_failure(mut admitted: Admitted<'_>, e: crate::Error, method: &st
     failed
         .answer(idem_reservation.as_mut(), e, &screen_target(&call, method))
         .await
+}
+
+/// The backend dispatch, aborted by the caller's own explicit cancel (MIK-7642
+/// PR.C). Aborting drops it, and the transport's guard cancels the call on
+/// the backend by the backend's id. The client is answered -32800, and the
+/// failure path settles an idempotency key as it does any error that may
+/// follow a committed side effect (ADR-012 consequence 1).
+async fn explicitly_cancellable<T>(
+    cancel_on: Option<futures::future::AbortRegistration>,
+    dispatch: impl std::future::Future<Output = crate::Result<T>>,
+) -> crate::Result<T> {
+    let Some(cancel_on) = cancel_on else {
+        return dispatch.await;
+    };
+    futures::future::Abortable::new(dispatch, cancel_on)
+        .await
+        .unwrap_or_else(|_| {
+            Err(crate::Error::JsonRpc {
+                code: -32800,
+                message: "Request cancelled by the client".to_owned(),
+                data: None,
+            })
+        })
 }
 
 /// The terminal arm: dispatch, then answer. Settled, never dropped: an
