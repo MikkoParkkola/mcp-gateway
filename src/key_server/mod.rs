@@ -266,6 +266,36 @@ mod tests {
         );
     }
 
+    /// MIK-8286 R9: a stored identity is refused when it is read back, never
+    /// trusted because it was valid when written. A live token whose identity
+    /// names nobody (empty subject, or empty issuer) validates as no token.
+    /// Mutant: the read-back check removed from the lookup.
+    #[tokio::test]
+    async fn a_stored_token_whose_identity_names_nobody_is_refused() {
+        let ks = KeyServer::new(KeyServerConfig::default());
+        for (bearer, subject, issuer) in [
+            ("mcpgw_nameless_subject", "", "https://issuer.invalid"),
+            ("mcpgw_nameless_issuer", "sub", ""),
+        ] {
+            ks.store
+                .insert(TemporaryToken {
+                    jti: format!("jti-{bearer}"),
+                    token: bearer.to_string(),
+                    identity: identity(subject, "u@corp.invalid", issuer),
+                    scopes: store::TokenScopes::default(),
+                    iat: 0,
+                    exp: u64::MAX,
+                    client_ip: None,
+                })
+                .await;
+            assert!(ks.store.get(bearer).await.is_some(), "the store holds it");
+            assert!(
+                ks.validate_token(bearer).await.is_none(),
+                "{bearer}: a stored identity that names nobody is no credential"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn oidc_token_with_empty_backends_reaches_none() {
         // BACKENDGRANT.1: the token's scopes are copied as-is, and an empty

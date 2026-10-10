@@ -395,3 +395,50 @@ mod mtls_listener {
         assert!(outcome.is_err(), "a missing server certificate must fail");
     }
 }
+
+/// A leaf with no CN and no SAN URI, parsed by the production parser.
+fn nameless_leaf() -> CertIdentity {
+    let mut params = CertificateParams::default();
+    params.distinguished_name = DistinguishedName::new();
+    let key_pair = KeyPair::generate().expect("key generation failed");
+    let der = params
+        .self_signed(&key_pair)
+        .expect("cert generation failed")
+        .der()
+        .to_vec();
+    CertIdentity::from_der(&der).expect("a nameless leaf still parses")
+}
+
+/// MIK-8286 R3: a client certificate that names no subject is a presented
+/// identity that names nobody, so the TLS identity layer refuses it as
+/// unauthenticated (401, -32000) before anything inside runs, on every path,
+/// `/health` included. Mutant: the layer's refusal removed.
+#[tokio::test]
+async fn a_nameless_client_certificate_is_refused_before_anything_runs() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tower::ServiceExt;
+
+    let reached = Arc::new(AtomicUsize::new(0));
+    let spy = Arc::clone(&reached);
+    let inner = axum::Router::new().route(
+        "/health",
+        axum::routing::get(move || {
+            spy.fetch_add(1, Ordering::SeqCst);
+            async { "ok" }
+        }),
+    );
+    let app = PeerCertIdentityLayer::new(Some(nameless_leaf())).layer(inner);
+    let request = Request::get("/health")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+
+    assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+    assert_eq!(body["error"]["code"], serde_json::json!(-32000), "{body}");
+    assert_eq!(reached.load(Ordering::SeqCst), 0, "nothing inside ran");
+}

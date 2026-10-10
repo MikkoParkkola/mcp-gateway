@@ -164,3 +164,43 @@ fn token_exchange_keeps_bucket() {
     let after = caller_key(Some(&who), None, Some(&credential("token-2")));
     assert_eq!(before, after, "a new token split one subject's bucket");
 }
+
+/// A real leaf, parsed by `CertIdentity::from_der`, with the given CN and
+/// SAN URI (either may be absent).
+fn leaf(cn: Option<&str>, san_uri: Option<&str>) -> CertIdentity {
+    use rcgen::string::Ia5String;
+    use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
+    let mut params = CertificateParams::default();
+    let mut dn = DistinguishedName::new();
+    if let Some(cn) = cn {
+        dn.push(DnType::CommonName, cn);
+    }
+    params.distinguished_name = dn;
+    params.subject_alt_names = san_uri
+        .map(|uri| SanType::URI(Ia5String::try_from(uri).unwrap()))
+        .into_iter()
+        .collect();
+    let key_pair = KeyPair::generate().expect("key generation failed");
+    let der = params.self_signed(&key_pair).expect("cert").der().to_vec();
+    CertIdentity::from_der(&der).expect("parses")
+}
+
+/// MIK-8286 R1a: a certificate with neither a SAN URI nor a CN has no grant
+/// subject, rather than the display-name placeholder every such certificate
+/// shares; one with either keeps its subject byte for byte. Mutant: the
+/// display-name fallback restored.
+#[test]
+fn a_certificate_naming_no_subject_has_no_grant_subject() {
+    assert_eq!(grant_subject_from_cert_identity(&leaf(None, None)), None);
+    let by_cn = grant_subject_from_cert_identity(&leaf(Some("agent-a"), None)).unwrap();
+    assert_eq!(
+        (by_cn.authority.as_str(), by_cn.subject.as_str()),
+        ("mtls", "agent-a")
+    );
+    let uri = "spiffe://example.test/agent/b";
+    let by_uri = grant_subject_from_cert_identity(&leaf(None, Some(uri))).unwrap();
+    assert_eq!(
+        (by_uri.authority.as_str(), by_uri.subject.as_str()),
+        ("mtls", uri)
+    );
+}

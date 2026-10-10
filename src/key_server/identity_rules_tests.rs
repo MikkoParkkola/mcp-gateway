@@ -532,3 +532,58 @@ async fn a_cleartext_issuer_refusal_carries_no_issuer_detail() {
         assert!(!shown.contains(leaked), "leaked {leaked:?}: {shown}");
     }
 }
+
+/// MIK-8287 (filed row): two people's tokens from one issuer, both with an
+/// empty `sub`, must never become one caller.
+#[tokio::test]
+async fn two_empty_subject_tokens_are_never_one_caller() {
+    let h = Harness::start(&config_yaml("[]", "")).await;
+    let alice = h.mint(
+        ISS_A,
+        "",
+        &json!({"email": "alice@corp.com", "email_verified": true}),
+    );
+    let bob = h.mint(
+        ISS_A,
+        "",
+        &json!({"email": "bob@corp.com", "email_verified": true}),
+    );
+    if let (Ok(alice), Ok(bob)) = (h.verify(&alice).await, h.verify(&bob).await) {
+        assert_ne!(
+            alice.stable_actor_id(),
+            bob.stable_actor_id(),
+            "two people verified as one caller"
+        );
+    }
+}
+
+/// MIK-8286 R4: an empty `sub` names nobody, so verification refuses it as a
+/// missing required claim and the token exchange answers 401 with no token.
+/// Mutant: the verifier's emptiness check removed.
+#[tokio::test]
+async fn an_empty_subject_is_refused_as_a_missing_claim() {
+    let h = Harness::start(&config_yaml("[]", "")).await;
+    let token = h.mint(
+        ISS_A,
+        "",
+        &json!({"email": "alice@corp.com", "email_verified": true}),
+    );
+    let err = h
+        .verify(&token)
+        .await
+        .expect_err("an empty sub must not verify");
+    assert!(
+        matches!(
+            &err,
+            OidcError::JwtError(e)
+                if matches!(e.kind(), jsonwebtoken::errors::ErrorKind::MissingRequiredClaim(c) if c == "sub")
+        ),
+        "{err}"
+    );
+    let (status, body) = h.exchange(&token).await;
+    assert_eq!(status, 401, "{body}");
+    assert!(
+        body.get("access_token").is_none(),
+        "no token is issued: {body}"
+    );
+}
