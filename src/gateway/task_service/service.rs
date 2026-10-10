@@ -218,8 +218,9 @@ impl TaskService {
         backend: &str,
         reserve: impl FnOnce() -> Option<OwnedSemaphorePermit> + Send,
     ) -> Result<CreateOutcome, ServiceError> {
-        self.create_targeted(request, task, (backend, Vec::new()), reserve)
-            .await
+        Ok(self
+            .create_targeted(request, task, (backend, Vec::new()), reserve)
+            .await)
     }
 
     /// [`Self::create`] recording the backend calls the task will make (#2450).
@@ -229,11 +230,11 @@ impl TaskService {
         task: &Task,
         (backend, targets): (&str, Vec<Target>),
         reserve: impl FnOnce() -> Option<OwnedSemaphorePermit> + Send,
-    ) -> Result<CreateOutcome, ServiceError> {
+    ) -> CreateOutcome {
         match self.admission.admit_task(request) {
             Ok(TaskAdmission::Owned(lease)) => {
                 let Some(slot) = reserve() else {
-                    return Ok(CreateOutcome::Capacity);
+                    return CreateOutcome::Capacity;
                 };
                 let binding = lease.binding().clone();
                 let prepared = PreparedTask::admitted_with_targets(
@@ -247,11 +248,11 @@ impl TaskService {
                 // the reservation back rather than stranding the key. The permit
                 // is dropped with this arm so a store refusal cannot keep a worker.
                 match self.store.create(prepared).await {
-                    Ok(committed) => Ok(CreateOutcome::Created {
+                    Ok(committed) => CreateOutcome::Created {
                         task: committed,
                         slot,
-                    }),
-                    Err(_) => Ok(CreateOutcome::Unavailable),
+                    },
+                    Err(_) => CreateOutcome::Unavailable,
                 }
             }
             // The key already owns a committed task: the caller gets THAT task,
@@ -260,14 +261,14 @@ impl TaskService {
             // is reserved — a repeat must not compete with the running task.
             Ok(TaskAdmission::Existing { task_id, binding }) => {
                 match self.store.get(binding.principal_digest(), &task_id) {
-                    Ok(committed) => Ok(CreateOutcome::Existing(committed)),
-                    Err(_) => Ok(CreateOutcome::Unavailable),
+                    Ok(committed) => CreateOutcome::Existing(committed),
+                    Err(_) => CreateOutcome::Unavailable,
                 }
             }
-            Ok(TaskAdmission::InFlight) => Ok(CreateOutcome::InFlight),
-            Ok(TaskAdmission::Sealed) => Ok(CreateOutcome::Sealed),
-            Err(Refusal::Mismatch) => Ok(CreateOutcome::Mismatch),
-            Ok(TaskAdmission::Unavailable) | Err(_) => Ok(CreateOutcome::Unavailable),
+            Ok(TaskAdmission::InFlight) => CreateOutcome::InFlight,
+            Ok(TaskAdmission::Sealed) => CreateOutcome::Sealed,
+            Err(Refusal::Mismatch) => CreateOutcome::Mismatch,
+            Ok(TaskAdmission::Unavailable) | Err(_) => CreateOutcome::Unavailable,
         }
     }
 

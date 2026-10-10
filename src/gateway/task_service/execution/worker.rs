@@ -45,27 +45,22 @@ pub(super) async fn commit_and_run(
     let executor = Arc::clone(handoff.executor());
     let principal = intent.request.principal().to_string();
 
-    let Ok(outcome) = executor
+    let outcome = executor
         .commit_create(CreateWrite {
             request: &intent.request,
             task: &task,
             backend: &backend,
             targets: creation_targets(&intent, &call),
         })
-        .await
-    else {
-        let _ = tx.send(Err(ServiceError::Unavailable));
-        return;
-    };
+        .await;
 
     let (begin, slot) = split_create(outcome);
-    if !matches!(begin, BeginOutcome::Created(_)) {
-        let _ = tx.send(Ok(begin));
-        return;
-    }
-
-    let BeginOutcome::Created(committed) = begin else {
-        unreachable!("checked above");
+    let committed = match begin {
+        BeginOutcome::Created(committed) => committed,
+        other => {
+            let _ = tx.send(Ok(other));
+            return;
+        }
     };
     let id = committed.task.id().to_string();
     let revision = committed.revision;
@@ -156,12 +151,17 @@ async fn run_dispatched(
     // Trust is a live question with an await in it, so it cannot be a match
     // guard: asked here, after the shape is known and before anything is armed.
     // The verdict is computed first and the option cleared after, so nothing
-    // borrows `job` across the assignment.
-    let claimed = match (executor.recovery(), job.as_ref()) {
-        (Some(adapter), Some(candidate)) => adapter.claims(&candidate.server).await,
-        _ => false,
+    // borrows `job` across the assignment. The claiming adapter is kept: it is
+    // the one a captured handle is later followed with, so `job` and `adapter`
+    // are both set or both cleared.
+    let adapter = match (executor.recovery(), job.as_ref()) {
+        (Some(adapter), Some(candidate)) => adapter
+            .claims(&candidate.server)
+            .await
+            .then(|| Arc::clone(adapter)),
+        _ => None,
     };
-    if !claimed {
+    if adapter.is_none() {
         job = None;
     }
 
@@ -253,14 +253,15 @@ async fn run_dispatched(
     // dispatch's own return is the `working` stub, not an answer, and settling
     // on it would report a job that has not run as finished.
     if let Some(handle) = submission.as_ref().and_then(|slot| slot.handle()) {
-        let job = job.expect("a handle is captured only for an armed job");
+        let (job, adapter) = job
+            .zip(adapter)
+            .expect("a handle is captured only for an armed job");
         follow_upstream_job(
             &executor,
             &state,
-            &principal,
-            &id,
-            revision,
+            (&principal, &id, revision),
             (job, handle, caller.relay_caller(session_id.as_deref())),
+            &adapter,
             &mut cancel_rx,
         )
         .await;
@@ -292,14 +293,13 @@ async fn run_dispatched(
 async fn follow_upstream_job(
     executor: &Arc<TaskExecutor>,
     state: &crate::gateway::task_service::host::LiveHost,
-    principal: &str,
-    id: &str,
-    revision: u64,
+    (principal, id, revision): (&str, &str, u64),
     dispatched: (
         crate::gateway::meta_mcp::upstream::DirectJob,
         String,
         crate::gateway::meta_mcp::invoke::relay::RelayKey<'_>,
     ),
+    adapter: &Arc<dyn super::UpstreamRecovery>,
     cancel_rx: &mut watch::Receiver<bool>,
 ) {
     let (job, handle, relay) = dispatched;
@@ -317,9 +317,6 @@ async fn follow_upstream_job(
         )
         .await;
 
-    let Some(adapter) = executor.recovery() else {
-        return;
-    };
     // The digest the record is owned by, for the durable recheck each query
     // makes under the record's slot. A principal admission cannot hash is a
     // principal nothing here can re-read, so the job is left to a later
@@ -372,7 +369,7 @@ async fn follow_upstream_job(
     let writes_mark = crate::gateway::gateway_writes::mark();
     let processed = crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(async {
         match answer {
-            UpstreamAnswer::Completed(result) => Some((
+            Terminal::Completed(result) => (
                 match state
                     .meta_mcp()
                     .recover_task_result(&job.server, &job.tool, None, id, result)
@@ -388,39 +385,44 @@ async fn follow_upstream_job(
                     ),
                 },
                 ErrorAuthor::Gateway,
-            )),
+            ),
             // The failure half of that same processing: the peer's message and
             // nested data are screened before this settles, keeping the code.
-            UpstreamAnswer::Failed(error) => Some(screened_peer_failure(state, &job, id, error)),
+            Terminal::Failed(error) => screened_peer_failure(state, &job, id, error),
             // The gateway's own words, never the peer's (MIK-7887.RECEIPT.1).
-            UpstreamAnswer::Substituted(error) => Some((
+            Terminal::Substituted(error) => (
                 TaskTransition::Fail(strip_http_status(error)),
                 ErrorAuthor::Gateway,
-            )),
-            // [`poll_to_terminal`] hands back a lease only with a terminal answer.
-            UpstreamAnswer::Live | UpstreamAnswer::Unavailable => None,
+            ),
         }
     })
     .await;
-    if let (Some(outcome), notes) = processed {
-        let followed = FollowedJob {
-            job: &job,
-            relay,
-            id,
-            principal,
-            revision,
-        };
-        let writes = crate::gateway::gateway_writes::snapshot_since(writes_mark);
-        settle_followed(executor, state, &followed, (outcome, writes), &notes).await;
-    }
+    let (outcome, notes) = processed;
+    let followed = FollowedJob {
+        job: &job,
+        relay,
+        id,
+        principal,
+        revision,
+    };
+    let writes = crate::gateway::gateway_writes::snapshot_since(writes_mark);
+    settle_followed(executor, state, &followed, (outcome, writes), &notes).await;
     lease.release(executor, id).await;
+}
+
+/// The answers that end a followed job: [`UpstreamAnswer`] without `Live` and
+/// `Unavailable`, which [`poll_to_terminal`] keeps polling or retains instead.
+enum Terminal {
+    Completed(serde_json::Value),
+    Failed(crate::protocol::JsonRpcError),
+    Substituted(crate::protocol::JsonRpcError),
 }
 
 /// What following one handle within the worker's budget produced.
 enum Followed {
     /// A terminal answer, with the record's query slot still held so the
     /// settlement it justifies cannot be overtaken by a queued reader.
-    Terminal(UpstreamAnswer, QueryLease),
+    Terminal(Terminal, QueryLease),
     /// Live at the end of the budget, or unreachable. Nothing to commit, and no
     /// slot retained.
     Retained,
@@ -474,7 +476,15 @@ async fn poll_to_terminal(
                 lease.release(executor, id).await;
                 return Followed::Retained;
             }
-            terminal => return Followed::Terminal(terminal, lease),
+            UpstreamAnswer::Completed(result) => {
+                return Followed::Terminal(Terminal::Completed(result), lease);
+            }
+            UpstreamAnswer::Failed(error) => {
+                return Followed::Terminal(Terminal::Failed(error), lease);
+            }
+            UpstreamAnswer::Substituted(error) => {
+                return Followed::Terminal(Terminal::Substituted(error), lease);
+            }
         }
         if tokio::time::Instant::now() >= deadline {
             return Followed::Retained;

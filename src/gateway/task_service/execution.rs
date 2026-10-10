@@ -509,10 +509,7 @@ impl TaskExecutor {
         self.handoffs.cancel_signal(id);
     }
 
-    pub(crate) async fn commit_create(
-        &self,
-        write: CreateWrite<'_>,
-    ) -> Result<CreateOutcome, CommitFailure> {
+    pub(crate) async fn commit_create(&self, write: CreateWrite<'_>) -> CreateOutcome {
         let CreateWrite {
             request,
             task,
@@ -525,14 +522,13 @@ impl TaskExecutor {
             .create_targeted(request.borrow(), task, (backend, targets), move || {
                 workers.try_acquire_owned().ok()
             })
-            .await
-            .map_err(CommitFailure::Service)?;
+            .await;
         if let CreateOutcome::Created { task: stored, .. } = &created {
             let id = stored.task.id().to_owned();
             self.published(stored, &id);
             self.notify_observer(CommitStage::Published, &id).await;
         }
-        Ok(created)
+        created
     }
 
     pub(crate) async fn commit_transition(
