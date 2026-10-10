@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 # pre-push gate — public hygiene, the cheap release-line gates CI enforces,
 # and local fmt + lint + lib-test parity with CI.
+# Cargo steps run `${CARGO:-cargo}`: `CARGO=spark-cargo scripts/dev/pre-push.sh`
+# sends the builds to Spark.
 # Bypass: SKIP_PREPUSH=1 (logged, audit-only).
 set -euo pipefail
 
@@ -38,6 +40,10 @@ if [[ -f Cargo.toml ]]; then
   # One line per obligation: show them all only when one is unresolved.
   c6="$(python3 scripts/release/c6_resolve.py --tree HEAD)" || { printf '%s\n' "$c6"; exit 1; }
   printf '%s\n' "${c6##*$'\n'}"
+  echo "[pre-push] scope acceptance"
+  python3 scripts/release/check_scope_acceptance.py --check
+  echo "[pre-push] clock baseline"
+  python3 scripts/release/check_clock_baseline.py "$base"
 
   echo "[pre-push] commit message hygiene"
   # This branch's own commits. With no argument the script falls back to the
@@ -55,7 +61,7 @@ if [[ -f Cargo.toml ]]; then
     shift
     log="$(mktemp "${TMPDIR:-/tmp}/pre-push-cargo.XXXXXX")"
     # No colour: escape codes before `test result:` would hide it from grep.
-    CARGO_TERM_COLOR=never cargo "$@" >"$log" 2>&1 || rc=$?
+    CARGO_TERM_COLOR=never "${CARGO:-cargo}" "$@" >"$log" 2>&1 || rc=$?
     grep -E '^test result:' "$log" || true
     if [[ $rc -ne 0 ]]; then
       tail -40 "$log"
