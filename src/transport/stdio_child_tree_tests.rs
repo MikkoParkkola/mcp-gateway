@@ -333,7 +333,8 @@ async fn a_close_cancelled_while_the_leader_runs_still_ends_the_group() {
         Some(false),
         "precondition: the leader runs"
     );
-    let mut close = std::pin::pin!(t.close());
+    // An owned boxed future, so the drop below really cancels it.
+    let mut close = t.close();
     assert!(
         futures::poll!(&mut close).is_pending(),
         "precondition: close was still pending when cancelled"
