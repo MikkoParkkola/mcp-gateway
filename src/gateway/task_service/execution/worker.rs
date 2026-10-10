@@ -325,7 +325,38 @@ async fn follow_upstream_job(
 ) {
     let (job, handle, relay) = dispatched;
     let captured = capture_handle(executor, (principal, id, revision), &job, &handle).await;
+    let followed = (&job, handle.clone(), relay, captured);
+    follow_handle(
+        executor,
+        state,
+        (principal, id, revision),
+        followed,
+        cancel_rx,
+    )
+    .await;
+    // A refused capture (the row cancelled meanwhile, or a failed write) left
+    // the handle held here as the only one. A cancel commits before it
+    // signals, so the follow may have ended any way at all without seeing it:
+    // offer the handle once, now. The claim is a no-op unless the row is
+    // cancelled and unclaimed (MIK-7642).
+    if !captured {
+        cancel_held_upstream(executor, principal, id, &job, handle).await;
+    }
+}
 
+/// Follow one handle within the worker's budget and settle what it says.
+async fn follow_handle(
+    executor: &Arc<TaskExecutor>,
+    state: &crate::gateway::task_service::host::LiveHost,
+    (principal, id, revision): (&str, &str, u64),
+    (job, handle, relay, captured): (
+        &crate::gateway::meta_mcp::upstream::DirectJob,
+        String,
+        crate::gateway::meta_mcp::invoke::relay::RelayKey<'_>,
+        bool,
+    ),
+    cancel_rx: &mut watch::Receiver<bool>,
+) {
     // Neither early return below can strand a refused capture's handle: a job
     // is armed only when an installed adapter claims its backend, and its
     // principal already hashed at admission. Without an adapter no cancel
@@ -347,12 +378,7 @@ async fn follow_upstream_job(
     };
     let followed = tokio::select! {
         biased;
-        _ = cancel_rx.changed() => {
-            // The capture-side sender: a capture refused (the row cancelled
-            // meanwhile, or a failed write) left the claim to this handle.
-            cancel_held_upstream(executor, principal, id, &job, upstream.handle.clone()).await;
-            return;
-        }
+        _ = cancel_rx.changed() => return,
         followed = poll_to_terminal(executor, owner_digest, id, adapter, &upstream) => followed,
     };
     // The lease is still held for a terminal answer, and released only after
@@ -380,13 +406,6 @@ async fn follow_upstream_job(
                 captured,
                 "upstream task settled by an owner read; this worker asks nothing further"
             );
-            // A cancel commits before its signal: a capture refused in that gap
-            // reaches here with no signal seen. The handle held here may be the
-            // only one; the claim is a no-op unless the row is cancelled and
-            // unclaimed (MIK-7642).
-            if !captured {
-                cancel_held_upstream(executor, principal, id, &job, upstream.handle.clone()).await;
-            }
             return;
         }
     };
@@ -416,7 +435,7 @@ async fn follow_upstream_job(
             )),
             // The failure half of that same processing: the peer's message and
             // nested data are screened before this settles, keeping the code.
-            UpstreamAnswer::Failed(error) => Some(screened_peer_failure(state, &job, id, error)),
+            UpstreamAnswer::Failed(error) => Some(screened_peer_failure(state, job, id, error)),
             // The gateway's own words, never the peer's (MIK-7887.RECEIPT.1).
             UpstreamAnswer::Substituted(error) => Some((
                 TaskTransition::Fail(strip_http_status(error)),
@@ -429,7 +448,7 @@ async fn follow_upstream_job(
     .await;
     if let (Some(outcome), notes) = processed {
         let followed = FollowedJob {
-            job: &job,
+            job,
             relay,
             id,
             principal,

@@ -409,9 +409,10 @@ impl CommitObserver for CancelAtCapture {
 }
 
 /// T1: the cancel transition finds no descriptor (none was captured yet), so
-/// it claims nothing; the capture is refused on the cancelled row, and the
-/// follow's cancel arm offers the handle and sends the one upstream
-/// `tasks/cancel`. Mutant "the follow arm does not offer" sends none.
+/// it claims nothing; the capture is refused on the cancelled row, and once the
+/// follow ends the worker offers the handle it holds and sends the one
+/// upstream `tasks/cancel`. Mutant "no offer after a refused capture" sends
+/// none.
 #[tokio::test]
 async fn a_cancel_between_the_task_answer_and_its_capture_cancels_once() {
     let rig = rig(Head::Received, Reply::Task, Release::Immediately).await;
@@ -464,10 +465,10 @@ impl CommitObserver for CommitCancelAtCapture {
 }
 
 /// T1b (delta-2 review): the cancel has committed but not yet signalled when
-/// the capture is refused. The worker's follow finds the row settled
-/// (`Overtaken`) with no cancel seen, and still offers the handle it holds,
-/// the only one anywhere: one upstream `tasks/cancel`. Mutant "Overtaken does
-/// not offer" sends none.
+/// the capture is refused. The worker's follow ends with no cancel seen (it
+/// finds the row settled), and the worker still offers the handle it holds,
+/// the only one anywhere: one upstream `tasks/cancel`. Mutant "no offer after
+/// a refused capture" sends none.
 #[tokio::test]
 async fn a_cancel_committed_before_its_signal_still_cancels_upstream_once() {
     let rig = rig(Head::Received, Reply::Task, Release::Immediately).await;

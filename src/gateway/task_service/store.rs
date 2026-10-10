@@ -373,6 +373,15 @@ impl TaskStore {
     /// admission's principal hashing to read what dispatch persisted would put
     /// the test's own derivation between it and the record. It is a read of the
     /// committed image and exists only under `cfg(test)`.
+    #[cfg(test)]
+    pub(crate) fn upstream_for_test(&self, id: &str) -> Option<UpstreamRecord> {
+        self.0
+            .state()
+            .entries
+            .get(id)
+            .and_then(|entry| entry.record.upstream.clone())
+    }
+
     /// Test-only: the owner digest of `id`, whatever owner holds it.
     #[cfg(test)]
     pub(crate) fn owner_digest_for_test(&self, id: &str) -> Option<String> {
@@ -381,15 +390,6 @@ impl TaskStore {
             .entries
             .get(id)
             .map(|entry| entry.record.admission.principal_digest.clone())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn upstream_for_test(&self, id: &str) -> Option<UpstreamRecord> {
-        self.0
-            .state()
-            .entries
-            .get(id)
-            .and_then(|entry| entry.record.upstream.clone())
     }
 
     /// The admitted operation digest of one owner-scoped row.
