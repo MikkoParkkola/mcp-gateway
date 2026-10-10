@@ -11,7 +11,7 @@ and the baselines are the ones in docs/release/v4.0.0-critical-path-coverage.md
 
 Exit status: 0 when every path clears the Standard floor and its recorded
 baseline, 1 otherwise. A path with no measured file fails. 3 when the report is
-absent, empty or unreadable: nothing was graded (MIK-8265).
+absent, empty, unreadable or unparseable: nothing was graded (MIK-8265).
 """
 
 import argparse
@@ -106,11 +106,17 @@ def main(argv=None):
             text = handle.read()
     except OSError:
         text = ""
-    if not text.strip():
+    try:
+        report = json.loads(text) if text.strip() else None
+    except ValueError:  # truncated or corrupt: as unusable as an absent report
+        report = None
+    if not (isinstance(report, dict) and isinstance(report.get("data"), list)):
+        report = None  # JSON, but not an llvm-cov summary report
+    if report is None:
         print(f"input missing: {args.report}")
         print("NOT GRADED: the coverage report is missing, so no path was graded")
         return INPUT_MISSING
-    rows = grade(json.loads(text))
+    rows = grade(report)
     for name, count, covered, total, percent, failures in rows:
         verdict = "; ".join(failures) if failures else "ok"
         print(f"{name:15} files={count:3} {covered}/{total} {percent:6.2f}%  {verdict}")

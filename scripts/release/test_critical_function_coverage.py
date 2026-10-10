@@ -136,6 +136,13 @@ class CriticalFunctionCoverage(unittest.TestCase):
                 with self.assertRaises(cfc.MissingInput):
                     cfc.read_lcov([self.lcov, bad], self.root)
 
+    def test_an_unparseable_report_counts_as_missing(self):
+        # A truncated or corrupt lcov: present, but a DA line is not numbers.
+        corrupt = self.root / "corrupt.lcov"
+        corrupt.write_text("SF:src/lib.rs\nDA:1\nDA:not,a-number\n")
+        with self.assertRaises(cfc.MissingInput):
+            cfc.read_lcov([self.lcov, corrupt], self.root)
+
     def test_the_wrapper_maps_the_same_status(self):
         # coverage_grade.sh turns a grader's INPUT_MISSING into NOT GRADED.
         wrapper = (pathlib.Path(__file__).resolve().parent / "coverage_grade.sh").read_text()

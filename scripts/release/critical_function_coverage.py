@@ -28,7 +28,8 @@ the macro and pass the local.
 
 Exit status: 0 when every Critical row clears the floor, 1 otherwise. A row
 whose function is gone, or that no given report measured, fails. 3 when a
-given report is absent, empty or unreadable: nothing was graded (MIK-8265).
+given report is absent, empty, unreadable or unparseable: nothing was graded
+(MIK-8265).
 """
 
 import argparse
@@ -284,7 +285,8 @@ INPUT_MISSING = 3
 
 
 class MissingInput(Exception):
-    """An lcov report the grade was given is absent, empty or unreadable, as
+    """An lcov report the grade was given is absent, empty, unreadable or
+    unparseable, as
     when a platform's coverage job uploaded none. Nothing is graded from a
     partial set: an empty report would grade as the other platform alone."""
 
@@ -304,15 +306,19 @@ def read_lcov(paths, root):
             raise MissingInput(path)
         texts.append(text)
     hits, current = {}, None
-    for raw in (line for text in texts for line in text.splitlines()):
-        if raw.startswith("SF:"):
-            current = repo_relative(raw[3:], root)
-            if current:
-                hits.setdefault(current, {})
-        elif raw.startswith("DA:") and current:
-            number, count = raw[3:].split(",")[:2]
-            line = int(number)
-            hits[current][line] = hits[current].get(line, 0) + int(count)
+    for path, text in zip(paths, texts):
+        for raw in text.splitlines():
+            if raw.startswith("SF:"):
+                current = repo_relative(raw[3:], root)
+                if current:
+                    hits.setdefault(current, {})
+            elif raw.startswith("DA:") and current:
+                try:
+                    number, count = raw[3:].split(",")[:2]
+                    line, count = int(number), int(count)
+                except ValueError:
+                    raise MissingInput(path) from None  # unparseable: a corrupt report
+                hits[current][line] = hits[current].get(line, 0) + count
     return hits
 
 
