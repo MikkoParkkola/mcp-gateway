@@ -805,11 +805,19 @@ content arrays (each step's `content`) is never formed: the pieces sit in separa
 which the join never runs together, and a copy spread across them is out of model under D2.
 
 **Subsets.** A subset forward of whole pieces is excused for every k-gram inside a kept piece or a
-delivered join of consecutive kept pieces. A k-gram spanning a seam the forward created is evidence
-only if some other caller was delivered that exact join. A source is a tool name (`{server}:{tool}`,
-`collusion_gate.rs:612`), so one tool may return one text split on one call and joined on another.
-If it delivered another caller the exact join of the kept pieces, sensitively, the holder's subset
-forward is refused. That is an in-model defect: MIK-8205.
+delivered join of consecutive kept pieces, and (MIK-8205) for every k-gram of a seam the forward
+created: a window of the normalised run-together of one key-path run the caller was delivered, with
+one contiguous span of pieces omitted, that overlaps the seam. Each such window is text the caller
+received from that source with at most one gap. These seams are recorded at delivery as excuse only,
+in a store apart from the evidence entries: they never witness, never count toward `Common`, and
+never take evidence capacity. A plan answer's runs are attributed to the one receipt that keeps every
+piece whole. Work per delivery is O(P + S x B): at most 4,096 pieces counted before any per-piece
+work, 1,024 spans generated lazily, 2 x 1,024 bytes read per span; a side whose edge the byte cap
+made is cut only where normalising each side apart equals normalising them together (no mark is cut
+before, and unsafe controls are dropped first, as matching does). Residuals: a forward no single
+ordered subsequence explains is excused window by window (each window is still received text); a
+subset forwarded inside its original structure is matched through the all-values forms and stays
+refused against a competing structured copy.
 
 ### 14.2 Cross-tool copies: the per-source excuse is load-bearing (MIK-8206)
 
@@ -885,7 +893,9 @@ causes names it (MIK-8201):
 Metered (MIK-8201): `mcp_gateway_collusion_capacity_total{bound}` counts each bound at its event:
 `receipt_truncated` (adds the fingerprints cut), `fingerprint_evicted`, `record_dropped`,
 `record_replaced`, `record_overflow`, `sketch_refused`, `sketch_evicted` (for room, never on
-expiry), `marker_evicted` and `record_text_cut` (a text budget cut, MIK-8209).
+expiry), `marker_evicted`, `record_text_cut` (a text budget cut, MIK-8209), `seam_excuse_cut` (a
+subset-forward seam pass stopped by a cap or a span skipped, MIK-8205) and `seam_excuse_evicted`
+(seam excuses evicted past their global cap, MIK-8205).
 `mcp_gateway_collusion_relay_total{action, reason}` counts each refusal under `relay`,
 `other_source`, `capacity` or `unkeyed`. A refusal names its reason: another tool's copy (MIK-8206),
 another caller's overflow record, or an excuse of the caller's dropped for room. A dropped excuse
@@ -931,7 +941,7 @@ middle of its own long answer, D2) are all in model.
 | MIK-8196: a 56-char tail missed once on one platform | D1 | in model, inside B1 | Row keeps every k-gram; determinism row added |
 | MIK-8200: sketch eviction refuses a holder | D2 | in model | Fix (High): see B2 |
 | MIK-8201: capacity bounds not metered or named | B2 visibility | in model | Fix |
-| MIK-8205: subset forward refused against the same tool's exact join | D2 | in model | Fix |
+| MIK-8205: subset forward refused against the same tool's exact join | D2 | in model | Fixed: seams of the caller's own runs as excuse only (see Subsets); rows red on base (CI run 38025159522) |
 | MIK-8206: cross-tool verbatim copy refused | D2 | stated bound (14.2) | Fix: metric and named refusal |
 | MIK-8136 (1): a run of over 256 bytes of combining marks without a starter may normalize differently near the forced cut | D1 only | out of model | Pathological input; a miss, never a refusal |
 | MIK-8136 (2): cut rule not checked against the Unicode corpus | none | not a finding | No concrete input |

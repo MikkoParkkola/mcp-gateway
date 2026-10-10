@@ -48,6 +48,7 @@ pub enum SkillsCommand {
         /// Capabilities directory to load from
         #[arg(
             short = 'C',
+            hide = true,
             long,
             default_value = "capabilities",
             env = "MCP_GATEWAY_CAPABILITIES"

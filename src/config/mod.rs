@@ -20,6 +20,7 @@ mod flagged_tools;
 mod input_schema;
 pub(crate) mod log_once;
 mod meta_mcp_config;
+mod pattern_grammar;
 mod remote_provenance_posture;
 mod secret_file;
 mod secret_ref;
@@ -80,6 +81,15 @@ pub(crate) use features::{api_key_expired_now, parse_api_key_digest, parse_cidr}
 // Personal-account custody DTO only — not the rest of `personal_accounts`.
 pub use crate::personal_accounts::config::{AccountsConfig, AccountsLimits};
 
+/// A YAML null (an empty section) as the type's default.
+fn null_as_default<'de, D, T>(deserializer: D) -> std::result::Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 // ── Root config ───────────────────────────────────────────────────────────────
 
 /// Top-level gateway configuration.
@@ -103,7 +113,10 @@ pub struct Config {
     pub failsafe: FailsafeConfig,
     /// Error-budget / kill-switch thresholds (GH #475).
     pub error_budget: ErrorBudgetSection,
-    /// Backend configurations.
+    /// Backend configurations. An empty `backends:` section, which is what a
+    /// section with every entry commented out reads as, is no backends rather
+    /// than a load error (MIK-8299).
+    #[serde(deserialize_with = "null_as_default")]
     pub backends: HashMap<String, BackendConfig>,
     /// Capability configuration (direct REST API integration).
     pub capabilities: CapabilityConfig,

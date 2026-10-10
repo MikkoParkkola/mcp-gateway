@@ -280,6 +280,7 @@ class Entry:
     file: str
     line: int
     note: str = ""
+    hidden: bool = False  # lib: `#[doc(hidden)]`, so not documented API
 
 
 class Index:
@@ -427,8 +428,14 @@ class ConfigWalker:
             name = serde_attr(a, "rename") or rename(f.name, rule)
             fkey = f"{key}.{name}" if key else name
             self.emit(fkey, item.file, f.line, fnote)
-            if serde_attr(a, "with") is None and serde_attr(a, "deserialize_with") is None:
+            if serde_attr(a, "with") is None and serde_attr(a, "deserialize_with") in (None, *SAME_KEYS_DESERIALIZERS):
                 self.walk_type(f.ty, fkey, item.file, f.line, fnote, seen)
+
+
+# Custom deserializers that read the declared type with its own keys, so the
+# walker keeps descending through them: `null_as_default` only maps a YAML null
+# to the default and defers everything else to the type (MIK-8299).
+SAME_KEYS_DESERIALIZERS = ("null_as_default",)
 
 
 def extract_config() -> list[Entry]:
@@ -708,7 +715,7 @@ def extract_routes() -> list[Entry]:
 
 
 LIB_ITEM_RE = re.compile(
-    r"^((?:#\[[^\n]*\]\s*)*)pub\s+(?:(?:const(?=\s+(?:async\s+|unsafe\s+|extern\s+\"\w+\"\s+)*fn\b)|async|unsafe|extern\s+\"\w+\")\s+)*"
+    r"^((?:#\[[^\n]*\]\s*)*)pub\s+(?:(?:const(?=\s+(?:async\s+|unsafe\s+|extern(?:\s+\"[^\"]*\")?\s+)*fn\b)|async|unsafe|extern(?:\s+\"[^\"]*\")?)\s+)*"
     r"(mod|use|fn|const\s+fn|const|static|struct|enum|trait|type|union|extern\s+crate)\s+([^;{(=<]+)",
     re.M,
 )
@@ -746,10 +753,11 @@ def extract_lib(path: Path | None = None) -> list[Entry]:
     for f in files:
         fcode = code if f == path else prod_scan(f)[0]
         for m in re.finditer(r"^#\[macro_export(?:\([^)]*\))?\][^\n]*\n(?:#\[[^\n]*\]\s*)*macro_rules!\s*(\w+)", fcode, re.M):
-            out.append(Entry(f"mcp_gateway::{m.group(1)}!", rel(f), line_of(fcode, m.start()), "exported macro"))
+            out.append(Entry(f"mcp_gateway::{m.group(1)}!", rel(f), line_of(fcode, m.start()), "exported macro", is_hidden(m.group(0))))
     for m in LIB_ITEM_RE.finditer(code):
         kind, rest = m.group(2).split()[-1], " ".join(m.group(3).split())
         note = feature_of(m.group(1))
+        hidden = is_hidden(m.group(1))
         if kind == "use":
             end = code.index(";", m.start())
             body = " ".join(code[m.end(2) : end].split())
@@ -757,12 +765,53 @@ def extract_lib(path: Path | None = None) -> list[Entry]:
             for name in (names.rstrip("}").split(",") if names else [root.rsplit("::", 1)[-1]]):
                 name = name.strip()
                 if name:
-                    out.append(Entry(f"mcp_gateway::{name}", rel(path), line_of(code, m.start(2)), f"re-export from {root.strip(' :')}"))
+                    out.append(Entry(f"mcp_gateway::{name}", rel(path), line_of(code, m.start(2)), f"re-export from {root.strip(' :')}", hidden))
             continue
         # `extern crate a as b` exports `b`.
         name = rest.split(" as ")[-1].split(":")[0].strip()
-        out.append(Entry(f"mcp_gateway::{name}", rel(path), line_of(code, m.start(2)), " ".join(x for x in (kind, note) if x)))
+        out.append(Entry(f"mcp_gateway::{name}", rel(path), line_of(code, m.start(2)), " ".join(x for x in (kind, note) if x), hidden))
     return sorted(out, key=lambda e: e.id)
+
+
+def is_hidden(attrs: str) -> bool:
+    """Whether one of `attrs`' lines is exactly `#[doc(hidden)]`. Any other
+    spelling (sharing a line, inside a string) reads as not hidden, so the
+    item is refused rather than passed."""
+    return any(line.strip() == "#[doc(hidden)]" for line in attrs.splitlines())
+
+
+# Crate-root items documented as public API on purpose (MIK-8044.SURF.5): none.
+# The library is internal to the binary; every root item is `#[doc(hidden)]`.
+LIB_KEEP: frozenset[str] = frozenset()
+
+
+def lib_documented(path: Path | None = None, keep: frozenset[str] = LIB_KEEP) -> list[str]:
+    """Problems with the documented crate-root API: any root item that is not
+    `#[doc(hidden)]` and not in `keep`, and, failing closed, any construct
+    `extract_lib` does not model: a `macro_export` token anywhere in the
+    library (`cfg_attr` included), a conditional module path, a root `extern`
+    block, a root inline `mod name { .. }`, a root `include!`. Lexical by
+    design; `rustdoc.yml` is the compiler-backed gate."""
+    path = path or SRC / "lib.rs"
+    errors = [
+        f"{e.file}:{e.line}: {e.id} is documented crate-root API; add #[doc(hidden)] or list it in LIB_KEEP"
+        for e in extract_lib(path)
+        if not e.hidden and e.id not in keep
+    ]
+    for f in module_files(path):
+        mask = prod_scan(f)[1]
+        for m in re.finditer(r"\bmacro_export\b", mask):
+            errors.append(f"{rel(f)}:{line_of(mask, m.start())}: #[macro_export] is not modelled by the lib check; refused")
+        for m in re.finditer(r"cfg_attr\s*\([^\]]*\bpath\s*=", mask):
+            errors.append(f"{rel(f)}:{line_of(mask, m.start())}: a conditional module path is not modelled by the lib check; refused")
+    mask = prod_scan(path)[1]
+    for m in re.finditer(r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?extern\s*(?:\"[^\"]*\"\s*)?\{", mask, re.M):
+        errors.append(f"{rel(path)}:{line_of(mask, m.start())}: a root extern block is not modelled by the lib check; refused")
+    for m in re.finditer(r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?mod\s+(?:r#)?\w+\s*\{", mask, re.M):
+        errors.append(f"{rel(path)}:{line_of(mask, m.start())}: a root inline module is not modelled by the lib check; refused")
+    for m in re.finditer(r"\binclude\s*!", mask):
+        errors.append(f"{rel(path)}:{line_of(mask, m.start())}: a root include! is not modelled by the lib check; refused")
+    return errors
 
 
 # ── The inventory doc ────────────────────────────────────────────────────────
@@ -933,6 +982,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     extracted = extract_all()
     errors = check(args.doc.read_text(encoding="utf-8"), extracted)
+    errors += lib_documented()
     errors += check_hidden_table(args.doc.read_text(encoding="utf-8"), HIDDEN_TABLE.read_text(encoding="utf-8"))
     for line in errors:
         print(line, file=sys.stderr)

@@ -464,6 +464,8 @@ mod c4_enable_tests;
 #[cfg(test)]
 mod c9_file_ref_tests;
 #[cfg(test)]
+mod empty_backends_reload_tests;
+#[cfg(test)]
 mod reload_pause;
 #[cfg(test)]
 mod webhook_base_path_reload_tests;
@@ -484,6 +486,8 @@ mod grant_audit_journal_tests;
 mod grant_audit_reload_tests;
 #[cfg(test)]
 pub(crate) mod grant_audit_tests;
+#[cfg(test)]
+mod pattern_grammar_reload_tests;
 #[cfg(test)]
 mod principal_collision_tests;
 #[cfg(test)]

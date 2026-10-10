@@ -247,7 +247,7 @@ class CheckAgainstGit(unittest.TestCase):
 
     def git(self, *args):
         subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+            ["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
             cwd=self.root, check=True, capture_output=True,
         )
 

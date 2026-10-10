@@ -196,7 +196,7 @@ class Ratchet(unittest.TestCase):
     def test_r6_base_is_read_through_git(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            git = lambda *a: subprocess.run(["git", *a], cwd=root, check=True, capture_output=True)
+            git = lambda *a: subprocess.run(["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", *a], cwd=root, check=True, capture_output=True)
             git("init", "-q")
             git("config", "user.email", "t@t")
             git("config", "user.name", "t")
@@ -222,7 +222,7 @@ class RatchetThroughGit(unittest.TestCase):
     def test_r7_a_raised_allowance_through_base_is_refused(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            git = lambda *a: subprocess.run(["git", *a], cwd=root, check=True, capture_output=True)
+            git = lambda *a: subprocess.run(["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", *a], cwd=root, check=True, capture_output=True)
             git("init", "-q")
             git("config", "user.email", "t@t")
             git("config", "user.name", "t")
@@ -250,7 +250,7 @@ class RatchetThroughGit(unittest.TestCase):
         row preceded by `annotation`, judged through main() against the base."""
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
-            git = lambda *a: subprocess.run(["git", *a], cwd=root, check=True, capture_output=True)
+            git = lambda *a: subprocess.run(["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", *a], cwd=root, check=True, capture_output=True)
             git("init", "-q")
             git("config", "user.email", "t@t")
             git("config", "user.name", "t")

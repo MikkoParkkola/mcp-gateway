@@ -73,9 +73,14 @@ where the value differs from the default or is a credential.
 6. **The env overlay follows the config key.** `MCP_GATEWAY_<SECTION>__<KEY>` stays as the container form
    of any KEEP key; an overlay naming a non-KEEP key gets the key's treatment.
 7. **The library is not a product surface.** README documents no library use and no crate in the
-   workspace depends on it. Every crate-root item becomes INTERNAL: `#[doc(hidden)] pub` where the binary
-   needs it, a `#[doc(hidden)] pub mod test_support` re-export where only tests need it, and `pub(crate)`
-   where nothing outside uses it.
+   workspace depends on it. Every crate-root item becomes INTERNAL by hiding it in place:
+   `#[doc(hidden)] pub` at its unchanged path, so the binary, the integration tests and the benches build
+   as before, docs.rs lists nothing, and no path carries a stability promise. The crate doc says so.
+   `scripts/release/check_surface_inventory.py` fails on any crate-root item that is neither hidden nor in
+   its empty `LIB_KEEP`, and refuses what it does not model: a `macro_export` token anywhere (`cfg_attr` included),
+   a conditional module path, a root `extern` block, a root inline module or a root `include!`. That check is
+   lexical; `.github/workflows/rustdoc.yml` is the compiler-backed gate (the crate page must list no item)
+   (MIK-8044.SURF.5).
 
 ## Decisions by area
 
@@ -156,6 +161,11 @@ Generated from the tables at the end; each row there carries the reason and migr
 
 ### routes
 
+INTERNAL routes stay mounted with the answers they give today: admin-only routes refuse a
+non-admin, control-plane reads serve the Auditor, `/ui/api/status` gives a non-admin the redacted
+counts, and `/sse` answers 410 Gone pointing to `POST /mcp` (MIK-8044.SURF.4b).
+`tests/webui_management_tests/internal_routes.rs` pins each one per route, method and caller.
+
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
 | `/.well-known` | 2 |  |  |  |  |
@@ -176,7 +186,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
-| `lib` |  |  |  | 65 |  |
+| `lib` |  |  |  | 64 |  |
 
 
 ## Findings filed on the way (0-bug rule)
@@ -1398,67 +1408,67 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 
 | Item | Class | Used by (files) | Reason | Migration | Defined at |
 |---|---|---|---|---|---|
-| `mcp_gateway::Error` | INTERNAL | bin 3, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from error) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:104 |
-| `mcp_gateway::InitializedStore` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::MCP_PROTOCOL_VERSION` | INTERNAL | bin 2, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (const) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:118 |
-| `mcp_gateway::MigratedCredential` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::OfflineInitError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::OfflineMigrationError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::Result` | INTERNAL | bin 1, tests 8, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from error) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:104 |
-| `mcp_gateway::attestation` | INTERNAL | bin 1, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:32 |
-| `mcp_gateway::autotag` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:33 |
-| `mcp_gateway::backend` | INTERNAL | bin 0, tests 52, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:34 |
-| `mcp_gateway::cache` | INTERNAL | bin 0, tests 5, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:35 |
-| `mcp_gateway::capability` | INTERNAL | bin 5, tests 13, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:36 |
-| `mcp_gateway::chains` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:37 |
-| `mcp_gateway::cli` | INTERNAL | bin 22, tests 6, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:38 |
-| `mcp_gateway::config` | INTERNAL | bin 20, tests 90, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:39 |
-| `mcp_gateway::config_persistence` | INTERNAL | bin 6, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:40 |
-| `mcp_gateway::config_reload` | INTERNAL | bin 0, tests 33, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:41 |
-| `mcp_gateway::context_compression` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:42 |
-| `mcp_gateway::context_integrity` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:43 |
-| `mcp_gateway::control_plane` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:44 |
-| `mcp_gateway::cost_accounting` | INTERNAL | bin 0, tests 4, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:45 |
-| `mcp_gateway::discovery` | INTERNAL | bin 4, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:46 |
-| `mcp_gateway::error` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:47 |
-| `mcp_gateway::failsafe` | INTERNAL | bin 0, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:49 |
-| `mcp_gateway::gateway` | INTERNAL | bin 5, tests 105, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:51 |
-| `mcp_gateway::honest_task_tokens` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:54 |
-| `mcp_gateway::idempotency` | INTERNAL | bin 0, tests 8, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:55 |
-| `mcp_gateway::identity_grants` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:56 |
-| `mcp_gateway::identity_propagation` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:57 |
-| `mcp_gateway::initialize_store_offline` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::key_server` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:58 |
-| `mcp_gateway::kill_switch` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:59 |
-| `mcp_gateway::kubernetes` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:60 |
-| `mcp_gateway::metrics` | INTERNAL | bin 0, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod feature metrics) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:62 |
-| `mcp_gateway::migrate_legacy_credential_offline` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::mtls` | INTERNAL | bin 2, tests 28, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:63 |
-| `mcp_gateway::oauth` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:64 |
-| `mcp_gateway::playbook` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:67 |
-| `mcp_gateway::projection` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:68 |
-| `mcp_gateway::protocol` | INTERNAL | bin 0, tests 74, benches/examples 2 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:69 |
-| `mcp_gateway::protocol_imports` | INTERNAL | bin 2, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:70 |
-| `mcp_gateway::protocol_revision_telemetry` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:71 |
-| `mcp_gateway::provider` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:72 |
-| `mcp_gateway::ranking` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:73 |
-| `mcp_gateway::registry` | INTERNAL | bin 4, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:74 |
-| `mcp_gateway::routing_profile` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:75 |
-| `mcp_gateway::runtime` | INTERNAL | bin 3, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:76 |
-| `mcp_gateway::scheduler` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:77 |
-| `mcp_gateway::secret_injection` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:78 |
-| `mcp_gateway::secrets` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:79 |
-| `mcp_gateway::security` | INTERNAL | bin 8, tests 39, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:80 |
-| `mcp_gateway::semantic_search` | INTERNAL | bin 0, tests 1, benches/examples 1 | the crate ships a binary; README documents no library use (mod feature semantic-search) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:82 |
-| `mcp_gateway::setup_tracing` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (fn) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:149 |
-| `mcp_gateway::simhash` | INTERNAL | bin 0, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:83 |
-| `mcp_gateway::skills` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:84 |
-| `mcp_gateway::stats` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:85 |
-| `mcp_gateway::tool_profiles` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod feature tool-profiles) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:89 |
-| `mcp_gateway::tool_registry` | INTERNAL | bin 0, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:90 |
-| `mcp_gateway::tracing_context` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:91 |
-| `mcp_gateway::transform` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:92 |
-| `mcp_gateway::transition` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:93 |
-| `mcp_gateway::transport` | INTERNAL | bin 2, tests 3, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:94 |
-| `mcp_gateway::trust` | INTERNAL | bin 7, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:95 |
-| `mcp_gateway::validator` | INTERNAL | bin 1, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:96 |
+| `mcp_gateway::Error` | INTERNAL | bin 3, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from error) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:161 |
+| `mcp_gateway::InitializedStore` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::MCP_PROTOCOL_VERSION` | INTERNAL | bin 2, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (const) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:177 |
+| `mcp_gateway::MigratedCredential` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::OfflineInitError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::OfflineMigrationError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::Result` | INTERNAL | bin 1, tests 8, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from error) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:161 |
+| `mcp_gateway::attestation` | INTERNAL | bin 1, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:28 |
+| `mcp_gateway::autotag` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:30 |
+| `mcp_gateway::backend` | INTERNAL | bin 0, tests 52, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:32 |
+| `mcp_gateway::cache` | INTERNAL | bin 0, tests 5, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:34 |
+| `mcp_gateway::capability` | INTERNAL | bin 5, tests 13, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:36 |
+| `mcp_gateway::chains` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:38 |
+| `mcp_gateway::cli` | INTERNAL | bin 22, tests 6, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:40 |
+| `mcp_gateway::config` | INTERNAL | bin 20, tests 90, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:43 |
+| `mcp_gateway::config_persistence` | INTERNAL | bin 6, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:45 |
+| `mcp_gateway::config_reload` | INTERNAL | bin 0, tests 33, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:47 |
+| `mcp_gateway::context_compression` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:49 |
+| `mcp_gateway::context_integrity` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:51 |
+| `mcp_gateway::control_plane` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:53 |
+| `mcp_gateway::cost_accounting` | INTERNAL | bin 0, tests 4, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:55 |
+| `mcp_gateway::discovery` | INTERNAL | bin 4, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:58 |
+| `mcp_gateway::error` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:61 |
+| `mcp_gateway::failsafe` | INTERNAL | bin 0, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:64 |
+| `mcp_gateway::gateway` | INTERNAL | bin 5, tests 105, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:67 |
+| `mcp_gateway::honest_task_tokens` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:71 |
+| `mcp_gateway::idempotency` | INTERNAL | bin 0, tests 8, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:73 |
+| `mcp_gateway::identity_grants` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:75 |
+| `mcp_gateway::identity_propagation` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:77 |
+| `mcp_gateway::initialize_store_offline` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::key_server` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:79 |
+| `mcp_gateway::kill_switch` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:81 |
+| `mcp_gateway::kubernetes` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:83 |
+| `mcp_gateway::metrics` | INTERNAL | bin 0, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod feature metrics) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:86 |
+| `mcp_gateway::migrate_legacy_credential_offline` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::mtls` | INTERNAL | bin 2, tests 28, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:88 |
+| `mcp_gateway::oauth` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:90 |
+| `mcp_gateway::playbook` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:94 |
+| `mcp_gateway::projection` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:96 |
+| `mcp_gateway::protocol` | INTERNAL | bin 0, tests 74, benches/examples 2 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:98 |
+| `mcp_gateway::protocol_imports` | INTERNAL | bin 2, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:100 |
+| `mcp_gateway::protocol_revision_telemetry` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:102 |
+| `mcp_gateway::provider` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:104 |
+| `mcp_gateway::ranking` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:106 |
+| `mcp_gateway::registry` | INTERNAL | bin 4, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:108 |
+| `mcp_gateway::routing_profile` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:110 |
+| `mcp_gateway::runtime` | INTERNAL | bin 3, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:112 |
+| `mcp_gateway::scheduler` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:114 |
+| `mcp_gateway::secret_injection` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:116 |
+| `mcp_gateway::secrets` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:118 |
+| `mcp_gateway::security` | INTERNAL | bin 8, tests 39, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:120 |
+| `mcp_gateway::semantic_search` | INTERNAL | bin 0, tests 1, benches/examples 1 | the crate ships a binary; README documents no library use (mod feature semantic-search) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:123 |
+| `mcp_gateway::setup_tracing` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (fn) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:209 |
+| `mcp_gateway::simhash` | INTERNAL | bin 0, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:125 |
+| `mcp_gateway::skills` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:127 |
+| `mcp_gateway::stats` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:129 |
+| `mcp_gateway::tool_profiles` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod feature tool-profiles) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:138 |
+| `mcp_gateway::tool_registry` | INTERNAL | bin 0, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:140 |
+| `mcp_gateway::tracing_context` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:142 |
+| `mcp_gateway::transform` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:144 |
+| `mcp_gateway::transition` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:146 |
+| `mcp_gateway::transport` | INTERNAL | bin 2, tests 3, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:148 |
+| `mcp_gateway::trust` | INTERNAL | bin 7, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:150 |
+| `mcp_gateway::validator` | INTERNAL | bin 1, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:152 |
