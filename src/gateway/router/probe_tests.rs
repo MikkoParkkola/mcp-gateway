@@ -298,16 +298,21 @@ where
 fn rate_limited_counter_counts_each_limiter_refusal() {
     let backend = limited_backend();
     let refused = std::cell::Cell::new(0_usize);
+    let first_admitted = std::cell::Cell::new(false);
     let total = rate_limited_total_after(|| async {
-        for _ in 0..3 {
-            if matches!(
-                backend.request("tools/list", None).await,
-                Err(crate::Error::RateLimited(_))
-            ) {
+        for i in 0..3 {
+            let outcome = backend.request("tools/list", None).await;
+            if matches!(outcome, Err(crate::Error::RateLimited(_))) {
                 refused.set(refused.get() + 1);
+            } else if i == 0 {
+                first_admitted.set(true);
             }
         }
     });
+    assert!(
+        first_admitted.get(),
+        "the burst token admits the first request"
+    );
     let refused = refused.get();
     assert!(
         refused >= 1,
@@ -326,14 +331,21 @@ fn rate_limited_counter_counts_each_limiter_refusal() {
 #[test]
 fn rate_limited_counter_counts_a_refused_notification() {
     let backend = limited_backend();
+    let refused = std::cell::Cell::new(0_usize);
     let total = rate_limited_total_after(|| async {
         let _ = backend.request("tools/list", None).await;
-        let refused = backend.notify("notifications/initialized", None).await;
-        assert!(
-            matches!(refused, Err(crate::Error::RateLimited(_))),
-            "the notification must meet the empty bucket: {refused:?}"
-        );
+        // A host slow enough to let the bucket refill admits a notification;
+        // that spends the token again, so the next one meets the empty bucket
+        // (MIK-8292).
+        for _ in 0..5 {
+            let outcome = backend.notify("notifications/initialized", None).await;
+            if matches!(outcome, Err(crate::Error::RateLimited(_))) {
+                refused.set(refused.get() + 1);
+                break;
+            }
+        }
     });
+    assert_eq!(refused.get(), 1, "no notification met the empty bucket");
     assert_eq!(total.as_deref(), Some("1"));
 }
 
