@@ -155,3 +155,47 @@ async fn sanitize_rows() {
         stdio.body
     );
 }
+
+/// A backend answer carrying a credential the response firewall blocks. Built
+/// at compile time so no key-shaped literal sits in the source.
+const WITH_SECRET: &str = concat!(
+    "benign prefix ",
+    "gh",
+    "p_",
+    "0123456789abcdefghij0123456789abcdef"
+);
+
+/// The response firewall's own refusal.
+const RESPONSE_BLOCKED: &str = "Response blocked by security firewall";
+
+/// ResponseFirewall: on every sending route the secret-bearing answer is
+/// refused by the response firewall itself (its -32600 message) and the
+/// secret never reaches the client.
+#[tokio::test]
+async fn response_firewall_rows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audit = dir.path().join("audit.jsonl");
+    for route in [Route::Invoke, Route::Direct, Route::Stdio] {
+        assert_eq!(
+            expect(MethodKind::ToolsCall, route, Stage::ResponseFirewall),
+            Expect::Applies,
+            "{route:?}"
+        );
+        let body = match route {
+            Route::Invoke => router::invoke_answering(WITH_SECRET).await.body,
+            Route::Direct => router::direct_answering(WITH_SECRET).await.body,
+            Route::Stdio => {
+                stdio::stdio_firewalled_answering(&audit, json!({}), WITH_SECRET)
+                    .await
+                    .body
+            }
+            other => unreachable!("not driven here: {other:?}"),
+        };
+        assert_eq!(body["error"]["code"], -32600, "{route:?}: {body}");
+        assert_eq!(body["error"]["message"], RESPONSE_BLOCKED, "{route:?}: {body}");
+        assert!(
+            !body.to_string().contains(&WITH_SECRET[14..]),
+            "{route:?}: the secret leaked: {body}"
+        );
+    }
+}

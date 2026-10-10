@@ -67,3 +67,23 @@ pub(crate) async fn direct_sanitizing(on: bool, args: Value) -> Sent {
     let (_, body) = post_direct(&fx, "alpha", "k-std", "read", args, None, None).await;
     sent(&fx, body)
 }
+
+/// R1 `/mcp` `gateway_invoke alpha read` on the firewalled fixture, whose
+/// backend answers `text`.
+pub(crate) async fn invoke_answering(text: &'static str) -> Sent {
+    let fx = super::direct_guards_fixture::fixture_firewalled_with(Answer::Text(text), None, false)
+        .await;
+    let (_, body) = post_meta_invoke(&fx, "k-std", "alpha", "read", serde_json::json!({}), None, None)
+        .await;
+    sent(&fx, body)
+}
+
+/// R3 `/mcp/alpha` `tools/call read` on the firewalled fixture, whose backend
+/// answers `text`.
+pub(crate) async fn direct_answering(text: &'static str) -> Sent {
+    let fx = super::direct_guards_fixture::fixture_firewalled_with(Answer::Text(text), None, false)
+        .await;
+    let (_, body) = post_direct(&fx, "alpha", "k-std", "read", serde_json::json!({}), None, None)
+        .await;
+    sent(&fx, body)
+}
