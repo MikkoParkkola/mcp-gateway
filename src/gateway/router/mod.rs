@@ -171,6 +171,9 @@ mod signing_nonce_order_tests;
 /// E1: SSO admins through the role mapping (MIK-7570.ADMINSSO.1).
 #[cfg(test)]
 mod sso_admin_tests;
+/// MIK-8286 / MIK-8287: an identity that names nobody is refused.
+#[cfg(test)]
+mod identity_collapse_tests;
 #[cfg(test)]
 mod stream_kill_tests;
 /// `pub(crate)` for the A11 direct-route cells in `meta_mcp`, which need this
