@@ -138,6 +138,7 @@ async fn a_selection_that_is_not_a_version_is_refused_without_being_repeated() {
 /// Every tracing callsite enabled, so the handshake's log lines evaluate the
 /// diagnostic command they name (MIK-8195 W7).
 fn verbose() -> tracing::subscriber::DefaultGuard {
+    crate::test_log_capture::keep_interest_open();
     tracing::subscriber::set_default(
         tracing_subscriber::fmt()
             .with_max_level(tracing::Level::TRACE)
