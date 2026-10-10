@@ -493,7 +493,10 @@ async fn a_clock_before_the_epoch_expires_nothing() {
         loop {
             let row = service.get(OWNER, &asking.id);
             // Cancelled, or already deleted after retention by a later pass.
-            if row.map_or(true, |row| row.task.status() == TaskStatus::Cancelled) {
+            if row.map_or_else(
+                |error| matches!(error, ServiceError::NotFound),
+                |row| row.task.status() == TaskStatus::Cancelled,
+            ) {
                 return;
             }
             tokio::time::sleep(TICK / 2).await;

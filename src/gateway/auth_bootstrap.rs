@@ -147,6 +147,14 @@ pub(super) fn try_dashboard_bootstrap(
             state.dashboard_bootstrap.consume_capped(&candidate)
         else {
             auth_failure(AuthFailureKind::BootstrapRefused);
+            // Refused but kept: the clock reads before 1970 (MIK-8202). Say
+            // so, or the operator would throw away a link that still works.
+            if state.dashboard_bootstrap.peek().as_deref() == Some(candidate.as_str()) {
+                return Some(bearer_unauthorized_response(
+                    "The host clock reads before 1970, so this sign-in cannot be dated. The \
+                     link is kept: open it again once the clock is set.",
+                ));
+            }
             warn!("Dashboard bootstrap rejected: wrong or already-used value");
             return Some(bearer_unauthorized_response(
                 "Bootstrap link is invalid or already used. Run `mcp-gateway \

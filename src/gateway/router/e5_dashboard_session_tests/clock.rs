@@ -84,6 +84,11 @@ async fn a_bootstrap_link_on_a_clock_before_1970_keeps_the_session() {
         Some(value.as_str()),
         "the link is kept"
     );
+    assert!(
+        out.body.contains("1970") && out.body.contains("kept"),
+        "says the link still works: {}",
+        out.body
+    );
     assert!(is_admin_view(&send(&state, get(STATUS, Some(&live))).await));
     let later = send(&state, redeem(&value, None)).await;
     assert!(
