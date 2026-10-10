@@ -89,14 +89,14 @@ fn input_dependent_findings_still_run_on_a_memoised_text() {
 #[test]
 fn a_replaced_kernel_starts_with_an_empty_memo() {
     let marker = format!("{MARKER}kernel-replaced");
-    enforcing().evaluate(input(&marker, false));
-    enforcing().evaluate(input(&marker, false));
+    let _ = enforcing().evaluate(input(&marker, false));
+    let _ = enforcing().evaluate(input(&marker, false));
     assert_eq!(runs("kernel", &marker), 2);
 }
 
 /// MEMO.4 cost, measured not asserted: run on the bench host with
 /// `--release -- --ignored --nocapture memo_cost`. Medians of 500 calls on a
-/// 6.2 KB catalogue holding one em dash (the PikeVM path); the kernel miss
+/// 6.2 KB catalogue holding one em dash (the `PikeVM` path); the kernel miss
 /// is the median of 300 first evaluations, one per pre-built kernel.
 #[test]
 #[ignore = "measurement for the bench host, prints medians"]
