@@ -4,7 +4,6 @@
 
 use std::sync::Arc;
 
-use futures::future::Abortable;
 use serde_json::json;
 
 use super::{CallKey, InFlightCalls};
@@ -28,7 +27,7 @@ async fn a_cancel_reaches_only_the_call_registered_under_its_own_key() {
     let calls = Arc::new(InFlightCalls::default());
     let mine = key("alice", Some("s1"), &json!(7));
     let (_held, registration) = calls.register(mine.clone()).expect("registered");
-    let call = Abortable::new(std::future::pending::<()>(), registration);
+    let call = registration.run(std::future::pending::<()>());
     for other in [
         key("bob", Some("s1"), &json!(7)),
         key("alice", Some("s2"), &json!(7)),
@@ -42,7 +41,7 @@ async fn a_cancel_reaches_only_the_call_registered_under_its_own_key() {
         );
     }
     assert!(calls.cancel(&mine));
-    assert!(call.await.is_err(), "the call was aborted");
+    assert!(call.await.is_none(), "the call was aborted");
 }
 
 /// D5: a second call under a live key is not registered and leaves the first
@@ -63,16 +62,24 @@ fn a_duplicate_key_is_refused_and_cannot_unregister_the_live_call() {
     assert!(calls.register(k).is_some(), "the key is free again");
 }
 
-/// A registration knows when its caller's own cancel aborted it, and only
-/// then. Mutant: `cancelled` answering for any registration.
-#[test]
-fn a_registration_knows_whether_its_caller_cancelled_it() {
+/// A registration knows when its caller's own cancel aborted its dispatch,
+/// and only then: a cancel that lands after the call finished aborts nothing.
+/// Mutants: `cancelled` answering for any registration; the abort read from
+/// the handle (set by a late cancel) instead of the dispatch's outcome.
+#[tokio::test]
+async fn a_registration_knows_whether_its_caller_cancelled_it() {
     let calls = Arc::new(InFlightCalls::default());
-    let (cancelled, _) = calls.register(key("alice", None, &json!(1))).unwrap();
-    let (running, _) = calls.register(key("alice", None, &json!(2))).unwrap();
+    let (cancelled, on_cancel) = calls.register(key("alice", None, &json!(1))).unwrap();
+    let held = on_cancel.run(std::future::pending::<()>());
     assert!(calls.cancel(&key("alice", None, &json!(1))));
+    assert!(held.await.is_none());
     assert!(cancelled.cancelled());
-    assert!(!running.cancelled());
+    // Finished first, cancelled after: the late cancel still finds the live
+    // registration, but the dispatch was never aborted.
+    let (finished, on_finish) = calls.register(key("alice", None, &json!(2))).unwrap();
+    assert_eq!(on_finish.run(std::future::ready(7)).await, Some(7));
+    assert!(calls.cancel(&key("alice", None, &json!(2))));
+    assert!(!finished.cancelled(), "a late cancel aborted nothing");
 }
 
 /// The caller's cancel is told from a backend that returns the same error by
@@ -84,6 +91,10 @@ async fn only_an_aborted_registration_makes_a_failure_the_callers_cancel() {
     let (aborted, on_abort) = calls.register(key("alice", None, &json!(1))).unwrap();
     let (running, _) = calls.register(key("alice", None, &json!(2))).unwrap();
     assert!(calls.cancel(&key("alice", None, &json!(1))));
+    assert!(
+        calls.cancel(&key("alice", None, &json!(2))),
+        "asked, never aborted"
+    );
     let minted =
         super::explicitly_cancellable(Some(on_abort), std::future::pending::<crate::Result<()>>())
             .await

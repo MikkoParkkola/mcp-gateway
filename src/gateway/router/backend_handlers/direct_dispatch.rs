@@ -52,7 +52,7 @@ pub(super) struct Admitted<'a> {
     /// request's life so the caller's own cancel can find it.
     pub(super) cancel_entry: Option<crate::gateway::router::inflight_calls::Registered>,
     /// Its abort half, taken by the one dispatch this call makes.
-    pub(super) cancel_on: Option<futures::future::AbortRegistration>,
+    pub(super) cancel_on: Option<crate::gateway::router::inflight_calls::CancelOn>,
 }
 
 /// A refusal before dispatch: give back the nonce this call admitted

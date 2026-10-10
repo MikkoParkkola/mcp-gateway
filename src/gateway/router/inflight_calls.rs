@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::future::{AbortHandle, AbortRegistration};
 use parking_lot::Mutex;
@@ -37,27 +38,26 @@ pub(crate) const CLIENT_CANCELLED_MESSAGE: &str = "Request cancelled by the clie
 /// does any error that may follow a committed side effect (ADR-012
 /// consequence 1).
 pub(crate) async fn explicitly_cancellable<T>(
-    cancel_on: Option<AbortRegistration>,
+    cancel_on: Option<CancelOn>,
     dispatch: impl std::future::Future<Output = crate::Result<T>>,
 ) -> crate::Result<T> {
     let Some(cancel_on) = cancel_on else {
         return dispatch.await;
     };
-    futures::future::Abortable::new(dispatch, cancel_on)
-        .await
-        .unwrap_or_else(|_| {
-            Err(crate::Error::JsonRpc {
-                code: CLIENT_CANCELLED_CODE,
-                message: CLIENT_CANCELLED_MESSAGE.to_owned(),
-                data: None,
-            })
+    cancel_on.run(dispatch).await.unwrap_or_else(|| {
+        Err(crate::Error::JsonRpc {
+            code: CLIENT_CANCELLED_CODE,
+            message: CLIENT_CANCELLED_MESSAGE.to_owned(),
+            data: None,
         })
+    })
 }
 
-/// Whether a call failed because its own caller cancelled it: its
-/// registration was aborted, and `error` is the one [`explicitly_cancellable`]
-/// answers that abort with. Both, so a backend that returns the same error
-/// is never mistaken for the caller's cancel.
+/// Whether a call failed because its own caller cancelled it: its dispatch
+/// was actually aborted (not merely asked to be, after it had finished), and
+/// `error` is the one [`explicitly_cancellable`] answers that abort with. So
+/// a backend that returns the same error is never mistaken for the caller's
+/// cancel, even when a cancel lands just after its answer.
 pub(crate) fn cancelled_by_caller(
     entry: Option<&Registered>,
     error: Option<&crate::Error>,
@@ -110,24 +110,24 @@ impl InFlightCalls {
     /// Register a call. `None` when a live call already holds this key (D5):
     /// JSON-RPC forbids reusing a live id, so the second call cannot be
     /// cancelled explicitly, and the first stays untouched.
-    pub(crate) fn register(
-        self: &Arc<Self>,
-        key: CallKey,
-    ) -> Option<(Registered, AbortRegistration)> {
+    pub(crate) fn register(self: &Arc<Self>, key: CallKey) -> Option<(Registered, CancelOn)> {
         let mut calls = self.calls.lock();
         if calls.contains_key(&key) {
             return None;
         }
         let (handle, registration) = AbortHandle::new_pair();
-        let calls_handle = handle.clone();
         calls.insert(key.clone(), handle);
+        let aborted = Arc::new(AtomicBool::new(false));
         Some((
             Registered {
                 calls: Arc::clone(self),
                 key,
-                handle: calls_handle,
+                aborted: Arc::clone(&aborted),
             },
-            registration,
+            CancelOn {
+                registration,
+                aborted,
+            },
         ))
     }
 
@@ -150,14 +150,35 @@ impl InFlightCalls {
 pub(crate) struct Registered {
     calls: Arc<InFlightCalls>,
     key: CallKey,
-    handle: AbortHandle,
+    aborted: Arc<AtomicBool>,
 }
 
 impl Registered {
-    /// Whether the caller's own cancel aborted this call: its failure is then
-    /// the client's choice, not the backend's or the gateway's.
+    /// Whether the caller's own cancel aborted this call's dispatch: its
+    /// failure is then the client's choice, not the backend's or the
+    /// gateway's. Set only when the dispatch yielded to the abort, never by a
+    /// cancel that arrived after it finished.
     pub(crate) fn cancelled(&self) -> bool {
-        self.handle.is_aborted()
+        self.aborted.load(Ordering::SeqCst)
+    }
+}
+
+/// The abort half of a registration, taken by the one dispatch the call
+/// makes.
+pub(crate) struct CancelOn {
+    registration: AbortRegistration,
+    aborted: Arc<AtomicBool>,
+}
+
+impl CancelOn {
+    /// Run `call` until it finishes or the caller's own cancel aborts it
+    /// (`None`), recording an abort for [`Registered::cancelled`].
+    pub(crate) async fn run<F: std::future::Future>(self, call: F) -> Option<F::Output> {
+        let outcome = futures::future::Abortable::new(call, self.registration).await;
+        if outcome.is_err() {
+            self.aborted.store(true, Ordering::SeqCst);
+        }
+        outcome.ok()
     }
 }
 

@@ -463,7 +463,7 @@ async fn meta_mcp_dispatch(
                 &mut execution,
             ));
             let called = match cancel_on {
-                Some(cancel_on) => futures::future::Abortable::new(call, cancel_on).await.ok(),
+                Some(cancel_on) => cancel_on.run(call).await,
                 None => Some(call.await),
             };
             match called {
