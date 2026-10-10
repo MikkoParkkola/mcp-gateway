@@ -36,7 +36,7 @@ fn firewall() -> Arc<Firewall> {
 fn meta(fw: &Arc<Firewall>, action_mode: bool) -> MetaMcp {
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
     meta.set_firewall(Some(Arc::clone(fw)));
-    meta.share_keyring_with_for_test(&*fw);
+    meta.share_keyring_with_for_test(fw);
     if action_mode {
         meta.enable_response_inspection_action_mode();
     }

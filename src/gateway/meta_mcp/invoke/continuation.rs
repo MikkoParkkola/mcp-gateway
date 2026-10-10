@@ -661,7 +661,7 @@ impl crate::gateway::meta_mcp::MetaMcp {
     /// Test-only: mint with the keyring `firewall` exempts, as the gateway
     /// pairs them (#2210, MIK-8276). A firewall built without one is a
     /// fixture defect, so this panics rather than leave the pair unmatched.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "firewall"))]
     pub(crate) fn share_keyring_with_for_test(
         &mut self,
         firewall: &crate::security::firewall::Firewall,
