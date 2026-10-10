@@ -221,6 +221,29 @@ async fn a_settlement_whose_retry_also_fails_reports_nothing_delivered() {
     );
 }
 
+/// A first write that fails for a reason other than a lost revision gives up
+/// at once: nothing is delivered, the row stays working, and no re-read or
+/// retry follows. Mutant: the failure is treated as a conflict, so a second
+/// write is attempted.
+#[tokio::test]
+async fn a_settlement_whose_first_write_fails_does_not_retry() {
+    let fx = fixture("cas-first").await;
+    let attempts = fx.fail_writes().await;
+
+    let delivered = fx
+        .executor
+        .settle_cas(OWNER, &fx.id, fx.revision, complete())
+        .await;
+
+    assert!(!delivered);
+    assert_eq!(fx.status(), TaskStatus::Working, "the row was not settled");
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        1,
+        "one write, at the revision read, and no retry"
+    );
+}
+
 /// A marker write at a revision the row has left, or on a settled row, is
 /// refused; the same call at the live revision marks. Mutant: a refusal is
 /// reported as a store failure (which would settle the row interrupted).
