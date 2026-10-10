@@ -27,6 +27,7 @@ pub(crate) use meta_mcp::publish_identity_grants;
 #[cfg(test)]
 pub(crate) use meta_mcp::{MetaMcp, invoke::audit::with_dispatch_scope};
 mod meta_mcp_helpers;
+mod meta_mcp_helpers_routing;
 mod meta_mcp_helpers_text;
 mod meta_mcp_search_schema;
 mod meta_mcp_tool_defs;

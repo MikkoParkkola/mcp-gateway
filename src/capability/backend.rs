@@ -556,24 +556,6 @@ impl CapabilityBackend {
             .collect()
     }
 
-    /// Each capability's name, category and chain hints, in insertion order:
-    /// what the initialize guide reads, without copying the rest of each
-    /// definition (MIK-8014 PERF.8a).
-    pub(crate) fn routing_fields(&self) -> Vec<(String, String, Vec<String>)> {
-        self.capabilities
-            .read()
-            .entries
-            .iter()
-            .map(|c| {
-                (
-                    c.name.clone(),
-                    c.metadata.category.clone(),
-                    c.metadata.chains_with.clone(),
-                )
-            })
-            .collect()
-    }
-
     /// List all capability definitions (cloned, insertion order).
     pub fn list_capabilities(&self) -> Vec<CapabilityDefinition> {
         self.capabilities.read().entries.clone()
