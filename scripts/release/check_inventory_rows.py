@@ -69,6 +69,12 @@ SWEPT_AREAS = (
     "src/personal_accounts/service.rs",
     "src/personal_accounts/worker.rs",
     "src/personal_accounts/worker_journeys.rs",
+    # MIK-8195 W4: oauth (non-client) and the stdio server modules.
+    "src/oauth/callback.rs",
+    "src/oauth/metadata.rs",
+    "src/oauth/storage.rs",
+    "src/oauth/token_file.rs",
+    "src/gateway/server/stdio",
     # MIK-8195 W8: the stdio read judge.
     "src/gateway/outbound/stdio.rs",
     # MIK-8195 W3: identity propagation, the input bridge and the rest of
