@@ -346,7 +346,8 @@ pub struct AgentDefinitionConfig {
     /// PEM-encoded RSA public key for RS256 verification.
     #[serde(default)]
     pub rs256_public_key: Option<String>,
-    /// Granted scopes (e.g., `tools:surreal:*`).
+    /// Granted scopes (e.g., `tools:surreal:*`): `tools:<backend>:<tool>:<action>`,
+    /// backend and tool each an exact name or `*` alone (MIK-8298).
     #[serde(default)]
     pub scopes: Vec<String>,
     /// Expected issuer (`iss` claim). Optional.

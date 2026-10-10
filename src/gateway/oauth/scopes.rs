@@ -41,12 +41,15 @@ pub enum Action {
 }
 
 impl Action {
-    fn from_str(s: &str) -> Self {
+    /// `None` for anything but the four spellings: a misspelt action used to
+    /// read as `Any` and grant every action (MIK-8298). It now grants nothing.
+    fn from_str(s: &str) -> Option<Self> {
         match s {
-            "read" => Self::Read,
-            "write" => Self::Write,
-            "execute" => Self::Execute,
-            _ => Self::Any, // "*" and anything else treated as wildcard
+            "read" => Some(Self::Read),
+            "write" => Some(Self::Write),
+            "execute" => Some(Self::Execute),
+            "*" => Some(Self::Any),
+            _ => None,
         }
     }
 
@@ -70,14 +73,16 @@ pub struct Scope {
 impl Scope {
     /// Parse a scope string.
     ///
-    /// Returns `None` if the string does not start with `tools:`.
+    /// Returns `None` if the string does not start with `tools:`, or if its
+    /// action is not `read`, `write`, `execute` or `*`: such a scope grants
+    /// nothing.
     pub fn parse(s: &str) -> Option<Self> {
         let rest = s.strip_prefix("tools:")?;
 
         let mut parts = rest.splitn(3, ':');
         let backend = parts.next().unwrap_or("*").to_string();
         let tool = parts.next().unwrap_or("*").to_string();
-        let action = Action::from_str(parts.next().unwrap_or("*"));
+        let action = Action::from_str(parts.next().unwrap_or("*"))?;
 
         Some(Self {
             backend,
@@ -228,8 +233,11 @@ mod tests {
     }
 
     #[test]
-    fn action_from_str_unknown_becomes_any() {
-        assert_eq!(Action::from_str("bogus"), Action::Any);
-        assert_eq!(Action::from_str("*"), Action::Any);
+    fn action_from_str_reads_only_the_four_spellings() {
+        // MIK-8298: this test used to pin the fallback that made a misspelt
+        // action grant every action.
+        assert_eq!(Action::from_str("bogus"), None);
+        assert_eq!(Action::from_str("*"), Some(Action::Any));
+        assert_eq!(Action::from_str("read"), Some(Action::Read));
     }
 }

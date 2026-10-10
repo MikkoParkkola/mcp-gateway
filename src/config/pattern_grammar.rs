@@ -11,8 +11,10 @@
 //! - backend lists (`auth.api_keys[].backends`,
 //!   `key_server.policies[].scopes.backends`): an exact name or `*` alone
 //!   (`AuthenticatedClient::can_access_backend`);
-//! - agent scopes (`agent_auth.agents[].scopes`): `tools:<backend>:<tool>`,
-//!   each segment an exact name or `*` alone (`gateway/oauth/scopes.rs`).
+//! - agent scopes (`agent_auth.agents[].scopes`): `tools:<backend>:<tool>:<action>`,
+//!   backend and tool each an exact name or `*` alone, the action one of
+//!   `read`, `write`, `execute` or `*` (`gateway/oauth/scopes.rs`);
+//! - backend names, `capabilities.name` included: no `*`.
 //!
 //! Any other `*` used to load as a literal and match nothing: a deny that
 //! denies nothing, or an allow that grants nothing. The refusal says, on one
@@ -87,10 +89,14 @@ fn refuse(key: &str, patterns: &[String], grammar: Grammar) -> Result<()> {
     Ok(())
 }
 
-/// The backend and tool segments of an agent scope, each exact or `*` alone.
+/// An agent scope: the `tools:` prefix, backend and tool each exact or `*`
+/// alone, and a known action.
 fn refuse_agent_scope(key: &str, scope: &str) -> Result<()> {
     let Some(rest) = scope.strip_prefix("tools:") else {
-        return Ok(());
+        return Err(Error::ConfigValidation(format!(
+            "{key} = {scope:?} grants nothing: an agent scope starts with 'tools:' \
+             (\"tools:<backend>:<tool>:<action>\")."
+        )));
     };
     let mut parts = rest.splitn(3, ':');
     for noun in ["backend", "tool"] {
@@ -101,6 +107,14 @@ fn refuse_agent_scope(key: &str, scope: &str) -> Result<()> {
                 "{key} = {scope:?}: segment {segment:?} {why}"
             )));
         }
+    }
+    if let Some(action) = parts.next()
+        && !matches!(action, "read" | "write" | "execute" | "*")
+    {
+        return Err(Error::ConfigValidation(format!(
+            "{key} = {scope:?}: {action:?} is not an action, so the scope grants nothing. \
+             Use read, write, execute or '*'."
+        )));
     }
     Ok(())
 }
@@ -153,6 +167,14 @@ impl Config {
                 &rule.scopes.tools,
                 Grammar::ToolPrefix(Role::Allow),
             )?;
+        }
+        // The capability backend is a backend too: '*' is never in a name.
+        let name = &self.capabilities.name;
+        if name.contains('*') {
+            return Err(Error::ConfigValidation(format!(
+                "capabilities.name = {name:?} names a backend, and a backend name may not \
+                 contain '*'. Rename it."
+            )));
         }
         for (i, agent) in self.agent_auth.agents.iter().enumerate() {
             for (j, scope) in agent.scopes.iter().enumerate() {
