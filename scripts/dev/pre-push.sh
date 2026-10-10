@@ -40,17 +40,34 @@ if [[ -f Cargo.toml ]]; then
   echo "[pre-push] public repo hygiene"
   scripts/dev/check-public-repo-hygiene.sh
 
+  # Cargo's own exit code decides, never a pipe's: the full output goes to a
+  # log, a failure prints its tail and keeps the log, and every `test result:`
+  # summary line is shown either way.
+  run_cargo() {
+    local name="$1" log rc=0
+    shift
+    log="$(mktemp "${TMPDIR:-/tmp}/pre-push-cargo.XXXXXX")"
+    cargo "$@" >"$log" 2>&1 || rc=$?
+    grep -E '^test result:' "$log" || true
+    if [[ $rc -ne 0 ]]; then
+      tail -40 "$log"
+      echo "FAIL: $name (exit $rc; full log: $log)"
+      exit 1
+    fi
+    rm -f "$log"
+  }
+
   echo "[pre-push] cargo fmt --check"
-  cargo fmt --all --check 2>&1 | tail -20 || { echo "FAIL: cargo fmt"; exit 1; }
+  run_cargo "cargo fmt" fmt --all --check
 
   echo "[pre-push] cargo clippy --all-targets --all-features -D warnings"
-  cargo clippy --all-targets --all-features --quiet -- -D warnings 2>&1 | tail -20 || { echo "FAIL: clippy all-features"; exit 1; }
+  run_cargo "clippy all-features" clippy --all-targets --all-features --quiet -- -D warnings
 
   echo "[pre-push] cargo clippy --all-targets --no-default-features -D warnings"
-  cargo clippy --all-targets --no-default-features --quiet -- -D warnings 2>&1 | tail -20 || { echo "FAIL: clippy no-default-features"; exit 1; }
+  run_cargo "clippy no-default-features" clippy --all-targets --no-default-features --quiet -- -D warnings
 
   echo "[pre-push] cargo test --lib"
-  cargo test --lib --quiet 2>&1 | tail -10 || { echo "FAIL: cargo test --lib"; exit 1; }
+  run_cargo "cargo test --lib" test --lib --quiet
 fi
 
 tip="$(git rev-parse HEAD)"
