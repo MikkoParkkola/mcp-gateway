@@ -478,13 +478,10 @@ impl TaskExecutor {
         .await
     }
 
-    /// Spawn an update's worker and wait for the outcome it sends. Nothing
-    /// is spawned, and the answer is -32005, when the update's own grant
-    /// decisions could not be written under `FailClosed` (MIK-8204).
-    ///
-    /// Not an `async fn`: `spawn_worker` boxes the worker here, before the
-    /// wait, so the caller's future never holds it inline (a debug-build
-    /// stack overflow otherwise).
+    /// Spawn an update's worker and wait for its outcome; -32005 and no spawn
+    /// when the update's grant decisions could not be written under
+    /// `FailClosed` (MIK-8204). Not an `async fn`: the worker is boxed before
+    /// the wait, never held inline in the caller's future (stack overflow).
     fn round_outcome<F>(
         &self,
         worker: impl FnOnce(tokio::sync::oneshot::Sender<InputOutcome>) -> F,
