@@ -291,5 +291,14 @@ class Predicates(unittest.TestCase):
         self.assertEqual(len(found), 1, found)
         self.assertIn("not run on macOS and not listed", found[0])
 
+    def test_p21_a_cfg_attr_cut_before_ignore_still_finds_its_test(self) -> None:
+        # A `]` in a comment ends the join before `ignore`: the attribute is
+        # unclosed, so it counts, and its test must still be found.
+        (Path(self.dir.name) / "Cargo.toml").write_text(self.CARGO)
+        found = self.tree(
+            '#[cfg_attr(\n    target_os = "macos", /* see ] */\n    ignore\n)]\n#[test]\nfn probe() {}\n'
+        )
+        self.assertEqual(found, ["not run on macOS and not listed: src/x_tests.rs probe"])
+
 if __name__ == "__main__":
     unittest.main()
