@@ -240,11 +240,12 @@ async fn stdio_clean_call_passes_with_anomaly_detection_on() {
 }
 
 /// The second of two stdio calls is refused at the route stage by the
-/// firewall control `tune` configures: `-32600`, a blocking request row, no
-/// second send; the first ran.
+/// firewall control `tune` configures, with that control's own `finding`:
+/// `-32600`, a blocking request row, no second send; the first ran.
 async fn second_stdio_call_is_refused(
     tune: impl FnOnce(&mut crate::security::firewall::FirewallConfig),
     args: (serde_json::Value, serde_json::Value),
+    finding: &str,
 ) {
     let dir = tempfile::tempdir().expect("tempdir");
     let audit = dir.path().join("audit.jsonl");
@@ -255,8 +256,8 @@ async fn second_stdio_call_is_refused(
     );
     assert_eq!(second["error"]["code"], -32600, "{second}");
     assert!(
-        message(&second).starts_with("Firewall blocked: "),
-        "not the firewall's refusal: {second}"
+        message(&second).starts_with(&format!("Firewall blocked: {finding}")),
+        "not refused by this control: {second}"
     );
     assert_eq!(calls, 1, "the second call reached the backend: {second}");
     let requests = audit_rows(&audit, "request");
@@ -275,7 +276,8 @@ async fn stdio_calls_spend_the_call_budget() {
         config.budget.max_calls_per_window = 1;
         config.budget.window_secs = 3_600;
     };
-    second_stdio_call_is_refused(budget, (serde_json::json!({}), serde_json::json!({}))).await;
+    let args = (serde_json::json!({}), serde_json::json!({}));
+    second_stdio_call_is_refused(budget, args, "Call budget exceeded:").await;
 }
 
 /// P3 (A10): the tenant guard applies to stdio. One tenant per window: a
@@ -292,7 +294,7 @@ async fn stdio_calls_meet_the_tenant_guard() {
         serde_json::json!({ "tenant": "acme" }),
         serde_json::json!({ "tenant": "globex" }),
     );
-    second_stdio_call_is_refused(tenants, args).await;
+    second_stdio_call_is_refused(tenants, args, "Cross-tenant reach exceeded:").await;
 }
 
 /// P3: X14's round trip on hardened stdio spends one signing nonce once. The
@@ -327,4 +329,22 @@ async fn stdio_x14_round_spends_its_nonce_once() {
         redeemed.pointer("/result/taskId"),
         "the retry did not get the admitted task: {retried}"
     );
+}
+
+/// MIK-8149.REQFW.1, task form (grok's row): a task-augmented stdio call whose
+/// argument the request firewall blocks is refused at the route stage, before
+/// any task exists: the firewall's own refusal, no `taskId`, no backend call.
+#[tokio::test]
+async fn stdio_blocked_task_call_makes_no_task() {
+    let (body, calls) = Box::pin(stdio::stdio_blocked_task()).await;
+    assert_eq!(body["error"]["code"], -32600, "{body}");
+    assert!(
+        message(&body).starts_with("Firewall blocked: "),
+        "not the firewall's refusal: {body}"
+    );
+    assert!(
+        body.pointer("/result/taskId").is_none(),
+        "a task was made for a blocked call: {body}"
+    );
+    assert_eq!(calls, 0, "{body}");
 }

@@ -134,18 +134,14 @@ async fn apply_backend_tool_call_security(
             );
         }
         if let Some((code, message)) = verdict.request_refusal() {
-            // OWASP ASI10: an anomaly block carries -32002 on every route, as
-            // on the meta route, so a caller can tell it from other refusals.
-            // This route keeps its own HTTP status for it (403).
-            if code == -32002 {
-                return Err(backend_security_error_with_status(
-                    id,
-                    code,
-                    &message,
-                    StatusCode::FORBIDDEN,
-                ));
-            }
-            return Err(backend_security_error(id, &message));
+            // The shared wording's code, ASI10's -32002 included, with this
+            // route's own HTTP status (403).
+            return Err(backend_security_error_with_status(
+                id,
+                code,
+                &message,
+                StatusCode::FORBIDDEN,
+            ));
         }
         let target = (backend_name, tool_name);
         let audit = (session_id.as_str(), caller_name);

@@ -79,6 +79,12 @@ async fn a_stdio_task_worker_refuses_a_tool_the_current_policy_denies() {
         "the worker did not refuse the denied tool: {:?}",
         task.task.status()
     );
+    // Failed by the policy itself, not by any other error.
+    let stored = serde_json::to_value(task.task.wire()).expect("a task serializes");
+    assert!(
+        stored.to_string().contains("blocked by security policy"),
+        "not refused by the tool policy: {stored}"
+    );
     assert_eq!(
         fixture.rounds.load(Ordering::SeqCst),
         0,

@@ -219,3 +219,34 @@ pub(crate) async fn stdio_x14_signed_round() -> (Value, Value, Value, Value) {
     let retried = dispatch(&fixture, call(4, "stdio-x14-round-0002", json!({}))).await;
     (challenge, redeemed, replay, retried)
 }
+
+/// An argument the request firewall blocks as shell injection, built so no
+/// such literal sits in the source.
+const SHELL_PATTERN: &str = concat!(";", " rm", " -rf", " / ");
+
+/// R5 (P3, grok's row): a modern task-augmented `gateway_invoke echo` over
+/// stdio whose argument the request firewall blocks, on the production-built
+/// gateway (its firewall scans requests by default). Returns the answer and
+/// the backend's `tools/call` count.
+pub(crate) async fn stdio_blocked_task() -> (Value, usize) {
+    let served = backend().await;
+    let calls = std::sync::Arc::clone(&served.1);
+    let fixture = Box::pin(fixture_on_with(served, None, |_| {})).await;
+    let request = json!({
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {
+            "name": "gateway_invoke",
+            "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"cmd": SHELL_PATTERN}},
+            "task": {},
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {
+                    "extensions": {"io.modelcontextprotocol/tasks": {}}
+                },
+                "io.mcp-gateway/idempotency-key": "blocked-task",
+            },
+        },
+    });
+    let body = dispatch(&fixture, request).await;
+    (body, calls.load(Ordering::SeqCst))
+}
