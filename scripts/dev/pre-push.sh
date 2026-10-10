@@ -32,7 +32,8 @@ if [[ -f Cargo.toml ]]; then
 fi
 
 tip="$(git rev-parse HEAD)"
-if ! grep -q '^Local-Tested: ' <<<"$(git log -1 --pretty=%B)"; then
+message="$(git log -1 --pretty=%B)"
+if ! grep -q '^Local-Tested: ' <<<"$message"; then
   git -c trailer.ifexists=replace commit --amend --no-edit \
     --trailer "Local-Tested: cargo fmt+clippy+test green @ ${tip}" >/dev/null || true
 fi
