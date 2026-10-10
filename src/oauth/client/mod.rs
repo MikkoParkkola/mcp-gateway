@@ -342,7 +342,9 @@ impl OAuthClient {
         // refusal is an answer, not a missing document: it ends discovery
         // rather than falling back (MIK-7701).
         if let Some(meta) = self.discover_resource_metadata().await? {
-            debug!(resource = %meta.resource, "Found protected resource metadata");
+            // Read before the macro so its count is graded (MIK-7725).
+            let resource = &meta.resource;
+            debug!(resource = %resource, "Found protected resource metadata");
 
             // Get authorization server from metadata
             if let Some(auth_server) = meta.authorization_server() {
@@ -393,7 +395,9 @@ impl OAuthClient {
         // process restarts or a connection is re-established.
         self.restore_persisted_client_id();
 
-        info!(backend = %self.backend_name, "OAuth client initialized");
+        // Read before the macro so its count is graded (MIK-7725).
+        let backend = &self.backend_name;
+        info!(backend = %backend, "OAuth client initialized");
         Ok(())
     }
 

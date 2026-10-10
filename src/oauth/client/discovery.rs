@@ -240,7 +240,9 @@ impl OAuthClient {
                 if is_ssrf_refusal(&error) {
                     return Err(error);
                 }
-                debug!(url = %redact_url_for_diagnostics(url), error = %error, "No metadata here");
+                // Computed before the macro so its count is graded (MIK-7725).
+                let redacted = redact_url_for_diagnostics(url);
+                debug!(url = %redacted, error = %error, "No metadata here");
                 return Ok(Fetched::Absent);
             }
         };
