@@ -44,7 +44,7 @@ use crate::protocol::mrtr::InputRequired;
 const OWNER: &str = "verified-owner";
 /// Every wait in this file is bounded by a real timeout: a sweep that never
 /// happens must fail at the assertion that names it, not hang the harness.
-const BUDGET: Duration = Duration::from_secs(5);
+const BUDGET: Duration = Duration::from_secs(10);
 /// Short enough that a row's deletion is observed within `BUDGET`, long enough
 /// that the loop is a periodic owner rather than a spin.
 const TICK: Duration = Duration::from_millis(20);

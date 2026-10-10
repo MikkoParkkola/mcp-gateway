@@ -259,8 +259,19 @@ async fn t14b_a_repaired_live_row_stays_sealed_while_the_store_clock_is_unreadab
     let sweep = executor
         .start_expiry(Duration::from_millis(50))
         .expect("sweep");
+    let refused = restored.store.refused_reads_for_test();
     repair(&originals);
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    // Two sweep passes past the repair, each refused a read of the clock:
+    // an event, not a window. Either pass would have settled the rows.
+    let _ = crate::test_wait::wait_until(BUDGET, || {
+        let passes = restored.store.refused_reads_for_test() >= refused + 2;
+        std::future::ready(if passes {
+            Break(())
+        } else {
+            Continue(String::from("two refused sweep passes"))
+        })
+    })
+    .await;
     let still_sealed = restored.skipped_records().sealed;
     restored.store.set_clock_for_test(None);
     let _ = crate::test_wait::wait_until(BUDGET, || {
