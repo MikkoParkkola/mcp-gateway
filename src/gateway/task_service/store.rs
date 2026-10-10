@@ -25,6 +25,9 @@ use crate::fs_lock::ExclusiveFileLock;
 use chrono::{DateTime, Utc};
 #[cfg(test)]
 use disk::acquire_lease;
+// Unix-only: its one caller, `store_tests::repaired_rows`, is `cfg(unix)`.
+#[cfg(all(test, unix))]
+pub(super) use disk::after_load;
 #[cfg(test)]
 pub(super) use disk::read_bounded;
 use disk::{Fault, fire, open_blocking, write_record};
