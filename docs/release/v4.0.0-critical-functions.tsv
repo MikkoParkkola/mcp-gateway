@@ -240,7 +240,7 @@ src/gateway/task_service/execution/input_round.rs	provide_input	1	critical	c	Tas
 src/gateway/task_service/execution/input_round.rs	resume	1	critical	d	resume	Closes a round whose continuation deadline has passed, and one refused for expiry, instead of resuming it
 src/gateway/task_service/execution/input_round.rs	resume_flow	1	critical	d	resume_flow	Closes a round whose continuation deadline has passed, and one refused for expiry, instead of resuming it
 src/gateway/task_service/execution/input_round.rs	settle_interrupted	1	critical	d	settle_interrupted	Settles a resumed task interrupted when its host is gone, instead of dispatching without one
-src/gateway/task_service/execution/input_round.rs	close_late_round	1	critical	d	TaskExecutor::close_late_round	Closes a resumed round past its deadline; waits out a clock before 1970 rather than leave the task working
+src/gateway/task_service/execution/input_round.rs	close_late_round	1	critical	d	TaskExecutor::close_late_round	Closes a resumed round past its deadline, stamped at the time the deadline was judged at, never a second clock read
 src/gateway/task_service/execution/input_round.rs	proceed_unless_late	1	critical	d	TaskExecutor::proceed_unless_late	The one place both late-deadline checks of a resume close the round
 src/gateway/task_service/execution/input_round.rs	park	1	critical	d	Settling::park	Parks a round only with a deadline it can date; settles a round that could only fail as abandoned
 src/gateway/task_service/execution/input_round.rs	readable_now	1	critical	d	readable_now	The now every round deadline check and park stamp reads; waits out a clock before 1970 so no round is closed, abandoned or stranded on it
