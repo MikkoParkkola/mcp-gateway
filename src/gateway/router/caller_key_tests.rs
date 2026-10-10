@@ -204,3 +204,20 @@ fn a_certificate_naming_no_subject_has_no_grant_subject() {
         ("mtls", uri)
     );
 }
+
+/// MIK-8286 R8 (pins): a certificate that names its subject keeps today's
+/// grant subject, subject key and caller key byte for byte, so no stored key
+/// moves. Literals copied from the code before the change.
+#[test]
+fn a_named_certificate_keeps_its_keys_byte_for_byte() {
+    let cert = leaf(Some("agent-a"), None);
+    let subject = grant_subject_from_cert_identity(&cert).unwrap();
+    assert_eq!(
+        subject_key(Some(&subject), Some(&cert)).as_deref(),
+        Some("subject:4:mtls:7:agent-a")
+    );
+    assert_eq!(
+        caller_key(Some(&subject), Some(&cert), None),
+        "subject:4:mtls:7:agent-a"
+    );
+}
