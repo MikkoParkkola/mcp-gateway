@@ -765,3 +765,7 @@ mod tests {
         assert_eq!(lifecycle.tracked_count(), 1, "and its new deadline stays");
     }
 }
+
+#[cfg(test)]
+#[path = "session_lifecycle_clock_tests.rs"]
+mod clock_tests;
