@@ -314,7 +314,7 @@ pub(super) fn subject_key(
     cert: Option<&CertIdentity>,
 ) -> Option<String> {
     let subject = subject?;
-    let from_cert = cert.and_then(grant_subject_from_cert_identity).as_ref() == Some(subject);
+    let from_cert = cert.is_some_and(|cert| is_this_certificates(subject, cert));
     let id = if from_cert {
         cert.and_then(cert_subject_id)?
     } else {
@@ -326,6 +326,20 @@ pub(super) fn subject_key(
         subject.authority,
         id.len()
     ))
+}
+
+/// Whether `subject` is the one `cert` stands for: the subject it names, or
+/// (MIK-8286) the display-name placeholder a certificate naming no subject
+/// shows, which the certificate source no longer makes but which must still
+/// never become a key if handed over with that certificate.
+fn is_this_certificates(subject: &GrantSubject, cert: &CertIdentity) -> bool {
+    subject.authority == MTLS_AUTHORITY
+        && match cert.subject_id() {
+            Some(id) => subject.subject == id,
+            None => {
+                trimmed_non_empty(&cert.display_name).as_deref() == Some(subject.subject.as_str())
+            }
+        }
 }
 
 /// The key the per-caller firewall controls (anomaly, tenant, budget) score on:
