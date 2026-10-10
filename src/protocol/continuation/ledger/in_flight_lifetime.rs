@@ -19,7 +19,12 @@ const T: u64 = 1_000;
 async fn held_until_t(capacity: usize) -> (InFlight, String) {
     let table = InFlight::new("gw-1", capacity);
     let key = table
-        .hold("backend", T, T)
+        .hold(
+            "backend",
+            &crate::protocol::continuation::QuotaKey::for_test("t"),
+            T,
+            T,
+        )
         .await
         .expect("an empty table admits");
     (table, key)
@@ -98,7 +103,18 @@ async fn row_05_the_first_call_through_any_reader_reclaims() {
     // `hold` — observed through its own admission at a capacity of one: the
     // slot can only be free if that same call reclaimed the expired entry.
     let (table, _key) = held_until_t(1).await;
-    assert!(table.hold("backend", T + 2, T + 1).await.is_some(), "hold");
+    assert!(
+        table
+            .hold(
+                "backend",
+                &crate::protocol::continuation::QuotaKey::for_test("t"),
+                T + 2,
+                T + 1
+            )
+            .await
+            .is_some(),
+        "hold"
+    );
 }
 
 #[tokio::test]
@@ -122,9 +138,29 @@ async fn row_08_hold_at_capacity_admits_when_the_occupants_are_expired() {
     // reclaim must have happened in `guard` before the check reads `len`.
     let table = InFlight::new("gw-1", 4);
     for _ in 0..4 {
-        assert!(table.hold("backend", T, T).await.is_some());
+        assert!(
+            table
+                .hold(
+                    "backend",
+                    &crate::protocol::continuation::QuotaKey::for_test("t"),
+                    T,
+                    T
+                )
+                .await
+                .is_some()
+        );
     }
-    assert!(table.hold("backend", T + 2, T + 1).await.is_some());
+    assert!(
+        table
+            .hold(
+                "backend",
+                &crate::protocol::continuation::QuotaKey::for_test("t"),
+                T + 2,
+                T + 1
+            )
+            .await
+            .is_some()
+    );
 }
 
 #[tokio::test]
@@ -139,9 +175,29 @@ async fn row_09_hold_at_capacity_still_refuses_when_the_occupants_are_live() {
     // refusal is deleted rather than re-ordered.
     let table = InFlight::new("gw-1", 4);
     for _ in 0..4 {
-        assert!(table.hold("backend", T, T).await.is_some());
+        assert!(
+            table
+                .hold(
+                    "backend",
+                    &crate::protocol::continuation::QuotaKey::for_test("t"),
+                    T,
+                    T
+                )
+                .await
+                .is_some()
+        );
     }
-    assert!(table.hold("backend", T, T).await.is_none());
+    assert!(
+        table
+            .hold(
+                "backend",
+                &crate::protocol::continuation::QuotaKey::for_test("t"),
+                T,
+                T
+            )
+            .await
+            .is_none()
+    );
 }
 
 // --- MIK-8060: a reader walks the table only when something can be expired. ---
@@ -151,7 +207,12 @@ async fn full_of_live_holds() -> InFlight {
     let table = InFlight::new("gw-1", IN_FLIGHT_CAPACITY);
     for i in 0..IN_FLIGHT_CAPACITY {
         let deadline = T + 1_000 + u64::try_from(i).expect("small");
-        table.hold("backend", deadline, T).await.expect("capacity");
+        // A caller per hold: the table fills, not one caller's share.
+        let quota = crate::protocol::continuation::QuotaKey::for_test(&format!("c{i}"));
+        table
+            .hold("backend", &quota, deadline, T)
+            .await
+            .expect("capacity");
     }
     table
 }
@@ -177,8 +238,24 @@ async fn row_10_completing_the_earliest_hold_never_hides_a_later_expiry() {
     // The tracked earliest deadline may go stale when its hold completes; it
     // must stay a lower bound, so an expiry behind it is still reclaimed.
     let table = InFlight::new("gw-1", 4);
-    let first = table.hold("backend", T, T).await.expect("capacity");
-    let _second = table.hold("backend", T + 10, T).await.expect("capacity");
+    let first = table
+        .hold(
+            "backend",
+            &crate::protocol::continuation::QuotaKey::for_test("t"),
+            T,
+            T,
+        )
+        .await
+        .expect("capacity");
+    let _second = table
+        .hold(
+            "backend",
+            &crate::protocol::continuation::QuotaKey::for_test("t"),
+            T + 10,
+            T,
+        )
+        .await
+        .expect("capacity");
     assert!(table.complete(&first, T).await);
     assert_eq!(table.len(T + 5).await, 1, "the later hold is still live");
     assert_eq!(
@@ -192,7 +269,15 @@ async fn row_10_completing_the_earliest_hold_never_hides_a_later_expiry() {
 async fn row_11_holds_inserted_out_of_deadline_order_expire_in_order() {
     let table = InFlight::new("gw-1", 4);
     for deadline in [T + 30, T + 10, T + 20] {
-        table.hold("backend", deadline, T).await.expect("capacity");
+        table
+            .hold(
+                "backend",
+                &crate::protocol::continuation::QuotaKey::for_test("t"),
+                deadline,
+                T,
+            )
+            .await
+            .expect("capacity");
     }
     assert_eq!(table.len(T + 15).await, 2);
     assert_eq!(table.len(T + 25).await, 1);
@@ -202,7 +287,15 @@ async fn row_11_holds_inserted_out_of_deadline_order_expire_in_order() {
 #[tokio::test]
 async fn row_12_a_reader_at_the_earliest_deadline_neither_walks_nor_evicts() {
     let table = InFlight::new("gw-1", 4);
-    table.hold("backend", T + 10, T).await.expect("capacity");
+    table
+        .hold(
+            "backend",
+            &crate::protocol::continuation::QuotaKey::for_test("t"),
+            T + 10,
+            T,
+        )
+        .await
+        .expect("capacity");
     let before = table.walks.load(std::sync::atomic::Ordering::SeqCst);
     assert_eq!(table.len(T + 10).await, 1, "live at its own deadline");
     let walked = table.walks.load(std::sync::atomic::Ordering::SeqCst) - before;
@@ -212,8 +305,24 @@ async fn row_12_a_reader_at_the_earliest_deadline_neither_walks_nor_evicts() {
 #[tokio::test]
 async fn row_13_a_walk_resets_the_bound_to_the_earliest_survivor() {
     let table = InFlight::new("gw-1", 4);
-    table.hold("backend", T + 5, T).await.expect("capacity");
-    table.hold("backend", T + 50, T).await.expect("capacity");
+    table
+        .hold(
+            "backend",
+            &crate::protocol::continuation::QuotaKey::for_test("t"),
+            T + 5,
+            T,
+        )
+        .await
+        .expect("capacity");
+    table
+        .hold(
+            "backend",
+            &crate::protocol::continuation::QuotaKey::for_test("t"),
+            T + 50,
+            T,
+        )
+        .await
+        .expect("capacity");
     assert_eq!(table.len(T + 6).await, 1, "the first hold is reclaimed");
     let before = table.walks.load(std::sync::atomic::Ordering::SeqCst);
     for _ in 0..10 {
@@ -277,7 +386,12 @@ async fn a_step_digest_is_returned_only_while_its_hold_exists() {
 async fn try_complete_frees_the_slot_while_the_step_map_is_held() {
     let table = std::sync::Arc::new(InFlight::new("gw-1", IN_FLIGHT_CAPACITY));
     let key = table
-        .hold("alpha", T + 60, T)
+        .hold(
+            "alpha",
+            &crate::protocol::continuation::QuotaKey::for_test("t"),
+            T + 60,
+            T,
+        )
         .await
         .expect("an empty table has a slot");
     let steps = table.steps.lock();

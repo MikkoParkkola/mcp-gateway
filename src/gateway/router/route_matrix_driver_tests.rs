@@ -407,9 +407,58 @@ impl crate::transport::Transport for Destructive {
 
 /// R4a: a modern task-augmented `tools/call read` by its surfaced name on
 /// `/mcp`, declaring form elicitation, where `read` is listed
-/// `destructiveHint: true`, so X14 has a destructive call to decide.
-pub(crate) async fn task_submit_surfaced() -> Sent {
-    task_submit_read_as("k-std", Surfacing::On).await.1
+/// `destructiveHint: true`, so X14 has a destructive call to decide. `k-std`
+/// carries no verified identity, so X14 binds it by its key (MIK-8137).
+///
+/// The whole round on one gateway: `k-std`'s call; its challenge, answered
+/// `accept` and presented by another key (`k-budget`); then by `k-std`. With
+/// the backend calls counted after each.
+pub(crate) async fn task_submit_surfaced() -> TaskConfirmRound {
+    let (fx, calls, params) = task_submit_fixture(Surfacing::On).await;
+    let send = |key: &'static str, params: serde_json::Value| {
+        super::direct_guards_fixture::send_with_headers(
+            &fx,
+            "/mcp",
+            key,
+            "tools/call",
+            params,
+            None,
+            &TASK_SUBMIT_HEADERS,
+        )
+    };
+    let (_, challenge) = send("k-std", params.clone()).await;
+    let mut accepted = params;
+    if let (Some(state), Some((issued, _))) = (
+        challenge.pointer("/result/requestState").cloned(),
+        challenge
+            .pointer("/result/inputRequests")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|requests| requests.iter().next()),
+    ) {
+        accepted["requestState"] = state;
+        accepted["inputResponses"] = serde_json::json!({ issued.clone(): {"action": "accept"} });
+    }
+    let (_, other_key) = send("k-budget", accepted.clone()).await;
+    let after_other_key = calls.load(Ordering::SeqCst);
+    let (_, same_key) = send("k-std", accepted).await;
+    TaskConfirmRound {
+        challenge,
+        other_key,
+        after_other_key,
+        same_key,
+    }
+}
+
+/// [`task_submit_surfaced`]'s answers.
+pub(crate) struct TaskConfirmRound {
+    /// `k-std`'s first call: X14's question.
+    pub challenge: serde_json::Value,
+    /// The accepted answer presented by another key.
+    pub other_key: serde_json::Value,
+    /// Backend calls once that presentation was answered.
+    pub after_other_key: usize,
+    /// The accepted answer presented by `k-std`.
+    pub same_key: serde_json::Value,
 }
 
 /// Whether the fixture surfaces `read` (P3, MIK-8326).
@@ -421,13 +470,22 @@ pub(crate) enum Surfacing {
     Off,
 }
 
-/// [`task_submit_surfaced`] sent with the API key `key`, on a fixture that
-/// surfaces `read` per `surfacing`. Returns the HTTP status with the answer.
-/// `k-deny` is the fixture's key denied `read` (P3, MIK-8326).
-pub(crate) async fn task_submit_read_as(
-    key: &str,
+/// The modern era's header mirrors for a `tools/call read`.
+const TASK_SUBMIT_HEADERS: [(&str, &str); 3] = [
+    ("mcp-protocol-version", "2026-07-28"),
+    ("mcp-method", "tools/call"),
+    ("mcp-name", "read"),
+];
+
+/// The R4a fixture, surfacing `read` per `surfacing_mode`, with its backend
+/// call counter and the task-augmented call's params.
+async fn task_submit_fixture(
     surfacing_mode: Surfacing,
-) -> (axum::http::StatusCode, Sent) {
+) -> (
+    super::direct_guards_fixture::Fx,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    serde_json::Value,
+) {
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let transport = std::sync::Arc::new(Destructive {
         calls: std::sync::Arc::clone(&calls),
@@ -451,11 +509,17 @@ pub(crate) async fn task_submit_read_as(
             crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "x14-submit"
         }
     });
-    let headers = [
-        ("mcp-protocol-version", "2026-07-28"),
-        ("mcp-method", "tools/call"),
-        ("mcp-name", "read"),
-    ];
+    (fx, calls, params)
+}
+
+/// One R4a call sent with the API key `key`, on a fixture that surfaces
+/// `read` per `surfacing_mode`. Returns the HTTP status with the answer.
+/// `k-deny` is the fixture's key denied `read` (P3, MIK-8326).
+pub(crate) async fn task_submit_read_as(
+    key: &str,
+    surfacing_mode: Surfacing,
+) -> (axum::http::StatusCode, Sent) {
+    let (fx, calls, params) = task_submit_fixture(surfacing_mode).await;
     let (status, body) = super::direct_guards_fixture::send_with_headers(
         &fx,
         "/mcp",
@@ -463,7 +527,7 @@ pub(crate) async fn task_submit_read_as(
         "tools/call",
         params,
         None,
-        &headers,
+        &TASK_SUBMIT_HEADERS,
     )
     .await;
     let sent = Sent {

@@ -6,16 +6,30 @@
 
 use super::*;
 
-/// Two stdio processes: each draws its own nonce (`StdioNonce::process`).
-const PROCESS_A: [u8; 32] = [0xA1; 32];
-const PROCESS_B: [u8; 32] = [0xB2; 32];
-
-/// [`ask_principal`] as the stdio process holding `nonce`, admitting its tasks
+/// [`ask_caller`] as the stdio process holding `nonce`, admitting its tasks
 /// under the local operator as `stdio_tasks::intent` does.
-async fn ask_stdio(fx: &Fixture, retry: &RetryFields, nonce: &[u8; 32]) -> TaskConfirmation {
-    let principal = crate::protocol::mrtr::PrincipalSource::Stdio { nonce };
-    let actor = Some(crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL);
-    ask_principal(fx, retry, elicitation(), (principal, actor)).await
+async fn ask_stdio(
+    fx: &Fixture,
+    retry: &RetryFields,
+    nonce: &'static crate::gateway::server::StdioNonce,
+) -> TaskConfirmation {
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        stdio_nonce: Some(nonce),
+        ..crate::gateway::meta_mcp::anonymous_caller()
+    };
+    let owner = crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL;
+    ask_caller(fx, retry, elicitation(), &caller, owner).await
+}
+
+/// Two stdio processes, each with its own nonce (`StdioNonce::process`).
+fn processes() -> (
+    &'static crate::gateway::server::StdioNonce,
+    &'static crate::gateway::server::StdioNonce,
+) {
+    (
+        crate::gateway::server::StdioNonce::leaked_for_test(),
+        crate::gateway::server::StdioNonce::leaked_for_test(),
+    )
 }
 
 /// The retry that answers `outcome`'s challenge with `accept`.
@@ -34,16 +48,17 @@ fn accepting(outcome: &TaskConfirmation) -> RetryFields {
 #[tokio::test]
 async fn a_stdio_grant_answers_only_the_process_that_asked() {
     let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
-    let retry = accepting(&ask_stdio(&fx, &fresh(), &PROCESS_A).await);
+    let (process_a, process_b) = processes();
+    let retry = accepting(&ask_stdio(&fx, &fresh(), process_a).await);
     assert!(
         !matches!(
-            ask_stdio(&fx, &retry, &PROCESS_B).await,
+            ask_stdio(&fx, &retry, process_b).await,
             TaskConfirmation::Granted(_)
         ),
         "another stdio process answered this process's grant"
     );
     assert!(matches!(
-        ask_stdio(&fx, &retry, &PROCESS_A).await,
+        ask_stdio(&fx, &retry, process_a).await,
         TaskConfirmation::Granted(_)
     ));
 }
@@ -53,7 +68,8 @@ async fn a_stdio_grant_answers_only_the_process_that_asked() {
 #[tokio::test]
 async fn a_grant_does_not_cross_between_stdio_and_http() {
     let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
-    let stdio_grant = accepting(&ask_stdio(&fx, &fresh(), &PROCESS_A).await);
+    let (process_a, _) = processes();
+    let stdio_grant = accepting(&ask_stdio(&fx, &fresh(), process_a).await);
     assert!(
         !matches!(
             ask(&fx, &stdio_grant, elicitation()).await,
@@ -64,7 +80,7 @@ async fn a_grant_does_not_cross_between_stdio_and_http() {
     let http_grant = accepting(&ask(&fx, &fresh(), elicitation()).await);
     assert!(
         !matches!(
-            ask_stdio(&fx, &http_grant, &PROCESS_A).await,
+            ask_stdio(&fx, &http_grant, process_a).await,
             TaskConfirmation::Granted(_)
         ),
         "a stdio caller answered an HTTP grant"
@@ -74,7 +90,7 @@ async fn a_grant_does_not_cross_between_stdio_and_http() {
         TaskConfirmation::Granted(_)
     ));
     assert!(matches!(
-        ask_stdio(&fx, &stdio_grant, &PROCESS_A).await,
+        ask_stdio(&fx, &stdio_grant, process_a).await,
         TaskConfirmation::Granted(_)
     ));
 }
@@ -96,7 +112,7 @@ async fn a_stdio_retry_of_an_admitted_task_is_not_asked_again() {
     let _held = fx.admission.admit_task(owned.borrow());
     assert!(
         matches!(
-            ask_stdio(&fx, &fresh(), &PROCESS_A).await,
+            ask_stdio(&fx, &fresh(), processes().0).await,
             TaskConfirmation::Granted(_)
         ),
         "an admitted stdio task was challenged again"
@@ -112,7 +128,11 @@ async fn x14_does_not_classify_a_name_the_caller_may_not_invoke() {
     let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
     let (arguments, task, retry) = (json!({ "id": 1 }), json!({ "ttl": 60_000 }), fresh());
     let alice = identity();
-    let actor = alice.stable_actor_id();
+    let owner = alice.stable_actor_id();
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        verified_identity: Some(&alice),
+        ..crate::gateway::meta_mcp::anonymous_caller()
+    };
     let denied = crate::gateway::meta_mcp::InvokeScope {
         authorizer: &crate::gateway::authz::DenyAll,
         ..open_scope()
@@ -125,8 +145,10 @@ async fn x14_does_not_classify_a_name_the_caller_may_not_invoke() {
             arguments: &arguments,
             task: Some(&task),
             retry: &retry,
-            principal: crate::protocol::mrtr::PrincipalSource::Credential(Some(&alice)),
-            admission_actor: Some(&actor),
+            verified_identity: Some(&alice),
+            principal: crate::protocol::mrtr::source_fingerprint(caller.principal_source(None)),
+            quota: caller.quota_key(),
+            owner: &owner,
             scope: denied,
             session_id: None,
             input_capabilities: elicitation(),

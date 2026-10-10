@@ -91,11 +91,14 @@ impl Gateway {
                 arguments,
                 task,
                 retry: caller.retry,
+                verified_identity: None,
                 // The derivation continuations bind stdio by (`Stdio { nonce }`),
                 // so a grant and a continuation name one caller one way.
-                principal: caller.principal_source(None),
+                principal: crate::protocol::mrtr::source_fingerprint(caller.principal_source(None)),
+                // This process's one share of the continuation pool (MIK-8293).
+                quota: caller.quota_key(),
                 // The owner stdio admits its tasks under (`stdio_tasks::intent`).
-                admission_actor: Some(LOCAL_OPERATOR_PRINCIPAL),
+                owner: LOCAL_OPERATOR_PRINCIPAL,
                 scope,
                 session_id: Some(session_id),
                 input_capabilities: caller.input_capabilities,

@@ -438,7 +438,14 @@ async fn egress_a_refused_question_frees_only_its_own_slot() {
         let continuation = fx.state.meta_mcp.continuation();
         let now = crate::protocol::continuation::now_unix_secs();
         let other = continuation
-            .begin_exchange("other".into(), None, "fp".into(), "digest".into(), now)
+            .begin_exchange(
+                "other".into(),
+                None,
+                "fp".into(),
+                &crate::protocol::continuation::QuotaKey::for_test("fp"),
+                "digest".into(),
+                now,
+            )
             .await;
         let other = other.expect("an unrelated exchange holds a slot");
         let (uri, sent, params) = request(route, "tools/call", Part::InterimQuestion);
@@ -517,7 +524,14 @@ async fn egress_a_stolen_envelope_frees_no_other_slot() {
     let continuation = fx.state.meta_mcp.continuation();
     let now = crate::protocol::continuation::now_unix_secs();
     let other = continuation
-        .begin_exchange("other".into(), None, "fp".into(), "digest".into(), now)
+        .begin_exchange(
+            "other".into(),
+            None,
+            "fp".into(),
+            &crate::protocol::continuation::QuotaKey::for_test("fp"),
+            "digest".into(),
+            now,
+        )
         .await
         .expect("an unrelated exchange holds a slot");
     let stolen = continuation.keyring().mint(&other).expect("its envelope");

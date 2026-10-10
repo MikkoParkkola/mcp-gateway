@@ -186,3 +186,34 @@ fn task_owner_key_separates_keys_and_subjects_but_never_stands_in_for_a_key() {
         "no key, no owner"
     );
 }
+
+/// S3b1 premise (MIK-8293, lead ruling): an API-key task's worker carries its
+/// owner, `credential:<principal>`, as its credential principal, while the live
+/// caller carries the bare principal. S3b1 drives those two spellings directly,
+/// so this pins that production builds them: the owner from `task_owner_key`,
+/// the worker context from `task_intent_for_call`, as the task route does.
+#[tokio::test]
+async fn s3b1_premise_a_key_holders_task_worker_carries_the_prefixed_owner() {
+    let state = state(true).await;
+    let (args, retry) = (json!({}), keyed());
+    let client = key_holder("digest-alice");
+    let owner = task_owner_key(None, None, Some(&client));
+    let api_key_caller = TaskIntentRequest {
+        owner: &owner,
+        client: Some(&client),
+        ..request(&args, &retry, true)
+    };
+    let Ok(Some(intent)) = task_intent_for_call(&state, RequestId::Number(4), api_key_caller)
+    else {
+        panic!("setup: an API-key caller gets a task intent");
+    };
+    assert_eq!(
+        intent.owned.credential_principal_for_test(),
+        format!(
+            "{}{}",
+            crate::gateway::auth::CREDENTIAL_OWNER_PREFIX,
+            client.principal
+        ),
+        "the task worker's principal is not the prefixed owner S3b1 assumes"
+    );
+}

@@ -36,9 +36,10 @@ use tracing::{debug, warn};
 use crate::gateway::task_service::OwnedAdmissionRequest;
 use crate::hashing::{canonical_json, sha256_hex};
 use crate::idempotency::admission::ExecutionAdmission;
+use crate::key_server::oidc::VerifiedIdentity;
 use crate::protocol::continuation::{ContinuationPurpose, Payload, clock_now};
 use crate::protocol::meta::Declared;
-use crate::protocol::mrtr::{PrincipalSource, RetryFields, source_fingerprint};
+use crate::protocol::mrtr::RetryFields;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 use super::{InvokeScope, MetaMcp};
@@ -130,14 +131,24 @@ pub(crate) struct TaskConfirmationRequest<'a> {
     pub task: Option<&'a Value>,
     /// The retry pair and idempotency key this call carried, already parsed.
     pub retry: &'a RetryFields,
-    /// Who a grant is bound to: `Credential(verified)` over HTTP, the
-    /// process's `Stdio { nonce }` over stdio. A credential with no verified
-    /// identity is refused rather than bound weakly — see [`source_fingerprint`].
-    pub principal: PrincipalSource<'a>,
-    /// The actor this caller's task admission keys on (HTTP: the verified
-    /// identity's stable actor id; stdio: the local operator), read by the
-    /// already-admitted replay. `None` when the caller has no admission actor.
-    pub admission_actor: Option<&'a str>,
+    /// The verified identity, read only to choose the catalogue slot a
+    /// propagating backend dispatches on; never the binding.
+    pub verified_identity: Option<&'a VerifiedIdentity>,
+    /// Who the grant is bound to: the caller's one binding,
+    /// `source_fingerprint(caller.principal_source(None))`, computed by the
+    /// caller (MIK-8137). A key IS an authenticated principal: the admin and
+    /// scope gates already authorised this call on it, and continuations and
+    /// the idempotency guard bind it too. `None` (no identity and no key) is
+    /// refused.
+    pub principal: Option<String>,
+    /// Who an open confirmation's slot is charged to:
+    /// `caller.quota_key()`, from the same caller context as `principal`
+    /// (MIK-8293). `None` is refused with it.
+    pub quota: Option<crate::protocol::continuation::QuotaKey>,
+    /// The routed task owner this call would be admitted under, the owner the
+    /// already-admitted lookup asks about. Never the binding above: admission
+    /// keys on the owner, and two renderings of one caller miss each other.
+    pub owner: &'a str,
     /// What this caller may invoke, and its session: a surfaced name it may
     /// not invoke is never classified (MIK-8326), whoever calls this gate.
     pub scope: InvokeScope<'a>,
@@ -192,7 +203,12 @@ impl MetaMcp {
             return TaskConfirmation::NotRequired;
         };
 
-        let Some(fingerprint) = source_fingerprint(request.principal.clone()) else {
+        // The sealed binding and the caller the slot is charged to (MIK-8293):
+        // both computed by the caller from one context, the quota key the one
+        // `MetaMcpCallerContext::quota_key` gives this caller on every other
+        // route, so a confirmation shares the caller's one cap.
+        let (Some(fingerprint), Some(quota)) = (request.principal.clone(), request.quota.clone())
+        else {
             return refuse(
                 request,
                 "unbindable_caller",
@@ -226,8 +242,14 @@ impl MetaMcp {
                     record("admitted_replay");
                     return TaskConfirmation::Granted(cleared(request.retry));
                 }
-                self.challenge(request, &backend_id, unclassified, fingerprint, digest)
-                    .await
+                self.challenge(
+                    request,
+                    &backend_id,
+                    unclassified,
+                    (fingerprint, &quota),
+                    digest,
+                )
+                .await
             }
             // Answers with no grant. Not a fresh call — it claims to be
             // continuing one — and not a retry this gateway can place.
@@ -276,8 +298,7 @@ impl MetaMcp {
             return None;
         }
         let backend = self.backends.get(server)?;
-        let verified = matches!(request.principal, PrincipalSource::Credential(Some(_)));
-        if verified && backend.identity_propagation_config().is_some() {
+        if request.verified_identity.is_some() && backend.identity_propagation_config().is_some() {
             debug!(
                 server,
                 tool = tool_name,
@@ -331,7 +352,7 @@ impl MetaMcp {
         request: &TaskConfirmationRequest<'_>,
         backend_id: &str,
         unclassified: bool,
-        fingerprint: String,
+        (fingerprint, quota): (String, &crate::protocol::continuation::QuotaKey),
         digest: String,
     ) -> TaskConfirmation {
         let capability = CONFIRMATION_CAPABILITY;
@@ -375,6 +396,7 @@ impl MetaMcp {
                 // empty string is a state the backend never issued.
                 None,
                 fingerprint,
+                quota,
                 digest,
                 now,
             )
@@ -397,6 +419,12 @@ impl MetaMcp {
             Err(error) => {
                 let tool = request.tool_name;
                 warn!(tool, %error, "Confirmation grant mint refused");
+                // No envelope will ever name this slot, so it is given back now
+                // rather than held until it expires (MIK-8311).
+                self.continuation
+                    .in_flight()
+                    .complete(&payload.hold_key, now)
+                    .await;
                 return refuse(
                     request,
                     "mint_refused",
@@ -567,11 +595,11 @@ impl MetaMcp {
     /// the task it already owns. That is admission's contract for every
     /// task-augmented call and is not relaxed for this one.
     fn already_admitted(request: &TaskConfirmationRequest<'_>, key: &str) -> bool {
-        let Some(actor) = request.admission_actor else {
+        if request.owner.is_empty() {
             return false;
-        };
+        }
         let admission_request = task_admission_request(
-            actor.to_owned(),
+            request.owner.to_owned(),
             key.to_owned(),
             request.tool_name,
             request.arguments,
