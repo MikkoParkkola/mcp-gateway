@@ -90,7 +90,8 @@ PREFIXES = (
     "src/config/account_bindings.rs",
     "src/identity_propagation/",
     # MIK-8195 W8 (lead ruling 2026-10-10): the stdio read judge. The rest of
-    # src/gateway/outbound/ joins under MIK-8321.
+    # src/gateway/outbound/ joins under MIK-8321. Inventory and probe surface
+    # only: critical_path_coverage.py PATHS does not grade it as a path.
     "src/gateway/outbound/stdio.rs",
 )
 
