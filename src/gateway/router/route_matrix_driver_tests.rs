@@ -518,8 +518,13 @@ pub(crate) async fn concurrent_same_key() -> (Value, usize) {
     tokio::time::timeout(std::time::Duration::from_secs(30), entered.notified())
         .await
         .expect("the first call reached the held backend");
-    let second = call(Arc::clone(&fx)).await;
+    // Bounded too: on a lease miss the second call reaches the held backend
+    // and waits on `gate`; release both before asserting so nothing hangs.
+    let second =
+        tokio::time::timeout(std::time::Duration::from_secs(30), call(Arc::clone(&fx))).await;
+    gate.notify_waiters();
     gate.notify_one();
+    let second = second.expect("the second call was answered while the first was held");
     let _first = tokio::time::timeout(std::time::Duration::from_secs(30), first)
         .await
         .expect("the first call finished once released")

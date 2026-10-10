@@ -191,8 +191,9 @@ fn the_table_answers_every_route_and_stage() {
             }
         }
     }
-    // Today's gaps on 0028fb249: R1/R2/R5 nonce, R2 chain link, R3 rescan,
-    // sanitize and lease, R5 route firewall, sanitize and X14.
+    // Today's gaps: R1/R2/R5 nonce, R2 chain link, R3 rescan, sanitize and
+    // lease, R4a nonce give-back (D2) and authorize (D3), R5 route firewall,
+    // sanitize and X14.
     assert_eq!(
         gaps, 12,
         "the gap count moved: update the table and this pin"

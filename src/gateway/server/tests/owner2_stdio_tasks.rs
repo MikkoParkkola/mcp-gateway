@@ -54,7 +54,13 @@ pub(crate) async fn backend_listing(tools: Value) -> (String, Arc<AtomicUsize>) 
                     Some("tools/list") => json!({"tools": tools}),
                     Some("tools/call") => {
                         counted.fetch_add(1, Ordering::SeqCst);
-                        json!({"content": [{"type": "text", "text": "done"}]})
+                        // Echoes a `cmd` argument as sent, so a row can see
+                        // what reached the backend (route x check matrix).
+                        let text = request["params"]["arguments"]["cmd"]
+                            .as_str()
+                            .unwrap_or("done")
+                            .to_string();
+                        json!({"content": [{"type": "text", "text": text}]})
                     }
                     _ => json!({}),
                 };

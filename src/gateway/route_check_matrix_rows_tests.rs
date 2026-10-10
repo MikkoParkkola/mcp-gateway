@@ -178,7 +178,17 @@ async fn sanitize_rows() {
         );
         assert_eq!(
             calls, 1,
-            "R5 sanitize_input={on}: the NUL did not reach the backend: {body}"
+            "R5 sanitize_input={on}: the call did not reach the backend: {body}"
+        );
+        // The backend echoes `cmd`; `gateway_invoke` wraps its result as text.
+        // The NUL arrived unchanged, not stripped.
+        let inner: serde_json::Value = body["result"]["content"][0]["text"]
+            .as_str()
+            .and_then(|text| serde_json::from_str(text).ok())
+            .unwrap_or_default();
+        assert_eq!(
+            inner["content"][0]["text"], "a\u{0}b",
+            "R5 sanitize_input={on}: the backend did not get the NUL as sent: {body}"
         );
     }
 }
@@ -474,8 +484,8 @@ async fn task_confirm_submit_row() {
     );
 }
 
-/// `TaskConfirm`, R5 gap (MIK-8160): the same task-augmented call of an
-/// unannotated surfaced tool over stdio is admitted as a task with no X14
+/// `TaskConfirm`, R5 gap (MIK-8160): the same task-augmented call of a
+/// destructive surfaced tool over stdio is admitted as a task with no X14
 /// decision at all: neither X14's challenge nor its refusal.
 #[tokio::test]
 async fn task_confirm_stdio_gap_row() {
