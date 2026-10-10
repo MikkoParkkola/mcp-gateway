@@ -81,6 +81,8 @@ mod continuation_instance_tests;
 #[cfg(test)]
 mod direct_audit_tests;
 #[cfg(test)]
+mod direct_cache_guard_tests;
+#[cfg(test)]
 mod direct_capability_tests;
 #[cfg(test)]
 mod direct_continuation_gate_tests;
