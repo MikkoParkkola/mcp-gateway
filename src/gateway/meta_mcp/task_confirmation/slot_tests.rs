@@ -475,6 +475,17 @@ async fn an_anonymous_caller_is_classified_from_the_shared_slot() {
     }
 }
 
+/// MIK-8137 R3 (BIND.2): a caller with neither an identity nor a key is still
+/// refused as unbindable once key-only callers can be bound: binding the key
+/// must not turn "no principal" into "everyone is one principal".
+#[tokio::test]
+async fn a_caller_with_no_identity_and_no_key_is_refused_as_unbindable() {
+    let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
+    let (code, message) = refusal(&ask_as(&fx, &fresh(), elicitation(), None).await);
+    assert_eq!(code, -32003, "{message}");
+    assert!(message.contains("cannot name"), "{message}");
+}
+
 fn refusal(outcome: &TaskConfirmation) -> (i32, String) {
     let TaskConfirmation::Answer(response) = outcome else {
         panic!("expected a refusal, got {outcome:?}");

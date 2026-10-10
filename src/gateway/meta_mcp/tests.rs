@@ -33,6 +33,8 @@ mod admin_exposure;
 mod backend_lists;
 #[path = "tests/code_mode.rs"]
 mod code_mode;
+#[path = "tests/confirmation_binding.rs"]
+mod confirmation_binding;
 #[path = "tests/enforced_transform.rs"]
 mod enforced_transform;
 #[path = "tests/input_requests.rs"]

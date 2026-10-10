@@ -590,3 +590,6 @@ async fn a_chain_resume_after_its_backend_is_replaced_is_refused() {
         replacement.calls()
     );
 }
+
+#[path = "chain_resume_binding_tests.rs"]
+mod binding;
