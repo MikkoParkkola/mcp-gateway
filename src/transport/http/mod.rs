@@ -351,6 +351,13 @@ fn bearer_header_value(token: &str) -> Result<header::HeaderValue> {
 }
 
 impl HttpTransport {
+    /// Test-only: this transport's OAuth client, for a row that ages its
+    /// token (MIK-8269).
+    #[cfg(test)]
+    pub(crate) fn oauth_client_for_test(&self) -> Option<Arc<TokioMutex<OAuthClient>>> {
+        self.oauth_client.clone()
+    }
+
     /// Create a new HTTP transport
     ///
     /// If `streamable_http` is true, uses direct POST without SSE handshake.

@@ -137,6 +137,10 @@ async fn end_ineligible(shared: &Shared, hub: &Weak<EventsHub>) -> bool {
 
 /// The task: reconnect until stopped.
 pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub: Weak<EventsHub>) {
+    #[cfg(test)]
+    {
+        *shared.ran_interactive.lock() = Some(crate::oauth::login_gate::interactive());
+    }
     let _gate = tokio::select! {
         () = shared.stop.cancelled() => return,
         gate = Arc::clone(&shared.gate).lock_owned() => gate,

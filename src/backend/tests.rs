@@ -27,6 +27,7 @@ mod login_probe;
 mod login_window;
 mod metric_label;
 mod per_identity_catalogue;
+mod token_lapse;
 mod tool_cache;
 
 struct MockTransport {

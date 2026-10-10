@@ -107,6 +107,11 @@ pub(crate) enum Answer {
     /// completes with its own arguments echoed as text (MIK-8176: a playbook
     /// step can carry an earlier step's envelope into a completed answer).
     AskThenEcho,
+    /// The first `tools/call` asks; later ones are a tiny store: `cmd`
+    /// `"store <text>"` keeps `<text>`, and `"get"` returns what was kept
+    /// (MIK-8323: a backend handed an envelope can return it to a later,
+    /// fresh call).
+    AskThenStore,
 }
 
 /// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
@@ -118,6 +123,8 @@ struct CountingBackend {
     /// The params of every `tools/call`, in order (MIK-8078).
     seen: Arc<std::sync::Mutex<Vec<Value>>>,
     answer: Answer,
+    /// What `Answer::AskThenStore` keeps between calls.
+    kept: Arc<std::sync::Mutex<String>>,
 }
 
 #[async_trait::async_trait]
@@ -135,21 +142,8 @@ impl Transport for CountingBackend {
             .unwrap()
             .push(params.clone().unwrap_or(Value::Null));
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
-        if matches!(self.answer, Answer::AskThenEcho) {
-            let echoed = params
-                .as_ref()
-                .and_then(|p| p.get("arguments"))
-                .cloned()
-                .unwrap_or(Value::Null)
-                .to_string();
-            return Ok(JsonRpcResponse::success(
-                id,
-                if n == 0 {
-                    question(Answer::AskOnce)
-                } else {
-                    json!({"content": [{"type": "text", "text": echoed}], "isError": false})
-                },
-            ));
+        if let Some(body) = answers::recording_answer(self.answer, n, params.as_ref(), &self.kept) {
+            return Ok(JsonRpcResponse::success(id, body));
         }
         if let Answer::StateOnlyRounds(at, text) = self.answer {
             let round = |text: &str| {
@@ -271,6 +265,7 @@ pub(crate) fn replace_backend(fx: &Fx, name: &str) -> Arc<AtomicUsize> {
         calls: Arc::clone(&calls),
         seen: Arc::default(),
         answer: Answer::Ok,
+        kept: Arc::default(),
     }));
     assert!(
         fx.state.backends.register(backend),
@@ -368,6 +363,7 @@ pub(crate) async fn fixture_firewalled_with(
 mod answers;
 #[path = "direct_guards_fixture_egress.rs"]
 mod egress;
+pub(crate) use answers::envelope_in;
 #[path = "direct_guards_fixture_quota.rs"]
 mod quota;
 use answers::{call_answer, listing, question};

@@ -1,0 +1,2 @@
+src/oauth/storage.rs	save_client_id_polled	1	standard	borderline	TokenStorage::save_client_id_polled	Persists a registered client id on the async login path, waiting for the repair lock only by polling under a bound, so a cancelled or stuck wait never blocks a runtime thread (MIK-8344).
+src/oauth/storage.rs	link_client_id	1	standard	borderline	TokenStorage::link_client_id	First-writer-wins link of a client id, adopting a valid existing id and handing back a corrupt final for locked repair; a mistake would overwrite another instance's id.
