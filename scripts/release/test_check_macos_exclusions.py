@@ -58,7 +58,10 @@ class CheckMacosExclusions(unittest.TestCase):
             '#[cfg(target_os = "linux")]\nmod d;\n'
             '#[cfg(all(test, target_os = "linux"))]\n#[test]\nfn e() {}\n'
         )
-        self.assertEqual(len(self.tree(rust)), 5)
+        self.assertEqual(
+            self.tree(rust),
+            [f"not run on macOS and not listed: src/x_tests.rs {name}" for name in "abcde"],
+        )
 
     def test_a_macos_job_skip_needs_a_row_and_a_row_needs_the_skip(self) -> None:
         # The Tests job's own skip is not the macOS job's and needs no row.
@@ -216,6 +219,20 @@ class Predicates(unittest.TestCase):
     def test_p11_a_lint_cfg_attr_with_a_path_is_on(self) -> None:
         # Only the predicate is parsed; the attributes after it may hold paths.
         self.assert_on("#[cfg_attr(not(test), deny(clippy::print_stdout))]")
+
+    def test_p12_a_trailing_comment_after_the_attribute_is_allowed(self) -> None:
+        # The repo's usual `#[cfg(..)] // reason` style must still be read.
+        self.assert_off('#[cfg(target_os = "linux")] // reads /proc')
+        self.assert_off("#[cfg_attr(target_vendor = \"apple\", ignore)] // flaky on macOS")
+        self.assert_on('#[cfg(all(test, target_os = "macos"))] // fine everywhere')
+
+    def test_p13_a_production_module_gated_on_test_anywhere_is_a_test_module(self) -> None:
+        found = self.tree('#[cfg(all(target_os = "linux", test))]\nmod probe_tests;\n', path="src/reload/mod.rs")
+        self.assertEqual(found, ["not run on macOS and not listed: src/reload/mod.rs probe_tests"])
+
+    def test_p14_true_and_false_are_decided(self) -> None:
+        self.assert_on("#[cfg(true)]")
+        self.assert_on("#[cfg(false)]")  # off on both platforms: not a macOS gap
 
 if __name__ == "__main__":
     unittest.main()
