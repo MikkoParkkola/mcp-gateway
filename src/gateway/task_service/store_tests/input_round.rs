@@ -430,7 +430,7 @@ async fn closing_a_round_at_a_stale_revision_writes_nothing() {
     let (_dir, store, task) = opened().await;
     let revision = parked_with(&store, &task, &["confirm"], due(secs(at(30)))).await;
     let stale = store
-        .close_round(OWNER, task.id(), revision - 1, "closed".to_owned())
+        .close_round(OWNER, task.id(), revision - 1, "closed".to_owned(), at(31))
         .await;
     assert!(
         matches!(stale, Err(StoreError::RevisionConflict)),
@@ -447,7 +447,7 @@ async fn closing_a_round_cancels_it_with_the_reason_in_one_write() {
     let (_dir, store, task) = opened().await;
     let revision = parked_with(&store, &task, &["confirm"], due(secs(at(30)))).await;
     let closed = store
-        .close_round(OWNER, task.id(), revision, "the reason".to_owned())
+        .close_round(OWNER, task.id(), revision, "the reason".to_owned(), at(31))
         .await
         .expect("an open round closes");
     assert_eq!(closed.revision, revision + 1);
@@ -457,36 +457,23 @@ async fn closing_a_round_cancels_it_with_the_reason_in_one_write() {
     assert!(store.input_round_for_test(task.id()).0.is_none());
 }
 
-/// MIK-8202: a close stamped on a clock before 1970 is refused and the round
-/// stays open; the sweep closes it once the clock reads. Mutant: the cancel
-/// stamped with a fallback time instead of refused.
+/// MIK-8202: a close is stamped at the time its caller judged the round
+/// closed, never at a second read: with the store's clock stepped before
+/// 1970 it still closes, dated by the caller. Mutant: the close reads the
+/// clock again, and is refused.
 #[tokio::test]
-async fn a_clock_before_the_epoch_refuses_a_close_and_keeps_the_round() {
+async fn a_close_is_stamped_at_its_callers_time() {
     let (_dir, store, task) = opened().await;
     let revision = parked_with(&store, &task, &["confirm"], due(secs(at(30)))).await;
     store.set_clock_for_test(Some(
         chrono::DateTime::<chrono::Utc>::from_timestamp(-1, 0).expect("one second before 1970"),
     ));
-    let refused = store
-        .close_round(OWNER, task.id(), revision, "expired".to_owned())
-        .await;
-    assert!(
-        matches!(refused, Err(StoreError::Unavailable)),
-        "{refused:?}"
-    );
-    let after = store.get(OWNER, task.id()).unwrap();
-    assert_eq!(
-        after.task.status(),
-        TaskStatus::InputRequired,
-        "closed on an unreadable clock"
-    );
-    assert_eq!(after.revision, revision);
-
-    store.set_clock_for_test(Some(at(31)));
-    store
-        .close_round(OWNER, task.id(), revision, "expired".to_owned())
+    let closed = store
+        .close_round(OWNER, task.id(), revision, "expired".to_owned(), at(31))
         .await
-        .expect("the round closes once the clock reads");
+        .expect("closed at the caller's time");
+    assert_eq!(closed.task.status(), TaskStatus::Cancelled);
+    assert_eq!(closed.task.last_updated_at(), at(31));
 }
 
 /// Mutant: a settled row closed again (a second terminal write and publish).
@@ -495,11 +482,17 @@ async fn closing_an_already_settled_round_writes_nothing() {
     let (_dir, store, task) = opened().await;
     let revision = parked_with(&store, &task, &["confirm"], due(secs(at(30)))).await;
     let closed = store
-        .close_round(OWNER, task.id(), revision, "first".to_owned())
+        .close_round(OWNER, task.id(), revision, "first".to_owned(), at(31))
         .await
         .expect("an open round closes");
     let again = store
-        .close_round(OWNER, task.id(), closed.revision, "second".to_owned())
+        .close_round(
+            OWNER,
+            task.id(),
+            closed.revision,
+            "second".to_owned(),
+            at(31),
+        )
         .await;
     assert!(
         matches!(again, Err(StoreError::InvalidTransition)),
@@ -544,7 +537,7 @@ async fn assert_rounds_unserved(
         closed.err()
     );
     let closed = reader
-        .close_round(OWNER, task.id(), revision, "expired".into())
+        .close_round(OWNER, task.id(), revision, "expired".into(), at(31))
         .await;
     assert!(matches!(closed, Err(StoreError::Unavailable)), "{closed:?}");
     assert!(reader.expired_input_rounds(far).is_empty());
@@ -667,13 +660,13 @@ async fn a_foreign_owner_cannot_write_the_dispatch_marker_or_a_round() {
         refused.as_ref().err()
     );
     let refused = store
-        .close_round(OTHER, task.id(), revision, "closed".to_owned())
+        .close_round(OTHER, task.id(), revision, "closed".to_owned(), at(31))
         .await;
     assert!(matches!(refused, Err(StoreError::NotFound)), "{refused:?}");
     assert_eq!(bytes(), before, "a refused write changed the record");
 
     store
-        .close_round(OWNER, task.id(), revision, "closed".to_owned())
+        .close_round(OWNER, task.id(), revision, "closed".to_owned(), at(31))
         .await
         .expect("control: the owner closes its round");
     assert_ne!(bytes(), before, "control: the round is closed on disk");

@@ -399,7 +399,8 @@ impl TaskExecutor {
             // An answer stamped on a clock before 1970 is refused for now, as
             // the store refuses it, and the round stays open (MIK-8202).
             let store = &executor.service.store;
-            let provided = match store.now() {
+            let stamp = store.now();
+            let provided = match stamp {
                 Ok(at) => {
                     store
                         .provide_input(&digest, &id, answers, move || workers.try_acquire_owned().ok(), at)
@@ -418,13 +419,17 @@ impl TaskExecutor {
                     // round is closed to answers: every later one is refused the
                     // same way, and the sweep retries a close that fails here.
                     let settled = async {
+                        // Closed as of the time the answer was judged at.
+                        let Ok(at) = stamp else {
+                            return Ok(());
+                        };
                         let current = executor
                             .service
                             .store
                             .get(&digest, &id)
                             .map_err(|_| super::CommitFailure::RevisionConflict)?;
                         executor
-                            .close_round(&digest, &id, current.revision, closed.reason())
+                            .close_round(&digest, &id, current.revision, closed.reason(), at)
                             .await
                     }
                     .await;
@@ -517,10 +522,10 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     // An answer taken in time can still reach dispatch late; redeeming then
     // could only fail, so the round is closed as the sweep would close it.
     let deadline = round.continuation_deadline;
-    let (_, now) = readable_now(&executor.service.store, &mut cancel_rx).await?;
+    let (at, now) = readable_now(&executor.service.store, &mut cancel_rx).await?;
     let reached = deadline.is_some_and(|d| now >= d);
     executor
-        .proceed_unless_late(ids, deadline, reached, &mut cancel_rx)
+        .proceed_unless_late(ids, deadline, reached, at)
         .await?;
     let call = TaskCall {
         tool: round.tool,
@@ -534,10 +539,10 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     // Preparation inside the funnel can outlast the margin. A continuation
     // refused once its envelope has expired was refused for expiry: close the
     // round with that reason rather than fail the task.
-    let (_, now) = readable_now(&executor.service.store, &mut cancel_rx).await?;
+    let (at, now) = readable_now(&executor.service.store, &mut cancel_rx).await?;
     let expired = deadline.is_some_and(|d| rejected_after_expiry(&response, d, now));
     executor
-        .proceed_unless_late(ids, deadline, expired, &mut cancel_rx)
+        .proceed_unless_late(ids, deadline, expired, at)
         .await?;
     let mut response = inspect_settled(&state, &call, &id, response);
     state.meta_mcp().release_unsent_hold(&mut response).await; // MIK-8131
@@ -633,21 +638,20 @@ impl TaskExecutor {
         (principal, id, revision): (&str, &str, u64),
         deadline: Option<u64>,
         late: bool,
-        cancel_rx: &mut watch::Receiver<bool>,
+        at: chrono::DateTime<chrono::Utc>,
     ) -> Option<()> {
         let Some(deadline) = deadline.filter(|_| late) else {
             return Some(());
         };
-        self.close_late_round(principal, id, revision, deadline, cancel_rx)
+        self.close_late_round(principal, id, revision, deadline, at)
             .await;
         None
     }
 
-    /// Close a resumed round that met its deadline. A write that fails for any
-    /// reason but a moved row is tried once more, reason and all. A write
-    /// refused because the clock stepped before 1970 since the deadline check
-    /// waits for it to read and tries again, so the task is never left
-    /// `working` with nothing to finish it (MIK-8202).
+    /// Close a resumed round that met its deadline, stamped at the time the
+    /// deadline was judged at (MIK-8202: a second read could find a clock
+    /// stepped before 1970). A write that fails for any reason but a moved
+    /// row is tried once more, reason and all.
     // ponytail: two attempts, then the row waits for restart recovery (which
     // settles it interrupted), as every other settlement write does.
     async fn close_late_round(
@@ -656,28 +660,25 @@ impl TaskExecutor {
         id: &str,
         revision: u64,
         deadline: u64,
-        cancel_rx: &mut watch::Receiver<bool>,
+        at: chrono::DateTime<chrono::Utc>,
     ) {
         let Ok(owner) = self.service.owner(principal) else {
             return;
         };
-        let mut retried = false;
-        loop {
-            let reason = RoundClosed::Continuation(deadline).reason();
-            match self
-                .close_round(owner.as_digest(), id, revision, reason)
-                .await
-            {
-                Ok(()) | Err(super::CommitFailure::RevisionConflict) => return,
-                Err(_) if self.service.store.now().is_err() => {
-                    if readable_now(&self.service.store, cancel_rx).await.is_none() {
-                        return;
-                    }
-                }
-                Err(_) if !retried => retried = true,
-                Err(_) => {
+        let reason = RoundClosed::Continuation(deadline).reason();
+        match self
+            .close_round(owner.as_digest(), id, revision, reason, at)
+            .await
+        {
+            Ok(()) | Err(super::CommitFailure::RevisionConflict) => {}
+            Err(_) => {
+                let reason = RoundClosed::Continuation(deadline).reason();
+                if self
+                    .close_round(owner.as_digest(), id, revision, reason, at)
+                    .await
+                    .is_err()
+                {
                     tracing::warn!(task_id = %id, "a late input round was not closed");
-                    return;
                 }
             }
         }
@@ -690,11 +691,12 @@ impl TaskExecutor {
         id: &str,
         revision: u64,
         reason: String,
+        at: chrono::DateTime<chrono::Utc>,
     ) -> Result<(), super::CommitFailure> {
         match self
             .service
             .store
-            .close_round(owner_digest, id, revision, reason)
+            .close_round(owner_digest, id, revision, reason, at)
             .await
         {
             Ok(committed) => {

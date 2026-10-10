@@ -193,11 +193,12 @@ impl TaskStore {
         id: &str,
         revision: u64,
         reason: String,
+        at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
         tokio::task::spawn_blocking(move || {
-            shared.close_round_blocking(&owner, &id, revision, reason)
+            shared.close_round_blocking(&owner, &id, revision, reason, at)
         })
         .await
         .map_err(|_| StoreError::Storage)?
@@ -358,6 +359,7 @@ impl Shared {
         id: &str,
         revision: u64,
         reason: String,
+        at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
         let _order = self.order();
         let (mut task, mut record) = self.read_owned(owner, id)?;
@@ -371,11 +373,9 @@ impl Shared {
         ) {
             return Err(StoreError::InvalidTransition);
         }
-        // A cancel stamped on a clock before 1970 is refused, not dated 1969:
-        // the round stays open and a later pass closes it (MIK-8202).
-        let Ok(at) = self.now() else {
-            return Err(StoreError::Unavailable);
-        };
+        // Stamped at the time the caller read when it judged the round closed,
+        // never a second read: the clock may have stepped before 1970 since
+        // (MIK-8202).
         for event in [
             TaskTransition::StatusMessage(Some(reason)),
             TaskTransition::Cancel,

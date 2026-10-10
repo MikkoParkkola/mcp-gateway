@@ -122,17 +122,14 @@ async fn a_resume_without_its_host_settles_the_task_interrupted() {
 async fn a_resume_past_its_deadline_closes_the_round_and_one_before_it_carries_on() {
     let fx = fixture("exit-late").await;
     let ids = (OWNER, fx.id.as_str(), fx.revision);
-    let (_cancel, mut cancel_rx) = tokio::sync::watch::channel(false);
+    let at = crate::clock::utc_now().expect("clock after 1970");
 
     let on_time = fx
         .executor
-        .proceed_unless_late(ids, Some(10), false, &mut cancel_rx)
+        .proceed_unless_late(ids, Some(10), false, at)
         .await;
     assert!(on_time.is_some(), "before the deadline the resume proceeds");
-    let no_deadline = fx
-        .executor
-        .proceed_unless_late(ids, None, true, &mut cancel_rx)
-        .await;
+    let no_deadline = fx.executor.proceed_unless_late(ids, None, true, at).await;
     assert!(
         no_deadline.is_some(),
         "a round with no deadline is never closed as late"
@@ -141,7 +138,7 @@ async fn a_resume_past_its_deadline_closes_the_round_and_one_before_it_carries_o
 
     let late = fx
         .executor
-        .proceed_unless_late(ids, Some(10), true, &mut cancel_rx)
+        .proceed_unless_late(ids, Some(10), true, at)
         .await;
     assert!(late.is_none(), "past the deadline the resume stops");
     std::assert_eq!(status(&fx), TaskStatus::Cancelled, "the round was closed");
