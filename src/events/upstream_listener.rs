@@ -566,10 +566,15 @@ impl UpstreamListeners {
         self.starts
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let shared = self.entry(backend, need, ledger);
-        tokio::spawn(super::upstream_session::run(
-            Arc::clone(&shared),
-            Arc::clone(&self.registry),
-            self.hub.clone(),
+        // Background upkeep never opens a browser (MIK-8269): every bounded
+        // open, refill and subscription the session sends would otherwise lead
+        // a login and end it `Cancelled` when its bound fires.
+        tokio::spawn(crate::oauth::login_gate::non_interactive(
+            super::upstream_session::run(
+                Arc::clone(&shared),
+                Arc::clone(&self.registry),
+                self.hub.clone(),
+            ),
         ));
         shared
     }

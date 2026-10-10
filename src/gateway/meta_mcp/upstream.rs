@@ -180,7 +180,14 @@ impl NativeUpstreamTasks {
         let deadline = QUERY_DEADLINE.min(backend.request_timeout());
         let answer = tokio::time::timeout(
             deadline,
-            backend.request_with_headers("server/discover", None, &[], None),
+            // Never interactive (MIK-8269): a bound that fires mid-login
+            // would end a login this query opened.
+            crate::oauth::login_gate::non_interactive(backend.request_with_headers(
+                "server/discover",
+                None,
+                &[],
+                None,
+            )),
         )
         .await;
         // Silence, a transport failure and a JSON-RPC REFUSAL are all "the peer
@@ -219,12 +226,12 @@ impl UpstreamRecovery for NativeUpstreamTasks {
         // method, and nothing that writes upstream.
         match tokio::time::timeout(
             deadline,
-            backend.request_with_task_capability(
+            crate::oauth::login_gate::non_interactive(backend.request_with_task_capability(
                 "tasks/get",
                 Some(json!({ "taskId": handle.handle })),
                 &[],
                 None,
-            ),
+            )),
         )
         .await
         {
@@ -250,12 +257,12 @@ impl UpstreamRecovery for NativeUpstreamTasks {
         // ignored: the gateway task is already cancelled whatever the peer says.
         let sent = tokio::time::timeout(
             deadline,
-            backend.request_with_task_capability(
+            crate::oauth::login_gate::non_interactive(backend.request_with_task_capability(
                 "tasks/cancel",
                 Some(json!({ "taskId": handle.handle })),
                 &[],
                 None,
-            ),
+            )),
         )
         .await;
         if !matches!(sent, Ok(Ok(_))) {
