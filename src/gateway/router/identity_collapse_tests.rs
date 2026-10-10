@@ -280,3 +280,70 @@ async fn two_nameless_callers_never_share_an_execution_lease() {
         "neither nameless caller reached the backend"
     );
 }
+
+/// A nameless client certificate: no CN, no SAN URI, parsed by the
+/// production parser.
+fn nameless_cert() -> crate::mtls::CertIdentity {
+    let mut params = rcgen::CertificateParams::default();
+    params.distinguished_name = rcgen::DistinguishedName::new();
+    let key_pair = rcgen::KeyPair::generate().expect("key generation failed");
+    let der = params.self_signed(&key_pair).expect("cert").der().to_vec();
+    crate::mtls::CertIdentity::from_der(&der).expect("a nameless leaf still parses")
+}
+
+/// `tools/call gateway_invoke` of `alpha`/`read` on `/mcp` as API key `key`,
+/// carrying client certificate `cert`, under idempotency key `op`.
+async fn call_with_cert(
+    fx: &super::direct_guards_fixture::Fx,
+    key: &str,
+    cert: &crate::mtls::CertIdentity,
+    op: &str,
+) -> Value {
+    let mut params = json!({
+        "name": "gateway_invoke",
+        "arguments": {"server": "alpha", "tool": "read", "arguments": {}},
+    });
+    params
+        .as_object_mut()
+        .unwrap()
+        .extend(keyed(op).as_object().unwrap().clone());
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("authorization", format!("Bearer {key}"))
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "gateway_invoke")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params})
+                .to_string(),
+        ))
+        .unwrap();
+    // As the TLS identity layer would, were its entry refusal missing: this
+    // row pins the second layer, the grant subject's fallback removal.
+    request.extensions_mut().insert(cert.clone());
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+}
+
+/// R1 (the MIK-8286 replay, at the route): two callers behind different API
+/// keys both present a nameless certificate and send one idempotency key.
+/// Each is its own caller, so B's call runs rather than being served A's
+/// result. Today both key on the shared display-name subject and B replays
+/// A. Mutant: the display-name fallback restored. (The entry refusal, R3,
+/// would stop both before this; this row pins the layer behind it.)
+#[tokio::test]
+async fn a_nameless_certificate_never_replays_another_callers_result() {
+    use super::direct_continuation_tests::dispatched;
+    use super::direct_guards_fixture::{Answer, fixture};
+
+    let fx = fixture(Answer::Ok, |_| {}).await;
+    let cert = nameless_cert();
+    let a = call_with_cert(&fx, "k-std", &cert, "op-1").await;
+    assert!(a.get("error").is_none(), "caller A is served: {a}");
+    let b = call_with_cert(&fx, "k-budget", &cert, "op-1").await;
+    assert!(b.get("error").is_none(), "caller B is served: {b}");
+    assert_eq!(dispatched(&fx), 2, "B ran its own call, not A's replay");
+}
