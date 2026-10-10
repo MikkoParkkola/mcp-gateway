@@ -139,6 +139,12 @@ pub mod test_helpers {
         ServiceError, StoreLimits, TaskExecutor, TaskService, open_runtime,
     };
 
+    /// The one bound a test uses to say "this wait is a hang guard"
+    /// (MIK-8247, MIK-8288): long enough that a loaded runner never reaches
+    /// it on a green run, so it costs nothing until something is truly stuck.
+    /// Lib tests reach it as `crate::test_wait::HANG_BOUND`.
+    pub const HANG_BOUND: std::time::Duration = std::time::Duration::from_secs(30);
+
     /// Bind `meta` to the HTTP server's change feed, as `serve` does (F24), so
     /// an in-process fixture advertises what the HTTP server advertises.
     pub fn bind_http_change_feed(meta: &MetaMcp) {

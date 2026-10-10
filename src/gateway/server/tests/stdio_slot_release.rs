@@ -18,6 +18,7 @@ use tokio::time::timeout;
 use crate::config::Config;
 use crate::gateway::Gateway;
 use crate::gateway::meta_mcp::MetaMcp;
+use crate::test_wait::HANG_BOUND;
 
 const BACKEND: &str = "fixture";
 /// Asks at once, naming the caller's `customer_id` as its tenant.
@@ -25,7 +26,6 @@ const ASKING: &str = "ask";
 /// Asks after [`SLOW`], so a cancel can arrive first.
 const SLOW_ASKING: &str = "slow_ask";
 const SLOW: Duration = Duration::from_millis(800);
-const ARRIVAL: Duration = Duration::from_secs(5);
 
 type Stdout = Lines<BufReader<DuplexStream>>;
 
@@ -127,7 +127,7 @@ async fn open(setup: Setup, capacity: usize) -> Session {
     let (stdin, input) = tokio::io::duplex(64 * 1024);
     let (output, reader) = tokio::io::duplex(capacity);
     let task = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
-    let meta = timeout(ARRIVAL, meta)
+    let meta = timeout(HANG_BOUND, meta)
         .await
         .expect("the session reports its Meta-MCP")
         .expect("the seam's sender is kept until it is sent");
@@ -162,7 +162,7 @@ impl Session {
     }
 
     async fn next_frame(&mut self) -> Value {
-        let line = timeout(ARRIVAL, self.stdout.next_line())
+        let line = timeout(HANG_BOUND, self.stdout.next_line())
             .await
             .expect("a frame arrives within the bound")
             .expect("stdout reads")
@@ -303,7 +303,7 @@ async fn a_stdio_question_still_queued_at_session_end_gives_its_slot_back() {
     session.send(&call(6, ASKING, "t1")).await;
     // Both questions sealed before the session ends: one is with the writer,
     // the other can only be in the queue behind it.
-    let deadline = tokio::time::Instant::now() + ARRIVAL;
+    let deadline = tokio::time::Instant::now() + HANG_BOUND;
     while session.held().await < 2 {
         assert!(
             tokio::time::Instant::now() < deadline,

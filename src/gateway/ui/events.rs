@@ -63,8 +63,7 @@ fn admitted(
     // only, never the email label, as the admin audit layer names an SSO admin.
     let subject = identity
         .map(|Extension(id)| id)
-        .filter(|id| !id.issuer.is_empty() && !id.subject.is_empty())
-        .map(|id| GrantSubject::new(id.issuer, id.subject, None));
+        .and_then(|id| GrantSubject::checked(id.issuer, id.subject, None));
     let actor = client.map(|c| Actor {
         who: AuditWho::from_request(Some(&c), subject.as_ref()),
     });

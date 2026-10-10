@@ -181,7 +181,7 @@ async fn a_dropped_request_leaves_no_partial_frame_for_the_next_caller() {
         "while IFS= read -r line; do\n\
          case \"$line\" in\n\
          *'\"method\":\"initialize\"'*) printf '%s\\n' {reply} ;;\n\
-         *'notifications/initialized'*) sleep 2; break ;;\n\
+         *'notifications/initialized'*) while [ ! -e release ]; do sleep 0.05; done; break ;;\n\
          esac\ndone\n\
          while IFS= read -r line; do printf '%s\\n' \"$line\" >> \"{log}\"; done\n",
         log = log.display()
@@ -196,8 +196,12 @@ async fn a_dropped_request_leaves_no_partial_frame_for_the_next_caller() {
     );
     transport.start().await.expect("start");
 
-    // Far over a pipe buffer, so the write blocks while the backend sleeps.
+    // Far over a pipe buffer, so the write blocks until the backend is
+    // released: it reads nothing more until the test creates `release`, so
+    // both give-up windows below expire however loaded the runner is
+    // (MIK-8266: this used to race a 2 s sleep in the backend).
     let big = serde_json::json!({ "name": "x", "arguments": { "blob": "a".repeat(256 * 1024) } });
+    // timing: precondition
     let dropped = tokio::time::timeout(
         std::time::Duration::from_millis(300),
         transport.request("tools/call", Some(big)),
@@ -209,12 +213,14 @@ async fn a_dropped_request_leaves_no_partial_frame_for_the_next_caller() {
     );
 
     // A caller queued behind the stuck write and then cancelled sends nothing.
+    // timing: precondition
     let queued = tokio::time::timeout(
         std::time::Duration::from_millis(200),
         transport.request("resources/list", None),
     )
     .await;
     assert!(queued.is_err(), "precondition: the queued request gave up");
+    std::fs::write(dir.path().join("release"), "").unwrap();
 
     transport
         .notify("notifications/roots/list_changed", None)

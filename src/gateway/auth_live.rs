@@ -101,8 +101,12 @@ pub(crate) async fn current_client(
     if let Some((client, _)) = state.auth_config.validate_token_with_origin(token) {
         return Some(client);
     }
-    if let Some((client, _, _)) = key_server_credential(state, token).await {
-        return Some(client);
+    match key_server_credential(state, token).await {
+        KsCredential::Credential(found) => return Some(found.0),
+        // A recognised credential that names no one is dead, never the
+        // anonymous client (MIK-8286).
+        KsCredential::Refused => return None,
+        KsCredential::NotOurs => {}
     }
     agent_validated.then(super::public_client)
 }
@@ -159,26 +163,33 @@ pub(crate) async fn delivery(
 ///
 /// The `via` label exists only so each caller keeps its own log line; it is a
 /// fixed string, never anything the caller sent.
-pub(super) async fn key_server_credential(
-    state: &AuthState,
-    token: &str,
-) -> Option<(AuthenticatedClient, KeyServerSubject, &'static str)> {
-    let ks = state.key_server.as_ref()?;
-    let (mut client, identity, exp, jti, issued_at, via) =
-        if let Some((client, temporary)) = ks.validate_token(token).await {
+pub(super) async fn key_server_credential(state: &AuthState, token: &str) -> KsCredential {
+    use crate::key_server::KeyServerLookup;
+    let Some(ks) = state.key_server.as_ref() else {
+        return KsCredential::NotOurs;
+    };
+    let (mut client, identity, exp, jti, issued_at, via) = match ks.lookup(token).await {
+        KeyServerLookup::Valid((client, temporary)) => {
             let (exp, jti) = (Some(temporary.exp), Some(temporary.jti.clone()));
             let identity = temporary.identity.clone();
             (client, identity, exp, jti, None, "temporary token")
-        } else if ks.config.delegated_bearer && super::looks_like_jwt(token) {
-            // Gated on config and a cheap JWT-shape check so JWKS verification
-            // never runs on an opaque or static token.
-            let (client, identity) = ks.verify_bearer_identity(token).await?;
-            let exp = bearer_deadline(token, ks.config.max_oidc_token_age_secs);
-            let iat = jwt_claim(token, "iat");
-            (client, identity, exp, None, iat, "delegated OIDC bearer")
-        } else {
-            return None;
-        };
+        }
+        KeyServerLookup::Nameless => return KsCredential::Refused,
+        // Gated on config and a cheap JWT-shape check so JWKS verification
+        // never runs on an opaque or static token.
+        KeyServerLookup::Absent if ks.config.delegated_bearer && super::looks_like_jwt(token) => {
+            match ks.verify_bearer(token).await {
+                KeyServerLookup::Valid((client, identity)) => {
+                    let exp = bearer_deadline(token, ks.config.max_oidc_token_age_secs);
+                    let iat = jwt_claim(token, "iat");
+                    (client, identity, exp, None, iat, "delegated OIDC bearer")
+                }
+                KeyServerLookup::Nameless => return KsCredential::Refused,
+                KeyServerLookup::Absent => return KsCredential::NotOurs,
+            }
+        }
+        KeyServerLookup::Absent => return KsCredential::NotOurs,
+    };
     // E1-a: admin comes from the live role mapping on every request; no mint
     // site stores it, so a reload that removes the rule revokes it.
     let config = state.live_config.get();
@@ -186,7 +197,7 @@ pub(super) async fn key_server_credential(
     let expires_at = exp
         .and_then(|s| i64::try_from(s).ok())
         .and_then(|s| chrono::DateTime::from_timestamp(s, 0));
-    Some((
+    KsCredential::Credential(Box::new((
         client,
         KeyServerSubject {
             facts: CredentialFacts {
@@ -198,7 +209,18 @@ pub(super) async fn key_server_credential(
             identity,
         },
         via,
-    ))
+    )))
+}
+
+/// What a presented bearer is to the key server (MIK-8286).
+pub(super) enum KsCredential {
+    /// A credential: who it is, and which mechanism said so.
+    Credential(Box<(AuthenticatedClient, KeyServerSubject, &'static str)>),
+    /// A credential the gateway recognises whose identity names no one:
+    /// refused on every path, public ones included.
+    Refused,
+    /// Not a key-server credential; the caller's other paths decide.
+    NotOurs,
 }
 
 /// What MCP Events binds a subscription to for a key-server credential

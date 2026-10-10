@@ -296,7 +296,8 @@ async fn ac_stdio_modern_caller_is_not_sent_elicitation_create() {
         ..
     } = modern_exchange(Declares::Both).await;
     frames.extend(frames_lenient(
-        &session.collect_lines(Duration::from_secs(1)).await,
+        // timing: absence
+        &session.collect_for_absence(Duration::from_secs(1)).await,
     ));
     assert!(
         !frames

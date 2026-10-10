@@ -94,12 +94,14 @@ impl StdioSession {
         }
     }
 
-    /// Drain stdout for a fixed window and return the raw lines.
+    /// Drain stdout for a fixed window and return the raw lines, for a row
+    /// that asserts something did NOT arrive.
     ///
-    /// The whole drain is under one timeout rather than each read, so a chatty
-    /// child cannot keep this alive indefinitely: the window expires, the
-    /// caller gets what arrived, and the row asserts on it.
-    pub async fn collect_lines(&mut self, window: Duration) -> Vec<String> {
+    /// A positive assert on this result is a race (MIK-8295): whatever must
+    /// arrive has to beat the window, which a loaded runner does not promise.
+    /// Wait for it with [`Self::collect_lines_until`] instead. The whole drain
+    /// is under one timeout, so a chatty child cannot keep it alive.
+    pub async fn collect_for_absence(&mut self, window: Duration) -> Vec<String> {
         let mut lines = Vec::new();
         let _ = timeout(window, async {
             while let Ok(Some(line)) = self.stdout.next_line().await {

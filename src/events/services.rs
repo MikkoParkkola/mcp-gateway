@@ -161,12 +161,15 @@ impl Services {
                 issued_at,
                 provider_sha256,
             } => credentials.key_server.as_ref().is_some_and(|ks| {
-                let identity = crate::key_server::oidc::VerifiedIdentity {
-                    subject: subject.clone(),
-                    email: email.clone(),
-                    name: None,
-                    groups: groups.clone(),
-                    issuer: issuer.clone(),
+                // A binding that names no one never stays live (MIK-8286).
+                let Some(identity) = crate::key_server::oidc::VerifiedIdentity::checked(
+                    issuer.clone(),
+                    subject.clone(),
+                    email.clone(),
+                    None,
+                    groups.clone(),
+                ) else {
+                    return false;
                 };
                 // The provider must still accept what it accepted, and the
                 // bearer must still be young enough for the running max age.

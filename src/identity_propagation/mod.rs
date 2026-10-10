@@ -356,13 +356,14 @@ pub(crate) fn identity_binding_prefix(
     }
     // Built through `stable_actor_id` rather than restated, so the two cannot
     // drift: the pool binding is derived from that same method.
-    let subject_key = VerifiedIdentity {
-        subject: subject.subject.clone(),
-        email: String::new(),
-        name: None,
-        groups: Vec::new(),
-        issuer: subject.authority.clone(),
-    }
+    // Through `checked`: a subject that names no one has no slot to evict.
+    let subject_key = VerifiedIdentity::checked(
+        subject.authority.clone(),
+        subject.subject.clone(),
+        String::new(),
+        None,
+        Vec::new(),
+    )?
     .stable_actor_id();
     Some(format!("idp:{}:{subject_key}:", subject_key.len()))
 }

@@ -19,6 +19,7 @@ use tokio::time::{Instant, timeout};
 
 use crate::config::Config;
 use crate::gateway::Gateway;
+use crate::test_wait::HANG_BOUND;
 
 const BACKEND: &str = "fixture";
 /// Answers after [`SLOW_CALL`], so a cancel can land mid-call.
@@ -26,7 +27,6 @@ const SLOW: &str = "slow";
 /// Answers at once.
 const FAST: &str = "fast";
 const SLOW_CALL: Duration = Duration::from_secs(4);
-const ARRIVAL: Duration = Duration::from_secs(5);
 
 type Stdout = Lines<BufReader<DuplexStream>>;
 /// Every message the backend received, in arrival order.
@@ -127,7 +127,7 @@ async fn send(stdin: &mut DuplexStream, line: &str) {
 }
 
 async fn next_frame(stdout: &mut Stdout) -> Value {
-    let line = timeout(ARRIVAL, stdout.next_line())
+    let line = timeout(HANG_BOUND, stdout.next_line())
         .await
         .expect("a frame arrives within the bound")
         .expect("stdout reads")
@@ -196,12 +196,22 @@ fn backend_cancels(seen: &Seen) -> Vec<Value> {
 
 /// Wait until the backend has received a `tools/call` for `tool`.
 async fn until_backend_has(seen: &Seen, tool: &str) {
-    let deadline = Instant::now() + ARRIVAL;
+    let deadline = Instant::now() + HANG_BOUND;
     while backend_call_ids(seen, tool).is_empty() {
         assert!(
             Instant::now() < deadline,
             "the backend never received {tool}"
         );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Wait until the backend has received at least one cancel (MIK-8266: the
+/// cancel is awaited, not raced against a fixed sleep).
+async fn until_backend_cancelled(seen: &Seen) {
+    let deadline = Instant::now() + HANG_BOUND;
+    while backend_cancels(seen).is_empty() {
+        assert!(Instant::now() < deadline, "no cancel reached the backend");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
@@ -215,7 +225,10 @@ async fn a_cancelled_call_cancels_the_backend_call_by_its_own_id() {
     send(&mut served.stdin, &call(&client_id, SLOW)).await;
     until_backend_has(&served.seen, SLOW).await;
     send(&mut served.stdin, &cancel(&client_id)).await;
-    tokio::time::sleep(Duration::from_millis(1500)).await;
+    until_backend_cancelled(&served.seen).await;
+    // A second cancel would follow the first at once; give it time to show.
+    // timing: absence
+    tokio::time::sleep(Duration::from_millis(500)).await;
     let backend_ids = backend_call_ids(&served.seen, SLOW);
     let cancels = backend_cancels(&served.seen);
     served.task.abort();
@@ -238,7 +251,7 @@ async fn a_cancel_after_the_answer_sends_nothing() {
     let client_id = json!("client-2");
     send(&mut served.stdin, &call(&client_id, FAST)).await;
     assert!(
-        answer_within(&mut served.stdout, &client_id, ARRIVAL)
+        answer_within(&mut served.stdout, &client_id, HANG_BOUND)
             .await
             .is_some(),
         "precondition: the call was answered"

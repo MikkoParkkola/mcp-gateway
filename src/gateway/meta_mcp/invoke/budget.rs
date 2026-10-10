@@ -116,9 +116,7 @@ impl MetaMcp {
     pub(in crate::gateway::meta_mcp) fn grant_subject_from_api_key(
         api_key_name: Option<&str>,
     ) -> Option<GrantSubject> {
-        api_key_name
-            .filter(|name| !name.is_empty())
-            .map(|name| GrantSubject::new("api_key", name, Some(name.to_string())))
+        api_key_name.and_then(|name| GrantSubject::checked("api_key", name, Some(name.to_string())))
     }
 
     /// Whether the kernel enforces on `carrier`. Notes no data classes: the
