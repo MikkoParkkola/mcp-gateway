@@ -34,6 +34,8 @@ struct MockMcpBackend {
     delay: std::time::Duration,
     /// How many `nextCursor` pages the list spans; each carries `payload`.
     pages: usize,
+    /// The `cursor` of every `method` request, in order (`None` for page 1).
+    cursors: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
 }
 
 async fn start_mock(backend: MockMcpBackend) -> String {
@@ -69,15 +71,25 @@ async fn start_mock(backend: MockMcpBackend) -> String {
             }),
             m if m == s.backend.method => {
                 s.seen.fetch_add(1, Ordering::SeqCst);
+                let cursor = req["params"]["cursor"].as_str().map(str::to_owned);
+                s.backend.cursors.lock().unwrap().push(cursor.clone());
+                // Page n (1-based) is asked for with cursor "n"; the first page
+                // carries no cursor. A cursor this mock never issued is refused,
+                // so a drain that sent a wrong one cannot pass as page 1.
+                let page = match cursor.as_deref().map(str::parse::<usize>) {
+                    None => 1,
+                    Some(Ok(n)) if (2..=s.backend.pages).contains(&n) => n,
+                    Some(_) => {
+                        return Json(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": req["id"],
+                            "error": { "code": -32602, "message": "cursor not issued" },
+                        }));
+                    }
+                };
                 if !s.backend.delay.is_zero() {
                     tokio::time::sleep(s.backend.delay).await;
                 }
-                // Page n (1-based) is asked for with cursor "n"; the first page
-                // carries no cursor. Every page but the last names the next.
-                let page = req["params"]["cursor"]
-                    .as_str()
-                    .and_then(|c| c.parse::<usize>().ok())
-                    .unwrap_or(1);
                 // A multi-page list names each page's entries apart, so no
                 // merge or dedup can make two pages read as one.
                 let mut items = s.backend.payload.clone();
@@ -126,6 +138,7 @@ async fn prompts_list_includes_backend_prompts() {
         payload: serde_json::json!([{ "name": "greet", "description": "say hi" }]),
         delay: Duration::ZERO,
         pages: 1,
+        cursors: Arc::default(),
     })
     .await;
     let meta = meta_with_backend(&url, Duration::from_secs(5));
@@ -162,24 +175,42 @@ const PAGED_BACKEND_TIMEOUT: Duration = Duration::from_millis(4500);
 /// fetch) would cut this backend at 4.5 s and drop it from every list.
 #[tokio::test]
 async fn prompts_list_drains_pages_whose_total_exceeds_the_backend_timeout() {
+    let cursors = std::sync::Arc::default();
     let url = start_mock(MockMcpBackend {
         method: "prompts/list",
         payload: serde_json::json!([{ "name": "greet", "description": "say hi" }]),
         delay: PAGE_DELAY,
         pages: 2,
+        cursors: std::sync::Arc::clone(&cursors),
     })
     .await;
     let unset = crate::config::MetaMcpConfig::default().prompts_resources_fetch_timeout;
+    assert_eq!(
+        unset,
+        Duration::from_secs(10),
+        "the row's whole-fetch default"
+    );
     let meta = meta_with_backend_timeout(&url, unset, PAGED_BACKEND_TIMEOUT);
 
     let resp = meta
         .handle_prompts_list(RequestId::Number(1), None, None, None)
         .await;
     let prompts = resp.result.unwrap()["prompts"].as_array().unwrap().clone();
-    let names: Vec<&str> = prompts.iter().filter_map(|p| p["name"].as_str()).collect();
-    assert!(
-        names.contains(&"mock/greet-p1") && names.contains(&"mock/greet-p2"),
-        "both pages listed: {names:?}"
+    let mut names: Vec<&str> = prompts
+        .iter()
+        .filter_map(|p| p["name"].as_str())
+        .filter(|n| n.starts_with("mock/"))
+        .collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        ["mock/greet-p1", "mock/greet-p2"],
+        "both pages, once each"
+    );
+    assert_eq!(
+        *cursors.lock().unwrap(),
+        [None, Some("2".to_owned())],
+        "page 1 without a cursor, then page 2 by its cursor"
     );
 }
 
@@ -187,14 +218,21 @@ async fn prompts_list_drains_pages_whose_total_exceeds_the_backend_timeout() {
 /// the resources family, which has its own aggregation site.
 #[tokio::test]
 async fn resources_list_drains_pages_whose_total_exceeds_the_backend_timeout() {
+    let cursors = std::sync::Arc::default();
     let url = start_mock(MockMcpBackend {
         method: "resources/list",
         payload: serde_json::json!([{ "uri": "mock://a", "name": "A" }]),
         delay: PAGE_DELAY,
         pages: 2,
+        cursors: std::sync::Arc::clone(&cursors),
     })
     .await;
     let unset = crate::config::MetaMcpConfig::default().prompts_resources_fetch_timeout;
+    assert_eq!(
+        unset,
+        Duration::from_secs(10),
+        "the row's whole-fetch default"
+    );
     let meta = meta_with_backend_timeout(&url, unset, PAGED_BACKEND_TIMEOUT);
 
     let resp = meta
@@ -204,10 +242,21 @@ async fn resources_list_drains_pages_whose_total_exceeds_the_backend_timeout() {
         .as_array()
         .unwrap()
         .clone();
-    let uris: Vec<&str> = resources.iter().filter_map(|r| r["uri"].as_str()).collect();
-    assert!(
-        uris.contains(&"mock://a-p1") && uris.contains(&"mock://a-p2"),
-        "both pages listed: {uris:?}"
+    let mut uris: Vec<&str> = resources
+        .iter()
+        .filter_map(|r| r["uri"].as_str())
+        .filter(|u| u.starts_with("mock://"))
+        .collect();
+    uris.sort_unstable();
+    assert_eq!(
+        uris,
+        ["mock://a-p1", "mock://a-p2"],
+        "both pages, once each"
+    );
+    assert_eq!(
+        *cursors.lock().unwrap(),
+        [None, Some("2".to_owned())],
+        "page 1 without a cursor, then page 2 by its cursor"
     );
 }
 
@@ -218,6 +267,7 @@ async fn prompts_list_skips_hung_backend_within_timeout() {
         payload: serde_json::json!([]),
         delay: HUNG,
         pages: 1,
+        cursors: Arc::default(),
     })
     .await;
     // The backend's own timeout outlasts the hang guard, so a list that waited
@@ -250,6 +300,7 @@ async fn resources_list_skips_hung_backend_within_timeout() {
         payload: serde_json::json!([]),
         delay: HUNG,
         pages: 1,
+        cursors: Arc::default(),
     })
     .await;
     // The backend's own timeout outlasts the hang guard, so a list that waited
@@ -278,6 +329,7 @@ async fn resources_list_includes_backend_resources() {
         payload: serde_json::json!([{ "uri": "mock://a", "name": "A" }]),
         delay: Duration::ZERO,
         pages: 1,
+        cursors: Arc::default(),
     })
     .await;
     let meta = meta_with_backend(&url, Duration::from_secs(5));
@@ -308,6 +360,7 @@ async fn prompts_list_fast_backend_not_stalled_by_hung_one() {
         payload: serde_json::json!([{ "name": "quick", "description": "fast" }]),
         delay: Duration::ZERO,
         pages: 1,
+        cursors: Arc::default(),
     })
     .await;
     let hung = start_mock(MockMcpBackend {
@@ -315,6 +368,7 @@ async fn prompts_list_fast_backend_not_stalled_by_hung_one() {
         payload: serde_json::json!([]),
         delay: HUNG,
         pages: 1,
+        cursors: Arc::default(),
     })
     .await;
 
