@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::transform::{parse_json_path, resolve_path_single};
+use crate::transform::{JsonPathSegment, parse_json_path, resolve_path_single};
 
 // ============================================================================
 // Configuration types (deserialized from YAML)
@@ -208,11 +208,9 @@ impl PlaybookContext {
     /// - Pure reference (`"$inputs.query"`) returns the resolved value as-is (preserving type).
     /// - Embedded references (`"search for $inputs.query"`) render as string.
     pub(crate) fn interpolate_string(&self, s: &str) -> Value {
-        let trimmed = s.trim();
-
         // Pure variable reference: return the resolved value directly.
-        if trimmed.starts_with('$') && !trimmed.contains(' ') && !trimmed.contains('+') {
-            return self.resolve_var(trimmed);
+        if let Some(pure) = pure_ref(s) {
+            return self.resolve_var(pure);
         }
 
         // Embedded references: replace all `$var.path` occurrences.
@@ -230,6 +228,65 @@ impl PlaybookContext {
             result = result.replace(&var_ref, &replacement);
         }
         Value::String(result)
+    }
+}
+
+/// `s` as a pure reference (`"$inputs.query"`), which resolves to the value
+/// itself rather than rendering into text.
+fn pure_ref(s: &str) -> Option<&str> {
+    let trimmed = s.trim();
+    (trimmed.starts_with('$') && !trimmed.contains(' ') && !trimmed.contains('+'))
+        .then_some(trimmed)
+}
+
+/// Every reference `interpolate` would resolve in `value`, in any string at any
+/// depth, read the same way `interpolate` reads it: a check over this list
+/// sees exactly what substitution will use (MIK-8323).
+pub(crate) fn var_refs_in(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(s) => match pure_ref(s) {
+            Some(pure) => out.push(pure.to_owned()),
+            None => out.extend(extract_var_refs(s)),
+        },
+        Value::Object(map) => map.values().for_each(|v| var_refs_in(v, out)),
+        Value::Array(items) => items.iter().for_each(|v| var_refs_in(v, out)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+/// Whether `reference` names a step result's `requestState` (the sealed
+/// continuation envelope) as a whole path component, at any depth. `inputs`
+/// is the caller's own data and is left to the run-time check.
+fn names_sealed_state(reference: &str) -> bool {
+    let trimmed = reference.trim_start_matches('$');
+    let (source, remainder) = trimmed.split_once('.').unwrap_or((trimmed, ""));
+    source != "inputs"
+        && parse_json_path(remainder)
+            .iter()
+            .any(|segment| matches!(segment, JsonPathSegment::Key(key) if key == "requestState"))
+}
+
+impl PlaybookDefinition {
+    /// Each `(step, reference)` whose arguments name a step's `requestState`
+    /// (MIK-8323). Such a playbook is refused whole: it was written to hand
+    /// the gateway's envelope to a backend. Outputs and conditions are not
+    /// checked: an output hands the envelope to the playbook's own client,
+    /// which is where it belongs.
+    #[must_use]
+    pub fn sealed_state_references(&self) -> Vec<(String, String)> {
+        let mut found = Vec::new();
+        for step in &self.steps {
+            let mut refs = Vec::new();
+            step.arguments
+                .values()
+                .for_each(|v| var_refs_in(v, &mut refs));
+            found.extend(
+                refs.into_iter()
+                    .filter(|r| names_sealed_state(r))
+                    .map(|r| (step.name.clone(), r)),
+            );
+        }
+        found
     }
 }
 
@@ -391,6 +448,23 @@ pub struct PlaybookResult {
 pub trait ToolInvoker: Send + Sync {
     /// Invoke a tool on a server with the given arguments.
     async fn invoke(&self, server: &str, tool: &str, arguments: Value) -> crate::Result<Value>;
+
+    /// Whether `value` carries a continuation envelope this gateway sealed
+    /// (MIK-8323). The engine asks before every step, for each value a
+    /// reference resolves to, and refuses the step on `true` or on any refusal.
+    /// Required, with no default: an invoker that cannot answer must say so,
+    /// not silently answer "no".
+    ///
+    /// # Errors
+    ///
+    /// [`ProbeRefusal`](crate::protocol::continuation::ProbeRefusal) when
+    /// the answer cannot be known: `budget` runs out, or the clock that judges
+    /// a candidate cannot be read.
+    fn sealed_state_in(
+        &self,
+        value: &Value,
+        budget: &mut crate::protocol::continuation::ProbeBudget,
+    ) -> Result<bool, crate::protocol::continuation::ProbeRefusal>;
 }
 
 pub mod engine;
