@@ -7,7 +7,6 @@ src/identity_propagation/account_strategies.rs	declared	1	AccountStrategyRegistr
 src/identity_propagation/account_strategies.rs	installed	1	AccountStrategyRegistry::installed is a read-lock map lookup returning an Arc; callers decide.
 src/identity_propagation/account_strategies.rs	managed_vault	1	AccountStrategyRegistry::managed_vault chains installed() and Minter::managed() lookups; the vault and callers decide.
 src/identity_propagation/mod.rs	fmt	2	PropagationError::fmt is Display formatting of error text; it decides nothing.
-src/identity_propagation/mod.rs	audit_subject	1	audit_subject derives a label ("unauthenticated" or stable actor id) for audit records only; identity binding is decided elsewhere.
 src/identity_propagation/token_exchange.rs	new	1	TokenExchangeStrategy::new only delegates to with_http_client with the default client; construction wiring is in with_http_client.
 src/identity_propagation/token_exchange.rs	reap_expired	1	TokenExchangeStrategy::reap_expired is cache housekeeping that drops expired entries (skipped on unreadable clock); expiry is enforced at read time in cached().
 src/identity_propagation/token_exchange.rs	store	1	TokenExchangeStrategy::store inserts a cache entry (reaping first when at MAX_CACHE_ENTRIES) and never refuses; reads are gated in cached().
