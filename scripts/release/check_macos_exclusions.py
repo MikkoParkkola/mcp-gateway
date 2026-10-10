@@ -272,12 +272,6 @@ def unquoted(text: str) -> str:
     return re.sub(r'"(?:[^"\\]|\\.)*"', '""', text)
 
 
-def open_brackets(line: str) -> int:
-    """`[` less `]` in `line`, outside strings and a trailing `//` comment."""
-    code = unquoted(line).split("//", 1)[0]
-    return code.count("[") - code.count("]")
-
-
 def logical_lines(text: str) -> list[tuple[str, bool]]:
     """Trimmed lines, with an attribute spread over several lines joined into
     one: (text, whether it was joined)."""
@@ -286,13 +280,19 @@ def logical_lines(text: str) -> list[tuple[str, bool]]:
     i = 0
     while i < len(raw):
         line = raw[i]
-        depth = open_brackets(line)
+        depth = line.count("[") - line.count("]")
         if line.startswith(("#[", "#![")) and depth > 0:
-            # Counted line by line: each line's own `//` comment is dropped.
+            # The join never takes the next attribute or item: a bracket in a
+            # comment or string can leave the count open, and it must not
+            # swallow a test. The attribute is then read by bracket matching
+            # that skips strings; left open, it does not close as `)]` and
+            # counts.
             j = i
             while j + 1 < len(raw) and depth > 0:
+                if raw[j + 1].startswith(("#[", "#![")) or ITEM.match(raw[j + 1]):
+                    break
                 j += 1
-                depth += open_brackets(raw[j])
+                depth += raw[j].count("[") - raw[j].count("]")
                 line += " " + raw[j]
             out.append((line, True))
             i = j + 1

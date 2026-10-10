@@ -238,6 +238,8 @@ class Predicates(unittest.TestCase):
         self.assert_off('#[cfg_attr(target_os = "macos", /* flaky */ ignore)]')
 
     def test_p16_a_bracket_in_an_ignore_reason_does_not_swallow_the_test(self) -> None:
+        # A stray bracket in a string must not leave the attribute open.
+        self.assert_on('#[cfg_attr(target_os = "linux", ignore = "see [MIK-8174")]')
         (Path(self.dir.name) / "Cargo.toml").write_text(self.CARGO)
         rust = (
             '#[cfg_attr(target_vendor = "apple", ignore = "needs procfs [see MIK-8174")]\n#[test]\nfn probe() {}\n'
