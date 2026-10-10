@@ -220,3 +220,63 @@ async fn unverifiable_input_on_a_public_path_keeps_the_public_fall_through() {
         assert_eq!(status, StatusCode::OK, "{case}: {body}");
     }
 }
+
+/// A key server holding `tokens`: (bearer, subject, email) triples, all from
+/// the one issuer, all live.
+async fn key_server_with(tokens: &[(&str, &str, &str)]) -> Arc<KeyServer> {
+    let ks = KeyServer::new(KeyServerConfig {
+        enabled: true,
+        ..KeyServerConfig::default()
+    });
+    for (bearer, subject, email) in tokens {
+        let mut token = stored(bearer, subject);
+        token.identity.email = (*email).to_owned();
+        ks.store.insert(token).await;
+    }
+    Arc::new(ks)
+}
+
+/// `gateway_invoke` params under idempotency key `key`.
+fn keyed(key: &str) -> Value {
+    json!({"_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}},
+        crate::protocol::mrtr::IDEMPOTENCY_KEY_META: key,
+    }})
+}
+
+/// R5 (the admission-lease site, `meta_mcp/admission.rs:374`): two people
+/// whose stored identities both name nobody use one idempotency key. Neither
+/// is admitted: both are refused (-32000) before admission, so the backend
+/// never runs and B can never be served A's result. Control: a named token
+/// does reach admission and the backend. Mutant: the read-back check removed.
+#[tokio::test]
+async fn two_nameless_callers_never_share_an_execution_lease() {
+    use super::direct_continuation_tests::{code, dispatched, meta_call};
+    use super::direct_guards_fixture::{Answer, fixture_with_key_server};
+
+    let ks = key_server_with(&[
+        ("mcpgw_r5_alice", "", "alice@corp.invalid"),
+        ("mcpgw_r5_bob", "", "bob@corp.invalid"),
+        ("mcpgw_r5_named", "carol", "carol@corp.invalid"),
+    ])
+    .await;
+    let fx = fixture_with_key_server(Answer::Ok, ks).await;
+
+    let control = meta_call(&fx, "mcpgw_r5_named", "alpha", keyed("op-c")).await;
+    assert!(
+        control.get("error").is_none(),
+        "the control is admitted: {control}"
+    );
+    assert_eq!(dispatched(&fx), 1, "the control reached the backend");
+
+    let alice = meta_call(&fx, "mcpgw_r5_alice", "alpha", keyed("op-1")).await;
+    let bob = meta_call(&fx, "mcpgw_r5_bob", "alpha", keyed("op-1")).await;
+    assert_eq!(code(&alice), Some(-32000), "{alice}");
+    assert_eq!(code(&bob), Some(-32000), "{bob}");
+    assert_eq!(
+        dispatched(&fx),
+        1,
+        "neither nameless caller reached the backend"
+    );
+}
