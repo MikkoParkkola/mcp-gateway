@@ -402,4 +402,15 @@ impl TaskExecutor {
             gate.remove(id);
         }
     }
+
+    /// How many clones of `id`'s query slot exist beside the directory's own.
+    /// A recovery read holds one, held or queued. A worker's [`QueryLease`]
+    /// holds two, held or queued: the lease's own and its owned guard's. The
+    /// signal a row waits on to know who holds the slot and that a contender is
+    /// parked behind it, rather than guessing from scheduler turns.
+    #[cfg(test)]
+    pub(crate) async fn query_slot_clones_for_test(&self, id: &str) -> usize {
+        let gate = self.query_gate.lock().await;
+        gate.get(id).map_or(0, |slot| Arc::strong_count(slot) - 1)
+    }
 }
