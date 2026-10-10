@@ -142,7 +142,7 @@ fn every_line_classifies_as_the_untagged_parse_does() {
 }
 
 /// The `error` member is captured as sent and parsed again (MIK-8263): the
-/// answer must not move at serde_json's nesting limit, nor with whitespace
+/// answer must not move at `serde_json`'s nesting limit, nor with whitespace
 /// around or inside the member.
 #[test]
 fn nested_and_spaced_error_members_classify_as_the_untagged_parse_does() {
