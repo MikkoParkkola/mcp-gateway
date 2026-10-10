@@ -27,14 +27,7 @@ impl Write for Sink {
 fn warnings_while_building(config: Config) -> String {
     // A process-wide interested subscriber keeps callsite interest open, so the
     // scoped one below sees every record (see the note in the stdio tests).
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        use tracing_subscriber::prelude::*;
-        let _ = tracing::subscriber::set_global_default(
-            tracing_subscriber::Registry::default()
-                .with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
+    crate::test_log_capture::keep_interest_open();
     let sink = Sink::default();
     let writer = sink.clone();
     let subscriber = tracing_subscriber::fmt()

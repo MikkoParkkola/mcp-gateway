@@ -296,14 +296,7 @@ fn capture() -> (
     // A global subscriber interested in everything, so a callsite first hit
     // on another thread is not cached as "never interesting" (the pattern
     // `openwebui_adapter::start_route::capture` uses).
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        use tracing_subscriber::prelude::*;
-        let _ = tracing::subscriber::set_global_default(
-            tracing_subscriber::Registry::default()
-                .with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
+    crate::test_log_capture::keep_interest_open();
     let buffer = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let sink = Sink(Arc::clone(&buffer));
     let subscriber = tracing_subscriber::fmt()

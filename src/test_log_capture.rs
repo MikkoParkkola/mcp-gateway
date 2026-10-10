@@ -7,6 +7,13 @@
 
 use std::sync::{Arc, Mutex};
 
+// The one keeper, shared with the binary's capture (MIK-8254).
+#[path = "test_support/interest.rs"]
+mod interest;
+// Re-exported at its old path: callers outside this file (#3696) use
+// `crate::test_log_capture::keep_interest_open`.
+pub(crate) use interest::keep_interest_open;
+
 #[derive(Clone, Default)]
 struct Sink(Arc<Mutex<Vec<u8>>>);
 
@@ -66,19 +73,6 @@ pub(crate) fn capture_warnings<T>(operation: impl FnOnce() -> T) -> (T, String) 
     (result, output)
 }
 
-/// The process-wide TRACE registry, installed once: a scoped subscriber
-/// only sees an event whose callsite interest is not already cached as off.
-pub(crate) fn keep_interest_open() {
-    use tracing_subscriber::prelude::*;
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        let _ = tracing::subscriber::set_global_default(
-            tracing_subscriber::Registry::default()
-                .with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
-}
-
 /// A live count, on this thread, of log records containing `text`, for a
 /// test that must wait for a record rather than read the log afterwards.
 /// Counting stops when the guard drops.
@@ -126,4 +120,75 @@ pub(crate) fn count(records: &[serde_json::Value], level: &str, text: &str) -> u
                     .is_some_and(|m| m.contains(text))
         })
         .count()
+}
+
+/// MIK-8254 guard: every test file that installs its own scoped subscriber
+/// also keeps callsite interest open, so the next capture cannot bring the
+/// flake back. Lexical by design: a file that names `subscriber::with_default`
+/// or `subscriber::set_default` must also reach the keeper (directly, or
+/// through `test_log_capture` or the shared `error_capture`).
+#[test]
+fn every_scoped_log_capture_keeps_interest_open() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("a source dir") {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    walk(&root.join("src"), &mut files);
+    walk(&root.join("tests"), &mut files);
+    let installs = ["subscriber::with_default(", "subscriber::set_default("];
+    let keeps = ["keep_interest_open", "test_log_capture", "error_capture"];
+    let mut missing: Vec<String> = files
+        .iter()
+        .filter_map(|path| {
+            let text = std::fs::read_to_string(path).ok()?;
+            let installs_one = installs.iter().any(|needle| text.contains(needle));
+            let keeps_one = keeps.iter().any(|needle| text.contains(needle));
+            (installs_one && !keeps_one).then(|| {
+                path.strip_prefix(root)
+                    .unwrap_or(path)
+                    .display()
+                    .to_string()
+            })
+        })
+        .collect();
+    missing.sort();
+    // A second keeper, pasted inline, is the duplication this family removed:
+    // a static Once that installs a global Registry, outside the one keeper.
+    let mut copies: Vec<String> = files
+        .iter()
+        .filter(|path| !path.ends_with("test_support/interest.rs"))
+        .filter_map(|path| {
+            let text = std::fs::read_to_string(path).ok()?;
+            // Split so this guard's own source never matches itself.
+            let inline_keeper = text.contains(concat!("call", "_once"))
+                && text.contains(concat!("set_global", "_default("))
+                && text.contains(concat!("Registry", "::default()"));
+            inline_keeper.then(|| {
+                path.strip_prefix(root)
+                    .unwrap_or(path)
+                    .display()
+                    .to_string()
+            })
+        })
+        .collect();
+    copies.sort();
+    assert!(
+        copies.is_empty(),
+        "these files define their own callsite-interest keeper instead of calling \
+         crate::test_log_capture::keep_interest_open (one definition; MIK-8254): {copies:#?}"
+    );
+    assert!(
+        missing.is_empty(),
+        "these test files install a scoped log subscriber without keeping \
+         callsite interest open (call crate::test_log_capture::keep_interest_open \
+         first; MIK-8254): {missing:#?}"
+    );
 }

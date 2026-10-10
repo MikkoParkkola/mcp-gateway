@@ -282,7 +282,6 @@ pub(in crate::oauth) fn capture() -> (
     tracing::subscriber::DefaultGuard,
     Arc<std::sync::Mutex<Vec<u8>>>,
 ) {
-    static INTEREST: std::sync::Once = std::sync::Once::new();
     struct W(Arc<std::sync::Mutex<Vec<u8>>>);
     impl std::io::Write for W {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -293,13 +292,7 @@ pub(in crate::oauth) fn capture() -> (
             Ok(())
         }
     }
-    INTEREST.call_once(|| {
-        use tracing_subscriber::prelude::*;
-        let _ = tracing::subscriber::set_global_default(
-            tracing_subscriber::Registry::default()
-                .with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
+    crate::test_log_capture::keep_interest_open();
     let buffer = Arc::new(std::sync::Mutex::new(Vec::new()));
     let writer = Arc::clone(&buffer);
     let subscriber = tracing_subscriber::fmt()
