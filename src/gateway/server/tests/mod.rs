@@ -60,14 +60,6 @@ mod stdio_cost_persistence;
 #[cfg(feature = "cost-governance")]
 mod http_cost_persistence;
 
-/// Advance the paused clock one cost-save interval at a time until `costs`
-/// exists, giving each tick real time to land, for up to `catch_up` ticks.
-///
-/// A tick that finds `COST_WRITE` held is skipped, and the next tick catches
-/// up (MIK-8157). Paused time packs intervals into almost no real time, so a
-/// previous save thread, or another test's save in this process, can still
-/// hold the lock at the first tick (MIK-8216). One advance alone cannot
-/// recover from that skip.
 /// How many ticks a periodic-save test may advance, and how long each may take
 /// to land: together the 30 s the tests gave a single tick before MIK-8216.
 #[cfg(feature = "cost-governance")]
@@ -75,6 +67,14 @@ const CATCH_UP_TICKS: u32 = 3;
 #[cfg(feature = "cost-governance")]
 const TICK_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// Advance the paused clock one cost-save interval at a time until `costs`
+/// exists, giving each tick real time to land, for up to [`CATCH_UP_TICKS`] ticks.
+///
+/// A tick that finds `COST_WRITE` held is skipped, and the next tick catches
+/// up (MIK-8157). Paused time packs intervals into almost no real time, so a
+/// previous save thread, or another test's save in this process, can still
+/// hold the lock at the first tick (MIK-8216). One advance alone cannot
+/// recover from that skip.
 #[cfg(feature = "cost-governance")]
 async fn advance_until_saved(costs: &std::path::Path) -> Result<(), String> {
     for _ in 0..CATCH_UP_TICKS {

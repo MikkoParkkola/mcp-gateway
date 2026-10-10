@@ -424,15 +424,17 @@ mod tests {
             "a periodic save wrote while the previous write held the lock"
         );
         enforcer.record_spend("tool", Some("key"), 0.15);
-        // Successive ticks: COST_WRITE is process-wide, so another test's
-        // save may hold it for one of them, which is the skip being tested.
-        for _ in 0..1_000 {
+        // Successive ticks. COST_WRITE is process-wide, so another test's
+        // save may hold it at one of them: each retry first waits for that
+        // holder to let go, so the count bounds lost races, not anyone's speed.
+        for _ in 0..100 {
+            drop(COST_WRITE.lock().unwrap_or_else(PoisonError::into_inner));
             save_costs_unless_busy(&enforcer, dir.path());
             if costs.exists() {
                 break;
             }
-            std::thread::yield_now();
         }
+        assert!(costs.exists(), "no catch-up save landed in 100 ticks");
         let global = restored_global(dir.path());
         assert!(
             (global - 0.4).abs() < 1e-9,
