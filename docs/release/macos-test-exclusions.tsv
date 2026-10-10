@@ -2,8 +2,5 @@ path	item	portable	reason
 .github/workflows/ci.yml	a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result	n/a	Skipped by the Tests job too: needs Python and Redis, which only the task-sdk-recovery job provisions (MIK-7534).
 .github/workflows/ci.yml	mik_7479_full_burst	n/a	Skipped by the Tests job too: runs in full in mrtr7b-full-burst.yml (MIK-7479).
 src/gateway/task_service/store_tests/durability.rs	open_refuses_a_lease_it_cannot_inspect_and_creates_none	inherent	Builds a path at the Linux PATH_MAX (4096); macOS PATH_MAX is 1024, so the fixture cannot be made the same way.
-src/personal_accounts/store_tests.rs	record_lookup_child	no-port-yet	Child-process entrypoint of the record-FIFO regression below; ignored on every platform.
-src/personal_accounts/store_tests.rs	s03_fifo_record_refuses_promptly_without_blocking_lookup	no-port-yet	Record-FIFO regression uses mkfifo and a bounded child process (W-L8); macOS has FIFOs, the harness is Linux-only.
-src/personal_accounts/tests.rs	fifo	no-port-yet	Authority-FIFO regression module, same harness as the record-FIFO row (W-L8).
 src/test_ports.rs	the_reserved_range_is_outside_the_ephemeral_range	inherent	Reads /proc/sys/net/ipv4/ip_local_port_range, which exists only on Linux.
 tests/cli_broken_pipe.rs	any_other_stdout_error_still_fails	inherent	Writes to /dev/full for ENOSPC; macOS has no /dev/full.

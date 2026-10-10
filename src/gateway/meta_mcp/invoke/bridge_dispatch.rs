@@ -109,6 +109,8 @@ pub(super) fn undeclared_input_request(
 /// a retry that silently diverges.
 pub(super) struct BridgeDispatcher<'a> {
     pub(super) meta: &'a MetaMcp,
+    /// The call's caller, for each round's dispatch chokepoint (MIK-8137 b1).
+    pub(super) caller: &'a crate::gateway::meta_mcp::MetaMcpCallerContext<'a>,
     pub(super) server: &'a str,
     pub(super) tool: &'a str,
     pub(super) arguments: &'a Value,
@@ -275,6 +277,26 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             input_responses: retry_params.get("inputResponses").cloned(),
         };
         self.refuse_relaying_round(&outbound)?;
+        // MIK-8137 b1: every round passes the chokepoint before it is armed,
+        // its answers included. A refusal waits in `relay_refused`, which the
+        // call site answers first, releasing the key: nothing was sent.
+        let sent = super::chokepoint::Outbound {
+            arguments: self.arguments,
+            answers: outbound.input_responses.as_ref(),
+        };
+        let at = (self.server, self.tool);
+        let source = super::chokepoint::Source::Bridged;
+        let permit = match self
+            .meta
+            .chokepoint(self.caller, self.session_id, at, &sent, source)
+        {
+            Ok(permit) => permit,
+            Err(refused) => {
+                let message = refused.to_string();
+                *self.relay_refused.lock() = Some(refused);
+                return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted { message });
+            }
+        };
         // #1962: armed for the dispatch, so a dropped exchange settles the key.
         arm(self.reservation, true);
         let dispatched = self
@@ -303,6 +325,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.captured.clone(),
                 &super::super::response_security::chain_receipt::ChainSlot::default(),
                 &admission,
+                permit,
             )
             .await;
         // The round's spend is settled; an unsettled reservation is given back.

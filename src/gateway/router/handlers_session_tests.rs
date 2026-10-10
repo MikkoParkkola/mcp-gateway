@@ -215,7 +215,7 @@ async fn a_prompt_reaches_only_its_holder_and_only_its_holder_answers_it() {
             .await
             .unwrap()
     });
-    let prompt = tokio::time::timeout(Duration::from_secs(2), a_rx.recv())
+    let prompt = tokio::time::timeout(Duration::from_secs(10), a_rx.recv())
         .await
         .expect("the prompt reaches the session that asked")
         .unwrap();
@@ -276,7 +276,7 @@ async fn the_prompt_flow_logs_session_fingerprints_only() {
             .await
             .unwrap()
     });
-    tokio::time::timeout(Duration::from_secs(2), rx.recv())
+    tokio::time::timeout(Duration::from_secs(10), rx.recv())
         .await
         .expect("the prompt reaches the asking session")
         .unwrap();

@@ -117,6 +117,8 @@ async fn non_admin_callback_registration_is_audited_as_a_denial() {
             .with_ansi(false)
             .with_writer(move || writer.clone()),
     );
+    // A callsite another thread cached as off would miss this capture (MIK-8254).
+    crate::test_log_capture::keep_interest_open();
     let guard = tracing::subscriber::set_default(subscriber);
     let refused = meta.invoke_tool(&args(), None, &anonymous_caller()).await;
     drop(guard);

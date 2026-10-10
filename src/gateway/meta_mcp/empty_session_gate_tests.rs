@@ -26,7 +26,7 @@ async fn judge_on_the_empty_id(policy: ConfirmationPolicy) -> super::super::Gate
     let proxy = crate::gateway::ProxyManager::new(mux);
     let ctx = gate_ctx(&proxy, policy);
     tokio::time::timeout(
-        std::time::Duration::from_secs(2),
+        std::time::Duration::from_secs(10),
         super::super::destructive_confirmation_gate(
             &RequestId::Number(1),
             "gateway_kill_server",

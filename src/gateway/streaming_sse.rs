@@ -406,6 +406,11 @@ pub(crate) async fn request_scoped_event_stream(
     }
 
     let (mut parts, body) = response.into_parts();
+    // MIK-8176: the answer's holds move into the stream and are handed off
+    // only as its event is yielded; a stream dropped first gives them back.
+    let carried = parts
+        .extensions
+        .remove::<crate::gateway::meta_mcp::sealed_hold::CarriedHolds>();
     // Lazy, frame by frame: each notification is committed, and the answer's
     // body read (which commits its reservation, MIK-7116.MIN.2 F3), only as
     // the client reads this stream, never while it is being built.
@@ -414,6 +419,9 @@ pub(crate) async fn request_scoped_event_stream(
             if let Some(event) = sse_message(&judge.record(frame).await) {
                 yield Ok::<_, Infallible>(axum::body::Bytes::from(event));
             }
+        }
+        if let Some(carried) = &carried {
+            crate::gateway::meta_mcp::sealed_hold::hand_off(carried);
         }
         yield Ok(axum::body::Bytes::from_static(b"event: message\ndata: "));
         let mut result = body.into_data_stream();
@@ -535,7 +543,17 @@ where
                             yield Ok(event);
                         }
                     }
-                    yield Ok(terminal_frame(judge.emit(response).await).await);
+                    // MIK-8176: handed off as the answer event is yielded.
+                    let emitted = judge.emit(response).await;
+                    let carried = emitted
+                        .extensions()
+                        .get::<crate::gateway::meta_mcp::sealed_hold::CarriedHolds>()
+                        .cloned();
+                    let frame = terminal_frame(emitted).await;
+                    if let Some(carried) = &carried {
+                        crate::gateway::meta_mcp::sealed_hold::hand_off(carried);
+                    }
+                    yield Ok(frame);
                     break;
                 }
             }

@@ -344,14 +344,7 @@ impl std::io::Write for Sink {
 /// resume and its invoke run on this thread. The process-wide TRACE registry
 /// keeps callsite interest open, as in `agent_identity_audit_tests`.
 async fn resumed_invocations(state: &Arc<AppState>, id: &str, label: Option<&str>) -> Vec<Value> {
-    use tracing_subscriber::prelude::*;
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        let _ = tracing::subscriber::set_global_default(
-            tracing_subscriber::Registry::default()
-                .with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
+    crate::test_log_capture::keep_interest_open();
     let sink = Sink::default();
     let writer = sink.clone();
     let subscriber = tracing_subscriber::fmt()

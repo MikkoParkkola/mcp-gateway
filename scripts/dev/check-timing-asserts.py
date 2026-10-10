@@ -11,6 +11,22 @@ A window built at run time is refused (fail closed); a spelling this misses is
 an accepted miss. 5 s is a policy cutoff: `Duration::from_secs(5)` is already
 the tree's hang bound, so a window at or over it is read as a hang guard.
 
+Timeouts get the same cutoff (MIK-8247). In test code, a `timeout(W, f)`
+whose expiry fails the test (`.await` then `.expect`, `.unwrap`, `?` or
+`.unwrap_or_else(|_| panic!..)`, directly or through a `let` binding) is
+refused when W is under 5 s or cannot be resolved. A fn on a paused clock
+(`start_paused = true`, `time::pause()`) is skipped: its time is virtual.
+Test code is a test path, or a product file from its first `#[cfg(test)]`.
+A const reaches a file `include!`d by the file that defines it.
+
+Stated misses: a `sleep` used as a window; a timeout that is expected to
+elapse and is then asserted on; a window passed in through a constructor or
+helper; `timeout_at`; a `select!` arm on `sleep`; a `let`-bound result first
+consumed over 2000 characters later; a fn that pauses the clock partway, which
+is skipped whole; a commented-out `include!`, or a file included by two files
+(the last includer's consts are used). A same-named binding that shadows the
+timeout's result can be read as consuming it: that fails loudly, never quietly.
+
 The allowlist is shrink-only: with `--base <ref>` a row absent from the list
 at `ref` fails. The comparison is skipped only when `ref` has no list.
 
@@ -22,10 +38,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import bisect
+import functools
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
 THRESHOLD_S = 5.0
@@ -63,39 +81,58 @@ RAW_OPEN = re.compile(r'b?r(#*)"')
 CHAR = re.compile(r"'(?:\\.|[^\\'])'")
 
 
+SPECIAL = re.compile(r'//|/\*|b?r#*"|"|\'')
+
+
+@functools.lru_cache(maxsize=None)
 def blank_strings_and_comments(text: str) -> str:
     """`text` with comments and string literals blanked, newlines kept.
 
     Strings become `""`, so a message naming `elapsed()` reads as nothing.
+    Jumps from one comment or literal opener to the next, so the plain text
+    between them is copied in one slice rather than character by character.
     """
     out, i, n = [], 0, len(text)
     while i < n:
-        c = text[i]
-        if text.startswith("//", i):
+        m = SPECIAL.search(text, i)
+        if m is None:
+            out.append(text[i:])
+            break
+        k, tok = m.start(), m.group()
+        out.append(text[i:k])
+        i = k
+        if tok == "//":
             j = text.find("\n", i)
             i = n if j < 0 else j
-        elif text.startswith("/*", i):
+        elif tok == "/*":
             j = text.find("*/", i + 2)
             j = n if j < 0 else j + 2
             out.append("\n" * text.count("\n", i, j))
             i = j
-        elif (m := RAW_OPEN.match(text, i)) and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")):
-            end = '"' + m.group(1)
-            j = text.find(end, m.end())
-            j = n if j < 0 else j + len(end)
+        elif tok not in ('"', "'"):
+            quote = k + len(tok) - 1
+            if k > 0 and (text[k - 1].isalnum() or text[k - 1] == "_"):
+                # An identifier ending in `r` / `b` before a quote: not a raw
+                # prefix. Copy it; the quote opens a plain string next round.
+                out.append(text[k:quote])
+                i = quote
+                continue
+            close = '"' + RAW_OPEN.match(text, k).group(1)
+            j = text.find(close, m.end())
+            j = n if j < 0 else j + len(close)
             out.append('""' + "\n" * text.count("\n", i, j))
             i = j
-        elif c == '"':
+        elif tok == '"':
             j = i + 1
             while j < n and text[j] != '"':
                 j += 2 if text[j] == "\\" else 1
             out.append('""' + "\n" * text.count("\n", i, j))
             i = j + 1
-        elif c == "'" and (m := CHAR.match(text, i)):
+        elif char := CHAR.match(text, i):
             out.append("' '")
-            i = m.end()
+            i = char.end()
         else:
-            out.append(c)
+            out.append("'")
             i += 1
     return "".join(out)
 
@@ -336,9 +373,10 @@ def scan_text(path: str, text: str, tree_consts: dict[str, list[tuple[str, str]]
     file_consts = {m.group(2): m.group(3) for m in CONST.finditer(code)}
     imports = imports_of(code)
     found = []
+    fns = [(m.start(), m.group(1)) for m in FN.finditer(code)]
     for offset, equality, args in calls(code):
-        fns = list(FN.finditer(code, 0, offset))
-        fn, start = (fns[-1].group(1), fns[-1].start()) if fns else ("<file>", 0)
+        at = bisect.bisect_left(fns, (offset,)) - 1
+        start, fn = fns[at] if at >= 0 else (0, "<file>")
         lets, names, deadlines = bindings(code[start:offset])
         hit = window_of(equality, args, names, deadlines)
         if hit is None:
@@ -359,6 +397,120 @@ def scan_text(path: str, text: str, tree_consts: dict[str, list[tuple[str, str]]
                 "unresolvable window" if value is None else "under 5 s",
             )
         )
+    return found
+
+
+TIMEOUT = re.compile(r"(?<![\w.])(?:(?:tokio::)?time::)?timeout\(")
+# A test file, or a helper under a test module directory (`wire_tests/fixture.rs`).
+TEST_FILE = re.compile(r"(^tests/|/tests/|_tests/|_tests\.rs$|/tests\.rs$)")
+# A timeout's Result consumed so that expiry fails the test, read from the
+# text right after `.await` (rustfmt may wrap each link onto its own line).
+# What turns an expired timeout into a failed test, whether it follows the
+# `.await` directly or a `let` binding of the result.
+CONSUMED = r"(?:\.\s*(?:expect|unwrap)\s*\(|\?|\.\s*unwrap_or_else\(\s*\|[^|]*\|\s*panic!)"
+FAILS_ON_EXPIRY = re.compile(r"\s*\.await\s*" + CONSUMED)
+LET_BOUND = re.compile(r"let\s+(?:mut\s+)?(\w+)\s*(?::[^=;]+)?=\s*$")
+
+
+def test_start(path: str, code: str) -> int | None:
+    """Where test code starts in `code`: all of a test file, or from a product
+    file's first `#[cfg(test)]` on (its inline test module). None: no tests."""
+    if TEST_FILE.search(path):
+        return 0
+    m = re.search(r"#\[cfg\(test\)\]", code)
+    return m.start() if m else None
+
+
+def scan_timeouts(
+    path: str,
+    text: str,
+    tree_consts: dict[str, list[tuple[str, str]]],
+    includers: dict[str, str],
+) -> list[Finding]:
+    """Every `timeout(W, f)` in test code whose expiry fails the test, when W is
+    under 5 s or does not resolve (MIK-8247).
+
+    Fails the test: the Result is consumed by `.expect`, `.unwrap`, `?` or
+    `.unwrap_or_else(|_| panic!(..))`, straight after `.await` or through a
+    `let` binding the function later consumes the same way. A timeout whose
+    Result is only inspected (`assert!(r.is_err())`, a cancellation) is not
+    judged: it expects the window to pass.
+    """
+    code = blank_strings_and_comments(text)
+    start = test_start(path, code)
+    if start is None:
+        return []
+    file_consts = {m.group(2): m.group(3) for m in CONST.finditer(code)}
+    # A file textually `include!`d into another shares that file's items.
+    if path in includers:
+        for name, entries in tree_consts.items():
+            for where, expr in entries:
+                if where == includers[path]:
+                    file_consts.setdefault(name, expr)
+    imports = imports_of(code)
+    fns = [(m.start(), m.group(1)) for m in FN.finditer(code)]
+    found = []
+    for m in TIMEOUT.finditer(code, start):
+        depth, end = 1, m.end()
+        while end < len(code) and depth:
+            depth += {"(": 1, ")": -1}.get(code[end], 0)
+            end += 1
+        tail = code[end : end + 300]
+        fails = bool(FAILS_ON_EXPIRY.match(tail))
+        if not fails and re.match(r"\s*\.await\s*;", tail):
+            bound = LET_BOUND.search(code[max(0, m.start() - 120) : m.start()])
+            if bound:
+                name = re.escape(bound.group(1))
+                after = code[end : end + 2000]
+                fails = bool(re.search(rf"\b{name}\s*{CONSUMED}", after))
+        if not fails:
+            continue
+        at = bisect.bisect_left(fns, (m.start(),)) - 1
+        fn_start, fn = fns[at] if at >= 0 else (0, "<file>")
+        if paused_clock(code, fn_start, fns[at + 1][0] if at + 1 < len(fns) else len(code)):
+            continue
+        lets, _, _ = bindings(code[fn_start : m.start()])
+        window = split_top(code[m.end() : end - 1], (",",))[0][1].strip()
+        value = resolve(window, Scope(path, lets, file_consts, tree_consts, imports))
+        seconds = None if value is None else value[0]
+        if seconds is not None and seconds >= THRESHOLD_S:
+            continue
+        found.append(
+            Finding(
+                path,
+                fn,
+                " ".join(code[m.start() : end].split()),
+                code.count("\n", 0, m.start()) + 1,
+                seconds,
+                "unresolvable window" if seconds is None else "under 5 s",
+            )
+        )
+    return found
+
+
+def paused_clock(code: str, fn_start: int, fn_end: int) -> bool:
+    """Whether the function at `fn_start` runs on tokio's paused clock: its
+    attributes say `start_paused = true`, or its body calls `time::pause()`.
+    There a timeout is virtual time, which load cannot make fire early, so it
+    is not the wall-clock window this guard is about."""
+    attrs = code[max(0, fn_start - 300) : fn_start]
+    head = attrs[attrs.rfind("}") + 1 :] if "}" in attrs else attrs
+    return "start_paused = true" in head or bool(re.search(r"\btime::pause\(\)", code[fn_start:fn_end]))
+
+
+def includers_of(texts: dict[str, str]) -> dict[str, str]:
+    """Files pulled into another by `include!("rel")`, mapped to the includer."""
+    found = {}
+    for path, text in texts.items():
+        for rel in re.findall(r'include!\(\s*"([^"]+\.rs)"\s*\)', text):
+            target = (PurePosixPath(path).parent / rel).as_posix()
+            parts = []
+            for part in target.split("/"):
+                if part == "..":
+                    parts and parts.pop()
+                elif part != ".":
+                    parts.append(part)
+            found["/".join(parts)] = path
     return found
 
 
@@ -444,12 +596,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     texts = {p.relative_to(ROOT).as_posix(): p.read_text(encoding="utf-8", errors="replace") for p in rust_files()}
     consts = tree_consts(texts)
+    includers = includers_of(texts)
     found = [f for path, text in texts.items() for f in scan_text(path, text, consts)]
+    found += [f for path, text in texts.items() for f in scan_timeouts(path, text, consts, includers)]
     rows = parse_allowlist(ALLOWLIST.read_text(encoding="utf-8")) if ALLOWLIST.exists() else []
     errors = judge(found, rows, read_base(args.base) if args.base else None)
     for line in errors:
         print(line)
-    print(f"{len(found)} timing asserts under {THRESHOLD_S:g} s or unresolvable, {len(rows)} allowlisted.")
+    print(f"{len(found)} timing asserts or timeouts under {THRESHOLD_S:g} s or unresolvable, {len(rows)} allowlisted.")
     return 1 if errors else 0
 
 

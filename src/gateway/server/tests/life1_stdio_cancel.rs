@@ -139,12 +139,11 @@ async fn serve(output_capacity: usize) -> Served {
     served
 }
 
-/// Wait up to `bound` for `run_stdio_on` to return, and require that it
-/// returned `Ok`: a panic or an error is not a clean shutdown.
-async fn returns_within(task: &mut JoinHandle<crate::Result<()>>, bound: Duration) {
-    timeout(bound, task)
-        .await
-        .unwrap_or_else(|_| panic!("run_stdio_on must return within {bound:?} of EOF"))
+/// Require that `run_stdio_on` returned `Ok`: a panic or an error is not a
+/// clean shutdown. The wait itself stays at each call site, where its window
+/// is a named constant the timing guard can read.
+fn returned_ok(joined: Result<crate::Result<()>, tokio::task::JoinError>) {
+    joined
         .expect("the serve task does not panic")
         .expect("run_stdio_on returns Ok");
 }
@@ -265,7 +264,11 @@ async fn a_cancelled_call_is_joined_before_eof_returns() {
     // Let the loop read the cancel before stdin closes.
     let before = frames_within(&mut served.stdout, Duration::from_millis(500)).await;
     drop(served.stdin);
-    returns_within(&mut served.task, ARRIVAL).await;
+    returned_ok(
+        timeout(ARRIVAL, &mut served.task)
+            .await
+            .unwrap_or_else(|_| panic!("run_stdio_on must return within {ARRIVAL:?} of EOF")),
+    );
     let after = frames_within(&mut served.stdout, Duration::from_millis(500)).await;
     let frames = [before, after].concat();
     assert!(answers(&frames, &held).is_empty(), "{frames:?}");
@@ -422,8 +425,14 @@ async fn eof_is_bounded_when_the_client_stops_reading() {
     .await;
     tokio::time::sleep(Duration::from_secs(1)).await;
     drop(served.stdin);
-    let bound = super::super::STDIO_DRAIN_TIMEOUT + Duration::from_secs(10);
-    returns_within(&mut served.task, bound).await;
+    returned_ok(
+        timeout(
+            super::super::STDIO_DRAIN_TIMEOUT + Duration::from_secs(10),
+            &mut served.task,
+        )
+        .await
+        .expect("run_stdio_on must return within the drain bound of EOF"),
+    );
     // Kept open until here: a dropped reader would unblock the writer.
     drop(served.stdout);
 }

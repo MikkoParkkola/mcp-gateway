@@ -38,7 +38,7 @@ async fn sampling_prompt_is_delivered_to_the_requesting_session() {
     let call = tokio::spawn(async move { router.oneshot(request).await.unwrap() });
 
     // THEN: the prompt arrives on that session's stream
-    let delivered = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+    let delivered = tokio::time::timeout(Duration::from_secs(10), rx.recv())
         .await
         .expect("the prompt must reach the requesting session, not a literal \"broadcast\" id")
         .expect("the notification stream must stay open");

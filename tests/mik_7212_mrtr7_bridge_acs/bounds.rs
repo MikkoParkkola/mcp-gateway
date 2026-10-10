@@ -249,7 +249,7 @@ async fn ac_mrtr_7b_a_wait_bounded_by_the_aggregate_remainder_is_a_deadline() {
     let records = Records::default();
 
     let outcome = tokio::time::timeout(
-        Duration::from_secs(3),
+        Duration::from_secs(10),
         bridge_with(
             &client,
             &backend,

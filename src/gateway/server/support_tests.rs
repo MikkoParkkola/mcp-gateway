@@ -161,17 +161,13 @@ mod mtls_listener {
             .expect("the TLS request reached its handler")
             .expect("started");
 
-        let signalled = std::time::Instant::now();
+        // The request never ends, so only the shutdown deadline can return
+        // the server: returning inside the hang guard is the oracle (MIK-8222).
         stop_tx.send(()).expect("server is running");
         let outcome = tokio::time::timeout(Duration::from_secs(5), server)
             .await
             .expect("the mTLS server did not return within 5 s while a request was open");
-        let elapsed = signalled.elapsed();
         outcome.expect("server task").expect("serve");
-        assert!(
-            elapsed < Duration::from_secs(2),
-            "mTLS shutdown took {elapsed:?} with a {grace:?} timeout"
-        );
         request.abort();
     }
 
