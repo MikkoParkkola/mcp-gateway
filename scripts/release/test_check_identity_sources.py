@@ -164,6 +164,11 @@ class CodeReviewBypasses(unittest.TestCase):
         root = tree({"src/a.rs": "fn f() { GrantSubject :: new (a, b, None); }\n"}, "mod a;\n")
         self.assertEqual(len(cis.violations(root)), 1, cis.violations(root))
 
+    def test_a_spaced_self_constructor_in_an_identity_impl_fails(self):
+        root = tree({"src/a.rs": "impl GrantSubject { fn f() -> Self { Self :: new (a, b, None) } }\n"},
+                    "mod a;\n")
+        self.assertEqual(len(cis.violations(root)), 1, cis.violations(root))
+
     def test_an_enum_or_crate_visible_carrier_read_back_fails(self):
         for carrier in (
             "#[derive(Deserialize)]\npub(crate) enum Tok { A(VerifiedIdentity) }\n",

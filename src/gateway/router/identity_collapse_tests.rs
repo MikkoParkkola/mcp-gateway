@@ -214,7 +214,10 @@ async fn a_recognised_credential_that_names_nobody_is_refused_on_a_public_path()
 async fn unverifiable_input_on_a_public_path_keeps_the_public_fall_through() {
     let idp = Idp::start().await;
     let (state, _store) = gateway(&idp).await;
-    let named = idp.token("alice", &json!({}));
+    let named = idp.token(
+        "alice",
+        &json!({"email": "alice@corp.invalid", "email_verified": true}),
+    );
     let mut forged = idp.token("", &json!({}));
     forged.push('x');
     let unknown_issuer = idp.token("", &json!({ "iss": "https://idp-unknown.example" }));
@@ -624,4 +627,90 @@ fn named_cert(cn: &str) -> crate::mtls::CertIdentity {
     let key_pair = rcgen::KeyPair::generate().expect("key generation failed");
     let der = params.self_signed(&key_pair).expect("cert").der().to_vec();
     crate::mtls::CertIdentity::from_der(&der).expect("parses")
+}
+
+/// POST `message` to `/mcp` with an optional `bearer` on an optional
+/// `session`; the status, the body and the session the gateway names.
+async fn post(
+    state: &Arc<AppState>,
+    bearer: Option<&str>,
+    session: Option<&str>,
+    message: Value,
+) -> (StatusCode, Value, Option<String>) {
+    let mut builder = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("accept", "application/json");
+    if let Some(bearer) = bearer {
+        builder = builder.header("authorization", format!("Bearer {bearer}"));
+    }
+    if let Some(session) = session {
+        builder = builder.header("mcp-session-id", session);
+    }
+    let request = builder
+        .body(axum::body::Body::from(message.to_string()))
+        .unwrap();
+    let response = create_router(Arc::clone(state))
+        .oneshot(request)
+        .await
+        .unwrap();
+    let status = response.status();
+    let session = response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        session,
+    )
+}
+
+fn init_message() -> Value {
+    json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": crate::protocol::PROTOCOL_VERSION, "capabilities": {},
+        "clientInfo": { "name": "r10", "version": "0" } } })
+}
+
+/// What a caller with no credential gets on `session`: whether it is served,
+/// and the status and body for the failure message.
+async fn anonymous_resume(state: &Arc<AppState>, session: &str) -> (bool, String) {
+    let list = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
+    let (status, body, echoed) = post(state, None, Some(session), list).await;
+    let served = status == StatusCode::OK && echoed.as_deref() == Some(session);
+    (served, format!("{status}, session {echoed:?}, {body}"))
+}
+
+/// R10's positive control, made to prove what it claims (MIK-8286 review):
+/// a NAMED delegated bearer on public `/mcp` is authenticated as that
+/// identity, not handed the anonymous public client. Observed through
+/// session ownership: the session it opens belongs to its subject, so a
+/// caller with no credential cannot resume it, whereas an anonymous session
+/// can be. The bearer carries a verified email in the allowlisted domain.
+#[tokio::test]
+async fn a_named_bearer_on_a_public_path_is_authenticated() {
+    let idp = Idp::start().await;
+    let (state, _store) = gateway(&idp).await;
+
+    let (status, body, anonymous) = post(&state, None, None, init_message()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let anonymous = anonymous.expect("an anonymous session");
+    let (served, seen) = anonymous_resume(&state, &anonymous).await;
+    assert!(served, "the probe serves an anonymous session: {seen}");
+
+    let named = idp.token(
+        "alice",
+        &json!({"email": "alice@corp.invalid", "email_verified": true}),
+    );
+    let (status, body, session) = post(&state, Some(&named), None, init_message()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let session = session.expect("a session");
+    let (served, seen) = anonymous_resume(&state, &session).await;
+    assert!(
+        !served,
+        "the named bearer's session was resumable anonymously, so it fell through as public: {seen}"
+    );
 }
