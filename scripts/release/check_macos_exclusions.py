@@ -274,7 +274,7 @@ def unquoted(text: str) -> str:
 
 def logical_lines(text: str) -> list[tuple[str, bool]]:
     """Trimmed lines, with an attribute spread over several lines joined into
-    one: (text, whether it was joined)."""
+    one: (text, whether the join is not trusted)."""
     out: list[tuple[str, bool]] = []
     raw = [line.strip() for line in text.splitlines()]
     i = 0
@@ -294,7 +294,14 @@ def logical_lines(text: str) -> list[tuple[str, bool]]:
                 j += 1
                 depth += raw[j].count("[") - raw[j].count("]")
                 line += " " + raw[j]
-            out.append((line, True))
+            # Fail closed (lead ruling): a join over several lines that holds
+            # a comment marker, or a string spread over lines (an odd quote
+            # count on a line), is not trusted: a `]` inside it can end the
+            # join early. Single-line quoted values (`"macos"`) are fine.
+            risky = j > i and any(
+                "/*" in r or "//" in r or r.count('"') % 2 for r in raw[i : j + 1]
+            )
+            out.append((line, risky))
             i = j + 1
             continue
         out.append((line, False))
@@ -312,12 +319,15 @@ def excluded(root: Path) -> set[tuple[str, str]]:
             continue
         logical = logical_lines(file.read_text(errors="replace"))
         lines = [text for text, _ in logical]
-        for n, (line, _joined) in enumerate(logical):
-            if not ATTR.match(line):
+        for n, (line, risky) in enumerate(logical):
+            head = ATTR.match(line)
+            if not head:
                 continue
-            # A multi-line attribute is judged on its joined text; a part the
-            # reader cannot parse (a comment inside it) makes it count.
-            if not off_macos(line, crate_features(root, file, features)):
+            # A multi-line attribute is judged on its joined text; an
+            # untrusted join always counts, unless it is a cfg_attr with no
+            # `ignore` anywhere in it (which cannot skip a test).
+            blunt = risky and (head.group(1) == "cfg" or re.search(r"\bignore\b", line) is not None)
+            if not (blunt or off_macos(line, crate_features(root, file, features))):
                 continue
             if line.startswith("#!["):
                 found.add((rel, "*"))
@@ -330,7 +340,14 @@ def excluded(root: Path) -> set[tuple[str, str]]:
             while end + 1 < len(lines) and lines[end + 1].startswith(("#[", "///", "//")):
                 end += 1
             block = lines[start : end + 1]
-            item = ITEM.match(lines[end + 1]) if end + 1 < len(lines) else None
+            after = end + 1
+            # Its item is then the next item line: the rest of an attribute
+            # whose join ended early sits in between.
+            while blunt and after < len(lines) and after <= end + 30 and not ITEM.match(lines[after]):
+                if lines[after].startswith("#["):
+                    block.append(lines[after])
+                after += 1
+            item = ITEM.match(lines[after]) if after < len(lines) else None
             if not item:
                 continue
             kind, name = item.groups()

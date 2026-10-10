@@ -283,8 +283,13 @@ class Predicates(unittest.TestCase):
         (Path(self.dir.name) / "Cargo.toml").write_text(self.CARGO)
         found = self.tree('#[cfg(all(\n    test, /* ] */\n    target_os = "macos"\n))]\n#[test]\nfn probe() {}\n')
         self.assertEqual(found, ["not run on macOS and not listed: src/x_tests.rs probe"])
-        found = self.tree('#[cfg_attr(\n    target_os = "linux",\n    ignore = "x"\n)]\n#[test]\nfn probe() {}\n')
-        self.assertEqual(found, ["not run on macOS and not listed: src/x_tests.rs probe"])
+        # A string spread over lines, holding item-like text: fail closed,
+        # the check demands a row rather than passing silently.
+        found = self.tree(
+            '#[cfg_attr(\n    target_os = "macos",\n    ignore = "spans\n#[test]\nfn fake() {}\nlines"\n)]\n#[test]\nfn probe() {}\n'
+        )
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("not run on macOS and not listed", found[0])
 
 if __name__ == "__main__":
     unittest.main()
