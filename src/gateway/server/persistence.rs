@@ -112,6 +112,12 @@ pub(super) fn save_costs(enforcer: &BudgetEnforcer, data_dir: &Path) {
 #[cfg(feature = "cost-governance")]
 static COST_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// The data directory of each periodic save skipped because `COST_WRITE` was
+/// held: a test observes its own skip instead of guessing when it happened
+/// (MIK-8216). Keyed by directory, since the lock is process-wide.
+#[cfg(test)]
+static SKIPPED_SAVES: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
 #[cfg(feature = "cost-governance")]
 fn write_costs(enforcer: &BudgetEnforcer, data_dir: &Path, _turn: &std::sync::MutexGuard<'_, ()>) {
     let Ok(snapshot) = enforcer.snapshot_for_save() else {
@@ -138,6 +144,11 @@ fn save_costs_unless_busy(enforcer: &BudgetEnforcer, data_dir: &Path) {
         }
         Err(std::sync::TryLockError::WouldBlock) => {
             warn!("periodic cost save skipped: the previous costs.json write has not finished");
+            #[cfg(test)]
+            SKIPPED_SAVES
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(data_dir.to_path_buf());
         }
     }
 }
@@ -476,24 +487,47 @@ mod tests {
     }
 
     /// MIK-8216 AC2: the losing order, forced. Another holder has `COST_WRITE`
-    /// when the first periodic tick fires, so that tick is skipped, and the
-    /// helper's next tick saves. One advance alone would leave no save at all:
+    /// when the first periodic tick fires and lets go only once that tick is
+    /// recorded as skipped, so the helper's next tick is the one that saves. One advance alone would leave no save at all:
     /// the reported flake.
     #[cfg(feature = "cost-governance")]
     #[tokio::test(start_paused = true)]
     async fn the_catch_up_helper_recovers_a_tick_skipped_under_a_held_lock() {
+        // The single `yield_now` below lets the saver start its interval
+        // before the first advance only because a current-thread runtime runs
+        // the spawned task at that yield. On a multi-thread runtime it might
+        // not, and the row would then wait out its hang bound instead of
+        // failing at once, so the flavour is pinned here.
+        assert_eq!(
+            tokio::runtime::Handle::current().runtime_flavor(),
+            tokio::runtime::RuntimeFlavor::CurrentThread,
+            "this row's ordering relies on a current-thread runtime"
+        );
         let dir = tempfile::tempdir().unwrap();
         let costs = dir.path().join("costs.json");
         let enforcer = enforcer_with_spend(0.25);
         let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let skipped_dir = dir.path().to_path_buf();
         let holder = std::thread::spawn(move || {
             let _writing = COST_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
             held_tx
                 .send(())
                 .expect("the test waits for the lock to be held");
-            // Past the first tick's save attempt; long before the helper's
-            // second tick, one TICK_BOUND later.
-            std::thread::sleep(std::time::Duration::from_secs(3));
+            // Released only once this test's first tick has been skipped:
+            // the catch-up is then required, not a matter of timing. The
+            // bound is a hang guard; the skip lands within milliseconds.
+            let observed = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while !SKIPPED_SAVES
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains(&skipped_dir)
+            {
+                assert!(
+                    std::time::Instant::now() < observed,
+                    "the first tick was never skipped under the held lock"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
         });
         held_rx.recv().expect("the holder took the lock");
         let saver = spawn_cost_saver(
@@ -502,6 +536,10 @@ mod tests {
             COST_SAVE_INTERVAL,
             None,
         );
+        // Let the saver start its interval and take the immediate first tick
+        // before the helper advances; otherwise the interval begins after the
+        // first advance and that tick makes no save attempt at all.
+        tokio::task::yield_now().await;
         let landed = advance_until_saved(&costs).await;
         holder.join().expect("the holder does not panic");
         saver.abort();
