@@ -303,47 +303,6 @@ async fn run_dispatched(
     }
 }
 
-/// Own one live upstream job: make its handle durable, follow it within a
-/// bounded budget, and settle what it eventually says.
-///
-/// Order matters. The handle is made durable BEFORE anything else is done with
-/// it — a row is recoverable only once its handle is on disk, and the window
-/// between the peer's answer and that write stays `unknown`. A refusal there
-/// does not stop the job, which is why the follow below still runs.
-async fn follow_upstream_job(
-    executor: &Arc<TaskExecutor>,
-    state: &crate::gateway::task_service::host::LiveHost,
-    principal: &str,
-    id: &str,
-    revision: u64,
-    dispatched: (
-        crate::gateway::meta_mcp::upstream::DirectJob,
-        String,
-        crate::gateway::meta_mcp::invoke::relay::RelayKey<'_>,
-    ),
-    cancel_rx: &mut watch::Receiver<bool>,
-) {
-    let (job, handle, relay) = dispatched;
-    let captured = capture_handle(executor, (principal, id, revision), &job, &handle).await;
-    let followed = (&job, handle.clone(), relay, captured);
-    follow_handle(
-        executor,
-        state,
-        (principal, id, revision),
-        followed,
-        cancel_rx,
-    )
-    .await;
-    // A refused capture (the row cancelled meanwhile, or a failed write) left
-    // the handle held here as the only one. A cancel commits before it
-    // signals, so the follow may have ended any way at all without seeing it:
-    // offer the handle once, now. The claim is a no-op unless the row is
-    // cancelled and unclaimed (MIK-7642).
-    if !captured {
-        cancel_held_upstream(executor, principal, id, &job, handle).await;
-    }
-}
-
 /// Follow one handle within the worker's budget and settle what it says.
 async fn follow_handle(
     executor: &Arc<TaskExecutor>,
@@ -458,52 +417,6 @@ async fn follow_handle(
         settle_followed(executor, state, &followed, (outcome, writes), &notes).await;
     }
     lease.release(executor, id).await;
-}
-
-/// Make `handle` durable, before anything else is done with it. A refusal
-/// does not stop the job: it is followed either way, and once the follow ends
-/// the held handle is offered to the row's one cancel claim
-/// (`follow_upstream_job`; design r8 R8.4, the capture-side case).
-async fn capture_handle(
-    executor: &Arc<TaskExecutor>,
-    (principal, id, revision): (&str, &str, u64),
-    job: &crate::gateway::meta_mcp::upstream::DirectJob,
-    handle: &str,
-) -> bool {
-    executor
-        .notify_observer(super::CommitStage::BeforeCapture, id)
-        .await;
-    let capture = UpstreamCapture {
-        backend: job.server.clone(),
-        tool: job.tool.clone(),
-        arguments: job.arguments.clone(),
-        handle: handle.to_owned(),
-    };
-    executor
-        .capture_upstream(principal, id, revision, capture)
-        .await
-}
-
-/// Offer a handle this worker holds, for a row cancelled under it, to the
-/// row's one durable cancel claim; send it here if this worker wins. `false`
-/// when the row is not cancelled, another sender claimed, or nothing could be
-/// read.
-async fn cancel_held_upstream(
-    executor: &Arc<TaskExecutor>,
-    principal: &str,
-    id: &str,
-    job: &crate::gateway::meta_mcp::upstream::DirectJob,
-    handle: String,
-) -> bool {
-    let Ok(owner) = executor.service.owner(principal) else {
-        return false;
-    };
-    let Some(offer) = executor.offered_descriptor(owner.as_digest(), id, job, handle) else {
-        return false;
-    };
-    executor
-        .cancel_upstream_once(owner.as_digest(), id, Some(offer), CancelSend::Inline)
-        .await
 }
 
 /// What following one handle within the worker's budget produced.
@@ -846,41 +759,10 @@ pub(crate) enum CommitFailure {
     RevisionConflict,
 }
 
-/// Test seam for design r9 R9.2 (row T2c): spend this worker's coop budget
-/// inside the cancel arm, immediately before the rescue poll, and record that
-/// it was spent there. Inert unless a test names the task.
+#[path = "worker_held.rs"]
+mod held;
+use held::{cancel_held_upstream, follow_upstream_job};
+
 #[cfg(test)]
-pub(crate) mod rescue_seam {
-    use std::collections::HashSet;
-    use std::sync::LazyLock;
-
-    use parking_lot::Mutex;
-
-    static EXHAUST: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
-    static EXHAUSTED: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
-
-    /// Spend the coop budget of `task_id`'s worker before its rescue poll.
-    pub(crate) fn exhaust_before_rescue(task_id: &str) {
-        EXHAUST.lock().insert(task_id.to_owned());
-    }
-
-    /// Whether the budget was observed spent before the rescue poll.
-    pub(crate) fn was_exhausted(task_id: &str) -> bool {
-        EXHAUSTED.lock().contains(task_id)
-    }
-
-    pub(super) async fn before_rescue_poll(task_id: &str) {
-        if !EXHAUST.lock().contains(task_id) {
-            return;
-        }
-        // Until the runtime says the budget is gone: `consume_budget` is
-        // Pending exactly then.
-        loop {
-            let mut step = std::pin::pin!(tokio::task::consume_budget());
-            if futures::poll!(step.as_mut()).is_pending() {
-                break;
-            }
-        }
-        EXHAUSTED.lock().insert(task_id.to_owned());
-    }
-}
+#[path = "worker_rescue_seam.rs"]
+pub(crate) mod rescue_seam;

@@ -464,7 +464,7 @@ async fn a_cancel_retry_on_an_unclaimed_cancelled_row_still_claims() {
             &f.id,
             f.revision,
             crate::protocol::tasks::TaskTransition::Cancel,
-            chrono::Utc::now(),
+            crate::clock::utc_now().expect("the clock is past the epoch"),
         )
         .await
         .expect("the earlier cancel commits");

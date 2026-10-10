@@ -250,8 +250,8 @@ src/gateway/task_service/execution/worker.rs	upstream_descriptor_fits	1	critical
 src/gateway/task_service/execution/worker.rs	follow_handle	1	standard	borderline	follow_handle	Follows a held handle under the record's query lease; handle_still_live and the settlement path carry the checks
 src/gateway/task_service/execution/worker.rs	run_dispatched	1	standard	borderline	run_dispatched	Arms the upstream job only if the adapter claims the backend; builds the worker authorizer
 src/gateway/task_service/execution/worker.rs	stored_backend_output	1	critical	borderline	stored_backend_output	Decides whether a settled row holds backend output that a receipt may describe as the peer's.
-src/gateway/task_service/execution/worker.rs	capture_handle	1	standard	borderline	capture_handle	Builds the capture of a handle; capture_upstream and mark_upstream_blocking carry the checks
-src/gateway/task_service/execution/worker.rs	cancel_held_upstream	1	standard	borderline	cancel_held_upstream	Resolves the caller's own owner digest for the claim; claim_upstream_cancel_blocking carries the checks
+src/gateway/task_service/execution/worker_held.rs	capture_handle	1	standard	borderline	capture_handle	Builds the capture of a handle; capture_upstream and mark_upstream_blocking carry the checks
+src/gateway/task_service/execution/worker_held.rs	cancel_held_upstream	1	standard	borderline	cancel_held_upstream	Resolves the caller's own owner digest for the claim; claim_upstream_cancel_blocking carries the checks
 src/gateway/task_service/host.rs	admits_backend	1	standard	borderline	HostAuthorizer::admits_backend	Delegates the backend-admission decision
 src/gateway/task_service/host.rs	authorizer	1	standard	borderline	LiveHost::authorizer	Picks the transport authorizer; a wrong pick applies the wrong policy
 src/gateway/task_service/host.rs	decide	1	standard	borderline	HostAuthorizer::decide	Delegates the authz Decision to the HTTP or stdio authorizer

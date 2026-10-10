@@ -358,9 +358,11 @@ impl TaskStore {
         });
         candidate.version = candidate.version.max(UPSTREAM_VERSION);
         let budget = self.0.limits.record_bytes;
-        // And once cancelled (MIK-7642): see `targets::cancelled_bytes`.
+        // And once cancelled (MIK-7642): see `targets::cancelled_bytes`. The
+        // instant only sets the timestamp's width, widened there to nine
+        // fractional digits, so the row's own last update stands in for now.
         Ok(serialize(&candidate)?.len() <= budget
-            && targets::cancelled_bytes(&task, &candidate, chrono::Utc::now())? <= budget)
+            && targets::cancelled_bytes(&task, &candidate, task.last_updated_at())? <= budget)
     }
 
     /// Test-only: the durable recovery descriptor of `id`, whatever owner holds
