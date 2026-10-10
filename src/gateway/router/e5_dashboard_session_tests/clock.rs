@@ -93,3 +93,27 @@ async fn a_bootstrap_link_on_a_clock_before_1970_keeps_the_session() {
         later.set_cookie()
     );
 }
+
+/// A bootstrap link presented from another machine on that clock is refused
+/// and burned all the same (#1529): where the link was presented decides
+/// that, not the clock, and no session is issued. Mutant: the burn refused
+/// on an unreadable clock, leaving a leaked link redeemable.
+#[tokio::test]
+async fn a_leaked_bootstrap_link_on_a_clock_before_1970_is_burned() {
+    let (state, _dir) = fixture().await;
+    let value = state.dashboard_bootstrap.peek().expect("startup value");
+    let remote = Request::builder()
+        .method("GET")
+        .uri(format!("/dashboard?bootstrap={value}"))
+        .extension(ConnectInfo(SocketAddr::from(([203, 0, 113, 9], 52_347))))
+        .body(Body::empty())
+        .expect("request");
+    let out = before_epoch(&state, remote).await;
+    assert_eq!(out.status, StatusCode::UNAUTHORIZED, "{}", out.body);
+    assert!(out.set_cookie().is_empty(), "{}", out.set_cookie());
+    assert_eq!(
+        state.dashboard_bootstrap.peek(),
+        None,
+        "a link presented from elsewhere dies on first use"
+    );
+}

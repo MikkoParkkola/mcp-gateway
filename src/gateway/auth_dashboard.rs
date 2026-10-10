@@ -181,10 +181,13 @@ impl DashboardBootstrap {
     }
 
     /// Consume the value if it matches. Single use: a second attempt fails even
-    /// with the right value, so a link left in a shell history is spent.
+    /// with the right value, so a link left in a shell history is spent. A
+    /// burn, not a redemption: it issues nothing, so it spends the value
+    /// whatever the clock reads (#1529: a copy presented from elsewhere must
+    /// die on first use).
     #[must_use]
     pub fn consume(&self, candidate: &str) -> bool {
-        self.consume_capped(candidate).is_some()
+        self.take_matching(candidate).is_some()
     }
 
     /// Consume the value if it matches, returning the cap it was minted with.
@@ -199,11 +202,15 @@ impl DashboardBootstrap {
             );
             return None;
         }
+        self.take_matching(candidate)
+            .map(|(_, not_after)| Redemption { not_after, now })
+    }
+
+    /// Take the value and its cap if `candidate` matches it.
+    fn take_matching(&self, candidate: &str) -> Option<(String, Option<SystemTime>)> {
         let mut guard = self.value.lock().ok()?;
         match guard.as_ref() {
-            Some((expected, _)) if expected == candidate => guard
-                .take()
-                .map(|(_, not_after)| Redemption { not_after, now }),
+            Some((expected, _)) if expected == candidate => guard.take(),
             _ => None,
         }
     }

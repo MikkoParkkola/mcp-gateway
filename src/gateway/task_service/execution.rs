@@ -97,9 +97,13 @@ impl BeginOutcome {
                 -32002,
                 "a task with this idempotency key is already being created",
             ),
-            Self::Capacity | Self::Unavailable => {
-                JsonRpcResponse::error(Some(id), -32603, "task store unavailable")
+            // Refused at once, never queued: a pool whose workers all wait
+            // (for a backend, or for a host clock that reads before 1970)
+            // must not hang new submissions (MIK-8202).
+            Self::Capacity => {
+                JsonRpcResponse::error(Some(id), -32603, "every task worker is busy; retry later")
             }
+            Self::Unavailable => JsonRpcResponse::error(Some(id), -32603, "task store unavailable"),
             // The code the synchronous path gives a sealed call, so a client
             // sees one refusal for it on either path.
             Self::Sealed => {

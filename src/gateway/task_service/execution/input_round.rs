@@ -216,7 +216,7 @@ impl<'a> Settling<'a> {
         // The continuation the resume will redeem dies at its own deadline;
         // a round that could only fail is settled now, never parked.
         let store = &self.executor.service.store;
-        let Some((at, now)) = readable_now(store, cancel_rx).await else {
+        let Some((at, now)) = readable_now(store, self.id, cancel_rx).await else {
             return;
         };
         let continuation = self.state.meta_mcp().continuation();
@@ -522,7 +522,7 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     // An answer taken in time can still reach dispatch late; redeeming then
     // could only fail, so the round is closed as the sweep would close it.
     let deadline = round.continuation_deadline;
-    let (at, now) = readable_now(&executor.service.store, &mut cancel_rx).await?;
+    let (at, now) = readable_now(&executor.service.store, &id, &mut cancel_rx).await?;
     let reached = deadline.is_some_and(|d| now >= d);
     executor
         .proceed_unless_late(ids, deadline, reached, at)
@@ -539,7 +539,7 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     // Preparation inside the funnel can outlast the margin. A continuation
     // refused once its envelope has expired was refused for expiry: close the
     // round with that reason rather than fail the task.
-    let (at, now) = readable_now(&executor.service.store, &mut cancel_rx).await?;
+    let (at, now) = readable_now(&executor.service.store, &id, &mut cancel_rx).await?;
     let expired = deadline.is_some_and(|d| rejected_after_expiry(&response, d, now));
     executor
         .proceed_unless_late(ids, deadline, expired, at)
@@ -611,14 +611,25 @@ const CLOCK_RETRY: Duration = if cfg!(test) {
 // clock is unreadable; a clock-recovered signal would free it sooner.
 async fn readable_now(
     store: &crate::gateway::task_service::store::TaskStore,
+    id: &str,
     cancel_rx: &mut watch::Receiver<bool>,
 ) -> Option<(chrono::DateTime<chrono::Utc>, u64)> {
+    let mut warned = false;
     loop {
         if *cancel_rx.borrow() {
             return None;
         }
         if let Ok(at) = store.now() {
             return Some((at, u64::try_from(at.timestamp()).unwrap_or_default()));
+        }
+        // Once per round: the operator learns why a worker is held.
+        if !warned {
+            warned = true;
+            telemetry_metrics::counter!("mcp_task_clock_waits_total").increment(1);
+            tracing::warn!(
+                task_id = %id,
+                "the host clock reads before 1970: this input round waits for it, holding a task worker"
+            );
         }
         tokio::select! {
             biased;
