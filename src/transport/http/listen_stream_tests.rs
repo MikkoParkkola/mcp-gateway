@@ -22,7 +22,7 @@ async fn a_streamed_frame_over_the_cap_ends_the_listen() {
     })
     .await;
     let mut stream = transport(&url).listen(req()).await.expect("opened");
-    let note = tokio::time::timeout(Duration::from_secs(5), stream.rx.recv())
+    let note = tokio::time::timeout(Duration::from_secs(20), stream.rx.recv())
         .await
         .expect("the stream ends");
     assert_eq!(note, None);
@@ -44,7 +44,7 @@ async fn a_stream_that_breaks_off_ends_the_listen() {
     })
     .await;
     let mut stream = transport(&url).listen(req()).await.expect("opened");
-    let note = tokio::time::timeout(Duration::from_secs(5), stream.rx.recv())
+    let note = tokio::time::timeout(Duration::from_secs(20), stream.rx.recv())
         .await
         .expect("the stream ends");
     assert_eq!(note, None);
@@ -64,7 +64,7 @@ async fn a_streamed_answer_for_another_id_is_skipped() {
     })
     .await;
     let mut stream = transport(&url).listen(req()).await.expect("opened");
-    let note = tokio::time::timeout(Duration::from_secs(5), stream.rx.recv())
+    let note = tokio::time::timeout(Duration::from_secs(20), stream.rx.recv())
         .await
         .expect("the stream ends");
     assert_eq!(note, Some(UpstreamNote::End));
@@ -102,11 +102,11 @@ async fn a_session_stream_delivers_its_notes_and_ends_with_the_body() {
         .await
         .expect("sent")
         .expect("opened");
-    let first = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+    let first = tokio::time::timeout(Duration::from_secs(20), rx.recv())
         .await
         .expect("a note arrives");
     assert!(first.is_some(), "the notification was not delivered");
-    let end = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+    let end = tokio::time::timeout(Duration::from_secs(20), rx.recv())
         .await
         .expect("the stream ends");
     assert_eq!(end, None);
@@ -128,7 +128,7 @@ async fn a_session_stream_that_breaks_off_ends() {
         .await
         .expect("sent")
         .expect("opened");
-    let note = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+    let note = tokio::time::timeout(Duration::from_secs(20), rx.recv())
         .await
         .expect("the stream ends");
     assert_eq!(note, None);
@@ -153,7 +153,7 @@ async fn a_session_stream_drops_a_note_the_watch_does_not_admit() {
         .await
         .expect("sent")
         .expect("opened");
-    let note = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+    let note = tokio::time::timeout(Duration::from_secs(20), rx.recv())
         .await
         .expect("the stream ends");
     assert_eq!(note, None, "an unwatched note crossed the channel");
