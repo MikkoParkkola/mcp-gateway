@@ -457,7 +457,7 @@ impl Shared {
         // The round's keys stay on the model, which the bounded failure keeps:
         // a round that leaves it no room is refused while the task can still
         // settle (MIK-7651).
-        if super::targets::fallback_bytes(&task, &record, at)? > self.limits.record_bytes {
+        if super::targets::fallback_bytes(&task, &record)? > self.limits.record_bytes {
             return Err(StoreError::Capacity);
         }
         let bytes = self.fits_cap(&record)?;

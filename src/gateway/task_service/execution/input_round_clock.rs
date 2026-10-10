@@ -76,15 +76,15 @@ pub(super) async fn readable_now(
                     "the host clock reads before 1970: this input round waits for it, holding a task worker"
                 );
             }
-            Some(began)
-                if store
-                    .clock_wait_bound(id)
-                    .is_some_and(|ttl| began.elapsed() >= ttl) =>
-            {
-                tracing::warn!(task_id = %id, "the host clock stayed before 1970 for the task's ttl: the task fails");
-                return ClockWait::Expired;
-            }
-            Some(_) => {}
+            Some(began) => match store.clock_wait_bound(id) {
+                // The row left the store: nothing is left to wait for.
+                None => return ClockWait::Stopped,
+                Some(bound) if began.elapsed() >= bound => {
+                    tracing::warn!(task_id = %id, "the host clock stayed before 1970 for the task's ttl: the task fails");
+                    return ClockWait::Expired;
+                }
+                Some(_) => {}
+            },
         }
         tokio::select! {
             biased;
@@ -122,10 +122,12 @@ pub(super) async fn readable_or_fail(
 /// sample is taken before the open, so the continuation is unspent and
 /// undispatched and the same retry may go again once the clock reads. A real
 /// expiry is a readable sample and returns as the response it always was.
-/// `None` once the task is cancelled; executor shutdown drops the wait.
+/// `None` once the task is cancelled, or failed because the clock stayed
+/// unreadable for its bound; executor shutdown drops the wait.
 pub(super) async fn redeeming_dispatch(
     (state, owned, call, retry): (&LiveHost, &OwnedCallerContext, &TaskCall, &RetryFields),
-    (executor, id): (&TaskExecutor, &str),
+    executor: &TaskExecutor,
+    ids: (&str, &str, u64),
     cancel_rx: &mut watch::Receiver<bool>,
 ) -> Option<JsonRpcResponse> {
     let store = &executor.service.store;
@@ -135,19 +137,9 @@ pub(super) async fn redeeming_dispatch(
         if !owned.dispatch_log().worker().take_redemption_unreadable() {
             return Some(response);
         }
-        match readable_now(store, id, cancel_rx).await {
-            ClockWait::Read(..) => {}
-            ClockWait::Stopped => return None,
-            // Settled failed by the caller, as any refused dispatch is.
-            ClockWait::Expired => {
-                let error = clock_expired();
-                return Some(JsonRpcResponse::error(
-                    Some(crate::protocol::RequestId::Number(0)),
-                    error.code,
-                    error.message,
-                ));
-            }
-        }
+        // An expired wait fails the task here, once: a caller that read the
+        // clock again would start a second full wait (MIK-8202).
+        readable_or_fail(executor, ids, cancel_rx).await?;
     }
 }
 

@@ -427,13 +427,13 @@ pub(super) fn cancelled_bytes(
 /// and the input round: a write that grows a KEPT field must check this
 /// against the record budget. Today those are creation and a new input round;
 /// the loader checks every live row it reads.
-pub(super) fn fallback_bytes(
-    task: &Task,
-    record: &Record,
-    now: DateTime<Utc>,
-) -> Result<usize, StoreError> {
-    let at = now.max(task.last_updated_at());
-    let at = at.with_nanosecond(999_999_999).unwrap_or(at);
+///
+/// Measured at the widest timestamp chrono encodes (expanded year, nine
+/// fractional digits), the same at creation, at a new round and at load, so a
+/// row admitted near the cap always loads again. It is about width, not time,
+/// so it reads no clock (MIK-8202).
+pub(super) fn fallback_bytes(task: &Task, record: &Record) -> Result<usize, StoreError> {
+    let at = DateTime::<Utc>::MAX_UTC;
     let Some((_, mut fallback)) = settled(
         task,
         record,

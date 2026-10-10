@@ -157,10 +157,18 @@ pub(super) async fn mint_or_withhold(
 
 /// Hand the gated payload to the worker. The funnel's own answer stays the
 /// refusal, so a path that drops the channel is today's behaviour.
+///
+/// Only a payload that still asks for input after the gates is handed over:
+/// a gate that replaced the round (a context-integrity denial, say) has
+/// decided the question may not be asked, so nothing is minted for it and the
+/// funnel delivers the gated payload as it is (`false`).
 pub(super) fn hand_to_worker(
     (binding, backend_request_state): (Binding, Option<String>),
     gated: Value,
 ) -> bool {
+    if !crate::protocol::mrtr::InputRequired::claims_input_required(&gated) {
+        return false;
+    }
     let Some((log, _)) = armed() else {
         return false;
     };

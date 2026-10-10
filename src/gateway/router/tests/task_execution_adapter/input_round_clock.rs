@@ -32,7 +32,7 @@ fn before_epoch(state: &Arc<AppState>) {
 
 /// Yield, without letting paused time advance, until the store has refused
 /// more than `past` reads; the new count.
-async fn observe_wait(state: &Arc<AppState>, past: usize) -> usize {
+pub(super) async fn observe_wait(state: &Arc<AppState>, past: usize) -> usize {
     for _ in 0..TURNS {
         if store(state).refused_reads_for_test() > past {
             break;
@@ -172,7 +172,7 @@ async fn settle_yields() {
 
 /// A parked round answered in time whose first `script` redemption samples are
 /// given: the answer is acked, the resume worker is running.
-async fn answered_with(
+pub(super) async fn answered_with(
     key: &str,
     script: impl FnOnce(u64) -> Vec<RedemptionRead>,
 ) -> (

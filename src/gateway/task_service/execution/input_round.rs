@@ -136,7 +136,8 @@ impl<'a> Settling<'a> {
             round_mark = Some(crate::gateway::gateway_writes::mark());
             let Some(next) = redeeming_dispatch(
                 (self.state, self.owned, self.call, &retry),
-                (self.executor, self.id),
+                self.executor,
+                (self.principal, self.id, self.revision),
                 cancel_rx,
             )
             .await
@@ -596,7 +597,8 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     );
     let response = redeeming_dispatch(
         (&state, &owned, &call, &retry),
-        (&executor, &id),
+        &executor,
+        ids,
         &mut cancel_rx,
     )
     .await?;
