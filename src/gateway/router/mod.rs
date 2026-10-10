@@ -42,6 +42,7 @@ mod handlers;
 mod hardened_elicitation;
 mod hardened_identity;
 mod identity;
+pub(crate) mod inflight_calls;
 mod meta_refusal_audit;
 // Re-exported rather than widening `mod handlers` itself, so exactly one item
 // becomes crate-visible. The `MIK-7334.CATALOGUE.1` C10a/C10b cells drive the
@@ -85,6 +86,8 @@ mod direct_capability_tests;
 mod direct_continuation_gate_tests;
 #[cfg(test)]
 mod direct_continuation_tests;
+#[cfg(test)]
+mod direct_explicit_cancel_tests;
 #[cfg(test)]
 mod direct_guards_fixture;
 #[cfg(all(test, feature = "a2a", feature = "firewall"))]

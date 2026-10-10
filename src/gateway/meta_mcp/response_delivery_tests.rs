@@ -737,3 +737,6 @@ fn firewall_delivery_failed_append_preserves_output_and_consumes_one_shot_fault(
 mod minted;
 #[path = "response_delivery_scope_tests.rs"]
 mod scope_tests;
+
+#[path = "response_delivery_memo_tests.rs"]
+mod memo;

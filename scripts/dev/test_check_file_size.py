@@ -245,6 +245,41 @@ class RatchetThroughGit(unittest.TestCase):
         self.assertIn("806", out.getvalue())
 
 
+    def renamed(self, annotation: str) -> tuple[int, str]:
+        """`src/a.rs` (805 lines, baselined) renamed to `src/b.rs`, its new
+        row preceded by `annotation`, judged through main() against the base."""
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git = lambda *a: subprocess.run(["git", *a], cwd=root, check=True, capture_output=True)
+            git("init", "-q")
+            git("config", "user.email", "t@t")
+            git("config", "user.name", "t")
+            (root / "src").mkdir()
+            (root / "src/a.rs").write_text(body(805), encoding="utf-8")
+            (root / "scripts/dev").mkdir(parents=True)
+            baseline = root / "scripts/dev/file-size-baseline.txt"
+            baseline.write_text("805 src/a.rs\n", encoding="utf-8")
+            git("add", "-A")
+            git("commit", "-qm", "base")
+            (root / "src/a.rs").unlink()
+            (root / "src/b.rs").write_text(body(805), encoding="utf-8")
+            baseline.write_text(f"{annotation}805 src/b.rs\n", encoding="utf-8")
+            gate = load_gate(root)
+            gate.BASELINE = baseline
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+                status = gate.main(["--base", "HEAD"])
+        return status, out.getvalue()
+
+    def test_r8_an_annotated_rename_through_main_passes(self):  # MIK-8291
+        status, out = self.renamed("# moved-from src/a.rs\n")
+        self.assertEqual(status, 0, out)
+
+    def test_r9_an_unannotated_rename_through_main_fails(self):  # MIK-8291
+        status, out = self.renamed("")
+        self.assertEqual(status, 1, out)
+        self.assertIn("src/b.rs", out)
+
 class Modes(unittest.TestCase):
     def test_update_and_base_cannot_combine(self):
         # --update with --base would rewrite the baseline and skip the ratchet.
@@ -276,6 +311,104 @@ class Wiring(unittest.TestCase):
         # push, and the parent commit when a push has no previous tip.
         self.assertIn("github.event.pull_request.base.sha || github.event.before", step)
         self.assertIn("HEAD^", step)
+
+
+
+class MovedRows(unittest.TestCase):
+    """MIK-8291 (split-baselines): a new row is a move when `# moved-from`
+    names a donor row that shrank or left in the same change. The total
+    excess may not rise and a listed row may not grow."""
+
+    def ratchet(self, base, head, moved=None):
+        return load_gate(Path("/nonexistent")).check_ratchet(base, head, moved)
+
+    def test_m1_an_annotated_rename_passes(self):
+        self.assertEqual(self.ratchet({"src/a.rs": 1000}, {"src/b.rs": 1000}, {"src/b.rs": ["src/a.rs"]}), [])
+
+    def test_m1b_an_unannotated_rename_fails(self):
+        errors = self.ratchet({"src/a.rs": 1000}, {"src/b.rs": 1000})
+        self.assertTrue(any("src/b.rs" in e and "moved-from" in e for e in errors), errors)
+
+    def test_m2_an_annotated_split_leaving_one_part_over_the_ceiling_passes(self):
+        # 1000 -> 150 left in place (row leaves) + 850 moved to b.
+        self.assertEqual(self.ratchet({"src/a.rs": 1000}, {"src/b.rs": 850}, {"src/b.rs": ["src/a.rs"]}), [])
+
+    def test_m2b_a_three_way_split_may_name_one_donor_for_each_part(self):
+        moved = {p: ["src/a.rs"] for p in ("src/b.rs", "src/c.rs", "src/d.rs")}
+        head = {"src/b.rs": 850, "src/c.rs": 850, "src/d.rs": 850}
+        self.assertEqual(self.ratchet({"src/a.rs": 2550}, head, moved), [])
+
+    def test_m3_a_new_oversized_file_with_no_annotation_fails(self):
+        errors = self.ratchet({"src/a.rs": 1000}, {"src/a.rs": 1000, "src/c.rs": 850})
+        self.assertTrue(any("src/c.rs" in e for e in errors), errors)
+
+    def test_m3b_a_donor_that_did_not_shrink_fails(self):
+        errors = self.ratchet({"src/a.rs": 1000}, {"src/a.rs": 1000, "src/c.rs": 850}, {"src/c.rs": ["src/a.rs"]})
+        self.assertTrue(any("src/c.rs" in e and "src/a.rs" in e for e in errors), errors)
+
+    def test_m3c_a_donor_that_is_not_a_baseline_row_fails(self):
+        errors = self.ratchet({"src/a.rs": 1000}, {"src/a.rs": 900, "src/c.rs": 850}, {"src/c.rs": ["src/small.rs"]})
+        self.assertTrue(any("src/c.rs" in e and "src/small.rs" in e for e in errors), errors)
+
+    def test_m4_a_listed_row_that_grows_fails(self):
+        errors = self.ratchet({"src/a.rs": 1000}, {"src/a.rs": 1001})
+        self.assertTrue(any("src/a.rs" in e and "1001" in e for e in errors), errors)
+
+    def test_m5_a_new_row_bigger_than_what_moved_fails(self):
+        # The donor gave up 50 lines but the "moved" file is 900 lines over:
+        # excess 200 -> 150 + 100. Only the total rule stops it.
+        errors = self.ratchet({"src/a.rs": 1000}, {"src/a.rs": 950, "src/b.rs": 900}, {"src/b.rs": ["src/a.rs"]})
+        self.assertTrue(any("total" in e for e in errors), errors)
+
+    def test_m6_a_total_excess_that_rises_fails(self):
+        errors = self.ratchet({"src/a.rs": 801}, {"src/b.rs": 841}, {"src/b.rs": ["src/a.rs"]})
+        self.assertTrue(any("total" in e for e in errors), errors)
+
+    def test_m9_a_row_under_the_ceiling_cannot_cancel_a_rising_total(self):
+        # A hand-edited 5-line row would be -795 lines of "excess"; each row's
+        # excess counts from 0. (The 5-line row needs no annotation to sink
+        # the total, so the test pins the total, not the annotation.)
+        errors = self.ratchet(
+            {"src/a.rs": 801},
+            {"src/b.rs": 841, "src/z.rs": 5},
+            {"src/b.rs": ["src/a.rs"], "src/z.rs": ["src/a.rs"]},
+        )
+        self.assertTrue(any("total" in e for e in errors), errors)
+
+
+class MovedAnnotations(unittest.TestCase):
+    """The `# moved-from` lines: which row they name, and that --update keeps them."""
+
+    def test_annotations_attach_to_the_row_directly_below(self):
+        gate = load_gate(Path("/nonexistent"))
+        text = "# header\n# moved-from src/a.rs\n# moved-from src/x.rs\n850 src/b.rs\n900 src/c.rs\n"
+        self.assertEqual(gate.parse_moved(text), {"src/b.rs": ["src/a.rs", "src/x.rs"]})
+
+    def test_a_blank_line_or_other_comment_detaches_an_annotation(self):
+        gate = load_gate(Path("/nonexistent"))
+        self.assertEqual(gate.parse_moved("# moved-from src/a.rs\n\n850 src/b.rs\n"), {})
+        self.assertEqual(gate.parse_moved("# moved-from src/a.rs\n# note\n850 src/b.rs\n"), {})
+
+    def test_update_keeps_the_annotations_of_surviving_rows(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = load_gate(root)
+            gate.write_baseline({"src/b.rs": 850, "src/c.rs": 900}, {"src/b.rs": ["src/a.rs"], "src/gone.rs": ["src/a.rs"]})
+            text = gate.BASELINE.read_text(encoding="utf-8")
+        self.assertEqual(gate.parse_moved(text), {"src/b.rs": ["src/a.rs"]})
+        self.assertEqual(gate.parse_baseline(text), {"src/b.rs": 850, "src/c.rs": 900})
+
+
+    def test_update_through_main_keeps_the_annotations(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/b.rs").write_text(body(850), encoding="utf-8")
+            gate = load_gate(root)
+            gate.BASELINE.write_text("# moved-from src/a.rs\n850 src/b.rs\n", encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(gate.main(["--update"]), 0)
+            self.assertEqual(gate.load_moved(), {"src/b.rs": ["src/a.rs"]})
 
 if __name__ == "__main__":
     unittest.main()

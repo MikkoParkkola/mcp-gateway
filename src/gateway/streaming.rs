@@ -10,7 +10,12 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+// Session age is read on the runtime's clock, the one the reaper's ticker
+// runs on: identical in production (the real clock), and a paused test
+// clock moves both together (MIK-8288).
+use tokio::time::Instant;
 
 use parking_lot::RwLock;
 use serde::Serialize;
