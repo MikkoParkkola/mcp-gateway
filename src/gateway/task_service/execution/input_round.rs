@@ -400,6 +400,8 @@ impl TaskExecutor {
             principal.to_owned(),
         );
         self.round_outcome(|tx| async move {
+            #[cfg(test)]
+            super::resume_seams::at(super::resume_seams::ResumePoint::Spawned).await;
             let workers = Arc::clone(&executor.workers);
             // An answer stamped on a clock before 1970 is refused for now, as
             // the store refuses it, and the round stays open (MIK-8202).
@@ -558,6 +560,8 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
         round.request_state,
         Some(Value::Object(round.accepted_inputs)),
     );
+    #[cfg(test)]
+    super::resume_seams::at(super::resume_seams::ResumePoint::BeforeRedeem).await;
     let response = dispatch(&state, &owned, &call, &retry, &mut cancel_rx).await?;
     // Preparation inside the funnel can outlast the margin. A continuation
     // refused once its envelope has expired was refused for expiry: close the

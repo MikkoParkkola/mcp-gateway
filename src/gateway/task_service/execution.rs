@@ -9,6 +9,8 @@ mod observe;
 #[cfg(debug_assertions)]
 pub(crate) mod pause_hook;
 mod recovery;
+#[cfg(test)]
+pub(crate) mod resume_seams;
 mod settle_followed;
 mod settlement;
 mod upstream;

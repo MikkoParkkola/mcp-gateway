@@ -389,6 +389,26 @@ impl TaskStore {
             .and_then(|entry| entry.record.upstream.clone())
     }
 
+    /// MIK-8176: a committed row's status, whatever owner holds it, read
+    /// without a delivery (a `tasks/get` would hand off its holds).
+    #[cfg(test)]
+    pub(crate) fn status_for_test(&self, id: &str) -> Option<crate::protocol::tasks::TaskStatus> {
+        self.0
+            .state()
+            .entries
+            .get(id)
+            .map(|entry| entry.task.status())
+    }
+
+    /// MIK-8176 B11: the bytes `id`'s committed record takes as the store
+    /// writes it, so a row can pin a record cap between two sizes.
+    #[cfg(test)]
+    pub(crate) fn record_bytes_for_test(&self, id: &str) -> Option<usize> {
+        let state = self.0.state();
+        let entry = state.entries.get(id)?;
+        serialize(&entry.record).ok().map(|bytes| bytes.len())
+    }
+
     /// MIK-8204 S5: the committed rows, the ones `get` can return (not
     /// capacity occupancy, which also counts reserved and sealed files).
     #[cfg(test)]

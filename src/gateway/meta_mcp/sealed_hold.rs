@@ -205,6 +205,20 @@ fn reopens(hold: &SealedHold, token: Option<&str>) -> bool {
     })
 }
 
+/// Put a retained copy's holds into the open scope, so the reader's route
+/// treats them as its own mints: `carried` finds them in the answer it builds
+/// and its transport hands them off. Outside a scope this drops the reader's
+/// clones only; the retained copy's own clones keep the slot.
+fn adopt(holds: CarriedHolds) {
+    let _ = HOLDS.try_with(|scope| {
+        scope
+            .held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(holds.0);
+    });
+}
+
 /// Hand `holds` off to the transport: their slots now live until redeemed or
 /// expired. The one place a hold is disarmed.
 pub(crate) fn hand_off(holds: &CarriedHolds) {
@@ -444,3 +458,10 @@ mod tests {
         );
     }
 }
+
+mod held;
+pub(crate) use held::{Held, HoldSink};
+
+#[cfg(test)]
+#[path = "sealed_hold_guards.rs"]
+mod guards;
