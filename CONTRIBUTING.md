@@ -278,19 +278,21 @@ description, and the reviewer judges each one. The steps assume rustfmt-formatte
    colours. List every line in the ordinary added or removed colour, and the first line of every
    moved block. Expected: `use`, `mod` and `#[path]` lines, a new file's header and module docs,
    visibility a child module needs (`pub(super)`), and one block start per moved region. A block
-   that starts in the middle of a function means its statements were reordered.
+   that starts in the middle of a function needs a look: statements may have been reordered (an
+   edit or a re-indented line can also split a block).
 2. Every line added to a file that existed before the move, moved or not:
-   `git diff --no-color -M -U0 --diff-filter=MR <base> <head> -- <paths> | grep -E '^(\+\+\+ |\+.*[^[:space:]])'`
+   `git diff --no-color -M -U0 --diff-filter=MR <base> <head> -- <paths> | grep -E '^(--- |\+\+\+ |\+.*[^[:space:]])'`
    A move adds only wiring to existing files. Anything else is moved code landing inside an
    existing item (a `#[cfg]` module, an `impl`) or lines swapped between files, which step 1
    shows as moved. `--diff-filter=MR` keeps modified files and files renamed with changes, so
    `<paths>` must name both the old and the new path of a renamed file.
 3. Every changed line with a relative path or visibility:
-   `git diff --no-color -M -U0 <base> <head> -- <paths> | grep -E '^(\+\+\+ |[+-].*(\bsuper[[:space:]]*::|\bself[[:space:]]*::|pub[[:space:]]*\([[:space:]]*(super|in)\b))'`
+   `git diff --no-color -M -U0 <base> <head> -- <paths> | grep -E '^(--- |\+\+\+ |[+-].*(\bsuper[[:space:]]*::|\bself[[:space:]]*::|pub[[:space:]]*\([[:space:]]*(super|in)\b))'`
    Code moved to a different module depth with `super::x` unchanged now points elsewhere, and
    step 1 shows it as moved.
 
-The `+++ b/<file>` lines in steps 2 and 3 only name the file the lines below them belong to.
+The `--- a/<file>` and `+++ b/<file>` lines in steps 2 and 3 only name the file the lines below
+them come from and go to (`/dev/null` for a deleted or a new file).
 
 Not caught, and why:
 - A bare name that resolves to a different item after the move, or a change in what a macro
@@ -299,6 +301,9 @@ Not caught, and why:
 - A change to the leading whitespace inside a multi-line string literal that moved with an
   indentation change. Step 1 ignores indentation so that re-indented code reads as moved; check
   moved multi-line string literals by hand.
+- A file renamed without changes (shown as `R100`) shows no lines in steps 1 to 3. If the rename
+  changes its module depth, its `super::` and `self::` paths now point elsewhere; check them by
+  hand.
 
 ## Architecture Decisions
 
