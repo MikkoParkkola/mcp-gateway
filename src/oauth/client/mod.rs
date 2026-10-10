@@ -337,34 +337,33 @@ impl OAuthClient {
         // string is left and the two are indistinguishable.
         let mut issuer_source = IssuerSource::Origin;
 
-        // Try to discover protected resource metadata first
-        match ProtectedResourceMetadata::discover(self.client_for(&base_url)?, &base_url).await {
-            Ok(meta) => {
-                debug!(resource = %meta.resource, "Found protected resource metadata");
+        // Which protected-resource document describes this backend, held to
+        // the configured resource (MIK-8320, MIK-8324). A mismatch or a policy
+        // refusal is an answer, not a missing document: it ends discovery
+        // rather than falling back (MIK-7701).
+        if let Some(meta) = self.discover_resource_metadata().await? {
+            // Read before the macro so its count is graded (MIK-7725).
+            let resource = &meta.resource;
+            debug!(resource = %resource, "Found protected resource metadata");
 
-                // Get authorization server from metadata
-                if let Some(auth_server) = meta.authorization_server() {
-                    self.oauth_base_url = Some(auth_server.to_string());
-                    issuer_source = IssuerSource::Advertised;
-                } else {
-                    // Fallback to same base URL
-                    self.oauth_base_url = Some(base_url.clone());
-                }
-
-                // Use scopes from metadata if not specified
-                if self.scopes.is_empty() && !meta.scopes_supported.is_empty() {
-                    self.scopes.clone_from(&meta.scopes_supported);
-                }
-
-                self.resource_metadata = Some(meta);
-            }
-            // A policy refusal is an answer, not a missing document: falling
-            // back would walk past it (MIK-7701).
-            Err(e) if is_ssrf_refusal(&e) => return Err(e),
-            Err(e) => {
-                debug!(error = %e, "No protected resource metadata, using base URL");
+            // Get authorization server from metadata
+            if let Some(auth_server) = meta.authorization_server() {
+                self.oauth_base_url = Some(auth_server.to_string());
+                issuer_source = IssuerSource::Advertised;
+            } else {
+                // Fallback to same base URL
                 self.oauth_base_url = Some(base_url.clone());
             }
+
+            // Use scopes from metadata if not specified
+            if self.scopes.is_empty() && !meta.scopes_supported.is_empty() {
+                self.scopes.clone_from(&meta.scopes_supported);
+            }
+
+            self.resource_metadata = Some(meta);
+        } else {
+            debug!("No protected resource metadata, using base URL");
+            self.oauth_base_url = Some(base_url.clone());
         }
 
         // Discover authorization server metadata
@@ -396,7 +395,9 @@ impl OAuthClient {
         // process restarts or a connection is re-established.
         self.restore_persisted_client_id();
 
-        info!(backend = %self.backend_name, "OAuth client initialized");
+        // Read before the macro so its count is graded (MIK-7725).
+        let backend = &self.backend_name;
+        info!(backend = %backend, "OAuth client initialized");
         Ok(())
     }
 
@@ -595,6 +596,7 @@ fn generate_client_id() -> String {
 mod authorize_tests;
 mod browser;
 pub(crate) mod destination;
+mod discovery;
 #[cfg(test)]
 mod refresh_flight_tests;
 #[cfg(test)]
@@ -622,6 +624,10 @@ mod refresh_flight;
 pub(crate) use refresh_flight::{
     RefreshCaller, RefreshRequest, Refreshed, StoredCredential, refresh_stored,
 };
+#[cfg(test)]
+mod issuer_provenance_tests;
+#[cfg(test)]
+mod prm_discovery_tests;
 mod registration;
 mod renewal;
 #[cfg(test)]
