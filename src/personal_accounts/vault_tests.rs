@@ -739,3 +739,6 @@ mod revalidate;
 
 #[path = "vault_custody_order_tests.rs"]
 mod custody_order;
+
+#[path = "vault_propagation_tests.rs"]
+mod propagation;
