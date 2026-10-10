@@ -24,7 +24,7 @@
 //! unknown fields.
 
 use serde::Deserialize;
-use serde::de::{IgnoredAny, MapAccess, Visitor};
+use serde::de::{MapAccess, Visitor};
 use serde_json::Value;
 
 use super::{
@@ -68,7 +68,9 @@ impl<T> Slot<T> {
     {
         if self.value.is_some() || self.repeated {
             self.repeated = true;
-            map.next_value::<IgnoredAny>()?;
+            // Parsed, not skipped: the derive parses every value, so a
+            // malformed one is refused here too.
+            map.next_value::<Value>()?;
         } else {
             self.value = Some(map.next_value()?);
         }
@@ -88,7 +90,97 @@ struct Frame {
     method: Slot<Value>,
     params: Slot<Value>,
     result: Slot<Value>,
-    error: Slot<Value>,
+    error: Slot<ErrorMember>,
+}
+
+/// The `error` member as sent, and whether its own `code`, `message` or
+/// `data` key repeated: `JsonRpcError`'s derive refuses that, and a plain
+/// `Value` would keep the last one silently.
+struct ErrorMember {
+    value: Value,
+    repeated_field: bool,
+}
+
+impl<'de> Deserialize<'de> for ErrorMember {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ErrorVisitor;
+        impl<'de> Visitor<'de> for ErrorVisitor {
+            type Value = ErrorMember;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("any JSON value")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<ErrorMember, A::Error> {
+                let mut object = serde_json::Map::new();
+                let mut repeated_field = false;
+                while let Some(key) = map.next_key::<String>()? {
+                    let value = map.next_value::<Value>()?;
+                    let known = matches!(key.as_str(), "code" | "message" | "data");
+                    if known && object.contains_key(&key) {
+                        repeated_field = true;
+                    } else {
+                        object.insert(key, value);
+                    }
+                }
+                Ok(ErrorMember {
+                    value: Value::Object(object),
+                    repeated_field,
+                })
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                seq: A,
+            ) -> Result<ErrorMember, A::Error> {
+                let value = Value::deserialize(serde::de::value::SeqAccessDeserializer::new(seq))?;
+                Ok(ErrorMember {
+                    value,
+                    repeated_field: false,
+                })
+            }
+            fn visit_bool<E>(self, v: bool) -> Result<ErrorMember, E> {
+                Ok(ErrorMember {
+                    value: Value::Bool(v),
+                    repeated_field: false,
+                })
+            }
+            fn visit_i64<E>(self, v: i64) -> Result<ErrorMember, E> {
+                Ok(ErrorMember {
+                    value: v.into(),
+                    repeated_field: false,
+                })
+            }
+            fn visit_u64<E>(self, v: u64) -> Result<ErrorMember, E> {
+                Ok(ErrorMember {
+                    value: v.into(),
+                    repeated_field: false,
+                })
+            }
+            fn visit_f64<E>(self, v: f64) -> Result<ErrorMember, E> {
+                Ok(ErrorMember {
+                    value: v.into(),
+                    repeated_field: false,
+                })
+            }
+            fn visit_str<E>(self, v: &str) -> Result<ErrorMember, E> {
+                Ok(ErrorMember {
+                    value: Value::String(v.to_owned()),
+                    repeated_field: false,
+                })
+            }
+            fn visit_string<E>(self, v: String) -> Result<ErrorMember, E> {
+                Ok(ErrorMember {
+                    value: Value::String(v),
+                    repeated_field: false,
+                })
+            }
+            fn visit_unit<E>(self) -> Result<ErrorMember, E> {
+                Ok(ErrorMember {
+                    value: Value::Null,
+                    repeated_field: false,
+                })
+            }
+        }
+        deserializer.deserialize_any(ErrorVisitor)
+    }
 }
 
 impl<'de> Deserialize<'de> for Frame {
@@ -110,7 +202,7 @@ impl<'de> Deserialize<'de> for Frame {
                         Member::Result => frame.result.take(&mut map)?,
                         Member::Error => frame.error.take(&mut map)?,
                         Member::Other => {
-                            map.next_value::<IgnoredAny>()?;
+                            map.next_value::<Value>()?;
                         }
                     }
                 }
@@ -139,6 +231,14 @@ impl JsonRpcMessage {
     /// One line from a backend, as a request, a notification or a response,
     /// deserialized once.
     pub(crate) fn from_line(line: &str) -> serde_json::Result<Self> {
+        // Anything but an object (an array is a valid message to the derive)
+        // takes the derive's own path: rare, and exactly as before.
+        if !line
+            .trim_start_matches([' ', '\t', '\n', '\r'])
+            .starts_with('{')
+        {
+            return serde_json::from_str::<Self>(line);
+        }
         let frame: Frame = serde_json::from_str(line)?;
         let jsonrpc = frame
             .jsonrpc
@@ -177,8 +277,17 @@ impl JsonRpcMessage {
                 if frame.id.repeated || frame.result.repeated || frame.error.repeated {
                     return Err(refuse("a response member is repeated"));
                 }
+                let error = match frame.error.value {
+                    Some(ErrorMember {
+                        repeated_field: true,
+                        ..
+                    }) => {
+                        return Err(refuse("an `error` field is repeated"));
+                    }
+                    member => member.map(|m| m.value),
+                };
                 let id = optional::<RequestId>(frame.id.value)?;
-                let error = optional::<JsonRpcError>(frame.error.value)?;
+                let error = optional::<JsonRpcError>(error)?;
                 // A `null` beside an error is the peer spelling "no result".
                 let result = match (frame.result.value, &error) {
                     (Some(Value::Null), Some(_)) => None,

@@ -96,19 +96,29 @@ const CORPUS: &[&str] = &[
     r#"{"jsonrpc":"2.0","id":1,"error":{"code":1,"message":"a"},"error":{"code":2,"message":"b"}}"#,
     r#"{"jsonrpc":"2.0","id":1,"result":1,"x":1,"x":2}"#,
     r#"{"jsonrpc":"2.0","method":"n","x":1,"x":2}"#,
+    // review r1 (gpt): duplicated fields inside `error`, malformed skipped
+    // values, and messages sent as arrays
+    r#"{"jsonrpc":"2.0","id":1,"error":{"code":1,"code":2,"message":"x"}}"#,
+    r#"{"jsonrpc":"2.0","id":1,"error":{"code":1,"message":"a","message":"b"}}"#,
+    r#"{"jsonrpc":"2.0","id":1,"error":{"code":1,"message":"a","data":1,"data":2}}"#,
+    r#"{"jsonrpc":"2.0","id":1,"error":{"code":1,"message":"a","x":1,"x":2}}"#,
+    r#"{"jsonrpc":"2.0","method":"n","error":{"code":1,"code":2}}"#,
+    r#"{"jsonrpc":"2.0","id":1,"result":1,"x":1e400}"#,
+    r#"{"jsonrpc":"2.0","id":1,"result":1,"x":"\ud800"}"#,
+    r#"{"jsonrpc":"2.0","id":1,"result":1,"result":1e400}"#,
+    r#"["2.0",1,"m",{}]"#,
+    r#"["2.0","n",{}]"#,
+    r#"["2.0",1,{},null]"#,
+    r#" {"jsonrpc":"2.0","id":1,"result":1}"#,
     "",
     "null",
 ];
 
-fn shape(message: &JsonRpcMessage) -> (&'static str, serde_json::Value) {
-    let kind = if message.is_request() {
-        "request"
-    } else if message.is_response() {
-        "response"
-    } else {
-        "notification"
-    };
-    (kind, serde_json::to_value(message).expect("serializes"))
+/// Every parsed field, as `Debug` shows them: serializing a response would
+/// pass its result through the cache-scope clamp and could hide a
+/// difference.
+fn shape(message: &JsonRpcMessage) -> String {
+    format!("{message:?}")
 }
 
 #[test]
