@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The worker's settlement retry, dispatch marker, poll budget and create
-//! failure (MIK-8195 wave 3). Real store, real executor, one real working
+//! The worker's settlement retry, dispatch marker and poll budget (MIK-8195
+//! wave 3). Real store, real executor, one real working
 //! task. The conflict is forced by moving the row on before settling at the
 //! revision the caller read, so nothing races and nothing sleeps.
 
