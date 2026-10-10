@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Grade each Critical function's own line coverage (MIK-7324.COV.3).
 
-Reads the function inventory (docs/release/v4.0.0-critical-functions.tsv) and
+Reads the function inventory (docs/release/v4.0.0-critical-functions.tsv plus its
+docs/release/inventory.d/*.critical.tsv fragments, through inventory_ledger.py) and
 one or more lcov reports from `cargo llvm-cov report --lcov`. A function's
 lines are the `DA:` records from its `fn` line to the brace that closes its
 body; its coverage is the share of those with a non-zero count, over the union

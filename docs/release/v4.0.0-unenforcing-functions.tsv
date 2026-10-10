@@ -1,6 +1,6 @@
 # MIK-7324.COV.3: functions on the seven named paths reviewed as enforcing nothing.
 # scripts/release/check_inventory_rows.py fails a change that adds a function on those paths
-# with a row in neither this file nor docs/release/v4.0.0-critical-functions.tsv.
+# with a row in neither ledger; add yours to docs/release/inventory.d/<pr>.unenforcing.tsv (or .critical.tsv), not here.
 # A row here is a claim a reviewer checks: the function makes no decision the coverage doc counts. New rows go in docs/release/inventory.d/<pr>.unenforcing.tsv (MIK-8279).
 path	fn	occurrence	reason
 src/gateway/router/watch_poll.rs	catalogue	1	Reads the meta catalogue for the watch host; the admission decision is may_invoke

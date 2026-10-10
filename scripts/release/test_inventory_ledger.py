@@ -180,6 +180,48 @@ class ReadersAgree(unittest.TestCase):
         graded = {ledger.key(r) for r in loaded["critical_function_coverage"].read_inventory(repo.root / CRIT)}
         self.assertEqual(graded, {("src/a.rs", "existing", 1), ("src/c.rs", "c", 1)})
 
+        # A moved name: rows("HEAD") follows the new commit, not a cached one.
+        self.assertIn(("src/c.rs", "c", 1), cir.rows("HEAD", cir.INVENTORY))
+        repo.write("docs/release/inventory.d/9.critical.tsv", crit_row("src/n.rs", "n"))
+        repo.commit("one more")
+        self.assertIn(("src/n.rs", "n", 1), cir.rows("HEAD", cir.INVENTORY))
+
+        # A key stated twice fails through both scripts, not only the module.
+        repo.write("docs/release/inventory.d/10.critical.tsv", crit_row("src/c.rs", "c"))
+        repo.commit("duplicate")
+        with self.assertRaises(ledger.LedgerError):
+            cir.rows("HEAD", cir.INVENTORY)
+        with self.assertRaises(ledger.LedgerError):
+            loaded["critical_function_coverage"].read_inventory(repo.root / CRIT)
+
+
+class GitReadsFailLoud(unittest.TestCase):
+    """The git loader never turns a failure or an odd file name into "no rows"."""
+
+    def test_a_non_ascii_digit_name_fails_both_loaders(self) -> None:
+        repo = Repo()
+        self.addCleanup(repo.close)
+        repo.write("docs/release/inventory.d/١٢.critical.tsv", crit_row("src/z.rs", "z"))
+        repo.commit("odd name")
+        with self.assertRaises(ledger.LedgerError):
+            ledger.load_rev(repo.root, "HEAD", ledger.CRITICAL, CRIT)
+        with self.assertRaises(ledger.LedgerError):
+            ledger.load_files(ledger.CRITICAL, repo.root / CRIT)
+
+    def test_a_bad_revision_raises_instead_of_reading_empty(self) -> None:
+        repo = Repo()
+        self.addCleanup(repo.close)
+        with self.assertRaises(ledger.LedgerError):
+            ledger.load_rev(repo.root, "no-such-rev", ledger.CRITICAL, CRIT)
+
+    def test_a_base_absent_at_the_rev_keeps_its_fragments(self) -> None:
+        repo = Repo()
+        self.addCleanup(repo.close)
+        repo.git("rm", "-q", CRIT)
+        repo.write("docs/release/inventory.d/3.critical.tsv", crit_row("src/c.rs", "c"))
+        repo.commit("no base")
+        self.assertEqual(repo.keys(ledger.CRITICAL, CRIT), {("src/c.rs", "c", 1)})
+
 
 def problems(which: str, base: str, fragments: list) -> list[str]:
     try:

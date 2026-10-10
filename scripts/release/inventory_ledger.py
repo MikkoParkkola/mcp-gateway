@@ -42,7 +42,8 @@ COLUMNS = {
 }
 TIERS = ("critical", "standard")
 FRAGMENT_DIR = "inventory.d"
-NAME = re.compile(r"^\d+(?:-\d+)?\.(critical|unenforcing)\.tsv$")
+# ASCII digits only: `\d` would also accept other scripts' digits.
+NAME = re.compile(r"^[0-9]+(?:-[0-9]+)?\.(critical|unenforcing)\.tsv$")
 
 
 class LedgerError(Exception):
@@ -124,34 +125,46 @@ def merge(ledger: str, base: tuple[str, str], fragments: list[tuple[str, str]]) 
     return rows
 
 
+def listed_fragments(names: list[str]) -> list[str]:
+    """The one listing rule both loaders apply to a directory's entries:
+    every `*.tsv`, misnamed or not, so `merge` judges each name."""
+    return sorted(n for n in names if n.endswith(".tsv"))
+
+
 def load_files(ledger: str, base: Path) -> list[dict]:
     """The ledger as the filesystem has it: `base` plus the `*.tsv` files in
     `inventory.d/` beside it. A missing directory holds no fragments."""
     folder = base.parent / FRAGMENT_DIR
-    fragments = [(str(p), p.read_text()) for p in sorted(folder.glob("*.tsv"))] if folder.is_dir() else []
+    names = listed_fragments([str(p) for p in folder.iterdir() if p.is_file()]) if folder.is_dir() else []
+    fragments = [(name, Path(name).read_text()) for name in names]
     return merge(ledger, (str(base), base.read_text()), fragments)
 
 
 def load_rev(root: Path, rev: str, ledger: str, base: str) -> list[dict]:
     """The ledger as commit `rev` of the repository at `root` has it: `base`
     (a repository path) plus the `*.tsv` files in `inventory.d/` beside it.
-    A base missing at `rev` reads as empty; a missing directory holds no
-    fragments."""
+
+    A path absent at `rev` is empty: a missing base has no rows and a missing
+    directory no fragments. Any other git failure, including a failed read of
+    a listed fragment, raises LedgerError rather than reading as empty."""
     folder = str(Path(base).parent / FRAGMENT_DIR)
 
-    def show(path: str) -> str | None:
-        done = subprocess.run(["git", "show", f"{rev}:{path}"], cwd=root, capture_output=True, text=True)
-        return done.stdout if done.returncode == 0 else None
+    def git(*args: str) -> str:
+        done = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True)
+        if done.returncode != 0:
+            raise LedgerError([f"git {' '.join(args)} failed at {rev}: {done.stderr.strip()}"])
+        return done.stdout
 
-    listing = subprocess.run(
-        ["git", "ls-tree", "--name-only", f"{rev}:{folder}"], cwd=root, capture_output=True, text=True
-    )
-    names = listing.stdout.split() if listing.returncode == 0 else []
-    fragments = [(f"{folder}/{n}", show(f"{folder}/{n}") or "") for n in names if n.endswith(".tsv")]
-    text = show(base)
-    if text is None:
-        return merge(ledger, (base, chr(9).join(COLUMNS[ledger]) + "\n"), fragments)
-    return merge(ledger, (base, text), fragments)
+    def listed(pathspec: str) -> list[str]:
+        # From the commit root with a pathspec, so an absent path lists nothing
+        # (exit 0) while a bad revision still fails; -z keeps names unquoted.
+        return [n for n in git("ls-tree", "-z", "--name-only", rev, "--", pathspec).split("\0") if n]
+
+    names = listed_fragments(listed(folder + "/"))
+    fragments = [(name, git("show", f"{rev}:{name}")) for name in names]
+    if base not in listed(base):
+        return merge(ledger, (base, "\t".join(COLUMNS[ledger]) + "\n"), fragments)
+    return merge(ledger, (base, git("show", f"{rev}:{base}")), fragments)
 
 
 def overlap(critical: list[dict], unenforcing: list[dict]) -> list[str]:

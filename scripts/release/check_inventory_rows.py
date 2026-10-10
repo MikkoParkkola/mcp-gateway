@@ -160,15 +160,16 @@ LEDGER_OF = {INVENTORY: ledger.CRITICAL, UNENFORCING: ledger.UNENFORCING}
 
 
 @functools.cache
-def ledger_rows(rev: str, path: str) -> tuple[dict, ...]:
+def ledger_rows(root: Path, rev: str, path: str) -> tuple[dict, ...]:
     """The rows of the ledger at `path` as `rev` has it: the base TSV plus its
     fragments (inventory_ledger.py). Raises LedgerError on any bad row."""
-    return tuple(ledger.load_rev(ROOT, rev, LEDGER_OF[path], path))
+    return tuple(ledger.load_rev(root, rev, LEDGER_OF[path], path))
 
 
 def rows(rev: str, path: str) -> set[tuple[str, str, int]]:
-    """(file, fn, occurrence) of every row of one ledger, base and fragments."""
-    return {ledger.key(row) for row in ledger_rows(rev, path)}
+    """(file, fn, occurrence) of every row of one ledger, base and fragments.
+    `rev` is resolved first, so the cache never serves a moved name."""
+    return {ledger.key(row) for row in ledger_rows(ROOT, git("rev-parse", rev).strip(), path)}
 
 
 def occurrence(lines: list[str], name: str, line: int) -> int:
@@ -273,7 +274,7 @@ def main(argv: list[str]) -> int:
     head = argv[2] if len(argv) == 3 else "HEAD"
     try:
         resolved = git("rev-parse", head).strip()
-        broken = ledger.overlap(list(ledger_rows(resolved, INVENTORY)), list(ledger_rows(resolved, UNENFORCING)))
+        broken = ledger.overlap(list(ledger_rows(ROOT, resolved, INVENTORY)), list(ledger_rows(ROOT, resolved, UNENFORCING)))
         missing = missing_rows(argv[1], head)
     except ledger.LedgerError as error:
         broken = error.problems
