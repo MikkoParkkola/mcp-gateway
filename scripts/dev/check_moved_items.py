@@ -59,14 +59,18 @@ def split(toks: list[str]) -> list[list[str]]:
 def items(text: str, moved: bool) -> list[str]:
     toks = tp.tokens(text)
     if moved:
-        # Token-wise, so a string literal with a space stays one token; each
-        # `super :: super ::` is read once, left to right, as before.
+        # Token-wise, so a string literal with a space stays one token. A file
+        # moved one module down reaches each ancestor through one more
+        # `super ::`, so a maximal chain of k >= 2 reads back as k - 1.
         out: list[str] = []
         i = 0
         while i < len(toks):
-            if toks[i : i + 4] == ["super", "::", "super", "::"]:
-                out += ["super", "::"]
-                i += 4
+            k = 0
+            while toks[i + 2 * k : i + 2 * k + 2] == ["super", "::"]:
+                k += 1
+            if k >= 2:
+                out += ["super", "::"] * (k - 1)
+                i += 2 * k
             else:
                 out.append(toks[i])
                 i += 1

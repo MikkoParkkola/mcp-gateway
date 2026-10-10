@@ -88,31 +88,27 @@ def wrap_returns(s: str) -> str:
 
 
 def strip_comments(text: str) -> str:
-    out = []
-    for line in text.split("\n"):
-        in_str, prev, cut_at = False, "", len(line)
-        for i, c in enumerate(line):
-            if in_str:
-                if c == '"' and prev != "\\":
-                    in_str = False
-            elif c == '"':
-                in_str = True
-            elif c == "/" and prev == "/":
-                cut_at = i - 1
-                break
-            prev = "" if prev == "\\" and c == "\\" else c
-        out.append(line[:cut_at])
-    return "\n".join(out)
+    """Drop `//` and `/* */` comments, reading literals (raw strings included)
+    whole, so a `//` or a quote inside a literal neither cuts nor shifts it."""
+    return COMMENT_OR_LITERAL.sub(
+        lambda m: m.group(0) if not m.group(0).startswith("/") else "", text)
 
 
+# Raw strings with every delimiter Rust allows (0 to 255 `#`), longest first so
+# a literal is never cut at a shorter closing delimiter. Non-capturing, so
+# `findall` still returns whole tokens.
+RAW = "|".join(
+    f'b?r{"#" * n}"[\\s\\S]*?"{"#" * n}' for n in range(255, -1, -1))
+LITERAL = RAW + r'|"(?:\\.|[^"\\])*"' + r"|'(?:\\.|[^'\\])'"
 TOKEN = re.compile(
-    r'b?r##"[\s\S]*?"##|b?r#"[\s\S]*?"#|b?r"[^"]*"'  # raw strings, kept whole
-    r'|"(?:\\.|[^"\\])*"'  # string literals, kept whole
+    RAW  # raw strings, kept whole
+    + r'|"(?:\\.|[^"\\])*"'  # string literals, kept whole
     r"|'(?:\\.|[^'\\])'"  # char literals
     r"|'[A-Za-z_]\w*"  # lifetimes and labels
     r"|\d[\w.]*|\w+"  # numbers, identifiers
     r"|::|->|=>|==|!=|<=|>=|&&|\|\||\.\.=?|[^\w\s]"
 )
+COMMENT_OR_LITERAL = re.compile(LITERAL + r"|//[^\n]*|/\*[\s\S]*?\*/")
 VALUE_END = re.compile(r'^(\w+|"|\'|\)|\]|\?)')
 
 
