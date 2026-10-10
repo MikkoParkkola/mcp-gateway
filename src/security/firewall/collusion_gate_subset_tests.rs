@@ -332,7 +332,6 @@ fn a_two_gap_window_equal_to_a_one_gap_window_is_excused_and_no_other() {
 /// hers; alice's forward has a separator after the join too, but her own
 /// delivery ends at the join, so that window is unexcused. Red until fixed.
 #[test]
-#[ignore = "MIK-8290: a separator after a forward is unexcused at min_matches 1"]
 fn a_whole_join_forward_is_not_refused_for_a_trailing_separator() {
     let fw = Firewall::from_config(
         FirewallConfig {
@@ -370,7 +369,6 @@ fn a_whole_join_forward_is_not_refused_for_a_trailing_separator() {
 /// windows "separator + join head" and "join tail + separator" are carol's
 /// and not hers: two unexcused windows.
 #[test]
-#[ignore = "MIK-8290: separators on both sides of a forward reach the default min_matches"]
 fn a_whole_join_forward_with_separators_on_both_sides_is_not_refused() {
     let fw = observing();
     let reported: Vec<usize> = (0..TEXTS)
