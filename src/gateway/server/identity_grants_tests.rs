@@ -655,6 +655,7 @@ async fn a_first_start_with_an_unreadable_journal_keeps_a_baseline() {
 /// when it is on.
 #[tokio::test]
 async fn an_unreadable_grants_file_loads_no_grants_or_refuses_start() {
+    crate::test_log_capture::keep_interest_open();
     let _log = tracing::subscriber::set_default(
         tracing_subscriber::fmt()
             .with_max_level(tracing::Level::WARN)
