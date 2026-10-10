@@ -186,8 +186,6 @@ pub struct Gateway {
     test_seams: test_seams::TestSeams,
 }
 
-impl Gateway {}
-
 /// Which single minting strategy kind, if any, this config installs
 /// process-wide. Returns the minting kind present among backends
 /// (`SignedAssertion` or `TokenExchange`), or `None` when only `Passthrough`

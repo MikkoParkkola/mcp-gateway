@@ -104,7 +104,7 @@ pub(super) fn stdio_take_merged_client_meta(request: &mut serde_json::Value) -> 
 /// in one named place instead of forty lines per test.
 ///
 /// NOT the production path. `dispatch_tools_call` builds its own context
-/// inline (`mod.rs:2762`) and carries the negotiated `protocol_revision`,
+/// inline (via `build_stdio_caller_context`, `stdio_dispatch.rs`) and carries the negotiated `protocol_revision`,
 /// which this fixture hardcodes to `None`. An earlier doc comment here
 /// claimed the helper had been extracted from `dispatch_single_with_sink`;
 /// it never was, and no production arm calls it. Assert production stdio

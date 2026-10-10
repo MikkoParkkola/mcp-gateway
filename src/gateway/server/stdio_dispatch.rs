@@ -199,7 +199,7 @@ impl Gateway {
 
     /// Capture the signing envelope and the chain nonce ahead of parsing:
     /// both are taken out before anything else reads the request.
-    pub(super) fn prepare_signing(
+    fn prepare_signing(
         meta_mcp: &Arc<MetaMcp>,
         request: &mut serde_json::Value,
     ) -> std::result::Result<
@@ -234,7 +234,7 @@ impl Gateway {
     ///
     /// `Err(None)` means no response is due (a notification); `Err(Some(_))`
     /// carries an already-serialized error response.
-    pub(super) fn parse_and_observe<'r>(
+    fn parse_and_observe<'r>(
         request: &'r serde_json::Value,
         session_id: &str,
         protocol_telemetry_sink: Option<
@@ -391,7 +391,7 @@ impl Gateway {
     /// dispatched and accounted for, and splitting it would put the policy
     /// checks and the outcome they gate in different functions.
     #[expect(clippy::too_many_lines, reason = "one admission path, kept whole")]
-    pub(super) async fn dispatch_tools_call(
+    async fn dispatch_tools_call(
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
         request: &mut serde_json::Value,
