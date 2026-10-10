@@ -19,11 +19,20 @@ pub(crate) struct Sent {
     pub(crate) body: Value,
     /// How many `tools/call` sends reached the backend.
     pub(crate) backend_calls: usize,
+    /// The params each of those sends carried.
+    pub(crate) seen: Vec<Value>,
+}
+
+fn sent(fx: &super::direct_guards_fixture::Fx, body: Value) -> Sent {
+    Sent {
+        body,
+        backend_calls: fx.calls.load(Ordering::SeqCst),
+        seen: fx.seen.lock().expect("seen lock").clone(),
+    }
 }
 
 /// R1 `/mcp` `gateway_invoke alpha read`, with the production firewall on both
 /// layers writing audit rows to `audit`.
-#[cfg(feature = "firewall")]
 pub(crate) async fn invoke_firewalled(audit: &Path, args: Value) -> Sent {
     let fx = super::direct_guards_fixture::fixture_firewalled_audited(
         Answer::Ok,
@@ -31,14 +40,10 @@ pub(crate) async fn invoke_firewalled(audit: &Path, args: Value) -> Sent {
     )
     .await;
     let (_, body) = post_meta_invoke(&fx, "k-std", "alpha", "read", args, None, None).await;
-    Sent {
-        body,
-        backend_calls: fx.calls.load(Ordering::SeqCst),
-    }
+    sent(&fx, body)
 }
 
 /// R3 `/mcp/alpha` `tools/call read`, on the same firewalled fixture.
-#[cfg(feature = "firewall")]
 pub(crate) async fn direct_firewalled(audit: &Path, args: Value) -> Sent {
     let fx = super::direct_guards_fixture::fixture_firewalled_audited(
         Answer::Ok,
@@ -46,8 +51,19 @@ pub(crate) async fn direct_firewalled(audit: &Path, args: Value) -> Sent {
     )
     .await;
     let (_, body) = post_direct(&fx, "alpha", "k-std", "read", args, None, None).await;
-    Sent {
-        body,
-        backend_calls: fx.calls.load(Ordering::SeqCst),
-    }
+    sent(&fx, body)
+}
+
+/// R1 `/mcp` `gateway_invoke alpha read` with `security.sanitize_input` = `on`.
+pub(crate) async fn invoke_sanitizing(on: bool, args: Value) -> Sent {
+    let fx = super::direct_guards_fixture::fixture_sanitizing(Answer::Ok, on).await;
+    let (_, body) = post_meta_invoke(&fx, "k-std", "alpha", "read", args, None, None).await;
+    sent(&fx, body)
+}
+
+/// R3 `/mcp/alpha` `tools/call read` with `security.sanitize_input` = `on`.
+pub(crate) async fn direct_sanitizing(on: bool, args: Value) -> Sent {
+    let fx = super::direct_guards_fixture::fixture_sanitizing(Answer::Ok, on).await;
+    let (_, body) = post_direct(&fx, "alpha", "k-std", "read", args, None, None).await;
+    sent(&fx, body)
 }

@@ -61,11 +61,20 @@ async fn route_firewall_rows() {
         assert_eq!(backend_calls, 0, "{route:?}: reached its backend: {body}");
         match expect(MethodKind::ToolsCall, route, Stage::RouteFirewall) {
             Expect::Applies => assert!(blocked, "{route:?}: no blocking request row: {body}"),
-            Expect::ExpectedGap(ticket) => assert!(
-                requests.is_empty(),
-                "{route:?}: a request row appeared ({requests:?}); {ticket:?} may have \
-                 closed this gap, so flip the row to Applies"
-            ),
+            Expect::ExpectedGap(ticket) => {
+                assert!(
+                    requests.is_empty(),
+                    "{route:?}: a request row appeared ({requests:?}); {ticket:?} may have \
+                     closed this gap, so flip the row to Applies"
+                );
+                // The send was stopped, and by the dispatch-time rescan, not by
+                // anything else.
+                let dispatched = audit_rows(&audit, "dispatch");
+                assert!(
+                    dispatched.iter().any(|row| row["action"] == "block"),
+                    "{route:?}: stopped, but not by the dispatch rescan: {dispatched:?}; {body}"
+                );
+            }
             other => panic!("{route:?}: the table says {other:?}; this row drives it"),
         }
     }
@@ -89,4 +98,60 @@ async fn chokepoint_rescan_stdio_row() {
         "no blocking dispatch row: {dispatched:?}; {body}"
     );
     assert_eq!(backend_calls, 0, "reached its backend: {body}");
+}
+
+/// The sanitizer's refusal of a NUL byte (security/sanitize.rs).
+const NUL_REFUSED: &str = "Input contains null bytes which are not allowed";
+
+/// An argument holding a NUL byte, which sanitization refuses.
+fn with_nul() -> Value {
+    json!({ "cmd": "a\u{0}b" })
+}
+
+/// Whether a backend send carried the NUL argument unchanged.
+fn nul_reached(seen: &[Value]) -> bool {
+    seen.iter()
+        .any(|params| params["arguments"]["cmd"] == "a\u{0}b")
+}
+
+/// Sanitize. R1 Applies: with `sanitize_input` on the NUL never reaches the
+/// backend; off, it does (the control that shows the setting decides). R3 gap
+/// (MIK-8154): the direct route sanitizes even with the setting off. R5 gap
+/// (MIK-8149): stdio passes the NUL through.
+#[tokio::test]
+async fn sanitize_rows() {
+    let row = |route| expect(MethodKind::ToolsCall, route, Stage::Sanitize);
+
+    assert_eq!(row(Route::Invoke), Expect::Applies);
+    let on = router::invoke_sanitizing(true, with_nul()).await;
+    assert!(!nul_reached(&on.seen), "R1 on: the NUL reached the backend: {}", on.body);
+    assert!(
+        on.body.to_string().contains(NUL_REFUSED),
+        "R1 on: stopped, but not by the sanitizer: {}",
+        on.body
+    );
+    let off = router::invoke_sanitizing(false, with_nul()).await;
+    assert!(nul_reached(&off.seen), "R1 off: the control failed: {}", off.body);
+
+    assert_eq!(row(Route::Direct), Expect::ExpectedGap(super::Ticket::Mik8154));
+    let direct_off = router::direct_sanitizing(false, with_nul()).await;
+    assert!(
+        !nul_reached(&direct_off.seen),
+        "R3 off: the NUL reached the backend, so the direct route now honours the \
+         setting; MIK-8154 may have closed this gap, flip the row to Applies"
+    );
+    assert!(
+        direct_off.body.to_string().contains(NUL_REFUSED),
+        "R3 off: stopped, but not by the sanitizer: {}",
+        direct_off.body
+    );
+
+    assert_eq!(row(Route::Stdio), Expect::ExpectedGap(super::Ticket::Mik8149));
+    let stdio = stdio::stdio_plain(with_nul()).await;
+    assert!(
+        nul_reached(&stdio.seen),
+        "R5: the NUL no longer reaches the backend; MIK-8149 may have closed this \
+         gap, flip the row to Applies: {}",
+        stdio.body
+    );
 }

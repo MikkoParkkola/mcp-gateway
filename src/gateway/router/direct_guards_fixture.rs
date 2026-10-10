@@ -236,6 +236,14 @@ pub(crate) async fn fixture(answer: Answer, arm: impl FnOnce(&mut MetaMcp)) -> F
     .await
 }
 
+/// [`fixture`] with `security.sanitize_input` set to `on` (MIK-8137 b3).
+pub(crate) async fn fixture_sanitizing(answer: Answer, on: bool) -> Fx {
+    SANITIZE.with(|s| s.set(on));
+    let fx = fixture_inner(answer, false, |meta| meta).await;
+    SANITIZE.with(|s| s.set(false));
+    fx
+}
+
 /// [`fixture`], for arming that needs the owned builder methods
 /// (`with_profile_registry`, `with_cost_governance`).
 pub(crate) async fn fixture_built(answer: Answer, build: impl FnOnce(MetaMcp) -> MetaMcp) -> Fx {
@@ -389,6 +397,8 @@ thread_local! {
     static MODERN_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static KEY_SERVER: std::cell::RefCell<Option<Arc<crate::key_server::KeyServer>>> =
         const { std::cell::RefCell::new(None) };
+    /// `security.sanitize_input` for the state (the route x check matrix).
+    static SANITIZE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// A transport that replaces the scripted backend (the egress matrix).
     static TRANSPORT: std::cell::RefCell<Option<Arc<dyn Transport>>> =
         const { std::cell::RefCell::new(None) };
@@ -468,6 +478,7 @@ async fn fixture_inner(
     let (mut state, store) = fixture_state().await;
     let (calls, seen) = (Arc::new(AtomicUsize::new(0)), Arc::default());
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
+    state_mut.sanitize_input = SANITIZE.with(std::cell::Cell::get);
     for (name, passthrough) in [("alpha", false), ("alpha-pt", true)] {
         let backend = Arc::new(Backend::new(
             name,

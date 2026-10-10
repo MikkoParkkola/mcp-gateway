@@ -10,7 +10,7 @@ pub(crate) mod account_bindings;
 mod attestation_start_tests;
 #[cfg(test)]
 mod audit_start_tests;
-#[cfg(test)]
+#[cfg(all(test, feature = "firewall"))]
 pub(super) mod route_matrix_driver_tests;
 mod background;
 mod build_meta;

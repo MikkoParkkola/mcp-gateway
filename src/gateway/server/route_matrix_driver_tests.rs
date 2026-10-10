@@ -19,15 +19,20 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 /// A backend serving one tool, `read`, counting the `tools/call` sends.
 struct Counting {
     calls: Arc<AtomicUsize>,
+    seen: Arc<std::sync::Mutex<Vec<Value>>>,
 }
 
 #[async_trait::async_trait]
 impl crate::transport::Transport for Counting {
-    async fn request(&self, method: &str, _params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
         let body = if method == "tools/list" {
             json!({ "tools": [{ "name": "read", "inputSchema": { "type": "object" } }] })
         } else {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            self.seen
+                .lock()
+                .expect("seen lock")
+                .push(params.unwrap_or_default());
             json!({ "content": [{ "type": "text", "text": "ok" }], "isError": false })
         };
         Ok(JsonRpcResponse::success(RequestId::Number(1), body))
@@ -50,15 +55,15 @@ impl crate::transport::Transport for Counting {
 pub(crate) struct Sent {
     pub(crate) body: Value,
     pub(crate) backend_calls: usize,
+    /// The params each backend send carried.
+    pub(crate) seen: Vec<Value>,
 }
 
-/// R5: stdio `tools/call gateway_invoke alpha read`, with the production
-/// firewall (request and response scanning) on the stdio Meta-MCP, its only
-/// instance, writing audit rows to `audit`.
-#[cfg(feature = "firewall")]
-pub(crate) async fn stdio_firewalled(audit: &Path, args: Value) -> Sent {
-    use crate::security::firewall::{Firewall, FirewallConfig};
+/// R5: stdio `tools/call gateway_invoke alpha read` on a Meta-MCP holding
+/// `firewall` (its only instance), as the stdio server wires it.
+async fn stdio_call(firewall: Option<Arc<crate::security::firewall::Firewall>>, args: Value) -> Sent {
     let calls = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "alpha",
@@ -68,22 +73,12 @@ pub(crate) async fn stdio_firewalled(audit: &Path, args: Value) -> Sent {
     ));
     backend.set_transport_for_test(Arc::new(Counting {
         calls: Arc::clone(&calls),
+        seen: Arc::clone(&seen),
     }) as Arc<dyn crate::transport::Transport>);
     backend.get_tools_shared().await.expect("warm the tool cache");
     assert!(registry.register(backend));
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_requests: true,
-            scan_responses: true,
-            credential_redaction: true,
-            audit_log: Some(audit.to_path_buf()),
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
     let mut meta = MetaMcp::new(registry);
-    meta.set_firewall(Some(firewall));
+    meta.set_firewall(firewall);
     let meta = Arc::new(meta);
     let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
@@ -97,8 +92,33 @@ pub(crate) async fn stdio_firewalled(audit: &Path, args: Value) -> Sent {
     let body = super::Gateway::dispatch_single(&meta, &policy, &mtls, &request, "stdio-matrix")
         .await
         .expect("a request is answered");
+    let seen = seen.lock().expect("seen lock").clone();
     Sent {
         body,
         backend_calls: calls.load(Ordering::SeqCst),
+        seen,
     }
+}
+
+/// R5 with the production firewall (request and response scanning) writing
+/// audit rows to `audit`.
+pub(crate) async fn stdio_firewalled(audit: &Path, args: Value) -> Sent {
+    use crate::security::firewall::{Firewall, FirewallConfig};
+    let firewall = Arc::new(Firewall::from_config(
+        FirewallConfig {
+            enabled: true,
+            scan_requests: true,
+            scan_responses: true,
+            credential_redaction: true,
+            audit_log: Some(audit.to_path_buf()),
+            ..FirewallConfig::default()
+        },
+        None,
+    ));
+    stdio_call(Some(firewall), args).await
+}
+
+/// R5 with no firewall: what the stdio route itself does to the arguments.
+pub(crate) async fn stdio_plain(args: Value) -> Sent {
+    stdio_call(None, args).await
 }

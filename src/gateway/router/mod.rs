@@ -74,7 +74,7 @@ mod body_limit_tests;
 mod callback_admin_denial_tests;
 #[cfg(test)]
 mod chokepoint_tests;
-#[cfg(test)]
+#[cfg(all(test, feature = "firewall"))]
 pub(super) mod route_matrix_driver_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod collusion_direct_tests;
