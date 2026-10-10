@@ -7,7 +7,6 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::gateway::subscription_registry::SubscriptionRegistry;
 use crate::idempotency::admission::ExecutionAdmission;
@@ -82,11 +81,9 @@ pub async fn open_runtime(
     limits: StoreLimits,
     subscriptions: Arc<SubscriptionRegistry>,
 ) -> Result<(Arc<TaskService>, Arc<TaskExecutor>), ServiceError> {
-    let admission = ExecutionAdmission::new(Arc::new(|| {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_secs())
-    }));
+    // The fallible wall clock: a clock before 1970 never expires or reclaims
+    // an admitted key (MIK-8202).
+    let admission = ExecutionAdmission::new_fallible(Arc::new(crate::clock::unix_secs));
     open_runtime_with_admission(store_dir, max_workers, limits, subscriptions, admission).await
 }
 

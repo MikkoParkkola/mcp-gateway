@@ -9,7 +9,7 @@ use super::*;
 use crate::gateway::task_service::{TaskStatus, open_runtime_with_recovery};
 
 /// MIK-8202 RECORDER rule, P2 row 12. Mutant: settle at 1969 (raw
-/// `Utc::now()` ignoring the store clock).
+/// a raw chrono read ignoring the store clock).
 #[tokio::test]
 async fn t11_recovery_on_an_unreadable_store_clock_leaves_the_row_for_the_next_pass() {
     // GIVEN: an interrupted, never-dispatched row from a previous process

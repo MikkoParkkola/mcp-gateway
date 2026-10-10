@@ -168,7 +168,14 @@ async fn append_delivery_attempt(
     fields.insert("response_stage".into(), stage.into());
     fields.insert("response_hash_encoding".into(), "sorted-json-v1".into());
     fields.insert("response_hash".into(), hash.into());
-    fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
+    // A security event is written even when it cannot be dated: an explicit
+    // `null` and the reason, never a fake date (MIK-8202).
+    if let Ok(now) = crate::clock::utc_now() {
+        fields.insert("timestamp".into(), now.to_rfc3339().into());
+    } else {
+        fields.insert("timestamp".into(), serde_json::Value::Null);
+        fields.insert("clock".into(), "before_epoch".into());
+    }
     // A fingerprint: the id is its anonymous holder's credential (F9).
     let session_id = crate::gateway::session_id::session_fp(correlation.session_id);
     fields.insert("session_id".into(), session_id.into());

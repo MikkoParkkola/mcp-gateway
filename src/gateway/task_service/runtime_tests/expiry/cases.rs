@@ -515,7 +515,7 @@ async fn a_clock_before_the_epoch_expires_nothing() {
 /// T14 (guard, MIK-8202 P2 row 15): the sweep closes an expired input round
 /// stamped at the sweep's own checked `now`, which is the store clock. The
 /// store clock is frozen two hours ahead; the announced last-change time is
-/// exactly that. True since P1; pins it against a raw `Utc::now()`.
+/// exactly that. True since P1; pins it against a raw chrono read.
 #[tokio::test]
 async fn t14_the_sweep_stamps_an_expired_round_close_at_the_stores_time() {
     let root = tempfile::tempdir().unwrap();
@@ -548,7 +548,8 @@ async fn t14_the_sweep_stamps_an_expired_round_close_at_the_stores_time() {
         Settle::InputRequired,
     )
     .await;
-    let frozen = Utc::now() + crate::duration_bound::delta!(hours, 2);
+    let frozen =
+        crate::clock::utc_now().expect("host clock") + crate::duration_bound::delta!(hours, 2);
     service.store.set_clock_for_test(Some(frozen));
     let guard = executor.start_expiry(TICK).expect("the sweep starts");
     let closed_at = timeout(BUDGET, async {

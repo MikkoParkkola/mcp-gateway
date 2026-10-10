@@ -173,7 +173,7 @@ async fn audit_startup(
             let shown_path = path.display();
             warn!(%reason, path = %shown_path, "identity grants unreadable at startup; serving none until a reload reads them");
             auditor.seed_empty_baseline()?;
-            auditor.snapshot(&[], chrono::Utc::now())?;
+            auditor.snapshot(&[], snapshot_time()?)?;
             drop(read.guard);
             return Err(StartupFailure::Unreadable(reason));
         }
@@ -182,9 +182,18 @@ async fn audit_startup(
     if let Recorded::Unrecorded(reason) = auditor.record(prepared) {
         return Err(reason.into());
     }
-    auditor.snapshot(&rows, chrono::Utc::now())?;
+    auditor.snapshot(&rows, snapshot_time()?)?;
     drop(read.guard);
     Ok(rows)
+}
+
+/// When the startup snapshot is taken. A clock before 1970 cannot date it, so
+/// the snapshot is not recorded and the start serves no grants (`Unrecorded`):
+/// no grant becomes usable without its audit snapshot (MIK-8202).
+fn snapshot_time() -> std::result::Result<chrono::DateTime<chrono::Utc>, StartupFailure> {
+    crate::clock::utc_now().map_err(|error| {
+        StartupFailure::Unrecorded(format!("the host clock cannot date the snapshot: {error}"))
+    })
 }
 
 /// The stdio half: stdio opens no governance store for anything else, so it

@@ -471,6 +471,7 @@ impl TaskExecutor {
                 crate::gateway::gateway_writes::WriteRecord::default(),
             ),
             ErrorAuthor::Gateway,
+            None,
         )
         .await
         .expect("the cancel commits");
@@ -664,12 +665,20 @@ impl TaskExecutor {
                 author,
                 writes,
             } => {
+                // Recovery is a recorder: it dates the row at the store's
+                // clock, and with none readable leaves the row for the next
+                // start (MIK-8202).
+                let Ok(now) = self.service.store.now() else {
+                    tracing::error!(task_id = %id, "host clock reads before 1970: task not settled");
+                    return Err(CommitFailure::Service(ServiceError::Unavailable));
+                };
                 self.transition_digest_write(
                     owner_digest,
                     id,
                     revision,
                     (event, None, writes),
                     author,
+                    Some(now),
                 )
                 .await?
             }
@@ -719,7 +728,7 @@ impl TaskExecutor {
             .service
             .owner(principal)
             .map_err(CommitFailure::Service)?;
-        self.transition_digest_write(owner.as_digest(), id, revision, outcome, author)
+        self.transition_digest_write(owner.as_digest(), id, revision, outcome, author, None)
             .await
     }
 

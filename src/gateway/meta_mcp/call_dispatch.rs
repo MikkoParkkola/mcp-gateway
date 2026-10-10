@@ -305,11 +305,7 @@ impl MetaMcp {
     ) -> JsonRpcResponse {
         use crate::gateway::task_service::execution::BeginOutcome;
 
-        let task = crate::gateway::task_service::Task::create_at(
-            tool_name,
-            chrono::Utc::now(),
-            intent.options,
-        );
+        let task = crate::gateway::task_service::Task::create_undated(tool_name, intent.options);
         let backend = task_backend_name(self, tool_name, &arguments);
         let executor = Arc::clone(&intent.executor);
         // #2450: a repeat is answered from the stored task, so the policy a

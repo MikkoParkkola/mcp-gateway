@@ -68,7 +68,7 @@ fn a_store_row_cannot_mask_an_enforced_grant_in_the_view() {
     let mut snapshot = ControlPlaneSnapshot::default();
     snapshot.grants.push(control_plane_grant_from_identity(
         enforced_grant(),
-        chrono::Utc::now(),
+        Ok(chrono::Utc::now()),
     ));
 
     assert!(!merge_store_into_snapshot(&store, &mut snapshot));

@@ -395,10 +395,17 @@ impl super::MetaMcp {
             return;
         }
         let nonce = chain_nonce.or(invoke_nonce);
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        // A link that must be emitted and cannot be dated is a refused
+        // delivery: never a link at 0, never an unlinked success, and a
+        // verified prefix is never relabelled (MIK-8202).
+        let Ok(ts) = crate::clock::unix_secs() else {
+            *response = crate::protocol::JsonRpcResponse::delivery_refusal_error(
+                response.id.take(),
+                -32001,
+                "Result cannot carry a signature chain link: the host clock reads before 1970",
+            );
+            return;
+        };
         // No upstream outcome: an origin link. Otherwise preserve the verified
         // upstream links and append, or declare the upstream unverified.
         let hop = match upstream.as_deref() {

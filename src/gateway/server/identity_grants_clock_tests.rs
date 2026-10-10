@@ -44,17 +44,27 @@ async fn t9_an_undatable_startup_snapshot_serves_no_grants_and_records_none() {
     assert!(snapshot.is_empty(), "no snapshot record: {snapshot:?}");
 }
 
-/// T9 source check: both snapshot sites take a fallible `crate::clock`
-/// sample, and no raw `Utc::now()` remains in the startup audit.
+/// T9 source check: both snapshot sites take a fallible `crate::clock` sample
+/// (directly or through the one helper that reads it), and no raw chrono read
+/// remains in the startup audit.
 #[test]
 fn t9_both_snapshot_sites_read_the_fallible_clock() {
     let source = include_str!("identity_grants.rs");
-    assert!(!source.contains("Utc::now()"), "a raw chrono read remains");
-    let sites = source.matches("auditor.snapshot(").count();
-    let sampled = source.matches("crate::clock::utc_now").count();
-    assert_eq!(sites, 2, "the two snapshot sites");
+    let raw = ["Utc", "::now()"].concat();
+    assert!(!source.contains(&raw), "a raw chrono read remains");
     assert!(
-        sampled >= sites,
-        "each site samples crate::clock: {sampled}"
+        source.contains("crate::clock::utc_now"),
+        "no fallible sample"
     );
+    let sites: Vec<&str> = source
+        .lines()
+        .filter(|line| line.contains("auditor.snapshot("))
+        .collect();
+    assert_eq!(sites.len(), 2, "the two snapshot sites: {sites:?}");
+    for site in sites {
+        assert!(
+            site.contains("snapshot_time()") || site.contains("crate::clock::utc_now"),
+            "a snapshot site does not sample the clock: {site}"
+        );
+    }
 }

@@ -6,7 +6,7 @@
 //! resubmits, or consults a backend: each interrupted row is settled by what its
 //! own record can still prove, through the same commit seam a worker settles on.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use super::settlement::interrupted_result;
@@ -90,11 +90,15 @@ impl TaskExecutor {
             crate::gateway::gateway_writes::WriteRecord,
         ),
         author: ErrorAuthor,
+        at: Option<DateTime<Utc>>,
     ) -> Result<(CommittedTask, bool, String), CommitFailure> {
+        // Startup recovery dates its settle at the store's clock (`Some`); a
+        // request-side settle (`None`) keeps the wall clock it always read.
+        let now = at.unwrap_or_else(Utc::now);
         match self
             .service
             .store
-            .settle_bounded_by(owner_digest, id, revision, settlement, author, Utc::now())
+            .settle_bounded_by(owner_digest, id, revision, settlement, author, now)
             .await
         {
             Ok(committed) => {

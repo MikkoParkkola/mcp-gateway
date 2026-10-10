@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::{
     Router,
@@ -75,11 +74,10 @@ impl EndpointStats {
 
     fn record_received(&self) {
         self.received.fetch_add(1, Ordering::Relaxed);
-        let ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        self.last_received_at.store(ts, Ordering::Relaxed);
+        // A statistic: on a clock before 1970 the previous time is kept, never 0.
+        if let Ok(ts) = crate::clock::unix_secs() {
+            self.last_received_at.store(ts, Ordering::Relaxed);
+        }
     }
 }
 

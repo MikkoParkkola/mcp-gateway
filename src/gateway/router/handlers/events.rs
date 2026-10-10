@@ -82,8 +82,13 @@ impl Presented {
                     .idle_timeout_secs;
                 let ends = i64::try_from(idle)
                     .ok()
-                    .and_then(chrono::TimeDelta::try_seconds)
-                    .and_then(|idle| chrono::Utc::now().checked_add_signed(idle));
+                    .and_then(chrono::TimeDelta::try_seconds);
+                // A lease end cannot be computed on a clock before 1970: the
+                // subscribe is refused and no row is stored (MIK-8202).
+                let now = crate::clock::utc_now().map_err(|error| {
+                    format!("cannot date the dashboard-session subscription: {error}")
+                })?;
+                let ends = ends.and_then(|idle| now.checked_add_signed(idle));
                 Some(ends.ok_or_else(|| {
                     crate::duration_bound::too_long(&format!(
                         "auth.dashboard_session.idle_timeout_secs ({idle})"

@@ -240,6 +240,20 @@ impl TaskService {
                 let Some(slot) = reserve() else {
                     return CreateOutcome::Capacity;
                 };
+                // A NEW row is dated here, and only here: a replay (below)
+                // answers from the stored row and needs no clock. A clock
+                // before 1970 refuses the create before anything is written;
+                // the dropped lease releases the key (MIK-8202).
+                let dated;
+                let task = if task.is_undated() {
+                    let Ok(now) = self.store.now() else {
+                        return CreateOutcome::Unavailable;
+                    };
+                    dated = task.clone().dated_at(now);
+                    &dated
+                } else {
+                    task
+                };
                 let binding = lease.binding().clone();
                 let prepared = PreparedTask::admitted_with_targets(
                     task,

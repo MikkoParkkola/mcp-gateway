@@ -98,7 +98,7 @@ pub(super) fn local_runtime_snapshot(
     // "grants" governance view reflects actual local grants instead of an empty
     // table (MIK-6558). Status is derived from revocation/expiry; local grants
     // have no "requested" state, so an active grant reads as Approved.
-    let now = chrono::Utc::now();
+    let now = crate::clock::utc_now();
     for grant in state.meta_mcp.identity_grant_rows() {
         snapshot
             .grants
@@ -144,14 +144,24 @@ pub(super) fn merge_store_into_snapshot(
 
 /// Project a local [`IdentityGrant`] into a read-only [`ControlPlaneGrant`].
 ///
-/// Local grants have no "requested" state: a grant that is neither revoked nor
-/// past its expiry reads as `Approved`; otherwise `Revoked`.
+/// Local grants have no "requested" state. A revoked grant reads `Revoked`
+/// whatever the time; one with no expiry reads `Approved`; one with an expiry
+/// is judged against `now`. On a clock before 1970 (`now` is `Err`) that last
+/// judgment cannot be made, so it reads `Undetermined`: neither guessed
+/// active nor expired (MIK-8202).
 pub(super) fn control_plane_grant_from_identity(
     grant: crate::identity_grants::IdentityGrant,
-    now: chrono::DateTime<chrono::Utc>,
+    now: Result<chrono::DateTime<chrono::Utc>, crate::clock::ClockBeforeEpoch>,
 ) -> ControlPlaneGrant {
-    let revoked =
-        grant.revoked_at.is_some() || grant.expires_at.is_some_and(|expiry| expiry <= now);
+    let status = if grant.revoked_at.is_some() {
+        ControlPlaneGrantStatus::Revoked
+    } else {
+        match (grant.expires_at, now) {
+            (Some(_), Err(_)) => ControlPlaneGrantStatus::Undetermined,
+            (Some(expiry), Ok(now)) if expiry <= now => ControlPlaneGrantStatus::Revoked,
+            (None, _) | (Some(_), Ok(_)) => ControlPlaneGrantStatus::Approved,
+        }
+    };
     ControlPlaneGrant {
         grant_id: grant.grant_id,
         subject_id: grant
@@ -161,11 +171,7 @@ pub(super) fn control_plane_grant_from_identity(
             .unwrap_or_else(|| format!("{}:{}", grant.subject.authority, grant.subject.subject)),
         server_id: format!("capability:{}", grant.capability),
         tool_id: grant.tool,
-        status: if revoked {
-            ControlPlaneGrantStatus::Revoked
-        } else {
-            ControlPlaneGrantStatus::Approved
-        },
+        status,
     }
 }
 

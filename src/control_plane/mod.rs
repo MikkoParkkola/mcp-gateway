@@ -309,6 +309,9 @@ pub enum ControlPlaneGrantStatus {
     Approved,
     /// Revoked.
     Revoked,
+    /// Whether the grant is still in force depends on the time, and the host
+    /// clock reads before 1970, so it is neither guessed active nor expired.
+    Undetermined,
 }
 
 /// Policy row.

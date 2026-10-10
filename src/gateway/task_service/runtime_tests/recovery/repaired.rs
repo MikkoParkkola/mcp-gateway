@@ -205,15 +205,16 @@ fn repair(originals: &[(std::path::PathBuf, Vec<u8>)]) {
 }
 
 /// T14b (MIK-8202 RECORDER rule, P2 row 15): a repaired live row is settled
-/// at the store clock's checked time, never a raw `Utc::now()`. The store
+/// at the store clock's checked time, never a raw chrono read. The store
 /// clock is frozen two hours ahead; the row's last-change time is exactly
-/// that. Mutant: raw `Utc::now()` restored.
+/// that. Mutant: the raw read restored.
 #[tokio::test]
 async fn t14b_a_repaired_live_row_is_settled_at_the_frozen_store_time() {
     let root = tempfile::tempdir().unwrap();
     let dir = root.path().join("tasks");
     let (seeded, originals, restored, executor, heard) = sealed_runtime(&dir).await;
-    let frozen = chrono::Utc::now() + crate::duration_bound::delta!(hours, 2);
+    let frozen =
+        crate::clock::utc_now().expect("host clock") + crate::duration_bound::delta!(hours, 2);
     restored.store.set_clock_for_test(Some(frozen));
     let sweep = executor
         .start_expiry(Duration::from_millis(50))
@@ -244,7 +245,7 @@ async fn t14b_a_repaired_live_row_is_settled_at_the_frozen_store_time() {
     assert_eq!(at, Some(frozen), "settled at the store's time");
 }
 
-/// T14b (unreadable store clock): the repaired live row is not settled; it
+/// T14b (unreadable store clock): the repaired live rows are not settled; they
 /// stays sealed until a pass can date it, then is served. Mutant: settle at
 /// a raw 1969-or-now read anyway.
 #[tokio::test]
@@ -274,6 +275,9 @@ async fn t14b_a_repaired_live_row_stays_sealed_while_the_store_clock_is_unreadab
     let after = restored.skipped_records().sealed;
     sweep.shutdown().await.expect("sweep stops");
     restored.shutdown().await.expect("custody released");
-    assert_eq!(still_sealed, 3, "nothing was settled on an undatable clock");
+    assert_eq!(
+        still_sealed, 2,
+        "the two live rows are not settled on an undatable clock"
+    );
     assert_eq!(after, 0, "the next readable pass serves them");
 }

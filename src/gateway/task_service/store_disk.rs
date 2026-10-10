@@ -370,7 +370,7 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
             // A live row written before this check, or under a larger cap,
             // may have no room for the bounded failure it could settle as;
             // refused like a row over the cap (MIK-7651).
-            let needed = super::targets::fallback_bytes(&task, &record, chrono::Utc::now())?;
+            let needed = super::targets::fallback_bytes(&task, &record, WIDEST_INSTANT)?;
             if needed > limits.record_bytes {
                 tracing::warn!(
                     path = %shown_path,
@@ -390,6 +390,11 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
     }
     Ok(loaded)
 }
+
+/// The settle instant a loaded row's fallback is measured at: the widest
+/// timestamp chrono encodes (expanded year, nine fractional digits). The check
+/// is about width, not time, so it reads no clock (MIK-8202).
+const WIDEST_INSTANT: chrono::DateTime<chrono::Utc> = chrono::DateTime::<chrono::Utc>::MAX_UTC;
 
 /// What reading a sealed row again found (MIK-8052).
 pub(super) enum Reread {
@@ -464,7 +469,7 @@ pub(super) fn reread_record(
         (Some((record, task)), _) => {
             // As at load: a row with no room for the bounded failure it may
             // settle as would make the next startup refuse the store (MIK-7651).
-            let needed = super::targets::fallback_bytes(&task, &record, chrono::Utc::now());
+            let needed = super::targets::fallback_bytes(&task, &record, WIDEST_INSTANT);
             if !needed.is_ok_and(|needed| needed <= limits.record_bytes) {
                 tracing::error!(path = %shown_path, "repaired task record leaves no room for its bounded failure; raise max_record_bytes or remove the row; it stays sealed");
                 return Reread::Sealed;
