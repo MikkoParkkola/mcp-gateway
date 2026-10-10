@@ -9,13 +9,15 @@ use tracing::{debug, info, warn};
 
 use super::BuiltMetaMcp;
 use super::Gateway;
+#[cfg(feature = "cost-governance")]
+use super::persistence;
 use super::stdio_refusal::{admit_stdio_request, stdio_busy_batch_response, stdio_busy_response};
 use super::warmstart::build_warm_start_list;
 use super::warmstart::{WarmStartMode, WarmerGuard};
 use super::{
     AbortOnDrop, MAX_CONCURRENT_STDIO_DISPATCHES, MAX_INFLIGHT_STDIO_REQUESTS, STDIO_DRAIN_TIMEOUT,
-    STDIO_SESSION_ID, StdioClient, StdioTelemetry, account_bindings, persistence, stdio_channel,
-    stdio_shutdown, stdio_tasks,
+    STDIO_SESSION_ID, StdioClient, StdioTelemetry, account_bindings, stdio_channel, stdio_shutdown,
+    stdio_tasks,
 };
 use super::{StdioNonce, identity_grants, spawn_health_loop, spawn_idle_reaper, stdio_dispatches};
 use crate::Result;
