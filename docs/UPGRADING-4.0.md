@@ -883,6 +883,10 @@ config and reports the error.
   working. No setting starts with either prefix, so such a key is never a misspelling, and it is
   never bound: `key_server: {_enabled: true}` leaves the key server off. Entries of maps you name
   yourself (`env`, `headers`, backend names) are data, not keys, and are unaffected.
+- **An empty `backends:` section loads as no backends (MIK-8299).** A `backends:` key with
+  nothing under it, which is what the section reads as when every entry is commented out, starts
+  and reloads with no backends instead of failing with `invalid type: found unit, expected a map`.
+  A `backends:` that is a list, a string or a number is still refused.
 - **A backend that names two transports is refused.** `command` and `http_url` together loaded as
   a stdio backend and ignored `http_url`, `streamable_http` and any `a2a_*` key. The error names
   each ignored key and the key that selected the transport. Keep one transport per backend.
@@ -1031,9 +1035,9 @@ The check follows symlinks, so a Kubernetes `..data` link is judged by the file 
 Group read is allowed only on a file the gateway does not own, and item 96 narrows that to root, because there the group is how it
 reads the file. That is the case for a root-owned Kubernetes projection with `fsGroup`.
 
-- **A refused config file fails every command that loads it**, `doctor` and `config export`
+- **A refused config file fails every command that loads it**, `doctor` and `setup export`
   included. The error names the path, the mode and the fix: `chmod 600 <path>`.
-- **A refused env file fails `serve`, stdio and reload.** `doctor`, `config export` and the other
+- **A refused env file fails `serve`, stdio and reload.** `doctor`, `setup export` and the other
   commands that do not serve print a warning and skip the file.
 - **Helm:** the chart now sets `podSecurityContext.fsGroup: 1001` and
   `configVolume.defaultMode: 288` (octal `0440`), so the projected config is `root:1001 0440`.
@@ -1817,7 +1821,7 @@ held to item 35.
   UID is in (1001 in the image). The file is then `root:1001 0440` and passes. Without them it is
   `root:root 0644` and is refused.
 - **Docker Compose:** a bind-mounted key keeps its host mode and owner. `chmod 600` and `chown 1001` it (item 96 refuses any other owner).
-- `mcp-gateway config export` now writes the client config it edits as `0600`, and says so on
+- `mcp-gateway setup export` now writes the client config it edits as `0600`, and says so on
   stderr when that changes the file's mode.
 
 ## 55. Answers without the gateway's `requestState` are refused
