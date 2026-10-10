@@ -194,3 +194,92 @@ fn the_table_answers_every_route_and_stage() {
     // sanitize and lease, R5 route firewall, sanitize and X14.
     assert_eq!(gaps, 10, "the gap count moved: update the table and this pin");
 }
+
+/// The cells a live row in `rows` drives (route, stage). Kept beside the
+/// table so a new row and its listing land together.
+const DRIVEN: &[(Route, Stage)] = &[
+    (Route::Invoke, Stage::RouteFirewall),
+    (Route::Surfaced, Stage::RouteFirewall),
+    (Route::Direct, Stage::RouteFirewall),
+    (Route::Stdio, Stage::RouteFirewall),
+    (Route::Invoke, Stage::ChokepointRescan),
+    (Route::Direct, Stage::ChokepointRescan),
+    (Route::Stdio, Stage::ChokepointRescan),
+    (Route::Invoke, Stage::Sanitize),
+    (Route::Direct, Stage::Sanitize),
+    (Route::Stdio, Stage::Sanitize),
+    (Route::Invoke, Stage::MrtrUndeclared),
+    (Route::Direct, Stage::MrtrUndeclared),
+    (Route::Stdio, Stage::MrtrUndeclared),
+    (Route::TaskSubmit, Stage::TaskConfirm),
+    (Route::Stdio, Stage::TaskConfirm),
+    (Route::Invoke, Stage::Lease),
+    (Route::Direct, Stage::Lease),
+    (Route::Invoke, Stage::NonceGiveBack),
+    (Route::Direct, Stage::NonceGiveBack),
+    (Route::Invoke, Stage::ChainLink),
+    (Route::Surfaced, Stage::ChainLink),
+    (Route::Direct, Stage::ChainLink),
+    (Route::Stdio, Stage::ChainLink),
+    (Route::Invoke, Stage::ResponseFirewall),
+    (Route::Direct, Stage::ResponseFirewall),
+    (Route::Stdio, Stage::ResponseFirewall),
+];
+
+/// Cells the table states but no live row drives yet, each with the reason
+/// and where it gets driven. Visible on purpose: an undriven cell is a claim
+/// without a regression net, so it is named rather than silently skipped.
+const UNDRIVEN: &[(Route, Stage, &str)] = &[
+    (Route::Invoke, Stage::Authorize, "needs a capability-provider fixture; v4.0.1 N2 follow-up"),
+    (Route::Invoke, Stage::Idempotency, "needs the outer-admission eviction helper; v4.0.1 N2 follow-up"),
+    (Route::Surfaced, Stage::ChokepointRescan, "R1 drives the same code path; v4.0.1 N2 follow-up"),
+    (Route::Surfaced, Stage::Sanitize, "R1 drives the same intake; v4.0.1 N2 follow-up"),
+    (Route::Surfaced, Stage::Authorize, "needs a capability-provider fixture; v4.0.1 N2 follow-up"),
+    (Route::Surfaced, Stage::MrtrUndeclared, "R1 drives the same gate; v4.0.1 N2 follow-up"),
+    (Route::Surfaced, Stage::Idempotency, "needs the outer-admission eviction helper; v4.0.1 N2 follow-up"),
+    (Route::Surfaced, Stage::Lease, "R1 drives the same admit_meta_sync; v4.0.1 N2 follow-up"),
+    (Route::Surfaced, Stage::NonceGiveBack, "gap MIK-8150: driven red-first by MIK-8150.NONCE.4"),
+    (Route::Surfaced, Stage::ResponseFirewall, "R1 drives the same egress; v4.0.1 N2 follow-up"),
+    (Route::Direct, Stage::Idempotency, "needs the outer-admission eviction helper; v4.0.1 N2 follow-up"),
+    (Route::TaskSubmit, Stage::RouteFirewall, "needs a task-submit driver per stage; v4.0.1 N2 follow-up"),
+    (Route::TaskSubmit, Stage::Sanitize, "needs a task-submit driver per stage; v4.0.1 N2 follow-up"),
+    (Route::TaskSubmit, Stage::Authorize, "needs a capability-provider fixture; v4.0.1 N2 follow-up"),
+    (Route::TaskSubmit, Stage::Idempotency, "needs the outer-admission eviction helper; v4.0.1 N2 follow-up"),
+    (Route::TaskSubmit, Stage::NonceGiveBack, "needs a signed task-submit driver; v4.0.1 N2 follow-up"),
+    (Route::TaskWorker, Stage::ChokepointRescan, "needs a task-worker driver; v4.0.1 N2 follow-up"),
+    (Route::TaskWorker, Stage::Authorize, "needs a task-worker driver; v4.0.1 N2 follow-up"),
+    (Route::TaskWorker, Stage::MrtrUndeclared, "needs a task-worker driver; v4.0.1 N2 follow-up"),
+    (Route::TaskWorker, Stage::ResponseFirewall, "needs a task-worker driver; v4.0.1 N2 follow-up"),
+    (Route::Stdio, Stage::Authorize, "needs a capability-provider fixture; v4.0.1 N2 follow-up"),
+    (Route::Stdio, Stage::Idempotency, "needs the outer-admission eviction helper; v4.0.1 N2 follow-up"),
+    (Route::Stdio, Stage::Lease, "needs a held stdio backend; v4.0.1 N2 follow-up"),
+    (Route::Stdio, Stage::NonceGiveBack, "gap MIK-8150: driven red-first by MIK-8150.NONCE.5"),
+];
+
+/// Every cell the table says Applies or ExpectedGap is either driven by a
+/// live row or listed in `UNDRIVEN`, never both and never neither; no
+/// NotApplicable cell is listed. A new row that forgets `DRIVEN`, or a table
+/// change that strands a cell, fails here.
+#[test]
+fn every_stated_cell_is_driven_or_named_undriven() {
+    let driven = |r, s| DRIVEN.iter().any(|&(dr, ds)| dr == r && ds == s);
+    let undriven = |r, s| UNDRIVEN.iter().any(|&(ur, us, _)| ur == r && us == s);
+    let mut missing = Vec::new();
+    for route in Route::ALL {
+        for stage in Stage::ALL {
+            let stated = !matches!(
+                expect(MethodKind::ToolsCall, route, stage),
+                Expect::NotApplicable(_)
+            );
+            match (stated, driven(route, stage), undriven(route, stage)) {
+                (true, true, false) | (true, false, true) | (false, false, false) => {}
+                state => missing.push((route, stage, state)),
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "cells driven twice, stranded, or listed while NotApplicable \
+         (route, stage, (stated, driven, undriven)): {missing:?}"
+    );
+}
