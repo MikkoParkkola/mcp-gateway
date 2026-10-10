@@ -48,6 +48,11 @@ pub(super) struct Admitted<'a> {
     pub(super) nonce: Option<AdmittedNonce>,
     /// An interim answer's sealed envelope and hold key (MIK-8078).
     pub(super) sealed: Option<(String, String)>,
+    /// MIK-7642 PR.C: this call's explicit-cancel registration, held for the
+    /// request's life so the caller's own cancel can find it.
+    pub(super) cancel_entry: Option<crate::gateway::router::inflight_calls::Registered>,
+    /// Its abort half, taken by the one dispatch this call makes.
+    pub(super) cancel_on: Option<crate::gateway::router::inflight_calls::CancelOn>,
 }
 
 /// A refusal before dispatch: give back the nonce this call admitted
@@ -236,6 +241,20 @@ pub(super) async fn admit<'a>(
         #[cfg(feature = "firewall")]
         grant_subject: caller.grant_subject.as_ref(),
     };
+    // Registered before the dispatch exists: a cancel that arrives first
+    // aborts it before anything reaches the backend.
+    let (cancel_entry, cancel_on) = serde_json::to_value(scope.id)
+        .ok()
+        .and_then(|id| {
+            super::direct_caller::explicit_cancel_key(
+                scope.name,
+                scope.caller,
+                scope.route.session_id,
+                &id,
+            )
+        })
+        .and_then(|key| scope.state.meta_mcp.inflight_calls().register(key))
+        .unzip();
     let mut admitted = Admitted {
         failed,
         call,
@@ -244,6 +263,8 @@ pub(super) async fn admit<'a>(
         idem_reservation: None,
         nonce: None,
         sealed: None,
+        cancel_entry,
+        cancel_on,
     };
     guard_and_sanitize(scope, envelope, propagation, &mut admitted).await?;
     let guarded = idempotency_outcome(scope, envelope, preflight, propagation)?;
@@ -313,15 +334,19 @@ async fn forward_sanitized(
         return refused;
     }
     // Forward the sanitized params to the backend
+    let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(super::dispatch_armed(
         admitted.idem_reservation.as_mut(),
-        super::dispatch_in_scope(
-            &route.backend,
-            &envelope.method,
-            id,
-            Some(sanitized_params),
-            &propagation.headers,
-            propagation.identity_key.as_deref(),
+        crate::gateway::router::inflight_calls::explicitly_cancellable(
+            cancel_on,
+            super::dispatch_in_scope(
+                &route.backend,
+                &envelope.method,
+                id,
+                Some(sanitized_params),
+                &propagation.headers,
+                propagation.identity_key.as_deref(),
+            ),
         ),
     ))
     .await;
@@ -344,8 +369,14 @@ async fn forward_sanitized(
         ),
     );
     let guards = (client, &mut admitted.sealed);
-    let forward =
-        DirectRouteGuards::after_dispatch(state, (seen, seal), guards, &admission, forward).await;
+    let forward = DirectRouteGuards::after_dispatch(
+        state,
+        (seen, seal),
+        guards,
+        (&admission, admitted.cancel_entry.as_ref()),
+        forward,
+    )
+    .await;
     settle_parked(parked, &forward, &mut admitted);
     // The spend is settled; an unsettled reservation is given back here.
     drop(admission);
@@ -383,15 +414,21 @@ async fn forward_plain(
         let (headers, key) = (&propagation.headers, propagation.identity_key.as_deref());
         // Success is recorded after the firewall pass: a listing it refuses is
         // not a client success (MIK-7708).
-        return Ok(super::direct_list::drain(
+        let drain = super::direct_list::drain(
             &route.backend,
             id,
             envelope.params.as_ref(),
             headers,
             key,
             name,
-        )
-        .await);
+        );
+        return Ok(
+            crate::gateway::router::inflight_calls::explicitly_cancellable(
+                admitted.cancel_on.take(),
+                drain,
+            )
+            .await,
+        );
     }
     let admission = if method == "tools/call" {
         match DirectRouteGuards::before_dispatch(&state.meta_mcp, &admitted.call) {
@@ -415,9 +452,10 @@ async fn forward_plain(
         &propagation.headers,
         propagation.identity_key.as_deref(),
     );
+    let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(super::dispatch_armed(
         admitted.idem_reservation.as_mut(),
-        dispatch,
+        crate::gateway::router::inflight_calls::explicitly_cancellable(cancel_on, dispatch),
     ))
     .await;
     let answered = if method == "tools/call" {
@@ -439,9 +477,14 @@ async fn forward_plain(
             ),
         );
         let guards = (client, &mut admitted.sealed);
-        let guarded =
-            DirectRouteGuards::after_dispatch(state, (seen, seal), guards, &admission, forward)
-                .await;
+        let guarded = DirectRouteGuards::after_dispatch(
+            state,
+            (seen, seal),
+            guards,
+            (&admission, admitted.cancel_entry.as_ref()),
+            forward,
+        )
+        .await;
         settle_parked(parked, &guarded, admitted);
         guarded
     } else {
@@ -700,6 +743,19 @@ async fn answer_failure(mut admitted: Admitted<'_>, e: crate::Error, method: &st
     // Nothing reached the backend, so the nonce is given back (MIK-7698).
     if e.is_pre_dispatch() {
         give_back_nonce(admitted.failed.state, &mut admitted);
+    }
+    // MIK-7642 PR.C: the caller's own cancel is its choice, not a failure: no
+    // breaker strike, and answered 200 as on `/mcp`. The key still settles as
+    // dispatched (ADR-012 consequence 1), so a retry never re-runs the call.
+    let entry = admitted.cancel_entry.as_ref();
+    if crate::gateway::router::inflight_calls::cancelled_by_caller(entry, Some(&e)) {
+        let response = JsonRpcResponse::error(
+            Some(admitted.failed.id.clone()),
+            crate::gateway::router::inflight_calls::CLIENT_CANCELLED_CODE,
+            crate::gateway::router::inflight_calls::CLIENT_CANCELLED_MESSAGE,
+        );
+        super::settle_direct_failure(admitted.idem_reservation.as_mut(), &e, &response);
+        return build_http_response(&Egressed::gateway_own(response), StatusCode::OK);
     }
     let Admitted {
         failed,

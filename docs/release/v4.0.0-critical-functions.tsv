@@ -70,6 +70,7 @@ src/gateway/router/backend_handlers/direct_caller.rs	validate_agent	1	critical	a
 src/gateway/router/backend_handlers/direct_caller.rs	read_envelope	1	critical	a,d	read_envelope	Refuses a malformed envelope, a key outside its backend scope (403, no 404 oracle) and a hardened legacy request.
 src/gateway/router/backend_handlers/direct_caller.rs	route	1	critical	a,c	route	Backend lookup, session ownership by the /mcp owner rule, and the admin log-level gate.
 src/gateway/router/backend_handlers/direct_caller.rs	forward_notification	1	critical	d	forward_notification	Refuses a notification where the caller request would be refused for identity; never forwards it.
+src/gateway/router/backend_handlers/direct_caller.rs	explicit_cancel_key	1	critical	c	explicit_cancel_key	Keys a direct-route cancel by the caller key (subject re-derived from a certificate, else authenticated credential), validated session and client id (MIK-7642 PR.C)
 src/gateway/router/backend_handlers/direct_preflight.rs	preflight	1	critical	a,b,d	preflight	Task-method refusal, malformed retry fields, nonces, chain challenge and attestation, all before any credential is minted.
 src/gateway/router/backend_handlers/direct_preflight.rs	take_nonces	1	critical	b,d	take_nonces	Takes the chain and signing nonces off the params and refuses an invalid signing nonce.
 src/gateway/router/backend_handlers/direct_preflight.rs	check_attestation	1	critical	b,d	check_attestation	Refuses an unattested call before it mints a per-user credential or writes a mint audit row.
@@ -117,6 +118,7 @@ src/gateway/router/direct_guards.rs	before_dispatch	1	critical	d	DirectRouteGuar
 src/gateway/router/direct_guards.rs	scan_direct_egress	1	critical	d	scan_direct_egress	The direct route's egress scan at every backend-text exit, on the router's own firewall (MIK-8139).
 src/gateway/router/direct_guards.rs	run	1	critical	a,d	DirectRouteGuards::run	admit_target policy plus refusal when message signing is enabled.
 src/gateway/router/direct_guards.rs	release_nonce	1	critical	b,d	DirectRouteGuards::release_nonce	Releases only the nonce registration a refused direct call made (MIK-7698).
+src/gateway/router/handlers/dispatch_intake.rs	mcp_cancel_key	1	critical	c	mcp_cancel_key	Keys a /mcp cancel by the caller key and session; sessionless keyed by caller key alone (MIK-7642 PR.C)
 src/gateway/router/handlers/health.rs	health_handler	1	critical	a	health_handler	Backend detail only for admins; everyone else gets status and version.
 src/gateway/router/handlers/session_end.rs	mcp_delete_handler	1	critical	a,c	mcp_delete_handler	Requires an authenticated credential; deletes only a session the caller owns.
 src/gateway/router/handlers/sse.rs	mcp_sse_handler	1	critical	c	mcp_sse_handler	SSE stream resumption is scoped to the session owner.
@@ -161,6 +163,14 @@ src/gateway/router/identity.rs	grant_subject_from_cert_identity	1	standard	borde
 src/gateway/router/identity.rs	grant_subject_from_oauth_agent	1	standard	borderline	grant_subject_from_oauth_agent	Agent JWT sub used verbatim as the subject.
 src/gateway/router/identity.rs	subject_key	1	standard	borderline	subject_key	Session-ownership and CallerKey encoding; a collision would merge principals.
 src/gateway/router/identity.rs	control_identity	1	critical	d	control_identity	Picks the key per-principal rate and budget limits score on; a fresh session falls to one shared anonymous bucket
+src/gateway/router/inflight_calls.rs	explicitly_cancellable	1	standard	borderline	explicitly_cancellable	Makes the dispatch abortable by its registration; the key carries the isolation
+src/gateway/router/inflight_calls.rs	is_client_cancelled	1	standard	borderline	is_client_cancelled	Recognises only the gateway's own abort error, so a backend failure still strikes the client breaker
+src/gateway/router/inflight_calls.rs	cancelled_by_caller	1	standard	borderline	cancelled_by_caller	A failure is the caller's own cancel only when its dispatch yielded to the abort and the error is the gateway's; a backend echo, even with a late cancel, still counts
+src/gateway/router/inflight_calls.rs	new	1	critical	c	CallKey::new	Refuses a key without an owner, so an ownerless caller's cancels always drop
+src/gateway/router/inflight_calls.rs	register	1	critical	c	InFlightCalls::register	Refuses a duplicate live key, leaving the live call untouched (D5)
+src/gateway/router/inflight_calls.rs	cancel	1	critical	c	InFlightCalls::cancel	Aborts only the call registered under the caller's exact key
+src/gateway/router/inflight_calls.rs	cancelled	1	standard	borderline	Registered::cancelled	True only once the caller's own cancel aborted this call's dispatch
+src/gateway/router/inflight_calls.rs	run	1	standard	borderline	CancelOn::run	Records an abort only when the dispatch yielded to it, never for a cancel after it finished
 src/gateway/router/judged_answer.rs	record_delivery	1	critical	d	record_delivery	Replaces a judged answer with the audit-unavailable refusal when its delivery cannot be recorded (fail closed).
 src/gateway/router/meta_refusal_audit.rs	record	1	critical	borderline	Refused::record	Answers 503 when the refusal's audit write fails under FailClosed.
 src/gateway/router/meta_refusal_audit.rs	answer	1	standard	borderline	Refused::answer	Builds the Denied record and its tenants; a mistake would record a refusal as another outcome
