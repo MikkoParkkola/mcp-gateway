@@ -15,14 +15,9 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
 if [[ -f Cargo.toml ]]; then
-  echo "[pre-push] public repo hygiene"
-  scripts/dev/check-public-repo-hygiene.sh
-
-  echo "[pre-push] commit message hygiene"
-  scripts/dev/check-commit-message-hygiene.sh
-
   # The cheap gates CI enforces, against the point this branch left the
   # release line (MIK-8328). Each prints its own message and stops the push.
+  # They run first: each takes seconds, and the hygiene scan below takes minutes.
   base="$(git merge-base HEAD origin/docs/ranking-1-release-line)"
   echo "[pre-push] changelog fragment"
   python3 scripts/release/changelog_fragments.py check --base "$base" --head HEAD
@@ -34,6 +29,12 @@ if [[ -f Cargo.toml ]]; then
   python3 scripts/dev/check-timing-asserts.py --base "$base"
   echo "[pre-push] C6 obligations"
   python3 scripts/release/c6_resolve.py --tree HEAD
+
+  echo "[pre-push] commit message hygiene"
+  scripts/dev/check-commit-message-hygiene.sh
+
+  echo "[pre-push] public repo hygiene"
+  scripts/dev/check-public-repo-hygiene.sh
 
   echo "[pre-push] cargo fmt --check"
   cargo fmt --all --check 2>&1 | tail -20 || { echo "FAIL: cargo fmt"; exit 1; }
