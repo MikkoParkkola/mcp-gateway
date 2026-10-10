@@ -293,10 +293,7 @@ impl OAuthClient {
     /// asks for one instead of sleeping out a short-lived token.
     #[cfg(test)]
     pub(crate) async fn age_token_for_test(&self) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = crate::clock::unix_secs().expect("the test clock reads after 1970");
         let aged = {
             let mut slot = self.current_token.write();
             let Some(token) = slot.as_mut() else { return };

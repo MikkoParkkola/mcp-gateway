@@ -109,9 +109,9 @@ async fn a_probe_recovering_its_session_does_not_wait_on_a_login() {
     );
 
     // Ended in time, whatever it reported: the row is about not waiting. Its
-    // answer comes 8 s after it sent; one waiting on the login would run on
-    // to its own 25 s bound.
-    let _probed = tokio::time::timeout(Duration::from_secs(8 + 6), probe)
+    // answer comes 8 s after it sent, so 14 s is that plus 6 s; one waiting
+    // on the login would run on to its own 25 s bound.
+    let _probed = tokio::time::timeout(Duration::from_secs(14), probe)
         .await
         .expect("the probe's session recovery does not wait on the login")
         .expect("probe task");

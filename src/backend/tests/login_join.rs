@@ -34,15 +34,16 @@ fn spawn_check(
 async fn a_joiner_of_a_dispatched_fill_times_out_as_the_backend() {
     static PAGES: Pages = Pages::new();
     // Owner at t0: page 1 answers at 2 s, page 2 times out at its 10 s
-    // transport bound (about 12 s). The joiner enters at about 0.5 s, so its
-    // 10 s + 1 s deadline (about 11.5 s) passes while the owner still waits.
+    // transport bound (about 12 s). The joiner enters once the owner's first
+    // page is in flight, so its 10 s + 1 s deadline passes while the owner
+    // still waits.
     let (backend, browser, _dir) = approved_start(
         Upstream::ListStallsCounted(Duration::from_secs(2), &PAGES),
         Duration::from_secs(10),
     )
     .await;
     let owner = spawn_discovery(&backend);
-    sleep(Duration::from_millis(500)).await;
+    arrived(&PAGES.first, 1, "the owner's first page").await;
     let joiner = spawn_check(&backend);
 
     // The owner has sent its second page before the token lapses.
