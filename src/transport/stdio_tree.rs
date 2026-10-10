@@ -52,8 +52,8 @@ pub(super) fn spawn_in_own_tree(cmd: Command) -> Result<Box<dyn ChildWrapper>> {
 /// Write one frame (`message` and a newline) to stdin (MIK-8079).
 ///
 /// The caller takes stdin first, so a caller cancelled while waiting sends
-/// nothing. The write itself runs in a task the caller only awaits, so an
-/// admitted write is never cut off mid-frame by its caller being dropped.
+/// nothing. An admitted write is never cut off mid-frame by its caller being
+/// dropped: see [`finish_whole`].
 /// `close()` cancels `shutdown` after ending the tree: a write stuck on a reader
 /// outside the group is then dropped, giving up stdin and its buffer.
 pub(super) async fn write_frame(
@@ -104,12 +104,24 @@ async fn write_whole<W: tokio::io::AsyncWrite + Unpin>(
     }
 }
 
-/// Run an admitted write to its end even if the caller is dropped (MIK-8079):
-/// the write runs in a task the caller only awaits.
+/// Run an admitted write to its end even if the caller is dropped (MIK-8079).
+///
+/// The write is polled once in place: a frame that fits the pipe completes
+/// there with no task hop (MIK-7536, the hop cost a thread handoff per call).
+/// Still pending, the SAME boxed future, progress kept, moves to its own task
+/// that the caller only awaits. There is no `.await` between that poll and
+/// the spawn, so a caller dropped at any await point cannot cut the frame:
+/// before the poll nothing is written; after it the task owns the write.
+/// What this does not promise, as before: shutdown, an I/O error or runtime
+/// teardown can still end a frame early.
 async fn finish_whole<F>(write: F) -> Result<()>
 where
     F: std::future::Future<Output = Result<()>> + Send + 'static,
 {
+    let mut write = Box::pin(write);
+    if let Some(done) = futures::FutureExt::now_or_never(write.as_mut()) {
+        return done;
+    }
     #[cfg(test)]
     HANDED_OVER.with(|n| n.set(n.get() + 1));
     tokio::spawn(write)
