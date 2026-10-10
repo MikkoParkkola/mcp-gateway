@@ -207,20 +207,33 @@ fn text_in_long_keys_by_a_non_holder_is_reported() {
     }
 }
 
+/// Prose of `words` 17-char words: few spaces per window, so a window
+/// keeps at least K − 4 chars of its field only when the spaces count as the
+/// field's own.
+fn long_word_prose(i: usize) -> String {
+    (0..30)
+        .map(|n| format!("w{i:02}x{:013}", n * 7_919 % 10_007))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// G10: the interior windows of a long prose field are all kept: spaces
-/// inside a field are its own, not glue.
+/// inside a field are its own, not glue. Long words put only about three
+/// spaces in a window, so unowned spaces would push interior windows over
+/// the glue line.
 #[test]
 fn prose_interior_windows_are_kept() {
     let fw = observing();
     for i in 0..TEXTS {
-        let t = text(i);
-        let (all, kept) = egress(&fw, &send(&json!({"a_note": "x", "b_body": t})));
-        let interior: HashSet<u64> = fps(&fw, &t).intersection(&all).copied().collect();
-        assert!(!interior.is_empty(), "premise: text {i} has windows");
-        assert!(
-            interior.is_subset(&kept),
-            "text {i}: a prose interior window dropped"
-        );
+        for t in [text(i), long_word_prose(i)] {
+            let (all, kept) = egress(&fw, &send(&json!({"a_note": "x", "b_body": t})));
+            let interior: HashSet<u64> = fps(&fw, &t).intersection(&all).copied().collect();
+            assert!(!interior.is_empty(), "premise: text {i} has windows");
+            assert!(
+                interior.is_subset(&kept),
+                "text {i}: a prose interior window dropped"
+            );
+        }
     }
 }
 
