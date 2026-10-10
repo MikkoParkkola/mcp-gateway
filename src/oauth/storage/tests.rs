@@ -731,3 +731,29 @@ async fn a_polled_save_gives_up_on_a_held_repair_lock_at_its_bound() {
         .collect();
     assert!(leftovers.is_empty(), "{leftovers:?}");
 }
+
+/// MIK-8344: with the repair lock free, the async save heals a corrupt
+/// final exactly as the synchronous one does.
+#[tokio::test]
+async fn a_polled_save_heals_a_corrupt_final_when_the_lock_is_free() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = TokenStorage::new(dir.path().to_path_buf()).expect("create store");
+    let (backend, resource) = ("healed", "http://127.0.0.1:1/mcp");
+    std::fs::write(store.client_path(backend, resource), "not json").unwrap();
+
+    let saved = store
+        .save_client_id_polled(backend, resource, "ours", Duration::from_secs(20))
+        .await;
+
+    assert_eq!(saved.unwrap(), "ours");
+    assert_eq!(
+        store.load_client_id(backend, resource).as_deref(),
+        Some("ours")
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|name| name.contains(".tmp."))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
