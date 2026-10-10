@@ -344,7 +344,9 @@ async fn a_redirected_probe_gives_no_hint_and_its_location_is_never_fetched() {
 #[tokio::test]
 async fn a_hint_to_a_refused_destination_is_refused() {
     let (_served, result) = initialize(backend(
-        Probe::HintAbsolute("http://169.254.169.254/latest/meta-data"),
+        // https, so the cleartext rule cannot be what refuses it: only the
+        // destination policy's IP-literal check can (gpt, design r2).
+        Probe::HintAbsolute("https://169.254.169.254/latest/meta-data"),
         Doc::Absent,
         Doc::Names("/mcp"),
         Doc::Absent,
