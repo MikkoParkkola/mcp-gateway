@@ -489,16 +489,23 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
         .set_transport_for_test(Arc::new(AsksThenAnswers {
             calls: parking_lot::Mutex::new(0),
         }));
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_responses: true,
-            scan_requests: false,
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+    // With a keyring its gateway mints with, as the gateway pairs them
+    // (#2210, MIK-8276).
+    let keys = Arc::new(crate::protocol::continuation::ContinuationState::new());
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_responses: true,
+                scan_requests: false,
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .with_continuations(Arc::clone(&keys)),
+    );
     m.set_firewall(Some(Arc::clone(&firewall)));
+    m.set_continuation_for_test(keys);
 
     let channel = NoSessionCounted::default();
     let first = json!({"server": "asks", "tool": "gateway_list_tools", "arguments": {}});

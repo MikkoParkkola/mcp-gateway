@@ -288,16 +288,19 @@ async fn fixture(setup: Setup, path: Path) -> Fixture {
     let mut meta =
         Arc::try_unwrap(app.meta_mcp).unwrap_or_else(|_| panic!("fixture meta is exclusive"));
     meta.enable_transparency_log(Arc::clone(&log));
-    meta.set_firewall(Some(Arc::new(Firewall::from_config(
-        FirewallConfig {
-            tenant_guard: TenantGuardConfig {
-                arg_keys: vec!["customer_id".to_string()],
-                ..TenantGuardConfig::default()
+    meta.set_firewall(Some(Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                tenant_guard: TenantGuardConfig {
+                    arg_keys: vec!["customer_id".to_string()],
+                    ..TenantGuardConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ))));
+            None,
+        )
+        .with_continuations(meta.continuation()),
+    )));
     if setup.refusing {
         meta.enable_response_inspection_action_mode();
     }

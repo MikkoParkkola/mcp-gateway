@@ -69,25 +69,28 @@ fn classify(body: &Value) -> Outcome {
 /// Budget of one call per window; or, with `anomaly`, the anomaly detector
 /// (which exists only with a transition tracker to learn from).
 fn firewall(anomaly: bool) -> Arc<Firewall> {
-    Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_requests: true,
-            scan_responses: false,
-            anomaly_detection: anomaly,
-            anomaly_block_threshold: anomaly.then_some(0.99),
-            // Pinned rather than inherited, so a changed default cannot move
-            // the warm-up under these rows (the first call per key warms up).
-            anomaly_min_observations: 20,
-            budget: BudgetGuardConfig {
-                enabled: !anomaly,
-                max_calls_per_window: 1,
-                window_secs: 3600,
+    Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_requests: true,
+                scan_responses: false,
+                anomaly_detection: anomaly,
+                anomaly_block_threshold: anomaly.then_some(0.99),
+                // Pinned rather than inherited, so a changed default cannot move
+                // the warm-up under these rows (the first call per key warms up).
+                anomaly_min_observations: 20,
+                budget: BudgetGuardConfig {
+                    enabled: !anomaly,
+                    max_calls_per_window: 1,
+                    window_secs: 3600,
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        anomaly.then(|| Arc::new(crate::transition::TransitionTracker::new())),
-    ))
+            anomaly.then(|| Arc::new(crate::transition::TransitionTracker::new())),
+        )
+        .keyed_for_test(),
+    )
 }
 
 fn api_key(secret: &str, name: &str) -> ApiKeyConfig {
@@ -610,22 +613,25 @@ async fn h17b_the_per_backend_fallback_is_never_tracked() {
 /// Tenant guard on (one tenant per caller per window, tenant named by the
 /// `tenant` argument); budget and anomaly off, so only the tenant guard binds.
 fn tenant_firewall() -> Arc<Firewall> {
-    Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_requests: true,
-            scan_responses: false,
-            tenant_guard: crate::security::firewall::tenant_guard::TenantGuardConfig {
+    Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
                 enabled: true,
-                max_tenants_per_window: 1,
-                window_secs: 3600,
-                arg_keys: vec!["tenant".to_string()],
-                ..Default::default()
+                scan_requests: true,
+                scan_responses: false,
+                tenant_guard: crate::security::firewall::tenant_guard::TenantGuardConfig {
+                    enabled: true,
+                    max_tenants_per_window: 1,
+                    window_secs: 3600,
+                    arg_keys: vec!["tenant".to_string()],
+                    ..Default::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ))
+            None,
+        )
+        .keyed_for_test(),
+    )
 }
 
 #[tokio::test]

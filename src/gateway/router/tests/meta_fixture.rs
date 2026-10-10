@@ -27,6 +27,14 @@ pub(in crate::gateway::router) async fn test_router_app_state_with_meta_and_fire
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Fixture {
     let (mut state, store) = test_router_app_state_with_meta(auth, key_server, configure).await;
+    // The router's engine exempts the keyring the gateway mints with, as
+    // startup pairs them (#2210, MIK-8276).
+    assert!(
+        firewall.as_ref().is_none_or(|fw| fw
+            .continuations_for_test()
+            .is_some_and(|keys| Arc::ptr_eq(&keys, &state.meta_mcp.continuation()))),
+        "the router's firewall must exempt the gateway's keyring"
+    );
     Arc::get_mut(&mut state)
         .expect("the fixture state is not shared yet")
         .firewall = firewall;
