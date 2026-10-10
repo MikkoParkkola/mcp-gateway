@@ -17,7 +17,7 @@ use tower::ServiceExt;
 use super::create_router;
 use super::tests::{test_router_app_state_with_auth, test_router_app_state_with_auth_and_config};
 use crate::backend::Backend;
-use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig};
+use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -231,30 +231,6 @@ pub(crate) struct Fx {
     _store: tempfile::TempDir,
 }
 
-/// A transparency log on a leaked temp file, alive for the test process.
-fn leaked_transparency_log() -> Arc<crate::security::TransparencyLogger> {
-    use crate::security::transparency_log::TransparencyLogConfig;
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
-    let path = file.path().to_string_lossy().to_string();
-    std::mem::forget(file);
-    let config = Arc::new(TransparencyLogConfig {
-        enabled: true,
-        path,
-        key_id: "test".to_string(),
-        ..TransparencyLogConfig::default()
-    });
-    Arc::new(crate::security::TransparencyLogger::open(config).expect("logger opens"))
-}
-
-/// The fixture's backends with the per-backend rate limiter off: no row here
-/// tests it (`probe_tests` does, on its own backend), and the slot-cap rows
-/// (MIK-8293) send 65 calls in a burst.
-fn fixture_failsafe() -> FailsafeConfig {
-    let mut failsafe = FailsafeConfig::default();
-    failsafe.rate_limit.enabled = false;
-    failsafe
-}
-
 fn key(name: &str) -> ApiKeyConfig {
     // `hardened` refuses a request with no per-caller identity, so its keys
     // are personal ones.
@@ -319,20 +295,6 @@ pub(crate) async fn fixture_built(answer: Answer, build: impl FnOnce(MetaMcp) ->
     fixture_inner(answer, false, build).await
 }
 
-/// [`fixture`] whose two backends require identity propagation to distinct
-/// audiences; `arm` installs the strategy (MIK-8293 S3c).
-pub(crate) async fn fixture_propagating(answer: Answer, arm: impl FnOnce(&mut MetaMcp)) -> Fx {
-    PROPAGATING.with(|p| p.set(true));
-    let fx = fixture(answer, |meta| {
-        // The meta layer checks for its own audit sink before a required mint.
-        meta.enable_transparency_log(leaked_transparency_log());
-        arm(meta);
-    })
-    .await;
-    PROPAGATING.with(|p| p.set(false));
-    fx
-}
-
 /// [`fixture`] with the production firewall installed on both the router and
 /// the Meta-MCP (request scanning, response scanning, credential redaction),
 /// as `server/mod.rs` wires it.
@@ -372,12 +334,16 @@ pub(crate) async fn fixture_firewalled_with(
 mod answers;
 #[path = "direct_guards_fixture_egress.rs"]
 mod egress;
+#[path = "direct_guards_fixture_quota.rs"]
+mod quota;
 use answers::{call_answer, listing, question};
 use egress::backend_transport;
 #[cfg(feature = "firewall")]
 pub(crate) use egress::{
     fixture_audited_on, fixture_firewalled_on, fixture_inspecting_on, meta_firewall,
 };
+pub(crate) use quota::fixture_propagating;
+use quota::{fixture_backend_config, fixture_failsafe, leaked_transparency_log};
 
 pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
 
@@ -572,32 +538,7 @@ async fn fixture_inner(
     for (name, passthrough) in [("alpha", false), ("alpha-pt", true)] {
         let backend = Arc::new(Backend::new(
             name,
-            BackendConfig {
-                passthrough,
-                // A propagating backend validates an HTTP base URL before it
-                // reaches the scripted transport.
-                transport: if PROPAGATING.with(std::cell::Cell::get) {
-                    crate::config::TransportConfig::Http {
-                        http_url: format!("https://{name}.internal/mcp"),
-                        streamable_http: Some(true),
-                        protocol_version: None,
-                    }
-                } else {
-                    BackendConfig::default().transport
-                },
-                identity_propagation: PROPAGATING.with(std::cell::Cell::get).then(|| {
-                    crate::identity_propagation::IdentityPropagationConfig {
-                        strategy:
-                            crate::identity_propagation::PropagationStrategyKind::SignedAssertion,
-                        audience: format!("aud-{name}"),
-                        required: true,
-                        session_mode: crate::identity_propagation::SessionMode::Stateless,
-                        token_exchange_endpoint: None,
-                        token_exchange_scope: None,
-                    }
-                }),
-                ..BackendConfig::default()
-            },
+            fixture_backend_config(name, passthrough),
             &fixture_failsafe(),
             Duration::from_secs(60),
         ));

@@ -123,7 +123,14 @@ async fn slot_release_matrix() {
             let continuation = fx.state.meta_mcp.continuation();
             let now = now_unix_secs();
             let other = continuation
-                .begin_exchange("other".into(), None, "fp".into(), "digest".into(), now)
+                .begin_exchange(
+                    "other".into(),
+                    None,
+                    "fp".into(),
+                    &crate::protocol::continuation::QuotaKey::for_test("fp"),
+                    "digest".into(),
+                    now,
+                )
                 .await
                 .expect("an unrelated exchange holds a slot");
             let before = counts(&continuation);
@@ -200,7 +207,14 @@ async fn a_refused_state_only_task_round_gives_its_slot_back() {
         let continuation = fx.state.meta_mcp.continuation();
         let now = now_unix_secs();
         let other = continuation
-            .begin_exchange("other".into(), None, "fp".into(), "digest".into(), now)
+            .begin_exchange(
+                "other".into(),
+                None,
+                "fp".into(),
+                &crate::protocol::continuation::QuotaKey::for_test("fp"),
+                "digest".into(),
+                now,
+            )
             .await
             .expect("an unrelated exchange holds a slot");
         let before = counts(&continuation);

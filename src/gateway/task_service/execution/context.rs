@@ -164,13 +164,6 @@ impl OwnedCallerContext {
         Some(state.session_lifecycle.as_ref()?.hold(key))
     }
 
-    /// Rebuild the dispatch funnel.
-    ///
-    /// - Retry metadata is not forwarded: admission already reserved the key
-    ///   in `Mode::Task`. The one exception is the creating request's
-    ///   attestation token, which the funnel re-checks at dispatch.
-    /// - Confirmation is unavailable on the worker.
-    /// - Capabilities are the creating request's.
     /// Test-only: the owner the worker's caller carries as its credential
     /// principal (MIK-8293 S3b1's premise row).
     #[cfg(test)]
@@ -178,6 +171,13 @@ impl OwnedCallerContext {
         &self.credential_principal
     }
 
+    /// Rebuild the dispatch funnel.
+    ///
+    /// - Retry metadata is not forwarded: admission already reserved the key
+    ///   in `Mode::Task`. The one exception is the creating request's
+    ///   attestation token, which the funnel re-checks at dispatch.
+    /// - Confirmation is unavailable on the worker.
+    /// - Capabilities are the creating request's.
     pub(crate) fn dispatch_context<'a>(
         &'a self,
         host: &LiveHost,

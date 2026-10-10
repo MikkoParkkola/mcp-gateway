@@ -278,6 +278,7 @@ async fn foreign_states(fx: &Fixture) -> Vec<String> {
             SERVER.to_string(),
             None,
             "fingerprint".to_string(),
+            &crate::protocol::continuation::QuotaKey::for_test("fingerprint"),
             "digest".to_string(),
             crate::protocol::continuation::now_unix_secs(),
         )
@@ -547,7 +548,16 @@ async fn a_full_hold_table_refuses_the_challenge_and_mints_no_grant() {
     let now = crate::protocol::continuation::now_unix_secs();
     let table = fx.meta.continuation.in_flight();
     let mut held = Vec::new();
-    while let Some(key) = table.hold("filler", now + 300, now).await {
+    // A caller per hold: the table fills, not one caller's share (MIK-8293).
+    while let Some(key) = table
+        .hold(
+            "filler",
+            &crate::protocol::continuation::QuotaKey::for_test(&format!("filler-{}", held.len())),
+            now + 300,
+            now,
+        )
+        .await
+    {
         held.push(key);
         assert!(held.len() <= 1 << 16, "the hold table is bounded");
     }

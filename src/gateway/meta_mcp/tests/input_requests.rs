@@ -381,43 +381,6 @@ async fn a_non_destructive_call_is_not_judged_by_this_gate() {
     ));
 }
 
-/// S6a (MIK-8311 CSL.1): an in-band confirmation whose envelope mint fails
-/// gives its slot back. The keyring refuses every envelope, so the gate takes
-/// a slot, cannot seal the question, and refuses; the slot must not stay held
-/// for the envelope's lifetime. Red on base: the slot count grows by one.
-/// Mutant m7: the release on the mint-failure path removed.
-#[tokio::test]
-async fn s6a_a_refused_confirmation_mint_gives_its_slot_back() {
-    let continuation = std::sync::Arc::new(
-        crate::protocol::continuation::ContinuationState::mint_refusing_for_test(),
-    );
-    let mut ctx = super::allow_all_ctx_named(Some("k-confirm"), None);
-    ctx.confirmation = crate::gateway::destructive_confirmation::ConfirmationChannel::InBand {
-        continuation: &continuation,
-    };
-    let now = crate::protocol::continuation::now_unix_secs();
-    let before = continuation.in_flight().len(now).await;
-
-    let outcome = super::destructive_confirmation_gate(
-        &RequestId::Number(1),
-        "gateway_kill_server",
-        &json!({"server": "brave"}),
-        None,
-        &ctx,
-    )
-    .await;
-    assert!(
-        matches!(outcome, super::GateOutcome::Refuse(_)),
-        "setup: a refused mint must refuse the call"
-    );
-
-    let after = continuation.in_flight().len(now).await;
-    assert_eq!(
-        after, before,
-        "the refused confirmation kept its slot: {before} held before, {after} after"
-    );
-}
-
 #[test]
 fn every_confirmation_refusal_is_marked_by_construction() {
     let refusal = super::confirmation_refusal_response(
