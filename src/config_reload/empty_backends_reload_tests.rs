@@ -29,4 +29,9 @@ fn a_reload_reads_an_empty_backends_section_as_none() {
         "{:?}",
         evaluated.config.backends.keys()
     );
+    assert_eq!(
+        evaluated.patch.backends_removed,
+        ["tavily"],
+        "the reload removes the backend that was commented out"
+    );
 }

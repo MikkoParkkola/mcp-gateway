@@ -153,11 +153,12 @@ const CHILD: &str = "MIK_8299_ISOLATED";
 /// Printed by the child once the body ran, so a filter matching no test fails.
 const CHILD_OK: &str = "mik-8299: the isolated body ran";
 
-/// Run the calling test in a child with an empty environment and a fresh
-/// home, so no `MCP_GATEWAY_*` override, env file or home config from the
-/// developer's or the CI runner's environment reaches `Config::load` (#3752
-/// review). True in the child, which runs the body; the parent returns false
-/// once the child has passed.
+/// Run the calling test in a child that inherits no `MCP_GATEWAY_*` override
+/// and has a fresh home, so nothing from the developer's or the CI runner's
+/// environment reaches `Config::load` (#3752 review). The config path is
+/// explicit and the example's env-file paths point into the test's temp dir,
+/// so those overrides are the environment's only way in. True in the child,
+/// which runs the body; the parent returns false once the child has passed.
 fn in_clean_child(test: &str) -> bool {
     if std::env::var_os(CHILD).is_some() {
         return true;
@@ -166,14 +167,12 @@ fn in_clean_child(test: &str) -> bool {
     let mut child = std::process::Command::new(std::env::current_exe().expect("test executable"));
     child
         .args(["--exact", test, "--nocapture"])
-        .env_clear()
         .env(CHILD, "1")
-        .env("HOME", home.path())
-        .env("USERPROFILE", home.path());
-    // What a process needs to start and make temp dirs, never a config input.
-    for keep in ["PATH", "SYSTEMROOT", "SystemRoot", "TEMP", "TMP", "TMPDIR"] {
-        if let Some(value) = std::env::var_os(keep) {
-            child.env(keep, value);
+        .env("HOME", home.path()) // spawn-check: not the gateway: this test binary's fresh home
+        .env("USERPROFILE", home.path()); // spawn-check: not the gateway: this test binary's fresh home
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("MCP_GATEWAY_") {
+            child.env_remove(key);
         }
     }
     let output = child.output().expect("run the isolated child");
