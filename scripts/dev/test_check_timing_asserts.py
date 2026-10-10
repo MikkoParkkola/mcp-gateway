@@ -299,6 +299,8 @@ class NewCode(unittest.TestCase):
         for tag in ("lower-bound because", "whatever", "Absence"):
             with self.subTest(tag=tag):
                 self.assertRefused(f"// timing: {tag}\n{sleep}", guard.TAG)
+                # A bad tag also leaves the sleep unexcused.
+                self.assertRefused(f"// timing: {tag}\n{sleep}", guard.SLEEP)
 
     def test_a_paused_clock_is_not_judged(self):
         self.assertPasses("tokio::time::sleep(Duration::from_millis(200)).await;\nassert!(done());", attrs="#[tokio::test(start_paused = true)]")
