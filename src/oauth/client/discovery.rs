@@ -208,12 +208,22 @@ impl OAuthClient {
             .body(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#)
             .send()
             .await
-            .map_err(|e| debug!(error = %e, "No resource-metadata hint: the probe failed"))
+            .map_err(|e| {
+                // Never the raw reqwest error: its Display carries the URL,
+                // query credentials included.
+                let safe = crate::security::http_diagnostics::safe_reqwest_message(
+                    "the resource-metadata probe failed",
+                    &e,
+                );
+                debug!(error = %safe, "No resource-metadata hint");
+            })
             .ok()?;
         if response.status() != reqwest::StatusCode::UNAUTHORIZED {
             return None;
         }
-        resource_metadata_hint(response.headers())
+        // A hint that is not an absolute URL (empty, relative) names nothing:
+        // it must not end discovery before the well-known candidates.
+        resource_metadata_hint(response.headers()).filter(|hint| url::Url::parse(hint).is_ok())
     }
 
     async fn fetch_resource_metadata(&self, url: &str) -> Result<Fetched> {
@@ -287,7 +297,14 @@ mod tests {
             !names("https://h", "https://h/mcp"),
             "the origin is not the path resource"
         );
-        assert!(!names("https://H/mcp", "https://h/mcp/"));
+        assert!(
+            !names("https://H/mcp", "https://h/mcp"),
+            "host case in the document"
+        );
+        assert!(
+            names("https://h/mcp", "https://H/mcp"),
+            "the configured URL as serialized"
+        );
     }
 
     fn hint(values: &[&str]) -> Option<String> {

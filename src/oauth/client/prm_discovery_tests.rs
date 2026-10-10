@@ -77,6 +77,7 @@ fn document(doc: &Doc, base: &str) -> axum::response::Response {
             axum::Json(serde_json::json!({
                 "resource": resource,
                 "authorization_servers": [base],
+                "scopes_supported": ["prm-scope"],
             }))
             .into_response()
         }
@@ -179,12 +180,23 @@ fn owned_client_under(
     )
 }
 
-async fn initialize(backend: Backend) -> (Served, Result<()>) {
+async fn initialize(backend: Backend) -> (Served, Result<()>, OAuthClient) {
     let served = serve(backend).await;
     let dir = tempfile::tempdir().unwrap();
     let mut client = owned_client(&format!("{}/mcp", served.base), dir.path());
     let result = client.initialize().await;
-    (served, result)
+    (served, result, client)
+}
+
+/// The used document's identity and its scopes were kept: the walk returned
+/// that document, not merely a success.
+fn kept_the_document(client: &OAuthClient, base: &str) {
+    let meta = client
+        .resource_metadata
+        .as_ref()
+        .expect("a document was used");
+    assert_eq!(meta.resource, format!("{base}/mcp"));
+    assert_eq!(client.scopes, vec!["prm-scope".to_string()]);
 }
 
 const PATH: &str = "GET /.well-known/oauth-protected-resource/mcp";
@@ -214,7 +226,7 @@ fn in_order(seen: &[String], first: &str, then: &str) -> bool {
 
 #[tokio::test]
 async fn a_path_document_naming_another_resource_is_refused_naming_both() {
-    let (served, result) = initialize(backend(
+    let (served, result, _client) = initialize(backend(
         Probe::Plain401,
         Doc::Absent,
         Doc::Names("/other"),
@@ -226,11 +238,15 @@ async fn a_path_document_naming_another_resource_is_refused_naming_both() {
         .to_string();
     assert!(err.contains(&format!("{}/other", served.base)), "{err}");
     assert!(err.contains(&format!("{}/mcp", served.base)), "{err}");
+    assert!(
+        err.contains("/.well-known/oauth-protected-resource/mcp"),
+        "the error names the document it refused: {err}"
+    );
 }
 
 #[tokio::test]
 async fn a_path_document_naming_this_resource_is_used() {
-    let (served, result) = initialize(backend(
+    let (served, result, client) = initialize(backend(
         Probe::Plain401,
         Doc::Absent,
         Doc::Names("/mcp"),
@@ -238,6 +254,7 @@ async fn a_path_document_naming_this_resource_is_used() {
     ))
     .await;
     result.expect("a document naming the configured resource is used");
+    kept_the_document(&client, &served.base);
     assert!(
         position(&served.seen(), PATH).is_some(),
         "{:?}",
@@ -248,7 +265,7 @@ async fn a_path_document_naming_this_resource_is_used() {
 /// Ruling (A): the origin document is held to the configured resource too.
 #[tokio::test]
 async fn an_origin_document_naming_the_origin_is_refused_for_a_path_resource() {
-    let (served, result) = initialize(backend(
+    let (served, result, _client) = initialize(backend(
         Probe::Plain401,
         Doc::Absent,
         Doc::Absent,
@@ -265,7 +282,7 @@ async fn an_origin_document_naming_the_origin_is_refused_for_a_path_resource() {
 
 #[tokio::test]
 async fn the_path_inserted_document_is_tried_before_the_origin() {
-    let (served, result) = initialize(backend(
+    let (served, result, client) = initialize(backend(
         Probe::Plain401,
         Doc::Absent,
         Doc::Absent,
@@ -273,6 +290,7 @@ async fn the_path_inserted_document_is_tried_before_the_origin() {
     ))
     .await;
     result.expect("an origin document naming this resource is used");
+    kept_the_document(&client, &served.base);
     let seen = served.seen();
     let (path, origin) = (position(&seen, PATH), position(&seen, ORIGIN));
     assert!(
@@ -283,7 +301,7 @@ async fn the_path_inserted_document_is_tried_before_the_origin() {
 
 #[tokio::test]
 async fn a_path_answer_that_is_not_a_document_falls_through_to_the_origin() {
-    let (served, result) = initialize(backend(
+    let (served, result, client) = initialize(backend(
         Probe::Plain401,
         Doc::Absent,
         Doc::Html,
@@ -291,6 +309,7 @@ async fn a_path_answer_that_is_not_a_document_falls_through_to_the_origin() {
     ))
     .await;
     result.expect("an HTML answer is not a document; the origin is tried next");
+    kept_the_document(&client, &served.base);
     let seen = served.seen();
     assert!(in_order(&seen, PATH, ORIGIN), "{seen:?}");
 }
@@ -299,7 +318,7 @@ async fn a_path_answer_that_is_not_a_document_falls_through_to_the_origin() {
 
 #[tokio::test]
 async fn the_hinted_document_is_fetched_first_and_used() {
-    let (served, result) = initialize(backend(
+    let (served, result, client) = initialize(backend(
         Probe::Hint("/hinted-prm"),
         Doc::Names("/mcp"),
         Doc::Names("/other"),
@@ -307,6 +326,7 @@ async fn the_hinted_document_is_fetched_first_and_used() {
     ))
     .await;
     result.expect("the hinted document names this resource");
+    kept_the_document(&client, &served.base);
     let seen = served.seen();
     assert!(position(&seen, HINTED).is_some(), "{seen:?}");
     assert!(
@@ -317,14 +337,20 @@ async fn the_hinted_document_is_fetched_first_and_used() {
 
 #[tokio::test]
 async fn a_hinted_document_naming_another_resource_is_refused_with_no_fallback() {
-    let (served, result) = initialize(backend(
+    let (served, result, _client) = initialize(backend(
         Probe::Hint("/hinted-prm"),
         Doc::Names("/other"),
         Doc::Names("/mcp"),
         Doc::Absent,
     ))
     .await;
-    result.expect_err("a mismatch is an answer, not a missing document");
+    let err = result
+        .expect_err("a mismatch is an answer, not a missing document")
+        .to_string();
+    assert!(
+        err.contains(&format!("{}/hinted-prm", served.base)),
+        "{err}"
+    );
     assert!(
         position(&served.seen(), PATH).is_none(),
         "{:?}",
@@ -334,7 +360,7 @@ async fn a_hinted_document_naming_another_resource_is_refused_with_no_fallback()
 
 #[tokio::test]
 async fn a_401_without_a_hint_falls_through_to_the_well_known_order() {
-    let (served, result) = initialize(backend(
+    let (served, result, client) = initialize(backend(
         Probe::Plain401,
         Doc::Absent,
         Doc::Names("/mcp"),
@@ -342,6 +368,7 @@ async fn a_401_without_a_hint_falls_through_to_the_well_known_order() {
     ))
     .await;
     result.expect("no hint: the path-inserted document");
+    kept_the_document(&client, &served.base);
     let seen = served.seen();
     assert!(in_order(&seen, "POST /mcp", PATH), "{seen:?}");
 }
@@ -349,7 +376,7 @@ async fn a_401_without_a_hint_falls_through_to_the_well_known_order() {
 /// Ruling (B): the probe follows no redirect.
 #[tokio::test]
 async fn a_redirected_probe_gives_no_hint_and_its_location_is_never_fetched() {
-    let (served, result) = initialize(backend(
+    let (served, result, client) = initialize(backend(
         Probe::Redirect,
         Doc::Absent,
         Doc::Names("/mcp"),
@@ -357,6 +384,7 @@ async fn a_redirected_probe_gives_no_hint_and_its_location_is_never_fetched() {
     ))
     .await;
     result.expect("a 302 gives no hint; the well-known order applies");
+    kept_the_document(&client, &served.base);
     let seen = served.seen();
     assert!(position(&seen, "GET /elsewhere").is_none(), "{seen:?}");
     assert!(position(&seen, PATH).is_some(), "{seen:?}");
@@ -364,7 +392,7 @@ async fn a_redirected_probe_gives_no_hint_and_its_location_is_never_fetched() {
 
 #[tokio::test]
 async fn a_hint_to_a_refused_destination_is_refused() {
-    let (_served, result) = initialize(backend(
+    let (_served, result, _client) = initialize(backend(
         // https, so the cleartext rule cannot be what refuses it: only the
         // destination policy's IP-literal check can (gpt, design r2).
         Probe::HintAbsolute("https://169.254.169.254/latest/meta-data"),
@@ -382,7 +410,7 @@ async fn a_hint_to_a_refused_destination_is_refused() {
 #[tokio::test]
 async fn a_failed_path_fetch_does_not_let_an_origin_named_document_through() {
     for failure in [Doc::Html, Doc::Abort] {
-        let (served, result) = initialize(backend(
+        let (served, result, _client) = initialize(backend(
             Probe::Plain401,
             Doc::Absent,
             failure,
@@ -423,6 +451,7 @@ async fn a_refused_probe_is_no_hint_and_the_candidates_decide() {
         .initialize()
         .await
         .expect("no hint; the path document names this resource");
+    kept_the_document(&client, &served.base);
     let seen = served.seen();
     assert!(
         position(&seen, "POST /mcp").is_none(),
@@ -430,4 +459,58 @@ async fn a_refused_probe_is_no_hint_and_the_candidates_decide() {
     );
     assert!(position(&seen, HINTED).is_none(), "{seen:?}");
     assert!(position(&seen, PATH).is_some(), "{seen:?}");
+}
+
+/// Companion to the refused-probe row, with the production pinned client: a
+/// candidate the destination policy refuses ends discovery, it is not skipped.
+#[tokio::test]
+async fn a_refused_candidate_ends_discovery_under_the_production_client() {
+    let served = serve(Backend {
+        probe: Probe::Plain401,
+        hint: Doc::Absent,
+        path: Doc::Names("/mcp"),
+        origin: Doc::Absent,
+        localhost: true,
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let policy = crate::security::ssrf::DestinationPolicy::Public;
+    let mut client = OAuthClient::with_destination(
+        policy,
+        crate::security::ssrf::pinned_client_builder_for(policy)
+            .build()
+            .unwrap(),
+        "prm-discovery".to_string(),
+        format!("{}/mcp", served.base),
+        vec![],
+        Arc::new(TokenStorage::new(dir.path().to_path_buf()).unwrap()),
+        OAuthClientConfig::default(),
+    );
+    let err = client
+        .initialize()
+        .await
+        .expect_err("a refused candidate is an answer, not a missing document")
+        .to_string();
+    assert!(err.contains("SSRF blocked"), "{err}");
+    assert!(
+        served.seen().is_empty(),
+        "nothing reached the server: {:?}",
+        served.seen()
+    );
+}
+
+/// A hint that is not an absolute URL names nothing: the well-known order
+/// still decides, instead of discovery ending on the bad parameter (grok,
+/// implementation review).
+#[tokio::test]
+async fn a_hint_that_is_not_a_url_is_no_hint() {
+    let (served, result, client) = initialize(backend(
+        Probe::HintAbsolute("not a url"),
+        Doc::Absent,
+        Doc::Names("/mcp"),
+        Doc::Absent,
+    ))
+    .await;
+    result.expect("the bad hint is ignored; the path document names this resource");
+    kept_the_document(&client, &served.base);
 }
