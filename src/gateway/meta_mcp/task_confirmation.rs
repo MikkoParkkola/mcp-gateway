@@ -37,7 +37,7 @@ use crate::gateway::task_service::OwnedAdmissionRequest;
 use crate::hashing::{canonical_json, sha256_hex};
 use crate::idempotency::admission::ExecutionAdmission;
 use crate::key_server::oidc::VerifiedIdentity;
-use crate::protocol::continuation::{ContinuationPurpose, Payload, now_unix_secs};
+use crate::protocol::continuation::{ContinuationPurpose, Payload, clock_now};
 use crate::protocol::meta::Declared;
 use crate::protocol::mrtr::{RetryFields, principal_fingerprint};
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -52,9 +52,14 @@ use helpers::{challenge_key, cleared, operation_digest, record, refuse, refuse_g
 /// spelling is a discriminator that can disagree with itself.
 const RESULT_TYPE_INPUT_REQUIRED: &str = "input_required";
 
-/// The method a confirmation is asked with, and the capability the client must
-/// have declared to be asked it.
+/// The method a confirmation is asked with.
 const CONFIRMATION_METHOD: &str = "elicitation/create";
+
+/// The capability the client must have declared to be asked
+/// [`CONFIRMATION_METHOD`]: `required_capability` maps the one to the other,
+/// and `the_confirmation_method_needs_the_confirmation_capability` pins it, so
+/// the pair cannot drift apart (MIK-8248).
+const CONFIRMATION_CAPABILITY: &str = "elicitation";
 
 /// The one answer that authorises the call. Per the elicitation contract the
 /// other two values are `decline` and `cancel`; anything that is not this is a
@@ -288,7 +293,7 @@ impl MetaMcp {
         request.retry.request_state.as_deref().is_some_and(|token| {
             self.continuation
                 .keyring()
-                .open(token, now_unix_secs())
+                .open_now(token)
                 .is_ok_and(|payload| {
                     payload
                         .require_purpose(ContinuationPurpose::DestructiveConfirm)
@@ -310,15 +315,7 @@ impl MetaMcp {
         fingerprint: String,
         digest: String,
     ) -> TaskConfirmation {
-        let Some(capability) = crate::protocol::meta::required_capability(CONFIRMATION_METHOD)
-        else {
-            return refuse(
-                request,
-                "unaskable",
-                -32603,
-                "this gateway cannot classify its own confirmation request",
-            );
-        };
+        let capability = CONFIRMATION_CAPABILITY;
         if !request.input_capabilities.has(capability) {
             record("undeclared");
             return TaskConfirmation::Answer(Box::new(JsonRpcResponse::error_with_data(
@@ -338,6 +335,18 @@ impl MetaMcp {
             )));
         }
 
+        let Ok(now) = clock_now() else {
+            warn!(
+                tool = request.tool_name,
+                "Clock reads before 1970; refusing to confirm"
+            );
+            return refuse(
+                request,
+                "clock_before_epoch",
+                -32003,
+                "this destructive call cannot be confirmed right now",
+            );
+        };
         let Some(payload) = self
             .continuation
             .begin_confirmation_exchange(
@@ -348,7 +357,7 @@ impl MetaMcp {
                 None,
                 fingerprint,
                 digest,
-                now_unix_secs(),
+                now,
             )
             .await
         else {
@@ -412,9 +421,10 @@ impl MetaMcp {
         digest: &str,
         key: &str,
     ) -> TaskConfirmation {
-        let now = now_unix_secs();
-        let payload = match self.continuation.keyring().open(token, now) {
-            Ok(payload) => payload,
+        let opened =
+            clock_now().and_then(|now| Ok((self.continuation.keyring().open(token, now)?, now)));
+        let (payload, now) = match opened {
+            Ok(opened) => opened,
             Err(error) => {
                 let tool = request.tool_name;
                 warn!(tool, %error, "Confirmation grant refused");
@@ -556,6 +566,17 @@ impl MetaMcp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The capability `challenge` checks is the one the protocol requires for
+    /// the method it asks with. This is the only way the removed `unaskable`
+    /// refusal could ever have run: a drift between the two literals.
+    #[test]
+    fn the_confirmation_method_needs_the_confirmation_capability() {
+        assert_eq!(
+            crate::protocol::meta::required_capability(CONFIRMATION_METHOD),
+            Some(CONFIRMATION_CAPABILITY)
+        );
+    }
 
     fn digest_of(name: &str, arguments: &Value, task: &Value, key: &str) -> String {
         operation_digest(name, arguments, task, key)

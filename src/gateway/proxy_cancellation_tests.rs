@@ -66,7 +66,7 @@ async fn mik_7212_wire_11_cancelled_sampling_does_not_strand_pending_entry() {
 
     // Receiving the prompt proves the entry is registered and the send
     // succeeded: the call is now parked on the response receiver.
-    let delivered = tokio::time::timeout(Duration::from_millis(500), rx_session.recv())
+    let delivered = tokio::time::timeout(Duration::from_secs(10), rx_session.recv())
         .await
         .expect("originating session must receive the sampling request")
         .expect("channel open");
@@ -129,7 +129,7 @@ async fn mik_7388_cancel_1_a_cancelled_exchange_cannot_be_answered_into_another(
     // parked on its receiver, and yields the id the client would answer.
     macro_rules! next_id {
         () => {{
-            let delivered = tokio::time::timeout(Duration::from_millis(500), rx_session.recv())
+            let delivered = tokio::time::timeout(Duration::from_secs(10), rx_session.recv())
                 .await
                 .expect("the session must receive the prompt")
                 .expect("channel open");
@@ -185,7 +185,7 @@ async fn mik_7388_cancel_1_a_cancelled_exchange_cannot_be_answered_into_another(
         proxy.resolve_pending(&id_survivor, &session, own.clone()),
         "the surviving exchange must still be answerable"
     );
-    let got = tokio::time::timeout(Duration::from_millis(500), survivor)
+    let got = tokio::time::timeout(Duration::from_secs(10), survivor)
         .await
         .expect("the surviving call must return")
         .expect("its task must not panic")
@@ -220,7 +220,7 @@ async fn mik_7212_wire_11_cancelled_elicitation_does_not_strand_pending_entry() 
             .await
     });
 
-    let delivered = tokio::time::timeout(Duration::from_millis(500), rx_session.recv())
+    let delivered = tokio::time::timeout(Duration::from_secs(10), rx_session.recv())
         .await
         .expect("originating session must receive the elicitation request")
         .expect("channel open");

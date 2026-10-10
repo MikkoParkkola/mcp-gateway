@@ -50,12 +50,15 @@ struct Scripted {
 
 #[async_trait::async_trait]
 impl Transport for Scripted {
-    async fn request(
-        &self,
-        method: &str,
-        _params: Option<Value>,
-    ) -> crate::Result<JsonRpcResponse> {
+    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
         let id = RequestId::Number(1);
+        // MIK-8176: a progress token gets a notification first.
+        #[cfg(feature = "firewall")]
+        if slot_release::notify_first(method, params.as_ref()) {
+            tokio::task::yield_now().await;
+        }
+        #[cfg(not(feature = "firewall"))]
+        let _ = &params;
         // F13: a cold `tools/call` lists the backend first. The list names the
         // tool the rows call, and it is not a call, so `calls` skips it.
         if method == "tools/list" {
@@ -177,6 +180,7 @@ enum MetaMode {
     #[default]
     Plain,
     /// Response inspection refuses a HIGH finding instead of annotating it.
+    #[cfg(feature = "firewall")]
     InspectionBlocks,
     /// The idempotency cache is on, so a re-issued key replays.
     Idempotent,
@@ -189,6 +193,7 @@ impl MetaMode {
     fn arm(&self, mut meta: MetaMcp) -> MetaMcp {
         match self {
             Self::Plain => {}
+            #[cfg(feature = "firewall")]
             Self::InspectionBlocks => meta.enable_response_inspection_action_mode(),
             Self::Idempotent => meta.enable_idempotency(
                 Arc::new(crate::idempotency::IdempotencyCache::new()),

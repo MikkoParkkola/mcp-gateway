@@ -189,6 +189,8 @@ async fn off_runtime_unslotted_check_refuses_without_panic() {
             .with_max_level(tracing::Level::ERROR)
             .with_writer(move || Captured(Arc::clone(&sink)))
             .finish();
+        // A callsite another thread cached as off would miss this capture (MIK-8254).
+        crate::test_log_capture::keep_interest_open();
         let code = tracing::subscriber::with_default(subscriber, || {
             let _allowed = allow_unslotted_check_for_test();
             let who = api_key("alice");
@@ -257,26 +259,23 @@ fn stalled_log_bounds_the_decision_write() {
             endpoint.release_one();
             endpoint.wait_for_arrivals(2).await;
             let gate = log.stall_next_write_for_test(APPEND_BOUND);
-            let armed = Instant::now();
             endpoint.release_one();
+            // The gate opens only after the call answers, so a decision write
+            // that waited on the stall never answers: the hang guard below
+            // fails it, and `refused` names the bounded path (MIK-8222).
             let answer = call.await.expect("the call task completes");
-            let elapsed = armed.elapsed();
             gate.release();
-            (answer, elapsed, log.refused_under_stall_for_test())
+            (answer, log.refused_under_stall_for_test())
         });
         let _ = sent.send(outcome);
     });
-    let (answer, elapsed, refused) = received
+    let (answer, refused) = received
         .recv_timeout(Duration::from_secs(10))
         .expect("the call must answer: a stalled decision write pinned the scenario");
     assert_eq!(
         answer.pointer("/error/code").and_then(Value::as_i64),
         Some(-32005),
         "{answer}"
-    );
-    assert!(
-        elapsed < APPEND_BOUND * 2 + Duration::from_secs(1),
-        "answered after {elapsed:?}; bound {APPEND_BOUND:?} plus margin"
     );
     assert!(
         refused >= 1,

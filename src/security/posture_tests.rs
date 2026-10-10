@@ -245,14 +245,7 @@ impl std::io::Write for Sink {
 /// Thread-local subscriber over a process-wide TRACE registry (idiom from
 /// `agent_identity_audit_tests`), so no callsite is filtered before it.
 pub(crate) fn posture_records(run: impl FnOnce()) -> Vec<(String, String)> {
-    use tracing_subscriber::prelude::*;
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        let _ = tracing::subscriber::set_global_default(
-            tracing_subscriber::Registry::default()
-                .with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
+    crate::test_log_capture::keep_interest_open();
     let sink = Sink::default();
     let writer = sink.clone();
     let subscriber = tracing_subscriber::fmt()
@@ -365,6 +358,7 @@ fn gateway_startup_logs_posture_once() {
 
 /// An in-memory hardened config is forced before it is validated, so a
 /// block threshold above 1.0 is refused on the constructor path too.
+#[cfg(feature = "firewall")]
 #[test]
 fn gateway_constructor_validates_what_hardened_forces() {
     let mut config = Config::default();
@@ -403,6 +397,7 @@ fn load_err(body: &str) -> String {
         .to_string()
 }
 
+#[cfg(feature = "firewall")]
 #[test]
 fn hardened_forces_anomaly_blocking() {
     for (block, expected) in [(None, 1.0), (Some("0.95"), 0.95), (Some("0.9"), 0.9)] {
@@ -418,6 +413,7 @@ fn hardened_forces_anomaly_blocking() {
     }
 }
 
+#[cfg(feature = "firewall")]
 #[test]
 fn standard_posture_leaves_the_firewall_alone() {
     let config = load(&firewall_yaml("standard", None));

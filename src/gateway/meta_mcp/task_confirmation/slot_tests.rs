@@ -371,6 +371,14 @@ async fn unclassified_without_elicitation_is_refused_as_unclassified() {
         "refusal text: {}",
         error.message
     );
+    // The refusal names exactly the capability to declare: the confirmation
+    // capability, which `challenge` now reads from its constant (MIK-8248).
+    assert_eq!(
+        error.data.as_ref().map(|d| &d["requiredCapabilities"]),
+        Some(&json!(["elicitation"])),
+        "refusal data: {:?}",
+        error.data
+    );
 }
 
 /// T7: a grant issued while the tool read destructive is still redeemed after
@@ -625,4 +633,24 @@ fn an_unattributable_caller_is_never_an_admitted_replay() {
         "control: the verified owner's operation is recognised"
     );
     assert!(!MetaMcp::already_admitted(&request(None), KEY));
+}
+
+/// MIK-8202 (#3616 regression): a destructive call on a clock before 1970 is
+/// refused, never challenged: no confirmation is minted against a time the
+/// gateway cannot read. Control: the real clock challenges the same call.
+#[tokio::test]
+async fn a_destructive_call_on_a_clock_before_the_epoch_is_refused() {
+    let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
+    let refused = {
+        let _clock = crate::clock::test_clock::before_epoch();
+        ask(&fx, &fresh(), elicitation()).await
+    };
+    let TaskConfirmation::Answer(response) = &refused else {
+        panic!("a clock before 1970 challenged a destructive call: {refused:?}");
+    };
+    let error = response.error.as_ref().expect("a refusal is an error");
+    assert_eq!(error.code, -32003, "{error:?}");
+    assert!(response.result.is_none(), "a refusal carries no challenge");
+
+    challenge(&ask(&fx, &fresh(), elicitation()).await);
 }

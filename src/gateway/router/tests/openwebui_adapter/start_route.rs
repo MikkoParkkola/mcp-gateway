@@ -536,14 +536,7 @@ impl std::io::Write for Sink {
 /// client and the fake all run on it under `current_thread`).
 pub(super) fn capture() -> (Captured, tracing::subscriber::DefaultGuard) {
     use tracing_subscriber::fmt::format::FmtSpan;
-    use tracing_subscriber::prelude::*;
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        let _ = tracing::subscriber::set_global_default(
-            tracing_subscriber::Registry::default()
-                .with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
+    crate::test_log_capture::keep_interest_open();
     let captured = Captured::default();
     let writer = captured.clone();
     let subscriber = tracing_subscriber::fmt()

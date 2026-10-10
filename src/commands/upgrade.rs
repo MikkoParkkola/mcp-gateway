@@ -17,10 +17,12 @@
 //!     applies_below: "3.0.0",
 //!     description: "Rename 'backends.*.http_url' to 'backends.*.url'",
 //!     apply: |config_dir| {
+//!         // Read and write under one hold of the config lock (MIK-8042),
+//!         // never `read_to_string` then `std::fs::write`.
 //!         let path = config_dir.join("gateway.yaml");
-//!         let text = std::fs::read_to_string(&path)?;
-//!         let patched = text.replace("http_url:", "url:");
-//!         std::fs::write(&path, patched)?;
+//!         edit_config_text(&path, |current| {
+//!             Ok(current.map(|text| text.replace("http_url:", "url:")))
+//!         })?;
 //!         Ok(())
 //!     },
 //! }

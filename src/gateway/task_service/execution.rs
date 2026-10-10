@@ -191,6 +191,11 @@ pub struct TaskExecutor {
     /// Cancelled once, by a shutdown whose drain ran out; every worker runs
     /// under it ([`Self::spawn_worker`]).
     shutdown: tokio_util::sync::CancellationToken,
+    /// Test-only: replaces the produce-seam wait, so a test can tell "woken"
+    /// from "timed out" by whether an update answers at all, not by how long
+    /// it took (MIK-8222).
+    #[cfg(test)]
+    produce_seam_wait: std::sync::OnceLock<Duration>,
 }
 
 impl TaskExecutor {
@@ -212,6 +217,8 @@ impl TaskExecutor {
             publication_hook: std::sync::OnceLock::new(),
             managed: std::sync::OnceLock::new(),
             shutdown: tokio_util::sync::CancellationToken::new(),
+            #[cfg(test)]
+            produce_seam_wait: std::sync::OnceLock::new(),
         })
     }
 
@@ -381,6 +388,15 @@ impl TaskExecutor {
     #[cfg(test)]
     pub(crate) fn release_waiters_for_test(&self) -> usize {
         self.handoffs.release_waiters()
+    }
+
+    /// Test-only: an update waits up to `wait` for the current owner instead
+    /// of the produce-seam second. Set once per executor.
+    #[cfg(test)]
+    pub(crate) fn stretch_produce_seam_wait_for_test(&self, wait: Duration) {
+        self.produce_seam_wait
+            .set(wait)
+            .expect("the produce-seam wait is set once");
     }
 
     /// Test-only: the recovery descriptor a dispatch made durable for `id`.

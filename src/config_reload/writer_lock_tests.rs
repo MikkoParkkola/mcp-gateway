@@ -8,6 +8,8 @@
 use std::{sync::Arc, time::Duration};
 
 use super::*;
+// Every build has it; the `super` re-export is the web UI's (webui only).
+use super::write::MutateError;
 use crate::config::Config;
 use crate::config_persistence::CommentLoss;
 use crate::fs_lock::ExclusiveFileLock;

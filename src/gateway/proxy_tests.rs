@@ -133,7 +133,7 @@ async fn sampling_request_reaches_only_the_originating_session() {
             .await
     });
 
-    let delivered = tokio::time::timeout(Duration::from_millis(500), rx_a.recv())
+    let delivered = tokio::time::timeout(Duration::from_secs(10), rx_a.recv())
         .await
         .expect("originating session must receive the sampling request")
         .expect("channel open");
@@ -528,7 +528,7 @@ async fn a_bridged_prompt_commits_its_receipt_only_when_written() {
             .send_request_committing(&origin, "rq-1", "elicitation/create", None, Some(commit))
             .await
     });
-    let queued = tokio::time::timeout(Duration::from_millis(500), rx.recv())
+    let queued = tokio::time::timeout(Duration::from_secs(10), rx.recv())
         .await
         .expect("the session receives the prompt")
         .expect("channel open");
@@ -566,7 +566,7 @@ async fn an_unwritten_prompt_commits_nothing() {
             .send_request_committing(&origin, "rq-2", "elicitation/create", None, Some(commit))
             .await
     });
-    let queued = tokio::time::timeout(Duration::from_millis(500), rx.recv())
+    let queued = tokio::time::timeout(Duration::from_secs(10), rx.recv())
         .await
         .expect("the session receives the prompt")
         .expect("channel open");

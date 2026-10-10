@@ -106,7 +106,10 @@ fn assert_event(firewall: &Firewall, directory: &TempDir, action: &str, finding:
     );
     let event = &events[0];
     assert_eq!(event["event"], "response");
-    assert_eq!(event["schema_version"], 2);
+    assert_eq!(
+        event["schema_version"], 3,
+        "MIK-8236: every audit row is version 3"
+    );
     assert_eq!(event["artifact_kind"], "bridge_challenge");
     assert_eq!(event["action"], action);
     assert_eq!(

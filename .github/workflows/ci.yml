@@ -122,6 +122,11 @@ jobs:
       - name: Every added COV.3 function has an inventory row (MIK-8169)
         if: github.event_name == 'pull_request'
         run: python3 scripts/release/check_inventory_rows.py "origin/${{ github.base_ref }}"
+      # A clock before 1970 makes a raw read admit what expired; new code reads
+      # the wall clock through crate::clock only (MIK-8202).
+      - name: No new raw wall-clock read (MIK-8202)
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/release/check_clock_baseline.py "origin/${{ github.base_ref }}"
       # Every function in the swept areas has a row, whenever it was added
       # (MIK-8195); the area list grows with each wave until it is removed.
       - name: Every function in a swept COV.3 area has an inventory row (MIK-8195)
@@ -138,6 +143,10 @@ jobs:
         run: scripts/ci/check-hosted-runners.sh --self-test
       - name: Require GitHub-hosted runners (plus the one trusted label)
         run: scripts/ci/check-hosted-runners.sh
+      # Every image CI pulls names its registry; Docker Hub content comes from
+      # mirror.gcr.io, so the anonymous pull limit cannot fail a merge (MIK-8256).
+      - name: No anonymous Docker Hub pull
+        run: python3 scripts/ci/check_docker_hub_pulls.py
       - name: Validate the trusted runner's admission rules
         run: scripts/ci/trusted-runner/job-started.sh --self-test
       - name: Validate the mutant batch classifier
@@ -313,7 +322,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       registry:
-        image: registry:2
+        image: mirror.gcr.io/library/registry:2
         ports:
           - 5000:5000
     steps:
@@ -345,7 +354,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       registry:
-        image: registry:2
+        image: mirror.gcr.io/library/registry:2
         ports:
           - 5000:5000
     steps:
@@ -371,11 +380,11 @@ jobs:
     runs-on: ubuntu-latest
     services:
       registry:
-        image: registry:2
+        image: mirror.gcr.io/library/registry:2
         ports:
           - 5000:5000
       airgap:
-        image: registry:2
+        image: mirror.gcr.io/library/registry:2
         ports:
           - 5001:5000
     steps:
@@ -407,6 +416,8 @@ jobs:
         uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         with:
           cluster_name: mcp-gateway-rollback-smoke
+          # kind v0.33.0's own default node image, through the mirror (MIK-8256).
+          node_image: mirror.gcr.io/kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
       - name: Apply, upgrade, and roll back on the real cluster
         env:
           # kind-action already created the cluster and set the kube context;
@@ -481,11 +492,10 @@ jobs:
       # The Windows-only modules (`win_acl`, the one module allowed `unsafe`
       # under ADR-016, and `private_fs`) compile nowhere else, so the Linux
       # clippy jobs never see them. Lint them where they compile.
-      # `unnecessary_wraps` is allowed here only: it fires on the existing
-      # non-unix no-op stubs, which keep the unix signature on purpose.
-      - run: >-
-          cargo clippy --all-targets --all-features --
-          -D warnings -A clippy::unnecessary_wraps
+      # No job-wide allow: each non-unix no-op stub that keeps the unix
+      # signature carries its own #[expect(clippy::unnecessary_wraps)]
+      # (MIK-8223).
+      - run: cargo clippy --all-targets --all-features -- -D warnings
       # Symlink creation for the no-follow row (W-T6): Developer Mode lets a
       # non-elevated token create symlinks, so the row runs rather than skips.
       - name: Allow symlink creation
@@ -1001,8 +1011,16 @@ jobs:
         run: python3 scripts/release/test_critical_function_coverage.py
       - name: Test the inventory-row check (MIK-8169)
         run: python3 scripts/release/test_check_inventory_rows.py
+      - name: Test the coverage grade download pruning
+        run: python3 scripts/release/test_prune_coverage_grades.py
+      - name: Test the C6 obligation resolver (MIK-8245)
+        run: python3 scripts/release/test_c6_resolve.py
+      - name: Test the raw clock-read check (MIK-8202)
+        run: python3 scripts/release/test_check_clock_baseline.py
       - name: Test the macOS exclusion check (MIK-8174)
         run: python3 scripts/release/test_check_macos_exclusions.py
+      - name: Test the release-binary test-hook check, and that every workflow calls it
+        run: python3 scripts/release/test_grep_no_test_hook.py
       - name: Test the tag/manifest publish gate
         run: python3 scripts/release/test_check_tag_manifest.py
       - name: Test the burndown summary drift check
@@ -1178,6 +1196,36 @@ jobs:
         if: github.event_name == 'pull_request'
         run: python3 scripts/dev/check-event-source-scope.py "origin/${{ github.base_ref }}"
 
+  timing-asserts:
+    name: No wall-clock windows under 5 s in tests (MIK-8222)
+    if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
+    # A test that tells two outcomes apart by elapsed time against a short
+    # window goes red on a loaded runner, on a change that touched nothing
+    # near it. Such a test waits on an event instead. The allowlist only
+    # shrinks: against the base, a new row fails.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Check the guard refuses what it claims to
+        run: python3 scripts/dev/test_check_timing_asserts.py
+      - name: Check the tree and the allowlist against the previous tip
+        if: github.event_name != 'pull_request'
+        # The frozen design's base outside a PR: the tip this push replaced,
+        # else the parent. A new branch or a dispatch has no previous tip.
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          base="$BEFORE"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="HEAD^"
+          fi
+          python3 scripts/dev/check-timing-asserts.py --base "$base"
+      - name: Check the tree and the allowlist against the base
+        if: github.event_name == 'pull_request'
+        run: python3 scripts/dev/check-timing-asserts.py --base "origin/${{ github.base_ref }}"
+
   orphan-test-modules:
     name: Orphan test modules (MIK-7538)
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) }}
@@ -1312,6 +1360,9 @@ jobs:
         run: python3 scripts/release/check_tag_manifest.py
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        # buildx bootstraps BuildKit from this image; the default is on Docker Hub (MIK-8256).
+        with:
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -1471,6 +1522,9 @@ jobs:
         run: python3 scripts/release/check_tag_manifest.py
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        # buildx bootstraps BuildKit from this image; the default is on Docker Hub (MIK-8256).
+        with:
+          driver-opts: image=mirror.gcr.io/moby/buildkit:buildx-stable-1
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0

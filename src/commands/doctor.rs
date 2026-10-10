@@ -10,9 +10,6 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
-#[cfg(test)]
-use std::net::TcpListener;
-
 use mcp_gateway::{
     cli::output::OutputFormat,
     config::{Config, TransportConfig},
@@ -375,18 +372,6 @@ fn check_config(path: Option<&Path>, _fix: bool) -> (CheckResult, Option<Config>
                 .with_manual_fix(format!("mcp-gateway validate {}", p.display())),
             None,
         ),
-    }
-}
-
-#[cfg(test)]
-fn check_port(port: u16) -> CheckResult {
-    let addr = format!("127.0.0.1:{port}");
-    match TcpListener::bind(&addr) {
-        Ok(_) => CheckResult::pass("Port", format!("{port} available")).with_category("port"),
-        Err(_) => CheckResult::fail("Port", format!("{port} already in use"))
-            .with_category("port")
-            .with_hint("Another process is listening on this port")
-            .with_manual_fix(format!("lsof -nP -iTCP:{port} -sTCP:LISTEN")),
     }
 }
 

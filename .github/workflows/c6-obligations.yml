@@ -1,0 +1,36 @@
+name: C6 obligations
+
+# Every C6 gate-day obligation still resolves to its function (MIK-8245). The frozen ranking
+# names each one by the file it was drawn in. A function that moved, or whose patched lines
+# changed, would leave its fail-open patch unable to apply; the mutants runner scores that VOID
+# and G9 lets an understudy replace it, so the obligation would leave the sample silently.
+# scripts/release/c6_resolve.py finds each one by identity, checks that its patch mutates that
+# function and applies, and fails on any it cannot resolve. It runs on every pull request, so a
+# change that moves or edits a framed function re-targets or repairs its patch in the same PR,
+# and on every release-line push. No path filter, no condition: it must never be skipped.
+# scripts/release/test_check_tag_manifest.py and test_workflow_wiring_mutations.py pin this.
+on:
+  pull_request:
+  push:
+    branches: [docs/ranking-1-release-line]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    name: C6 obligations resolve (MIK-8245)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Every framed obligation resolves to its function
+        timeout-minutes: 1
+        run: python3 scripts/release/c6_resolve.py --tree HEAD

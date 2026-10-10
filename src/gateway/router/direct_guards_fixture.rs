@@ -250,6 +250,16 @@ pub(crate) async fn fixture_firewalled(answer: Answer) -> Fx {
     fixture_inner(answer, true, |meta| meta).await
 }
 
+/// [`fixture_firewalled`] with both firewalls writing their audit rows to
+/// `audit` (MIK-8137 b1: the chokepoint's `dispatch` rows).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_audited(answer: Answer, audit: std::path::PathBuf) -> Fx {
+    AUDIT_LOG.with(|a| *a.borrow_mut() = Some(audit));
+    let fx = fixture_inner(answer, true, |meta| meta).await;
+    AUDIT_LOG.with(|a| *a.borrow_mut() = None);
+    fx
+}
+
 /// [`fixture_firewalled`] with a firewall rule for `read` and a client
 /// circuit breaker that opens after one counted failure, so a cell can tell a
 /// refusal the gateway excludes from client accounting from one it charges.
@@ -273,9 +283,10 @@ mod answers;
 mod egress;
 use answers::{call_answer, listing, question};
 use egress::backend_transport;
-pub(crate) use egress::fixture_inspecting_on;
 #[cfg(feature = "firewall")]
-pub(crate) use egress::{fixture_audited_on, fixture_firewalled_on, meta_firewall};
+pub(crate) use egress::{
+    fixture_audited_on, fixture_firewalled_on, fixture_inspecting_on, meta_firewall,
+};
 
 pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
 

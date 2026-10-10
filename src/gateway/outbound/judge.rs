@@ -237,11 +237,12 @@ pub(crate) fn delivered(
     };
     OutboundFrame {
         payload,
-        assessment: Some(assessment),
+        assessment: Some(Box::new(assessment)),
         ticket,
         record_taken: false,
         key: key.map(Arc::from),
         delivery: None,
+        holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
     }
 }
 
@@ -271,11 +272,12 @@ pub(crate) fn admit(
     }
     Admission::Admitted(OutboundFrame {
         payload,
-        assessment: Some(assessment),
+        assessment: Some(Box::new(assessment)),
         ticket,
         record_taken: false,
         key: key.map(Arc::from),
         delivery: None,
+        holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
     })
 }
 
@@ -321,11 +323,12 @@ pub(crate) fn admit_stream_item(
     }
     Admission::Admitted(OutboundFrame {
         payload: Payload::Withheld,
-        assessment: Some(assessment),
+        assessment: Some(Box::new(assessment)),
         ticket,
         record_taken: false,
         key: key.map(Arc::from),
         delivery: None,
+        holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
     })
 }
 

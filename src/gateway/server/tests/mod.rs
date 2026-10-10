@@ -26,7 +26,6 @@ mod visibility_reload_race;
 mod signing_stdio_routing;
 
 mod dispatcher_admission_arms;
-#[cfg(feature = "metrics")]
 mod unkeyed_admission;
 
 mod stdout_death_admission;
@@ -74,6 +73,8 @@ mod owner4_stdio_policy;
 
 // MIK-7272.LIFE.1 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I3).
 mod life1_stdio_cancel;
+// MIK-8176 stage 3: stdio slots kept when written, given back otherwise.
+mod stdio_slot_release;
 // MIK-7642.PR.B: a client cancel reaches the backend by its own request id.
 mod mik7642_backend_cancel;
 mod owner2_stdio_tasks;

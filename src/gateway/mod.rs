@@ -38,7 +38,8 @@ pub mod oauth;
 // auth layer that must run first.
 #[cfg(test)]
 pub(crate) mod chain_test_support;
-#[cfg(test)]
+// Every egress matrix it feeds is `firewall`-gated.
+#[cfg(all(test, feature = "firewall"))]
 pub(crate) mod egress_fixture;
 mod openwebui_adapter;
 pub(crate) mod outbound;
@@ -77,8 +78,9 @@ pub(crate) use server::StdioNonce;
 pub(crate) use server::account_bindings::declare_account_descriptors;
 pub(crate) use server::account_bindings::{ServeMode, sole_operator_asserted};
 /// The test-only allocation meter, for allocation rows outside `gateway`
-/// (`MIK-8201`), without `server` becoming crate-visible.
-#[cfg(test)]
+/// (`MIK-8201`), without `server` becoming crate-visible. Its one reader
+/// outside `gateway` is a `firewall`-gated row.
+#[cfg(all(test, feature = "firewall"))]
 pub(crate) use server::signing_allocation_tests::alloc_meter;
 pub(crate) mod session_id;
 pub mod session_lifecycle;
@@ -159,6 +161,40 @@ pub mod test_helpers {
                 std::sync::Arc::default(),
             ),
         }
+    }
+
+    /// Writes a whole `config` to `path` for a test fixture, through the
+    /// deprecated snapshot writer on purpose: a fixture sets up a file, it
+    /// does not race another writer.
+    ///
+    /// # Errors
+    ///
+    /// The writer's own error message.
+    pub fn write_config_fixture(
+        path: &std::path::Path,
+        config: &crate::config::Config,
+    ) -> Result<(), String> {
+        #[allow(deprecated)] // test fixture writes a whole config on purpose
+        crate::config_persistence::write_config(path, config)
+    }
+
+    /// Writes config `text` to `path` for a test fixture, through the
+    /// deprecated unlocked text writer on purpose (see
+    /// [`write_config_fixture`]).
+    ///
+    /// # Errors
+    ///
+    /// The writer's own error message.
+    pub fn write_config_text_fixture(path: &std::path::Path, text: &str) -> Result<(), String> {
+        #[allow(deprecated)] // test fixture writes a whole config on purpose
+        crate::config_persistence::write_config_text(path, text)
+    }
+
+    /// A receiver told once when a CLI config writer next starts waiting for
+    /// `config`'s lock: a concurrency test overlaps two writers by it instead
+    /// of a fixed sleep.
+    pub fn when_waiting_for_config_lock(config: &std::path::Path) -> std::sync::mpsc::Receiver<()> {
+        crate::config_persistence::when_waiting_for_lock(config)
     }
 
     /// Writes a fixture owner-only (0600 on Unix), as the gateway requires of

@@ -204,7 +204,7 @@ fn what_add_writes_survives_the_config_file_and_loads() {
     )
     .unwrap();
     let path = dir.path().join("gateway.yaml");
-    write_config(&path, &config).unwrap();
+    crate::gateway::test_helpers::write_config_fixture(&path, &config).unwrap();
     let loaded = Config::load(Some(&path)).expect("the written config loads");
     assert!(!loaded.backends["tavily"].enabled);
     assert!(loaded.backends["github"].enabled);

@@ -131,6 +131,7 @@ async fn f13_t9c_a_bridged_round_fills_as_its_own_caller() {
     )];
     let round = BridgeDispatcher {
         meta: &meta,
+        caller: &crate::gateway::meta_mcp::authz_tests::ctx(&crate::gateway::authz::AllowAll),
         server: "edits",
         tool: "edit",
         arguments: &arguments,
@@ -205,6 +206,7 @@ async fn f13_a3_a_bridged_fill_failure_is_not_admitted() {
     let arguments = json!({"edits": []});
     let round = BridgeDispatcher {
         meta: &meta,
+        caller: &crate::gateway::meta_mcp::authz_tests::ctx(&crate::gateway::authz::AllowAll),
         server: "edits",
         tool: "edit",
         arguments: &arguments,
@@ -264,6 +266,7 @@ async fn mik_1989_a_bridged_round_after_the_server_is_killed_is_not_admitted() {
     let arguments = json!({"edits": []});
     let round = BridgeDispatcher {
         meta: &meta,
+        caller: &crate::gateway::meta_mcp::authz_tests::ctx(&crate::gateway::authz::AllowAll),
         server: "edits",
         tool: "edit",
         arguments: &arguments,
@@ -325,6 +328,7 @@ async fn mik_1989_a_kill_during_the_schema_check_stops_the_round() {
     let arguments = json!({"edits": []});
     let round = BridgeDispatcher {
         meta: &meta,
+        caller: &crate::gateway::meta_mcp::authz_tests::ctx(&crate::gateway::authz::AllowAll),
         server: "edits",
         tool: "edit",
         arguments: &arguments,
@@ -367,6 +371,7 @@ async fn mik_1989_a_kill_during_the_schema_check_stops_the_round() {
 /// MIK-7910: the challenge gate scans a round's prompts as the client receives
 /// them. A backend's copy of the reserved chain member is not delivered, so a
 /// marker only there does not refuse the exchange; one in the prompt does.
+#[cfg(feature = "firewall")]
 #[test]
 fn the_challenge_gate_scans_a_prompt_as_it_is_delivered() {
     use crate::gateway::input_bridge::ChallengeGate as _;
@@ -393,6 +398,7 @@ fn the_challenge_gate_scans_a_prompt_as_it_is_delivered() {
     let arguments = json!({});
     let round = BridgeDispatcher {
         meta: &meta,
+        caller: &crate::gateway::meta_mcp::authz_tests::ctx(&crate::gateway::authz::AllowAll),
         server: "origin-backend",
         tool: "ask_user",
         arguments: &arguments,
@@ -432,4 +438,88 @@ fn the_challenge_gate_scans_a_prompt_as_it_is_delivered() {
         round.admit(&batch(INJECTION, "link")).is_err(),
         "a marker in the delivered prompt was admitted"
     );
+}
+
+/// MIK-8137 b1 (gpt i1 on #3688): a bridged round whose answers carry a pattern
+/// the request firewall blocks is refused at the dispatch chokepoint: the
+/// refusal waits in `relay_refused` for the call site, and no `tools/call`
+/// goes out. Control: the same round answering cleanly is sent. Mutant: the
+/// round skipping the chokepoint's answer scan.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_bridged_round_whose_answers_the_firewall_blocks_is_not_sent() {
+    use crate::security::firewall::{Firewall, FirewallConfig};
+    for (answer, refused) in [("work", false), ("; rm -rf / ", true)] {
+        let backend = Arc::new(Backend::new(
+            "edits",
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            Duration::from_secs(60),
+        ));
+        let registry = Arc::new(BackendRegistry::new());
+        assert!(registry.register(Arc::clone(&backend)));
+        let mut meta = MetaMcp::new(registry);
+        meta.set_firewall(Some(Arc::new(Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_requests: true,
+                ..FirewallConfig::default()
+            },
+            None,
+        ))));
+        let slot = Arc::new(Slot::default());
+        backend.set_transport_for_test(Arc::clone(&slot) as Arc<dyn crate::transport::Transport>);
+        let arguments = json!({"edits": []});
+        let relay_refused = parking_lot::Mutex::new(None);
+        let round = BridgeDispatcher {
+            meta: &meta,
+            caller: &crate::gateway::meta_mcp::authz_tests::ctx(&crate::gateway::authz::AllowAll),
+            server: "edits",
+            tool: "edit",
+            arguments: &arguments,
+            prompt_cache_key: None,
+            inbound_meta: None,
+            want_full: false,
+            session_id: None,
+            arm_key: None,
+            caller_identity: None,
+            caller_proof: CallerProof::Anonymous,
+            credential_owner: None,
+            headers: &[],
+            cache_binding: None,
+            account_credential: None,
+            api_key_name: None,
+            trace_id: "b1-bridged-firewall",
+            policy_epoch: 0,
+            protocol_revision: None,
+            routing_profile: "default",
+            scope: InvokeScope::allow_all(CallerStanding::Standard),
+            captured: meta.backends.get("edits"),
+            managed: None,
+            account_refusal: &parking_lot::Mutex::new(None),
+            reservation: &parking_lot::Mutex::new(None),
+            relay: super::relay::RelayKey::unkeyed_for_test("b1"),
+            relay_refused: &relay_refused,
+        };
+        let answers = json!({"k1": {"action": "accept", "content": {"account": answer}}});
+        let outcome = round.invoke(json!({"inputResponses": answers})).await;
+        let calls = slot.calls.load(Ordering::SeqCst);
+        if refused {
+            assert!(
+                matches!(outcome, Err(BridgeError::NotAdmitted { ref message }) if message.contains("Firewall blocked")),
+                "{outcome:?}"
+            );
+            assert!(
+                relay_refused.lock().is_some(),
+                "the refusal waits for the call site"
+            );
+            assert_eq!(calls, 0, "a blocked round's tools/call went out");
+        } else {
+            assert!(
+                outcome.is_ok(),
+                "control: a clean round is sent: {outcome:?}"
+            );
+            assert_eq!(calls, 1, "control: the clean round's tools/call went out");
+        }
+    }
 }

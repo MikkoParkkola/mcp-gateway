@@ -147,6 +147,8 @@ impl StdioReads {
     /// One frame for a batch whose items were each judged (and had their relay
     /// receipts recorded) right after their own dispatch.
     pub(crate) fn batch_of(items: Vec<OutboundFrame>) -> OutboundFrame {
+        // MIK-8176: each answer carries its own holds to the writer.
+        let items = items.into_iter().map(OutboundFrame::carry_holds).collect();
         OutboundFrame::unjudged(Payload::Batch(items))
     }
 

@@ -248,6 +248,17 @@ impl Backend {
         self.resolve_era(transport, entry).await;
     }
 
+    /// A build-first restart's era probe of its candidate (MIK-8012): run
+    /// without the slot cache's lock, so the transport still serving keeps its
+    /// verdict, and installed only when the candidate is published.
+    pub(super) async fn probe_candidate_era(
+        &self,
+        transport: &Arc<dyn Transport>,
+    ) -> crate::protocol::era::DetachedProbe {
+        let timeout = self.probe_timeout();
+        crate::protocol::era::EraCache::probe_detached(|| probe(transport, timeout)).await
+    }
+
     /// Resolve the era of a freshly started peer, probing at most once.
     ///
     /// Awaited on the start path so the first request already knows which

@@ -5,9 +5,7 @@
 //! The repository has a Firewall writer, not a production audit reader. These
 //! test consumers pin compatibility of its existing fields without inventing one.
 
-#[path = "capture.rs"]
-mod capture;
-pub(crate) use capture::capture_warnings;
+pub(crate) use crate::test_log_capture::capture_warnings;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -33,7 +31,7 @@ struct LegacyResponseEvent {
 }
 
 #[derive(Debug, Deserialize)]
-struct V2ResponseEvent {
+struct ResponseEvent {
     #[serde(flatten)]
     legacy: LegacyResponseEvent,
     schema_version: u8,
@@ -48,16 +46,16 @@ struct AuditTarget {
     tool: String,
 }
 
-pub(crate) fn assert_v2_event(
+pub(crate) fn assert_response_event(
     event: &Value,
     correlation: &ResponseCorrelation<'_>,
     targets: &[ResponsePolicyTarget],
     artifact: ResponseArtifactKind,
     action: FirewallAction,
 ) {
-    let parsed: V2ResponseEvent =
-        serde_json::from_value(event.clone()).expect("complete typed v2 event");
-    assert_eq!(parsed.schema_version, 2);
+    let parsed: ResponseEvent =
+        serde_json::from_value(event.clone()).expect("complete typed response event");
+    assert_eq!(parsed.schema_version, 3, "MIK-8236: every row is version 3");
     assert_eq!(
         json!(parsed.artifact_kind),
         serde_json::to_value(artifact).unwrap()

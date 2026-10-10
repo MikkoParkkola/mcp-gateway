@@ -19,6 +19,7 @@ use crate::config::{AuthConfig, BackendConfig, FailsafeConfig, SurfacedToolConfi
 use crate::gateway::test_helpers::MetaMcp;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
+#[cfg(feature = "firewall")]
 mod redaction;
 mod refusal;
 
@@ -107,14 +108,24 @@ impl Env {
 /// Build the fixture. A discovery fill runs first, as it does before any
 /// served listing, so the backend's slot holds its catalogue.
 pub(super) async fn env_with(config: BackendConfig, tools: Vec<Value>) -> Env {
-    build(config, tools, None).await
+    assemble(config, tools, |_| {}).await
 }
 
 /// [`env_with`], with an optional response firewall on the state.
+#[cfg(feature = "firewall")]
 pub(super) async fn build(
     config: BackendConfig,
     tools: Vec<Value>,
     firewall: Option<Arc<crate::security::firewall::Firewall>>,
+) -> Env {
+    assemble(config, tools, |state| state.firewall = firewall).await
+}
+
+/// The fixture, with `wire` applied to the state before the router is built.
+async fn assemble(
+    config: BackendConfig,
+    tools: Vec<Value>,
+    wire: impl FnOnce(&mut crate::gateway::router::AppState),
 ) -> Env {
     let (mut state, store) = test_router_app_state_with_auth(&AuthConfig::default()).await;
     let registry = Arc::clone(&state.backends);
@@ -149,7 +160,7 @@ pub(super) async fn build(
     let meta = MetaMcp::new(registry).with_surfaced_tools(surfaced);
     let state_mut = Arc::get_mut(&mut state).expect("state is uniquely owned here");
     state_mut.meta_mcp = Arc::new(meta);
-    state_mut.firewall = firewall;
+    wire(state_mut);
     Env {
         router: create_router(Arc::clone(&state)),
         upstream,

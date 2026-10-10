@@ -60,6 +60,9 @@ failures are fixed in that order of preference:
 Give a child process a home directory with `MCP_GATEWAY_TEST_HOME_DIR` (debug builds
 only, `src/home_dir.rs`; the release job fails if the release binary carries the name).
 On Windows `dirs::home_dir()` ignores `HOME` and `USERPROFILE`, so `HOME` alone cannot do it.
+Give a child process a clock that reads before 1970 with `MCP_GATEWAY_TEST_CLOCK=before-epoch`
+(debug builds only, `src/clock.rs`; the release job fails if the release binary carries the
+name). In-process tests use `crate::clock::test_clock` instead.
 Create a test symlink with `crate::test_symlink::symlink`: the `Windows check` job enables
 Developer Mode (`ci.yml`, "Allow symlink creation"), so symlink creation needs no gate.
 
