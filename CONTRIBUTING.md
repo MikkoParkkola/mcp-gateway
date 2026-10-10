@@ -287,7 +287,7 @@ description, and the reviewer judges each one. The steps assume rustfmt-formatte
    shows as moved. `--diff-filter=MR` keeps modified files and files renamed with changes, so
    `<paths>` must name both the old and the new path of a renamed file.
 3. Every changed line with a relative path or visibility:
-   `git diff --no-color -M -U0 <base> <head> -- <paths> | grep -E '^(--- |\+\+\+ |[+-].*(\bsuper[[:space:]]*::|\bself[[:space:]]*::|pub[[:space:]]*\([[:space:]]*(super|in)\b))'`
+   `git diff --no-color -M -U0 <base> <head> -- <paths> | grep -E '^(--- |\+\+\+ |[+-](.*[^[:alnum:]_])?((super|self)[[:space:]]*::|pub[[:space:]]*\([[:space:]]*(super|in)([^[:alnum:]_]|$)))'`
    Code moved to a different module depth with `super::x` unchanged now points elsewhere, and
    step 1 shows it as moved.
 
