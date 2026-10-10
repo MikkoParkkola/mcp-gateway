@@ -379,3 +379,52 @@ fn production_redemption_now_is_the_store_clock_and_no_other() {
         ["self.now()"]
     );
 }
+
+/// The suite's state with response inspection blocking (action mode).
+async fn state_blocking_responses(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+    let (state, dir) = state_with(mock).await;
+    let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
+    let mut meta =
+        Arc::try_unwrap(app.meta_mcp).unwrap_or_else(|_| panic!("fixture meta is exclusive"));
+    meta.enable_response_inspection_action_mode();
+    app.meta_mcp = Arc::new(meta);
+    (Arc::new(app), dir)
+}
+
+/// AC12 (RED by mutant). A backend asks for input behind a refusing response
+/// gate while the store clock is unreadable: the gate refuses, nothing is
+/// sealed, no worker is parked and none waits. Assembled at runtime so secret
+/// scanners do not flag the source. Mutant: the hand-off to the worker moved
+/// before `gated?`, so the refused payload waits for a clock and is sealed.
+#[tokio::test(start_paused = true)]
+async fn a_round_refused_by_a_gate_on_an_unreadable_clock_is_not_minted_or_parked() {
+    let mut question = ask("confirm", STATE_1);
+    let key = ["AKIA", "IOSFODNN7", "EXAMPLE"].concat();
+    question["content"] = json!([{ "type": "text", "text": key }]);
+    let (mock, mut gate) = MockBackend::holding(Answer::Sequence(vec![question, done()]));
+    let (state, _dir) = state_blocking_responses(&mock).await;
+    let id = task_id(&post(&state, "key-a", create(1, "ac12-gate")).await);
+    gate.wait_for_dispatch().await;
+    before_epoch(&state);
+    gate.release_all();
+    // Settled by events, not by a count or a clock: the round either reaches
+    // a terminal status or the store refuses a read because the payload is
+    // waiting for the clock. Paused time cannot advance while this yields.
+    let refused = store(&state).refused_reads_for_test();
+    let settled = loop {
+        let seen = get_task(&state, "key-a", &id).await;
+        if is_terminal(&status_of(&seen)) {
+            break seen;
+        }
+        std::assert_eq!(
+            store(&state).refused_reads_for_test(),
+            refused,
+            "the refused payload waits for the clock: {seen}"
+        );
+        tokio::task::yield_now().await;
+    };
+    std::assert_eq!(status_of(&settled), "failed", "{settled}");
+    std::assert!(!has_round(&state, &id), "nothing was parked");
+    std::assert_eq!(mock.calls(), 1);
+    std::assert!(!settled.to_string().contains(STATE_1), "{settled}");
+}
