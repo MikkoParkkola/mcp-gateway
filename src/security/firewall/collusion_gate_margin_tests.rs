@@ -51,11 +51,15 @@ fn recorded(fw: &Firewall, result: &Value) -> HashSet<u64> {
         .collect()
 }
 
-/// The egress windows of `params`: every window of today's egress text, and
-/// those kept as evidence. Until the margin filter lands, kept is all.
+/// The egress windows of `params`: every window of the egress text, and
+/// those kept as evidence once glue windows are dropped.
 fn egress(fw: &Firewall, params: &Value) -> (HashSet<u64>, HashSet<u64>) {
     let all = fps(fw, &super::super::super::egress_text(params));
-    let kept = all.clone();
+    let detector = fw.relay_detector().expect("relay detection on");
+    let kept: HashSet<u64> = detector
+        .egress_fingerprints(&super::super::super::egress_parts(params))
+        .into_iter()
+        .collect();
     assert!(kept.is_subset(&all), "the filter added a window");
     (all, kept)
 }
