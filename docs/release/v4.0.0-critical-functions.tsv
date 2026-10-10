@@ -171,7 +171,8 @@ src/gateway/router/inflight_calls.rs	cancelled_by_caller	1	standard	borderline	c
 src/gateway/router/inflight_calls.rs	new	1	critical	c	CallKey::new	Refuses a key without an owner, so an ownerless caller's cancels always drop
 src/gateway/router/inflight_calls.rs	register	1	critical	c	InFlightCalls::register	Refuses a duplicate live key, leaving the live call untouched (D5)
 src/gateway/router/inflight_calls.rs	cancel	1	critical	c	InFlightCalls::cancel	Aborts only the call registered under the caller's exact key
-src/gateway/router/inflight_calls.rs	cancelled	1	standard	borderline	Registered::cancelled	True only once the caller's own cancel aborted this registration
+src/gateway/router/inflight_calls.rs	cancelled	1	standard	borderline	Registered::cancelled	True only once the caller's own cancel aborted this call's dispatch
+src/gateway/router/inflight_calls.rs	run	1	standard	borderline	CancelOn::run	Records an abort only when the dispatch yielded to it, never for a cancel after it finished
 src/gateway/router/judged_answer.rs	record_delivery	1	critical	d	record_delivery	Replaces a judged answer with the audit-unavailable refusal when its delivery cannot be recorded (fail closed).
 src/gateway/router/meta_refusal_audit.rs	record	1	critical	borderline	Refused::record	Answers 503 when the refusal's audit write fails under FailClosed.
 src/gateway/router/meta_refusal_audit.rs	answer	1	standard	borderline	Refused::answer	Builds the Denied record and its tenants; a mistake would record a refusal as another outcome
