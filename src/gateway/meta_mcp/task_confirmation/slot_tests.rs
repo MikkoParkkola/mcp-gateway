@@ -371,6 +371,14 @@ async fn unclassified_without_elicitation_is_refused_as_unclassified() {
         "refusal text: {}",
         error.message
     );
+    // The refusal names exactly the capability to declare: the confirmation
+    // capability, which `challenge` now reads from its constant (MIK-8248).
+    assert_eq!(
+        error.data.as_ref().map(|d| &d["requiredCapabilities"]),
+        Some(&json!(["elicitation"])),
+        "refusal data: {:?}",
+        error.data
+    );
 }
 
 /// T7: a grant issued while the tool read destructive is still redeemed after
