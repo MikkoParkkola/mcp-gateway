@@ -67,7 +67,14 @@ async fn task_ended(
 
 fn assert_refused_task(mock: &MockBackend, settled: &Value, row: &str) {
     std::assert_eq!(status_of(settled), "failed", "{row}: {settled}");
-    std::assert_eq!(error_code(settled), Some(-32600), "{row}: {settled}");
+    // A task carries its settled error under `result.error`.
+    std::assert_eq!(
+        settled
+            .pointer("/result/error/code")
+            .and_then(Value::as_i64),
+        Some(-32600),
+        "{row}: {settled}"
+    );
     std::assert!(settled.to_string().contains(REFUSAL), "{row}: {settled}");
     std::assert!(!settled.to_string().contains(STATE_1), "{row}: {settled}");
     std::assert_eq!(mock.calls(), 1, "{row}: the backend is not resumed");
@@ -207,9 +214,13 @@ async fn s7c_a_retrying_playbook_does_not_retry_an_enforced_question() {
     state.meta_mcp.set_playbook_engine(engine);
     let read = post(&state, "key-a", run_playbook(1)).await;
     std::assert_eq!(mock.calls(), 1, "the refused step is not retried: {read}");
-    std::assert!(
-        read.to_string().contains("first"),
-        "the failed step is named: {read}"
-    );
+    // The step failed, not completed: on the base the blocked round was a
+    // successful step, so one call alone does not tell the two apart.
+    let outcome: Value = read["result"]["content"][0]["text"]
+        .as_str()
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or_else(|| panic!("a playbook result: {read}"));
+    std::assert_eq!(outcome["steps_failed"], json!(["first"]), "{read}");
+    std::assert_eq!(outcome["step_errors"]["first"], REFUSAL, "{read}");
     std::assert!(!read.to_string().contains(STATE_1), "{read}");
 }
