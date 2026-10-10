@@ -85,7 +85,12 @@ async fn chain_payload(
 ) -> Payload {
     let hold_key = state
         .in_flight()
-        .hold("srv", NOW + HOLD_SECONDS, NOW)
+        .hold(
+            "srv",
+            &crate::protocol::continuation::QuotaKey::for_test("caller"),
+            NOW + HOLD_SECONDS,
+            NOW,
+        )
         .await
         .expect("the in-flight table has room for one exchange");
     let mut payload = Payload::mint(
@@ -604,7 +609,12 @@ async fn a_first_stop_seals_the_chain_identity_onto_the_steps_envelope() {
     let chain = three_step_chain();
     let hold_key = state
         .in_flight()
-        .hold("srv", NOW + HOLD_SECONDS, NOW)
+        .hold(
+            "srv",
+            &crate::protocol::continuation::QuotaKey::for_test("caller"),
+            NOW + HOLD_SECONDS,
+            NOW,
+        )
         .await
         .expect("the in-flight table has room for one exchange");
     let step_scoped = Payload::mint(
@@ -663,7 +673,12 @@ async fn a_chain_resume_is_not_routed_to_the_origin_backend() {
     let now = crate::protocol::continuation::now_unix_secs();
     let hold_key = state
         .in_flight()
-        .hold("srv", now + HOLD_SECONDS, now)
+        .hold(
+            "srv",
+            &crate::protocol::continuation::QuotaKey::for_test("caller"),
+            now + HOLD_SECONDS,
+            now,
+        )
         .await
         .expect("the in-flight table has room for one exchange");
     let payload = Payload::mint(
