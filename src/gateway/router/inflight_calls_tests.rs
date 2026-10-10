@@ -62,3 +62,22 @@ fn a_duplicate_key_is_refused_and_cannot_unregister_the_live_call() {
     assert_eq!(calls.len(), 0, "the live call's own finish removes it");
     assert!(calls.register(k).is_some(), "the key is free again");
 }
+
+/// The owner is the authorized subject when there is one, else the credential
+/// principal; neither means no owner. Mutants: the principal preferred over a
+/// subject; the principal fallback removed.
+#[test]
+fn the_owner_is_the_subject_else_the_principal() {
+    let subject = crate::identity_grants::GrantSubject {
+        authority: "https://idp.example".to_owned(),
+        subject: "alice".to_owned(),
+        label: None,
+    };
+    let by_subject = super::cancel_owner(Some(&subject), Some("shared-key"));
+    assert_eq!(by_subject.as_deref(), Some("https://idp.example\u{0}alice"));
+    assert_eq!(
+        super::cancel_owner(None, Some("shared-key")).as_deref(),
+        Some("shared-key")
+    );
+    assert_eq!(super::cancel_owner(None, None), None);
+}

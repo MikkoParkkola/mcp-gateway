@@ -3,6 +3,7 @@
 # with a row in neither this file nor docs/release/v4.0.0-critical-functions.tsv.
 # A row here is a claim a reviewer checks: the function makes no decision the coverage doc counts.
 path	fn	occurrence	reason
+src/gateway/router/inflight_calls.rs	drop	1	Removes its own registration when the call ends; enforces nothing
 src/gateway/router/watch_poll.rs	catalogue	1	Reads the meta catalogue for the watch host; the admission decision is may_invoke
 src/gateway/router/watch_poll.rs	catalogue_generation	1	Reads the catalogue generation counter for the watch host
 src/gateway/server/warmstart.rs	lock	1	Warm-start lifecycle (MIK-8054): serializes warm-ups of one backend
