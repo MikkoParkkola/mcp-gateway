@@ -415,6 +415,13 @@ impl TaskExecutor {
         self.service.store.set_hook(Some(hook)).await;
     }
 
+    /// Test-only: workers running now, the pool less its free permits.
+    #[cfg(test)]
+    pub(crate) fn busy_workers_for_test(&self) -> usize {
+        self.max_workers
+            .saturating_sub(self.workers.available_permits())
+    }
+
     /// Test-only: how many tasks are subscribed to the handoff release signal
     /// right now, so a test can tell that an update has parked in its wait.
     #[cfg(test)]

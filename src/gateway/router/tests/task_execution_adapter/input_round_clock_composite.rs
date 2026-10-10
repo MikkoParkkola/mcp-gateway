@@ -252,18 +252,7 @@ async fn never_recovers(default_ttl_ms: Option<u64>) {
     // Bounded by the worker's own retries, not by time: past the bound, the
     // first retry ends the wait. A wait that ignores it keeps retrying, each
     // retry one more refused read, with the task still working.
-    let past_bound = store(&state).refused_reads_for_test();
-    let ended = loop {
-        let status = stored_status(&state, &id).expect("the task exists");
-        if !matches!(status, TaskStatus::Working | TaskStatus::InputRequired) {
-            break status;
-        }
-        std::assert!(
-            store(&state).refused_reads_for_test() < past_bound + 10,
-            "still {status:?} after ten retries past the bound"
-        );
-        tokio::time::sleep(CLOCK_RETRY).await;
-    };
+    let ended = ended_past_the_bound(&state, &id).await;
     std::assert_eq!(ended, TaskStatus::Failed);
     let shown = get_task(&state, "key-a", &id).await;
     std::assert!(shown.to_string().contains("ttl ran out"), "{shown}");
@@ -365,18 +354,7 @@ async fn t26c_an_expired_redemption_wait_fails_the_task_once() {
         .clock_wait_bound(&id)
         .expect("the task exists");
     tokio::time::advance(bound + CLOCK_RETRY).await;
-    let past_bound = store(&state).refused_reads_for_test();
-    let ended = loop {
-        let status = stored_status(&state, &id).expect("the task exists");
-        if !matches!(status, TaskStatus::Working | TaskStatus::InputRequired) {
-            break status;
-        }
-        std::assert!(
-            store(&state).refused_reads_for_test() < past_bound + 10,
-            "still {status:?} after ten retries past the bound"
-        );
-        tokio::time::sleep(CLOCK_RETRY).await;
-    };
+    let ended = ended_past_the_bound(&state, &id).await;
     std::assert_eq!(ended, TaskStatus::Failed);
     std::assert_eq!(mock.calls(), 1, "nothing redeemed or dispatched");
 }
@@ -472,19 +450,29 @@ async fn t28b_a_park_waiting_past_its_bound_fails_the_task() {
         .clock_wait_bound(&id)
         .expect("the task exists");
     tokio::time::advance(bound + CLOCK_RETRY).await;
-    let past_bound = store(&state).refused_reads_for_test();
-    let ended = loop {
-        let status = stored_status(&state, &id).expect("the task exists");
-        if status != TaskStatus::Working {
-            break status;
-        }
-        std::assert!(
-            store(&state).refused_reads_for_test() < past_bound + 10,
-            "still working after ten retries past the bound"
-        );
-        tokio::time::sleep(CLOCK_RETRY).await;
-    };
+    let ended = ended_past_the_bound(&state, &id).await;
     std::assert_eq!(ended, TaskStatus::Failed);
     std::assert!(!has_round(&state, &id), "nothing parked");
     std::assert_eq!(mock.calls(), 1);
+}
+
+/// Once monotonic time is past the bound: the task's end, read from the store.
+/// Two events stop the wait, neither a count of time: the worker is gone (a
+/// task left working by a worker that returned), or it has retried ten times
+/// past the bound and still not ended the task.
+async fn ended_past_the_bound(state: &Arc<AppState>, id: &str) -> TaskStatus {
+    let past_bound = store(state).refused_reads_for_test();
+    loop {
+        let status = stored_status(state, id).expect("the task exists");
+        if !matches!(status, TaskStatus::Working | TaskStatus::InputRequired)
+            || state.task_executor.busy_workers_for_test() == 0
+        {
+            return status;
+        }
+        std::assert!(
+            store(state).refused_reads_for_test() < past_bound + 10,
+            "still {status:?} after ten retries past the bound"
+        );
+        tokio::time::sleep(CLOCK_RETRY).await;
+    }
 }
