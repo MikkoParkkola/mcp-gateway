@@ -88,6 +88,7 @@ pub mod scheduler;
 pub mod secret_injection;
 pub mod secrets;
 pub mod security;
+pub mod scan_probe;
 #[cfg(feature = "semantic-search")]
 pub mod semantic_search;
 pub mod simhash;

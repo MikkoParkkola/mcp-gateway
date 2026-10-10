@@ -417,6 +417,7 @@ fn append_regex_findings(
     data_class: ContextDataClass,
     description: &str,
 ) {
+    crate::scan_probe::note("kernel_set", text);
     for idx in set.matches(text) {
         findings.push(ContextIntegrityFinding {
             classifier,

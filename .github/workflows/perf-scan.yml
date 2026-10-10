@@ -1,0 +1,73 @@
+name: Egress scan text probe
+
+# Throwaway branch only (never merged). MIK-8259 premise check: which texts the
+# egress regex sets scan under the workload's request mix, and whether any
+# holds non-ASCII bytes (which sends the whole regex search to the PikeVM).
+# The probe hook (src/scan_probe.rs) writes SCANPROBE lines to stderr.
+on:
+  push:
+    branches: ["throwaway/perf-scan-*"]
+
+permissions:
+  contents: read
+
+env:
+  CPC_MIX: workload
+  FEATURES: a2a,webui,config-export,cost-governance,firewall,discovery,semantic-search,tool-profiles,metrics
+  WARMUP: "200"
+  CALLS: "3000"
+  RATE: "100"
+  PORT: "39420"
+
+jobs:
+  probe:
+    name: Scan text probe
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.98.0
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --locked --features "$FEATURES"
+          mkdir -p "$RUNNER_TEMP/out"
+          git rev-parse HEAD > "$RUNNER_TEMP/out/head.txt"
+      - name: Run the workload mix
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/out"; config="$RUNNER_TEMP/gateway.workload.yaml"
+          fixture="$PWD/benchmarks/workload/mcp_backend.py"
+          # shellcheck disable=SC2016 # the placeholder is literal, as the harness renders it
+          python3 -c 'import sys; t=open(sys.argv[1]).read(); assert "${WORKLOAD_FIXTURE}" in t; open(sys.argv[2],"w").write(t.replace("${WORKLOAD_FIXTURE}", sys.argv[3]))' \
+            benchmarks/workload/gateway.workload.yaml "$config" "$fixture"
+          chmod 600 "$config"
+          home="$RUNNER_TEMP/home"; mkdir -p "$home"
+          HOME="$home" RUST_LOG=error WORKLOAD_FIXTURE="$fixture" \
+            target/release/mcp-gateway --config "$config" --port "$PORT" \
+            > "$out/gateway.stdout" 2> "$out/gateway.stderr" &
+          pid=$!
+          for _ in $(seq 150); do
+            curl -fsS "http://127.0.0.1:$PORT/health" > /dev/null 2>&1 && break
+            kill -0 "$pid" 2>/dev/null || { echo "VOID: gateway exited during startup"; exit 3; }
+            sleep 0.2
+          done
+          curl -fsS "http://127.0.0.1:$PORT/health" > /dev/null || { echo "VOID: gateway never healthy"; exit 3; }
+          python3 benchmarks/workload/cpu_per_call.py measure "$PORT" "$pid" "$WARMUP" "$CALLS" "$RATE" "$out/measure.json"
+          kill "$pid" || true; wait "$pid" 2>/dev/null || true
+          grep -c '^SCANPROBE-COUNT' "$out/gateway.stderr" || true
+          grep '^SCANPROBE-COUNT' "$out/gateway.stderr" | tail -4 || true
+          grep '^SCANPROBE-NONASCII' "$out/gateway.stderr" | cut -c1-600 || echo "no non-ASCII scan"
+      - name: Upload the run
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-scan-${{ github.run_id }}
+          path: ${{ runner.temp }}/out/
+          retention-days: 30
