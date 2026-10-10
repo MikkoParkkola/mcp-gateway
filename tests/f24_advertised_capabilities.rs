@@ -32,7 +32,11 @@ const FLAGS: [(&str, &str); 4] = [
 
 /// Expected value of each flag in `FLAGS` order, per surface.
 const HTTP_EXPECTED: [bool; 4] = [true, false, false, false];
-const STDIO_EXPECTED: [bool; 4] = [false, false, false, false];
+/// MIK-8278: a legacy stdio session delivers `tools/list_changed`
+/// (`src/gateway/server/tests/stdio_list_changed.rs`); a modern one cannot
+/// until stdio `subscriptions/listen` (MIK-8345), so its discovery says false.
+const STDIO_INITIALIZE_EXPECTED: [bool; 4] = [true, false, false, false];
+const STDIO_DISCOVER_EXPECTED: [bool; 4] = [false, false, false, false];
 
 /// Flag -> the test in `f24_tools_changed_delivery.rs` that fires its producer
 /// and watches the notification arrive. A flag advertised true anywhere must
@@ -142,8 +146,16 @@ async fn each_surface_advertises_only_what_it_delivers() {
     for (surface, capabilities, expected) in [
         ("HTTP initialize", &http_initialize, HTTP_EXPECTED),
         ("HTTP server/discover", &http_discover, HTTP_EXPECTED),
-        ("stdio initialize", &stdio_initialize, STDIO_EXPECTED),
-        ("stdio server/discover", &stdio_discover, STDIO_EXPECTED),
+        (
+            "stdio initialize",
+            &stdio_initialize,
+            STDIO_INITIALIZE_EXPECTED,
+        ),
+        (
+            "stdio server/discover",
+            &stdio_discover,
+            STDIO_DISCOVER_EXPECTED,
+        ),
     ] {
         assert!(
             capabilities.is_object(),
@@ -162,7 +174,10 @@ const DELIVERY_SOURCE: &str = include_str!("f24_tools_changed_delivery.rs");
 #[test]
 fn every_advertised_flag_has_a_delivery_probe() {
     for (index, (object, field)) in FLAGS.iter().enumerate() {
-        if HTTP_EXPECTED[index] || STDIO_EXPECTED[index] {
+        if HTTP_EXPECTED[index]
+            || STDIO_INITIALIZE_EXPECTED[index]
+            || STDIO_DISCOVER_EXPECTED[index]
+        {
             let flag = format!("{object}.{field}");
             let probe = DELIVERY_PROBES
                 .iter()
