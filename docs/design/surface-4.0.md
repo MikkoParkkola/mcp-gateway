@@ -103,7 +103,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `idempotency` | 4 |  |  |  |  |
 | `key_server` | 20 | `oidc[].auto_discover` | `cleanup_interval_secs`; `max_oidc_token_age_secs`; `max_tokens_per_identity`; `token_ttl_secs` |  |  |
 | `marketplace` |  |  |  |  | `marketplace` |
-| `meta_mcp` | 8 | `prompts_resources_fetch_timeout` | `cache_ttl`; `projection_mode` |  | `cache_tools` |
+| `meta_mcp` | 8 |  | `cache_ttl`; `prompts_resources_fetch_timeout`; `projection_mode` |  | `cache_tools` |
 | `mtls` | 20 |  |  |  |  |
 | `playbooks` | 3 |  |  |  |  |
 | `routing_profiles` | 6 |  |  |  |  |
@@ -530,7 +530,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `meta_mcp.expose_stats_tool` | KEEP | `false` | README documents it as the switch for `gateway_get_stats` | - | src/config/meta_mcp_config.rs:98 |
 | `meta_mcp.exposed_meta_tools` | KEEP | `Vec::new()` | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:90 |
 | `meta_mcp.projection_mode` | INTERNAL | `crate::projection::ProjectionMode::default()` | rollout switch for response projection; off unless a test sets it | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/meta_mcp_config.rs:75 |
-| `meta_mcp.prompts_resources_fetch_timeout` | AUTO | `Duration::from_secs(10)` | unset: min(the backend's `timeout`, 10 s), today's 10 s as the ceiling | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/meta_mcp_config.rs:56 |
+| `meta_mcp.prompts_resources_fetch_timeout` | INTERNAL | `Duration::from_secs(10)` | aggregation wait bound. Per request: the backend's `timeout` (HTTP session recovery may add one re-initialization and resend); whole fetch: 10 s unless set. Not derived from the backend's `timeout`: a paged list can need several requests, each within it (MIK-8285) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/meta_mcp_config.rs:56 |
 | `meta_mcp.surfaced_tools` | KEEP | `Vec::new()` | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:67 |
 | `meta_mcp.surfaced_tools[].server` | KEEP | — | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:28 |
 | `meta_mcp.surfaced_tools[].tool` | KEEP | — | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:30 |

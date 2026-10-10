@@ -30,8 +30,10 @@ struct MockMcpBackend {
     method: &'static str,
     /// JSON array to return for `method`.
     payload: serde_json::Value,
-    /// Sleep before responding.
+    /// Sleep before responding, per page.
     delay: std::time::Duration,
+    /// How many `nextCursor` pages the list spans; each carries `payload`.
+    pages: usize,
 }
 
 async fn start_mock(backend: MockMcpBackend) -> String {
@@ -70,11 +72,29 @@ async fn start_mock(backend: MockMcpBackend) -> String {
                 if !s.backend.delay.is_zero() {
                     tokio::time::sleep(s.backend.delay).await;
                 }
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": req["id"],
-                    "result": { "prompts": s.backend.payload, "resources": s.backend.payload },
-                })
+                // Page n (1-based) is asked for with cursor "n"; the first page
+                // carries no cursor. Every page but the last names the next.
+                let page = req["params"]["cursor"]
+                    .as_str()
+                    .and_then(|c| c.parse::<usize>().ok())
+                    .unwrap_or(1);
+                // A multi-page list names each page's entries apart, so no
+                // merge or dedup can make two pages read as one.
+                let mut items = s.backend.payload.clone();
+                if s.backend.pages > 1 {
+                    for item in items.as_array_mut().into_iter().flatten() {
+                        for key in ["name", "uri"] {
+                            if let Some(v) = item[key].as_str() {
+                                item[key] = serde_json::json!(format!("{v}-p{page}"));
+                            }
+                        }
+                    }
+                }
+                let mut result = serde_json::json!({ "prompts": items, "resources": items });
+                if page < s.backend.pages {
+                    result["nextCursor"] = serde_json::json!((page + 1).to_string());
+                }
+                serde_json::json!({ "jsonrpc": "2.0", "id": req["id"], "result": result })
             }
             _ => serde_json::json!({
                 "jsonrpc": "2.0",
@@ -105,6 +125,7 @@ async fn prompts_list_includes_backend_prompts() {
         method: "prompts/list",
         payload: serde_json::json!([{ "name": "greet", "description": "say hi" }]),
         delay: Duration::ZERO,
+        pages: 1,
     })
     .await;
     let meta = meta_with_backend(&url, Duration::from_secs(5));
@@ -124,12 +145,77 @@ async fn prompts_list_includes_backend_prompts() {
     assert!(names.contains(&"mock/greet"), "backend prompt namespaced");
 }
 
+/// One page's latency in the paged rows: under the backend's timeout alone,
+/// over it for two pages together.
+const PAGE_DELAY: Duration = Duration::from_secs(3);
+/// The paged backend's own per-call timeout: 1.5 pages, so each page clears it
+/// by 1.5 s and the two-page drain (6 s) exceeds it while staying 4 s under
+/// the 10 s whole-fetch default.
+const PAGED_BACKEND_TIMEOUT: Duration = Duration::from_millis(4500);
+
+/// MIK-8285 FETCHTO.3: the whole-fetch bound is the unset 10 s default, not
+/// the backend's `timeout`. A cold cache drains two pages that each answer
+/// within the backend's timeout but together take longer, and both pages'
+/// entries are listed. Reading A (min(backend timeout, 10 s) for the whole
+/// fetch) would cut this backend at 4.5 s and drop it from every list.
+#[tokio::test]
+async fn prompts_list_drains_pages_whose_total_exceeds_the_backend_timeout() {
+    let url = start_mock(MockMcpBackend {
+        method: "prompts/list",
+        payload: serde_json::json!([{ "name": "greet", "description": "say hi" }]),
+        delay: PAGE_DELAY,
+        pages: 2,
+    })
+    .await;
+    let unset = crate::config::MetaMcpConfig::default().prompts_resources_fetch_timeout;
+    let meta = meta_with_backend_timeout(&url, unset, PAGED_BACKEND_TIMEOUT);
+
+    let resp = meta
+        .handle_prompts_list(RequestId::Number(1), None, None, None)
+        .await;
+    let prompts = resp.result.unwrap()["prompts"].as_array().unwrap().clone();
+    let names: Vec<&str> = prompts.iter().filter_map(|p| p["name"].as_str()).collect();
+    assert!(
+        names.contains(&"mock/greet-p1") && names.contains(&"mock/greet-p2"),
+        "both pages listed: {names:?}"
+    );
+}
+
+/// [`prompts_list_drains_pages_whose_total_exceeds_the_backend_timeout`] for
+/// the resources family, which has its own aggregation site.
+#[tokio::test]
+async fn resources_list_drains_pages_whose_total_exceeds_the_backend_timeout() {
+    let url = start_mock(MockMcpBackend {
+        method: "resources/list",
+        payload: serde_json::json!([{ "uri": "mock://a", "name": "A" }]),
+        delay: PAGE_DELAY,
+        pages: 2,
+    })
+    .await;
+    let unset = crate::config::MetaMcpConfig::default().prompts_resources_fetch_timeout;
+    let meta = meta_with_backend_timeout(&url, unset, PAGED_BACKEND_TIMEOUT);
+
+    let resp = meta
+        .handle_resources_list(RequestId::Number(1), None, None, None)
+        .await;
+    let resources = resp.result.unwrap()["resources"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let uris: Vec<&str> = resources.iter().filter_map(|r| r["uri"].as_str()).collect();
+    assert!(
+        uris.contains(&"mock://a-p1") && uris.contains(&"mock://a-p2"),
+        "both pages listed: {uris:?}"
+    );
+}
+
 #[tokio::test]
 async fn prompts_list_skips_hung_backend_within_timeout() {
     let url = start_mock(MockMcpBackend {
         method: "prompts/list",
         payload: serde_json::json!([]),
         delay: HUNG,
+        pages: 1,
     })
     .await;
     // The backend's own timeout outlasts the hang guard, so a list that waited
@@ -161,6 +247,7 @@ async fn resources_list_skips_hung_backend_within_timeout() {
         method: "resources/list",
         payload: serde_json::json!([]),
         delay: HUNG,
+        pages: 1,
     })
     .await;
     // The backend's own timeout outlasts the hang guard, so a list that waited
@@ -188,6 +275,7 @@ async fn resources_list_includes_backend_resources() {
         method: "resources/list",
         payload: serde_json::json!([{ "uri": "mock://a", "name": "A" }]),
         delay: Duration::ZERO,
+        pages: 1,
     })
     .await;
     let meta = meta_with_backend(&url, Duration::from_secs(5));
@@ -217,12 +305,14 @@ async fn prompts_list_fast_backend_not_stalled_by_hung_one() {
         method: "prompts/list",
         payload: serde_json::json!([{ "name": "quick", "description": "fast" }]),
         delay: Duration::ZERO,
+        pages: 1,
     })
     .await;
     let hung = start_mock(MockMcpBackend {
         method: "prompts/list",
         payload: serde_json::json!([]),
         delay: HUNG,
+        pages: 1,
     })
     .await;
 
