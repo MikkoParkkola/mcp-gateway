@@ -11,11 +11,17 @@ under src/ and tests/, and fails when
 
   - a file holds more raw reads than its row in the baseline allows, or
   - a file with no row holds any, or
-  - the baseline itself grew against the base branch (a new row, a raised count).
+  - the baseline itself grew against the base branch: the total rose, a listed
+    file's count rose, or a new row holds more than it moved (MIK-8283).
 
 So a file can lose reads freely and never gain one, and swapping one file's
-allowance for another's is refused. Counting every file, not only the listed
-ones, is the point: a read in an unlisted file fails however it got there.
+allowance for another's is refused. A split or rename may carry its reads to
+a new file: a new row is allowed only for reads that moved, each matched by
+its trimmed line text to a read gone from a file whose row shrank. A read
+whose text changed on the way (`std::time::SystemTime::now()` becoming
+`SystemTime::now()`) does not match and fails, so a move keeps the text as
+it was. Counting every file, not only the listed ones, is the point: a read
+in an unlisted file fails however it got there.
 
 It also refuses, with no allowance, any alias of a clock type outside
 src/clock.rs (`use chrono::Utc as U`, `type Now = SystemTime`): a renamed type
@@ -33,6 +39,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -59,22 +66,38 @@ ALIAS = re.compile(
 HEADER = (
     "# MIK-8202: raw wall-clock reads each file may still hold (path, count).\n"
     "# scripts/release/check_clock_baseline.py fails when a count rises or an\n"
-    "# unlisted file gains one. Rows only shrink; part 2 empties this file.\n"
+    "# unlisted file gains one; a new row only carries reads moved from a\n"
+    "# shrinking one (MIK-8283). Part 2 empties this file.\n"
 )
 
 
-def counts(root: Path) -> dict[str, int]:
-    """Raw reads per file, for every Rust file under src/ and tests/."""
-    found: dict[str, int] = {}
+def reads(text: str) -> list[str]:
+    """The trimmed line of each raw read in `text`, once per read."""
+    out = []
+    for m in RAW.finditer(text):
+        start = text.rfind("\n", 0, m.start()) + 1
+        end = text.find("\n", m.end())
+        out.append(text[start : len(text) if end == -1 else end].strip())
+    return out
+
+
+def tree_reads(root: Path) -> dict[str, list[str]]:
+    """Raw reads per file, as lines, for every Rust file under src/ and tests/."""
+    found: dict[str, list[str]] = {}
     for top in ("src", "tests"):
         for path in sorted((root / top).rglob("*.rs")):
             rel = path.relative_to(root).as_posix()
             if rel in EXEMPT:
                 continue
-            n = len(RAW.findall(path.read_text(encoding="utf-8", errors="replace")))
-            if n:
-                found[rel] = n
+            lines = reads(path.read_text(encoding="utf-8", errors="replace"))
+            if lines:
+                found[rel] = lines
     return found
+
+
+def counts(root: Path) -> dict[str, int]:
+    """Raw reads per file, for every Rust file under src/ and tests/."""
+    return {path: len(lines) for path, lines in tree_reads(root).items()}
 
 
 def aliases(root: Path) -> list[str]:
@@ -98,6 +121,9 @@ def parse(text: str) -> dict[str, int]:
         if not line.strip() or line.startswith("#"):
             continue
         path, count = line.split("\t")
+        # A negative row would cancel growth elsewhere in the total (MIK-8283).
+        if int(count) < 0:
+            raise ValueError(f"{path}: a baseline count may not be negative ({count})")
         rows[path] = int(count)
     return rows
 
@@ -115,12 +141,51 @@ def violations(tree: dict[str, int], baseline: dict[str, int]) -> list[str]:
     return out
 
 
-def grown(baseline: dict[str, int], base: dict[str, int]) -> list[str]:
-    return [
-        f"{path}: baseline {n} > base {base.get(path, 0)}; the baseline may only shrink"
-        for path, n in sorted(baseline.items())
-        if n > base.get(path, 0)
-    ]
+def grown(
+    baseline: dict[str, int],
+    base: dict[str, int],
+    base_lines: dict[str, list[str]] | None = None,
+    head_lines: dict[str, list[str]] | None = None,
+) -> list[str]:
+    """How `baseline` grew against `base` (MIK-8283).
+
+    The total may not rise and a listed row may not grow. A new row may hold
+    only reads that moved: each of its lines (`head_lines`) must match a line
+    gone from a row that shrank (`base_lines` at base less `head_lines` now).
+    Without lines nothing has moved, so any new row fails.
+    """
+    base_lines, head_lines = base_lines or {}, head_lines or {}
+    out = []
+    if sum(baseline.values()) > sum(base.values()):
+        out.append(f"the baseline total rose {sum(base.values())} -> {sum(baseline.values())}; it may only shrink")
+    moved: Counter[str] = Counter()
+    for path, n in base.items():
+        if baseline.get(path, 0) < n:
+            moved += Counter(base_lines.get(path, [])) - Counter(head_lines.get(path, []))
+    for path, n in sorted(baseline.items()):
+        if path in base:
+            if n > base[path]:
+                out.append(f"{path}: baseline {n} > base {base[path]}; the baseline may only shrink")
+            continue
+        took = Counter(head_lines.get(path, [])) & moved
+        moved -= took
+        carried = sum(took.values())
+        if n > carried:
+            out.append(
+                f"{path}: a new row of {n} carries only {carried} read(s) moved from a shrinking"
+                " file (matched by line text); a new file may not gain reads"
+            )
+    return out
+
+
+def base_reads(ref: str, paths: list[str]) -> dict[str, list[str]]:
+    """The raw-read lines each of `paths` held at `ref`."""
+    out = {}
+    for path in paths:
+        done = subprocess.run(["git", "show", f"{ref}:{path}"], cwd=ROOT, capture_output=True, text=True)
+        if done.returncode == 0:
+            out[path] = reads(done.stdout)
+    return out
 
 
 def base_baseline(ref: str) -> dict[str, int] | None:
@@ -138,10 +203,16 @@ def main(argv: list[str]) -> int:
     if len(argv) > 2 or (len(argv) == 2 and argv[1].startswith("-")):
         print(__doc__, file=sys.stderr)
         return 2
-    baseline = parse((ROOT / BASELINE).read_text(encoding="utf-8"))
-    problems = violations(counts(ROOT), baseline) + aliases(ROOT)
+    try:
+        baseline = parse((ROOT / BASELINE).read_text(encoding="utf-8"))
+    except ValueError as error:
+        print(error)
+        return 1
+    lines = tree_reads(ROOT)
+    problems = violations({p: len(r) for p, r in lines.items()}, baseline) + aliases(ROOT)
     if len(argv) == 2 and (base := base_baseline(argv[1])) is not None:
-        problems += grown(baseline, base)
+        shrunk = [p for p, n in base.items() if baseline.get(p, 0) < n]
+        problems += grown(baseline, base, base_reads(argv[1], shrunk), lines)
     for problem in problems:
         print(problem)
     if problems:
