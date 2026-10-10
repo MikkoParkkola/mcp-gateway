@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 use super::direct_continuation_tests::{BACKENDS, answers, call, code, held, state_of};
 use super::direct_guards_fixture::{Answer, Fx, fixture, fixture_propagating};
 
-/// The per-caller cap the rows expect (design r3 D3: `IN_FLIGHT_CAPACITY / 64`).
-const CAP: usize = 64;
+/// The per-caller cap, from the one constant that defines it.
+const CAP: usize = crate::protocol::continuation::PRINCIPAL_SLOTS;
 
 /// `CAP` fresh calls as `subject`, each asserted to have been asked.
 async fn fill(fx: &Fx, backend: &str, subject: &str) -> Vec<Value> {
@@ -424,5 +424,32 @@ async fn s3e_one_stdio_process_has_one_cap_live_and_in_a_task_worker() {
         over_refused && http_asked,
         "stdio 65th refused = {over_refused} (want true), HTTP caller asked = {http_asked} \
          (want true): {over:?}"
+    );
+}
+
+/// One identity has one cap across both HTTP routes (gpt seat improvement on
+/// MIK-8293): 32 rounds on `POST /mcp/{name}` and 32 through
+/// `gateway_invoke`, then the 65th is refused.
+#[tokio::test]
+async fn one_identity_has_one_cap_across_both_http_routes() {
+    let fx = fixture(Answer::AskAlways, |_| {}).await;
+    for i in 0..CAP / 2 {
+        let (_, named) = call(&fx, BACKENDS[0], Some("alice"), json!({})).await;
+        assert_eq!(
+            named["result"]["resultType"], "input_required",
+            "setup: named-route call {i} was not asked: {named}"
+        );
+        let meta = meta_call(&fx, BACKENDS[0], "alice").await;
+        assert_eq!(
+            meta["result"]["resultType"], "input_required",
+            "setup: meta call {i} was not asked: {meta}"
+        );
+    }
+    assert_eq!(held(&fx).await, CAP, "setup: alice's rounds are held");
+    let (_, over) = call(&fx, BACKENDS[0], Some("alice"), json!({})).await;
+    assert_eq!(
+        code(&over),
+        Some(-32003),
+        "alice's 65th round, after 32 on each route, was served: {over}"
     );
 }
