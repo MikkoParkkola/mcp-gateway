@@ -651,3 +651,56 @@ fn build_output_no_mapping_returns_all_results() {
     let (output, _) = build_output(&def, &ctx, &HashMap::new());
     assert_eq!(output["s1"], json!({"data": 1}));
 }
+
+/// Counts calls and refuses one tool as the content gate does.
+struct RefusingInvoker {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl ToolInvoker for RefusingInvoker {
+    async fn invoke(&self, _server: &str, tool: &str, _arguments: Value) -> crate::Result<Value> {
+        if tool == "gated" {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            return Err(crate::Error::ResponseFirewallRefused);
+        }
+        Ok(json!({ "ok": true }))
+    }
+}
+
+/// MIK-8325: a firewall refusal is final, like a denial: retrying it cannot
+/// change the answer and would call the backend again. A retried step is
+/// called once, recorded failed, and `on_error: retry` carries on as after any
+/// failed step. Mutant: the refusal left out of the non-retryable match.
+#[tokio::test]
+async fn a_firewall_refusal_is_not_retried() {
+    let step = |name: &str, tool: &str| PlaybookStep {
+        name: name.to_string(),
+        tool: tool.to_string(),
+        server: "test".to_string(),
+        arguments: HashMap::new(),
+        condition: None,
+    };
+    let mut engine = PlaybookEngine::new();
+    engine.register(PlaybookDefinition {
+        playbook: "1.0".to_string(),
+        name: "refused".to_string(),
+        description: "a refused step under retry".to_string(),
+        inputs: json!({}),
+        steps: vec![step("first", "gated"), step("second", "open")],
+        output: None,
+        on_error: ErrorStrategy::Retry,
+        max_retries: 3,
+        timeout: 60,
+    });
+    let invoker = RefusingInvoker {
+        calls: std::sync::atomic::AtomicUsize::new(0),
+    };
+    let result = engine
+        .execute("refused", json!({}), &invoker)
+        .await
+        .unwrap();
+    assert_eq!(invoker.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(result.steps_failed, vec!["first"]);
+    assert_eq!(result.steps_completed, vec!["second"]);
+}
