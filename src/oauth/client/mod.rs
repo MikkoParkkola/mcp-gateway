@@ -341,30 +341,27 @@ impl OAuthClient {
         // the configured resource (MIK-8320, MIK-8324). A mismatch or a policy
         // refusal is an answer, not a missing document: it ends discovery
         // rather than falling back (MIK-7701).
-        match self.discover_resource_metadata().await? {
-            Some(meta) => {
-                debug!(resource = %meta.resource, "Found protected resource metadata");
+        if let Some(meta) = self.discover_resource_metadata().await? {
+            debug!(resource = %meta.resource, "Found protected resource metadata");
 
-                // Get authorization server from metadata
-                if let Some(auth_server) = meta.authorization_server() {
-                    self.oauth_base_url = Some(auth_server.to_string());
-                    issuer_source = IssuerSource::Advertised;
-                } else {
-                    // Fallback to same base URL
-                    self.oauth_base_url = Some(base_url.clone());
-                }
-
-                // Use scopes from metadata if not specified
-                if self.scopes.is_empty() && !meta.scopes_supported.is_empty() {
-                    self.scopes.clone_from(&meta.scopes_supported);
-                }
-
-                self.resource_metadata = Some(meta);
-            }
-            None => {
-                debug!("No protected resource metadata, using base URL");
+            // Get authorization server from metadata
+            if let Some(auth_server) = meta.authorization_server() {
+                self.oauth_base_url = Some(auth_server.to_string());
+                issuer_source = IssuerSource::Advertised;
+            } else {
+                // Fallback to same base URL
                 self.oauth_base_url = Some(base_url.clone());
             }
+
+            // Use scopes from metadata if not specified
+            if self.scopes.is_empty() && !meta.scopes_supported.is_empty() {
+                self.scopes.clone_from(&meta.scopes_supported);
+            }
+
+            self.resource_metadata = Some(meta);
+        } else {
+            debug!("No protected resource metadata, using base URL");
+            self.oauth_base_url = Some(base_url.clone());
         }
 
         // Discover authorization server metadata
