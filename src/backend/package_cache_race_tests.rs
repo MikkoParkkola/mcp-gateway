@@ -196,8 +196,13 @@ async fn a_cancelled_rename_keeps_the_cache_locked_until_it_ends() {
 
 /// A start that cannot get its cache's lock within one full repair
 /// (`lock_hold_bound`) fails as unavailable instead of queueing behind it
-/// forever, and it does not give up any sooner.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+/// forever, and it does not give up any sooner: in particular not after one
+/// request timeout, which is what lets a start arriving mid-repair wait it out.
+///
+/// On tokio's paused clock: nothing here spawns a process (the start never gets
+/// the lock), so virtual time moves only when the runtime is idle and `waited`
+/// is exactly the deadline the start chose, whatever the machine's load.
+#[tokio::test(start_paused = true)]
 async fn a_start_gives_up_waiting_for_a_held_cache() {
     let workspace = tempfile::tempdir().expect("workspace");
     write_stub(workspace.path(), STUB);
@@ -213,7 +218,7 @@ async fn a_start_gives_up_waiting_for_a_held_cache() {
 
     let lock = repair_lock(&cache.root);
     let _held = lock.lock().await;
-    let began = std::time::Instant::now();
+    let began = tokio::time::Instant::now();
     let (result, repair) =
         tokio::time::timeout(Duration::from_secs(15), start_reporting(&transport))
             .await
@@ -471,64 +476,109 @@ async fn a_cancelled_moved_rename_still_discards_its_tombstone() {
     );
 }
 
-/// A start that arrives while another start of the backend is repairing waits
-/// the repair out and succeeds, instead of failing because the repair outlasted
-/// one request timeout.
+/// A start that arrives while another start of the backend is repairing its
+/// cache waits the repair out and succeeds after it.
+///
+/// Events only, so load cannot fail it: the repair's retry is held on a release
+/// file the test creates, and the arriving start is seen queued by the lock
+/// handle it takes. No request answers against a deadline (T = 120 s, above the
+/// 60 s watchdog). That the wait is not bounded by one request timeout is shown
+/// on a paused clock by `a_start_gives_up_waiting_for_a_held_cache`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_start_arriving_mid_repair_succeeds_after_it() {
     let workspace = tempfile::tempdir().expect("workspace");
     write_stub(workspace.path(), STUB);
     let cache = seed_cache(workspace.path());
-    let request_timeout = Duration::from_secs(1);
-
-    // The repairing start's retry answers after 0.7 s. With the first
-    // attempt's 0.5 s settle and the 0.25 s initialized pause, the repair holds
-    // the cache for at least 1.45 s, longer than one request timeout, while each
-    // request still answers inside it.
+    let release = workspace.path().join("release");
     let first_log = workspace.path().join("first.log");
-    let mut env = env_with_cache(&first_log, "fail-once", CACHE_SHAPED, &cache.root);
-    env.insert(
-        "MCP_GATEWAY_TEST_RETRY_DELAY".to_string(),
-        "0.7".to_string(),
+    let second_log = workspace.path().join("second.log");
+    let step = Arc::new(std::sync::Mutex::new("a: the repair's retry spawns"));
+
+    let scenario = mid_repair_scenario(
+        workspace.path().to_path_buf(),
+        cache.root.clone(),
+        release,
+        (first_log.clone(), second_log.clone()),
+        Arc::clone(&step),
     );
-    let repairing = transport(workspace.path(), env, request_timeout, Some(&cache.root));
-    let first = tokio::spawn({
-        let repairing = Arc::clone(&repairing);
-        async move { start_reporting(&repairing).await }
-    });
-    // The lock is taken before the first spawn, so once it has spawned the
-    // second start below has to wait for the whole repair.
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while spawns(&first_log).is_empty() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the repair never started"
+    if tokio::time::timeout(Duration::from_secs(60), scenario)
+        .await
+        .is_err()
+    {
+        let at = *step.lock().expect("step");
+        panic!(
+            "watchdog: stalled at step {at}; repairing spawns {:?}, arriving spawns {:?}",
+            spawns(&first_log),
+            spawns(&second_log)
         );
+    }
+}
+
+/// The steps of `a_start_arriving_mid_repair_succeeds_after_it`, each named in
+/// `step` before it waits, so a watchdog expiry says where it stalled.
+async fn mid_repair_scenario(
+    workspace: PathBuf,
+    cache_root: PathBuf,
+    release: PathBuf,
+    (first_log, second_log): (PathBuf, PathBuf),
+    step: Arc<std::sync::Mutex<&'static str>>,
+) {
+    let at = |name| *step.lock().expect("step") = name;
+    let request_timeout = Duration::from_secs(120);
+
+    // a. The retry logs its spawn, then parks on the release file. The repair
+    // holds the cache's lock from before the first spawn to the end of the
+    // retry, so from here until the release it is held.
+    let mut env = env_with_cache(&first_log, "fail-once", CACHE_SHAPED, &cache_root);
+    env.insert(
+        "MCP_GATEWAY_TEST_RELEASE".to_string(),
+        release.to_string_lossy().into_owned(),
+    );
+    let repairing = transport(&workspace, env, request_timeout, Some(&cache_root));
+    let first = tokio::spawn(async move { start_reporting(&repairing).await });
+    while spawns(&first_log).len() < 2 {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
-    let second_log = workspace.path().join("second.log");
+    // b. Bound for the whole poll below: a temporary would be dropped at once,
+    // and the count could then never rise above `base`. While the retry is
+    // parked the count is the registry's, the repair's guard and this one.
+    at("c: the arriving start takes a handle to the cache's lock");
+    let handle = repair_lock(&cache_root);
+    let base = Arc::strong_count(&handle);
+
+    // c. The arriving start clones the lock on its way to waiting for it.
     let arriving = transport(
-        workspace.path(),
-        env_with_cache(&second_log, "succeed", CACHE_SHAPED, &cache.root),
+        &workspace,
+        env_with_cache(&second_log, "succeed", CACHE_SHAPED, &cache_root),
         request_timeout,
-        Some(&cache.root),
+        Some(&cache_root),
     );
-    let arrived = std::time::Instant::now();
-    let (result, repair) =
-        tokio::time::timeout(Duration::from_secs(15), start_reporting(&arriving))
-            .await
-            .expect("the wait is bounded");
+    let second = tokio::spawn(async move { start_reporting(&arriving).await });
+    while Arc::strong_count(&handle) <= base {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    eprintln!(
+        "step c fired: {} handles to the cache's lock, base {base}",
+        Arc::strong_count(&handle)
+    );
+
+    // d. It has not started its backend while the repair holds the cache.
+    assert!(
+        spawns(&second_log).is_empty(),
+        "the arriving start spawned while the repair held the cache"
+    );
+
+    // e. Release the retry; both starts finish.
+    at("e: both starts finish after the release");
+    std::fs::write(&release, b"").expect("release the retry");
+    let (result, repair) = second.await.expect("the arriving task completes");
     assert!(
         result.is_ok(),
         "the start arriving mid-repair succeeds: {result:?}"
     );
     assert_eq!(repair, Repair::NotRepaired);
-    assert!(
-        arrived.elapsed() > request_timeout,
-        "it waited longer than one request timeout, which a T-bounded wait would have refused"
-    );
-
+    assert_eq!(spawns(&second_log).len(), 1, "one start, after the repair");
     let (result, repair) = first.await.expect("the repair task completes");
     assert!(result.is_ok(), "{result:?}");
     assert_eq!(repair, Repair::Cleared);
