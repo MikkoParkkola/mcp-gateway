@@ -31,7 +31,9 @@ if [[ -f Cargo.toml ]]; then
   python3 scripts/release/c6_resolve.py --tree HEAD
 
   echo "[pre-push] commit message hygiene"
-  scripts/dev/check-commit-message-hygiene.sh
+  # This branch's own commits. With no argument the script falls back to the
+  # upstream, else origin/main, which is far behind the release line.
+  scripts/dev/check-commit-message-hygiene.sh "$base..HEAD"
 
   echo "[pre-push] public repo hygiene"
   scripts/dev/check-public-repo-hygiene.sh
