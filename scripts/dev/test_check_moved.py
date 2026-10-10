@@ -61,7 +61,7 @@ class Comments(unittest.TestCase):
         text = 'let s = r#"a // b "q" c"#; // gone\nlet t = 1; /* gone */'
         self.assertEqual(
             statements.strip_comments(text),
-            'let s = r#"a // b "q" c"#; \nlet t = 1; ')
+            'let s = r#"a // b "q" c"#;  \nlet t = 1;  ')
 
     def test_a_changed_raw_payload_is_a_change(self) -> None:
         a = statements.normalise('let s = r#"a "q" // b"#;')
@@ -69,6 +69,19 @@ class Comments(unittest.TestCase):
         self.assertNotEqual(a, b)
         a = statements.normalise('let s = r#"a "q x" b"#;')
         b = statements.normalise('let s = r#"a "q  x" b"#;')
+        self.assertNotEqual(a, b)
+
+
+class StripperRegressions(unittest.TestCase):
+    """Rows for what #3727's own first version got wrong (gpt review)."""
+
+    def test_a_block_comment_keeps_its_neighbours_apart(self) -> None:
+        self.assertNotEqual(statements.normalise("m!(a/**/b);"),
+                            statements.normalise("m!(ab);"))
+
+    def test_a_continued_string_is_one_literal(self) -> None:
+        a = statements.normalise('let s = "x\\\n // p";')
+        b = statements.normalise('let s = "x\\\n // q";')
         self.assertNotEqual(a, b)
 
 
@@ -94,7 +107,7 @@ BASE_SRC = """impl Foo {
 }
 """
 BASE_DEST = """impl Foo {
-    fn already(&self) {}
+    fn already(&self) { super::super::x() }
 }
 """
 HEAD_SRC = """impl Foo {
@@ -103,9 +116,9 @@ HEAD_SRC = """impl Foo {
 """
 
 
-def head_dest(op: str) -> str:
+def head_dest(op: str, already: str = "super::super::x()") -> str:
     return f"""impl Foo {{
-    fn already(&self) {{}}
+    fn already(&self) {{ {already} }}
     pub(super) fn moved(&self, a: u8, b: u8) -> bool {{
         let t = ["x", "y"].join(", ");
         a {op} b && !t.is_empty()
@@ -118,7 +131,8 @@ class EndToEnd(unittest.TestCase):
     """The real script over a two-commit repository: src/a.rs moves `moved`
     into src/a/b.rs, which already holds another method of `impl Foo`."""
 
-    def run_checker(self, op: str, *flags: str) -> subprocess.CompletedProcess:
+    def run_checker(self, op: str, *flags: str,
+                    dest_already: str = "super::super::x()") -> subprocess.CompletedProcess:
         with TemporaryDirectory() as tmp:
             repo = Path(tmp)
 
@@ -134,7 +148,7 @@ class EndToEnd(unittest.TestCase):
 
             git("init", "-q")
             commit(BASE_SRC, BASE_DEST)
-            commit(HEAD_SRC, head_dest(op))
+            commit(HEAD_SRC, head_dest(op, dest_already))
             return subprocess.run(
                 [sys.executable, "-I", str(HERE / "check_moved_items.py"),
                  "--source", "src/a.rs", *flags, "HEAD~1", "HEAD", "a/b.rs"],
@@ -151,9 +165,38 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("only at base", done.stdout)
         self.assertIn("only at head", done.stdout)
 
+    def test_a_changed_item_already_in_the_destination_is_reported(self) -> None:
+        # `already` keeps its place but now reaches one module less far up;
+        # reading it one module up would make both spellings `super::x`.
+        done = self.run_checker(">", "--impl", "Foo", dest_already="super::x()")
+        self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+        self.assertIn("only at head", done.stdout)
+
     def test_without_the_impl_type_a_split_impl_is_a_difference(self) -> None:
         done = self.run_checker(">")
         self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+
+
+class RootSource(unittest.TestCase):
+    def test_a_source_at_the_repository_root_names_root_destinations(self) -> None:
+        with TemporaryDirectory() as tmp:
+            def git(*args: str) -> None:
+                subprocess.run(["git", "-C", tmp, *args], check=True, capture_output=True)
+
+            def commit(files: dict[str, str]) -> None:
+                for name, text in files.items():
+                    (Path(tmp) / name).write_text(text)
+                git("add", "-A")
+                git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c")
+
+            git("init", "-q")
+            commit({"a.rs": "fn kept() {}\nfn moved() {}\n"})
+            commit({"a.rs": "fn kept() {}\n", "b.rs": "fn moved() {}\n"})
+            done = subprocess.run(
+                [sys.executable, "-I", str(HERE / "check_moved_items.py"),
+                 "--source", "a.rs", "HEAD~1", "HEAD", "b.rs"],
+                cwd=tmp, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
 
 
 if __name__ == "__main__":

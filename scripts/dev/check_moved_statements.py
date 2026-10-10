@@ -88,10 +88,11 @@ def wrap_returns(s: str) -> str:
 
 
 def strip_comments(text: str) -> str:
-    """Drop `//` and `/* */` comments, reading literals (raw strings included)
-    whole, so a `//` or a quote inside a literal neither cuts nor shifts it."""
+    """Replace `//` and `/* */` comments with a space, reading literals (raw
+    strings included) whole, so a `//` or a quote inside a literal neither cuts
+    nor shifts it, and `a/**/b` stays two tokens."""
     return COMMENT_OR_LITERAL.sub(
-        lambda m: m.group(0) if not m.group(0).startswith("/") else "", text)
+        lambda m: m.group(0) if not m.group(0).startswith("/") else " ", text)
 
 
 # Raw strings with every delimiter Rust allows (0 to 255 `#`), longest first so
@@ -106,9 +107,11 @@ TOKEN = re.compile(
     r"|'(?:\\.|[^'\\])'"  # char literals
     r"|'[A-Za-z_]\w*"  # lifetimes and labels
     r"|\d[\w.]*|\w+"  # numbers, identifiers
-    r"|::|->|=>|==|!=|<=|>=|&&|\|\||\.\.=?|[^\w\s]"
+    r"|::|->|=>|==|!=|<=|>=|&&|\|\||\.\.=?|[^\w\s]",
+    re.S,  # a string continued with a backslash-newline is one token
 )
-COMMENT_OR_LITERAL = re.compile(LITERAL + r"|//[^\n]*|/\*[\s\S]*?\*/")
+# DOTALL: a string continued with a backslash-newline stays one literal.
+COMMENT_OR_LITERAL = re.compile(LITERAL + r"|//[^\n]*|/\*[\s\S]*?\*/", re.S)
 VALUE_END = re.compile(r'^(\w+|"|\'|\)|\]|\?)')
 
 

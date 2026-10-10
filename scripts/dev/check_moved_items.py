@@ -22,6 +22,7 @@ equal, 1 on a difference.
 from __future__ import annotations
 
 import importlib.util
+import posixpath
 import re
 import subprocess
 import sys
@@ -104,6 +105,28 @@ def exists(ref: str, path: str) -> bool:
                           capture_output=True).returncode == 0
 
 
+def destination(base: str, head: str, path: str, impls: tuple[str, ...]) -> list[str]:
+    """A named file's items at <head>. An item it already had at <base>
+    unchanged is matched as written; every other item is read one module up.
+    So the one-level reading, which reads `super::super::x` and `super::x`
+    alike, only applies to items that can have moved in, and a changed
+    pre-existing item is compared with its <base> form as written."""
+    lifted = items(show(head, path), True, impls)
+    if not exists(base, path):
+        return lifted
+    raw = items(show(head, path), False, impls)
+    assert len(raw) == len(lifted), path
+    same = Counter(items(show(base, path), False, impls)) & Counter(raw)
+    out = []
+    for r, lift_r in zip(raw, lifted):
+        if same[r]:
+            same[r] -= 1
+            out.append(r)
+        else:
+            out.append(lift_r)
+    return out
+
+
 def main() -> int:
     args = sys.argv[1:]
     source, impls = D + "mod.rs", []
@@ -118,13 +141,14 @@ def main() -> int:
         return 2
     impls_t = tuple(impls) or ("Gateway",)
     base, head, files = args[0], args[1], args[2:]
-    here = source.rsplit("/", 1)[0] + "/"
+    parent = posixpath.dirname(source)
+    here = parent + "/" if parent else ""
     a = Counter(items(show(base, source), False, impls_t))
     b = Counter(items(show(head, source), False, impls_t))
     for f in files:
+        b.update(destination(base, head, here + f, impls_t))
         if exists(base, here + f):
-            a.update(items(show(base, here + f), True, impls_t))
-        b.update(items(show(head, here + f), True, impls_t))
+            a.update(items(show(base, here + f), False, impls_t))
     problems = [f"only at base: {x[:150]}" for x in sorted((a - b).elements())]
     problems += [f"only at head: {x[:150]}" for x in sorted((b - a).elements())]
     if problems:
