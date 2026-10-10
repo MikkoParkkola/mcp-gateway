@@ -35,6 +35,14 @@ fn text(text: &str) -> Value {
 /// `block` relay detector over every `mock` tool and redacts nothing, so the
 /// answer changes only in the router's response pass.
 async fn plan_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+    plan_state_with(mock, &two_principal_auth()).await
+}
+
+/// [`plan_state`] under `auth`.
+async fn plan_state_with(
+    mock: &Arc<MockBackend>,
+    auth: &AuthConfig,
+) -> (Arc<AppState>, tempfile::TempDir) {
     let router = Arc::new(Firewall::from_config(
         FirewallConfig {
             enabled: true,
@@ -71,7 +79,7 @@ async fn plan_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDi
         .keeping_every_kgram(),
     );
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
-        &two_principal_auth(),
+        auth,
         None,
         Some(router),
         |mut meta| {
@@ -411,4 +419,54 @@ async fn late_redaction_copies_keep_the_cross_step_join() {
     );
     let own = post(&state, "key-a", sync_invoke(3, json!({"text": joined}))).await;
     assert!(own.get("error").is_none(), "the holder was refused: {own}");
+}
+
+/// `MIK-8205` (S4): a plan's final answer delivers key-a three labelled parts;
+/// the same tool delivers key-c the join of parts 1 and 3 on its own call.
+/// Key-a forwarding that subset is not refused: the answer's own run gives
+/// her the one-gap seam. Key-b, delivered nothing, is refused.
+#[tokio::test]
+async fn a_subset_of_a_plan_answers_parts_against_the_tools_exact_join_is_not_refused() {
+    let p = |k: usize| -> String { format!("piece{k}-").repeat(10).chars().take(47).collect() };
+    let joined = format!("{}{}", p(0), p(2));
+    let parts: Vec<Value> = (0..3)
+        .map(|k| json!({"part": p(k), "kind": "chunk"}))
+        .collect();
+    let mock = MockBackend::answering(Answer::Sequence(
+        std::iter::once(json!({"parts": parts, "isError": false}))
+            // key-c's copy is a single leaf: a content item (`{"text": .., "type": ..}`)
+            // would put a separator after the join, and the window "tail + separator"
+            // is a separate, pre-existing edge (MIK-8290), not this row's.
+            .chain(std::iter::once(json!({"note": joined, "isError": false})))
+            .chain(std::iter::repeat_with(|| text("ok")).take(4))
+            .collect(),
+    ));
+    let (state, _store) = plan_state_with(&mock, &three_principal_auth()).await;
+    let step = json!({"tool": format!("{BACKEND}:{TOOL}"), "arguments": {}});
+    let plan = modern(
+        1,
+        "tools/call",
+        json!({"name": "gateway_execute", "arguments": {"chain": [step]}}),
+        false,
+    );
+    let read = post(&state, "key-a", plan).await;
+    assert!(
+        read.get("error").is_none(),
+        "base: the plan is delivered: {read}"
+    );
+    let held = post(&state, "key-c", sync_invoke(2, json!({}))).await;
+    assert!(
+        held.get("error").is_none(),
+        "base: key-c is delivered the join: {held}"
+    );
+    let bob = post(&state, "key-b", sync_invoke(3, json!({"text": joined}))).await;
+    assert_eq!(
+        bob["error"]["code"], -32002,
+        "control: key-b was not refused: {bob}"
+    );
+    let alice = post(&state, "key-a", sync_invoke(4, json!({"text": joined}))).await;
+    assert!(
+        alice.get("error").is_none(),
+        "key-a's subset forward was refused: {alice}"
+    );
 }

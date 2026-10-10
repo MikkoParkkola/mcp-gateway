@@ -231,3 +231,53 @@ fn walk<'v>(
         _ => {}
     }
 }
+
+/// `MIK-8205` (S4): attach the subset-forward seams of `answer`'s
+/// single-receipt runs to the receipt that produced each run, so
+/// `record_digest` stores them under that receipt's source for the plan's
+/// caller. A piece belongs to a receipt only when exactly one receipt of its
+/// step keeps it whole: one step can hold several receipts of different
+/// sources (a nested plan), and a run is attributed only when one receipt
+/// owns every piece. A run spanning receipts gets none, so no window is
+/// excused under a source that did not produce all of it.
+/// Uniqueness is a deliberate fail-safe, withholds, never admits: a piece
+/// two receipts of one step keep whole gets no owner (#3726 p1).
+pub(in super::super) fn add_subset_seams(fw: &Firewall, receipts: &mut [Receipt], answer: &Value) {
+    let Some(parts) = answer_parts(answer) else {
+        return;
+    };
+    let owner: HashMap<*const u8, u32> = {
+        let whole: Vec<(usize, u32, HashSet<&str>)> = receipts
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.in_plan)
+            .filter_map(|(i, r)| Some((i, r.step?, r.digest.whole_values().collect())))
+            .collect();
+        parts
+            .iter()
+            .filter_map(|(text, label)| {
+                let label = (*label)?;
+                let mut holders = whole
+                    .iter()
+                    .filter(|(_, step, w)| *step == label && w.contains(text))
+                    .map(|(i, _, _)| *i);
+                let only = holders.next()?;
+                holders
+                    .next()
+                    .is_none()
+                    .then_some((text.as_ptr(), u32::try_from(only).ok()?))
+            })
+            .collect()
+    };
+    for (receipt, fps) in
+        fw.single_step_subset_seams(answer, &|piece| owner.get(&piece.as_ptr()).copied())
+    {
+        if let Some(r) = receipts.get_mut(receipt as usize) {
+            r.digest.add_seam_excuses(&fps);
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "relay_seams_subset_tests.rs"]
+mod subset_tests;

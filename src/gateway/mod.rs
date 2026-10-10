@@ -50,6 +50,8 @@ mod proxy_scope_tests;
 #[cfg(test)]
 mod proxy_session_tests;
 pub mod recovery;
+#[cfg(test)]
+mod route_check_matrix_tests;
 mod router;
 pub(crate) mod routes;
 #[cfg(test)]

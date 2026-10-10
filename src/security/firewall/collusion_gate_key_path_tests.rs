@@ -456,3 +456,6 @@ fn the_gate_reads_a_join_seam_run_together_only() {
         "a newline-form fingerprint in a join seam"
     );
 }
+
+#[path = "collusion_gate_subset_tests.rs"]
+mod subset;

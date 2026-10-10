@@ -439,9 +439,22 @@ impl Firewall {
         result: &Value,
     ) -> Option<DeliveryDigest> {
         let (digest, cut) = self.digest_with(server, tool, result, DeliveryDigest::of_parts)?;
-        // `MIK-8209`: the key-path joins, on a budget of their own.
-        let joins = key_path_joins(result);
+        // `MIK-8209`: the key-path joins, on a budget of their own; one walk
+        // of `result` serves them and the seam pass.
+        let runs = key_path_runs(result);
+        let joins: Vec<String> = runs.iter().map(|run| run.concat()).collect();
         let (mut digest, joins_cut) = digest.with_joins(joins.clone());
+        // `MIK-8205`: the caller's own subset-forward seams, excuse only.
+        if let Some(detector) = self.relay_detector() {
+            let (seams, seams_cut) = detector.seam_excuse_fingerprints(&runs);
+            if seams_cut {
+                telemetry_metrics::counter!(CAPACITY_METRIC, "bound" => "seam_excuse_cut")
+                    .increment(1);
+            }
+            if !seams.is_empty() {
+                digest.seam_excuses = Some(seams.into());
+            }
+        }
         self.count_cut(joins_cut && !cut);
         if cut || joins_cut {
             // `MIK-8066.EXCUSE.1`: the whole delivered value, as received.
@@ -661,18 +674,7 @@ impl Firewall {
             return;
         }
         let flows = self.relay.source_flows(&source);
-        // MIK-7992: the one sink every record passes, so a plan step's
-        // receipt never kept to its plan's answer is recorded capped too.
-        let capped = self.capped(digest);
-        let digest = capped.as_ref().unwrap_or(digest);
-        let now = Instant::now();
-        detector.record_cut_fingerprints_at(
-            &source,
-            caller.key(),
-            (digest.sensitive, flows),
-            (digest.fingerprints(detector), digest.cut_fps.clone()),
-            now,
-        );
+        self.record_kept(detector, &source, caller, flows, digest);
     }
 }
 
@@ -791,6 +793,8 @@ fn context_integrity_sensitive(result: &Value) -> bool {
         })
 }
 
+#[path = "collusion_gate_seams.rs"]
+mod seams;
 #[cfg(test)]
 #[path = "collusion_gate_tests.rs"]
 mod tests;

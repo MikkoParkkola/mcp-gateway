@@ -288,3 +288,6 @@ impl Piece {
         self.steps.clear();
     }
 }
+
+#[path = "collusion_seam_excuse.rs"]
+pub(super) mod seam_excuse;
