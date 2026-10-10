@@ -77,7 +77,10 @@ fn adm_sweep_every_admission_uses_one_owner_spelling() {
             "gateway/router/handlers/dispatch_tools_call.rs",
             "AdmissionOwner::routed(admission_owner)",
         ),
-        ("gateway/server/stdio_dispatch.rs", "AdmissionOwner::local_operator()"),
+        (
+            "gateway/server/stdio_dispatch.rs",
+            "AdmissionOwner::local_operator()",
+        ),
     ]
     .into_iter()
     .collect();
