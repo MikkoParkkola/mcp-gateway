@@ -77,23 +77,51 @@ pub(super) async fn write_frame(
     // From here the frame goes out whole even if the caller is dropped, so the
     // call is no longer pre-send (MIK-7979).
     began.store(true, std::sync::atomic::Ordering::Relaxed);
-    tokio::spawn(async move {
+    finish_whole(async move {
         let Some(stdin) = writer.as_mut() else {
             return Err(Error::TransportConnect("Not connected".to_string()));
         };
-        let write = async {
-            stdin.write_all(&frame).await?;
-            stdin.flush().await
-        };
-        tokio::select! {
-            written = write => written.map_err(|e| Error::Transport(e.to_string())),
-            () = shutdown.cancelled() => {
-                Err(Error::Transport("stdio transport closed mid-write".to_string()))
-            }
-        }
+        write_whole(stdin, &frame, &shutdown).await
     })
     .await
-    .map_err(|e| Error::Transport(e.to_string()))?
+}
+
+/// Write `frame` and flush it, or give up once `shutdown` is cancelled.
+async fn write_whole<W: tokio::io::AsyncWrite + Unpin>(
+    stdin: &mut W,
+    frame: &[u8],
+    shutdown: &tokio_util::sync::CancellationToken,
+) -> Result<()> {
+    let write = async {
+        stdin.write_all(frame).await?;
+        stdin.flush().await
+    };
+    tokio::select! {
+        written = write => written.map_err(|e| Error::Transport(e.to_string())),
+        () = shutdown.cancelled() => {
+            Err(Error::Transport("stdio transport closed mid-write".to_string()))
+        }
+    }
+}
+
+/// Run an admitted write to its end even if the caller is dropped (MIK-8079):
+/// the write runs in a task the caller only awaits.
+async fn finish_whole<F>(write: F) -> Result<()>
+where
+    F: std::future::Future<Output = Result<()>> + Send + 'static,
+{
+    #[cfg(test)]
+    HANDED_OVER.with(|n| n.set(n.get() + 1));
+    tokio::spawn(write)
+        .await
+        .map_err(|e| Error::Transport(e.to_string()))?
+}
+
+// Writes handed to their own task on this thread, for the rows that pin when
+// a write takes the task hop.
+#[cfg(test)]
+thread_local! {
+    static HANDED_OVER: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// `MIK-7642.PR.B`: a request dropped before its answer cancels the backend's
@@ -213,3 +241,7 @@ pub(super) async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
         .map(Some)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
+
+#[cfg(test)]
+#[path = "stdio_write_whole_tests.rs"]
+mod write_whole_tests;
