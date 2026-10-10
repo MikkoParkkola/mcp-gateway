@@ -436,9 +436,7 @@ The gateway ships with **130+ built-in capabilities**: weather, Wikipedia, GitHu
 | **Webhooks** | GitHub/Linear/Stripe push events as MCP notifications. [Docs](docs/WEBHOOKS.md). |
 | **Auto-discovery** | Discover MCP servers from existing client configs and running processes. |
 | **Surfaced tools** | Pin high-value tools directly in `tools/list` for one-hop invocation. |
-| **Semantic search** | TF-IDF ranked search across all tool names and descriptions. |
-| **Tool profiles** | Usage analytics per tool: latency, errors, trends. Persisted to disk. |
-| **Config export** | Export sanitized config as YAML or JSON via `mcp-gateway config export`. |
+| **Client config export** | `mcp-gateway setup export` writes the gateway's entry into each AI client's own MCP config file (Claude Code, Claude Desktop, Cursor, VS Code Copilot, Windsurf, Cline, Zed), in proxy or stdio mode, with `--dry-run` and `--watch`. |
 
 ### Protocol and transport
 
@@ -485,7 +483,7 @@ Remote MCP servers plug in by URL, with no extra code. See [examples/gateway-ful
 |--------|-------|-------|
 | **Startup time** | ~8ms | Mean run time of `mcp-gateway --help` (`hyperfine`, 20 runs); not the time until the gateway serves requests ([benchmarks](docs/BENCHMARKS.md)) |
 | **Binary size** | ~12-13 MB | Release build with LTO, stripped |
-| **Hot-path microbenchmarks** | Included | Criterion suite covers registry, parsing, cache-key, firewall, and semantic-search hot paths |
+| **Hot-path microbenchmarks** | Included | Criterion suite covers registry, parsing, cache-key, and firewall hot paths |
 | **End-to-end latency** | Backend-dependent | Measure with your real MCP servers and REST APIs rather than relying on a synthetic single number |
 
 ## SKILL.md / agentskills.io compatibility
