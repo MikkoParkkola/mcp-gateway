@@ -144,6 +144,15 @@ impl Backend {
         Ok(())
     }
 
+    /// Wait until no start of the shared slot is in flight; nothing is held
+    /// after (MIK-8269). For one-shot upkeep that a non-interactive scope
+    /// would otherwise refuse while a start holds the slot, often only to
+    /// reconnect with a stored token. Waiting never begins or joins a login:
+    /// the start's own login runs in its own task.
+    pub(crate) async fn start_settled(&self) {
+        drop(self.shared_entry().start_lock.lock().await);
+    }
+
     /// Start the pooled entry for `key` if needed; return its live transport.
     ///
     /// Double-checked under the entry's own start lock so concurrent callers for

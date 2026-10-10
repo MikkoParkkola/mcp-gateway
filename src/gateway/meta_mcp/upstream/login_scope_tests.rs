@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8269: task recovery is background upkeep. Its bounded discover, query
-//! and cancel never run in a scope that may begin or join a login: one they
-//! began would open the browser and end `Cancelled` when the bound fires.
+//! MIK-8269: task recovery's query and cancel are background upkeep. They,
+//! and the discovery they trigger, never run in a scope that may begin or join
+//! a login: one they began would open the browser and end `Cancelled` when the
+//! bound fires. A dispatch's claim is not upkeep and keeps its caller's scope.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -120,5 +121,66 @@ async fn a_dispatch_claim_discovers_in_its_callers_own_scope() {
         seen,
         [("server/discover".to_string(), true)],
         "the claim's discovery ran outside its caller's scope"
+    );
+}
+
+/// A restarted gateway's one upstream `tasks/cancel` for an OAuth backend
+/// whose start is still in flight (a reconnect with a stored token) waits for
+/// that start, then is sent. It used to be refused `AuthorizationRequired`,
+/// logged "unclaimed", and never sent: the owner's cancel vanished.
+#[tokio::test]
+async fn a_cancel_waits_for_an_oauth_backend_start_in_flight() {
+    let witness = Arc::new(ScopeWitness::default());
+    let config = BackendConfig {
+        oauth: Some(crate::config::OAuthConfig {
+            shared_account: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let backend = Arc::new(Backend::new(
+        "peer",
+        config,
+        &FailsafeConfig::default(),
+        Duration::from_secs(5),
+    ));
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(
+        registry.register(Arc::clone(&backend)),
+        "fixture registration"
+    );
+    let adapter = NativeUpstreamTasks::new(registry, &["peer".to_string()]);
+    let handle = UpstreamHandle {
+        backend: "peer".to_string(),
+        handle: "t1".to_string(),
+    };
+    let entry = backend.shared_entry_for_test();
+    let start_in_flight = entry.start_lock.lock().await;
+
+    let cancel = tokio::spawn(async move { adapter.cancel(&handle, Duration::from_secs(5)).await });
+    // Run the cancel to its first real wait (no I/O before it): a refusal
+    // finishes it here; a waiting cancel parks on the start lock.
+    for _ in 0..100 {
+        if cancel.is_finished() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    // The start completes.
+    backend.set_transport_for_test(Arc::clone(&witness) as Arc<dyn crate::transport::Transport>);
+    drop(start_in_flight);
+    tokio::time::timeout(Duration::from_secs(10), cancel)
+        .await
+        .expect("the cancel ends")
+        .expect("cancel task");
+
+    let seen = witness.seen.lock().clone();
+    assert!(
+        seen.iter().any(|(m, _)| m == "tasks/cancel"),
+        "the owner's cancel was dropped while the start was in flight: {seen:?}"
+    );
+    assert!(
+        seen.iter().all(|(_, interactive)| !interactive),
+        "the cancel ran where a login may begin: {seen:?}"
     );
 }

@@ -253,6 +253,12 @@ impl UpstreamRecovery for NativeUpstreamTasks {
     async fn cancel(&self, handle: &UpstreamHandle, deadline: Duration) {
         // Never interactive (MIK-8269), as `query`.
         crate::oauth::login_gate::non_interactive(async {
+            // This is the row's one send, so a start in flight (a restarted
+            // gateway reconnecting) must not refuse it: wait for that start,
+            // within the deadline, before the non-interactive attempt.
+            if let Some(backend) = self.backends.get(&handle.backend) {
+                let _ = tokio::time::timeout(deadline, backend.start_settled()).await;
+            }
             let Some(backend) = self.eligible(&handle.backend).await else {
                 tracing::warn!(backend = %handle.backend, "upstream tasks/cancel not sent: backend unclaimed");
                 return;
