@@ -66,7 +66,8 @@ ALIAS = re.compile(
 HEADER = (
     "# MIK-8202: raw wall-clock reads each file may still hold (path, count).\n"
     "# scripts/release/check_clock_baseline.py fails when a count rises or an\n"
-    "# unlisted file gains one. Rows only shrink; part 2 empties this file.\n"
+    "# unlisted file gains one; a new row only carries reads moved from a\n"
+    "# shrinking one (MIK-8283). Part 2 empties this file.\n"
 )
 
 
@@ -120,6 +121,9 @@ def parse(text: str) -> dict[str, int]:
         if not line.strip() or line.startswith("#"):
             continue
         path, count = line.split("\t")
+        # A negative row would cancel growth elsewhere in the total (MIK-8283).
+        if int(count) < 0:
+            raise ValueError(f"{path}: a baseline count may not be negative ({count})")
         rows[path] = int(count)
     return rows
 
@@ -199,7 +203,11 @@ def main(argv: list[str]) -> int:
     if len(argv) > 2 or (len(argv) == 2 and argv[1].startswith("-")):
         print(__doc__, file=sys.stderr)
         return 2
-    baseline = parse((ROOT / BASELINE).read_text(encoding="utf-8"))
+    try:
+        baseline = parse((ROOT / BASELINE).read_text(encoding="utf-8"))
+    except ValueError as error:
+        print(error)
+        return 1
     lines = tree_reads(ROOT)
     problems = violations({p: len(r) for p, r in lines.items()}, baseline) + aliases(ROOT)
     if len(argv) == 2 and (base := base_baseline(argv[1])) is not None:

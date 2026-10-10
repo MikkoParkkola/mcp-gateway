@@ -148,6 +148,32 @@ class Moving(unittest.TestCase):
         problems = ccb.grown(head, base, *lines)
         self.assertTrue(any("total" in p for p in problems), problems)
 
+    def test_a_negative_row_is_refused_so_it_cannot_cancel_the_total(self):
+        # old.rs is rewritten to 2 new raw reads, new.rs carries 2 moved ones,
+        # and a -1 row would bring the total back to 3: 4 reads on 3 allowed.
+        with self.assertRaises(ValueError):
+            ccb.parse("src/old.rs\t2\nsrc/new.rs\t2\nsrc/phantom.rs\t-1\n")
+
+    def test_one_moved_line_is_spent_once(self):
+        # Two new files may not both carry the single line old.rs gave up.
+        base = {"src/old.rs": 2}
+        head = {"src/old.rs": 1, "src/n1.rs": 1, "src/n2.rs": 1}
+        lines = ({"src/old.rs": self.A[:2]}, {"src/old.rs": self.A[:1], "src/n1.rs": self.A[1:2], "src/n2.rs": self.A[1:2]})
+        problems = ccb.grown(head, base, *lines)
+        self.assertTrue(any("src/n2.rs" in p for p in problems), problems)
+
+    def test_identical_lines_from_several_files_move_as_a_multiset(self):
+        # Two files each give up one copy of the same line; two new files
+        # may take one copy each, and a third copy would have nowhere to come from.
+        same = "let e = UNIX_EPOCH;"
+        base = {"src/a.rs": 1, "src/b.rs": 1}
+        ok_head = {"src/n1.rs": 1, "src/n2.rs": 1}
+        lines = ({"src/a.rs": [same], "src/b.rs": [same]}, {"src/n1.rs": [same], "src/n2.rs": [same]})
+        self.assertEqual(ccb.grown(ok_head, base, *lines), [])
+        bad_head = {"src/n1.rs": 2, "src/n2.rs": 1}
+        bad = ({"src/a.rs": [same], "src/b.rs": [same]}, {"src/n1.rs": [same, same], "src/n2.rs": [same]})
+        self.assertTrue(ccb.grown(bad_head, base, *bad))
+
     def test_a_read_whose_text_changed_in_the_move_fails_safe(self):
         base = {"src/old.rs": 1}
         head = {"src/new.rs": 1}
