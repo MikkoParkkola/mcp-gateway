@@ -303,6 +303,37 @@ async fn a_foreign_reap_leaks_rather_than_signals() {
     assert!(after > before, "the descendant's heartbeat stopped");
 }
 
+/// A leader that ignores SIGTERM, with a descendant that inherits the trap,
+/// still ends with its group on close, and is reaped. Test idea from #3419
+/// (terafin).
+#[tokio::test]
+async fn close_ends_a_group_that_ignores_sigterm() {
+    let after = format!("trap '' TERM\n{DESCENDANT}\nwhile IFS= read -r l; do :; done");
+    let (w, t) = started(&after, None).await;
+    let child = descendant(w.path()).await;
+    let pid = leader(&t).await;
+    t.close().await.expect("close");
+    assert_settled(sent_after(pid).await);
+    assert_eq!(kernel_view(pid), None, "the leader is reaped");
+    gone(child).await;
+}
+
+/// A close cancelled at its first await while the leader still runs, then
+/// the last handle dropped: the group still ends. A zero timeout polls
+/// `close` once and then drops it. Test idea from #3419 (terafin).
+#[tokio::test]
+async fn a_close_cancelled_while_the_leader_runs_then_a_drop_still_ends_the_group() {
+    let after = format!("trap '' TERM\n{DESCENDANT}\nwhile IFS= read -r l; do :; done");
+    let (w, t) = started(&after, None).await;
+    let child = descendant(w.path()).await;
+    let pid = leader(&t).await;
+    let cancelled = tokio::time::timeout(Duration::ZERO, t.close()).await;
+    assert!(cancelled.is_err(), "precondition: close was cancelled");
+    drop(Arc::into_inner(t).expect("the only handle"));
+    assert_settled(sent_after(pid).await);
+    gone(child).await;
+}
+
 /// D1: a member forking in a tight loop while close runs. Each child
 /// records its own pid before it sleeps, so a child whose parent dies
 /// between fork and record still registers; late registrations get a
