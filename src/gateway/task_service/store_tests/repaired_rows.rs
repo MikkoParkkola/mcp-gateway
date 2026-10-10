@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A repaired sealed row that cannot be served again stays sealed (admission
-//! refusal, duplicate task or key, record budget); and expiry that cannot
-//! remove a record keeps the task and its dedupe entry.
+//! refusal, duplicate task or key, record budget); expiry that cannot
+//! remove a record keeps the task and its dedupe entry, and an open refuses a
+//! directory swapped under it.
 
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
@@ -179,4 +180,45 @@ async fn expiry_that_cannot_remove_the_record_keeps_everything() {
     assert!(row.is_dir(), "the path was not touched");
     assert_eq!(admission.snapshot(), held, "dedupe capacity is kept");
     assert!(store.get(binding.principal_digest(), &id).is_ok());
+}
+
+/// A directory replaced after its rows are loaded but before its identity is
+/// confirmed is refused as storage, and the refusal names the path. The swap
+/// runs at the open's own seam, so the interleaving is fixed, not raced.
+#[test]
+fn a_directory_swapped_after_its_rows_load_is_refused() {
+    use std::os::unix::fs::DirBuilderExt as _;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("tasks");
+    let moved = root.path().join("moved");
+    let (from, to) = (path.clone(), moved.clone());
+    super::super::store::after_load::set(
+        &path,
+        Some(Arc::new(move || {
+            std::fs::rename(&from, &to).unwrap();
+            std::fs::DirBuilder::new()
+                .mode(0o700)
+                .create(&from)
+                .unwrap();
+        })),
+    );
+    let mut opened = None;
+    let records = crate::test_log_capture::records(|| {
+        opened = Some(super::super::store::after_load::open(
+            &path,
+            StoreLimits::default(),
+        ));
+    });
+    super::super::store::after_load::set(&path, None);
+
+    assert_eq!(opened, Some(Err(StoreError::Storage)));
+    assert!(moved.is_dir(), "the seam swapped the directory");
+    let logged: Vec<_> = records
+        .iter()
+        .filter(|r| r["fields"]["message"] == "task store directory changed while it was opened")
+        .collect();
+    let [one] = logged.as_slice() else {
+        panic!("one refusal record: {records:?}");
+    };
+    assert_eq!(one["fields"]["path"], path.display().to_string());
 }
