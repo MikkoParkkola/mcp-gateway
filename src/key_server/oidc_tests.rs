@@ -303,6 +303,11 @@ fn remote_redirects_stay_on_the_fetched_origin() {
     assert!(!hop("https://idp.example:8443/jwks"));
     assert!(!hop("https://other.example/jwks"));
     assert!(!hop("https://sub.idp.example/jwks"));
+    assert!(!hop("https://idp.example./jwks"));
+    assert!(!hop("https://[::1]/jwks"));
+    assert!(!hop("https://ïdp.example/jwks"));
+    // The issuer's name as userinfo: the host is attacker.example.
+    assert!(!hop("https://idp.example@attacker.example/jwks"));
     assert!(!hop("http://127.0.0.1/jwks"));
 }
 
@@ -365,6 +370,12 @@ fn pinned_cache(ca_pem: &str) -> JwksCache {
     JwksCache::with_http_client(client)
 }
 
+/// The fetch failed because the redirect policy refused a hop, not because a
+/// server was unreachable or TLS failed.
+fn refused_redirect<T>(result: &Result<T, OidcError>) -> bool {
+    matches!(result, Err(OidcError::HttpError(e)) if e.is_redirect())
+}
+
 /// MIK-8281 OIDCPIN.1: a discovery URL that redirects to a different origin
 /// is refused, and that origin is never asked for anything. Driven through
 /// the production redirect policy, with the test CA trusted, because a
@@ -418,8 +429,8 @@ async fn a_discovery_redirected_off_origin_is_refused() {
         )
         .await;
     assert!(
-        result.is_err(),
-        "an off-origin redirect was followed: {result:?}"
+        refused_redirect(&result),
+        "not refused by the redirect policy: {result:?}"
     );
     assert_eq!(
         hits.load(Ordering::SeqCst),
@@ -477,8 +488,8 @@ async fn a_jwks_redirect_is_followed_only_on_its_own_origin() {
     assert!(same.is_ok(), "a same-origin redirect was refused: {same:?}");
     let away = cache.get_or_fetch(&idp, &format!("{idp}/away"), true).await;
     assert!(
-        away.is_err(),
-        "an off-origin redirect was followed: {away:?}"
+        refused_redirect(&away),
+        "not refused by the redirect policy: {away:?}"
     );
     assert_eq!(
         hits.load(Ordering::SeqCst),
