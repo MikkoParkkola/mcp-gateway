@@ -245,6 +245,41 @@ class RatchetThroughGit(unittest.TestCase):
         self.assertIn("806", out.getvalue())
 
 
+    def renamed(self, head_text: str) -> tuple[int, str]:
+        """`src/a.rs` (805 lines, baselined) renamed to `src/b.rs` holding
+        `head_text`, judged through main() against the base commit."""
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            git = lambda *a: subprocess.run(["git", *a], cwd=root, check=True, capture_output=True)
+            git("init", "-q")
+            git("config", "user.email", "t@t")
+            git("config", "user.name", "t")
+            (root / "src").mkdir()
+            (root / "src/a.rs").write_text(body(805), encoding="utf-8")
+            (root / "scripts/dev").mkdir(parents=True)
+            baseline = root / "scripts/dev/file-size-baseline.txt"
+            baseline.write_text("805 src/a.rs\n", encoding="utf-8")
+            git("add", "-A")
+            git("commit", "-qm", "base")
+            (root / "src/a.rs").unlink()
+            (root / "src/b.rs").write_text(head_text, encoding="utf-8")
+            baseline.write_text(f"{head_text.count(chr(10))} src/b.rs\n", encoding="utf-8")
+            gate = load_gate(root)
+            gate.BASELINE = baseline
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+                status = gate.main(["--base", "HEAD"])
+        return status, out.getvalue()
+
+    def test_r8_a_rename_through_main_carries_its_row(self):  # MIK-8291
+        status, out = self.renamed(body(805))
+        self.assertEqual(status, 0, out)
+
+    def test_r9_a_rename_that_changes_the_text_fails_through_main(self):  # MIK-8291
+        status, out = self.renamed(body(805).replace("fn f", "pub fn f"))
+        self.assertEqual(status, 1, out)
+        self.assertIn("src/b.rs", out)
+
 class Modes(unittest.TestCase):
     def test_update_and_base_cannot_combine(self):
         # --update with --base would rewrite the baseline and skip the ratchet.
@@ -277,8 +312,6 @@ class Wiring(unittest.TestCase):
         self.assertIn("github.event.pull_request.base.sha || github.event.before", step)
         self.assertIn("HEAD^", step)
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 def code(start: int, count: int) -> list[str]:
@@ -403,3 +436,7 @@ class MovedRows(unittest.TestCase):
         lines = [x for i in range(1000) for x in (f"    fn f{i}() {{", "    }")]
         errors = self.ratchet({"src/a.rs": 2000}, {"src/b.rs": 2000}, {"src/a.rs": text(lines)}, {"src/b.rs": text(lines)})
         self.assertEqual(errors, [])
+
+
+if __name__ == "__main__":
+    unittest.main()
