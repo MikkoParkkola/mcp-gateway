@@ -345,16 +345,12 @@ class MovedRows(unittest.TestCase):
         self.assertTrue(any("src/b.rs" in e for e in errors), errors)
 
     def test_m6_a_total_excess_that_rises_fails(self):
-        # The source drops under the ceiling (excess 50 -> 0) while the new
-        # file's excess (150) is fully carried: only the total rule refuses.
-        lines = code(0, 850)
-        part = lines[:150] + code(5000, 800)
-        errors = self.ratchet(
-            {"src/a.rs": 850},
-            {"src/b.rs": 950},
-            {"src/a.rs": text(lines)},
-            {"src/a.rs": text(lines[150:]), "src/b.rs": text(part)},
-        )
+        # A full rename of an 801-line file plus a 40-line header: the new row
+        # is within the header allowance, so only the total rule refuses the
+        # excess rising 1 -> 41.
+        lines = code(0, 801)
+        part = code(5000, 40) + lines
+        errors = self.ratchet({"src/a.rs": 801}, {"src/b.rs": 841}, {"src/a.rs": text(lines)}, {"src/b.rs": text(part)})
         self.assertTrue(any("total" in e for e in errors), errors)
 
     def test_m7_text_changed_in_the_move_fails_safe(self):
@@ -379,12 +375,31 @@ class MovedRows(unittest.TestCase):
     def test_m9_a_row_under_the_ceiling_cannot_cancel_a_rising_total(self):
         # A hand-edited 5-line row would be -795 lines of "excess" and hide
         # m6's rise from the total rule; each row's excess counts from 0.
-        lines = code(0, 850)
-        part = lines[:150] + code(5000, 800)
+        lines = code(0, 801)
+        part = code(5000, 40) + lines
         errors = self.ratchet(
-            {"src/a.rs": 850},
-            {"src/b.rs": 950, "src/z.rs": 5},
+            {"src/a.rs": 801},
+            {"src/b.rs": 841, "src/z.rs": 5},
             {"src/a.rs": text(lines)},
-            {"src/a.rs": text(lines[150:]), "src/b.rs": text(part), "src/z.rs": text(code(7000, 5))},
+            {"src/b.rs": text(part), "src/z.rs": text(code(7000, 5))},
         )
         self.assertTrue(any("total" in e for e in errors), errors)
+
+    def test_m10_a_new_file_carrying_a_handful_of_moved_lines_fails(self):
+        # Excess 1, but 796 of its 801 lines are new: a move carries nearly
+        # the whole file, not just its excess.
+        lines = code(0, 1000)
+        fresh = lines[:5] + code(5000, 796)
+        errors = self.ratchet(
+            {"src/a.rs": 1000},
+            {"src/a.rs": 995, "src/c.rs": 801},
+            {"src/a.rs": text(lines)},
+            {"src/a.rs": text(lines[5:]), "src/c.rs": text(fresh)},
+        )
+        self.assertTrue(any("src/c.rs" in e for e in errors), errors)
+
+    def test_m11_an_unchanged_rename_of_a_brace_heavy_file_passes(self):
+        # Half its lines are trivial; carried with the code they close.
+        lines = [x for i in range(1000) for x in (f"    fn f{i}() {{", "    }")]
+        errors = self.ratchet({"src/a.rs": 2000}, {"src/b.rs": 2000}, {"src/a.rs": text(lines)}, {"src/b.rs": text(lines)})
+        self.assertEqual(errors, [])
