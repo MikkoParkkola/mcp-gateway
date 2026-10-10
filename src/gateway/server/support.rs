@@ -55,19 +55,8 @@ pub(super) fn log_startup_banner(
         // Authorization header, so without this an operator with a perfectly
         // good credential still cannot open the dashboard. The value is
         // single-use and is not the credential itself.
-        // Loopback only. The link carries an admin-granting value and the log
-        // it is printed to may be shipped elsewhere; on a network listener the
-        // reader of that log would not even need to be on the machine.
-        if crate::gateway::router::is_loopback_bind(&config.server.host)
-            && let Some(value) = bootstrap.and_then(DashboardBootstrap::peek)
-        {
-            info!(
-                "DASHBOARD (opens once, then remembered in this browser): \
-                 {}://{}/dashboard?bootstrap={}",
-                if config.mtls.enabled { "https" } else { "http" },
-                url_authority(&config.server.host, port),
-                value
-            );
+        if let Some(link) = dashboard_link(config, port, bootstrap) {
+            info!("{link}");
             if let Some(note) = dashboard_link_handoff(config) {
                 info!("DASHBOARD {note}");
             }
@@ -397,6 +386,28 @@ fn url_authority(host: &str, port: u16) -> String {
     } else {
         format!("{host}:{port}")
     }
+}
+
+/// The dashboard link the startup banner prints, or `None` when it must not
+/// be printed. Loopback only: the link carries an admin-granting value and
+/// the log it is printed to may be shipped elsewhere; on a network listener
+/// the reader of that log would not even need to be on the machine. With auth
+/// off there is no admin to grant, and without a bootstrap value no link.
+fn dashboard_link(
+    config: &Config,
+    port: u16,
+    bootstrap: Option<&DashboardBootstrap>,
+) -> Option<String> {
+    if !config.auth.enabled || !crate::gateway::router::is_loopback_bind(&config.server.host) {
+        return None;
+    }
+    let value = bootstrap.and_then(DashboardBootstrap::peek)?;
+    let scheme = if config.mtls.enabled { "https" } else { "http" };
+    let authority = url_authority(&config.server.host, port);
+    Some(format!(
+        "DASHBOARD (opens once, then remembered in this browser): \
+         {scheme}://{authority}/dashboard?bootstrap={value}"
+    ))
 }
 
 /// Where the link's code is entered, when this listener is plain HTTP behind an

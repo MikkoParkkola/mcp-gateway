@@ -435,3 +435,45 @@ async fn a_nameless_client_certificate_is_refused_before_anything_runs() {
     assert_eq!(body["error"]["code"], serde_json::json!(-32000), "{body}");
     assert_eq!(reached.load(Ordering::SeqCst), 0, "nothing inside ran");
 }
+
+/// MIK-8195 W2: the admin-granting dashboard link is printed only on a
+/// loopback bind, with auth on and a bootstrap value; never otherwise.
+#[test]
+fn the_dashboard_link_is_printed_only_on_loopback_with_auth_and_a_value() {
+    let bootstrap = DashboardBootstrap::new();
+    let value = bootstrap.peek().expect("a fresh bootstrap holds a value");
+    let mut config = Config::default();
+    config.auth.enabled = true;
+    config.server.host = "127.0.0.1".to_string();
+
+    let link = dashboard_link(&config, 39400, Some(&bootstrap)).expect("loopback with auth");
+    assert!(
+        link.contains(&format!(
+            "http://127.0.0.1:39400/dashboard?bootstrap={value}"
+        )),
+        "{link}"
+    );
+    config.mtls.enabled = true;
+    let link = dashboard_link(&config, 39400, Some(&bootstrap)).expect("loopback with mTLS");
+    assert!(link.contains("https://127.0.0.1:39400/"), "{link}");
+    config.mtls.enabled = false;
+
+    assert_eq!(
+        dashboard_link(&config, 39400, None),
+        None,
+        "no value, no link"
+    );
+    config.server.host = "0.0.0.0".to_string();
+    assert_eq!(
+        dashboard_link(&config, 39400, Some(&bootstrap)),
+        None,
+        "a network bind never prints the admin link"
+    );
+    config.server.host = "127.0.0.1".to_string();
+    config.auth.enabled = false;
+    assert_eq!(
+        dashboard_link(&config, 39400, Some(&bootstrap)),
+        None,
+        "with auth off there is no admin to grant"
+    );
+}
