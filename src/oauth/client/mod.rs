@@ -622,6 +622,8 @@ mod refresh_flight;
 pub(crate) use refresh_flight::{
     RefreshCaller, RefreshRequest, Refreshed, StoredCredential, refresh_stored,
 };
+#[cfg(test)]
+mod prm_discovery_tests;
 mod registration;
 mod renewal;
 #[cfg(test)]
