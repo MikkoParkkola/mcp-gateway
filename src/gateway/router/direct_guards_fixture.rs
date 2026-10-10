@@ -384,6 +384,7 @@ pub(crate) async fn fixture_firewalled_with(
 mod answers;
 #[path = "direct_guards_fixture_egress.rs"]
 mod egress;
+pub(crate) use answers::envelope_in;
 use answers::{call_answer, listing, question};
 use egress::backend_transport;
 #[cfg(feature = "firewall")]
@@ -763,28 +764,6 @@ pub(crate) async fn send(
     session: Option<&str>,
 ) -> (StatusCode, Value) {
     send_with_headers(fx, uri, key, method, params, session, &[]).await
-}
-
-/// The first string in `value`, or in a JSON document a string carries (a
-/// playbook answer is JSON text in `content`), that opens under `fx`'s
-/// continuation keyring: the one "find the envelope" oracle the envelope rows
-/// share (MIK-8176 cache guards, MIK-8323).
-pub(crate) fn envelope_in(fx: &Fx, value: &Value) -> Option<String> {
-    match value {
-        Value::String(text) => {
-            let continuation = fx.state.meta_mcp.continuation();
-            if continuation.keyring().open_now(text).is_ok() {
-                return Some(text.clone());
-            }
-            serde_json::from_str::<Value>(text)
-                .ok()
-                .filter(|inner| !inner.is_string())
-                .and_then(|inner| envelope_in(fx, &inner))
-        }
-        Value::Array(items) => items.iter().find_map(|item| envelope_in(fx, item)),
-        Value::Object(fields) => fields.values().find_map(|field| envelope_in(fx, field)),
-        _ => None,
-    }
 }
 
 /// [`send`] plus extra request headers, such as the modern era's mirrors.

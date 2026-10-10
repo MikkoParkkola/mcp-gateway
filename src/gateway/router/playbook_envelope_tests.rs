@@ -243,3 +243,35 @@ async fn assert_inputs_forward_none(case: &str, cmd: &str, wrap: bool) {
         "{case}: an input envelope reached a backend: {after:?}"
     );
 }
+
+/// R6 (green pin): a playbook's declared OUTPUT may hand E to its own client,
+/// and E's slot stays held for that client to redeem (MIK-8176). The load
+/// check covers step arguments only; applied to outputs it would refuse this.
+#[tokio::test]
+async fn r6_the_output_hands_the_envelope_to_its_own_client() {
+    let definition = serde_json::from_value(json!({
+        "playbook": "1.0",
+        "name": "carry",
+        "description": "the output hands the envelope to the playbook's client",
+        "steps": [ { "name": "ask", "tool": "read", "server": "alpha", "arguments": {} } ],
+        "output": { "type": "object",
+                    "properties": { "e": { "path": "$ask.requestState" } } }
+    }))
+    .expect("the playbook deserialises");
+    let fx = fixture_with(Answer::AskThenEcho, definition).await;
+    let envelope = run_on(&fx, json!({}), "r6").await;
+    let now = crate::protocol::continuation::now_unix_secs();
+    assert!(
+        fx.state
+            .meta_mcp
+            .continuation()
+            .keyring()
+            .open_now(&envelope)
+            .is_ok(),
+        "the delivered envelope does not open"
+    );
+    assert!(
+        fx.state.meta_mcp.continuation().in_flight().len(now).await >= 1,
+        "the delivered envelope's slot was released"
+    );
+}

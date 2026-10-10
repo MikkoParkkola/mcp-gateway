@@ -57,11 +57,9 @@ async fn signed_keyed(
 ///   so only routing keeps it out: it is stored by execution admission, never
 ///   by this cache.
 ///
-/// An envelope can still reach a cached answer when playbook interpolation
-/// hands it to a step backend (see
-/// `an_echoed_envelope_in_the_cache_needs_its_own_arguments_to_replay`); that
-/// backend could also return it uncached, so the fix belongs at the
-/// interpolation, not in cache ownership (MIK-8323). Mutants: the cache
+/// The other way an envelope could reach a cached answer, playbook
+/// interpolation handing it to a step backend, is closed at the interpolation
+/// (MIK-8323; see `a_playbook_handing_a_request_state_to_a_step_is_refused`). Mutants: the cache
 /// stores non-final answers; a playbook's output is stored in it.
 #[tokio::test]
 async fn the_idempotency_cache_keeps_no_question_it_was_handed_directly() {
@@ -131,38 +129,77 @@ async fn the_idempotency_cache_keeps_no_question_it_was_handed_directly() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// MIK-8176 guard (gpt counter-path, lead ruling): a keyed playbook whose
-/// second step echoes the first step's envelope E caches that completed
-/// answer WITH E, while its declared output omits E, so E's slot is
-/// released. The entry replays only for a call presenting the same arguments
-/// (the fingerprint covers them): a replay without E misses and serves no
-/// envelope. This does NOT make the path safe: a backend handed E by
-/// interpolation can return E from its own state, cached or not. That is
-/// MIK-8323 (the gateway must not hand a sealed envelope to a backend).
-/// Mutant: the fingerprint ignores the arguments.
-#[tokio::test]
-async fn an_echoed_envelope_in_the_cache_needs_its_own_arguments_to_replay() {
+/// A keyed playbook `ask` -> `echo(cmd)` on `alpha/read`, answering
+/// `AskThenEcho`, whose output omits every envelope.
+async fn echo_fixture(cmd: &str) -> Fx {
     use super::direct_guards_fixture::fixture_hardened_signed_built;
     let definition: crate::playbook::PlaybookDefinition = serde_json::from_value(json!({
         "playbook": "1.0",
         "name": "ask-echo",
-        "description": "the second step echoes the first step's envelope",
+        "description": "the second step echoes its argument",
         "steps": [
             { "name": "ask", "tool": "read", "server": "alpha", "arguments": {} },
             { "name": "echo", "tool": "read", "server": "alpha",
-              "arguments": { "cmd": "$ask.requestState" } }
+              "arguments": { "cmd": cmd } }
         ],
         "output": { "type": "object",
                     "properties": { "done": { "path": "$echo.isError", "fallback": false } } }
     }))
     .expect("the echo playbook deserialises");
-    let fx = fixture_hardened_signed_built(Answer::AskThenEcho, true, move |meta| {
+    fixture_hardened_signed_built(Answer::AskThenEcho, true, move |meta| {
         let mut engine = crate::playbook::PlaybookEngine::new();
         engine.register(definition);
         meta.set_playbook_engine(engine);
         meta
     })
+    .await
+}
+
+/// MIK-8323 D3 (formerly the MIK-8176 leak pin, which asserted the echo step's
+/// cached answer carried the envelope E): a playbook whose step argument names
+/// `$ask.requestState` is refused before any step runs, naming the step and
+/// the reference, so no backend is handed E and nothing caches it.
+#[tokio::test]
+async fn a_playbook_handing_a_request_state_to_a_step_is_refused() {
+    let fx = echo_fixture("$ask.requestState").await;
+    let ran = signed_keyed(
+        &fx,
+        ("/mcp", "gateway_run_playbook"),
+        json!({"name": "gateway_run_playbook", "arguments": {"name": "ask-echo"}}),
+        ("h3-echo", "h3-echo-n1"),
+    )
     .await;
+    let text = ran.to_string();
+    assert!(
+        ran.get("error").is_some() && text.contains("echo") && text.contains("$ask.requestState"),
+        "the playbook is refused naming its step and reference: {ran}"
+    );
+    assert_eq!(
+        fx.calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "a refused playbook ran a step"
+    );
+    let cached = fx.state.meta_mcp.idempotency_completed_for_test();
+    assert!(
+        !cached.iter().any(|value| carries_envelope(&fx, value)),
+        "the cache holds an envelope: {cached:?}"
+    );
+}
+
+/// MIK-8176 guard, moved here from the D3 row with no envelope in it: a keyed
+/// playbook whose asking step's envelope is never delivered (its output omits
+/// it) completes, and that envelope's slot is released.
+#[tokio::test]
+async fn a_playbook_ask_steps_undelivered_envelope_releases_its_slot() {
+    let fx = echo_fixture("marker-8323").await;
+    let minted = || {
+        fx.state
+            .meta_mcp
+            .continuation()
+            .keyring()
+            .mint_budget_remaining()
+    };
+    let budget_before = minted();
     let ran = signed_keyed(
         &fx,
         ("/mcp", "gateway_run_playbook"),
@@ -174,41 +211,85 @@ async fn an_echoed_envelope_in_the_cache_needs_its_own_arguments_to_replay() {
         ran.get("error").is_none() && !carries_envelope(&fx, &ran),
         "the playbook completes and its output omits the envelope: {ran}"
     );
-    let cached = fx.state.meta_mcp.idempotency_completed_for_test();
+    // gpt c2: without this the release check passes when nothing was minted.
     assert!(
-        cached.iter().any(|value| carries_envelope(&fx, value)),
-        "the echo step's completed answer is cached WITH the envelope: {cached:?} \
-         (backend calls {}, params seen {:?}, playbook answer {ran})",
-        fx.calls.load(std::sync::atomic::Ordering::SeqCst),
-        fx.seen.lock().unwrap()
+        minted() < budget_before,
+        "setup: the asking step minted no envelope: {ran}"
     );
-    let now = crate::protocol::continuation::now_unix_secs();
-    let mut held = fx.state.meta_mcp.continuation().in_flight().len(now).await;
-    let bound = tokio::time::Instant::now() + crate::test_wait::HANG_BOUND;
-    while held != 0 && tokio::time::Instant::now() < bound {
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        held = fx
-            .state
+    let held = || async {
+        fx.state
             .meta_mcp
             .continuation()
             .in_flight()
             .len(crate::protocol::continuation::now_unix_secs())
-            .await;
+            .await
+    };
+    let bound = tokio::time::Instant::now() + crate::test_wait::HANG_BOUND;
+    while held().await != 0 && tokio::time::Instant::now() < bound {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    assert_eq!(held, 0, "the undelivered envelope's slot is released");
-    for (n, arguments) in [(2, json!({})), (3, json!({"cmd": "not-the-envelope"}))] {
-        let replay = signed_keyed(
-            &fx,
-            ("/mcp/alpha", "read"),
-            json!({"name": "read", "arguments": arguments}),
-            ("h3-echo", &format!("h3-echo-n{n}")),
-        )
-        .await;
+    assert_eq!(
+        held().await,
+        0,
+        "the undelivered envelope's slot is released"
+    );
+}
+
+/// The fingerprint half of the old D3 row, on a keyed DIRECT call so it does
+/// not depend on how a playbook's steps use the client's key (MIK-8341): a
+/// cached answer replays only for the same arguments. Mutant: the fingerprint
+/// ignores the arguments.
+#[tokio::test]
+async fn a_cached_answer_needs_its_own_arguments_to_replay() {
+    use super::direct_guards_fixture::fixture_hardened_signed_built;
+    const MARKER: &str = "marker-8323";
+    let fx = fixture_hardened_signed_built(Answer::AskThenEcho, true, |meta| meta).await;
+    let read = |arguments: Value, nonce: &'static str| {
+        let fx = &fx;
+        async move {
+            signed_keyed(
+                fx,
+                ("/mcp/alpha", "read"),
+                json!({"name": "read", "arguments": arguments}),
+                ("fp-key", nonce),
+            )
+            .await
+        }
+    };
+    // `AskThenEcho` asks on its first call; spend it under another key.
+    let asked = signed_keyed(
+        &fx,
+        ("/mcp/alpha", "read"),
+        json!({"name": "read", "arguments": {}}),
+        ("fp-ask", "fp-ask-n1"),
+    )
+    .await;
+    assert!(
+        carries_envelope(&fx, &asked),
+        "setup: the first call asks: {asked}"
+    );
+    let first = read(json!({"cmd": MARKER}), "fp-n1").await;
+    assert!(
+        first.to_string().contains(MARKER),
+        "setup: the keyed call is answered: {first}"
+    );
+    for (arguments, nonce) in [(json!({}), "fp-n2"), (json!({"cmd": "other"}), "fp-n3")] {
+        let replay = read(arguments, nonce).await;
         assert!(
-            !carries_envelope(&fx, &replay),
-            "a replay without the envelope is served none: {replay}"
+            !replay.to_string().contains(MARKER),
+            "a reuse with other arguments is served the cached answer: {replay}"
         );
     }
+    // The control that keeps the misses honest: the same arguments hit. The
+    // backend echoes, so the marker alone cannot tell a hit from a fresh call;
+    // a hit is the answer with no new backend call.
+    let before = fx.calls.load(std::sync::atomic::Ordering::SeqCst);
+    let hit = read(json!({"cmd": MARKER}), "fp-n4").await;
+    assert!(
+        hit.to_string().contains(MARKER)
+            && fx.calls.load(std::sync::atomic::Ordering::SeqCst) == before,
+        "the same arguments are not served from the cache: {hit}"
+    );
 }
 
 /// A one-step playbook, `ask-once`, whose step (`alpha/read`) asks once.
