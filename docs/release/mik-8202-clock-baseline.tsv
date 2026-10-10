@@ -18,7 +18,6 @@ src/commands/trust/baseline.rs	1
 src/commands/trust/lab.rs	2
 src/config_reload/grant_audit_crash_tests.rs	4
 src/config_reload/grant_reload_trigger_tests.rs	2
-src/cost_accounting/enforcer.rs	3
 src/cost_accounting/mod.rs	3
 src/cost_accounting/persistence.rs	3
 src/events/backend_source.rs	1
