@@ -28,6 +28,7 @@ on:
       - "src/personal_accounts/**"
       - "src/config/account_bindings.rs"
       - "src/identity_propagation/**"
+      - "src/gateway/outbound/stdio.rs"
       - "docs/release/v4.0.0-critical-functions.tsv"
       - "docs/release/v4.0.0-unenforcing-functions.tsv"
       - "docs/release/inventory.d/**"

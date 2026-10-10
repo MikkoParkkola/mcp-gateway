@@ -194,3 +194,7 @@ impl StdioReads {
         }
     }
 }
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "stdio_tests.rs"]
+mod tests;
