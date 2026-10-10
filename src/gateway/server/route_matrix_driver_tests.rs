@@ -16,6 +16,8 @@ use crate::config::{BackendConfig, FailsafeConfig};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
+pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::stdio_task_surfaced;
+
 /// A backend serving one tool, `read`, counting the `tools/call` sends.
 struct Counting {
     calls: Arc<AtomicUsize>,

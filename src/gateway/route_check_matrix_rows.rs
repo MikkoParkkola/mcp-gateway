@@ -372,6 +372,10 @@ async fn nonce_give_back_direct_row() {
     assert_eq!(again["error"], refused["error"], "R3: not the same refusal again: {again}");
 }
 
+/// The part of X14's challenge prompt both its variants carry
+/// (meta_mcp/task_confirmation.rs `confirmation_prompt`).
+const X14_PROMPT: &str = "It runs as a task once accepted";
+
 /// X14's refusal for a caller it cannot bind a confirmation to
 /// (meta_mcp/task_confirmation.rs). The fixture's `k-std` is a shared key with
 /// no verified identity, so this is the X14 outcome the design names for it.
@@ -396,4 +400,26 @@ async fn task_confirm_submit_row() {
         sent.body
     );
     assert_eq!(sent.backend_calls, 0, "R4a: dispatched before X14: {}", sent.body);
+}
+
+/// TaskConfirm, R5 gap (MIK-8160): the same task-augmented call of an
+/// unannotated surfaced tool over stdio is admitted as a task with no X14
+/// decision at all: neither X14's challenge nor its refusal.
+#[tokio::test]
+async fn task_confirm_stdio_gap_row() {
+    assert_eq!(
+        expect(MethodKind::ToolsCall, Route::Stdio, Stage::TaskConfirm),
+        Expect::ExpectedGap(super::Ticket::Mik8160)
+    );
+    let (body, _calls) = stdio::stdio_task_surfaced().await;
+    let text = body.to_string();
+    assert!(
+        !text.contains(X14_PROMPT) && !text.contains(X14_UNBINDABLE),
+        "stdio now gets an X14 decision; MIK-8160 may have closed this gap, flip the \
+         row to Applies: {body}"
+    );
+    assert!(
+        body.pointer("/result/taskId").is_some(),
+        "premise: stdio admitted the call as a task: {body}"
+    );
 }
