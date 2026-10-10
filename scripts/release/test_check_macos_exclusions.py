@@ -276,5 +276,15 @@ class Predicates(unittest.TestCase):
             [f"not run on macOS and not listed: src/x_tests.rs {n}" for n in ("other", "probe")],
         )
 
+    def test_p20_a_multi_line_attribute_with_a_comment_or_string_counts(self) -> None:
+        # Blunt and fail closed (lead ruling): a `]` inside a comment can end
+        # the join early, so a multi-line attribute holding a comment marker
+        # or a string literal always counts, and its item is the next item.
+        (Path(self.dir.name) / "Cargo.toml").write_text(self.CARGO)
+        found = self.tree('#[cfg(all(\n    test, /* ] */\n    target_os = "macos"\n))]\n#[test]\nfn probe() {}\n')
+        self.assertEqual(found, ["not run on macOS and not listed: src/x_tests.rs probe"])
+        found = self.tree('#[cfg_attr(\n    target_os = "linux",\n    ignore = "x"\n)]\n#[test]\nfn probe() {}\n')
+        self.assertEqual(found, ["not run on macOS and not listed: src/x_tests.rs probe"])
+
 if __name__ == "__main__":
     unittest.main()
