@@ -84,7 +84,10 @@ fn stored(bearer: &str, subject: &str) -> TemporaryToken {
         jti: format!("jti-{bearer}"),
         token: bearer.to_owned(),
         identity: identity(subject),
-        scopes: TokenScopes::default(),
+        scopes: TokenScopes {
+            backends: vec!["*".to_owned()],
+            ..TokenScopes::default()
+        },
         iat: 0,
         exp: u64::MAX,
         client_ip: None,
