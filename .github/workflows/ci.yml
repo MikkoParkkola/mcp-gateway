@@ -151,6 +151,11 @@ jobs:
       # mirror.gcr.io, so the anonymous pull limit cannot fail a merge (MIK-8256).
       - name: No anonymous Docker Hub pull
         run: python3 scripts/ci/check_docker_hub_pulls.py
+      # Under pipefail `x | grep -q` fails the pipeline on a match (MIK-8333).
+      - name: No piped quiet grep
+        run: |
+          python3 scripts/ci/check-pipefail-grep-q.py
+          python3 scripts/dev/test_pipefail_quiet_grep.py
       - name: Validate the trusted runner's admission rules
         run: scripts/ci/trusted-runner/job-started.sh --self-test
       - name: Validate the mutant batch classifier
@@ -348,7 +353,8 @@ jobs:
           mkdir -p "$out/pulled"
           helm pull oci://localhost:5000/charts/mcp-gateway --version "$ver" -d "$out/pulled" --plain-http
           test -f "$out/pulled/mcp-gateway-$ver.tgz"
-          helm template t "$out/pulled/mcp-gateway-$ver.tgz" | grep -q '^kind: Deployment'
+          helm template t "$out/pulled/mcp-gateway-$ver.tgz" > "$out/rendered.yaml"
+          grep -q '^kind: Deployment' "$out/rendered.yaml"
           echo "OCI round-trip ok: pushed + pulled + rendered mcp-gateway $ver"
 
   helm-supply-chain:

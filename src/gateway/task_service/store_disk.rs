@@ -379,7 +379,15 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
                 );
                 return Err(StoreError::Capacity);
             }
-            loaded.entries.insert(task_id, Entry { task, record });
+            loaded.entries.insert(
+                task_id,
+                Entry {
+                    task,
+                    record,
+                    // Loaded from disk: no holds, as the slot table starts empty.
+                    holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+                },
+            );
         } else {
             tracing::warn!(
                 path = %shown_path,

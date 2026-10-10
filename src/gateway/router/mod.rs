@@ -81,6 +81,8 @@ mod continuation_instance_tests;
 #[cfg(test)]
 mod direct_audit_tests;
 #[cfg(test)]
+mod direct_cache_guard_tests;
+#[cfg(test)]
 mod direct_capability_tests;
 #[cfg(test)]
 mod direct_continuation_gate_tests;
@@ -143,6 +145,8 @@ mod mrtr9_lease_tests;
 /// MIK-8058: a failed reload's status says whose fault it is.
 #[cfg(all(test, feature = "webui"))]
 mod reload_status_tests;
+#[cfg(all(test, feature = "firewall"))]
+pub(super) mod route_matrix_driver_tests;
 #[cfg(test)]
 mod webhook_mount_tests;
 /// The meta route's post-judge delivery record, shared with stdio (MIK-7920).

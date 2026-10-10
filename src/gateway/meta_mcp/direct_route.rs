@@ -159,6 +159,16 @@ impl MetaMcp {
         RESERVATION_ATTEMPTS.with(|count| count.set(0));
     }
 
+    /// Test-only: every completed value the idempotency cache retains
+    /// (MIK-8176 cache guards). Read-only; compiled only under
+    /// `cfg(test)`, so no production caller reaches the cache through it.
+    pub(crate) fn idempotency_completed_for_test(&self) -> Vec<Value> {
+        self.idempotency_cache
+            .as_ref()
+            .map(|cache| cache.completed_values_for_test())
+            .unwrap_or_default()
+    }
+
     /// Test-only entry to `invoke_tool` for router cells that must drive a
     /// meta-layer exchange (a bridged input round) on the same `MetaMcp` an
     /// HTTP fixture serves (MIK-7597 T3c). Compiled only under `cfg(test)`.

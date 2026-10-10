@@ -62,7 +62,7 @@ class Repo:
         }
 
     def git(self, *args: str) -> str:
-        return subprocess.run(["git", *args], cwd=self.root, check=True, capture_output=True, text=True).stdout
+        return subprocess.run(["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", *args], cwd=self.root, check=True, capture_output=True, text=True).stdout
 
     def commit(self) -> None:
         for path, text in self.files.items():

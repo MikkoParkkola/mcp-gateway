@@ -483,7 +483,14 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
     let (task_service, task_executor) = crate::gateway::task_service::open_runtime_with_admission(
         &store_dir.path().join("tasks"),
         config.tasks.max_workers,
-        crate::gateway::task_service::StoreLimits::default(),
+        // The configured limits, built as production builds them
+        // (server/task_runtime.rs), so a row that sets a task limit gets it.
+        crate::gateway::task_service::StoreLimits {
+            records: config.tasks.max_records,
+            per_principal: config.tasks.max_per_principal,
+            record_bytes: config.tasks.max_record_bytes,
+            logical_bytes: config.tasks.logical_budget_bytes,
+        },
         Arc::clone(&subscriptions),
         Arc::clone(meta_mcp.execution_admission()),
     )

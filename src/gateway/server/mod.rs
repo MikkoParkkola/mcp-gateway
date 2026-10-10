@@ -32,6 +32,8 @@ mod provenance_signer;
 mod remote_provenance_start_tests;
 #[cfg(test)]
 mod replica_state_tests;
+#[cfg(all(test, feature = "firewall"))]
+pub(super) mod route_matrix_driver_tests;
 mod run;
 mod run_steps;
 #[cfg(test)]
@@ -47,6 +49,8 @@ mod stdio_loop;
 mod stdio_nonce;
 mod stdio_notify;
 mod stdio_refusal;
+#[cfg(test)]
+pub(crate) mod stdio_seams;
 mod stdio_shutdown;
 mod stdio_single;
 mod stdio_tasks;

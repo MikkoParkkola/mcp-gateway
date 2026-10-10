@@ -35,6 +35,8 @@ use disk::{Fault, fire, open_blocking, write_record};
 mod disk;
 #[path = "store_expiry.rs"]
 mod expiry;
+#[path = "store_holds.rs"]
+mod holds;
 #[path = "store_input.rs"]
 pub(crate) mod input;
 #[cfg(test)]
@@ -135,6 +137,24 @@ pub(super) type CommitHook = Arc<dyn Fn(CommitStage) -> std::io::Result<()> + Se
 struct Entry {
     task: Task,
     record: Record,
+    /// The holds of the sealed questions this row's payload carries (its
+    /// parked round or its completed result), MIK-8176. In memory only: a row
+    /// loaded from disk has none, as the slot table it would point into
+    /// starts empty too. Dropping the entry drops them, which gives back the
+    /// slots of a payload never handed off.
+    holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds,
+}
+
+/// What a commit does with the row's holds (MIK-8176 D2). Every `publish`
+/// names one, so a new commit path cannot silently keep or lose them.
+pub(super) enum HoldUpdate {
+    /// The commit stores a payload carrying these holds (a parked round, a
+    /// completed result); the previous holds go.
+    Replace(crate::gateway::meta_mcp::sealed_hold::CarriedHolds),
+    /// The commit changes neither the round nor the result: keep them.
+    Carry,
+    /// The commit leaves no sealed question on the row: give them up.
+    Drop,
 }
 
 struct State {
@@ -490,7 +510,7 @@ impl Shared {
         self.commit(&record_name(task.id()), &bytes)?;
         // Readable FIRST, discoverable second. Reversed, a retry could be told
         // the task exists and then fail to read it.
-        let committed = self.publish(task, record);
+        let committed = self.publish(task, record, HoldUpdate::Drop);
         let hook = self.hook();
         let hook_result = fire(hook.as_ref(), CommitStage::Published);
         if let Some(publication) = publication {
@@ -538,7 +558,7 @@ impl Shared {
             return Err(StoreError::Capacity);
         }
         self.commit(&record_name(task.id()), &bytes)?;
-        Ok(self.publish(task, record))
+        Ok(self.publish(task, record, HoldUpdate::Carry))
     }
 
     fn mark_dispatched_blocking(
@@ -571,7 +591,7 @@ impl Shared {
             return Err(StoreError::Capacity);
         }
         self.commit(&record_name(task.id()), &bytes)?;
-        self.publish(task, record);
+        self.publish(task, record, HoldUpdate::Carry);
         Ok(())
     }
 
@@ -620,7 +640,7 @@ impl Shared {
             return Err(StoreError::Capacity);
         }
         self.commit(&record_name(task.id()), &bytes)?;
-        self.publish(task, record);
+        self.publish(task, record, HoldUpdate::Carry);
         Ok(())
     }
 
@@ -642,11 +662,26 @@ impl Shared {
 
     /// Make a committed record visible to readers. Called only after the write
     /// is durable, which is what keeps an acknowledgement behind its record.
-    fn publish(&self, task: Task, record: Record) -> CommittedTask {
+    fn publish(&self, task: Task, record: Record, holds: HoldUpdate) -> CommittedTask {
         let committed = CommittedTask::of(task.clone(), &record);
-        self.state()
-            .entries
-            .insert(task.id().to_owned(), Entry { task, record });
+        let mut state = self.state();
+        let holds = match holds {
+            HoldUpdate::Replace(holds) => holds,
+            HoldUpdate::Carry => state
+                .entries
+                .get(task.id())
+                .map(|entry| entry.holds.clone())
+                .unwrap_or_default(),
+            HoldUpdate::Drop => crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+        };
+        state.entries.insert(
+            task.id().to_owned(),
+            Entry {
+                task,
+                record,
+                holds,
+            },
+        );
         committed
     }
 

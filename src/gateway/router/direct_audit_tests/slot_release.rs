@@ -151,17 +151,13 @@ const PATHS: [Path; 4] = [
     Path::InvocationRecordRefused,
 ];
 
-/// Rows that still leak. Empty since stage 3, when the SSE arm gained its
-/// yield-point handoff (MIK-8176 SLOT.1, SLOT.2 SSE arms).
-const KNOWN_LEAK: [(Arm, Path); 0] = [];
-
-/// Slots a row must leave held: the delivered first read keeps one.
-fn want(arm: Arm, path: Path) -> usize {
-    let kept = match path {
+/// Slots a row must leave held: the delivered first read keeps one. There is
+/// no allow-list of leaking rows (MIK-8176 D7): a reintroduced leak fails.
+const fn want(path: Path) -> usize {
+    match path {
         Path::Delivered | Path::ReadJudgeWithheld => 1,
         Path::DeliveryRecordRefused | Path::InvocationRecordRefused => 0,
-    };
-    kept + usize::from(KNOWN_LEAK.contains(&(arm, path)))
+    }
 }
 
 /// Run one row; `None` when the route cannot take the path.
@@ -220,7 +216,7 @@ async fn row(arm: Arm, path: Path, relay: Relay) -> Option<String> {
             "{label}: the notification did not go first: {body}"
         ));
     }
-    let (held, want) = (held(&fx).await, want(arm, path));
+    let (held, want) = (held(&fx).await, want(path));
     (held != want).then(|| format!("{label}: {held} slots held, want {want}: {body}"))
 }
 
@@ -310,4 +306,72 @@ pub(super) fn notify_first(method: &str, params: Option<&Value>) -> bool {
         params: Some(json!({"progressToken": token, "progress": 1})),
     }]);
     true
+}
+
+/// MIK-8276: both of this fixture's firewalls know the keyring its gateway
+/// mints continuations with, as the gateway's own do (#2210, MIK-8092).
+/// Random ciphertext holds a credential shape about once in 20,000
+/// envelopes; without the keyring the redactor rewrites the sealed
+/// `requestState` and the answer is refused (-32600) instead of withheld or
+/// delivered, which is how the streamed `ReadJudgeWithheld` row failed.
+#[tokio::test]
+async fn the_fixtures_firewalls_deliver_a_minted_continuation() {
+    use crate::gateway::meta_mcp::response_security::ResponseDeliveryContext;
+    use crate::security::firewall::response_tests::minted_value::mint_credential_shaped;
+    use crate::security::response_policy::{ResponseCorrelation, ResponsePolicyTarget};
+
+    let fx = fixture(Setup {
+        reply: Some(question("t1")),
+        tenant_limit: Some(0),
+        ..Setup::default()
+    })
+    .await;
+    let token = mint_credential_shaped(fx.state.meta_mcp.continuation().keyring());
+    let targets = [ResponsePolicyTarget {
+        server: "alpha".to_string(),
+        tool: "t".to_string(),
+    }];
+    let context = ResponseDeliveryContext {
+        method: "tools/call",
+        targets: &targets,
+        correlation: ResponseCorrelation {
+            session_id: "",
+            caller: "anonymous",
+            external_server: "alpha",
+            external_tool: "t",
+            subject: None,
+        },
+        signing: None,
+        chain_source: crate::protocol::ChainSource::default(),
+        chain_nonce: None,
+    };
+    // The router's firewall judges a routed `tools/call`; without one, the
+    // Meta-MCP's own does.
+    // Without a router firewall the first pass would judge with the
+    // Meta-MCP's, and the row would test one firewall twice.
+    assert!(fx.state.firewall.is_some(), "the fixture's router firewall");
+    for (name, router) in [("router", fx.state.firewall.as_deref()), ("meta", None)] {
+        let answer = json!({
+            "resultType": "input_required",
+            "inputRequests": {"q1": {"params": {"message": "Choose"}}},
+            "requestState": token,
+        });
+        let response = JsonRpcResponse::success(RequestId::Number(1), answer);
+        let delivered = fx
+            .state
+            .meta_mcp
+            .finalize_routed(response, &context, router);
+        assert!(
+            delivered.error.is_none(),
+            "the {name} firewall refused the minted handle: {delivered:?}"
+        );
+        assert_eq!(
+            delivered
+                .result
+                .as_ref()
+                .and_then(|r| r.get("requestState")),
+            Some(&json!(token)),
+            "the {name} firewall changed the minted handle"
+        );
+    }
 }

@@ -11,6 +11,7 @@ mod env_files;
 mod error_budget;
 mod idle_and_agents;
 mod loading;
+mod pattern_grammar;
 mod validate_config;
 
 /// The child half of ENVFILE.19d. Computes its OWN `dirs::home_dir()` as the

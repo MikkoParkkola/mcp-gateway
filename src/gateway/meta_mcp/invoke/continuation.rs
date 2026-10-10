@@ -28,9 +28,9 @@ use crate::{Error, Result};
 /// the keyring refuses gives that slot back at once: no envelope names it, so
 /// held until it expired it would only take capacity from other exchanges.
 ///
-/// `Some((envelope, hold_key))`: the hold key lets a caller give the slot
-/// back ([`release_unless_carried`]) when a later step keeps the envelope from
-/// the client.
+/// `Some((envelope, hold_key))`: the slot is held in the caller's request
+/// scope, released with it unless the answer carrying the envelope is handed
+/// off (MIK-8176).
 pub(super) async fn mint_continuation(
     continuation: &std::sync::Arc<crate::protocol::continuation::ContinuationState>,
     source: crate::protocol::mrtr::PrincipalSource<'_>,
@@ -96,27 +96,6 @@ async fn release_unsent(
         // skip its pass (MIK-8202 D2).
         let now = crate::clock::unix_secs().unwrap_or(0);
         continuation.in_flight().complete(hold_key, now).await;
-    }
-}
-
-/// Keep a sealed question's slot only if `delivered`, the answer that leaves,
-/// still carries its envelope (MIK-8078). A step after the seal that refused
-/// the answer, or replaced it (a tool error in its place), took the question
-/// from the client, so its slot is given back.
-pub(crate) async fn release_unless_carried(
-    continuation: &crate::protocol::continuation::ContinuationState,
-    sealed: Option<(String, String)>,
-    delivered: Option<&Value>,
-) {
-    let Some((envelope, hold_key)) = sealed else {
-        return;
-    };
-    let carried = delivered
-        .and_then(|result| result.get("requestState"))
-        .and_then(Value::as_str)
-        == Some(envelope.as_str());
-    if !carried {
-        release_unsent(continuation, Some(hold_key.as_str())).await;
     }
 }
 
@@ -585,8 +564,9 @@ impl crate::gateway::meta_mcp::MetaMcp {
     /// call, as the meta route does. An answer that is not interim is left as
     /// it is.
     ///
-    /// Returns the sealed envelope and its hold key, for
-    /// [`Self::release_direct_hold`] once the answer that leaves is known.
+    /// Returns the sealed envelope and its hold key. The slot is held in the
+    /// request's scope and released with it unless the answer that carries
+    /// it is handed off (MIK-8176).
     ///
     /// MRTR.9 and 9a first (MIK-8089): a question the client did not declare
     /// it can answer is refused before anything is minted, as on `/mcp`.
@@ -648,24 +628,27 @@ impl crate::gateway::meta_mcp::MetaMcp {
         Ok(Some((envelope, hold_key)))
     }
 
-    /// Test-only: replace the continuation store (MIK-8078).
+    /// Test-only: replace the continuation store (MIK-8078), or share one a
+    /// fixture's firewalls were built with (MIK-8276).
     #[cfg(test)]
     pub(crate) fn set_continuation_for_test(
         &mut self,
-        state: crate::protocol::continuation::ContinuationState,
+        state: impl Into<std::sync::Arc<crate::protocol::continuation::ContinuationState>>,
     ) {
-        self.continuation = std::sync::Arc::new(state);
+        self.continuation = state.into();
     }
 
-    /// Give back the slot of a sealed question unless `delivered`, the answer
-    /// that leaves, still carries it ([`release_unless_carried`]): the direct
-    /// route after its tail, `/mcp` and stdio after their delivery scan.
-    pub(crate) async fn release_direct_hold(
-        &self,
-        sealed: Option<(String, String)>,
-        delivered: Option<&Value>,
+    /// Test-only: mint with the keyring `firewall` exempts, as the gateway
+    /// pairs them (#2210, MIK-8276). A firewall built without one is a
+    /// fixture defect, so this panics rather than leave the pair unmatched.
+    #[cfg(all(test, feature = "firewall"))]
+    pub(crate) fn share_keyring_with_for_test(
+        &mut self,
+        firewall: &crate::security::firewall::Firewall,
     ) {
-        release_unless_carried(&self.continuation, sealed, delivered).await;
+        self.continuation = firewall
+            .continuations_for_test()
+            .expect("a fixture firewall carries a keyring (keyed_for_test)");
     }
 }
 

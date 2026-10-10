@@ -21,18 +21,29 @@ use crate::protocol::meta::Declared;
 use crate::protocol::mrtr::RetryFields;
 use crate::security::{ToolPolicy, ToolPolicyConfig};
 
-pub(super) const BACKEND: &str = "fixture";
-const TOOL: &str = "echo";
+pub(crate) const BACKEND: &str = "fixture";
+pub(crate) const TOOL: &str = "echo";
 const DENIED: &str = "forbidden";
 
 /// A counting backend answering every tool at once.
-async fn backend() -> (String, Arc<AtomicUsize>) {
+pub(crate) async fn backend() -> (String, Arc<AtomicUsize>) {
+    backend_listing(json!([
+        {"name": TOOL, "inputSchema": {"type": "object"}},
+        {"name": DENIED, "inputSchema": {"type": "object"}},
+    ]))
+    .await
+}
+
+/// [`backend`] whose `tools/list` answers `tools` (the route x check matrix
+/// lists a destructive tool, MIK-8137 b3).
+pub(crate) async fn backend_listing(tools: Value) -> (String, Arc<AtomicUsize>) {
     let rounds = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&rounds);
     let app = axum::Router::new().route(
         "/",
         axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
             let counted = Arc::clone(&counted);
+            let tools = tools.clone();
             async move {
                 let result = match request.get("method").and_then(Value::as_str) {
                     Some("initialize") => json!({
@@ -40,13 +51,16 @@ async fn backend() -> (String, Arc<AtomicUsize>) {
                         "capabilities": {"tools": {}},
                         "serverInfo": {"name": BACKEND, "version": "0"},
                     }),
-                    Some("tools/list") => json!({"tools": [
-                        {"name": TOOL, "inputSchema": {"type": "object"}},
-                        {"name": DENIED, "inputSchema": {"type": "object"}},
-                    ]}),
+                    Some("tools/list") => json!({"tools": tools}),
                     Some("tools/call") => {
                         counted.fetch_add(1, Ordering::SeqCst);
-                        json!({"content": [{"type": "text", "text": "done"}]})
+                        // Echoes a `cmd` argument as sent, so a row can see
+                        // what reached the backend (route x check matrix).
+                        let text = request["params"]["arguments"]["cmd"]
+                            .as_str()
+                            .unwrap_or("done")
+                            .to_string();
+                        json!({"content": [{"type": "text", "text": text}]})
                     }
                     _ => json!({}),
                 };
@@ -63,7 +77,7 @@ async fn backend() -> (String, Arc<AtomicUsize>) {
 }
 
 /// A stdio task store over a production-built `MetaMcp`, under `policy`.
-pub(super) struct Fixture {
+pub(crate) struct Fixture {
     pub(super) tasks: Arc<StdioTasks>,
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     policy: Arc<ToolPolicy>,
@@ -80,8 +94,18 @@ async fn fixture(policy: Option<ToolPolicy>) -> Fixture {
 
 /// [`fixture`] over the backend at `url`.
 pub(super) async fn fixture_on(
+    backend: (String, Arc<AtomicUsize>),
+    policy: Option<ToolPolicy>,
+) -> Fixture {
+    Box::pin(fixture_on_with(backend, policy, |_| {})).await
+}
+
+/// [`fixture_on`] with `configure` applied to the gateway config before it is
+/// built (the route x check matrix surfaces a tool through it, MIK-8137 b3).
+pub(crate) async fn fixture_on_with(
     (url, rounds): (String, Arc<AtomicUsize>),
     policy: Option<ToolPolicy>,
+    configure: impl FnOnce(&mut Config),
 ) -> Fixture {
     let store = tempfile::tempdir().expect("store root");
     let mut config = Config::default();
@@ -98,6 +122,7 @@ pub(super) async fn fixture_on(
             ..BackendConfig::default()
         },
     );
+    configure(&mut config);
     let data = tempfile::tempdir().expect("data dir");
     let built = Gateway::new(config.clone())
         .await
@@ -244,7 +269,7 @@ pub(super) fn modern_call(id: u64, tool: &str, key: &str, task: bool) -> Value {
 }
 
 /// One request through the stdio dispatcher, with this fixture's store.
-pub(super) async fn dispatch(fixture: &Fixture, request: Value) -> Value {
+pub(crate) async fn dispatch(fixture: &Fixture, request: Value) -> Value {
     Gateway::dispatch_single_with_sink(
         &fixture.meta,
         &fixture.policy,
@@ -649,7 +674,7 @@ async fn eof_drains_a_running_task_before_returning() {
     let task = service
         .get(LOCAL_OPERATOR_PRINCIPAL, &id)
         .expect("the local operator's task is in its store");
-    let wire = crate::gateway::task_route::task_envelope(&task.task, "complete");
+    let wire = serde_json::to_value(task.task.wire()).expect("the task serializes");
     assert_eq!(
         task.task.status(),
         crate::protocol::tasks::TaskStatus::Completed,

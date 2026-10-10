@@ -94,6 +94,15 @@ pub(crate) enum Answer {
     /// A failed dispatch dressed as an `accounts.v1` account refusal, with
     /// the given message (MIK-8139: a backend can forge the marker).
     ForgedAccount(&'static str),
+    /// State-only interim rounds (`requestState`, no questions; MIK-8177):
+    /// calls before the given index answer a harmless round, the call at it a
+    /// round whose `content` carries the given text, every later call
+    /// succeeds. Index 0 refuses the initial round, 1 a resumed one.
+    StateOnlyRounds(usize, &'static str),
+    /// The first `tools/call` asks (as [`Answer::AskOnce`]); every later one
+    /// completes with its own arguments echoed as text (MIK-8176: a playbook
+    /// step can carry an earlier step's envelope into a completed answer).
+    AskThenEcho,
 }
 
 /// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
@@ -122,6 +131,38 @@ impl Transport for CountingBackend {
             .unwrap()
             .push(params.clone().unwrap_or(Value::Null));
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        if matches!(self.answer, Answer::AskThenEcho) {
+            let echoed = params
+                .as_ref()
+                .and_then(|p| p.get("arguments"))
+                .cloned()
+                .unwrap_or(Value::Null)
+                .to_string();
+            return Ok(JsonRpcResponse::success(
+                id,
+                if n == 0 {
+                    question(Answer::AskOnce)
+                } else {
+                    json!({"content": [{"type": "text", "text": echoed}], "isError": false})
+                },
+            ));
+        }
+        if let Answer::StateOnlyRounds(at, text) = self.answer {
+            let round = |text: &str| {
+                json!({"resultType": "input_required", "requestState": format!("state-{n}"),
+                       "content": [{"type": "text", "text": text}]})
+            };
+            return Ok(JsonRpcResponse::success(
+                id,
+                match n.cmp(&at) {
+                    std::cmp::Ordering::Less => round("nothing to see"),
+                    std::cmp::Ordering::Equal => round(text),
+                    std::cmp::Ordering::Greater => {
+                        json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
+                    }
+                },
+            ));
+        }
         if matches!(
             self.answer,
             Answer::AskOnce
@@ -236,6 +277,14 @@ pub(crate) async fn fixture(answer: Answer, arm: impl FnOnce(&mut MetaMcp)) -> F
     .await
 }
 
+/// [`fixture`] with `security.sanitize_input` set to `on` (MIK-8137 b3).
+pub(crate) async fn fixture_sanitizing(answer: Answer, on: bool) -> Fx {
+    SANITIZE.with(|s| s.set(on));
+    let fx = fixture_inner(answer, false, |meta| meta).await;
+    SANITIZE.with(|s| s.set(false));
+    fx
+}
+
 /// [`fixture`], for arming that needs the owned builder methods
 /// (`with_profile_registry`, `with_cost_governance`).
 pub(crate) async fn fixture_built(answer: Answer, build: impl FnOnce(MetaMcp) -> MetaMcp) -> Fx {
@@ -256,6 +305,32 @@ pub(crate) async fn fixture_firewalled(answer: Answer) -> Fx {
 pub(crate) async fn fixture_firewalled_audited(answer: Answer, audit: std::path::PathBuf) -> Fx {
     AUDIT_LOG.with(|a| *a.borrow_mut() = Some(audit));
     let fx = fixture_inner(answer, true, |meta| meta).await;
+    AUDIT_LOG.with(|a| *a.borrow_mut() = None);
+    fx
+}
+
+/// [`fixture_built`] with `transport` answering for both backends in place of
+/// the scripted one (the route x check matrix's annotated tool, MIK-8137 b3).
+pub(crate) async fn fixture_built_on(
+    transport: Arc<dyn Transport>,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
+    let fx = fixture_inner(Answer::Ok, false, build).await;
+    TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
+/// [`fixture_firewalled_audited`], arming the replaced `MetaMcp` with `build`
+/// (the route x check matrix's surfaced-name route, MIK-8137 b3).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_audited_built(
+    answer: Answer,
+    audit: std::path::PathBuf,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    AUDIT_LOG.with(|a| *a.borrow_mut() = Some(audit));
+    let fx = fixture_inner(answer, true, build).await;
     AUDIT_LOG.with(|a| *a.borrow_mut() = None);
     fx
 }
@@ -389,6 +464,8 @@ thread_local! {
     static MODERN_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static KEY_SERVER: std::cell::RefCell<Option<Arc<crate::key_server::KeyServer>>> =
         const { std::cell::RefCell::new(None) };
+    /// `security.sanitize_input` for the state (the route x check matrix).
+    static SANITIZE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// A transport that replaces the scripted backend (the egress matrix).
     static TRANSPORT: std::cell::RefCell<Option<Arc<dyn Transport>>> =
         const { std::cell::RefCell::new(None) };
@@ -468,6 +545,7 @@ async fn fixture_inner(
     let (mut state, store) = fixture_state().await;
     let (calls, seen) = (Arc::new(AtomicUsize::new(0)), Arc::default());
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
+    state_mut.sanitize_input = SANITIZE.with(std::cell::Cell::get);
     for (name, passthrough) in [("alpha", false), ("alpha-pt", true)] {
         let backend = Arc::new(Backend::new(
             name,
@@ -533,11 +611,13 @@ async fn fixture_inner(
             },
             ..FirewallConfig::default()
         };
-        state_mut.firewall = Some(Arc::new(Firewall::from_config(
-            config.clone(),
-            tracker.clone(),
-        )));
-        let meta_firewall = Arc::new(Firewall::from_config(config, tracker));
+        state_mut.firewall = Some(Arc::new(
+            Firewall::from_config(config.clone(), tracker.clone())
+                .with_continuations(meta.continuation()),
+        ));
+        let meta_firewall = Arc::new(
+            Firewall::from_config(config, tracker).with_continuations(meta.continuation()),
+        );
         META_FIREWALL.with(|f| *f.borrow_mut() = Some(Arc::clone(&meta_firewall)));
         meta.set_firewall(Some(meta_firewall));
     }
