@@ -110,13 +110,16 @@ async fn a_flavour_flip_before_the_send_sends_nothing() {
     );
 }
 
-/// T15b (measured): the connection flips to the legacy handshake and back to
-/// Streamable HTTP before the send. The backend is eligible again when the
-/// send is admitted.
+/// T15b (W3): the connection flips to the legacy handshake and back to
+/// Streamable HTTP before the send. Admission judges the backend as it is
+/// then, eligible, so the event is delivered: a flip that has been undone is
+/// not a refusal, and dropping the event would lose one still authorized.
 #[tokio::test]
-async fn a_flavour_flip_and_back_before_the_send() {
-    let sent = attempt_across_flips(&[Some(false), Some(true)]).await;
-    eprintln!("T15b: flip and back before the send delivered {sent}");
+async fn a_flavour_flip_undone_before_the_send_still_sends() {
+    assert!(
+        attempt_across_flips(&[Some(false), Some(true)]).await >= 1,
+        "not sent though the backend was eligible again at admission"
+    );
 }
 
 /// A callback that accepts each connection and never answers; the
@@ -176,17 +179,19 @@ async fn a_detection_does_not_wait_for_a_send_in_flight() {
         .await,
         "premise: the send is in flight"
     );
-    // Judged by order, not by a deadline: a detection that waited on the send
-    // would return only once the client gave up on it (`TOTAL_TIMEOUT`,
-    // 10 s). The 30 s bound only stops a hang.
+    // Judged against the send's own end: the attempt cannot finish until the
+    // client gives up on the silent callback (`TOTAL_TIMEOUT`, 10 s), so a
+    // detection that waited on the send could neither return inside 5 s nor
+    // return while the attempt is still in flight. Read on the client side,
+    // not the server's EOF observer, which can lag the client giving up.
     let detection = std::thread::spawn(move || transport.set_detected(Some(false)));
     assert!(
-        within(Duration::from_secs(30), || detection.is_finished()).await,
-        "a detection never returned"
+        within(Duration::from_secs(5), || detection.is_finished()).await,
+        "a detection waited on a send's network I/O"
     );
     assert!(
-        !ended.load(Ordering::SeqCst),
-        "a detection waited on a send's network I/O"
+        !attempt.is_finished() && !ended.load(Ordering::SeqCst),
+        "premise: the send was still in flight when the detection returned"
     );
     attempt.abort();
 }

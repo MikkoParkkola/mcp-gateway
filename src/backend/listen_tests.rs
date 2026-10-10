@@ -252,3 +252,51 @@ async fn a_listener_reads_only_a_settled_era() {
     assert!(cache.discard_if(|_| true).await);
     assert_eq!(cache.settled().await, None, "discarded, re-probe pending");
 }
+
+/// MIK-8125 (d0 review W2): a publish that replaces the slot's transport is
+/// never read as undetected. Old and new transports both detected the legacy
+/// SSE handshake, so every reader must see `Some(false)`: the old pair, or
+/// the new one. Read as `None` (unresolved), an ineligible backend's events
+/// would be admitted for the length of the swap.
+#[test]
+fn a_transport_swap_is_never_read_as_undetected() {
+    let backend = Arc::new(backend());
+    let old = http("http://127.0.0.1:9/mcp");
+    old.set_detected(Some(false));
+    backend.install_http_for_test(&old);
+    assert_eq!(backend.connected_streamable(), Some(false), "premise");
+    let new = http("http://127.0.0.1:9/mcp");
+    new.set_detected(Some(false));
+
+    // Inside the swap, the slot is read without waiting: either a writer
+    // holds it (the swap is atomic to readers) or the read lands in the swap
+    // and must still see a legacy transport. No thread, no clock.
+    let inside = Arc::new(parking_lot::Mutex::new(None::<Option<Option<bool>>>));
+    let (reader, seen) = (Arc::clone(&backend), Arc::clone(&inside));
+    *backend.between_listen_and_transport.lock() = Some(Box::new(move || {
+        *seen.lock() = Some(reader.try_connected_streamable());
+    }));
+    let entry = backend.shared_entry();
+    let erased: Arc<dyn crate::transport::Transport> = Arc::clone(&new) as _;
+    backend
+        .publish(
+            &entry,
+            (&erased, Some(super::handle_of(&new))),
+            backend.destination(),
+            || {},
+        )
+        .expect("published");
+    match inside.lock().take().expect("the swap ran its hook") {
+        None => {} // the swap held the slot: no reader could land in it
+        Some(read) => assert_eq!(
+            read,
+            Some(false),
+            "a reader inside the swap saw an undetected transport"
+        ),
+    }
+    assert_eq!(
+        backend.connected_streamable(),
+        Some(false),
+        "after the swap"
+    );
+}

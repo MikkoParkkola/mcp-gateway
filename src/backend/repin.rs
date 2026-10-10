@@ -47,6 +47,10 @@ impl Backend {
             between();
         }
         *entry.listen.write() = listen;
+        #[cfg(test)]
+        if let Some(between) = self.between_listen_and_transport.lock().take() {
+            between();
+        }
         // The verdict a reader of the slot will see the instant the transport
         // lands in it, read before the write so nothing after it can mask it.
         #[cfg(test)]

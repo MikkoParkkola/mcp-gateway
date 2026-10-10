@@ -28,6 +28,21 @@ pub(super) fn handle_of<T: UpstreamListen + 'static>(
     std::sync::Arc::downgrade(&strong)
 }
 
+/// The flavour `installed` detected, read through `entry`'s listen handle
+/// while the caller holds `entry`'s transport lock, so the two are one pair.
+fn flavour_of(
+    entry: &super::pool::PooledEntry,
+    installed: Option<&Arc<dyn crate::transport::Transport>>,
+) -> Option<bool> {
+    let installed = installed?;
+    let handle = entry.listen.read().as_ref()?.upgrade()?;
+    // A handle left by a stopped or replaced transport names another
+    // allocation: only the installed transport's answer counts.
+    std::ptr::addr_eq(Arc::as_ptr(installed), Arc::as_ptr(&handle))
+        .then(|| handle.detected_streamable())
+        .flatten()
+}
+
 /// While held, the idle reaper leaves the shared slot's transport alone
 /// without the idle clock moving (design §5, D5).
 pub(crate) struct ListenLease(#[allow(dead_code, reason = "held for its Drop")] ActivityGuard);
@@ -97,13 +112,16 @@ impl Backend {
     pub(crate) fn connected_streamable(&self) -> Option<bool> {
         let entry = self.shared_entry();
         let installed = entry.transport.read();
-        let installed = installed.as_ref()?;
-        let handle = entry.listen.read().as_ref()?.upgrade()?;
-        // A handle left by a stopped or replaced transport names another
-        // allocation: only the installed transport's answer counts.
-        std::ptr::addr_eq(Arc::as_ptr(installed), Arc::as_ptr(&handle))
-            .then(|| handle.detected_streamable())
-            .flatten()
+        flavour_of(&entry, installed.as_ref())
+    }
+
+    /// [`Self::connected_streamable`] without waiting: `None` while a writer
+    /// holds the slot's transport, as a publish does across its swap.
+    #[cfg(test)]
+    pub(crate) fn try_connected_streamable(&self) -> Option<Option<bool>> {
+        let entry = self.shared_entry();
+        let installed = entry.transport.try_read()?;
+        Some(flavour_of(&entry, installed.as_ref()))
     }
 
     /// Install `transport` in the shared slot as a start publishes one.
