@@ -201,6 +201,26 @@ impl Firewall {
         self
     }
 
+    /// Test-only: a firewall built with a fresh keyring, for a fixture that
+    /// builds its firewall before the gateway it guards; the gateway then
+    /// adopts it ([`crate::gateway::meta_mcp::MetaMcp::share_keyring_with_for_test`]),
+    /// so the pair matches the gateway's own (#2210, MIK-8276).
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn keyed_for_test(self) -> Self {
+        self.with_continuations(Arc::new(
+            crate::protocol::continuation::ContinuationState::new(),
+        ))
+    }
+
+    /// Test-only: the keyring this firewall exempts, if any.
+    #[cfg(test)]
+    pub(crate) fn continuations_for_test(
+        &self,
+    ) -> Option<Arc<crate::protocol::continuation::ContinuationState>> {
+        self.continuations.clone()
+    }
+
     /// Relay detection keeps every k-gram instead of a keyed sample, so a
     /// test row always checks the fingerprints its text holds, under any
     /// hash key (MIK-8083). Call it on a firewall just built.

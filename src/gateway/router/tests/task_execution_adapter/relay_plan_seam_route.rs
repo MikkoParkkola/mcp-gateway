@@ -57,6 +57,7 @@ async fn seam_state_with(
             },
             None,
         )
+        .keyed_for_test()
         .keeping_every_kgram(),
     );
     let definition: crate::playbook::PlaybookDefinition =
@@ -70,6 +71,7 @@ async fn seam_state_with(
         None,
         None,
         |mut meta| {
+            meta.share_keyring_with_for_test(&relay);
             meta.set_firewall(Some(relay));
             let mut engine = crate::playbook::PlaybookEngine::new();
             engine.register(definition);
@@ -455,22 +457,25 @@ async fn a_redacted_field_is_no_steps_text() {
     let canary = concat!("ghp", "_abcdefghijklmnopqrstuvwxyz1234567890");
     let field = format!("north slope {canary}");
     let mock = backend(&[&field, FIELD_B]);
-    let router = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_responses: true,
-            scan_requests: false,
-            credential_redaction: true,
-            rules: vec![crate::security::firewall::FirewallRule {
-                tool_match: "*".to_string(),
-                action: crate::security::firewall::FirewallAction::Allow,
-                reason: None,
-                scan: Vec::new(),
-            }],
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+    let router = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_responses: true,
+                scan_requests: false,
+                credential_redaction: true,
+                rules: vec![crate::security::firewall::FirewallRule {
+                    tool_match: "*".to_string(),
+                    action: crate::security::firewall::FirewallAction::Allow,
+                    reason: None,
+                    scan: Vec::new(),
+                }],
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .keyed_for_test(),
+    );
     let relay = Arc::new(
         Firewall::from_config(
             FirewallConfig {
@@ -479,6 +484,7 @@ async fn a_redacted_field_is_no_steps_text() {
             },
             None,
         )
+        .with_continuations(router.continuations_for_test().expect("keyed"))
         .keeping_every_kgram(),
     );
     let definition: crate::playbook::PlaybookDefinition = serde_yaml::from_str(&playbook(
@@ -490,6 +496,7 @@ async fn a_redacted_field_is_no_steps_text() {
         None,
         Some(router),
         |mut meta| {
+            meta.share_keyring_with_for_test(&relay);
             meta.set_firewall(Some(relay));
             let mut engine = crate::playbook::PlaybookEngine::new();
             engine.register(definition);

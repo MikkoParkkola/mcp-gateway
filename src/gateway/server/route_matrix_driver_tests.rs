@@ -143,12 +143,7 @@ pub(crate) async fn stdio_firewalled_answering(
     answer: &'static str,
 ) -> Sent {
     let firewall = audited_firewall(audit);
-    stdio_call(
-        |meta| meta.set_firewall(Some(firewall)),
-        (args, None),
-        text_result(answer),
-    )
-    .await
+    stdio_call(arm_firewall(firewall), (args, None), text_result(answer)).await
 }
 
 /// The production firewall (request and response scanning) writing audit
@@ -176,7 +171,16 @@ fn audited_firewall_with(
     let tracker = config
         .anomaly_detection
         .then(|| Arc::new(crate::transition::TransitionTracker::new()));
-    Arc::new(Firewall::from_config(config, tracker))
+    Arc::new(Firewall::from_config(config, tracker).keyed_for_test())
+}
+
+/// Arm a Meta-MCP with `firewall` the way the gateway does: it adopts the
+/// firewall's keyring, then installs it (#2210, MIK-8276).
+fn arm_firewall(firewall: Arc<crate::security::firewall::Firewall>) -> impl FnOnce(&mut MetaMcp) {
+    move |meta| {
+        meta.share_keyring_with_for_test(&firewall);
+        meta.set_firewall(Some(firewall));
+    }
 }
 
 /// R5: a clean `gateway_invoke read` over stdio with anomaly detection on.
@@ -184,12 +188,7 @@ fn audited_firewall_with(
 /// identity it would refuse every call unscored (P3).
 pub(crate) async fn stdio_anomaly_clean(audit: &Path) -> Sent {
     let firewall = audited_firewall_with(audit, |config| config.anomaly_detection = true);
-    stdio_call(
-        |meta| meta.set_firewall(Some(firewall)),
-        (json!({}), None),
-        text_result("ok"),
-    )
-    .await
+    stdio_call(arm_firewall(firewall), (json!({}), None), text_result("ok")).await
 }
 
 /// A plain text tool result.
@@ -273,7 +272,7 @@ pub(crate) async fn stdio_retry_answering(audit: &Path, answer: &str) -> Sent {
     let calls = Arc::new(AtomicUsize::new(0));
     let firewall = audited_firewall(audit);
     let gateway_meta = stdio_meta(
-        |meta| meta.set_firewall(Some(firewall)),
+        arm_firewall(firewall),
         Arc::new(AsksOnce {
             calls: Arc::clone(&calls),
         }),
@@ -311,7 +310,7 @@ pub(crate) async fn stdio_twice(
     let calls = Arc::new(AtomicUsize::new(0));
     let firewall = audited_firewall_with(audit, tune);
     let gateway_meta = stdio_meta(
-        |meta| meta.set_firewall(Some(firewall)),
+        arm_firewall(firewall),
         Arc::new(Counting {
             calls: Arc::clone(&calls),
             answer: text_result("ok"),

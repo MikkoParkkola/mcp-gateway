@@ -628,13 +628,27 @@ impl crate::gateway::meta_mcp::MetaMcp {
         Ok(Some((envelope, hold_key)))
     }
 
-    /// Test-only: replace the continuation store (MIK-8078).
+    /// Test-only: replace the continuation store (MIK-8078), or share one a
+    /// fixture's firewalls were built with (MIK-8276).
     #[cfg(test)]
     pub(crate) fn set_continuation_for_test(
         &mut self,
-        state: crate::protocol::continuation::ContinuationState,
+        state: impl Into<std::sync::Arc<crate::protocol::continuation::ContinuationState>>,
     ) {
-        self.continuation = std::sync::Arc::new(state);
+        self.continuation = state.into();
+    }
+
+    /// Test-only: mint with the keyring `firewall` exempts, as the gateway
+    /// pairs them (#2210, MIK-8276). A firewall built without one is a
+    /// fixture defect, so this panics rather than leave the pair unmatched.
+    #[cfg(all(test, feature = "firewall"))]
+    pub(crate) fn share_keyring_with_for_test(
+        &mut self,
+        firewall: &crate::security::firewall::Firewall,
+    ) {
+        self.continuation = firewall
+            .continuations_for_test()
+            .expect("a fixture firewall carries a keyring (keyed_for_test)");
     }
 }
 
