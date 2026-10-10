@@ -276,7 +276,10 @@ impl<'a> Settling<'a> {
             // owner, so returning would leave it `working` with nobody to
             // finish it: settle the abandoned result instead.
             Err(error) => {
-                tracing::warn!(task_id = %self.id, %error, "input round not committed");
+                // Bound to a local: a field access on the head line cannot be
+                // graded as run (MIK-7725).
+                let task_id = self.id;
+                tracing::warn!(task_id = %task_id, %error, "input round not committed");
                 self.settle(TaskTransition::Complete(abandoned_input_round()), false)
                     .await;
             }
@@ -333,6 +336,9 @@ pub(crate) enum InputOutcome {
     Closed(RoundClosed),
     NotFound,
     Unavailable,
+    /// MIK-8204: under `FailClosed` the resuming request's grant decisions
+    /// could not be appended, so no resume worker was spawned (-32005).
+    AuditUnavailable,
 }
 
 /// What a store refusal means to the caller of `provide_input`: one mapping,
@@ -395,14 +401,13 @@ impl TaskExecutor {
         // row with no worker: the task finishes the write, and on a resume it
         // becomes the resume worker itself. The request only waits for the
         // outcome, which arrives after the write commits.
-        let (tx, rx) = tokio::sync::oneshot::channel();
         let executor = Arc::clone(self);
         let (digest, id, principal) = (
             owner.as_digest().to_owned(),
             id.to_owned(),
             principal.to_owned(),
         );
-        self.spawn_worker(async move {
+        self.round_outcome(|tx| async move {
             let workers = Arc::clone(&executor.workers);
             let provided = executor
                 .service
@@ -469,8 +474,29 @@ impl TaskExecutor {
             // Not a resume: the handoff and cancel receiver go with this task.
             drop((handoff, cancel_rx));
             let _ = tx.send(outcome);
-        });
-        rx.await.unwrap_or(InputOutcome::Unavailable)
+        })
+        .await
+    }
+
+    /// Spawn an update's worker and wait for its outcome; -32005 and no spawn
+    /// when the update's grant decisions could not be written under
+    /// `FailClosed` (MIK-8204). Not an `async fn`: the worker is boxed before
+    /// the wait, never held inline in the caller's future (stack overflow).
+    fn round_outcome<F>(
+        &self,
+        worker: impl FnOnce(tokio::sync::oneshot::Sender<InputOutcome>) -> F,
+    ) -> impl std::future::Future<Output = InputOutcome> + Send + '_
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let spawned = self.spawn_worker(worker(tx));
+        async move {
+            if spawned.await.is_err() {
+                return InputOutcome::AuditUnavailable;
+            }
+            rx.await.unwrap_or(InputOutcome::Unavailable)
+        }
     }
 }
 
@@ -772,3 +798,7 @@ mod mapping_tests {
 #[cfg(test)]
 #[path = "input_round_exit_tests.rs"]
 mod exit_tests;
+
+#[cfg(test)]
+#[path = "input_round_park_tests.rs"]
+mod park_tests;

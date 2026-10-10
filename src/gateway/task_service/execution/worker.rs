@@ -47,27 +47,22 @@ pub(super) async fn commit_and_run(
     let executor = Arc::clone(handoff.executor());
     let principal = intent.request.principal().to_string();
 
-    let Ok(outcome) = executor
+    let outcome = executor
         .commit_create(CreateWrite {
             request: &intent.request,
             task: &task,
             backend: &backend,
             targets: creation_targets(&intent, &call),
         })
-        .await
-    else {
-        let _ = tx.send(Err(ServiceError::Unavailable));
-        return;
-    };
+        .await;
 
     let (begin, slot) = split_create(outcome);
-    if !matches!(begin, BeginOutcome::Created(_)) {
-        let _ = tx.send(Ok(begin));
-        return;
-    }
-
-    let BeginOutcome::Created(committed) = begin else {
-        unreachable!("checked above");
+    let committed = match begin {
+        BeginOutcome::Created(committed) => committed,
+        other => {
+            let _ = tx.send(Ok(other));
+            return;
+        }
     };
     let id = committed.task.id().to_string();
     let revision = committed.revision;
@@ -375,7 +370,7 @@ async fn follow_handle(
     let writes_mark = crate::gateway::gateway_writes::mark();
     let processed = crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(async {
         match answer {
-            UpstreamAnswer::Completed(result) => Some((
+            Terminal::Completed(result) => (
                 match state
                     .meta_mcp()
                     .recover_task_result(&job.server, &job.tool, None, id, result)
@@ -391,39 +386,44 @@ async fn follow_handle(
                     ),
                 },
                 ErrorAuthor::Gateway,
-            )),
+            ),
             // The failure half of that same processing: the peer's message and
             // nested data are screened before this settles, keeping the code.
-            UpstreamAnswer::Failed(error) => Some(screened_peer_failure(state, job, id, error)),
+            Terminal::Failed(error) => screened_peer_failure(state, job, id, error),
             // The gateway's own words, never the peer's (MIK-7887.RECEIPT.1).
-            UpstreamAnswer::Substituted(error) => Some((
+            Terminal::Substituted(error) => (
                 TaskTransition::Fail(strip_http_status(error)),
                 ErrorAuthor::Gateway,
-            )),
-            // [`poll_to_terminal`] hands back a lease only with a terminal answer.
-            UpstreamAnswer::Live | UpstreamAnswer::Unavailable => None,
+            ),
         }
     })
     .await;
-    if let (Some(outcome), notes) = processed {
-        let followed = FollowedJob {
-            job,
-            relay,
-            id,
-            principal,
-            revision,
-        };
-        let writes = crate::gateway::gateway_writes::snapshot_since(writes_mark);
-        settle_followed(executor, state, &followed, (outcome, writes), &notes).await;
-    }
+    let (outcome, notes) = processed;
+    let followed = FollowedJob {
+        job,
+        relay,
+        id,
+        principal,
+        revision,
+    };
+    let writes = crate::gateway::gateway_writes::snapshot_since(writes_mark);
+    settle_followed(executor, state, &followed, (outcome, writes), &notes).await;
     lease.release(executor, id).await;
+}
+
+/// The answers that end a followed job: [`UpstreamAnswer`] without `Live` and
+/// `Unavailable`, which [`poll_to_terminal`] keeps polling or retains instead.
+enum Terminal {
+    Completed(serde_json::Value),
+    Failed(crate::protocol::JsonRpcError),
+    Substituted(crate::protocol::JsonRpcError),
 }
 
 /// What following one handle within the worker's budget produced.
 enum Followed {
     /// A terminal answer, with the record's query slot still held so the
     /// settlement it justifies cannot be overtaken by a queued reader.
-    Terminal(UpstreamAnswer, QueryLease),
+    Terminal(Terminal, QueryLease),
     /// Live at the end of the budget, or unreachable. Nothing to commit, and no
     /// slot retained.
     Retained,
@@ -477,7 +477,15 @@ async fn poll_to_terminal(
                 lease.release(executor, id).await;
                 return Followed::Retained;
             }
-            terminal => return Followed::Terminal(terminal, lease),
+            UpstreamAnswer::Completed(result) => {
+                return Followed::Terminal(Terminal::Completed(result), lease);
+            }
+            UpstreamAnswer::Failed(error) => {
+                return Followed::Terminal(Terminal::Failed(error), lease);
+            }
+            UpstreamAnswer::Substituted(error) => {
+                return Followed::Terminal(Terminal::Substituted(error), lease);
+            }
         }
         if tokio::time::Instant::now() >= deadline {
             return Followed::Retained;
@@ -766,3 +774,7 @@ use held::{cancel_held_upstream, follow_upstream_job};
 #[cfg(test)]
 #[path = "worker_rescue_seam.rs"]
 pub(crate) mod rescue_seam;
+
+#[cfg(test)]
+#[path = "worker_tests.rs"]
+mod worker_tests;

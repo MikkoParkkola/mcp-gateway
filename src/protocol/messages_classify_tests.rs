@@ -119,6 +119,15 @@ const CORPUS: &[&str] = &[
     "\n\r {\"jsonrpc\":\"2.0\",\"method\":\"n\"}",
     "",
     "null",
+    // MIK-8263: scalar and malformed `error` members.
+    r#"{"jsonrpc":"2.0","id":1,"error":true}"#,
+    r#"{"jsonrpc":"2.0","id":1,"error":null}"#,
+    r#"{"jsonrpc":"2.0","id":1,"error":1e400}"#,
+    r#"{"jsonrpc":"2.0","id":1,"error":18446744073709551616}"#,
+    r#"{"jsonrpc":"2.0","id":1,"error":{"code":18446744073709551616,"message":"m"}}"#,
+    r#"{"jsonrpc":"2.0","id":1,"error":{"code":1,"message":"\ud800"}}"#,
+    r#"{"jsonrpc":"2.0","method":"n","error":"\ud800"}"#,
+    r#"{"jsonrpc":"2.0","method":"n","error":1e400}"#,
 ];
 
 /// Every parsed field, as `Debug` shows them: serializing a response would
@@ -131,6 +140,59 @@ fn shape(message: &JsonRpcMessage) -> String {
 #[test]
 fn every_line_classifies_as_the_untagged_parse_does() {
     for line in CORPUS {
+        let new = JsonRpcMessage::from_line(line);
+        let old = serde_json::from_str::<JsonRpcMessage>(line);
+        match (&new, &old) {
+            (Ok(n), Ok(o)) => assert_eq!(shape(n), shape(o), "line {line}"),
+            (Err(_), Err(_)) => {}
+            _ => panic!("line {line}: from_line {new:?}, untagged {old:?}"),
+        }
+    }
+}
+
+/// The `error` member is captured as sent and parsed again (MIK-8263): the
+/// answer must not move at `serde_json`'s nesting limit, nor with whitespace
+/// around or inside the member.
+#[test]
+fn nested_and_spaced_error_members_classify_as_the_untagged_parse_does() {
+    let mut lines = Vec::new();
+    // Families whose lines are valid below the limit, so each must show both
+    // an accepted and a refused line: the limit falls inside the window and
+    // neither parser refuses the shape for another reason.
+    let mut families: Vec<Vec<String>> = vec![Vec::new(), Vec::new()];
+    for depth in 120..=130 {
+        let array = format!("{}1{}", "[".repeat(depth), "]".repeat(depth));
+        lines.push(format!(r#"{{"jsonrpc":"2.0","id":1,"error":{array}}}"#));
+        // A notification ignores `error`, but both parsers still parse it.
+        families[0].push(format!(
+            r#"{{"jsonrpc":"2.0","method":"n","error":{array}}}"#
+        ));
+        let data = format!("{}1{}", r#"{"d":"#.repeat(depth), "}".repeat(depth));
+        families[1].push(format!(
+            r#"{{"jsonrpc":"2.0","id":1,"error":{{"code":1,"message":"m","data":{data}}}}}"#
+        ));
+    }
+    for family in &families {
+        let outcomes: Vec<bool> = family
+            .iter()
+            .map(|l| JsonRpcMessage::from_line(l).is_ok())
+            .collect();
+        assert!(
+            outcomes.contains(&true) && outcomes.contains(&false),
+            "{outcomes:?}"
+        );
+        lines.extend(family.iter().cloned());
+    }
+    lines.push(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\" :\n\t { \"code\" : 1 , \"message\" : \"m\" } }"
+            .into(),
+    );
+    lines.push("{\"jsonrpc\":\"2.0\",\"id\":1,\"error\": \"text\" }".into());
+    lines.push(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\": {\"code\":1,\"code\":2,\"message\":\"m\"} }"
+            .into(),
+    );
+    for line in &lines {
         let new = JsonRpcMessage::from_line(line);
         let old = serde_json::from_str::<JsonRpcMessage>(line);
         match (&new, &old) {
