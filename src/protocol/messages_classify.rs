@@ -61,7 +61,8 @@ impl<T> Default for Slot<T> {
 }
 
 impl<T> Slot<T> {
-    /// Keep the first occurrence; a repeat is skipped without being built.
+    /// Keep the first occurrence; a repeat is parsed (so a malformed one is
+    /// refused, as the derive refuses it) and dropped.
     fn take<'de, A: MapAccess<'de>>(&mut self, map: &mut A) -> Result<(), A::Error>
     where
         T: Deserialize<'de>,

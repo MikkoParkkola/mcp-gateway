@@ -110,6 +110,13 @@ const CORPUS: &[&str] = &[
     r#"["2.0","n",{}]"#,
     r#"["2.0",1,{},null]"#,
     r#" {"jsonrpc":"2.0","id":1,"result":1}"#,
+    // review r2: error as an array, a float id, every JSON whitespace prefix
+    r#"{"jsonrpc":"2.0","id":1,"error":[1,"x"]}"#,
+    r#"{"jsonrpc":"2.0","id":1,"error":[1,"x",null]}"#,
+    r#"{"jsonrpc":"2.0","id":1.0,"result":1}"#,
+    r#"{"jsonrpc":"2.0","id":-1,"error":{"code":2147483648,"message":"x"}}"#,
+    "\t{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":1}",
+    "\n\r {\"jsonrpc\":\"2.0\",\"method\":\"n\"}",
     "",
     "null",
 ];
