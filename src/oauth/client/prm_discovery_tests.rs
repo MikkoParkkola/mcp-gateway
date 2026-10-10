@@ -514,3 +514,114 @@ async fn a_hint_that_is_not_a_url_is_no_hint() {
     result.expect("the bad hint is ignored; the path document names this resource");
     kept_the_document(&client, &served.base);
 }
+
+// ── What discovery logs (each branch's record, under a TRACE subscriber) ────
+
+/// `work` on a current-thread runtime under a scoped TRACE subscriber, and
+/// every record it logged.
+fn logged<T>(work: impl std::future::Future<Output = T>) -> (T, Vec<serde_json::Value>) {
+    let mut out = None;
+    let records = crate::test_log_capture::records(|| {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        out = Some(runtime.block_on(work));
+    });
+    (out.expect("the work ran"), records)
+}
+
+fn with_message<'a>(records: &'a [serde_json::Value], message: &str) -> Vec<&'a serde_json::Value> {
+    records
+        .iter()
+        .filter(|r| r["fields"]["message"] == message)
+        .collect()
+}
+
+/// A resource the destination policy refuses: the probe is not sent (and the
+/// log says why), and the candidates, on the same refused address, end
+/// discovery with the refusal.
+#[test]
+fn a_probe_the_policy_refuses_is_not_sent_and_discovery_is_refused() {
+    let ((served, result), records) = logged(async {
+        let served = serve(backend(
+            Probe::Hint("/hinted-prm"),
+            Doc::Names("/mcp"),
+            Doc::Names("/mcp"),
+            Doc::Absent,
+        ))
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        // 127.0.0.1 is a literal `Public` refuses: check_destination decides.
+        let mut client = owned_client_under(
+            crate::security::ssrf::DestinationPolicy::Public,
+            &format!("{}/mcp", served.base),
+            dir.path(),
+        );
+        let result = client.initialize().await;
+        (served, result)
+    });
+    let err = result
+        .expect_err("every candidate is on the refused address")
+        .to_string();
+    assert!(err.contains("SSRF blocked"), "{err}");
+    assert!(
+        served.seen().is_empty(),
+        "nothing was sent: {:?}",
+        served.seen()
+    );
+    assert_eq!(
+        with_message(&records, "No resource-metadata hint: the probe is not sent").len(),
+        1,
+        "{records:?}"
+    );
+}
+
+/// The used document and the completion are logged, with the resource the
+/// document names.
+#[test]
+fn discovery_logs_the_document_it_used_and_its_completion() {
+    let ((served, result), records) = logged(async {
+        let (served, result, _client) = initialize(backend(
+            Probe::Plain401,
+            Doc::Absent,
+            Doc::Names("/mcp"),
+            Doc::Absent,
+        ))
+        .await;
+        (served, result)
+    });
+    result.expect("the path document names this resource");
+    let found = with_message(&records, "Found protected resource metadata");
+    assert_eq!(found.len(), 1, "{records:?}");
+    assert_eq!(
+        found[0]["fields"]["resource"],
+        format!("{}/mcp", served.base)
+    );
+    assert_eq!(
+        with_message(&records, "OAuth client initialized").len(),
+        1,
+        "{records:?}"
+    );
+}
+
+/// A transport failure on a candidate is logged with the URL redacted (no
+/// query or credentials), and discovery moves on.
+#[test]
+fn a_transport_failure_is_logged_redacted_and_the_walk_moves_on() {
+    let ((_served, result), records) = logged(async {
+        let (served, result, _client) = initialize(backend(
+            Probe::Plain401,
+            Doc::Absent,
+            Doc::Abort,
+            Doc::Names("/mcp"),
+        ))
+        .await;
+        (served, result)
+    });
+    result.expect("the origin document names this resource");
+    let failed = with_message(&records, "No metadata here");
+    assert_eq!(failed.len(), 1, "{records:?}");
+    let url = failed[0]["fields"]["url"].as_str().unwrap_or_default();
+    assert!(!url.contains('?') && !url.contains('@'), "redacted: {url}");
+}
