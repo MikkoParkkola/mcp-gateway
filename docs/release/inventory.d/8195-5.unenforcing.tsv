@@ -12,7 +12,7 @@ src/personal_accounts/refusal.rs	unmark	1	Converts a marked refusal back to its 
 src/personal_accounts/storage.rs	sync_directory	1	Flushes a directory to disk for durability; decides nothing, privacy is judged elsewhere (private_directory).
 src/personal_accounts/storage_windows.rs	sync_directory	1	Windows directory flush mapped to StorageUnavailable; durability only, privacy judged by private_fs.
 src/personal_accounts/vault.rs	authorization_value	1	Formats the Authorization header value from scheme and token; allow or deny was decided before release.
-src/personal_accounts/vault.rs	now_secs	1	Stamps PropagatedCredential::expires_at with the current Unix time; no decision: the pre-1970 clock refusal that makes the sibling now_* functions critical lives in account_strategies via clock::utc_now
+src/personal_accounts/vault.rs	now_secs	1	Stamps PropagatedCredential::expires_at with the current Unix time and decides nothing. The in-process sibling SignedAssertionStrategy::now_secs (identity_propagation, critical d) refuses a pre-1970 clock itself; for this strategy that refusal happens downstream in account_strategies via clock::utc_now.
 src/personal_accounts/vault.rs	refresh_after_rejection	2	Trait impl forwarding to CustodyHandle::refresh_after_rejection; the decision lives in the custody service.
 src/personal_accounts/vault.rs	refresh_if_expired	2	Trait impl forwarding to CustodyHandle::refresh_if_expired; the decision lives in the custody service.
 src/personal_accounts/vault.rs	release	2	Trait impl forwarding to CustodyHandle::release; the lease recheck is made in the custody service.
