@@ -15,12 +15,18 @@ use super::*;
 use crate::protocol::continuation::{
     ContinuationState, ProbeBudget, ProbeRefusal, sealed_state_in,
 };
-
 /// A real envelope, minted for a test exchange.
 async fn real_envelope(state: &ContinuationState) -> String {
     let now = crate::protocol::continuation::now_unix_secs();
     let payload = state
-        .begin_exchange("srv".into(), None, "fp".into(), "digest".into(), now)
+        .begin_exchange(
+            "srv".into(),
+            None,
+            "fp".into(),
+            &crate::protocol::continuation::QuotaKey::for_test("fp"),
+            "digest".into(),
+            now,
+        )
         .await
         .expect("a fresh state has a slot");
     state.keyring().mint(&payload).expect("the envelope seals")

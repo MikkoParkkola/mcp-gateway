@@ -6,22 +6,50 @@ use serde_json::json;
 
 use super::*;
 use crate::protocol::continuation::{ContinuationState, now_unix_secs};
-
 async fn mint_at(state: &ContinuationState, now: u64) -> String {
     let payload = state
-        .begin_exchange("srv".into(), None, "fp".into(), "digest".into(), now)
+        .begin_exchange(
+            "srv".into(),
+            None,
+            "fp".into(),
+            &crate::protocol::continuation::QuotaKey::for_test("fp"),
+            "digest".into(),
+            now,
+        )
         .await
         .expect("a fresh state has a slot");
     state.keyring().mint(&payload).expect("the envelope seals")
 }
 
 /// R10: every real mint passes the four-character gate and is found. A
-/// three-character decode (two nonce bits in the kid byte) misses most.
+/// three-character decode (two nonce bits in the kid byte) misses most, so the
+/// row needs many envelopes. One caller mints all 256, as one client running
+/// many exchanges would: each exchange's slot is released before the next
+/// mint (as a redeem would), so the caller stays under its 64-slot share
+/// (MIK-8293) and the envelope still opens (`open` checks authenticity and
+/// expiry, never the slot). The slot table is empty after every probe: the
+/// probe opens envelopes, it never takes or keeps a slot.
 #[tokio::test]
 async fn r10_every_real_mint_passes_the_gate_and_is_found() {
     let state = ContinuationState::new();
     for n in 0..256 {
-        let envelope = mint_at(&state, now_unix_secs()).await;
+        let now = now_unix_secs();
+        let payload = state
+            .begin_exchange(
+                "srv".into(),
+                None,
+                "fp".into(),
+                &crate::protocol::continuation::QuotaKey::for_test("fp"),
+                "digest".into(),
+                now,
+            )
+            .await
+            .unwrap_or_else(|| panic!("mint {n}: the caller is at its share"));
+        let envelope = state.keyring().mint(&payload).expect("the envelope seals");
+        assert!(
+            state.in_flight().complete(&payload.hold_key, now).await,
+            "setup: release"
+        );
         assert!(
             framed(state.keyring(), &envelope),
             "mint {n} failed the gate"
@@ -34,6 +62,11 @@ async fn r10_every_real_mint_passes_the_gate_and_is_found() {
             "mint {n} was not found"
         );
         assert_eq!(budget.spent(), 1, "mint {n} cost more than one open");
+        assert_eq!(
+            state.in_flight().len(now_unix_secs()).await,
+            0,
+            "mint {n}: the probe took a slot"
+        );
     }
 }
 
