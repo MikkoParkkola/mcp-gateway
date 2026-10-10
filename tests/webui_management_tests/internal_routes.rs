@@ -521,8 +521,7 @@ async fn check(
     // Each `{name}` row finds the capability whatever ran before it, so a
     // reorder of ROWS cannot turn an admin 200 into a 404 (a DELETE removes it).
     if row.path == "/ui/api/capabilities/{name}" {
-        std::fs::write(gw.caps.path().join("test_cap.yaml"), VALID_YAML)
-            .expect("seed test_cap");
+        std::fs::write(gw.caps.path().join("test_cap.yaml"), VALID_YAML).expect("seed test_cap");
     }
     let (status, content_type, body) =
         send(gw, request(&row.method, row.uri, caller, row.payload)).await;
@@ -530,7 +529,9 @@ async fn check(
     let text = String::from_utf8_lossy(&body);
     // `/sse` is a pointer, not a transport: a 410 must still say where to go.
     if row.path == "/sse" && status == StatusCode::GONE && !text.contains("POST /mcp") {
-        wrong.push(format!("{label}: 410 without the `POST /mcp` pointer: {text}"));
+        wrong.push(format!(
+            "{label}: 410 without the `POST /mcp` pointer: {text}"
+        ));
     }
     // A row whose method is not registered answers 405, and the probe below
     // skips methods a row claims: pin that and the route is unguarded.
