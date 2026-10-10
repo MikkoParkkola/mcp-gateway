@@ -133,3 +133,28 @@ async fn a_session_stream_that_breaks_off_ends() {
         .expect("the stream ends");
     assert_eq!(note, None);
 }
+
+/// MIK-8195 W1 (`open_session_stream`): a note the watch does not admit is
+/// dropped before it crosses the channel; the stream ends with none.
+#[tokio::test]
+async fn a_session_stream_drops_a_note_the_watch_does_not_admit() {
+    let url = peer(|_| {
+        let note = json!({"jsonrpc": "2.0", "method": "notifications/resources/updated",
+            "params": {"uri": "file:///unwatched"}});
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n\
+             data: {note}\n\n"
+        )
+    })
+    .await;
+    let t = transport(&url);
+    let mut rx = t
+        .open_session_stream(Watched::by(|_| false))
+        .await
+        .expect("sent")
+        .expect("opened");
+    let note = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+        .await
+        .expect("the stream ends");
+    assert_eq!(note, None, "an unwatched note crossed the channel");
+}
