@@ -266,6 +266,30 @@ The batch must carry the harness (`run_mutants.py`, `mutants.yml`) byte-identica
 branch, or the run aborts: after a harness change merges, re-copy both files into every open
 `throwaway/mutants-*` branch before pushing it again.
 
+### Moving code between files
+
+A pull request that only moves code (a file split, an extraction) proves it changed nothing with
+git's own move detection. List every line the three commands below print in the pull request
+description; the reviewer judges each one.
+
+1. Lines git does not mark as moved:
+   `git diff --color-moved=plain --color-moved-ws=allow-indentation-change -M <base> <head> -- <paths>`
+   Expected: `use`, `mod` and `#[path]` lines, a new file's header and module docs, and visibility
+   a child module needs (`pub(super)`).
+2. Every line added to a file that existed before the move, moved or not:
+   `git diff -M -U0 <base> <head> -- <files that existed at base> | grep -vE '^(\+\+\+|---) ' | grep -E '^\+.*[^[:space:]]'`
+   A move adds only wiring to existing files. Anything else is moved code landing inside an
+   existing item (a `#[cfg]` module, an `impl`) or lines swapped between files, which step 1
+   shows as moved.
+3. Every changed line with a relative path or visibility:
+   `git diff -M -U0 <base> <head> -- <paths> | grep -vE '^(\+\+\+|---) ' | grep -E '^[+-].*(\bsuper[[:space:]]*::|\bself[[:space:]]*::|pub[[:space:]]*\([[:space:]]*(super|in)\b)'`
+   Code moved to a different module depth with `super::x` unchanged now points elsewhere, and
+   step 1 shows it as moved.
+
+This does not catch a bare name that resolves to a different item after the move, or a change
+in what a macro expands to. Neither shows in the text of the moved lines; the compiler and the
+test suite cover them.
+
 ## Architecture Decisions
 
 Changes affecting public API, config schema, new dependencies, transport protocols, or security features should be discussed in a GitHub issue before implementation. Design docs live in `docs/design/`.
