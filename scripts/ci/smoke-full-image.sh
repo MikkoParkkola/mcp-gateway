@@ -81,7 +81,10 @@ probe() {
 wait_for_gateway() {
   local name="$1"
   for _ in $(seq 1 $((STARTUP_TIMEOUT / 2))); do
-    if ! docker inspect -f '{{.State.Running}}' "${name}" | grep -q true; then
+    # Captured and compared, never piped into `grep -q` (pipefail); a
+    # container already gone reads as not running.
+    running="$(docker inspect -f '{{.State.Running}}' "${name}" 2>/dev/null || true)"
+    if [ "${running}" != "true" ]; then
       docker logs "${name}"
       fail "exited during startup"
     fi
