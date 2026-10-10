@@ -32,32 +32,36 @@ fn text(text: &str) -> Value {
 /// The Meta-MCP firewall both redacts credentials in what a task settles and
 /// runs the `block` relay detector over every `mock` tool.
 async fn plan_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_responses: true,
-            scan_requests: false,
-            credential_redaction: true,
-            // Allowed, so the credential is redacted rather than the result refused.
-            rules: vec![FirewallRule {
-                tool_match: "*".to_string(),
-                action: FirewallAction::Allow,
-                reason: None,
-                scan: Vec::new(),
-            }],
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                sources: vec![format!("{BACKEND}:*")],
-                ..CollusionConfig::default()
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_responses: true,
+                scan_requests: false,
+                credential_redaction: true,
+                // Allowed, so the credential is redacted rather than the result refused.
+                rules: vec![FirewallRule {
+                    tool_match: "*".to_string(),
+                    action: FirewallAction::Allow,
+                    reason: None,
+                    scan: Vec::new(),
+                }],
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources: vec![format!("{BACKEND}:*")],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+            None,
+        )
+        .keyed_for_test(),
+    );
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta(
         &two_principal_auth(),
         None,
         |mut meta| {
+            meta.share_keyring_with_for_test(&firewall);
             meta.set_firewall(Some(firewall));
             meta
         },

@@ -17,7 +17,7 @@ use tower::ServiceExt;
 use super::create_router;
 use super::tests::{test_router_app_state_with_auth, test_router_app_state_with_auth_and_config};
 use crate::backend::Backend;
-use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig};
+use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -50,6 +50,10 @@ pub(crate) enum Answer {
     AskOnce,
     /// Like `AskOnce`, the question carrying no `requestState` (MIK-8078).
     AskNoState,
+    /// Asks on every call that carries no `requestState`, and answers every
+    /// retry that does: each fresh call takes one continuation slot, and a
+    /// redeem gives it back without taking another (MIK-8293).
+    AskAlways,
     /// A completed answer that still carries a `requestState` (MIK-8078).
     DoneWithState,
     /// Like `AskOnce`, a question `InputRequired::from_result` declines (an
@@ -174,8 +178,16 @@ impl Transport for CountingBackend {
                 | Answer::AskAndError
                 | Answer::AskSecond
                 | Answer::AskEdited(_)
+                | Answer::AskAlways
         ) {
-            let asks_now = n == usize::from(matches!(self.answer, Answer::AskSecond));
+            let asks_now = if matches!(self.answer, Answer::AskAlways) {
+                params
+                    .as_ref()
+                    .and_then(|p| p.get("requestState"))
+                    .is_none()
+            } else {
+                n == usize::from(matches!(self.answer, Answer::AskSecond))
+            };
             return Ok(if asks_now {
                 let mut asked = JsonRpcResponse::success(id, question(self.answer));
                 if matches!(self.answer, Answer::AskAndError) {
@@ -252,7 +264,7 @@ pub(crate) fn replace_backend(fx: &Fx, name: &str) -> Arc<AtomicUsize> {
             passthrough: name.ends_with("-pt"),
             ..BackendConfig::default()
         },
-        &FailsafeConfig::default(),
+        &fixture_failsafe(),
         Duration::from_secs(60),
     ));
     backend.set_transport_for_test(Arc::new(CountingBackend {
@@ -356,12 +368,16 @@ pub(crate) async fn fixture_firewalled_with(
 mod answers;
 #[path = "direct_guards_fixture_egress.rs"]
 mod egress;
+#[path = "direct_guards_fixture_quota.rs"]
+mod quota;
 use answers::{call_answer, listing, question};
 use egress::backend_transport;
 #[cfg(feature = "firewall")]
 pub(crate) use egress::{
     fixture_audited_on, fixture_firewalled_on, fixture_inspecting_on, meta_firewall,
 };
+pub(crate) use quota::fixture_propagating;
+use quota::{fixture_backend_config, fixture_failsafe, leaked_transparency_log};
 
 pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
 
@@ -466,6 +482,10 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     /// `security.sanitize_input` for the state (the route x check matrix).
     static SANITIZE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Both backends require identity propagation, each to its own audience
+    /// (`aud-<name>`), so one caller reaches them under two bindings
+    /// (MIK-8293 S3c).
+    static PROPAGATING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// A transport that replaces the scripted backend (the egress matrix).
     static TRANSPORT: std::cell::RefCell<Option<Arc<dyn Transport>>> =
         const { std::cell::RefCell::new(None) };
@@ -491,6 +511,7 @@ fn fixture_auth() -> AuthConfig {
         enabled: true,
         api_keys: vec![
             key("k-std"),
+            key("k-other"),
             key("k-budget"),
             ApiKeyConfig {
                 rate_limit: 1,
@@ -546,14 +567,16 @@ async fn fixture_inner(
     let (calls, seen) = (Arc::new(AtomicUsize::new(0)), Arc::default());
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.sanitize_input = SANITIZE.with(std::cell::Cell::get);
+    // A required propagation refuses to mint without a durable audit sink
+    // (MIK-6740), so a propagating fixture gets a transparency log.
+    if PROPAGATING.with(std::cell::Cell::get) {
+        state_mut.transparency_log = Some(leaked_transparency_log());
+    }
     for (name, passthrough) in [("alpha", false), ("alpha-pt", true)] {
         let backend = Arc::new(Backend::new(
             name,
-            BackendConfig {
-                passthrough,
-                ..BackendConfig::default()
-            },
-            &FailsafeConfig::default(),
+            fixture_backend_config(name, passthrough),
+            &fixture_failsafe(),
             Duration::from_secs(60),
         ));
         backend.set_transport_for_test(backend_transport((&calls, &seen), answer));
@@ -611,11 +634,13 @@ async fn fixture_inner(
             },
             ..FirewallConfig::default()
         };
-        state_mut.firewall = Some(Arc::new(Firewall::from_config(
-            config.clone(),
-            tracker.clone(),
-        )));
-        let meta_firewall = Arc::new(Firewall::from_config(config, tracker));
+        state_mut.firewall = Some(Arc::new(
+            Firewall::from_config(config.clone(), tracker.clone())
+                .with_continuations(meta.continuation()),
+        ));
+        let meta_firewall = Arc::new(
+            Firewall::from_config(config, tracker).with_continuations(meta.continuation()),
+        );
         META_FIREWALL.with(|f| *f.borrow_mut() = Some(Arc::clone(&meta_firewall)));
         meta.set_firewall(Some(meta_firewall));
     }

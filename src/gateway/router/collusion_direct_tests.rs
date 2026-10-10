@@ -305,8 +305,11 @@ async fn fixture(setup: Setup) -> Fixture {
         },
         ..FirewallConfig::default()
     };
-    state_mut.firewall = Some(Arc::new(Firewall::from_config(config, None)));
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
+    // With the gateway's keyring, as the gateway builds it (#2210, MIK-8276).
+    state_mut.firewall = Some(Arc::new(
+        Firewall::from_config(config, None).with_continuations(meta.continuation()),
+    ));
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
     state_mut.meta_mcp = Arc::new((setup.arm)(meta));
     Fixture {

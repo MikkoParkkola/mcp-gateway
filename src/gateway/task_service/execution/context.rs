@@ -164,6 +164,13 @@ impl OwnedCallerContext {
         Some(state.session_lifecycle.as_ref()?.hold(key))
     }
 
+    /// Test-only: the owner the worker's caller carries as its credential
+    /// principal (MIK-8293 S3b1's premise row).
+    #[cfg(test)]
+    pub(crate) fn credential_principal_for_test(&self) -> &str {
+        &self.credential_principal
+    }
+
     /// Rebuild the dispatch funnel.
     ///
     /// - Retry metadata is not forwarded: admission already reserved the key
