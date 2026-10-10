@@ -747,11 +747,11 @@ def extract_lib(path: Path | None = None) -> list[Entry]:
     for f in files:
         fcode = code if f == path else prod_scan(f)[0]
         for m in re.finditer(r"^#\[macro_export(?:\([^)]*\))?\][^\n]*\n(?:#\[[^\n]*\]\s*)*macro_rules!\s*(\w+)", fcode, re.M):
-            out.append(Entry(f"mcp_gateway::{m.group(1)}!", rel(f), line_of(fcode, m.start()), "exported macro", HIDDEN_RE.search(m.group(0)) is not None))
+            out.append(Entry(f"mcp_gateway::{m.group(1)}!", rel(f), line_of(fcode, m.start()), "exported macro", is_hidden(m.group(0))))
     for m in LIB_ITEM_RE.finditer(code):
         kind, rest = m.group(2).split()[-1], " ".join(m.group(3).split())
         note = feature_of(m.group(1))
-        hidden = HIDDEN_RE.search(m.group(1)) is not None
+        hidden = is_hidden(m.group(1))
         if kind == "use":
             end = code.index(";", m.start())
             body = " ".join(code[m.end(2) : end].split())
@@ -768,6 +768,13 @@ def extract_lib(path: Path | None = None) -> list[Entry]:
 
 
 HIDDEN_RE = re.compile(r"#\[doc\(hidden\)\]")
+
+
+def is_hidden(attrs: str) -> bool:
+    """Whether `attrs` holds a `#[doc(hidden)]` attribute, not that text inside a string."""
+    return HIDDEN_RE.search(re.sub(r'"(?:[^"\\]|\\.)*"', '""', attrs)) is not None
+
+
 # Crate-root items documented as public API on purpose (MIK-8044.SURF.5): none.
 # The library is internal to the binary; every root item is `#[doc(hidden)]`.
 LIB_KEEP: frozenset[str] = frozenset()
@@ -789,10 +796,12 @@ def lib_documented(path: Path | None = None, keep: frozenset[str] = LIB_KEEP) ->
         for m in re.finditer(r"#\[\s*macro_export\b", mask):
             errors.append(f"{rel(f)}:{line_of(mask, m.start())}: #[macro_export] is not modelled by the lib check; refused")
     mask = prod_scan(path)[1]
-    for m in re.finditer(r"^[ \t]*(?:unsafe\s+)?extern\s*(?:\"[^\"]*\"\s*)?\{", mask, re.M):
+    for m in re.finditer(r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?extern\s*(?:\"[^\"]*\"\s*)?\{", mask, re.M):
         errors.append(f"{rel(path)}:{line_of(mask, m.start())}: a root extern block is not modelled by the lib check; refused")
     for m in re.finditer(r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?mod\s+(?:r#)?\w+\s*\{", mask, re.M):
         errors.append(f"{rel(path)}:{line_of(mask, m.start())}: a root inline module is not modelled by the lib check; refused")
+    for m in re.finditer(r"\binclude\s*!", mask):
+        errors.append(f"{rel(path)}:{line_of(mask, m.start())}: a root include! is not modelled by the lib check; refused")
     return errors
 
 

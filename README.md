@@ -618,11 +618,14 @@ This project follows [Semantic Versioning](https://semver.org/) over its
 either are versioned accordingly — a config key that stops being accepted, or a
 command that changes behaviour, is a breaking change.
 
-**The Rust library API is not part of that surface.** Types are `pub` for
-modularity and testing, not as a supported embedding API, and they may change
-in any release. The crate ships a binary; at the time of writing crates.io
-reports zero reverse dependencies. If you embed the library, pin an exact
-version (`=4.0.0`) rather than a caret range.
+**The Rust library API is not part of that surface.** As of 4.0 every
+crate-root item is `#[doc(hidden)]`: the library exists so the binary, its
+tests and its benches share one build, and docs.rs lists nothing. The supported
+surface is the binary, its configuration and the MCP wire protocol. Library
+paths may change in any release. The crate ships a binary; at the time of
+writing crates.io reports zero reverse dependencies. If you embed the library,
+open an issue describing what you use, and pin an exact version (`=4.0.0`)
+rather than a caret range.
 
 This is stated explicitly because "removing a `pub` field" and "breaking a
 supported API" are only the same thing when the API is supported. Here it is
