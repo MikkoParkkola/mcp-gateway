@@ -77,6 +77,19 @@ SWEPT_AREAS = (
     "src/gateway/server/stdio",
     # MIK-8195 W8: the stdio read judge.
     "src/gateway/outbound/stdio.rs",
+    # MIK-8195 W2: gateway/server outside stdio, mod.rs and persistence.rs
+    # (those two are W7), listed one by one.
+    "src/gateway/server/cleartext.rs",
+    "src/gateway/server/control_plane_store.rs",
+    "src/gateway/server/events_wiring.rs",
+    "src/gateway/server/identity_grants.rs",
+    "src/gateway/server/listener.rs",
+    "src/gateway/server/provenance_signer.rs",
+    "src/gateway/server/start_checks.rs",
+    "src/gateway/server/support.rs",
+    "src/gateway/server/task_runtime.rs",
+    "src/gateway/server/tools_changed.rs",
+    "src/gateway/server/warmstart.rs",
 )
 # Diffing against git's empty tree reads every line of <head> as added.
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
