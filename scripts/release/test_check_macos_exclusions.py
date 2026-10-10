@@ -129,5 +129,68 @@ class CheckMacosExclusions(unittest.TestCase):
         self.assertEqual(mac.problems(HERE.parents[1]), [])
 
 
+class Predicates(unittest.TestCase):
+    """MIK-8237: the gate is evaluated as a cfg predicate on macOS with
+    --all-features, not read as words. Unparseable or undecided counts as off
+    macOS, so it must be listed (fail safe)."""
+
+    tree = CheckMacosExclusions.tree
+
+    def setUp(self) -> None:
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+
+    CARGO = (
+        '[package]\nname = "x"\n[features]\nfoo = []\nusedd = ["dep:dd"]\n'
+        '[dependencies]\nopt = { version = "1", optional = true }\n'
+        'dd = { version = "1", optional = true }\n'
+    )
+
+    def gated(self, gate: str) -> list[str]:
+        """Problems for one unlisted test fn under `gate`, with the Cargo.toml above."""
+        (Path(self.dir.name) / "Cargo.toml").write_text(self.CARGO)
+        return self.tree(f"{gate}\n#[test]\nfn probe() {{}}\n")
+
+    def assert_on(self, gate: str) -> None:
+        self.assertEqual(self.gated(gate), [], gate)
+
+    def assert_off(self, gate: str) -> None:
+        self.assertEqual(self.gated(gate), ["not run on macOS and not listed: src/x_tests.rs probe"], gate)
+
+    def test_p1_any_linux_or_macos_in_another_spelling_runs_on_macos(self) -> None:
+        self.assert_on('#[cfg(all(any(target_os = "macos", target_os = "linux"), test))]')
+
+    def test_p2_a_gate_that_names_macos_but_requires_linux_is_off(self) -> None:
+        self.assert_off('#[cfg(all(test, target_os = "linux", any(feature = "foo", target_os = "macos")))]')
+
+    def test_p3_a_nested_any_with_not_apple_is_evaluated(self) -> None:
+        self.assert_on('#[cfg(all(test, any(target_os = "macos", not(target_vendor = "apple"))))]')
+        self.assert_off('#[cfg(all(test, not(any(target_os = "macos", target_os = "ios"))))]')
+
+    def test_p4_feature_atoms_follow_cargo(self) -> None:
+        self.assert_on('#[cfg(feature = "foo")]')
+        self.assert_on('#[cfg(feature = "opt")]')
+        self.assert_off('#[cfg(feature = "nope")]')
+        self.assert_off('#[cfg(feature = "dd")]')
+
+    def test_p5_a_comment_inside_the_attribute_is_not_a_predicate(self) -> None:
+        self.assert_off('#[cfg(all(test, /* linux */ target_os = "macos"))]')
+
+    def test_p6_a_multi_line_attribute_counts_as_off(self) -> None:
+        (Path(self.dir.name) / "Cargo.toml").write_text(self.CARGO)
+        found = self.tree('#[cfg(all(\n    test,\n    target_os = "macos"\n))]\n#[test]\nfn probe() {}\n')
+        self.assertEqual(found, ["not run on macOS and not listed: src/x_tests.rs probe"])
+
+    def test_p7_an_undecided_key_counts_as_off(self) -> None:
+        self.assert_off('#[cfg(target_has_atomic = "64")]')
+
+    def test_p8_cfg_attr_ignore_under_any_true_predicate_is_off(self) -> None:
+        self.assert_off("#[cfg_attr(unix, ignore)]")
+        self.assert_on('#[cfg_attr(target_os = "linux", ignore)]')
+
+    def test_p9_cfg_attr_without_ignore_is_on(self) -> None:
+        self.assert_on('#[cfg_attr(target_os = "macos", allow(dead_code))]')
+
+
 if __name__ == "__main__":
     unittest.main()
