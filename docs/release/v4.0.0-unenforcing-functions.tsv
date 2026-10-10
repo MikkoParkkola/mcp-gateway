@@ -140,6 +140,7 @@ src/gateway/server/construct.rs	reload_path	1	Returns the config path hot reload
 src/gateway/server/construct.rs	shutdown_account_custody	1	Releases account custody at shutdown; no access decision
 src/gateway/server/construct.rs	with_env	1	Builder: sets the evaluated environment; no access decision
 src/gateway/server/construct.rs	with_watched_config	1	Builder: sets the watched config path; no access decision
+src/gateway/server/background.rs	stop	1	AbortOnDrop::stop: aborts the owned task and waits for it to end; no access decision (moved from persistence.rs, MIK-8144)
 src/gateway/server/run_steps.rs	generate_gateway_key_pair	1	Generates the JWKS signing key pair; makes no access decision (MIK-8144)
 src/gateway/server/run_steps.rs	managed_recovery_adapters	1	Lists the recovery adapters that are configured backends; makes no access decision (MIK-8144)
 src/gateway/server/run_steps.rs	webhook_routes	1	Builds the webhook routes the router puts behind its origin gate; the gate decides (MIK-8144)

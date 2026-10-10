@@ -163,7 +163,7 @@ fn deliver_plan_step(fw: &Firewall, answer: &serde_json::Value) {
     let delivered = fw
         .delivered_for_plan(answer, None)
         .expect("under the bound");
-    let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered));
+    let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered, None));
     fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &kept);
 }
 

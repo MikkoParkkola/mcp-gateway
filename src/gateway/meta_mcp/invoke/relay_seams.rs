@@ -54,7 +54,7 @@ pub(crate) async fn noting_plan_members<F: Future>(delivery: F) -> (F::Output, V
 }
 
 #[cfg(feature = "firewall")]
-pub(super) use with_firewall::add_seams;
+pub(super) use with_firewall::{add_seams, answer_parts};
 
 #[cfg(feature = "firewall")]
 #[path = "relay_seams_record.rs"]

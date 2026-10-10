@@ -30,8 +30,52 @@ fn info_logging() -> tracing::subscriber::DefaultGuard {
     )
 }
 
+/// The environment every test here builds against: the attestation keys
+/// `build_meta_mcp` reads are assigned empty. An overlay falls through to the
+/// process environment for any key it does not assign
+/// (`EnvOverlay::resolve`), so an empty overlay would still let a key in the
+/// developer's own environment decide the build; assigning them closes that.
+fn pinned_env() -> Arc<crate::config::LiveEnv> {
+    use crate::attestation::{
+        ATTESTATION_AUDIENCE_ENV, ATTESTATION_KEY_ID_ENV, ATTESTATION_MODE_ENV,
+        ATTESTATION_SIGNING_KEY_ENV,
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let env_file = dir.path().join(".env");
+    let mut body = String::new();
+    for key in [
+        ATTESTATION_MODE_ENV,
+        ATTESTATION_SIGNING_KEY_ENV,
+        ATTESTATION_KEY_ID_ENV,
+        ATTESTATION_AUDIENCE_ENV,
+    ] {
+        body.push_str(key);
+        body.push_str("=\n");
+    }
+    crate::gateway::test_helpers::write_owner_only(&env_file, body).expect("env file");
+    // The overlay is read here, so the file may go when `dir` drops. A file
+    // that fails to load must fail the test, not fall back to the process
+    // environment the pin exists to exclude.
+    let overlay = crate::config::EnvOverlay::from_paths_checked(&[env_file]).expect("pinned env");
+    for key in [
+        ATTESTATION_MODE_ENV,
+        ATTESTATION_SIGNING_KEY_ENV,
+        ATTESTATION_KEY_ID_ENV,
+        ATTESTATION_AUDIENCE_ENV,
+    ] {
+        assert!(overlay.assigns(key), "the pinned env must assign {key}");
+    }
+    Arc::new(crate::config::LiveEnv::new(
+        Arc::new(overlay),
+        crate::config::ResolvedEnvFiles::default(),
+    ))
+}
+
 async fn built(config: Config) -> Arc<MetaMcp> {
-    let gateway = Gateway::new(config).await.expect("gateway");
+    let gateway = Gateway::new(config)
+        .await
+        .expect("gateway")
+        .with_env(pinned_env());
     gateway
         .build_meta_mcp()
         .await
@@ -163,26 +207,10 @@ async fn a_configured_signature_chain_installs_the_chain_signer() {
 #[tokio::test]
 async fn provenance_stamping_without_a_key_installs_no_signer() {
     let _log = info_logging();
-    let dir = tempfile::tempdir().expect("tempdir");
-    let env_file = dir.path().join(".env");
-    crate::gateway::test_helpers::write_owner_only(
-        &env_file,
-        format!("{}=\n", crate::attestation::ATTESTATION_SIGNING_KEY_ENV),
-    )
-    .expect("env file");
-    let env = Arc::new(crate::config::LiveEnv::new(
-        Arc::new(crate::config::EnvOverlay::from_paths(&[env_file])),
-        crate::config::ResolvedEnvFiles::default(),
-    ));
     let mut config = Config::default();
     config.security.provenance_stamping = true;
-    let gateway = Gateway::new(config).await.expect("gateway").with_env(env);
 
-    let meta = gateway
-        .build_meta_mcp()
-        .await
-        .expect("build_meta_mcp")
-        .meta_mcp;
+    let meta = built(config).await;
 
     assert!(
         meta.provenance_signer.is_none(),
