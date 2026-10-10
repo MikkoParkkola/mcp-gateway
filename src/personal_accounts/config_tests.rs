@@ -645,4 +645,9 @@ fn an_omitted_schema_version_defaults_to_accounts_v1() {
         .remove("schema_version");
     let parsed: AccountsConfig = serde_yaml::from_value(value).expect("loads without the key");
     assert_eq!(parsed.schema_version, SCHEMA_VERSION);
+    // The production gate accepts it too; a written `accounts.v2` is still
+    // refused (the `schema_version` case of the refusal table above).
+    refuse_scaffold(resolve(Some(&parsed), &overlay()), "omitted schema_version")
+        .expect("an omitted schema_version passes the production gate")
+        .expect("accounts present means custody is configured");
 }
