@@ -42,6 +42,9 @@ struct Backend {
     hint: Doc,
     path: Doc,
     origin: Doc,
+    /// Name the server `localhost` in every document and URL (a hostname,
+    /// so a pinning resolver decides, not the IP-literal check).
+    localhost: bool,
 }
 
 struct Served {
@@ -83,7 +86,12 @@ fn document(doc: &Doc, base: &str) -> axum::response::Response {
 async fn serve(backend: Backend) -> Served {
     use axum::response::IntoResponse;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let base = format!("http://{}", listener.local_addr().unwrap());
+    let addr = listener.local_addr().unwrap();
+    let base = if backend.localhost {
+        format!("http://localhost:{}", addr.port())
+    } else {
+        format!("http://{addr}")
+    };
     let seen = Arc::new(Mutex::new(Vec::new()));
     let (b, s) = (base.clone(), seen.clone());
     let app = axum::Router::new().fallback(move |req: axum::extract::Request| {
@@ -148,8 +156,20 @@ async fn serve(backend: Backend) -> Served {
 
 /// A gateway-owned client (`with_destination`, as production builds it).
 fn owned_client(resource_url: &str, dir: &std::path::Path) -> OAuthClient {
-    OAuthClient::with_destination(
+    owned_client_under(
         crate::security::ssrf::DestinationPolicy::Private,
+        resource_url,
+        dir,
+    )
+}
+
+fn owned_client_under(
+    policy: crate::security::ssrf::DestinationPolicy,
+    resource_url: &str,
+    dir: &std::path::Path,
+) -> OAuthClient {
+    OAuthClient::with_destination(
+        policy,
         Client::new(),
         "prm-discovery".to_string(),
         resource_url.to_string(),
@@ -177,6 +197,7 @@ fn backend(probe: Probe, hint: Doc, path: Doc, origin: Doc) -> Backend {
         hint,
         path,
         origin,
+        localhost: false,
     }
 }
 
@@ -375,4 +396,38 @@ async fn a_failed_path_fetch_does_not_let_an_origin_named_document_through() {
         let seen = served.seen();
         assert!(in_order(&seen, PATH, ORIGIN), "fell through: {seen:?}");
     }
+}
+
+/// A design change from r4 (lead-approved, r5): a probe the destination policy
+/// refuses is no hint, and the walk goes on. Under `Public` the redirect-free
+/// probe client pins `localhost` and refuses it, while the candidates go
+/// through the supplied client. The probe is never sent, the hint (here naming
+/// another resource) is never read, and the path document alone decides.
+#[tokio::test]
+async fn a_refused_probe_is_no_hint_and_the_candidates_decide() {
+    let served = serve(Backend {
+        probe: Probe::Hint("/hinted-prm"),
+        hint: Doc::Names("/other"),
+        path: Doc::Names("/mcp"),
+        origin: Doc::Absent,
+        localhost: true,
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = owned_client_under(
+        crate::security::ssrf::DestinationPolicy::Public,
+        &format!("{}/mcp", served.base),
+        dir.path(),
+    );
+    client
+        .initialize()
+        .await
+        .expect("no hint; the path document names this resource");
+    let seen = served.seen();
+    assert!(
+        position(&seen, "POST /mcp").is_none(),
+        "the probe was refused: {seen:?}"
+    );
+    assert!(position(&seen, HINTED).is_none(), "{seen:?}");
+    assert!(position(&seen, PATH).is_some(), "{seen:?}");
 }
