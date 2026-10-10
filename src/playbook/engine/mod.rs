@@ -203,7 +203,13 @@ impl PlaybookEngine {
                         // errors keep retrying: that distinction is the whole
                         // reason the refusal carries its own variant instead of
                         // arriving as an opaque error.
-                        let refused = matches!(e, crate::Error::Forbidden { .. });
+                        // A firewall refusal is as final as a denial
+                        // (MIK-8325): the gate's verdict on the same answer
+                        // will not change, and a retry calls the backend again.
+                        let refused = matches!(
+                            e,
+                            crate::Error::Forbidden { .. } | crate::Error::ResponseFirewallRefused
+                        );
                         warn!(step = %step.name, error = %e, refused, "Step failed");
                         last_error = Some(e);
                         if refused {

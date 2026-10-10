@@ -349,9 +349,18 @@ impl MetaMcp {
             );
         }
 
+        // A follow-up question the content gate enforces on ends the call
+        // (MIK-8325): the gates judged the backend's question unsafe to show,
+        // so it is refused, never resumed and never answered with a handle to
+        // an exchange the caller cannot see. Strip, Summarize, Quarantine and
+        // Deny alike; a round the gate let through is unchanged.
+        let round = crate::protocol::mrtr::InputRequired::claims_input_required(&result);
         let delivered = self.apply_context_integrity(server, tool, api_key_name, trace_id, result);
         // MIN.2: past every gate, so this dispatch's raw reading counts.
         crate::security::tenant_reads::note_attribution(raw_read);
+        if round && delivered.1 == super::super::response_security::GateEffect::Enforced {
+            return Err(Error::ResponseFirewallRefused);
+        }
         Ok(delivered)
     }
 
