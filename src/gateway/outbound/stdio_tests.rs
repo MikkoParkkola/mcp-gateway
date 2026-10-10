@@ -107,6 +107,15 @@ async fn a_bridged_request_naming_another_tenant_is_withheld() {
         "control: off forwards B"
     );
 
+    // Without a transparency log the blocked request is still withheld; it
+    // simply has nowhere to be audited.
+    let (unlogged, _) = reads(CrossTenantReads::Block);
+    let _a = read_a(&unlogged).await;
+    assert!(
+        unlogged.request(request_naming_b()).await.is_none(),
+        "with no log, a bridged request naming B after an A read is still withheld"
+    );
+
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("audit.jsonl");
     let log = TransparencyLogger::open(Arc::new(
