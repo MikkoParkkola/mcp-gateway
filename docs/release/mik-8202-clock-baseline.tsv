@@ -154,7 +154,7 @@ src/protocol/continuation/ledger/in_flight_lifetime.rs	1
 src/protocol/era.rs	1
 src/protocol/tasks.rs	3
 src/protocol/tasks/snapshot_tests.rs	2
-src/protocol_revision_telemetry.rs	3
+src/protocol_revision_telemetry/durable.rs	3
 src/runtime/provider_tests.rs	2
 src/scheduler/tests.rs	5
 src/security/firewall/audit.rs	2
