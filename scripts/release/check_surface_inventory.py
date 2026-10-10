@@ -280,6 +280,7 @@ class Entry:
     file: str
     line: int
     note: str = ""
+    hidden: bool = False  # lib: `#[doc(hidden)]`, so not documented API
 
 
 class Index:
@@ -746,10 +747,11 @@ def extract_lib(path: Path | None = None) -> list[Entry]:
     for f in files:
         fcode = code if f == path else prod_scan(f)[0]
         for m in re.finditer(r"^#\[macro_export(?:\([^)]*\))?\][^\n]*\n(?:#\[[^\n]*\]\s*)*macro_rules!\s*(\w+)", fcode, re.M):
-            out.append(Entry(f"mcp_gateway::{m.group(1)}!", rel(f), line_of(fcode, m.start()), "exported macro"))
+            out.append(Entry(f"mcp_gateway::{m.group(1)}!", rel(f), line_of(fcode, m.start()), "exported macro", HIDDEN_RE.search(m.group(0)) is not None))
     for m in LIB_ITEM_RE.finditer(code):
         kind, rest = m.group(2).split()[-1], " ".join(m.group(3).split())
         note = feature_of(m.group(1))
+        hidden = HIDDEN_RE.search(m.group(1)) is not None
         if kind == "use":
             end = code.index(";", m.start())
             body = " ".join(code[m.end(2) : end].split())
@@ -757,12 +759,41 @@ def extract_lib(path: Path | None = None) -> list[Entry]:
             for name in (names.rstrip("}").split(",") if names else [root.rsplit("::", 1)[-1]]):
                 name = name.strip()
                 if name:
-                    out.append(Entry(f"mcp_gateway::{name}", rel(path), line_of(code, m.start(2)), f"re-export from {root.strip(' :')}"))
+                    out.append(Entry(f"mcp_gateway::{name}", rel(path), line_of(code, m.start(2)), f"re-export from {root.strip(' :')}", hidden))
             continue
         # `extern crate a as b` exports `b`.
         name = rest.split(" as ")[-1].split(":")[0].strip()
-        out.append(Entry(f"mcp_gateway::{name}", rel(path), line_of(code, m.start(2)), " ".join(x for x in (kind, note) if x)))
+        out.append(Entry(f"mcp_gateway::{name}", rel(path), line_of(code, m.start(2)), " ".join(x for x in (kind, note) if x), hidden))
     return sorted(out, key=lambda e: e.id)
+
+
+HIDDEN_RE = re.compile(r"#\[doc\(hidden\)\]")
+# Crate-root items documented as public API on purpose (MIK-8044.SURF.5): none.
+# The library is internal to the binary; every root item is `#[doc(hidden)]`.
+LIB_KEEP: frozenset[str] = frozenset()
+
+
+def lib_documented(path: Path | None = None, keep: frozenset[str] = LIB_KEEP) -> list[str]:
+    """Problems with the documented crate-root API: any root item that is not
+    `#[doc(hidden)]` and not in `keep`, and, failing closed, any construct
+    `extract_lib` does not model (a `#[macro_export]` anywhere in the library,
+    a root `extern` block, a root inline `mod name { .. }`)."""
+    path = path or SRC / "lib.rs"
+    errors = [
+        f"{e.file}:{e.line}: {e.id} is documented crate-root API; add #[doc(hidden)] or list it in LIB_KEEP"
+        for e in extract_lib(path)
+        if not e.hidden and e.id not in keep
+    ]
+    for f in module_files(path):
+        mask = prod_scan(f)[1]
+        for m in re.finditer(r"#\[\s*macro_export\b", mask):
+            errors.append(f"{rel(f)}:{line_of(mask, m.start())}: #[macro_export] is not modelled by the lib check; refused")
+    mask = prod_scan(path)[1]
+    for m in re.finditer(r"^[ \t]*(?:unsafe\s+)?extern\s*(?:\"[^\"]*\"\s*)?\{", mask, re.M):
+        errors.append(f"{rel(path)}:{line_of(mask, m.start())}: a root extern block is not modelled by the lib check; refused")
+    for m in re.finditer(r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?mod\s+(?:r#)?\w+\s*\{", mask, re.M):
+        errors.append(f"{rel(path)}:{line_of(mask, m.start())}: a root inline module is not modelled by the lib check; refused")
+    return errors
 
 
 # ── The inventory doc ────────────────────────────────────────────────────────
@@ -933,6 +964,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     extracted = extract_all()
     errors = check(args.doc.read_text(encoding="utf-8"), extracted)
+    errors += lib_documented()
     errors += check_hidden_table(args.doc.read_text(encoding="utf-8"), HIDDEN_TABLE.read_text(encoding="utf-8"))
     for line in errors:
         print(line, file=sys.stderr)
