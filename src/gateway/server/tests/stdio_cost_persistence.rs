@@ -22,7 +22,7 @@ use tokio::time::timeout;
 use crate::config::Config;
 use crate::cost_accounting::persistence::{self as cost_persistence, PersistedCosts, ToolTotal};
 use crate::gateway::Gateway;
-use crate::gateway::server::persistence::{COST_SAVE_INTERVAL, boot_cost_governance};
+use crate::gateway::server::persistence::boot_cost_governance;
 
 const BACKEND: &str = "fixture";
 const TOOL: &str = "echo";
@@ -246,8 +246,9 @@ async fn stdio_exit_saves_todays_spend() {
     );
 }
 
-/// R-PERIODIC: while stdin stays open, spend reaches disk on every interval,
-/// not only the first.
+/// R-PERIODIC: while stdin stays open, spend keeps reaching disk, not only at
+/// the first interval. An interval skipped while a write still held the lock is
+/// caught up by a later one (MIK-8157, MIK-8216).
 #[tokio::test]
 async fn stdio_saves_spend_periodically_before_exit() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -273,14 +274,13 @@ async fn stdio_saves_spend_periodically_before_exit() {
 
     // Paused only now, so no timer inside the boot was advanced.
     tokio::time::pause();
+    // Several ticks per round: see `advance_until_saved` (MIK-8216).
     for round in 1..=2 {
         std::fs::remove_file(&costs).expect("remove costs.json; only a save can bring it back");
-        tokio::time::advance(COST_SAVE_INTERVAL + Duration::from_secs(1)).await;
-        let landed =
-            crate::test_wait::wait_real_time(Duration::from_secs(30), || costs.exists()).await;
+        let landed = super::advance_until_saved(&costs).await;
         assert!(
             landed.is_ok(),
-            "no periodic save in interval {round} while stdin stayed open: the save {}",
+            "no periodic save in round {round} while stdin stayed open: the save {}",
             landed.err().unwrap_or_default()
         );
     }
