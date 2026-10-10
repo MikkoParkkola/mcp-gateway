@@ -135,6 +135,13 @@ jobs:
       # (MIK-8195); the area list grows with each wave until it is removed.
       - name: Every function in a swept COV.3 area has an inventory row (MIK-8195)
         run: python3 scripts/release/check_inventory_rows.py --all
+      # A new stage on the tools/call path gets a per-call timing row or a
+      # stated reason (MIK-8014); the gate's verdict rules have their own test.
+      - name: Every tools/call path function has a per-call stage (MIK-8014)
+        run: |
+          python3 scripts/ci/check_per_call_stages.py
+          python3 scripts/ci/test_check_per_call_stages.py
+          python3 scripts/perf/test_per_call_gate.py
       - name: Validate tracked public docs boundary
         run: scripts/dev/check-public-repo-hygiene.sh
       - name: Enforce the Noncommercial license header on every source file

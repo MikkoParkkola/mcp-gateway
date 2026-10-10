@@ -18,6 +18,7 @@ mod invoke_argument_copies;
 mod is_connected_count;
 #[cfg(feature = "firewall")]
 mod judge_allocations;
+mod per_call_timing;
 mod signing_nonce_allocations;
 mod signing_nonce_allocations_support;
 mod trust_card_list_allocations;
