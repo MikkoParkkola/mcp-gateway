@@ -246,8 +246,9 @@ async fn stdio_exit_saves_todays_spend() {
     );
 }
 
-/// R-PERIODIC: while stdin stays open, spend reaches disk on every interval,
-/// not only the first.
+/// R-PERIODIC: while stdin stays open, spend keeps reaching disk, not only at
+/// the first interval. An interval skipped while a write still held the lock is
+/// caught up by a later one (MIK-8157, MIK-8216).
 #[tokio::test]
 async fn stdio_saves_spend_periodically_before_exit() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -273,13 +274,13 @@ async fn stdio_saves_spend_periodically_before_exit() {
 
     // Paused only now, so no timer inside the boot was advanced.
     tokio::time::pause();
-    // Up to 3 ticks per round: see `advance_until_saved` (MIK-8216).
+    // Several ticks per round: see `advance_until_saved` (MIK-8216).
     for round in 1..=2 {
         std::fs::remove_file(&costs).expect("remove costs.json; only a save can bring it back");
-        let landed = super::advance_until_saved(&costs, 3).await;
+        let landed = super::advance_until_saved(&costs).await;
         assert!(
             landed.is_ok(),
-            "no periodic save within 3 intervals in round {round} while stdin stayed open: the save {}",
+            "no periodic save in round {round} while stdin stayed open: the save {}",
             landed.err().unwrap_or_default()
         );
     }

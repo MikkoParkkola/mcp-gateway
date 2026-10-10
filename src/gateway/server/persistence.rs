@@ -406,6 +406,40 @@ mod tests {
         );
     }
 
+    /// MIK-8216: a periodic save that finds the previous write still holding
+    /// the lock writes nothing, and a later one writes the cumulative spend,
+    /// so a skipped interval is caught up and nothing is lost.
+    #[cfg(feature = "cost-governance")]
+    #[test]
+    fn a_save_skipped_while_a_write_holds_the_lock_is_caught_up_later() {
+        let dir = tempfile::tempdir().unwrap();
+        let costs = dir.path().join("costs.json");
+        let enforcer = enforcer_with_spend(0.25);
+        {
+            let _writing = COST_WRITE.lock().unwrap_or_else(PoisonError::into_inner);
+            save_costs_unless_busy(&enforcer, dir.path());
+        }
+        assert!(
+            !costs.exists(),
+            "a periodic save wrote while the previous write held the lock"
+        );
+        enforcer.record_spend("tool", Some("key"), 0.15);
+        // Successive ticks: COST_WRITE is process-wide, so another test's
+        // save may hold it for one of them, which is the skip being tested.
+        for _ in 0..1_000 {
+            save_costs_unless_busy(&enforcer, dir.path());
+            if costs.exists() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        let global = restored_global(dir.path());
+        assert!(
+            (global - 0.4).abs() < 1e-9,
+            "the catch-up save lost spend from the skipped interval: the next boot reads {global}"
+        );
+    }
+
     /// The saver writes on its interval and ends when shutdown is sent.
     #[cfg(feature = "cost-governance")]
     #[tokio::test]

@@ -68,23 +68,31 @@ mod http_cost_persistence;
 /// previous save thread, or another test's save in this process, can still
 /// hold the lock at the first tick (MIK-8216). One advance alone cannot
 /// recover from that skip.
+/// How many ticks a periodic-save test may advance, and how long each may take
+/// to land: together the 30 s the tests gave a single tick before MIK-8216.
 #[cfg(feature = "cost-governance")]
-async fn advance_until_saved(costs: &std::path::Path, catch_up: u32) -> Result<(), String> {
-    let mut landed = Err(format!("no tick was advanced (catch_up = {catch_up})"));
-    for _ in 0..catch_up {
+const CATCH_UP_TICKS: u32 = 3;
+#[cfg(feature = "cost-governance")]
+const TICK_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[cfg(feature = "cost-governance")]
+async fn advance_until_saved(costs: &std::path::Path) -> Result<(), String> {
+    for _ in 0..CATCH_UP_TICKS {
         tokio::time::advance(
             crate::gateway::server::persistence::COST_SAVE_INTERVAL
                 + std::time::Duration::from_secs(1),
         )
         .await;
-        landed =
-            crate::test_wait::wait_real_time(std::time::Duration::from_secs(10), || costs.exists())
-                .await;
-        if landed.is_ok() {
-            break;
+        if crate::test_wait::wait_real_time(TICK_BOUND, || costs.exists())
+            .await
+            .is_ok()
+        {
+            return Ok(());
         }
     }
-    landed
+    Err(format!(
+        "did not land in {CATCH_UP_TICKS} ticks of {TICK_BOUND:?} real time each"
+    ))
 }
 
 mod grant_decision_stdio;
