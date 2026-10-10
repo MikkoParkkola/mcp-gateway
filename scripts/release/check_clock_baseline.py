@@ -43,7 +43,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-# The moved-text matcher, shared with the file-size ratchet (MIK-8291).
+# The moved-text matcher, shared with the timing-allowlist ratchet (MIK-8291).
 _SPEC = importlib.util.spec_from_file_location(
     "ratchet_moves", Path(__file__).resolve().parents[1] / "dev" / "ratchet_moves.py"
 )

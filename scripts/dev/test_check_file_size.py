@@ -399,5 +399,16 @@ class MovedAnnotations(unittest.TestCase):
         self.assertEqual(gate.parse_baseline(text), {"src/b.rs": 850, "src/c.rs": 900})
 
 
+    def test_update_through_main_keeps_the_annotations(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/b.rs").write_text(body(850), encoding="utf-8")
+            gate = load_gate(root)
+            gate.BASELINE.write_text("# moved-from src/a.rs\n850 src/b.rs\n", encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(gate.main(["--update"]), 0)
+            self.assertEqual(gate.load_moved(), {"src/b.rs": ["src/a.rs"]})
+
 if __name__ == "__main__":
     unittest.main()
