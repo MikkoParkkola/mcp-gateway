@@ -38,6 +38,7 @@ SWEPT_AREAS = (
     "src/oauth/login_gate.rs",
     "src/oauth/client/",
     "src/personal_accounts/journey/",
+    "src/gateway/task_service/",
     "src/gateway/router/",
 )
 # Diffing against git's empty tree reads every line of <head> as added.

@@ -58,45 +58,9 @@ mod stdio_catalogue_sole_operator;
 #[cfg(feature = "cost-governance")]
 mod stdio_cost_persistence;
 
+mod grant_decision_stdio;
 #[cfg(feature = "cost-governance")]
 mod http_cost_persistence;
-
-/// How many ticks a periodic-save test may advance, and how long each may take
-/// to land: together the 30 s the tests gave a single tick before MIK-8216.
-#[cfg(feature = "cost-governance")]
-const CATCH_UP_TICKS: u32 = 3;
-#[cfg(feature = "cost-governance")]
-const TICK_BOUND: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// Advance the paused clock one cost-save interval at a time until `costs`
-/// exists, giving each tick real time to land, for up to [`CATCH_UP_TICKS`] ticks.
-///
-/// A tick that finds `COST_WRITE` held is skipped, and the next tick catches
-/// up (MIK-8157). Paused time packs intervals into almost no real time, so a
-/// previous save thread, or another test's save in this process, can still
-/// hold the lock at the first tick (MIK-8216). One advance alone cannot
-/// recover from that skip.
-#[cfg(feature = "cost-governance")]
-async fn advance_until_saved(costs: &std::path::Path) -> Result<(), String> {
-    for _ in 0..CATCH_UP_TICKS {
-        tokio::time::advance(
-            crate::gateway::server::persistence::COST_SAVE_INTERVAL
-                + std::time::Duration::from_secs(1),
-        )
-        .await;
-        if crate::test_wait::wait_real_time(TICK_BOUND, || costs.exists())
-            .await
-            .is_ok()
-        {
-            return Ok(());
-        }
-    }
-    Err(format!(
-        "did not land in {CATCH_UP_TICKS} ticks of {TICK_BOUND:?} real time each"
-    ))
-}
-
-mod grant_decision_stdio;
 
 // MIK-7272.OWNER.3 and OWNER.5 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I1).
 mod owner3_stdio_keying;
