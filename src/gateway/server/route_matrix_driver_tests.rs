@@ -16,27 +16,28 @@ use crate::config::{BackendConfig, FailsafeConfig};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
-pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::stdio_task_surfaced;
+pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::{
+    stdio_sanitizing, stdio_task_surfaced,
+};
 
 /// A backend serving one tool, `read`, counting the `tools/call` sends.
 struct Counting {
     calls: Arc<AtomicUsize>,
-    seen: Arc<std::sync::Mutex<Vec<Value>>>,
     /// The result every `tools/call` answers.
     answer: Value,
 }
 
 #[async_trait::async_trait]
 impl crate::transport::Transport for Counting {
-    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
         let body = if method == "tools/list" {
             json!({ "tools": [{ "name": "read", "inputSchema": { "type": "object" } }] })
         } else {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            self.seen
-                .lock()
-                .expect("seen lock")
-                .push(params.unwrap_or_default());
             self.answer.clone()
         };
         Ok(JsonRpcResponse::success(RequestId::Number(1), body))
@@ -59,8 +60,6 @@ impl crate::transport::Transport for Counting {
 pub(crate) struct Sent {
     pub(crate) body: Value,
     pub(crate) backend_calls: usize,
-    /// The params each backend send carried.
-    pub(crate) seen: Vec<Value>,
 }
 
 /// R5: stdio `tools/call gateway_invoke alpha read` with `args`, its params
@@ -73,7 +72,6 @@ async fn stdio_call(
     answer: Value,
 ) -> Sent {
     let calls = Arc::new(AtomicUsize::new(0));
-    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "alpha",
@@ -83,7 +81,6 @@ async fn stdio_call(
     ));
     backend.set_transport_for_test(Arc::new(Counting {
         calls: Arc::clone(&calls),
-        seen: Arc::clone(&seen),
         answer,
     }) as Arc<dyn crate::transport::Transport>);
     backend
@@ -108,11 +105,9 @@ async fn stdio_call(
         super::Gateway::dispatch_single(&gateway_meta, &policy, &mtls, &request, "stdio-matrix")
             .await
             .expect("a request is answered");
-    let seen = seen.lock().expect("seen lock").clone();
     Sent {
         body,
         backend_calls: calls.load(Ordering::SeqCst),
-        seen,
     }
 }
 
@@ -146,11 +141,6 @@ pub(crate) async fn stdio_firewalled_answering(
         text_result(answer),
     )
     .await
-}
-
-/// R5 with no firewall: what the stdio route itself does to the arguments.
-pub(crate) async fn stdio_plain(args: Value) -> Sent {
-    stdio_call(|_| {}, (args, None), text_result("ok")).await
 }
 
 /// A plain text tool result.

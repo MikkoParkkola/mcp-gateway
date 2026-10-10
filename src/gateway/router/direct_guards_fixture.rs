@@ -268,6 +268,18 @@ pub(crate) async fn fixture_firewalled_audited(answer: Answer, audit: std::path:
     fx
 }
 
+/// [`fixture_built`] with `transport` answering for both backends in place of
+/// the scripted one (the route x check matrix's annotated tool, MIK-8137 b3).
+pub(crate) async fn fixture_built_on(
+    transport: Arc<dyn Transport>,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
+    let fx = fixture_inner(Answer::Ok, false, build).await;
+    TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
 /// [`fixture_firewalled_audited`], arming the replaced `MetaMcp` with `build`
 /// (the route x check matrix's surfaced-name route, MIK-8137 b3).
 #[cfg(feature = "firewall")]

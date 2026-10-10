@@ -167,13 +167,20 @@ async fn sanitize_rows() {
         row(Route::Stdio),
         Expect::ExpectedGap(super::Ticket::Mik8149)
     );
-    let stdio = stdio::stdio_plain(with_nul()).await;
-    assert!(
-        nul_reached(&stdio.seen),
-        "R5: the NUL no longer reaches the backend; MIK-8149 may have closed this \
-         gap, flip the row to Applies: {}",
-        stdio.body
-    );
+    // Built from config by the production Gateway, with the setting ON: stdio
+    // still passes the NUL (the gap). The OFF run is the control.
+    for on in [true, false] {
+        let (body, calls) = stdio::stdio_sanitizing(on).await;
+        assert!(
+            !body.to_string().contains(NUL_REFUSED),
+            "R5 sanitize_input={on}: stdio now refuses the NUL; MIK-8149 may have \
+             closed this gap, flip the row to Applies: {body}"
+        );
+        assert_eq!(
+            calls, 1,
+            "R5 sanitize_input={on}: the NUL did not reach the backend: {body}"
+        );
+    }
 }
 
 /// A backend answer carrying a credential the response firewall blocks. Built
@@ -354,10 +361,21 @@ async fn chokepoint_rescan_rows() {
         "R3 wrote a dispatch row, so the direct route now passes the chokepoint; \
          MIK-8154 SAN.3 may have closed this gap, flip the row to Applies: {dispatched:?}"
     );
+    // The hostile answer really went out unscanned: the retry succeeded, the
+    // backend was asked twice, and the second send carried the blocked text.
     assert!(
-        sent.backend_calls >= 1,
-        "premise: the direct route ran the first round: {}",
+        sent.body.get("error").is_none(),
+        "R3: the retry was refused, so this payload cannot show the missing \
+         chokepoint: {}",
         sent.body
+    );
+    assert_eq!(sent.backend_calls, 2, "R3: {}", sent.body);
+    assert!(
+        sent.seen
+            .get(1)
+            .is_some_and(|params| params.to_string().contains(BLOCKED.trim())),
+        "R3: the second send did not carry the blocked answer: {:?}",
+        sent.seen
     );
 }
 
@@ -402,19 +420,24 @@ async fn nonce_give_back_direct_row() {
         expect(MethodKind::ToolsCall, Route::Direct, Stage::NonceGiveBack),
         Expect::Applies
     );
-    let (refused, again) = router::direct_spend_then_resend().await;
+    let (refused, again, replay, calls) = router::direct_spend_then_resend().await;
     assert!(
-        refused.get("error").is_some(),
+        message(&refused).contains("daily budget exceeded"),
         "premise: the budget refused: {refused}"
     );
-    assert_ne!(
-        again["error"]["message"], REPLAY,
+    assert!(
+        message(&replay).contains(REPLAY),
+        "control: nonce admission is not on, so this row proves nothing: {replay}"
+    );
+    assert!(
+        !message(&again).contains(REPLAY),
         "R3 kept the nonce: {again}"
     );
-    assert_eq!(
-        again["error"], refused["error"],
-        "R3: not the same refusal again: {again}"
+    assert!(
+        message(&again).contains("daily budget exceeded"),
+        "R3: the re-send did not meet the budget again: {again}"
     );
+    assert_eq!(calls, 1, "R3: only the first call reached the backend");
 }
 
 /// The part of X14's challenge prompt both its variants carry
@@ -476,45 +499,25 @@ async fn task_confirm_stdio_gap_row() {
 /// The execution lease's in-flight refusal (`meta_mcp/admission.rs`).
 const LEASE_IN_FLIGHT: &str = "Execution is already in progress";
 
-/// The idempotency guard's in-flight refusal (`idempotency/guard.rs`).
-const GUARD_IN_FLIGHT: &str = "Duplicate request in progress for key";
-
 /// A JSON-RPC answer's error message, or "" when it has none.
 fn message(body: &Value) -> &str {
     body["error"]["message"].as_str().unwrap_or_default()
 }
 
-/// Lease. Two calls under one idempotency key, the second sent while the
-/// first is held at the backend. R1 Applies: the lease refuses the second with
-/// its own in-flight message, and the backend runs once. R3 gap (MIK-8154,
-/// matrix gap 11): the direct route has no lease; whatever stops the second
-/// there is not the lease.
+/// Lease, R1 Applies: two calls under one idempotency key, the second sent
+/// while the first is held at the backend; the lease refuses the second with
+/// its own in-flight message, and the backend runs once. R3's gap is not
+/// observable while its idempotency guard answers first (see `UNDRIVEN`).
 #[tokio::test]
-async fn lease_rows() {
-    let row = |route| expect(MethodKind::ToolsCall, route, Stage::Lease);
-
-    assert_eq!(row(Route::Invoke), Expect::Applies);
-    let (second, calls) = router::concurrent_same_key(router::LeaseRoute::Invoke).await;
+async fn lease_row() {
+    assert_eq!(
+        expect(MethodKind::ToolsCall, Route::Invoke, Stage::Lease),
+        Expect::Applies
+    );
+    let (second, calls) = router::concurrent_same_key().await;
     assert!(
         message(&second).contains(LEASE_IN_FLIGHT),
         "R1: the second call was not refused by the lease: {second}"
     );
     assert_eq!(calls, 1, "R1: the backend ran twice");
-
-    assert_eq!(
-        row(Route::Direct),
-        Expect::ExpectedGap(super::Ticket::Mik8154)
-    );
-    let (second, calls) = router::concurrent_same_key(router::LeaseRoute::Direct).await;
-    assert!(
-        !message(&second).contains(LEASE_IN_FLIGHT),
-        "R3 answered with the lease's refusal; MIK-8154 (gap 11) may have closed \
-         this gap, flip the row to Applies: {second}"
-    );
-    // What stops it today is the direct route's own idempotency guard.
-    assert!(
-        message(&second).contains(GUARD_IN_FLIGHT),
-        "R3: stopped, but not by the idempotency guard: {second}"
-    );
-    assert!(calls >= 1, "premise: the first direct call ran: {second}");
 }

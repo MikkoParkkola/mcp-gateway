@@ -27,12 +27,23 @@ const DENIED: &str = "forbidden";
 
 /// A counting backend answering every tool at once.
 pub(crate) async fn backend() -> (String, Arc<AtomicUsize>) {
+    backend_listing(json!([
+        {"name": TOOL, "inputSchema": {"type": "object"}},
+        {"name": DENIED, "inputSchema": {"type": "object"}},
+    ]))
+    .await
+}
+
+/// [`backend`] whose `tools/list` answers `tools` (the route x check matrix
+/// lists a destructive tool, MIK-8137 b3).
+pub(crate) async fn backend_listing(tools: Value) -> (String, Arc<AtomicUsize>) {
     let rounds = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&rounds);
     let app = axum::Router::new().route(
         "/",
         axum::routing::post(move |axum::Json(request): axum::Json<Value>| {
             let counted = Arc::clone(&counted);
+            let tools = tools.clone();
             async move {
                 let result = match request.get("method").and_then(Value::as_str) {
                     Some("initialize") => json!({
@@ -40,10 +51,7 @@ pub(crate) async fn backend() -> (String, Arc<AtomicUsize>) {
                         "capabilities": {"tools": {}},
                         "serverInfo": {"name": BACKEND, "version": "0"},
                     }),
-                    Some("tools/list") => json!({"tools": [
-                        {"name": TOOL, "inputSchema": {"type": "object"}},
-                        {"name": DENIED, "inputSchema": {"type": "object"}},
-                    ]}),
+                    Some("tools/list") => json!({"tools": tools}),
                     Some("tools/call") => {
                         counted.fetch_add(1, Ordering::SeqCst);
                         json!({"content": [{"type": "text", "text": "done"}]})

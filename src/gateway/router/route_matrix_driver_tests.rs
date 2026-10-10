@@ -342,11 +342,12 @@ pub(crate) async fn invoke_relay_then_resend(text: &'static str) -> (Value, Valu
     (relayed, resent)
 }
 
-/// R3, R20: on the signed fixture with a spend budget, `k-budget` runs once,
-/// is refused by the budget under nonce `n2`, then re-sends under `n2`.
-/// Returns (the spend refusal, the re-send).
+/// R3, R20: on the signed fixture with a spend budget, `k-budget` runs once
+/// under `n1`, is refused by the budget under `n2`, re-sends under `n2`, then
+/// re-sends under `n1`. Returns (the spend refusal, the `n2` re-send, the `n1`
+/// re-send, the backend's `tools/call` count).
 #[cfg(feature = "cost-governance")]
-pub(crate) async fn direct_spend_then_resend() -> (Value, Value) {
+pub(crate) async fn direct_spend_then_resend() -> (Value, Value, Value, usize) {
     use super::direct_continuation_tests::{budget, signed_call};
     let fx =
         super::direct_guards_fixture::fixture_hardened_signed_built(Answer::Ok, true, budget).await;
@@ -358,14 +359,61 @@ pub(crate) async fn direct_spend_then_resend() -> (Value, Value) {
     );
     let (_, refused) = signed_call(&fx, who, "n2", serde_json::json!({})).await;
     let (_, again) = signed_call(&fx, who, "n2", serde_json::json!({})).await;
-    (refused, again)
+    // Control: the first call's nonce was admitted, so its re-send is a replay.
+    let (_, replay) = signed_call(&fx, who, "n1", serde_json::json!({})).await;
+    (refused, again, replay, fx.calls.load(Ordering::SeqCst))
+}
+
+/// A backend listing `read` as `destructiveHint: true` and counting its sends.
+struct Destructive {
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Destructive {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        let body = if method == "tools/list" {
+            serde_json::json!({"tools": [{
+                "name": "read",
+                "inputSchema": {"type": "object"},
+                "annotations": {"destructiveHint": true, "readOnlyHint": false}
+            }]})
+        } else {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            serde_json::json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
+        };
+        Ok(crate::protocol::JsonRpcResponse::success(
+            crate::protocol::RequestId::Number(1),
+            body,
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
 }
 
 /// R4a: a modern task-augmented `tools/call read` by its surfaced name on
-/// `/mcp`, declaring form elicitation. `read` carries no annotations, so X14
-/// treats it as destructive (or unclassified) and must challenge first.
+/// `/mcp`, declaring form elicitation, where `read` is listed
+/// `destructiveHint: true`, so X14 has a destructive call to decide.
 pub(crate) async fn task_submit_surfaced() -> Sent {
-    let fx = super::direct_guards_fixture::fixture_built(Answer::Ok, surfacing).await;
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let transport = std::sync::Arc::new(Destructive {
+        calls: std::sync::Arc::clone(&calls),
+    });
+    let fx = super::direct_guards_fixture::fixture_built_on(transport, surfacing).await;
     let params = serde_json::json!({
         "name": "read",
         "arguments": {},
@@ -394,7 +442,11 @@ pub(crate) async fn task_submit_surfaced() -> Sent {
         &headers,
     )
     .await;
-    sent(&fx, body)
+    Sent {
+        body,
+        backend_calls: calls.load(Ordering::SeqCst),
+        seen: Vec::new(),
+    }
 }
 
 /// A backend whose `tools/call` signals `entered`, then waits for `gate`
@@ -439,19 +491,10 @@ impl crate::transport::Transport for Held {
     }
 }
 
-/// Which HTTP route a lease pair is driven on.
-#[derive(Clone, Copy)]
-pub(crate) enum LeaseRoute {
-    /// R1 `/mcp` `gateway_invoke`.
-    Invoke,
-    /// R3 `/mcp/alpha`.
-    Direct,
-}
-
-/// Two calls under one idempotency key: the second is sent while the first is
-/// held in flight at the backend. Returns (the second's answer, the backend's
+/// Two R1 `gateway_invoke` calls under one idempotency key: the second is sent
+/// while the first is held in flight at the backend. Returns (the second's answer, the backend's
 /// `tools/call` count once both settled).
-pub(crate) async fn concurrent_same_key(route: LeaseRoute) -> (Value, usize) {
+pub(crate) async fn concurrent_same_key() -> (Value, usize) {
     use std::sync::Arc;
     let entered = Arc::new(tokio::sync::Notify::new());
     let gate = Arc::new(tokio::sync::Notify::new());
@@ -465,20 +508,21 @@ pub(crate) async fn concurrent_same_key(route: LeaseRoute) -> (Value, usize) {
         Arc::new(super::direct_guards_fixture::fixture_firewalled_on(Arc::new(held), None).await);
     let call = |fx: Arc<super::direct_guards_fixture::Fx>| async move {
         let args = serde_json::json!({});
-        match route {
-            LeaseRoute::Invoke => {
-                post_meta_invoke(&fx, "k-std", "alpha", "read", args, Some("lease-1"), None).await
-            }
-            LeaseRoute::Direct => {
-                post_direct(&fx, "alpha", "k-std", "read", args, Some("lease-1"), None).await
-            }
-        }
-        .1
+        post_meta_invoke(&fx, "k-std", "alpha", "read", args, Some("lease-1"), None)
+            .await
+            .1
     };
     let first = tokio::spawn(call(Arc::clone(&fx)));
-    entered.notified().await;
+    // Bounded: a first call that never reaches the backend fails the row
+    // instead of hanging it.
+    tokio::time::timeout(std::time::Duration::from_secs(30), entered.notified())
+        .await
+        .expect("the first call reached the held backend");
     let second = call(Arc::clone(&fx)).await;
     gate.notify_one();
-    let _first = first.await.expect("the first call finishes");
+    let _first = tokio::time::timeout(std::time::Duration::from_secs(30), first)
+        .await
+        .expect("the first call finished once released")
+        .expect("the first call did not panic");
     (second, calls.load(Ordering::SeqCst))
 }

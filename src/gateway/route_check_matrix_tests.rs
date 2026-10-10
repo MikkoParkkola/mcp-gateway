@@ -89,6 +89,7 @@ pub(crate) enum Ticket {
     Mik8154,
     Mik8159,
     Mik8160,
+    Mik8315,
 }
 
 /// What a (method, route, stage) row asserts.
@@ -193,13 +194,14 @@ fn the_table_answers_every_route_and_stage() {
     // Today's gaps on 0028fb249: R1/R2/R5 nonce, R2 chain link, R3 rescan,
     // sanitize and lease, R5 route firewall, sanitize and X14.
     assert_eq!(
-        gaps, 10,
+        gaps, 12,
         "the gap count moved: update the table and this pin"
     );
 }
 
 /// The cells a live row in `rows` drives (route, stage). Kept beside the
 /// table so a new row and its listing land together.
+#[cfg(all(feature = "firewall", feature = "cost-governance"))]
 const DRIVEN: &[(Route, Stage)] = &[
     (Route::Invoke, Stage::RouteFirewall),
     (Route::Surfaced, Stage::RouteFirewall),
@@ -217,7 +219,6 @@ const DRIVEN: &[(Route, Stage)] = &[
     (Route::TaskSubmit, Stage::TaskConfirm),
     (Route::Stdio, Stage::TaskConfirm),
     (Route::Invoke, Stage::Lease),
-    (Route::Direct, Stage::Lease),
     (Route::Invoke, Stage::NonceGiveBack),
     (Route::Direct, Stage::NonceGiveBack),
     (Route::Invoke, Stage::ChainLink),
@@ -232,6 +233,7 @@ const DRIVEN: &[(Route, Stage)] = &[
 /// Cells the table states but no live row drives yet, each with the reason
 /// and where it gets driven. Visible on purpose: an undriven cell is a claim
 /// without a regression net, so it is named rather than silently skipped.
+#[cfg(all(feature = "firewall", feature = "cost-governance"))]
 const UNDRIVEN: &[(Route, Stage, &str)] = &[
     (
         Route::Invoke,
@@ -285,6 +287,11 @@ const UNDRIVEN: &[(Route, Stage, &str)] = &[
     ),
     (
         Route::Direct,
+        Stage::Lease,
+        "gap MIK-8154: not observable while the direct route's idempotency guard answers a same-key duplicate first; driven red-first by MIK-8154's P2 fix",
+    ),
+    (
+        Route::Direct,
         Stage::Idempotency,
         "needs the outer-admission eviction helper; MIK-8314",
     ),
@@ -301,7 +308,7 @@ const UNDRIVEN: &[(Route, Stage, &str)] = &[
     (
         Route::TaskSubmit,
         Stage::Authorize,
-        "needs a capability-provider fixture; MIK-8314",
+        "gap MIK-8315: driven red-first by MIK-8315 SUBMITAUTHZ.1",
     ),
     (
         Route::TaskSubmit,
@@ -311,7 +318,7 @@ const UNDRIVEN: &[(Route, Stage, &str)] = &[
     (
         Route::TaskSubmit,
         Stage::NonceGiveBack,
-        "needs a signed task-submit driver; MIK-8314",
+        "gap MIK-8150: driven red-first by MIK-8150.NONCE.6",
     ),
     (
         Route::TaskWorker,
@@ -359,6 +366,9 @@ const UNDRIVEN: &[(Route, Stage, &str)] = &[
 /// live row or listed in `UNDRIVEN`, never both and never neither; no
 /// `NotApplicable` cell is listed. A new row that forgets `DRIVEN`, or a table
 /// change that strands a cell, fails here.
+// Every live row compiles only with both features (`rows` needs firewall, the
+// R3 nonce row needs cost-governance), so the claim is checked where it holds.
+#[cfg(all(feature = "firewall", feature = "cost-governance"))]
 #[test]
 fn every_stated_cell_is_driven_or_named_undriven() {
     let driven = |r, s| DRIVEN.iter().any(|&(dr, ds)| dr == r && ds == s);
