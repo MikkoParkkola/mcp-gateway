@@ -29,15 +29,26 @@ async fn a_stdio_task_submit_of_an_ungranted_capability_is_refused_like_the_sync
     let rows = fixture.tasks.service.store.committed_count_for_test();
 
     let sync = dispatch(&fixture, personal_call(1, "sa-5-sync", false)).await;
-    assert!(sync.get("error").is_some(), "the sync control is refused: {sync}");
+    assert!(
+        sync.get("error").is_some(),
+        "the sync control is refused: {sync}"
+    );
     let task = dispatch(&fixture, personal_call(2, "sa-5", true)).await;
 
     assert!(
         task.pointer("/result/taskId").is_none(),
         "a task handle was returned for a call the sync path refuses: {task}"
     );
-    assert_eq!(task.pointer("/error/code"), sync.pointer("/error/code"), "{task}");
-    assert_eq!(task.pointer("/error/message"), sync.pointer("/error/message"), "{task}");
+    assert_eq!(
+        task.pointer("/error/code"),
+        sync.pointer("/error/code"),
+        "{task}"
+    );
+    assert_eq!(
+        task.pointer("/error/message"),
+        sync.pointer("/error/message"),
+        "{task}"
+    );
     assert_eq!(fixture.tasks.service.store.committed_count_for_test(), rows);
     assert_eq!(endpoint.arrivals(), 0, "the refused call reached nothing");
 

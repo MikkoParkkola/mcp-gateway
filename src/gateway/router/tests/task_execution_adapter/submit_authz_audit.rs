@@ -66,7 +66,10 @@ async fn records_of_a_settled_task(row: &Armed, body: Value) -> (usize, usize) {
     let first_worker = records.iter().position(is_worker);
     let last_submit = records.iter().rposition(|r| !is_worker(r));
     if let (Some(worker), Some(submit)) = (first_worker, last_submit) {
-        assert!(submit < worker, "a submit record follows the worker's: {records:#?}");
+        assert!(
+            submit < worker,
+            "a submit record follows the worker's: {records:#?}"
+        );
     }
     let workers = records.iter().filter(|r| is_worker(r)).count();
     (records.len() - workers, workers)
@@ -85,7 +88,12 @@ async fn an_allowed_invoke_task_records_one_submit_decision() {
 #[tokio::test]
 async fn an_allowed_surfaced_task_records_one_submit_decision() {
     let row = armed(true, false, AuditFailurePolicy::BestEffort, surfaced).await;
-    let call = modern(1, "tools/call", json!({ "name": PERSONAL, "arguments": {} }), true);
+    let call = modern(
+        1,
+        "tools/call",
+        json!({ "name": PERSONAL, "arguments": {} }),
+        true,
+    );
     let (submit, worker) = records_of_a_settled_task(&row, as_task(call, "sa-4b")).await;
     std::assert_eq!((submit, worker), (1, 1), "{:#?}", decisions(&row.dir));
 }
@@ -103,7 +111,9 @@ fn add_second_target(row: &Armed) {
     first
         .register_capability(crate::capability::parse_capability(&yaml).expect("parses"))
         .expect("the second target registers");
-    let mut rows = vec![crate::gateway::meta_mcp::grant_audit_fixture::grant("g1", OWNER, OWNER)];
+    let mut rows = vec![crate::gateway::meta_mcp::grant_audit_fixture::grant(
+        "g1", OWNER, OWNER,
+    )];
     let mut second: serde_json::Value = serde_json::to_value(&rows[0]).expect("serialises");
     second["grant_id"] = json!("g2");
     second["capability"] = json!(SECOND);
@@ -141,9 +151,17 @@ async fn a_failing_submit_append_under_fail_closed_creates_no_task() {
         answer.pointer("/result/taskId").is_none(),
         "a task handle was returned although the submit's decision could not be recorded: {answer}"
     );
-    std::assert_eq!(answer.pointer("/error/code"), Some(&json!(-32005)), "{answer}");
+    std::assert_eq!(
+        answer.pointer("/error/code"),
+        Some(&json!(-32005)),
+        "{answer}"
+    );
     std::assert_eq!(committed(&row), rows, "a task row was committed");
-    std::assert_eq!(row.endpoint.arrivals(), 0, "the backend ran without its cause on record");
+    std::assert_eq!(
+        row.endpoint.arrivals(),
+        0,
+        "the backend ran without its cause on record"
+    );
 }
 
 /// 4e. The inverse of O5 for a personal capability: the submit's grant
@@ -176,7 +194,9 @@ async fn a_stalled_sink_fails_the_submit_within_its_bound() {
     let row = armed(true, false, AuditFailurePolicy::FailClosed, |meta| meta).await;
     // The log's append bound, shortened as the other stall rows do; the
     // submit's grant record is the next write, and it is held.
-    let gate = row.log.stall_next_write_for_test(Duration::from_millis(200));
+    let gate = row
+        .log
+        .stall_next_write_for_test(Duration::from_millis(200));
     let rows = committed(&row);
     let answer = tokio::time::timeout(
         Duration::from_secs(10),
@@ -186,7 +206,15 @@ async fn a_stalled_sink_fails_the_submit_within_its_bound() {
     .expect("the submit hung on a stalled audit sink");
     gate.release();
     assert!(answer.pointer("/result/taskId").is_none(), "{answer}");
-    std::assert_eq!(answer.pointer("/error/code"), Some(&json!(-32005)), "{answer}");
+    std::assert_eq!(
+        answer.pointer("/error/code"),
+        Some(&json!(-32005)),
+        "{answer}"
+    );
     std::assert_eq!(committed(&row), rows, "a task row was committed");
-    std::assert_eq!(row.endpoint.arrivals(), 0, "the backend ran without its cause on record");
+    std::assert_eq!(
+        row.endpoint.arrivals(),
+        0,
+        "the backend ran without its cause on record"
+    );
 }

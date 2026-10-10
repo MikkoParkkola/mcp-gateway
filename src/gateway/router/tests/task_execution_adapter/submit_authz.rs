@@ -14,7 +14,11 @@ use crate::gateway::meta_mcp::grant_audit_fixture::{CAPS, PERSONAL, decisions, g
 use crate::security::audit::AuditFailurePolicy;
 
 pub(super) fn committed(row: &Armed) -> usize {
-    row.state.task_executor.service.store.committed_count_for_test()
+    row.state
+        .task_executor
+        .service
+        .store
+        .committed_count_for_test()
 }
 
 fn playbook_call(id: i64, key: &str) -> Value {
@@ -30,7 +34,12 @@ fn playbook_call(id: i64, key: &str) -> Value {
 }
 
 fn surfaced_call(id: i64) -> Value {
-    modern(id, "tools/call", json!({ "name": PERSONAL, "arguments": {} }), true)
+    modern(
+        id,
+        "tools/call",
+        json!({ "name": PERSONAL, "arguments": {} }),
+        true,
+    )
 }
 
 fn code_plan(id: i64, key: &str) -> Value {
@@ -40,7 +49,9 @@ fn code_plan(id: i64, key: &str) -> Value {
 /// An ungranted `key-a` row with the playbook registered.
 pub(super) async fn ungranted(configure: fn(MetaMcp) -> MetaMcp) -> Armed {
     let row = armed(false, false, AuditFailurePolicy::BestEffort, configure).await;
-    row.state.meta_mcp.set_playbook_engine(continuing_playbook());
+    row.state
+        .meta_mcp
+        .set_playbook_engine(continuing_playbook());
     row
 }
 
@@ -69,14 +80,21 @@ pub(super) async fn refused_like_sync_then_granted(row: &Armed, sync: Value, tas
     let created = post(&row.state, "key-a", task).await;
     let settled = poll_until_terminal(&row.state, "key-a", &task_id(&created)).await;
     std::assert_eq!(status_of(&settled), "completed", "{settled}");
-    std::assert_eq!(committed(row), rows + 1, "the key was admitted by the refused submit");
+    std::assert_eq!(
+        committed(row),
+        rows + 1,
+        "the key was admitted by the refused submit"
+    );
 }
 
 /// The refusal half of row 1; returns the committed row count.
 pub(super) async fn refused_like_sync(row: &Armed, sync: Value, task: Value) -> usize {
     let before = decisions(&row.dir).len();
     let (sync_status, sync_answer) = post_full(&row.state, "key-a", sync).await;
-    assert!(sync_answer.get("error").is_some(), "the sync call is refused: {sync_answer}");
+    assert!(
+        sync_answer.get("error").is_some(),
+        "the sync call is refused: {sync_answer}"
+    );
     let sync_records = decisions(&row.dir).len() - before;
     let (rows, before) = (committed(row), decisions(&row.dir).len());
 
@@ -90,8 +108,16 @@ pub(super) async fn refused_like_sync(row: &Armed, sync: Value, task: Value) -> 
     std::assert_eq!(code_of(&answer), code_of(&sync_answer), "{answer}");
     std::assert_eq!(message_of(&answer), message_of(&sync_answer), "{answer}");
     std::assert_eq!(committed(row), rows, "a task row was committed");
-    std::assert_eq!(decisions(&row.dir).len() - before, sync_records, "refusal audit records");
-    std::assert_eq!(row.endpoint.arrivals(), 0, "the refused call reached nothing");
+    std::assert_eq!(
+        decisions(&row.dir).len() - before,
+        sync_records,
+        "refusal audit records"
+    );
+    std::assert_eq!(
+        row.endpoint.arrivals(),
+        0,
+        "the refused call reached nothing"
+    );
     rows
 }
 
@@ -184,7 +210,11 @@ async fn a_grant_revoked_after_submit_is_still_refused_by_the_worker() {
         .await
         .expect("the worker commits a transition");
     let stored = loop {
-        let stored = row.state.tasks.get(&alice(), &id).expect("the committed task");
+        let stored = row
+            .state
+            .tasks
+            .get(&alice(), &id)
+            .expect("the committed task");
         if settled(stored.task.status()) {
             break stored;
         }
@@ -222,7 +252,10 @@ async fn resubmit_after_revoke(hold: bool) {
     let sync = post(&row.state, "key-a", personal_invoke(2)).await;
     let again = post(&row.state, "key-a", task).await;
     row.endpoint.release();
-    assert!(again.get("result").is_none(), "a stored task was served: {again}");
+    assert!(
+        again.get("result").is_none(),
+        "a stored task was served: {again}"
+    );
     std::assert_eq!(code_of(&again), code_of(&sync), "{again}");
     std::assert_eq!(row.endpoint.arrivals(), 1, "the worker ran once");
 }
@@ -293,6 +326,11 @@ async fn non_admin_webhook_submit_is_refused_like_the_sync_call() {
     let row = ungranted(|meta| meta).await;
     row.state.meta_mcp.set_capabilities(webhook_backend());
     let sync = post_full(&row.state, "key-a", webhook_invoke(1)).await;
-    std::assert_eq!(sync.0, StatusCode::FORBIDDEN, "the sync control: {}", sync.1);
+    std::assert_eq!(
+        sync.0,
+        StatusCode::FORBIDDEN,
+        "the sync control: {}",
+        sync.1
+    );
     refused_like_sync(&row, webhook_invoke(1), as_task(webhook_invoke(2), "sa-2")).await;
 }

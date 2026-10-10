@@ -369,8 +369,16 @@ async fn a_stdio_task_runs_under_the_current_tool_policy() {
     let sync = dispatch(&fixture, modern_call(1, DENIED, "u5-denied-sync", false)).await;
     let refused = dispatch(&fixture, modern_call(2, DENIED, "u5-denied", true)).await;
     assert!(refused.pointer("/result/taskId").is_none(), "{refused}");
-    assert_eq!(refused.pointer("/error/code"), sync.pointer("/error/code"), "{refused}");
-    assert_eq!(refused.pointer("/error/message"), sync.pointer("/error/message"), "{refused}");
+    assert_eq!(
+        refused.pointer("/error/code"),
+        sync.pointer("/error/code"),
+        "{refused}"
+    );
+    assert_eq!(
+        refused.pointer("/error/message"),
+        sync.pointer("/error/message"),
+        "{refused}"
+    );
     assert_eq!(
         fixture.rounds.load(Ordering::SeqCst),
         0,
