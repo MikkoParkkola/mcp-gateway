@@ -45,7 +45,7 @@ fn texts_outside_the_size_window_always_compute() {
 fn ten_thousand_distinct_texts_stay_under_the_bounds() {
     let memo = TextMemo::new("test");
     for n in 0..10_000 {
-        let t = text(n, MIN_TEXT_BYTES + (n % 7) * 9000);
+        let t = text(n, MIN_TEXT_BYTES + (n % 7) * 20_000);
         memo.get_or_compute(&t, || n);
         let (entries, bytes) = memo.held();
         assert!(
@@ -57,7 +57,7 @@ fn ten_thousand_distinct_texts_stay_under_the_bounds() {
 }
 
 #[test]
-fn the_oldest_entry_is_evicted_first() {
+fn the_least_recently_used_entry_is_evicted_first() {
     let memo = TextMemo::new("test");
     let texts: Vec<String> = (0..=MAX_ENTRIES).map(|n| text(n, 2000)).collect();
     for (n, t) in texts.iter().enumerate() {
@@ -91,4 +91,23 @@ fn concurrent_lookups_keep_the_bounds_and_the_results() {
     });
     let (entries, bytes) = memo.held();
     assert!(entries <= MAX_ENTRIES && bytes <= MAX_STORED_BYTES);
+}
+
+/// A hit moves its text to the back: a catalogue re-read between one-shot
+/// texts survives any number of them (FIFO would drop it after 16).
+#[test]
+fn a_re_read_catalogue_survives_newer_one_shot_texts() {
+    let memo = TextMemo::new("test");
+    let catalogue = text(0, 6000);
+    let runs = AtomicUsize::new(0);
+    memo.get_or_compute(&catalogue, || runs.fetch_add(1, Ordering::Relaxed));
+    for n in 1..=(2 * MAX_ENTRIES) {
+        memo.get_or_compute(&text(n, 2000), || 0);
+        memo.get_or_compute(&catalogue, || runs.fetch_add(1, Ordering::Relaxed));
+    }
+    assert_eq!(
+        runs.load(Ordering::Relaxed),
+        1,
+        "the catalogue was never evicted"
+    );
 }

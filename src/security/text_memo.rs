@@ -9,7 +9,7 @@
 //! stays outside it, at the call site.
 //!
 //! Backend text is attacker-controllable, so the memo is bounded by entries
-//! and by stored bytes, and the oldest entry is evicted first. A backend that
+//! and by stored bytes, and the least recently used entry is evicted first. A backend that
 //! varies its text on every list just cycles the memo: no hits, bounded
 //! memory.
 
@@ -19,8 +19,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 /// Texts shorter than this scan in about a microsecond: not memoised.
 pub(crate) const MIN_TEXT_BYTES: usize = 1024;
-/// Texts longer than this are never stored.
-pub(crate) const MAX_TEXT_BYTES: usize = 64 * 1024;
+/// Texts longer than this are never stored. Above the kernel's truncated
+/// classification sample (two 32 KiB edges and a marker), so a large
+/// catalogue still hits; a text over this gets today's cost.
+pub(crate) const MAX_TEXT_BYTES: usize = 128 * 1024;
 /// ponytail: 16 entries, so more than 16 distinct hot texts (callers or
 /// profiles that each see a different catalogue) thrash back to today's
 /// cost; correctness holds. Raise it if `hits`/`misses` show thrashing.
@@ -28,7 +30,8 @@ pub(crate) const MAX_ENTRIES: usize = 16;
 /// Stored text bytes across all entries.
 pub(crate) const MAX_STORED_BYTES: usize = 1024 * 1024;
 
-/// A bounded, oldest-first memo from an exact text to `V`.
+/// A bounded memo from an exact text to `V`, evicting the least recently
+/// used entry first.
 pub(crate) struct TextMemo<V> {
     /// The `memo` label on `mcp_egress_scan_memo_total`.
     name: &'static str,
@@ -39,7 +42,8 @@ pub(crate) struct TextMemo<V> {
 
 struct Entries<V> {
     by_text: HashMap<Arc<str>, V>,
-    oldest_first: VecDeque<Arc<str>>,
+    /// Least recently used first; a hit moves its key to the back.
+    least_recent_first: VecDeque<Arc<str>>,
     stored_bytes: usize,
 }
 
@@ -49,7 +53,7 @@ impl<V: Clone> TextMemo<V> {
             name,
             entries: Mutex::new(Entries {
                 by_text: HashMap::new(),
-                oldest_first: VecDeque::new(),
+                least_recent_first: VecDeque::new(),
                 stored_bytes: 0,
             }),
             hits: AtomicU64::new(0),
@@ -65,10 +69,23 @@ impl<V: Clone> TextMemo<V> {
         if !(MIN_TEXT_BYTES..=MAX_TEXT_BYTES).contains(&text.len()) {
             return compute();
         }
-        if let Some(value) = self.lock().by_text.get(text) {
+        // Cloned under the lock, counted after it: the metrics recorder never
+        // extends the shared lookup's critical section.
+        let held = {
+            let mut entries = self.lock();
+            let held = entries.by_text.get(text).cloned();
+            if held.is_some()
+                && let Some(at) = entries.least_recent_first.iter().position(|k| &**k == text)
+                && let Some(key) = entries.least_recent_first.remove(at)
+            {
+                entries.least_recent_first.push_back(key);
+            }
+            held
+        };
+        if let Some(value) = held {
             self.hits.fetch_add(1, Ordering::Relaxed);
             self.count("hit");
-            return value.clone();
+            return value;
         }
         self.misses.fetch_add(1, Ordering::Relaxed);
         self.count("miss");
@@ -77,10 +94,10 @@ impl<V: Clone> TextMemo<V> {
         if !entries.by_text.contains_key(text) {
             let key: Arc<str> = Arc::from(text);
             entries.stored_bytes += key.len();
-            entries.oldest_first.push_back(Arc::clone(&key));
+            entries.least_recent_first.push_back(Arc::clone(&key));
             entries.by_text.insert(key, value.clone());
             while entries.by_text.len() > MAX_ENTRIES || entries.stored_bytes > MAX_STORED_BYTES {
-                let Some(oldest) = entries.oldest_first.pop_front() else {
+                let Some(oldest) = entries.least_recent_first.pop_front() else {
                     break;
                 };
                 entries.stored_bytes -= oldest.len();

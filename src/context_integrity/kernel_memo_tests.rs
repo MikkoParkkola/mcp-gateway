@@ -6,7 +6,7 @@ use serde_json::json;
 
 use super::ContextIntegrityKernel;
 use crate::context_integrity::*;
-use crate::security::classification_count::{MARKER, runs};
+use crate::test_classification_count::{MARKER, runs};
 
 /// A catalogue-sized text (over the 1 KiB memo floor) with an em dash, an
 /// injection phrase and a personal-data shape, carrying `marker`.
@@ -84,6 +84,34 @@ fn input_dependent_findings_still_run_on_a_memoised_text() {
         destructive.len() > plain.len(),
         "the destructive caller's finding is added per call: {destructive:?}"
     );
+}
+
+/// A catalogue just over 64 KiB: the kernel classifies its truncated sample
+/// (two 32 KiB edges and a marker, over 64 KiB), which still sits inside the
+/// memo window, so the second answer is a hit through M2.
+#[test]
+fn a_catalogue_over_64_kib_hits_on_its_second_answer() {
+    let marker = format!("{MARKER}kernel-large");
+    let text = format!(
+        "{marker} \u{2014} {}",
+        "Each tool has a schema. ".repeat(3000)
+    );
+    assert!(text.len() > 64 * 1024, "{}", text.len());
+    let content = json!({"content": [{"type": "text", "text": text}]});
+    let large = || {
+        let provenance = ContextProvenance::tool_result(
+            "remote_docs",
+            "search",
+            "invoke-1",
+            ContextTrustBoundary::RemoteToolOutput,
+        );
+        ContextIntegrityInput::read_only_tool_result(provenance, content.clone())
+    };
+    let kernel = enforcing();
+    let first = kernel.evaluate(large());
+    let again = kernel.evaluate(large());
+    assert_eq!(again.classification.findings, first.classification.findings);
+    assert_eq!(runs("kernel", &marker), 1, "the second answer hit M2");
 }
 
 #[test]
