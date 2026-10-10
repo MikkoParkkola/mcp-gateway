@@ -412,3 +412,56 @@ steps:
         "the step must actually have been skipped, not merely absent: {value}"
     );
 }
+
+/// MIK-8341 INV (mutant m6): a playbook step never inherits the run's retry
+/// fields. `gateway_run_playbook` refuses them at the dispatcher (D3), so this
+/// drives `run_playbook` directly with a caller carrying a `requestState` and
+/// an `inputResponses`: a step that inherited either would be dispatched as a
+/// continuation retry and refused; a step with its own empty retry runs.
+/// Red on base: the step inherits the outer caller's retry fields.
+#[tokio::test]
+async fn mik_8341_a_step_never_inherits_the_runs_retry_fields() {
+    for (field, retry) in [
+        (
+            "requestState",
+            crate::protocol::mrtr::RetryFields {
+                request_state: Some("not-a-continuation-of-ours".into()),
+                ..Default::default()
+            },
+        ),
+        (
+            "inputResponses",
+            crate::protocol::mrtr::RetryFields {
+                input_responses: Some(json!({"k1": {"action": "accept"}})),
+                ..Default::default()
+            },
+        ),
+    ] {
+        let (registry, calls) = counted_backend("alpha");
+        let meta = MetaMcp::new(registry);
+        let allowed = ctx(&AllowAll);
+        let result = run_playbook_yaml(
+            &meta,
+            r"
+name: inherits
+description: one plain step
+on_error: abort
+steps:
+  - name: read
+    server: alpha
+    tool: read
+",
+            &allowed.with_retry(&retry),
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "{field}: the step inherited the run's retry field: {result:?}"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "{field}: the step did not run"
+        );
+    }
+}

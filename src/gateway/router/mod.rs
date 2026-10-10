@@ -142,6 +142,8 @@ mod mcp_nonce_tests;
 mod meta_fingerprint_tests;
 #[cfg(test)]
 mod mrtr9_lease_tests;
+#[cfg(test)]
+mod playbook_key_tests;
 /// MIK-8058: a failed reload's status says whose fault it is.
 #[cfg(all(test, feature = "webui"))]
 mod reload_status_tests;
