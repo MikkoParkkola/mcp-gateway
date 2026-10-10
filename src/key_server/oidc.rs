@@ -119,11 +119,6 @@ pub enum OidcError {
     ClientUnavailable,
 }
 
-/// A redirect from an `https://` fetch may only move to `https://`.
-fn remote_hop_allowed(next: &url::Url) -> bool {
-    next.scheme() == "https"
-}
-
 /// Keep a built client, or log once and keep none: a fallback client would
 /// drop the redirect and proxy policy the builder carries.
 fn built(client: reqwest::Result<reqwest::Client>) -> Option<reqwest::Client> {
@@ -277,15 +272,7 @@ impl JwksCache {
         // Not `https_only`: that would refuse the loopback carve-out too.
         // Every fetch picks its client by URL (`client_for`).
         let remote = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                if attempt.previous().len() > 5 {
-                    attempt.error("OIDC fetch exceeded 5 redirects")
-                } else if remote_hop_allowed(attempt.url()) {
-                    attempt.follow()
-                } else {
-                    attempt.error("OIDC refuses a redirect to a non-HTTPS URL")
-                }
-            }))
+            .redirect(remote_redirect_policy())
             .timeout(Duration::from_secs(10));
         let remote = match proxy {
             Some(proxy) => remote.proxy(proxy),
@@ -789,6 +776,12 @@ fn validate_discovery_document(
     }
     Ok(doc.jwks_uri)
 }
+
+#[path = "oidc_redirect.rs"]
+mod redirect;
+#[cfg(test)]
+use redirect::remote_hop_allowed;
+use redirect::remote_redirect_policy;
 
 #[cfg(test)]
 #[path = "oidc_tests.rs"]

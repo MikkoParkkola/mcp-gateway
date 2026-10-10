@@ -300,3 +300,114 @@ fn remote_redirects_may_only_move_to_https() {
     assert!(!hop("http://idp.example/jwks"));
     assert!(!hop("http://127.0.0.1/jwks"));
 }
+
+/// An `https://localhost` server with a leaf signed by `issuer`, answering
+/// `app`. Returns its base URL.
+async fn https_server_with(
+    issuer: &rcgen::Issuer<'static, rcgen::KeyPair>,
+    app: axum::Router,
+) -> String {
+    use rcgen::{CertificateParams, KeyPair};
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let leaf_key = KeyPair::generate().expect("leaf key");
+    let mut leaf_params = CertificateParams::new(vec!["localhost".to_owned()]).expect("leaf");
+    leaf_params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "localhost");
+    let leaf = leaf_params.signed_by(&leaf_key, issuer).expect("signed");
+    let tls = axum_server::tls_rustls::RustlsConfig::from_pem(
+        leaf.pem().into_bytes(),
+        leaf_key.serialize_pem().into_bytes(),
+    )
+    .await
+    .expect("tls");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    listener.set_nonblocking(true).expect("non-blocking");
+    let port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move {
+        let _ = axum_server::from_tcp_rustls(listener, tls)
+            .expect("listener")
+            .serve(app.into_make_service())
+            .await;
+    });
+    format!("https://localhost:{port}")
+}
+
+/// MIK-8281 OIDCPIN.1: a discovery URL that redirects to a different origin
+/// is refused, and that origin is never asked for anything. Driven through
+/// the production redirect policy, with the test CA trusted, because a
+/// loopback http fetch follows no redirect at all.
+#[tokio::test]
+async fn a_discovery_redirected_off_origin_is_refused() {
+    use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
+    use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let ca_key = KeyPair::generate().expect("CA key");
+    let mut ca_params = CertificateParams::new(Vec::new()).expect("CA params");
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca_params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "oidc-pin CA");
+    let ca = ca_params.clone().self_signed(&ca_key).expect("CA");
+    let ca_issuer = Issuer::new(ca_params, ca_key);
+
+    // The other origin: a discovery document that would pass validation for
+    // the issuer, naming keys on itself. It counts every request.
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&hits);
+    let issuer_slot: Arc<std::sync::OnceLock<String>> = Arc::default();
+    let named = Arc::clone(&issuer_slot);
+    let other = https_server_with(
+        &ca_issuer,
+        axum::Router::new().fallback(move |uri: axum::http::Uri| {
+            let counter = Arc::clone(&counter);
+            let named = Arc::clone(&named);
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                let issuer = named.get().cloned().unwrap_or_default();
+                axum::Json(serde_json::json!({
+                    "issuer": issuer,
+                    "jwks_uri": format!("https://localhost{}", uri.path()),
+                }))
+            }
+        }),
+    )
+    .await;
+    // The configured issuer: its discovery path redirects to the other origin.
+    let target = format!("{other}/.well-known/openid-configuration");
+    let issuer = https_server_with(
+        &ca_issuer,
+        axum::Router::new().route(
+            "/.well-known/openid-configuration",
+            axum::routing::get(move || {
+                let target = target.clone();
+                async move { axum::response::Redirect::temporary(&target) }
+            }),
+        ),
+    )
+    .await;
+    issuer_slot.set(issuer.clone()).expect("set once");
+
+    let client = reqwest::Client::builder()
+        .redirect(remote_redirect_policy())
+        .add_root_certificate(reqwest::Certificate::from_pem(ca.pem().as_bytes()).expect("ca"))
+        .no_proxy()
+        .build()
+        .expect("client");
+    let cache = JwksCache::with_http_client(client);
+    let result = cache
+        .resolve_jwks_uri(
+            &issuer,
+            &format!("{issuer}/.well-known/openid-configuration"),
+        )
+        .await;
+    assert!(
+        result.is_err(),
+        "an off-origin redirect was followed: {result:?}"
+    );
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        0,
+        "the other origin was requested"
+    );
+}
