@@ -261,5 +261,18 @@ class Predicates(unittest.TestCase):
         )
         self.assertEqual(self.tree('#[cfg(any(feature = "nix", target_os = "linux"))]\n#[test]\nfn probe() {}\n'), [])
 
+    def test_p19_a_runaway_join_stops_at_the_next_attribute_or_item(self) -> None:
+        # A bracket in a block comment leaves the join open; it must stop at
+        # the next attribute or item, count the attribute, and keep the test.
+        (Path(self.dir.name) / "Cargo.toml").write_text(self.CARGO)
+        rust = (
+            '#[cfg(all(\n    test, /* see [MIK-1 */\n    target_os = "macos"\n))]\n#[test]\nfn probe() {}\n'
+            '#[cfg(target_os = "linux")]\n#[test]\nfn other() {}\n'
+        )
+        self.assertEqual(
+            self.tree(rust),
+            [f"not run on macOS and not listed: src/x_tests.rs {n}" for n in ("other", "probe")],
+        )
+
 if __name__ == "__main__":
     unittest.main()
