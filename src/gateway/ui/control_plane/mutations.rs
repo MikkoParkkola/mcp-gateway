@@ -170,6 +170,18 @@ pub(super) fn control_plane_store(state: &AppState) -> Result<&Arc<dyn ControlPl
     ))
 }
 
+// Test hook: the event ids the validation-only preflights built, newest last.
+#[cfg(test)]
+thread_local! {
+    pub(super) static PREFLIGHT_EVENT_IDS: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn note_preflight_event_id(id: &str) {
+    PREFLIGHT_EVENT_IDS.with(|ids| ids.borrow_mut().push(id.to_owned()));
+}
+
 pub(super) fn store_unavailable(reason: String) -> axum::response::Response {
     (
         StatusCode::SERVICE_UNAVAILABLE,
@@ -236,6 +248,8 @@ pub(super) fn resolve_decision_core(
         reason: req.reason,
         rollback: req.rollback,
     };
+    #[cfg(test)]
+    note_preflight_event_id(&event.event_id);
     let mutation = ControlPlaneMutation {
         action,
         target_id: req.target_id.clone(),
@@ -320,6 +334,8 @@ pub(super) fn apply_mutation(
         reason,
         rollback,
     };
+    #[cfg(test)]
+    note_preflight_event_id(&event.event_id);
     let mutation = ControlPlaneMutation {
         action,
         target_id,

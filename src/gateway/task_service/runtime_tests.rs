@@ -13,6 +13,8 @@ use std::sync::Arc;
 
 use super::{ServiceError, StoreLimits, open_runtime};
 
+/// MIK-8202 P2: the admission clock `open_runtime` builds.
+mod admission_clock;
 /// Startup recovery of records a previous process left mid-flight.
 mod recovery;
 use crate::gateway::subscription_registry::{DEFAULT_MAX_LISTENERS, SubscriptionRegistry};

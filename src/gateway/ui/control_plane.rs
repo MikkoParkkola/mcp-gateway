@@ -166,6 +166,10 @@ mod mutation_tests;
 #[path = "control_plane_authority_tests.rs"]
 mod authority_tests;
 
+#[cfg(test)]
+#[path = "control_plane_preflight_tests.rs"]
+mod preflight_tests;
+
 /// B6 (MIK-7570.BREAKER.1): an open breaker reads `Down` and `Blocked`,
 /// through the real `Backend::status()`, never a hand-built status.
 #[cfg(test)]

@@ -511,3 +511,64 @@ async fn a_clock_before_the_epoch_expires_nothing() {
     service.shutdown().await.expect("custody is released");
     drop(executor);
 }
+
+/// T14 (guard, MIK-8202 P2 row 15): the sweep closes an expired input round
+/// stamped at the sweep's own checked `now`, which is the store clock. The
+/// store clock is frozen two hours ahead; the announced last-change time is
+/// exactly that. True since P1; pins it against a raw `Utc::now()`.
+#[tokio::test]
+async fn t14_the_sweep_stamps_an_expired_round_close_at_the_stores_time() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("tasks");
+    let (service, executor) = open_runtime_with_admission(
+        &dir,
+        8,
+        StoreLimits::default(),
+        test_subscriptions(),
+        fresh_admission(),
+    )
+    .await
+    .expect("the runtime opens");
+    let heard = Arc::new(Mutex::new(
+        Vec::<(String, TaskStatus, chrono::DateTime<Utc>)>::new(),
+    ));
+    let sink = Arc::clone(&heard);
+    executor.on_publication(Arc::new(move |id, status, at, _| {
+        sink.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((id.to_owned(), status, at));
+    }));
+    let workers = Arc::new(Semaphore::new(8));
+    let asking = seed(
+        &service,
+        &workers,
+        "x-t14",
+        3_600_000,
+        Some(SHORT_TTL_MS),
+        Settle::InputRequired,
+    )
+    .await;
+    let frozen = Utc::now() + crate::duration_bound::delta!(hours, 2);
+    service.store.set_clock_for_test(Some(frozen));
+    let guard = executor.start_expiry(TICK).expect("the sweep starts");
+    let closed_at = timeout(BUDGET, async {
+        loop {
+            let found = heard
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .find(|(id, status, _)| *id == asking.id && *status == TaskStatus::Cancelled)
+                .map(|(_, _, at)| *at);
+            if let Some(at) = found {
+                return at;
+            }
+            tokio::time::sleep(TICK / 2).await;
+        }
+    })
+    .await
+    .expect("the round was closed");
+    guard.shutdown().await.expect("the sweep stops");
+    service.shutdown().await.expect("custody is released");
+    drop(executor);
+    assert_eq!(closed_at, frozen, "stamped at the sweep's checked now");
+}

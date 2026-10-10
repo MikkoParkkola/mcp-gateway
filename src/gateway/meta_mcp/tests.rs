@@ -207,6 +207,10 @@ mod attestation_plan;
 #[cfg(test)]
 #[path = "chain_strip_tests.rs"]
 mod chain_strip;
+/// MIK-8202 P2: the meta route's clock reads on a clock before 1970.
+#[cfg(test)]
+#[path = "clock_p2_tests.rs"]
+mod clock_p2;
 /// `MIK-7993` r5: a playbook's step notes are carried onto its answer.
 #[cfg(test)]
 #[path = "playbook_writes_tests.rs"]

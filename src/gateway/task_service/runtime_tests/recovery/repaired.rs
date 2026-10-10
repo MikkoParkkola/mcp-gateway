@@ -165,3 +165,115 @@ async fn sealed_rows(dir: &std::path::Path) -> (Vec<Seeded>, Vec<(std::path::Pat
         .collect();
     (seeded, originals)
 }
+
+/// A runtime over the three sealed rows of [`sealed_rows`], recording the
+/// last-change time each announced transition carried.
+async fn sealed_runtime(
+    dir: &std::path::Path,
+) -> (
+    Vec<Seeded>,
+    Vec<(std::path::PathBuf, Vec<u8>)>,
+    Arc<TaskService>,
+    Arc<crate::gateway::task_service::TaskExecutor>,
+    Arc<parking_lot::Mutex<Vec<(String, chrono::DateTime<chrono::Utc>)>>>,
+) {
+    let (seeded, originals) = sealed_rows(dir).await;
+    let heard = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let sink = Arc::clone(&heard);
+    let (restored, executor) = crate::gateway::task_service::open_runtime_with_recovery(
+        dir,
+        1,
+        StoreLimits::default(),
+        test_subscriptions(),
+        fresh_admission(),
+        &[],
+        |_, executor| {
+            executor.on_publication(Arc::new(move |id, _, at, _| {
+                sink.lock().push((id.to_owned(), at));
+            }));
+        },
+    )
+    .await
+    .expect("sealed rows never stop startup");
+    (seeded, originals, restored, executor, heard)
+}
+
+fn repair(originals: &[(std::path::PathBuf, Vec<u8>)]) {
+    for (record, original) in originals {
+        std::fs::write(record, original).unwrap();
+    }
+}
+
+/// T14b (MIK-8202 RECORDER rule, P2 row 15): a repaired live row is settled
+/// at the store clock's checked time, never a raw `Utc::now()`. The store
+/// clock is frozen two hours ahead; the row's last-change time is exactly
+/// that. Mutant: raw `Utc::now()` restored.
+#[tokio::test]
+async fn t14b_a_repaired_live_row_is_settled_at_the_frozen_store_time() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("tasks");
+    let (seeded, originals, restored, executor, heard) = sealed_runtime(&dir).await;
+    let frozen = chrono::Utc::now() + crate::duration_bound::delta!(hours, 2);
+    restored.store.set_clock_for_test(Some(frozen));
+    let sweep = executor
+        .start_expiry(Duration::from_millis(50))
+        .expect("sweep");
+    repair(&originals);
+    let dispatched = seeded
+        .iter()
+        .find(|r| r.key == "x6b-dispatched")
+        .unwrap()
+        .id
+        .clone();
+    let _ = crate::test_wait::wait_until(BUDGET, || {
+        let seen = heard.lock().iter().any(|(id, _)| *id == dispatched);
+        std::future::ready(if seen {
+            Break(())
+        } else {
+            Continue(String::new())
+        })
+    })
+    .await;
+    let at = heard
+        .lock()
+        .iter()
+        .find(|(id, _)| *id == dispatched)
+        .map(|(_, at)| *at);
+    sweep.shutdown().await.expect("sweep stops");
+    restored.shutdown().await.expect("custody released");
+    assert_eq!(at, Some(frozen), "settled at the store's time");
+}
+
+/// T14b (unreadable store clock): the repaired live row is not settled; it
+/// stays sealed until a pass can date it, then is served. Mutant: settle at
+/// a raw 1969-or-now read anyway.
+#[tokio::test]
+async fn t14b_a_repaired_live_row_stays_sealed_while_the_store_clock_is_unreadable() {
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("tasks");
+    let (_, originals, restored, executor, _heard) = sealed_runtime(&dir).await;
+    restored
+        .store
+        .set_clock_for_test(Some(chrono::DateTime::from_timestamp(-1, 0).unwrap()));
+    let sweep = executor
+        .start_expiry(Duration::from_millis(50))
+        .expect("sweep");
+    repair(&originals);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let still_sealed = restored.skipped_records().sealed;
+    restored.store.set_clock_for_test(None);
+    let _ = crate::test_wait::wait_until(BUDGET, || {
+        let done = restored.skipped_records().sealed == 0;
+        std::future::ready(if done {
+            Break(())
+        } else {
+            Continue(String::new())
+        })
+    })
+    .await;
+    let after = restored.skipped_records().sealed;
+    sweep.shutdown().await.expect("sweep stops");
+    restored.shutdown().await.expect("custody released");
+    assert_eq!(still_sealed, 3, "nothing was settled on an undatable clock");
+    assert_eq!(after, 0, "the next readable pass serves them");
+}
