@@ -173,18 +173,45 @@ def is_safe_macro(prefix, name, safe):
     return path + name in _QUALIFIED_SAFE and name in safe
 
 
-def macro_names(root):
-    """The macro names a line may invoke and still be graded by its count:
-    SAFE_MACROS minus any name a `macro_rules!` in `src/` defines."""
+def local_macros(root):
+    """Every name a `macro_rules!` in `src/` defines."""
     local = set()
     for path in (Path(root) / "src").rglob("*.rs"):
         local.update(_MACRO_DEF.findall(path.read_text()))
-    return SAFE_MACROS - local
+    return frozenset(local)
 
 
-def head_has_call(raw, safe=SAFE_MACROS):
+def macro_names(root):
+    """The macro names a line may invoke and still be graded by its count:
+    SAFE_MACROS minus any name a `macro_rules!` in `src/` defines."""
+    return SAFE_MACROS - local_macros(root)
+
+
+# MIK-8327: a line that is only an optional `let <pattern> =` and a
+# `[tokio::]select! {` head holds no call: each arm is graded on its own line,
+# and a binding pattern runs no code. Such a line is graded by its count, so a
+# reached head is hit and an unreached one missed. Anything else on the line
+# (`biased;`, an arm, a call, a type annotation, a comment, another path)
+# keeps the MIK-7725 rule. A bare `select!` qualifies only when no
+# `macro_rules!` in `src/` defines `select`, which could wrap tracing.
+_BINDING = r"(?:mut\s+)?[A-Za-z_]\w*"
+_PATTERN = r"(?:" + _BINDING + r"|\(\s*" + _BINDING + r"(?:\s*,\s*" + _BINDING + r")*\s*,?\s*\))"
+SELECT_HEAD = re.compile(
+    r"^\s*(?:let\s+" + _PATTERN + r"\s*=\s*)?(?P<path>(?:::)?tokio::)?select!\s*\{\s*$"
+)
+
+
+def is_select_head(raw, local=frozenset()):
+    """Whether `raw` is exactly a bare `select!` head (see SELECT_HEAD)."""
+    match = SELECT_HEAD.match(raw)
+    return bool(match) and (bool(match.group("path")) or "select" not in local)
+
+
+def head_has_call(raw, safe=SAFE_MACROS, local=frozenset()):
     """True when this raw source line invokes a macro outside `safe` (or names
     a tracing level) but is not, as a whole, a plain head line (see above)."""
+    if is_select_head(raw, local):
+        return False
     unsafe = TRACING_NAME.search(raw) or any(
         not is_safe_macro(prefix, name, safe) and not (prefix == "" and name in _KEYWORDS)
         for prefix, name in _ANY_MACRO.findall(raw)
@@ -330,7 +357,8 @@ def read_inventory(path):
 
 def grade(root, inventory, lcovs):
     hits = read_lcov(lcovs, root)
-    names = macro_names(root)
+    local = local_macros(root)
+    names = SAFE_MACROS - local
     results = [
         ("INDIRECT", {"path": what.split(":", 1)[0], "fn": what.split(": ", 1)[1], "occurrence": "-"}, None, None, [])
         for what in tracing_indirections(root)
@@ -352,7 +380,7 @@ def grade(root, inventory, lcovs):
         unverifiable = []
         split = split_call_lines(lines, lo, hi, names)
         for n in range(lo, hi + 1):
-            if n in counts and (n in split or head_has_call(lines[n - 1], names)):
+            if n in counts and (n in split or head_has_call(lines[n - 1], names, local)):
                 unverifiable.append(f"{row['path']}:{n} (head count {counts[n]})")
                 counts[n] = 0
         excluded = []
