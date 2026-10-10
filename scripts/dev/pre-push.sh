@@ -52,6 +52,8 @@ if [[ -f Cargo.toml ]]; then
   step "scope acceptance"
   python3 scripts/release/check_scope_acceptance.py --check
   step "clock baseline"
+  # Against the merge-base; CI compares with the PR's base tip, so a base that
+  # moved since the branch point can still differ there.
   python3 scripts/release/check_clock_baseline.py "$base"
 
   step "commit message hygiene"
