@@ -117,8 +117,6 @@ src/gateway/server/identity_grants.rs	2
 src/gateway/server/tests/boot.rs	1
 src/gateway/session_lifecycle.rs	2
 src/gateway/streaming_tests/listen_graceful.rs	2
-src/gateway/task_service/execution/expiry.rs	1
-src/gateway/task_service/execution/input_round.rs	2
 src/gateway/task_service/execution/input_round_exit_tests.rs	1
 src/gateway/task_service/execution/recovery.rs	1
 src/gateway/task_service/execution/upstream/failed_policy_tests.rs	1
@@ -130,7 +128,6 @@ src/gateway/task_service/runtime_tests/expiry.rs	4
 src/gateway/task_service/runtime_tests/recovery.rs	3
 src/gateway/task_service/store_disk.rs	2
 src/gateway/task_service/store_expiry.rs	1
-src/gateway/task_service/store_input.rs	1
 src/gateway/task_service/store_tests/skipped.rs	1
 src/gateway/task_service/store_tests/targets.rs	2
 src/gateway/ui/control_plane/grant_projection_tests.rs	6

@@ -457,6 +457,38 @@ async fn closing_a_round_cancels_it_with_the_reason_in_one_write() {
     assert!(store.input_round_for_test(task.id()).0.is_none());
 }
 
+/// MIK-8202: a close stamped on a clock before 1970 is refused and the round
+/// stays open; the sweep closes it once the clock reads. Mutant: the cancel
+/// stamped with a fallback time instead of refused.
+#[tokio::test]
+async fn a_clock_before_the_epoch_refuses_a_close_and_keeps_the_round() {
+    let (_dir, store, task) = opened().await;
+    let revision = parked_with(&store, &task, &["confirm"], due(secs(at(30)))).await;
+    store.set_clock_for_test(Some(
+        chrono::DateTime::<chrono::Utc>::from_timestamp(-1, 0).expect("one second before 1970"),
+    ));
+    let refused = store
+        .close_round(OWNER, task.id(), revision, "expired".to_owned())
+        .await;
+    assert!(
+        matches!(refused, Err(StoreError::Unavailable)),
+        "{refused:?}"
+    );
+    let after = store.get(OWNER, task.id()).unwrap();
+    assert_eq!(
+        after.task.status(),
+        TaskStatus::InputRequired,
+        "closed on an unreadable clock"
+    );
+    assert_eq!(after.revision, revision);
+
+    store.set_clock_for_test(Some(at(31)));
+    store
+        .close_round(OWNER, task.id(), revision, "expired".to_owned())
+        .await
+        .expect("the round closes once the clock reads");
+}
+
 /// Mutant: a settled row closed again (a second terminal write and publish).
 #[tokio::test]
 async fn closing_an_already_settled_round_writes_nothing() {

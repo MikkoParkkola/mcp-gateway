@@ -14,7 +14,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
@@ -136,15 +135,19 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
     // calls without a restart (MIK-8052), and a repaired row is served again
     // (MIK-8121). It never fails the sweep.
     executor.reread_sealed().await;
+    // A clock before 1970 cannot tell what has aged out: the pass deletes and
+    // cancels nothing, and the next one runs once the clock reads (MIK-8202).
+    let Ok(now) = service.store.now() else {
+        tracing::warn!("clock before 1970: task expiry pass skipped");
+        return Ok(());
+    };
     // The deletion snapshot is taken FIRST, so a round cancelled below is
     // deleted by a later pass, never in the same one.
-    let candidates = service.store.expired_candidates(Utc::now());
+    let candidates = service.store.expired_candidates(now);
     // An open input round past its TTL is cancelled here, continuation and
     // all; a later pass deletes it like any terminal row after retention.
     let mut round_failure = None;
-    for (id, revision, owner_digest, closed) in
-        service.store.expired_input_rounds(service.store.now())
-    {
+    for (id, revision, owner_digest, closed) in service.store.expired_input_rounds(now) {
         // #2429: one write that names why the round closed and drops it.
         let cancelled = executor
             .close_round(&owner_digest, &id, revision, closed.reason())

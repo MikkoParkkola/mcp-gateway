@@ -10,7 +10,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
 use serde_json::{Map, Value};
 use tokio::sync::{OwnedSemaphorePermit, watch};
 
@@ -216,7 +215,7 @@ impl<'a> Settling<'a> {
         };
         // The continuation the resume will redeem dies at its own deadline;
         // a round that could only fail is settled now, never parked.
-        let now = unix_secs(self.executor.service.store.now());
+        let now = now_secs(&self.executor.service.store);
         let continuation = self.state.meta_mcp().continuation();
         let Ok(continuation_deadline) =
             round_deadline(continuation.keyring(), round.request_state.as_deref(), now)
@@ -232,19 +231,17 @@ impl<'a> Settling<'a> {
             accepted_inputs: Map::new(),
             continuation_deadline,
         };
-        let parked = self
-            .executor
-            .service
-            .store
-            .require_input(
-                owner.as_digest(),
-                self.id,
-                self.revision,
-                round,
-                stored,
-                Utc::now(),
-            )
-            .await;
+        // Parking stamps the transition: a clock before 1970 cannot, and is
+        // handled as a round that could not be written (MIK-8202).
+        let store = &self.executor.service.store;
+        let parked = match store.now() {
+            Ok(at) => {
+                store
+                    .require_input(owner.as_digest(), self.id, self.revision, round, stored, at)
+                    .await
+            }
+            Err(_) => Err(StoreError::Unavailable),
+        };
         match parked {
             Ok(committed) => {
                 self.executor.published(&committed, self.id);
@@ -404,17 +401,17 @@ impl TaskExecutor {
         );
         self.spawn_worker(async move {
             let workers = Arc::clone(&executor.workers);
-            let provided = executor
-                .service
-                .store
-                .provide_input(
-                    &digest,
-                    &id,
-                    answers,
-                    move || workers.try_acquire_owned().ok(),
-                    Utc::now(),
-                )
-                .await;
+            // An answer stamped on a clock before 1970 is refused for now, as
+            // the store refuses it, and the round stays open (MIK-8202).
+            let store = &executor.service.store;
+            let provided = match store.now() {
+                Ok(at) => {
+                    store
+                        .provide_input(&digest, &id, answers, move || workers.try_acquire_owned().ok(), at)
+                        .await
+                }
+                Err(_) => Err(StoreError::Unavailable),
+            };
             let outcome = match provided {
                 Ok(ProvideOutcome::Partial(committed)) => {
                     executor.published(&committed, &id);
@@ -525,7 +522,7 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     // An answer taken in time can still reach dispatch late; redeeming then
     // could only fail, so the round is closed as the sweep would close it.
     let deadline = round.continuation_deadline;
-    let reached = deadline.is_some_and(|d| unix_secs(executor.service.store.now()) >= d);
+    let reached = deadline.is_some_and(|d| now_secs(&executor.service.store) >= d);
     executor.proceed_unless_late(ids, deadline, reached).await?;
     let call = TaskCall {
         tool: round.tool,
@@ -539,9 +536,8 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     // Preparation inside the funnel can outlast the margin. A continuation
     // refused once its envelope has expired was refused for expiry: close the
     // round with that reason rather than fail the task.
-    let expired = deadline.is_some_and(|d| {
-        rejected_after_expiry(&response, d, unix_secs(executor.service.store.now()))
-    });
+    let expired = deadline
+        .is_some_and(|d| rejected_after_expiry(&response, d, now_secs(&executor.service.store)));
     executor.proceed_unless_late(ids, deadline, expired).await?;
     let mut response = inspect_settled(&state, &call, &id, response);
     state.meta_mcp().release_unsent_hold(&mut response).await; // MIK-8131
@@ -594,11 +590,15 @@ fn rejected_after_expiry(response: &JsonRpcResponse, deadline: u64, now: u64) ->
             .is_some_and(|error| error.code == -32602 && error.message == expired.client_message())
 }
 
-/// `at` in the seconds round deadlines are kept in. Read only to compare
-/// against a deadline: a time before 1970 is a clock that cannot be read, and
+/// The store's now in the seconds round deadlines are kept in. Read only to
+/// compare against a deadline, an access check: a clock that cannot be read
 /// reads as past every deadline, never as before them (MIK-8202).
-fn unix_secs(at: chrono::DateTime<Utc>) -> u64 {
-    u64::try_from(at.timestamp()).unwrap_or(u64::MAX)
+fn now_secs(store: &crate::gateway::task_service::store::TaskStore) -> u64 {
+    store
+        .now()
+        .ok()
+        .and_then(|at| u64::try_from(at.timestamp()).ok())
+        .unwrap_or(u64::MAX)
 }
 
 impl TaskExecutor {

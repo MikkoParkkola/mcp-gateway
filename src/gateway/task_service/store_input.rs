@@ -92,13 +92,14 @@ impl TestSeams {
 }
 
 impl Shared {
-    /// The clock every round-deadline decision reads. Wall time in production;
-    /// a test may freeze it per store.
+    /// The clock every round-deadline decision reads: `crate::clock` in
+    /// production; a test may freeze it per store. `Err` is a clock before
+    /// 1970, which dates nothing (MIK-8202).
     #[cfg_attr(
         not(test),
         expect(clippy::unused_self, reason = "one shape with the cfg(test) clock")
     )]
-    pub(super) fn now(&self) -> DateTime<Utc> {
+    pub(super) fn now(&self) -> Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch> {
         #[cfg(test)]
         if let Some(frozen) = *self
             .seams
@@ -106,15 +107,19 @@ impl Shared {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
         {
-            return frozen;
+            return if frozen.timestamp() < 0 {
+                Err(crate::clock::ClockBeforeEpoch)
+            } else {
+                Ok(frozen)
+            };
         }
-        Utc::now()
+        crate::clock::utc_now()
     }
 }
 
 impl TaskStore {
     /// The store's clock (see [`Shared::now`]).
-    pub(crate) fn now(&self) -> DateTime<Utc> {
+    pub(crate) fn now(&self) -> Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch> {
         self.0.now()
     }
 
@@ -352,7 +357,11 @@ impl Shared {
         ) {
             return Err(StoreError::InvalidTransition);
         }
-        let at = self.now();
+        // A cancel stamped on a clock before 1970 is refused, not dated 1969:
+        // the round stays open and a later pass closes it (MIK-8202).
+        let Ok(at) = self.now() else {
+            return Err(StoreError::Unavailable);
+        };
         for event in [
             TaskTransition::StatusMessage(Some(reason)),
             TaskTransition::Cancel,
@@ -401,13 +410,12 @@ impl Shared {
         let (mut task, mut record) = self.read_owned(owner, id)?;
         // Read after the lock, never before: an update queued while the round
         // was open must not be let through once it has closed.
-        let now = self.now();
         // A clock before 1970 dates nothing: the update is refused for now,
         // and the round is not closed, since closing cancels the task for
         // good on a time it cannot read (MIK-8202).
-        if now.timestamp() < 0 {
+        let Ok(now) = self.now() else {
             return Err(StoreError::Unavailable);
-        }
+        };
         if let Some(closed) = closed_at(&task, &record, now) {
             return Ok(ProvideOutcome::Closed(closed));
         }
