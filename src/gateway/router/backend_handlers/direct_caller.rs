@@ -293,6 +293,21 @@ pub(super) async fn read_envelope(
     })
 }
 
+/// The key a caller's explicit cancel of its own call `id` is registered and
+/// looked up under on this route (MIK-7642 PR.C, design r5 D3, r4 R4.2): the
+/// backend, the caller's key (`identity::caller_key`: its subject, else its
+/// authenticated credential), its validated session, and the client's id.
+/// `None` for a caller with neither: its cancels are always dropped.
+pub(super) fn explicit_cancel_key(
+    backend: &str,
+    caller: &Caller,
+    session: Option<&str>,
+    id: &Value,
+) -> Option<crate::gateway::router::inflight_calls::CallKey> {
+    let owner = Some(caller.spend_key.as_str());
+    crate::gateway::router::inflight_calls::CallKey::new(backend, owner, session, id)
+}
+
 /// What stage 3 resolved: the backend and the session the caller owns.
 pub(super) struct Route<'a> {
     pub(super) backend: std::sync::Arc<crate::backend::Backend>,
@@ -376,12 +391,20 @@ pub(super) async fn forward_notification(
     envelope: Envelope,
 ) -> Rejection {
     // MIK-8072: a client's cancel names the client's request id, which the
-    // backend never saw (each transport numbers its own requests), so
-    // forwarding it could cancel another caller's call holding that number.
-    // Accepted and dropped before any per-caller credential is minted or
-    // leased for it; MIK-7642 sends the caller's own backend id.
+    // backend never saw (each transport numbers its own requests), so it is
+    // never forwarded: another caller's call may hold that number. MIK-7642
+    // PR.C: it aborts the call this same caller registered under that id, if
+    // one is in flight, and the transport then cancels that call on the
+    // backend by the backend's own id. Answered before any per-caller
+    // credential is minted or leased.
     if envelope.method == "notifications/cancelled" {
-        tracing::debug!(backend = %name, "Client cancel not forwarded");
+        let aborted = envelope
+            .params
+            .as_ref()
+            .and_then(|params| params.get("requestId"))
+            .and_then(|id| explicit_cancel_key(name, caller, route.session_id, id))
+            .is_some_and(|key| state.meta_mcp.inflight_calls().cancel(&key));
+        tracing::debug!(backend = %name, aborted, "Client cancel never forwarded");
         return (StatusCode::ACCEPTED, Json(serde_json::json!({})));
     }
     let Ok(super::notification_key::Resolved { headers, binding }) =

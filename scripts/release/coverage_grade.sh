@@ -16,6 +16,9 @@
 # of <rev> itself, so line ranges match the report. PASS needs all three: the run
 # concluded success (the probe has no --ignore-run-fail, so no test failed), every
 # Critical row is >=95%, and every path clears 80% and its recorded baseline.
+# A report the run should have uploaded but did not (a platform job that failed)
+# is no grade at all: the last line reads NOT GRADED and the exit status is 5,
+# never the 1 of a graded FAIL (MIK-8265).
 # Needs git, gh (authenticated) and python3.
 set -euo pipefail
 REPO=MikkoParkkola/mcp-gateway
@@ -105,16 +108,37 @@ rm -rf "$out"; mkdir -p "$out/src"
 # Shared by every worktree of the clone and ~50 MB a run: keep the newest few,
 # this run and the self-check baseline (MIK-8217).
 python3 "$HERE/prune_coverage_grades.py" "$grades" 3 "$run" "$SELF_RUN"
-gh run download "$run" -R "$REPO" -D "$out/art"
+# A failed download is no grade either: the check below names each report it
+# left absent and ends NOT GRADED (MIK-8265).
+gh run download "$run" -R "$REPO" -D "$out/art" || echo "download of run $run failed or was partial"
 git archive "$rev" src docs/release scripts/release | tar -x -C "$out/src"
 paths_grader="$out/src/scripts/release/critical_path_coverage.py"
 [[ -f "$paths_grader" ]] || paths_grader="$HERE/critical_path_coverage.py"
 
-status=0
+# A report the run should have uploaded but did not (a platform job that failed)
+# is no grade at all, never a graded FAIL (MIK-8265). Checked here first, so the
+# answer does not depend on <rev>'s graders, which may predate their own check;
+# each grader also exits 3 on an absent, empty or unreadable report.
+INPUT_MISSING=3
+not_graded() {
+  echo "GRADE rev=$rev run=$run conclusion=$conclusion: NOT GRADED (an input is missing; see above)"
+  exit 5
+}
+missing=0
+for input in coverage-linux/linux.lcov coverage-windows/windows.lcov coverage-linux/cov.json; do
+  [[ -s "$out/art/$input" && -r "$out/art/$input" ]] || { echo "input missing: $out/art/$input"; missing=1; }
+done
+[[ $missing == 0 ]] || not_graded
+status=0 functions=0 paths=0
 (cd "$out/src" && python3 scripts/release/critical_function_coverage.py \
   --lcov "$out/art/coverage-linux/linux.lcov" --lcov "$out/art/coverage-windows/windows.lcov") \
-  > "$out/functions.txt" || status=1
-python3 "$paths_grader" "$out/art/coverage-linux/cov.json" > "$out/paths.txt" || status=1
+  > "$out/functions.txt" || functions=$?
+python3 "$paths_grader" "$out/art/coverage-linux/cov.json" > "$out/paths.txt" || paths=$?
+if [[ $functions == "$INPUT_MISSING" || $paths == "$INPUT_MISSING" ]]; then
+  grep -h '^input missing:' "$out/functions.txt" "$out/paths.txt" || true
+  not_graded
+fi
+[[ $functions == 0 && $paths == 0 ]] || status=1
 [[ "$conclusion" == success ]] || status=1
 
 echo "== Critical rows not ok (every row: $out/functions.txt)"

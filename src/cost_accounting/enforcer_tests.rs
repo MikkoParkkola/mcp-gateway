@@ -183,7 +183,7 @@ fn a_spend_sweeps_unbudgeted_entries_from_an_earlier_day() {
     // GIVEN: entries left from two days ago for an unbudgeted tool and key, and
     // one for a key with a budget
     let e = enforcer_with(true, None, &[], &[("budgeted", 5.0)], &[]);
-    let old = current_day() - 2;
+    let old = current_day().expect("clock after 1970") - 2;
     e.tool_daily
         .insert("old-tool".to_string(), DailyAccumulator::stale(old, 5));
     e.key_daily
@@ -323,7 +323,7 @@ fn budgeted_names_present_first_leave_the_full_unbudgeted_allowance() {
 fn a_due_sweep_frees_the_cap_before_a_new_name_is_counted() {
     // GIVEN: the per-tool map full of unbudgeted entries from two days ago
     let e = enforcer_with(true, None, &[], &[], &[]);
-    let old = current_day() - 2;
+    let old = current_day().expect("clock after 1970") - 2;
     for i in 0..MAX_UNBUDGETED_ROWS {
         e.tool_daily
             .insert(format!("old-{i}"), DailyAccumulator::stale(old, 5));
@@ -340,7 +340,7 @@ fn the_first_spend_of_a_new_day_sweeps_whatever_the_minute_throttle_says() {
     // GIVEN: yesterday's map full of unbudgeted rows, and the minute throttle
     // armed far ahead, as if a sweep had just run before midnight
     let e = enforcer_with(true, None, &[], &[], &[]);
-    let yesterday = current_day() - 1;
+    let yesterday = current_day().expect("clock after 1970") - 1;
     for i in 0..MAX_UNBUDGETED_ROWS {
         e.tool_daily
             .insert(format!("old-{i}"), DailyAccumulator::stale(yesterday, 5));
@@ -399,12 +399,14 @@ fn swept_today_with_old_rows(
     rows: fn(&BudgetEnforcer) -> &DashMap<String, DailyAccumulator>,
 ) -> BudgetEnforcer {
     let e = enforcer_with(true, None, &[], &[], &[]);
-    let yesterday = current_day() - 1;
+    let yesterday = current_day().expect("clock after 1970") - 1;
     for i in 0..MAX_UNBUDGETED_ROWS {
         rows(&e).insert(format!("old-{i}"), DailyAccumulator::stale(yesterday, 5));
     }
-    e.swept_day
-        .store(current_day(), std::sync::atomic::Ordering::Relaxed);
+    e.swept_day.store(
+        current_day().expect("clock after 1970"),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     e.next_sweep
         .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
     e
@@ -456,7 +458,7 @@ fn overflowing_spends_sweep_at_most_once_a_day() {
     }
     e.record_spend("first-over", None, 0.01);
     // AND: a row gone stale since, with the minute throttle armed
-    let yesterday = DailyAccumulator::stale(current_day() - 1, 5);
+    let yesterday = DailyAccumulator::stale(current_day().expect("clock after 1970") - 1, 5);
     e.tool_daily.insert("now-0".to_string(), yesterday);
     e.next_sweep
         .store(u64::MAX, std::sync::atomic::Ordering::Relaxed);
@@ -494,4 +496,42 @@ fn a_sub_micro_tool_exhausts_a_budget_of_n_micros() {
         !e.check("cheap", None).allowed,
         "a sub-micro tool was never counted against its budget"
     );
+}
+
+/// MIK-8202 AC10: spend restored on a clock before 1970 is filed under the
+/// snapshot's own UTC day, so once the clock reads that day the spend still
+/// counts against the budgets instead of restarting them at zero. Mutant: the
+/// restore adds on the clock's day, as before.
+#[test]
+fn spend_restored_on_an_unreadable_clock_counts_once_the_clock_reads() {
+    use super::super::persistence::{PersistedCosts, ToolTotal};
+    let saved_at = 1_791_500_000;
+    let mut saved = PersistedCosts {
+        saved_at,
+        key_overflow_usd: 0.125,
+        tool_overflow_usd: 0.5,
+        ..PersistedCosts::default()
+    };
+    saved.key_totals.insert("k".to_owned(), 0.375);
+    let total = ToolTotal {
+        call_count: 1,
+        total_cost_usd: 0.25,
+        avg_cost_usd: 0.25,
+    };
+    saved.tool_totals.insert("t".to_owned(), total);
+    // Built and restored on the unreadable clock, as at a start whose clock
+    // fails before the enforcer exists.
+    let e = {
+        let _unreadable = crate::clock::test_clock::before_epoch();
+        let e = enforcer_with(true, None, &[], &[], &[]);
+        e.restore(&saved);
+        e
+    };
+    let _same_day = crate::clock::test_clock::at_secs(saved_at + 60);
+    let snap = e.snapshot();
+    assert!((snap.global_daily_usd - 0.75).abs() < 1e-9, "{snap:?}");
+    assert!((snap.tool_daily["t"] - 0.25).abs() < 1e-9, "{snap:?}");
+    assert!((snap.key_daily["k"] - 0.375).abs() < 1e-9, "{snap:?}");
+    assert!((snap.tool_overflow_usd - 0.5).abs() < 1e-9, "{snap:?}");
+    assert!((snap.key_overflow_usd - 0.125).abs() < 1e-9, "{snap:?}");
 }

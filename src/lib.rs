@@ -187,6 +187,8 @@ pub fn setup_tracing(level: &str, format: Option<&str>) -> Result<()> {
 mod log_filter_tests;
 
 #[cfg(test)]
+pub(crate) mod test_classification_count;
+#[cfg(test)]
 pub(crate) mod test_log_capture;
 
 // Unix-only (W-L8): `mkfifo` has no Windows counterpart.

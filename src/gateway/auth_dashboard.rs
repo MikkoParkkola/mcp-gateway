@@ -50,6 +50,10 @@ struct Handoff {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Redemption {
     pub(crate) not_after: Option<SystemTime>,
+    /// The clocks the redemption was checked against, which the session or
+    /// code it yields is issued at: a second read could land on a clock that
+    /// stepped before 1970 in between (MIK-8202).
+    pub(crate) now: Now,
 }
 
 /// When a session was issued and when it last saw operator activity.
@@ -177,19 +181,36 @@ impl DashboardBootstrap {
     }
 
     /// Consume the value if it matches. Single use: a second attempt fails even
-    /// with the right value, so a link left in a shell history is spent.
+    /// with the right value, so a link left in a shell history is spent. A
+    /// burn, not a redemption: it issues nothing, so it spends the value
+    /// whatever the clock reads (#1529: a copy presented from elsewhere must
+    /// die on first use).
     #[must_use]
     pub fn consume(&self, candidate: &str) -> bool {
-        self.consume_capped(candidate).is_some()
+        self.take_matching(candidate).is_some()
     }
 
     /// Consume the value if it matches, returning the cap it was minted with.
+    /// A wall clock before 1970 refuses it unspent: the session it would
+    /// issue could not be dated, and the operator keeps a working link
+    /// (MIK-8202).
     pub(crate) fn consume_capped(&self, candidate: &str) -> Option<Redemption> {
+        let now = Now::read();
+        if wall_unreadable(now) {
+            tracing::warn!(
+                "dashboard bootstrap refused: the host clock reads before 1970; the link is kept"
+            );
+            return None;
+        }
+        self.take_matching(candidate)
+            .map(|(_, not_after)| Redemption { not_after, now })
+    }
+
+    /// Take the value and its cap if `candidate` matches it.
+    fn take_matching(&self, candidate: &str) -> Option<(String, Option<SystemTime>)> {
         let mut guard = self.value.lock().ok()?;
         match guard.as_ref() {
-            Some((expected, _)) if expected == candidate => {
-                guard.take().map(|(_, not_after)| Redemption { not_after })
-            }
+            Some((expected, _)) if expected == candidate => guard.take(),
             _ => None,
         }
     }
@@ -313,6 +334,7 @@ impl DashboardBootstrap {
         }
         slot.take().map(|live| Redemption {
             not_after: live.cap,
+            now,
         })
     }
 
@@ -415,11 +437,14 @@ pub(crate) struct Now {
 }
 
 impl Now {
-    /// Both clocks, read now.
+    /// Both clocks, read now. The wall clock comes through `crate::clock`
+    /// (MIK-8202): one that reads before 1970 is kept as a time before the
+    /// epoch, which `wall_unreadable` refuses, so a session is never judged
+    /// against it.
     pub(crate) fn read() -> Self {
         Self {
             mono: Instant::now(),
-            wall: SystemTime::now(),
+            wall: crate::clock::system_time_or_before_epoch(),
         }
     }
 }
