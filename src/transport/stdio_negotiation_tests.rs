@@ -202,9 +202,8 @@ async fn an_accepted_negotiated_retry_is_logged_and_adopted() {
 /// MIK-8195 W7: a backend whose `initialize` fails for a reason other than
 /// the protocol version ends the start, and the error names only its code:
 /// the backend's own text may quote back a credential the gateway sent.
-#[tokio::test]
-async fn a_non_version_initialize_error_ends_the_start_by_code_only() {
-    let _log = verbose();
+#[test]
+fn a_non_version_initialize_error_ends_the_start_by_code_only() {
     let workspace = tempfile::tempdir().expect("workspace");
     let script = r#"while IFS= read -r request; do
     id=$(printf '%s' "$request" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
@@ -217,16 +216,28 @@ done
 "#
     .replace("QUOTED", NOT_A_VERSION);
     std::fs::write(workspace.path().join("server.sh"), script).expect("write server");
-    let transport = StdioTransport::new(
-        "sh server.sh",
-        HashMap::new(),
-        Some(workspace.path().to_string_lossy().into_owned()),
-        std::time::Duration::from_secs(10),
-        None,
-    );
-    let outcome = transport.start().await;
-    let adopted = transport.protocol_version.read().clone();
-    let _ = transport.close().await;
+
+    let mut ended = None;
+    let records = crate::test_log_capture::records(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(async {
+                let transport = StdioTransport::new(
+                    "sh server.sh",
+                    HashMap::new(),
+                    Some(workspace.path().to_string_lossy().into_owned()),
+                    std::time::Duration::from_secs(10),
+                    None,
+                );
+                let outcome = transport.start().await;
+                let adopted = transport.protocol_version.read().clone();
+                let _ = transport.close().await;
+                ended = Some((outcome, adopted));
+            });
+    });
+    let (outcome, adopted) = ended.expect("the start ran");
 
     let error = outcome.expect_err("a failed initialize is no session");
     assert!(matches!(error, Error::Protocol(_)), "{error:?}");
@@ -236,6 +247,18 @@ done
     );
     assert!(!error.to_string().contains(NOT_A_VERSION), "{error}");
     assert_eq!(adopted, None, "a failed initialize adopts nothing");
+
+    // Logs reach more readers than the caller: the backend's text must not
+    // reach a record either.
+    assert!(
+        !records.is_empty(),
+        "the capture must see the transport's records"
+    );
+    let leaked: Vec<_> = records
+        .iter()
+        .filter(|r| r.to_string().contains("sk-live"))
+        .collect();
+    assert!(leaked.is_empty(), "{leaked:#?}");
 }
 
 /// Neither a diagnostic nor the log may repeat what the backend sent: a
