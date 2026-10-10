@@ -21,6 +21,7 @@ use crate::gateway::task_service::record::Target;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 mod boundary;
+mod upstream_cancel;
 use crate::idempotency::admission::{
     ExecutionAdmission, Mode, Request, TaskAdmission, TaskBinding,
 };
@@ -410,11 +411,12 @@ async fn marker_05_the_loader_accepts_supported_versions_and_fails_closed_on_oth
                 reseed(&path, task.id(), &seed);
             }
             // One past the highest supported version: v4 carries the input
-            // round (MIK-7311.LIFECYCLE.1), v5 the task targets (#2450) and
-            // v6 the error's author (MIK-7887), so v7 is the first unsupported.
+            // round (MIK-7311.LIFECYCLE.1), v5 the task targets (#2450), v6
+            // the error's author (MIK-7887) and v7 the upstream cancel claim
+            // (MIK-7642), so v8 is the first unsupported.
             _ => {
                 let mut seed = record.clone();
-                seed["version"] = json!(7);
+                seed["version"] = json!(8);
                 reseed(&path, task.id(), &seed);
             }
         }

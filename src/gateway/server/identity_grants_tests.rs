@@ -57,7 +57,7 @@ fn config(dir: &Path, auth: bool) -> Config {
     let mut config = Config::default();
     config.auth.enabled = auth;
     config.auth.bearer_token = Some(TOKEN.to_string());
-    config.security.transparency_log.enabled = true;
+    config.security.transparency_log.enabled = Some(true);
     config.security.transparency_log.path = dir.join("audit.jsonl").to_string_lossy().into_owned();
     config.control_plane.store_dir = Some(store_dir(dir).to_string_lossy().into_owned());
     // The task store under the test's own directory, never the default under $HOME.

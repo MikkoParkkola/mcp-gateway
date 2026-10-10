@@ -264,6 +264,9 @@ impl HttpTransport {
                 };
                 safe_request_error_for("Request failed", &e, evidence)
             })?;
+        // The response head is in: a task worker's rescue poll can now only
+        // receive (MIK-7642 R10.1). A no-op unless a submission is armed.
+        crate::transport::submit_mark::response_head_received();
 
         // Extract session ID from response headers if this caller's bucket is
         // empty (MIK-6784: store under the caller's identity key, never a shared

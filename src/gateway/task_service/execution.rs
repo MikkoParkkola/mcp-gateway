@@ -35,6 +35,8 @@ pub(crate) use upstream::UpstreamCapture;
 /// Reachable at the visibility of [`TaskExecutor::commit`], which returns it.
 pub(crate) use worker::CommitFailure;
 use worker::commit_and_run;
+#[cfg(test)]
+pub(crate) use worker::rescue_seam;
 
 use super::record::{CommittedTask, ErrorAuthor, Target};
 use super::service::{CreateOutcome, ServiceError, TaskService};
@@ -302,6 +304,12 @@ impl TaskExecutor {
             Err(error) => return Err(commit_to_service(error)),
         };
         self.cancel_signal(id);
+        // The transition-side sender (design r8 R8.4): a row that already held
+        // its upstream descriptor when the cancel committed claims and sends
+        // its one `tasks/cancel` here. A worker still holding an uncaptured
+        // handle finds the claim taken, or takes it when this finds none.
+        self.cancel_upstream_once(&task.owner_digest, id, None, upstream::CancelSend::Detach)
+            .await;
         Ok(task)
     }
 
@@ -321,6 +329,16 @@ impl TaskExecutor {
     ) -> Result<CommittedTask, ServiceError> {
         let current = self.service.get(principal, id)?;
         if is_terminal(current.task.status()) {
+            // A row cancelled by an earlier attempt whose claim never landed
+            // still gets its one upstream cancel; any other terminal row is
+            // not the claim's to take (NotOurs).
+            self.cancel_upstream_once(
+                &current.owner_digest,
+                id,
+                None,
+                upstream::CancelSend::Detach,
+            )
+            .await;
             return Ok(current);
         }
         self.notify_observer(CommitStage::CancelRetry, id).await;
@@ -334,6 +352,14 @@ impl TaskExecutor {
         {
             Ok(task) => {
                 self.cancel_signal(id);
+                // The same transition-side sender as `cancel` above.
+                self.cancel_upstream_once(
+                    &task.owner_digest,
+                    id,
+                    None,
+                    upstream::CancelSend::Detach,
+                )
+                .await;
                 Ok(task)
             }
             // Bounded: the record moved again. If that move was terminal the
@@ -414,6 +440,36 @@ impl TaskExecutor {
         id: &str,
     ) -> Option<super::record::UpstreamRecord> {
         self.service.store.upstream_for_test(id)
+    }
+
+    /// Test-only: commit `id`'s Cancel without signalling its worker, as a
+    /// cancel does in the instant between its commit and its signal (MIK-7642).
+    #[cfg(test)]
+    pub(crate) async fn commit_cancel_unsignalled_for_test(&self, id: &str) {
+        let owner = self
+            .service
+            .store
+            .owner_digest_for_test(id)
+            .expect("the task exists");
+        let revision = self
+            .service
+            .store
+            .get(&owner, id)
+            .expect("readable")
+            .revision;
+        self.transition_digest_write(
+            &owner,
+            id,
+            revision,
+            (
+                TaskTransition::Cancel,
+                None,
+                crate::gateway::gateway_writes::WriteRecord::default(),
+            ),
+            ErrorAuthor::Gateway,
+        )
+        .await
+        .expect("the cancel commits");
     }
 
     /// Join every owner, then every worker permit, inside one timeout budget.
@@ -554,10 +610,7 @@ impl TaskExecutor {
         self.handoffs.cancel_signal(id);
     }
 
-    pub(crate) async fn commit_create(
-        &self,
-        write: CreateWrite<'_>,
-    ) -> Result<CreateOutcome, CommitFailure> {
+    pub(crate) async fn commit_create(&self, write: CreateWrite<'_>) -> CreateOutcome {
         let CreateWrite {
             request,
             task,
@@ -570,14 +623,13 @@ impl TaskExecutor {
             .create_targeted(request.borrow(), task, (backend, targets), move || {
                 workers.try_acquire_owned().ok()
             })
-            .await
-            .map_err(CommitFailure::Service)?;
+            .await;
         if let CreateOutcome::Created { task: stored, .. } = &created {
             let id = stored.task.id().to_owned();
             self.published(stored, &id);
             self.notify_observer(CommitStage::Published, &id).await;
         }
-        Ok(created)
+        created
     }
 
     pub(crate) async fn commit_transition(

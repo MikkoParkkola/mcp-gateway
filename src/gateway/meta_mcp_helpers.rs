@@ -15,6 +15,9 @@ use crate::protocol::{
 };
 use crate::ranking::SearchResult;
 
+#[cfg(test)]
+pub(crate) use super::meta_mcp_helpers_routing::build_routing_instructions;
+pub(crate) use super::meta_mcp_helpers_routing::{RoutingEntry, build_routing_guide};
 use super::meta_mcp_helpers_text::{char_prefix, word_matches_text};
 use crate::stats::StatsSnapshot;
 use crate::{Error, Result};
@@ -319,66 +322,6 @@ pub(crate) fn build_discovery_preamble(
         }
     }
     out
-}
-
-/// Build dynamic routing instructions from capability metadata.
-///
-/// Groups capabilities by `metadata.category` and lists representative tools.
-/// Returns an empty string when no capabilities are provided.
-pub(crate) fn build_routing_instructions(
-    capabilities: &[crate::capability::CapabilityDefinition],
-    capability_backend_name: &str,
-) -> String {
-    use std::collections::BTreeMap;
-
-    if capabilities.is_empty() {
-        return String::new();
-    }
-
-    // Group tools by category, preserving insertion order via BTreeMap
-    let mut by_category: BTreeMap<String, Vec<String>> = BTreeMap::new();
-
-    for cap in capabilities {
-        let category = if cap.metadata.category.is_empty() {
-            "general".to_string()
-        } else {
-            cap.metadata.category.clone()
-        };
-
-        by_category
-            .entry(category)
-            .or_default()
-            .push(format!("{}/{}", capability_backend_name, cap.name));
-    }
-
-    // Also track chains_with hints per category: source_tool -> [downstream_tools]
-    let mut chains: Vec<(String, Vec<String>)> = Vec::new();
-    for cap in capabilities {
-        if !cap.metadata.chains_with.is_empty() {
-            chains.push((cap.name.clone(), cap.metadata.chains_with.clone()));
-        }
-    }
-
-    let mut lines = vec!["\nRouting Guide (by task type):".to_string()];
-
-    for (category, tools) in &by_category {
-        let tool_sample = tools.iter().take(2).cloned().collect::<Vec<_>>().join(", ");
-        let suffix = if tools.len() > 2 {
-            format!(" (+{})", tools.len() - 2)
-        } else {
-            String::new()
-        };
-        lines.push(format!("- {category}: {tool_sample}{suffix}"));
-    }
-
-    if !chains.is_empty() {
-        lines.push("\nComposition chains (tool -> next steps):".to_string());
-        for (source, targets) in &chains {
-            lines.push(format!("  {source} -> {}", targets.join(", ")));
-        }
-    }
-
-    lines.join("\n")
 }
 
 /// Parse a Code Mode tool reference into `(tool_name, server)`.

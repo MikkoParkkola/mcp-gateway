@@ -506,6 +506,10 @@ pub(crate) async fn slot_rpc<'a, X: Send + 'a>(
     id: RequestId,
     future: impl Future<Output = (JsonRpcResponse, X)> + Send + 'a,
 ) -> (JsonRpcResponse, X) {
+    #[cfg(test)]
+    if logger.is_none() || GRANT_SLOT.try_with(|_| ()).is_ok() {
+        BOOKKEEPING.with(|b| b.borrow_mut().idle_wraps += 1);
+    }
     // Erased, so an opener's future type stays shallow (E0275 at the stdio spawn).
     let future: Pin<Box<dyn Future<Output = (JsonRpcResponse, X)> + Send + 'a>> = Box::pin(future);
     match with_grant_slot(logger, future).await {
@@ -618,10 +622,17 @@ impl super::MetaMcp {
     ) -> JsonRpcResponse {
         // MIK-7996: held to this dispatch's last write, on every exit path.
         let _session = self.hold_session(target.session_id);
-        let (logger, id) = (self.transparency_logger.as_ref(), target.id.clone());
+        let logger = self.transparency_logger.as_ref();
+        // A slot opens only with a log and none open (the HTTP handler opens
+        // one first): otherwise the wrap would box and clone for nothing.
+        let opens_slot = logger.is_some() && GRANT_SLOT.try_with(|_| ()).is_err();
+        let id = opens_slot.then(|| target.id.clone());
         let answer: Pin<Box<dyn Future<Output = JsonRpcResponse> + Send + '_>> =
             Box::pin(self.dispatch_below_gate_shaped_in_slot(target, shape, confirmed_in_band));
-        slot_rpc(logger, id, async { (answer.await, ()) }).await.0
+        match id {
+            Some(id) => slot_rpc(logger, id, async { (answer.await, ()) }).await.0,
+            None => answer.await,
+        }
     }
 }
 
@@ -658,6 +669,9 @@ pub(super) struct GrantBookkeeping {
     pub(super) slots_opened: usize,
     pub(super) notes_taken: usize,
     pub(super) flushes_spawned: usize,
+    /// `slot_rpc` calls that opened no slot (no log, or one already open):
+    /// a box and an id clone spent on nothing (MIK-8014 design item 3).
+    pub(super) idle_wraps: usize,
 }
 
 #[cfg(test)]

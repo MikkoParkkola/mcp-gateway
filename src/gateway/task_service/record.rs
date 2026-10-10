@@ -40,8 +40,13 @@ pub(super) const TARGET_VERSION: u32 = 5;
 /// which UPGRADING-4.0 item 105 states.
 pub(super) const ERROR_AUTHOR_VERSION: u32 = 6;
 
+/// The record version that introduced [`Record::upstream_cancel_sent`] (MIK-7642).
+/// Written only on a cancelled row whose upstream job one sender claimed; every
+/// other row keeps its version and its bytes.
+pub(super) const UPSTREAM_CANCEL_VERSION: u32 = 7;
+
 /// The highest record version the loader accepts: the newest field's version.
-pub(super) const MAX_LOADABLE_VERSION: u32 = ERROR_AUTHOR_VERSION;
+pub(super) const MAX_LOADABLE_VERSION: u32 = UPSTREAM_CANCEL_VERSION;
 
 /// One backend call a task's result was produced by: names only, never
 /// arguments. No current invocation policy reads `ToolTarget.arguments`; a
@@ -200,6 +205,13 @@ pub(super) struct Record {
     /// as "not established", which receipts nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) error_author: Option<ErrorAuthor>,
+    /// The attempt claim for the one upstream `tasks/cancel` a cancelled row's
+    /// job gets (MIK-7642, design r5 R5.3): set by the single sender that won
+    /// the durable compare, in the write that decided to send. It records that
+    /// a send was claimed, never that the backend received or honoured it.
+    /// Absent when false, so every other row serializes as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(super) upstream_cancel_sent: bool,
     pub(super) admission: AdmissionRecord,
     pub(super) backend: String,
     pub(super) revision: u64,
@@ -266,6 +278,7 @@ impl PreparedTask {
                 targets,
                 output_free: false,
                 error_author: None,
+                upstream_cancel_sent: false,
                 admission: AdmissionRecord {
                     identity_digest: binding.identity().to_owned(),
                     principal_digest: binding.principal_digest().to_owned(),
@@ -305,6 +318,7 @@ impl PreparedTask {
                 targets: Vec::new(),
                 output_free: false,
                 error_author: None,
+                upstream_cancel_sent: false,
                 admission: AdmissionRecord {
                     identity_digest: format!("{identity:064x}"),
                     principal_digest: owner.to_owned(),

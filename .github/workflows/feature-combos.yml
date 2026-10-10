@@ -150,3 +150,31 @@ jobs:
             echo "::error::the refusal does not name the firewall feature and key"
             exit 1
           fi
+
+  # Every test target must compile with debug assertions off (MIK-8223): an
+  # item gated on `debug_assertions` that a plain `cfg(test)` module uses
+  # compiles in debug and breaks `cargo test --release`. The row turns
+  # debug_assertions off in the test profile instead of building `--release`:
+  # the cfg is the same, and the release profile (thin LTO, one codegen unit)
+  # over 200 test binaries ran the runner out of memory. Default features.
+  # Not reproduced, on purpose: panic = "abort", overflow checks and
+  # opt-level differ from --release, but no code here is gated on them at
+  # compile time. Add a row for one before restoring --release.
+  release-test-compile:
+    name: Test compile without debug assertions
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      # Its own key: these artifacts differ in cfg from the clippy shards'.
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: feature-combos-no-debug-assertions
+      - name: Compile every test target with debug assertions off
+        run: >-
+          cargo test --all-targets --no-run
+          --config profile.dev.debug-assertions=false
+          --config profile.test.debug-assertions=false

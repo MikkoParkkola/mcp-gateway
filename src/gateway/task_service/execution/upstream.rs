@@ -25,6 +25,7 @@ use crate::gateway::meta_mcp::invoke::audit::{DispatchNotes, with_dispatch_scope
 use crate::gateway::task_service::ErrorAuthor;
 use crate::gateway::task_service::record::UpstreamRecord;
 use crate::gateway::task_service::store::StoreError;
+use crate::gateway::task_service::store::targets::CancelClaim;
 use crate::protocol::JsonRpcError;
 use crate::protocol::tasks::{TaskStatus, TaskTransition};
 
@@ -38,6 +39,13 @@ pub(crate) struct UpstreamCapture {
     pub tool: String,
     pub arguments: Value,
     pub handle: String,
+}
+
+/// Whether [`TaskExecutor::cancel_upstream_once`] awaits its send or detaches it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CancelSend {
+    Inline,
+    Detach,
 }
 
 /// Why a read issued zero upstream queries.
@@ -155,6 +163,71 @@ impl TaskExecutor {
                 false
             }
         }
+    }
+
+    /// Claim this cancelled row's one upstream `tasks/cancel`, and send it when
+    /// this caller won (MIK-7642, design r7 R7.3).
+    ///
+    /// Every sender comes through here: the cancel transition with no offer
+    /// (the row's own descriptor, if any), and the worker with the handle it
+    /// holds. The claim is one durable compare, so exactly one of them sends.
+    /// `Detach` spawns the send so an owner's `tasks/cancel` answer does not
+    /// wait on the peer; `Inline` awaits it on a worker that owns its own task.
+    /// Returns whether this caller claimed.
+    pub(crate) async fn cancel_upstream_once(
+        &self,
+        owner_digest: &str,
+        id: &str,
+        offered: Option<UpstreamRecord>,
+        send: CancelSend,
+    ) -> bool {
+        let Some(adapter) = self.recovery().cloned() else {
+            return false;
+        };
+        let claimed = match self
+            .service
+            .store
+            .claim_upstream_cancel(owner_digest, id, offered)
+            .await
+        {
+            Ok(CancelClaim::Claimed(descriptor)) => descriptor,
+            Ok(CancelClaim::AlreadyClaimed | CancelClaim::NotOurs) => return false,
+            Err(error) => {
+                tracing::warn!(task_id = %id, ?error, "upstream cancel claim not written; nothing sent");
+                return false;
+            }
+        };
+        let handle = UpstreamHandle {
+            backend: claimed.backend,
+            handle: claimed.handle,
+        };
+        let deadline = crate::gateway::meta_mcp::upstream::QUERY_DEADLINE;
+        match send {
+            CancelSend::Inline => adapter.cancel(&handle, deadline).await,
+            CancelSend::Detach => {
+                tokio::spawn(async move { adapter.cancel(&handle, deadline).await });
+            }
+        }
+        true
+    }
+
+    /// A worker's offer of the handle it holds for `job`, bound to the row's
+    /// own admitted operation; `None` when the row cannot be read.
+    pub(super) fn offered_descriptor(
+        &self,
+        owner_digest: &str,
+        id: &str,
+        job: &crate::gateway::meta_mcp::upstream::DirectJob,
+        handle: String,
+    ) -> Option<UpstreamRecord> {
+        let operation_digest = self.service.store.operation_digest_of(owner_digest, id)?;
+        Some(UpstreamRecord {
+            handle,
+            backend: job.server.clone(),
+            tool: job.tool.clone(),
+            arguments: job.arguments.clone(),
+            operation_digest,
+        })
     }
 
     /// The owner-scoped recovery descriptor a reader must authorize against.
@@ -401,5 +474,17 @@ impl TaskExecutor {
         if Arc::strong_count(&slot) <= 2 {
             gate.remove(id);
         }
+    }
+
+    /// How many clones of `id`'s query slot exist beside the directory's own,
+    /// or `None` when the directory holds no entry for `id`. A recovery read
+    /// holds one, held or queued. A worker's [`QueryLease`] holds two, held or
+    /// queued: the lease's own and its owned guard's. The signal a row waits on
+    /// to know who holds the slot and that a contender is parked behind it,
+    /// rather than guessing from scheduler turns.
+    #[cfg(test)]
+    pub(crate) async fn query_slot_clones_for_test(&self, id: &str) -> Option<usize> {
+        let gate = self.query_gate.lock().await;
+        gate.get(id).map(|slot| Arc::strong_count(slot) - 1)
     }
 }

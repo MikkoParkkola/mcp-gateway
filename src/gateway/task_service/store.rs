@@ -25,6 +25,9 @@ use crate::fs_lock::ExclusiveFileLock;
 use chrono::{DateTime, Utc};
 #[cfg(test)]
 use disk::acquire_lease;
+// Unix-only: its one caller, `store_tests::repaired_rows`, is `cfg(unix)`.
+#[cfg(all(test, unix))]
+pub(super) use disk::after_load;
 #[cfg(test)]
 pub(super) use disk::read_bounded;
 use disk::{Fault, fire, open_blocking, write_record};
@@ -337,12 +340,13 @@ impl TaskStore {
         tool: &str,
         arguments: &serde_json::Value,
     ) -> Result<bool, StoreError> {
-        let mut candidate = {
+        let (task, mut candidate) = {
             let state = self.0.state();
             if !state.ready {
                 return Err(StoreError::Unavailable);
             }
-            owned(&state, owner, id)?.record.clone()
+            let entry = owned(&state, owner, id)?;
+            (entry.task.clone(), entry.record.clone())
         };
         // The record's OWN admitted digest, exactly as `capture_upstream` binds
         // it: measuring against a digest derived a second time would measure a
@@ -356,7 +360,16 @@ impl TaskStore {
             operation_digest,
         });
         candidate.version = candidate.version.max(UPSTREAM_VERSION);
-        Ok(serialize(&candidate)?.len() <= self.0.limits.record_bytes)
+        let budget = self.0.limits.record_bytes;
+        // And once cancelled (MIK-7642): see `targets::cancelled_bytes`. Measured
+        // at the widest instant chrono can encode, so no real cancel's
+        // timestamp is wider, and no clock is read.
+        Ok(serialize(&candidate)?.len() <= budget
+            && targets::cancelled_bytes(
+                &task,
+                &candidate,
+                chrono::DateTime::<chrono::Utc>::MAX_UTC,
+            )? <= budget)
     }
 
     /// Test-only: the durable recovery descriptor of `id`, whatever owner holds
@@ -381,6 +394,16 @@ impl TaskStore {
     #[cfg(test)]
     pub(crate) fn committed_count_for_test(&self) -> usize {
         self.0.state().entries.len()
+    }
+
+    /// Test-only: the owner digest of `id`, whatever owner holds it.
+    #[cfg(test)]
+    pub(crate) fn owner_digest_for_test(&self, id: &str) -> Option<String> {
+        self.0
+            .state()
+            .entries
+            .get(id)
+            .map(|entry| entry.record.admission.principal_digest.clone())
     }
 
     /// The admitted operation digest of one owner-scoped row.

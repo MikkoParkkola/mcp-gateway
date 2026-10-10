@@ -276,7 +276,10 @@ impl<'a> Settling<'a> {
             // owner, so returning would leave it `working` with nobody to
             // finish it: settle the abandoned result instead.
             Err(error) => {
-                tracing::warn!(task_id = %self.id, %error, "input round not committed");
+                // Bound to a local: a field access on the head line cannot be
+                // graded as run (MIK-7725).
+                let task_id = self.id;
+                tracing::warn!(task_id = %task_id, %error, "input round not committed");
                 self.settle(TaskTransition::Complete(abandoned_input_round()), false)
                     .await;
             }
@@ -798,3 +801,7 @@ mod mapping_tests {
 #[cfg(test)]
 #[path = "input_round_exit_tests.rs"]
 mod exit_tests;
+
+#[cfg(test)]
+#[path = "input_round_park_tests.rs"]
+mod park_tests;

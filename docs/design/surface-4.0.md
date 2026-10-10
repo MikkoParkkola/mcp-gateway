@@ -595,7 +595,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `runtime.profiles.<name>.restart.backoff_secs` | KEEP | `5` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:276 |
 | `runtime.profiles.<name>.restart.max_restarts` | KEEP | `2` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:274 |
 | `security` | KEEP | `type default` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/mod.rs:115 |
-| `security.agent_identity` | KEEP | `AgentIdentityConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:629 |
+| `security.agent_identity` | KEEP | `AgentIdentityConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:642 |
 | `security.agent_identity.allow_unverified_agent_identity` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:89 |
 | `security.agent_identity.enabled` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:63 |
 | `security.agent_identity.incomparable_proof_sources` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:132 |
@@ -605,20 +605,20 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `security.agent_identity.principal_labels[].labels` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:249 |
 | `security.agent_identity.principal_labels[].source` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:244 |
 | `security.agent_identity.require_id` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:66 |
-| `security.caller_identity` | KEEP | `crate::security::caller_identity::CallerIdentityConfig::defa` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:644 |
+| `security.caller_identity` | KEEP | `crate::security::caller_identity::CallerIdentityConfig::defa` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:657 |
 | `security.caller_identity.authority` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:47 |
 | `security.caller_identity.cloudflare_access` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:49 |
 | `security.caller_identity.cloudflare_access.audiences` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:32 |
 | `security.caller_identity.cloudflare_access.team_domain` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:30 |
 | `security.caller_identity.mode` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:43 |
 | `security.caller_identity.trusted_proxies` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:45 |
-| `security.claim_capture` | KEEP | `ClaimCaptureConfig::default()` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:659 |
-| `security.claim_capture.enabled` | KEEP | `false` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:571 |
-| `security.claim_capture.path` | KEEP | `"~/.mcp-gateway/claim-capture/claims.jsonl".to_string()` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:573 |
-| `security.context_integrity` | KEEP | `ContextIntegrityConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:647 |
-| `security.context_integrity.non_bypassable` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:535 |
-| `security.context_integrity.preset` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:530 |
-| `security.firewall` | KEEP | `crate::security::firewall::FirewallConfig::default()` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/config/features/security.rs:623 |
+| `security.claim_capture` | KEEP | `ClaimCaptureConfig::default()` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:672 |
+| `security.claim_capture.enabled` | KEEP | `false` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:584 |
+| `security.claim_capture.path` | KEEP | `"~/.mcp-gateway/claim-capture/claims.jsonl".to_string()` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:586 |
+| `security.context_integrity` | KEEP | `ContextIntegrityConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:660 |
+| `security.context_integrity.non_bypassable` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:548 |
+| `security.context_integrity.preset` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:543 |
+| `security.firewall` | KEEP | `crate::security::firewall::FirewallConfig::default()` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/config/features/security.rs:636 |
 | `security.firewall.anomaly_block_threshold` | KEEP | `see impl Default` | a switch under rule 3: setting it turns anomaly blocking on (unset warns only) | - | src/security/firewall/config.rs:78 |
 | `security.firewall.anomaly_detection` | KEEP | `see impl Default` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:30 |
 | `security.firewall.anomaly_min_observations` | INTERNAL | `fn default_anomaly_min_observations` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/security/firewall/config.rs:81 |
@@ -658,22 +658,22 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `security.firewall.tenant_guard.enabled` | KEEP | `false` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/tenant_guard.rs:60 |
 | `security.firewall.tenant_guard.max_tenants_per_window` | KEEP | `3` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/tenant_guard.rs:62 |
 | `security.firewall.tenant_guard.window_secs` | KEEP | `300` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/tenant_guard.rs:64 |
-| `security.hardened` | KEEP | `crate::security::posture::HardenedConfig::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:598 |
+| `security.hardened` | KEEP | `crate::security::posture::HardenedConfig::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:611 |
 | `security.hardened.private_backends` | KEEP | `type default` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/posture.rs:67 |
-| `security.identity_grants` | KEEP | `IdentityGrantsConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:641 |
-| `security.identity_grants.enabled` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:447 |
-| `security.identity_grants.fail_on_error` | KEEP | `true` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:452 |
-| `security.identity_grants.path` | KEEP | `"~/.mcp-gateway/identity-grants.yaml".to_string()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:449 |
-| `security.message_signing` | KEEP | `MessageSigningConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:626 |
-| `security.message_signing.enabled` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:149 |
-| `security.message_signing.key_id` | KEEP | `"default".to_string()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:164 |
-| `security.message_signing.previous_secret` | KEEP | `String::new()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:156 |
-| `security.message_signing.replay_window` | INTERNAL | `300` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/security.rs:162 |
-| `security.message_signing.require_nonce` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:159 |
-| `security.message_signing.shared_secret` | KEEP | `String::new()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:153 |
-| `security.posture` | KEEP | `crate::security::posture::SecurityPosture::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:595 |
-| `security.provenance_stamping` | KEEP | `false` | opt-in provenance receipts on results (ASI04) | - | src/config/features/security.rs:655 |
-| `security.remote_server_signing` | KEEP | `RemoteServerSigningConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:650 |
+| `security.identity_grants` | KEEP | `IdentityGrantsConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:654 |
+| `security.identity_grants.enabled` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:460 |
+| `security.identity_grants.fail_on_error` | KEEP | `true` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:465 |
+| `security.identity_grants.path` | KEEP | `"~/.mcp-gateway/identity-grants.yaml".to_string()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:462 |
+| `security.message_signing` | KEEP | `MessageSigningConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:639 |
+| `security.message_signing.enabled` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:162 |
+| `security.message_signing.key_id` | KEEP | `"default".to_string()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:177 |
+| `security.message_signing.previous_secret` | KEEP | `String::new()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:169 |
+| `security.message_signing.replay_window` | INTERNAL | `300` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/security.rs:175 |
+| `security.message_signing.require_nonce` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:172 |
+| `security.message_signing.shared_secret` | KEEP | `String::new()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:166 |
+| `security.posture` | KEEP | `crate::security::posture::SecurityPosture::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:608 |
+| `security.provenance_stamping` | KEEP | `false` | opt-in provenance receipts on results (ASI04) | - | src/config/features/security.rs:668 |
+| `security.remote_server_signing` | KEEP | `RemoteServerSigningConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:663 |
 | `security.remote_server_signing.backends` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:27 |
 | `security.remote_server_signing.backends.<name>.issued_at` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:55 |
 | `security.remote_server_signing.backends.<name>.issuer` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:53 |
@@ -684,43 +684,43 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `security.remote_server_signing.trusted_keys` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:25 |
 | `security.remote_server_signing.trusted_keys.<name>.algorithm` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:34 |
 | `security.remote_server_signing.trusted_keys.<name>.public_key` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:36 |
-| `security.response_contract` | KEEP | `ResponseContractConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:638 |
-| `security.response_contract.action_mode` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:422 |
-| `security.response_contract.default_max_bytes` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:424 |
-| `security.response_contract.enabled` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:420 |
-| `security.response_contract.fail_closed` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:427 |
-| `security.response_contract.tools` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:429 |
-| `security.response_contract.tools.<name>.action_mode` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:393 |
-| `security.response_contract.tools.<name>.forbidden_patterns` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:391 |
-| `security.response_contract.tools.<name>.max_bytes` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:389 |
-| `security.response_inspection` | KEEP | `ResponseInspectionConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:635 |
-| `security.response_inspection.action_mode` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:370 |
-| `security.response_inspection.enabled` | KEEP | `true` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:366 |
-| `security.sanitize_input` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:600 |
-| `security.signature_chain` | KEEP | `None` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:661 |
+| `security.response_contract` | KEEP | `ResponseContractConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:651 |
+| `security.response_contract.action_mode` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:435 |
+| `security.response_contract.default_max_bytes` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:437 |
+| `security.response_contract.enabled` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:433 |
+| `security.response_contract.fail_closed` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:440 |
+| `security.response_contract.tools` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:442 |
+| `security.response_contract.tools.<name>.action_mode` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:406 |
+| `security.response_contract.tools.<name>.forbidden_patterns` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:404 |
+| `security.response_contract.tools.<name>.max_bytes` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:402 |
+| `security.response_inspection` | KEEP | `ResponseInspectionConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:648 |
+| `security.response_inspection.action_mode` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:383 |
+| `security.response_inspection.enabled` | KEEP | `true` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:379 |
+| `security.sanitize_input` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:613 |
+| `security.signature_chain` | KEEP | `None` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:674 |
 | `security.signature_chain.emit` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/signature_chain.rs:46 |
 | `security.signature_chain.key_id` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/signature_chain.rs:43 |
 | `security.signature_chain.max_links` | KEEP | `8` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/signature_chain.rs:49 |
 | `security.signature_chain.signing_key` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/signature_chain.rs:41 |
-| `security.ssrf_protection` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:602 |
-| `security.tool_policy` | KEEP | `ToolPolicyConfig::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:619 |
+| `security.ssrf_protection` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:615 |
+| `security.tool_policy` | KEEP | `ToolPolicyConfig::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:632 |
 | `security.tool_policy.allow` | KEEP | `Vec::new()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:50 |
 | `security.tool_policy.default_action` | KEEP | `PolicyAction::Allow` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:47 |
 | `security.tool_policy.deny` | KEEP | `Vec::new()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:53 |
 | `security.tool_policy.enabled` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:45 |
 | `security.tool_policy.log_denied` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:57 |
 | `security.tool_policy.use_default_deny` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:55 |
-| `security.transparency_log` | KEEP | `TransparencyLogConfig::default()` | audit-log signing key the operator owns | - | src/config/features/security.rs:632 |
-| `security.transparency_log.enabled` | KEEP | `false` | opt-in audit when auth is off; required when auth is on (src/config/features/security.rs:117) | - | src/config/features/security.rs:33 |
-| `security.transparency_log.key_id` | KEEP | `"default".to_string()` | audit-log signing key the operator owns | - | src/config/features/security.rs:37 |
-| `security.transparency_log.path` | KEEP | `"~/.mcp-gateway/transparency/transparency.jsonl".to_string()` | state location; deployments put it on a chosen volume (the Helm chart puts the audit log on its own persistent volume) | - | src/config/features/security.rs:35 |
-| `security.transparency_log.rotation` | KEEP | `crate::security::audit_rotation_config::RotationConfig::defa` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/config/features/security.rs:44 |
+| `security.transparency_log` | KEEP | `TransparencyLogConfig::default()` | audit-log signing key the operator owns | - | src/config/features/security.rs:645 |
+| `security.transparency_log.enabled` | KEEP | unset: on with auth, off without | opt-in audit when auth is off; on by default with auth, and `false` with auth fails the load (MIK-8044 P2c2, src/config/features/security.rs:127) | - | src/config/features/security.rs:37 |
+| `security.transparency_log.key_id` | KEEP | `"default".to_string()` | audit-log signing key the operator owns | - | src/config/features/security.rs:41 |
+| `security.transparency_log.path` | KEEP | `"~/.mcp-gateway/transparency/transparency.jsonl".to_string()` | state location; deployments put it on a chosen volume (the Helm chart puts the audit log on its own persistent volume) | - | src/config/features/security.rs:39 |
+| `security.transparency_log.rotation` | KEEP | `crate::security::audit_rotation_config::RotationConfig::defa` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/config/features/security.rs:48 |
 | `security.transparency_log.rotation.max_segment_age_secs` | KEEP | `0` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:37 |
 | `security.transparency_log.rotation.max_segment_bytes` | KEEP | `64 * 1024 * 1024` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:35 |
 | `security.transparency_log.rotation.on_disk_full` | KEEP | `OnDiskFull::ExpireOldest` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:41 |
 | `security.transparency_log.rotation.retain_segments` | KEEP | `12` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:39 |
-| `security.transparency_log.shared_secret` | KEEP | `String::new()` | audit-log signing key the operator owns | - | src/config/features/security.rs:42 |
-| `security.trust_configured_backends` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:617 |
+| `security.transparency_log.shared_secret` | KEEP | `String::new()` | audit-log signing key the operator owns | - | src/config/features/security.rs:46 |
+| `security.trust_configured_backends` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:630 |
 | `server` | KEEP | `type default` | where the gateway listens and how clients reach it | - | src/config/mod.rs:93 |
 | `server.allow_unauthenticated_network_bind` | KEEP | `false` | security opt-out or credential; must stay an explicit operator decision | - | src/config/server_config.rs:65 |
 | `server.cleartext_http` | KEEP | `CleartextHttp::Refuse` | security opt-out or credential; must stay an explicit operator decision | - | src/config/server_config.rs:87 |
