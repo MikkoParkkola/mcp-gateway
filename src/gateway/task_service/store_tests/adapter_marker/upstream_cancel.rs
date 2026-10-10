@@ -288,3 +288,35 @@ async fn a_claimed_legacy_row_keeps_its_call_as_a_target() {
     );
     store.close().await.unwrap();
 }
+
+/// The same for a legacy row whose handle was never made durable: the offered
+/// descriptor names the call that ran. Mutant "provenance read before the
+/// winning descriptor is on the row" leaves the targets empty.
+#[tokio::test]
+async fn an_offered_claim_on_a_legacy_row_keeps_its_call_as_a_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let (row, binding) = admitted(&store, &services(), "cancel-legacy-offer").await;
+    let owner = binding.principal_digest().to_owned();
+    let id = row.id().to_owned();
+    store
+        .transition(&owner, &id, 1, TaskTransition::Cancel, at(1))
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .claim_upstream_cancel(&owner, &id, Some(descriptor(&binding, "job-offered")))
+            .await
+            .unwrap(),
+        CancelClaim::Claimed(_)
+    ));
+    let record = record_json(&path, &id);
+    assert_eq!(
+        record["targets"],
+        json!([{"server": "orders", "tool": "create"}]),
+        "{record}"
+    );
+    assert!(record.get("upstream").is_none(), "{record}");
+    store.close().await.unwrap();
+}

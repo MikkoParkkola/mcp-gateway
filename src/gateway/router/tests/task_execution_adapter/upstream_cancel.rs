@@ -439,3 +439,53 @@ async fn a_cancel_between_the_task_answer_and_its_capture_cancels_once() {
         "cancelled"
     );
 }
+
+/// Commits the task's Cancel at `BeforeCapture` without signalling the worker:
+/// the instant between a cancel's commit and its signal.
+struct CommitCancelAtCapture {
+    state: Mutex<std::sync::Weak<AppState>>,
+}
+
+#[async_trait::async_trait]
+impl CommitObserver for CommitCancelAtCapture {
+    async fn reached(&self, stage: CommitStage, task_id: &str) {
+        if stage != CommitStage::BeforeCapture {
+            return;
+        }
+        let app = self
+            .state
+            .lock()
+            .upgrade()
+            .expect("the suite state is alive");
+        app.task_executor
+            .commit_cancel_unsignalled_for_test(task_id)
+            .await;
+    }
+}
+
+/// T1b (delta-2 review): the cancel has committed but not yet signalled when
+/// the capture is refused. The worker's follow finds the row settled
+/// (`Overtaken`) with no cancel seen, and still offers the handle it holds,
+/// the only one anywhere: one upstream `tasks/cancel`. Mutant "Overtaken does
+/// not offer" sends none.
+#[tokio::test]
+async fn a_cancel_committed_before_its_signal_still_cancels_upstream_once() {
+    let rig = rig(Head::Received, Reply::Task, Release::Immediately).await;
+    rig.state
+        .task_executor
+        .observe_commits(Arc::new(CommitCancelAtCapture {
+            state: Mutex::new(Arc::downgrade(&rig.state)),
+        }));
+    post(
+        &rig.state,
+        "key-a",
+        task_invoke(1, "upstream-cancel-t1b", json!({})),
+    )
+    .await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while rig.cancels.lock().is_empty() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    std::assert_eq!(*rig.cancels.lock(), vec![HANDLE.to_owned()]);
+}

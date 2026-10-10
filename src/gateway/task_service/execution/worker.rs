@@ -326,6 +326,10 @@ async fn follow_upstream_job(
     let (job, handle, relay) = dispatched;
     let captured = capture_handle(executor, (principal, id, revision), &job, &handle).await;
 
+    // Neither early return below can strand a refused capture's handle: a job
+    // is armed only when an installed adapter claims its backend, and its
+    // principal already hashed at admission. Without an adapter no cancel
+    // could be sent anyway.
     let Some(adapter) = executor.recovery() else {
         return;
     };
@@ -376,6 +380,13 @@ async fn follow_upstream_job(
                 captured,
                 "upstream task settled by an owner read; this worker asks nothing further"
             );
+            // A cancel commits before its signal: a capture refused in that gap
+            // reaches here with no signal seen. The handle held here may be the
+            // only one; the claim is a no-op unless the row is cancelled and
+            // unclaimed (MIK-7642).
+            if !captured {
+                cancel_held_upstream(executor, principal, id, &job, upstream.handle.clone()).await;
+            }
             return;
         }
     };

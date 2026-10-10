@@ -97,7 +97,9 @@ impl Shared {
         // the cancelled row already met its budget with the descriptor on it.
         // A legacy row named its call only through the descriptor: keep that
         // provenance as targets before the descriptor leaves (the row is raised
-        // past the version that reads targets).
+        // past the version that reads targets). The winning descriptor, offered
+        // or durable, is the one read.
+        record.upstream = Some(descriptor.clone());
         let _ = super::targets::keep_provenance(&task, &mut record);
         record.upstream = None;
         record.upstream_cancel_sent = true;

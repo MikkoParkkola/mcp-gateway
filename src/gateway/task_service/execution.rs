@@ -440,6 +440,36 @@ impl TaskExecutor {
         self.service.store.upstream_for_test(id)
     }
 
+    /// Test-only: commit `id`'s Cancel without signalling its worker, as a
+    /// cancel does in the instant between its commit and its signal (MIK-7642).
+    #[cfg(test)]
+    pub(crate) async fn commit_cancel_unsignalled_for_test(&self, id: &str) {
+        let owner = self
+            .service
+            .store
+            .owner_digest_for_test(id)
+            .expect("the task exists");
+        let revision = self
+            .service
+            .store
+            .get(&owner, id)
+            .expect("readable")
+            .revision;
+        self.transition_digest_write(
+            &owner,
+            id,
+            revision,
+            (
+                TaskTransition::Cancel,
+                None,
+                crate::gateway::gateway_writes::WriteRecord::default(),
+            ),
+            ErrorAuthor::Gateway,
+        )
+        .await
+        .expect("the cancel commits");
+    }
+
     /// Join every owner, then every worker permit, inside one timeout budget.
     ///
     /// Two phases and this order. Ownership is joined first because a handoff
