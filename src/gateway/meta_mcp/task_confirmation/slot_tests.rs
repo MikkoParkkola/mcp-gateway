@@ -41,12 +41,16 @@ enum Hint {
 /// A transport serving one tool list; the hint can be changed between fetches.
 struct Canned {
     destructive: std::sync::atomic::AtomicBool,
+    /// Answer a fresh `tools/call` with a question (MIK-8293 S3d); off, a
+    /// call is a fixture error.
+    asks: std::sync::atomic::AtomicBool,
 }
 
 impl Canned {
     fn new(hint: Hint) -> Arc<Self> {
         Arc::new(Self {
             destructive: std::sync::atomic::AtomicBool::new(matches!(hint, Hint::Destructive)),
+            asks: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -63,6 +67,17 @@ impl crate::transport::Transport for Canned {
         method: &str,
         _params: Option<Value>,
     ) -> crate::Result<JsonRpcResponse> {
+        if method == "tools/call" && self.asks.load(Ordering::SeqCst) {
+            return Ok(JsonRpcResponse::success(
+                RequestId::Number(1),
+                json!({
+                    "resultType": "input_required",
+                    "inputRequests": {"k1": {"method": "elicitation/create",
+                        "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}}},
+                    "requestState": "backend-state-1"
+                }),
+            ));
+        }
         assert_eq!(method, "tools/list", "fixture serves only tools/list");
         let tool = Tool {
             name: TOOL.to_string(),
@@ -159,7 +174,15 @@ async fn fixture_on(server: &str, config: BackendConfig, shared: Option<Hint>) -
     let backend = Arc::new(Backend::new(
         server,
         config,
-        &FailsafeConfig::default(),
+        // No row here tests the per-backend rate limiter, and S3d (MIK-8293)
+        // sends 64 calls in a burst.
+        &FailsafeConfig {
+            rate_limit: crate::config::RateLimitConfig {
+                enabled: false,
+                ..crate::config::RateLimitConfig::default()
+            },
+            ..FailsafeConfig::default()
+        },
         Duration::ZERO,
     ));
     backend.set_transport_for_test(wire.clone());
@@ -227,6 +250,17 @@ async fn ask_as(
 ) -> TaskConfirmation {
     let arguments = json!({ "id": 1 });
     let task = json!({ "ttl": 60_000 });
+    // What the HTTP edge hands over for this caller: its binding through
+    // `principal_source`, as the edge derives it, and the task owner it
+    // routes to. No identity here means no key either: unbindable.
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        verified_identity: who,
+        ..crate::gateway::meta_mcp::anonymous_caller()
+    };
+    let principal = crate::protocol::mrtr::source_fingerprint(caller.principal_source(None));
+    let owner = who
+        .map(VerifiedIdentity::stable_actor_id)
+        .unwrap_or_default();
     let outcome = fx
         .meta
         .confirm_destructive_task(&TaskConfirmationRequest {
@@ -236,6 +270,9 @@ async fn ask_as(
             task: Some(&task),
             retry,
             verified_identity: who,
+            principal,
+            quota: caller.quota_key(),
+            owner: &owner,
             input_capabilities: declared,
             is_modern: true,
             admission: &fx.admission,
@@ -255,6 +292,7 @@ async fn foreign_states(fx: &Fixture) -> Vec<String> {
             SERVER.to_string(),
             None,
             "fingerprint".to_string(),
+            &crate::protocol::continuation::QuotaKey::for_test("fingerprint"),
             "digest".to_string(),
             crate::protocol::continuation::now_unix_secs(),
         )
@@ -475,6 +513,17 @@ async fn an_anonymous_caller_is_classified_from_the_shared_slot() {
     }
 }
 
+/// MIK-8137 R3 (BIND.2): a caller with neither an identity nor a key is still
+/// refused as unbindable once key-only callers can be bound: binding the key
+/// must not turn "no principal" into "everyone is one principal".
+#[tokio::test]
+async fn a_caller_with_no_identity_and_no_key_is_refused_as_unbindable() {
+    let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
+    let (code, message) = refusal(&ask_as(&fx, &fresh(), elicitation(), None).await);
+    assert_eq!(code, -32003, "{message}");
+    assert!(message.contains("cannot name"), "{message}");
+}
+
 fn refusal(outcome: &TaskConfirmation) -> (i32, String) {
     let TaskConfirmation::Answer(response) = outcome else {
         panic!("expected a refusal, got {outcome:?}");
@@ -524,7 +573,16 @@ async fn a_full_hold_table_refuses_the_challenge_and_mints_no_grant() {
     let now = crate::protocol::continuation::now_unix_secs();
     let table = fx.meta.continuation.in_flight();
     let mut held = Vec::new();
-    while let Some(key) = table.hold("filler", now + 300, now).await {
+    // A caller per hold: the table fills, not one caller's share (MIK-8293).
+    while let Some(key) = table
+        .hold(
+            "filler",
+            &crate::protocol::continuation::QuotaKey::for_test(&format!("filler-{}", held.len())),
+            now + 300,
+            now,
+        )
+        .await
+    {
         held.push(key);
         assert!(held.len() <= 1 << 16, "the hold table is bounded");
     }
@@ -606,35 +664,6 @@ async fn a_grant_already_spent_is_refused_and_a_fresh_one_is_granted_once() {
     assert_eq!(refusal(&ask(&fx, &retry, elicitation()).await).0, -32602);
 }
 
-/// Mutant: a caller with no verified identity is treated as having an
-/// already-admitted task, or replay recognition is dropped for everyone.
-#[test]
-fn an_unattributable_caller_is_never_an_admitted_replay() {
-    let admission = ExecutionAdmission::new(Arc::new(|| 1_000));
-    let (arguments, retry) = (json!({ "id": 1 }), fresh());
-    let alice = identity();
-    // The same operation, held under the verified owner's key.
-    let owned =
-        super::task_admission_request(alice.stable_actor_id(), KEY.to_owned(), TOOL, &arguments);
-    let _held = admission.admit_task(owned.borrow());
-    let request = |who| TaskConfirmationRequest {
-        id: RequestId::Number(7),
-        tool_name: TOOL,
-        arguments: &arguments,
-        task: None,
-        retry: &retry,
-        verified_identity: who,
-        input_capabilities: Declared::NONE,
-        is_modern: true,
-        admission: &admission,
-    };
-    assert!(
-        MetaMcp::already_admitted(&request(Some(&alice)), KEY),
-        "control: the verified owner's operation is recognised"
-    );
-    assert!(!MetaMcp::already_admitted(&request(None), KEY));
-}
-
 /// MIK-8202 (#3616 regression): a destructive call on a clock before 1970 is
 /// refused, never challenged: no confirmation is minted against a time the
 /// gateway cannot read. Control: the real clock challenges the same call.
@@ -654,3 +683,110 @@ async fn a_destructive_call_on_a_clock_before_the_epoch_is_refused() {
 
     challenge(&ask(&fx, &fresh(), elicitation()).await);
 }
+
+/// S6b (MIK-8311 CSL.1): a task confirmation whose envelope mint fails gives
+/// its slot back. The keyring refuses every envelope, so the gate takes a
+/// slot, cannot seal the grant, and refuses; the slot must not stay held for
+/// the envelope's lifetime. Red on base: the slot count grows by one.
+/// Mutant m8: the release on the mint-failure path removed.
+#[tokio::test]
+async fn s6b_a_refused_confirmation_mint_gives_its_slot_back() {
+    let mut fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
+    fx.meta.set_continuation_for_test(
+        crate::protocol::continuation::ContinuationState::mint_refusing_for_test(),
+    );
+    let now = crate::protocol::continuation::now_unix_secs();
+    let before = fx.meta.continuation.in_flight().len(now).await;
+
+    let outcome = ask(&fx, &fresh(), elicitation()).await;
+    let TaskConfirmation::Answer(response) = &outcome else {
+        panic!("setup: the gate did not answer: {outcome:?}");
+    };
+    assert!(
+        response.error.is_some(),
+        "setup: a refused mint must refuse, got {response:?}"
+    );
+
+    let after = fx.meta.continuation.in_flight().len(now).await;
+    assert_eq!(
+        after, before,
+        "the refused confirmation kept its slot: {before} held before, {after} after"
+    );
+}
+
+/// S3d (SLOTQ.3, SLOTQ.5): one verified identity has one cap across a tool
+/// call and both confirmation gates. Alice's 64 `gateway_invoke` rounds hold
+/// her cap; a task confirmation and an in-band meta confirmation, on the same
+/// continuation store, are then both refused. Red on base: both are asked.
+/// Mutant m6: a confirmation site keys the cap on its sealed principal.
+#[tokio::test]
+async fn s3d_one_identity_has_one_cap_across_invoke_and_both_confirmations() {
+    let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
+    fx.wire.asks.store(true, Ordering::SeqCst);
+    let alice = identity();
+    let declared = crate::protocol::meta::classify_request(
+        Some(&json!({"_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}}
+        }})),
+        Some("2026-07-28"),
+    )
+    .declared_capabilities();
+    let no_retry = RetryFields::default();
+    let caller = || crate::gateway::meta_mcp::MetaMcpCallerContext {
+        verified_identity: Some(&alice),
+        authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
+        input_capabilities: declared,
+        retry: &no_retry,
+        ..crate::gateway::meta_mcp::anonymous_caller()
+    };
+    let args = json!({"server": SERVER, "tool": TOOL, "arguments": {"id": 1}});
+    for i in 0..64 {
+        let asked = fx.meta.invoke_tool_for_test(&args, None, &caller()).await;
+        assert!(
+            asked
+                .as_ref()
+                .is_ok_and(|v| v.get("resultType") == Some(&json!("input_required"))),
+            "setup: invoke {i} was not asked: {asked:?}"
+        );
+    }
+    let now = crate::protocol::continuation::now_unix_secs();
+    assert_eq!(
+        fx.meta.continuation.in_flight().len(now).await,
+        64,
+        "setup: alice's rounds are held"
+    );
+
+    let task = ask(&fx, &fresh(), elicitation()).await;
+    let TaskConfirmation::Answer(task_answer) = &task else {
+        panic!("setup: the task gate did not answer: {task:?}");
+    };
+    let task_refused = task_answer.error.is_some();
+
+    let mut meta_caller = caller();
+    meta_caller.confirmation =
+        crate::gateway::destructive_confirmation::ConfirmationChannel::InBand {
+            continuation: &fx.meta.continuation,
+        };
+    // The in-band gate answers a challenge as `GateOutcome::Refuse` carrying a
+    // success (`confirmation.rs`), so its outcome cannot say whether a slot was
+    // taken; the slot count can.
+    let before_meta = fx.meta.continuation.in_flight().len(now).await;
+    let _meta_gate = crate::gateway::meta_mcp::destructive_confirmation_gate(
+        &RequestId::Number(9),
+        "gateway_kill_server",
+        &json!({"server": "brave"}),
+        None,
+        &meta_caller,
+    )
+    .await;
+    let meta_refused = fx.meta.continuation.in_flight().len(now).await == before_meta;
+    assert!(
+        task_refused && meta_refused,
+        "alice took slots past her cap: task confirmation refused = {task_refused}, \
+         meta confirmation refused = {meta_refused}"
+    );
+}
+
+mod key_quota;
+mod replay;

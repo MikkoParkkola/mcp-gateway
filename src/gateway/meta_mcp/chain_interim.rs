@@ -291,15 +291,19 @@ pub async fn plan_chain_resume(
 /// arguments would be the one redemption spelled differently, and a
 /// spec-conformant client would present a handle nothing here could see.
 ///
+/// `fingerprint` is the presenting caller's binding at the step the handle is
+/// pending at, derived as that step minted it (`MetaMcp::chain_step_fingerprint`,
+/// MIK-8137): `None` for a caller with neither an identity nor a key.
+///
 /// # Errors
 ///
-/// Fails if a handle is presented without a verified identity to bind it to,
-/// or if the handle does not open against this chain.
+/// Fails if a handle is presented by a caller that cannot be bound, or if the
+/// handle does not open against this chain and this caller.
 pub async fn presented_resume(
     state: &ContinuationState,
     retry: &crate::protocol::mrtr::RetryFields,
     chain: &[Value],
-    identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    fingerprint: Option<String>,
     now: u64,
 ) -> Result<Option<ChainResumePlan>> {
     let Some(token) = retry.request_state.as_deref() else {
@@ -308,8 +312,8 @@ pub async fn presented_resume(
         retry.solicited_input_responses()?;
         return Ok(None);
     };
-    let fingerprint = crate::protocol::mrtr::principal_fingerprint(identity).ok_or_else(|| {
-        crate::Error::json_rpc(-32602, "A chain resume requires a verified caller identity")
+    let fingerprint = fingerprint.ok_or_else(|| {
+        crate::Error::json_rpc(-32602, "A chain resume requires an authenticated caller")
     })?;
     plan_chain_resume(state, token, chain, &fingerprint, now)
         .await

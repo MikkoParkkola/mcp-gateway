@@ -163,6 +163,31 @@ impl crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
     ///
     /// The one derivation both the mint and the redeem read, so the two cannot
     /// name one caller two ways.
+    /// Who the slot cap charges this caller's continuations to (MIK-8293):
+    /// the caller, never the sealed binding [`Self::principal_source`] gives,
+    /// which is finer (one per propagated binding). A stdio process first,
+    /// then the verified identity, the trusted subject, the authenticated
+    /// credential (live caller and task worker alike), the key name.
+    /// `None` names no one, and nothing is minted for it.
+    pub(crate) fn quota_key(&self) -> Option<crate::protocol::continuation::QuotaKey> {
+        use crate::protocol::continuation::{QuotaKey, QuotaSource};
+        let source = if let Some(nonce) = self.stdio_nonce {
+            QuotaSource::Stdio(nonce.bytes())
+        } else if let Some(identity) = self.verified_identity {
+            QuotaSource::Identity(identity)
+        } else if let Some(subject) = self.grant_subject.as_ref() {
+            QuotaSource::Subject(subject)
+        } else if let Some(principal) = self.credential_principal.filter(|p| {
+            !p.is_empty()
+                && self.authentication == crate::gateway::meta_mcp::Authentication::Authenticated
+        }) {
+            QuotaSource::Credential(principal)
+        } else {
+            QuotaSource::KeyName(self.api_key_name.filter(|n| !n.is_empty())?)
+        };
+        Some(QuotaKey::new(source))
+    }
+
     pub(crate) fn principal_source(
         &self,
         dispatch_binding: Option<&str>,

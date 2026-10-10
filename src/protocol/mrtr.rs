@@ -588,8 +588,11 @@ pub fn source_fingerprint(source: PrincipalSource<'_>) -> Option<String> {
 
 /// [`source_fingerprint`] for a caller bound by its verified identity alone.
 ///
-/// Kept as the identity-only spelling every non-stdio site uses; it is the
-/// same derivation, not a second one.
+/// Not a caller binding: every gateway site binds through
+/// `MetaMcpCallerContext::principal_source`, which also binds a key-only
+/// caller (MIK-8137). Its one production caller is the direct route's A2A
+/// round, whose caller cannot reach `principal_source` yet (MIK-8330). It is
+/// the same derivation as the `Credential` arm, not a second one.
 #[must_use]
 pub fn principal_fingerprint(
     identity: Option<&crate::key_server::oidc::VerifiedIdentity>,

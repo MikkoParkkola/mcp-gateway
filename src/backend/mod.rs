@@ -255,10 +255,20 @@ pub struct Backend {
     /// transport pooled cannot show through the slot (MIK-8012).
     #[cfg(test)]
     pub(crate) rebuilds_attempted: std::sync::atomic::AtomicUsize,
+    /// The OAuth client of the last HTTP transport a start built: a row ages
+    /// its token on demand instead of sleeping one out (MIK-8269).
+    #[cfg(test)]
+    pub(crate) last_oauth_client:
+        parking_lot::Mutex<Option<Arc<tokio::sync::Mutex<crate::oauth::OAuthClient>>>>,
     /// Run once by the next publish between its era install and its slot
     /// write: where a concurrent era writer must not land (MIK-8012 HOLD.1).
     #[cfg(test)]
     pub(crate) between_install_and_write: parking_lot::Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Run once by the next publish after it writes the listen handle and
+    /// before it writes the transport: inside the swap a reader of the slot's
+    /// detected flavour must not see (MIK-8125).
+    #[cfg(test)]
+    pub(crate) between_listen_and_transport: parking_lot::Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// The slot's era (`cached_now`) just before each publish makes a
     /// transport reachable: the dialect its first request is shaped in
     /// (MIK-8012 boundary rows).

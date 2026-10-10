@@ -371,3 +371,25 @@ mod revive;
 
 #[path = "reconcile_table_listener_tests.rs"]
 mod reconcile_table;
+
+/// MIK-8269: an event session is background upkeep, so its task never runs
+/// where a login may begin. Each bounded open, refill and subscription would
+/// otherwise lead a login and end it `Cancelled` when its bound fires.
+#[tokio::test]
+async fn an_event_session_never_runs_where_a_login_may_begin() {
+    let hub = listeners();
+    assert!(crate::oauth::login_gate::interactive(), "premise");
+    hub.add("b", &Interest::ResourcesChanged).expect("room");
+    let shared = hub.backends.lock().get("b").cloned().expect("listener");
+    let ran = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let Some(ran) = *shared.ran_interactive.lock() {
+                return ran;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the session task started");
+    assert!(!ran, "the event session ran where a login may begin");
+}

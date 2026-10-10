@@ -229,3 +229,62 @@ fn a_successful_registration_logs_the_issued_id() {
     };
     assert_eq!(one["fields"]["client_id"], "reg-logged");
 }
+
+/// MIK-8344: a registration that meets a corrupt stored id while another
+/// process holds the repair lock stays cancellable. The lock wait used to be a
+/// blocking `flock` on the async path: it pinned a runtime thread, and the
+/// login's cancel (a restart, a stop) could not end it until the holder let go.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancel_ends_a_registration_waiting_on_a_held_repair_lock() {
+    use tokio_util::sync::CancellationToken;
+    let dir = tempfile::tempdir().unwrap();
+    let endpoint = registration_endpoint(201, r#"{"client_id":"reg-held"}"#).await;
+    let (client, storage) = registering(dir.path(), Some(&endpoint));
+    let key = client.credential_key().unwrap();
+    let final_path = storage.client_path(&key, RESOURCE);
+    std::fs::write(&final_path, "not json").unwrap();
+    let stem = final_path.file_stem().unwrap().to_str().unwrap();
+    let lock_path = final_path.with_file_name(format!(".{stem}.lock"));
+    let held = crate::fs_lock::ExclusiveFileLock::acquire(&lock_path).unwrap();
+    // The counter includes the hold just taken: wait for registration's own.
+    let held_attempts = crate::fs_lock::lock_attempts(&lock_path);
+
+    let cancel = CancellationToken::new();
+    let registration = tokio::spawn({
+        let cancel = cancel.clone();
+        async move {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => None,
+                id = client.ensure_client_id_with_redirect(REDIRECT) => Some(id),
+            }
+        }
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while crate::fs_lock::lock_attempts(&lock_path) == held_attempts {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "registration never reached the repair lock"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    cancel.cancel();
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(20), registration).await;
+    drop(held);
+    let ended = ended.expect("registration ignored cancel while the repair lock was held");
+    assert!(matches!(ended, Ok(None)), "the cancel ended it: {ended:?}");
+    assert_eq!(
+        std::fs::read_to_string(&final_path).unwrap(),
+        "not json",
+        "a cancelled repair leaves the final as it was"
+    );
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|name| name.contains(".tmp."))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "a cancelled save left temp files: {leftovers:?}"
+    );
+}
