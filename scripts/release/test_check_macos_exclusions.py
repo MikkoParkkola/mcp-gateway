@@ -234,5 +234,32 @@ class Predicates(unittest.TestCase):
         self.assert_on("#[cfg(true)]")
         self.assert_on("#[cfg(false)]")  # off on both platforms: not a macOS gap
 
+    def test_p15_a_comment_inside_cfg_attr_counts(self) -> None:
+        self.assert_off('#[cfg_attr(target_os = "macos", /* flaky */ ignore)]')
+
+    def test_p16_a_bracket_in_an_ignore_reason_does_not_swallow_the_test(self) -> None:
+        (Path(self.dir.name) / "Cargo.toml").write_text(self.CARGO)
+        rust = (
+            '#[cfg_attr(target_vendor = "apple", ignore = "needs procfs [see MIK-8174")]\n#[test]\nfn probe() {}\n'
+            '#[cfg(target_os = "linux")]\n#[test]\nfn other() {}\n'
+        )
+        self.assertEqual(
+            self.tree(rust),
+            [f"not run on macOS and not listed: src/x_tests.rs {n}" for n in ("other", "probe")],
+        )
+
+    def test_p17_a_comment_in_a_production_module_gate_still_marks_a_test_module(self) -> None:
+        found = self.tree(
+            '#[cfg(all(target_os = "linux", /* procfs */ test))]\nmod probe_tests;\n', path="src/reload/mod.rs"
+        )
+        self.assertEqual(found, ["not run on macOS and not listed: src/reload/mod.rs probe_tests"])
+
+    def test_p18_a_target_specific_optional_dependency_has_its_feature(self) -> None:
+        (Path(self.dir.name) / "Cargo.toml").write_text(
+            '[package]\nname = "x"\n'
+            "[target.'cfg(unix)'.dependencies]\nnix = { version = \"1\", optional = true }\n"
+        )
+        self.assertEqual(self.tree('#[cfg(any(feature = "nix", target_os = "linux"))]\n#[test]\nfn probe() {}\n'), [])
+
 if __name__ == "__main__":
     unittest.main()
