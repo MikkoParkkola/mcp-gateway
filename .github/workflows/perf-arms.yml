@@ -1,0 +1,60 @@
+name: Perf arms
+
+# Throwaway branch only (never merged). Builds every benchmark arm with ONE
+# recipe -- same runner image, same pinned toolchain, default features,
+# --release --locked -- so a paired comparison measures the code and not the
+# build. `sym` arms keep symbols and debug info for profiling only; they are
+# never the measured binaries. Binaries are uploaded with their sha256.
+on:
+  push:
+    branches: ["throwaway/perf-arms-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build arm ${{ matrix.cell }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { cell: P, ref: 32f135a61fb50c20a044fb4c2347bc1cf8015d89, sym: false }
+          - { cell: Q, ref: e138680a542b41fa156a94a1ffc9decd9692be77, sym: false }
+          - { cell: T, ref: 836d0d600af7db76b640bd8a91ae3acaf30dce2a, sym: false }
+          - { cell: Qsym, ref: e138680a542b41fa156a94a1ffc9decd9692be77, sym: true }
+          - { cell: Tsym, ref: 836d0d600af7db76b640bd8a91ae3acaf30dce2a, sym: true }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.ref }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: 1.98.0
+      - name: Build
+        shell: bash
+        env:
+          SYM: ${{ matrix.sym }}
+          CELL: ${{ matrix.cell }}
+          REF: ${{ matrix.ref }}
+        run: |
+          rustc --version
+          if [ "$SYM" = "true" ]; then
+            export CARGO_PROFILE_RELEASE_STRIP=false
+            export CARGO_PROFILE_RELEASE_DEBUG=true
+          fi
+          cargo build --release --locked --bin mcp-gateway
+          mkdir -p out
+          cp target/release/mcp-gateway "out/mcp-gateway-$CELL"
+          echo "$REF" > "out/ref-$CELL.txt"
+          rustc --version > "out/rustc-$CELL.txt"
+          (cd out && sha256sum "mcp-gateway-$CELL" > "sha256-$CELL.txt")
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-arm-${{ matrix.cell }}-${{ matrix.ref }}
+          path: out/
+          retention-days: 14
+          if-no-files-found: error
