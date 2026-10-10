@@ -143,7 +143,8 @@ pub(super) fn try_dashboard_bootstrap(
                  Enable mtls or remove public_url.",
             )));
         }
-        let Some(Redemption { not_after }) = state.dashboard_bootstrap.consume_capped(&candidate)
+        let Some(Redemption { not_after, now }) =
+            state.dashboard_bootstrap.consume_capped(&candidate)
         else {
             auth_failure(AuthFailureKind::BootstrapRefused);
             warn!("Dashboard bootstrap rejected: wrong or already-used value");
@@ -159,6 +160,7 @@ pub(super) fn try_dashboard_bootstrap(
             &state.dashboard_bootstrap,
             &state.live_config,
             not_after,
+            now,
             secure,
         ))
     }
@@ -171,10 +173,10 @@ pub(super) fn signed_in(
     bootstrap: &DashboardBootstrap,
     live: &crate::config_reload::LiveConfig,
     not_after: Option<std::time::SystemTime>,
+    now: Now,
     secure: bool,
 ) -> Response {
     let limits = SessionLimits::from(&live.get().auth.dashboard_session);
-    let now = Now::read();
     let handle = bootstrap.issue_session_until(now, &limits, not_after);
     // The cookie lives exactly as long as the server will honour it, so a
     // browser never keeps presenting a handle the server already dropped:

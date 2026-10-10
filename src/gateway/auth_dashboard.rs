@@ -50,6 +50,10 @@ struct Handoff {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Redemption {
     pub(crate) not_after: Option<SystemTime>,
+    /// The clocks the redemption was checked against, which the session or
+    /// code it yields is issued at: a second read could land on a clock that
+    /// stepped before 1970 in between (MIK-8202).
+    pub(crate) now: Now,
 }
 
 /// When a session was issued and when it last saw operator activity.
@@ -188,7 +192,8 @@ impl DashboardBootstrap {
     /// issue could not be dated, and the operator keeps a working link
     /// (MIK-8202).
     pub(crate) fn consume_capped(&self, candidate: &str) -> Option<Redemption> {
-        if wall_unreadable(Now::read()) {
+        let now = Now::read();
+        if wall_unreadable(now) {
             tracing::warn!(
                 "dashboard bootstrap refused: the host clock reads before 1970; the link is kept"
             );
@@ -196,9 +201,9 @@ impl DashboardBootstrap {
         }
         let mut guard = self.value.lock().ok()?;
         match guard.as_ref() {
-            Some((expected, _)) if expected == candidate => {
-                guard.take().map(|(_, not_after)| Redemption { not_after })
-            }
+            Some((expected, _)) if expected == candidate => guard
+                .take()
+                .map(|(_, not_after)| Redemption { not_after, now }),
             _ => None,
         }
     }
@@ -322,6 +327,7 @@ impl DashboardBootstrap {
         }
         slot.take().map(|live| Redemption {
             not_after: live.cap,
+            now,
         })
     }
 

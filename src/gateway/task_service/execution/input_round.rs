@@ -519,7 +519,9 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     let deadline = round.continuation_deadline;
     let (_, now) = readable_now(&executor.service.store, &mut cancel_rx).await?;
     let reached = deadline.is_some_and(|d| now >= d);
-    executor.proceed_unless_late(ids, deadline, reached).await?;
+    executor
+        .proceed_unless_late(ids, deadline, reached, &mut cancel_rx)
+        .await?;
     let call = TaskCall {
         tool: round.tool,
         arguments: round.arguments,
@@ -534,7 +536,9 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     // round with that reason rather than fail the task.
     let (_, now) = readable_now(&executor.service.store, &mut cancel_rx).await?;
     let expired = deadline.is_some_and(|d| rejected_after_expiry(&response, d, now));
-    executor.proceed_unless_late(ids, deadline, expired).await?;
+    executor
+        .proceed_unless_late(ids, deadline, expired, &mut cancel_rx)
+        .await?;
     let mut response = inspect_settled(&state, &call, &id, response);
     state.meta_mcp().release_unsent_hold(&mut response).await; // MIK-8131
     Settling::new(&executor, &state, &owned, &call, &principal, &id, revision)
@@ -629,37 +633,51 @@ impl TaskExecutor {
         (principal, id, revision): (&str, &str, u64),
         deadline: Option<u64>,
         late: bool,
+        cancel_rx: &mut watch::Receiver<bool>,
     ) -> Option<()> {
         let Some(deadline) = deadline.filter(|_| late) else {
             return Some(());
         };
-        self.close_late_round(principal, id, revision, deadline)
+        self.close_late_round(principal, id, revision, deadline, cancel_rx)
             .await;
         None
     }
 
     /// Close a resumed round that met its deadline. A write that fails for any
-    /// reason but a moved row is tried once more, reason and all.
+    /// reason but a moved row is tried once more, reason and all. A write
+    /// refused because the clock stepped before 1970 since the deadline check
+    /// waits for it to read and tries again, so the task is never left
+    /// `working` with nothing to finish it (MIK-8202).
     // ponytail: two attempts, then the row waits for restart recovery (which
     // settles it interrupted), as every other settlement write does.
-    async fn close_late_round(&self, principal: &str, id: &str, revision: u64, deadline: u64) {
+    async fn close_late_round(
+        &self,
+        principal: &str,
+        id: &str,
+        revision: u64,
+        deadline: u64,
+        cancel_rx: &mut watch::Receiver<bool>,
+    ) {
         let Ok(owner) = self.service.owner(principal) else {
             return;
         };
-        let reason = RoundClosed::Continuation(deadline).reason();
-        match self
-            .close_round(owner.as_digest(), id, revision, reason)
-            .await
-        {
-            Ok(()) | Err(super::CommitFailure::RevisionConflict) => {}
-            Err(_) => {
-                let reason = RoundClosed::Continuation(deadline).reason();
-                if self
-                    .close_round(owner.as_digest(), id, revision, reason)
-                    .await
-                    .is_err()
-                {
+        let mut retried = false;
+        loop {
+            let reason = RoundClosed::Continuation(deadline).reason();
+            match self
+                .close_round(owner.as_digest(), id, revision, reason)
+                .await
+            {
+                Ok(()) | Err(super::CommitFailure::RevisionConflict) => return,
+                Err(_) if self.service.store.now().is_err() => {
+                    if readable_now(&self.service.store, cancel_rx).await.is_none() {
+                        return;
+                    }
+                }
+                Err(_) if !retried => retried = true,
+                Err(_) => {
                     tracing::warn!(task_id = %id, "a late input round was not closed");
+                    return;
                 }
             }
         }
