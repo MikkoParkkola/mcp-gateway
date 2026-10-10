@@ -205,20 +205,6 @@ impl super::Gateway {
     }
 }
 
-impl super::AbortOnDrop {
-    /// Abort the task and wait until it has ended, so nothing it was doing
-    /// can land after this returns.
-    #[cfg_attr(
-        not(any(feature = "cost-governance", test)),
-        expect(dead_code, reason = "only the stdio cost saver is stopped this way")
-    )]
-    pub(crate) async fn stop(mut self) {
-        self.0.abort();
-        // Cancelled is the expected outcome; a panic is reported by the runtime.
-        drop((&mut self.0).await);
-    }
-}
-
 /// How long an HTTP gateway's shutdown gives its state saves (MIK-8157).
 pub(super) const SHUTDOWN_SAVES_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 

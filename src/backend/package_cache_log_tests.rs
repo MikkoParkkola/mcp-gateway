@@ -39,12 +39,7 @@ fn a_failed_start_logs_the_classification_and_not_the_childs_text() {
     // tests in this file reach this callsite with no subscriber installed.
     // An interested global default keeps the cached interest live so the
     // thread-local subscriber below decides each event instead.
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        let _ = tracing::subscriber::set_global_default(
-            Registry::default().with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
+    crate::test_log_capture::keep_interest_open();
 
     let workspace = tempfile::tempdir().expect("workspace");
     write_stub(workspace.path(), LEAKY_DYING_STUB);

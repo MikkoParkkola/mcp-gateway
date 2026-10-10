@@ -30,6 +30,15 @@ const MAX_PIECE: usize = 256;
 /// answer, ascending.
 pub(crate) type SeamFingerprint = (u64, Vec<u32>);
 
+/// Which forms a seam pass reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SeamForms {
+    /// Newline-joined and run together: an answer's value leaves.
+    Both,
+    /// Run together only: a key-path join (`MIK-8209` K6).
+    RunTogether,
+}
+
 impl CollusionDetector {
     /// The seam fingerprints of `parts`, the answer's value leaves in order,
     /// each with the step that produced it. Every occurrence of a fingerprint
@@ -39,8 +48,23 @@ impl CollusionDetector {
     /// slid twice, collecting steps only for sampled seam fingerprints:
     /// O(L) time and memory for L chars of answer.
     pub(crate) fn seam_fingerprints(&self, parts: &[(&str, Option<u32>)]) -> Vec<SeamFingerprint> {
+        self.seam_fingerprints_in(parts, SeamForms::Both)
+    }
+
+    /// [`Self::seam_fingerprints`] reading only the `forms` given: a
+    /// key-path join is read run together only, as it was delivered
+    /// (`MIK-8209` K6).
+    pub(crate) fn seam_fingerprints_in(
+        &self,
+        parts: &[(&str, Option<u32>)],
+        forms: SeamForms,
+    ) -> Vec<SeamFingerprint> {
+        let separators: &[&str] = match forms {
+            SeamForms::Both => &["\n", ""],
+            SeamForms::RunTogether => &[""],
+        };
         let mut steps: HashMap<u64, BTreeSet<u32>> = HashMap::new();
-        for separator in ["\n", ""] {
+        for &separator in separators {
             if separator.is_empty() && parts.len() < 2 {
                 continue;
             }

@@ -39,6 +39,7 @@
 //!     &config,
 //!     env,
 //!     None, // no identity-grant sink: grants are not reloaded
+//!     None, // no capability backend to announce listing changes for
 //!     shutdown_tx.subscribe(),
 //! );
 //! # });
@@ -447,6 +448,8 @@ pub(crate) use write::{MutateError, mutate_config_and_reload_detached};
 
 mod env_poll;
 // Linux and macOS (MIK-8181), as the real-watcher rows (see `watch_chain_tests.rs`).
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod env_poll_announce_tests;
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod env_poll_e2e_tests;
 pub(crate) mod grant_audit;

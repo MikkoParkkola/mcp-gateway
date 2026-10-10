@@ -52,6 +52,10 @@ pub(crate) enum ToolsNudge {
     },
     /// The capability catalogue, which is not a registry backend.
     Catalogue { name: String },
+    /// The capability catalogue's startup scan finished. Announced even when
+    /// what it lists matches the last report: a client may have listed tools
+    /// mid-scan that the scan's end hid, and no nudge reported them (#3701).
+    CatalogueScanned { name: String },
 }
 
 /// What one per-user slot holds now.

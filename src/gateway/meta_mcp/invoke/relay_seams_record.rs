@@ -47,27 +47,9 @@ struct Group {
 /// receipts already kept to `answer`, the plan's decoded final answer.
 pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, answer: &Value) {
     receipts.retain(|r| r.kind != Kind::Seam);
-    let members = PLAN_MEMBERS
-        .try_with(|m| m.borrow().clone())
-        .unwrap_or_default();
-    if members.is_empty() {
+    let Some(parts) = answer_parts(answer) else {
         return;
-    }
-    let notes: HashMap<&str, u32> = members.iter().map(|(p, l)| (p.as_str(), *l)).collect();
-    let mut parts = Vec::new();
-    match answer {
-        Value::Object(map) => {
-            for (k, v) in map
-                .iter()
-                .filter(|(k, _)| k.as_str() != "_context_integrity")
-            {
-                let mut at = format!("/{}", super::pointer_token(k));
-                let label = notes.get(at.as_str()).copied();
-                walk(v, &mut at, label, &notes, &mut parts);
-            }
-        }
-        _ => walk(answer, &mut String::new(), None, &notes, &mut parts),
-    }
+    };
     // Each step's whole kept values, sources and sensitivity, read once.
     let mut steps: HashMap<u32, Step<'_>> = HashMap::new();
     for r in receipts.iter().filter(|r| r.in_plan) {
@@ -95,7 +77,7 @@ pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, an
     {
         return;
     }
-    let seams = fw.seam_fingerprints(&parts);
+    let seams = seam_fingerprints(fw, &parts, answer);
     let Some(caller) = receipts.iter().find(|r| r.in_plan) else {
         return;
     };
@@ -153,6 +135,24 @@ pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, an
     }
 }
 
+/// The seam fingerprints of `parts`, the answer's leaves with their owning
+/// steps, and (`MIK-8209` K6) of each key-path join whose pieces several
+/// steps produced, read run together as delivered. A piece's step is the one
+/// the leaf pass gave that same leaf, by identity, so ownership never differs.
+fn seam_fingerprints(
+    fw: &Firewall,
+    parts: &[(&str, Option<u32>)],
+    answer: &Value,
+) -> Vec<(u64, Vec<u32>)> {
+    let mut seams = fw.seam_fingerprints(parts);
+    let owner: HashMap<*const u8, u32> = parts
+        .iter()
+        .filter_map(|(text, label)| Some((text.as_ptr(), (*label)?)))
+        .collect();
+    seams.extend(fw.join_seam_fingerprints(answer, &|piece| owner.get(&piece.as_ptr()).copied()));
+    seams
+}
+
 /// The composite receipt of a seam joining `names`: its identity names
 /// every contributing source, under an empty server, which no backend can
 /// be named (`:` is refused in backend names), so it never aliases one.
@@ -166,6 +166,36 @@ fn composite(
     let sources = Some(names.into_boxed_slice());
     let digest = DeliveryDigest::of_seam(group.fps, group.sensitive, sources);
     seam(String::new(), identity, digest)
+}
+
+/// `answer`'s string leaves in the order a delivery walk reads them (the
+/// value leaves [`crate::security::firewall`]'s `delivery_parts` returns, in
+/// its order), each with the plan step whose noted member holds it, a
+/// parent's note inherited by the strings under it. `None` outside a plan.
+/// One walk serves the seam pass and retention's labels (`MIK-8209` K7).
+pub(in super::super) fn answer_parts(answer: &Value) -> Option<Vec<(&str, Option<u32>)>> {
+    let members = PLAN_MEMBERS
+        .try_with(|m| m.borrow().clone())
+        .unwrap_or_default();
+    if members.is_empty() {
+        return None;
+    }
+    let notes: HashMap<&str, u32> = members.iter().map(|(p, l)| (p.as_str(), *l)).collect();
+    let mut parts = Vec::new();
+    match answer {
+        Value::Object(map) => {
+            for (k, v) in map
+                .iter()
+                .filter(|(k, _)| k.as_str() != "_context_integrity")
+            {
+                let mut at = format!("/{}", super::pointer_token(k));
+                let label = notes.get(at.as_str()).copied();
+                walk(v, &mut at, label, &notes, &mut parts);
+            }
+        }
+        _ => walk(answer, &mut String::new(), None, &notes, &mut parts),
+    }
+    Some(parts)
 }
 
 /// Push `value`'s string leaves, in the order a delivery walk reads them,

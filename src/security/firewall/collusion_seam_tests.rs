@@ -344,3 +344,23 @@ fn composing_jamo_across_fields_keep_seams_exact() {
         "a seam fingerprint no relay of the delivered text computes"
     );
 }
+
+/// `MIK-8209` K6: a key-path join is read run together only. Its seam
+/// fingerprints are all of the run-together form; none comes from the
+/// newline-joined form alone.
+#[test]
+fn a_join_seam_has_no_newline_form() {
+    use super::SeamForms;
+    let det = detector();
+    let parts = [(FIELD_A, Some(0)), (FIELD_B, Some(1))];
+    let together: std::collections::HashSet<u64> = det
+        .fingerprints(&format!("{FIELD_A}{FIELD_B}"))
+        .into_iter()
+        .collect();
+    let seams = det.seam_fingerprints_in(&parts, SeamForms::RunTogether);
+    assert!(!seams.is_empty(), "premise: the two fields seam");
+    assert!(
+        seams.iter().all(|(fp, _)| together.contains(fp)),
+        "a newline-form fingerprint in a join seam"
+    );
+}

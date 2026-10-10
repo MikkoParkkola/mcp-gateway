@@ -48,14 +48,7 @@ impl std::io::Write for Sink {
 /// interest and the global max level open, so a record is never filtered out
 /// before the scoped subscriber sees it.
 fn audit_records(run: impl FnOnce()) -> Vec<serde_json::Value> {
-    use tracing_subscriber::prelude::*;
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        let _ = tracing::subscriber::set_global_default(
-            tracing_subscriber::Registry::default()
-                .with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
+    crate::test_log_capture::keep_interest_open();
     let sink = Sink::default();
     let writer = sink.clone();
     let subscriber = tracing_subscriber::fmt()

@@ -133,11 +133,8 @@ async fn f6_a_playbook_step_carrying_a_blocked_pattern_is_refused_at_dispatch() 
     );
     assert!(!row.contains("cmd"), "the argument key was logged: {row}");
     let finding = &rows[0]["findings"][0];
-    assert_eq!(
-        (&finding["matched"], &finding["description"]),
-        (&json!(""), &json!("")),
-        "{row}"
-    );
+    assert!(finding.get("matched").is_none(), "{row}");
+    assert!(finding.get("description").is_none(), "{row}");
 }
 
 /// The chokepoint's `dispatch` rows in the firewall audit log at `path`.

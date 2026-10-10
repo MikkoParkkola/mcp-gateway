@@ -189,6 +189,8 @@ async fn off_runtime_unslotted_check_refuses_without_panic() {
             .with_max_level(tracing::Level::ERROR)
             .with_writer(move || Captured(Arc::clone(&sink)))
             .finish();
+        // A callsite another thread cached as off would miss this capture (MIK-8254).
+        crate::test_log_capture::keep_interest_open();
         let code = tracing::subscriber::with_default(subscriber, || {
             let _allowed = allow_unslotted_check_for_test();
             let who = api_key("alice");

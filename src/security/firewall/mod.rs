@@ -606,8 +606,9 @@ impl Firewall {
 
 /// Generic refusal text served in place of a blocked response.
 ///
-/// Deliberately says nothing about what matched: the finding detail belongs in
-/// the audit log, not in a payload handed to the caller that triggered it.
+/// Deliberately says nothing about what matched: the caller that triggered it
+/// learns nothing of the content, and the audit log records only the finding's
+/// kind, severity and location (MIK-8236).
 pub const BLOCKED_RESPONSE_MESSAGE: &str =
     "Security firewall blocked this response: backend content failed a content scan";
 

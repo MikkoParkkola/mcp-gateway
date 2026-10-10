@@ -95,6 +95,42 @@ impl CapabilityExecutor {
         Self::new().with_env(env).with_account_strategies(accounts)
     }
 
+    /// When this listed capability stops being listed with no reload: the
+    /// moment its last unexpired `oauth:` token reaches the 60 s buffer
+    /// `is_expired` applies, in Unix seconds (MIK-7940). `None` when time
+    /// alone cannot change it: not listed, not an `oauth:` key, a token with
+    /// no expiry, or a stored token that can be refreshed.
+    pub(crate) fn listing_expires_at(&self, auth: &AuthConfig) -> Option<u64> {
+        if self.missing_credential(auth, &mut HashMap::new()).is_some() {
+            return None;
+        }
+        let provider = auth.key.strip_prefix("oauth:")?;
+        let cached = self
+            .oauth_tokens
+            .read()
+            .get(provider)
+            .filter(|t| !t.is_expired())
+            .map(|t| t.expires_at);
+        let stored = self
+            .token_storage
+            .as_ref()
+            .and_then(|storage| storage.load(provider, provider));
+        if auth.token_endpoint.is_some()
+            && stored.as_ref().is_some_and(|t| t.refresh_token.is_some())
+        {
+            return None;
+        }
+        let stored = stored.filter(|t| !t.is_expired()).map(|t| t.expires_at);
+        let valid = [cached, stored].into_iter().flatten();
+        // Listed while any accepted token is unexpired; one without an expiry
+        // never stops counting.
+        valid
+            .collect::<Option<Vec<u64>>>()?
+            .into_iter()
+            .max()
+            .map(|expires_at| expires_at.saturating_sub(60))
+    }
+
     /// The line `mcp-gateway cap list` prints for `cap`: name, description and
     /// auth type, then `off: needs <KEY>` when [`Self::missing_credential`]
     /// says the gateway would not list it. One rule, shared with `tools/list`.

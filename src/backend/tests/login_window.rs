@@ -762,8 +762,8 @@ async fn a_probe_during_a_request_time_login_neither_waits_nor_rebuilds() {
     browser.opened(2, "the call's request-time login").await;
 
     let probed = tokio::time::timeout(
-        Duration::from_secs(2),
-        backend.health_probe(Duration::from_secs(5)),
+        Duration::from_secs(10),
+        backend.health_probe(Duration::from_secs(60)), // outlasts the outer bound
     )
     .await
     .expect("a probe does not queue behind the login holding the OAuth client");

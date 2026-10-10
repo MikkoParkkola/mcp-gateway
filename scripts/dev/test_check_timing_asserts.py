@@ -147,6 +147,80 @@ class Windows(unittest.TestCase):
         self.assertRefused("let took = start.elapsed();\nlet ms = took.as_millis();\nassert!(ms < 100);")
 
 
+class Timeouts(unittest.TestCase):
+    """A timeout whose expiry fails the test is a window too (MIK-8247)."""
+
+    def scan(self, body, path="src/x_tests.rs", prelude="", consts=None, includers=None):
+        text = f"{prelude}\nasync fn case() {{\n{body}\n}}\n"
+        return guard.scan_timeouts(path, text, consts or {}, includers or {})
+
+    def assertRefused(self, body, rule="under 5 s", **kw):
+        found = self.scan(body, **kw)
+        self.assertEqual(len(found), 1, found)
+        self.assertEqual(found[0].rule, rule, found)
+
+    def assertPasses(self, body, **kw):
+        self.assertEqual(self.scan(body, **kw), [])
+
+    def test_each_consumption_that_fails_the_test_is_judged(self):
+        for tail in ('.expect("arrives")', ".unwrap()", "?", '.unwrap_or_else(|_| panic!("late"))'):
+            with self.subTest(tail=tail):
+                self.assertRefused(f"let x = timeout(Duration::from_millis(4900), rx.recv()).await{tail};")
+                self.assertPasses(f"let x = timeout(Duration::from_secs(5), rx.recv()).await{tail};")
+
+    def test_a_bound_result_consumed_later_is_judged(self):
+        self.assertRefused('let got = timeout(Duration::from_millis(10), probe()).await;\nlet v = got.expect("in time");')
+        self.assertRefused("let got = tokio::time::timeout(Duration::from_millis(10), probe()).await;\nlet v = got?;")
+        self.assertRefused(
+            "let got = timeout(Duration::from_millis(10), probe()).await;\n"
+            'let v = got.unwrap_or_else(|_| panic!("late"));'
+        )
+
+    def test_the_rustfmt_layout_is_seen(self):
+        self.assertRefused('tokio::time::timeout(\n    Duration::from_millis(500),\n    child.wait(),\n)\n.await\n.expect("exits");')
+
+    def test_an_unresolved_window_fails_closed(self):
+        self.assertRefused('timeout(window(), f()).await.expect("x");', rule="unresolvable window")
+
+    def test_a_timeout_whose_expiry_does_not_fail_the_test_passes(self):
+        self.assertPasses("let elapsed = timeout(Duration::from_millis(50), f()).await;\nassert!(elapsed.is_err());")
+        self.assertPasses("let _ = timeout(Duration::from_millis(50), f()).await;")
+
+    def test_an_expect_inside_the_timed_future_is_not_the_consumption(self):
+        self.assertPasses('let r = timeout(Duration::from_millis(50), async { rx.recv().await.expect("x") }).await;')
+
+    def test_a_paused_clock_is_virtual_time_and_not_judged(self):
+        body = 'timeout(Duration::from_millis(1), l.admit()).await.expect("waited");'
+        text = f"#[tokio::test(start_paused = true)]\nasync fn paused() {{\n{body}\n}}\n"
+        self.assertEqual(guard.scan_timeouts("src/x_tests.rs", text, {}, {}), [])
+        text = f"#[tokio::test]\nasync fn paused() {{\ntokio::time::pause();\n{body}\n}}\n"
+        self.assertEqual(guard.scan_timeouts("src/x_tests.rs", text, {}, {}), [])
+        # The next function is on the real clock again.
+        text = f"#[tokio::test(start_paused = true)]\nasync fn paused() {{}}\n#[tokio::test]\nasync fn real() {{\n{body}\n}}\n"
+        self.assertEqual([f.fn for f in guard.scan_timeouts("src/x_tests.rs", text, {}, {})], ["real"])
+
+    def test_the_handshake_shape_of_mik_8253_is_refused(self):
+        self.assertRefused('timeout(Duration::from_millis(500), t.start()).await.expect("handshake").unwrap();')
+
+    def test_the_quiet_window_shape_of_mik_8252_is_refused(self):
+        prelude = "const QUIET: Duration = Duration::from_millis(1500);"
+        self.assertRefused('timeout(QUIET, events.recv()).await.expect("event");', prelude=prelude)
+
+    def test_a_const_from_the_including_file_resolves(self):
+        consts = {"READ_TIMEOUT": [("tests/root.rs", "Duration::from_secs(15)")]}
+        body = 'timeout(READ_TIMEOUT, r.next()).await.expect("frame");'
+        self.assertPasses(body, path="tests/sub/rows.rs", consts=consts, includers={"tests/sub/rows.rs": "tests/root.rs"})
+        self.assertRefused(body, path="tests/sub/rows.rs", consts=consts, rule="unresolvable window")
+
+    def test_product_code_is_not_judged(self):
+        body = 'timeout(Duration::from_millis(100), f()).await.expect("x");'
+        self.assertPasses(body, path="src/backend/era.rs")
+        self.assertRefused(body, path="src/accounts/wire_tests/fixture.rs")
+        text = f"async fn product() {{\n{body}\n}}\n#[cfg(test)]\nmod tests {{\nasync fn t() {{\n{body}\n}}\n}}\n"
+        found = guard.scan_timeouts("src/backend/era.rs", text, {}, {})
+        self.assertEqual([f.fn for f in found], ["t"], found)
+
+
 class Allowlist(unittest.TestCase):
     def setUp(self):
         self.found = scan("assert!(start.elapsed() < Duration::from_secs(1));")

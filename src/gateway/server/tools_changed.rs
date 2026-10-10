@@ -262,17 +262,30 @@ fn decide(
             // A capability reload also refreshes webhook event routes,
             // whether or not its tools changed.
             state.meta_mcp.events_capabilities_reloaded(&name);
-            let visible = state
-                .meta_mcp
-                .capability_tools(&name)
-                .map_or_else(|| fingerprint(&[]), |tools| fingerprint(&tools));
+            let visible = catalogue_fingerprint(state, &name);
             if !announced.lock().catalogue(&name, visible) {
                 return None;
             }
             (name, Reach::Tools)
         }
+        ToolsNudge::CatalogueScanned { name } => {
+            state.meta_mcp.events_capabilities_reloaded(&name);
+            // Always heard: tools a client listed during the scan were never
+            // reported. Recorded, so later reports compare against it.
+            let visible = catalogue_fingerprint(state, &name);
+            announced.lock().catalogues.insert(name.clone(), visible);
+            (name, Reach::Tools)
+        }
     };
     Some(decided)
+}
+
+/// The fingerprint of the tools catalogue `name` shows now.
+fn catalogue_fingerprint(state: &AppState, name: &str) -> u64 {
+    state
+        .meta_mcp
+        .capability_tools(name)
+        .map_or_else(|| fingerprint(&[]), |tools| fingerprint(&tools))
 }
 
 /// Who hears an announcement.
@@ -605,5 +618,42 @@ mod tests {
             .await
             .expect("the drain released its AppState on shutdown");
         drop(tx);
+    }
+
+    /// #3701 (gpt delta, MEDIUM): a finished startup scan is announced even
+    /// when what it lists matches the last report (empty included), because
+    /// tools a client listed mid-scan were never reported. Ordinary reports
+    /// still compare against it afterwards.
+    #[tokio::test]
+    async fn a_finished_scan_is_announced_even_when_it_lists_nothing() {
+        let (state, _store) = crate::gateway::router::tests::direct_route_state_with_identity(
+            crate::config::AgentIdentityConfig::default(),
+        )
+        .await;
+        let announced = parking_lot::Mutex::new(Announced::default());
+        let ordinary = || ToolsNudge::Catalogue {
+            name: "caps".into(),
+        };
+        assert_eq!(
+            decide(&state, &announced, ordinary()),
+            None,
+            "premise: an ordinary empty first report is no change"
+        );
+        assert_eq!(
+            decide(
+                &state,
+                &announced,
+                ToolsNudge::CatalogueScanned {
+                    name: "caps".into()
+                }
+            ),
+            Some(("caps".to_string(), Reach::Tools)),
+            "a finished scan is heard whatever it lists"
+        );
+        assert_eq!(
+            decide(&state, &announced, ordinary()),
+            None,
+            "an ordinary report matching the scan's end is still no change"
+        );
     }
 }

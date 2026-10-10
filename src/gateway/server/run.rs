@@ -540,6 +540,8 @@ impl Gateway {
         let task_service_for_shutdown = Arc::clone(&task_service);
         let task_executor_for_shutdown = Arc::clone(&task_executor);
 
+        // For the config watcher below; `meta_mcp` moves into the state here.
+        let capabilities_for_watcher = meta_mcp.get_capabilities();
         let state = Arc::new(AppState {
             session_lifecycle: Some(Arc::clone(&session_lifecycle)),
             // Shared, not minted: the invoke path mints continuations against
@@ -680,8 +682,13 @@ impl Gateway {
         // active. MIK-6750 r4: starting it earlier would let a startup-time
         // reload move `live_config` before the snapshot, surfacing a
         // never-bound host/port in the advertised resource.
-        let _config_watcher: Option<ConfigWatcher> =
-            self.start_config_watcher(&live_config, identity_grant_sink, &shutdown_tx, &warmer);
+        let _config_watcher: Option<ConfigWatcher> = self.start_config_watcher(
+            &live_config,
+            identity_grant_sink,
+            capabilities_for_watcher,
+            &shutdown_tx,
+            &warmer,
+        );
 
         // Start health check task. Shared with `run_stdio` for the same reason
         // the idle reaper is: a setting that works in one serve mode and

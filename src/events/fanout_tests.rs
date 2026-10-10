@@ -561,3 +561,33 @@ async fn a_clock_before_the_epoch_delivers_nothing_on_a_live_lease() {
         "an unreadable clock delivered an event on a lease it cannot date"
     );
 }
+
+/// A task source admits a stored subscription at delivery even once the task
+/// row has expired: fan-out matched the occurrence to its carried owner, and
+/// asking the store now would refuse the owner's own settlement (MIK-7940).
+/// Subscribing still asks the store.
+#[tokio::test]
+async fn a_task_source_admits_at_delivery_after_the_row_expired() {
+    use crate::events::task_source::TaskSource;
+    use crate::gateway::task_service::{StoreLimits, TaskService};
+    let dir = tempfile::tempdir().expect("dir");
+    let admission = crate::idempotency::admission::ExecutionAdmission::new(Arc::new(|| 1_000));
+    let source = TaskSource {
+        service: Arc::new(
+            TaskService::open(&dir.path().join("tasks"), StoreLimits::default(), admission)
+                .await
+                .expect("service"),
+        ),
+    };
+    let mut sub = subscription("task.settled");
+    sub.arguments = json!({"taskId": "task-gone"});
+    assert_eq!(
+        source
+            .authorize(&sub.principal, &sub.name, &sub.arguments)
+            .await
+            .expect_err("subscribe asks the store")
+            .code,
+        -32012
+    );
+    source.authorize_row(&sub).await.expect("delivery admits");
+}

@@ -173,6 +173,10 @@ pub struct CapabilityBackend {
     initial_scan: std::sync::atomic::AtomicU8,
     /// Moves at every catalogue write, under the write lock (MIK-8037).
     catalogue_generation: std::sync::atomic::AtomicU64,
+    /// What was listed when a listing change was last announced.
+    listing: parking_lot::Mutex<Option<Vec<String>>>,
+    /// Wakes the listing watch when the catalogue changes.
+    listing_wake: tokio::sync::Notify,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -200,6 +204,8 @@ impl CapabilityBackend {
             multi_user: std::sync::atomic::AtomicBool::new(false),
             initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
             catalogue_generation: std::sync::atomic::AtomicU64::new(0),
+            listing: parking_lot::Mutex::new(None),
+            listing_wake: tokio::sync::Notify::new(),
         }
     }
 
@@ -255,6 +261,7 @@ impl CapabilityBackend {
             false
         };
         drop(caps);
+        self.catalogue_changed();
         // After the epoch bump: a call that started before it is stopped here,
         // and one that starts after it is refused at `acquire`.
         self.executor.stop_unloaded_mcp(&|loaded| loaded != name);
@@ -445,6 +452,7 @@ impl CapabilityBackend {
                 !revoked.contains(name) && caps.index.contains_key(name)
             });
         }
+        self.catalogue_changed();
 
         info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
         Ok(total)
@@ -511,26 +519,6 @@ impl CapabilityBackend {
                 .missing_credential(&entry.auth, seen)
                 .is_none()
         })
-    }
-
-    /// The names clients are shown now, sorted. A change between two calls is
-    /// a change of what `tools/list` answers.
-    pub fn listed_names(&self) -> Vec<String> {
-        let mut seen = HashMap::new();
-        let mut names: Vec<String> = self
-            .capabilities
-            .read()
-            .entries
-            .iter()
-            .filter(|entry| {
-                self.executor
-                    .missing_credential(&entry.auth, &mut seen)
-                    .is_none()
-            })
-            .map(|entry| entry.name.clone())
-            .collect();
-        names.sort();
-        names
     }
 
     /// Get a specific capability by name — O(1) via the name index.
@@ -712,6 +700,8 @@ impl CapabilityBackend {
             self.executor.bump_mcp_generation(&name);
             self.executor.stop_mcp(&name);
         }
+        drop(caps);
+        self.catalogue_changed();
         Ok(())
     }
 
@@ -764,6 +754,8 @@ fn build_success_tool_result(capability: &CapabilityDefinition, result: Value) -
     }
 }
 
+#[path = "backend_listing.rs"]
+mod listing;
 #[path = "backend_rug_pull.rs"]
 mod rug_pull;
 

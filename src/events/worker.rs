@@ -137,7 +137,11 @@ impl EventsHub {
     /// failed withdrawal left behind is not sent. Any other name no source
     /// offers is held, not refused: a source installed after the worker
     /// started, or a partial capability scan (MIK-7772), says nothing about
-    /// the subscription, so it is kept (MIK-7976).
+    /// the subscription, so it is kept (MIK-7976). Every offered type is
+    /// asked, owner-scoped or not: an operational source's verdict is the
+    /// principal's live standing, so a demoted admin is refused here. A
+    /// source whose refusal would only mean the record it describes is gone
+    /// (an expired task) admits at delivery itself (MIK-7940).
     async fn source_verdict(&self, sub: &super::records::Subscription) -> Verdict {
         match self.source_offering(&sub.name) {
             Some(source) => match source.authorize_row(sub).await {
