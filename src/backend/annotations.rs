@@ -174,3 +174,37 @@ pub(crate) fn prepare_tool_metadata(server: &str, tools: &mut Vec<Tool>) -> Hash
     normalize_tool_annotations(server, tools);
     resend_permitted
 }
+
+/// Tools the backend declared an explicit `readOnlyHint` of `true` for.
+///
+/// The response cache may serve a stored result in place of a call only for
+/// these. Absent means deny, so a backend that has not been discovered yet, or
+/// one that annotates nothing, caches nothing — the same safe direction
+/// [`prepare_tool_metadata`] takes, and for the same reason: a cached miss is a
+/// slower call, a cached write is a call that never happened while its caller
+/// was told it did.
+///
+/// Read-only alone, deliberately, and NOT `prepare_tool_metadata`'s set.
+/// `idempotentHint` grants permission to *retry* — repeating the call reaches
+/// the same state, so executing it again is harmless. Serving a stored result
+/// is a stronger thing: the call does not run at all. A tool can be idempotent
+/// and still be a write (`mark_emails_as_read` declares exactly that), and for
+/// those the cached answer describes an effect that this call did not perform.
+///
+/// Must be read BEFORE [`normalize_tool_annotations`] runs, which is the same
+/// ordering `prepare_tool_metadata` documents: afterwards every omitted hint
+/// carries an inference, and `get_emails_content` — a `get_`-prefixed name the
+/// backend annotates read-write — is indistinguishable from one inferred
+/// read-only by its prefix. A name heuristic answers whether a tool *looks*
+/// like a read; skipping the call needs the backend to have said so.
+pub(crate) fn explicit_read_only_tools(tools: &[Tool]) -> HashSet<String> {
+    tools
+        .iter()
+        .filter(|tool| {
+            tool.annotations
+                .as_ref()
+                .is_some_and(|annotations| annotations.read_only_hint == Some(true))
+        })
+        .map(|tool| tool.name.clone())
+        .collect()
+}

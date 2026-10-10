@@ -17,6 +17,9 @@ use crate::gateway::trace;
 #[path = "order2_fsm_tests.rs"]
 mod order2_fsm;
 
+#[path = "cache_read_only_tests.rs"]
+mod cache_read_only;
+
 /// The permissive authorizer the helpers below hand out.
 static ALLOW_ALL: crate::gateway::authz::AllowAll = crate::gateway::authz::AllowAll;
 
@@ -2193,6 +2196,7 @@ mod attestation_wiring {
             result: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
         });
         backend.set_transport_for_test(transport);
+        backend.set_cache_read_only_for_test(&["search"]);
         let _ = registry.register(backend);
         registry
     }
@@ -4451,8 +4455,22 @@ providers:
         .unwrap();
 
     let cache = Arc::new(crate::cache::ResponseCache::new());
+    // The staged entry is only reachable through a backend that declared the
+    // tool read-only, so the fixture registers one. It carries no transport:
+    // both cases below are answered before dispatch, which is what the staged
+    // entry is for.
+    let registry = Arc::new(BackendRegistry::new());
+    let cached_backend = Arc::new(crate::backend::Backend::new(
+        "personal_caps",
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    cached_backend.set_cache_read_only_for_test(&["calendar_read"]);
+    let _ = registry.register(cached_backend);
+
     let meta = MetaMcp::with_features(
-        Arc::new(BackendRegistry::new()),
+        registry,
         Some(Arc::clone(&cache)),
         None,
         None,
@@ -5705,6 +5723,10 @@ fn counting_backend(
         calls: Arc::clone(&calls),
     });
     backend.set_transport_for_test(transport);
+    // The cache admits a result only from a declared read-only tool; these
+    // cases are about the key, so the declaration is seeded rather than
+    // discovered.
+    backend.set_cache_read_only_for_test(&["search", "charge", "calendar_read"]);
     (backend, calls)
 }
 

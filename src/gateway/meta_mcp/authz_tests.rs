@@ -74,6 +74,10 @@ pub(in crate::gateway::meta_mcp) fn counted_backend(
         calls: Arc::clone(&calls),
         result: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
     }));
+    // The cache admits a result only from a declared read-only tool; these
+    // cases are about the key and the refusals, so the declaration is seeded
+    // rather than discovered.
+    backend.set_cache_read_only_for_test(&["read"]);
     let _ = registry.register(backend);
     (registry, calls)
 }
@@ -1015,6 +1019,7 @@ async fn authz_cache_4b_read_and_write_keys_share_the_pre_dispatch_epoch() {
         bumped: AtomicBool::new(false),
         result: json!({"content": [{"type": "text", "text": "ok"}], "isError": false}),
     }));
+    backend.set_cache_read_only_for_test(&["read"]);
 
     let first = meta
         .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&AllowAll))
