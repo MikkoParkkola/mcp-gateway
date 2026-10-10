@@ -164,11 +164,23 @@ pub(super) async fn poll_export_source(
 /// the gateway is gone. Tying the abort to a guard's lifetime makes every exit
 /// path behave the same.
 #[must_use = "dropping this guard aborts the task immediately"]
-pub(crate) struct AbortOnDrop(pub(super) tokio::task::JoinHandle<()>);
+pub(crate) struct AbortOnDrop(tokio::task::JoinHandle<()>);
 
 impl AbortOnDrop {
     pub(crate) const fn new(handle: tokio::task::JoinHandle<()>) -> Self {
         Self(handle)
+    }
+
+    /// Abort the task and wait until it has ended, so nothing it was doing
+    /// can land after this returns.
+    #[cfg_attr(
+        not(any(feature = "cost-governance", test)),
+        expect(dead_code, reason = "only the stdio cost saver is stopped this way")
+    )]
+    pub(crate) async fn stop(mut self) {
+        self.0.abort();
+        // Cancelled is the expected outcome; a panic is reported by the runtime.
+        drop((&mut self.0).await);
     }
 }
 
