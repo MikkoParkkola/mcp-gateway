@@ -228,13 +228,13 @@ async fn ask_as(
     let arguments = json!({ "id": 1 });
     let task = json!({ "ttl": 60_000 });
     // What the HTTP edge hands over for this caller: its binding through
-    // `principal_source` (an identity caller binds by identity) and the task
-    // owner it routes to. No identity here means no key either: unbindable.
-    let principal = who.and_then(|who| {
-        crate::protocol::mrtr::source_fingerprint(
-            crate::protocol::mrtr::PrincipalSource::Credential(Some(who)),
-        )
-    });
+    // `principal_source`, as the edge derives it, and the task owner it
+    // routes to. No identity here means no key either: unbindable.
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        verified_identity: who,
+        ..crate::gateway::meta_mcp::anonymous_caller()
+    };
+    let principal = crate::protocol::mrtr::source_fingerprint(caller.principal_source(None));
     let owner = who
         .map(VerifiedIdentity::stable_actor_id)
         .unwrap_or_default();

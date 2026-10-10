@@ -52,10 +52,20 @@ fn ctx<'a>(
 static IDLE: std::sync::LazyLock<VerifiedIdentity> = std::sync::LazyLock::new(identity);
 
 async fn run(meta: &MetaMcp, id: i64, caller: MetaMcpCallerContext<'_>) -> Value {
+    run_chain(meta, id, &chain(), caller).await
+}
+
+/// One `gateway_execute` of `chain`, as JSON.
+async fn run_chain(
+    meta: &MetaMcp,
+    id: i64,
+    chain: &Value,
+    caller: MetaMcpCallerContext<'_>,
+) -> Value {
     let response = Box::pin(meta.handle_tools_call(
         RequestId::Number(id),
         "gateway_execute",
-        json!({"chain": chain()}),
+        json!({ "chain": chain }),
         None,
         caller,
     ))
@@ -95,7 +105,8 @@ async fn a_key_only_caller_resumes_a_chain_it_was_stopped_in() {
 }
 
 /// R8: the handle is refused to a caller who is not the one it was minted for:
-/// another key, and another identity. Nothing reaches the backend.
+/// another key, and another identity. Nothing reaches the backend, and the
+/// refusal spends nothing: the owner still resumes with the same handle.
 #[tokio::test]
 async fn a_chain_handle_is_refused_to_another_principal() {
     type Who<'a> = (Option<&'a VerifiedIdentity>, Option<&'a str>);
@@ -123,6 +134,9 @@ async fn a_chain_handle_is_refused_to_another_principal() {
             1,
             "{case}: resumed for a stranger"
         );
+        let resumed = run(&meta, 3, ctx(owner.0, owner.1, &caps, &retry)).await;
+        assert!(resumed.get("error").is_none(), "{case}: {resumed}");
+        resumed_the_pending_step(&stub, &resumed);
     }
 }
 
@@ -130,8 +144,8 @@ async fn a_chain_handle_is_refused_to_another_principal() {
 const BINDING: &str = "alice@https://srv.internal";
 
 /// A propagation strategy that mints one fixed per-user binding, so the row
-/// can seed the slot the call will use.
-struct FixedBinding;
+/// can seed the slot the call will use, and counts every mint.
+struct FixedBinding(Arc<std::sync::atomic::AtomicUsize>);
 
 #[async_trait::async_trait]
 impl crate::identity_propagation::IdentityPropagation for FixedBinding {
@@ -143,6 +157,7 @@ impl crate::identity_propagation::IdentityPropagation for FixedBinding {
         crate::identity_propagation::PropagatedCredential,
         crate::identity_propagation::PropagationError,
     > {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(crate::identity_propagation::PropagatedCredential {
             headers: vec![("Authorization".to_string(), "Bearer minted".to_string())],
             expires_at: i64::MAX,
@@ -154,9 +169,11 @@ impl crate::identity_propagation::IdentityPropagation for FixedBinding {
     }
 }
 
-/// A gateway over one identity-propagating backend (stateless, required) whose transport is `stub`: its calls dispatch under a per-user
-/// binding, so a continuation is minted under that binding, not the identity.
-fn propagating_meta_over(stub: Arc<AsksOnce>) -> MetaMcp {
+/// A gateway over one identity-propagating backend (stateless, required) whose
+/// transport is `stub`: its calls dispatch under a per-user binding, so a
+/// continuation is minted under that binding, not the identity. Returned with
+/// the count of credentials minted.
+fn propagating_meta_over(stub: Arc<AsksOnce>) -> (MetaMcp, Arc<std::sync::atomic::AtomicUsize>) {
     let registry = Arc::new(BackendRegistry::new());
     let config = BackendConfig {
         transport: crate::config::TransportConfig::Http {
@@ -190,7 +207,8 @@ fn propagating_meta_over(stub: Arc<AsksOnce>) -> MetaMcp {
     );
     let _ = registry.register(backend);
     let mut meta = MetaMcp::new(registry);
-    meta.set_identity_propagation(Arc::new(FixedBinding));
+    let mints = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    meta.set_identity_propagation(Arc::new(FixedBinding(Arc::clone(&mints))));
     // A required mint needs a durable audit record (MIK-6740).
     let log = tempfile::NamedTempFile::new().expect("tempfile");
     let path = log.path().to_string_lossy().to_string();
@@ -204,7 +222,7 @@ fn propagating_meta_over(stub: Arc<AsksOnce>) -> MetaMcp {
     meta.enable_transparency_log(Arc::new(
         crate::security::TransparencyLogger::open(config).expect("logger opens"),
     ));
-    meta
+    (meta, mints)
 }
 
 /// R6: a step behind an identity-propagating backend is minted under the
@@ -212,7 +230,7 @@ fn propagating_meta_over(stub: Arc<AsksOnce>) -> MetaMcp {
 #[tokio::test]
 async fn a_chain_step_minted_under_a_dispatch_binding_resumes() {
     let stub = Arc::new(AsksOnce::default());
-    let meta = propagating_meta_over(Arc::clone(&stub));
+    let (meta, _) = propagating_meta_over(Arc::clone(&stub));
     let (who, caps) = (identity(), elicitation_caps());
     let no_retry = &crate::protocol::mrtr::NO_RETRY;
     let stop = run(&meta, 1, ctx(Some(&who), None, &caps, no_retry)).await;
@@ -230,6 +248,58 @@ async fn a_chain_step_minted_under_a_dispatch_binding_resumes() {
     );
     let retry = answers(&handle);
     let resumed = run(&meta, 2, ctx(Some(&who), None, &caps, &retry)).await;
+    assert!(resumed.get("error").is_none(), "{resumed}");
+    resumed_the_pending_step(&stub, &resumed);
+}
+
+/// R13 (review, gpt HIGH): resolving a resume's binding can mint the caller's
+/// credential, so nothing is minted for a step that is not the one that
+/// stopped, nor for one the caller may not call. A handle presented with a
+/// substituted chain, or by a caller the policy refuses, is refused with no
+/// mint and no backend call; the owner's resume still runs afterwards.
+#[tokio::test]
+async fn a_resume_mints_nothing_for_a_substituted_chain_or_a_refused_caller() {
+    use std::sync::atomic::Ordering;
+
+    let stub = Arc::new(AsksOnce::default());
+    let (meta, mints) = propagating_meta_over(Arc::clone(&stub));
+    let (who, caps) = (identity(), elicitation_caps());
+    let no_retry = &crate::protocol::mrtr::NO_RETRY;
+    let stop = run(&meta, 1, ctx(Some(&who), None, &caps, no_retry)).await;
+    let retry = answers(&handle_in(&stop));
+    let minted = mints.load(Ordering::SeqCst);
+
+    let substituted = json!([
+        {"tool": "srv:other", "arguments": {}},
+        {"tool": "srv:after", "arguments": {}}
+    ]);
+    let refused = run_chain(&meta, 2, &substituted, ctx(Some(&who), None, &caps, &retry)).await;
+    assert_eq!(refused["error"]["code"], json!(-32602), "{refused}");
+    // Only the pending step is denied, so the refusal is the step's policy,
+    // not a refusal of `gateway_execute` itself.
+    let denied = MetaMcpCallerContext {
+        authorizer: &crate::gateway::authz::DenyOne { tool: "ask" },
+        ..ctx(Some(&who), None, &caps, &retry)
+    };
+    let refused = run(&meta, 3, denied).await;
+    assert!(
+        refused
+            .to_string()
+            .contains("denied by test authorizer: 'ask'"),
+        "{refused}"
+    );
+    assert_eq!(
+        mints.load(Ordering::SeqCst),
+        minted,
+        "a refused resume minted a credential"
+    );
+    assert_eq!(
+        stub.calls_to("ask").len(),
+        1,
+        "a refused resume reached the backend"
+    );
+
+    let resumed = run(&meta, 4, ctx(Some(&who), None, &caps, &retry)).await;
     assert!(resumed.get("error").is_none(), "{resumed}");
     resumed_the_pending_step(&stub, &resumed);
 }

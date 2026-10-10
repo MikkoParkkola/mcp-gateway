@@ -33,7 +33,9 @@ impl MetaMcp {
         // A presented resume decides where the chain starts and how many rounds
         // this exchange has already spent. Both are sealed, so neither is a
         // number the caller can choose.
-        let fingerprint = self.resume_fingerprint(&chain, caller, now).await?;
+        let fingerprint = self
+            .resume_fingerprint(&chain, session_id, caller, now)
+            .await?;
         let resume =
             presented_resume(&self.continuation, caller.retry, &chain, fingerprint, now).await?;
         let (start_step, rounds_used) = resume
@@ -143,12 +145,17 @@ impl MetaMcp {
     ///
     /// The handle is opened, not redeemed: nothing is spent until
     /// `plan_chain_resume` has checked this binding, so a caller refused here
-    /// or there burns nothing. A handle that does not open as a chain resume
-    /// naming a step of this chain gets the step-less binding; the plan
-    /// refuses it either way.
+    /// or there burns nothing. Resolving the step's binding can mint the
+    /// caller's credential, so nothing is resolved for a step that is not the
+    /// one that stopped: the handle must open as a chain resume sealed over
+    /// THIS chain, and the step must pass the same invocation policy every
+    /// dispatch passes before it may mint (authorization, kill switch,
+    /// withheld tools). Anything else gets the step-less binding, and the
+    /// plan refuses it.
     async fn resume_fingerprint(
         &self,
         chain: &[Value],
+        session_id: Option<&str>,
         caller: &super::super::MetaMcpCallerContext<'_>,
         now: u64,
     ) -> Result<Option<String>> {
@@ -157,6 +164,7 @@ impl MetaMcp {
         let Some(token) = caller.retry.request_state.as_deref() else {
             return Ok(None);
         };
+        let sealed_over_this_chain = super::super::chain_interim::chain_digest(chain);
         let pending = self
             .continuation
             .keyring()
@@ -166,18 +174,27 @@ impl MetaMcp {
                 payload
                     .require_purpose(ContinuationPurpose::ChainResume)
                     .is_ok()
+                    && payload.original_request_digest == sealed_over_this_chain
             })
             .and_then(|payload| payload.next_step)
-            .and_then(|step| chain.get(step))
-            .and_then(|step| step.get("tool"))
-            .and_then(Value::as_str)
-            .map(parse_code_mode_tool_ref);
-        match pending {
-            Some((tool, Some(server))) => self.step_fingerprint(caller, (server, tool)).await,
-            _ => Ok(crate::protocol::mrtr::source_fingerprint(
+            .and_then(|step| chain.get(step));
+        // The step as `drive_chain` will dispatch it: absent arguments are `{}`.
+        let target = pending.and_then(|step| {
+            let (tool, server) = parse_code_mode_tool_ref(step.get("tool")?.as_str()?);
+            let arguments = step.get("arguments").cloned().unwrap_or_else(|| json!({}));
+            Some((server?, tool, arguments))
+        });
+        let Some((server, tool, arguments)) = target else {
+            return Ok(crate::protocol::mrtr::source_fingerprint(
                 caller.principal_source(None),
-            )),
-        }
+            ));
+        };
+        self.check_invocation_policy(
+            &json!({ "server": server, "tool": tool, "arguments": arguments }),
+            session_id,
+            caller,
+        )?;
+        self.step_fingerprint(caller, (server, tool)).await
     }
 }
 
