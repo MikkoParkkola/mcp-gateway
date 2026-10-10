@@ -53,8 +53,18 @@ fn pinned_env() -> Arc<crate::config::LiveEnv> {
         body.push_str("=\n");
     }
     crate::gateway::test_helpers::write_owner_only(&env_file, body).expect("env file");
-    // The overlay is read here, so the file may go when `dir` drops.
-    let overlay = crate::config::EnvOverlay::from_paths(&[env_file]);
+    // The overlay is read here, so the file may go when `dir` drops. A file
+    // that fails to load must fail the test, not fall back to the process
+    // environment the pin exists to exclude.
+    let overlay = crate::config::EnvOverlay::from_paths_checked(&[env_file]).expect("pinned env");
+    for key in [
+        ATTESTATION_MODE_ENV,
+        ATTESTATION_SIGNING_KEY_ENV,
+        ATTESTATION_KEY_ID_ENV,
+        ATTESTATION_AUDIENCE_ENV,
+    ] {
+        assert!(overlay.assigns(key), "the pinned env must assign {key}");
+    }
     Arc::new(crate::config::LiveEnv::new(
         Arc::new(overlay),
         crate::config::ResolvedEnvFiles::default(),
