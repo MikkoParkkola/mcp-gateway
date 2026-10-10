@@ -258,8 +258,6 @@ async fn fixture(setup: Setup) -> Fixture {
         state_mut.agent_identity_config = config;
     }
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
-    // With the keyring the gateway mints continuations with, as its own
-    // firewalls are built (#2210, MIK-8276).
     #[cfg(feature = "firewall")]
     if setup.request_firewall {
         state_mut.firewall = Some(Arc::new(
