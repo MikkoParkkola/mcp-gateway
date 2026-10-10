@@ -1245,7 +1245,7 @@
         "src/gateway/server/stdio_delivery.rs:102",
         "src/gateway/server/stdio_delivery.rs:141",
         "src/gateway/router/mod.rs:113",
-        "src/gateway/server/mod.rs:1172",
+        "src/gateway/server/stdio_dispatch.rs:161",
         "src/gateway/router/backend_handlers/direct_audit.rs:225",
         "src/gateway/router/tests/meta_firewall_verdict.rs:564",
         "src/gateway/router/tests/meta_firewall_verdict/list_and_task_block.rs:149",
@@ -1441,8 +1441,8 @@
       "evidence": [
         "src/gateway/server/tests/stdio1_discover_versions.rs:68",
         "src/gateway/server/tests/stdio1_discover_versions.rs:76",
-        "src/gateway/server/mod.rs:377",
-        "src/gateway/server/mod.rs:1124"
+        "src/gateway/server/stdio_loop.rs:104",
+        "src/gateway/server/stdio_dispatch.rs:113"
       ],
       "note": "Met 2026-10-01 (#2549, squash d09c3d0db). The stdio arm now passes server.modern_protocol, read once at stdio start (src/gateway/server/mod.rs:2315), to discover_document (:2993), so the caveat below is closed. Exact-version tests over run_stdio_on: modern on lists the legacy revisions then 2026-07-28 (src/gateway/server/tests/stdio1_discover_versions.rs:68), modern off lists exactly the legacy revisions (src/gateway/server/tests/stdio1_discover_versions.rs:76). S1 was red on the pre-fix code (CI run 36818921264: the four legacy versions, no 2026-07-28), the only failure in that run. Mutants D1 (the arm passes false) and D2 (passes true) RED on the final head (run 36831018875). Two code-review seats SHIP. CI green on 5617bdd69, Windows included; feature combinations run 36831057212. The README, the release-notes draft and the CHANGELOG highlights no longer state the limitation.\n\n--- prior note follows ---\nAdded 2026-09-30 from the Linear 4.0 audit (.git/linear-audit-4.0.md). CAVEAT on MET baseline rows DISCOVER.1a/1b: the stdio arm calls discover_document(false) unconditionally (src/gateway/server/mod.rs:2946). README states stdio discover lists only the handshake revisions; documentation alone does not close this row."
     },
@@ -1549,9 +1549,9 @@
         "src/gateway/server/tests/stdio_reused_id.rs:96",
         "src/gateway/server/tests/stdio_reused_id.rs:130",
         "src/gateway/server/tests/stdio_reused_id.rs:151",
-        "src/gateway/server/mod.rs:600",
-        "src/gateway/server/mod.rs:606",
-        "src/gateway/server/mod.rs:817",
+        "src/gateway/server/stdio_loop.rs:327",
+        "src/gateway/server/stdio_loop.rs:333",
+        "src/gateway/server/stdio_loop.rs:544",
         "src/gateway/server/stdio_dispatches.rs:39",
         "src/gateway/server/stdio_dispatches.rs:78",
         "src/gateway/server/stdio_channel.rs:106"

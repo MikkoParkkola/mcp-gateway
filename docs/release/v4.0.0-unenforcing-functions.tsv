@@ -143,3 +143,7 @@ src/gateway/server/construct.rs	reload_path	1	Returns the config path hot reload
 src/gateway/server/construct.rs	shutdown_account_custody	1	Releases account custody at shutdown; no access decision
 src/gateway/server/construct.rs	with_env	1	Builder: sets the evaluated environment; no access decision
 src/gateway/server/construct.rs	with_watched_config	1	Builder: sets the watched config path; no access decision
+src/gateway/server/stdio_single.rs	run_stdio	1	Starts stdio mode on the process stdin/stdout and delegates to run_stdio_on; no decision of its own (MIK-8144 move)
+src/gateway/server/stdio_single.rs	stdio_take_merged_client_meta	1	Moves the client _meta into the call arguments; makes no access decision
+src/gateway/server/stdio_single.rs	observe_stdio_inbound	1	Records the inbound protocol observation; makes no access decision
+src/gateway/server/stdio_single.rs	dispatch_single_staged	1	Runs one stdio dispatch and returns what it staged; the decisions are in the dispatch it calls
