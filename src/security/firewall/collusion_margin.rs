@@ -106,6 +106,15 @@ fn glue_windows(
     Some(glue)
 }
 
+/// A whitespace run being collapsed: none yet, every char of one owner (the
+/// separator's being `None`), or chars of several owners.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Run {
+    Outside,
+    Owned(Option<u32>),
+    Mixed,
+}
+
 /// The owner of each char of `norm`, rebuilt by normalising each owner's run
 /// of `parts` apart and collapsing whitespace as the whole text is: a
 /// whitespace run is an owner's when every char in it, and the chars on
@@ -122,24 +131,26 @@ fn tagged(parts: &[(&str, Option<u32>)], norm: &str) -> Option<Vec<Option<u32>>>
     }
     let mut rebuilt = String::with_capacity(norm.len());
     let mut tags = Vec::with_capacity(norm.len());
-    let mut run: Option<Option<Option<u32>>> = None;
+    let mut run = Run::Outside;
     for (c, owner) in stream {
         if c.is_whitespace() {
-            run = Some(match run {
-                None => Some(owner),
-                Some(Some(o)) if o == owner => Some(o),
-                Some(_) => None,
-            });
+            run = match run {
+                Run::Outside => Run::Owned(owner),
+                Run::Owned(o) if o == owner => Run::Owned(o),
+                Run::Owned(_) | Run::Mixed => Run::Mixed,
+            };
             continue;
         }
-        if let Some(space) = run.take()
+        let space = std::mem::replace(&mut run, Run::Outside);
+        if space != Run::Outside
             && let Some(&before) = tags.last()
         {
             // An owner's normalisation alone trims its edge whitespace, so a
             // space is its owner's only with that owner's text on both sides.
-            let own = space
-                .flatten()
-                .filter(|o| before == Some(*o) && owner == Some(*o));
+            let own = match space {
+                Run::Owned(Some(o)) if before == Some(o) && owner == Some(o) => Some(o),
+                _ => None,
+            };
             rebuilt.push(' ');
             tags.push(own);
         }

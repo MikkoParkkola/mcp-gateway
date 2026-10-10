@@ -305,7 +305,7 @@ fn a_long_combining_run_adds_no_refusal() {
     );
 }
 
-/// R4, a pinned residual (v4.0.1 follow-up, which names this row): a forward
+/// R4, a pinned residual (MIK-8332, v4.0.1, which names this row): a forward
 /// made of short fields, beside the holder's own short fields, against a copy
 /// whose neighbours share the touching chars, is still refused. No field is
 /// 2K long, so no window is glue. The follow-up flips this row red-first.
@@ -325,8 +325,25 @@ fn a_short_field_forward_beside_own_short_fields_is_still_refused() {
         let params = send(&json!({"a_subject": "Fwd:", "b_parts": p, "c_sig": "-- me"}));
         refused += usize::from(relay_found(&fw, "alice", &params));
     }
+    assert_eq!(refused, TEXTS, "the residual changed: update MIK-8332");
+}
+
+/// Both seats (implementation review): when a char composes across an owner
+/// boundary (an "e" field run together with a field opening with an acute),
+/// the per-owner rebuild differs from the whole text and nothing is dropped,
+/// even beside a 2K field.
+#[test]
+fn composition_across_fields_stands_the_filter_down() {
+    let fw = observing();
+    let body = format!("\u{301}{}", text(2));
+    let (all, kept) = egress(&fw, &send(&json!({"a_note": "e", "b_body": body})));
     assert_eq!(
-        refused, TEXTS,
-        "the residual changed: update the v4.0.1 follow-up"
+        all, kept,
+        "a window dropped though the owners could not be lined up"
+    );
+    let (all, kept) = egress(&fw, &send(&json!({"a_note": "f", "b_body": text(2)})));
+    assert!(
+        kept.len() < all.len(),
+        "premise: the same shape without composition drops glue"
     );
 }
