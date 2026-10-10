@@ -41,10 +41,12 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::revoke::RevocationMaterial;
 use super::service::{
-    AccountService, AccountServiceError, ConsentExpectation, CredentialLease,
-    CredentialReleaseObserver, RefreshProvider, RejectionOutcome, ReleasedCredentials,
+    AccountService, AccountServiceError, CredentialLease, CredentialReleaseObserver,
+    RefreshProvider, RejectionOutcome, ReleasedCredentials,
 };
-use super::{AccountError, AccountKey, GrantRecord, PersonalAccountStore, StoreConfig};
+use super::{AccountError, AccountKey, PersonalAccountStore, StoreConfig};
+#[cfg(test)]
+use super::{GrantRecord, service::ConsentExpectation};
 
 /// Default in-flight bound when a caller does not choose one.
 pub(crate) const DEFAULT_CAPACITY: usize = 32;
@@ -267,13 +269,8 @@ impl<P: RefreshProvider + 'static, O: CredentialReleaseObserver + 'static> Custo
             .ok_or(CustodyError::ShuttingDown)
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
-    )]
+    /// Test-only, like [`AccountService::commit_grant_if`] it forwards to.
+    #[cfg(test)]
     pub(crate) async fn commit_grant_if(
         &self,
         account: &AccountKey,

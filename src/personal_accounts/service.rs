@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
 use super::consent::{GuardedCommit, GuardedCommitError};
 use super::revoke::RevocationMaterial;
 use super::{
@@ -166,12 +167,9 @@ impl ConsentExpectation {
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub(crate) enum AccountServiceError {
     #[error("account service runtime is not implemented")]
-    #[cfg_attr(
-        all(not(test), not(kani)),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
+    #[expect(
+        dead_code,
+        reason = "never constructed since the guarded commit landed; the tests' refuse_scaffold still names it (MIK-8300)"
     )]
     RuntimeNotImplemented,
     #[error("account is not connected — connect the account for this backend, then retry")]
@@ -400,13 +398,10 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
     ///
     /// One store call, on purpose. Reading the state here and committing after
     /// would be the TOCTOU the guarded entrypoint exists to remove.
-    #[cfg_attr(
-        all(not(test), not(kani)),
-        expect(
-            dead_code,
-            reason = "per-user OAuth scaffolding, deferred to post-4.0.0 backlog MIK-6744/6745/6746"
-        )
-    )]
+    // Test-only: production consent commits inside the journey callback
+    // through `consent::commit_if_unchanged_locked`. Tests use this to publish
+    // a grant through live custody, which holds the store exclusively.
+    #[cfg(test)]
     pub(crate) fn commit_grant_if(
         &self,
         account: &AccountKey,
@@ -423,9 +418,6 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
             Ok(GuardedCommit::Committed) => Ok(()),
             Ok(GuardedCommit::Fenced) => Err(AccountServiceError::StaleConsentFenced),
             Err(GuardedCommitError::Store(error)) => Err(AccountServiceError::Store(error)),
-            Err(GuardedCommitError::RuntimeNotImplemented) => {
-                Err(AccountServiceError::RuntimeNotImplemented)
-            }
         }
     }
 

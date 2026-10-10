@@ -391,11 +391,9 @@ fn the_guarded_store_entrypoint_fences_a_stale_expectation_without_writing() {
 
     let recording = witness::watch(&store);
     let mark = recording.mark();
-    let outcome = refuse_guarded_scaffold(
-        store.commit_grant_if_unchanged(&alice(), &ConsentExpectation::Absent, &replacement, None),
-        "stale guarded commit",
-    )
-    .expect("a stale expectation is an ordinary refusal, not a store failure");
+    let outcome = store
+        .commit_grant_if_unchanged(&alice(), &ConsentExpectation::Absent, &replacement, None)
+        .expect("a stale expectation is an ordinary refusal, not a store failure");
     let events = recording.since(mark);
     drop(recording);
 
@@ -404,11 +402,6 @@ fn the_guarded_store_entrypoint_fences_a_stale_expectation_without_writing() {
         one_authority_session(&events),
         "the expectation is compared under the same single acquisition a commit \
          would have used. observed: {events:?}"
-    );
-    assert_ne!(
-        GuardedCommitError::from(AccountError::CapacityExhausted),
-        GuardedCommitError::RuntimeNotImplemented,
-        "a store failure and the unimplemented scaffold are different answers"
     );
 
     let durable = expect_connected(store.lookup(&alice()).expect("after the fenced commit"));
@@ -480,11 +473,10 @@ fn a_competing_writer_cannot_land_between_the_comparison_and_the_commit() {
     );
     park.release();
 
-    let outcome = refuse_guarded_scaffold(
-        guarded.join().expect("guarded thread"),
-        "guarded commit under contention",
-    )
-    .expect("the captured state was still current when the lock was taken");
+    let outcome = guarded
+        .join()
+        .expect("guarded thread")
+        .expect("the captured state was still current when the lock was taken");
     competing
         .join()
         .expect("competing thread")
@@ -563,4 +555,34 @@ fn the_split_acquisition_pattern_is_rejected_by_the_same_predicate() {
         !one_authority_session(&events),
         "the predicate the guarded cases pass with must reject lookup-then-commit"
     );
+}
+
+/// MIK-8195 W6: a store failure under the guarded commit reaches the caller
+/// as that failure. Read as success the user would see "connected" with
+/// nothing written; read as fenced they would be told to consent again for a
+/// fault consenting cannot fix.
+#[test]
+fn a_store_failure_in_the_guarded_commit_is_reported_as_itself() {
+    let (tmp, store) = seed(&[(&bob(), bob_grant())]);
+    drop(store);
+    let mut full = config(tmp.path());
+    full.max_entries = 1;
+    let fx = Fixture::wrap(
+        tmp,
+        PersonalAccountStore::open(full).expect("reopen at capacity"),
+    );
+
+    assert_eq!(
+        domain_err(
+            fx.service
+                .commit_grant_if(&alice(), &ConsentExpectation::Absent, &grant()),
+            "guarded commit into a full store",
+        ),
+        AccountServiceError::Store(AccountError::CapacityExhausted)
+    );
+    assert_eq!(
+        fx.service.store().lookup(&alice()),
+        Ok(AccountLookup::Absent)
+    );
+    fx.assert_quiet("guarded commit into a full store");
 }
