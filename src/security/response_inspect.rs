@@ -201,6 +201,12 @@ static PATTERN_SET: LazyLock<RegexSet> = LazyLock::new(|| {
 static INSPECTION_MEMO: LazyLock<crate::security::text_memo::TextMemo<Vec<usize>>> =
     LazyLock::new(|| crate::security::text_memo::TextMemo::new("response_inspect"));
 
+/// The pattern scan without the memo: the MEMO.4 measurement's baseline.
+#[cfg(test)]
+pub(crate) fn scan_uncached(text: &str) -> Vec<usize> {
+    PATTERN_SET.matches(text).into_iter().collect()
+}
+
 /// Inspect response text for security patterns.
 ///
 /// `action_mode`: `true` = block on HIGH/CRITICAL; `false` = observe only.

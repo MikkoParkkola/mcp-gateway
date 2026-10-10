@@ -93,3 +93,67 @@ fn a_replaced_kernel_starts_with_an_empty_memo() {
     enforcing().evaluate(input(&marker, false));
     assert_eq!(runs("kernel", &marker), 2);
 }
+
+/// MEMO.4 cost, measured not asserted: run on the bench host with
+/// `--release -- --ignored --nocapture memo_cost`. Medians of 500 calls on a
+/// 6.2 KB catalogue holding one em dash (the PikeVM path); the kernel miss
+/// is the median of 300 first evaluations, one per pre-built kernel.
+#[test]
+#[ignore = "measurement for the bench host, prints medians"]
+fn memo_cost_on_a_catalogue() {
+    use std::time::Instant;
+    fn median(mut f: impl FnMut()) -> u128 {
+        for _ in 0..50 {
+            f();
+        }
+        let mut v: Vec<u128> = (0..500)
+            .map(|_| {
+                let t = Instant::now();
+                f();
+                t.elapsed().as_nanos()
+            })
+            .collect();
+        v.sort_unstable();
+        v[v.len() / 2]
+    }
+    let base = "\ndescription\nList all connected MCP backend servers with their tools and status\ninputSchema\nproperties\ntype\nobject".repeat(60);
+    let text = format!("{}\u{2014}{}", &base[..828], &base[828..6205]);
+    let inspect_hit = median(|| {
+        std::hint::black_box(crate::security::response_inspect::inspect_response(
+            &text, false,
+        ));
+    });
+    let inspect_scan = median(|| {
+        std::hint::black_box(crate::security::response_inspect::scan_uncached(&text));
+    });
+    let content = serde_json::json!({"content": [{"type": "text", "text": text}]});
+    let evaluate = |kernel: &ContextIntegrityKernel| {
+        let provenance =
+            ContextProvenance::tool_result("s", "t", "i", ContextTrustBoundary::RemoteToolOutput);
+        std::hint::black_box(
+            kernel.evaluate(ContextIntegrityInput::read_only_tool_result(
+                provenance,
+                content.clone(),
+            )),
+        );
+    };
+    let kernel = enforcing();
+    let kernel_hit = median(|| evaluate(&kernel));
+    // A miss on a kernel built outside the timing: building one compiles its
+    // scanner's regex set, which is not per-call cost.
+    let fresh: Vec<ContextIntegrityKernel> = (0..300).map(|_| enforcing()).collect();
+    let mut misses: Vec<u128> = fresh
+        .iter()
+        .map(|kernel| {
+            let t = Instant::now();
+            evaluate(kernel);
+            t.elapsed().as_nanos()
+        })
+        .collect();
+    misses.sort_unstable();
+    let kernel_miss = misses[misses.len() / 2];
+    println!(
+        "MEMO.4 len={} inspect_hit_ns={inspect_hit} inspect_scan_ns={inspect_scan} kernel_evaluate_hit_ns={kernel_hit} kernel_evaluate_miss_ns={kernel_miss}",
+        text.len()
+    );
+}
