@@ -406,22 +406,31 @@ async fn a_round_refused_by_a_gate_on_an_unreadable_clock_is_not_minted_or_parke
     let id = task_id(&post(&state, "key-a", create(1, "ac12-gate")).await);
     gate.wait_for_dispatch().await;
     before_epoch(&state);
-    gate.release_all();
-    // Settled by events, not by a count or a clock: the round either reaches
-    // a terminal status or the store refuses a read because the payload is
-    // waiting for the clock. Paused time cannot advance while this yields.
     let refused = store(&state).refused_reads_for_test();
+    gate.release_all();
+    // Outcome, not clock reads: once the funnel has read the unreadable
+    // clock (or the round has already ended), the clock is restored. A
+    // refused payload is gone by then and the task ends failed; one held
+    // for the clock would now be minted and parked, so the round would wait
+    // for input instead. Both are events; neither depends on a count or the
+    // runner's speed.
+    loop {
+        let seen = get_task(&state, "key-a", &id).await;
+        if is_terminal(&status_of(&seen)) || store(&state).refused_reads_for_test() > refused {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    store(&state).set_clock_for_test(None);
     let settled = loop {
         let seen = get_task(&state, "key-a", &id).await;
-        if is_terminal(&status_of(&seen)) {
+        let status = status_of(&seen);
+        if is_terminal(&status) || status == "input_required" {
             break seen;
         }
-        std::assert_eq!(
-            store(&state).refused_reads_for_test(),
-            refused,
-            "the refused payload waits for the clock: {seen}"
-        );
-        tokio::task::yield_now().await;
+        // Lets paused time advance, so a worker waiting for the clock
+        // retries and reads the restored one.
+        tokio::time::sleep(CLOCK_RETRY).await;
     };
     std::assert_eq!(status_of(&settled), "failed", "{settled}");
     std::assert!(!has_round(&state, &id), "nothing was parked");
