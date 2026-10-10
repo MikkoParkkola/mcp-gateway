@@ -542,7 +542,7 @@ async fn h17_a_keyed_direct_route_caller_is_tracked_under_its_key() {
     use crate::gateway::session_lifecycle::{IDLE_TTL, now_unix};
     let auth = keys(vec![api_key("key-one", "one")]);
     let (router, lifecycle, reclaimed, _store) = tracked_gateway(&auth).await;
-    let before = now_unix();
+    let before = now_unix().expect("clock after 1970");
     let (outcome, _, body) = send(&router, direct_call("key-one", 0)).await;
     assert_eq!(outcome, Delivered, "{body}");
     assert_eq!(
@@ -570,7 +570,7 @@ async fn h17_a_keyed_direct_route_caller_is_tracked_under_its_key() {
         "reclaimed before its deadline"
     );
     assert_eq!(
-        lifecycle.reap(now_unix() + IDLE_TTL.as_secs() + 1),
+        lifecycle.reap(now_unix().expect("clock after 1970") + IDLE_TTL.as_secs() + 1),
         1,
         "not reclaimed past its deadline"
     );

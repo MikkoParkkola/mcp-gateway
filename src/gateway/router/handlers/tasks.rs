@@ -545,8 +545,7 @@ fn update_caller(
     if let Some(ref lifecycle) = state.session_lifecycle
         && !resume_key.is_empty()
     {
-        use crate::gateway::session_lifecycle::{IDLE_TTL, now_unix};
-        lifecycle.track(resume_key.clone(), now_unix() + IDLE_TTL.as_secs());
+        lifecycle.renew(resume_key.clone());
     }
     OwnedCallerContext::new(
         crate::gateway::task_service::host::TaskHost::Http(Arc::downgrade(state)),

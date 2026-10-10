@@ -26,8 +26,7 @@ pub(super) fn direct_control_identity(
         return key;
     }
     if let Some(ref lifecycle) = state.session_lifecycle {
-        use crate::gateway::session_lifecycle::{IDLE_TTL, now_unix};
-        lifecycle.track(key.clone(), now_unix() + IDLE_TTL.as_secs());
+        lifecycle.renew(key.clone());
     }
     key
 }

@@ -381,7 +381,9 @@ impl NotificationMultiplexer {
                     lifecycle.on_disconnect(&id);
                 }
 
-                let reclaimed = lifecycle.reap(now_unix());
+                // A clock before 1970 cannot tell what has gone idle: the
+                // pass reclaims nothing and the next one runs (MIK-8202).
+                let reclaimed = now_unix().map_or(0, |now| lifecycle.reap(now));
                 if reclaimed > 0 {
                     info!(reclaimed, "Session lifecycle reaper completed");
                 }

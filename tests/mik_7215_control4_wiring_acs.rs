@@ -85,10 +85,13 @@ fn a_sweep_reclaims_the_anomaly_detectors_state_for_that_identity() {
     // GIVEN the same first call for an identity whose deadline has passed
     let swept = "identity-under-sweep";
     assert_eq!(score(&firewall, swept, "tool-a"), NO_PREDECESSOR);
-    lifecycle.track(swept, now_unix().saturating_sub(1));
+    lifecycle.track(
+        swept,
+        now_unix().expect("clock after 1970").saturating_sub(1),
+    );
 
     // WHEN the sweep runs
-    let reclaimed = lifecycle.reap(now_unix());
+    let reclaimed = lifecycle.reap(now_unix().expect("clock after 1970"));
 
     // THEN the reclaimed identity's next call has no predecessor to score
     // against — the same call that scored 0.0 for the kept identity.

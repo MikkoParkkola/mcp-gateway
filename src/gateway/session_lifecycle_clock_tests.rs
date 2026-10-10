@@ -3,7 +3,7 @@
 //! MIK-8202 P2 (design v3, row 11): idle reclaim on a clock that reads before
 //! 1970. Activity on such a clock cannot be dated, so the key waits for
 //! renewal: the first readable reap gives it a full idle TTL (an ended
-//! session a full END_GRACE) and keeps it; only a later reap reclaims it.
+//! session a full `END_GRACE`) and keeps it; only a later reap reclaims it.
 //! Nothing is reclaimed early once the clock reads, and nothing is held
 //! forever.
 
@@ -80,7 +80,7 @@ fn activity_on_an_unreadable_clock_renews_an_existing_key_at_the_first_readable_
 }
 
 /// T10d: a session that ends on an unreadable clock runs its end handlers
-/// once at once, and its second pass waits a full END_GRACE from the first
+/// once at once, and its second pass waits a full `END_GRACE` from the first
 /// readable reap, at exactly that boundary too. Mutant: the grace stamped
 /// with the raw clock (or 0), so the second pass runs at the first readable
 /// reap.
@@ -112,4 +112,57 @@ fn a_session_ended_on_an_unreadable_clock_gets_a_full_grace_at_the_first_readabl
     assert_eq!(fired.load(Ordering::SeqCst), 1, "ran at the assigned grace");
     lifecycle.reap(first + END_GRACE.as_secs() + 1);
     assert_eq!(fired.load(Ordering::SeqCst), 2, "the second pass, once");
+}
+
+/// T10e: the pass that dates undated keys runs under the `tracked` write
+/// lock, so a renewal racing it waits and keeps its own deadline. Inside the
+/// pass a contender's non-blocking `try_write` must fail; then its `track`
+/// blocks until the pass ends and its deadline survives. Mutant: the dating
+/// pass reads, unlocks and writes back, so the probe takes the lock (and the
+/// writeback can overwrite the renewal).
+#[test]
+fn a_renewal_racing_the_dating_pass_keeps_its_own_deadline() {
+    use std::sync::mpsc;
+
+    let lifecycle = Arc::new(SessionLifecycle::new());
+    {
+        let _clock = crate::clock::test_clock::before_epoch();
+        lifecycle.renew("caller");
+    }
+    let (probed_tx, probed_rx) = mpsc::channel::<bool>();
+    let (joined_tx, joined_rx) = mpsc::channel::<std::thread::JoinHandle<()>>();
+    let contender = Arc::clone(&lifecycle);
+    // Far ahead, so the reap that runs on after the pass cannot reclaim it.
+    let distinctive = real_now() + 10 * IDLE_TTL.as_secs();
+    let mut armed = Some((probed_tx, joined_tx));
+    lifecycle.on_dating_pass(move || {
+        let Some((probed, joined)) = armed.take() else {
+            return;
+        };
+        let (about_tx, about_rx) = mpsc::channel::<()>();
+        let racer = Arc::clone(&contender);
+        let handle = std::thread::spawn(move || {
+            let _ = probed.send(racer.tracked.try_write().is_none());
+            let _ = about_tx.send(());
+            racer.track("caller", distinctive);
+        });
+        // Parked until the contender has probed and is about to track.
+        let _ = about_rx.recv();
+        let _ = joined.send(handle);
+    });
+    lifecycle.reap(real_now());
+    joined_rx
+        .recv()
+        .expect("the dating pass ran")
+        .join()
+        .expect("the contender");
+    assert!(
+        probed_rx.recv().expect("probe"),
+        "the dating pass let another writer take the lock"
+    );
+    assert_eq!(
+        lifecycle.tracked.read().get("caller").copied().flatten(),
+        Some(distinctive),
+        "the renewal lost to the dating pass"
+    );
 }

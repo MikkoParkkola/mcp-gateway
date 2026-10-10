@@ -212,10 +212,10 @@ async fn a_call_in_flight_when_its_session_ends_leaves_no_state_after_the_grace_
         "and its promoted tool"
     );
 
-    lifecycle.reap(now_unix());
+    lifecycle.reap(now_unix().expect("clock after 1970"));
     assert!(cost(), "the grace pass waits for its deadline");
 
-    lifecycle.reap(now_unix() + END_GRACE.as_secs() + 1);
+    lifecycle.reap(now_unix().expect("clock after 1970") + END_GRACE.as_secs() + 1);
     assert!(!cost(), "the grace pass took the late cost bucket");
     assert_eq!(tracker.key_count(), 0, "and the late last tool");
     #[cfg(feature = "spec-preview")]
@@ -284,7 +284,8 @@ impl Wired {
     /// Both cleanup passes: the end itself and the grace pass after it.
     fn end_with_both_passes(&self) {
         self.lifecycle.on_disconnect(SESSION);
-        self.lifecycle.reap(now_unix() + END_GRACE.as_secs() + 1);
+        self.lifecycle
+            .reap(now_unix().expect("clock after 1970") + END_GRACE.as_secs() + 1);
     }
 
     /// Writes the session-keyed stores under `SESSION` through the tail: the
@@ -422,7 +423,8 @@ async fn the_end_handlers_run_again_for_a_late_write_and_are_idempotent() {
     );
     w.assert_nothing_left("the second run took the late write");
 
-    w.lifecycle.reap(now_unix() + END_GRACE.as_secs() + 1);
+    w.lifecycle
+        .reap(now_unix().expect("clock after 1970") + END_GRACE.as_secs() + 1);
     w.lifecycle.on_disconnect(SESSION);
     assert_eq!(w.fired(), 4, "the grace pass and a repeated end");
     w.assert_nothing_left("runs on empty stores");
