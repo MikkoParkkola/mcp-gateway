@@ -51,7 +51,7 @@ async fn blocked_call(route: Route, audit: &std::path::Path) -> (Value, usize) {
     }
 }
 
-/// RouteFirewall: on an Applies route a blocked argument gets a blocking
+/// `RouteFirewall`: on an Applies route a blocked argument gets a blocking
 /// `event=request` row and reaches no backend. On the stdio gap there is no
 /// request row at all; the dispatch-time rescan still stops the send.
 #[tokio::test]
@@ -79,12 +79,14 @@ async fn route_firewall_rows() {
                     "{route:?}: stopped, but not by the dispatch rescan: {dispatched:?}; {body}"
                 );
             }
-            other => panic!("{route:?}: the table says {other:?}; this row drives it"),
+            other @ Expect::NotApplicable(_) => {
+                panic!("{route:?}: the table says {other:?}; this row drives it")
+            }
         }
     }
 }
 
-/// ChokepointRescan, stdio: with no route-layer scan, the blocked argument
+/// `ChokepointRescan`, stdio: with no route-layer scan, the blocked argument
 /// reaches the dispatch-time rescan, which writes a blocking `event=dispatch`
 /// row and stops the send.
 #[tokio::test]
@@ -104,7 +106,7 @@ async fn chokepoint_rescan_stdio_row() {
     assert_eq!(backend_calls, 0, "reached its backend: {body}");
 }
 
-/// The sanitizer's refusal of a NUL byte (security/sanitize.rs).
+/// The sanitizer's refusal of a NUL byte (`security/sanitize.rs`).
 const NUL_REFUSED: &str = "Input contains null bytes which are not allowed";
 
 /// An argument holding a NUL byte, which sanitization refuses.
@@ -128,16 +130,27 @@ async fn sanitize_rows() {
 
     assert_eq!(row(Route::Invoke), Expect::Applies);
     let on = router::invoke_sanitizing(true, with_nul()).await;
-    assert!(!nul_reached(&on.seen), "R1 on: the NUL reached the backend: {}", on.body);
+    assert!(
+        !nul_reached(&on.seen),
+        "R1 on: the NUL reached the backend: {}",
+        on.body
+    );
     assert!(
         on.body.to_string().contains(NUL_REFUSED),
         "R1 on: stopped, but not by the sanitizer: {}",
         on.body
     );
     let off = router::invoke_sanitizing(false, with_nul()).await;
-    assert!(nul_reached(&off.seen), "R1 off: the control failed: {}", off.body);
+    assert!(
+        nul_reached(&off.seen),
+        "R1 off: the control failed: {}",
+        off.body
+    );
 
-    assert_eq!(row(Route::Direct), Expect::ExpectedGap(super::Ticket::Mik8154));
+    assert_eq!(
+        row(Route::Direct),
+        Expect::ExpectedGap(super::Ticket::Mik8154)
+    );
     let direct_off = router::direct_sanitizing(false, with_nul()).await;
     assert!(
         !nul_reached(&direct_off.seen),
@@ -150,7 +163,10 @@ async fn sanitize_rows() {
         direct_off.body
     );
 
-    assert_eq!(row(Route::Stdio), Expect::ExpectedGap(super::Ticket::Mik8149));
+    assert_eq!(
+        row(Route::Stdio),
+        Expect::ExpectedGap(super::Ticket::Mik8149)
+    );
     let stdio = stdio::stdio_plain(with_nul()).await;
     assert!(
         nul_reached(&stdio.seen),
@@ -172,7 +188,7 @@ const WITH_SECRET: &str = concat!(
 /// The response firewall's own refusal.
 const RESPONSE_BLOCKED: &str = "Response blocked by security firewall";
 
-/// ResponseFirewall: on every sending route the secret-bearing answer is
+/// `ResponseFirewall`: on every sending route the secret-bearing answer is
 /// refused by the response firewall itself (its -32600 message) and the
 /// secret never reaches the client.
 #[tokio::test]
@@ -196,7 +212,10 @@ async fn response_firewall_rows() {
             other => unreachable!("not driven here: {other:?}"),
         };
         assert_eq!(body["error"]["code"], -32600, "{route:?}: {body}");
-        assert_eq!(body["error"]["message"], RESPONSE_BLOCKED, "{route:?}: {body}");
+        assert_eq!(
+            body["error"]["message"], RESPONSE_BLOCKED,
+            "{route:?}: {body}"
+        );
         assert!(
             !body.to_string().contains(&WITH_SECRET[14..]),
             "{route:?}: the secret leaked: {body}"
@@ -204,7 +223,7 @@ async fn response_firewall_rows() {
     }
 }
 
-/// MrtrUndeclared: a backend question of a type the client never declared is
+/// `MrtrUndeclared`: a backend question of a type the client never declared is
 /// refused with the MRTR.9 capability refusal (-32021, naming the undeclared
 /// capability), after exactly one backend send, on every sending route.
 #[tokio::test]
@@ -237,11 +256,14 @@ async fn mrtr_undeclared_rows() {
                 .is_some_and(|m| m.contains("the client did not declare")),
             "{route:?}: refused, but not by the MRTR.9 gate: {body}"
         );
-        assert_eq!(backend_calls, 1, "{route:?}: the question was asked once: {body}");
+        assert_eq!(
+            backend_calls, 1,
+            "{route:?}: the question was asked once: {body}"
+        );
     }
 }
 
-/// ChainLink: with a chain signer emitting on request and a chain nonce on
+/// `ChainLink`: with a chain signer emitting on request and a chain nonce on
 /// the call, the answer carries the gateway's origin link on every route the
 /// table says Applies.
 #[tokio::test]
@@ -267,7 +289,7 @@ async fn chain_link_rows() {
     }
 }
 
-/// ChainLink, R2 gap (MIK-8159): the same signed request by surfaced name
+/// `ChainLink`, R2 gap (MIK-8159): the same signed request by surfaced name
 /// succeeds and reaches its backend, but the answer carries no origin link,
 /// because the surfaced reply drops the chain source.
 #[tokio::test]
@@ -279,7 +301,11 @@ async fn chain_link_surfaced_gap_row() {
     );
     let sent = router::surfaced_chained().await;
     assert!(sent.body.get("error").is_none(), "refused: {}", sent.body);
-    assert_eq!(sent.backend_calls, 1, "premise: the call ran: {}", sent.body);
+    assert_eq!(
+        sent.backend_calls, 1,
+        "premise: the call ran: {}",
+        sent.body
+    );
     assert!(
         chain_of(&sent.body["result"]).is_none(),
         "R2 now carries an origin link; MIK-8159 may have closed this gap, flip \
@@ -288,7 +314,7 @@ async fn chain_link_surfaced_gap_row() {
     );
 }
 
-/// ChokepointRescan, R1 and the R3 gap. A continuation retry whose answer
+/// `ChokepointRescan`, R1 and the R3 gap. A continuation retry whose answer
 /// carries a blocked pattern reaches bytes the route-layer scan never judged.
 /// R1 Applies: the dispatch rescan refuses it with a blocking `event=dispatch`
 /// row and the backend is asked only once (the question). R3 gap (MIK-8154
@@ -309,9 +335,16 @@ async fn chokepoint_rescan_rows() {
         sent.body
     );
     assert_eq!(sent.body["error"]["code"], -32600, "R1: {}", sent.body);
-    assert_eq!(sent.backend_calls, 1, "R1: the hostile answer was sent: {}", sent.body);
+    assert_eq!(
+        sent.backend_calls, 1,
+        "R1: the hostile answer was sent: {}",
+        sent.body
+    );
 
-    assert_eq!(row(Route::Direct), Expect::ExpectedGap(super::Ticket::Mik8154));
+    assert_eq!(
+        row(Route::Direct),
+        Expect::ExpectedGap(super::Ticket::Mik8154)
+    );
     let dir = tempfile::tempdir().expect("tempdir");
     let audit = dir.path().join("audit.jsonl");
     let sent = router::direct_retry_answering(&audit, BLOCKED).await;
@@ -328,7 +361,7 @@ async fn chokepoint_rescan_rows() {
     );
 }
 
-/// The nonce store's replay refusal (security/message_signing.rs).
+/// The nonce store's replay refusal (`security/message_signing.rs`).
 const REPLAY: &str = "Nonce replay detected";
 
 /// A passage the relayed fixture's backend answers: long enough that the relay
@@ -337,7 +370,7 @@ const PROSE: &str = "The orchard ledger for the north slope records seven rows o
     pears, the grafting dates for each rootstock, the hours the drip lines ran during the \
     dry weeks of August, and which crew pruned the older trees after the second frost.";
 
-/// NonceGiveBack, R1 gap (MIK-8150 NONCE.3): a relay refusal after nonce
+/// `NonceGiveBack`, R1 gap (MIK-8150 NONCE.3): a relay refusal after nonce
 /// admission keeps the nonce, so the clean re-send under it is refused as a
 /// replay. The first refusal must be the relay check's own (-32002), so the
 /// row cannot pass on some other refusal.
@@ -348,7 +381,10 @@ async fn nonce_give_back_invoke_relay_gap_row() {
         Expect::ExpectedGap(super::Ticket::Mik8150)
     );
     let (relayed, resent) = router::invoke_relay_then_resend(PROSE).await;
-    assert_eq!(relayed["error"]["code"], -32002, "premise: the relay refusal: {relayed}");
+    assert_eq!(
+        relayed["error"]["code"], -32002,
+        "premise: the relay refusal: {relayed}"
+    );
     assert_eq!(
         resent["error"]["message"], REPLAY,
         "the re-send was not refused as a replay, so the relay refusal now gives the \
@@ -356,7 +392,7 @@ async fn nonce_give_back_invoke_relay_gap_row() {
     );
 }
 
-/// NonceGiveBack, R3 Applies (R20): a spend refusal after nonce admission
+/// `NonceGiveBack`, R3 Applies (R20): a spend refusal after nonce admission
 /// gives the nonce back, so the re-send meets the budget again (the same
 /// refusal), never the replay refusal.
 #[cfg(feature = "cost-governance")]
@@ -367,22 +403,31 @@ async fn nonce_give_back_direct_row() {
         Expect::Applies
     );
     let (refused, again) = router::direct_spend_then_resend().await;
-    assert!(refused.get("error").is_some(), "premise: the budget refused: {refused}");
-    assert_ne!(again["error"]["message"], REPLAY, "R3 kept the nonce: {again}");
-    assert_eq!(again["error"], refused["error"], "R3: not the same refusal again: {again}");
+    assert!(
+        refused.get("error").is_some(),
+        "premise: the budget refused: {refused}"
+    );
+    assert_ne!(
+        again["error"]["message"], REPLAY,
+        "R3 kept the nonce: {again}"
+    );
+    assert_eq!(
+        again["error"], refused["error"],
+        "R3: not the same refusal again: {again}"
+    );
 }
 
 /// The part of X14's challenge prompt both its variants carry
-/// (meta_mcp/task_confirmation.rs `confirmation_prompt`).
+/// (`meta_mcp/task_confirmation.rs` `confirmation_prompt`).
 const X14_PROMPT: &str = "It runs as a task once accepted";
 
 /// X14's refusal for a caller it cannot bind a confirmation to
-/// (meta_mcp/task_confirmation.rs). The fixture's `k-std` is a shared key with
+/// (`meta_mcp/task_confirmation.rs`). The fixture's `k-std` is a shared key with
 /// no verified identity, so this is the X14 outcome the design names for it.
 const X14_UNBINDABLE: &str =
     "this destructive call cannot be confirmed for a caller this gateway cannot name";
 
-/// TaskConfirm, R4a Applies: a task-augmented call of a destructive (or
+/// `TaskConfirm`, R4a Applies: a task-augmented call of a destructive (or
 /// unclassified) surfaced tool is decided by X14 before any dispatch. For a
 /// caller with no verified identity that decision is X14's own refusal
 /// (-32003), and the backend is never called.
@@ -399,10 +444,14 @@ async fn task_confirm_submit_row() {
         "R4a: not decided by X14: {}",
         sent.body
     );
-    assert_eq!(sent.backend_calls, 0, "R4a: dispatched before X14: {}", sent.body);
+    assert_eq!(
+        sent.backend_calls, 0,
+        "R4a: dispatched before X14: {}",
+        sent.body
+    );
 }
 
-/// TaskConfirm, R5 gap (MIK-8160): the same task-augmented call of an
+/// `TaskConfirm`, R5 gap (MIK-8160): the same task-augmented call of an
 /// unannotated surfaced tool over stdio is admitted as a task with no X14
 /// decision at all: neither X14's challenge nor its refusal.
 #[tokio::test]
@@ -411,7 +460,7 @@ async fn task_confirm_stdio_gap_row() {
         expect(MethodKind::ToolsCall, Route::Stdio, Stage::TaskConfirm),
         Expect::ExpectedGap(super::Ticket::Mik8160)
     );
-    let (body, _calls) = stdio::stdio_task_surfaced().await;
+    let (body, _calls) = Box::pin(stdio::stdio_task_surfaced()).await;
     let text = body.to_string();
     assert!(
         !text.contains(X14_PROMPT) && !text.contains(X14_UNBINDABLE),
@@ -424,10 +473,10 @@ async fn task_confirm_stdio_gap_row() {
     );
 }
 
-/// The execution lease's in-flight refusal (meta_mcp/admission.rs).
+/// The execution lease's in-flight refusal (`meta_mcp/admission.rs`).
 const LEASE_IN_FLIGHT: &str = "Execution is already in progress";
 
-/// The idempotency guard's in-flight refusal (idempotency/guard.rs).
+/// The idempotency guard's in-flight refusal (`idempotency/guard.rs`).
 const GUARD_IN_FLIGHT: &str = "Duplicate request in progress for key";
 
 /// A JSON-RPC answer's error message, or "" when it has none.
@@ -452,7 +501,10 @@ async fn lease_rows() {
     );
     assert_eq!(calls, 1, "R1: the backend ran twice");
 
-    assert_eq!(row(Route::Direct), Expect::ExpectedGap(super::Ticket::Mik8154));
+    assert_eq!(
+        row(Route::Direct),
+        Expect::ExpectedGap(super::Ticket::Mik8154)
+    );
     let (second, calls) = router::concurrent_same_key(router::LeaseRoute::Direct).await;
     assert!(
         !message(&second).contains(LEASE_IN_FLIGHT),

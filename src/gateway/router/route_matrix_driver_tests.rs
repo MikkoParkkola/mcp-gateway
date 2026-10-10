@@ -35,22 +35,18 @@ fn sent(fx: &super::direct_guards_fixture::Fx, body: Value) -> Sent {
 /// R1 `/mcp` `gateway_invoke alpha read`, with the production firewall on both
 /// layers writing audit rows to `audit`.
 pub(crate) async fn invoke_firewalled(audit: &Path, args: Value) -> Sent {
-    let fx = super::direct_guards_fixture::fixture_firewalled_audited(
-        Answer::Ok,
-        audit.to_path_buf(),
-    )
-    .await;
+    let fx =
+        super::direct_guards_fixture::fixture_firewalled_audited(Answer::Ok, audit.to_path_buf())
+            .await;
     let (_, body) = post_meta_invoke(&fx, "k-std", "alpha", "read", args, None, None).await;
     sent(&fx, body)
 }
 
 /// R3 `/mcp/alpha` `tools/call read`, on the same firewalled fixture.
 pub(crate) async fn direct_firewalled(audit: &Path, args: Value) -> Sent {
-    let fx = super::direct_guards_fixture::fixture_firewalled_audited(
-        Answer::Ok,
-        audit.to_path_buf(),
-    )
-    .await;
+    let fx =
+        super::direct_guards_fixture::fixture_firewalled_audited(Answer::Ok, audit.to_path_buf())
+            .await;
     let (_, body) = post_direct(&fx, "alpha", "k-std", "read", args, None, None).await;
     sent(&fx, body)
 }
@@ -74,8 +70,16 @@ pub(crate) async fn direct_sanitizing(on: bool, args: Value) -> Sent {
 pub(crate) async fn invoke_answering(text: &'static str) -> Sent {
     let fx = super::direct_guards_fixture::fixture_firewalled_with(Answer::Text(text), None, false)
         .await;
-    let (_, body) = post_meta_invoke(&fx, "k-std", "alpha", "read", serde_json::json!({}), None, None)
-        .await;
+    let (_, body) = post_meta_invoke(
+        &fx,
+        "k-std",
+        "alpha",
+        "read",
+        serde_json::json!({}),
+        None,
+        None,
+    )
+    .await;
     sent(&fx, body)
 }
 
@@ -84,8 +88,16 @@ pub(crate) async fn invoke_answering(text: &'static str) -> Sent {
 pub(crate) async fn direct_answering(text: &'static str) -> Sent {
     let fx = super::direct_guards_fixture::fixture_firewalled_with(Answer::Text(text), None, false)
         .await;
-    let (_, body) = post_direct(&fx, "alpha", "k-std", "read", serde_json::json!({}), None, None)
-        .await;
+    let (_, body) = post_direct(
+        &fx,
+        "alpha",
+        "k-std",
+        "read",
+        serde_json::json!({}),
+        None,
+        None,
+    )
+    .await;
     sent(&fx, body)
 }
 
@@ -93,16 +105,32 @@ pub(crate) async fn direct_answering(text: &'static str) -> Sent {
 /// question the client never declared.
 pub(crate) async fn invoke_asking() -> Sent {
     let fx = super::direct_guards_fixture::fixture(Answer::AskOnce, |_| {}).await;
-    let (_, body) = post_meta_invoke(&fx, "k-std", "alpha", "read", serde_json::json!({}), None, None)
-        .await;
+    let (_, body) = post_meta_invoke(
+        &fx,
+        "k-std",
+        "alpha",
+        "read",
+        serde_json::json!({}),
+        None,
+        None,
+    )
+    .await;
     sent(&fx, body)
 }
 
 /// R3 `/mcp/alpha` `tools/call read` whose backend asks the same question.
 pub(crate) async fn direct_asking() -> Sent {
     let fx = super::direct_guards_fixture::fixture(Answer::AskOnce, |_| {}).await;
-    let (_, body) = post_direct(&fx, "alpha", "k-std", "read", serde_json::json!({}), None, None)
-        .await;
+    let (_, body) = post_direct(
+        &fx,
+        "alpha",
+        "k-std",
+        "read",
+        serde_json::json!({}),
+        None,
+        None,
+    )
+    .await;
     sent(&fx, body)
 }
 
@@ -196,7 +224,7 @@ pub(crate) async fn surfaced_firewalled(audit: &Path, args: Value) -> Sent {
 
 /// The params of a modern `tools/call` of `name` declaring form elicitation,
 /// extended by `extra`.
-fn modern(name: &str, arguments: Value, extra: &Value) -> Value {
+fn modern(name: &str, arguments: &Value, extra: &Value) -> Value {
     let mut params = serde_json::json!({
         "name": name,
         "arguments": arguments,
@@ -223,10 +251,18 @@ async fn modern_call(
         ("mcp-method", "tools/call"),
         ("mcp-name", name),
     ];
-    let params = modern(name, arguments, extra);
-    super::direct_guards_fixture::send_with_headers(fx, uri, "k-std", "tools/call", params, None, &headers)
-        .await
-        .1
+    let params = modern(name, &arguments, extra);
+    super::direct_guards_fixture::send_with_headers(
+        fx,
+        uri,
+        "k-std",
+        "tools/call",
+        params,
+        None,
+        &headers,
+    )
+    .await
+    .1
 }
 
 /// The backend asks one question on `uri`; the retry answers it with
@@ -280,9 +316,17 @@ async fn signed_invoke(
         ("mcp-method", "tools/call"),
         ("mcp-name", "gateway_invoke"),
     ];
-    super::direct_guards_fixture::send_with_headers(fx, "/mcp", key, "tools/call", params, None, &headers)
-        .await
-        .1
+    super::direct_guards_fixture::send_with_headers(
+        fx,
+        "/mcp",
+        key,
+        "tools/call",
+        params,
+        None,
+        &headers,
+    )
+    .await
+    .1
 }
 
 /// R1, MIK-8150 NONCE.3: on the signed, relayed fixture whose backend answers
@@ -304,11 +348,14 @@ pub(crate) async fn invoke_relay_then_resend(text: &'static str) -> (Value, Valu
 #[cfg(feature = "cost-governance")]
 pub(crate) async fn direct_spend_then_resend() -> (Value, Value) {
     use super::direct_continuation_tests::{budget, signed_call};
-    let fx = super::direct_guards_fixture::fixture_hardened_signed_built(Answer::Ok, true, budget)
-        .await;
+    let fx =
+        super::direct_guards_fixture::fixture_hardened_signed_built(Answer::Ok, true, budget).await;
     let who = ("k-budget", "alpha");
     let (_, first) = signed_call(&fx, who, "n1", serde_json::json!({})).await;
-    assert!(first.get("error").is_none(), "premise: the first call ran: {first}");
+    assert!(
+        first.get("error").is_none(),
+        "premise: the first call ran: {first}"
+    );
     let (_, refused) = signed_call(&fx, who, "n2", serde_json::json!({})).await;
     let (_, again) = signed_call(&fx, who, "n2", serde_json::json!({})).await;
     (refused, again)
@@ -414,9 +461,8 @@ pub(crate) async fn concurrent_same_key(route: LeaseRoute) -> (Value, usize) {
         gate: Arc::clone(&gate),
         calls: Arc::clone(&calls),
     };
-    let fx = Arc::new(
-        super::direct_guards_fixture::fixture_firewalled_on(Arc::new(held), None).await,
-    );
+    let fx =
+        Arc::new(super::direct_guards_fixture::fixture_firewalled_on(Arc::new(held), None).await);
     let call = |fx: Arc<super::direct_guards_fixture::Fx>| async move {
         let args = serde_json::json!({});
         match route {

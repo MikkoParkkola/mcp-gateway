@@ -192,7 +192,10 @@ fn the_table_answers_every_route_and_stage() {
     }
     // Today's gaps on 0028fb249: R1/R2/R5 nonce, R2 chain link, R3 rescan,
     // sanitize and lease, R5 route firewall, sanitize and X14.
-    assert_eq!(gaps, 10, "the gap count moved: update the table and this pin");
+    assert_eq!(
+        gaps, 10,
+        "the gap count moved: update the table and this pin"
+    );
 }
 
 /// The cells a live row in `rows` drives (route, stage). Kept beside the
@@ -230,35 +233,131 @@ const DRIVEN: &[(Route, Stage)] = &[
 /// and where it gets driven. Visible on purpose: an undriven cell is a claim
 /// without a regression net, so it is named rather than silently skipped.
 const UNDRIVEN: &[(Route, Stage, &str)] = &[
-    (Route::Invoke, Stage::Authorize, "needs a capability-provider fixture; v4.0.1 N2 follow-up"),
-    (Route::Invoke, Stage::Idempotency, "needs the outer-admission eviction helper; v4.0.1 N2 follow-up"),
-    (Route::Surfaced, Stage::ChokepointRescan, "R1 drives the same code path; v4.0.1 N2 follow-up"),
-    (Route::Surfaced, Stage::Sanitize, "R1 drives the same intake; v4.0.1 N2 follow-up"),
-    (Route::Surfaced, Stage::Authorize, "needs a capability-provider fixture; v4.0.1 N2 follow-up"),
-    (Route::Surfaced, Stage::MrtrUndeclared, "R1 drives the same gate; v4.0.1 N2 follow-up"),
-    (Route::Surfaced, Stage::Idempotency, "needs the outer-admission eviction helper; v4.0.1 N2 follow-up"),
-    (Route::Surfaced, Stage::Lease, "R1 drives the same admit_meta_sync; v4.0.1 N2 follow-up"),
-    (Route::Surfaced, Stage::NonceGiveBack, "gap MIK-8150: driven red-first by MIK-8150.NONCE.4"),
-    (Route::Surfaced, Stage::ResponseFirewall, "R1 drives the same egress; v4.0.1 N2 follow-up"),
-    (Route::Direct, Stage::Idempotency, "needs the outer-admission eviction helper; v4.0.1 N2 follow-up"),
-    (Route::TaskSubmit, Stage::RouteFirewall, "needs a task-submit driver per stage; v4.0.1 N2 follow-up"),
-    (Route::TaskSubmit, Stage::Sanitize, "needs a task-submit driver per stage; v4.0.1 N2 follow-up"),
-    (Route::TaskSubmit, Stage::Authorize, "needs a capability-provider fixture; v4.0.1 N2 follow-up"),
-    (Route::TaskSubmit, Stage::Idempotency, "needs the outer-admission eviction helper; v4.0.1 N2 follow-up"),
-    (Route::TaskSubmit, Stage::NonceGiveBack, "needs a signed task-submit driver; v4.0.1 N2 follow-up"),
-    (Route::TaskWorker, Stage::ChokepointRescan, "needs a task-worker driver; v4.0.1 N2 follow-up"),
-    (Route::TaskWorker, Stage::Authorize, "needs a task-worker driver; v4.0.1 N2 follow-up"),
-    (Route::TaskWorker, Stage::MrtrUndeclared, "needs a task-worker driver; v4.0.1 N2 follow-up"),
-    (Route::TaskWorker, Stage::ResponseFirewall, "needs a task-worker driver; v4.0.1 N2 follow-up"),
-    (Route::Stdio, Stage::Authorize, "needs a capability-provider fixture; v4.0.1 N2 follow-up"),
-    (Route::Stdio, Stage::Idempotency, "needs the outer-admission eviction helper; v4.0.1 N2 follow-up"),
-    (Route::Stdio, Stage::Lease, "needs a held stdio backend; v4.0.1 N2 follow-up"),
-    (Route::Stdio, Stage::NonceGiveBack, "gap MIK-8150: driven red-first by MIK-8150.NONCE.5"),
+    (
+        Route::Invoke,
+        Stage::Authorize,
+        "needs a capability-provider fixture; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::Invoke,
+        Stage::Idempotency,
+        "needs the outer-admission eviction helper; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::Surfaced,
+        Stage::ChokepointRescan,
+        "R1 drives the same code path; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::Surfaced,
+        Stage::Sanitize,
+        "R1 drives the same intake; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::Surfaced,
+        Stage::Authorize,
+        "needs a capability-provider fixture; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::Surfaced,
+        Stage::MrtrUndeclared,
+        "R1 drives the same gate; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::Surfaced,
+        Stage::Idempotency,
+        "needs the outer-admission eviction helper; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::Surfaced,
+        Stage::Lease,
+        "R1 drives the same admit_meta_sync; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::Surfaced,
+        Stage::NonceGiveBack,
+        "gap MIK-8150: driven red-first by MIK-8150.NONCE.4",
+    ),
+    (
+        Route::Surfaced,
+        Stage::ResponseFirewall,
+        "R1 drives the same egress; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::Direct,
+        Stage::Idempotency,
+        "needs the outer-admission eviction helper; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::TaskSubmit,
+        Stage::RouteFirewall,
+        "needs a task-submit driver per stage; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::TaskSubmit,
+        Stage::Sanitize,
+        "needs a task-submit driver per stage; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::TaskSubmit,
+        Stage::Authorize,
+        "needs a capability-provider fixture; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::TaskSubmit,
+        Stage::Idempotency,
+        "needs the outer-admission eviction helper; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::TaskSubmit,
+        Stage::NonceGiveBack,
+        "needs a signed task-submit driver; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::TaskWorker,
+        Stage::ChokepointRescan,
+        "needs a task-worker driver; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::TaskWorker,
+        Stage::Authorize,
+        "needs a task-worker driver; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::TaskWorker,
+        Stage::MrtrUndeclared,
+        "needs a task-worker driver; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::TaskWorker,
+        Stage::ResponseFirewall,
+        "needs a task-worker driver; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::Stdio,
+        Stage::Authorize,
+        "needs a capability-provider fixture; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::Stdio,
+        Stage::Idempotency,
+        "needs the outer-admission eviction helper; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::Stdio,
+        Stage::Lease,
+        "needs a held stdio backend; v4.0.1 N2 follow-up",
+    ),
+    (
+        Route::Stdio,
+        Stage::NonceGiveBack,
+        "gap MIK-8150: driven red-first by MIK-8150.NONCE.5",
+    ),
 ];
 
-/// Every cell the table says Applies or ExpectedGap is either driven by a
+/// Every cell the table says Applies or `ExpectedGap` is either driven by a
 /// live row or listed in `UNDRIVEN`, never both and never neither; no
-/// NotApplicable cell is listed. A new row that forgets `DRIVEN`, or a table
+/// `NotApplicable` cell is listed. A new row that forgets `DRIVEN`, or a table
 /// change that strands a cell, fails here.
 #[test]
 fn every_stated_cell_is_driven_or_named_undriven() {

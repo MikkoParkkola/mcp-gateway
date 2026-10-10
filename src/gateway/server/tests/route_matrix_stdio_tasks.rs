@@ -19,12 +19,12 @@ use crate::config::SurfacedToolConfig;
 pub(crate) async fn stdio_task_surfaced() -> (Value, usize) {
     let served = backend().await;
     let calls = std::sync::Arc::clone(&served.1);
-    let fixture = fixture_on_with(served, None, |config| {
+    let fixture = Box::pin(fixture_on_with(served, None, |config| {
         config.meta_mcp.surfaced_tools = vec![SurfacedToolConfig {
             server: BACKEND.to_string(),
             tool: TOOL.to_string(),
         }];
-    })
+    }))
     .await;
     let request = json!({
         "jsonrpc": "2.0", "id": 1, "method": "tools/call",

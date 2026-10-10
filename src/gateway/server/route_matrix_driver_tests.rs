@@ -86,7 +86,10 @@ async fn stdio_call(
         seen: Arc::clone(&seen),
         answer,
     }) as Arc<dyn crate::transport::Transport>);
-    backend.get_tools_shared().await.expect("warm the tool cache");
+    backend
+        .get_tools_shared()
+        .await
+        .expect("warm the tool cache");
     assert!(registry.register(backend));
     let mut gateway_meta = MetaMcp::new(registry);
     arm(&mut gateway_meta);
@@ -101,9 +104,10 @@ async fn stdio_call(
         params["_meta"] = meta;
     }
     let request = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params });
-    let body = super::Gateway::dispatch_single(&gateway_meta, &policy, &mtls, &request, "stdio-matrix")
-        .await
-        .expect("a request is answered");
+    let body =
+        super::Gateway::dispatch_single(&gateway_meta, &policy, &mtls, &request, "stdio-matrix")
+            .await
+            .expect("a request is answered");
     let seen = seen.lock().expect("seen lock").clone();
     Sent {
         body,

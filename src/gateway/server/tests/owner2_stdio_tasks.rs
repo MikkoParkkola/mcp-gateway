@@ -83,7 +83,7 @@ pub(super) async fn fixture_on(
     backend: (String, Arc<AtomicUsize>),
     policy: Option<ToolPolicy>,
 ) -> Fixture {
-    fixture_on_with(backend, policy, |_| {}).await
+    Box::pin(fixture_on_with(backend, policy, |_| {})).await
 }
 
 /// [`fixture_on`] with `configure` applied to the gateway config before it is
