@@ -277,7 +277,24 @@ def repo_relative(source, root):
     return None
 
 
+# Exit status when an input report is absent: neither a pass (0), a graded
+# FAIL (1) nor a usage error (2), so a caller cannot read it as a grade (MIK-8265).
+INPUT_MISSING = 3
+
+
+class MissingInput(Exception):
+    """An lcov report the grade was given does not exist, as when a platform's
+    coverage job uploaded none. Nothing can be graded from a partial set."""
+
+    def __init__(self, path):
+        super().__init__(f"input missing: {path}")
+        self.path = str(path)
+
+
 def read_lcov(paths, root):
+    for path in paths:
+        if not Path(path).is_file():
+            raise MissingInput(path)
     hits, current = {}, None
     for raw in (line for path in paths for line in Path(path).read_text().splitlines()):
         if raw.startswith("SF:"):
@@ -362,6 +379,10 @@ def main(argv=None):
             print(f"inventory: {problem}")
         print("the inventory could not be read; nothing was graded")
         return 1
+    except MissingInput as missing:
+        print(missing)
+        print("NOT GRADED: a coverage report is missing, so no Critical row was graded")
+        return INPUT_MISSING
     for result in results:
         status, row = result[0], result[1]
         # An INDIRECT result is a diagnostic about the tree, not an inventory row.

@@ -109,6 +109,28 @@ class CriticalFunctionCoverage(unittest.TestCase):
         row = "src/lib.rs\tcheck\t2\tcritical\td\tcheck\tr"
         self.assertEqual(self.run_rows([row], lcovs=[self.lcov, windows]), 0)
 
+    def test_a_missing_report_is_named_and_is_not_a_graded_fail(self):
+        # MIK-8265: a run whose Windows job uploaded no report. The grade is
+        # refused, naming the input, with its own exit status; it never prints
+        # a row count that would read as a graded FAIL, and never a traceback.
+        missing = self.root / "coverage-windows" / "windows.lcov"
+        inventory = self.root / "inv.tsv"
+        inventory.write_text(HEADER + "src/lib.rs\tcheck\t2\tcritical\td\tcheck\tr\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cfc.main(["--inventory", str(inventory), "--root", str(self.root),
+                             "--lcov", str(self.lcov), "--lcov", str(missing)])
+        self.assertEqual(code, cfc.INPUT_MISSING)
+        self.assertNotIn(code, (0, 1))
+        self.assertIn(f"input missing: {missing}", out.getvalue())
+        self.assertNotIn("critical rows failing", out.getvalue())
+
+    def test_the_report_reader_names_the_missing_report(self):
+        missing = self.root / "absent.lcov"
+        with self.assertRaises(cfc.MissingInput) as raised:
+            cfc.read_lcov([self.lcov, missing], self.root)
+        self.assertEqual(raised.exception.path, str(missing))
+
     def run_scoped(self, rows, scope):
         inventory = self.root / "inv.tsv"
         inventory.write_text(HEADER + "".join(r + "\n" for r in rows))

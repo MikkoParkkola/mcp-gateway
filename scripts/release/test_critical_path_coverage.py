@@ -57,6 +57,24 @@ def table_rows(section):
 
 
 class CriticalPathCoverage(unittest.TestCase):
+    def test_a_missing_report_is_named_and_is_not_a_graded_fail(self):
+        # MIK-8265: the Linux job uploaded no cov.json. The grade is refused
+        # with its own exit status, the same one the function grader uses.
+        missing = pathlib.Path(tempfile.gettempdir()) / "mik-8265-absent" / "cov.json"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cpc.main([str(missing)])
+        self.assertEqual(code, cpc.INPUT_MISSING)
+        self.assertNotIn(code, (0, 1))
+        self.assertIn(f"input missing: {missing}", out.getvalue())
+        self.assertNotIn("paths failing", out.getvalue())
+
+    def test_both_graders_share_one_input_missing_status(self):
+        spec = importlib.util.spec_from_file_location("cfc", HERE / "critical_function_coverage.py")
+        cfc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cfc)
+        self.assertEqual(cpc.INPUT_MISSING, cfc.INPUT_MISSING)
+
     def test_every_path_at_99_percent_passes(self):
         self.assertEqual({name: [] for name, _, _ in cpc.PATHS}, failures(report()))
 

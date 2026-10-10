@@ -15,6 +15,7 @@ baseline, 1 otherwise. A path with no measured file fails.
 
 import argparse
 import json
+import os
 import sys
 
 FLOOR = 80.0
@@ -89,10 +90,20 @@ def grade(report):
     return rows
 
 
+# Exit status when the report is absent. Equal to critical_function_coverage's
+# INPUT_MISSING (a test pins it); defined here, not imported, because
+# coverage_grade.sh may run this file from an older revision (MIK-8265).
+INPUT_MISSING = 3
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("report", help="cargo llvm-cov --summary-only --json output")
     args = parser.parse_args(argv)
+    if not os.path.isfile(args.report):
+        print(f"input missing: {args.report}")
+        print("NOT GRADED: the coverage report is missing, so no path was graded")
+        return INPUT_MISSING
     with open(args.report, encoding="utf-8") as handle:
         rows = grade(json.load(handle))
     for name, count, covered, total, percent, failures in rows:
