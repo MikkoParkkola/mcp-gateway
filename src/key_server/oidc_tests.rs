@@ -291,13 +291,18 @@ async fn production_client_refuses_cleartext_fetches_and_hops() {
     );
 }
 
-// The https client's hop rule, which no loopback test server can reach.
+// The https client's hop rule: the fetched URL's origin, and nothing else.
 #[test]
-fn remote_redirects_may_only_move_to_https() {
-    let hop = |u: &str| remote_hop_allowed(&url::Url::parse(u).expect("url"));
+fn remote_redirects_stay_on_the_fetched_origin() {
+    let from =
+        url::Url::parse("https://idp.example/.well-known/openid-configuration").expect("url");
+    let hop = |u: &str| remote_hop_allowed(&from, &url::Url::parse(u).expect("url"));
     assert!(hop("https://idp.example/jwks"));
-    assert!(hop("HTTPS://idp.example/jwks"));
+    assert!(hop("HTTPS://IDP.example:443/jwks"));
     assert!(!hop("http://idp.example/jwks"));
+    assert!(!hop("https://idp.example:8443/jwks"));
+    assert!(!hop("https://other.example/jwks"));
+    assert!(!hop("https://sub.idp.example/jwks"));
     assert!(!hop("http://127.0.0.1/jwks"));
 }
 
@@ -333,14 +338,9 @@ async fn https_server_with(
     format!("https://localhost:{port}")
 }
 
-/// MIK-8281 OIDCPIN.1: a discovery URL that redirects to a different origin
-/// is refused, and that origin is never asked for anything. Driven through
-/// the production redirect policy, with the test CA trusted, because a
-/// loopback http fetch follows no redirect at all.
-#[tokio::test]
-async fn a_discovery_redirected_off_origin_is_refused() {
+/// A test CA for the `https://localhost` servers: its PEM and its issuer.
+fn oidc_pin_ca() -> (String, rcgen::Issuer<'static, rcgen::KeyPair>) {
     use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
-    use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let ca_key = KeyPair::generate().expect("CA key");
     let mut ca_params = CertificateParams::new(Vec::new()).expect("CA params");
@@ -349,7 +349,30 @@ async fn a_discovery_redirected_off_origin_is_refused() {
         .distinguished_name
         .push(rcgen::DnType::CommonName, "oidc-pin CA");
     let ca = ca_params.clone().self_signed(&ca_key).expect("CA");
-    let ca_issuer = Issuer::new(ca_params, ca_key);
+    (ca.pem(), Issuer::new(ca_params, ca_key))
+}
+
+/// A JWKS cache whose client carries the production redirect policy and
+/// trusts only the test CA; a loopback http fetch follows no redirect at all,
+/// so the remote rule is reachable only over HTTPS.
+fn pinned_cache(ca_pem: &str) -> JwksCache {
+    let client = reqwest::Client::builder()
+        .redirect(remote_redirect_policy())
+        .add_root_certificate(reqwest::Certificate::from_pem(ca_pem.as_bytes()).expect("ca"))
+        .no_proxy()
+        .build()
+        .expect("client");
+    JwksCache::with_http_client(client)
+}
+
+/// MIK-8281 OIDCPIN.1: a discovery URL that redirects to a different origin
+/// is refused, and that origin is never asked for anything. Driven through
+/// the production redirect policy, with the test CA trusted, because a
+/// loopback http fetch follows no redirect at all.
+#[tokio::test]
+async fn a_discovery_redirected_off_origin_is_refused() {
+    use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+    let (ca_pem, ca_issuer) = oidc_pin_ca();
 
     // The other origin: a discovery document that would pass validation for
     // the issuer, naming keys on itself. It counts every request.
@@ -388,14 +411,7 @@ async fn a_discovery_redirected_off_origin_is_refused() {
     .await;
     issuer_slot.set(issuer.clone()).expect("set once");
 
-    let client = reqwest::Client::builder()
-        .redirect(remote_redirect_policy())
-        .add_root_certificate(reqwest::Certificate::from_pem(ca.pem().as_bytes()).expect("ca"))
-        .no_proxy()
-        .build()
-        .expect("client");
-    let cache = JwksCache::with_http_client(client);
-    let result = cache
+    let result = pinned_cache(&ca_pem)
         .resolve_jwks_uri(
             &issuer,
             &format!("{issuer}/.well-known/openid-configuration"),
@@ -404,6 +420,65 @@ async fn a_discovery_redirected_off_origin_is_refused() {
     assert!(
         result.is_err(),
         "an off-origin redirect was followed: {result:?}"
+    );
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        0,
+        "the other origin was requested"
+    );
+}
+
+/// MIK-8281 OIDCPIN.2: a JWKS fetch follows a redirect on its own origin and
+/// refuses one off it, never asking the other origin. An explicit `jwks_uri`
+/// and a discovered one reach the network through the same `get_or_fetch`.
+#[tokio::test]
+async fn a_jwks_redirect_is_followed_only_on_its_own_origin() {
+    use std::sync::{Arc, atomic::AtomicUsize, atomic::Ordering};
+    let (ca_pem, ca_issuer) = oidc_pin_ca();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&hits);
+    let other = https_server_with(
+        &ca_issuer,
+        axum::Router::new().fallback(move || {
+            let counter = Arc::clone(&counter);
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                axum::Json(serde_json::json!({"keys": []}))
+            }
+        }),
+    )
+    .await;
+    let off = format!("{other}/jwks");
+    let idp = https_server_with(
+        &ca_issuer,
+        axum::Router::new()
+            .route(
+                "/moved",
+                axum::routing::get(|| async { axum::response::Redirect::temporary("/keys") }),
+            )
+            .route(
+                "/keys",
+                axum::routing::get(|| async { axum::Json(serde_json::json!({"keys": []})) }),
+            )
+            .route(
+                "/away",
+                axum::routing::get(move || {
+                    let off = off.clone();
+                    async move { axum::response::Redirect::temporary(&off) }
+                }),
+            ),
+    )
+    .await;
+    let cache = pinned_cache(&ca_pem);
+
+    let same = cache
+        .get_or_fetch(&idp, &format!("{idp}/moved"), true)
+        .await;
+    assert!(same.is_ok(), "a same-origin redirect was refused: {same:?}");
+    let away = cache.get_or_fetch(&idp, &format!("{idp}/away"), true).await;
+    assert!(
+        away.is_err(),
+        "an off-origin redirect was followed: {away:?}"
     );
     assert_eq!(
         hits.load(Ordering::SeqCst),

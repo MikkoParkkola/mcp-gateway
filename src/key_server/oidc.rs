@@ -15,8 +15,9 @@
 //! # Security properties
 //!
 //! - Discovery and JWKS are fetched only over HTTPS, or plain HTTP to a
-//!   loopback host without any proxy; redirects may only move to HTTPS. A
-//!   cleartext issuer off this machine is refused at load and at verify.
+//!   loopback host without any proxy. A remote redirect may not leave the
+//!   origin (scheme, host, port) of the URL fetched; a loopback fetch follows
+//!   none. A cleartext issuer off this machine is refused at load and at verify.
 //! - Unknown `kid` triggers a single cache refresh before failing; prevents
 //!   indefinite re-fetching if the key truly does not exist.
 //! - Clock leeway of 60 seconds tolerates minor clock skew between the `IdP` and
