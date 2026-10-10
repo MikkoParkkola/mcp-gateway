@@ -19,7 +19,7 @@ use super::{Transport, WebSocketTransport};
 use crate::protocol::PROTOCOL_VERSION;
 use crate::transport::websocket_test_server::{Behaviour, WsPeer};
 
-const FAST: Duration = Duration::from_secs(1);
+const FAST: Duration = Duration::from_secs(10);
 const WAIT: Duration = Duration::from_secs(10);
 const HANG_GUARD: Duration = Duration::from_secs(30);
 

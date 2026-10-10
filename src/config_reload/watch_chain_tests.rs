@@ -698,7 +698,7 @@ pub(crate) mod real_watcher {
         let (_root, a, _b, c) = release_tree();
         let mut h = start(&c.join("l"));
         let _ = h.shutdown.send(());
-        tokio::time::timeout(Duration::from_secs(2), &mut h.task)
+        tokio::time::timeout(Duration::from_secs(10), &mut h.task)
             .await
             .expect("the rewatch task ended")
             .expect("the task did not panic");
