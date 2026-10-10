@@ -225,10 +225,12 @@ src/gateway/server/stdio_tasks.rs	drop	1	critical	c	TasksDropGuard::drop	Seals t
 src/gateway/task_service/execution.rs	cancel	1	critical	c	TaskExecutor::cancel	Cancel is a write scoped to the owner via the principal; signals the worker only after it commits
 src/gateway/task_service/execution.rs	cancel_lost_the_revision	1	critical	c	TaskExecutor::cancel_lost_the_revision	Retries cancel only after re-reading the task through the owner-scoped service.get
 src/gateway/task_service/execution.rs	transition_write	1	critical	c	TaskExecutor::transition_write	Hashes the request principal to an owner
+src/gateway/task_service/execution.rs	spawn_worker	1	critical	c	TaskExecutor::spawn_worker	Appends the open slot's grant decisions before any worker spawns; under FailClosed a failed append refuses the spawn (MIK-8204)
 src/gateway/task_service/execution.rs	install_recovery	1	standard	borderline	TaskExecutor::install_recovery	Installs the trusted upstream adapter that gates recovery queries
 src/gateway/task_service/execution/context.rs	dispatch_context_retrying	1	standard	borderline	OwnedCallerContext::dispatch_context_retrying	signing: None keeps check_invocation_policy running; wrong value silently skips re-auth
 src/gateway/task_service/execution/context.rs	hold_caller_key	1	standard	borderline	OwnedCallerContext::hold_caller_key	Holds the caller key through a backend call; a miss lets an idle sweep reclaim the key the task writes under
 src/gateway/task_service/execution/input_round.rs	provide_input	1	critical	c	TaskExecutor::provide_input	Scopes task/update answers to the owner; foreign or absent task returns NotFound
+src/gateway/task_service/execution/input_round.rs	round_outcome	1	critical	c	TaskExecutor::round_outcome	Answers -32005 and spawns nothing when the update's grant decisions could not be written (MIK-8204)
 src/gateway/task_service/execution/input_round.rs	resume	1	critical	d	resume	Closes a round whose continuation deadline has passed, and one refused for expiry, instead of resuming it
 src/gateway/task_service/execution/input_round.rs	resume_flow	1	critical	d	resume_flow	Closes a round whose continuation deadline has passed, and one refused for expiry, instead of resuming it
 src/gateway/task_service/execution/input_round.rs	settle_interrupted	1	critical	d	settle_interrupted	Settles a resumed task interrupted when its host is gone, instead of dispatching without one

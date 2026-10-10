@@ -333,6 +333,9 @@ pub(crate) enum InputOutcome {
     Closed(RoundClosed),
     NotFound,
     Unavailable,
+    /// MIK-8204: under `FailClosed` the resuming request's grant decisions
+    /// could not be appended, so no resume worker was spawned (-32005).
+    AuditUnavailable,
 }
 
 /// What a store refusal means to the caller of `provide_input`: one mapping,
@@ -395,14 +398,13 @@ impl TaskExecutor {
         // row with no worker: the task finishes the write, and on a resume it
         // becomes the resume worker itself. The request only waits for the
         // outcome, which arrives after the write commits.
-        let (tx, rx) = tokio::sync::oneshot::channel();
         let executor = Arc::clone(self);
         let (digest, id, principal) = (
             owner.as_digest().to_owned(),
             id.to_owned(),
             principal.to_owned(),
         );
-        self.spawn_worker(async move {
+        self.round_outcome(|tx| async move {
             let workers = Arc::clone(&executor.workers);
             let provided = executor
                 .service
@@ -469,8 +471,32 @@ impl TaskExecutor {
             // Not a resume: the handoff and cancel receiver go with this task.
             drop((handoff, cancel_rx));
             let _ = tx.send(outcome);
-        });
-        rx.await.unwrap_or(InputOutcome::Unavailable)
+        })
+        .await
+    }
+
+    /// Spawn an update's worker and wait for the outcome it sends. Nothing
+    /// is spawned, and the answer is -32005, when the update's own grant
+    /// decisions could not be written under `FailClosed` (MIK-8204).
+    ///
+    /// Not an `async fn`: `spawn_worker` boxes the worker here, before the
+    /// wait, so the caller's future never holds it inline (a debug-build
+    /// stack overflow otherwise).
+    fn round_outcome<F>(
+        &self,
+        worker: impl FnOnce(tokio::sync::oneshot::Sender<InputOutcome>) -> F,
+    ) -> impl std::future::Future<Output = InputOutcome> + Send + '_
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let spawned = self.spawn_worker(worker(tx));
+        async move {
+            if spawned.await.is_err() {
+                return InputOutcome::AuditUnavailable;
+            }
+            rx.await.unwrap_or(InputOutcome::Unavailable)
+        }
     }
 }
 

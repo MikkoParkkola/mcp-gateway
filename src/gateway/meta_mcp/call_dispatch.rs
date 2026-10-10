@@ -336,6 +336,9 @@ impl MetaMcp {
                     .unwrap_or_else(|| BeginOutcome::Existing(stored).into_response(id))
             }
             Ok(outcome) => outcome.into_response(id),
+            Err(crate::gateway::task_service::ServiceError::AuditUnavailable) => {
+                error_response_preserving_status(id, &crate::Error::AuditUnavailable)
+            }
             Err(_) => JsonRpcResponse::error(Some(id), -32603, "task store unavailable"),
         }
     }
