@@ -103,6 +103,14 @@ async fn ungranted_invoke_submit_is_refused_like_the_sync_call() {
     refused_like_sync_then_granted(&row, personal_invoke(1), task).await;
 }
 
+/// The route-check matrix's `TaskSubmit` x `Authorize` driver: row 1a's
+/// refusal, compared with the sync call on the same fixture.
+pub(crate) async fn matrix_ungranted_invoke_submit() {
+    let row = ungranted(|meta| meta).await;
+    let task = as_task(personal_invoke(2), "sa-matrix");
+    refused_like_sync(&row, personal_invoke(1), task).await;
+}
+
 /// 1b. The capability's surfaced name (the sync answer is the concealment).
 #[tokio::test]
 async fn ungranted_surfaced_submit_is_refused_like_the_sync_call() {

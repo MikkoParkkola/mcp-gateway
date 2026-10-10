@@ -449,6 +449,14 @@ pub(crate) async fn task_submit_surfaced() -> Sent {
     }
 }
 
+/// R4a `Authorize` (MIK-8315): a modern task-augmented `gateway_invoke` of a
+/// personal capability the caller holds no grant for, on `/mcp`. Panics
+/// unless the submit answers the sync call's status, code and message,
+/// writes the sync call's audit records, creates no task and reaches nothing.
+pub(crate) async fn task_submit_ungranted() {
+    super::tests::task_execution_adapter::submit_authz::matrix_ungranted_invoke_submit().await;
+}
+
 /// A backend whose `tools/call` signals `entered`, then waits for `gate`
 /// before answering: a call held in flight while a second one arrives.
 struct Held {

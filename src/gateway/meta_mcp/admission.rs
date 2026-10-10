@@ -518,9 +518,16 @@ impl MetaMcp {
     ) -> Result<SyncAdmission> {
         // One admission authority per key, for every transport: a task is
         // admitted durably under `Mode::Task` by its handoff (a lease too would
-        // self-mismatch); it runs no backend work here, and its worker's own
-        // dispatch re-applies policy. Signing admission owns its own calls.
-        if caller.task.is_some() || caller.awaits_signing_admission() {
+        // self-mismatch). Signing admission owns its own calls, and a signed
+        // call was authorized when signing prepared it.
+        if caller.awaits_signing_admission() {
+            return Ok(SyncAdmission::Unprotected);
+        }
+        // A task passes the policy the synchronous call passes, here, before
+        // a task or its key exists; its worker checks again at dispatch
+        // (MIK-8315).
+        if caller.task.is_some() {
+            self.check_task_admission_policy(caller, tool_name, arguments, session)?;
             return Ok(SyncAdmission::Unprotected);
         }
         let is_modern = caller.is_modern;

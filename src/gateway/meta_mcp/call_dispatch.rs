@@ -312,8 +312,8 @@ impl MetaMcp {
         );
         let backend = task_backend_name(self, tool_name, &arguments);
         let executor = Arc::clone(&intent.executor);
-        // #2450: a repeat is answered from the stored task, so the policy a
-        // sync replay passes runs first. A fresh task is checked by its worker.
+        // Every task passed the synchronous call's policy at admission
+        // (`admit_meta_sync`, MIK-8315); its worker checks again at dispatch.
         let policy_arguments = arguments.clone();
         let call = crate::gateway::task_service::TaskCall {
             tool: tool_name.to_owned(),
@@ -325,16 +325,8 @@ impl MetaMcp {
                 // its holds are adopted before any decision; a refusal below
                 // only drops this request's clones, and the row keeps the slot.
                 let stored = held.deliver(super::sealed_hold::HoldSink::Scope);
-                // The request's own policy, then the calls that produced the
-                // stored result (R3.2): both must hold before it goes out.
-                if let Err(error) = self.check_task_admission_policy(
-                    caller,
-                    tool_name,
-                    &policy_arguments,
-                    session_id,
-                ) {
-                    return error_response_preserving_status(id, &error);
-                }
+                // The calls that produced the stored result (R3.2) must hold
+                // before it goes out; the request's own policy ran at admission.
                 // The token rides where the current request's own check reads it.
                 let attestation = if tool_name == "gateway_invoke" {
                     policy_arguments.get("attestation").and_then(Value::as_str)
