@@ -247,6 +247,7 @@ src/gateway/task_service/execution/upstream.rs	cancel_upstream_once	1	critical	b
 src/gateway/task_service/execution/upstream.rs	offered_descriptor	1	standard	borderline	TaskExecutor::offered_descriptor	Builds a worker's offer bound to the record's own admitted operation digest, read owner-scoped
 src/gateway/task_service/execution/worker.rs	inspect_settled	1	critical	d	inspect_settled	Runs the response firewall on the task result; settles on a refusal when blocked
 src/gateway/task_service/execution/worker.rs	upstream_descriptor_fits	1	critical	c	TaskExecutor::upstream_descriptor_fits	Preflight refuses when no owner-scoped descriptor measurement resolves
+src/gateway/task_service/execution/worker.rs	follow_handle	1	standard	borderline	follow_handle	Follows a held handle under the record's query lease; handle_still_live and the settlement path carry the checks
 src/gateway/task_service/execution/worker.rs	run_dispatched	1	standard	borderline	run_dispatched	Arms the upstream job only if the adapter claims the backend; builds the worker authorizer
 src/gateway/task_service/execution/worker.rs	stored_backend_output	1	critical	borderline	stored_backend_output	Decides whether a settled row holds backend output that a receipt may describe as the peer's.
 src/gateway/task_service/execution/worker.rs	capture_handle	1	standard	borderline	capture_handle	Builds the capture of a handle; capture_upstream and mark_upstream_blocking carry the checks
