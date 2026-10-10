@@ -24,6 +24,7 @@ which PR merged first.
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import re
 import subprocess
@@ -40,8 +41,9 @@ KEYS = ("change", "action", "notice")
 
 
 REQUIRED = ("change", "action")
-MARKER = "**Startup:** "
-NOTICE_MARKER = MARKER + "prints a notice"
+# The startup marker's clauses and test vectors, shared with tests/upgrading_summary_rows.rs.
+GRAMMAR = json.loads(pathlib.Path(__file__).with_name("upgrading-startup-grammar.json").read_text(encoding="utf-8"))
+MARKER = GRAMMAR["marker"]
 ROW = re.compile(r"^\|\s*(\d+)\s*\|")
 SECTION = re.compile(r"^## (\d+)\. (.*)$")
 
@@ -82,6 +84,30 @@ def name_errors(names: list[str]) -> list[str]:
         for n in names
         if n not in NOT_FRAGMENTS and not NAME.match(n)
     ]
+
+
+def parse_marker(text: str) -> list[dict]:
+    """Parse a marker's text (after `MARKER`) into its clauses: the rules of
+    `parse_marker` in tests/upgrading_summary_rows.rs. A ValueError message
+    starts with the reason token the grammar file names."""
+    clauses, last = [], None
+    for part in text.split("; "):
+        clause = next((c for c in GRAMMAR["clauses"] if part.startswith(c["words"])), None)
+        if clause is None:
+            raise ValueError(f"unknown_clause: unrecognised clause {part!r}")
+        rest = part[len(clause["words"]) :]
+        if rest.startswith(", "):
+            if not rest[2:].strip():
+                raise ValueError(f"empty_detail: empty text after the comma in {part!r}")
+        elif rest:
+            raise ValueError(f"detail_needs_comma: text must follow a comma in {part!r}")
+        if ";" in part:
+            raise ValueError(f"semicolon_in_text: free text may not contain ';': {part!r}")
+        if last is not None and clause["place"] <= last:
+            raise ValueError(f"order: clause out of order or repeated: {part!r}")
+        last = clause["place"]
+        clauses.append(clause)
+    return clauses
 
 
 def parse(name: str, text: str) -> tuple[Fragment | None, list[str]]:
@@ -125,10 +151,16 @@ def parse(name: str, text: str) -> tuple[Fragment | None, list[str]]:
         body.pop()
     if not body or not body[0].startswith(MARKER):
         errors.append(f"{where}: `{MARKER.strip()}` must be the first line after the title")
-    elif body[0].startswith(NOTICE_MARKER) != ("notice" in fields):
-        errors.append(
-            f"{where}: a `prints a notice` marker needs a `notice:` phrase in the front matter, and only it"
-        )
+    else:
+        try:
+            clauses = parse_marker(body[0][len(MARKER) :])
+        except ValueError as e:
+            errors.append(f"{where}: bad `{MARKER.strip()}` marker, {e} (rules: upgrading-startup-grammar.json)")
+        else:
+            if any(c.get("needs_notice_field") for c in clauses) != ("notice" in fields):
+                errors.append(
+                    f"{where}: a `prints a notice` marker needs a `notice:` phrase in the front matter, and only it"
+                )
     if errors:
         return None, errors
     return Fragment(name, fields["change"], fields["action"], title, body, fields.get("notice")), []

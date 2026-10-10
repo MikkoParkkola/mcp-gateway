@@ -114,6 +114,55 @@ class Parse(unittest.TestCase):
         self.assertRefused(frag("12. Twelve"), "number")
 
 
+class StartupGrammar(unittest.TestCase):
+    """MIK-8246: the marker grammar is one JSON file, also read by the Rust test."""
+
+    def test_every_valid_vector_parses(self):
+        for text in uf.GRAMMAR["valid"]:
+            with self.subTest(text=text):
+                uf.parse_marker(text)
+
+    def test_every_invalid_vector_is_refused_for_its_reason(self):
+        for case in uf.GRAMMAR["invalid"]:
+            with self.subTest(text=case["text"]):
+                with self.assertRaises(ValueError) as caught:
+                    uf.parse_marker(case["text"])
+                self.assertIn(case["reason"], str(caught.exception))
+
+    def test_grammar_table_is_well_formed(self):
+        clauses = uf.GRAMMAR["clauses"]
+        self.assertEqual(len({c["words"] for c in clauses}), len(clauses))
+        self.assertEqual({c["role"] for c in clauses} - {"notice", "refusal", "failure"}, set())
+        self.assertEqual({c["place"] for c in clauses}, {0, 1, 2, 3})
+        self.assertEqual(sum(bool(c.get("needs_notice_field")) for c in clauses), 1)
+        self.assertEqual(uf.GRAMMAR["marker"], "**Startup:** ")
+
+    def test_every_reason_token_has_a_vector(self):
+        # no_notice_or_effect is not a token: the other rules make that state unreachable
+        used = {case["reason"] for case in uf.GRAMMAR["invalid"]}
+        self.assertEqual(used, {"unknown_clause", "order", "empty_detail", "detail_needs_comma", "semicolon_in_text"})
+
+    def test_a_marker_outside_the_grammar_is_refused_by_parse(self):
+        for marker in ("unchanged", "", "refuses to start; prints a notice"):
+            with self.subTest(marker=marker):
+                _, errors = errors_of("3702.md", frag("T", marker=marker))
+                self.assertTrue(any("bad `**Startup:**` marker" in e for e in errors), errors)
+
+    def test_assemble_refuses_an_unchanged_marker(self):
+        bad = frag("T", marker="unchanged")
+        with self.assertRaises(ValueError) as caught:
+            uf.assemble(DOC, 3, {"3700.md": bad})
+        self.assertIn("unknown_clause", str(caught.exception))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = tree(tmp, {"3700.md": bad})
+            before = snapshot(root)
+            for args in (("assemble", "--dry-run"), ("assemble",), ("check",)):
+                code, _, err = run_main(root, *args)
+                self.assertEqual(code, 1)
+                self.assertIn("unknown_clause", err)
+            self.assertEqual(snapshot(root), before)
+
+
 class Names(unittest.TestCase):
     def test_order_is_pr_then_suffix_then_name(self):
         names = ["3700-2.md", "3544.md", "3700.md", "3544-0.md", "3700-10.md"]

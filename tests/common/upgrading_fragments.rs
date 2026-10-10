@@ -4,7 +4,7 @@
 //! the guide source `UPGRADING_DOC` selects, and supersession by title.
 //! Included by `tests/upgrading_summary_rows.rs`, whose helpers it uses.
 
-use super::{DOC, DocSource, MARKER, doc_source, parse_marker, read_doc, sections};
+use super::{DOC, DocSource, GRAMMAR, doc_source, parse_marker, read_doc, sections};
 
 /// The successor a `> Superseded in part by <name>: ...` note names. A title
 /// may itself contain `:`, so the longest known title (numbered or pending)
@@ -122,8 +122,12 @@ pub(super) fn pending_fragments(dir: &std::path::Path) -> Vec<(String, String)> 
 pub(super) fn fragment_marker<'a>(name: &str, text: &'a str) -> Result<&'a str, String> {
     let mut after_title = text.lines().skip_while(|l| !l.starts_with("## ")).skip(1);
     let line = after_title.find(|l| !l.trim().is_empty()).unwrap_or("");
-    line.strip_prefix(MARKER)
-        .ok_or_else(|| format!("upgrading.d/{name}: the first line after the title must start with `{MARKER}`: {line:?}"))
+    line.strip_prefix(GRAMMAR.marker.as_str()).ok_or_else(|| {
+        format!(
+            "upgrading.d/{name}: the first line after the title must start with `{}`: {line:?}",
+            GRAMMAR.marker
+        )
+    })
 }
 
 /// MIK-8185: every pending fragment's marker obeys the same grammar as a
