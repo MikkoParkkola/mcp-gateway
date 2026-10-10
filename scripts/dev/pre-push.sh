@@ -18,9 +18,16 @@ if [[ -f Cargo.toml ]]; then
   # The cheap gates CI enforces, against the point this branch left the
   # release line (MIK-8328). Each prints its own message and stops the push.
   # They run first: each takes seconds, and the hygiene scan below takes minutes.
-  base="$(git merge-base HEAD origin/docs/ranking-1-release-line)"
-  echo "[pre-push] changelog fragment"
-  python3 scripts/release/changelog_fragments.py check --base "$base" --head HEAD
+  base="$(git merge-base HEAD origin/docs/ranking-1-release-line)" || {
+    echo "FAIL: no merge-base with origin/docs/ranking-1-release-line; run: git fetch origin docs/ranking-1-release-line"
+    exit 1
+  }
+  # changelog.yml skips this repository's throwaway/ branches (red-first and
+  # mutant probes), so the hook does too.
+  if [[ "$(git rev-parse --abbrev-ref HEAD)" != throwaway/* ]]; then
+    echo "[pre-push] changelog fragment"
+    python3 scripts/release/changelog_fragments.py check --base "$base" --head HEAD
+  fi
   echo "[pre-push] file size"
   python3 scripts/dev/check-file-size.py --base "$base"
   echo "[pre-push] inventory rows"
