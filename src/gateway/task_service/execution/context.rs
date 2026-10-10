@@ -171,6 +171,13 @@ impl OwnedCallerContext {
     ///   attestation token, which the funnel re-checks at dispatch.
     /// - Confirmation is unavailable on the worker.
     /// - Capabilities are the creating request's.
+    /// Test-only: the owner the worker's caller carries as its credential
+    /// principal (MIK-8293 S3b1's premise row).
+    #[cfg(test)]
+    pub(crate) fn credential_principal_for_test(&self) -> &str {
+        &self.credential_principal
+    }
+
     pub(crate) fn dispatch_context<'a>(
         &'a self,
         host: &LiveHost,

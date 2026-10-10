@@ -146,6 +146,8 @@ mod mrtr9_lease_tests;
 #[cfg(all(test, feature = "webui"))]
 mod reload_status_tests;
 #[cfg(test)]
+mod slot_quota_direct_tests;
+#[cfg(test)]
 mod webhook_mount_tests;
 /// The meta route's post-judge delivery record, shared with stdio (MIK-7920).
 pub(in crate::gateway) use judged_answer::record_delivery as record_judged_delivery;
