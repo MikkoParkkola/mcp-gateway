@@ -438,6 +438,18 @@ async fn t28_a_park_waiting_for_the_clock_is_cancelled() {
     std::assert_eq!(ended, TaskStatus::Cancelled);
     std::assert!(!has_round(&state, &id), "nothing parked");
     std::assert_eq!(mock.calls(), 1);
+    // The worker has left the park's wait: no busy worker, and the store is
+    // refused no further reads across a retry.
+    while state.task_executor.busy_workers_for_test() > 0 {
+        tokio::task::yield_now().await;
+    }
+    let refused = store(&state).refused_reads_for_test();
+    tokio::time::sleep(CLOCK_RETRY * 2).await;
+    std::assert_eq!(
+        store(&state).refused_reads_for_test(),
+        refused,
+        "the wait ended"
+    );
 }
 
 /// T28b (park waits past its bound): the clock never recovers, so the task
