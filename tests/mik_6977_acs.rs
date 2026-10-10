@@ -180,11 +180,12 @@ fn mik6977_claim_3_compact_surfaces_match_the_canonical_tool_counts() {
         .as_u64()
         .expect("meta_tools.minimum");
 
-    let library_docs = read("src/lib.rs");
-    assert!(library_docs.contains(&format!("{minimum_tools} tools minimum")));
-    assert!(library_docs.contains(&format!(
-        "{scenario_tools} in the README benchmark scenario"
-    )));
+    // src/lib.rs no longer quotes the counts: since MIK-8044.SURF.5 the crate
+    // doc says the library is internal to the binary, so it is not a public
+    // claim surface. It stays on the banned-phrase scan in
+    // tests/public_claims_validation.rs.
+    let readme = read("README.md");
+    assert!(readme.contains(&format!("{minimum_tools} tools minimum")));
 
     assert!(llms.contains(&format!("{scenario_tools} Meta-MCP tools in context")));
     assert!(llms.contains(&format!(
