@@ -189,7 +189,9 @@ pub(crate) fn adapter_header_names(accounts: Option<&AccountsConfig>) -> Vec<Str
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountsConfig {
-    /// Required literal `accounts.v1`.
+    /// The literal `accounts.v1`. AUTO (MIK-8044 P2c3a): an omitted key is
+    /// `accounts.v1`, the only accepted value; a written one is still checked.
+    #[serde(default = "default_schema_version")]
     pub(crate) schema_version: String,
     /// Default false; required true for any `personal_managed` descriptor.
     #[serde(default)]
@@ -741,6 +743,10 @@ fn validate_managed(
 }
 
 const SCHEMA_VERSION: &str = "accounts.v1";
+
+fn default_schema_version() -> String {
+    SCHEMA_VERSION.to_string()
+}
 const DEPLOYMENT: &str = "single_process";
 use url::Url;
 const KEY_BYTES: usize = 32;

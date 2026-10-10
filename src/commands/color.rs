@@ -10,8 +10,17 @@
 /// given, never when `NO_COLOR` is set (to anything), and otherwise only
 /// when the output is a terminal.
 pub(crate) fn wanted(no_color_flag: bool, no_color_env: bool, stdout_is_terminal: bool) -> bool {
-    let _ = (no_color_env, stdout_is_terminal);
-    !no_color_flag
+    !no_color_flag && !no_color_env && stdout_is_terminal
+}
+
+/// [`wanted`] for this process's stdout and environment.
+pub(crate) fn for_stdout(no_color_flag: bool) -> bool {
+    use std::io::IsTerminal as _;
+    wanted(
+        no_color_flag,
+        std::env::var_os("NO_COLOR").is_some(),
+        std::io::stdout().is_terminal(),
+    )
 }
 
 #[cfg(test)]

@@ -142,7 +142,7 @@ async fn run(cli: Cli) -> ExitCode {
                 format,
                 min_severity: severity,
                 auto_fix: fix,
-                color: !no_color,
+                color: commands::color::for_stdout(no_color),
             };
             mcp_gateway::validator::cli_handler::run_validate_command(&paths, &config).await
         }
