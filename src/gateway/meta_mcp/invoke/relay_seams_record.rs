@@ -240,6 +240,8 @@ fn walk<'v>(
 /// sources (a nested plan), and a run is attributed only when one receipt
 /// owns every piece. A run spanning receipts gets none, so no window is
 /// excused under a source that did not produce all of it.
+/// Uniqueness is a deliberate fail-safe, withholds, never admits: a piece
+/// two receipts of one step keep whole gets no owner (#3726 p1).
 pub(in super::super) fn add_subset_seams(fw: &Firewall, receipts: &mut [Receipt], answer: &Value) {
     let Some(parts) = answer_parts(answer) else {
         return;
@@ -275,3 +277,7 @@ pub(in super::super) fn add_subset_seams(fw: &Firewall, receipts: &mut [Receipt]
         }
     }
 }
+
+#[cfg(test)]
+#[path = "relay_seams_subset_tests.rs"]
+mod subset_tests;

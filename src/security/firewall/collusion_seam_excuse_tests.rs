@@ -694,3 +694,70 @@ fn a_control_flood_keeps_the_cut_scans_bounded() {
         work.scanned
     );
 }
+
+/// The one-char margin at an artificial edge (grok, #3726 h1): a left side
+/// cut to exactly K chars (47 x's and an e) before a seam where the e
+/// composes with the right side's acute. The window at the cut, start 0, is
+/// not hashed. The margin is a deliberate fail-safe: that window is real
+/// text, so dropping it can only withhold an excuse.
+#[test]
+fn the_window_at_an_artificial_edge_is_not_hashed() {
+    let det = detector();
+    let left = format!("{}{}{}e", "a".repeat(10), " ".repeat(976), "x".repeat(47));
+    let right = format!("\u{301}{}", "b".repeat(47));
+    super::HASHED_AT.with(|h| h.borrow_mut().clear());
+    let (_, _, work) = pass(&det, &[vec![left, "~".to_owned(), right]]);
+    assert_eq!(work.spans_attempted, 1, "premise: one span");
+    let at = super::HASHED_AT.with(|h| h.borrow().clone());
+    assert_eq!(at.len(), K - 1, "hashes at the cut edge: {at:?}");
+    assert!(
+        at.iter().all(|&(s, _)| s > 0),
+        "the window at the cut was hashed"
+    );
+}
+
+/// Cut context on a run the piece cap truncated (grok, #3726 c5): the right
+/// side's cap falls in the last indexed piece, so nothing after it is known
+/// and the span is skipped. The same run inside the cap yields seams. A
+/// deliberate fail-safe: skipping can only withhold an excuse.
+#[test]
+fn cut_context_past_the_piece_cap_skips_the_span() {
+    let det = detector();
+    let mut run = vec![String::new(); MAX_SEAM_PIECES - 3];
+    run.extend(["a".repeat(47), "~".to_owned(), "x".repeat(2_000)]);
+    let (whole, _, _) = pass(&det, &[run.clone()]);
+    assert!(
+        !whole.is_empty(),
+        "premise: inside the cap the span has seams"
+    );
+    run.push("y".to_owned());
+    let (cut_short, cut, _) = pass(&det, &[run]);
+    assert!(cut, "the piece cap was not reported");
+    assert!(
+        cut_short.is_empty(),
+        "a span cut by the piece cap made seams"
+    );
+}
+
+/// The right-side twin of
+/// `a_short_side_after_a_safe_cut_skips_its_span_and_reports_it` (grok
+/// improvement, #3726): the right side's cap cut leaves 5 chars, under K.
+#[test]
+fn a_short_right_side_after_a_safe_cut_skips_its_span_and_reports_it() {
+    let det = detector();
+    let padded = format!("{}{}{}", "x".repeat(5), " ".repeat(1_019), "a".repeat(10));
+    let run = vec![
+        "c".repeat(47),
+        "~".to_owned(),
+        "b".repeat(47),
+        "~".to_owned(),
+        padded,
+    ];
+    let (fps, cut, _) = pass(&det, &[run]);
+    assert!(cut, "the skipped span was not reported");
+    let other = det.fingerprints(&format!("{}{}", "c".repeat(47), "b".repeat(47)));
+    assert!(
+        other.iter().any(|f| fps.contains(f)),
+        "the other span's seams are missing"
+    );
+}
