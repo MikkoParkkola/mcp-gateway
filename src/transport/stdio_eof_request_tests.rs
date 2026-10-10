@@ -45,6 +45,7 @@ AFTER
     // Shortened only now: the window a row tests is its requests', and a
     // loaded runner can take longer than that to spawn and answer (MIK-8253).
     transport.set_request_timeout(request_timeout);
+    assert_eq!(transport.request_timeout(), request_timeout);
     (workspace, transport)
 }
 
@@ -184,9 +185,9 @@ async fn a_cancelled_request_still_writes_its_whole_frame() {
 #[tokio::test]
 async fn a_request_that_timed_out_sends_no_cancel() {
     let (w, t) = started_with_timeout("cat > seen", Duration::from_millis(300)).await;
-    let err = t
-        .request("tools/list", None)
+    let err = tokio::time::timeout(ROW_LIMIT, t.request("tools/list", None))
         .await
+        .expect("the shortened request timeout ends the call")
         .expect_err("nothing answers");
     assert!(matches!(err, Error::BackendTimeout(_)), "{err:?}");
     t.notify("notifications/marker", None)
