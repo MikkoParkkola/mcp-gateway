@@ -124,19 +124,25 @@ pub(crate) async fn stdio_firewalled_answering(
     answer: &'static str,
 ) -> Sent {
     use crate::security::firewall::{Firewall, FirewallConfig};
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_requests: true,
-            scan_responses: true,
-            credential_redaction: true,
-            audit_log: Some(audit.to_path_buf()),
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_requests: true,
+                scan_responses: true,
+                credential_redaction: true,
+                audit_log: Some(audit.to_path_buf()),
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .keyed_for_test(),
+    );
     stdio_call(
-        |meta| meta.set_firewall(Some(firewall)),
+        |meta| {
+            meta.share_keyring_with_for_test(&firewall);
+            meta.set_firewall(Some(firewall));
+        },
         (args, None),
         text_result(answer),
     )

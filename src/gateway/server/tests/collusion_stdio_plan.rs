@@ -87,20 +87,24 @@ async fn a_stdio_plan_receipts_each_step_it_delivered() {
     ));
     backend.set_transport_for_test(Arc::new(Alpha));
     assert!(registry.register(backend));
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                sources: vec!["alpha:*".to_string()],
-                ..CollusionConfig::default()
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources: vec!["alpha:*".to_string()],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+            None,
+        )
+        .keyed_for_test(),
+    );
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    meta.share_keyring_with_for_test(&firewall);
     let meta = Arc::new(meta);
     let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(

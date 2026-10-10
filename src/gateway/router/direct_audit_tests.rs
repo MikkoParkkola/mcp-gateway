@@ -257,18 +257,23 @@ async fn fixture(setup: Setup) -> Fixture {
     if let Some(config) = setup.agent_identity {
         state_mut.agent_identity_config = config;
     }
+    let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
+    // With the keyring the gateway mints continuations with, as its own
+    // firewalls are built (#2210, MIK-8276).
     #[cfg(feature = "firewall")]
     if setup.request_firewall {
-        state_mut.firewall = Some(Arc::new(crate::security::firewall::Firewall::from_config(
-            crate::security::firewall::FirewallConfig {
-                enabled: true,
-                scan_requests: true,
-                ..crate::security::firewall::FirewallConfig::default()
-            },
-            None,
-        )));
+        state_mut.firewall = Some(Arc::new(
+            crate::security::firewall::Firewall::from_config(
+                crate::security::firewall::FirewallConfig {
+                    enabled: true,
+                    scan_requests: true,
+                    ..crate::security::firewall::FirewallConfig::default()
+                },
+                None,
+            )
+            .with_continuations(meta.continuation()),
+        ));
     }
-    let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
     meta.enable_transparency_log(Arc::clone(&log));
     if setup.chain == crate::config::ChainMode::Require {
         meta.set_chain_signer(

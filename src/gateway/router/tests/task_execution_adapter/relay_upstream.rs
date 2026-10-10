@@ -110,21 +110,25 @@ async fn followed(answer: Value) -> (Arc<AppState>, tempfile::TempDir) {
 
 /// [`followed`], with the query answering whatever `answering` returns.
 async fn followed_with(answering: Answering) -> (Arc<AppState>, tempfile::TempDir, String) {
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                sources: vec![format!("{BACKEND}:{TOOL}")],
-                ..CollusionConfig::default()
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources: vec![format!("{BACKEND}:{TOOL}")],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+            None,
+        )
+        .keyed_for_test(),
+    );
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta(
         &two_principal_auth(),
         None,
         |mut meta| {
+            meta.share_keyring_with_for_test(&firewall);
             meta.set_firewall(Some(firewall));
             meta
         },
