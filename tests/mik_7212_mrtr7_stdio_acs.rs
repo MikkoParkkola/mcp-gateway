@@ -190,7 +190,11 @@ async fn ac_mrtr_7a_stdio_client_answers_while_serve_loop_reads() {
     assert!(initialized.is_some(), "the child never answered initialize");
 
     session.send(&asking_call(2)).await;
-    let lines = session.collect_lines(COLLECT_WINDOW).await;
+    let lines = session
+        .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |f| {
+            position_of_outbound(f, "elicitation/create").is_some()
+        })
+        .await;
     let frames = frames_lenient(&lines);
 
     // Control: without this, every assertion below measures the fixture rather
@@ -263,7 +267,13 @@ async fn mik_1991_a_handshake_without_elicitation_keeps_the_question_out() {
     assert!(initialized.is_some(), "the child never answered initialize");
 
     session.send(&asking_call(2)).await;
-    let lines = session.collect_lines(COLLECT_WINDOW).await;
+    // Ends on the call's answer; the settle after it is where a prompt that
+    // must not be sent would show.
+    let lines = session
+        .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |f| {
+            f.iter().any(|frame| frame.get("id").and_then(Value::as_i64) == Some(2))
+        })
+        .await;
     let frames = frames_lenient(&lines);
 
     // Control: the call itself reached the backend, so "no question" is the
@@ -307,7 +317,11 @@ async fn ac_mrtr_7a_bridged_request_follows_the_initialize_response() {
     session.send(&initialize_request(1)).await;
     session.send(&asking_call(2)).await;
 
-    let lines = session.collect_lines(COLLECT_WINDOW).await;
+    let lines = session
+        .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |f| {
+            position_of_outbound(f, "elicitation/create").is_some()
+        })
+        .await;
     let frames = frames_lenient(&lines);
 
     assert!(
@@ -516,7 +530,11 @@ async fn ac_mrtr_7a_request_in_flight_when_stdin_closes_still_gets_its_response(
     assert!(initialized.is_some(), "the child never answered initialize");
 
     session.send(&asking_call(2)).await;
-    let staged = session.collect_lines(COLLECT_WINDOW).await;
+    let staged = session
+        .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |f| {
+            position_of_outbound(f, "elicitation/create").is_some()
+        })
+        .await;
 
     // Control: with no question outstanding there is no in-flight dispatch for
     // EOF to interrupt, and the row would pass against a gateway that had

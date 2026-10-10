@@ -11,6 +11,7 @@
 use super::listen_graceful::{authorizer, bearer, temporary_token};
 use super::*;
 use futures::StreamExt as _;
+use crate::test_wait::HANG_BOUND;
 
 /// A key server holding one live temporary token; its credential and `jti`.
 async fn key_server_with_token() -> (
@@ -60,8 +61,13 @@ async fn open(
     (id, body)
 }
 
-/// What the stream writes within `within`, and whether it ended.
-async fn read(body: &mut axum::body::BodyDataStream, within: Duration) -> (String, bool) {
+/// How long a row watches for a write or an end that must not happen.
+const SETTLE: Duration = Duration::from_millis(500);
+
+/// What the stream writes within `within`, and whether it ended. For a check
+/// that something is NOT written: a positive assert on this result races the
+/// window (MIK-8295), so use [`read_until`] for that.
+async fn read_for_absence(body: &mut axum::body::BodyDataStream, within: Duration) -> (String, bool) {
     let deadline = tokio::time::Instant::now() + within;
     let mut seen = String::new();
     loop {
@@ -72,6 +78,34 @@ async fn read(body: &mut axum::body::BodyDataStream, within: Duration) -> (Strin
             Ok(Some(Err(error))) => panic!("the session body failed: {error}"),
         }
     }
+}
+
+/// What the stream writes until `until` holds for it, the stream ends, or
+/// `HANG_BOUND` passes (the caller's assert then says what was missing), and
+/// whether it ended. Once `until` holds, it keeps reading for `SETTLE`, where
+/// an extra write or an end that must not happen would show.
+async fn read_until(
+    body: &mut axum::body::BodyDataStream,
+    until: impl Fn(&str) -> bool,
+) -> (String, bool) {
+    let deadline = tokio::time::Instant::now() + HANG_BOUND;
+    let mut seen = String::new();
+    while !until(&seen) {
+        match tokio::time::timeout_at(deadline, body.next()).await {
+            Err(_) => return (seen, false),
+            Ok(None) => return (seen, true),
+            Ok(Some(Ok(chunk))) => seen.push_str(&String::from_utf8_lossy(&chunk)),
+            Ok(Some(Err(error))) => panic!("the session body failed: {error}"),
+        }
+    }
+    // timing: absence
+    let (more, ended) = read_for_absence(body, SETTLE).await;
+    (seen + &more, ended)
+}
+
+/// Read until the stream ends: the event a revoked token's stream must reach.
+fn until_it_ends(_: &str) -> bool {
+    false
 }
 
 fn note(uri: &str) -> TaggedNotification {
@@ -118,9 +152,9 @@ async fn a_token_revoked_after_its_copy_is_queued_is_written_nothing() {
     );
     assert!(key_server.store.revoke_by_jti(&jti).await);
 
-    let (seen, _) = read(&mut kept, Duration::from_secs(2)).await;
+    let (seen, _) = read_until(&mut kept, |s| s.contains("rows://r9")).await;
     assert!(seen.contains("rows://r9"), "the live twin reads it: {seen}");
-    let (seen, ended) = read(&mut revoked, Duration::from_secs(2)).await;
+    let (seen, ended) = read_until(&mut revoked, until_it_ends).await;
     assert!(
         !seen.contains("rows://r9"),
         "a revoked token's queued copy was written: {seen}"
@@ -182,7 +216,11 @@ async fn prompt_behind_a_frame(
     if held == Held::Revoked {
         assert!(key_server.store.revoke_by_jti(&jti).await);
     }
-    let (seen, _) = read(&mut body, Duration::from_millis(500)).await;
+    let (seen, _) = if held == Held::Revoked {
+        read_until(&mut body, until_it_ends).await
+    } else {
+        read_until(&mut body, |s| s.contains("rows://r11") && s.contains("r11-prompt")).await
+    };
     let answer = tokio::time::timeout(Duration::from_secs(2), &mut asked)
         .await
         .ok();
@@ -263,7 +301,11 @@ async fn lagging_stream(held: Held) -> (String, bool) {
     if held == Held::Revoked {
         assert!(key_server.store.revoke_by_jti(&jti).await);
     }
-    read(&mut body, Duration::from_secs(2)).await
+    if held == Held::Revoked {
+        read_until(&mut body, until_it_ends).await
+    } else {
+        read_until(&mut body, |s| s.contains("lagged") && s.contains("rows://lag-3")).await
+    }
 }
 
 /// Seat finding: the `lagged` notice is a frame like any other, so a stream

@@ -384,9 +384,10 @@ impl StdioSession {
         }
     }
 
-    /// Drain for a fixed window. Used by rows asserting a notification is
-    /// *absent*, where there is no line to wait for.
-    async fn collect(&mut self, window: Duration) -> Vec<Value> {
+    /// Drain for a fixed window. Only for rows asserting a notification is
+    /// *absent*, where there is no line to wait for: a positive assert on
+    /// this result races the window (MIK-8295).
+    async fn collect_for_absence(&mut self, window: Duration) -> Vec<Value> {
         let mut frames = Vec::new();
         let _ = timeout(window, async {
             while let Ok(Some(line)) = self.stdout.next_line().await {
