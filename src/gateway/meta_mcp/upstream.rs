@@ -575,6 +575,10 @@ mod error_policy_tests;
 mod provenance_tests;
 
 #[cfg(test)]
+#[path = "upstream/login_scope_tests.rs"]
+mod login_scope_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

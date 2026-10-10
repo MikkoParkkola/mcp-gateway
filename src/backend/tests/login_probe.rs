@@ -4,8 +4,8 @@
 //! and never rebuilds over one.
 
 use super::login_window::{
-    Browser, LAPSE, Upstream, approved_start, counted_authorization_server, login_backend,
-    spawn_call, variant, within,
+    Browser, Upstream, approved_start, counted_authorization_server, login_backend, spawn_call,
+    variant, within,
 };
 use super::*;
 
@@ -85,18 +85,22 @@ async fn a_probe_refused_for_a_login_runs_one_start_and_no_rebuild() {
 /// once instead of waiting on the login inside the re-initialization.
 #[tokio::test]
 async fn a_probe_recovering_its_session_does_not_wait_on_a_login() {
-    // The probe sends inside the token's last 5 s; the session-expired answer
-    // comes 8 s later, after another caller's login has taken the client.
+    // The probe sends on a live token; the session-expired answer comes 8 s
+    // later, after another caller's login has taken the client.
+    static SEEN: AtomicUsize = AtomicUsize::new(0);
     let (backend, browser, _dir) = approved_start(
-        Upstream::SessionExpires(Duration::from_secs(8)),
+        Upstream::SessionExpires(Duration::from_secs(8), &SEEN),
         Duration::from_secs(30),
     )
     .await;
+    let before = SEEN.load(Ordering::SeqCst);
     let probe = {
         let backend = Arc::clone(&backend);
         tokio::spawn(async move { backend.health_probe(Duration::from_secs(25)).await })
     };
-    sleep(LAPSE).await;
+    // The probe's request has reached the server before the token lapses.
+    super::token_lapse::arrived(&SEEN, before + 1, "the probe's request").await;
+    super::token_lapse::lapse(&backend).await;
     let call = spawn_call(&backend);
     browser.opened(2, "the call's request-time login").await;
     assert!(
@@ -104,8 +108,10 @@ async fn a_probe_recovering_its_session_does_not_wait_on_a_login() {
         "the login must hold the client before the probe's answer comes back"
     );
 
-    // Ended in time, whatever it reported: the row is about not waiting.
-    let _probed = tokio::time::timeout(Duration::from_secs(6), probe)
+    // Ended in time, whatever it reported: the row is about not waiting. Its
+    // answer comes 8 s after it sent; one waiting on the login would run on
+    // to its own 25 s bound.
+    let _probed = tokio::time::timeout(Duration::from_secs(8 + 6), probe)
         .await
         .expect("the probe's session recovery does not wait on the login")
         .expect("probe task");

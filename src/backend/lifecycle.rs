@@ -117,6 +117,8 @@ impl Backend {
             #[cfg(test)]
             rebuilds_attempted: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
+            last_oauth_client: parking_lot::Mutex::new(None),
+            #[cfg(test)]
             between_install_and_write: parking_lot::Mutex::new(None),
             #[cfg(test)]
             era_at_publish: parking_lot::Mutex::new(Vec::new()),
@@ -471,6 +473,10 @@ impl Backend {
                 // single-tenant debug_assert provably safe -- tell it so.
                 if matches!(key, PoolKey::PerUser { .. }) {
                     transport.mark_single_tenant();
+                }
+                #[cfg(test)]
+                {
+                    *self.last_oauth_client.lock() = transport.oauth_client_for_test();
                 }
                 // RFC-0061 §2.4 startup: ask first, handshake only if the
                 // answer is not modern. Attached before anything reaches the

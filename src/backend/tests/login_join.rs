@@ -6,7 +6,8 @@
 //! is the backend's, even while a login of its cohort is in flight; a fill
 //! still waiting on that login leaves the joiner `AuthorizationPending`.
 
-use super::login_window::{LAPSE, Upstream, approved_start, spawn_call, variant, within};
+use super::login_window::{Upstream, approved_start, spawn_call, variant, within};
+use super::token_lapse::{Pages, arrived, lapse};
 use super::*;
 
 /// The caller that owns the fill: discovery's `DrainBudget` path, which runs
@@ -31,7 +32,7 @@ fn spawn_check(
 /// the fill it joined was waiting on the backend, not on the login.
 #[tokio::test]
 async fn a_joiner_of_a_dispatched_fill_times_out_as_the_backend() {
-    static PAGES: AtomicUsize = AtomicUsize::new(0);
+    static PAGES: Pages = Pages::new();
     // Owner at t0: page 1 answers at 2 s, page 2 times out at its 10 s
     // transport bound (about 12 s). The joiner enters at about 0.5 s, so its
     // 10 s + 1 s deadline (about 11.5 s) passes while the owner still waits.
@@ -44,7 +45,9 @@ async fn a_joiner_of_a_dispatched_fill_times_out_as_the_backend() {
     sleep(Duration::from_millis(500)).await;
     let joiner = spawn_check(&backend);
 
-    sleep(LAPSE).await;
+    // The owner has sent its second page before the token lapses.
+    arrived(&PAGES.second, 1, "the owner's second page").await;
+    lapse(&backend).await;
     let call = spawn_call(&backend);
     browser
         .opened(2, "another caller's request-time login")
@@ -63,7 +66,7 @@ async fn a_joiner_of_a_dispatched_fill_times_out_as_the_backend() {
         "the owner must still be waiting, or the joiner read the owner's error"
     );
     assert_eq!(
-        PAGES.load(Ordering::SeqCst),
+        PAGES.first.load(Ordering::SeqCst),
         1,
         "the joiner sent no first page of its own: it joined the owner's fill"
     );
@@ -82,7 +85,7 @@ async fn a_joiner_of_a_dispatched_fill_times_out_as_the_backend() {
 #[tokio::test]
 async fn a_joiner_of_a_fill_waiting_on_the_login_times_out_as_authorization_pending() {
     let (backend, browser, _dir) = approved_start(Upstream::Plain, Duration::from_secs(1)).await;
-    sleep(LAPSE).await;
+    lapse(&backend).await;
     let owner = spawn_discovery(&backend);
     browser
         .opened(2, "the owner fill's request-time login")
