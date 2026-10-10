@@ -254,3 +254,4 @@ src/gateway/task_service/store_targets.rs	settle_bounded_by	1	Async hop to settl
 src/gateway/task_service/store_unix.rs	sync_dir	1	fsync of the store directory
 src/gateway/task_service/store_unix.rs	sync_file	1	fsync of a record file
 src/gateway/task_service/execution.rs	spawn_now	1	Spawns an already-admitted worker under the shutdown token; the audit-write decision is spawn_worker's
+src/personal_accounts/config.rs	default_schema_version	1	Serde default for an omitted accounts.schema_version (MIK-8044 P2c3a); returns the literal accounts.v1 only, and the schema check itself is validate_* (config.rs:136/437/532)

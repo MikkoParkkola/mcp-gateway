@@ -10,6 +10,7 @@ mod accounts;
 mod add_remove;
 mod backend_url_keys;
 mod cap;
+pub(crate) mod color;
 #[cfg(feature = "config-export")]
 mod config_export;
 pub mod config_write;
