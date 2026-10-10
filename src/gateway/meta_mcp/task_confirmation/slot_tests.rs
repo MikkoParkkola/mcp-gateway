@@ -788,4 +788,5 @@ async fn s3d_one_identity_has_one_cap_across_invoke_and_both_confirmations() {
     );
 }
 
+mod key_quota;
 mod replay;
