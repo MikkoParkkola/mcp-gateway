@@ -39,6 +39,11 @@ enum Grammar {
     ToolPrefix(Role),
     /// An exact name or `*` alone; the noun names what the list holds.
     ExactOrStar(&'static str),
+    /// `key_server.policies[].scopes.backends`: matched as a prefix against a
+    /// client's request, but issued as the token's backend list, which takes an
+    /// exact name or `*` alone. A `prefix*` there grants only to clients that
+    /// name their backends, so it is refused like any other `*`.
+    IssuedBackends,
 }
 
 /// Why `pattern` matches nothing under `grammar`, and what to write instead;
@@ -70,11 +75,17 @@ fn unmatchable(pattern: &str, grammar: Grammar) -> Option<String> {
                 ),
             })
         }
-        Grammar::ExactOrStar(_) if pattern == "*" => None,
+        Grammar::ExactOrStar(_) | Grammar::IssuedBackends if pattern == "*" => None,
         Grammar::ExactOrStar(noun) => Some(format!(
             "matches no {noun}: here only exact names or '*' work. List the exact {noun} names, \
              or use \"*\" if every {noun} may be reached."
         )),
+        Grammar::IssuedBackends => Some(
+            "matches no backend for a client that does not name it in its request: a token's \
+             backend list takes only exact names or '*'. List the exact backend names, or use \
+             \"*\" if every backend may be reached."
+                .to_string(),
+        ),
     }
 }
 
@@ -101,10 +112,11 @@ fn refuse_agent_scope(key: &str, scope: &str) -> Result<()> {
     let mut parts = rest.splitn(3, ':');
     for noun in ["backend", "tool"] {
         if let Some(segment) = parts.next()
-            && let Some(why) = unmatchable(segment, Grammar::ExactOrStar(noun))
+            && unmatchable(segment, Grammar::ExactOrStar(noun)).is_some()
         {
             return Err(Error::ConfigValidation(format!(
-                "{key} = {scope:?}: segment {segment:?} {why}"
+                "{key} = {scope:?}: the {noun} segment {segment:?} matches no {noun}: each \
+                 segment is one exact name or '*' alone. Write one {noun} name there, or '*'."
             )));
         }
     }
@@ -160,7 +172,7 @@ impl Config {
             refuse(
                 &format!("{at}.backends"),
                 &rule.scopes.backends,
-                Grammar::ExactOrStar("backend"),
+                Grammar::IssuedBackends,
             )?;
             refuse(
                 &format!("{at}.tools"),

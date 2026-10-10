@@ -347,7 +347,8 @@ pub struct AgentDefinitionConfig {
     #[serde(default)]
     pub rs256_public_key: Option<String>,
     /// Granted scopes (e.g., `tools:surreal:*`): `tools:<backend>:<tool>:<action>`,
-    /// backend and tool each an exact name or `*` alone (MIK-8298).
+    /// backend and tool each an exact name or `*` alone, and the action `read`,
+    /// `write`, `execute` or `*` (MIK-8298).
     #[serde(default)]
     pub scopes: Vec<String>,
     /// Expected issuer (`iss` claim). Optional.

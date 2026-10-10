@@ -273,3 +273,97 @@ fn exact_names_and_trailing_prefixes_still_load_and_decide_the_same() {
     assert!(!grants("other", "search", Action::Write), "read only");
     assert!(!grants("other", "list", Action::Read), "search only off gh");
 }
+
+/// Each narrow grant decides alone, with no broader sibling beside it.
+#[test]
+fn narrow_grants_decide_on_their_own() {
+    let yaml = format!(
+        "auth:\n  enabled: false\n  api_keys:\n    - name: ci\n      key_sha256: {KEY:?}\n      backends: [\"gh\"]\n\
+         agent_auth:\n  enabled: false\n  agents:\n    - client_id: ci\n      name: ci\n      scopes: [\"tools:gh:*:read\"]\n"
+    );
+    let config = load(&yaml).expect("exact backends and a lone-star scope load");
+    let key = &config.auth.api_keys[0];
+    let client = crate::gateway::auth::AuthenticatedClient {
+        quota_principal: None,
+        principal: String::new(),
+        name: key.name.clone(),
+        rate_limit: 0,
+        backends: key.backends.clone(),
+        allowed_tools: None,
+        denied_tools: None,
+        admin: false,
+        authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
+    };
+    assert!(client.can_access_backend("gh"), "the exact backend");
+    assert!(
+        !client.can_access_backend("other"),
+        "only the exact backend"
+    );
+
+    let scopes: Vec<Scope> = config.agent_auth.agents[0]
+        .scopes
+        .iter()
+        .filter_map(|s| Scope::parse(s))
+        .collect();
+    let grants = |b: &str, t: &str, a: Action| check_scopes(&scopes, "ci", b, t, &a).is_ok();
+    assert!(
+        grants("gh", "any_tool", Action::Read),
+        "tools:gh:*:read reads any tool on gh"
+    );
+    assert!(!grants("gh", "any_tool", Action::Write), "and only reads");
+    assert!(!grants("other", "any_tool", Action::Read), "and only on gh");
+}
+
+fn refusal(yaml: &str) -> String {
+    match load(yaml) {
+        Ok(_) => panic!("loaded; it must be refused"),
+        Err(e) => e.to_string(),
+    }
+}
+
+/// A broader `prefix*` only denies more, so a deny hint offers it first; on an
+/// allow list it would grant more, so the hint leads with the exact names.
+#[test]
+fn deny_hints_offer_the_prefix_first_and_allow_hints_the_exact_names() {
+    let deny = refusal(&tool_policy("deny", "a*b", true));
+    let (use_prefix, exact) = (
+        deny.find("Use \"a*\""),
+        deny.find("list the exact tool names"),
+    );
+    assert!(
+        matches!((use_prefix, exact), (Some(p), Some(e)) if p < e),
+        "{deny}"
+    );
+
+    let allow = refusal(&tool_policy("allow", "a*b", true));
+    let (exact, prefix) = (
+        allow.find("List the exact tool names"),
+        allow.find("\"a*\""),
+    );
+    assert!(
+        matches!((exact, prefix), (Some(e), Some(p)) if e < p),
+        "{allow}"
+    );
+    assert!(allow.contains("may be allowed (broader)"), "{allow}");
+}
+
+#[test]
+fn the_key_server_backend_refusal_says_why_it_depends_on_the_client() {
+    let err = refusal(&key_server("backends", "gh*"));
+    assert!(
+        err.contains("a client that does not name it in its request"),
+        "{err}"
+    );
+    assert!(err.contains("List the exact backend names"), "{err}");
+}
+
+#[test]
+fn an_agent_segment_refusal_names_the_segment_and_its_fix() {
+    let err = refusal(&agent("tools:gh*:search"));
+    assert!(err.contains("the backend segment \"gh*\""), "{err}");
+    assert!(
+        err.contains("Write one backend name there, or '*'"),
+        "{err}"
+    );
+}
