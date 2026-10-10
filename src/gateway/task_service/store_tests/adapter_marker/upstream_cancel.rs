@@ -236,3 +236,55 @@ async fn a_row_admitted_at_the_tightest_budget_still_takes_the_cancel_claim() {
     );
     store.close().await.unwrap();
 }
+
+/// A v3 row names its one call only through its descriptor. The claim raises
+/// it past the version that reads targets and takes the descriptor off, so it
+/// keeps that call as a target first: the cancelled row still says what ran.
+/// Mutant "the claim drops the descriptor without keeping provenance" leaves
+/// a dispatched row claiming it ran nothing.
+#[tokio::test]
+async fn a_claimed_legacy_row_keeps_its_call_as_a_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let (row, binding) = admitted(&store, &services(), "cancel-legacy").await;
+    let owner = binding.principal_digest().to_owned();
+    let id = row.id().to_owned();
+    store
+        .mark_upstream(&owner, &id, 1, descriptor(&binding, "job-legacy"))
+        .await
+        .unwrap();
+    assert_eq!(
+        record_json(&path, &id)["version"],
+        json!(3),
+        "precondition: a v3 row"
+    );
+    store
+        .transition(&owner, &id, 1, TaskTransition::Cancel, at(1))
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .claim_upstream_cancel(&owner, &id, None)
+            .await
+            .unwrap(),
+        CancelClaim::Claimed(_)
+    ));
+    let record = record_json(&path, &id);
+    assert_eq!(record["version"], json!(7));
+    assert!(record.get("upstream").is_none(), "{record}");
+    assert_eq!(
+        record["targets"],
+        json!([{"server": "orders", "tool": "create"}]),
+        "{record}"
+    );
+    store.close().await.unwrap();
+    let store = open(&path).await;
+    let read = store.get(&owner, &id).unwrap();
+    assert!(
+        read.targets_recorded && read.targets.len() == 1,
+        "{:?}",
+        read.targets
+    );
+    store.close().await.unwrap();
+}
