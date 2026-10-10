@@ -22,3 +22,4 @@ src/transport/http/sse_decoder.rs	push	1	Appends a chunk and delegates to decode
 src/transport/http/sse_decoder.rs	finish	1	Flushes the final block by delegating to decode, which makes the bound decision.
 src/transport/http/transport_impl.rs	notify	1	Delegates to notify_with_headers with no headers and the shared bucket; no decision of its own.
 src/transport/http/transport_impl.rs	is_connected	1	Plain getter of the connected flag; decides nothing.
+src/transport/http/startup.rs	join_failure	1	Maps the OAuth task's JoinError (a panic or cancellation) to the Error::OAuth that connect returns; it decides nothing, connect refuses whenever the task fails.

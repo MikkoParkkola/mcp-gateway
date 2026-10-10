@@ -25,6 +25,9 @@ mod session_expiry;
 /// An unpinned flavour connects as a Streamable pin does (MIK-8044).
 mod unpinned_flavour;
 
+/// The legacy handshake's protocol-version refusals (MIK-8195 W1).
+mod version_refusals;
+
 /// Per-identity MCP-Session-Id partitioning (MIK-6784, GW.1).
 mod session_partition;
 

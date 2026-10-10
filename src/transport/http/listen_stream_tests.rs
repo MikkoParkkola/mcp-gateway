@@ -69,3 +69,67 @@ async fn a_streamed_answer_for_another_id_is_skipped() {
         .expect("the stream ends");
     assert_eq!(note, Some(UpstreamNote::End));
 }
+
+/// MIK-8195 W1 (`open_session_stream`): a session stream whose session cannot
+/// heal is refused as 404 before any GET is sent.
+#[tokio::test]
+async fn a_session_stream_that_cannot_heal_is_a_404() {
+    let t = transport("http://127.0.0.1:1/mcp");
+    t.reinit_needed
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let opened = t
+        .open_session_stream(Watched::default())
+        .await
+        .expect("no request is sent");
+    assert!(matches!(opened, Err(404)));
+}
+
+/// MIK-8195 W1 (`open_session_stream`): the session stream delivers an
+/// admitted notification, and ends when the body ends.
+#[tokio::test]
+async fn a_session_stream_delivers_its_notes_and_ends_with_the_body() {
+    let url = peer(|_| {
+        let note = json!({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"});
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n\
+             data: {note}\n\n"
+        )
+    })
+    .await;
+    let t = transport(&url);
+    let mut rx = t
+        .open_session_stream(Watched::default())
+        .await
+        .expect("sent")
+        .expect("opened");
+    let first = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+        .await
+        .expect("a note arrives");
+    assert!(first.is_some(), "the notification was not delivered");
+    let end = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+        .await
+        .expect("the stream ends");
+    assert_eq!(end, None);
+}
+
+/// MIK-8195 W1 (`open_session_stream`): a session stream whose body breaks
+/// off mid-chunk ends without a note.
+#[tokio::test]
+async fn a_session_stream_that_breaks_off_ends() {
+    let url = peer(|_| {
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+         transfer-encoding: chunked\r\n\r\n40\r\ndata:"
+            .to_owned()
+    })
+    .await;
+    let t = transport(&url);
+    let mut rx = t
+        .open_session_stream(Watched::default())
+        .await
+        .expect("sent")
+        .expect("opened");
+    let note = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+        .await
+        .expect("the stream ends");
+    assert_eq!(note, None);
+}
