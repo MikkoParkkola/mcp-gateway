@@ -9,6 +9,7 @@
 //! `Config::load`, the path start-up and hot reload share.
 
 use super::*;
+use crate::gateway::oauth::{Action, Scope, check_scopes};
 
 const KEY: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -255,7 +256,6 @@ fn exact_names_and_trailing_prefixes_still_load_and_decide_the_same() {
     );
     assert!(client.can_access_backend("gh") && client.can_access_backend("other"));
 
-    use crate::gateway::oauth::{Action, Scope, check_scopes};
     let scopes: Vec<Scope> = config.agent_auth.agents[0]
         .scopes
         .iter()
