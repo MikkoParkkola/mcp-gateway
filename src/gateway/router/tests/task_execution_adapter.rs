@@ -122,10 +122,10 @@ mod stored_result_policy;
 mod surface_hints;
 #[cfg(feature = "metrics")]
 mod unkeyed_task;
+mod upstream_cancel;
 /// I5's before-the-wire half: the recovery descriptor's capacity, decided
 /// before the first `tools/call` rather than after the handle comes back.
 mod upstream_descriptor;
-mod upstream_cancel;
 mod x1_dispatch;
 
 mod notifications;
