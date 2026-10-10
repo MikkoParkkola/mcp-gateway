@@ -145,3 +145,45 @@ async fn a_failing_submit_append_under_fail_closed_creates_no_task() {
     std::assert_eq!(committed(&row), rows, "a task row was committed");
     std::assert_eq!(row.endpoint.arrivals(), 0, "the backend ran without its cause on record");
 }
+
+/// 4e. The inverse of O5 for a personal capability: the submit's grant
+/// decision IS appended before the worker spawns (the design's new order;
+/// MIK-8204 flushes the submit's slot before the hand-off).
+#[tokio::test]
+async fn an_allowed_task_appends_its_submit_decision_before_the_spawn() {
+    use crate::gateway::meta_mcp::grant_audit::seams::{appends_for_test, worker_spawns_for_test};
+    let row = armed(true, false, AuditFailurePolicy::BestEffort, |meta| meta).await;
+    let (start, appends) = (worker_spawns_for_test().len(), appends_for_test());
+    let created = post(&row.state, "key-a", as_task(personal_invoke(1), "sa-4e")).await;
+    task_id(&created);
+    let edge = worker_spawns_for_test()
+        .get(start)
+        .copied()
+        .unwrap_or_else(|| panic!("the worker spawned: {created}"));
+    std::assert_eq!(
+        edge.appends,
+        appends + 1,
+        "exactly the submit's decision is appended before the spawn"
+    );
+}
+
+/// 4f. A stalled audit sink fails the submit within its bound instead of
+/// hanging it: under `FailClosed` the submit answers `AuditUnavailable`
+/// (-32005) and creates no task. The outer bound only guards the suite.
+#[tokio::test]
+async fn a_stalled_sink_fails_the_submit_within_its_bound() {
+    let row = armed(true, false, AuditFailurePolicy::FailClosed, |meta| meta).await;
+    let release = crate::gateway::meta_mcp::grant_audit_fixture::stall_log(&row.log).await;
+    let rows = committed(&row);
+    let answer = tokio::time::timeout(
+        Duration::from_secs(10),
+        post(&row.state, "key-a", as_task(personal_invoke(1), "sa-4f")),
+    )
+    .await
+    .expect("the submit hung on a stalled audit sink");
+    release();
+    assert!(answer.pointer("/result/taskId").is_none(), "{answer}");
+    std::assert_eq!(answer.pointer("/error/code"), Some(&json!(-32005)), "{answer}");
+    std::assert_eq!(committed(&row), rows, "a task row was committed");
+    std::assert_eq!(row.endpoint.arrivals(), 0, "the backend ran without its cause on record");
+}

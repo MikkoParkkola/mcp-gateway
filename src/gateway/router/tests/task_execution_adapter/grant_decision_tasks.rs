@@ -10,7 +10,7 @@ use super::grant_decisions::{
 use super::support::*;
 
 use crate::gateway::meta_mcp::grant_audit_fixture::{
-    CAPS, DECISION_KIND, PERSONAL, decisions, invocations, stall_log, trace_of,
+    CAPS, PERSONAL, decisions, invocations, stall_log, trace_of,
 };
 use crate::security::audit::AuditFailurePolicy;
 
@@ -26,8 +26,8 @@ fn error_code(settled: &Value) -> Option<i64> {
         .and_then(Value::as_i64)
 }
 
-/// T12. An unsigned task has one record: the worker's execution decision,
-/// traced, written before the task settles.
+/// T12. An unsigned task's worker writes its execution decision, traced,
+/// before the task settles. Since MIK-8315 the submit's decision comes first.
 #[tokio::test]
 async fn unsigned_task_writes_the_workers_record() {
     let row = armed(true, false, AuditFailurePolicy::BestEffort, |meta| meta).await;
@@ -36,10 +36,11 @@ async fn unsigned_task_writes_the_workers_record() {
     let records = decisions(&row.dir);
     std::assert_eq!(status_of(&settled), "completed", "{settled}");
     let invocation = only(invocations(&row.dir), "invocation record");
-    // The worker's decision, then the terminal read's replay-check decision
-    // (#2450): reading a finished task re-runs the grant check.
-    std::assert_eq!(records.len(), 2, "{records:#?}");
-    std::assert_eq!(trace_of(&records[0]), trace_of(&invocation), "{records:#?}");
+    // The submit's decision (MIK-8315), the worker's, then the terminal
+    // read's replay-check decision (#2450): reading a finished task re-runs
+    // the grant check.
+    std::assert_eq!(records.len(), 3, "{records:#?}");
+    std::assert_eq!(trace_of(&records[1]), trace_of(&invocation), "{records:#?}");
 }
 
 /// T13. A signed task has two records: signing preparation's (untraced
@@ -88,12 +89,15 @@ async fn cancelled_worker_keeps_its_pending_record() {
         "cancelled"
     );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while decisions(&row.dir).is_empty() && tokio::time::Instant::now() < deadline {
+    while decisions(&row.dir).len() < 2 && tokio::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     row.endpoint.release();
-    let record = only(decisions(&row.dir), "decision record");
-    std::assert_eq!(record["outcome"], json!("ok"), "{record}");
+    // The submit's decision (MIK-8315), then the cancelled worker's pending
+    // note, still written.
+    let records = decisions(&row.dir);
+    std::assert_eq!(records.len(), 2, "{records:#?}");
+    std::assert_eq!(records[1]["outcome"], json!("ok"), "{records:#?}");
 }
 
 /// T14b. The same cancellation on a stalled log: the dropped slot hands its
@@ -169,7 +173,10 @@ async fn worker_decision_write_failure_settles_as_audit_unavailable() {
         row.state
             .meta_mcp
             .set_playbook_engine(continuing_playbook());
-        row.log.fail_next_append_of_kind_for_test(DECISION_KIND);
+        // The worker's append, not the submit's: since MIK-8315 the submit's
+        // decision is the first append, and a failure there refuses the
+        // submit itself (submit_authz_audit 4d).
+        crate::gateway::meta_mcp::grant_audit::seams::fail_append_at_for_test(2);
         let key = format!("d3a-t24-{index}");
         let created = post(&row.state, "key-a", as_task(body(1), &key)).await;
         let settled = poll_until_terminal(&row.state, "key-a", &task_id(&created)).await;
@@ -179,8 +186,9 @@ async fn worker_decision_write_failure_settles_as_audit_unavailable() {
 }
 
 /// T27 (H2, task). The same surfaced direct-name call submitted as a task is
-/// refused at submit, as the sync call is (MIK-8315; the answer itself is
-/// compared with the sync call in `submit_authz`), and recorded once.
+/// refused at submit as a name that matches no tool (MIK-8326; route-check-parity
+/// P3), and recorded once. The run-time re-check is pinned by the chokepoint's
+/// F5 and the worker's policy check.
 #[tokio::test]
 async fn surfaced_task_grant_denial_writes_one_record() {
     let row = armed(false, false, AuditFailurePolicy::BestEffort, surfaced).await;
@@ -190,16 +198,21 @@ async fn surfaced_task_grant_denial_writes_one_record() {
         json!({ "name": PERSONAL, "arguments": {} }),
         true,
     );
-    let answer = post(&row.state, "key-a", as_task(body, "d3a-t27")).await;
-    std::assert!(answer.pointer("/result/taskId").is_none(), "{answer}");
-    std::assert!(answer.get("error").is_some(), "{answer}");
+    let created = post(&row.state, "key-a", as_task(body, "d3a-t27")).await;
+    std::assert_eq!(created["error"]["code"], json!(-32601), "{created}");
+    std::assert_eq!(
+        created["error"]["message"],
+        json!("JSON-RPC error -32601: Unknown tool: calendar_read_day"),
+        "{created}"
+    );
+    std::assert!(created.pointer("/result/taskId").is_none(), "{created}");
     std::assert_eq!(
         row.endpoint.arrivals(),
         0,
         "the refused task reaches nothing"
     );
     let records = decisions(&row.dir);
-    std::assert_eq!(records.len(), 1, "the submit's denial: {records:#?}");
+    std::assert_eq!(records.len(), 1, "the one grant decision: {records:#?}");
     std::assert!(
         records.iter().all(|r| r["outcome"] == json!("denied")),
         "{records:#?}"
