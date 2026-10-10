@@ -314,7 +314,15 @@ impl MetaMcp {
         let executor = Arc::clone(&intent.executor);
         // Every task passed the synchronous call's policy at admission
         // (`admit_meta_sync`, MIK-8315); its worker checks again at dispatch.
-        let policy_arguments = arguments.clone();
+        // Only a `gateway_invoke` envelope's token is kept back from the move.
+        let invoke_attestation = (tool_name == "gateway_invoke")
+            .then(|| {
+                arguments
+                    .get("attestation")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .flatten();
         let call = crate::gateway::task_service::TaskCall {
             tool: tool_name.to_owned(),
             arguments,
@@ -329,7 +337,7 @@ impl MetaMcp {
                 // before it goes out; the request's own policy ran at admission.
                 // The token rides where the current request's own check reads it.
                 let attestation = if tool_name == "gateway_invoke" {
-                    policy_arguments.get("attestation").and_then(Value::as_str)
+                    invoke_attestation.as_deref()
                 } else {
                     caller.retry.attestation.as_deref()
                 };
