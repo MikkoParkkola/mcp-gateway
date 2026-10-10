@@ -49,6 +49,8 @@ mod stdio_loop;
 mod stdio_nonce;
 mod stdio_notify;
 mod stdio_refusal;
+#[cfg(test)]
+pub(crate) mod stdio_seams;
 mod stdio_shutdown;
 mod stdio_single;
 mod stdio_tasks;

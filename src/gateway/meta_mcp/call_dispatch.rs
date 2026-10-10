@@ -316,7 +316,11 @@ impl MetaMcp {
             arguments,
         };
         match executor.begin(intent, task, backend, call).await {
-            Ok(BeginOutcome::Existing(stored)) => {
+            Ok(BeginOutcome::Existing(held)) => {
+                // MIK-8176 N1: delivered into this request's scope first, so
+                // its holds are adopted before any decision; a refusal below
+                // only drops this request's clones, and the row keeps the slot.
+                let stored = held.deliver(super::sealed_hold::HoldSink::Scope);
                 // The request's own policy, then the calls that produced the
                 // stored result (R3.2): both must hold before it goes out.
                 if let Err(error) = self.check_task_admission_policy(
@@ -334,7 +338,14 @@ impl MetaMcp {
                     caller.retry.attestation.as_deref()
                 };
                 self.refuse_stored_delivery(&id, &stored, attestation, session_id, caller)
-                    .unwrap_or_else(|| BeginOutcome::Existing(stored).into_response(id))
+                    .unwrap_or_else(|| {
+                        // The holds already sit in this request's scope.
+                        let held = super::sealed_hold::Held::new(
+                            stored,
+                            super::sealed_hold::CarriedHolds::none(),
+                        );
+                        BeginOutcome::Existing(held).into_response(id)
+                    })
             }
             Ok(outcome) => outcome.into_response(id),
             Err(crate::gateway::task_service::ServiceError::AuditUnavailable) => {

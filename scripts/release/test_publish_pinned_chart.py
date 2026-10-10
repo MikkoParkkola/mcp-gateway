@@ -87,7 +87,9 @@ class ExistingVersion(unittest.TestCase):
         (chart / "Chart.yaml").write_text("apiVersion: v2\nname: mcp-gateway\nversion: 0.2.0\n")
         (chart / "values.yaml").write_text(
             'image:\n  registry: ghcr.io\n  repository: mikkoparkkola/mcp-gateway\n  digest: ""\n')
-        git = ["git", "-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@t"]
+        # Flags after `-C <repo>`: `git[:3]` below must stay `git -C <repo>`.
+        git = ["git", "-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@t",
+               "-c", "gc.auto=0", "-c", "maintenance.auto=false"]
         subprocess.run([*git[:3], "init", "-q"], check=True)
         subprocess.run([*git, "add", "."], check=True)
         subprocess.run([*git, "commit", "-qm", "chart"], check=True)

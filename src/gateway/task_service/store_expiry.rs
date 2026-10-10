@@ -329,7 +329,7 @@ impl Shared {
             tracing::error!(record = %name, "repaired task record's key is refused by admission; it stays sealed");
             return;
         }
-        let committed = self.publish(task, record);
+        let committed = self.publish(task, record, super::HoldUpdate::Drop);
         tracing::warn!(record = %name, recovered = was_live, "sealed task record served again");
         self.state().sealed.remove(name);
         if was_live {

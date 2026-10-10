@@ -208,7 +208,6 @@ impl super::MetaMcp {
             _ => own,
         };
 
-        let sealed = self.sealed_question(context.method, &response);
         // One egress scan, every method and every part (MIK-8139 family):
         // a frame another pass already screened carries the mark.
         let at = super::invoke::egress::Egress {
@@ -265,14 +264,6 @@ impl super::MetaMcp {
                     -32603,
                     "Response signing failed",
                 );
-            }
-        }
-        // MIK-8131: a sealed question this finalization did not let out
-        // (refused or replaced) leaves its slot for the caller to give back.
-        if let Some((envelope, hold_key)) = sealed {
-            let state = response.result.as_ref().and_then(|r| r.get("requestState"));
-            if state.and_then(serde_json::Value::as_str) != Some(envelope.as_str()) {
-                response.unsent_hold = Some(hold_key);
             }
         }
         response

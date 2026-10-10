@@ -176,11 +176,9 @@ impl Settling<'_> {
             return Resealed::Done;
         };
         let response = JsonRpcResponse::success(crate::protocol::RequestId::Number(0), result);
-        let mut response = super::inspect_settled(self.state, self.call, self.id, response);
-        self.state
-            .meta_mcp()
-            .release_unsent_hold(&mut response)
-            .await; // MIK-8131
+        // The slot is the worker's request scope's: handed off when the round
+        // parks, given back with the scope otherwise (MIK-8176).
+        let response = super::inspect_settled(self.state, self.call, self.id, response);
         Resealed::Sealed(Box::new(response), (at, now))
     }
 }

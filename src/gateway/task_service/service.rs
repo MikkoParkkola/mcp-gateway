@@ -38,7 +38,8 @@ pub(crate) enum CreateOutcome {
         task: CommittedTask,
         slot: OwnedSemaphorePermit,
     },
-    Existing(CommittedTask),
+    /// The task the key already owns, carrying its holds (MIK-8176 N1).
+    Existing(crate::gateway::meta_mcp::sealed_hold::Held<CommittedTask>),
     Mismatch,
     InFlight,
     Capacity,
@@ -278,8 +279,8 @@ impl TaskService {
             // task value is not committed and never becomes visible. No worker
             // is reserved — a repeat must not compete with the running task.
             Ok(TaskAdmission::Existing { task_id, binding }) => {
-                match self.store.get(binding.principal_digest(), &task_id) {
-                    Ok(committed) => CreateOutcome::Existing(committed),
+                match self.store.get_held(binding.principal_digest(), &task_id) {
+                    Ok(held) => CreateOutcome::Existing(held),
                     Err(_) => CreateOutcome::Unavailable,
                 }
             }
@@ -293,6 +294,18 @@ impl TaskService {
     pub(crate) fn get(&self, principal: &str, id: &str) -> Result<CommittedTask, ServiceError> {
         self.store
             .get(self.owner(principal)?.as_digest(), id)
+            .map_err(refused)
+    }
+
+    /// [`Self::get`] for a reader that may put the row's payload on the
+    /// wire: it comes as `Held`, so delivering it adopts its holds.
+    pub(crate) fn get_held(
+        &self,
+        principal: &str,
+        id: &str,
+    ) -> Result<crate::gateway::meta_mcp::sealed_hold::Held<CommittedTask>, ServiceError> {
+        self.store
+            .get_held(self.owner(principal)?.as_digest(), id)
             .map_err(refused)
     }
 

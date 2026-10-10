@@ -9,6 +9,8 @@ mod observe;
 #[cfg(debug_assertions)]
 pub(crate) mod pause_hook;
 mod recovery;
+#[cfg(test)]
+pub(crate) mod resume_seams;
 mod settle_followed;
 mod settlement;
 mod upstream;
@@ -65,7 +67,9 @@ pub struct TaskIntent {
 /// Request-facing outcomes never own a worker permit.
 pub(crate) enum BeginOutcome {
     Created(CommittedTask),
-    Existing(CommittedTask),
+    /// A repeat of a key that already owns a task: the stored task, carrying
+    /// its holds, delivered only by adopting them (MIK-8176 N1).
+    Existing(crate::gateway::meta_mcp::sealed_hold::Held<CommittedTask>),
     Mismatch,
     InFlight,
     Capacity,
@@ -77,7 +81,16 @@ pub(crate) enum BeginOutcome {
 impl BeginOutcome {
     pub(crate) fn into_response(self, id: RequestId) -> JsonRpcResponse {
         match self {
-            Self::Created(task) | Self::Existing(task) => {
+            Self::Created(_) | Self::Existing(_) => {
+                // A fresh task carries no holds; a stored one's are adopted
+                // into this request's scope before its wire form is built.
+                let task = match self {
+                    Self::Created(task) => task,
+                    Self::Existing(held) => {
+                        held.deliver(crate::gateway::meta_mcp::sealed_hold::HoldSink::Scope)
+                    }
+                    _ => unreachable!("matched above"),
+                };
                 let mut value = serde_json::to_value(task.task.wire()).unwrap_or(Value::Null);
                 if let Some(obj) = value.as_object_mut() {
                     obj.insert("resultType".into(), json!("task"));
@@ -594,11 +607,10 @@ impl TaskExecutor {
         // task, around the worker: a task-local does not cross `tokio::spawn`,
         // so a scope opened outside the spawn would leave every mint unscoped.
         // Dropping the worker on cancel (the select below) ends the scope and
-        // with it the holds.
-        let worker = crate::gateway::meta_mcp::sealed_hold::scoped(
-            crate::gateway::meta_mcp::sealed_hold::HoldPolicy::CountOnly,
-            worker,
-        );
+        // with it the holds. Stage 4: what the worker settles or parks keeps
+        // its slots on the task row (the row owns them); every other hold it
+        // never handed off gives its slot back when the scope ends.
+        let worker = crate::gateway::meta_mcp::sealed_hold::scoped(worker);
         // Cancellation first on every poll (MIK-7839.CANCEL.3): tokio-util's
         // `run_until_cancelled_owned` polls the worker before the token, so a
         // worker cancelled while its runtime sat idle would take one more step

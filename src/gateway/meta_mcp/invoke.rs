@@ -583,8 +583,8 @@ impl MetaMcp {
         // Minted here, where the capability gate has just decided the question
         // may be asked at all: a continuation for a question the client will
         // never be shown is a redeemable envelope for an exchange that cannot
-        // happen.
-        let mut sealed = None;
+        // happen. Its slot is held in this request's scope: released with the
+        // scope unless the answer carrying it is handed off (MIK-8176).
         let mut withheld = None;
         if let Some(interim) = interim {
             match worker_clock::mint_or_withhold(
@@ -597,9 +597,8 @@ impl MetaMcp {
             )
             .await
             {
-                worker_clock::Minted::Sealed(envelope, hold_key) => {
+                worker_clock::Minted::Sealed(envelope) => {
                     result["requestState"] = json!(&envelope);
-                    sealed = Some((envelope, hold_key));
                     // MIK-7994: the envelope is the gateway's text, up to 8 KiB, and
                     // must not take the receipt's capped budget from the backend's
                     // prompt. Noted at the value layer: `tool_value` still reads
@@ -637,10 +636,7 @@ impl MetaMcp {
             trace_id,
             caller_key: None,
         };
-        let gated = self.gate_payload(&call, result);
-        let kept = gated.as_ref().ok().map(|(gated, _)| gated);
-        continuation::release_unless_carried(&self.continuation, sealed, kept).await;
-        let (gated, effect) = gated?;
+        let (gated, effect) = self.gate_payload(&call, result)?;
         // The gates have run on the payload; the worker takes it, unminted.
         if let Some(withheld) = withheld
             && worker_clock::hand_to_worker(withheld, gated.clone())

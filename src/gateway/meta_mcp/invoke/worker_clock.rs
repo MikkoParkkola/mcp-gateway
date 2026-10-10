@@ -118,7 +118,7 @@ fn armed() -> Option<(
 
 /// What a mint came to.
 pub(super) enum Minted {
-    Sealed(String, String),
+    Sealed(String),
     /// A worker will seal it later; the funnel must not.
     Withheld(Binding, Option<String>),
     Refused,
@@ -150,7 +150,7 @@ pub(super) async fn mint_or_withhold(
     )
     .await
     {
-        Some((envelope, hold)) => Minted::Sealed(envelope, hold),
+        Some((envelope, _)) => Minted::Sealed(envelope),
         None => Minted::Refused,
     }
 }

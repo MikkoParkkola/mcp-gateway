@@ -6,6 +6,21 @@ use super::*;
 use serde_json::json;
 use std::thread;
 
+impl IdempotencyCache {
+    /// Every completed value the cache retains (MIK-8176 cache guards). Here,
+    /// in a child of the cache's module, it reads the private entries without
+    /// growing `idempotency.rs` past its line ceiling.
+    pub(crate) fn completed_values_for_test(&self) -> Vec<Value> {
+        self.entries
+            .iter()
+            .filter_map(|entry| match &entry.state {
+                IdempotencyState::Completed(value, _) => Some(value.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
 /// Move the cache's clock forward by `by`. An entry stored before the move
 /// is that much older; one stored after is fresh (MIK-8070: no past `Instant`
 /// is ever built, so no test depends on how long ago the host booted).

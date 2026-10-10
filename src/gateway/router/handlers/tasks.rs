@@ -679,7 +679,7 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
                         .as_ref()
                         .is_none_or(|opened_as| *opened_as == reader.principal)
             })
-            .and_then(|id| self.state.tasks.get(&self.owner, id).ok());
+            .and_then(|id| self.state.tasks.get_held(&self.owner, id).ok());
         let live = RecoveryCaller {
             client: Some(reader),
             oauth_agent_identity: self.oauth_agent_identity.as_ref(),
@@ -705,14 +705,16 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
                     .is_some()
             })
         };
-        let pending = self
+        let mut pending = self
             .state
             .meta_mcp
-            .task_notification_frame(notification, stored.as_ref(), refused, subscription)
+            .task_notification_frame(notification, stored, refused, subscription)
             .await?;
+        let holds = std::mem::take(&mut pending.holds);
         Some(crate::gateway::streaming::TaskFrame {
             frame: pending.frame.clone(),
             restored_output: pending.restored_output,
+            holds,
             delivery: Box::new(FrameDelivery {
                 state: Arc::clone(&self.state),
                 pending,

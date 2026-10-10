@@ -243,6 +243,11 @@ impl Task {
     pub(crate) const fn input_requests(&self) -> Option<&Map<String, Value>> {
         self.wire.input_requests.as_ref()
     }
+    /// The status message, when the task carries one (MIK-8176: read
+    /// without serializing the payload).
+    pub(crate) fn status_message(&self) -> Option<&str> {
+        self.wire.status_message.as_deref()
+    }
 
     /// The completed result; absence never invents an answer.
     #[must_use]
