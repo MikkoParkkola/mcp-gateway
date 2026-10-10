@@ -611,11 +611,13 @@ async fn fixture_inner(
             },
             ..FirewallConfig::default()
         };
-        state_mut.firewall = Some(Arc::new(Firewall::from_config(
-            config.clone(),
-            tracker.clone(),
-        )));
-        let meta_firewall = Arc::new(Firewall::from_config(config, tracker));
+        state_mut.firewall = Some(Arc::new(
+            Firewall::from_config(config.clone(), tracker.clone())
+                .with_continuations(meta.continuation()),
+        ));
+        let meta_firewall = Arc::new(
+            Firewall::from_config(config, tracker).with_continuations(meta.continuation()),
+        );
         META_FIREWALL.with(|f| *f.borrow_mut() = Some(Arc::clone(&meta_firewall)));
         meta.set_firewall(Some(meta_firewall));
     }

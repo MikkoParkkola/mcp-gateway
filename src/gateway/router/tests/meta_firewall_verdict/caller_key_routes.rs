@@ -22,17 +22,20 @@ use std::sync::Arc;
 /// blocked: every call is admitted and learned, and only its predecessor (the
 /// caller's own history) decides whether it adds a transition.
 fn learning_firewall(tracker: &Arc<TransitionTracker>) -> Arc<Firewall> {
-    Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_requests: true,
-            scan_responses: false,
-            anomaly_detection: true,
-            anomaly_min_observations: 20,
-            ..FirewallConfig::default()
-        },
-        Some(Arc::clone(tracker)),
-    ))
+    Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_requests: true,
+                scan_responses: false,
+                anomaly_detection: true,
+                anomaly_min_observations: 20,
+                ..FirewallConfig::default()
+            },
+            Some(Arc::clone(tracker)),
+        )
+        .keyed_for_test(),
+    )
 }
 
 // ── #1785: each /mcp/{name} caller builds its own anomaly history ────────────

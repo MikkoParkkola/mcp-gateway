@@ -167,7 +167,8 @@ fn the_configured_firewall_withholds_a_recovered_failure() {
         crate::security::firewall::Firewall::from_config(
             crate::security::firewall::FirewallConfig::default(),
             None,
-        ),
+        )
+        .with_continuations(meta.continuation()),
     )));
     let error = JsonRpcError {
         code: -32001,
