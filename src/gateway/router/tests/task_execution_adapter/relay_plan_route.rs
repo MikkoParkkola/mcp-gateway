@@ -434,7 +434,10 @@ async fn a_subset_of_a_plan_answers_parts_against_the_tools_exact_join_is_not_re
         .collect();
     let mock = MockBackend::answering(Answer::Sequence(
         std::iter::once(json!({"parts": parts, "isError": false}))
-            .chain(std::iter::once(text(&joined)))
+            // key-c's copy is a single leaf: a content item (`{"text": .., "type": ..}`)
+            // would put a separator after the join, and the window "tail + separator"
+            // is a separate, pre-existing edge (MIK-8290), not this row's.
+            .chain(std::iter::once(json!({"note": joined, "isError": false})))
             .chain(std::iter::repeat_with(|| text("ok")).take(4))
             .collect(),
     ));

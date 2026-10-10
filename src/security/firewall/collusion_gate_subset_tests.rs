@@ -7,6 +7,9 @@
 
 use serde_json::json;
 
+use super::super::super::{CollusionAction, CollusionConfig};
+use crate::security::firewall::{Firewall, FirewallConfig};
+
 use super::{TEXTS, deliver, flat, labelled_parts, observing, pieces, relay_found, reported, text};
 
 /// The subset `pieces` without their middle piece, run together.
@@ -72,15 +75,21 @@ fn a_non_holder_forwarding_the_sources_exact_join_is_a_relay() {
     assert_eq!(reported.len(), TEXTS, "missed relays");
 }
 
-/// Piece `k` of text `i`: 47 chars of `text(i)` with spaces as `_`, so no
-/// whitespace collapses and the normalised length stays 47; unique across
-/// texts, so a forward of two pieces holds k-grams only across their seam.
+/// Piece `k` of text `i`: a letter naming `k`, then 46 chars of `text(i)`
+/// with spaces as `_`, so no whitespace collapses and the normalised length
+/// stays 47. Unique across texts, so a forward of two pieces holds k-grams
+/// only across their seam; and no two pieces of a run share a first char, so
+/// a window across one gap never equals a window across another.
 fn piece47(i: usize, k: usize) -> String {
-    let piece: String = text(i)
-        .chars()
-        .map(|c| if c == ' ' { '_' } else { c })
-        .skip(k * 47)
-        .take(47)
+    let tag = char::from(b'A' + u8::try_from(k).expect("few pieces"));
+    let piece: String = std::iter::once(tag)
+        .chain(
+            text(i)
+                .chars()
+                .map(|c| if c == ' ' { '_' } else { c })
+                .skip(k * 46)
+                .take(46),
+        )
         .collect();
     assert_eq!(piece.chars().count(), 47, "premise: text {i} has piece {k}");
     piece
@@ -282,4 +291,131 @@ fn a_structured_subset_against_its_structured_copy_stays_a_relay() {
         })
         .collect();
     assert!(wrong.is_empty(), "structured subsets mishandled: {wrong:?}");
+}
+
+/// `MIK-8205`: the two-gap run with `p4` and `p5` given the first two chars
+/// `start4` and `start5`. With equal starts, each window spanning both gaps of
+/// `p1 m p5` equals a window of the legal one-gap text `p1 m p4 p5` (omit
+/// `p2`): bytes alice received with one gap.
+fn repeated_prefix_run(i: usize, start4: &str, start5: &str) -> Vec<String> {
+    let mut run = two_gap_run(i);
+    run[3] = format!("{start4}{}", &run[3][2..]);
+    run[4] = format!("{start5}{}", &run[4][2..]);
+    run
+}
+
+/// `MIK-8205`: why `piece47` tags each piece. If a two-gap window's text
+/// equals a legal one-gap window's, the excuse covers exactly bytes alice
+/// received, so no unreceived text is excused and she is not reported. Once
+/// the starts differ, those windows hold bytes she never received, and they
+/// still count: she is reported. Both halves on the same shape.
+#[test]
+fn a_two_gap_window_equal_to_a_one_gap_window_is_excused_and_no_other() {
+    let joined = |run: &Vec<String>| format!("{}{}{}", run[0], run[2], run[4]);
+    let shared = alice_reported(
+        |i| repeated_prefix_run(i, "QQ", "QQ"),
+        |i| joined(&repeated_prefix_run(i, "QQ", "QQ")),
+        |i| joined(&repeated_prefix_run(i, "QQ", "QQ")),
+    );
+    assert!(shared.is_empty(), "received bytes reported: {shared:?}");
+    let distinct = alice_reported(
+        |i| repeated_prefix_run(i, "QQ", "ZZ"),
+        |i| joined(&repeated_prefix_run(i, "QQ", "ZZ")),
+        |i| joined(&repeated_prefix_run(i, "QQ", "ZZ")),
+    );
+    assert_eq!(distinct.len(), TEXTS, "unreceived bytes excused");
+}
+
+/// MIK-8290 (not `MIK-8205`): a holder forwarding the whole join it
+/// was delivered, at `min_matches` = 1. Carol's content item records
+/// "joined\ntext", so the window "the join's last 47 chars + separator" is
+/// hers; alice's forward has a separator after the join too, but her own
+/// delivery ends at the join, so that window is unexcused. Red until fixed.
+#[test]
+#[ignore = "MIK-8290: a separator after a forward is unexcused at min_matches 1"]
+fn a_whole_join_forward_is_not_refused_for_a_trailing_separator() {
+    let fw = Firewall::from_config(
+        FirewallConfig {
+            collusion: CollusionConfig {
+                action: CollusionAction::Observe,
+                sources: vec!["alpha:*".to_string()],
+                min_matches: 1,
+                ..CollusionConfig::default()
+            },
+            ..FirewallConfig::default()
+        },
+        None,
+    )
+    .keeping_every_kgram();
+    let reported: Vec<usize> = (0..TEXTS)
+        .filter(|&i| {
+            let tool = format!("read{i}");
+            let p: Vec<String> = (0..3).map(|k| piece47(i, k)).collect();
+            let joined = p.concat();
+            deliver(&fw, "alice", &tool, &labelled_parts(&p));
+            deliver(&fw, "carol", &tool, &flat(&joined));
+            reported(&fw, "alice", &joined)
+        })
+        .collect();
+    assert!(
+        reported.is_empty(),
+        "whole-join forwards reported: {reported:?}"
+    );
+}
+
+/// MIK-8290, the two-sided case at the default `min_matches` = 2: alice was
+/// delivered the join as a single leaf (`{"note": joined}`), carol the join
+/// between two other values. Alice forwards it with her own note field
+/// before it, so her egress has a separator on both sides of the join; the
+/// windows "separator + join head" and "join tail + separator" are carol's
+/// and not hers: two unexcused windows.
+#[test]
+#[ignore = "MIK-8290: separators on both sides of a forward reach the default min_matches"]
+fn a_whole_join_forward_with_separators_on_both_sides_is_not_refused() {
+    let fw = observing();
+    let reported: Vec<usize> = (0..TEXTS)
+        .filter(|&i| {
+            let tool = format!("read{i}");
+            let joined: String = (0..3).map(|k| piece47(i, k)).collect();
+            deliver(&fw, "alice", &tool, &json!({"note": joined}));
+            deliver(
+                &fw,
+                "carol",
+                &tool,
+                &json!({"a": "xx", "b": joined, "c": "yy"}),
+            );
+            let params = json!({"name": "send", "arguments": {"a_note": "x", "body": joined}});
+            relay_found(&fw, "alice", &params)
+        })
+        .collect();
+    assert!(
+        reported.is_empty(),
+        "two-sided forwards reported at the default: {reported:?}"
+    );
+}
+
+/// `MIK-8205` (design §2, §8): seams come only from what a caller was
+/// delivered. A plan step's staged receipt carries none, so a step's text the
+/// answer drops can never be excused; a committed delivery of the same value
+/// carries them.
+#[test]
+fn a_plan_steps_staged_receipt_carries_no_seams() {
+    let fw = observing();
+    let p: Vec<String> = (0..4).map(|k| piece47(0, k)).collect();
+    let value = labelled_parts(&p);
+    let staged = std::cell::Cell::new(0);
+    let step = fw
+        .receipt_digest("alpha", "read", &value, Some(&staged))
+        .expect("staged");
+    assert!(
+        step.seam_excuses.is_none(),
+        "a staged step receipt carries seams"
+    );
+    let delivered = fw
+        .delivery_digest("alpha", "read", &value)
+        .expect("recorded");
+    assert!(
+        delivered.seam_excuses.is_some(),
+        "premise: the delivered value has seams"
+    );
 }
