@@ -352,6 +352,7 @@ async fn a_nameless_certificate_never_replays_another_callers_result() {
 }
 
 /// The first `"pid"` number anywhere in `value`, looking inside JSON text.
+#[cfg(unix)]
 fn find_pid(value: &Value) -> Option<i64> {
     match value {
         Value::Object(map) => map

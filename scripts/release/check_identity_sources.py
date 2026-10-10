@@ -27,7 +27,7 @@ from pathlib import Path
 
 # (file, enclosing fn, construct) -> why it may build an identity directly.
 ALLOWED = {
-    ("src/key_server/oidc.rs", "checked", "VerifiedIdentity {"): "the checked constructor",
+    ("src/key_server/oidc_identity.rs", "checked", "VerifiedIdentity {"): "the checked constructor",
     ("src/identity_grants.rs", "new", "GrantSubject {"): "the one literal; `checked` wraps it",
     ("src/identity_grants.rs", "checked", "GrantSubject::new("): "the checked constructor",
     ("src/mtls/identity.rs", "from_der", "CertIdentity {"): "the production parser",

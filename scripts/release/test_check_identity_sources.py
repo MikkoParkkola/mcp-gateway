@@ -27,7 +27,9 @@ def tree(extra: dict[str, str], lib_mods: str = "") -> Path:
         "src/lib.rs": "pub mod key_server;\n" + lib_mods,
         "src/main.rs": "fn main() {}\n",
         "src/key_server/mod.rs": "pub mod oidc;\n",
-        "src/key_server/oidc.rs": "pub struct VerifiedIdentity { pub subject: String }\n" + ORACLE,
+        "src/key_server/oidc.rs": "pub struct VerifiedIdentity { pub subject: String }\n"
+                                  "#[path = \"oidc_identity.rs\"]\nmod identity;\n",
+        "src/key_server/oidc_identity.rs": ORACLE,
     }
     files.update(extra)
     root = Path(tempfile.mkdtemp())
@@ -43,7 +45,7 @@ class Shapes(unittest.TestCase):
         self.assertEqual(cis.violations(tree({})), [])
 
     def test_a_second_literal_in_an_allowed_file_fails(self):
-        root = tree({"src/key_server/oidc.rs": "pub struct VerifiedIdentity {}\n" + ORACLE.replace(
+        root = tree({"src/key_server/oidc_identity.rs": ORACLE.replace(
             "}\n}\n", "}\n    fn other() -> Self { Self { issuer: x, subject: y } }\n}\n")})
         self.assertEqual(len(cis.violations(root)), 1, cis.violations(root))
 
@@ -127,7 +129,7 @@ class RealTree(unittest.TestCase):
                      for v in cis.violations(HERE.parents[1])}
             self.assertEqual(found, {
                 "src/identity_grants.rs new", "src/identity_grants.rs checked",
-                "src/key_server/oidc.rs checked", "src/mtls/identity.rs from_der",
+                "src/key_server/oidc_identity.rs checked", "src/mtls/identity.rs from_der",
             })
         finally:
             cis.ALLOWED.update(saved)
