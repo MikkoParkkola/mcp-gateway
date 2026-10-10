@@ -155,11 +155,11 @@ impl Stage {
     }
 }
 
-#[path = "route_check_matrix_table.rs"]
+#[path = "route_check_matrix_table_tests.rs"]
 mod table;
 pub(crate) use table::expect;
 #[cfg(feature = "firewall")]
-#[path = "route_check_matrix_rows.rs"]
+#[path = "route_check_matrix_rows_tests.rs"]
 mod rows;
 
 /// `ALL` lists every variant exactly once: each index in `0..N` is hit once.
@@ -236,42 +236,42 @@ const UNDRIVEN: &[(Route, Stage, &str)] = &[
     (
         Route::Invoke,
         Stage::Authorize,
-        "needs a capability-provider fixture; v4.0.1 N2 follow-up",
+        "needs a capability-provider fixture; MIK-8314",
     ),
     (
         Route::Invoke,
         Stage::Idempotency,
-        "needs the outer-admission eviction helper; v4.0.1 N2 follow-up",
+        "needs the outer-admission eviction helper; MIK-8314",
     ),
     (
         Route::Surfaced,
         Stage::ChokepointRescan,
-        "R1 drives the same code path; v4.0.1 N2 follow-up",
+        "R1 drives the same code path; MIK-8314",
     ),
     (
         Route::Surfaced,
         Stage::Sanitize,
-        "R1 drives the same intake; v4.0.1 N2 follow-up",
+        "R1 drives the same intake; MIK-8314",
     ),
     (
         Route::Surfaced,
         Stage::Authorize,
-        "needs a capability-provider fixture; v4.0.1 N2 follow-up",
+        "needs a capability-provider fixture; MIK-8314",
     ),
     (
         Route::Surfaced,
         Stage::MrtrUndeclared,
-        "R1 drives the same gate; v4.0.1 N2 follow-up",
+        "R1 drives the same gate; MIK-8314",
     ),
     (
         Route::Surfaced,
         Stage::Idempotency,
-        "needs the outer-admission eviction helper; v4.0.1 N2 follow-up",
+        "needs the outer-admission eviction helper; MIK-8314",
     ),
     (
         Route::Surfaced,
         Stage::Lease,
-        "R1 drives the same admit_meta_sync; v4.0.1 N2 follow-up",
+        "R1 drives the same admit_meta_sync; MIK-8314",
     ),
     (
         Route::Surfaced,
@@ -281,72 +281,72 @@ const UNDRIVEN: &[(Route, Stage, &str)] = &[
     (
         Route::Surfaced,
         Stage::ResponseFirewall,
-        "R1 drives the same egress; v4.0.1 N2 follow-up",
+        "R1 drives the same egress; MIK-8314",
     ),
     (
         Route::Direct,
         Stage::Idempotency,
-        "needs the outer-admission eviction helper; v4.0.1 N2 follow-up",
+        "needs the outer-admission eviction helper; MIK-8314",
     ),
     (
         Route::TaskSubmit,
         Stage::RouteFirewall,
-        "needs a task-submit driver per stage; v4.0.1 N2 follow-up",
+        "needs a task-submit driver per stage; MIK-8314",
     ),
     (
         Route::TaskSubmit,
         Stage::Sanitize,
-        "needs a task-submit driver per stage; v4.0.1 N2 follow-up",
+        "needs a task-submit driver per stage; MIK-8314",
     ),
     (
         Route::TaskSubmit,
         Stage::Authorize,
-        "needs a capability-provider fixture; v4.0.1 N2 follow-up",
+        "needs a capability-provider fixture; MIK-8314",
     ),
     (
         Route::TaskSubmit,
         Stage::Idempotency,
-        "needs the outer-admission eviction helper; v4.0.1 N2 follow-up",
+        "needs the outer-admission eviction helper; MIK-8314",
     ),
     (
         Route::TaskSubmit,
         Stage::NonceGiveBack,
-        "needs a signed task-submit driver; v4.0.1 N2 follow-up",
+        "needs a signed task-submit driver; MIK-8314",
     ),
     (
         Route::TaskWorker,
         Stage::ChokepointRescan,
-        "needs a task-worker driver; v4.0.1 N2 follow-up",
+        "needs a task-worker driver; MIK-8314",
     ),
     (
         Route::TaskWorker,
         Stage::Authorize,
-        "needs a task-worker driver; v4.0.1 N2 follow-up",
+        "needs a task-worker driver; MIK-8314",
     ),
     (
         Route::TaskWorker,
         Stage::MrtrUndeclared,
-        "needs a task-worker driver; v4.0.1 N2 follow-up",
+        "needs a task-worker driver; MIK-8314",
     ),
     (
         Route::TaskWorker,
         Stage::ResponseFirewall,
-        "needs a task-worker driver; v4.0.1 N2 follow-up",
+        "needs a task-worker driver; MIK-8314",
     ),
     (
         Route::Stdio,
         Stage::Authorize,
-        "needs a capability-provider fixture; v4.0.1 N2 follow-up",
+        "needs a capability-provider fixture; MIK-8314",
     ),
     (
         Route::Stdio,
         Stage::Idempotency,
-        "needs the outer-admission eviction helper; v4.0.1 N2 follow-up",
+        "needs the outer-admission eviction helper; MIK-8314",
     ),
     (
         Route::Stdio,
         Stage::Lease,
-        "needs a held stdio backend; v4.0.1 N2 follow-up",
+        "needs a held stdio backend; MIK-8314",
     ),
     (
         Route::Stdio,
