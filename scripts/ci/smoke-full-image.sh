@@ -152,7 +152,11 @@ docker run -d --name "${ROOT_CASE}" --pull never --user root \
   -v "${WORKDIR}/smoke.yaml:/config.yaml:ro" \
   "${IMAGE}" --config /config.yaml > /dev/null
 wait_for_gateway "${ROOT_CASE}"
-docker logs "${ROOT_CASE}" 2>&1 | grep -q 'step: ran as uid 0' \
+# Matched from a captured string, never through a pipe: under pipefail,
+# `grep -q` exits on its first match and the writer's SIGPIPE (141) fails a
+# pipeline that did match, once the output outgrows the pipe buffer.
+ROOT_LOG="$(docker logs "${ROOT_CASE}" 2>&1)"
+grep -q 'step: ran as uid 0' <<< "${ROOT_LOG}" \
   || fail "the startup step did not run as root"
 if ! UID_LINE="$(docker exec "${ROOT_CASE}" sh -c 'grep -m1 "^Uid:" /proc/1/status')"; then
   fail "cannot read the uid of the gateway process"
@@ -178,7 +182,7 @@ if FAIL_LOG="$(docker run --rm --user root \
       "${IMAGE}" --config /config.yaml 2>&1)"; then
   fail "a startup step that fails does not stop the container"
 fi
-printf '%s' "${FAIL_LOG}" | grep -q 'step: refusing to start' \
+grep -q 'step: refusing to start' <<< "${FAIL_LOG}" \
   || fail "the container stopped without running the failing startup step"
 
 # Root path, installed package that does not exist: the install fails and the
@@ -196,7 +200,7 @@ if BAD_LOG="$(docker run --rm --user root \
       "${IMAGE}" --config /config.yaml 2>&1)"; then
   fail "a failed EXTRA_APT_PACKAGES install does not stop the container"
 fi
-printf '%s' "${BAD_LOG}" | grep -q 'EXTRA_APT_PACKAGES install failed' \
+grep -q 'EXTRA_APT_PACKAGES install failed' <<< "${BAD_LOG}" \
   || fail "the container stopped without reporting the failed install"
 
 # Root path, a stop while startup is still running: the entrypoint is PID 1
