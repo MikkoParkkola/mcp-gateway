@@ -709,7 +709,7 @@ def extract_routes() -> list[Entry]:
 
 
 LIB_ITEM_RE = re.compile(
-    r"^((?:#\[[^\n]*\]\s*)*)pub\s+(?:(?:const(?=\s+(?:async\s+|unsafe\s+|extern\s+\"\w+\"\s+)*fn\b)|async|unsafe|extern\s+\"\w+\")\s+)*"
+    r"^((?:#\[[^\n]*\]\s*)*)pub\s+(?:(?:const(?=\s+(?:async\s+|unsafe\s+|extern(?:\s+\"[^\"]*\")?\s+)*fn\b)|async|unsafe|extern(?:\s+\"[^\"]*\")?)\s+)*"
     r"(mod|use|fn|const\s+fn|const|static|struct|enum|trait|type|union|extern\s+crate)\s+([^;{(=<]+)",
     re.M,
 )
@@ -767,12 +767,11 @@ def extract_lib(path: Path | None = None) -> list[Entry]:
     return sorted(out, key=lambda e: e.id)
 
 
-HIDDEN_RE = re.compile(r"#\[doc\(hidden\)\]")
-
-
 def is_hidden(attrs: str) -> bool:
-    """Whether `attrs` holds a `#[doc(hidden)]` attribute, not that text inside a string."""
-    return HIDDEN_RE.search(re.sub(r'"(?:[^"\\]|\\.)*"', '""', attrs)) is not None
+    """Whether one of `attrs`' lines is exactly `#[doc(hidden)]`. Any other
+    spelling (sharing a line, inside a string) reads as not hidden, so the
+    item is refused rather than passed."""
+    return any(line.strip() == "#[doc(hidden)]" for line in attrs.splitlines())
 
 
 # Crate-root items documented as public API on purpose (MIK-8044.SURF.5): none.
@@ -793,8 +792,10 @@ def lib_documented(path: Path | None = None, keep: frozenset[str] = LIB_KEEP) ->
     ]
     for f in module_files(path):
         mask = prod_scan(f)[1]
-        for m in re.finditer(r"#\[\s*macro_export\b", mask):
+        for m in re.finditer(r"\bmacro_export\b", mask):
             errors.append(f"{rel(f)}:{line_of(mask, m.start())}: #[macro_export] is not modelled by the lib check; refused")
+        for m in re.finditer(r"cfg_attr\s*\([^\]]*\bpath\s*=", mask):
+            errors.append(f"{rel(f)}:{line_of(mask, m.start())}: a conditional module path is not modelled by the lib check; refused")
     mask = prod_scan(path)[1]
     for m in re.finditer(r"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+)?extern\s*(?:\"[^\"]*\"\s*)?\{", mask, re.M):
         errors.append(f"{rel(path)}:{line_of(mask, m.start())}: a root extern block is not modelled by the lib check; refused")
