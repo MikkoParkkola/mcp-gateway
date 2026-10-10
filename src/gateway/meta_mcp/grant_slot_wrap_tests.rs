@@ -68,3 +68,27 @@ async fn an_open_slot_is_not_wrapped_again() {
         "the dispatch tail wrapped again inside an open slot"
     );
 }
+
+/// The other side of the skip: with a log and no slot open (the task worker,
+/// or stdio's outermost call), the tail still opens its own slot.
+#[tokio::test(flavor = "current_thread")]
+async fn with_a_log_and_no_open_slot_the_tail_opens_one() {
+    let file = tempfile::NamedTempFile::new().expect("log file");
+    let config = crate::security::TransparencyLogConfig {
+        enabled: true,
+        path: file.path().to_string_lossy().to_string(),
+        key_id: "wrap".to_string(),
+        ..crate::security::TransparencyLogConfig::default()
+    };
+    let logger =
+        Arc::new(crate::security::TransparencyLogger::open(Arc::new(config)).expect("logger"));
+    let mut meta = super::MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
+    meta.enable_transparency_log(logger);
+    let opened = grant_bookkeeping_for_test().slots_opened;
+    dispatch(&meta).await;
+    assert_eq!(
+        grant_bookkeeping_for_test().slots_opened - opened,
+        1,
+        "with a log and no slot open, the dispatch tail must open one"
+    );
+}

@@ -46,14 +46,18 @@ providers:
     meta
 }
 
-fn guide_bytes(meta: &super::MetaMcp) -> u64 {
+fn guide(meta: &super::MetaMcp) -> (String, u64) {
     let scope = super::InvokeScope::unscoped(crate::gateway::router::CallerStanding::Admin);
     let (instructions, measured) = measure(|| meta.build_instructions(scope, None));
     assert!(
         instructions.contains("caps/probe"),
         "the guide names the capability: {instructions}"
     );
-    measured.bytes
+    (instructions, measured.bytes)
+}
+
+fn guide_bytes(meta: &super::MetaMcp) -> u64 {
+    guide(meta).1
 }
 
 #[test]
@@ -61,6 +65,8 @@ fn the_initialize_guide_does_not_copy_capability_schemas() {
     let (small, large) = (meta_with_schema(SMALL), meta_with_schema(LARGE));
     guide_bytes(&small);
     guide_bytes(&large);
+    // The guide never shows a schema: both texts are the same.
+    assert_eq!(guide(&small).0, guide(&large).0);
     let grown = guide_bytes(&large).saturating_sub(guide_bytes(&small));
     assert!(
         grown < (LARGE / 4) as u64,

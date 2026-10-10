@@ -19,15 +19,19 @@ use crate::gateway::router::create_router;
 /// A backend that answers at once and counts liveness checks.
 struct Counted {
     checks: AtomicUsize,
+    calls: AtomicUsize,
 }
 
 #[async_trait::async_trait]
 impl crate::transport::Transport for Counted {
     async fn request(
         &self,
-        _method: &str,
+        method: &str,
         _params: Option<serde_json::Value>,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method == "tools/call" {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+        }
         Ok(crate::protocol::JsonRpcResponse::success_serialized(
             crate::protocol::RequestId::Number(1),
             json!({"content": []}),
@@ -75,6 +79,7 @@ fn a_warm_invoke_checks_its_transport_once() {
         let (state, _store) = super::invoke_argument_copies::state().await;
         let counted = Arc::new(Counted {
             checks: AtomicUsize::new(0),
+            calls: AtomicUsize::new(0),
         });
         state
             .backends
@@ -85,9 +90,15 @@ fn a_warm_invoke_checks_its_transport_once() {
         let first = invoke(&state).await;
         assert!(first.contains("\"result\"") && !first.contains("\"isError\":true"), "{first}");
         let before = counted.checks.load(Ordering::Relaxed);
+        let calls_before = counted.calls.load(Ordering::Relaxed);
         let text = invoke(&state).await;
         assert!(text.contains("\"result\"") && !text.contains("\"isError\":true"), "{text}");
         let checks = counted.checks.load(Ordering::Relaxed) - before;
+        assert_eq!(
+            counted.calls.load(Ordering::Relaxed) - calls_before,
+            1,
+            "the warm invoke reached the backend exactly once"
+        );
         assert_eq!(
             checks, 1,
             "one warm gateway_invoke asked its transport is_connected {checks} times (MIK-8014 PERF.4)"
