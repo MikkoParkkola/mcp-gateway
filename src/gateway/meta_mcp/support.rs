@@ -77,6 +77,20 @@ pub(super) enum CachePrincipal {
 /// Returns `None` when no idempotency cache is configured, when the client
 /// sent no key, or when the principal is `Unresolved`. `route` labels the
 /// skip counter (`meta` or `direct`).
+/// `projection_key_suffix`, scoped to the playbook step this dispatch runs
+/// in, if any (MIK-8341): `|step:N` lands after the length-prefixed client
+/// key, so each step of a keyed run gets its own entry (no 409 between steps)
+/// while a retry of the same step inside the run still meets its stored answer
+/// (ADR-012). A client key that spells `|step:N` cannot collide: the length
+/// prefix covers only the client's text. Reads the playbook engine's own step
+/// label, never Code Mode's, whose steps carry no key.
+pub(super) fn step_scoped(projection_key_suffix: &str) -> String {
+    match crate::playbook::current_step() {
+        Some(label) => format!("|step:{label}{projection_key_suffix}"),
+        None => projection_key_suffix.to_owned(),
+    }
+}
+
 pub(super) fn idempotency_key_for(
     client_key: Option<&str>,
     projection_key_suffix: &str,
@@ -540,9 +554,19 @@ impl ToolInvoker for MetaMcpInvoker<'_, '_> {
         // step they could run directly, which is a regression rather than a
         // control: a playbook is not a way AROUND a check, so it faces the same
         // one — now including the scope checks, at the chokepoint.
+        // A step keeps the client's key and nothing else of the run's retry
+        // (MIK-8341): the run has no continuation, so no step may redeem the
+        // run's `requestState`/`inputResponses`, and `with_retry` drops
+        // `task`, as Code Mode chain steps do. The key is scoped to the step
+        // in `invoke_tool`, so steps never share the client's own entry.
+        let step_retry = crate::protocol::mrtr::RetryFields {
+            idempotency_key: self.caller.retry.idempotency_key.clone(),
+            ..Default::default()
+        };
+        let step_caller = self.caller.with_retry(&step_retry);
         let outcome = crate::gateway::meta_mcp::invoke::relay::plan_step(
             crate::playbook::current_step(),
-            self.meta.invoke_tool(&args, None, self.caller),
+            self.meta.invoke_tool(&args, None, &step_caller),
         )
         .await;
         // A refused step's reason names an operator-defined target the caller

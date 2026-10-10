@@ -465,3 +465,36 @@ steps:
         );
     }
 }
+
+/// MIK-8341 D3 site (b) (mutant m9): synchronous admission refuses a playbook
+/// run carrying retry fields BEFORE it reserves anything. HTTP and stdio admit
+/// before the dispatcher's own check, so without this a refused retry could
+/// reserve a round or meet a capacity error first. Red on base: admitted.
+#[test]
+fn mik_8341_admission_refuses_a_playbook_retry_before_reserving() {
+    let (registry, _calls) = counted_backend("alpha");
+    let meta = MetaMcp::new(registry);
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("pk-admit".into()),
+        input_responses: Some(json!({})),
+        ..Default::default()
+    };
+    let allowed = ctx(&AllowAll);
+    let caller = allowed.with_retry(&retry);
+    let admitted = meta.admit_meta_sync(
+        crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
+        &caller,
+        "gateway_run_playbook",
+        &json!({"name": "any"}),
+        None,
+        &crate::protocol::RequestId::Number(1),
+    );
+    match admitted {
+        Err(crate::Error::JsonRpc { code, message, .. }) => {
+            assert_eq!(code, -32602, "{message}");
+            assert!(message.contains("no continuation to resume"), "{message}");
+        }
+        Err(other) => panic!("admission refused for another reason: {other}"),
+        Ok(_) => panic!("admission admitted the playbook retry before refusing it"),
+    }
+}
