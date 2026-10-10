@@ -225,7 +225,7 @@ class OrderIndependence(unittest.TestCase):
         for first, second in ((("3700.md", A), ("3701.md", B)), (("3701.md", B), ("3700.md", A))):
             with tempfile.TemporaryDirectory() as tmp:
                 repo = pathlib.Path(tmp)
-                git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True, text=True)
+                git = lambda *a: subprocess.run(["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", *a], cwd=repo, check=True, capture_output=True, text=True)
                 git("init", "-q")
                 git("config", "user.email", "t@t")
                 git("config", "user.name", "t")
@@ -416,7 +416,7 @@ class CeilingFromBase(unittest.TestCase):
         checkout (the merge with the base) and the base both do."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = pathlib.Path(tmp)
-            git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+            git = lambda *a: subprocess.run(["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", *a], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
             git("init", "-q")
             git("config", "user.email", "t@t")
             git("config", "user.name", "t")
@@ -443,7 +443,7 @@ class CeilingFromBase(unittest.TestCase):
         checkout is held to the base ceiling (3), so item 4 is refused."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = pathlib.Path(tmp)
-            git = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+            git = lambda *a: subprocess.run(["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", *a], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
             git("init", "-q")
             git("config", "user.email", "t@t")
             git("config", "user.name", "t")
