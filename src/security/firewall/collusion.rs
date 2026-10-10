@@ -603,15 +603,26 @@ impl CollusionDetector {
     pub(crate) fn check_egress_flows_at(
         &self,
         principal: &str,
-        (tool, egress_flows): (&str, u64),
+        flows: (&str, u64),
         args: &str,
+        now: Instant,
+    ) -> Option<RelayFinding> {
+        self.check_egress_fingerprints_at(principal, flows, self.fingerprints(args), now)
+    }
+
+    /// [`Self::check_egress_flows_at`] for fingerprints already taken: the
+    /// gateway's egress, less its glue windows (`MIK-8290`).
+    pub(crate) fn check_egress_fingerprints_at(
+        &self,
+        principal: &str,
+        (tool, egress_flows): (&str, u64),
+        fps: Vec<u64>,
         now: Instant,
     ) -> Option<RelayFinding> {
         if self.params.action == RelayAction::Off {
             return None;
         }
         let sender = self.digest(principal);
-        let fps = self.fingerprints(args);
         let window = self.params.window;
         // Held at `now`: some copy delivered by then, inside the window.
         let live = |t: &&Holder| t.copies.held(now, window);
@@ -739,8 +750,13 @@ mod reason;
 mod reason_tests;
 pub(super) use reason::CAPACITY_METRIC;
 pub(crate) use reason::RelayReason;
+#[path = "collusion_margin.rs"]
+mod margin;
 #[path = "collusion_seam.rs"]
 mod seam;
+pub(crate) use margin::egress_parts;
+#[cfg(test)]
+pub(crate) use margin::egress_text;
 #[cfg(test)]
 #[path = "collusion_seam_tests.rs"]
 mod seam_tests;

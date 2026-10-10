@@ -49,6 +49,8 @@ mod profiles;
 mod response_cache;
 #[path = "tests/search_dispatch.rs"]
 mod search_dispatch;
+#[path = "tests/slot_quota_confirmation.rs"]
+mod slot_quota_confirmation;
 #[path = "tests/surfaced_tools.rs"]
 mod surfaced_tools;
 

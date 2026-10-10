@@ -241,7 +241,14 @@ mod tests {
     async fn slot(continuation: &ContinuationState) -> String {
         let now = crate::protocol::continuation::now_unix_secs();
         let payload = continuation
-            .begin_exchange("alpha".into(), None, "fp".into(), "digest".into(), now)
+            .begin_exchange(
+                "alpha".into(),
+                None,
+                "fp".into(),
+                &crate::protocol::continuation::QuotaKey::for_test("fp"),
+                "digest".into(),
+                now,
+            )
             .await
             .expect("a fresh state has a slot");
         payload.hold_key
@@ -399,7 +406,14 @@ mod tests {
         let continuation = Arc::new(ContinuationState::new());
         let now = crate::protocol::continuation::now_unix_secs();
         let payload = continuation
-            .begin_exchange("alpha".into(), None, "fp".into(), "digest".into(), now)
+            .begin_exchange(
+                "alpha".into(),
+                None,
+                "fp".into(),
+                &crate::protocol::continuation::QuotaKey::for_test("fp"),
+                "digest".into(),
+                now,
+            )
             .await
             .expect("a fresh state has a slot");
         let minted = continuation.keyring().mint(&payload).expect("mint");
@@ -431,7 +445,14 @@ mod tests {
         let continuation = Arc::new(ContinuationState::new());
         let now = crate::protocol::continuation::now_unix_secs();
         let payload = continuation
-            .begin_exchange("alpha".into(), None, "fp".into(), "digest".into(), now)
+            .begin_exchange(
+                "alpha".into(),
+                None,
+                "fp".into(),
+                &crate::protocol::continuation::QuotaKey::for_test("fp"),
+                "digest".into(),
+                now,
+            )
             .await
             .expect("a fresh state has a slot");
         let minted = continuation.keyring().mint(&payload).expect("mint");

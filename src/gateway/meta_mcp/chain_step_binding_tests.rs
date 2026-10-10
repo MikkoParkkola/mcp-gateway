@@ -21,7 +21,12 @@ async fn a_chain_resume_seals_the_step_over_its_bound_digest() {
     let chain = vec![json!({"tool": "srv:asks", "arguments": {"id": 7}})];
     let hold = state
         .in_flight()
-        .hold("srv", NOW + 300, NOW)
+        .hold(
+            "srv",
+            &crate::protocol::continuation::QuotaKey::for_test("caller"),
+            NOW + 300,
+            NOW,
+        )
         .await
         .expect("the in-flight table has room for one exchange");
     let asked = Payload::mint(
@@ -63,7 +68,12 @@ async fn a_step_digest_ends_with_its_exchange() {
     let state = ContinuationState::new();
     let hold = state
         .in_flight()
-        .hold("srv", NOW + 300, NOW)
+        .hold(
+            "srv",
+            &crate::protocol::continuation::QuotaKey::for_test("caller"),
+            NOW + 300,
+            NOW,
+        )
         .await
         .expect("room");
     let asked = Payload::mint(

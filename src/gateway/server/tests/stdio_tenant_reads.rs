@@ -400,3 +400,44 @@ async fn stdio_batch_items_record_what_is_served() {
         );
     }
 }
+
+/// MIK-8195 W4: `tasks/*` over stdio is served only to a modern request that
+/// declared the Tasks extension. A 2025 request is not found; a modern one
+/// without the extension is refused with the capability code, and neither
+/// reaches the store.
+#[tokio::test]
+async fn stdio_tasks_methods_refuse_legacy_and_undeclared_requests() {
+    let backend_url = spawn_backend().await;
+    let mut session = Session::open(&backend_url, "off").await;
+
+    let legacy = json!({"jsonrpc": "2.0", "id": 2, "method": "tasks/get",
+                        "params": {"taskId": "absent"}});
+    let legacy = session.ask(&legacy, 2).await;
+    assert_eq!(
+        legacy.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "{legacy}"
+    );
+    assert!(
+        legacy
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .is_some_and(|m| m.contains("requires MCP 2026-07-28")),
+        "{legacy}"
+    );
+
+    let undeclared = json!({"jsonrpc": "2.0", "id": 3, "method": "tasks/get",
+    "params": {"taskId": "absent", "_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+        "io.modelcontextprotocol/clientInfo": {"name": "min2", "version": "0"},
+    }}});
+    let undeclared = session.ask(&undeclared, 3).await;
+    assert_eq!(
+        undeclared.pointer("/error/code"),
+        Some(&json!(
+            crate::protocol::era::MISSING_REQUIRED_CLIENT_CAPABILITY
+        )),
+        "{undeclared}"
+    );
+}

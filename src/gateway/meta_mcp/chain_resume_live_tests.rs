@@ -485,7 +485,12 @@ async fn handle_expiring_at(meta: &MetaMcp, expires_at: u64, now: u64) -> String
     let state = meta.continuation();
     let hold = state
         .in_flight()
-        .hold("srv", expires_at, now)
+        .hold(
+            "srv",
+            &crate::protocol::continuation::QuotaKey::for_test("caller"),
+            expires_at,
+            now,
+        )
         .await
         .expect("the in-flight table has room for one exchange");
     let fingerprint = crate::protocol::mrtr::principal_fingerprint(Some(&identity()))

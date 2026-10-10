@@ -15,6 +15,7 @@ async fn mint(state: &Arc<ContinuationState>) -> Option<(String, String)> {
     mint_continuation(
         state,
         PrincipalSource::Key("caller".into()),
+        &crate::protocol::continuation::QuotaKey::for_test("caller"),
         ("srv", None),
         "tool",
         &json!({}),

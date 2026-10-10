@@ -30,6 +30,9 @@ use crate::gateway::task_service::TaskStore;
 pub(crate) struct Binding {
     pub(super) server: String,
     pub(super) fingerprint: String,
+    /// The caller the slot is charged to (MIK-8293): a late mint charges the
+    /// same principal, once.
+    pub(super) quota: crate::protocol::continuation::QuotaKey,
     pub(super) digest: String,
 }
 
@@ -129,13 +132,14 @@ pub(super) enum Minted {
 pub(super) async fn mint_or_withhold(
     continuation: &std::sync::Arc<crate::protocol::continuation::ContinuationState>,
     source: crate::protocol::mrtr::PrincipalSource<'_>,
+    quota: &crate::protocol::continuation::QuotaKey,
     target: (&str, Option<u64>),
     tool: &str,
     arguments: &Value,
     backend_request_state: Option<String>,
 ) -> Minted {
     if armed().is_some_and(|(_, store)| store.now().is_err()) {
-        return match super::continuation::bind(source, target, tool, arguments) {
+        return match super::continuation::bind(source, quota, target, tool, arguments) {
             Some(binding) => Minted::Withheld(binding, backend_request_state),
             None => Minted::Refused,
         };
@@ -143,6 +147,7 @@ pub(super) async fn mint_or_withhold(
     match super::continuation::mint_continuation(
         continuation,
         source,
+        quota,
         target,
         tool,
         arguments,
