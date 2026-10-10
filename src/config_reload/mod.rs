@@ -485,6 +485,8 @@ mod grant_audit_reload_tests;
 #[cfg(test)]
 pub(crate) mod grant_audit_tests;
 #[cfg(test)]
+mod pattern_grammar_reload_tests;
+#[cfg(test)]
 mod principal_collision_tests;
 #[cfg(test)]
 mod reload_load_tests;

@@ -1,0 +1,225 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-8298: a pattern its section cannot match is refused at load.
+//!
+//! Tool sections match an exact name or a trailing `prefix*`; backend
+//! sections and agent scope segments match an exact name or `*` alone. Any
+//! other `*` used to load as a literal and match nothing (an inert deny, or an
+//! allow that grants nothing). Each row loads a written YAML file through
+//! `Config::load`, the path start-up and hot reload share.
+
+use super::*;
+
+const KEY: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+
+fn load(yaml: &str) -> Result<Config> {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(&path, yaml).expect("write config");
+    Config::load(Some(&path))
+}
+
+/// The load is refused, and the one-line error names `key` and the pattern.
+fn assert_refused(yaml: &str, key: &str, pattern: &str) {
+    let err = match load(yaml) {
+        Ok(_) => panic!("{key} = {pattern:?} loaded; it must be refused"),
+        Err(e) => e.to_string(),
+    };
+    assert!(err.contains(key), "error does not name {key}: {err}");
+    assert!(
+        err.contains(&format!("{pattern:?}")),
+        "error does not quote {pattern:?}: {err}"
+    );
+    assert!(err.contains("matches no"), "error does not say why: {err}");
+    assert!(!err.contains('\n'), "error is not one line: {err}");
+}
+
+fn tool_policy(list: &str, pattern: &str, enabled: bool) -> String {
+    format!("security:\n  tool_policy:\n    enabled: {enabled}\n    {list}: [{pattern:?}]\n")
+}
+
+fn api_key(field: &str, pattern: &str) -> String {
+    let backends = if field == "backends" {
+        format!("[{pattern:?}]")
+    } else {
+        "[\"*\"]".into()
+    };
+    let extra = if field == "backends" {
+        String::new()
+    } else {
+        format!("\n      {field}: [{pattern:?}]")
+    };
+    format!(
+        "auth:\n  enabled: false\n  api_keys:\n    - name: ci\n      key_sha256: {KEY:?}\n      backends: {backends}{extra}\n"
+    )
+}
+
+fn key_server(field: &str, pattern: &str) -> String {
+    let (backends, tools) = if field == "backends" {
+        (format!("[{pattern:?}]"), "[\"*\"]".to_string())
+    } else {
+        ("[\"*\"]".to_string(), format!("[{pattern:?}]"))
+    };
+    format!(
+        "key_server:\n  enabled: false\n  policies:\n    - match:\n        issuer: https://issuer.example\n      scopes:\n        backends: {backends}\n        tools: {tools}\n"
+    )
+}
+
+fn agent(scope: &str) -> String {
+    format!(
+        "agent_auth:\n  enabled: false\n  agents:\n    - client_id: ci\n      name: ci\n      scopes: [{scope:?}]\n"
+    )
+}
+
+/// Tool-section patterns with a `*` before their last character.
+const INNER: &[&str] = &["*_delete", "a*b", "*search*", "**"];
+
+// ── LOAD.1: refused, per section, whatever `enabled` says ──────────────────
+
+#[test]
+fn tool_policy_deny_with_an_inner_star_is_refused() {
+    for p in INNER {
+        assert_refused(
+            &tool_policy("deny", p, true),
+            "security.tool_policy.deny[0]",
+            p,
+        );
+    }
+}
+
+#[test]
+fn tool_policy_allow_with_an_inner_star_is_refused() {
+    for p in INNER {
+        assert_refused(
+            &tool_policy("allow", p, true),
+            "security.tool_policy.allow[0]",
+            p,
+        );
+    }
+}
+
+#[test]
+fn a_disabled_tool_policy_is_still_checked() {
+    assert_refused(
+        &tool_policy("deny", "*_delete", false),
+        "security.tool_policy.deny[0]",
+        "*_delete",
+    );
+}
+
+#[test]
+fn api_key_tool_lists_with_an_inner_star_are_refused() {
+    for field in ["denied_tools", "allowed_tools"] {
+        for p in INNER {
+            assert_refused(
+                &api_key(field, p),
+                &format!("auth.api_keys[0].{field}[0]"),
+                p,
+            );
+        }
+    }
+}
+
+#[test]
+fn key_server_scope_tools_with_an_inner_star_are_refused_while_disabled() {
+    for p in INNER {
+        assert_refused(
+            &key_server("tools", p),
+            "key_server.policies[0].scopes.tools[0]",
+            p,
+        );
+    }
+}
+
+#[test]
+fn backend_lists_take_an_exact_name_or_a_lone_star() {
+    for p in ["gh*", "a*b", "*gh", "**"] {
+        assert_refused(&api_key("backends", p), "auth.api_keys[0].backends[0]", p);
+        assert_refused(
+            &key_server("backends", p),
+            "key_server.policies[0].scopes.backends[0]",
+            p,
+        );
+    }
+}
+
+#[test]
+fn agent_scope_segments_take_an_exact_name_or_a_lone_star() {
+    for scope in [
+        "tools:gh*:search",
+        "tools:gh:a*b",
+        "tools:*gh",
+        "tools:gh:*x:read",
+    ] {
+        assert_refused(&agent(scope), "agent_auth.agents[0].scopes[0]", scope);
+    }
+}
+
+#[test]
+fn a_backend_name_holding_a_star_is_refused() {
+    let err = load("backends:\n  \"my*be\":\n    command: echo\n")
+        .err()
+        .expect("a backend named my*be loaded; it must be refused")
+        .to_string();
+    assert!(err.contains("my*be"), "{err}");
+    assert!(err.contains('*'), "{err}");
+}
+
+// ── LOAD.2: what matched before loads and decides the same ─────────────────
+
+#[test]
+fn exact_names_and_trailing_prefixes_still_load_and_decide_the_same() {
+    let yaml = format!(
+        "security:\n  tool_policy:\n    enabled: true\n    use_default_deny: false\n    deny: [\"fs_*\", \"drop_table\"]\n    allow: [\"fs_read\"]\n\
+         auth:\n  enabled: false\n  api_keys:\n    - name: ci\n      key_sha256: {KEY:?}\n      backends: [\"gh\", \"*\"]\n      allowed_tools: [\"search_*\", \"gh:issue_list\"]\n      denied_tools: [\"search_admin\"]\n\
+         key_server:\n  enabled: false\n  policies:\n    - match:\n        issuer: https://issuer.example\n      scopes:\n        backends: [\"gh\"]\n        tools: [\"brave_*\", \"*\"]\n\
+         agent_auth:\n  enabled: false\n  agents:\n    - client_id: ci\n      name: ci\n      scopes: [\"tools:gh:*\", \"tools:*\", \"tools:gh:search:read\"]\n"
+    );
+    let config = load(&yaml).expect("a config of exact names and trailing prefixes loads");
+
+    let policy = crate::security::ToolPolicy::from_config(&config.security.tool_policy);
+    assert!(
+        policy.check("s", "fs_write").is_err(),
+        "fs_* denies fs_write"
+    );
+    assert!(policy.check("s", "drop_table").is_err(), "exact deny");
+    assert!(
+        policy.check("s", "fs_read").is_ok(),
+        "allow takes precedence"
+    );
+    assert!(
+        policy.check("s", "search").is_ok(),
+        "unlisted falls to default allow"
+    );
+
+    let key = &config.auth.api_keys[0];
+    let client = crate::gateway::auth::AuthenticatedClient {
+        quota_principal: None,
+        principal: String::new(),
+        name: key.name.clone(),
+        rate_limit: 0,
+        backends: key.backends.clone(),
+        allowed_tools: key.allowed_tools.clone(),
+        denied_tools: key.denied_tools.clone(),
+        admin: false,
+        authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
+    };
+    assert!(
+        client.check_tool_scope("x", "search_web").is_ok(),
+        "prefix allow"
+    );
+    assert!(
+        client.check_tool_scope("gh", "issue_list").is_ok(),
+        "qualified exact allow"
+    );
+    assert!(
+        client.check_tool_scope("x", "search_admin").is_err(),
+        "exact deny"
+    );
+    assert!(
+        client.check_tool_scope("x", "write").is_err(),
+        "outside the allowlist"
+    );
+    assert!(client.can_access_backend("gh") && client.can_access_backend("other"));
+}
