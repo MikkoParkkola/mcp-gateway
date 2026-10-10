@@ -8,8 +8,14 @@ these paths that meets the definition is added to the inventory in the same
 change." This check makes that mechanical. Each non-test function the change
 adds under the seven paths needs a row in the same change, in one of:
 
-  docs/release/v4.0.0-critical-functions.tsv     it enforces (critical/standard)
-  docs/release/v4.0.0-unenforcing-functions.tsv  reviewed: enforces nothing
+  docs/release/inventory.d/<pr>.critical.tsv     it enforces (critical/standard)
+  docs/release/inventory.d/<pr>.unenforcing.tsv  reviewed: enforces nothing
+
+A fragment per PR, so row-adding PRs never edit the same file (MIK-8279). The
+base ledgers, docs/release/v4.0.0-critical-functions.tsv and
+docs/release/v4.0.0-unenforcing-functions.tsv, hold the older rows and are
+read together with the fragments by inventory_ledger.py. A key stated twice,
+in one ledger or across both, fails.
 
 Usage:
   check_inventory_rows.py <base> [<head>]   fail when a function <head> (default
@@ -27,6 +33,9 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import inventory_ledger as ledger  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 INVENTORY = "docs/release/v4.0.0-critical-functions.tsv"
@@ -147,17 +156,20 @@ def show(rev: str, path: str) -> str | None:
     return done.stdout if done.returncode == 0 else None
 
 
+LEDGER_OF = {INVENTORY: ledger.CRITICAL, UNENFORCING: ledger.UNENFORCING}
+
+
+@functools.cache
+def ledger_rows(root: Path, rev: str, path: str) -> tuple[dict, ...]:
+    """The rows of the ledger at `path` as `rev` has it: the base TSV plus its
+    fragments (inventory_ledger.py). Raises LedgerError on any bad row."""
+    return tuple(ledger.load_rev(root, rev, LEDGER_OF[path], path))
+
+
 def rows(rev: str, path: str) -> set[tuple[str, str, int]]:
-    """(file, fn, occurrence) of every row; both files carry the occurrence
-    in their third column, as the grader reads it."""
-    out = set()
-    for line in (show(rev, path) or "").splitlines():
-        cells = line.split("\t")
-        # An unenforcing row counts only with its reason: that is what was reviewed.
-        reasoned = path != UNENFORCING or (len(cells) > 3 and cells[3].strip())
-        if len(cells) >= 3 and not line.startswith("#") and cells[2].isdigit() and reasoned:
-            out.add((cells[0], cells[1], int(cells[2])))
-    return out
+    """(file, fn, occurrence) of every row of one ledger, base and fragments.
+    `rev` is resolved first, so the cache never serves a moved name."""
+    return {ledger.key(row) for row in ledger_rows(ROOT, git("rev-parse", rev).strip(), path)}
 
 
 def occurrence(lines: list[str], name: str, line: int) -> int:
@@ -260,13 +272,25 @@ def main(argv: list[str]) -> int:
         print(__doc__, file=sys.stderr)
         return 2
     head = argv[2] if len(argv) == 3 else "HEAD"
-    missing = missing_rows(argv[1], head)
+    try:
+        resolved = git("rev-parse", head).strip()
+        broken = ledger.overlap(list(ledger_rows(ROOT, resolved, INVENTORY)), list(ledger_rows(ROOT, resolved, UNENFORCING)))
+        missing = missing_rows(argv[1], head)
+    except ledger.LedgerError as error:
+        broken = error.problems
+        missing = []
+    for problem in broken:
+        print(f"inventory: {problem}")
+    if broken:
+        print(f"{len(broken)} inventory problem(s); see inventory_ledger.py for the row rules.")
+        return 1
     for path, name, line, nth in missing:
         print(f"no inventory row: {path}:{line} fn {name} (occurrence {nth})")
     if missing:
         print(
             f"{len(missing)} function(s) on the COV.3 paths have no row. Add each to "
-            f"{INVENTORY} (it enforces) or {UNENFORCING} (it does not, with a reason)."
+            "docs/release/inventory.d/<pr>.critical.tsv (it enforces) or "
+            "docs/release/inventory.d/<pr>.unenforcing.tsv (it does not, with a reason)."
         )
         return 1
     scope = "in the swept COV.3 areas" if argv[1] == ALL else "added on the COV.3 paths"

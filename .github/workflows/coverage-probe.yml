@@ -30,6 +30,8 @@ on:
       - "src/identity_propagation/**"
       - "docs/release/v4.0.0-critical-functions.tsv"
       - "docs/release/v4.0.0-unenforcing-functions.tsv"
+      - "docs/release/inventory.d/**"
+      - "scripts/release/inventory_ledger.py"
       - "scripts/release/critical_function_coverage.py"
       - "scripts/release/critical_path_coverage.py"
       - ".github/workflows/coverage-probe.yml"

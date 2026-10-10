@@ -273,7 +273,9 @@ impl TaskExecutor {
         let (tx, rx) = oneshot::channel();
         self.spawn_worker(commit_and_run(
             handoff, intent, task, backend, call, cancel_rx, tx,
-        ));
+        ))
+        .await
+        .map_err(|_| ServiceError::AuditUnavailable)?;
         rx.await.map_err(|_| ServiceError::Unavailable)?
     }
 
@@ -548,7 +550,30 @@ impl TaskExecutor {
 
     /// Spawn a task worker under the shutdown token. Every worker goes through
     /// here, so none can outlive a shutdown that cancelled the rest.
-    fn spawn_worker(&self, worker: impl std::future::Future<Output = ()> + Send + 'static) {
+    ///
+    /// MIK-8204: first, every grant decision in the caller's open slot is
+    /// appended and the append has completed, so the audit log's file order
+    /// shows a cause before the work it starts. Under `FailClosed` a failed
+    /// append is `AuditUnavailable` and nothing is spawned; under
+    /// `BestEffort` it is logged and the spawn proceeds. A caller cancelled
+    /// during the append spawns nothing; its records are still written.
+    ///
+    /// Not an `async fn`: that would hold `worker` inline in the caller's
+    /// future across the append, and `commit_and_run`'s future is large
+    /// enough to overflow a debug-build stack. It is boxed before the wait.
+    fn spawn_worker(
+        &self,
+        worker: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> impl std::future::Future<Output = crate::Result<()>> + Send + '_ {
+        let worker = Box::pin(worker);
+        async move {
+            crate::gateway::meta_mcp::grant_audit::flush_open_slot().await?;
+            self.spawn_now(worker);
+            Ok(())
+        }
+    }
+
+    fn spawn_now(&self, worker: impl std::future::Future<Output = ()> + Send + 'static) {
         // COLLUDE.1: every worker collects its relay receipts on its own
         // task; task-locals do not cross `tokio::spawn`.
         let worker = crate::gateway::meta_mcp::invoke::relay::collecting(worker);
@@ -567,6 +592,8 @@ impl TaskExecutor {
         // worker cancelled while its runtime sat idle would take one more step
         // (and could dispatch to a backend) before noticing.
         let token = self.shutdown.clone();
+        #[cfg(test)]
+        crate::gateway::meta_mcp::grant_audit::seams::count_worker_spawn();
         tokio::spawn(async move {
             tokio::pin!(worker);
             tokio::select! {
@@ -575,6 +602,8 @@ impl TaskExecutor {
                 () = &mut worker => {}
             }
         });
+        #[cfg(test)]
+        crate::gateway::meta_mcp::grant_audit::seams::after_worker_spawn();
     }
 
     fn cancel_signal(&self, id: &str) {

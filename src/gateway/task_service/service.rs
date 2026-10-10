@@ -63,6 +63,10 @@ pub enum ServiceError {
     /// an absent task are answered identically.
     #[error("task not found")]
     NotFound,
+    /// MIK-8204: under `FailClosed` the grant decisions that cause the work
+    /// could not be appended, so nothing was started (-32005).
+    #[error("audit log unavailable")]
+    AuditUnavailable,
 }
 
 /// Durable task ownership and transitions backed by an exclusively leased

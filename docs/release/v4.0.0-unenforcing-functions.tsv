@@ -1,7 +1,7 @@
 # MIK-7324.COV.3: functions on the seven named paths reviewed as enforcing nothing.
 # scripts/release/check_inventory_rows.py fails a change that adds a function on those paths
-# with a row in neither this file nor docs/release/v4.0.0-critical-functions.tsv.
-# A row here is a claim a reviewer checks: the function makes no decision the coverage doc counts.
+# with a row in neither ledger; add yours to docs/release/inventory.d/<pr>.unenforcing.tsv (or .critical.tsv), not here.
+# A row here is a claim a reviewer checks: the function makes no decision the coverage doc counts. New rows go in docs/release/inventory.d/<pr>.unenforcing.tsv (MIK-8279).
 path	fn	occurrence	reason
 src/gateway/router/watch_poll.rs	catalogue	1	Reads the meta catalogue for the watch host; the admission decision is may_invoke
 src/gateway/router/watch_poll.rs	catalogue_generation	1	Reads the catalogue generation counter for the watch host
@@ -87,7 +87,6 @@ src/gateway/server/tools_changed/views.rs	baseline	1	Per-user change hint: picks
 src/gateway/server/tools_changed/views.rs	bury	1	Per-user change hint: keeps an evicted view's fingerprint, capped
 src/oauth/login_gate.rs	fill_scope	1	Runs a shared fill under its dispatch mark; affects only which timeout error a joiner reports (MIK-8046).
 src/oauth/login_gate.rs	joined	1	Records which shared fill a deadline scope waits on; affects only which timeout error it reports (MIK-8046).
-src/gateway/router/helpers.rs	build_http_response	1	Serialises a frame already wrapped as Egressed; the scan is decided where the Egressed value is made, not here.
 src/gateway/server/stdio_tasks.rs	stop_on_drop	1	Session lifecycle (MIK-7839.CANCEL.3): builds the guard that stops task workers when the session future is dropped
 src/gateway/task_service/service.rs	stop_serving	1	Store lifecycle (MIK-7839.CANCEL.3): forwards the admission cutoff to the store
 src/gateway/task_service/store.rs	stop_serving	1	Store lifecycle (MIK-7839.CANCEL.3): clears ready so later mutations answer Unavailable; ownership checks are elsewhere
@@ -165,7 +164,6 @@ src/gateway/task_service/execution.rs	published	1	Publishes a committed transiti
 src/gateway/task_service/execution.rs	recovery	1	Getter for the installed recovery adapter
 src/gateway/task_service/execution.rs	reread_sealed	1	Drives TaskService::reread_sealed_deferring each sweep and publishes rows it settled; the seal ordering is decided there
 src/gateway/task_service/execution.rs	seal	1	Cancels the shutdown token so later workers never start; lifecycle, not a security refusal
-src/gateway/task_service/execution.rs	spawn_worker	1	Spawns a worker under the shutdown token inside relay-receipt and continuation-slot accounting scopes; no allow or deny
 src/gateway/task_service/execution/context.rs	authorizer	1	Getter for the captured router authorizer
 src/gateway/task_service/execution/context.rs	dispatch_log	1	Getter for the dispatch log
 src/gateway/task_service/execution/context.rs	host	1	Getter for the task host
@@ -255,3 +253,5 @@ src/gateway/task_service/store_targets.rs	add_targets	1	Async hop to add_targets
 src/gateway/task_service/store_targets.rs	settle_bounded_by	1	Async hop to settle_bounded_blocking, where ownership and revision are checked
 src/gateway/task_service/store_unix.rs	sync_dir	1	fsync of the store directory
 src/gateway/task_service/store_unix.rs	sync_file	1	fsync of a record file
+src/gateway/task_service/execution.rs	spawn_now	1	Spawns an already-admitted worker under the shutdown token; the audit-write decision is spawn_worker's
+src/personal_accounts/config.rs	default_schema_version	1	Serde default for an omitted accounts.schema_version (MIK-8044 P2c3a); returns the literal accounts.v1 only, and the schema check itself is validate_* (config.rs:136/437/532)

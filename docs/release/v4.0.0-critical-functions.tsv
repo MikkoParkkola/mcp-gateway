@@ -1,6 +1,6 @@
 # MIK-7324.COV.3 function inventory: every security-enforcing function in the seven named paths.
 # tier=critical must clear 95% of its own lines; tier=standard rows are borderline builders kept at the path floor.
-# fn is the bare name; occurrence picks the nth 'fn <name>' in the file (cfg variants, same-named methods).
+# fn is the bare name; occurrence picks the nth 'fn <name>' in the file (cfg variants, same-named methods). New rows go in docs/release/inventory.d/<pr>.critical.tsv (MIK-8279).
 path	fn	occurrence	tier	category	qualified	reason
 src/config/account_bindings.rs	compile	1	critical	d	compile	Refuses raw Vault propagation without an account descriptor
 src/config/account_bindings.rs	compile_one	1	critical	d	compile_one	Refuses an account plus identity_propagation conflict, unresolved descriptor refs, and external without a strategy
@@ -62,8 +62,6 @@ src/gateway/router/authorization.rs	backend_tool_targets_for_call	1	standard	bor
 src/gateway/router/authorization.rs	capture	1	standard	borderline	OwnedRouterAuthorizer::capture	Captures identity for background workers; a wrong capture authorizes the wrong caller.
 src/gateway/router/authorization.rs	decide	1	standard	borderline	RouterAuthorizer::decide	Trait entry that hands the meta layer to `decide_tool_target`.
 src/gateway/router/authorization.rs	of_client	1	standard	borderline	CallerStanding::of_client	Derives admin standing from the client flag; feeds `permits`.
-src/gateway/router/authorization.rs	target_from_invoke_arguments	1	standard	borderline	target_from_invoke_arguments	Extracts the gateway_invoke target to authorize; a missing server or tool yields no target.
-src/gateway/router/authorization.rs	targets_from_code_mode_arguments	1	standard	borderline	targets_from_code_mode_arguments	Extracts the gateway_execute targets to authorize; an unparsed step yields no target.
 src/gateway/router/backend_handlers.rs	apply_backend_tool_call_security	1	critical	a,d	apply_backend_tool_call_security	Direct route: name validation, authorization, firewall verdict, R2 key check, sanitization.
 src/gateway/router/backend_handlers.rs	backend_handler	1	critical	d	backend_handler	Refuses the direct route with 503 while the audit log is down (D1-f).
 src/gateway/router/backend_handlers.rs	backend_handler_inner	1	critical	a,b,c,d	backend_handler_inner	Direct-route gate chain: identity, hardened, scope, session owner, attestation, OAuth isolation, firewall.
@@ -234,10 +232,12 @@ src/gateway/server/stdio_tasks.rs	drop	1	critical	c	TasksDropGuard::drop	Seals t
 src/gateway/task_service/execution.rs	cancel	1	critical	c	TaskExecutor::cancel	Cancel is a write scoped to the owner via the principal; signals the worker only after it commits
 src/gateway/task_service/execution.rs	cancel_lost_the_revision	1	critical	c	TaskExecutor::cancel_lost_the_revision	Retries cancel only after re-reading the task through the owner-scoped service.get
 src/gateway/task_service/execution.rs	transition_write	1	critical	c	TaskExecutor::transition_write	Hashes the request principal to an owner
+src/gateway/task_service/execution.rs	spawn_worker	1	critical	c	TaskExecutor::spawn_worker	Appends the open slot's grant decisions before any worker spawns; under FailClosed a failed append refuses the spawn (MIK-8204)
 src/gateway/task_service/execution.rs	install_recovery	1	standard	borderline	TaskExecutor::install_recovery	Installs the trusted upstream adapter that gates recovery queries
 src/gateway/task_service/execution/context.rs	dispatch_context_retrying	1	standard	borderline	OwnedCallerContext::dispatch_context_retrying	signing: None keeps check_invocation_policy running; wrong value silently skips re-auth
 src/gateway/task_service/execution/context.rs	hold_caller_key	1	standard	borderline	OwnedCallerContext::hold_caller_key	Holds the caller key through a backend call; a miss lets an idle sweep reclaim the key the task writes under
 src/gateway/task_service/execution/input_round.rs	provide_input	1	critical	c	TaskExecutor::provide_input	Scopes task/update answers to the owner; foreign or absent task returns NotFound
+src/gateway/task_service/execution/input_round.rs	round_outcome	1	critical	c	TaskExecutor::round_outcome	Answers -32005 and spawns nothing when the update's grant decisions could not be written (MIK-8204)
 src/gateway/task_service/execution/input_round.rs	resume	1	critical	d	resume	Closes a round whose continuation deadline has passed, and one refused for expiry, instead of resuming it
 src/gateway/task_service/execution/input_round.rs	resume_flow	1	critical	d	resume_flow	Closes a round whose continuation deadline has passed, and one refused for expiry, instead of resuming it
 src/gateway/task_service/execution/input_round.rs	proceed_unless_late	1	critical	d	TaskExecutor::proceed_unless_late	The one place both late-deadline checks of a resume close the round
@@ -745,7 +745,7 @@ src/gateway/router/helpers.rs	build_accepted_response	1	standard	borderline	buil
 src/gateway/router/helpers.rs	build_error_response	1	standard	borderline	build_error_response	Builds the JSON-RPC error frame and HTTP status that callers use to refuse requests, so a mistake would silently turn a refusal into a different answer.
 src/gateway/router/helpers.rs	build_error_response_with_data	1	standard	borderline	build_error_response_with_data	Builds the refusal frame carrying the data payload a client must act on, so a mistake would silently drop the refusal detail or its status.
 src/gateway/router/helpers.rs	build_http_error_response	1	standard	borderline	build_http_error_response	Builds a JSON-RPC error body and status for refusals without a session header, so a mistake would silently change what a refused caller receives.
-src/gateway/router/helpers.rs	build_http_response	1	standard	borderline	build_http_response	Builds the status and body that direct-route, key-check and account refusals are sent with, so a mistake would silently alter every such refusal on the wire.
+src/gateway/router/helpers.rs	build_http_response	1	standard	borderline	build_http_response	Builds the status and body that direct-route, key-check and account refusals are sent with, so a mistake would silently alter every such refusal on the wire; egress scan decided upstream, at Egressed construction.
 src/gateway/router/helpers.rs	build_response	1	standard	borderline	build_response	Builds the JSON-RPC response with session header that refusal paths rely on, so a mistake would silently change the status or session a refusal carries.
 src/gateway/router/helpers.rs	build_session_response	1	standard	borderline	build_session_response	Builds every session-bearing JSON response and attaches the session header through attach_session_header, so a mistake would silently drop or misplace the session identity callers are bound to.
 src/gateway/router/helpers.rs	extract_tools_call_params	1	standard	borderline	extract_tools_call_params	Extracts the tool name that tool policy, response-security targets and dispatch all key on, so a mistake would silently have the policy judge a different tool than the one called [standard vs unenforcing].
