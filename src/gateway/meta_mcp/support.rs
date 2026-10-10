@@ -56,6 +56,20 @@ pub(super) enum CachePrincipal {
     Unresolved,
 }
 
+/// `projection_key_suffix`, scoped to the playbook step this dispatch runs
+/// in, if any (MIK-8341): `|step:N` lands after the length-prefixed client
+/// key, so each step of a keyed run gets its own entry (no 409 between steps)
+/// while a retry of the same step inside the run still meets its stored answer
+/// (ADR-012). A client key that spells `|step:N` cannot collide: the length
+/// prefix covers only the client's text. Reads the playbook engine's own step
+/// label, never Code Mode's, whose steps carry no key.
+pub(super) fn step_scoped(projection_key_suffix: &str) -> String {
+    match crate::playbook::current_step() {
+        Some(label) => format!("|step:{label}{projection_key_suffix}"),
+        None => projection_key_suffix.to_owned(),
+    }
+}
+
 /// Build the idempotency key for a `gateway_invoke` call.
 ///
 /// `client_key` is the key the client sent in `params._meta`; there is no other
@@ -77,20 +91,6 @@ pub(super) enum CachePrincipal {
 /// Returns `None` when no idempotency cache is configured, when the client
 /// sent no key, or when the principal is `Unresolved`. `route` labels the
 /// skip counter (`meta` or `direct`).
-/// `projection_key_suffix`, scoped to the playbook step this dispatch runs
-/// in, if any (MIK-8341): `|step:N` lands after the length-prefixed client
-/// key, so each step of a keyed run gets its own entry (no 409 between steps)
-/// while a retry of the same step inside the run still meets its stored answer
-/// (ADR-012). A client key that spells `|step:N` cannot collide: the length
-/// prefix covers only the client's text. Reads the playbook engine's own step
-/// label, never Code Mode's, whose steps carry no key.
-pub(super) fn step_scoped(projection_key_suffix: &str) -> String {
-    match crate::playbook::current_step() {
-        Some(label) => format!("|step:{label}{projection_key_suffix}"),
-        None => projection_key_suffix.to_owned(),
-    }
-}
-
 pub(super) fn idempotency_key_for(
     client_key: Option<&str>,
     projection_key_suffix: &str,

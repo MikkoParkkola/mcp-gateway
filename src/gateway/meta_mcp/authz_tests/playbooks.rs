@@ -474,11 +474,21 @@ steps:
 fn mik_8341_admission_refuses_a_playbook_retry_before_reserving() {
     let (registry, _calls) = counted_backend("alpha");
     let meta = MetaMcp::new(registry);
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    engine.register(
+        serde_yaml::from_str(
+            "name: any\ndescription: d\nsteps:\n  - {name: read, server: alpha, tool: read}\n",
+        )
+        .expect("playbook fixture must parse"),
+    );
+    meta.set_playbook_engine(engine);
     let retry = crate::protocol::mrtr::RetryFields {
         idempotency_key: Some("pk-admit".into()),
         input_responses: Some(json!({})),
         ..Default::default()
     };
+    // The refused call has NO execution owner, so a refusal placed after
+    // `admit_operation` would surface as its -32003 instead (grok c2).
     let allowed = ctx(&AllowAll);
     let caller = allowed.with_retry(&retry);
     let admitted = meta.admit_meta_sync(
@@ -496,5 +506,37 @@ fn mik_8341_admission_refuses_a_playbook_retry_before_reserving() {
         }
         Err(other) => panic!("admission refused for another reason: {other}"),
         Ok(_) => panic!("admission admitted the playbook retry before refusing it"),
+    }
+    assert_eq!(
+        meta.execution_admission().snapshot().entries,
+        0,
+        "the refused retry reserved a round"
+    );
+    // grok c1: nothing was reserved. The honest call under the same key is
+    // admitted as the key's first owner, not met as a round in flight.
+    let honest = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("pk-admit".into()),
+        ..Default::default()
+    };
+    let mut owned = ctx(&AllowAll);
+    owned.credential_principal = Some("cred:mik-8341");
+    let caller = owned.with_retry(&honest);
+    let admitted = meta.admit_meta_sync(
+        crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
+        &caller,
+        "gateway_run_playbook",
+        &json!({"name": "any"}),
+        None,
+        &crate::protocol::RequestId::Number(2),
+    );
+    match admitted {
+        Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(_)) => {}
+        Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected) => {
+            panic!("setup: the honest call is unprotected")
+        }
+        Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Replay(..)) => {
+            panic!("the refused retry left a stored round")
+        }
+        Err(error) => panic!("the refused retry left the key reserved: {error}"),
     }
 }
