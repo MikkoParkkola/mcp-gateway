@@ -199,6 +199,45 @@ async fn an_accepted_negotiated_retry_is_logged_and_adopted() {
     assert_eq!(adopted.as_deref(), Some(selected));
 }
 
+/// MIK-8195 W7: a backend whose `initialize` fails for a reason other than
+/// the protocol version ends the start, and the error names only its code:
+/// the backend's own text may quote back a credential the gateway sent.
+#[tokio::test]
+async fn a_non_version_initialize_error_ends_the_start_by_code_only() {
+    let _log = verbose();
+    let workspace = tempfile::tempdir().expect("workspace");
+    let script = r#"while IFS= read -r request; do
+    id=$(printf '%s' "$request" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+    case "$request" in
+        *'"method":"initialize"'*)
+            printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32099,"message":"denied: QUOTED"}}\n' "$id"
+            ;;
+    esac
+done
+"#
+    .replace("QUOTED", NOT_A_VERSION);
+    std::fs::write(workspace.path().join("server.sh"), script).expect("write server");
+    let transport = StdioTransport::new(
+        "sh server.sh",
+        HashMap::new(),
+        Some(workspace.path().to_string_lossy().into_owned()),
+        std::time::Duration::from_secs(10),
+        None,
+    );
+    let outcome = transport.start().await;
+    let adopted = transport.protocol_version.read().clone();
+    let _ = transport.close().await;
+
+    let error = outcome.expect_err("a failed initialize is no session");
+    assert!(matches!(error, Error::Protocol(_)), "{error:?}");
+    assert!(
+        error.to_string().contains("backend error code -32099"),
+        "{error}"
+    );
+    assert!(!error.to_string().contains(NOT_A_VERSION), "{error}");
+    assert_eq!(adopted, None, "a failed initialize adopts nothing");
+}
+
 /// Neither a diagnostic nor the log may repeat what the backend sent: a
 /// backend can quote a credential back, and logs reach more readers than
 /// the caller does.
