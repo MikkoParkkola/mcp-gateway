@@ -149,3 +149,4 @@ src/gateway/server/background.rs	stop	1	AbortOnDrop::stop: aborts the owned task
 src/gateway/server/stdio_single.rs	observe_stdio_inbound	1	Records the inbound protocol observation; makes no access decision
 src/gateway/server/stdio_single.rs	run_stdio	1	Starts stdio mode on the process stdin/stdout and delegates to run_stdio_on; no decision of its own (MIK-8144 move)
 src/gateway/server/stdio_single.rs	stdio_take_merged_client_meta	1	Moves the client _meta into the call arguments; makes no access decision
+src/gateway/task_service/store_input.rs	now	2	TaskStore::now delegates to Shared::now, which carries the decision

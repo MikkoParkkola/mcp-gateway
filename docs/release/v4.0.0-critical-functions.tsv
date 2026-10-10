@@ -241,6 +241,7 @@ src/gateway/task_service/execution/input_round.rs	resume	1	critical	d	resume	Clo
 src/gateway/task_service/execution/input_round.rs	resume_flow	1	critical	d	resume_flow	Closes a round whose continuation deadline has passed, and one refused for expiry, instead of resuming it
 src/gateway/task_service/execution/input_round.rs	settle_interrupted	1	critical	d	settle_interrupted	Settles a resumed task interrupted when its host is gone, instead of dispatching without one
 src/gateway/task_service/execution/input_round.rs	proceed_unless_late	1	critical	d	TaskExecutor::proceed_unless_late	The one place both late-deadline checks of a resume close the round
+src/gateway/task_service/execution/input_round.rs	now_secs	1	critical	d	now_secs	The now every round deadline check compares against; a clock before 1970 reads as past every deadline
 src/gateway/task_service/execution/input_round.rs	round_deadline	1	critical	borderline	round_deadline	Opens the sealed continuation (authenticates) to derive the deadline; refuses unopenable ones
 src/gateway/task_service/execution/input_round.rs	dispatch	1	standard	borderline	dispatch	Builds the worker's authorizer and caller context for the resume dispatch
 src/gateway/task_service/execution/recovery.rs	transition_digest_write	1	standard	borderline	TaskExecutor::transition_digest_write	Digest-level transition that skips principal hashing; safe only if no request path reaches it
@@ -309,6 +310,7 @@ src/gateway/task_service/store_unix.rs	dir_identity	1	standard	borderline	dir_id
 src/gateway/task_service/store_expiry.rs	restored_bindings	1	standard	borderline	TaskStore::restored_bindings	Supplies persisted principal digests to admission at startup
 src/gateway/task_service/store_expiry.rs	reread_sealed	1	standard	borderline	TaskStore::reread_sealed	Re-reads sealed rows and imports repaired bindings; the seal ordering is enforced by TaskService::reread_sealed
 src/gateway/task_service/store_expiry.rs	binding_of	1	standard	borderline	binding_of	Builds the admission binding a stored admission block describes
+src/gateway/task_service/store_input.rs	now	1	critical	d	Shared::now	The store clock every round-deadline and expiry decision reads; Err on a clock before 1970, which dates nothing
 src/gateway/task_service/store_input.rs	close_round_blocking	1	critical	c	Shared::close_round_blocking	Requires ownership before cancelling an input round
 src/gateway/task_service/store_input.rs	closed_at	1	critical	d	closed_at	Continuation expiry: decides when no further answers are accepted
 src/gateway/task_service/store_input.rs	fits_cap	1	critical	d	fits_cap	Refuses an input-round record over the storage bound
