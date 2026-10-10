@@ -15,9 +15,6 @@ pub const CLIENT_PROTOCOL_VERSION: &str = "2025-06-18";
 pub const BACKEND: &str = "fixture";
 /// The fixture tool whose result asks a question instead of answering one.
 pub const ASKING_TOOL: &str = "needs_input";
-/// Bound on draining everything the child has to say. A row that expects a
-/// frame and gets none spends this once and then asserts.
-pub const COLLECT_WINDOW: Duration = Duration::from_secs(5);
 
 /// Every JSON-RPC request the fixture backend was handed, in arrival order.
 pub type Received = Arc<Mutex<Vec<Value>>>;
@@ -51,7 +48,7 @@ pub const QUESTION_BYTES: usize = 96 * 1024;
 /// `initialize` in microseconds while the bridged question needs a backend
 /// round-trip, so the ordering the row asserts holds by timing rather than by
 /// design and the row passes against the interleaving it exists to catch.
-pub const BACKEND_INITIALIZE_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
+pub const BACKEND_INITIALIZE_DELAY: Duration = Duration::from_millis(300);
 
 /// An HTTP MCP backend that answers `initialize` and `tools/list`, and whose
 /// one tool returns the MRTR interim shape carrying an `elicitation/create`

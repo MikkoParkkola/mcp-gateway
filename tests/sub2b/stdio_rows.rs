@@ -254,7 +254,9 @@ async fn s03_progress_stdio_each_call_sees_only_its_own_token() {
         .await;
     let (tail, _) = session.read_until(|frame| has_id(frame, 3)).await;
     seen.extend(tail);
-    seen.extend(session.collect(COLLECT_WINDOW).await);
+    // No duplicate token after id 3's answer.
+    // timing: absence
+    seen.extend(session.collect_for_absence(COLLECT_WINDOW).await);
 
     // THEN
     let tokens: Vec<&Value> = seen

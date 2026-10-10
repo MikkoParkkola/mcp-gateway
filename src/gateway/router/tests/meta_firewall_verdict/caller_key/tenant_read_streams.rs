@@ -16,6 +16,7 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::gateway::streaming::TaggedNotification;
+use crate::test_wait::HANG_BOUND;
 
 /// An open GET `/mcp` body under the fixture key, read event by event.
 struct Stream {
@@ -45,12 +46,39 @@ impl Stream {
     }
 
     /// Every `data:` payload that arrives within `within`, skipping the
-    /// `connected` event and keep-alives.
-    async fn drain(&mut self, within: Duration) -> Vec<String> {
+    /// `connected` event and keep-alives. For a check that something does NOT
+    /// arrive: a positive assert on this result races the window (MIK-8295),
+    /// so use [`Self::drain_until`] for that.
+    async fn drain_for_absence(&mut self, within: Duration) -> Vec<String> {
         let deadline = tokio::time::Instant::now() + within;
         while let Ok(Some(Ok(chunk))) = tokio::time::timeout_at(deadline, self.body.next()).await {
             self.buffer.push_str(&String::from_utf8_lossy(&chunk));
         }
+        self.take_events()
+    }
+
+    /// Payloads until `enough` holds for them, or `HANG_BOUND` passes (the
+    /// caller's assert then says what was missing), and then any more within
+    /// `QUIET`, where an extra that must not arrive would show.
+    async fn drain_until(&mut self, enough: impl Fn(&[String]) -> bool) -> Vec<String> {
+        let deadline = tokio::time::Instant::now() + HANG_BOUND;
+        let mut out = self.take_events();
+        while !enough(&out) {
+            match tokio::time::timeout_at(deadline, self.body.next()).await {
+                Ok(Some(Ok(chunk))) => {
+                    self.buffer.push_str(&String::from_utf8_lossy(&chunk));
+                    out.extend(self.take_events());
+                }
+                _ => return out,
+            }
+        }
+        // timing: absence
+        out.extend(self.drain_for_absence(QUIET).await);
+        out
+    }
+
+    /// The whole events buffered so far, as `data:` payloads.
+    fn take_events(&mut self) -> Vec<String> {
         let mut out = Vec::new();
         while let Some(end) = self.buffer.find("\n\n") {
             let block: String = self.buffer.drain(..end + 2).collect();
@@ -85,6 +113,34 @@ fn mentions(events: &[String], tenant: &str) -> bool {
     events.iter().any(|e| e.contains(tenant))
 }
 
+/// What a row expects of an event, so its collector waits for a delivery
+/// and only watches a window for a withholding.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Arrival {
+    Delivered,
+    Withheld,
+}
+
+impl Arrival {
+    fn when(delivered: bool) -> Self {
+        if delivered {
+            Self::Delivered
+        } else {
+            Self::Withheld
+        }
+    }
+}
+
+/// The events naming `needle`, waited for when they must arrive and watched
+/// for over `QUIET` when they must not.
+async fn expect(stream: &mut Stream, needle: &str, arrival: Arrival) -> Vec<String> {
+    match arrival {
+        Arrival::Delivered => stream.drain_until(|e| mentions(e, needle)).await,
+        // timing: absence
+        Arrival::Withheld => stream.drain_for_absence(QUIET).await,
+    }
+}
+
 const QUIET: Duration = Duration::from_millis(300);
 
 /// Row 2i: two subscribers under one key, one fast and one stalled. A is
@@ -99,18 +155,20 @@ async fn delayed_subscriber_copy_fails_closed() {
         let router = create_router(Arc::clone(&state));
         let mut fast = Stream::open(&router).await;
         let mut stalled = Stream::open(&router).await;
-        let _ = fast.drain(QUIET).await;
-        let _ = stalled.drain(QUIET).await;
+        let _ = fast.drain_for_absence(QUIET).await;
+        let _ = stalled.drain_for_absence(QUIET).await;
 
         state.multiplexer.broadcast(names(A));
         assert!(
-            mentions(&fast.drain(QUIET).await, A),
+            mentions(&fast.drain_until(|e| mentions(e, A)).await, A),
             "{mode:?}: A reaches the fast subscriber"
         );
+        // The product's quiet window must pass; longer under load is fine.
+        // timing: lower-bound
         tokio::time::sleep(Duration::from_millis(1_200)).await;
 
         state.multiplexer.broadcast(names(B));
-        let got = fast.drain(QUIET).await;
+        let got = expect(&mut fast, B, Arrival::when(mode == CrossTenantReads::Off)).await;
         if mode == CrossTenantReads::Off {
             assert!(mentions(&got, B), "control: off delivers B: {got:?}");
             continue;
@@ -120,7 +178,7 @@ async fn delayed_subscriber_copy_fails_closed() {
             "B was delivered while a copy of A was still unwritten: {got:?}"
         );
 
-        let late = stalled.drain(QUIET).await;
+        let late = stalled.drain_until(|e| mentions(e, A)).await;
         assert!(
             mentions(&late, A),
             "the stalled copy of A is written late: {late:?}"
@@ -130,15 +188,16 @@ async fn delayed_subscriber_copy_fails_closed() {
             "nor does B reach the stalled one: {late:?}"
         );
         state.multiplexer.broadcast(names(B));
-        let got = fast.drain(QUIET).await;
+        let got = expect(&mut fast, B, Arrival::Withheld).await;
         assert!(
             !mentions(&got, B),
             "last-seen is the late write of A, not its enqueue: {got:?}"
         );
 
+        // timing: lower-bound
         tokio::time::sleep(Duration::from_millis(1_200)).await;
         state.multiplexer.broadcast(names(B));
-        let got = fast.drain(QUIET).await;
+        let got = fast.drain_until(|e| mentions(e, B)).await;
         assert!(
             mentions(&got, B),
             "after a quiet window B is ordinary: {got:?}"
@@ -209,12 +268,13 @@ async fn webhook_and_event_scan_root() {
         let router = create_router(Arc::clone(&state));
         let hooks = webhook_routes(&state);
         let mut stream = Stream::open(&router).await;
-        let _ = stream.drain(QUIET).await;
+        let _ = stream.drain_for_absence(QUIET).await;
 
         let (a, _, body) = send(&router, call_with(&who, true, None, 0, &reading(A))).await;
         assert_eq!(a, Delivered, "{body}");
         post_webhook(&hooks, &json!({ "kind": "row-77", "customer_id": B })).await;
-        let got = stream.drain(QUIET).await;
+        let arrival = Arrival::when(mode == CrossTenantReads::Off);
+        let got = expect(&mut stream, "row-77", arrival).await;
         if mode == CrossTenantReads::Off {
             assert!(
                 mentions(&got, "row-77"),
@@ -274,16 +334,17 @@ async fn message_events(
     arg_keys: &[&str],
     transform: &str,
     body: &Value,
+    arrival: Arrival,
 ) -> Vec<String> {
     let (state, _store) = keyed_state(mode, 3600, arg_keys).await;
     let router = create_router(Arc::clone(&state));
     let hooks = message_routes(&state, transform);
     let mut stream = Stream::open(&router).await;
-    let _ = stream.drain(QUIET).await;
+    let _ = stream.drain_for_absence(QUIET).await;
     let (a, _, answer) = send(&router, call_with(&caller(), true, None, 0, &reading(A))).await;
     assert_eq!(a, Delivered, "{answer}");
     post_webhook(&hooks, body).await;
-    stream.drain(QUIET).await
+    expect(&mut stream, "row-78", arrival).await
 }
 
 async fn message_delivered(
@@ -291,9 +352,10 @@ async fn message_delivered(
     arg_keys: &[&str],
     transform: &str,
     body: &Value,
+    arrival: Arrival,
 ) -> bool {
     mentions(
-        &message_events(mode, arg_keys, transform, body).await,
+        &message_events(mode, arg_keys, transform, body, arrival).await,
         "row-78",
     )
 }
@@ -309,10 +371,12 @@ async fn message_webhook_top_level_id_is_judged() {
         for id in [named.clone(), json!(named.to_string())] {
             let body = json!({ "id": id, "kind": "row-78" });
             assert!(
-                message_delivered(CrossTenantReads::Off, &keys, "", &body).await,
+                message_delivered(CrossTenantReads::Off, &keys, "", &body, Arrival::Delivered)
+                    .await,
                 "control: off delivers {body}"
             );
-            let got = message_delivered(CrossTenantReads::Block, &keys, "", &body).await;
+            let arrival = Arrival::when(tenant == A);
+            let got = message_delivered(CrossTenantReads::Block, &keys, "", &body, arrival).await;
             assert_eq!(
                 got,
                 tenant == A,
@@ -331,18 +395,34 @@ async fn message_webhook_mapped_top_level_id_is_judged() {
     let transform = "      data:\n        id: \"{ref}\"\n        kind: \"{kind}\"";
     for tenant in [A, B] {
         let body = json!({ "ref": tenant, "kind": "row-78" });
-        let off = message_events(CrossTenantReads::Off, &keys, transform, &body).await;
+        let off = message_events(
+            CrossTenantReads::Off,
+            &keys,
+            transform,
+            &body,
+            Arrival::Delivered,
+        )
+        .await;
         assert!(
             mentions(&off, &format!(r#""id":"{tenant}""#)),
             "control: off delivers the mapped id: {off:?}"
         );
-        let got = message_delivered(CrossTenantReads::Block, &keys, transform, &body).await;
+        let arrival = Arrival::when(tenant == A);
+        let got =
+            message_delivered(CrossTenantReads::Block, &keys, transform, &body, arrival).await;
         assert_eq!(got, tenant == A, "block, mapped id naming {tenant}: {body}");
     }
     // A mapped `id` does not replace the raw scan: B named only in a field the
     // mapping drops is still judged.
     let body = json!({ "ref": "evt-1", "kind": "row-78", "customer_id": B });
-    let got = message_delivered(CrossTenantReads::Block, &["customer_id"], transform, &body).await;
+    let got = message_delivered(
+        CrossTenantReads::Block,
+        &["customer_id"],
+        transform,
+        &body,
+        Arrival::Withheld,
+    )
+    .await;
     assert!(!got, "block, B only in the dropped raw field: {body}");
 }
 
@@ -386,7 +466,9 @@ async fn open_listen_naming(router: &axum::Router, tenant: Option<&str>) -> Stre
         body: response.into_body().into_data_stream(),
         buffer: String::new(),
     };
-    let ack = stream.drain(QUIET).await;
+    let ack = stream
+        .drain_until(|e| e.iter().any(|e| e.contains("subscriptionId")))
+        .await;
     assert!(
         ack.iter().any(|e| e.contains("subscriptionId")),
         "the acknowledgement opens the stream: {ack:?}"
@@ -410,7 +492,8 @@ async fn listen_keyed_on_caller_key() {
             "method": "notifications/tools/list_changed",
             "params": { "customer_id": B },
         }));
-        let got = listen.drain(QUIET).await;
+        let arrival = Arrival::when(mode == CrossTenantReads::Off);
+        let got = expect(&mut listen, B, arrival).await;
         if mode == CrossTenantReads::Off {
             assert!(
                 mentions(&got, B),
@@ -438,7 +521,8 @@ async fn listen_request_params_are_a_read() {
             "method": "notifications/tools/list_changed",
             "params": { "customer_id": B },
         }));
-        let got = listen.drain(QUIET).await;
+        let arrival = Arrival::when(mode == CrossTenantReads::Off);
+        let got = expect(&mut listen, B, arrival).await;
         if mode == CrossTenantReads::Off {
             assert!(
                 mentions(&got, B),

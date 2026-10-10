@@ -410,7 +410,11 @@ async fn a_live_session_keeps_its_stores_through_the_idle_reclaim() {
 /// A legacy session that only POSTs holds no stream, so it is always "without
 /// receivers"; the reaper must go by its last activity, not its age, or a busy
 /// session is replaced mid-use and starts again on the default profile.
-#[tokio::test]
+///
+/// On a paused clock (MIK-8280): session age and the reaper's tick both read
+/// tokio time (#3739), so each round is exactly 40 ms of it, however loaded
+/// the runner. On the real clock a stalled round outlived the 150 ms TTL.
+#[tokio::test(start_paused = true)]
 async fn a_session_older_than_the_ttl_that_stays_active_keeps_its_profile() {
     let streaming = crate::config::StreamingConfig {
         session_ttl: std::time::Duration::from_millis(150),
