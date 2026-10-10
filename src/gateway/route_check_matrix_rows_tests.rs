@@ -86,24 +86,31 @@ async fn route_firewall_rows() {
     }
 }
 
-/// `ChokepointRescan`, stdio: with no route-layer scan, the blocked argument
-/// reaches the dispatch-time rescan, which writes a blocking `event=dispatch`
-/// row and stops the send.
+/// `ChokepointRescan`, stdio: the route stage passes a clean first call, and
+/// the continuation retry's answer carries the blocked pattern, which only the
+/// dispatch-time rescan judges. It writes a blocking `event=dispatch` row and
+/// refuses the send; the backend is asked once (the question).
 #[tokio::test]
 async fn chokepoint_rescan_stdio_row() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let audit = dir.path().join("audit.jsonl");
-    let (body, backend_calls) = blocked_call(Route::Stdio, &audit).await;
     assert_eq!(
         expect(MethodKind::ToolsCall, Route::Stdio, Stage::ChokepointRescan),
         Expect::Applies
     );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audit = dir.path().join("audit.jsonl");
+    let sent = stdio::stdio_retry_answering(&audit, BLOCKED).await;
     let dispatched = audit_rows(&audit, "dispatch");
     assert!(
         dispatched.iter().any(|row| row["action"] == "block"),
-        "no blocking dispatch row: {dispatched:?}; {body}"
+        "R5: not refused by the dispatch rescan: {dispatched:?}; {}",
+        sent.body
     );
-    assert_eq!(backend_calls, 0, "reached its backend: {body}");
+    assert_eq!(sent.body["error"]["code"], -32600, "R5: {}", sent.body);
+    assert_eq!(
+        sent.backend_calls, 1,
+        "R5: the hostile answer was sent: {}",
+        sent.body
+    );
 }
 
 /// The sanitizer's refusal of a NUL byte (`security/sanitize.rs`).
@@ -163,34 +170,33 @@ async fn sanitize_rows() {
         direct_off.body
     );
 
-    assert_eq!(
-        row(Route::Stdio),
-        Expect::ExpectedGap(super::Ticket::Mik8149)
+    assert_eq!(row(Route::Stdio), Expect::Applies);
+    // Built from config by the production Gateway. ON: the sanitizer refuses
+    // the NUL at intake, before the backend. OFF (the control): it arrives
+    // unchanged, as the echoing backend shows.
+    let (on, on_calls) = stdio::stdio_sanitizing(true).await;
+    assert!(
+        message(&on).contains(NUL_REFUSED),
+        "R5 sanitize_input=true: not refused by the sanitizer: {on}"
     );
-    // Built from config by the production Gateway, with the setting ON: stdio
-    // still passes the NUL (the gap). The OFF run is the control.
-    for on in [true, false] {
-        let (body, calls) = stdio::stdio_sanitizing(on).await;
-        assert!(
-            !body.to_string().contains(NUL_REFUSED),
-            "R5 sanitize_input={on}: stdio now refuses the NUL; MIK-8149 may have \
-             closed this gap, flip the row to Applies: {body}"
-        );
-        assert_eq!(
-            calls, 1,
-            "R5 sanitize_input={on}: the call did not reach the backend: {body}"
-        );
-        // The backend echoes `cmd`; `gateway_invoke` wraps its result as text.
-        // The NUL arrived unchanged, not stripped.
-        let inner: serde_json::Value = body["result"]["content"][0]["text"]
-            .as_str()
-            .and_then(|text| serde_json::from_str(text).ok())
-            .unwrap_or_default();
-        assert_eq!(
-            inner["content"][0]["text"], "a\u{0}b",
-            "R5 sanitize_input={on}: the backend did not get the NUL as sent: {body}"
-        );
-    }
+    assert_eq!(
+        on_calls, 0,
+        "R5 sanitize_input=true: reached the backend: {on}"
+    );
+    let (off, off_calls) = stdio::stdio_sanitizing(false).await;
+    assert_eq!(
+        off_calls, 1,
+        "R5 sanitize_input=false: no backend call: {off}"
+    );
+    // The backend echoes `cmd`; `gateway_invoke` wraps its result as text.
+    let inner: serde_json::Value = off["result"]["content"][0]["text"]
+        .as_str()
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or_default();
+    assert_eq!(
+        inner["content"][0]["text"], "a\u{0}b",
+        "R5 sanitize_input=false: the backend did not get the NUL as sent: {off}"
+    );
 }
 
 /// A backend answer carrying a credential the response firewall blocks. Built
@@ -481,28 +487,6 @@ async fn task_confirm_submit_row() {
         sent.backend_calls, 0,
         "R4a: dispatched before X14: {}",
         sent.body
-    );
-}
-
-/// `TaskConfirm`, R5 gap (MIK-8160): the same task-augmented call of a
-/// destructive surfaced tool over stdio is admitted as a task with no X14
-/// decision at all: neither X14's challenge nor its refusal.
-#[tokio::test]
-async fn task_confirm_stdio_gap_row() {
-    assert_eq!(
-        expect(MethodKind::ToolsCall, Route::Stdio, Stage::TaskConfirm),
-        Expect::ExpectedGap(super::Ticket::Mik8160)
-    );
-    let (body, _calls) = Box::pin(stdio::stdio_task_surfaced()).await;
-    let text = body.to_string();
-    assert!(
-        !text.contains(X14_PROMPT) && !text.contains(X14_UNBINDABLE),
-        "stdio now gets an X14 decision; MIK-8160 may have closed this gap, flip the \
-         row to Applies: {body}"
-    );
-    assert!(
-        body.pointer("/result/taskId").is_some(),
-        "premise: stdio admitted the call as a task: {body}"
     );
 }
 

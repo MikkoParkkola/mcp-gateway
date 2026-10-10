@@ -640,6 +640,29 @@ impl FirewallVerdict {
         self.blocked_only_by(|f| f.scan_type == ScanType::CollusionRelay)
     }
 
+    /// The code and message a blocked request answers on every route: an
+    /// ASI10 block (OWASP rogue agents) `-32002` "Anomaly detection blocked:
+    /// …", any other block `-32600` "Firewall blocked: …". `None` when the
+    /// verdict allows. One definition, so `/mcp`, `/mcp/{name}`, stdio and the
+    /// dispatch chokepoint cannot word one refusal differently
+    /// (route-check-parity P3). The HTTP status stays with each route.
+    pub(crate) fn request_refusal(&self) -> Option<(i32, String)> {
+        if self.allowed {
+            return None;
+        }
+        let desc = self
+            .findings
+            .first()
+            .map_or("Security firewall blocked this request", |f| {
+                f.description.as_str()
+            });
+        Some(if self.is_asi10_block() {
+            (-32002, format!("Anomaly detection blocked: {desc}"))
+        } else {
+            (-32600, format!("Firewall blocked: {desc}"))
+        })
+    }
+
     fn blocked_only_by(&self, also: impl Fn(&Finding) -> bool) -> bool {
         !self.allowed
             && !self.findings.is_empty()

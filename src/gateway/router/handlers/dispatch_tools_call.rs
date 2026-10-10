@@ -15,12 +15,14 @@ use tracing::warn;
 use super::dispatch_intake::Intake;
 use super::tasks;
 use crate::gateway::meta_mcp::admission::SyncLease;
+use crate::gateway::meta_mcp::invoke::RouteRefusal;
 use crate::gateway::meta_mcp::signing::SigningInvocationContext;
-use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
+use crate::gateway::meta_mcp::{
+    InvokeScope, MetaMcpCallerContext, error_response_preserving_status,
+};
 use crate::gateway::router::AppState;
 use crate::gateway::router::authorization::{
-    RouterAuthorizer, authorize_tool_target, backend_tool_targets_for_call, is_admin_meta_tool,
-    refusal_principal, require_admin_tool_access,
+    RouterAuthorizer, backend_tool_targets_for_call, is_admin_meta_tool, require_admin_tool_access,
 };
 use crate::gateway::router::helpers::{
     build_error_response, build_response, extract_tools_call_params_ref, merge_client_meta_ref,
@@ -162,48 +164,39 @@ pub(super) async fn tools_call(
         &backend_targets,
     );
     for target in &backend_targets {
-        // A surfaced name this caller could not invoke is answered by
-        // the meta layer exactly as an unknown name is (`-32601`), and
-        // audited there: a 403 here would confirm the backend (A3).
-        if state.meta_mcp.surfaced_tool_server(tool_name).is_some()
-            && state
-                .meta_mcp
-                .may_invoke(
-                    &target.server,
-                    &target.tool,
-                    invoke_scope,
-                    Some(session_id.as_str()),
-                )
-                .is_err()
-        {
-            continue;
-        }
-        if let Err(e) = authorize_tool_target(
-            state.as_ref(),
-            client.as_ref(),
-            oauth_agent_identity.as_ref(),
-            cert_identity.as_ref(),
-            target.as_target(),
+        // The one route-stage authorize /mcp and stdio share (P3). A surfaced
+        // name this caller may not invoke is answered as a name that matches
+        // no tool, through the tail exactly as the meta layer answers one, so
+        // neither the firewall, X14 nor admission sees it (MIK-8326, A3).
+        let checked = target.as_target();
+        match state.meta_mcp.authorize_route_target(
+            invoke_scope,
+            Some(session_id.as_str()),
+            tool_name,
+            (checked.server, checked.tool),
+            checked.arguments,
         ) {
-            // This gate returns without entering the meta layer, so the
-            // chokepoint's emitter never fires for a shape the router
-            // covers. Both gates call the one helper, or HTTP scope
-            // denials — the ones most worth seeing — go unrecorded.
-            crate::gateway::authz::audit_refusal(
-                crate::gateway::authz::Transport::Http,
-                refusal_principal(
-                    client.as_ref(),
-                    oauth_agent_identity.as_ref(),
-                    cert_identity.as_ref(),
-                )
-                .as_deref(),
-                &target.server,
-                &target.tool,
-                &e.message,
-            );
-            return Err(refused
-                .answer(state, target.as_target(), id, e.code, e.message, e.status)
-                .await);
+            Ok(()) => {}
+            Err(RouteRefusal::Withheld(absent)) => {
+                return Ok(error_response_preserving_status(id, &absent));
+            }
+            Err(RouteRefusal::Refused(crate::Error::Forbidden {
+                code,
+                status,
+                message,
+            })) => {
+                // Answered here, not in the meta layer, so the refusal keeps
+                // the route's own answer (its HTTP status included).
+                let status = StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN);
+                return Err(refused
+                    .answer(state, target.as_target(), id, code, message, status)
+                    .await);
+            }
+            // Any other refusal (an unwritable grant record) is answered as
+            // the meta layer answers it.
+            Err(RouteRefusal::Refused(other)) => {
+                return Ok(error_response_preserving_status(id, &other));
+            }
         }
 
         // Firewall: pre-invocation request scan
@@ -245,24 +238,7 @@ pub(super) async fn tools_call(
                     "Firewall: request warning"
                 );
             }
-            if !verdict.allowed {
-                // OWASP ASI10 (Rogue Agents): anomaly blocks use -32002;
-                // all other firewall blocks use -32600 (invalid request).
-                let (code, reason) = if verdict.is_asi10_block() {
-                    let desc = verdict.findings.first().map_or(
-                        "Anomaly detection triggered: unusual tool sequence blocked",
-                        |f| f.description.as_str(),
-                    );
-                    (-32002_i32, format!("Anomaly detection blocked: {desc}"))
-                } else {
-                    let desc = verdict
-                        .findings
-                        .first()
-                        .map_or("Security firewall blocked this request", |f| {
-                            f.description.as_str()
-                        });
-                    (-32600_i32, format!("Firewall blocked: {desc}"))
-                };
+            if let Some((code, reason)) = verdict.request_refusal() {
                 return Err(refused
                     .answer(state, target, id, code, reason, StatusCode::BAD_REQUEST)
                     .await);
@@ -297,6 +273,9 @@ pub(super) async fn tools_call(
     // Awaited into its own binding before the match, so the borrow of
     // `retry` ends with the statement and the `NotRequired` arm can hand
     // the same fields straight back.
+    // The admission actor HTTP task admission keys on: the verified
+    // identity's stable actor id, as `task_intent_for_call` uses.
+    let admission_actor = verified_identity.as_ref().map(|i| i.stable_actor_id());
     let confirmation = state
         .meta_mcp
         .confirm_destructive_task(&crate::gateway::meta_mcp::TaskConfirmationRequest {
@@ -310,7 +289,12 @@ pub(super) async fn tools_call(
             arguments: &arguments,
             task: params.and_then(|p| p.get("task")),
             retry: &retry,
-            verified_identity: verified_identity.as_ref(),
+            principal: crate::protocol::mrtr::PrincipalSource::Credential(
+                verified_identity.as_ref(),
+            ),
+            admission_actor: admission_actor.as_deref(),
+            scope: invoke_scope,
+            session_id: Some(session_id.as_str()),
             input_capabilities: declared_capabilities,
             is_modern,
             admission: state.task_executor.service.admission(),

@@ -255,6 +255,7 @@ async fn staged_request(
         handshake_capabilities: crate::protocol::meta::Declared::NONE,
         tasks: None,
         modern: false,
+        sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
     };
     let ((answer, staged), hidden) = crate::gateway::outbound::read_scoped(
         reads.guard(),
@@ -348,7 +349,10 @@ async fn batch_read_delivers(
         &policy,
         &mtls,
         batch,
-        "stdio-7800",
+        (
+            "stdio-7800",
+            crate::gateway::server::stdio_single::InputSanitizing::Off,
+        ),
         &StdioTelemetry::default(),
         reads,
     )
@@ -411,7 +415,10 @@ async fn a_batch_item_sees_the_receipt_of_an_earlier_item() {
         &policy,
         &mtls,
         batch,
-        "stdio-7800",
+        (
+            "stdio-7800",
+            crate::gateway::server::stdio_single::InputSanitizing::Off,
+        ),
         &StdioTelemetry::default(),
         &reads,
     )
@@ -621,6 +628,7 @@ async fn stdio_gateway_built_refusal_is_sent_as_written() {
         handshake_capabilities: crate::protocol::meta::Declared::NONE,
         tasks: None,
         modern: false,
+        sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
     };
     let ((answer, staged), hidden) = crate::gateway::outbound::read_scoped(
         reads.guard(),

@@ -219,11 +219,36 @@ async fn ask(fx: &Fixture, retry: &RetryFields, declared: Declared) -> TaskConfi
     ask_as(fx, retry, declared, Some(&identity())).await
 }
 
+/// A caller that may invoke everything: these rows test the gate's binding,
+/// not visibility (MIK-8326 has its own rows).
+fn open_scope() -> crate::gateway::meta_mcp::InvokeScope<'static> {
+    crate::gateway::meta_mcp::InvokeScope {
+        authorizer: &crate::gateway::authz::AllowAll,
+        is_admin: true,
+        api_key_name: None,
+        agent_id: None,
+        grant_subject: None,
+    }
+}
+
 async fn ask_as(
     fx: &Fixture,
     retry: &RetryFields,
     declared: Declared,
     who: Option<&VerifiedIdentity>,
+) -> TaskConfirmation {
+    let actor = who.map(VerifiedIdentity::stable_actor_id);
+    let principal = crate::protocol::mrtr::PrincipalSource::Credential(who);
+    ask_principal(fx, retry, declared, (principal, actor.as_deref())).await
+}
+
+/// [`ask_as`] for any principal X14 binds (stdio's `Stdio { nonce }` among
+/// them), with the admission actor its tasks are admitted under.
+async fn ask_principal(
+    fx: &Fixture,
+    retry: &RetryFields,
+    declared: Declared,
+    (principal, actor): (crate::protocol::mrtr::PrincipalSource<'_>, Option<&str>),
 ) -> TaskConfirmation {
     let arguments = json!({ "id": 1 });
     let task = json!({ "ttl": 60_000 });
@@ -235,7 +260,10 @@ async fn ask_as(
             arguments: &arguments,
             task: Some(&task),
             retry,
-            verified_identity: who,
+            principal,
+            admission_actor: actor,
+            scope: open_scope(),
+            session_id: None,
             input_capabilities: declared,
             is_modern: true,
             admission: &fx.admission,
@@ -617,22 +645,30 @@ fn an_unattributable_caller_is_never_an_admitted_replay() {
     let owned =
         super::task_admission_request(alice.stable_actor_id(), KEY.to_owned(), TOOL, &arguments);
     let _held = admission.admit_task(owned.borrow());
-    let request = |who| TaskConfirmationRequest {
+    let alice_actor = alice.stable_actor_id();
+    let owner = TaskConfirmationRequest {
         id: RequestId::Number(7),
         tool_name: TOOL,
         arguments: &arguments,
         task: None,
         retry: &retry,
-        verified_identity: who,
+        principal: crate::protocol::mrtr::PrincipalSource::Credential(None),
+        admission_actor: Some(&alice_actor),
+        scope: open_scope(),
+        session_id: None,
         input_capabilities: Declared::NONE,
         is_modern: true,
         admission: &admission,
     };
     assert!(
-        MetaMcp::already_admitted(&request(Some(&alice)), KEY),
+        MetaMcp::already_admitted(&owner, KEY),
         "control: the verified owner's operation is recognised"
     );
-    assert!(!MetaMcp::already_admitted(&request(None), KEY));
+    let unattributed = TaskConfirmationRequest {
+        admission_actor: None,
+        ..owner
+    };
+    assert!(!MetaMcp::already_admitted(&unattributed, KEY));
 }
 
 /// MIK-8202 (#3616 regression): a destructive call on a clock before 1970 is
@@ -653,4 +689,101 @@ async fn a_destructive_call_on_a_clock_before_the_epoch_is_refused() {
     assert!(response.result.is_none(), "a refusal carries no challenge");
 
     challenge(&ask(&fx, &fresh(), elicitation()).await);
+}
+
+/// Two stdio processes: each draws its own nonce (`StdioNonce::process`).
+const PROCESS_A: [u8; 32] = [0xA1; 32];
+const PROCESS_B: [u8; 32] = [0xB2; 32];
+
+/// [`ask_principal`] as the stdio process holding `nonce`, admitting its tasks
+/// under the local operator as `stdio_tasks::intent` does.
+async fn ask_stdio(fx: &Fixture, retry: &RetryFields, nonce: &[u8; 32]) -> TaskConfirmation {
+    let principal = crate::protocol::mrtr::PrincipalSource::Stdio { nonce };
+    let actor = Some(crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL);
+    ask_principal(fx, retry, elicitation(), (principal, actor)).await
+}
+
+/// The retry that answers `outcome`'s challenge with `accept`.
+fn accepting(outcome: &TaskConfirmation) -> RetryFields {
+    let (_, issued_key, state) = challenge(outcome);
+    RetryFields {
+        input_responses: Some(json!({ issued_key: { "action": "accept" } })),
+        request_state: Some(state),
+        ..fresh()
+    }
+}
+
+/// MIK-8160.X14.1 (P3, lead ruling 1): a stdio caller is challenged, bound
+/// to its own process. Another stdio process cannot answer the grant; the
+/// process that asked can, once.
+#[tokio::test]
+async fn a_stdio_grant_answers_only_the_process_that_asked() {
+    let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
+    let retry = accepting(&ask_stdio(&fx, &fresh(), &PROCESS_A).await);
+    assert!(
+        !matches!(
+            ask_stdio(&fx, &retry, &PROCESS_B).await,
+            TaskConfirmation::Granted(_)
+        ),
+        "another stdio process answered this process's grant"
+    );
+    assert!(matches!(
+        ask_stdio(&fx, &retry, &PROCESS_A).await,
+        TaskConfirmation::Granted(_)
+    ));
+}
+
+/// P3: a grant does not cross between stdio and HTTP in either direction;
+/// each owner then redeems its own.
+#[tokio::test]
+async fn a_grant_does_not_cross_between_stdio_and_http() {
+    let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
+    let stdio_grant = accepting(&ask_stdio(&fx, &fresh(), &PROCESS_A).await);
+    assert!(
+        !matches!(
+            ask(&fx, &stdio_grant, elicitation()).await,
+            TaskConfirmation::Granted(_)
+        ),
+        "an HTTP caller answered a stdio grant"
+    );
+    let http_grant = accepting(&ask(&fx, &fresh(), elicitation()).await);
+    assert!(
+        !matches!(
+            ask_stdio(&fx, &http_grant, &PROCESS_A).await,
+            TaskConfirmation::Granted(_)
+        ),
+        "a stdio caller answered an HTTP grant"
+    );
+    assert!(matches!(
+        ask(&fx, &http_grant, elicitation()).await,
+        TaskConfirmation::Granted(_)
+    ));
+    assert!(matches!(
+        ask_stdio(&fx, &stdio_grant, &PROCESS_A).await,
+        TaskConfirmation::Granted(_)
+    ));
+}
+
+/// P3 replay row: a stdio retry of a destructive task this gateway already
+/// admitted, carrying no grant, is let through to admission (which returns the
+/// task it owns), not challenged again. Pins `already_admitted` reading the
+/// owner stdio admits under (`LOCAL_OPERATOR_PRINCIPAL`), never the nonce.
+#[tokio::test]
+async fn a_stdio_retry_of_an_admitted_task_is_not_asked_again() {
+    let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
+    let arguments = json!({ "id": 1 });
+    let owned = super::task_admission_request(
+        crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL.to_owned(),
+        KEY.to_owned(),
+        TOOL,
+        &arguments,
+    );
+    let _held = fx.admission.admit_task(owned.borrow());
+    assert!(
+        matches!(
+            ask_stdio(&fx, &fresh(), &PROCESS_A).await,
+            TaskConfirmation::Granted(_)
+        ),
+        "an admitted stdio task was challenged again"
+    );
 }

@@ -49,6 +49,7 @@ mod stdio_loop;
 mod stdio_nonce;
 mod stdio_notify;
 mod stdio_refusal;
+mod stdio_route_stage;
 mod stdio_shutdown;
 mod stdio_single;
 mod stdio_tasks;

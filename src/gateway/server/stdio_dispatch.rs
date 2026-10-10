@@ -8,6 +8,8 @@ use tracing::debug;
 
 use super::Gateway;
 use super::StdioNonce;
+use super::stdio_route_stage::RouteStage;
+use super::stdio_single::InputSanitizing;
 use super::{
     STDIO_CREDENTIAL_PRINCIPAL, StdioClient, StdioTelemetry, stdio_catalogue, stdio_delivery,
     stdio_routing_keys_only, stdio_take_merged_client_meta, stdio_tasks,
@@ -34,7 +36,7 @@ impl Gateway {
         use crate::protocol::JsonRpcResponse;
 
         let session_id = client.session_id;
-        let prepared = Self::prepare_signing(meta_mcp, &mut request);
+        let prepared = Self::prepare_signing(meta_mcp, &mut request, client.sanitize);
         let (mut signing_context, chain_nonce) = match prepared {
             Ok(prepared) => prepared,
             Err(response) => return Some(stdio_delivery::StdioAnswer::Built(response)),
@@ -197,11 +199,16 @@ impl Gateway {
         ))
     }
 
-    /// Capture the signing envelope and the chain nonce ahead of parsing:
-    /// both are taken out before anything else reads the request.
+    /// The intake `/mcp` runs (`router::handlers::dispatch_intake`), in its
+    /// order: capture the signing envelope, take the chain nonce, sanitize,
+    /// restore, then refuse a malformed nonce early. Sanitizing between
+    /// capture and restore means nothing that judges the signature or the
+    /// shape reads bytes the sanitizer would have changed (route-check-parity
+    /// P3, MIK-8149.REQFW.2).
     fn prepare_signing(
         meta_mcp: &Arc<MetaMcp>,
         request: &mut serde_json::Value,
+        sanitize: InputSanitizing,
     ) -> std::result::Result<
         (
             Option<super::super::meta_mcp::signing::SigningInvocationContext>,
@@ -209,25 +216,39 @@ impl Gateway {
         ),
         serde_json::Value,
     > {
+        use super::super::meta_mcp::signing::wire_error_message;
+        use crate::protocol::JsonRpcResponse;
         // A bad chain nonce keeps the caller's id; a bad envelope has none.
         let raw_id = crate::protocol::mrtr::raw_request_id(request);
+        let refuse = |id, error: &crate::Error| {
+            JsonRpcResponse::error(id, error.to_rpc_code(), wire_error_message(error))
+                .to_value_lossy()
+        };
         let mut signing_context = meta_mcp.signing_enabled().then(|| {
             super::super::meta_mcp::signing::SigningInvocationContext::capture_scoped(
                 request,
                 meta_mcp.signing_scope(),
             )
         });
-        let restored = (signing_context.as_mut()).map_or(Ok(()), |c| c.restore(request));
-        let id = restored.is_ok().then_some(raw_id).flatten();
-        match restored.and(crate::protocol::mrtr::take_chain_nonce(request)) {
-            Ok(chain_nonce) => Ok((signing_context, chain_nonce)),
-            Err(error) => Err(crate::protocol::JsonRpcResponse::error(
-                id,
-                error.to_rpc_code(),
-                super::super::meta_mcp::signing::wire_error_message(&error),
-            )
-            .to_value_lossy()),
+        let chain_nonce = crate::protocol::mrtr::take_chain_nonce(request)
+            .map_err(|error| refuse(raw_id.clone(), &error))?;
+        if sanitize == InputSanitizing::On {
+            *request =
+                crate::security::sanitize::sanitize_json_value(request).map_err(|error| {
+                    JsonRpcResponse::error(None, -32600, error.to_string()).to_value_lossy()
+                })?;
         }
+        if let Some(context) = signing_context.as_mut() {
+            context
+                .restore(request)
+                .map_err(|error| refuse(None, &error))?;
+        }
+        if let Some(context) = signing_context.as_ref() {
+            context
+                .refuse_malformed_nonce_early()
+                .map_err(|error| refuse(raw_id, &error))?;
+        }
+        Ok((signing_context, chain_nonce))
     }
 
     /// Parse, classify and durably observe one inbound stdio request.
@@ -323,10 +344,9 @@ impl Gateway {
         client: StdioClient<'a>,
     ) -> MetaMcpCallerContext<'a> {
         MetaMcpCallerContext {
-            // stdio has no task route: the extension's handle is read
-            // back over `tasks/get`, which only the HTTP surface serves,
-            // so a handle minted here would name work nobody could ask
-            // about. Every stdio call stays synchronous.
+            // Filled after the route stage, by the task intent, when the
+            // session serves `tasks/*` (its store is open) and the call asked
+            // for a task; X14 has decided a destructive one before that.
             task: None,
             execution: None,
             signing: None,
@@ -427,7 +447,8 @@ impl Gateway {
 
             let retry = crate::protocol::mrtr::RetryFields::from_params(params);
             // Read before the merge below moves `_meta` out of the request.
-            let wants_task = params.is_some_and(|params| params.get("task").is_some());
+            let task_member = params.and_then(|params| params.get("task")).cloned();
+            let wants_task = task_member.is_some();
             let is_modern = matches!(
                 request_shape,
                 crate::protocol::meta::RequestShape::Modern(_)
@@ -481,6 +502,9 @@ impl Gateway {
             } else {
                 merge_client_meta_ref(arguments.unwrap_or(&empty_arguments), params, is_meta_tool)
             };
+            // X14's granted retry fields, when it grants: declared ahead of
+            // the caller context that borrows them.
+            let granted;
             let mut caller = Self::build_stdio_caller_context(
                 is_modern,
                 protocol_revision_owned.as_deref(),
@@ -489,6 +513,10 @@ impl Gateway {
                 request_shape,
                 client,
             );
+            // The signing nonce is admitted before the route stage, so a bad
+            // nonce is refused without paying for the payload
+            // (MIK-7377.SIGNING.5 row 40); a call the route stage refuses
+            // gives it back below (lead ruling, P3).
             if let Some(context) = signing_context.as_mut()
                 && let Err(error) = meta_mcp.prepare_signing_for_call(
                     context,
@@ -505,6 +533,28 @@ impl Gateway {
                 );
             }
             caller.signing = signing_context.as_ref();
+            // The route stage `/mcp` runs, in its order: authorize, request
+            // firewall, X14 (route-check-parity P3). A refusal here took no
+            // key, lease or task, and gives back the nonce admitted above.
+            match Self::stdio_route_stage(
+                meta_mcp,
+                &id,
+                (&tool_name, arguments.as_ref(), task_member.as_ref()),
+                &caller,
+                client,
+            )
+            .await
+            {
+                RouteStage::Answer(answer) => {
+                    meta_mcp.release_unasked_nonce(&caller);
+                    break 'tool_call answer;
+                }
+                RouteStage::Proceed(Some(fields)) => {
+                    granted = fields;
+                    caller.retry = &granted;
+                }
+                RouteStage::Proceed(None) => {}
+            }
             if wants_task && let Some(tasks) = client.tasks {
                 match stdio_tasks::task_intent(
                     tasks,

@@ -178,8 +178,10 @@ async fn worker_decision_write_failure_settles_as_audit_unavailable() {
     }
 }
 
-/// T27 (H2, task). The same surfaced direct-name call submitted as a task:
-/// the worker's refusal is -32601 as today, and recorded once.
+/// T27 (H2, task). The same surfaced direct-name call submitted as a task is
+/// refused at submit as a name that matches no tool (MIK-8326; route-check-parity
+/// P3), and recorded once. The run-time re-check is pinned by the chokepoint's
+/// F5 and the worker's policy check.
 #[tokio::test]
 async fn surfaced_task_grant_denial_writes_one_record() {
     let row = armed(false, false, AuditFailurePolicy::BestEffort, surfaced).await;
@@ -190,31 +192,20 @@ async fn surfaced_task_grant_denial_writes_one_record() {
         true,
     );
     let created = post(&row.state, "key-a", as_task(body, "d3a-t27")).await;
-    // The task settles failed with the worker's refusal, but reading it now
-    // re-runs the grant check on the stored target (#2450), which is denied
-    // again: the read is refused with the grant denial and no stored result.
-    let id = task_id(&created);
-    let mut read = get_task(&row.state, "key-a", &id).await;
-    for _ in 0..2_000 {
-        if read.get("error").is_some() || is_terminal(&status_of(&read)) {
-            break;
-        }
-        tokio::task::yield_now().await;
-        read = get_task(&row.state, "key-a", &id).await;
-    }
-    std::assert_eq!(read.pointer("/error/code"), Some(&json!(-32004)), "{read}");
-    std::assert!(read.get("result").is_none(), "{read}");
+    std::assert_eq!(created["error"]["code"], json!(-32601), "{created}");
+    std::assert_eq!(
+        created["error"]["message"],
+        json!("JSON-RPC error -32601: Unknown tool: calendar_read_day"),
+        "{created}"
+    );
+    std::assert!(created.pointer("/result/taskId").is_none(), "{created}");
     std::assert_eq!(
         row.endpoint.arrivals(),
         0,
         "the refused task reaches nothing"
     );
     let records = decisions(&row.dir);
-    std::assert_eq!(
-        records.len(),
-        2,
-        "worker's denial, then the read's: {records:#?}"
-    );
+    std::assert_eq!(records.len(), 1, "the one grant decision: {records:#?}");
     std::assert!(
         records.iter().all(|r| r["outcome"] == json!("denied")),
         "{records:#?}"

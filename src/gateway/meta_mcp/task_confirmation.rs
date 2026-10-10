@@ -36,13 +36,12 @@ use tracing::{debug, warn};
 use crate::gateway::task_service::OwnedAdmissionRequest;
 use crate::hashing::{canonical_json, sha256_hex};
 use crate::idempotency::admission::ExecutionAdmission;
-use crate::key_server::oidc::VerifiedIdentity;
 use crate::protocol::continuation::{ContinuationPurpose, Payload, clock_now};
 use crate::protocol::meta::Declared;
-use crate::protocol::mrtr::{RetryFields, principal_fingerprint};
+use crate::protocol::mrtr::{PrincipalSource, RetryFields, source_fingerprint};
 use crate::protocol::{JsonRpcResponse, RequestId};
 
-use super::MetaMcp;
+use super::{InvokeScope, MetaMcp};
 
 mod helpers;
 pub(crate) use helpers::{AdmissionOwner, task_admission_request};
@@ -131,9 +130,19 @@ pub(crate) struct TaskConfirmationRequest<'a> {
     pub task: Option<&'a Value>,
     /// The retry pair and idempotency key this call carried, already parsed.
     pub retry: &'a RetryFields,
-    /// The strong verified owner. A caller with none is refused rather than
-    /// bound weakly — see [`principal_fingerprint`].
-    pub verified_identity: Option<&'a VerifiedIdentity>,
+    /// Who a grant is bound to: `Credential(verified)` over HTTP, the
+    /// process's `Stdio { nonce }` over stdio. A credential with no verified
+    /// identity is refused rather than bound weakly — see [`source_fingerprint`].
+    pub principal: PrincipalSource<'a>,
+    /// The actor this caller's task admission keys on (HTTP: the verified
+    /// identity's stable actor id; stdio: the local operator), read by the
+    /// already-admitted replay. `None` when the caller has no admission actor.
+    pub admission_actor: Option<&'a str>,
+    /// What this caller may invoke, and its session: a surfaced name it may
+    /// not invoke is never classified (MIK-8326), whoever calls this gate.
+    pub scope: InvokeScope<'a>,
+    /// The session the call runs in, for the routing profile.
+    pub session_id: Option<&'a str>,
     /// What this request declared it can be asked.
     pub input_capabilities: Declared,
     /// Whether the request was written against the modern revision.
@@ -183,7 +192,7 @@ impl MetaMcp {
             return TaskConfirmation::NotRequired;
         };
 
-        let Some(fingerprint) = principal_fingerprint(request.verified_identity) else {
+        let Some(fingerprint) = source_fingerprint(request.principal.clone()) else {
             return refuse(
                 request,
                 "unbindable_caller",
@@ -257,8 +266,18 @@ impl MetaMcp {
     fn classify_surfaced(&self, request: &TaskConfirmationRequest<'_>) -> Option<Classification> {
         let tool_name = request.tool_name;
         let server = self.surfaced_tool_server(tool_name)?;
+        // A name this caller may not invoke is not this gate's to classify:
+        // it answers as a name that matches no tool, and a challenge would
+        // confirm the tool exists (MIK-8326).
+        if self
+            .may_invoke(server, tool_name, request.scope, request.session_id)
+            .is_err()
+        {
+            return None;
+        }
         let backend = self.backends.get(server)?;
-        if request.verified_identity.is_some() && backend.identity_propagation_config().is_some() {
+        let verified = matches!(request.principal, PrincipalSource::Credential(Some(_)));
+        if verified && backend.identity_propagation_config().is_some() {
             debug!(
                 server,
                 tool = tool_name,
@@ -548,11 +567,11 @@ impl MetaMcp {
     /// the task it already owns. That is admission's contract for every
     /// task-augmented call and is not relaxed for this one.
     fn already_admitted(request: &TaskConfirmationRequest<'_>, key: &str) -> bool {
-        let Some(identity) = request.verified_identity else {
+        let Some(actor) = request.admission_actor else {
             return false;
         };
         let admission_request = task_admission_request(
-            identity.stable_actor_id(),
+            actor.to_owned(),
             key.to_owned(),
             request.tool_name,
             request.arguments,

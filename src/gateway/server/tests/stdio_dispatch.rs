@@ -90,6 +90,7 @@ async fn stdio_dispatch_persists_operator_readable_protocol_counters() {
             handshake_capabilities: crate::protocol::meta::Declared::NONE,
             tasks: None,
             modern: false,
+            sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
         &sink,
     )

@@ -79,7 +79,7 @@ impl Gateway {
         tool_policy: &std::sync::Arc<crate::security::ToolPolicy>,
         mtls_policy: &std::sync::Arc<crate::mtls::MtlsPolicy>,
         batch: serde_json::Value,
-        session_id: &str,
+        (session_id, sanitize): (&str, super::stdio_single::InputSanitizing),
         protocol_telemetry_sink: &super::StdioTelemetry,
         reads: &StdioReads,
     ) -> Vec<OutboundFrame> {
@@ -116,6 +116,8 @@ impl Gateway {
                         // A batch is a legacy shape; it serves no `tasks/*`.
                         tasks: None,
                         modern: false,
+                        // Each item is sanitized as a single request is.
+                        sanitize,
                     },
                     protocol_telemetry_sink,
                 )),
@@ -154,7 +156,7 @@ impl Gateway {
             tool_policy,
             mtls_policy,
             batch,
-            session_id,
+            (session_id, super::stdio_single::InputSanitizing::Off),
             protocol_telemetry_sink,
             &reads,
         )

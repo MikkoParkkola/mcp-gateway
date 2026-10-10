@@ -44,6 +44,7 @@ async fn dispatch(fixture: &Fixture, request: Value) -> Value {
             handshake_capabilities: crate::protocol::meta::Declared::NONE,
             tasks: None,
             modern: false,
+            sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
         &super::super::StdioTelemetry::default(),
     )
@@ -103,5 +104,63 @@ fn standard_stdio_leaves_a_non_invoke_tool_call_unsigned() {
             response["result"].get("_signature").is_none(),
             "under standard the answer is not signed: {response}"
         );
+    });
+}
+
+/// An argument the request firewall blocks as shell injection, built so no
+/// such literal sits in the source.
+const SHELL_PATTERN: &str = concat!(";", " rm", " -rf", " / ");
+
+/// Route-check-parity P3: a hardened stdio `tools/call` the route-stage request
+/// firewall refuses spends no nonce. Stdio admits the nonce before the route
+/// stage (a bad nonce stays cheap to refuse, MIK-7377.SIGNING.5 row 40) and
+/// gives it back when the route stage refuses (lead ruling), so the same nonce
+/// is admitted once afterwards, and only once.
+#[cfg(feature = "firewall")]
+#[test]
+fn a_route_refusal_spends_no_signing_nonce() {
+    runtime().block_on(async {
+        let fixture = Fixture::start_hardened().await;
+        let blocked = json!({
+            "jsonrpc": "2.0",
+            "id": "blocked",
+            "method": "tools/call",
+            "params": {
+                "name": "gateway_invoke",
+                "arguments": {
+                    "server": super::signing_nonce_allocations_support::BACKEND,
+                    "tool": super::signing_nonce_allocations_support::TOOL,
+                    "arguments": {"cmd": SHELL_PATTERN}
+                },
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                    NONCE_META: "stdio-route-refusal-0001"
+                }
+            }
+        });
+        let refused = dispatch(&fixture, blocked).await;
+        let (code, message) = error_of(&refused);
+        assert_eq!(code, -32600, "{refused}");
+        assert!(
+            message.starts_with("Firewall blocked: "),
+            "not refused by the route-stage firewall: {refused}"
+        );
+        let next = dispatch(
+            &fixture,
+            list_servers("next", Some("stdio-route-refusal-0001")),
+        )
+        .await;
+        assert!(
+            next.get("error").is_none(),
+            "the refused call spent its nonce: {next}"
+        );
+        // Given back, not forgotten: it is good for exactly one more call.
+        let again = dispatch(
+            &fixture,
+            list_servers("again", Some("stdio-route-refusal-0001")),
+        )
+        .await;
+        assert_refused(&again, REPLAYED_NONCE);
     });
 }
