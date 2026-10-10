@@ -235,7 +235,14 @@ async fn deliver_moves_the_holds_onto_a_frame() {
     let continuation = std::sync::Arc::new(ContinuationState::new());
     let now = now_unix_secs();
     let key = continuation
-        .begin_exchange("alpha".into(), None, "fp".into(), "digest".into(), now)
+        .begin_exchange(
+            "alpha".into(),
+            None,
+            "fp".into(),
+            &crate::protocol::continuation::QuotaKey::for_test("fp"),
+            "digest".into(),
+            now,
+        )
         .await
         .expect("a fresh state has a slot")
         .hold_key;

@@ -34,6 +34,7 @@ use crate::{Error, Result};
 pub(super) async fn mint_continuation(
     continuation: &std::sync::Arc<crate::protocol::continuation::ContinuationState>,
     source: crate::protocol::mrtr::PrincipalSource<'_>,
+    quota: &crate::protocol::continuation::QuotaKey,
     (server, instance): (&str, Option<u64>),
     tool: &str,
     arguments: &Value,
@@ -49,6 +50,7 @@ pub(super) async fn mint_continuation(
             server.to_string(),
             backend_request_state,
             crate::protocol::mrtr::source_fingerprint(source)?,
+            quota,
             crate::protocol::mrtr::original_request_digest(
                 &continuation_target(server, instance),
                 tool,
@@ -478,6 +480,25 @@ pub(crate) type DirectCaller<'a> = (
     Option<&'a crate::gateway::auth::AuthenticatedClient>,
 );
 
+/// Who the slot cap charges a direct-route caller to (MIK-8293): the meta
+/// route's rule (`MetaMcpCallerContext::quota_key`) on the direct caller's
+/// inputs, without the propagated binding, so one credential has one cap
+/// across every backend it reaches. `None` names no one.
+fn direct_quota_key(
+    (identity, (_, subject), client): DirectCaller<'_>,
+) -> Option<crate::protocol::continuation::QuotaKey> {
+    use crate::protocol::continuation::{QuotaKey, QuotaSource};
+    let source = if let Some(identity) = identity {
+        QuotaSource::Identity(identity)
+    } else if let Some(subject) = subject {
+        QuotaSource::Subject(subject)
+    } else {
+        let client = client.filter(|c| c.authenticated && !c.principal.is_empty())?;
+        QuotaSource::Credential(&client.principal)
+    };
+    Some(QuotaKey::new(source))
+}
+
 /// What a direct-route continuation binds its caller to: the meta route's
 /// rule (`principal_source`), from the same idempotency-guard inputs the
 /// direct route keys the caller's calls on (`direct_route_idempotency`), in
@@ -603,9 +624,19 @@ impl crate::gateway::meta_mcp::MetaMcp {
             return Ok(None);
         };
         let source = direct_source(who);
+        // The caller the slot is charged to (MIK-8293); a caller no quota key
+        // names is refused like an unbindable one.
+        let Some(quota) = direct_quota_key(who) else {
+            warn!(
+                server,
+                tool, "Cannot mint a continuation for this direct-route caller; refusing"
+            );
+            return Err(unbindable_continuation(server, tool));
+        };
         let Some((envelope, hold_key)) = mint_continuation(
             &self.continuation,
             source,
+            &quota,
             (server, instance),
             tool,
             &arguments,
@@ -628,13 +659,27 @@ impl crate::gateway::meta_mcp::MetaMcp {
         Ok(Some((envelope, hold_key)))
     }
 
-    /// Test-only: replace the continuation store (MIK-8078).
+    /// Test-only: replace the continuation store (MIK-8078), or share one a
+    /// fixture's firewalls were built with (MIK-8276).
     #[cfg(test)]
     pub(crate) fn set_continuation_for_test(
         &mut self,
-        state: crate::protocol::continuation::ContinuationState,
+        state: impl Into<std::sync::Arc<crate::protocol::continuation::ContinuationState>>,
     ) {
-        self.continuation = std::sync::Arc::new(state);
+        self.continuation = state.into();
+    }
+
+    /// Test-only: mint with the keyring `firewall` exempts, as the gateway
+    /// pairs them (#2210, MIK-8276). A firewall built without one is a
+    /// fixture defect, so this panics rather than leave the pair unmatched.
+    #[cfg(all(test, feature = "firewall"))]
+    pub(crate) fn share_keyring_with_for_test(
+        &mut self,
+        firewall: &crate::security::firewall::Firewall,
+    ) {
+        self.continuation = firewall
+            .continuations_for_test()
+            .expect("a fixture firewall carries a keyring (keyed_for_test)");
     }
 }
 

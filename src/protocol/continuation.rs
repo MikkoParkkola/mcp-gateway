@@ -114,6 +114,7 @@ mod keyring;
 mod ledger;
 mod payload;
 mod probe;
+mod quota;
 
 pub use keyring::Keyring;
 pub use ledger::{ConsumedLedger, ContinuationState, InFlight, Routing};
@@ -124,3 +125,4 @@ use payload::{CONTINUATION_LIFETIME_SECS, CONTINUATION_ROTATION_SECS, expiry_for
 pub use payload::{ContinuationPurpose, Payload};
 pub(crate) use probe::PROBE_OPENS_PER_STEP;
 pub use probe::{ProbeBudget, ProbeRefusal, sealed_state_in};
+pub use quota::{PRINCIPAL_SLOTS, QuotaKey, QuotaSource};

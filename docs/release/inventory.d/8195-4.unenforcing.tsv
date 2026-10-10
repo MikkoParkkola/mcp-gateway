@@ -1,0 +1,45 @@
+src/oauth/callback.rs	hold_until_closed	1	Stores a drop guard so the caller learns when listeners closed; pure plumbing, the state/code check is in the callback handler comparing expected_state.
+src/oauth/callback.rs	stop	1	Abandons a login by delegating to shutdown; decides nothing, no peer input involved.
+src/oauth/callback.rs	shutdown	1	Aborts and joins listener tasks to free the port; resource cleanup with no allow/deny decision (the deadline decision is wait_within).
+src/oauth/callback.rs	drop	1	CallbackServer::drop aborts listeners and releases the close guard on any exit path; cleanup only, decides nothing.
+src/oauth/token_file.rs	forget	1	Removes a path from the log-dedup set so a re-loosened file logs ERROR again; affects log level only, the mode refusal is made by read_checked_file in token_file::read.
+src/oauth/metadata.rs	deserialize_scopes	1	Serde adapter accepting a space-separated string or an array of scopes; a conversion with no allow/deny decision.
+src/oauth/metadata.rs	supports_pkce	1	AuthorizationServerMetadata::supports_pkce checks for S256 in metadata but has no production caller (only tests), so it gates nothing; the PKCE verifier check lives in the token exchange.
+src/oauth/metadata.rs	authorization_server	1	Getter returning the first advertised authorization server; the issuer match against it is made later by AuthorizationServerMetadata::discover.
+src/oauth/metadata.rs	well_known_url	1	Builds the RFC 8414 well-known URL string; plumbing, the discovered issuer is checked by AuthorizationServerMetadata::discover.
+src/oauth/storage.rs	default_token_type	1	Returns the literal "Bearer" default for a missing token_type; a constant with no decision.
+src/oauth/storage.rs	time_until_expiry	1	Computes remaining lifetime and is only used in an info log line; expiry decisions are made by is_expired.
+src/oauth/storage.rs	new	1	TokenStorage::new creates the storage directory; file modes are enforced by create_secret_tmp and read_checked_file, not here.
+src/oauth/storage.rs	default_location	1	Resolves the home-based default directory and delegates to new; path choice only.
+src/oauth/storage.rs	token_path	1	Joins the base dir with the storage_key filename; plumbing, the per-backend scoping is in storage_key.
+src/oauth/storage.rs	refresh_state_path	1	Joins the base dir with the storage_key sidecar filename; plumbing with no decision.
+src/oauth/storage.rs	client_path	1	Joins the base dir with the storage_key client filename; plumbing with no decision.
+src/oauth/storage.rs	client_lock_path	1	Builds the advisory-lock sidecar path; the lock itself is taken by repair_corrupt_final.
+src/oauth/storage.rs	load_client_id	1	Reads and parses the stored non-secret client_id, returning None on any failure; no permission check or refusal of its own.
+src/oauth/storage.rs	write_secret_tmp	1	Writes content into the already-private temp file and cleans up on failure; the 0600 mode is applied by create_secret_tmp via create_new_private.
+src/oauth/storage.rs	delete_client_id	1	Removes the stored client_id file so the next connection re-registers; housekeeping with no security decision.
+src/gateway/server/stdio_dispatches.rs	send_unless_cancelled	1	Drops the answer frame of a dispatch the peer itself cancelled and marks it answered; protocol bookkeeping on the peer's own request, scoping no principal or data.
+src/gateway/server/stdio_dispatches.rs	cancelled	1	Clones the shared Cancelled handle; plain getter.
+src/gateway/server/stdio_dispatches.rs	is_empty	1	Reports whether the JoinSet is empty; plain getter.
+src/gateway/server/stdio_dispatches.rs	spawn	1	Spawns the dispatch and records its request id for cancellation; a reused in-flight id is deliberately not refused, so it decides nothing.
+src/gateway/server/stdio_dispatches.rs	cancel	1	Marks and aborts the dispatch for a peer-sent cancel id, ignoring unknown ids; no authorization decision since cancel targets the peer's own requests.
+src/gateway/server/stdio_dispatches.rs	join_next	1	Reaps a finished dispatch and releases its id and task marks; map bookkeeping only.
+src/gateway/server/stdio_dispatches.rs	shutdown	1	Awaits JoinSet::shutdown; plumbing.
+src/gateway/server/stdio_shutdown.rs	bounded_step	1	Wraps a future in a timeout and logs on expiry; teardown deadline plumbing that gates no principal's access.
+src/gateway/server/stdio_shutdown.rs	bounded_blocking	1	Runs a blocking closure on a detached thread under a deadline; teardown plumbing.
+src/gateway/server/stdio_shutdown.rs	final_cost_save	1	Stops the cost saver then saves the final snapshot, skipping on timeout; persistence ordering, the budget enforcer decides elsewhere.
+src/gateway/server/stdio_shutdown.rs	persist_stdio_protocol_telemetry	1	Persists protocol-revision telemetry and logs failure; measurement, no decision.
+src/gateway/server/stdio_shutdown.rs	persist_stdio_telemetry_bounded	1	Runs the telemetry save under a deadline via bounded_blocking; plumbing.
+src/gateway/server/stdio_shutdown.rs	stdio_teardown	1	Sequences post-EOF shutdown steps (warm-start cancel, task store, custody, backends) under a deadline; each step does its own work and no request is allowed or denied.
+src/gateway/server/stdio_tasks.rs	store_dir	1	Computes the stdio task store directory path; path construction only.
+src/gateway/server/stdio_tasks.rs	degraded	1	Logs that the task store is unavailable; the None return in open is the fallback.
+src/gateway/server/stdio_tasks.rs	shutdown	1	Delegates to task_runtime::shutdown; plumbing.
+src/gateway/server/stdio_tasks.rs	strip_tasks_extension	1	Recursively removes the Tasks extension id from a JSON advertisement; formatting, the serving decision is made by the tasks Option in serve.
+src/gateway/server/stdio_tasks.rs	advertised	1	Strips Tasks from an initialize/discover answer when no store is open; advertisement shaping, refusal of tasks/* happens in serve.
+src/gateway/server/stdio_channel.rs	send_request	1	Delegates to send_request_committing with no commit; the refusal decisions are made there.
+src/gateway/server/stdio_delivery.rs	finalized	1	Inert constructor packing a response, tool name, lease and signing context into a Finalized; judging happens in judge_and_commit.
+src/gateway/server/stdio_delivery.rs	split	1	Moves the fields of a Finalized into the response and a Settle record; decides nothing, the judge runs on the result in judge_and_commit.
+src/gateway/server/stdio_nonce.rs	bytes	1	Plain getter for the nonce bytes; the fingerprint comparison happens in source_fingerprint and continuation redemption.
+src/gateway/server/stdio_refusal.rs	stdio_busy_response	1	Formats the -32000 server-busy JSON-RPC error for a request id; the refusal itself is decided by admit_stdio_request's semaphore try_acquire.
+src/gateway/server/stdio_refusal.rs	stdio_busy_batch_response	1	Formats per-element busy or Invalid Request answers for a batch under JSON-RPC rules; the capacity refusal is decided by admit_stdio_request.
+src/gateway/server/stdio_writer.rs	write_response	1	Serialises one value and writes it with newline to the sink, reporting pipe loss; the withhold decision is made upstream by the judge and run_stdout_writer.

@@ -93,6 +93,7 @@ pub(super) fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRp
         | Answer::AskBadMeta
         | Answer::AskAndError
         | Answer::AskSecond
+        | Answer::AskAlways
         | Answer::AskEdited(_)
         | Answer::StateOnlyRounds(..)
         | Answer::AskThenEcho
@@ -178,6 +179,43 @@ pub(crate) fn envelope_in(fx: &Fx, value: &Value) -> Option<String> {
         }
         Value::Array(items) => items.iter().find_map(|item| envelope_in(fx, item)),
         Value::Object(fields) => fields.values().find_map(|field| envelope_in(fx, field)),
+        _ => None,
+    }
+}
+
+/// The answers that read the call's own arguments: `AskThenStore` (a tiny
+/// store: `cmd` `"store <text>"` keeps `<text>`, anything else returns what was
+/// kept) and `AskThenEcho` (echoes the arguments). Both ask on call 0. `None`
+/// for every other answer.
+pub(super) fn recording_answer(
+    answer: Answer,
+    n: usize,
+    params: Option<&Value>,
+    kept: &std::sync::Mutex<String>,
+) -> Option<Value> {
+    let done =
+        |text: String| json!({"content": [{"type": "text", "text": text}], "isError": false});
+    match answer {
+        Answer::AskThenStore | Answer::AskThenEcho if n == 0 => Some(question(Answer::AskOnce)),
+        Answer::AskThenStore => {
+            let cmd = params
+                .and_then(|p| p.pointer("/arguments/cmd"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            Some(done(if let Some(text) = cmd.strip_prefix("store ") {
+                *kept.lock().unwrap() = text.to_owned();
+                "stored".to_owned()
+            } else {
+                kept.lock().unwrap().clone()
+            }))
+        }
+        Answer::AskThenEcho => Some(done(
+            params
+                .and_then(|p| p.get("arguments"))
+                .cloned()
+                .unwrap_or(Value::Null)
+                .to_string(),
+        )),
         _ => None,
     }
 }
