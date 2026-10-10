@@ -156,6 +156,16 @@ fn get_finds_only_the_backend_of_the_file_its_source_names() {
             source.expected(),
             text(&out)
         );
+        for file in ["gateway.yaml", "env.yaml", "flag.yaml"] {
+            if file != source.expected() {
+                let other = run(home.path(), source, &["get", marker(file)]);
+                assert!(
+                    !other.status.success(),
+                    "{source:?}: `get` found {file}'s backend, so it read {file}: {}",
+                    text(&other)
+                );
+            }
+        }
     }
 }
 

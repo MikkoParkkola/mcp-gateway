@@ -606,6 +606,13 @@ fn apply_cli_overrides_and_validate(
     config.validate_with_env(overlay)
 }
 
+/// The file `add`, `remove`, `list` and `get` use: the global `--config` /
+/// `MCP_GATEWAY_CONFIG`, else `./gateway.yaml`. Unlike the stdio path below, a
+/// named file is used as given, never swapped for a fallback.
+fn cli_config_or_default(global: Option<&Path>) -> std::path::PathBuf {
+    global.map_or_else(|| "gateway.yaml".into(), Path::to_path_buf)
+}
+
 /// Run the gateway in stdio mode (newline-delimited JSON-RPC on stdin/stdout).
 /// Resolve the effective `--config` path for the **stdio** serve command only.
 ///
@@ -623,12 +630,6 @@ fn apply_cli_overrides_and_validate(
 /// because its defaults (`auth.enabled=false`, `meta_mcp.enabled=true`) would be
 /// a fail-open regression if an intended `--config` went missing. `audit`/
 /// `validate`/`doctor` likewise keep `Config::load`'s fail-loud behavior.
-/// The file `add`, `remove`, `list` and `get` use: the global `--config` /
-/// `MCP_GATEWAY_CONFIG`, else `./gateway.yaml`.
-fn cli_config_or_default(global: Option<&Path>) -> std::path::PathBuf {
-    global.map_or_else(|| "gateway.yaml".into(), Path::to_path_buf)
-}
-
 fn serve_config_path(cli: &Cli) -> Option<std::path::PathBuf> {
     match cli.config.as_deref() {
         Some(p) if !p.exists() => {
