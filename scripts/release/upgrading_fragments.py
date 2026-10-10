@@ -97,7 +97,9 @@ def parse_marker(text: str) -> list[dict]:
             raise ValueError(f"unknown_clause: unrecognised clause {part!r}")
         rest = part[len(clause["words"]) :]
         if rest.startswith(", "):
-            if not rest[2:].strip():
+            # Rust's `trim` strips Unicode White_Space; Python's `isspace` also
+            # counts U+001C..U+001F, which Rust keeps as text.
+            if all(c.isspace() and c not in "\x1c\x1d\x1e\x1f" for c in rest[2:]):
                 raise ValueError(f"empty_detail: empty text after the comma in {part!r}")
         elif rest:
             raise ValueError(f"detail_needs_comma: text must follow a comma in {part!r}")

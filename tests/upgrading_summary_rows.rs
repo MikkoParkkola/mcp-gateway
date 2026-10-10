@@ -386,7 +386,7 @@ fn marker_grammar() {
     for bad in &GRAMMAR.invalid {
         let err = parse_marker(&bad.text).expect_err(&format!("{:?} must be refused", bad.text));
         assert!(
-            err.contains(&bad.reason),
+            err.starts_with(&format!("{}:", bad.reason)),
             "{:?} must be refused for {}: {err}",
             bad.text,
             bad.reason

@@ -122,12 +122,19 @@ class StartupGrammar(unittest.TestCase):
             with self.subTest(text=text):
                 uf.parse_marker(text)
 
+    def test_every_valid_vector_passes_parse(self):
+        for text in uf.GRAMMAR["valid"]:
+            with self.subTest(text=text):
+                needs = any(c.get("needs_notice_field") for c in uf.parse_marker(text))
+                _, errors = errors_of("3702.md", frag("T", marker=text, notice="a phrase" if needs else None))
+                self.assertEqual(errors, [])
+
     def test_every_invalid_vector_is_refused_for_its_reason(self):
         for case in uf.GRAMMAR["invalid"]:
             with self.subTest(text=case["text"]):
                 with self.assertRaises(ValueError) as caught:
                     uf.parse_marker(case["text"])
-                self.assertIn(case["reason"], str(caught.exception))
+                self.assertTrue(str(caught.exception).startswith(case["reason"] + ":"), caught.exception)
 
     def test_grammar_table_is_well_formed(self):
         clauses = uf.GRAMMAR["clauses"]

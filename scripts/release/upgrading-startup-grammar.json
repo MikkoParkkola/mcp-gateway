@@ -37,7 +37,8 @@
     "refuses to start; fails a backend; fails a capability file",
     "no notice,  two spaces after the comma",
     "no notice, a:b, (c) \"d\"",
-    "no notice, café ünï"
+    "no notice, café ünï",
+    "no notice, \u001f"
   ],
   "invalid": [
     {"text": "", "reason": "unknown_clause"},
@@ -83,6 +84,7 @@
     {"text": "refuses to start, a;b; prints a notice", "reason": "semicolon_in_text"},
     {"text": "fails backend", "reason": "unknown_clause"},
     {"text": "prints a notice, ", "reason": "empty_detail"},
-    {"text": "refuses to start; fails a backend, ", "reason": "empty_detail"}
+    {"text": "refuses to start; fails a backend, ", "reason": "empty_detail"},
+    {"text": "no notice, \u00a0", "reason": "empty_detail"}
   ]
 }
