@@ -202,7 +202,7 @@ async fn settle_quiet() {
 
 /// Signals each terminal commit, read where the worker commits it, so the
 /// row never reads the task through `tasks/get` (which adds a record).
-struct Terminal(tokio::sync::Notify);
+pub(super) struct Terminal(pub(super) tokio::sync::Notify);
 
 #[async_trait::async_trait]
 impl crate::gateway::task_service::CommitObserver for Terminal {

@@ -81,6 +81,8 @@ mod grant_audit_order;
 /// D3-a: grant decision records at the route.
 mod grant_decision_tasks;
 mod grant_decisions;
+mod submit_authz;
+mod submit_authz_audit;
 mod grant_slot_release;
 
 mod admission_identity;

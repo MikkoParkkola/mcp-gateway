@@ -79,7 +79,7 @@ pub(crate) async fn backend_listing(tools: Value) -> (String, Arc<AtomicUsize>) 
 /// A stdio task store over a production-built `MetaMcp`, under `policy`.
 pub(crate) struct Fixture {
     pub(super) tasks: Arc<StdioTasks>,
-    meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
+    pub(super) meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     policy: Arc<ToolPolicy>,
     mtls: Arc<crate::mtls::MtlsPolicy>,
     rounds: Arc<AtomicUsize>,
@@ -88,7 +88,7 @@ pub(crate) struct Fixture {
     _data: tempfile::TempDir,
 }
 
-async fn fixture(policy: Option<ToolPolicy>) -> Fixture {
+pub(super) async fn fixture(policy: Option<ToolPolicy>) -> Fixture {
     fixture_on(backend().await, policy).await
 }
 

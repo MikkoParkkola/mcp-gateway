@@ -15,7 +15,7 @@ use crate::gateway::meta_mcp::grant_audit_fixture::{
 use crate::security::audit::AuditFailurePolicy;
 
 /// Make an already-built call task-augmented and keyed.
-fn as_task(mut body: Value, key: &str) -> Value {
+pub(super) fn as_task(mut body: Value, key: &str) -> Value {
     body["params"]["task"] = json!({});
     keyed(body, key)
 }
@@ -127,7 +127,7 @@ async fn cancelled_worker_on_stalled_log_writes_through_the_bound() {
 }
 
 /// A playbook of one personal-capability step whose failures continue.
-fn continuing_playbook() -> crate::playbook::PlaybookEngine {
+pub(super) fn continuing_playbook() -> crate::playbook::PlaybookEngine {
     let definition: crate::playbook::PlaybookDefinition = serde_json::from_value(json!({
         "playbook": "1.0",
         "name": "d3a-continue",
