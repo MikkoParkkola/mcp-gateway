@@ -77,7 +77,9 @@ where the value differs from the default or is a credential.
    `#[doc(hidden)] pub` at its unchanged path, so the binary, the integration tests and the benches build
    as before, docs.rs lists nothing, and no path carries a stability promise. The crate doc says so.
    `scripts/release/check_surface_inventory.py` fails on any crate-root item that is neither hidden nor in
-   its empty `LIB_KEEP`, and refuses a `#[macro_export]`, a root `extern` block or a root inline module
+   its empty `LIB_KEEP`, and refuses what it does not model: a `macro_export` token anywhere (`cfg_attr` included),
+   a conditional module path, a root `extern` block, a root inline module or a root `include!`. That check is
+   lexical; `.github/workflows/rustdoc.yml` is the compiler-backed gate (the crate page must list no item)
    (MIK-8044.SURF.5).
 
 ## Decisions by area

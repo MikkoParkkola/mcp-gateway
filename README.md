@@ -621,7 +621,7 @@ command that changes behaviour, is a breaking change.
 **The Rust library API is not part of that surface.** As of 4.0 every
 crate-root item is `#[doc(hidden)]`: the library exists so the binary, its
 tests and its benches share one build, and docs.rs lists nothing. The supported
-surface is the binary, its configuration and the MCP wire protocol. Library
+surface is the binary, its configuration and its HTTP and MCP interfaces. Library
 paths may change in any release. The crate ships a binary; at the time of
 writing crates.io reports zero reverse dependencies. If you embed the library,
 open an issue describing what you use, and pin an exact version (`=4.0.0`)

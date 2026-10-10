@@ -782,8 +782,10 @@ LIB_KEEP: frozenset[str] = frozenset()
 def lib_documented(path: Path | None = None, keep: frozenset[str] = LIB_KEEP) -> list[str]:
     """Problems with the documented crate-root API: any root item that is not
     `#[doc(hidden)]` and not in `keep`, and, failing closed, any construct
-    `extract_lib` does not model (a `#[macro_export]` anywhere in the library,
-    a root `extern` block, a root inline `mod name { .. }`)."""
+    `extract_lib` does not model: a `macro_export` token anywhere in the
+    library (`cfg_attr` included), a conditional module path, a root `extern`
+    block, a root inline `mod name { .. }`, a root `include!`. Lexical by
+    design; `rustdoc.yml` is the compiler-backed gate."""
     path = path or SRC / "lib.rs"
     errors = [
         f"{e.file}:{e.line}: {e.id} is documented crate-root API; add #[doc(hidden)] or list it in LIB_KEEP"
