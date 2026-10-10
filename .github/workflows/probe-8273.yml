@@ -1,0 +1,37 @@
+name: probe-8273
+# Throwaway probe for MIK-8273 (never merged): the package-cache mid-repair
+# race test, alone, 200 times under synthetic CPU load on macOS.
+on:
+  push:
+    branches: ["throwaway/probe-8273"]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: macos-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - name: Build the lib test binary
+        run: cargo test --all-features --lib --no-run
+      - name: Mid-repair test x200 under CPU load
+        shell: bash
+        run: |
+          set -uo pipefail
+          n=$(( $(sysctl -n hw.ncpu) + 1 ))
+          echo "cores+1 = $n busy loops"
+          for _ in $(seq 1 "$n"); do yes > /dev/null & done
+          fails=0
+          for i in $(seq 1 200); do
+            start=$(date +%s)
+            if ! cargo test -q --all-features --lib -- --exact backend::package_cache::retry_tests::race::a_start_arriving_mid_repair_succeeds_after_it > "/tmp/m.$i.log" 2>&1 \
+              || ! grep -q 'test result: ok. 1 passed' "/tmp/m.$i.log"; then
+              fails=$((fails+1)); echo "run $i FAILED after $(( $(date +%s) - start ))s:"
+              awk '/panicked at|BackendTimeout|Err\(|test result/' "/tmp/m.$i.log" | head -6
+            fi
+          done
+          pkill yes || true
+          echo "mid-repair test under load: $fails/200 failed"
