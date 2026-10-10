@@ -9,8 +9,8 @@ use serde_json::json;
 
 use super::{CallKey, InFlightCalls};
 
-fn key(owner: &str, session: Option<&str>, id: serde_json::Value) -> CallKey {
-    CallKey::new("ledger", Some(owner), session, &id).expect("an owner is present")
+fn key(owner: &str, session: Option<&str>, id: &serde_json::Value) -> CallKey {
+    CallKey::new("ledger", Some(owner), session, id).expect("an owner is present")
 }
 
 /// A caller with no owner is never registered, so its cancels always drop.
@@ -26,14 +26,14 @@ fn a_caller_without_an_owner_has_no_key() {
 #[tokio::test]
 async fn a_cancel_reaches_only_the_call_registered_under_its_own_key() {
     let calls = Arc::new(InFlightCalls::default());
-    let mine = key("alice", Some("s1"), json!(7));
+    let mine = key("alice", Some("s1"), &json!(7));
     let (_held, registration) = calls.register(mine.clone()).expect("registered");
     let call = Abortable::new(std::future::pending::<()>(), registration);
     for other in [
-        key("bob", Some("s1"), json!(7)),
-        key("alice", Some("s2"), json!(7)),
-        key("alice", None, json!(7)),
-        key("alice", Some("s1"), json!("7")),
+        key("bob", Some("s1"), &json!(7)),
+        key("alice", Some("s2"), &json!(7)),
+        key("alice", None, &json!(7)),
+        key("alice", Some("s1"), &json!("7")),
         CallKey::new("other-backend", Some("alice"), Some("s1"), &json!(7)).unwrap(),
     ] {
         assert!(
@@ -51,7 +51,7 @@ async fn a_cancel_reaches_only_the_call_registered_under_its_own_key() {
 #[test]
 fn a_duplicate_key_is_refused_and_cannot_unregister_the_live_call() {
     let calls = Arc::new(InFlightCalls::default());
-    let k = key("alice", None, json!(1));
+    let k = key("alice", None, &json!(1));
     let first = calls.register(k.clone()).expect("the first registers");
     assert!(
         calls.register(k.clone()).is_none(),
