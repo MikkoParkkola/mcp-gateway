@@ -71,6 +71,8 @@ SWEPT_AREAS = (
     "src/personal_accounts/worker_journeys.rs",
     # MIK-8195 W8: the stdio read judge.
     "src/gateway/outbound/stdio.rs",
+    # MIK-8195 W1: the HTTP transport.
+    "src/transport/http/",
 )
 # Diffing against git's empty tree reads every line of <head> as added.
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
