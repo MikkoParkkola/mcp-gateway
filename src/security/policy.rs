@@ -46,10 +46,12 @@ pub struct ToolPolicyConfig {
     /// Default action when a tool matches neither allow nor deny.
     pub default_action: PolicyAction,
     /// Explicit allow list (takes precedence over deny).
-    /// Supports exact names and glob-like `*` suffix patterns.
+    /// Exact names or a trailing `prefix*`; any other `*` is refused at load
+    /// (MIK-8298).
     pub allow: Vec<String>,
     /// Explicit deny list.
-    /// Supports exact names and glob-like `*` suffix patterns.
+    /// Exact names or a trailing `prefix*`; any other `*` is refused at load
+    /// (MIK-8298).
     pub deny: Vec<String>,
     /// Whether to include default deny patterns for high-risk tools.
     pub use_default_deny: bool,

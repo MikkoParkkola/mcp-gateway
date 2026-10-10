@@ -197,9 +197,9 @@ pub struct AuthenticatedClient {
     pub rate_limit: u32,
     /// Allowed backends (`["*"]` = all; empty = none)
     pub backends: Vec<String>,
-    /// Allowed tools (allowlist if Some). Supports glob patterns.
+    /// Allowed tools (allowlist if Some): exact names or a trailing `prefix*`.
     pub allowed_tools: Option<Vec<String>>,
-    /// Denied tools (blocklist if Some). Supports glob patterns.
+    /// Denied tools (blocklist if Some): exact names or a trailing `prefix*`.
     pub denied_tools: Option<Vec<String>>,
     /// Admin-level UI and management tool access.
     pub admin: bool,
