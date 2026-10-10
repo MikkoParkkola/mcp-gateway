@@ -61,9 +61,12 @@ pub use crate::protocol::tasks::{TaskOptions, TaskStatus, TaskTransition};
 #[cfg(test)]
 pub(crate) use execution::{CommitObserver, CommitStage};
 #[cfg(test)]
-pub(crate) use service::CreateOutcome;
+pub(crate) use record::CONTINUATION_DEADLINE_MARGIN_SECS;
 #[cfg(test)]
-pub(crate) use {record::CONTINUATION_DEADLINE_MARGIN_SECS, store::TaskStore};
+pub(crate) use service::CreateOutcome;
+pub(crate) use store::TaskStore;
+#[cfg(test)]
+pub(crate) use store::input::RedemptionRead;
 
 /// Open the durable store, import restored bindings, build the executor, and
 /// settle whatever a previous process left mid-flight.

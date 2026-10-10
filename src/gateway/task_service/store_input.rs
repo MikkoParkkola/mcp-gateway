@@ -74,6 +74,24 @@ pub(super) struct TestSeams {
     arrived: std::sync::atomic::AtomicUsize,
     /// Reads of a frozen clock before 1970, each refused.
     refused_reads: std::sync::atomic::AtomicUsize,
+    /// Reads of a frozen clock that returned a time.
+    readable_reads: std::sync::atomic::AtomicUsize,
+    /// Scripted redemption samples not yet consumed, oldest first.
+    redemption_script: std::sync::Mutex<std::collections::VecDeque<RedemptionRead>>,
+    /// Every scripted sample a redemption consumed, in order.
+    redemption_consumed: std::sync::Mutex<Vec<RedemptionRead>>,
+}
+
+/// One scripted redemption sample (MIK-8202 AC13).
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RedemptionRead {
+    /// The sample is refused, and the store's own clock reads unreadable from
+    /// here on, so a worker's `readable_now` really waits.
+    Unreadable,
+    /// The sample reads this time, and the store's own clock is frozen at it
+    /// from here on.
+    At(DateTime<Utc>),
 }
 
 #[cfg(test)]
@@ -115,6 +133,9 @@ impl Shared {
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Err(crate::clock::ClockBeforeEpoch)
             } else {
+                self.seams
+                    .readable_reads
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok(frozen)
             };
         }
@@ -126,6 +147,72 @@ impl TaskStore {
     /// The store's clock (see [`Shared::now`]).
     pub(crate) fn now(&self) -> Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch> {
         self.0.now()
+    }
+
+    /// The clock a continuation redemption samples once, immediately before
+    /// it opens the envelope, and reuses for the open, hold and ledger checks
+    /// (MIK-8202 AC13). Exactly [`Self::now`]; under test a script may
+    /// stand in for single samples.
+    pub(crate) fn redemption_now(&self) -> Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch> {
+        #[cfg(test)]
+        if let Some(read) = self.next_scripted_redemption() {
+            return match read {
+                RedemptionRead::At(at) => {
+                    // The instant the redemption saw is the instant the
+                    // worker's next read sees: time does not run backwards.
+                    self.set_clock_for_test(Some(at));
+                    Ok(at)
+                }
+                RedemptionRead::Unreadable => {
+                    self.set_clock_for_test(DateTime::from_timestamp(-1, 0));
+                    Err(crate::clock::ClockBeforeEpoch)
+                }
+            };
+        }
+        self.now()
+    }
+
+    #[cfg(test)]
+    fn next_scripted_redemption(&self) -> Option<RedemptionRead> {
+        let read = self
+            .0
+            .seams
+            .redemption_script
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop_front()?;
+        self.0
+            .seams
+            .redemption_consumed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(read);
+        Some(read)
+    }
+
+    /// Script the next redemption samples, one consumed per sample.
+    #[cfg(test)]
+    pub(crate) fn script_redemption_reads_for_test(
+        &self,
+        reads: impl IntoIterator<Item = RedemptionRead>,
+    ) {
+        *self
+            .0
+            .seams
+            .redemption_script
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = reads.into_iter().collect();
+    }
+
+    /// The scripted samples consumed so far, in order.
+    #[cfg(test)]
+    pub(crate) fn redemptions_consumed_for_test(&self) -> Vec<RedemptionRead> {
+        self.0
+            .seams
+            .redemption_consumed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     #[cfg(test)]
@@ -155,6 +242,15 @@ impl TaskStore {
         self.0
             .seams
             .refused_reads
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// How many reads of a frozen clock returned a time.
+    #[cfg(test)]
+    pub(crate) fn readable_reads_for_test(&self) -> usize {
+        self.0
+            .seams
+            .readable_reads
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 

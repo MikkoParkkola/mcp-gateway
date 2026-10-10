@@ -27,6 +27,10 @@ use crate::protocol::mrtr::{InputRequired, RetryFields};
 use crate::protocol::tasks::{TaskStatus, TaskTransition};
 use crate::protocol::{JsonRpcError, JsonRpcResponse, RequestId};
 
+#[path = "input_round_clock.rs"]
+mod clock;
+use clock::{Resealed, readable_now, redeeming_dispatch};
+
 /// Consecutive state-only rounds one worker resumes before it gives up. A
 /// fixed ceiling that stops a backend looping the gateway forever.
 const STATE_ONLY_CEILING: usize = 4;
@@ -82,6 +86,16 @@ impl<'a> Settling<'a> {
         // described.
         let mut round_mark: Option<crate::gateway::gateway_writes::Mark> = None;
         loop {
+            // MIK-8202 AC12: a round the funnel could not date is sealed here.
+            let mut minted_at = None;
+            match self.reseal_withheld(cancel_rx).await {
+                Resealed::Nothing => {}
+                Resealed::Sealed(sealed, at) => {
+                    response = *sealed;
+                    minted_at = Some(at);
+                }
+                Resealed::Done => return,
+            }
             let round = match classify_dispatch(response) {
                 DispatchSettlement::Complete(result) => {
                     let writes = round_mark.map_or_else(
@@ -103,7 +117,7 @@ impl<'a> Settling<'a> {
                 DispatchSettlement::Input(round) => round,
             };
             if !round.requests.is_empty() {
-                return self.park(round, cancel_rx).await;
+                return self.park(round, minted_at, cancel_rx).await;
             }
             // ponytail: the counter is loop-local, not on the record: a client
             // round ends this worker, so a resumed worker starts at zero,
@@ -118,7 +132,12 @@ impl<'a> Settling<'a> {
             crate::gateway::meta_mcp::invoke::relay::discard_staged();
             let retry = self.owned.continuation(round.request_state, None);
             round_mark = Some(crate::gateway::gateway_writes::mark());
-            let Some(next) = dispatch(self.state, self.owned, self.call, &retry, cancel_rx).await
+            let Some(next) = redeeming_dispatch(
+                (self.state, self.owned, self.call, &retry),
+                (self.executor, self.id),
+                cancel_rx,
+            )
+            .await
             else {
                 return;
             };
@@ -202,7 +221,12 @@ impl<'a> Settling<'a> {
 
     /// Commit `input_required` with the continuation, then release: the worker
     /// returns and the row waits with no owner.
-    async fn park(&self, round: InputRequired, cancel_rx: &mut watch::Receiver<bool>) {
+    async fn park(
+        &self,
+        round: InputRequired,
+        minted_at: Option<(chrono::DateTime<chrono::Utc>, u64)>,
+        cancel_rx: &mut watch::Receiver<bool>,
+    ) {
         if !self.park_targets().await {
             return self
                 .settle(TaskTransition::Complete(abandoned_input_round()), false)
@@ -216,7 +240,12 @@ impl<'a> Settling<'a> {
         // The continuation the resume will redeem dies at its own deadline;
         // a round that could only fail is settled now, never parked.
         let store = &self.executor.service.store;
-        let Some((at, now)) = readable_now(store, self.id, cancel_rx).await else {
+        // A round sealed after a wait parks at the very time it was sealed at.
+        let read = match minted_at {
+            Some(read) => Some(read),
+            None => readable_now(store, self.id, cancel_rx).await,
+        };
+        let Some((at, now)) = read else {
             return;
         };
         let continuation = self.state.meta_mcp().continuation();
@@ -558,12 +587,18 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
         round.request_state,
         Some(Value::Object(round.accepted_inputs)),
     );
-    let response = dispatch(&state, &owned, &call, &retry, &mut cancel_rx).await?;
+    let response = redeeming_dispatch(
+        (&state, &owned, &call, &retry),
+        (&executor, &id),
+        &mut cancel_rx,
+    )
+    .await?;
     // Preparation inside the funnel can outlast the margin. A continuation
     // refused once its envelope has expired was refused for expiry: close the
     // round with that reason rather than fail the task.
     let (at, now) = readable_now(&executor.service.store, &id, &mut cancel_rx).await?;
-    let expired = deadline.is_some_and(|d| rejected_after_expiry(&response, d, now));
+    let expired = owned.dispatch_log().worker().take_redemption_expired()
+        || deadline.is_some_and(|d| rejected_after_expiry(&response, d, now));
     executor
         .proceed_unless_late(ids, deadline, expired, at)
         .await?;
@@ -616,51 +651,6 @@ fn rejected_after_expiry(response: &JsonRpcResponse, deadline: u64, now: u64) ->
             .error
             .as_ref()
             .is_some_and(|error| error.code == -32602 && error.message == expired.client_message())
-}
-
-/// How often a worker reads a clock that read before 1970 again.
-const CLOCK_RETRY: Duration = if cfg!(test) {
-    Duration::from_millis(20)
-} else {
-    Duration::from_secs(1)
-};
-
-/// The store's now, and the same instant in the seconds round deadlines are
-/// kept in, waiting out a clock before 1970: a round is neither parked nor
-/// resumed nor closed on a time it cannot read, so nothing is lost while the
-/// clock is wrong (MIK-8202). `None` once the task is cancelled; executor
-/// shutdown drops the worker, wait and all.
-// ponytail: polls on monotonic time and holds this worker's slot while the
-// clock is unreadable; a clock-recovered signal would free it sooner.
-async fn readable_now(
-    store: &crate::gateway::task_service::store::TaskStore,
-    id: &str,
-    cancel_rx: &mut watch::Receiver<bool>,
-) -> Option<(chrono::DateTime<chrono::Utc>, u64)> {
-    let mut warned = false;
-    loop {
-        if *cancel_rx.borrow() {
-            return None;
-        }
-        if let Ok(at) = store.now() {
-            return Some((at, u64::try_from(at.timestamp()).unwrap_or_default()));
-        }
-        // Once per round: the operator learns why a worker is held.
-        if !warned {
-            warned = true;
-            telemetry_metrics::counter!("mcp_task_clock_waits_total").increment(1);
-            tracing::warn!(
-                task_id = %id,
-                "the host clock reads before 1970: this input round waits for it, holding a task worker"
-            );
-        }
-        tokio::select! {
-            biased;
-            // A dropped sender can no longer cancel: stop, as `dispatch` does.
-            changed = cancel_rx.changed() => changed.ok()?,
-            () = tokio::time::sleep(CLOCK_RETRY) => {}
-        }
-    }
 }
 
 impl TaskExecutor {

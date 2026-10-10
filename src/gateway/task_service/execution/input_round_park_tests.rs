@@ -161,7 +161,7 @@ async fn park(fx: &Fixture, ids: Ids<'_>, tool: &str, arguments: Value) {
         ids.id,
         ids.revision,
     )
-    .park(round(), &mut cancel_rx)
+    .park(round(), None, &mut cancel_rx)
     .await;
 }
 

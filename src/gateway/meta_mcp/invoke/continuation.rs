@@ -34,31 +34,63 @@ use crate::{Error, Result};
 pub(super) async fn mint_continuation(
     continuation: &std::sync::Arc<crate::protocol::continuation::ContinuationState>,
     source: crate::protocol::mrtr::PrincipalSource<'_>,
-    (server, instance): (&str, Option<u64>),
+    target: (&str, Option<u64>),
     tool: &str,
     arguments: &Value,
     backend_request_state: Option<String>,
 ) -> Option<(String, String)> {
     let Ok(now) = crate::protocol::continuation::clock_now() else {
+        let server = target.0;
         warn!(server, tool, "Clock reads before 1970; refusing to mint");
         record_continuation_mint("clock_before_epoch");
         return None;
     };
+    let binding = bind(source, target, tool, arguments)?;
+    seal_exchange(continuation, binding, backend_request_state, now).await
+}
+
+/// What an exchange asked by `source` for `tool` is bound to, or `None` for a
+/// caller no continuation can name.
+pub(super) fn bind(
+    source: crate::protocol::mrtr::PrincipalSource<'_>,
+    (server, instance): (&str, Option<u64>),
+    tool: &str,
+    arguments: &Value,
+) -> Option<super::worker_clock::Binding> {
+    Some(super::worker_clock::Binding {
+        server: server.to_owned(),
+        fingerprint: crate::protocol::mrtr::source_fingerprint(source)?,
+        digest: crate::protocol::mrtr::original_request_digest(
+            &continuation_target(server, instance),
+            tool,
+            arguments,
+        ),
+    })
+}
+
+/// Open the exchange on this replica and seal its envelope at `now`: the
+/// half of a mint that needs a time, shared by the request thread's mint and
+/// a task worker's, which mints later with its own checked store time
+/// (MIK-8202 AC12). `binding` is what the exchange was bound to when the
+/// backend asked, so a late mint keeps the original binding.
+pub(super) async fn seal_exchange(
+    continuation: &std::sync::Arc<crate::protocol::continuation::ContinuationState>,
+    binding: super::worker_clock::Binding,
+    backend_request_state: Option<String>,
+    now: u64,
+) -> Option<(String, String)> {
+    let server = binding.server.clone();
     let Some(payload) = continuation
         .begin_exchange(
-            server.to_string(),
+            binding.server,
             backend_request_state,
-            crate::protocol::mrtr::source_fingerprint(source)?,
-            crate::protocol::mrtr::original_request_digest(
-                &continuation_target(server, instance),
-                tool,
-                arguments,
-            ),
+            binding.fingerprint,
+            binding.digest,
             now,
         )
         .await
     else {
-        warn!(server, tool, "No slot to hold this exchange open; refusing");
+        warn!(server, "No slot to hold this exchange open; refusing");
         record_continuation_mint("no_slot");
         return None;
     };
@@ -75,7 +107,7 @@ pub(super) async fn mint_continuation(
             Some((envelope, payload.hold_key))
         }
         Err(error) => {
-            warn!(server, tool, %error, "Continuation mint refused");
+            warn!(server, %error, "Continuation mint refused");
             record_continuation_mint(continuation_error_reason(&error));
             release_unsent(continuation, Some(payload.hold_key.as_str())).await;
             None
@@ -218,6 +250,7 @@ pub(super) fn continuation_error_reason(
         ContinuationError::MintBudgetExhausted => "mint_budget_exhausted",
         ContinuationError::TooLarge => "too_large",
         ContinuationError::LifetimeExceeded => "lifetime_exceeded",
+        ContinuationError::ClockUnreadable => "clock_unreadable",
     }
 }
 
@@ -342,8 +375,15 @@ pub(super) async fn redeem_retry(
         record_continuation_rejection(continuation_error_reason(&error));
         rejected_continuation(&error)
     };
-    let now = crate::protocol::continuation::clock_now().map_err(refuse)?;
-    let payload = continuation.keyring().open(token, now).map_err(refuse)?;
+    // One sample, taken before the open and reused by the open, the hold and
+    // the ledger (MIK-8202 AC13): a task worker's is the store's.
+    let sampled = super::worker_clock::redemption_sample()
+        .unwrap_or_else(crate::protocol::continuation::clock_now);
+    let now = sampled.map_err(refuse)?;
+    let payload = continuation.keyring().open(token, now).map_err(|error| {
+        super::worker_clock::note_open_refusal(&error);
+        refuse(error)
+    })?;
 
     // Which domain the envelope was sealed for, before anything is read out of
     // it and before the hold or the ledger is touched.

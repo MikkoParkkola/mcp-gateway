@@ -79,12 +79,13 @@ mod post_dispatch;
 mod pre_dispatch;
 mod projection;
 mod propagation;
+pub(crate) mod worker_clock; // MIK-8202 AC12/AC13: the task worker's clock channel
 use bridge_dispatch::{BridgeDispatcher, run_input_bridge, undeclared_input_request};
 pub(super) use bridge_dispatch::{
     REQUIRED_CAPABILITIES_DATA_KEY, UNSUPPORTED_ELICITATION_MODE_DATA_KEY,
 };
 pub(super) use continuation::retry_origin_backend;
-use continuation::{OutboundRetry, mint_continuation, redeem_retry, unbindable_continuation};
+use continuation::{OutboundRetry, redeem_retry, unbindable_continuation};
 pub(super) use errors::BudgetOutcome;
 #[cfg(test)]
 use errors::classify_dispatch_error;
@@ -584,8 +585,9 @@ impl MetaMcp {
         // never be shown is a redeemable envelope for an exchange that cannot
         // happen.
         let mut sealed = None;
+        let mut withheld = None;
         if let Some(interim) = interim {
-            let Some((envelope, hold_key)) = mint_continuation(
+            match worker_clock::mint_or_withhold(
                 &self.continuation,
                 caller.principal_source(dispatch_binding.as_deref()),
                 target,
@@ -594,24 +596,34 @@ impl MetaMcp {
                 interim.request_state,
             )
             .await
-            else {
-                warn!(
-                    server,
-                    tool, trace_id, "Cannot mint a continuation for this caller; refusing"
-                );
-                return Err(unbindable_continuation(server, tool));
-            };
-            result["requestState"] = json!(&envelope);
-            sealed = Some((envelope, hold_key));
-            // MIK-7994: the envelope is the gateway's text, up to 8 KiB, and
-            // must not take the receipt's capped budget from the backend's
-            // prompt. Noted at the value layer: `tool_value` still reads
-            // `requestState` to know the answer is interim, not wrapped.
-            gateway_writes::note(
-                gateway_writes::Layer::Value,
-                gateway_writes::REQUEST_STATE,
-                &result,
-            );
+            {
+                worker_clock::Minted::Sealed(envelope, hold_key) => {
+                    result["requestState"] = json!(&envelope);
+                    sealed = Some((envelope, hold_key));
+                    // MIK-7994: the envelope is the gateway's text, up to 8 KiB, and
+                    // must not take the receipt's capped budget from the backend's
+                    // prompt. Noted at the value layer: `tool_value` still reads
+                    // `requestState` to know the answer is interim, not wrapped.
+                    gateway_writes::note(
+                        gateway_writes::Layer::Value,
+                        gateway_writes::REQUEST_STATE,
+                        &result,
+                    );
+                }
+                // MIK-8202 AC12: a task worker seals this later. The backend's
+                // state is withheld from the payload meanwhile (MRTR.2).
+                worker_clock::Minted::Withheld(binding, state) => {
+                    result["requestState"] = Value::Null;
+                    withheld = Some((binding, state));
+                }
+                worker_clock::Minted::Refused => {
+                    warn!(
+                        server,
+                        tool, trace_id, "Cannot mint a continuation for this caller; refusing"
+                    );
+                    return Err(unbindable_continuation(server, tool));
+                }
+            }
         } else {
             // MRTR.2a holds for an unusable round too (MIK-8078).
             continuation::withhold_unsealed_state(&mut result);
@@ -629,6 +641,12 @@ impl MetaMcp {
         let kept = gated.as_ref().ok().map(|(gated, _)| gated);
         continuation::release_unless_carried(&self.continuation, sealed, kept).await;
         let (gated, effect) = gated?;
+        // The gates have run on the payload; the worker takes it, unminted.
+        if let Some(withheld) = withheld
+            && worker_clock::hand_to_worker(withheld, gated.clone())
+        {
+            return Err(unbindable_continuation(server, tool));
+        }
         result = gated;
         self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
         // A chained backend is eligible only with a checked upstream outcome.
