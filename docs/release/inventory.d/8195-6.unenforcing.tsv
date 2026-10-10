@@ -1,0 +1,24 @@
+src/personal_accounts/commit.rs	scratch_name	1	Formats a dot-prefixed temp file name with a random suffix; the exclusive create in create_scratch, not the name, is what prevents collisions.
+src/personal_accounts/commit.rs	sync_file	1	Thin wrapper over File::sync_all for durability; decides nothing.
+src/personal_accounts/commit.rs	replace_file	1	Generic write-sync-rename-syncdir sequence returning where it stopped; the content and who may write it are decided by callers, and it only reports failures.
+src/personal_accounts/commit.rs	persist_record	1	Durably writes already-sealed record bytes and cleans up on failure; sealing and the decision to commit are made upstream.
+src/personal_accounts/commit.rs	commit_checkpoint	1	Test-only fault hook followed by a delegation to write_manifest; adds no decision of its own.
+src/personal_accounts/commit.rs	publish	1	Passes None provenance to stage_publication and maps the refusal to AccountError; the refresh CAS check is in refresh_tokens.
+src/personal_accounts/commit.rs	refusal_as_fault	1	Maps a ManifestRefusal variant to an AccountError category; pure error conversion.
+src/personal_accounts/migration.rs	ascending	1	Whitespace-splits, sorts and dedups a scope string into the shape validate_record accepts; a pure transform.
+src/personal_accounts/migration_revision.rs	opt	1	Maps an absent optional string to empty for the revision digest input; a plain conversion.
+src/personal_accounts/offline_migration.rs	reachability	1	Returns an operator-facing sentence chosen by sole_operator_asserted, which makes the actual decision; this only formats text.
+src/personal_accounts/offline_migration.rs	migrate_legacy_credential_offline	1	Resolves the default 3.x token location and forwards to migrate_from, where binding and refusal decisions are made.
+src/personal_accounts/revoke.rs	new	1	Wraps a token string's bytes; inert constructor.
+src/personal_accounts/revoke.rs	as_str	1	Plain getter returning the wrapped bytes as str; no decision.
+src/personal_accounts/revoke.rs	as_str	2	Maps ProviderOutcome variants to fixed wire strings; formatting only.
+src/personal_accounts/revoke.rs	invalidate	2	Forwards to CustodyHandle::invalidate; the revoke itself is decided in PersonalAccountStore::revoke_capturing.
+src/personal_accounts/service.rs	refresh	2	Arc blanket impl forwarding to T::refresh; no decision.
+src/personal_accounts/service.rs	new	1	Inert constructor storing store, provider, observer and an empty flights map.
+src/personal_accounts/service.rs	store	1	Plain getter for the store reference.
+src/personal_accounts/service.rs	provider	1	Plain getter for the refresh provider reference.
+src/personal_accounts/worker.rs	capacity	1	Plain getter of the in-flight bound; the bound is enforced in admit.
+src/personal_accounts/worker.rs	resolve	1	Clones the account key and delegates to AccountService::resolve through offload; admission is in admit and the lookup decision is in the service.
+src/personal_accounts/worker.rs	release	1	Clones the lease and delegates to AccountService::release through offload; the decision lives in the service and in admit.
+src/personal_accounts/worker.rs	invalidate	1	Clones the account key and delegates to AccountService::invalidate through offload; the decision lives in the service and in admit.
+src/personal_accounts/worker_journeys.rs	account_of	2	Looks up the account name of an active journey by id for the pre-session dead-link check; ownership and authentication are decided later in start.
