@@ -195,6 +195,7 @@ class Predicates(unittest.TestCase):
 
     def test_p7_an_undecided_key_counts_as_off(self) -> None:
         self.assert_off('#[cfg(target_has_atomic = "64")]')
+        self.assert_off("#[cfg(all(test, miri))]")
 
     def test_p8_cfg_attr_ignore_true_on_macos_only_is_off(self) -> None:
         self.assert_off('#[cfg_attr(target_vendor = "apple", ignore)]')
