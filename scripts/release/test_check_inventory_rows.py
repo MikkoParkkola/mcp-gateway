@@ -19,7 +19,8 @@ spec = importlib.util.spec_from_file_location("rows", HERE / "check_inventory_ro
 rows = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rows)
 
-HEADER = "path\tfn\toccurrence\ttier\tcategory\tname\treason\n"
+HEADER = "path\tfn\toccurrence\ttier\tcategory\tqualified\treason\n"
+UNENFORCING_HEADER = "path\tfn\toccurrence\treason\n"
 
 
 class Repo:
@@ -66,7 +67,7 @@ class CheckInventoryRows(unittest.TestCase):
     def test_a_row_in_either_file_passes(self) -> None:
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn a() {}\nfn b() {}\n")
         self.repo.write(rows.INVENTORY, HEADER + "src/oauth/mod.rs\ta\t1\tcritical\tb\ta\tr\n")
-        self.repo.write(rows.UNENFORCING, "src/oauth/mod.rs\tb\t1\tformats a message\n")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\tb\t1\tformats a message\n")
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), [])
 
@@ -156,10 +157,17 @@ class CheckInventoryRows(unittest.TestCase):
         self.assertEqual(self.repo.missing(), ["hook"])
 
     def test_an_unenforcing_row_without_a_reason_does_not_count(self) -> None:
+        # MIK-8279: a row without its reason is no longer skipped quietly (which
+        # left the function reported missing); it is a malformed row, named.
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn a() {}\nfn b() {}\n")
-        self.repo.write(rows.UNENFORCING, "src/oauth/mod.rs\ta\t1\t\nsrc/oauth/mod.rs\tb\t1\n")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\ta\t1\t\nsrc/oauth/mod.rs\tb\t1\n")
         self.repo.commit("add")
-        self.assertEqual(self.repo.missing(), ["a", "b"])
+        with self.assertRaises(rows.ledger.LedgerError) as raised:
+            self.repo.missing()
+        found = raised.exception.problems
+        self.assertEqual(len(found), 2, found)
+        self.assertIn(f"{rows.UNENFORCING}:2: the reason must not be empty", found[0])
+        self.assertIn(f"{rows.UNENFORCING}:3: 3 columns", found[1])
 
     def test_the_whole_tree_mode_sees_a_function_older_than_the_change(self) -> None:
         # MIK-8195: `existing` came in with the base, so the diff check never
@@ -172,7 +180,7 @@ class CheckInventoryRows(unittest.TestCase):
         self.assertEqual(rows.missing_rows(rows.ALL, "HEAD"), [], "an unswept area is not enforced yet")
         rows.SWEPT_AREAS = ("src/oauth/",)
         self.assertEqual(sorted(f[1] for f in rows.missing_rows(rows.ALL, "HEAD")), ["added", "existing"])
-        self.repo.write(rows.UNENFORCING, "src/oauth/mod.rs\texisting\t1\tr\nsrc/oauth/mod.rs\tadded\t1\tr\n")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\texisting\t1\tr\nsrc/oauth/mod.rs\tadded\t1\tr\n")
         self.repo.commit("rows")
         self.assertEqual(rows.missing_rows(rows.ALL, "HEAD"), [])
 
@@ -206,6 +214,8 @@ class CoverageGradeTrigger(unittest.TestCase):
         wanted |= {
             "docs/release/v4.0.0-critical-functions.tsv",
             "docs/release/v4.0.0-unenforcing-functions.tsv",
+            "docs/release/inventory.d/**",
+            "scripts/release/inventory_ledger.py",
             "scripts/release/critical_function_coverage.py",
             "scripts/release/critical_path_coverage.py",
             ".github/workflows/coverage-probe.yml",

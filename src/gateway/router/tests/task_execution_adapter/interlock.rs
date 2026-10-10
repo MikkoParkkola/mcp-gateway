@@ -172,6 +172,18 @@ fn observe(
     }
 }
 
+/// Join the worker, so a row's claims about it cover its whole run and not
+/// only the settlement a read can see. Terminal visibility precedes worker
+/// cleanup: a row that stops at the read can end the runtime while the worker
+/// is still returning from that settlement.
+async fn join_worker(state: &Arc<AppState>) {
+    let joined = state
+        .task_executor
+        .drain(std::time::Duration::from_secs(5))
+        .await;
+    assert!(joined.is_clean(), "the worker must finish: {joined:?}");
+}
+
 /// Assert design §4's interrupted-before-dispatch settlement.
 fn assert_interrupted_before_dispatch(fetched: &Value) {
     std::assert_eq!(
@@ -211,6 +223,7 @@ async fn x4_a_marker_write_failure_settles_completed_not_executed_and_dispatches
     let fetched = poll_until_terminal(&state, "key-a", &id).await;
 
     assert_interrupted_before_dispatch(&fetched);
+    join_worker(&state).await;
     std::assert_eq!(
         mock.calls(),
         0,
@@ -237,6 +250,7 @@ async fn x4_a_state_that_no_longer_upgrades_settles_completed_not_executed() {
     let fetched = poll_until_terminal(&state, "key-a", &id).await;
 
     assert_interrupted_before_dispatch(&fetched);
+    join_worker(&state).await;
     std::assert_eq!(
         mock.calls(),
         0,

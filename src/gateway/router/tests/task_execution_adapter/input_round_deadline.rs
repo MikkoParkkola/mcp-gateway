@@ -409,3 +409,167 @@ async fn a_resume_without_a_label_audits_none_even_if_the_creator_declared_one()
         "{events:?}"
     );
 }
+
+/// Freeze the store's clock one second before 1970.
+fn before_epoch(state: &Arc<AppState>) {
+    store(state).set_clock_for_test(Some(
+        chrono::DateTime::from_timestamp(-1, 0).expect("one second before 1970"),
+    ));
+}
+
+/// Wait until the worker has read the frozen pre-1970 clock `n` times: a
+/// second read proves it is still alive and waiting, not settled.
+async fn refused_reads(state: &Arc<AppState>, n: usize) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while store(state).refused_reads_for_test() < n {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the worker kept reading the clock");
+}
+
+/// MIK-8202: a round asked for on a clock before 1970 is neither parked nor
+/// abandoned; the worker waits, and parks it once the clock reads. Mutant:
+/// an unreadable clock read as past every deadline (the round abandoned).
+#[tokio::test]
+async fn a_round_asked_on_a_clock_before_1970_waits_then_parks() {
+    let (mock, mut gate) =
+        MockBackend::holding(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+    let (state, _dir) = state_with(&mock).await;
+    let id = task_id(&post(&state, "key-a", create(1, "park-unreadable")).await);
+    gate.wait_for_dispatch().await;
+    before_epoch(&state);
+    gate.release_all();
+    refused_reads(&state, 2).await;
+    let waiting = get_task(&state, "key-a", &id).await;
+    std::assert_eq!(status_of(&waiting), "working", "{waiting}");
+    store(&state).set_clock_for_test(None);
+    wait_input_required(&state, &id).await;
+}
+
+/// MIK-8202: an answer taken in time whose resume meets a clock before 1970
+/// is neither closed nor stranded: the worker waits, then dispatches once
+/// the clock reads. Mutant: the unreadable clock read as past the deadline,
+/// a refused close, and a task left `working` with nothing to finish it.
+#[tokio::test]
+async fn a_resume_on_a_clock_before_1970_waits_then_completes() {
+    let (mock, state, _dir, id) = parked_round("resume-unreadable").await;
+    let due = deadline(&state, &id);
+    clock(&state, due - 1);
+    store(&state).set_clock_after_next_resume(
+        chrono::DateTime::from_timestamp(-1, 0).expect("one second before 1970"),
+    );
+    let acked = post(
+        &state,
+        "key-a",
+        update(2, &id, json!({ "confirm": answer() })),
+    )
+    .await;
+    std::assert!(acked.get("error").is_none(), "{acked}");
+    refused_reads(&state, 2).await;
+    std::assert_eq!(mock.calls(), 1, "not dispatched on an unreadable clock");
+    clock(&state, due - 1);
+    let settled = poll_until_terminal(&state, "key-a", &id).await;
+    std::assert_eq!(status_of(&settled), "completed", "{settled}");
+    std::assert_eq!(mock.calls(), 2);
+}
+
+/// One worker, its round waiting on a clock before 1970.
+async fn one_worker_waiting(
+    key: &str,
+) -> (Arc<MockBackend>, Arc<AppState>, tempfile::TempDir, String) {
+    let (mock, mut gate) = MockBackend::holding(Answer::Sequence(vec![
+        ask("confirm", STATE_1),
+        done(),
+        done(),
+    ]));
+    let mut config = crate::config::Config::default();
+    config.tasks.max_workers = 1;
+    let (state, dir) = state_with_config(&mock, config).await;
+    let id = task_id(&post(&state, "key-a", create(1, key)).await);
+    gate.wait_for_dispatch().await;
+    before_epoch(&state);
+    gate.release_all();
+    refused_reads(&state, 2).await;
+    (mock, state, dir, id)
+}
+
+/// MIK-8202: with every worker waiting for the clock, a new submission is
+/// refused at once with a clear error, never queued behind the wait.
+#[tokio::test]
+async fn a_pool_waiting_for_the_clock_refuses_new_work_at_once() {
+    let (_mock, state, _dir, _id) = one_worker_waiting("pool-clock").await;
+    let refused = tokio::time::timeout(
+        Duration::from_secs(5),
+        post(&state, "key-a", create(2, "pool-clock-next")),
+    )
+    .await
+    .expect("refused at once, not queued");
+    std::assert_eq!(
+        message(&refused),
+        "every task worker is busy; retry later",
+        "{refused}"
+    );
+}
+
+/// MIK-8202: cancelling a task whose round waits for the clock ends the
+/// wait and frees its worker. Mutant: the wait ignores cancel.
+#[tokio::test]
+async fn a_cancel_ends_a_round_waiting_for_the_clock() {
+    let (_mock, state, _dir, id) = one_worker_waiting("cancel-clock").await;
+    let cancel = task_method(2, "tasks/cancel", json!({ "taskId": id }));
+    std::assert!(post(&state, "key-a", cancel).await.get("error").is_none());
+    // An ended wait stops reading the clock; a live one reads it every
+    // `CLOCK_RETRY` (20 ms under test), so ten intervals would show it.
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    let settled = store(&state).refused_reads_for_test();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    std::assert_eq!(
+        store(&state).refused_reads_for_test(),
+        settled,
+        "the cancelled round still waits for the clock"
+    );
+}
+
+/// MIK-8202: executor shutdown ends a worker waiting for the clock, within
+/// its bound: the wait never holds shutdown open.
+#[tokio::test]
+async fn shutdown_ends_a_round_waiting_for_the_clock() {
+    let (_mock, state, _dir, _id) = one_worker_waiting("shutdown-clock").await;
+    let outcome = state
+        .task_executor
+        .cancel_remaining(Duration::from_secs(5))
+        .await;
+    std::assert!(outcome.stopped, "the waiting worker outlived shutdown");
+}
+
+/// MIK-8202: an answer on a clock before 1970 is refused for now, the round
+/// stays open, and the same answer is taken once the clock reads. Covers the
+/// answer path's unreadable-clock refusal end to end; the store refuses the
+/// same answer on its own (`a_clock_before_the_epoch_refuses_an_update_and_keeps_the_round`).
+#[tokio::test]
+async fn an_answer_on_a_clock_before_1970_is_refused_and_the_round_stays_open() {
+    let (_mock, state, _dir, id) = parked_round("answer-unreadable").await;
+    let due = deadline(&state, &id);
+    before_epoch(&state);
+    let refused = post(
+        &state,
+        "key-a",
+        update(2, &id, json!({ "confirm": answer() })),
+    )
+    .await;
+    std::assert!(refused.get("error").is_some(), "{refused}");
+    std::assert_eq!(
+        status_of(&get_task(&state, "key-a", &id).await),
+        "input_required"
+    );
+    clock(&state, due - 1);
+    let taken = post(
+        &state,
+        "key-a",
+        update(3, &id, json!({ "confirm": answer() })),
+    )
+    .await;
+    std::assert!(taken.get("error").is_none(), "{taken}");
+}

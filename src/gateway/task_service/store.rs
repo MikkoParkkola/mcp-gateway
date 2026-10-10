@@ -25,6 +25,9 @@ use crate::fs_lock::ExclusiveFileLock;
 use chrono::{DateTime, Utc};
 #[cfg(test)]
 use disk::acquire_lease;
+// Unix-only: its one caller, `store_tests::repaired_rows`, is `cfg(unix)`.
+#[cfg(all(test, unix))]
+pub(super) use disk::after_load;
 #[cfg(test)]
 pub(super) use disk::read_bounded;
 use disk::{Fault, fire, open_blocking, write_record};
@@ -386,6 +389,13 @@ impl TaskStore {
             .and_then(|entry| entry.record.upstream.clone())
     }
 
+    /// MIK-8204 S5: the committed rows, the ones `get` can return (not
+    /// capacity occupancy, which also counts reserved and sealed files).
+    #[cfg(test)]
+    pub(crate) fn committed_count_for_test(&self) -> usize {
+        self.0.state().entries.len()
+    }
+
     /// Test-only: the owner digest of `id`, whatever owner holds it.
     #[cfg(test)]
     pub(crate) fn owner_digest_for_test(&self, id: &str) -> Option<String> {
@@ -469,7 +479,12 @@ impl Shared {
         }
         // Room for the bounded failure this task may have to settle as, or a
         // too-large outcome would leave it working (MIK-7651).
-        if targets::fallback_bytes(&task, &record, self.now())? > self.limits.record_bytes {
+        if targets::fallback_bytes(
+            &task,
+            &record,
+            self.now().map_err(|_| StoreError::Unavailable)?,
+        )? > self.limits.record_bytes
+        {
             return Err(StoreError::Capacity);
         }
         self.commit(&record_name(task.id()), &bytes)?;

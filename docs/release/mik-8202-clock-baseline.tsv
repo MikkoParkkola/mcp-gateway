@@ -1,6 +1,7 @@
 # MIK-8202: raw wall-clock reads each file may still hold (path, count).
 # scripts/release/check_clock_baseline.py fails when a count rises or an
-# unlisted file gains one. Rows only shrink; part 2 empties this file.
+# unlisted file gains one; a new row only carries reads moved from a
+# shrinking one (MIK-8283). Part 2 empties this file.
 src/attestation/audience_tests.rs	4
 src/attestation/launcher.rs	3
 src/attestation/signer.rs	3
@@ -18,7 +19,6 @@ src/commands/trust/baseline.rs	1
 src/commands/trust/lab.rs	2
 src/config_reload/grant_audit_crash_tests.rs	4
 src/config_reload/grant_reload_trigger_tests.rs	2
-src/cost_accounting/enforcer.rs	3
 src/cost_accounting/mod.rs	3
 src/cost_accounting/persistence.rs	3
 src/events/backend_source.rs	1
@@ -66,7 +66,7 @@ src/events/worker_tests.rs	9
 src/failsafe/circuit_breaker.rs	2
 src/failsafe/health.rs	5
 src/gateway/auth_api_key_digest_tests.rs	4
-src/gateway/auth_dashboard.rs	3
+src/gateway/auth_dashboard.rs	2
 src/gateway/auth_dashboard_tests.rs	1
 src/gateway/auth_live.rs	2
 src/gateway/auth_resolved.rs	1
@@ -117,8 +117,6 @@ src/gateway/server/identity_grants.rs	2
 src/gateway/server/tests/boot.rs	1
 src/gateway/session_lifecycle.rs	2
 src/gateway/streaming_tests/listen_graceful.rs	2
-src/gateway/task_service/execution/expiry.rs	1
-src/gateway/task_service/execution/input_round.rs	2
 src/gateway/task_service/execution/input_round_exit_tests.rs	1
 src/gateway/task_service/execution/recovery.rs	1
 src/gateway/task_service/execution/upstream/failed_policy_tests.rs	1
@@ -130,7 +128,6 @@ src/gateway/task_service/runtime_tests/expiry.rs	4
 src/gateway/task_service/runtime_tests/recovery.rs	3
 src/gateway/task_service/store_disk.rs	2
 src/gateway/task_service/store_expiry.rs	1
-src/gateway/task_service/store_input.rs	1
 src/gateway/task_service/store_tests/skipped.rs	1
 src/gateway/task_service/store_tests/targets.rs	2
 src/gateway/ui/control_plane/grant_projection_tests.rs	6

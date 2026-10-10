@@ -80,6 +80,17 @@ pub(crate) fn unix_millis() -> Result<u64, ClockBeforeEpoch> {
     since_epoch().map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
+/// Now as a `SystemTime`, for a site that compares against stored
+/// `SystemTime`s. A clock that cannot be read gives a time before the
+/// epoch, which such a site already refuses (`duration_since(UNIX_EPOCH)`
+/// fails): the reading is never a plausible present.
+pub(crate) fn system_time_or_before_epoch() -> SystemTime {
+    since_epoch().map_or_else(
+        |_| UNIX_EPOCH - std::time::Duration::from_secs(1),
+        |since| UNIX_EPOCH + since,
+    )
+}
+
 /// Now as a chrono time: `Err` where chrono would give a 1969 date.
 pub(crate) fn utc_now() -> Result<DateTime<Utc>, ClockBeforeEpoch> {
     let since = since_epoch()?;

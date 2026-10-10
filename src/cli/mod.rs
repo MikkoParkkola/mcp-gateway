@@ -344,8 +344,9 @@ pub enum Command {
         #[arg(long)]
         fix: bool,
 
-        /// Disable colored output
-        #[arg(long)]
+        /// Disable colored output. Hidden (MIK-8044 P2c3a): colour already
+        /// follows the terminal and `NO_COLOR`.
+        #[arg(long, hide = true)]
         no_color: bool,
     },
 

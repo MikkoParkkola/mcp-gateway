@@ -322,6 +322,13 @@ probe = "none"
 reason = "needs a backend response carrying the payload; the caller leg has no way to plant one"
 
 [[control]]
+id = "egress-scan-memo"
+description = "the response-inspection and context-integrity verdict memo returns only a text's own classification"
+source = "src/security/text_memo.rs"
+probe = "none"
+reason = "a wrong cache answer is a wrong scan answer, so it is part of the egress scan; like response-inspection it needs a backend response carrying the payload, which the caller leg cannot plant. Exercised through response-inspection's rows: MIK-8259 MEMO.1-3 (text_memo_tests, kernel_memo_tests, the response_inspect memo row and the delivery rows)"
+
+[[control]]
 id = "response-injection-scanner"
 description = "prompt-injection patterns in upstream responses are detected"
 source = "src/security/response_scanner.rs"

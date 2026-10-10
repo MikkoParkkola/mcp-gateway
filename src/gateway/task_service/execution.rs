@@ -97,9 +97,13 @@ impl BeginOutcome {
                 -32002,
                 "a task with this idempotency key is already being created",
             ),
-            Self::Capacity | Self::Unavailable => {
-                JsonRpcResponse::error(Some(id), -32603, "task store unavailable")
+            // Refused at once, never queued: a pool whose workers all wait
+            // (for a backend, or for a host clock that reads before 1970)
+            // must not hang new submissions (MIK-8202).
+            Self::Capacity => {
+                JsonRpcResponse::error(Some(id), -32603, "every task worker is busy; retry later")
             }
+            Self::Unavailable => JsonRpcResponse::error(Some(id), -32603, "task store unavailable"),
             // The code the synchronous path gives a sealed call, so a client
             // sees one refusal for it on either path.
             Self::Sealed => {
@@ -273,7 +277,9 @@ impl TaskExecutor {
         let (tx, rx) = oneshot::channel();
         self.spawn_worker(commit_and_run(
             handoff, intent, task, backend, call, cancel_rx, tx,
-        ));
+        ))
+        .await
+        .map_err(|_| ServiceError::AuditUnavailable)?;
         rx.await.map_err(|_| ServiceError::Unavailable)?
     }
 
@@ -548,7 +554,30 @@ impl TaskExecutor {
 
     /// Spawn a task worker under the shutdown token. Every worker goes through
     /// here, so none can outlive a shutdown that cancelled the rest.
-    fn spawn_worker(&self, worker: impl std::future::Future<Output = ()> + Send + 'static) {
+    ///
+    /// MIK-8204: first, every grant decision in the caller's open slot is
+    /// appended and the append has completed, so the audit log's file order
+    /// shows a cause before the work it starts. Under `FailClosed` a failed
+    /// append is `AuditUnavailable` and nothing is spawned; under
+    /// `BestEffort` it is logged and the spawn proceeds. A caller cancelled
+    /// during the append spawns nothing; its records are still written.
+    ///
+    /// Not an `async fn`: that would hold `worker` inline in the caller's
+    /// future across the append, and `commit_and_run`'s future is large
+    /// enough to overflow a debug-build stack. It is boxed before the wait.
+    fn spawn_worker(
+        &self,
+        worker: impl std::future::Future<Output = ()> + Send + 'static,
+    ) -> impl std::future::Future<Output = crate::Result<()>> + Send + '_ {
+        let worker = Box::pin(worker);
+        async move {
+            crate::gateway::meta_mcp::grant_audit::flush_open_slot().await?;
+            self.spawn_now(worker);
+            Ok(())
+        }
+    }
+
+    fn spawn_now(&self, worker: impl std::future::Future<Output = ()> + Send + 'static) {
         // COLLUDE.1: every worker collects its relay receipts on its own
         // task; task-locals do not cross `tokio::spawn`.
         let worker = crate::gateway::meta_mcp::invoke::relay::collecting(worker);
@@ -567,6 +596,8 @@ impl TaskExecutor {
         // worker cancelled while its runtime sat idle would take one more step
         // (and could dispatch to a backend) before noticing.
         let token = self.shutdown.clone();
+        #[cfg(test)]
+        crate::gateway::meta_mcp::grant_audit::seams::count_worker_spawn();
         tokio::spawn(async move {
             tokio::pin!(worker);
             tokio::select! {
@@ -575,16 +606,15 @@ impl TaskExecutor {
                 () = &mut worker => {}
             }
         });
+        #[cfg(test)]
+        crate::gateway::meta_mcp::grant_audit::seams::after_worker_spawn();
     }
 
     fn cancel_signal(&self, id: &str) {
         self.handoffs.cancel_signal(id);
     }
 
-    pub(crate) async fn commit_create(
-        &self,
-        write: CreateWrite<'_>,
-    ) -> Result<CreateOutcome, CommitFailure> {
+    pub(crate) async fn commit_create(&self, write: CreateWrite<'_>) -> CreateOutcome {
         let CreateWrite {
             request,
             task,
@@ -597,14 +627,13 @@ impl TaskExecutor {
             .create_targeted(request.borrow(), task, (backend, targets), move || {
                 workers.try_acquire_owned().ok()
             })
-            .await
-            .map_err(CommitFailure::Service)?;
+            .await;
         if let CreateOutcome::Created { task: stored, .. } = &created {
             let id = stored.task.id().to_owned();
             self.published(stored, &id);
             self.notify_observer(CommitStage::Published, &id).await;
         }
-        Ok(created)
+        created
     }
 
     pub(crate) async fn commit_transition(
