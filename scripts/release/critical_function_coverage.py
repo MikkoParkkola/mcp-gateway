@@ -173,44 +173,54 @@ def is_safe_macro(prefix, name, safe):
     return path + name in _QUALIFIED_SAFE and name in safe
 
 
-def local_macros(root):
-    """Every name a `macro_rules!` in `src/` defines."""
-    local = set()
-    for path in (Path(root) / "src").rglob("*.rs"):
-        local.update(_MACRO_DEF.findall(path.read_text()))
-    return frozenset(local)
-
-
 def macro_names(root):
     """The macro names a line may invoke and still be graded by its count:
     SAFE_MACROS minus any name a `macro_rules!` in `src/` defines."""
-    return SAFE_MACROS - local_macros(root)
+    local = set()
+    for path in (Path(root) / "src").rglob("*.rs"):
+        local.update(_MACRO_DEF.findall(path.read_text()))
+    return SAFE_MACROS - local
 
 
 # MIK-8327: a line that is only an optional `let <pattern> =` and a
-# `[tokio::]select! {` head holds no call: each arm is graded on its own line,
-# and a binding pattern runs no code. Such a line is graded by its count, so a
-# reached head is hit and an unreached one missed. Anything else on the line
-# (`biased;`, an arm, a call, a type annotation, a comment, another path)
-# keeps the MIK-7725 rule. A bare `select!` qualifies only when no
-# `macro_rules!` in `src/` defines `select`, which could wrap tracing.
+# `[::]tokio::select! {` head holds no call: each arm is graded on its own
+# line, and a binding pattern runs no code. Such a line is graded by its
+# count, so a reached head is hit and an unreached one missed. Anything else
+# on the line (`biased;`, an arm, a call, a type annotation, a comment,
+# another path, a bare `select!`) keeps the MIK-7725 rule. The spelling only
+# names tokio's macro if nothing in the crate can rebind it, so the exemption
+# is off for the whole grade when `src/` holds a `mod tokio`, an `as tokio`,
+# an `as select` or a `macro_rules! select`, or Cargo.toml renames the tokio
+# dependency (`package =`): any of those could make the head a wrapper whose
+# expansion runs code on the head line's count.
 _BINDING = r"(?:mut\s+)?[A-Za-z_]\w*"
 _PATTERN = r"(?:" + _BINDING + r"|\(\s*" + _BINDING + r"(?:\s*,\s*" + _BINDING + r")*\s*,?\s*\))"
 SELECT_HEAD = re.compile(
-    r"^\s*(?:let\s+" + _PATTERN + r"\s*=\s*)?(?P<path>(?:::)?tokio::)?select!\s*\{\s*$"
+    r"^\s*(?:let\s+" + _PATTERN + r"\s*=\s*)?(?:::)?tokio::select!\s*\{\s*$"
+)
+_REBINDS_SELECT = re.compile(
+    r"(?<!\w)mod\s+tokio\b|\bas\s+(?:tokio|select)\b|(?<!\w)macro_rules" + _GAP + r"!" + _GAP + r"select\b",
+    re.S,
+)
+# An inline `tokio = { package = .. }`, or any `[...dependencies.tokio]` table
+# (which could carry a `package` key on a later line): either fails closed.
+_TOKIO_RENAMED = re.compile(
+    r"(?m)^\s*tokio\s*=\s*\{[^}\n]*\bpackage\s*=|^\s*\[[^\]\n]*dependencies\.tokio\s*\]"
 )
 
 
-def is_select_head(raw, local=frozenset()):
-    """Whether `raw` is exactly a bare `select!` head (see SELECT_HEAD)."""
-    match = SELECT_HEAD.match(raw)
-    return bool(match) and (bool(match.group("path")) or "select" not in local)
+def select_head_trusted(root):
+    """Whether `tokio::select!` can only name tokio's macro in this crate."""
+    if any(_REBINDS_SELECT.search(path.read_text()) for path in (Path(root) / "src").rglob("*.rs")):
+        return False
+    cargo = Path(root) / "Cargo.toml"
+    return not (cargo.exists() and _TOKIO_RENAMED.search(cargo.read_text()))
 
 
-def head_has_call(raw, safe=SAFE_MACROS, local=frozenset()):
+def head_has_call(raw, safe=SAFE_MACROS, select_trusted=False):
     """True when this raw source line invokes a macro outside `safe` (or names
     a tracing level) but is not, as a whole, a plain head line (see above)."""
-    if is_select_head(raw, local):
+    if select_trusted and SELECT_HEAD.match(raw):
         return False
     unsafe = TRACING_NAME.search(raw) or any(
         not is_safe_macro(prefix, name, safe) and not (prefix == "" and name in _KEYWORDS)
@@ -357,8 +367,8 @@ def read_inventory(path):
 
 def grade(root, inventory, lcovs):
     hits = read_lcov(lcovs, root)
-    local = local_macros(root)
-    names = SAFE_MACROS - local
+    names = macro_names(root)
+    select_trusted = select_head_trusted(root)
     results = [
         ("INDIRECT", {"path": what.split(":", 1)[0], "fn": what.split(": ", 1)[1], "occurrence": "-"}, None, None, [])
         for what in tracing_indirections(root)
@@ -380,7 +390,7 @@ def grade(root, inventory, lcovs):
         unverifiable = []
         split = split_call_lines(lines, lo, hi, names)
         for n in range(lo, hi + 1):
-            if n in counts and (n in split or head_has_call(lines[n - 1], names, local)):
+            if n in counts and (n in split or head_has_call(lines[n - 1], names, select_trusted)):
                 unverifiable.append(f"{row['path']}:{n} (head count {counts[n]})")
                 counts[n] = 0
         excluded = []
