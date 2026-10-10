@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""Prove items moved out of server/mod.rs into sibling files unchanged.
+"""Prove items moved out of one Rust file into others unchanged.
 
-Usage: check_moved_items.py [--source <path>] <base> <head> <file>...
+Usage: check_moved_items.py [--source <path>] [--impl <Type>]... <base> <head> <file>...
 
-<file> names the new files under src/gateway/server/ (for example
-background.rs). With `--source <path>`, the items move out of <path> instead
-of server/mod.rs, and each <file> is named relative to <path>'s directory. The items of server/mod.rs at <base> must equal, as a
-multiset, the items of server/mod.rs and the named files at <head>. Each
-method of an `impl Gateway` block counts as an item of its own, so a method
-may move between impl blocks. `use` and `mod` lines are not compared (the
-compiler checks them). The only differences allowed are the ones a move
-makes: a `pub(super)` visibility added to an item or field, and, in a new
-file, `super::super::` for what was `super::` (a path one module higher).
-Comments and whitespace are ignored. Exit 0 when equal.
+The items move out of <path> (default src/gateway/server/mod.rs) into each
+<file>, named relative to <path>'s directory (for example background.rs, or
+backend/definition_access.rs). The items of <path> and of every <file> that
+already existed at <base> must equal, as a multiset, the items of <path> and
+the named files at <head>. Each method of an `impl <Type>` block (default
+`Gateway`; repeat `--impl` for more types) counts as an item of its own, so a
+method may move between impl blocks. `use` and `mod` lines are not compared
+(the compiler checks them). The only differences allowed are the ones a move
+makes: a `pub(super)` visibility added to an item or field, and, in a named
+file, one `super::` less on each `super::` chain (a path one module higher).
+Comments and whitespace are ignored; literals are compared whole. Exit 0 when
+equal, 1 on a difference.
 """
 
 from __future__ import annotations
@@ -56,7 +58,7 @@ def split(toks: list[str]) -> list[list[str]]:
     return out
 
 
-def items(text: str, moved: bool) -> list[str]:
+def items(text: str, moved: bool, impls: tuple[str, ...] = ("Gateway",)) -> list[str]:
     toks = tp.tokens(text)
     if moved:
         # Token-wise, so a string literal with a space stays one token. A file
@@ -82,10 +84,11 @@ def items(text: str, moved: bool) -> list[str]:
         body = re.sub(r"^(# \[ [^\]]* \] )+", "", s)
         if body.startswith(("use ", "pub ( crate ) use ", "pub use ", "mod ", "pub mod ", "pub ( crate ) mod ")):
             continue
-        if body.startswith("impl Gateway {"):
+        owner = next((i for i in impls if body.startswith(f"impl {i} {{")), None)
+        if owner:
             inner = it[it.index("{") + 1 : -1]
             for m in split(inner):
-                found.append("impl Gateway :: " + norm(" ".join(m)))
+                found.append(f"impl {owner} :: " + norm(" ".join(m)))
             continue
         found.append(norm(s))
     return found
@@ -96,29 +99,40 @@ def norm(s: str) -> str:
     return re.sub(r"(^|[({,;\]] )pub \( super \) ", r"\1", s)
 
 
+def exists(ref: str, path: str) -> bool:
+    return subprocess.run(["git", "cat-file", "-e", f"{ref}:{path}"],
+                          capture_output=True).returncode == 0
+
+
 def main() -> int:
     args = sys.argv[1:]
-    source = D + "mod.rs"
-    if args[:1] == ["--source"] and len(args) > 1:
-        source, args = args[1], args[2:]
+    source, impls = D + "mod.rs", []
+    while args[:1] in (["--source"], ["--impl"]) and len(args) > 1:
+        if args[0] == "--source":
+            source = args[1]
+        else:
+            impls.append(args[1])
+        args = args[2:]
     if len(args) < 3:
         print(__doc__)
         return 2
+    impls_t = tuple(impls) or ("Gateway",)
     base, head, files = args[0], args[1], args[2:]
     here = source.rsplit("/", 1)[0] + "/"
-    a = Counter(items(show(base, source), False))
-    b = Counter(items(show(head, source), False))
+    a = Counter(items(show(base, source), False, impls_t))
+    b = Counter(items(show(head, source), False, impls_t))
     for f in files:
-        b.update(items(show(head, here + f), True))
+        if exists(base, here + f):
+            a.update(items(show(base, here + f), True, impls_t))
+        b.update(items(show(head, here + f), True, impls_t))
     problems = [f"only at base: {x[:150]}" for x in sorted((a - b).elements())]
     problems += [f"only at head: {x[:150]}" for x in sorted((b - a).elements())]
     if problems:
         print("\n".join(problems))
         return 1
-    moved = sum(sum(1 for _ in items(show(head, here + f), True)) for f in files)
-    print(f"items equal: {sum(a.values())} items, {moved} of them moved into {', '.join(files)}")
+    moved = sum((b - Counter(items(show(head, source), False, impls_t))).values())
+    print(f"items equal: {sum(a.values())} items, {moved} of them in {', '.join(files)}")
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
