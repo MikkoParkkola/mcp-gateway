@@ -178,7 +178,7 @@ def gated_on_test(attribute: str) -> bool:
     span = attribute_span(attribute)
     tree = predicate(span[0]) if span else None
     if tree is None:
-        return bool(TEST_CFG.search(attribute))
+        return bool(re.search(r"\btest\b", unquoted(attribute)))
 
     def names_test(node) -> bool:
         if node[0] in ("all", "any"):
@@ -223,6 +223,9 @@ def off_macos(attribute: str, features: set[str]) -> bool:
         parts = split_top(body)
         if len(parts) < 2:
             return True
+        # A comment among the attributes may hide an `ignore`: it counts.
+        if any("/*" in unquoted(part) or "//" in unquoted(part) for part in parts[1:]):
+            return True
         if not any(re.fullmatch(r"ignore\b.*", part.strip(), re.S) for part in parts[1:]):
             return False
         tree, runs_when = predicate(parts[0]), False
@@ -252,14 +255,27 @@ def crate_features(root: Path, file: Path, cache: dict[Path, set[str]]) -> set[s
         data = tomllib.loads(manifest.read_text())
         declared = set(data.get("features", {}))
         named = {v[4:] for values in data.get("features", {}).values() for v in values if v.startswith("dep:")}
+        tables = [data, *data.get("target", {}).values()]
         optional = {
             name
+            for scope in tables
             for table in ("dependencies", "dev-dependencies", "build-dependencies")
-            for name, spec in data.get(table, {}).items()
+            for name, spec in scope.get(table, {}).items()
             if isinstance(spec, dict) and spec.get("optional")
         }
         cache[manifest] = declared | (optional - named)
     return cache[manifest]
+
+
+def unquoted(text: str) -> str:
+    """`text` with its string literals emptied."""
+    return re.sub(r'"(?:[^"\\]|\\.)*"', '""', text)
+
+
+def open_brackets(line: str) -> int:
+    """`[` less `]` in `line`, outside strings and a trailing `//` comment."""
+    code = unquoted(line).split("//", 1)[0]
+    return code.count("[") - code.count("]")
 
 
 def logical_lines(text: str) -> list[tuple[str, bool]]:
@@ -270,10 +286,13 @@ def logical_lines(text: str) -> list[tuple[str, bool]]:
     i = 0
     while i < len(raw):
         line = raw[i]
-        if line.startswith(("#[", "#![")) and line.count("[") > line.count("]"):
+        depth = open_brackets(line)
+        if line.startswith(("#[", "#![")) and depth > 0:
+            # Counted line by line: each line's own `//` comment is dropped.
             j = i
-            while j + 1 < len(raw) and line.count("[") > line.count("]"):
+            while j + 1 < len(raw) and depth > 0:
                 j += 1
+                depth += open_brackets(raw[j])
                 line += " " + raw[j]
             out.append((line, True))
             i = j + 1
