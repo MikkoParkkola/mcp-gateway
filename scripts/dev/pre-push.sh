@@ -29,6 +29,7 @@ if [[ -f Cargo.toml ]]; then
   # The cheap gates CI enforces, against the point this branch left the
   # release line (MIK-8328). Each prints its own message and stops the push.
   # They run first: each takes seconds, and the hygiene scan below takes minutes.
+  step "merge-base"
   base="$(git merge-base HEAD origin/docs/ranking-1-release-line)" || {
     echo "FAIL: no merge-base with origin/docs/ranking-1-release-line; run: git fetch origin docs/ranking-1-release-line"
     exit 1
@@ -95,6 +96,7 @@ if [[ -f Cargo.toml ]]; then
   run_cargo "cargo test --lib" test --lib --quiet
 fi
 
+step "commit metadata"
 tip="$(git rev-parse HEAD)"
 message="$(git log -1 --pretty=%B)"
 if ! grep -q '^Local-Tested: ' <<<"$message"; then
