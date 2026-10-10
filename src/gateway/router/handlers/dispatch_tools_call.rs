@@ -275,7 +275,9 @@ pub(super) async fn tools_call(
     // the same fields straight back.
     // The admission actor HTTP task admission keys on: the verified
     // identity's stable actor id, as `task_intent_for_call` uses.
-    let admission_actor = verified_identity.as_ref().map(|i| i.stable_actor_id());
+    let admission_actor = verified_identity
+        .as_ref()
+        .map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id);
     let confirmation = state
         .meta_mcp
         .confirm_destructive_task(&crate::gateway::meta_mcp::TaskConfirmationRequest {

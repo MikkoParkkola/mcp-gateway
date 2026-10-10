@@ -100,7 +100,7 @@ async fn stdio_send(gateway_meta: &Arc<MetaMcp>, params: Value) -> Value {
 }
 
 /// The params of `gateway_invoke alpha read` with `args`.
-fn invoke_read(args: Value) -> Value {
+fn invoke_read(args: &Value) -> Value {
     json!({ "name": "gateway_invoke",
         "arguments": { "server": "alpha", "tool": "read", "arguments": args } })
 }
@@ -119,7 +119,7 @@ async fn stdio_call(
         answer,
     });
     let gateway_meta = stdio_meta(arm, transport).await;
-    let mut params = invoke_read(args);
+    let mut params = invoke_read(&args);
     if let Some(meta) = meta {
         params["_meta"] = meta;
     }
@@ -172,7 +172,11 @@ fn audited_firewall_with(
         ..FirewallConfig::default()
     };
     tune(&mut config);
-    Arc::new(Firewall::from_config(config, None))
+    // The detector exists only with a transition tracker, as in production.
+    let tracker = config
+        .anomaly_detection
+        .then(|| Arc::new(crate::transition::TransitionTracker::new()));
+    Arc::new(Firewall::from_config(config, tracker))
 }
 
 /// R5: a clean `gateway_invoke read` over stdio with anomaly detection on.
@@ -275,7 +279,7 @@ pub(crate) async fn stdio_retry_answering(audit: &Path, answer: &str) -> Sent {
         }),
     )
     .await;
-    let mut params = invoke_read(json!({}));
+    let mut params = invoke_read(&json!({}));
     params["_meta"] = json!({
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
         "io.modelcontextprotocol/clientCapabilities": { "elicitation": { "form": {} } }
@@ -314,7 +318,7 @@ pub(crate) async fn stdio_twice(
         }),
     )
     .await;
-    let first = stdio_send(&gateway_meta, invoke_read(args.0)).await;
-    let second = stdio_send(&gateway_meta, invoke_read(args.1)).await;
+    let first = stdio_send(&gateway_meta, invoke_read(&args.0)).await;
+    let second = stdio_send(&gateway_meta, invoke_read(&args.1)).await;
     (first, second, calls.load(Ordering::SeqCst))
 }

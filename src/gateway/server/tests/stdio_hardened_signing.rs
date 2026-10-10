@@ -109,6 +109,7 @@ fn standard_stdio_leaves_a_non_invoke_tool_call_unsigned() {
 
 /// An argument the request firewall blocks as shell injection, built so no
 /// such literal sits in the source.
+#[cfg(feature = "firewall")]
 const SHELL_PATTERN: &str = concat!(";", " rm", " -rf", " / ");
 
 /// Route-check-parity P3: a hardened stdio `tools/call` the route-stage request

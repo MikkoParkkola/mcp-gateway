@@ -646,7 +646,7 @@ fn an_unattributable_caller_is_never_an_admitted_replay() {
         super::task_admission_request(alice.stable_actor_id(), KEY.to_owned(), TOOL, &arguments);
     let _held = admission.admit_task(owned.borrow());
     let alice_actor = alice.stable_actor_id();
-    let owner = TaskConfirmationRequest {
+    let alice_request = TaskConfirmationRequest {
         id: RequestId::Number(7),
         tool_name: TOOL,
         arguments: &arguments,
@@ -661,12 +661,12 @@ fn an_unattributable_caller_is_never_an_admitted_replay() {
         admission: &admission,
     };
     assert!(
-        MetaMcp::already_admitted(&owner, KEY),
+        MetaMcp::already_admitted(&alice_request, KEY),
         "control: the verified owner's operation is recognised"
     );
     let unattributed = TaskConfirmationRequest {
         admission_actor: None,
-        ..owner
+        ..alice_request
     };
     assert!(!MetaMcp::already_admitted(&unattributed, KEY));
 }
