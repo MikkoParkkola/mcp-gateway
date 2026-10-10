@@ -109,13 +109,13 @@ async fn a_round_asked_on_an_unreadable_clock_is_sealed_after_the_wait_and_redee
     std::assert!(!shown.to_string().contains(STATE_1), "{shown}");
 
     // The original binding: the same caller's answer redeems it.
-    let taken = post(
+    let redeemed = post(
         &state,
         "key-a",
         update(2, &id, json!({ "confirm": answer() })),
     )
     .await;
-    std::assert!(taken.get("error").is_none(), "{taken}");
+    std::assert!(redeemed.get("error").is_none(), "{redeemed}");
     let settled = poll_until_terminal(&state, "key-a", &id).await;
     std::assert_eq!(status_of(&settled), "completed", "{settled}");
     std::assert_eq!(mock.calls(), 2);
@@ -212,7 +212,7 @@ async fn a_redemption_on_an_unreadable_clock_waits_and_retries_unspent() {
         seen = observe_wait(&state, seen).await;
         let snapshot = store(&state).refused_reads_for_test();
         std::assert_eq!(mock.calls(), 1, "attempt {attempt}: nothing dispatched");
-        tokio::time::advance(CLOCK_RETRY - Duration::from_millis(1)).await;
+        tokio::time::advance(Duration::from_millis(19)).await;
         settle_yields().await;
         std::assert_eq!(store(&state).refused_reads_for_test(), snapshot, "too soon");
         tokio::time::advance(Duration::from_millis(1)).await;
