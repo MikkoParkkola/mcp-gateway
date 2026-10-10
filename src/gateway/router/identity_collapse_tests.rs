@@ -449,3 +449,157 @@ async fn nameless_certificates_never_share_a_per_caller_child() {
     }
     assert_ne!(pids[0], pids[1], "two callers shared one child");
 }
+
+/// A personal, cacheable REST capability `name`, owned by mTLS subject
+/// `owner`, served by `port`'s `/probe`.
+fn personal_probe(name: &str, owner: &str, port: u16) -> String {
+    format!(
+        "name: {name}\ndescription: Personal cacheable probe\ncache:\n  ttl: 60\n  \
+         strategy: memory\nmetadata:\n  exposure: personal\n  identity_owner:\n    \
+         authority: mtls\n    subject: '{owner}'\nproviders:\n  primary:\n    service: rest\n    \
+         config:\n      base_url: http://localhost:{port}\n      path: /probe\n      method: GET\n"
+    )
+}
+
+/// `tools/call gateway_invoke` of capability `tool` as API key `key` with
+/// client certificate `cert`; the body.
+async fn invoke_capability(
+    fx: &super::direct_guards_fixture::Fx,
+    key: &str,
+    cert: &crate::mtls::CertIdentity,
+    tool: &str,
+) -> Value {
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("authorization", format!("Bearer {key}"))
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "gateway_invoke")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+                "name": "gateway_invoke",
+                "arguments": {"server": "caps", "tool": tool, "arguments": {}},
+                "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                          "io.modelcontextprotocol/clientCapabilities": {}},
+            }})
+            .to_string(),
+        ))
+        .unwrap();
+    request.extensions_mut().insert(cert.clone());
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+}
+
+/// R2a (the capability-cache site, `capability/executor/params.rs` `1:`
+/// arm): a personal capability whose owner an operator wrote as the
+/// placeholder subject. Two callers behind different API keys who both
+/// present a nameless certificate must never share its cached result: today
+/// both run as that owner, and B is served A's cached answer (the upstream
+/// sees one request). Control: a named owner's second call is a cache hit, so
+/// caching demonstrably happens. Mutant: the display-name fallback restored.
+#[tokio::test]
+async fn nameless_certificates_never_share_a_cached_personal_result() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use crate::capability::{CapabilityBackend, CapabilityExecutor};
+
+    use super::direct_guards_fixture::{Answer, fixture};
+
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&hits);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let app = axum::Router::new().route(
+            "/probe",
+            axum::routing::get(move || {
+                let n = counter.fetch_add(1, Ordering::SeqCst) + 1;
+                async move { axum::Json(json!({"answer": format!("served-{n}")})) }
+            }),
+        );
+        axum::serve(listener, app).await.unwrap();
+    });
+    let dir = tempfile::TempDir::new().unwrap();
+    let placeholder = nameless_cert().display_name;
+    std::fs::write(
+        dir.path().join("placeholder_probe.yaml"),
+        personal_probe("placeholder_probe", &placeholder, port),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("named_probe.yaml"),
+        personal_probe("named_probe", "agent-a", port),
+    )
+    .unwrap();
+    let executor = CapabilityExecutor::new().with_test_http_client(reqwest::Client::new());
+    let caps = Arc::new(CapabilityBackend::new("caps", Arc::new(executor)));
+    caps.load_from_directory(dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+    // Each owner holds an execute grant for its own probe, as an operator
+    // would write them.
+    let grant = |id: &str, subject: &str, capability: &str| {
+        let subject = crate::identity_grants::GrantSubject::new("mtls", subject, None);
+        crate::identity_grants::IdentityGrant {
+            grant_id: id.to_owned(),
+            subject: subject.clone(),
+            agent: crate::identity_grants::GrantAgent::Any,
+            capability: capability.to_owned(),
+            tool: None,
+            scope: crate::identity_grants::GrantScope::Execute,
+            owner: Some(subject),
+            expires_at: None,
+            revoked_at: None,
+            provenance: "test".to_owned(),
+            reason: "MIK-8286 R2a".to_owned(),
+        }
+    };
+    let grants = crate::identity_grants::LocalIdentityGrantStore::from_grants(vec![
+        grant("g-named", "agent-a", "named_probe"),
+        grant("g-placeholder", &placeholder, "placeholder_probe"),
+    ]);
+    let fx = fixture(Answer::Ok, |meta| {
+        meta.set_capabilities(Arc::clone(&caps));
+        meta.set_identity_grants(grants);
+    })
+    .await;
+
+    let named = named_cert("agent-a");
+    let first = invoke_capability(&fx, "k-std", &named, "named_probe").await;
+    assert!(
+        first.to_string().contains("served-1"),
+        "control runs: {first}"
+    );
+    let again = invoke_capability(&fx, "k-std", &named, "named_probe").await;
+    assert!(
+        again.to_string().contains("served-1"),
+        "control is cached: {again}"
+    );
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "the control's second call hit the cache"
+    );
+
+    let nameless = nameless_cert();
+    let a = invoke_capability(&fx, "k-std", &nameless, "placeholder_probe").await;
+    let b = invoke_capability(&fx, "k-budget", &nameless, "placeholder_probe").await;
+    assert!(
+        !(a.to_string().contains("served-2") && b.to_string().contains("served-2")),
+        "caller B was served caller A's cached personal result: A={a} B={b}"
+    );
+}
+
+/// A client certificate whose CN is `cn`, parsed by the production parser.
+fn named_cert(cn: &str) -> crate::mtls::CertIdentity {
+    let mut params = rcgen::CertificateParams::default();
+    let mut dn = rcgen::DistinguishedName::new();
+    dn.push(rcgen::DnType::CommonName, cn);
+    params.distinguished_name = dn;
+    let key_pair = rcgen::KeyPair::generate().expect("key generation failed");
+    let der = params.self_signed(&key_pair).expect("cert").der().to_vec();
+    crate::mtls::CertIdentity::from_der(&der).expect("parses")
+}
