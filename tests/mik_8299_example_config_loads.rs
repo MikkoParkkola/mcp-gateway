@@ -77,7 +77,9 @@ fn blocks(lines: &[&str]) -> Vec<Block> {
 /// `lines` with `block` uncommented and `~/` pointed at `home`, so the test
 /// never reads the developer's own env file.
 fn with_block(lines: &[&str], block: Option<&Block>, home: &Path) -> String {
-    let home = format!("{}/", home.display());
+    // Forward slashes: a Windows `\U` inside a double-quoted YAML path would
+    // read as an escape sequence, and Windows accepts `/` as a separator.
+    let home = format!("{}/", home.display().to_string().replace('\\', "/"));
     let mut out = String::new();
     for (n, line) in lines.iter().enumerate() {
         let line = match block {
