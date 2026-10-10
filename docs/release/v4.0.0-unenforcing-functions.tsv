@@ -130,3 +130,16 @@ src/gateway/server/run_steps.rs	webhook_routes	1	Builds the webhook routes the r
 src/gateway/server/run_steps.rs	generate_gateway_key_pair	1	Generates the JWKS signing key pair; makes no access decision (MIK-8144)
 src/gateway/server/run_steps.rs	managed_recovery_adapters	1	Lists the recovery adapters that are configured backends; makes no access decision (MIK-8144)
 src/gateway/server/stdio_writer.rs	stdout_queue	1	Queue construction (MIK-8176): creates the stdout writer's bounded queue and, in test builds only, reports the stdio session's Meta-MCP to a test seam; it decides nothing
+src/gateway/server/background.rs	drop	1	AbortOnDrop::drop: aborts the owned task; no access decision
+src/gateway/server/background.rs	new	1	AbortOnDrop::new: wraps a task handle so dropping it aborts the task; no access decision
+src/gateway/server/background.rs	poll_export_source	1	Polls one log exporter for the SIEM export; makes no access decision
+src/gateway/server/background.rs	spawn_export_task	1	Starts the SIEM evidence export; reads and forwards logs, makes no access decision (MIK-8144 move)
+src/gateway/server/background.rs	spawn_health_loop	1	Starts backend health checks; no access decision
+src/gateway/server/background.rs	spawn_idle_reaper	1	Starts the idle backend reaper; no access decision
+src/gateway/server/construct.rs	account_custody	1	Returns the custody handle; no access decision
+src/gateway/server/construct.rs	new	1	Gateway::new: the in-memory constructor, delegating to new_with_path; no decision of its own
+src/gateway/server/construct.rs	new_with_path	1	Delegates to new_with_env with an empty overlay; no decision of its own
+src/gateway/server/construct.rs	reload_path	1	Returns the config path hot reload watches; no access decision
+src/gateway/server/construct.rs	shutdown_account_custody	1	Releases account custody at shutdown; no access decision
+src/gateway/server/construct.rs	with_env	1	Builder: sets the evaluated environment; no access decision
+src/gateway/server/construct.rs	with_watched_config	1	Builder: sets the watched config path; no access decision

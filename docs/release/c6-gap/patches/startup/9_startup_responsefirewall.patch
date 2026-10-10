@@ -1,9 +1,9 @@
-diff --git a/src/gateway/server/mod.rs b/src/gateway/server/mod.rs
-index e2bb23408..a6431f1fd 100644
---- a/src/gateway/server/mod.rs
-+++ b/src/gateway/server/mod.rs
-@@ -473,9 +473,7 @@ impl Gateway {
-     fn response_firewall(&self, meta_mcp: &MetaMcp) -> Arc<Firewall> {
+diff --git a/src/gateway/server/build_meta.rs b/src/gateway/server/build_meta.rs
+index a76fc65e3..d5214b573 100644
+--- a/src/gateway/server/build_meta.rs
++++ b/src/gateway/server/build_meta.rs
+@@ -58,9 +58,7 @@ impl Gateway {
+     pub(super) fn response_firewall(&self, meta_mcp: &MetaMcp) -> Arc<Firewall> {
          let fw_cfg = self.config.security.firewall.clone();
          let fw_enabled = fw_cfg.enabled;
 -        let tt = fw_cfg

@@ -1645,7 +1645,7 @@ class WorkflowWiring(unittest.TestCase):
             ["dockerfile", "rust-version"],
             "release-compile must compile on both the Dockerfile's toolchain and the rust-version",
         )
-        self.assertIn("sed -n 's/^FROM rust:", body, "the Dockerfile row no longer reads the Dockerfile")
+        self.assertIn("sed -n 's/^FROM mirror\\.gcr\\.io\\/library\\/rust:", body, "the Dockerfile row no longer reads the Dockerfile")
         self.assertIn("sed -n 's/^rust-version = ", body, "the rust-version row no longer reads Cargo.toml")
         # The Dockerfile row builds the binary (MIK-8188) so the next step can
         # grep it for the debug-only test trust roots; the rust-version row
@@ -2486,6 +2486,36 @@ class WorkflowWiring(unittest.TestCase):
                  for command in joined(block) for script in unit if f"scripts/release/{script}" in command}
         self.assertEqual(stray, set(), "a unit test left in the report-only job is swallowed off a tag")
         self.assertIn("release-script-tests", needs_of(jobs("ci.yml")["docker-build"]) or "")
+
+    def test_every_c6_obligation_is_resolved_on_every_pull_request_and_release_push(self):
+        # MIK-8245: an obligation whose function moved, or whose patched lines
+        # changed, would be scored VOID at gate day and replaced silently. The
+        # resolver catches it in the change that caused it, so it must run on
+        # every pull request and every release-line push, unconditionally, and
+        # fail the run: no filter, no `if:`, nothing that swallows its status.
+        path = WORKFLOWS / "c6-obligations.yml"
+        doc = yaml.load(path.read_text(encoding="utf-8"), Loader=_StrictLoader)
+        on = doc.get("on", doc.get(True))
+        self.assertIsInstance(on, dict, "c6-obligations.yml must name its triggers")
+        self.assertIn("pull_request", on, "the resolver must run on pull requests")
+        self.assertFalse(on["pull_request"], "the pull_request trigger must carry no branch or path filter")
+        push = on.get("push") or {}
+        self.assertIn("docs/ranking-1-release-line", push.get("branches", []), "the resolver must run on release-line pushes")
+        self.assertNotIn("paths", push, "the push trigger must carry no path filter")
+        self.assertNotIn("paths-ignore", push, "the push trigger must carry no path filter")
+        resolving = []
+        for name, job in doc["jobs"].items():
+            for step in job.get("steps", []):
+                if "c6_resolve.py" in str(step.get("run", "")):
+                    resolving.append((name, job, step))
+        self.assertEqual(len(resolving), 1, "exactly one step must run the C6 resolver")
+        name, job, step = resolving[0]
+        self.assertNotIn("if", job, f"job {name} must not be conditional")
+        self.assertNotIn("if", step, "the resolver step must not be conditional")
+        self.assertFalse(job.get("continue-on-error") or step.get("continue-on-error"),
+                         "the resolver's failure must fail the run")
+        self.assertEqual(step["run"].strip(), "python3 scripts/release/c6_resolve.py --tree HEAD",
+                         "the resolver must run alone, on the checked-out head, with its exit status")
 
     def test_the_ranking_corpus_is_regenerated_and_compared_every_ref(self):
         # MIK-7850: the held-out corpus must stay what gen_corpus.py derives
