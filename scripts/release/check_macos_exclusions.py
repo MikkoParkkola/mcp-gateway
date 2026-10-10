@@ -23,7 +23,9 @@ exclusion). It guards against accidental omission, not adversarial spellings.
 Stated limits: an untrusted multi-line attribute's item is the next item line
 within 30 lines; a string spread over lines whose next line reads like
 `fn name` can be taken for that item; stacked cfgs are judged one by one, so
-gates off on both platforms only together still demand a row (over-listing)."""
+gates off on both platforms only together still demand a row (over-listing);
+a multi-line gate whose `)]` closer sits inside a comment (`//)]`, `/*)]*/`)
+closes early and can drop its test."""
 
 from __future__ import annotations
 
