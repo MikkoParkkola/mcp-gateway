@@ -88,11 +88,10 @@ pub(super) async fn readable_now(
         }
         // The cancel signal first, then the retry: a timeout polls its inner
         // future before its timer, as the old biased select did.
-        match tokio::time::timeout(CLOCK_RETRY, cancel_rx.changed()).await {
-            // A dropped sender can no longer cancel: stop, as `dispatch` does.
-            Ok(Err(_)) => return ClockWait::Stopped,
-            // A change (the loop re-reads the flag) or the retry is due.
-            Ok(Ok(())) | Err(_) => {}
+        // A dropped sender can no longer cancel: stop, as `dispatch` does. A
+        // change (the loop re-reads the flag) or a due retry loops.
+        if let Ok(Err(_)) = tokio::time::timeout(CLOCK_RETRY, cancel_rx.changed()).await {
+            return ClockWait::Stopped;
         }
     }
 }
