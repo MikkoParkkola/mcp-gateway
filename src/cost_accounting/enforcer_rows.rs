@@ -38,6 +38,7 @@ pub(super) fn add_capped(
     name: &str,
     limits: &HashMap<String, f64>,
     micro: u64,
+    day: Option<u64>,
 ) -> u64 {
     // Budgeted entries never count against the cap, present or not, so the map
     // holds at most every budgeted name plus MAX_UNBUDGETED_ROWS others.
@@ -56,16 +57,38 @@ pub(super) fn add_capped(
     // The day is marked before the sweep finishes; no second spend can act on
     // that early mark because settles run one at a time under the ledger lock
     // and a restore runs before the enforcer is shared.
-    if !own && short {
-        let today = super::current_day();
-        if swept.fetch_max(today, Ordering::Relaxed) < today {
-            sweep_stale(map, limits);
-            own = unbudgeted() < MAX_UNBUDGETED_ROWS;
-        }
+    if !own
+        && short
+        && let Some(today) = day
+        && swept.fetch_max(today, Ordering::Relaxed) < today
+    {
+        sweep_stale(map, limits);
+        own = unbudgeted() < MAX_UNBUDGETED_ROWS;
     }
     if own {
-        map.entry(name.to_string()).or_default().add(micro)
+        map.entry(name.to_string()).or_default().add_on(day, micro)
     } else {
-        overflow.add(micro)
+        overflow.add_on(day, micro)
+    }
+}
+
+impl DailyAccumulator {
+    /// Add `micro` on `day` and return the running total. A later `day`
+    /// resets the total first, in the same critical section, so an add on the
+    /// new day cannot be erased by the reset (MIK-7880); an earlier one never
+    /// moves the day back. `None` is a clock before 1970: no rollover, the
+    /// spend counts on the stored day.
+    pub(super) fn add_on(&self, day: Option<u64>, micro: u64) -> u64 {
+        let mut state = self.lock();
+        if let Some(day) = day
+            && day > state.0
+        {
+            state.0 = day;
+            #[cfg(test)]
+            super::fire_after_day_publish();
+            state.1 = 0;
+        }
+        state.1 = state.1.saturating_add(micro);
+        state.1
     }
 }

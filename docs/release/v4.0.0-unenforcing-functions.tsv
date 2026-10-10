@@ -147,6 +147,7 @@ src/gateway/server/run_steps.rs	webhook_routes	1	Builds the webhook routes the r
 src/gateway/server/stdio_single.rs	observe_stdio_inbound	1	Records the inbound protocol observation; makes no access decision
 src/gateway/server/stdio_single.rs	run_stdio	1	Starts stdio mode on the process stdin/stdout and delegates to run_stdio_on; no decision of its own (MIK-8144 move)
 src/gateway/server/stdio_single.rs	stdio_take_merged_client_meta	1	Moves the client _meta into the call arguments; makes no access decision
+src/gateway/task_service/store_input.rs	now	2	TaskStore::now delegates to Shared::now, which carries the decision
 src/gateway/server/stdio_writer.rs	stdout_queue	1	Queue construction (MIK-8176): creates the stdout writer's bounded queue and, in test builds only, reports the stdio session's Meta-MCP to a test seam; it decides nothing
 src/gateway/task_service/execution.rs	begin	1	Takes the handoff for a fresh id and spawns commit_and_run; admission and dispatch gating happen in the worker
 src/gateway/task_service/execution.rs	cancel_remaining	1	Cancels running workers at shutdown and waits a bound for them to end

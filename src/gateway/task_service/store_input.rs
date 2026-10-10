@@ -72,6 +72,8 @@ pub(super) struct TestSeams {
     clock_after_resume: std::sync::Mutex<Option<DateTime<Utc>>>,
     /// Answer writes that have entered the store, before its ordering lock.
     arrived: std::sync::atomic::AtomicUsize,
+    /// Reads of a frozen clock before 1970, each refused.
+    refused_reads: std::sync::atomic::AtomicUsize,
 }
 
 #[cfg(test)]
@@ -92,13 +94,14 @@ impl TestSeams {
 }
 
 impl Shared {
-    /// The clock every round-deadline decision reads. Wall time in production;
-    /// a test may freeze it per store.
+    /// The clock every round-deadline decision reads: `crate::clock` in
+    /// production; a test may freeze it per store. `Err` is a clock before
+    /// 1970, which dates nothing (MIK-8202).
     #[cfg_attr(
         not(test),
         expect(clippy::unused_self, reason = "one shape with the cfg(test) clock")
     )]
-    pub(super) fn now(&self) -> DateTime<Utc> {
+    pub(super) fn now(&self) -> Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch> {
         #[cfg(test)]
         if let Some(frozen) = *self
             .seams
@@ -106,15 +109,22 @@ impl Shared {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
         {
-            return frozen;
+            return if frozen.timestamp() < 0 {
+                self.seams
+                    .refused_reads
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(crate::clock::ClockBeforeEpoch)
+            } else {
+                Ok(frozen)
+            };
         }
-        Utc::now()
+        crate::clock::utc_now()
     }
 }
 
 impl TaskStore {
     /// The store's clock (see [`Shared::now`]).
-    pub(crate) fn now(&self) -> DateTime<Utc> {
+    pub(crate) fn now(&self) -> Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch> {
         self.0.now()
     }
 
@@ -137,6 +147,15 @@ impl TaskStore {
             .clock_after_resume
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(at);
+    }
+
+    /// How many reads of a frozen clock before 1970 were refused.
+    #[cfg(test)]
+    pub(crate) fn refused_reads_for_test(&self) -> usize {
+        self.0
+            .seams
+            .refused_reads
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// How many answer writes have reached the store's ordering lock.
@@ -174,11 +193,12 @@ impl TaskStore {
         id: &str,
         revision: u64,
         reason: String,
+        at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
         tokio::task::spawn_blocking(move || {
-            shared.close_round_blocking(&owner, &id, revision, reason)
+            shared.close_round_blocking(&owner, &id, revision, reason, at)
         })
         .await
         .map_err(|_| StoreError::Storage)?
@@ -339,6 +359,7 @@ impl Shared {
         id: &str,
         revision: u64,
         reason: String,
+        at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
         let _order = self.order();
         let (mut task, mut record) = self.read_owned(owner, id)?;
@@ -352,7 +373,9 @@ impl Shared {
         ) {
             return Err(StoreError::InvalidTransition);
         }
-        let at = self.now();
+        // Stamped at the time the caller read when it judged the round closed,
+        // never a second read: the clock may have stepped before 1970 since
+        // (MIK-8202).
         for event in [
             TaskTransition::StatusMessage(Some(reason)),
             TaskTransition::Cancel,
@@ -401,13 +424,12 @@ impl Shared {
         let (mut task, mut record) = self.read_owned(owner, id)?;
         // Read after the lock, never before: an update queued while the round
         // was open must not be let through once it has closed.
-        let now = self.now();
         // A clock before 1970 dates nothing: the update is refused for now,
         // and the round is not closed, since closing cancels the task for
         // good on a time it cannot read (MIK-8202).
-        if now.timestamp() < 0 {
+        let Ok(now) = self.now() else {
             return Err(StoreError::Unavailable);
-        }
+        };
         if let Some(closed) = closed_at(&task, &record, now) {
             return Ok(ProvideOutcome::Closed(closed));
         }
