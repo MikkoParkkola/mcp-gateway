@@ -27,7 +27,8 @@ spuriously but never pass an unrun call. Compute the value into a local before
 the macro and pass the local.
 
 Exit status: 0 when every Critical row clears the floor, 1 otherwise. A row
-whose function is gone, or that no given report measured, fails.
+whose function is gone, or that no given report measured, fails. 3 when a
+given report is absent, empty or unreadable: nothing was graded (MIK-8265).
 """
 
 import argparse
@@ -283,8 +284,9 @@ INPUT_MISSING = 3
 
 
 class MissingInput(Exception):
-    """An lcov report the grade was given does not exist, as when a platform's
-    coverage job uploaded none. Nothing can be graded from a partial set."""
+    """An lcov report the grade was given is absent, empty or unreadable, as
+    when a platform's coverage job uploaded none. Nothing is graded from a
+    partial set: an empty report would grade as the other platform alone."""
 
     def __init__(self, path):
         super().__init__(f"input missing: {path}")
@@ -292,11 +294,17 @@ class MissingInput(Exception):
 
 
 def read_lcov(paths, root):
+    texts = []
     for path in paths:
-        if not Path(path).is_file():
+        try:
+            text = Path(path).read_text() if Path(path).is_file() else ""
+        except OSError:
+            text = ""
+        if not text.strip():
             raise MissingInput(path)
+        texts.append(text)
     hits, current = {}, None
-    for raw in (line for path in paths for line in Path(path).read_text().splitlines()):
+    for raw in (line for text in texts for line in text.splitlines()):
         if raw.startswith("SF:"):
             current = repo_relative(raw[3:], root)
             if current:

@@ -1009,6 +1009,8 @@ jobs:
         run: python3 scripts/release/test_scope_acceptance.py
       - name: Test the Critical function coverage grader
         run: python3 scripts/release/test_critical_function_coverage.py
+      - name: Test the critical path coverage grader
+        run: python3 scripts/release/test_critical_path_coverage.py
       - name: Test the inventory-row check (MIK-8169)
         run: python3 scripts/release/test_check_inventory_rows.py
       - name: Test the inventory ledger and its fragments (MIK-8279)

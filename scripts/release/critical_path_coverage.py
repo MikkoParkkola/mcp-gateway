@@ -10,7 +10,8 @@ and the baselines are the ones in docs/release/v4.0.0-critical-path-coverage.md
 2026-10-01"); a change there is a change here, in the same commit.
 
 Exit status: 0 when every path clears the Standard floor and its recorded
-baseline, 1 otherwise. A path with no measured file fails.
+baseline, 1 otherwise. A path with no measured file fails. 3 when the report is
+absent, empty or unreadable: nothing was graded (MIK-8265).
 """
 
 import argparse
@@ -100,7 +101,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("report", help="cargo llvm-cov --summary-only --json output")
     args = parser.parse_args(argv)
-    if not os.path.isfile(args.report):
+    # Absent, empty or unreadable all mean the Linux job uploaded no report.
+    if not os.path.isfile(args.report) or not os.access(args.report, os.R_OK) or os.path.getsize(args.report) == 0:
         print(f"input missing: {args.report}")
         print("NOT GRADED: the coverage report is missing, so no path was graded")
         return INPUT_MISSING

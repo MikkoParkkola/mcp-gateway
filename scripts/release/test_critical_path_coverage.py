@@ -69,6 +69,16 @@ class CriticalPathCoverage(unittest.TestCase):
         self.assertIn(f"input missing: {missing}", out.getvalue())
         self.assertNotIn("paths failing", out.getvalue())
 
+    def test_an_empty_report_counts_as_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            empty = pathlib.Path(tmp) / "cov.json"
+            empty.write_text("")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                code = cpc.main([str(empty)])
+        self.assertEqual(code, cpc.INPUT_MISSING)
+        self.assertIn(f"input missing: {empty}", out.getvalue())
+
     def test_both_graders_share_one_input_missing_status(self):
         spec = importlib.util.spec_from_file_location("cfc", HERE / "critical_function_coverage.py")
         cfc = importlib.util.module_from_spec(spec)

@@ -113,9 +113,20 @@ git archive "$rev" src docs/release scripts/release | tar -x -C "$out/src"
 paths_grader="$out/src/scripts/release/critical_path_coverage.py"
 [[ -f "$paths_grader" ]] || paths_grader="$HERE/critical_path_coverage.py"
 
-# Each grader exits 3 when a report it was given is absent (a platform job that
-# uploaded none, MIK-8265): that is no grade at all, never a graded FAIL.
+# A report the run should have uploaded but did not (a platform job that failed)
+# is no grade at all, never a graded FAIL (MIK-8265). Checked here first, so the
+# answer does not depend on <rev>'s graders, which may predate their own check;
+# each grader also exits 3 on an absent, empty or unreadable report.
 INPUT_MISSING=3
+not_graded() {
+  echo "GRADE rev=$rev run=$run conclusion=$conclusion: NOT GRADED (an input is missing; see above)"
+  exit 5
+}
+missing=0
+for input in coverage-linux/linux.lcov coverage-windows/windows.lcov coverage-linux/cov.json; do
+  [[ -s "$out/art/$input" && -r "$out/art/$input" ]] || { echo "input missing: $out/art/$input"; missing=1; }
+done
+[[ $missing == 0 ]] || not_graded
 status=0 functions=0 paths=0
 (cd "$out/src" && python3 scripts/release/critical_function_coverage.py \
   --lcov "$out/art/coverage-linux/linux.lcov" --lcov "$out/art/coverage-windows/windows.lcov") \
@@ -123,8 +134,7 @@ status=0 functions=0 paths=0
 python3 "$paths_grader" "$out/art/coverage-linux/cov.json" > "$out/paths.txt" || paths=$?
 if [[ $functions == "$INPUT_MISSING" || $paths == "$INPUT_MISSING" ]]; then
   grep -h '^input missing:' "$out/functions.txt" "$out/paths.txt" || true
-  echo "GRADE rev=$rev run=$run conclusion=$conclusion: NOT GRADED (an input is missing; see above)"
-  exit 5
+  not_graded
 fi
 [[ $functions == 0 && $paths == 0 ]] || status=1
 [[ "$conclusion" == success ]] || status=1

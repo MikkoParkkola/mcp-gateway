@@ -125,6 +125,22 @@ class CriticalFunctionCoverage(unittest.TestCase):
         self.assertIn(f"input missing: {missing}", out.getvalue())
         self.assertNotIn("critical rows failing", out.getvalue())
 
+    def test_an_empty_or_unreadable_report_counts_as_missing(self):
+        # An empty windows.lcov would otherwise grade as Linux alone (MIK-8265).
+        empty = self.root / "empty.lcov"
+        empty.write_text("")
+        folder = self.root / "a-directory.lcov"
+        folder.mkdir()
+        for bad in (empty, folder):
+            with self.subTest(bad=bad.name):
+                with self.assertRaises(cfc.MissingInput):
+                    cfc.read_lcov([self.lcov, bad], self.root)
+
+    def test_the_wrapper_maps_the_same_status(self):
+        # coverage_grade.sh turns a grader's INPUT_MISSING into NOT GRADED.
+        wrapper = (pathlib.Path(__file__).resolve().parent / "coverage_grade.sh").read_text()
+        self.assertIn(f"INPUT_MISSING={cfc.INPUT_MISSING}\n", wrapper)
+
     def test_the_report_reader_names_the_missing_report(self):
         missing = self.root / "absent.lcov"
         with self.assertRaises(cfc.MissingInput) as raised:
