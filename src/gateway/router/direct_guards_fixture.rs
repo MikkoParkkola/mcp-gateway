@@ -50,6 +50,10 @@ pub(crate) enum Answer {
     AskOnce,
     /// Like `AskOnce`, the question carrying no `requestState` (MIK-8078).
     AskNoState,
+    /// Asks on every call that carries no `requestState`, and answers every
+    /// retry that does: each fresh call takes one continuation slot, and a
+    /// redeem gives it back without taking another (MIK-8293).
+    AskAlways,
     /// A completed answer that still carries a `requestState` (MIK-8078).
     DoneWithState,
     /// Like `AskOnce`, a question `InputRequired::from_result` declines (an
@@ -174,8 +178,16 @@ impl Transport for CountingBackend {
                 | Answer::AskAndError
                 | Answer::AskSecond
                 | Answer::AskEdited(_)
+                | Answer::AskAlways
         ) {
-            let asks_now = n == usize::from(matches!(self.answer, Answer::AskSecond));
+            let asks_now = if matches!(self.answer, Answer::AskAlways) {
+                params
+                    .as_ref()
+                    .and_then(|p| p.get("requestState"))
+                    .is_none()
+            } else {
+                n == usize::from(matches!(self.answer, Answer::AskSecond))
+            };
             return Ok(if asks_now {
                 let mut asked = JsonRpcResponse::success(id, question(self.answer));
                 if matches!(self.answer, Answer::AskAndError) {
@@ -219,6 +231,30 @@ pub(crate) struct Fx {
     _store: tempfile::TempDir,
 }
 
+/// A transparency log on a leaked temp file, alive for the test process.
+fn leaked_transparency_log() -> Arc<crate::security::TransparencyLogger> {
+    use crate::security::transparency_log::TransparencyLogConfig;
+    let file = tempfile::NamedTempFile::new().expect("tempfile");
+    let path = file.path().to_string_lossy().to_string();
+    std::mem::forget(file);
+    let config = Arc::new(TransparencyLogConfig {
+        enabled: true,
+        path,
+        key_id: "test".to_string(),
+        ..TransparencyLogConfig::default()
+    });
+    Arc::new(crate::security::TransparencyLogger::open(config).expect("logger opens"))
+}
+
+/// The fixture's backends with the per-backend rate limiter off: no row here
+/// tests it (`probe_tests` does, on its own backend), and the slot-cap rows
+/// (MIK-8293) send 65 calls in a burst.
+fn fixture_failsafe() -> FailsafeConfig {
+    let mut failsafe = FailsafeConfig::default();
+    failsafe.rate_limit.enabled = false;
+    failsafe
+}
+
 fn key(name: &str) -> ApiKeyConfig {
     // `hardened` refuses a request with no per-caller identity, so its keys
     // are personal ones.
@@ -252,7 +288,7 @@ pub(crate) fn replace_backend(fx: &Fx, name: &str) -> Arc<AtomicUsize> {
             passthrough: name.ends_with("-pt"),
             ..BackendConfig::default()
         },
-        &FailsafeConfig::default(),
+        &fixture_failsafe(),
         Duration::from_secs(60),
     ));
     backend.set_transport_for_test(Arc::new(CountingBackend {
@@ -289,6 +325,20 @@ pub(crate) async fn fixture_sanitizing(answer: Answer, on: bool) -> Fx {
 /// (`with_profile_registry`, `with_cost_governance`).
 pub(crate) async fn fixture_built(answer: Answer, build: impl FnOnce(MetaMcp) -> MetaMcp) -> Fx {
     fixture_inner(answer, false, build).await
+}
+
+/// [`fixture`] whose two backends require identity propagation to distinct
+/// audiences; `arm` installs the strategy (MIK-8293 S3c).
+pub(crate) async fn fixture_propagating(answer: Answer, arm: impl FnOnce(&mut MetaMcp)) -> Fx {
+    PROPAGATING.with(|p| p.set(true));
+    let fx = fixture(answer, |meta| {
+        // The meta layer checks for its own audit sink before a required mint.
+        meta.enable_transparency_log(leaked_transparency_log());
+        arm(meta);
+    })
+    .await;
+    PROPAGATING.with(|p| p.set(false));
+    fx
 }
 
 /// [`fixture`] with the production firewall installed on both the router and
@@ -466,6 +516,10 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
     /// `security.sanitize_input` for the state (the route x check matrix).
     static SANITIZE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Both backends require identity propagation, each to its own audience
+    /// (`aud-<name>`), so one caller reaches them under two bindings
+    /// (MIK-8293 S3c).
+    static PROPAGATING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// A transport that replaces the scripted backend (the egress matrix).
     static TRANSPORT: std::cell::RefCell<Option<Arc<dyn Transport>>> =
         const { std::cell::RefCell::new(None) };
@@ -491,6 +545,7 @@ fn fixture_auth() -> AuthConfig {
         enabled: true,
         api_keys: vec![
             key("k-std"),
+            key("k-other"),
             key("k-budget"),
             ApiKeyConfig {
                 rate_limit: 1,
@@ -546,14 +601,41 @@ async fn fixture_inner(
     let (calls, seen) = (Arc::new(AtomicUsize::new(0)), Arc::default());
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.sanitize_input = SANITIZE.with(std::cell::Cell::get);
+    // A required propagation refuses to mint without a durable audit sink
+    // (MIK-6740), so a propagating fixture gets a transparency log.
+    if PROPAGATING.with(std::cell::Cell::get) {
+        state_mut.transparency_log = Some(leaked_transparency_log());
+    }
     for (name, passthrough) in [("alpha", false), ("alpha-pt", true)] {
         let backend = Arc::new(Backend::new(
             name,
             BackendConfig {
                 passthrough,
+                // A propagating backend validates an HTTP base URL before it
+                // reaches the scripted transport.
+                transport: if PROPAGATING.with(std::cell::Cell::get) {
+                    crate::config::TransportConfig::Http {
+                        http_url: format!("https://{name}.internal/mcp"),
+                        streamable_http: Some(true),
+                        protocol_version: None,
+                    }
+                } else {
+                    BackendConfig::default().transport
+                },
+                identity_propagation: PROPAGATING.with(std::cell::Cell::get).then(|| {
+                    crate::identity_propagation::IdentityPropagationConfig {
+                        strategy:
+                            crate::identity_propagation::PropagationStrategyKind::SignedAssertion,
+                        audience: format!("aud-{name}"),
+                        required: true,
+                        session_mode: crate::identity_propagation::SessionMode::Stateless,
+                        token_exchange_endpoint: None,
+                        token_exchange_scope: None,
+                    }
+                }),
                 ..BackendConfig::default()
             },
-            &FailsafeConfig::default(),
+            &fixture_failsafe(),
             Duration::from_secs(60),
         ));
         backend.set_transport_for_test(backend_transport((&calls, &seen), answer));

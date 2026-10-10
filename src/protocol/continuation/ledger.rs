@@ -444,6 +444,22 @@ impl ContinuationState {
         state
     }
 
+    /// Test-only: a store that grants slots but whose keyring refuses every
+    /// envelope (a mint budget of zero), so a site's mint-failure path is
+    /// reached with its slot already taken (MIK-8311).
+    #[cfg(test)]
+    pub(crate) fn mint_refusing_for_test() -> Self {
+        let mut key = [0u8; 32];
+        SystemRandom::new()
+            .fill(&mut key)
+            .expect("platform RNG must produce a continuation key");
+        let mut state = Self::new();
+        state.keyring = Keyring::new(&[(1, key)])
+            .expect("a single 32-byte key is a valid keyring")
+            .with_mint_budget(0);
+        state
+    }
+
     /// Open an exchange on this replica and seal a continuation for it
     /// (MRTR.8).
     ///
