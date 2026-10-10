@@ -18,7 +18,12 @@ decide (an unmodelled key) counts as kept off macOS, so it must be listed.
 Also every `--skip` of the macOS job's test step in .github/workflows/ci.yml.
 Fails on any such item missing from docs/release/macos-test-exclusions.tsv, on
 a row with no reason, and on a row that no longer matches an item (a stale
-exclusion). It guards against accidental omission, not adversarial spellings."""
+exclusion). It guards against accidental omission, not adversarial spellings.
+
+Stated limits: an untrusted multi-line attribute's item is the next item line
+within 30 lines; a string spread over lines whose next line reads like
+`fn name` can be taken for that item; stacked cfgs are judged one by one, so
+gates off on both platforms only together still demand a row (over-listing)."""
 
 from __future__ import annotations
 
@@ -274,7 +279,7 @@ def unquoted(text: str) -> str:
 
 def logical_lines(text: str) -> list[tuple[str, bool]]:
     """Trimmed lines, with an attribute spread over several lines joined into
-    one: (text, whether the join is not trusted)."""
+    one: (text, whether it was joined)."""
     out: list[tuple[str, bool]] = []
     raw = [line.strip() for line in text.splitlines()]
     i = 0
@@ -294,14 +299,7 @@ def logical_lines(text: str) -> list[tuple[str, bool]]:
                 j += 1
                 depth += raw[j].count("[") - raw[j].count("]")
                 line += " " + raw[j]
-            # Fail closed (lead ruling): a join over several lines that holds
-            # a comment marker, or a string spread over lines (an odd quote
-            # count on a line), is not trusted: a `]` inside it can end the
-            # join early. Single-line quoted values (`"macos"`) are fine.
-            risky = j > i and any(
-                "/*" in r or "//" in r or r.count('"') % 2 for r in raw[i : j + 1]
-            )
-            out.append((line, risky))
+            out.append((line, True))
             i = j + 1
             continue
         out.append((line, False))
@@ -319,15 +317,14 @@ def excluded(root: Path) -> set[tuple[str, str]]:
             continue
         logical = logical_lines(file.read_text(errors="replace"))
         lines = [text for text, _ in logical]
-        for n, (line, risky) in enumerate(logical):
-            head = ATTR.match(line)
-            if not head:
+        for n, (line, _joined) in enumerate(logical):
+            if not ATTR.match(line):
                 continue
-            # A multi-line attribute is judged on its joined text; an
-            # untrusted join always counts, unless it is a cfg_attr with no
-            # `ignore` anywhere in it (which cannot skip a test).
-            blunt = risky and (head.group(1) == "cfg" or re.search(r"\bignore\b", line) is not None)
-            if not (blunt or off_macos(line, crate_features(root, file, features))):
+            # A multi-line attribute is judged on its joined text. One whose
+            # join a comment or a string spread over lines may have cut short
+            # does not close as `)]`, and counts (fail closed); one holding a
+            # comment does not parse, and counts.
+            if not off_macos(line, crate_features(root, file, features)):
                 continue
             if line.startswith("#!["):
                 found.add((rel, "*"))
@@ -343,7 +340,10 @@ def excluded(root: Path) -> set[tuple[str, str]]:
             after = end + 1
             # Its item is then the next item line: the rest of an attribute
             # whose join ended early sits in between.
-            while blunt and after < len(lines) and after <= end + 30 and not ITEM.match(lines[after]):
+            # An attribute left unclosed counts, so its test must be found even
+            # when the join ended early: its item is the next item line.
+            unclosed = attribute_span(line) is None
+            while unclosed and after < len(lines) and after <= end + 30 and not ITEM.match(lines[after]):
                 if lines[after].startswith("#["):
                     block.append(lines[after])
                 after += 1
