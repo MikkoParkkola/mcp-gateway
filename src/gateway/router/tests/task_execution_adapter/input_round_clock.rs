@@ -346,13 +346,36 @@ fn production_redemption_now_is_the_store_clock_and_no_other() {
         .expect("the sampler");
     let body = &source[start..];
     let body = &body[..body.find("\n    }\n").expect("its end")];
+    // Production code only: not the signature, not the test-only script block.
+    let mut in_script = false;
+    let production: Vec<&str> = body
+        .lines()
+        .skip(1)
+        .filter(|line| {
+            in_script |= line.contains("#[cfg(test)]");
+            let keep = !in_script;
+            in_script &= *line != "        }";
+            keep
+        })
+        .collect();
     let raw = ["SystemTime", "Utc", "Instant"].map(|name| format!("{name}::now"));
-    for other in raw
-        .iter()
-        .map(String::as_str)
-        .chain(["crate::clock", "clock_now"])
-    {
-        std::assert!(!body.contains(other), "redemption_now reads {other}");
+    for line in &production {
+        for other in raw
+            .iter()
+            .map(String::as_str)
+            .chain(["crate::clock", "clock_now"])
+        {
+            std::assert!(
+                !line.contains(other),
+                "redemption_now reads {other}: {line}"
+            );
+        }
     }
-    std::assert!(body.trim_end().ends_with("self.now()"), "{body}");
+    std::assert_eq!(
+        production
+            .iter()
+            .map(|line| line.trim())
+            .collect::<Vec<_>>(),
+        ["self.now()"]
+    );
 }

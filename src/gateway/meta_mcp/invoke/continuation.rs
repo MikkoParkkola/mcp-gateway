@@ -371,6 +371,8 @@ pub(super) async fn redeem_retry(
     };
 
     let refuse = |error: ContinuationError| {
+        // The worker's outcome is read from this very error (MIK-8202 AC13).
+        super::worker_clock::note_refusal(&error);
         warn!(server, tool, %error, "Continuation refused");
         record_continuation_rejection(continuation_error_reason(&error));
         rejected_continuation(&error)
@@ -380,10 +382,7 @@ pub(super) async fn redeem_retry(
     let sampled = super::worker_clock::redemption_sample()
         .unwrap_or_else(crate::protocol::continuation::clock_now);
     let now = sampled.map_err(refuse)?;
-    let payload = continuation.keyring().open(token, now).map_err(|error| {
-        super::worker_clock::note_open_refusal(&error);
-        refuse(error)
-    })?;
+    let payload = continuation.keyring().open(token, now).map_err(refuse)?;
 
     // Which domain the envelope was sealed for, before anything is read out of
     // it and before the hold or the ledger is touched.

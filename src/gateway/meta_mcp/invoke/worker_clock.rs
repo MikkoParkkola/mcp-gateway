@@ -167,33 +167,32 @@ pub(super) fn hand_to_worker(
 /// The one time a redemption samples, immediately before the open.
 ///
 /// `None` off a worker: the request reads `crate::clock` as before. On a
-/// worker, `Some(Err(..))` is a clock that cannot date the open: the channel
-/// notes it, and nothing has been spent or dispatched.
+/// worker the store's sample is the time, or the refusal that a clock which
+/// cannot date the open returns: the same [`ContinuationError`] the funnel
+/// answers with, from which [`note_refusal`] derives what the worker sees.
 pub(super) fn redemption_sample()
 -> Option<Result<u64, crate::protocol::continuation::ContinuationError>> {
-    use crate::protocol::continuation::ContinuationError;
-    let (log, store) = armed()?;
+    let (_, store) = armed()?;
     let sample = store
         .redemption_now()
         .ok()
         .and_then(|at| u64::try_from(at.timestamp()).ok());
-    Some(sample.ok_or_else(|| {
-        log.worker()
-            .redemption_unreadable
-            .store(true, Ordering::SeqCst);
-        ContinuationError::ClockUnreadable
-    }))
+    Some(sample.ok_or(crate::protocol::continuation::ContinuationError::ClockUnreadable))
 }
 
-/// Note, for the worker, that the open refused `error`: only a real expiry
-/// matters, and it closes the round.
-pub(super) fn note_open_refusal(error: &crate::protocol::continuation::ContinuationError) {
+/// Tell the worker what the funnel refused a redemption for, read from the
+/// very [`ContinuationError`] the funnel returns, so no second signal can
+/// disagree with it: an unreadable clock means retry (nothing was spent), an
+/// expiry means the round is over.
+pub(super) fn note_refusal(error: &crate::protocol::continuation::ContinuationError) {
     use crate::protocol::continuation::ContinuationError;
-    if *error == ContinuationError::Expired
-        && let Some((log, _)) = armed()
-    {
-        log.worker()
-            .redemption_expired
-            .store(true, Ordering::SeqCst);
+    let Some((log, _)) = armed() else {
+        return;
+    };
+    match error {
+        ContinuationError::ClockUnreadable => &log.worker().redemption_unreadable,
+        ContinuationError::Expired => &log.worker().redemption_expired,
+        _ => return,
     }
+    .store(true, Ordering::SeqCst);
 }
