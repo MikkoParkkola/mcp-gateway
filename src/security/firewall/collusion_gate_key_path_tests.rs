@@ -456,3 +456,66 @@ fn the_gate_reads_a_join_seam_run_together_only() {
         "a newline-form fingerprint in a join seam"
     );
 }
+
+/// The subset `pieces` without their middle piece, run together.
+fn without_middle(pieces: &[String]) -> String {
+    let middle = pieces.len() / 2;
+    pieces
+        .iter()
+        .enumerate()
+        .filter(|(k, _)| *k != middle)
+        .map(|(_, p)| p.as_str())
+        .collect()
+}
+
+/// Per text: alice is delivered the pieces (S3b) by `alpha:read{i}`; with
+/// `carol`, that same tool delivers carol the exact join of the subset on
+/// another call. Returns the texts where `who` forwarding the subset is
+/// reported. Each piece is under one k-gram, so only a k-gram spanning the
+/// seam the subset created can match.
+fn subset_reported(who: &str, carol: bool) -> Vec<usize> {
+    let fw = observing();
+    (0..TEXTS)
+        .filter(|&i| {
+            let (text, tool) = (text(i), format!("read{i}"));
+            let pieces = pieces(&text);
+            let subset = without_middle(&pieces);
+            deliver(&fw, "alice", &tool, &labelled_parts(&pieces));
+            if carol {
+                deliver(&fw, "carol", &tool, &flat(&subset));
+            }
+            reported(&fw, who, &subset)
+        })
+        .collect()
+}
+
+/// `MIK-8205` SUBSET.1: alice forwarding a subset of whole pieces she was
+/// delivered is not a relay, though the same tool delivered carol that
+/// exact join on another call.
+#[test]
+fn a_subset_forward_against_its_sources_exact_join_is_not_a_relay() {
+    let reported = subset_reported("alice", true);
+    assert!(
+        reported.is_empty(),
+        "subset forwards reported: {reported:?}"
+    );
+}
+
+/// `MIK-8205` falsifier: without carol's join the same forward is not
+/// reported, so carol's delivery is what refuses alice.
+#[test]
+fn a_subset_forward_with_no_competing_join_is_not_a_relay() {
+    let reported = subset_reported("alice", false);
+    assert!(
+        reported.is_empty(),
+        "subset forwards reported: {reported:?}"
+    );
+}
+
+/// `MIK-8205` SUBSET.2 control: bob, delivered nothing by the tool,
+/// forwarding carol's join is a relay.
+#[test]
+fn a_non_holder_forwarding_the_sources_exact_join_is_a_relay() {
+    let reported = subset_reported("bob", true);
+    assert_eq!(reported.len(), TEXTS, "missed relays");
+}
