@@ -245,9 +245,9 @@ class RatchetThroughGit(unittest.TestCase):
         self.assertIn("806", out.getvalue())
 
 
-    def renamed(self, head_text: str) -> tuple[int, str]:
-        """`src/a.rs` (805 lines, baselined) renamed to `src/b.rs` holding
-        `head_text`, judged through main() against the base commit."""
+    def renamed(self, annotation: str) -> tuple[int, str]:
+        """`src/a.rs` (805 lines, baselined) renamed to `src/b.rs`, its new
+        row preceded by `annotation`, judged through main() against the base."""
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             git = lambda *a: subprocess.run(["git", *a], cwd=root, check=True, capture_output=True)
@@ -262,8 +262,8 @@ class RatchetThroughGit(unittest.TestCase):
             git("add", "-A")
             git("commit", "-qm", "base")
             (root / "src/a.rs").unlink()
-            (root / "src/b.rs").write_text(head_text, encoding="utf-8")
-            baseline.write_text(f"{head_text.count(chr(10))} src/b.rs\n", encoding="utf-8")
+            (root / "src/b.rs").write_text(body(805), encoding="utf-8")
+            baseline.write_text(f"{annotation}805 src/b.rs\n", encoding="utf-8")
             gate = load_gate(root)
             gate.BASELINE = baseline
             out = io.StringIO()
@@ -271,12 +271,12 @@ class RatchetThroughGit(unittest.TestCase):
                 status = gate.main(["--base", "HEAD"])
         return status, out.getvalue()
 
-    def test_r8_a_rename_through_main_carries_its_row(self):  # MIK-8291
-        status, out = self.renamed(body(805))
+    def test_r8_an_annotated_rename_through_main_passes(self):  # MIK-8291
+        status, out = self.renamed("# moved-from src/a.rs\n")
         self.assertEqual(status, 0, out)
 
-    def test_r9_a_rename_that_changes_the_text_fails_through_main(self):  # MIK-8291
-        status, out = self.renamed(body(805).replace("fn f", "pub fn f"))
+    def test_r9_an_unannotated_rename_through_main_fails(self):  # MIK-8291
+        status, out = self.renamed("")
         self.assertEqual(status, 1, out)
         self.assertIn("src/b.rs", out)
 
@@ -314,142 +314,89 @@ class Wiring(unittest.TestCase):
 
 
 
-def code(start: int, count: int) -> list[str]:
-    """`count` distinct, non-trivial source lines."""
-    return [f"    let v{i} = {i};" for i in range(start, start + count)]
-
-
-def text(lines: list[str]) -> str:
-    return "".join(f"{line}\n" for line in lines)
-
-
 class MovedRows(unittest.TestCase):
-    """MIK-8291 (split-baselines): a new row may carry lines moved from a row
-    that shrank or left. The total excess may not rise, a listed row may not
-    grow, and a new row's excess over the ceiling must be covered by moved
-    lines; changed text does not match and fails safe."""
+    """MIK-8291 (split-baselines): a new row is a move when `# moved-from`
+    names a donor row that shrank or left in the same change. The total
+    excess may not rise and a listed row may not grow."""
 
-    HEADER = ["// SPDX-FileCopyrightText: 2026 Mikko Parkkola", "use super::*;"]
+    def ratchet(self, base, head, moved=None):
+        return load_gate(Path("/nonexistent")).check_ratchet(base, head, moved)
 
-    def ratchet(self, base, head, base_texts, head_texts):
-        return load_gate(Path("/nonexistent")).check_ratchet(base, head, base_texts, head_texts)
+    def test_m1_an_annotated_rename_passes(self):
+        self.assertEqual(self.ratchet({"src/a.rs": 1000}, {"src/b.rs": 1000}, {"src/b.rs": ["src/a.rs"]}), [])
 
-    def test_m1_a_whole_file_rename_passes(self):
-        lines = code(0, 1000)
-        errors = self.ratchet({"src/a.rs": 1000}, {"src/b.rs": 1000}, {"src/a.rs": text(lines)}, {"src/b.rs": text(lines)})
-        self.assertEqual(errors, [])
+    def test_m1b_an_unannotated_rename_fails(self):
+        errors = self.ratchet({"src/a.rs": 1000}, {"src/b.rs": 1000})
+        self.assertTrue(any("src/b.rs" in e and "moved-from" in e for e in errors), errors)
 
-    def test_m2_a_split_leaving_one_part_over_the_ceiling_passes(self):
-        lines = code(0, 1000)
-        moved, kept = lines[:848], lines[848:]
-        part = self.HEADER + moved
-        errors = self.ratchet(
-            {"src/a.rs": 1000},
-            {"src/b.rs": len(part)},
-            {"src/a.rs": text(lines)},
-            {"src/a.rs": text(kept), "src/b.rs": text(part)},
-        )
-        self.assertEqual(errors, [])
+    def test_m2_an_annotated_split_leaving_one_part_over_the_ceiling_passes(self):
+        # 1000 -> 150 left in place (row leaves) + 850 moved to b.
+        self.assertEqual(self.ratchet({"src/a.rs": 1000}, {"src/b.rs": 850}, {"src/b.rs": ["src/a.rs"]}), [])
 
-    def test_m3_a_new_oversized_file_with_nothing_moved_fails(self):
-        lines = code(0, 1000)
-        errors = self.ratchet(
-            {"src/a.rs": 1000},
-            {"src/a.rs": 1000, "src/c.rs": 850},
-            {"src/a.rs": text(lines)},
-            {"src/a.rs": text(lines), "src/c.rs": text(code(5000, 850))},
-        )
+    def test_m2b_a_three_way_split_may_name_one_donor_for_each_part(self):
+        moved = {p: ["src/a.rs"] for p in ("src/b.rs", "src/c.rs", "src/d.rs")}
+        head = {"src/b.rs": 850, "src/c.rs": 850, "src/d.rs": 850}
+        self.assertEqual(self.ratchet({"src/a.rs": 2550}, head, moved), [])
+
+    def test_m3_a_new_oversized_file_with_no_annotation_fails(self):
+        errors = self.ratchet({"src/a.rs": 1000}, {"src/a.rs": 1000, "src/c.rs": 850})
         self.assertTrue(any("src/c.rs" in e for e in errors), errors)
+
+    def test_m3b_a_donor_that_did_not_shrink_fails(self):
+        errors = self.ratchet({"src/a.rs": 1000}, {"src/a.rs": 1000, "src/c.rs": 850}, {"src/c.rs": ["src/a.rs"]})
+        self.assertTrue(any("src/c.rs" in e and "src/a.rs" in e for e in errors), errors)
+
+    def test_m3c_a_donor_that_is_not_a_baseline_row_fails(self):
+        errors = self.ratchet({"src/a.rs": 1000}, {"src/a.rs": 900, "src/c.rs": 850}, {"src/c.rs": ["src/small.rs"]})
+        self.assertTrue(any("src/c.rs" in e and "src/small.rs" in e for e in errors), errors)
 
     def test_m4_a_listed_row_that_grows_fails(self):
-        lines = code(0, 1000)
-        errors = self.ratchet({"src/a.rs": 1000}, {"src/a.rs": 1001}, {"src/a.rs": text(lines)}, {"src/a.rs": text(lines + code(9000, 1))})
-        self.assertTrue(any("src/a.rs" in e for e in errors), errors)
+        errors = self.ratchet({"src/a.rs": 1000}, {"src/a.rs": 1001})
+        self.assertTrue(any("src/a.rs" in e and "1001" in e for e in errors), errors)
 
     def test_m5_a_new_row_bigger_than_what_moved_fails(self):
-        lines = code(0, 1000)
-        part = lines[:50] + code(5000, 850)
-        errors = self.ratchet(
-            {"src/a.rs": 1000},
-            {"src/a.rs": 950, "src/b.rs": 900},
-            {"src/a.rs": text(lines)},
-            {"src/a.rs": text(lines[50:]), "src/b.rs": text(part)},
-        )
-        self.assertTrue(any("src/b.rs" in e for e in errors), errors)
-
-    def test_m6_a_total_excess_that_rises_fails(self):
-        # A full rename of an 801-line file plus a 40-line header: the new row
-        # is within the header allowance, so only the total rule refuses the
-        # excess rising 1 -> 41.
-        lines = code(0, 801)
-        part = code(5000, 40) + lines
-        errors = self.ratchet({"src/a.rs": 801}, {"src/b.rs": 841}, {"src/a.rs": text(lines)}, {"src/b.rs": text(part)})
+        # The donor gave up 50 lines but the "moved" file is 900 lines over:
+        # excess 200 -> 150 + 100. Only the total rule stops it.
+        errors = self.ratchet({"src/a.rs": 1000}, {"src/a.rs": 950, "src/b.rs": 900}, {"src/b.rs": ["src/a.rs"]})
         self.assertTrue(any("total" in e for e in errors), errors)
 
-    def test_m7_text_changed_in_the_move_fails_safe(self):
-        lines = code(0, 1000)
-        renamed = [line.replace("let", "let mut") for line in lines]
-        errors = self.ratchet({"src/a.rs": 1000}, {"src/b.rs": 1000}, {"src/a.rs": text(lines)}, {"src/b.rs": text(renamed)})
-        self.assertTrue(any("src/b.rs" in e for e in errors), errors)
-
-    def test_m8_closing_braces_freed_by_deletion_carry_nothing(self):
-        # Deleting a brace-heavy file frees 900 `}` lines; uncapped, they
-        # would fund a fabricated 900-line file of braces. Trivial lines
-        # carry only alongside code carried with them, so it earns nothing.
-        source = [f"    fn f{i}() {{" for i in range(100)] + ["    }"] * 900
-        fake = ["}"] * 900
-        errors = self.ratchet(
-            {"src/a.rs": 1000},
-            {"src/c.rs": 900},
-            {"src/a.rs": text(source)},
-            {"src/a.rs": "", "src/c.rs": text(fake)},
-        )
-        self.assertTrue(any("src/c.rs" in e for e in errors), errors)
+    def test_m6_a_total_excess_that_rises_fails(self):
+        errors = self.ratchet({"src/a.rs": 801}, {"src/b.rs": 841}, {"src/b.rs": ["src/a.rs"]})
+        self.assertTrue(any("total" in e for e in errors), errors)
 
     def test_m9_a_row_under_the_ceiling_cannot_cancel_a_rising_total(self):
-        # A hand-edited 5-line row would be -795 lines of "excess" and hide
-        # m6's rise from the total rule; each row's excess counts from 0.
-        lines = code(0, 801)
-        part = code(5000, 40) + lines
+        # A hand-edited 5-line row would be -795 lines of "excess"; each row's
+        # excess counts from 0. (The 5-line row needs no annotation to sink
+        # the total, so the test pins the total, not the annotation.)
         errors = self.ratchet(
             {"src/a.rs": 801},
             {"src/b.rs": 841, "src/z.rs": 5},
-            {"src/a.rs": text(lines)},
-            {"src/b.rs": text(part), "src/z.rs": text(code(7000, 5))},
+            {"src/b.rs": ["src/a.rs"], "src/z.rs": ["src/a.rs"]},
         )
         self.assertTrue(any("total" in e for e in errors), errors)
 
-    def test_m12_one_moved_file_funds_one_copy(self):
-        # Each moved line is spent once: two copies of a removed file cannot
-        # both carry it. The second copy (by path order) is refused.
-        lines = code(0, 1000)
-        errors = self.ratchet(
-            {"src/a.rs": 1000},
-            {"src/b.rs": 1000, "src/c.rs": 1000},
-            {"src/a.rs": text(lines)},
-            {"src/a.rs": "", "src/b.rs": text(lines), "src/c.rs": text(lines)},
-        )
-        self.assertFalse(any("src/b.rs" in e for e in errors), errors)
-        self.assertTrue(any("src/c.rs" in e and "carries only" in e for e in errors), errors)
 
-    def test_m10_a_new_file_carrying_a_handful_of_moved_lines_fails(self):
-        # Excess 1, but 796 of its 801 lines are new: a move carries nearly
-        # the whole file, not just its excess.
-        lines = code(0, 1000)
-        fresh = lines[:5] + code(5000, 796)
-        errors = self.ratchet(
-            {"src/a.rs": 1000},
-            {"src/a.rs": 995, "src/c.rs": 801},
-            {"src/a.rs": text(lines)},
-            {"src/a.rs": text(lines[5:]), "src/c.rs": text(fresh)},
-        )
-        self.assertTrue(any("src/c.rs" in e for e in errors), errors)
+class MovedAnnotations(unittest.TestCase):
+    """The `# moved-from` lines: which row they name, and that --update keeps them."""
 
-    def test_m11_an_unchanged_rename_of_a_brace_heavy_file_passes(self):
-        # Half its lines are trivial; carried with the code they close.
-        lines = [x for i in range(1000) for x in (f"    fn f{i}() {{", "    }")]
-        errors = self.ratchet({"src/a.rs": 2000}, {"src/b.rs": 2000}, {"src/a.rs": text(lines)}, {"src/b.rs": text(lines)})
-        self.assertEqual(errors, [])
+    def test_annotations_attach_to_the_row_directly_below(self):
+        gate = load_gate(Path("/nonexistent"))
+        text = "# header\n# moved-from src/a.rs\n# moved-from src/x.rs\n850 src/b.rs\n900 src/c.rs\n"
+        self.assertEqual(gate.parse_moved(text), {"src/b.rs": ["src/a.rs", "src/x.rs"]})
+
+    def test_a_blank_line_or_other_comment_detaches_an_annotation(self):
+        gate = load_gate(Path("/nonexistent"))
+        self.assertEqual(gate.parse_moved("# moved-from src/a.rs\n\n850 src/b.rs\n"), {})
+        self.assertEqual(gate.parse_moved("# moved-from src/a.rs\n# note\n850 src/b.rs\n"), {})
+
+    def test_update_keeps_the_annotations_of_surviving_rows(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            gate = load_gate(root)
+            gate.write_baseline({"src/b.rs": 850, "src/c.rs": 900}, {"src/b.rs": ["src/a.rs"], "src/gone.rs": ["src/a.rs"]})
+            text = gate.BASELINE.read_text(encoding="utf-8")
+        self.assertEqual(gate.parse_moved(text), {"src/b.rs": ["src/a.rs"]})
+        self.assertEqual(gate.parse_baseline(text), {"src/b.rs": 850, "src/c.rs": 900})
 
 
 if __name__ == "__main__":
