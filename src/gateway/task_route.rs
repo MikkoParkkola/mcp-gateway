@@ -206,6 +206,12 @@ impl TaskRoute<'_> {
             ),
             InputOutcome::NotFound => missing_task_error(id),
             InputOutcome::Unavailable => store_unavailable(id),
+            InputOutcome::AuditUnavailable => {
+                crate::gateway::meta_mcp::response_security::error_response_preserving_status(
+                    id,
+                    &crate::Error::AuditUnavailable,
+                )
+            }
         }
     }
 

@@ -45,7 +45,7 @@ fn arguments(size: usize) -> Value {
 
 /// The fixture's `demo` backend, with `search` listed so the invoke reaches
 /// the backend instead of being refused as unknown.
-async fn state() -> (Arc<AppState>, tempfile::TempDir) {
+pub(super) async fn state() -> (Arc<AppState>, tempfile::TempDir) {
     let (state, store) = crate::gateway::router::tests::direct_route_state_with_identity(
         crate::config::AgentIdentityConfig::default(),
     )

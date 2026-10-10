@@ -60,7 +60,7 @@ use crate::{stats::UsageStats, tool_registry::ToolRegistry};
 
 use super::meta_mcp_helpers::{
     build_code_mode_tools, build_discovery_preamble, build_initialize_result,
-    build_routing_instructions, extract_client_version, extract_required_str,
+    extract_client_version, extract_required_str,
 };
 use super::meta_mcp_tool_defs::{MetaToolExposure, ToolTotal};
 use super::meta_mcp_tool_total::tool_total;
@@ -362,7 +362,7 @@ pub struct MetaMcp {
 
     /// Tamper-evident hash-chain transparency log (issue #133, D3).
     ///
-    /// `Some` when `security.transparency_log.enabled = true`; `None` otherwise.
+    /// `Some` when the audit log (`security.transparency_log`) is on; `None` otherwise.
     /// Zero overhead when `None` — no allocation or I/O on the hot path.
     pub(super) transparency_logger: Option<Arc<crate::security::TransparencyLogger>>,
 
@@ -793,6 +793,10 @@ mod grant_decision_audit_tests;
 mod grant_decision_slot_tests;
 #[cfg(test)]
 mod grant_replay_dedupe_tests;
+#[cfg(test)]
+mod grant_slot_wrap_tests;
+#[cfg(test)]
+mod guide_alloc_tests;
 #[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;

@@ -279,12 +279,17 @@ impl MetaMcp {
                 .await;
         }
 
-        self.dispatch_below_gate(
-            id,
-            tool_name,
-            arguments,
-            session_id,
-            &caller,
+        // Straight to the shaped tail (MIK-8014 design item 2): the
+        // `dispatch_below_gate` layer only builds this target.
+        self.dispatch_below_gate_shaped(
+            DispatchTarget {
+                id,
+                tool_name,
+                arguments,
+                session_id,
+                caller: &caller,
+            },
+            ResultShape::Wrapped,
             confirmed_in_band,
         )
         .await
@@ -336,12 +341,16 @@ impl MetaMcp {
                     .unwrap_or_else(|| BeginOutcome::Existing(stored).into_response(id))
             }
             Ok(outcome) => outcome.into_response(id),
+            Err(crate::gateway::task_service::ServiceError::AuditUnavailable) => {
+                error_response_preserving_status(id, &crate::Error::AuditUnavailable)
+            }
             Err(_) => JsonRpcResponse::error(Some(id), -32603, "task store unavailable"),
         }
     }
 
-    /// The dispatch tail below the confirmation gate. The request thread and
-    /// the task worker call the same function; there is no parallel handler.
+    /// The dispatch tail below the confirmation gate, as the request thread
+    /// takes it (it builds the target itself). Kept for tests.
+    #[cfg(test)]
     pub(crate) async fn dispatch_below_gate(
         &self,
         id: RequestId,

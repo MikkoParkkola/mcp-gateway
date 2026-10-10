@@ -29,7 +29,7 @@ server:
 
 auth:
   enabled: false                  # Enable auth (set true for networked deployments)
-                                  # true requires security.transparency_log below (UPGRADING-4.0 item 43)
+                                  # true turns security.transparency_log on unless it says enabled: false
 
   # Bearer token for simple auth.
   # Options: "auto" (random, logged at startup), "env:VAR_NAME", or a literal string.

@@ -235,16 +235,18 @@ impl MetaMcp {
         cap: &crate::capability::CapabilityBackend,
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
-    ) -> Vec<crate::capability::CapabilityDefinition> {
+    ) -> Vec<(String, String, Vec<String>)> {
         let mut seen = std::collections::HashMap::new();
         let mut allowed = |name: &str| {
             cap.is_listed_in(name, &mut seen)
                 && self.may_invoke(&cap.name, name, scope, session_id).is_ok()
         };
-        let mut caps = cap.list_capabilities();
-        caps.retain(|c| allowed(&c.name));
-        for c in &mut caps {
-            c.metadata.chains_with.retain(|t| allowed(t));
+        // Name, category and chain hints only (MIK-8014 PERF.8a): the guide
+        // reads nothing else, so no definition is copied.
+        let mut caps = cap.routing_fields();
+        caps.retain(|(name, _, _)| allowed(name));
+        for (_, _, chains_with) in &mut caps {
+            chains_with.retain(|t| allowed(t));
         }
         caps
     }

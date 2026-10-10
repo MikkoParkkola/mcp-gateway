@@ -25,6 +25,9 @@ use crate::fs_lock::ExclusiveFileLock;
 use chrono::{DateTime, Utc};
 #[cfg(test)]
 use disk::acquire_lease;
+// Unix-only: its one caller, `store_tests::repaired_rows`, is `cfg(unix)`.
+#[cfg(all(test, unix))]
+pub(super) use disk::after_load;
 #[cfg(test)]
 pub(super) use disk::read_bounded;
 use disk::{Fault, fire, open_blocking, write_record};
@@ -384,6 +387,13 @@ impl TaskStore {
             .entries
             .get(id)
             .and_then(|entry| entry.record.upstream.clone())
+    }
+
+    /// MIK-8204 S5: the committed rows, the ones `get` can return (not
+    /// capacity occupancy, which also counts reserved and sealed files).
+    #[cfg(test)]
+    pub(crate) fn committed_count_for_test(&self) -> usize {
+        self.0.state().entries.len()
     }
 
     /// Test-only: the owner digest of `id`, whatever owner holds it.

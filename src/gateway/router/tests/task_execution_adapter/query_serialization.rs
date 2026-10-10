@@ -176,6 +176,10 @@ enum Script {
     /// answer `Completed`. The shape a row needs when it wants a recoverable
     /// row with no worker left in it.
     RetainThenHold,
+    /// Answer the FIRST query `Live` — which releases the worker's slot and
+    /// sends it to wait out its poll gap — then hold and answer `Completed`.
+    /// The shape a row needs when the worker must queue behind a reader.
+    LiveThenHold,
 }
 
 /// Counts queries, holds them, and reports the most that were ever in flight
@@ -308,6 +312,9 @@ impl UpstreamRecovery for BarrierRecovery {
         let _in_flight = InFlight(self);
         if self.script == Script::RetainThenHold && seen == 0 {
             return UpstreamAnswer::Unavailable;
+        }
+        if self.script == Script::LiveThenHold && seen == 0 {
+            return UpstreamAnswer::Live;
         }
         // Held until the row says so: the answer arrives when the test decides,
         // not when a timer does.
@@ -504,6 +511,100 @@ async fn an_authorized_read_of_a_retained_row_makes_exactly_one_query() {
         transport.calls(),
         1,
         "recovery reads never resubmit the original call"
+    );
+}
+
+/// Spin until `ready` holds, failing after [`ARRIVAL_BOUND`] of wall-clock
+/// time. The overtaken row runs on a paused clock, where a `tokio` deadline
+/// never passes and a missing event would hang rather than fail.
+async fn wait_until(what: &str, mut ready: impl AsyncFnMut() -> bool) {
+    let deadline = std::time::Instant::now() + ARRIVAL_BOUND;
+    while !ready().await {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what} did not happen within {ARRIVAL_BOUND:?}"
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
+/// GIVEN a live worker waiting out its poll gap, WHEN the owner's read takes
+/// the record's slot, the worker queues behind it, and the read settles the
+/// row, THEN the worker finds its handle settled and asks the peer nothing
+/// further (MIK-8261).
+///
+/// The order is forced, not raced. The clock is paused, so the worker's poll
+/// gap ends only when the row advances it, and that happens once the reader's
+/// query is held at the barrier. The row then waits until the worker is a
+/// second contender for the slot before releasing the reader. Mutant: the
+/// handle check before each query is dropped, and the worker queries a third
+/// time.
+///
+/// Which exit the worker took is not asserted here: in this scenario the
+/// overtaken exit and the retained one leave the same state (no further query,
+/// no settlement by the worker, slot released, the reader's outcome stored).
+/// The variant is pinned by return value in
+/// `worker_tests::a_row_settled_before_the_poll_is_never_queried`, which calls
+/// `poll_to_terminal` directly.
+#[tokio::test(start_paused = true)]
+async fn a_worker_queued_behind_a_settling_read_asks_nothing_further() {
+    let (state, transport, adapter, _store) = armed_fixture(Script::LiveThenHold).await;
+    let id = submit(&state, "i5-query-serialization-overtaken").await;
+
+    // The worker's first query answered `Live`: it released the slot and is
+    // waiting out its poll gap, which cannot end while the clock is paused.
+    wait_until("the worker's first query", async || adapter.queries() >= 1).await;
+
+    let reader = tokio::spawn({
+        let (state, id) = (Arc::clone(&state), id.clone());
+        async move { get_task(&state, "key-a", &id).await }
+    });
+    // The reader's query, held at the barrier with the slot taken.
+    wait_until("the reader's query", async || adapter.queries() >= 2).await;
+    let executor = Arc::clone(&state.task_executor);
+    std::assert_eq!(
+        executor.query_slot_clones_for_test(&id).await,
+        Some(1),
+        "the slot is held by the reader alone (one clone); a worker lease would \
+         add two, meaning the worker woke early and the held query is its own"
+    );
+
+    // The worker's poll gap (`WORKER_POLL_GAP`, one second) ends now, while the
+    // reader holds the slot, so the worker can only queue behind it: its lease
+    // adds two clones to the reader's one.
+    tokio::time::advance(Duration::from_secs(1)).await;
+    wait_until("the worker queueing behind the reader", async || {
+        executor.query_slot_clones_for_test(&id).await == Some(3)
+    })
+    .await;
+
+    adapter.release_all();
+    let fetched = reader.await.expect("the owner's read must answer");
+    join_workers(&state).await;
+
+    std::assert_eq!(
+        status_of(&fetched),
+        "completed",
+        "the reader settled the row from its own query: {fetched}"
+    );
+    std::assert_eq!(
+        fetched.pointer("/result/result/structuredContent/marker"),
+        Some(&json!("upstream-answered")),
+        "the committed outcome is the upstream job's result: {fetched}"
+    );
+    std::assert_eq!(
+        adapter.queries(),
+        2,
+        "the worker's first query and the reader's, and nothing after: the worker \
+         found the row settled when it got the slot and asked the peer {} times in all",
+        adapter.queries()
+    );
+    std::assert_eq!(adapter.max_in_flight(), 1, "no two queries overlapped");
+    std::assert_eq!(transport.calls(), 1, "one dispatch, nothing resubmitted");
+    std::assert_eq!(
+        executor.query_slot_clones_for_test(&id).await,
+        None,
+        "the worker released the slot it acquired and the directory entry went with it"
     );
 }
 

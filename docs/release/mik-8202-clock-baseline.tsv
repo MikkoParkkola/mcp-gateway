@@ -1,6 +1,7 @@
 # MIK-8202: raw wall-clock reads each file may still hold (path, count).
 # scripts/release/check_clock_baseline.py fails when a count rises or an
-# unlisted file gains one. Rows only shrink; part 2 empties this file.
+# unlisted file gains one; a new row only carries reads moved from a
+# shrinking one (MIK-8283). Part 2 empties this file.
 src/attestation/audience_tests.rs	4
 src/attestation/launcher.rs	3
 src/attestation/signer.rs	3
