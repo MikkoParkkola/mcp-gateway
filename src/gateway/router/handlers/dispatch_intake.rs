@@ -102,20 +102,21 @@ impl Intake<'_> {
 
 /// The key a `/mcp` caller's explicit cancel of its own call `id` is
 /// registered and looked up under (MIK-7642 PR.C, design r6 PR.C): the route,
-/// the caller's subject or credential principal, its session (none for a
-/// modern-by-header caller, whose session id is empty), and the client's id.
+/// the caller's key (`identity::caller_key`: its subject, else its
+/// authenticated credential), its session (none for a modern-by-header
+/// caller, whose session id is empty), and the client's id.
 pub(super) fn mcp_cancel_key(
-    grant_subject: Option<&crate::identity_grants::GrantSubject>,
-    client: Option<&AuthenticatedClient>,
+    caller: (
+        Option<&crate::identity_grants::GrantSubject>,
+        Option<&CertIdentity>,
+        Option<&AuthenticatedClient>,
+    ),
     session_id: &str,
     id: &Value,
 ) -> Option<crate::gateway::router::inflight_calls::CallKey> {
-    let owner = crate::gateway::router::inflight_calls::cancel_owner(
-        grant_subject,
-        client.map(|client| client.principal.as_str()),
-    );
+    let owner = crate::gateway::router::identity::caller_key(caller.0, caller.1, caller.2);
     let session = (!session_id.is_empty()).then_some(session_id);
-    crate::gateway::router::inflight_calls::CallKey::new("/mcp", owner.as_deref(), session, id)
+    crate::gateway::router::inflight_calls::CallKey::new("/mcp", Some(&owner), session, id)
 }
 
 /// The prelude, run once per request. `Err` is a finished answer the
@@ -546,7 +547,12 @@ pub(super) async fn intake(
                 .get("params")
                 .and_then(|params| params.get("requestId"))
                 .and_then(|id| {
-                    mcp_cancel_key(grant_subject.as_ref(), client.as_ref(), &session_id, id)
+                    let caller = (
+                        grant_subject.as_ref(),
+                        cert_identity.as_ref(),
+                        client.as_ref(),
+                    );
+                    mcp_cancel_key(caller, &session_id, id)
                 })
                 .is_some_and(|key| state.meta_mcp.inflight_calls().cancel(&key));
             debug!(aborted, "Client cancel never forwarded");

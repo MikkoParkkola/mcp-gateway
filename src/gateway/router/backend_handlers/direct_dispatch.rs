@@ -50,7 +50,7 @@ pub(super) struct Admitted<'a> {
     pub(super) sealed: Option<(String, String)>,
     /// MIK-7642 PR.C: this call's explicit-cancel registration, held for the
     /// request's life so the caller's own cancel can find it.
-    pub(super) _cancel_entry: Option<crate::gateway::router::inflight_calls::Registered>,
+    pub(super) cancel_entry: Option<crate::gateway::router::inflight_calls::Registered>,
     /// Its abort half, taken by the one dispatch this call makes.
     pub(super) cancel_on: Option<futures::future::AbortRegistration>,
 }
@@ -263,7 +263,7 @@ pub(super) async fn admit<'a>(
         idem_reservation: None,
         nonce: None,
         sealed: None,
-        _cancel_entry: cancel_entry,
+        cancel_entry,
         cancel_on,
     };
     guard_and_sanitize(scope, envelope, propagation, &mut admitted).await?;
@@ -337,7 +337,7 @@ async fn forward_sanitized(
     let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(super::dispatch_armed(
         admitted.idem_reservation.as_mut(),
-        explicitly_cancellable(
+        crate::gateway::router::inflight_calls::explicitly_cancellable(
             cancel_on,
             super::dispatch_in_scope(
                 &route.backend,
@@ -408,15 +408,21 @@ async fn forward_plain(
         let (headers, key) = (&propagation.headers, propagation.identity_key.as_deref());
         // Success is recorded after the firewall pass: a listing it refuses is
         // not a client success (MIK-7708).
-        return Ok(super::direct_list::drain(
+        let drain = super::direct_list::drain(
             &route.backend,
             id,
             envelope.params.as_ref(),
             headers,
             key,
             name,
-        )
-        .await);
+        );
+        return Ok(
+            crate::gateway::router::inflight_calls::explicitly_cancellable(
+                admitted.cancel_on.take(),
+                drain,
+            )
+            .await,
+        );
     }
     let admission = if method == "tools/call" {
         match DirectRouteGuards::before_dispatch(&state.meta_mcp, &admitted.call) {
@@ -443,7 +449,7 @@ async fn forward_plain(
     let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(super::dispatch_armed(
         admitted.idem_reservation.as_mut(),
-        explicitly_cancellable(cancel_on, dispatch),
+        crate::gateway::router::inflight_calls::explicitly_cancellable(cancel_on, dispatch),
     ))
     .await;
     let answered = if method == "tools/call" {
@@ -727,6 +733,22 @@ async fn answer_failure(mut admitted: Admitted<'_>, e: crate::Error, method: &st
     if e.is_pre_dispatch() {
         give_back_nonce(admitted.failed.state, &mut admitted);
     }
+    // MIK-7642 PR.C: the caller's own cancel is its choice, not a failure: no
+    // breaker strike, and answered 200 as on `/mcp`. The key still settles as
+    // dispatched (ADR-012 consequence 1), so a retry never re-runs the call.
+    let own_cancel = admitted
+        .cancel_entry
+        .as_ref()
+        .is_some_and(crate::gateway::router::inflight_calls::Registered::cancelled);
+    if own_cancel && crate::gateway::router::inflight_calls::is_client_cancelled(&e) {
+        let response = JsonRpcResponse::error(
+            Some(admitted.failed.id.clone()),
+            crate::gateway::router::inflight_calls::CLIENT_CANCELLED_CODE,
+            crate::gateway::router::inflight_calls::CLIENT_CANCELLED_MESSAGE,
+        );
+        super::settle_direct_failure(admitted.idem_reservation.as_mut(), &e, &response);
+        return build_http_response(&Egressed::gateway_own(response), StatusCode::OK);
+    }
     let Admitted {
         failed,
         call,
@@ -736,29 +758,6 @@ async fn answer_failure(mut admitted: Admitted<'_>, e: crate::Error, method: &st
     failed
         .answer(idem_reservation.as_mut(), e, &screen_target(&call, method))
         .await
-}
-
-/// The backend dispatch, aborted by the caller's own explicit cancel (MIK-7642
-/// PR.C). Aborting drops it, and the transport's guard cancels the call on
-/// the backend by the backend's id. The client is answered -32800, and the
-/// failure path settles an idempotency key as it does any error that may
-/// follow a committed side effect (ADR-012 consequence 1).
-async fn explicitly_cancellable<T>(
-    cancel_on: Option<futures::future::AbortRegistration>,
-    dispatch: impl std::future::Future<Output = crate::Result<T>>,
-) -> crate::Result<T> {
-    let Some(cancel_on) = cancel_on else {
-        return dispatch.await;
-    };
-    futures::future::Abortable::new(dispatch, cancel_on)
-        .await
-        .unwrap_or_else(|_| {
-            Err(crate::Error::JsonRpc {
-                code: -32800,
-                message: "Request cancelled by the client".to_owned(),
-                data: None,
-            })
-        })
 }
 
 /// The terminal arm: dispatch, then answer. Settled, never dropped: an

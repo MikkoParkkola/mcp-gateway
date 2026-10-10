@@ -441,12 +441,12 @@ async fn meta_mcp_dispatch(
             let (_cancel_entry, cancel_on) = serde_json::to_value(&id)
                 .ok()
                 .and_then(|key_id| {
-                    dispatch_intake::mcp_cancel_key(
+                    let caller = (
                         grant_subject.as_ref(),
+                        cert_identity.as_ref(),
                         client.as_ref(),
-                        session_id,
-                        &key_id,
-                    )
+                    );
+                    dispatch_intake::mcp_cancel_key(caller, session_id, &key_id)
                 })
                 .and_then(|key| state.meta_mcp.inflight_calls().register(key))
                 .unzip();
@@ -470,10 +470,13 @@ async fn meta_mcp_dispatch(
                 Some(Ok(response)) => response,
                 Some(Err(response)) => return response,
                 None => {
+                    // Not counted against the client: the cancel was its
+                    // own choice. The admission lease settles on drop as
+                    // dispatched, so a retry never re-runs the call.
                     return build_error_response(
                         Some(answer_id),
-                        -32800,
-                        "Request cancelled by the client",
+                        crate::gateway::router::inflight_calls::CLIENT_CANCELLED_CODE,
+                        crate::gateway::router::inflight_calls::CLIENT_CANCELLED_MESSAGE,
                         session_id,
                         StatusCode::OK,
                     );

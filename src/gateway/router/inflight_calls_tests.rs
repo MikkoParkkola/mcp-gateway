@@ -63,21 +63,14 @@ fn a_duplicate_key_is_refused_and_cannot_unregister_the_live_call() {
     assert!(calls.register(k).is_some(), "the key is free again");
 }
 
-/// The owner is the authorized subject when there is one, else the credential
-/// principal; neither means no owner. Mutants: the principal preferred over a
-/// subject; the principal fallback removed.
+/// A registration knows when its caller's own cancel aborted it, and only
+/// then. Mutant: `cancelled` answering for any registration.
 #[test]
-fn the_owner_is_the_subject_else_the_principal() {
-    let subject = crate::identity_grants::GrantSubject {
-        authority: "https://idp.example".to_owned(),
-        subject: "alice".to_owned(),
-        label: None,
-    };
-    let by_subject = super::cancel_owner(Some(&subject), Some("shared-key"));
-    assert_eq!(by_subject.as_deref(), Some("https://idp.example\u{0}alice"));
-    assert_eq!(
-        super::cancel_owner(None, Some("shared-key")).as_deref(),
-        Some("shared-key")
-    );
-    assert_eq!(super::cancel_owner(None, None), None);
+fn a_registration_knows_whether_its_caller_cancelled_it() {
+    let calls = Arc::new(InFlightCalls::default());
+    let (cancelled, _) = calls.register(key("alice", None, &json!(1))).unwrap();
+    let (running, _) = calls.register(key("alice", None, &json!(2))).unwrap();
+    assert!(calls.cancel(&key("alice", None, &json!(1))));
+    assert!(cancelled.cancelled());
+    assert!(!running.cancelled());
 }

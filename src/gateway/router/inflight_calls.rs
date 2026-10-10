@@ -11,10 +11,11 @@
 //!
 //! The key is (scope, owner, session, client request id). The scope is the
 //! backend name on the direct route, or the `/mcp` route itself. The owner is
-//! the resolved authorized subject, or the credential principal when there is
-//! no subject; a caller with neither is never registered, so its cancels are
-//! always dropped. The session is the validated MCP session id, or none for a
-//! sessionless caller.
+//! the router's caller key (`identity::caller_key`): the authorized subject,
+//! re-derived from a certificate rather than its display-name fallback, else
+//! the authenticated credential. A caller with neither is never registered,
+//! so its cancels are always dropped. The session is the validated MCP
+//! session id, or none for a sessionless caller.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -23,17 +24,40 @@ use futures::future::{AbortHandle, AbortRegistration};
 use parking_lot::Mutex;
 use serde_json::Value;
 
-/// The owner a call is registered under: the caller's authorized subject, or
-/// its credential principal when it has none (never the slot principal,
-/// which can group several subjects). `None` when it has neither.
-pub(crate) fn cancel_owner(
-    subject: Option<&crate::identity_grants::GrantSubject>,
-    principal: Option<&str>,
-) -> Option<String> {
-    match subject {
-        Some(subject) => Some(format!("{}\u{0}{}", subject.authority, subject.subject)),
-        None => principal.map(str::to_owned),
-    }
+/// The JSON-RPC code a call aborted by its caller's own cancel is answered
+/// with: the request was cancelled (MCP's `RequestCancelled`).
+pub(crate) const CLIENT_CANCELLED_CODE: i32 = -32800;
+/// Its message.
+pub(crate) const CLIENT_CANCELLED_MESSAGE: &str = "Request cancelled by the client";
+
+/// The dispatch, aborted by its caller's own explicit cancel. Aborting drops
+/// it, and the transport's guard cancels the call on the backend by the
+/// backend's id. An abort becomes the [`is_client_cancelled`] error, which
+/// the direct route answers -32800 and settles an idempotency key on as it
+/// does any error that may follow a committed side effect (ADR-012
+/// consequence 1).
+pub(crate) async fn explicitly_cancellable<T>(
+    cancel_on: Option<AbortRegistration>,
+    dispatch: impl std::future::Future<Output = crate::Result<T>>,
+) -> crate::Result<T> {
+    let Some(cancel_on) = cancel_on else {
+        return dispatch.await;
+    };
+    futures::future::Abortable::new(dispatch, cancel_on)
+        .await
+        .unwrap_or_else(|_| {
+            Err(crate::Error::JsonRpc {
+                code: CLIENT_CANCELLED_CODE,
+                message: CLIENT_CANCELLED_MESSAGE.to_owned(),
+                data: None,
+            })
+        })
+}
+
+/// Whether `e` is the error [`explicitly_cancellable`] answers an abort with.
+pub(crate) fn is_client_cancelled(e: &crate::Error) -> bool {
+    matches!(e, crate::Error::JsonRpc { code, message, data: None }
+        if *code == CLIENT_CANCELLED_CODE && message == CLIENT_CANCELLED_MESSAGE)
 }
 
 /// Whose call, where, and which of their requests.
@@ -47,7 +71,8 @@ pub(crate) struct CallKey {
 }
 
 impl CallKey {
-    /// `None` without an owner: such a caller's call is never registered.
+    /// `None` without an owner (an empty caller key): such a caller's call is
+    /// never registered.
     pub(crate) fn new(
         scope: &str,
         owner: Option<&str>,
@@ -83,11 +108,13 @@ impl InFlightCalls {
             return None;
         }
         let (handle, registration) = AbortHandle::new_pair();
+        let calls_handle = handle.clone();
         calls.insert(key.clone(), handle);
         Some((
             Registered {
                 calls: Arc::clone(self),
                 key,
+                handle: calls_handle,
             },
             registration,
         ))
@@ -112,6 +139,15 @@ impl InFlightCalls {
 pub(crate) struct Registered {
     calls: Arc<InFlightCalls>,
     key: CallKey,
+    handle: AbortHandle,
+}
+
+impl Registered {
+    /// Whether the caller's own cancel aborted this call: its failure is then
+    /// the client's choice, not the backend's or the gateway's.
+    pub(crate) fn cancelled(&self) -> bool {
+        self.handle.is_aborted()
+    }
 }
 
 impl Drop for Registered {

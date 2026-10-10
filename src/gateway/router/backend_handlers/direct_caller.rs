@@ -295,23 +295,17 @@ pub(super) async fn read_envelope(
 
 /// The key a caller's explicit cancel of its own call `id` is registered and
 /// looked up under on this route (MIK-7642 PR.C, design r5 D3, r4 R4.2): the
-/// backend, the caller's authorized subject (or its credential principal when
-/// it has none), its validated session, and the client's id. `None` for a
-/// caller with neither subject nor principal: its cancels are always dropped.
+/// backend, the caller's key (`identity::caller_key`: its subject, else its
+/// authenticated credential), its validated session, and the client's id.
+/// `None` for a caller with neither: its cancels are always dropped.
 pub(super) fn explicit_cancel_key(
     backend: &str,
     caller: &Caller,
     session: Option<&str>,
     id: &Value,
 ) -> Option<crate::gateway::router::inflight_calls::CallKey> {
-    let owner = crate::gateway::router::inflight_calls::cancel_owner(
-        caller.grant_subject.as_ref(),
-        caller
-            .client
-            .as_ref()
-            .map(|client| client.principal.as_str()),
-    );
-    crate::gateway::router::inflight_calls::CallKey::new(backend, owner.as_deref(), session, id)
+    let owner = Some(caller.spend_key.as_str());
+    crate::gateway::router::inflight_calls::CallKey::new(backend, owner, session, id)
 }
 
 /// What stage 3 resolved: the backend and the session the caller owns.
