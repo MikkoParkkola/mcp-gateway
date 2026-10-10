@@ -54,7 +54,8 @@ if [[ -f Cargo.toml ]]; then
     local name="$1" log rc=0
     shift
     log="$(mktemp "${TMPDIR:-/tmp}/pre-push-cargo.XXXXXX")"
-    cargo "$@" >"$log" 2>&1 || rc=$?
+    # No colour: escape codes before `test result:` would hide it from grep.
+    CARGO_TERM_COLOR=never cargo "$@" >"$log" 2>&1 || rc=$?
     grep -E '^test result:' "$log" || true
     if [[ $rc -ne 0 ]]; then
       tail -40 "$log"
