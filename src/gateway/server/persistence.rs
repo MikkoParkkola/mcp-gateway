@@ -115,7 +115,7 @@ static COST_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// The data directory of each periodic save skipped because `COST_WRITE` was
 /// held: a test observes its own skip instead of guessing when it happened
 /// (MIK-8216). Keyed by directory, since the lock is process-wide.
-#[cfg(test)]
+#[cfg(all(test, feature = "cost-governance"))]
 static SKIPPED_SAVES: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(feature = "cost-governance")]
