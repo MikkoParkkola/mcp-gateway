@@ -29,7 +29,7 @@ pub(crate) use pool::PoolKey;
 use pool::PoolKey;
 use pool::PooledEntry;
 
-pub(crate) use annotations::prepare_tool_metadata;
+pub(crate) use annotations::{explicit_read_only_tools, prepare_tool_metadata};
 pub use lifecycle::runtime_plan_for_backend;
 pub use registry::{
     BackendLifecycle, BackendRegistry, BackendRuntimeState, BackendRuntimeStatus, BackendStatus,
@@ -91,6 +91,20 @@ pub struct Backend {
     /// a backend that has not been discovered yet, or one that annotates
     /// nothing — denies every resend, which is the safe direction.
     resend_permitted: parking_lot::RwLock<std::collections::HashSet<String>>,
+    /// Tools this backend declared an explicit `readOnlyHint` of `true` for, as
+    /// of the last `tools/list`.
+    ///
+    /// Membership is the only thing that lets the response cache serve a stored
+    /// result in place of a call. Absent means deny, so an empty set — a
+    /// backend that has not been discovered yet, or one that annotates nothing
+    /// — caches nothing, which is the safe direction: a cached miss costs a
+    /// call, a cached write is a write that never ran.
+    ///
+    /// Deliberately narrower than [`Self::resend_permitted`], which also admits
+    /// `idempotentHint`. A retry re-executes and reaches the same state, so
+    /// idempotence is enough for it; a cache hit does not execute at all, so it
+    /// needs the call to have no effect to begin with.
+    cache_read_only: parking_lot::RwLock<std::collections::HashSet<String>>,
     /// Cached resources
     resources_cache: CachedMetadata<Vec<Resource>>,
     /// Cached resource templates

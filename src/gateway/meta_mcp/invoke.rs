@@ -1835,7 +1835,20 @@ impl MetaMcp {
             .protocol_revision
             .and_then(crate::protocol::meta::served_revision);
 
-        if !want_full
+        // A stored result may stand in for a call only when the backend
+        // declared the tool read-only, so the call it replaces had no effect to
+        // lose. Deny by default: an unannotated tool, an undiscovered backend,
+        // and a read-write tool all refuse. `is_explicitly_read_only` is the
+        // backend's own answer rather than a name heuristic, because serving a
+        // cached write reports an effect that never happened — email left
+        // unread behind a "Successfully marked as read".
+        let cache_admits_result = self
+            .backends
+            .get(server)
+            .is_some_and(|backend| backend.is_explicitly_read_only(tool));
+
+        if cache_admits_result
+            && !want_full
             && protocol_revision.is_some()
             && let Some(ref cache) = self.cache
         {
@@ -2419,7 +2432,8 @@ impl MetaMcp {
         // the backend's claim rather than "was a continuation minted" also
         // covers the shapes `from_result` declines, which mint nothing and are
         // not answers either.
-        if !want_full
+        if cache_admits_result
+            && !want_full
             && !stopped_to_ask
             && protocol_revision.is_some()
             && let Some(ref cache) = self.cache

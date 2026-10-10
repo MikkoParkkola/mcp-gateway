@@ -157,6 +157,7 @@ impl Backend {
             probe_in_flight: std::sync::atomic::AtomicBool::new(false),
             tools_cache: CachedMetadata::new(),
             resend_permitted: parking_lot::RwLock::default(),
+            cache_read_only: parking_lot::RwLock::default(),
             resources_cache: CachedMetadata::new(),
             resource_templates_cache: CachedMetadata::new(),
             prompts_cache: CachedMetadata::new(),

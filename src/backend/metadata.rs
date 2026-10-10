@@ -10,7 +10,7 @@ use serde_json::Value;
 use tracing::debug;
 
 use super::Backend;
-use super::annotations::prepare_tool_metadata;
+use super::annotations::{explicit_read_only_tools, prepare_tool_metadata};
 use super::cached_metadata::CachedMetadata;
 use crate::Error;
 use crate::Result;
@@ -172,11 +172,37 @@ impl Backend {
         self.get_cached_list_shared(&self.tools_cache, "tools/list", "tools", |result| {
             let mut tools = serde_json::from_value::<ToolsListResult>(result)?.tools;
             // Discovery is where the explicit annotations are still readable,
-            // and it always precedes a `tools/call` (ADR-012 A1).
+            // and it always precedes a `tools/call` (ADR-012 A1). Both sets are
+            // read here for that reason: `prepare_tool_metadata` normalizes in
+            // place, and an omitted hint carries an inference afterwards.
+            *self.cache_read_only.write() = explicit_read_only_tools(&tools);
             *self.resend_permitted.write() = prepare_tool_metadata(&self.name, &mut tools);
             Ok(tools)
         })
         .await
+    }
+
+    /// Seed the read-only set directly, for fixtures whose subject is the
+    /// cache's keying rather than how a declaration is read.
+    ///
+    /// Production reaches this set through `tools/list` and
+    /// [`explicit_read_only_tools`]; a fixture that has to answer `tools/list`
+    /// to test key derivation would be testing the wrong thing, and the
+    /// declaration path has its own cases in
+    /// `gateway::meta_mcp::cache_read_only_tests`.
+    #[cfg(test)]
+    pub(crate) fn set_cache_read_only_for_test(&self, tools: &[&str]) {
+        *self.cache_read_only.write() = tools.iter().map(|tool| (*tool).to_string()).collect();
+    }
+
+    /// Whether the backend declared this tool read-only, which is what lets the
+    /// response cache serve a stored result in place of calling it.
+    ///
+    /// Denies by default: an undeclared tool, an undiscovered backend, and a
+    /// read-write tool all answer `false`.
+    #[must_use]
+    pub(crate) fn is_explicitly_read_only(&self, tool: &str) -> bool {
+        self.cache_read_only.read().contains(tool)
     }
 
     /// Record the tools whose backend-declared annotations grant resend

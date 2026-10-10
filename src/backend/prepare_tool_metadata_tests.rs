@@ -4,6 +4,66 @@
 //! under the line-count ceiling.
 use super::*;
 
+// --- Response-cache admission: only an explicit `readOnlyHint` lets a stored
+// result stand in for a call (`gateway/meta_mcp/invoke.rs`).
+
+fn annotated_tool(name: &str, read_only: Option<bool>, idempotent: Option<bool>) -> Tool {
+    let mut tool = sample_tool(name);
+    tool.annotations = Some(ToolAnnotations {
+        read_only_hint: read_only,
+        destructive_hint: None,
+        idempotent_hint: idempotent,
+        open_world_hint: None,
+        title: None,
+    });
+    tool
+}
+
+#[test]
+fn explicit_read_only_tools_admits_a_declaration_and_nothing_else() {
+    // GIVEN a declared read-only tool, a declared idempotent write, and an
+    // unannotated getter whose name alone reads as a read
+    let tools = vec![
+        annotated_tool("search", Some(true), None),
+        annotated_tool("mark_emails_as_read", Some(false), Some(true)),
+        sample_tool("get_status"),
+    ];
+
+    // WHEN the cache-admission set is read
+    let admitted = explicit_read_only_tools(&tools);
+
+    // THEN only the declaration counts. Retry permission is not the permission
+    // to skip the call: `mark_emails_as_read` is resend-permitted and is still
+    // a write whose cached answer describes an effect this call did not have.
+    assert!(admitted.contains("search"));
+    assert!(!admitted.contains("mark_emails_as_read"));
+    assert!(!admitted.contains("get_status"));
+}
+
+#[test]
+fn explicit_read_only_tools_is_only_meaningful_before_normalization() {
+    // GIVEN an unannotated tool
+    let mut tools = vec![sample_tool("get_status")];
+
+    // WHEN the set is read before the metadata path runs, and again after
+    let before = explicit_read_only_tools(&tools);
+    prepare_tool_metadata("beeper", &mut tools);
+    let after = explicit_read_only_tools(&tools);
+
+    // THEN only the early read answers the question that was asked. This is a
+    // canary, not a preference: normalization writes the name inference into
+    // the hint, so a read taken afterwards admits a guess as if the backend had
+    // declared it. `Backend::get_tools_shared` therefore reads this first, and
+    // if normalization ever stops overwriting the hint this fails and the
+    // ordering note above it comes out.
+    assert!(
+        tools[0].annotations.as_ref().unwrap().read_only_hint == Some(true),
+        "normalization is expected to fill the omitted hint"
+    );
+    assert!(!before.contains("get_status"));
+    assert!(after.contains("get_status"));
+}
+
 // --- MIK-7214.HEADER.8 — tools violating an `x-mcp-header` constraint are
 // excluded from `tools/list`, on the same tool-metadata path as the
 // destructive-annotation gate.
