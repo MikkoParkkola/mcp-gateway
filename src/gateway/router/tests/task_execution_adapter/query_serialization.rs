@@ -296,6 +296,9 @@ impl BarrierRecovery {
 
 #[async_trait::async_trait]
 impl UpstreamRecovery for BarrierRecovery {
+    /// This suite asserts nothing about upstream cancels (MIK-7642 PR.D rows do).
+    async fn cancel(&self, _handle: &UpstreamHandle, _deadline: Duration) {}
+
     async fn claims(&self, backend: &str) -> bool {
         self.claims.fetch_add(1, Ordering::SeqCst);
         backend == BACKEND
