@@ -55,7 +55,7 @@ for package, expected in [('fastmcp', '4.0.3'), ('fastmcp-tasks', '4.0.3'), ('py
 PY
 
 if [[ -z "${MCP_GATEWAY_TASK_SDK_REDIS_URL:-}" ]]; then
-  image='redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf'
+  image='mirror.gcr.io/library/redis@sha256:ff02b58f971e7d7d156a1267e283fcbbeee91773b6aa36c49dac28ecfe28eadf'
   container="$(docker run --detach --rm --label codex.task=task-sdk-recovery \
     --publish 127.0.0.1::6379 --memory 256m --cpus 1 --pids-limit 128 \
     --tmpfs /data:rw,nosuid,nodev,size=64m "$image" \

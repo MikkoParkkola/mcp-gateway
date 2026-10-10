@@ -398,8 +398,9 @@ steps:
     );
     assert_eq!(
         counting.count_for("alpha", "read"),
-        1,
-        "and the step that does run must be authorized exactly once"
+        2,
+        "and the step that does run is authorized at its invocation and \
+         re-checked once at the dispatch chokepoint (MIK-8137 b1)"
     );
 
     let skipped = value

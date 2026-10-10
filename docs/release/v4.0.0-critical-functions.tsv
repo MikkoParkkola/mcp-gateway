@@ -201,7 +201,11 @@ src/gateway/server/cleartext.rs	serve_refusal	1	critical	d	serve_refusal	Everyth
 src/gateway/server/identity_grants.rs	audit_startup	1	critical	a	audit_startup	Reconciles, records and snapshots grants under the journal lock; the rows returned are the rows recorded
 src/gateway/server/identity_grants.rs	start_identity_grant_audit	1	critical	a	start_identity_grant_audit	Decides which identity grants go live; fails closed when reconciliation or its audit cannot be recorded
 src/gateway/server/mod.rs	prepare_signing	1	critical	b,d	Gateway::prepare_signing	stdio first step: refuses a malformed chain nonce or signing envelope
-src/gateway/server/mod.rs	response_firewall	1	critical	d	Gateway::response_firewall	Builds the firewall both transports enforce with; anomaly blocking depends on it
+src/gateway/server/build_meta.rs	response_firewall	1	critical	d	Gateway::response_firewall	Builds the firewall both transports enforce with; anomaly blocking depends on it
+src/gateway/server/build_meta.rs	build_meta_mcp	1	critical	d	Gateway::build_meta_mcp	Refuses startup when an auth-required audit log cannot open, and builds the tool policy, mTLS policy, firewall and provenance signer both serve modes enforce with (moved from mod.rs, MIK-8144)
+src/gateway/server/construct.rs	new_with_env	1	standard	borderline	Gateway::new_with_env	The construction every caller gets: config posture and destination policy are set here (moved from mod.rs, MIK-8144)
+src/gateway/server/construct.rs	new_evaluated_inner	1	standard	borderline	Gateway::new_evaluated_inner	Builds a deployment gateway and brings up account custody before it is returned
+src/gateway/server/construct.rs	start_account_custody_inner	1	standard	borderline	Gateway::start_account_custody_inner	Returns only after managed descriptors' issuer metadata is validated and pinned and the custody locks are held
 src/gateway/server/run.rs	run	1	standard	borderline	Gateway::run	HTTP serve mode: wires every enforcer before the bind and refuses to start on start_refusal; a mistake would serve without one (moved from mod.rs, MIK-8144)
 src/gateway/server/run_steps.rs	start_capability_watcher	1	standard	borderline	Gateway::start_capability_watcher	An account-bound deployment finishes the capability admission scan before serving and fails startup on refusals; a mistake would serve a partial catalogue
 src/gateway/server/run_steps.rs	start_key_server	1	standard	borderline	Gateway::start_key_server	Resolves the key server admin token before the key server starts
