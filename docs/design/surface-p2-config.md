@@ -56,7 +56,7 @@ explicit value honoured as a hidden key, and each gets a red-first test of the d
 | `backends.<name>.protocol_version` | negotiated in `initialize` (already) |
 | `backends.<name>.streamable_http` | detected at connect (already) |
 | `key_server.oidc[].auto_discover` | OIDC discovery first, then `{issuer}/.well-known/jwks.json`; `jwks_uri` still overrides |
-| `meta_mcp.prompts_resources_fetch_timeout` | unset: min(the backend's `timeout`, 10 s). **Met by today's behaviour, no code change** (MIK-8044 P2c3a, lead ruling 2026-10-10). Each backend's transport already bounds every request by its own `timeout` (src/backend/mod.rs:373 and :390, src/backend/stdio_start.rs:28, src/backend/lifecycle.rs:462; `Backend::request_timeout`, src/backend/ops.rs:686), and the 10 s aggregation default caps a longer one (`prompts_list_skips_hung_backend_within_timeout` and `resources_list_skips_hung_backend_within_timeout`, src/gateway/meta_mcp/tests/backend_lists.rs). The key stays hidden (P2b) as a plain `Duration`. |
+| `meta_mcp.prompts_resources_fetch_timeout` | unset: min(the backend's `timeout`, 10 s) |
 | `--capabilities` on `skills generate` and `tool completions/inspect/invoke/list` (5 rows), `MCP_GATEWAY_CAPABILITIES` | derived from every entry of the loaded config's `capabilities.directories`, in order. Precedence: the flag, then the variable, then the config. Flag and variable stay as hidden overrides |
 | `validate --no-color` | colour follows the terminal and `NO_COLOR`; hidden flag |
 ## Kept as operator decisions (challenged and rejected as AUTO)
