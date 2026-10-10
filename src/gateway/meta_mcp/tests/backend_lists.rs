@@ -147,10 +147,12 @@ async fn prompts_list_includes_backend_prompts() {
 
 /// One page's latency in the paged rows: under the backend's timeout alone,
 /// over it for two pages together.
+// timing-oracle: vs 4.5 s backend timeout (MIK-8285)
 const PAGE_DELAY: Duration = Duration::from_secs(3);
 /// The paged backend's own per-call timeout: 1.5 pages, so each page clears it
 /// by 1.5 s and the two-page drain (6 s) exceeds it while staying 4 s under
 /// the 10 s whole-fetch default.
+// timing-oracle: vs 10 s whole-fetch default (MIK-8285)
 const PAGED_BACKEND_TIMEOUT: Duration = Duration::from_millis(4500);
 
 /// MIK-8285 FETCHTO.3: the whole-fetch bound is the unset 10 s default, not
