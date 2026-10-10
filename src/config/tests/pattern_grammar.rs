@@ -158,11 +158,43 @@ fn agent_scope_segments_take_an_exact_name_or_a_lone_star() {
 #[test]
 fn a_backend_name_holding_a_star_is_refused() {
     let err = load("backends:\n  \"my*be\":\n    command: echo\n")
-        .err()
-        .expect("a backend named my*be loaded; it must be refused")
+        .expect_err("a backend named my*be loaded; it must be refused")
         .to_string();
     assert!(err.contains("my*be"), "{err}");
     assert!(err.contains('*'), "{err}");
+}
+
+#[test]
+fn an_agent_scope_action_must_be_a_known_action() {
+    for scope in ["tools:gh:search:reed", "tools:gh:search:read*"] {
+        let Err(err) = load(&agent(scope)) else {
+            panic!("{scope:?} loaded; it must be refused");
+        };
+        let err = err.to_string();
+        assert!(err.contains("agent_auth.agents[0].scopes[0]"), "{err}");
+        assert!(err.contains(&format!("{scope:?}")), "{err}");
+        assert!(err.contains("not an action"), "{err}");
+        assert!(!err.contains('\n'), "{err}");
+    }
+}
+
+#[test]
+fn an_agent_scope_without_the_tools_prefix_is_refused() {
+    let err = load(&agent("surreal:*"))
+        .expect_err("'surreal:*' loaded; it grants nothing and must be refused")
+        .to_string();
+    assert!(err.contains("agent_auth.agents[0].scopes[0]"), "{err}");
+    assert!(err.contains("\"surreal:*\""), "{err}");
+    assert!(err.contains("tools:"), "{err}");
+}
+
+#[test]
+fn a_capability_backend_name_holding_a_star_is_refused() {
+    let err = load("capabilities:\n  name: \"my*caps\"\n")
+        .expect_err("capabilities.name my*caps loaded; it must be refused")
+        .to_string();
+    assert!(err.contains("capabilities.name"), "{err}");
+    assert!(err.contains("my*caps"), "{err}");
 }
 
 // ── LOAD.2: what matched before loads and decides the same ─────────────────
@@ -173,7 +205,7 @@ fn exact_names_and_trailing_prefixes_still_load_and_decide_the_same() {
         "security:\n  tool_policy:\n    enabled: true\n    use_default_deny: false\n    deny: [\"fs_*\", \"drop_table\"]\n    allow: [\"fs_read\"]\n\
          auth:\n  enabled: false\n  api_keys:\n    - name: ci\n      key_sha256: {KEY:?}\n      backends: [\"gh\", \"*\"]\n      allowed_tools: [\"search_*\", \"gh:issue_list\"]\n      denied_tools: [\"search_admin\"]\n\
          key_server:\n  enabled: false\n  policies:\n    - match:\n        issuer: https://issuer.example\n      scopes:\n        backends: [\"gh\"]\n        tools: [\"brave_*\", \"*\"]\n\
-         agent_auth:\n  enabled: false\n  agents:\n    - client_id: ci\n      name: ci\n      scopes: [\"tools:gh:*\", \"tools:*\", \"tools:gh:search:read\"]\n"
+         agent_auth:\n  enabled: false\n  agents:\n    - client_id: ci\n      name: ci\n      scopes: [\"tools:gh:*\", \"tools:*:search:read\", \"tools:gh:*:read\", \"tools:gh:search:read\"]\n"
     );
     let config = load(&yaml).expect("a config of exact names and trailing prefixes loads");
 
@@ -222,4 +254,22 @@ fn exact_names_and_trailing_prefixes_still_load_and_decide_the_same() {
         "outside the allowlist"
     );
     assert!(client.can_access_backend("gh") && client.can_access_backend("other"));
+
+    use crate::gateway::oauth::{Action, Scope, check_scopes};
+    let scopes: Vec<Scope> = config.agent_auth.agents[0]
+        .scopes
+        .iter()
+        .filter_map(|s| Scope::parse(s))
+        .collect();
+    let grants = |b: &str, t: &str, a: Action| check_scopes(&scopes, "ci", b, t, &a).is_ok();
+    assert!(
+        grants("gh", "anything", Action::Write),
+        "tools:gh:* grants every tool and action on gh"
+    );
+    assert!(
+        grants("other", "search", Action::Read),
+        "tools:*:search:read"
+    );
+    assert!(!grants("other", "search", Action::Write), "read only");
+    assert!(!grants("other", "list", Action::Read), "search only off gh");
 }

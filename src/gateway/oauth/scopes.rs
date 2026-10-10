@@ -213,6 +213,21 @@ mod tests {
     }
 
     #[test]
+    fn a_misspelt_action_grants_nothing() {
+        // MIK-8298 (d): a typo in the action segment used to parse as `Any`
+        // and grant read, write and execute. It now grants nothing.
+        for raw in ["tools:gh:search:reed", "tools:gh:search:read*"] {
+            let scopes: Vec<Scope> = Scope::parse(raw).into_iter().collect();
+            for action in [Action::Read, Action::Write, Action::Execute] {
+                assert!(
+                    check_scopes(&scopes, "a", "gh", "search", &action).is_err(),
+                    "{raw} granted {action:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn action_from_str_unknown_becomes_any() {
         assert_eq!(Action::from_str("bogus"), Action::Any);
         assert_eq!(Action::from_str("*"), Action::Any);
