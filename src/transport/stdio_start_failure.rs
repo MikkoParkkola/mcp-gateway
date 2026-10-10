@@ -103,7 +103,7 @@ impl StdioTransport {
 
     /// A row that needs a short request timeout sets it after `start`, so the
     /// handshake is not bounded by it (MIK-8253).
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn set_request_timeout(&self, timeout: std::time::Duration) {
         let nanos = u64::try_from(timeout.as_nanos()).unwrap_or(u64::MAX);
         self.request_timeout.store(nanos, Ordering::Relaxed);
