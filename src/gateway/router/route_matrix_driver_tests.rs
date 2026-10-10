@@ -349,3 +349,90 @@ pub(crate) async fn task_submit_surfaced() -> Sent {
     .await;
     sent(&fx, body)
 }
+
+/// A backend whose `tools/call` signals `entered`, then waits for `gate`
+/// before answering: a call held in flight while a second one arrives.
+struct Held {
+    entered: std::sync::Arc<tokio::sync::Notify>,
+    gate: std::sync::Arc<tokio::sync::Notify>,
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Held {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        let body = if method == "tools/list" {
+            serde_json::json!({"tools": [{"name": "read", "inputSchema": {"type": "object"}}]})
+        } else {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.entered.notify_one();
+            self.gate.notified().await;
+            serde_json::json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
+        };
+        Ok(crate::protocol::JsonRpcResponse::success(
+            crate::protocol::RequestId::Number(1),
+            body,
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// Which HTTP route a lease pair is driven on.
+#[derive(Clone, Copy)]
+pub(crate) enum LeaseRoute {
+    /// R1 `/mcp` `gateway_invoke`.
+    Invoke,
+    /// R3 `/mcp/alpha`.
+    Direct,
+}
+
+/// Two calls under one idempotency key: the second is sent while the first is
+/// held in flight at the backend. Returns (the second's answer, the backend's
+/// `tools/call` count once both settled).
+pub(crate) async fn concurrent_same_key(route: LeaseRoute) -> (Value, usize) {
+    use std::sync::Arc;
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let gate = Arc::new(tokio::sync::Notify::new());
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let held = Held {
+        entered: Arc::clone(&entered),
+        gate: Arc::clone(&gate),
+        calls: Arc::clone(&calls),
+    };
+    let fx = Arc::new(
+        super::direct_guards_fixture::fixture_firewalled_on(Arc::new(held), None).await,
+    );
+    let call = |fx: Arc<super::direct_guards_fixture::Fx>| async move {
+        let args = serde_json::json!({});
+        match route {
+            LeaseRoute::Invoke => {
+                post_meta_invoke(&fx, "k-std", "alpha", "read", args, Some("lease-1"), None).await
+            }
+            LeaseRoute::Direct => {
+                post_direct(&fx, "alpha", "k-std", "read", args, Some("lease-1"), None).await
+            }
+        }
+        .1
+    };
+    let first = tokio::spawn(call(Arc::clone(&fx)));
+    entered.notified().await;
+    let second = call(Arc::clone(&fx)).await;
+    gate.notify_one();
+    let _first = first.await.expect("the first call finishes");
+    (second, calls.load(Ordering::SeqCst))
+}

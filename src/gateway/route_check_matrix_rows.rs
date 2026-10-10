@@ -423,3 +423,46 @@ async fn task_confirm_stdio_gap_row() {
         "premise: stdio admitted the call as a task: {body}"
     );
 }
+
+/// The execution lease's in-flight refusal (meta_mcp/admission.rs).
+const LEASE_IN_FLIGHT: &str = "Execution is already in progress";
+
+/// The idempotency guard's in-flight refusal (idempotency/guard.rs).
+const GUARD_IN_FLIGHT: &str = "Duplicate request in progress for key";
+
+/// A JSON-RPC answer's error message, or "" when it has none.
+fn message(body: &Value) -> &str {
+    body["error"]["message"].as_str().unwrap_or_default()
+}
+
+/// Lease. Two calls under one idempotency key, the second sent while the
+/// first is held at the backend. R1 Applies: the lease refuses the second with
+/// its own in-flight message, and the backend runs once. R3 gap (MIK-8154,
+/// matrix gap 11): the direct route has no lease; whatever stops the second
+/// there is not the lease.
+#[tokio::test]
+async fn lease_rows() {
+    let row = |route| expect(MethodKind::ToolsCall, route, Stage::Lease);
+
+    assert_eq!(row(Route::Invoke), Expect::Applies);
+    let (second, calls) = router::concurrent_same_key(router::LeaseRoute::Invoke).await;
+    assert!(
+        message(&second).contains(LEASE_IN_FLIGHT),
+        "R1: the second call was not refused by the lease: {second}"
+    );
+    assert_eq!(calls, 1, "R1: the backend ran twice");
+
+    assert_eq!(row(Route::Direct), Expect::ExpectedGap(super::Ticket::Mik8154));
+    let (second, calls) = router::concurrent_same_key(router::LeaseRoute::Direct).await;
+    assert!(
+        !message(&second).contains(LEASE_IN_FLIGHT),
+        "R3 answered with the lease's refusal; MIK-8154 (gap 11) may have closed \
+         this gap, flip the row to Applies: {second}"
+    );
+    // What stops it today is the direct route's own idempotency guard.
+    assert!(
+        message(&second).contains(GUARD_IN_FLIGHT),
+        "R3: stopped, but not by the idempotency guard: {second}"
+    );
+    assert!(calls >= 1, "premise: the first direct call ran: {second}");
+}
