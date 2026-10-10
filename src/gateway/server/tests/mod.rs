@@ -15,6 +15,7 @@ mod admission_allocations;
 pub(crate) mod alloc_meter;
 mod input_key_allocations;
 mod invoke_argument_copies;
+mod is_connected_count;
 #[cfg(feature = "firewall")]
 mod judge_allocations;
 mod signing_nonce_allocations;
@@ -57,10 +58,9 @@ mod stdio_catalogue_sole_operator;
 #[cfg(feature = "cost-governance")]
 mod stdio_cost_persistence;
 
+mod grant_decision_stdio;
 #[cfg(feature = "cost-governance")]
 mod http_cost_persistence;
-
-mod grant_decision_stdio;
 
 // MIK-7272.OWNER.3 and OWNER.5 (docs/design/2026-09-30-sub4-stdio-owner-test-plan.md, I1).
 mod owner3_stdio_keying;

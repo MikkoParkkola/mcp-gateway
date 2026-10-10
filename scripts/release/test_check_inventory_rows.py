@@ -19,7 +19,8 @@ spec = importlib.util.spec_from_file_location("rows", HERE / "check_inventory_ro
 rows = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rows)
 
-HEADER = "path\tfn\toccurrence\ttier\tcategory\tname\treason\n"
+HEADER = "path\tfn\toccurrence\ttier\tcategory\tqualified\treason\n"
+UNENFORCING_HEADER = "path\tfn\toccurrence\treason\n"
 
 
 class Repo:
@@ -66,7 +67,7 @@ class CheckInventoryRows(unittest.TestCase):
     def test_a_row_in_either_file_passes(self) -> None:
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn a() {}\nfn b() {}\n")
         self.repo.write(rows.INVENTORY, HEADER + "src/oauth/mod.rs\ta\t1\tcritical\tb\ta\tr\n")
-        self.repo.write(rows.UNENFORCING, "src/oauth/mod.rs\tb\t1\tformats a message\n")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\tb\t1\tformats a message\n")
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), [])
 
@@ -156,10 +157,17 @@ class CheckInventoryRows(unittest.TestCase):
         self.assertEqual(self.repo.missing(), ["hook"])
 
     def test_an_unenforcing_row_without_a_reason_does_not_count(self) -> None:
+        # MIK-8279: a row without its reason is no longer skipped quietly (which
+        # left the function reported missing); it is a malformed row, named.
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn a() {}\nfn b() {}\n")
-        self.repo.write(rows.UNENFORCING, "src/oauth/mod.rs\ta\t1\t\nsrc/oauth/mod.rs\tb\t1\n")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\ta\t1\t\nsrc/oauth/mod.rs\tb\t1\n")
         self.repo.commit("add")
-        self.assertEqual(self.repo.missing(), ["a", "b"])
+        with self.assertRaises(rows.ledger.LedgerError) as raised:
+            self.repo.missing()
+        found = raised.exception.problems
+        self.assertEqual(len(found), 2, found)
+        self.assertIn(f"{rows.UNENFORCING}:2: the reason must not be empty", found[0])
+        self.assertIn(f"{rows.UNENFORCING}:3: 3 columns", found[1])
 
     def test_the_whole_tree_mode_sees_a_function_older_than_the_change(self) -> None:
         # MIK-8195: `existing` came in with the base, so the diff check never
@@ -172,7 +180,7 @@ class CheckInventoryRows(unittest.TestCase):
         self.assertEqual(rows.missing_rows(rows.ALL, "HEAD"), [], "an unswept area is not enforced yet")
         rows.SWEPT_AREAS = ("src/oauth/",)
         self.assertEqual(sorted(f[1] for f in rows.missing_rows(rows.ALL, "HEAD")), ["added", "existing"])
-        self.repo.write(rows.UNENFORCING, "src/oauth/mod.rs\texisting\t1\tr\nsrc/oauth/mod.rs\tadded\t1\tr\n")
+        self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\texisting\t1\tr\nsrc/oauth/mod.rs\tadded\t1\tr\n")
         self.repo.commit("rows")
         self.assertEqual(rows.missing_rows(rows.ALL, "HEAD"), [])
 
@@ -181,6 +189,38 @@ class CheckInventoryRows(unittest.TestCase):
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn helper() {}\n")
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), ["helper"])
+
+
+class CoverageGradeTrigger(unittest.TestCase):
+    """The CI grade's pull_request paths name exactly the COV.3 prefixes
+    (MIK-8217): a prefix missing there lets a PR on that path merge ungraded.
+    A GitHub `*` does not cross `/`, so a bare stem needs both its file and
+    its directory form."""
+
+    def test_the_pull_request_paths_cover_every_cov3_prefix(self) -> None:
+        text = (HERE.parent.parent / ".github/workflows/coverage-probe.yml").read_text()
+        block = text.split("  pull_request:", 1)[1].split("  workflow_dispatch:", 1)[0]
+        listed = {line.strip()[3:-1] for line in block.splitlines()
+                  if line.strip().startswith('- "')}
+        wanted = set()
+        for prefix in rows.PREFIXES:
+            if prefix.endswith("/"):
+                wanted.add(prefix + "**")
+            elif prefix.endswith(".rs"):
+                wanted.add(prefix)
+            else:
+                wanted |= {prefix + ".rs", prefix + "/**"}
+        # What the grade itself reads: a change to any of these is graded too.
+        wanted |= {
+            "docs/release/v4.0.0-critical-functions.tsv",
+            "docs/release/v4.0.0-unenforcing-functions.tsv",
+            "docs/release/inventory.d/**",
+            "scripts/release/inventory_ledger.py",
+            "scripts/release/critical_function_coverage.py",
+            "scripts/release/critical_path_coverage.py",
+            ".github/workflows/coverage-probe.yml",
+        }
+        self.assertEqual(listed, wanted)
 
 
 if __name__ == "__main__":

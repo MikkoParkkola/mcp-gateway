@@ -9,8 +9,18 @@ use std::time::Duration;
 use super::rotation_tests::{append, cfg, log_path};
 use super::*;
 use crate::security::audit::AuditFailurePolicy;
+use crate::test_wait::HANG_BOUND;
 
 const BOUND: Duration = Duration::from_millis(200);
+
+/// Whether the late write cleared its generation within `HANG_BOUND`. Waits
+/// on the blocking pool, so no runtime worker is held while it waits.
+async fn write_cleared(l: &Arc<TransparencyLogger>) -> bool {
+    let l = Arc::clone(l);
+    tokio::task::spawn_blocking(move || l.wait_write_cleared_for_test(HANG_BOUND))
+        .await
+        .expect("the wait does not panic")
+}
 
 fn logger(dir: &tempfile::TempDir, policy: AuditFailurePolicy) -> Arc<TransparencyLogger> {
     let l = TransparencyLogger::open(cfg(&log_path(dir), 12, false))
@@ -191,14 +201,9 @@ async fn admit_fails_fast_while_stalled_and_late_success_clears_it() {
     l.set_append_failure_for_test(false);
     // The stuck write finishes: the stall clears and calls are admitted.
     release.release();
-    // The late write finishes on another thread; a loaded runner can take
-    // well over 500 ms to schedule it, so poll for up to 5 s.
-    for _ in 0..500 {
-        if !l.is_stalled() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    // The late write finishes on another thread, however late a loaded
+    // runner schedules it: wait for its clear (MIK-8294).
+    assert!(write_cleared(&l).await, "the late write never finished");
     assert!(!l.is_stalled());
     assert!(l.admit().await.is_ok());
     healthy_invocation(&l).await.unwrap();
@@ -230,7 +235,12 @@ async fn healthy_append_is_unaffected() {
 
 /// F20 r3: a write that finishes between the caller's timeout and its
 /// stall-lock check must not leave `stalled` set.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+///
+/// MIK-8294: the hook blocks the thread that runs the caller's future while
+/// it waits for the late write. On the single-threaded runtime that is the
+/// only thread for async tasks, so the row also proves the write never needs
+/// one: it finishes on tokio's blocking pool and signals its clear.
+#[tokio::test]
 async fn completion_at_timeout_boundary_does_not_stick() {
     let dir = tempfile::tempdir().unwrap();
     let l = logger(&dir, AuditFailurePolicy::FailClosed);
@@ -239,13 +249,10 @@ async fn completion_at_timeout_boundary_does_not_stick() {
     *l.bound.before_mark.lock().unwrap() = Some(Box::new(move || {
         release.release();
         // Wait for the late write to clear its generation.
-        for _ in 0..500 {
-            if !probe.write_in_flight_for_test() {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        panic!("the late write never finished");
+        assert!(
+            probe.wait_write_cleared_for_test(HANG_BOUND),
+            "the late write never finished"
+        );
     }));
     assert!(invocation(&l).await.is_err(), "the caller still timed out");
     assert!(!l.is_stalled(), "the finished write cleared the stall");
@@ -265,12 +272,7 @@ async fn late_failure_degrades_with_cause() {
     assert!(invocation(&l).await.is_err());
     assert!(l.is_stalled());
     release.release();
-    for _ in 0..100 {
-        if !l.is_stalled() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    assert!(write_cleared(&l).await, "the late write never finished");
     assert!(!l.is_stalled(), "the late result cleared the stall");
     assert_eq!(l.last_failure_cause(), Some("storage_full"));
     assert!(l.admit().await.is_err(), "degraded, not healthy");

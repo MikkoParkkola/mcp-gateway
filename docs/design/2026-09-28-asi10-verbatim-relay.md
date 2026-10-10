@@ -787,12 +787,37 @@ all-values form; a re-join of one key path's pieces matches only the per-key-pat
 metadata keys is needed. The per-key-path form is text the caller received, so it is valid as
 evidence and as excuse. The mid-word evasion row (A3c) must stay red on revert.
 
+**As built (MIK-8209).** For every array (a nested array is its own, never joined across instances)
+and every object-only key path under its elements, a run of at least two consecutive string values
+is joined; the empty path is left to the all-values form. Each join is fingerprinted alone, after
+the leaf and retained fingerprints, so the per-delivery fingerprint bound keeps leaf evidence first,
+and on a 6 KiB budget of its own; joins past it, each alone, go to the cut-delivery sketch (excuse
+only). A text cut by either budget is counted once per delivery as
+`capacity_total{bound="record_text_cut"}` (a join cut always comes with a leaf cut). A plan step
+stages its runs as leaf indices; retention keeps every held, consecutive sub-run and leaves only
+fingerprints in the receipt. A plan answer's delivered k-grams include its values newline-joined,
+run together, and each join. The seam pass reads each join whose pieces several steps produced, run
+together. A step's retention spends its room (at most what it staged, MIK-7992) on its own span of
+the answer first, so an equal leaf another step delivered cannot crowd out its own piece. Residuals:
+copies within one step's own span still spend its room first (MIK-8251, open; reachable through
+a late redaction of a step's values into copies of a staged leaf); a cross-step join of nested
+content arrays (each step's `content`) is never formed: the pieces sit in separate array instances,
+which the join never runs together, and a copy spread across them is out of model under D2.
+
 **Subsets.** A subset forward of whole pieces is excused for every k-gram inside a kept piece or a
-delivered join of consecutive kept pieces. A k-gram spanning a seam the forward created is evidence
-only if some other caller was delivered that exact join. A source is a tool name (`{server}:{tool}`,
-`collusion_gate.rs:612`), so one tool may return one text split on one call and joined on another.
-If it delivered another caller the exact join of the kept pieces, sensitively, the holder's subset
-forward is refused. That is an in-model defect: MIK-8205.
+delivered join of consecutive kept pieces, and (MIK-8205) for every k-gram of a seam the forward
+created: a window of the normalised run-together of one key-path run the caller was delivered, with
+one contiguous span of pieces omitted, that overlaps the seam. Each such window is text the caller
+received from that source with at most one gap. These seams are recorded at delivery as excuse only,
+in a store apart from the evidence entries: they never witness, never count toward `Common`, and
+never take evidence capacity. A plan answer's runs are attributed to the one receipt that keeps every
+piece whole. Work per delivery is O(P + S x B): at most 4,096 pieces counted before any per-piece
+work, 1,024 spans generated lazily, 2 x 1,024 bytes read per span; a side whose edge the byte cap
+made is cut only where normalising each side apart equals normalising them together (no mark is cut
+before, and unsafe controls are dropped first, as matching does). Residuals: a forward no single
+ordered subsequence explains is excused window by window (each window is still received text); a
+subset forwarded inside its original structure is matched through the all-values forms and stays
+refused against a competing structured copy.
 
 ### 14.2 Cross-tool copies: the per-source excuse is load-bearing (MIK-8206)
 
@@ -868,16 +893,19 @@ causes names it (MIK-8201):
 Metered (MIK-8201): `mcp_gateway_collusion_capacity_total{bound}` counts each bound at its event:
 `receipt_truncated` (adds the fingerprints cut), `fingerprint_evicted`, `record_dropped`,
 `record_replaced`, `record_overflow`, `sketch_refused`, `sketch_evicted` (for room, never on
-expiry) and `marker_evicted`. `mcp_gateway_collusion_relay_total{action, reason}` counts each
-refusal under `relay`, `other_source`, `capacity` or `unkeyed`. A refusal names its reason:
-another tool's copy (MIK-8206), another caller's overflow record, or an excuse of the caller's
-dropped for room. A dropped excuse leaves an "excuse lost" marker per (source, caller) for one
-window (at most 65,536, oldest first, never charged to the sketch budget). Filling to the cap
-allocates at most 15.1 MiB in total (measured; includes the hash table's growth copies), about
-10 MiB of it retained (derived from bucket sizes, not measured). That is per detector instance;
-a gateway runs one, shared by the meta-MCP and direct paths, and none with relay detection off.
-Labels never excuse; a marker is source-level, so a genuine relay from a source whose other text
-lost an excuse is labelled `capacity` and still refused.
+expiry), `marker_evicted`, `record_text_cut` (a text budget cut, MIK-8209), `seam_excuse_cut` (a
+subset-forward seam pass stopped by a cap or a span skipped, MIK-8205) and `seam_excuse_evicted`
+(seam excuses evicted past their global cap, MIK-8205).
+`mcp_gateway_collusion_relay_total{action, reason}` counts each refusal under `relay`,
+`other_source`, `capacity` or `unkeyed`. A refusal names its reason: another tool's copy (MIK-8206),
+another caller's overflow record, or an excuse of the caller's dropped for room. A dropped excuse
+leaves an "excuse lost" marker per (source, caller) for one window (at most 65,536, oldest first,
+never charged to the sketch budget). Filling to the cap allocates at most 15.1 MiB in total
+(measured; includes the hash table's growth copies), about 10 MiB of it retained (derived from
+bucket sizes, not measured). That is per detector instance; a gateway runs one, shared by the
+meta-MCP and direct paths, and none with relay detection off. Labels never excuse; a marker is
+source-level, so a genuine relay from a source whose other text lost an excuse is labelled
+`capacity` and still refused.
 
 The `other_source` label reads the sender's sketches from other sources through a by-caller index
 (caller to the sources it holds a sketch from), so labelling one refusal visits only the sender's
@@ -909,11 +937,11 @@ middle of its own long answer, D2) are all in model.
 | MIK-8066 BIG.3 and remainder: plan answers or steps over 1 MiB lose receipts and excuses | D1, D2 | in model | Fix: streaming sketch build; the thinned sample |
 | MIK-8209 (from MIK-8035) residuals 1, 3: content items, labelled parts | D2 | in model | Fix: the per-key-path join |
 | MIK-8209 (from MIK-8035) residual 4: plan path has no run-together form | D2 and D1 | in model | Fix: the per-key-path join applied to the plan answer's k-grams |
-| MIK-8209 (from MIK-8035) residual 2: over the cap, flat and split receipts cut differently | D2 | in model | Pin with one row; likely met by MIK-8066's sketch |
+| MIK-8209 (from MIK-8035) residual 2: over the cap, flat and split receipts cut differently | D2 | in model | Fixed (row `flat_and_split_receipts_over_the_cap_both_excuse`, red on base); was: Pin with one row; likely met by MIK-8066's sketch |
 | MIK-8196: a 56-char tail missed once on one platform | D1 | in model, inside B1 | Row keeps every k-gram; determinism row added |
 | MIK-8200: sketch eviction refuses a holder | D2 | in model | Fix (High): see B2 |
 | MIK-8201: capacity bounds not metered or named | B2 visibility | in model | Fix |
-| MIK-8205: subset forward refused against the same tool's exact join | D2 | in model | Fix |
+| MIK-8205: subset forward refused against the same tool's exact join | D2 | in model | Fixed: seams of the caller's own runs as excuse only (see Subsets); rows red on base (CI run 38025159522) |
 | MIK-8206: cross-tool verbatim copy refused | D2 | stated bound (14.2) | Fix: metric and named refusal |
 | MIK-8136 (1): a run of over 256 bytes of combining marks without a starter may normalize differently near the forced cut | D1 only | out of model | Pathological input; a miss, never a refusal |
 | MIK-8136 (2): cut rule not checked against the Unicode corpus | none | not a finding | No concrete input |

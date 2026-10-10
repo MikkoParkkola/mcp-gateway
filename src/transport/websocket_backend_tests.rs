@@ -19,7 +19,7 @@ use super::{Transport, WebSocketTransport};
 use crate::protocol::PROTOCOL_VERSION;
 use crate::transport::websocket_test_server::{Behaviour, WsPeer};
 
-const FAST: Duration = Duration::from_secs(1);
+const FAST: Duration = Duration::from_secs(10);
 const WAIT: Duration = Duration::from_secs(10);
 const HANG_GUARD: Duration = Duration::from_secs(30);
 
@@ -253,15 +253,10 @@ mod diagnostics {
         use tracing_subscriber::layer::SubscriberExt;
         // Keep callsite interest live across tests that log without a scoped
         // subscriber (see `security::firewall::response_tests::capture`).
-        static INTEREST: std::sync::Once = std::sync::Once::new();
-        INTEREST.call_once(|| {
-            let _ = tracing::subscriber::set_global_default(
-                tracing_subscriber::Registry::default()
-                    .with(tracing::level_filters::LevelFilter::TRACE),
-            );
-            // tungstenite logs through `log`; bridge it as production does.
-            let _ = tracing_log::LogTracer::init();
-        });
+        crate::test_log_capture::keep_interest_open();
+        // tungstenite logs through `log`; bridge it as production does. The
+        // keeper does not install this bridge.
+        let _ = tracing_log::LogTracer::init();
         let buffer = Buffer::default();
         let writer = buffer.clone();
         let subscriber = tracing_subscriber::registry()

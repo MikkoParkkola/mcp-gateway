@@ -10,12 +10,15 @@
 #   coverage_grade.sh --self-check       grade the 2026-10-06 baseline run and
 #                                        require its known FAIL
 #
-# A probe is <rev>'s tree plus scripts/release/coverage-probe.yml as a workflow,
+# A probe is <rev>'s tree plus this checkout's .github/workflows/coverage-probe.yml,
 # committed with plumbing (no checkout is touched) and pushed to
 # throwaway/coverage-grade-<tag>. Grading reads the source, inventory and grader
 # of <rev> itself, so line ranges match the report. PASS needs all three: the run
 # concluded success (the probe has no --ignore-run-fail, so no test failed), every
 # Critical row is >=95%, and every path clears 80% and its recorded baseline.
+# A report the run should have uploaded but did not (a platform job that failed)
+# is no grade at all: the last line reads NOT GRADED and the exit status is 5,
+# never the 1 of a graded FAIL (MIK-8265).
 # Needs git, gh (authenticated) and python3.
 set -euo pipefail
 REPO=MikkoParkkola/mcp-gateway
@@ -29,10 +32,12 @@ SELF_REV=409e95619a608d638735a3dc0ca44942e922cf08
 SELF_ROW=$'BELOW\t 91.67%\t55/60\tsrc/gateway/task_service/execution/upstream.rs:query_and_commit#1'
 
 # The probe workflow a graded run must have executed, byte for byte: this
-# checkout's coverage-probe.yml, or for the self-check the definition that
+# checkout's .github/workflows/coverage-probe.yml (MIK-8217 moved it there; CI
+# runs the same file), or for the self-check the definition that
 # baseline run used (it predates this script).
 PROBE_PATH=.github/workflows/coverage-probe.yml
-PROBE_BLOB="$(git hash-object "$HERE/coverage-probe.yml")"
+PROBE_FILE="$(git rev-parse --show-toplevel)/$PROBE_PATH"
+PROBE_BLOB="$(git hash-object "$PROBE_FILE")"
 
 self_check=""
 case "${1:-}" in
@@ -49,7 +54,7 @@ case "${1:-}" in
     [[ "$tag" =~ ^[A-Za-z0-9-]+$ ]] || { echo "tag must match [A-Za-z0-9-]+" >&2; exit 2; }
     index="$(mktemp)"; trap 'rm -f "$index"' EXIT
     GIT_INDEX_FILE="$index" git read-tree "$rev"
-    blob="$(git hash-object -w "$HERE/coverage-probe.yml")"
+    blob="$(git hash-object -w "$PROBE_FILE")"
     GIT_INDEX_FILE="$index" git update-index --add --cacheinfo "100644,$blob,$PROBE_PATH"
     tree="$(GIT_INDEX_FILE="$index" git write-tree)"
     probe="$(git commit-tree "$tree" -p "$rev" -m "ci(throwaway): coverage grade of ${rev:0:9}")"
@@ -80,26 +85,60 @@ refuse() { echo "run $run: $*" >&2; exit 4; }
 head_sha="$(gh run view "$run" -R "$REPO" --json headSha -q .headSha)"
 git cat-file -e "$head_sha^{commit}" 2>/dev/null || git fetch -q origin "$head_sha"
 [[ "$(git rev-parse "$head_sha^")" == "$rev" ]] || refuse "probed $head_sha, whose parent is not $rev"
-[[ "$(git diff --name-only "$rev" "$head_sha")" == "$PROBE_PATH" ]] \
+# Empty when <rev> already carries the pinned workflow; the blob check below
+# still pins its content.
+changed="$(git diff --name-only "$rev" "$head_sha")"
+[[ -z "$changed" || "$changed" == "$PROBE_PATH" ]] \
   || refuse "probed $head_sha, which changes more than $PROBE_PATH"
 [[ "$(git rev-parse "$head_sha:$PROBE_PATH")" == "$PROBE_BLOB" ]] \
   || refuse "probed $head_sha with a $PROBE_PATH that is not the pinned probe"
 
 until [[ "$(gh run view "$run" -R "$REPO" --json status -q .status)" == completed ]]; do sleep 120; done
-conclusion="$(gh run view "$run" -R "$REPO" --json conclusion -q .conclusion)"
+# The two platform jobs, not the run: since MIK-8217 the run also holds CI's own
+# grade job, which can fail where this script's grade differs (an older <rev>
+# without critical_path_coverage.py uses the fallback below). Both jobs must
+# have succeeded: no test failed and each report was produced.
+conclusion="$(gh run view "$run" -R "$REPO" --json jobs -q \
+  '[.jobs[] | select(.name == "llvm-cov Linux, grade" or .name == "llvm-cov Windows, grade") | .conclusion]
+   | if length == 2 and all(. == "success") then "success" else "failure" end')"
 
-out="$(git rev-parse --path-format=absolute --git-common-dir)/coverage-grade/$run"
+grades="$(git rev-parse --path-format=absolute --git-common-dir)/coverage-grade"
+out="$grades/$run"
 rm -rf "$out"; mkdir -p "$out/src"
-gh run download "$run" -R "$REPO" -D "$out/art"
+# Shared by every worktree of the clone and ~50 MB a run: keep the newest few,
+# this run and the self-check baseline (MIK-8217).
+python3 "$HERE/prune_coverage_grades.py" "$grades" 3 "$run" "$SELF_RUN"
+# A failed download is no grade either: the check below names each report it
+# left absent and ends NOT GRADED (MIK-8265).
+gh run download "$run" -R "$REPO" -D "$out/art" || echo "download of run $run failed or was partial"
 git archive "$rev" src docs/release scripts/release | tar -x -C "$out/src"
 paths_grader="$out/src/scripts/release/critical_path_coverage.py"
 [[ -f "$paths_grader" ]] || paths_grader="$HERE/critical_path_coverage.py"
 
-status=0
+# A report the run should have uploaded but did not (a platform job that failed)
+# is no grade at all, never a graded FAIL (MIK-8265). Checked here first, so the
+# answer does not depend on <rev>'s graders, which may predate their own check;
+# each grader also exits 3 on an absent, empty or unreadable report.
+INPUT_MISSING=3
+not_graded() {
+  echo "GRADE rev=$rev run=$run conclusion=$conclusion: NOT GRADED (an input is missing; see above)"
+  exit 5
+}
+missing=0
+for input in coverage-linux/linux.lcov coverage-windows/windows.lcov coverage-linux/cov.json; do
+  [[ -s "$out/art/$input" && -r "$out/art/$input" ]] || { echo "input missing: $out/art/$input"; missing=1; }
+done
+[[ $missing == 0 ]] || not_graded
+status=0 functions=0 paths=0
 (cd "$out/src" && python3 scripts/release/critical_function_coverage.py \
   --lcov "$out/art/coverage-linux/linux.lcov" --lcov "$out/art/coverage-windows/windows.lcov") \
-  > "$out/functions.txt" || status=1
-python3 "$paths_grader" "$out/art/coverage-linux/cov.json" > "$out/paths.txt" || status=1
+  > "$out/functions.txt" || functions=$?
+python3 "$paths_grader" "$out/art/coverage-linux/cov.json" > "$out/paths.txt" || paths=$?
+if [[ $functions == "$INPUT_MISSING" || $paths == "$INPUT_MISSING" ]]; then
+  grep -h '^input missing:' "$out/functions.txt" "$out/paths.txt" || true
+  not_graded
+fi
+[[ $functions == 0 && $paths == 0 ]] || status=1
 [[ "$conclusion" == success ]] || status=1
 
 echo "== Critical rows not ok (every row: $out/functions.txt)"

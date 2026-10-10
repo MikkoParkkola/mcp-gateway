@@ -427,6 +427,16 @@ impl BackendRegistry {
         }
     }
 
+    /// Report that the capability catalogue `name` finished its startup scan:
+    /// announced whatever it lists. A no-op until a feed is set.
+    pub(crate) fn nudge_catalogue_scanned(&self, name: &str) {
+        if let Some(feed) = self.change_feed.get() {
+            let _ = feed.send(super::tools_nudge::ToolsNudge::CatalogueScanned {
+                name: name.to_string(),
+            });
+        }
+    }
+
     /// Report that the instance now registered as `name` is settled without a
     /// stored list (`NudgeKind::Resolved`): no warm-up will fill it, so it
     /// shows nothing until something stores one.

@@ -138,7 +138,9 @@ tower-http = { version = "0.7", features = ["cors", "trace", "timeout", "compres
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# raw_value: the reply classifier captures a backend `error` member as sent
+# (MIK-8263); axum already enables it, this states the dependency.
+serde_json = { version = "1.0", features = ["raw_value"] }
 serde_json_canonicalizer = "0.3.2"
 serde_yaml = "0.9"
 # Collects the config keys serde skipped, so an unrecognised key is a load

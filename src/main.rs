@@ -16,9 +16,6 @@ mod commands;
 #[path = "debug_trust_roots.rs"]
 mod debug_trust_roots;
 mod home_dir;
-#[cfg(test)]
-#[path = "test_ports.rs"]
-mod test_ports;
 
 use std::{path::Path, process::ExitCode};
 
@@ -145,7 +142,7 @@ async fn run(cli: Cli) -> ExitCode {
                 format,
                 min_severity: severity,
                 auto_fix: fix,
-                color: !no_color,
+                color: commands::color::for_stdout(no_color),
             };
             mcp_gateway::validator::cli_handler::run_validate_command(&paths, &config).await
         }
@@ -204,10 +201,10 @@ async fn run(cli: Cli) -> ExitCode {
             url,
             description,
             env_vars,
-            config,
             force,
             trailing_command,
         }) => {
+            let config = cli_config_or_default(config_path.as_deref());
             // Merge --command flag and trailing `-- cmd args...` (claude/codex style)
             let effective_command = if trailing_command.is_empty() {
                 command
@@ -242,11 +239,8 @@ async fn run(cli: Cli) -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        Some(Command::Remove {
-            name,
-            config,
-            force,
-        }) => {
+        Some(Command::Remove { name, force }) => {
+            let config = cli_config_or_default(config_path.as_deref());
             #[cfg(feature = "webui")]
             {
                 commands::run_remove_command(
@@ -262,11 +256,8 @@ async fn run(cli: Cli) -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        Some(Command::List {
-            json,
-            available,
-            config,
-        }) => {
+        Some(Command::List { json, available }) => {
+            let config = cli_config_or_default(config_path.as_deref());
             #[cfg(feature = "webui")]
             {
                 if available {
@@ -282,7 +273,8 @@ async fn run(cli: Cli) -> ExitCode {
                 ExitCode::FAILURE
             }
         }
-        Some(Command::Get { name, config }) => {
+        Some(Command::Get { name }) => {
+            let config = cli_config_or_default(config_path.as_deref());
             #[cfg(feature = "webui")]
             {
                 commands::run_get_command(&name, &config)
@@ -612,6 +604,13 @@ fn apply_cli_overrides_and_validate(
 ) -> mcp_gateway::Result<()> {
     apply_cli_overrides(config, cli);
     config.validate_with_env(overlay)
+}
+
+/// The file `add`, `remove`, `list` and `get` use: the global `--config` /
+/// `MCP_GATEWAY_CONFIG`, else `./gateway.yaml`. Unlike the stdio path below, a
+/// named file is used as given, never swapped for a fallback.
+fn cli_config_or_default(global: Option<&Path>) -> std::path::PathBuf {
+    global.map_or_else(|| "gateway.yaml".into(), Path::to_path_buf)
 }
 
 /// Run the gateway in stdio mode (newline-delimited JSON-RPC on stdin/stdout).

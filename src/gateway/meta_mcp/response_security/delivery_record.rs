@@ -69,7 +69,7 @@ impl super::super::MetaMcp {
             .as_ref()
             .map_or(AuditOutcome::Ok, |e| AuditOutcome::Error(e.code));
         self.record_delivery_attempt(
-            serde_json::to_value(response),
+            || serde_json::to_value(response),
             outcome,
             "transport_finalized",
             correlation,
@@ -86,7 +86,7 @@ impl super::super::MetaMcp {
         correlation: &ResponseCorrelation<'_>,
     ) -> bool {
         self.record_delivery_attempt(
-            Ok(frame.clone()),
+            || Ok(frame.clone()),
             crate::security::audit::AuditOutcome::Ok,
             "notification_delivered",
             correlation,
@@ -97,7 +97,7 @@ impl super::super::MetaMcp {
 
     pub(super) async fn record_delivery_attempt(
         &self,
-        value: serde_json::Result<serde_json::Value>,
+        value: impl FnOnce() -> serde_json::Result<serde_json::Value>,
         outcome: crate::security::audit::AuditOutcome,
         stage: &str,
         correlation: &ResponseCorrelation<'_>,
@@ -129,7 +129,7 @@ pub(crate) async fn record_answer_delivery(
 ) -> bool {
     append_delivery_attempt(
         logger,
-        answer,
+        || answer,
         outcome,
         "transport_finalized",
         correlation,
@@ -139,10 +139,11 @@ pub(crate) async fn record_answer_delivery(
 }
 
 /// Append one delivery-attempt record to `logger`; `true` when there is no
-/// log. `false` only when the append failed under `FailClosed`.
+/// log. `false` only when the append failed under `FailClosed`. The record's
+/// value is built only once a log exists to take it (MIK-8014 PERF.9).
 async fn append_delivery_attempt(
     logger: Option<&std::sync::Arc<crate::security::TransparencyLogger>>,
-    value: serde_json::Result<serde_json::Value>,
+    value: impl FnOnce() -> serde_json::Result<serde_json::Value>,
     outcome: crate::security::audit::AuditOutcome,
     stage: &str,
     correlation: &ResponseCorrelation<'_>,
@@ -156,7 +157,7 @@ async fn append_delivery_attempt(
         return true;
     };
     let fail_closed = logger.failure_policy() == AuditFailurePolicy::FailClosed;
-    let encoded = value.and_then(|value| serde_json::to_vec(&value));
+    let encoded = value().and_then(|value| serde_json::to_vec(&value));
     let Ok(encoded) = encoded else {
         tracing::warn!("Failed to encode response delivery attempt for transparency log");
         return !fail_closed;
@@ -210,3 +211,7 @@ async fn append_delivery_attempt(
     }
     true
 }
+
+#[cfg(test)]
+#[path = "delivery_record_tests.rs"]
+mod tests;

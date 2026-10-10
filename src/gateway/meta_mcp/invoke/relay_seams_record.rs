@@ -47,27 +47,9 @@ struct Group {
 /// receipts already kept to `answer`, the plan's decoded final answer.
 pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, answer: &Value) {
     receipts.retain(|r| r.kind != Kind::Seam);
-    let members = PLAN_MEMBERS
-        .try_with(|m| m.borrow().clone())
-        .unwrap_or_default();
-    if members.is_empty() {
+    let Some(parts) = answer_parts(answer) else {
         return;
-    }
-    let notes: HashMap<&str, u32> = members.iter().map(|(p, l)| (p.as_str(), *l)).collect();
-    let mut parts = Vec::new();
-    match answer {
-        Value::Object(map) => {
-            for (k, v) in map
-                .iter()
-                .filter(|(k, _)| k.as_str() != "_context_integrity")
-            {
-                let mut at = format!("/{}", super::pointer_token(k));
-                let label = notes.get(at.as_str()).copied();
-                walk(v, &mut at, label, &notes, &mut parts);
-            }
-        }
-        _ => walk(answer, &mut String::new(), None, &notes, &mut parts),
-    }
+    };
     // Each step's whole kept values, sources and sensitivity, read once.
     let mut steps: HashMap<u32, Step<'_>> = HashMap::new();
     for r in receipts.iter().filter(|r| r.in_plan) {
@@ -95,7 +77,7 @@ pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, an
     {
         return;
     }
-    let seams = fw.seam_fingerprints(&parts);
+    let seams = seam_fingerprints(fw, &parts, answer);
     let Some(caller) = receipts.iter().find(|r| r.in_plan) else {
         return;
     };
@@ -153,6 +135,24 @@ pub(in super::super) fn add_seams(fw: &Firewall, receipts: &mut Vec<Receipt>, an
     }
 }
 
+/// The seam fingerprints of `parts`, the answer's leaves with their owning
+/// steps, and (`MIK-8209` K6) of each key-path join whose pieces several
+/// steps produced, read run together as delivered. A piece's step is the one
+/// the leaf pass gave that same leaf, by identity, so ownership never differs.
+fn seam_fingerprints(
+    fw: &Firewall,
+    parts: &[(&str, Option<u32>)],
+    answer: &Value,
+) -> Vec<(u64, Vec<u32>)> {
+    let mut seams = fw.seam_fingerprints(parts);
+    let owner: HashMap<*const u8, u32> = parts
+        .iter()
+        .filter_map(|(text, label)| Some((text.as_ptr(), (*label)?)))
+        .collect();
+    seams.extend(fw.join_seam_fingerprints(answer, &|piece| owner.get(&piece.as_ptr()).copied()));
+    seams
+}
+
 /// The composite receipt of a seam joining `names`: its identity names
 /// every contributing source, under an empty server, which no backend can
 /// be named (`:` is refused in backend names), so it never aliases one.
@@ -166,6 +166,36 @@ fn composite(
     let sources = Some(names.into_boxed_slice());
     let digest = DeliveryDigest::of_seam(group.fps, group.sensitive, sources);
     seam(String::new(), identity, digest)
+}
+
+/// `answer`'s string leaves in the order a delivery walk reads them (the
+/// value leaves [`crate::security::firewall`]'s `delivery_parts` returns, in
+/// its order), each with the plan step whose noted member holds it, a
+/// parent's note inherited by the strings under it. `None` outside a plan.
+/// One walk serves the seam pass and retention's labels (`MIK-8209` K7).
+pub(in super::super) fn answer_parts(answer: &Value) -> Option<Vec<(&str, Option<u32>)>> {
+    let members = PLAN_MEMBERS
+        .try_with(|m| m.borrow().clone())
+        .unwrap_or_default();
+    if members.is_empty() {
+        return None;
+    }
+    let notes: HashMap<&str, u32> = members.iter().map(|(p, l)| (p.as_str(), *l)).collect();
+    let mut parts = Vec::new();
+    match answer {
+        Value::Object(map) => {
+            for (k, v) in map
+                .iter()
+                .filter(|(k, _)| k.as_str() != "_context_integrity")
+            {
+                let mut at = format!("/{}", super::pointer_token(k));
+                let label = notes.get(at.as_str()).copied();
+                walk(v, &mut at, label, &notes, &mut parts);
+            }
+        }
+        _ => walk(answer, &mut String::new(), None, &notes, &mut parts),
+    }
+    Some(parts)
 }
 
 /// Push `value`'s string leaves, in the order a delivery walk reads them,
@@ -201,3 +231,53 @@ fn walk<'v>(
         _ => {}
     }
 }
+
+/// `MIK-8205` (S4): attach the subset-forward seams of `answer`'s
+/// single-receipt runs to the receipt that produced each run, so
+/// `record_digest` stores them under that receipt's source for the plan's
+/// caller. A piece belongs to a receipt only when exactly one receipt of its
+/// step keeps it whole: one step can hold several receipts of different
+/// sources (a nested plan), and a run is attributed only when one receipt
+/// owns every piece. A run spanning receipts gets none, so no window is
+/// excused under a source that did not produce all of it.
+/// Uniqueness is a deliberate fail-safe, withholds, never admits: a piece
+/// two receipts of one step keep whole gets no owner (#3726 p1).
+pub(in super::super) fn add_subset_seams(fw: &Firewall, receipts: &mut [Receipt], answer: &Value) {
+    let Some(parts) = answer_parts(answer) else {
+        return;
+    };
+    let owner: HashMap<*const u8, u32> = {
+        let whole: Vec<(usize, u32, HashSet<&str>)> = receipts
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.in_plan)
+            .filter_map(|(i, r)| Some((i, r.step?, r.digest.whole_values().collect())))
+            .collect();
+        parts
+            .iter()
+            .filter_map(|(text, label)| {
+                let label = (*label)?;
+                let mut holders = whole
+                    .iter()
+                    .filter(|(_, step, w)| *step == label && w.contains(text))
+                    .map(|(i, _, _)| *i);
+                let only = holders.next()?;
+                holders
+                    .next()
+                    .is_none()
+                    .then_some((text.as_ptr(), u32::try_from(only).ok()?))
+            })
+            .collect()
+    };
+    for (receipt, fps) in
+        fw.single_step_subset_seams(answer, &|piece| owner.get(&piece.as_ptr()).copied())
+    {
+        if let Some(r) = receipts.get_mut(receipt as usize) {
+            r.digest.add_seam_excuses(&fps);
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "relay_seams_subset_tests.rs"]
+mod subset_tests;

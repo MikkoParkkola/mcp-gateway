@@ -652,11 +652,23 @@ async fn authenticate_request(
         // the anonymous identity — and with it the anonymous quota, which any
         // unauthenticated flood can exhaust. Unrecognised input still falls
         // through to the anonymous identity below, exactly as before.
-        if let Some((client, identity, via)) = key_server_credential(&state, &presented).await {
-            debug!(client = %client.name, path = %path, "Public path authenticated via {via}");
-            identity.insert_into(request.extensions_mut());
-            request.extensions_mut().insert(client);
-            return next.run(request).await;
+        match key_server_credential(&state, &presented).await {
+            live::KsCredential::Credential(found) => {
+                let (client, identity, via) = *found;
+                debug!(client = %client.name, path = %path, "Public path authenticated via {via}");
+                identity.insert_into(request.extensions_mut());
+                request.extensions_mut().insert(client);
+                return next.run(request).await;
+            }
+            // A credential this gateway recognises whose identity names no
+            // one is refused here too, never handed the anonymous identity
+            // below (MIK-8286).
+            live::KsCredential::Refused => {
+                auth_failure(AuthFailureKind::InvalidCredential);
+                warn!(path = %path, "Invalid token");
+                return bearer_unauthorized_response("Invalid token");
+            }
+            live::KsCredential::NotOurs => {}
         }
     }
 
@@ -704,7 +716,8 @@ async fn authenticate_request(
     // 2. Try the key server: temporary token, then delegated OIDC bearer. The
     //    verified subject is bound into request extensions so downstream grant
     //    evaluation can scope capabilities to the caller identity.
-    if let Some((client, identity, via)) = key_server_credential(&state, token).await {
+    if let live::KsCredential::Credential(found) = key_server_credential(&state, token).await {
+        let (client, identity, via) = *found;
         if let Some(deny) = client_preflight(auth_config, &client, path) {
             return deny;
         }

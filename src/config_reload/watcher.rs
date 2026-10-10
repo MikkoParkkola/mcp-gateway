@@ -135,6 +135,10 @@ impl ConfigWatcher {
     /// `hardened` posture, a backend that already connected over HTTP or
     /// WebSocket before any destination policy was stamped cannot be pinned in
     /// place (MIK-7700), and nothing is started.
+    ///
+    /// `capabilities` is the backend whose listing a login or key edit can
+    /// change; such a reload announces it, as the explicit reload does.
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         config_path: PathBuf,
         live_config: Arc<LiveConfig>,
@@ -142,6 +146,7 @@ impl ConfigWatcher {
         initial_config: &Config,
         env: Arc<LiveEnv>,
         identity_grants: Option<Arc<IdentityGrantSink>>,
+        capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<Self> {
         Self::start_with_hook(
@@ -151,6 +156,7 @@ impl ConfigWatcher {
             initial_config,
             env,
             identity_grants,
+            capabilities,
             shutdown_rx,
             None,
         )
@@ -166,6 +172,7 @@ impl ConfigWatcher {
         initial_config: &Config,
         env: Arc<LiveEnv>,
         identity_grants: Option<Arc<IdentityGrantSink>>,
+        capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
         shutdown_rx: tokio::sync::broadcast::Receiver<()>,
         on_registered: Option<super::OnRegistered>,
     ) -> Result<Self> {
@@ -213,6 +220,7 @@ impl ConfigWatcher {
             cache_ttl,
             env,
             identity_grants,
+            capabilities,
             on_registered,
             event_rx,
             shutdown_rx,
@@ -282,6 +290,7 @@ impl ConfigWatcher {
         cache_ttl: Duration,
         env: Arc<LiveEnv>,
         identity_grants: Option<Arc<IdentityGrantSink>>,
+        capabilities: Option<Arc<crate::capability::CapabilityBackend>>,
         on_registered: Option<super::OnRegistered>,
         mut event_rx: tokio::sync::mpsc::Receiver<ReloadTrigger>,
         mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
@@ -312,7 +321,8 @@ impl ConfigWatcher {
                 Ok(ctx) => {
                     let ctx = ctx
                         .with_env(env)
-                        .with_identity_grant_sink_opt(identity_grants);
+                        .with_identity_grant_sink_opt(identity_grants)
+                        .with_capabilities(capabilities);
                     match on_registered {
                         Some(hook) => ctx.with_on_registered(hook),
                         None => ctx,

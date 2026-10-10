@@ -73,9 +73,14 @@ where the value differs from the default or is a credential.
 6. **The env overlay follows the config key.** `MCP_GATEWAY_<SECTION>__<KEY>` stays as the container form
    of any KEEP key; an overlay naming a non-KEEP key gets the key's treatment.
 7. **The library is not a product surface.** README documents no library use and no crate in the
-   workspace depends on it. Every crate-root item becomes INTERNAL: `#[doc(hidden)] pub` where the binary
-   needs it, a `#[doc(hidden)] pub mod test_support` re-export where only tests need it, and `pub(crate)`
-   where nothing outside uses it.
+   workspace depends on it. Every crate-root item becomes INTERNAL by hiding it in place:
+   `#[doc(hidden)] pub` at its unchanged path, so the binary, the integration tests and the benches build
+   as before, docs.rs lists nothing, and no path carries a stability promise. The crate doc says so.
+   `scripts/release/check_surface_inventory.py` fails on any crate-root item that is neither hidden nor in
+   its empty `LIB_KEEP`, and refuses what it does not model: a `macro_export` token anywhere (`cfg_attr` included),
+   a conditional module path, a root `extern` block, a root inline module or a root `include!`. That check is
+   lexical; `.github/workflows/rustdoc.yml` is the compiler-backed gate (the crate page must list no item)
+   (MIK-8044.SURF.5).
 
 ## Decisions by area
 
@@ -103,7 +108,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 | `idempotency` | 4 |  |  |  |  |
 | `key_server` | 20 | `oidc[].auto_discover` | `cleanup_interval_secs`; `max_oidc_token_age_secs`; `max_tokens_per_identity`; `token_ttl_secs` |  |  |
 | `marketplace` |  |  |  |  | `marketplace` |
-| `meta_mcp` | 8 | `prompts_resources_fetch_timeout` | `cache_ttl`; `projection_mode` |  | `cache_tools` |
+| `meta_mcp` | 8 |  | `cache_ttl`; `prompts_resources_fetch_timeout`; `projection_mode` |  | `cache_tools` |
 | `mtls` | 20 |  |  |  |  |
 | `playbooks` | 3 |  |  |  |  |
 | `routing_profiles` | 6 |  |  |  |  |
@@ -156,6 +161,11 @@ Generated from the tables at the end; each row there carries the reason and migr
 
 ### routes
 
+INTERNAL routes stay mounted with the answers they give today: admin-only routes refuse a
+non-admin, control-plane reads serve the Auditor, `/ui/api/status` gives a non-admin the redacted
+counts, and `/sse` answers 410 Gone pointing to `POST /mcp` (MIK-8044.SURF.4b).
+`tests/webui_management_tests/internal_routes.rs` pins each one per route, method and caller.
+
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
 | `/.well-known` | 2 |  |  |  |  |
@@ -176,7 +186,7 @@ Generated from the tables at the end; each row there carries the reason and migr
 
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
-| `lib` |  |  |  | 65 |  |
+| `lib` |  |  |  | 64 |  |
 
 
 ## Findings filed on the way (0-bug rule)
@@ -530,7 +540,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `meta_mcp.expose_stats_tool` | KEEP | `false` | README documents it as the switch for `gateway_get_stats` | - | src/config/meta_mcp_config.rs:98 |
 | `meta_mcp.exposed_meta_tools` | KEEP | `Vec::new()` | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:90 |
 | `meta_mcp.projection_mode` | INTERNAL | `crate::projection::ProjectionMode::default()` | rollout switch for response projection; off unless a test sets it | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/meta_mcp_config.rs:75 |
-| `meta_mcp.prompts_resources_fetch_timeout` | AUTO | `Duration::from_secs(10)` | unset: min(the backend's `timeout`, 10 s), today's 10 s as the ceiling | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/meta_mcp_config.rs:56 |
+| `meta_mcp.prompts_resources_fetch_timeout` | INTERNAL | `Duration::from_secs(10)` | aggregation wait bound. Per request: the backend's `timeout` (HTTP session recovery may add one re-initialization and resend); whole fetch: 10 s unless set. Not derived from the backend's `timeout`: a paged list can need several requests, each within it (MIK-8285) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/meta_mcp_config.rs:56 |
 | `meta_mcp.surfaced_tools` | KEEP | `Vec::new()` | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:67 |
 | `meta_mcp.surfaced_tools[].server` | KEEP | — | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:28 |
 | `meta_mcp.surfaced_tools[].tool` | KEEP | — | operator picks which tools the client sees and which backends start eagerly | - | src/config/meta_mcp_config.rs:30 |
@@ -595,7 +605,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `runtime.profiles.<name>.restart.backoff_secs` | KEEP | `5` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:276 |
 | `runtime.profiles.<name>.restart.max_restarts` | KEEP | `2` | sandbox runtime profiles (opt-in) | - | src/runtime/provider.rs:274 |
 | `security` | KEEP | `type default` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/mod.rs:115 |
-| `security.agent_identity` | KEEP | `AgentIdentityConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:629 |
+| `security.agent_identity` | KEEP | `AgentIdentityConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:642 |
 | `security.agent_identity.allow_unverified_agent_identity` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:89 |
 | `security.agent_identity.enabled` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:63 |
 | `security.agent_identity.incomparable_proof_sources` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:132 |
@@ -605,20 +615,20 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `security.agent_identity.principal_labels[].labels` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:249 |
 | `security.agent_identity.principal_labels[].source` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:244 |
 | `security.agent_identity.require_id` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/agent_identity.rs:66 |
-| `security.caller_identity` | KEEP | `crate::security::caller_identity::CallerIdentityConfig::defa` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:644 |
+| `security.caller_identity` | KEEP | `crate::security::caller_identity::CallerIdentityConfig::defa` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:657 |
 | `security.caller_identity.authority` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:47 |
 | `security.caller_identity.cloudflare_access` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:49 |
 | `security.caller_identity.cloudflare_access.audiences` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:32 |
 | `security.caller_identity.cloudflare_access.team_domain` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:30 |
 | `security.caller_identity.mode` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:43 |
 | `security.caller_identity.trusted_proxies` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/caller_identity.rs:45 |
-| `security.claim_capture` | KEEP | `ClaimCaptureConfig::default()` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:659 |
-| `security.claim_capture.enabled` | KEEP | `false` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:571 |
-| `security.claim_capture.path` | KEEP | `"~/.mcp-gateway/claim-capture/claims.jsonl".to_string()` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:573 |
-| `security.context_integrity` | KEEP | `ContextIntegrityConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:647 |
-| `security.context_integrity.non_bypassable` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:535 |
-| `security.context_integrity.preset` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:530 |
-| `security.firewall` | KEEP | `crate::security::firewall::FirewallConfig::default()` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/config/features/security.rs:623 |
+| `security.claim_capture` | KEEP | `ClaimCaptureConfig::default()` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:672 |
+| `security.claim_capture.enabled` | KEEP | `false` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:584 |
+| `security.claim_capture.path` | KEEP | `"~/.mcp-gateway/claim-capture/claims.jsonl".to_string()` | opt-in capture switch and its file (rule 1) | - | src/config/features/security.rs:586 |
+| `security.context_integrity` | KEEP | `ContextIntegrityConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:660 |
+| `security.context_integrity.non_bypassable` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:548 |
+| `security.context_integrity.preset` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:543 |
+| `security.firewall` | KEEP | `crate::security::firewall::FirewallConfig::default()` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/config/features/security.rs:636 |
 | `security.firewall.anomaly_block_threshold` | KEEP | `see impl Default` | a switch under rule 3: setting it turns anomaly blocking on (unset warns only) | - | src/security/firewall/config.rs:78 |
 | `security.firewall.anomaly_detection` | KEEP | `see impl Default` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:30 |
 | `security.firewall.anomaly_min_observations` | INTERNAL | `fn default_anomaly_min_observations` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/security/firewall/config.rs:81 |
@@ -658,22 +668,22 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `security.firewall.tenant_guard.enabled` | KEEP | `false` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/tenant_guard.rs:60 |
 | `security.firewall.tenant_guard.max_tenants_per_window` | KEEP | `3` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/tenant_guard.rs:62 |
 | `security.firewall.tenant_guard.window_secs` | KEEP | `300` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/tenant_guard.rs:64 |
-| `security.hardened` | KEEP | `crate::security::posture::HardenedConfig::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:598 |
+| `security.hardened` | KEEP | `crate::security::posture::HardenedConfig::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:611 |
 | `security.hardened.private_backends` | KEEP | `type default` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/posture.rs:67 |
-| `security.identity_grants` | KEEP | `IdentityGrantsConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:641 |
-| `security.identity_grants.enabled` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:447 |
-| `security.identity_grants.fail_on_error` | KEEP | `true` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:452 |
-| `security.identity_grants.path` | KEEP | `"~/.mcp-gateway/identity-grants.yaml".to_string()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:449 |
-| `security.message_signing` | KEEP | `MessageSigningConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:626 |
-| `security.message_signing.enabled` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:149 |
-| `security.message_signing.key_id` | KEEP | `"default".to_string()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:164 |
-| `security.message_signing.previous_secret` | KEEP | `String::new()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:156 |
-| `security.message_signing.replay_window` | INTERNAL | `300` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/security.rs:162 |
-| `security.message_signing.require_nonce` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:159 |
-| `security.message_signing.shared_secret` | KEEP | `String::new()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:153 |
-| `security.posture` | KEEP | `crate::security::posture::SecurityPosture::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:595 |
-| `security.provenance_stamping` | KEEP | `false` | opt-in provenance receipts on results (ASI04) | - | src/config/features/security.rs:655 |
-| `security.remote_server_signing` | KEEP | `RemoteServerSigningConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:650 |
+| `security.identity_grants` | KEEP | `IdentityGrantsConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:654 |
+| `security.identity_grants.enabled` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:460 |
+| `security.identity_grants.fail_on_error` | KEEP | `true` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:465 |
+| `security.identity_grants.path` | KEEP | `"~/.mcp-gateway/identity-grants.yaml".to_string()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:462 |
+| `security.message_signing` | KEEP | `MessageSigningConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:639 |
+| `security.message_signing.enabled` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:162 |
+| `security.message_signing.key_id` | KEEP | `"default".to_string()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:177 |
+| `security.message_signing.previous_secret` | KEEP | `String::new()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:169 |
+| `security.message_signing.replay_window` | INTERNAL | `300` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/security.rs:175 |
+| `security.message_signing.require_nonce` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:172 |
+| `security.message_signing.shared_secret` | KEEP | `String::new()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:166 |
+| `security.posture` | KEEP | `crate::security::posture::SecurityPosture::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:608 |
+| `security.provenance_stamping` | KEEP | `false` | opt-in provenance receipts on results (ASI04) | - | src/config/features/security.rs:668 |
+| `security.remote_server_signing` | KEEP | `RemoteServerSigningConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:663 |
 | `security.remote_server_signing.backends` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:27 |
 | `security.remote_server_signing.backends.<name>.issued_at` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:55 |
 | `security.remote_server_signing.backends.<name>.issuer` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:53 |
@@ -684,43 +694,43 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `security.remote_server_signing.trusted_keys` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:25 |
 | `security.remote_server_signing.trusted_keys.<name>.algorithm` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:34 |
 | `security.remote_server_signing.trusted_keys.<name>.public_key` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/security/remote_provenance.rs:36 |
-| `security.response_contract` | KEEP | `ResponseContractConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:638 |
-| `security.response_contract.action_mode` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:422 |
-| `security.response_contract.default_max_bytes` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:424 |
-| `security.response_contract.enabled` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:420 |
-| `security.response_contract.fail_closed` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:427 |
-| `security.response_contract.tools` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:429 |
-| `security.response_contract.tools.<name>.action_mode` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:393 |
-| `security.response_contract.tools.<name>.forbidden_patterns` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:391 |
-| `security.response_contract.tools.<name>.max_bytes` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:389 |
-| `security.response_inspection` | KEEP | `ResponseInspectionConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:635 |
-| `security.response_inspection.action_mode` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:370 |
-| `security.response_inspection.enabled` | KEEP | `true` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:366 |
-| `security.sanitize_input` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:600 |
-| `security.signature_chain` | KEEP | `None` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:661 |
+| `security.response_contract` | KEEP | `ResponseContractConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:651 |
+| `security.response_contract.action_mode` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:435 |
+| `security.response_contract.default_max_bytes` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:437 |
+| `security.response_contract.enabled` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:433 |
+| `security.response_contract.fail_closed` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:440 |
+| `security.response_contract.tools` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:442 |
+| `security.response_contract.tools.<name>.action_mode` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:406 |
+| `security.response_contract.tools.<name>.forbidden_patterns` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:404 |
+| `security.response_contract.tools.<name>.max_bytes` | KEEP | `type default` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:402 |
+| `security.response_inspection` | KEEP | `ResponseInspectionConfig::default()` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:648 |
+| `security.response_inspection.action_mode` | KEEP | `false` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:383 |
+| `security.response_inspection.enabled` | KEEP | `true` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:379 |
+| `security.sanitize_input` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:613 |
+| `security.signature_chain` | KEEP | `None` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/security.rs:674 |
 | `security.signature_chain.emit` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/signature_chain.rs:46 |
 | `security.signature_chain.key_id` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/signature_chain.rs:43 |
 | `security.signature_chain.max_links` | KEEP | `8` | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/signature_chain.rs:49 |
 | `security.signature_chain.signing_key` | KEEP | — | opt-in security control (OWASP_AGENTIC_AI_COMPLIANCE.md); behaviour unchanged | - | src/config/features/signature_chain.rs:41 |
-| `security.ssrf_protection` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:602 |
-| `security.tool_policy` | KEEP | `ToolPolicyConfig::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:619 |
+| `security.ssrf_protection` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:615 |
+| `security.tool_policy` | KEEP | `ToolPolicyConfig::default()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:632 |
 | `security.tool_policy.allow` | KEEP | `Vec::new()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:50 |
 | `security.tool_policy.default_action` | KEEP | `PolicyAction::Allow` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:47 |
 | `security.tool_policy.deny` | KEEP | `Vec::new()` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:53 |
 | `security.tool_policy.enabled` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:45 |
 | `security.tool_policy.log_denied` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:57 |
 | `security.tool_policy.use_default_deny` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/security/policy.rs:55 |
-| `security.transparency_log` | KEEP | `TransparencyLogConfig::default()` | audit-log signing key the operator owns | - | src/config/features/security.rs:632 |
-| `security.transparency_log.enabled` | KEEP | `false` | opt-in audit when auth is off; required when auth is on (src/config/features/security.rs:117) | - | src/config/features/security.rs:33 |
-| `security.transparency_log.key_id` | KEEP | `"default".to_string()` | audit-log signing key the operator owns | - | src/config/features/security.rs:37 |
-| `security.transparency_log.path` | KEEP | `"~/.mcp-gateway/transparency/transparency.jsonl".to_string()` | state location; deployments put it on a chosen volume (the Helm chart puts the audit log on its own persistent volume) | - | src/config/features/security.rs:35 |
-| `security.transparency_log.rotation` | KEEP | `crate::security::audit_rotation_config::RotationConfig::defa` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/config/features/security.rs:44 |
+| `security.transparency_log` | KEEP | `TransparencyLogConfig::default()` | audit-log signing key the operator owns | - | src/config/features/security.rs:645 |
+| `security.transparency_log.enabled` | KEEP | unset: on with auth, off without | opt-in audit when auth is off; on by default with auth, and `false` with auth fails the load (MIK-8044 P2c2, src/config/features/security.rs:127) | - | src/config/features/security.rs:37 |
+| `security.transparency_log.key_id` | KEEP | `"default".to_string()` | audit-log signing key the operator owns | - | src/config/features/security.rs:41 |
+| `security.transparency_log.path` | KEEP | `"~/.mcp-gateway/transparency/transparency.jsonl".to_string()` | state location; deployments put it on a chosen volume (the Helm chart puts the audit log on its own persistent volume) | - | src/config/features/security.rs:39 |
+| `security.transparency_log.rotation` | KEEP | `crate::security::audit_rotation_config::RotationConfig::defa` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/config/features/security.rs:48 |
 | `security.transparency_log.rotation.max_segment_age_secs` | KEEP | `0` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:37 |
 | `security.transparency_log.rotation.max_segment_bytes` | KEEP | `64 * 1024 * 1024` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:35 |
 | `security.transparency_log.rotation.on_disk_full` | KEEP | `OnDiskFull::ExpireOldest` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:41 |
 | `security.transparency_log.rotation.retain_segments` | KEEP | `12` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:39 |
-| `security.transparency_log.shared_secret` | KEEP | `String::new()` | audit-log signing key the operator owns | - | src/config/features/security.rs:42 |
-| `security.trust_configured_backends` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:617 |
+| `security.transparency_log.shared_secret` | KEEP | `String::new()` | audit-log signing key the operator owns | - | src/config/features/security.rs:46 |
+| `security.trust_configured_backends` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:630 |
 | `server` | KEEP | `type default` | where the gateway listens and how clients reach it | - | src/config/mod.rs:93 |
 | `server.allow_unauthenticated_network_bind` | KEEP | `false` | security opt-out or credential; must stay an explicit operator decision | - | src/config/server_config.rs:65 |
 | `server.cleartext_http` | KEEP | `CleartextHttp::Refuse` | security opt-out or credential; must stay an explicit operator decision | - | src/config/server_config.rs:87 |
@@ -1398,67 +1408,67 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 
 | Item | Class | Used by (files) | Reason | Migration | Defined at |
 |---|---|---|---|---|---|
-| `mcp_gateway::Error` | INTERNAL | bin 3, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from error) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:104 |
-| `mcp_gateway::InitializedStore` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::MCP_PROTOCOL_VERSION` | INTERNAL | bin 2, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (const) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:118 |
-| `mcp_gateway::MigratedCredential` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::OfflineInitError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::OfflineMigrationError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::Result` | INTERNAL | bin 1, tests 8, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from error) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:104 |
-| `mcp_gateway::attestation` | INTERNAL | bin 1, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:32 |
-| `mcp_gateway::autotag` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:33 |
-| `mcp_gateway::backend` | INTERNAL | bin 0, tests 52, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:34 |
-| `mcp_gateway::cache` | INTERNAL | bin 0, tests 5, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:35 |
-| `mcp_gateway::capability` | INTERNAL | bin 5, tests 13, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:36 |
-| `mcp_gateway::chains` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:37 |
-| `mcp_gateway::cli` | INTERNAL | bin 22, tests 6, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:38 |
-| `mcp_gateway::config` | INTERNAL | bin 20, tests 90, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:39 |
-| `mcp_gateway::config_persistence` | INTERNAL | bin 6, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:40 |
-| `mcp_gateway::config_reload` | INTERNAL | bin 0, tests 33, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:41 |
-| `mcp_gateway::context_compression` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:42 |
-| `mcp_gateway::context_integrity` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:43 |
-| `mcp_gateway::control_plane` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:44 |
-| `mcp_gateway::cost_accounting` | INTERNAL | bin 0, tests 4, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:45 |
-| `mcp_gateway::discovery` | INTERNAL | bin 4, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:46 |
-| `mcp_gateway::error` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:47 |
-| `mcp_gateway::failsafe` | INTERNAL | bin 0, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:49 |
-| `mcp_gateway::gateway` | INTERNAL | bin 5, tests 105, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:51 |
-| `mcp_gateway::honest_task_tokens` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:54 |
-| `mcp_gateway::idempotency` | INTERNAL | bin 0, tests 8, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:55 |
-| `mcp_gateway::identity_grants` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:56 |
-| `mcp_gateway::identity_propagation` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:57 |
-| `mcp_gateway::initialize_store_offline` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::key_server` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:58 |
-| `mcp_gateway::kill_switch` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:59 |
-| `mcp_gateway::kubernetes` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:60 |
-| `mcp_gateway::metrics` | INTERNAL | bin 0, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod feature metrics) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:62 |
-| `mcp_gateway::migrate_legacy_credential_offline` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:110 |
-| `mcp_gateway::mtls` | INTERNAL | bin 2, tests 28, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:63 |
-| `mcp_gateway::oauth` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:64 |
-| `mcp_gateway::playbook` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:67 |
-| `mcp_gateway::projection` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:68 |
-| `mcp_gateway::protocol` | INTERNAL | bin 0, tests 74, benches/examples 2 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:69 |
-| `mcp_gateway::protocol_imports` | INTERNAL | bin 2, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:70 |
-| `mcp_gateway::protocol_revision_telemetry` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:71 |
-| `mcp_gateway::provider` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:72 |
-| `mcp_gateway::ranking` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:73 |
-| `mcp_gateway::registry` | INTERNAL | bin 4, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:74 |
-| `mcp_gateway::routing_profile` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:75 |
-| `mcp_gateway::runtime` | INTERNAL | bin 3, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:76 |
-| `mcp_gateway::scheduler` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:77 |
-| `mcp_gateway::secret_injection` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:78 |
-| `mcp_gateway::secrets` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:79 |
-| `mcp_gateway::security` | INTERNAL | bin 8, tests 39, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:80 |
-| `mcp_gateway::semantic_search` | INTERNAL | bin 0, tests 1, benches/examples 1 | the crate ships a binary; README documents no library use (mod feature semantic-search) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:82 |
-| `mcp_gateway::setup_tracing` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (fn) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:149 |
-| `mcp_gateway::simhash` | INTERNAL | bin 0, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:83 |
-| `mcp_gateway::skills` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:84 |
-| `mcp_gateway::stats` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:85 |
-| `mcp_gateway::tool_profiles` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod feature tool-profiles) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:89 |
-| `mcp_gateway::tool_registry` | INTERNAL | bin 0, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:90 |
-| `mcp_gateway::tracing_context` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `pub(crate)`; no caller outside the crate | src/lib.rs:91 |
-| `mcp_gateway::transform` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:92 |
-| `mcp_gateway::transition` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | reached by integration tests through `#[doc(hidden)] pub mod test_support` | src/lib.rs:93 |
-| `mcp_gateway::transport` | INTERNAL | bin 2, tests 3, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:94 |
-| `mcp_gateway::trust` | INTERNAL | bin 7, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:95 |
-| `mcp_gateway::validator` | INTERNAL | bin 1, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub` re-export for the binary; off docs.rs | src/lib.rs:96 |
+| `mcp_gateway::Error` | INTERNAL | bin 3, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from error) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:161 |
+| `mcp_gateway::InitializedStore` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::MCP_PROTOCOL_VERSION` | INTERNAL | bin 2, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (const) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:177 |
+| `mcp_gateway::MigratedCredential` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::OfflineInitError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::OfflineMigrationError` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::Result` | INTERNAL | bin 1, tests 8, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from error) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:161 |
+| `mcp_gateway::attestation` | INTERNAL | bin 1, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:28 |
+| `mcp_gateway::autotag` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:30 |
+| `mcp_gateway::backend` | INTERNAL | bin 0, tests 52, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:32 |
+| `mcp_gateway::cache` | INTERNAL | bin 0, tests 5, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:34 |
+| `mcp_gateway::capability` | INTERNAL | bin 5, tests 13, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:36 |
+| `mcp_gateway::chains` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:38 |
+| `mcp_gateway::cli` | INTERNAL | bin 22, tests 6, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:40 |
+| `mcp_gateway::config` | INTERNAL | bin 20, tests 90, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:43 |
+| `mcp_gateway::config_persistence` | INTERNAL | bin 6, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:45 |
+| `mcp_gateway::config_reload` | INTERNAL | bin 0, tests 33, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:47 |
+| `mcp_gateway::context_compression` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:49 |
+| `mcp_gateway::context_integrity` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:51 |
+| `mcp_gateway::control_plane` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:53 |
+| `mcp_gateway::cost_accounting` | INTERNAL | bin 0, tests 4, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:55 |
+| `mcp_gateway::discovery` | INTERNAL | bin 4, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:58 |
+| `mcp_gateway::error` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:61 |
+| `mcp_gateway::failsafe` | INTERNAL | bin 0, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:64 |
+| `mcp_gateway::gateway` | INTERNAL | bin 5, tests 105, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:67 |
+| `mcp_gateway::honest_task_tokens` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:71 |
+| `mcp_gateway::idempotency` | INTERNAL | bin 0, tests 8, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:73 |
+| `mcp_gateway::identity_grants` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:75 |
+| `mcp_gateway::identity_propagation` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:77 |
+| `mcp_gateway::initialize_store_offline` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::key_server` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:79 |
+| `mcp_gateway::kill_switch` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:81 |
+| `mcp_gateway::kubernetes` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:83 |
+| `mcp_gateway::metrics` | INTERNAL | bin 0, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod feature metrics) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:86 |
+| `mcp_gateway::migrate_legacy_credential_offline` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (re-export from personal_accounts) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:168 |
+| `mcp_gateway::mtls` | INTERNAL | bin 2, tests 28, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:88 |
+| `mcp_gateway::oauth` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:90 |
+| `mcp_gateway::playbook` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:94 |
+| `mcp_gateway::projection` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:96 |
+| `mcp_gateway::protocol` | INTERNAL | bin 0, tests 74, benches/examples 2 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:98 |
+| `mcp_gateway::protocol_imports` | INTERNAL | bin 2, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:100 |
+| `mcp_gateway::protocol_revision_telemetry` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:102 |
+| `mcp_gateway::provider` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:104 |
+| `mcp_gateway::ranking` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:106 |
+| `mcp_gateway::registry` | INTERNAL | bin 4, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:108 |
+| `mcp_gateway::routing_profile` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:110 |
+| `mcp_gateway::runtime` | INTERNAL | bin 3, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:112 |
+| `mcp_gateway::scheduler` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:114 |
+| `mcp_gateway::secret_injection` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:116 |
+| `mcp_gateway::secrets` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:118 |
+| `mcp_gateway::security` | INTERNAL | bin 8, tests 39, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:120 |
+| `mcp_gateway::semantic_search` | INTERNAL | bin 0, tests 1, benches/examples 1 | the crate ships a binary; README documents no library use (mod feature semantic-search) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:123 |
+| `mcp_gateway::setup_tracing` | INTERNAL | bin 1, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (fn) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:209 |
+| `mcp_gateway::simhash` | INTERNAL | bin 0, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:125 |
+| `mcp_gateway::skills` | INTERNAL | bin 1, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:127 |
+| `mcp_gateway::stats` | INTERNAL | bin 0, tests 3, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:129 |
+| `mcp_gateway::tool_profiles` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod feature tool-profiles) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:138 |
+| `mcp_gateway::tool_registry` | INTERNAL | bin 0, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:140 |
+| `mcp_gateway::tracing_context` | INTERNAL | bin 0, tests 0, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:142 |
+| `mcp_gateway::transform` | INTERNAL | bin 0, tests 1, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:144 |
+| `mcp_gateway::transition` | INTERNAL | bin 0, tests 2, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:146 |
+| `mcp_gateway::transport` | INTERNAL | bin 2, tests 3, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:148 |
+| `mcp_gateway::trust` | INTERNAL | bin 7, tests 4, benches/examples 0 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:150 |
+| `mcp_gateway::validator` | INTERNAL | bin 1, tests 0, benches/examples 1 | the crate ships a binary; README documents no library use (mod) | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise | src/lib.rs:152 |

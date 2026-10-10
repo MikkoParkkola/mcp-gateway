@@ -152,11 +152,12 @@ pub(crate) fn with_modern_meta(method: &str, params: Option<Value>) -> Result<Op
 ///
 /// The opt-in selects task-augmented execution upstream, so the vocabulary it
 /// unlocks is exactly the one the adapter implements: the initial submission
-/// (`tools/call`) and the poll (`tasks/get`). `tasks/update` and `tasks/cancel`
-/// exist upstream and are outside this adapter by construction — an allow-list
-/// keeps a future caller from reaching them through this door by passing a
-/// method name.
-pub(super) const TASK_CAPABILITY_METHODS: [&str; 2] = ["tools/call", "tasks/get"];
+/// (`tools/call`), the poll (`tasks/get`), and the one cancel of a handle whose
+/// task the owner cancelled (`tasks/cancel`, MIK-7642 design r5 R5.2).
+/// `tasks/update` exists upstream and is outside this adapter by construction
+/// — an allow-list keeps a future caller from reaching it through this door by
+/// passing a method name.
+pub(super) const TASK_CAPABILITY_METHODS: [&str; 3] = ["tools/call", "tasks/get", "tasks/cancel"];
 
 /// Build the modern `_meta` envelope, then declare the one tasks extension in it.
 ///

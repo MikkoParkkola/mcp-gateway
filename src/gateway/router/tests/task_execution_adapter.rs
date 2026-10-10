@@ -77,6 +77,7 @@ mod relay_settlement;
 #[cfg(feature = "firewall")]
 mod relay_upstream;
 
+mod grant_audit_order;
 /// D3-a: grant decision records at the route.
 mod grant_decision_tasks;
 mod grant_decisions;
@@ -122,6 +123,7 @@ mod stored_result_policy;
 mod surface_hints;
 #[cfg(feature = "metrics")]
 mod unkeyed_task;
+mod upstream_cancel;
 /// I5's before-the-wire half: the recovery descriptor's capacity, decided
 /// before the first `tools/call` rather than after the handle comes back.
 mod upstream_descriptor;

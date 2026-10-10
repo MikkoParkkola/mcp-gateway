@@ -35,6 +35,14 @@ fn text(text: &str) -> Value {
 /// `block` relay detector over every `mock` tool and redacts nothing, so the
 /// answer changes only in the router's response pass.
 async fn plan_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+    plan_state_with(mock, &two_principal_auth()).await
+}
+
+/// [`plan_state`] under `auth`.
+async fn plan_state_with(
+    mock: &Arc<MockBackend>,
+    auth: &AuthConfig,
+) -> (Arc<AppState>, tempfile::TempDir) {
     let router = Arc::new(Firewall::from_config(
         FirewallConfig {
             enabled: true,
@@ -71,7 +79,7 @@ async fn plan_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDi
         .keeping_every_kgram(),
     );
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
-        &two_principal_auth(),
+        auth,
         None,
         Some(router),
         |mut meta| {
@@ -260,5 +268,205 @@ async fn a_rewritten_wrapper_keeps_its_fields_receipted_across_them() {
     assert_eq!(
         relayed["error"]["code"], -32002,
         "the receipt lost the run across the two fields: {relayed}"
+    );
+}
+
+/// `MIK-8209` K6: three chain steps each return one 32-char `part` beside a
+/// `kind` field. No part is a k-gram alone, so only the 96-char join of the
+/// `results[].result.part` key path, which spans all three steps, is
+/// evidence: key-b relaying it is refused, and key-a, who was delivered the
+/// chain, re-joining the parts is excused by the same seam receipt.
+#[tokio::test]
+async fn a_key_path_join_across_chain_steps_is_seam_evidence_and_excuse() {
+    let parts = [
+        "abcdefghij klmnopqrst uvwxyz0123",
+        "fourscore and seven years ago ou",
+        "r fathers brought forth on this ",
+    ];
+    let joined = parts.concat();
+    assert!(
+        parts.iter().all(|p| p.len() < 48),
+        "premise: no part is a k-gram"
+    );
+    let mock = MockBackend::answering(Answer::Sequence(
+        parts
+            .iter()
+            .map(|p| json!({"part": p, "kind": "chunk", "isError": false}))
+            .chain(std::iter::repeat_with(|| text("ok")).take(6))
+            .collect(),
+    ));
+    let (state, _store) = plan_state(&mock).await;
+    let step = json!({"tool": format!("{BACKEND}:{TOOL}"), "arguments": {}});
+    let plan = modern(
+        1,
+        "tools/call",
+        json!({"name": "gateway_execute", "arguments": {"chain": [step, step, step]}}),
+        false,
+    );
+    let read = post(&state, "key-a", plan).await;
+    assert!(
+        read.get("error").is_none(),
+        "base: the chain is delivered: {read}"
+    );
+    let relayed = post(&state, "key-b", sync_invoke(2, json!({"text": joined}))).await;
+    assert_eq!(
+        relayed["error"]["code"], -32002,
+        "the cross-step join was not receipted: {relayed}"
+    );
+    let own = post(&state, "key-a", sync_invoke(3, json!({"text": joined}))).await;
+    assert!(own.get("error").is_none(), "the holder was refused: {own}");
+}
+
+/// `MIK-8209` Q2 (gpt's shape at the route): each chain step returns its
+/// `part` beside `x` and twenty more `"x"` copies. A chain answer carries
+/// each step's result exactly once, so a step's span never holds more
+/// copies than the step staged, and the cross-step join is still recorded
+/// and excused. The copies are staged with the step (`xs`), so this row
+/// confirms K6 under repeats within a result; the copies a late redaction
+/// adds are `late_redaction_copies_keep_the_cross_step_join` (MIK-8251).
+#[tokio::test]
+async fn repeated_metadata_in_chain_steps_keeps_the_cross_step_join() {
+    let parts = [
+        "abcdefghij klmnopqrst uvwxyz0123",
+        "fourscore and seven years ago ou",
+        "r fathers brought forth on this ",
+    ];
+    let joined = parts.concat();
+    assert!(
+        parts.iter().all(|p| p.len() < 48),
+        "premise: no part is a k-gram"
+    );
+    let mock = MockBackend::answering(Answer::Sequence(
+        parts
+            .iter()
+            .map(|p| json!({"part": p, "x": "x", "xs": vec!["x"; 20], "isError": false}))
+            .chain(std::iter::repeat_with(|| text("ok")).take(6))
+            .collect(),
+    ));
+    let (state, _store) = plan_state(&mock).await;
+    let step = json!({"tool": format!("{BACKEND}:{TOOL}"), "arguments": {}});
+    let plan = modern(
+        1,
+        "tools/call",
+        json!({"name": "gateway_execute", "arguments": {"chain": [step, step, step]}}),
+        false,
+    );
+    let read = post(&state, "key-a", plan).await;
+    assert!(
+        read.get("error").is_none(),
+        "base: the chain is delivered: {read}"
+    );
+    let relayed = post(&state, "key-b", sync_invoke(2, json!({"text": joined}))).await;
+    assert_eq!(
+        relayed["error"]["code"], -32002,
+        "the cross-step join was not receipted: {relayed}"
+    );
+    let own = post(&state, "key-a", sync_invoke(3, json!({"text": joined}))).await;
+    assert!(own.get("error").is_none(), "the holder was refused: {own}");
+}
+
+/// `MIK-8209` Q2, gpt's counterexample: the router redacts each step's
+/// thousand credentials after staging, so the answer repeats the staged
+/// marker `b` a thousand times in the step's span. Each step must still
+/// keep its `part` whole, so the cross-step join is recorded and excused.
+/// Red until MIK-8251: the copies spend the room and `part` is lost.
+#[tokio::test]
+#[ignore = "MIK-8251: late redaction copies of a staged leaf crowd out a step's part"]
+async fn late_redaction_copies_keep_the_cross_step_join() {
+    let parts = ["a".repeat(32), "b".repeat(32), "c".repeat(32)];
+    let joined = parts.concat();
+    assert!(
+        parts.iter().all(|p| p.len() < 48),
+        "premise: no part is a k-gram"
+    );
+    // An AWS access key id shape, built so no literal key sits in the source.
+    let key = format!("{}{}", "AK".to_owned() + "IA", "0".repeat(16));
+    let mock = MockBackend::answering(Answer::Sequence(
+        parts
+            .iter()
+            .map(|p| {
+                json!({
+                    "a": vec![key.as_str(); 1000],
+                    "b": "[REDACTED:credential]",
+                    "part": p,
+                    "isError": false,
+                })
+            })
+            .chain(std::iter::repeat_with(|| text("ok")).take(6))
+            .collect(),
+    ));
+    let (state, _store) = plan_state(&mock).await;
+    let step = json!({"tool": format!("{BACKEND}:{TOOL}"), "arguments": {}});
+    let plan = modern(
+        1,
+        "tools/call",
+        json!({"name": "gateway_execute", "arguments": {"chain": [step, step, step]}}),
+        false,
+    );
+    let read = post(&state, "key-a", plan).await;
+    assert!(
+        read.get("error").is_none(),
+        "base: the chain is delivered: {read}"
+    );
+    assert!(
+        !read.to_string().contains(&key),
+        "premise: the router redacted the keys"
+    );
+    let relayed = post(&state, "key-b", sync_invoke(2, json!({"text": joined}))).await;
+    assert_eq!(
+        relayed["error"]["code"], -32002,
+        "the cross-step join was not receipted: {relayed}"
+    );
+    let own = post(&state, "key-a", sync_invoke(3, json!({"text": joined}))).await;
+    assert!(own.get("error").is_none(), "the holder was refused: {own}");
+}
+
+/// `MIK-8205` (S4): a plan's final answer delivers key-a three labelled parts;
+/// the same tool delivers key-c the join of parts 1 and 3 on its own call.
+/// Key-a forwarding that subset is not refused: the answer's own run gives
+/// her the one-gap seam. Key-b, delivered nothing, is refused.
+#[tokio::test]
+async fn a_subset_of_a_plan_answers_parts_against_the_tools_exact_join_is_not_refused() {
+    let p = |k: usize| -> String { format!("piece{k}-").repeat(10).chars().take(47).collect() };
+    let joined = format!("{}{}", p(0), p(2));
+    let parts: Vec<Value> = (0..3)
+        .map(|k| json!({"part": p(k), "kind": "chunk"}))
+        .collect();
+    let mock = MockBackend::answering(Answer::Sequence(
+        std::iter::once(json!({"parts": parts, "isError": false}))
+            // key-c's copy is a single leaf: a content item (`{"text": .., "type": ..}`)
+            // would put a separator after the join, and the window "tail + separator"
+            // is a separate, pre-existing edge (MIK-8290), not this row's.
+            .chain(std::iter::once(json!({"note": joined, "isError": false})))
+            .chain(std::iter::repeat_with(|| text("ok")).take(4))
+            .collect(),
+    ));
+    let (state, _store) = plan_state_with(&mock, &three_principal_auth()).await;
+    let step = json!({"tool": format!("{BACKEND}:{TOOL}"), "arguments": {}});
+    let plan = modern(
+        1,
+        "tools/call",
+        json!({"name": "gateway_execute", "arguments": {"chain": [step]}}),
+        false,
+    );
+    let read = post(&state, "key-a", plan).await;
+    assert!(
+        read.get("error").is_none(),
+        "base: the plan is delivered: {read}"
+    );
+    let held = post(&state, "key-c", sync_invoke(2, json!({}))).await;
+    assert!(
+        held.get("error").is_none(),
+        "base: key-c is delivered the join: {held}"
+    );
+    let bob = post(&state, "key-b", sync_invoke(3, json!({"text": joined}))).await;
+    assert_eq!(
+        bob["error"]["code"], -32002,
+        "control: key-b was not refused: {bob}"
+    );
+    let alice = post(&state, "key-a", sync_invoke(4, json!({"text": joined}))).await;
+    assert!(
+        alice.get("error").is_none(),
+        "key-a's subset forward was refused: {alice}"
     );
 }

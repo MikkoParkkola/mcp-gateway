@@ -4,7 +4,8 @@
 
 # Load environment files before config processing.
 # Supports ~ expansion. Files that don't exist are silently skipped.
-# Variables are set into the process environment for {env.VAR} resolution.
+# Their variables resolve `${VAR}` and `env:VAR` references and `MCP_GATEWAY_*`
+# overrides in this file; they are not exported into the process environment.
 env_files:
   - ~/.mcp-gateway/.env
   # - ~/.config/mcp-gateway/secrets.env
@@ -29,7 +30,7 @@ server:
 
 auth:
   enabled: false                  # Enable auth (set true for networked deployments)
-                                  # true requires security.transparency_log below (UPGRADING-4.0 item 43)
+                                  # true turns security.transparency_log on unless it says enabled: false
 
   # Bearer token for simple auth.
   # Options: "auto" (random, logged at startup), "env:VAR_NAME", or a literal string.
@@ -45,7 +46,7 @@ auth:
   #     rate_limit: 100           # Requests per minute (0 = unlimited)
   #     backends: ["tavily"]      # Backends this key reaches; empty or omitted = none
   #     admin: false              # Set true only for UI/config management keys
-  #   - key_sha256: "sha256:<64 lowercase hex from hash-key>"
+  #   - key_sha256: "env:CLIENT_B_KEY_SHA256"  # or the literal sha256:<64 hex> hash-key prints
   #     name: "Client B"
   #     expires_at: "2027-01-01T00:00:00Z"  # Optional; refused with 401 after this
   #     backends: ["*"]           # All backends ("*" is the only wildcard)
@@ -188,11 +189,11 @@ capabilities:
 #       heavy_user_key: 5.0
 #   alerts:                        # Budget alert thresholds (sorted by at_percent)
 #     - at_percent: 50
-#       action: Log                # Log, Notify, or Block
+#       action: log                # log, notify, or block
 #     - at_percent: 80
-#       action: Notify
+#       action: notify
 #     - at_percent: 100
-#       action: Block
+#       action: block
 #   tool_costs:                    # Explicit per-tool costs (overrides default_cost)
 #     tavily_search: 0.01
 #     brave_search: 0.005
@@ -212,13 +213,13 @@ capabilities:
 #     anomaly_threshold: 0.7      # 0.0-1.0, higher = more permissive
 #     audit_log: /var/log/mcp-gateway/audit.ndjson  # NDJSON audit trail
 #     rules:                       # Per-tool glob-matched rules
-#       - tool_match: "exec_*"
-#         action: Block            # Allow, Warn, or Block
+#       - match: "exec_*"
+#         action: block            # allow, warn, or block
 #         reason: "Execution tools blocked by policy"
-#         scan: [ShellInjection, PathTraversal]
-#       - tool_match: "*"
-#         action: Warn
-#         scan: [Credentials, SqlInjection]
+#         scan: [shell_injection, path_traversal]
+#       - match: "*"
+#         action: warn
+#         scan: [credentials, sql_injection]
 
 # --- Context Integrity (tool-result boundary protection) ---
 
@@ -236,50 +237,6 @@ capabilities:
 #     # monitor_only is the default safe rollout. Use team_shared to enforce the
 #     # free/core shared-team baseline. enterprise_strict is enterprise scope.
 #     preset: monitor_only          # monitor_only, local_developer, team_shared, audit_only, enterprise_strict
-
-# --- Config Export (RFC-0070) ---
-
-# config_export:
-#   enabled: true                  # Enable `mcp-gateway config export` command
-#   format: yaml                   # Export format: yaml or json
-#   redact_secrets: true           # Mask secrets (env vars, tokens) as "***"
-#   include_defaults: true         # Include default values in export
-
-# --- Auto-Discovery (RFC-0074) ---
-
-# discovery:
-#   enabled: true                  # Enable automatic MCP server discovery
-#   scan_interval: 60s             # How often to scan for new servers
-#   sources:                       # Discovery sources to scan
-#     - type: npm                  # Scan node_modules for MCP servers
-#       enabled: true
-#     - type: pip                  # Scan pip packages for MCP servers
-#       enabled: true
-#     - type: docker               # Scan Docker containers exposing MCP
-#       enabled: false
-#   auto_register: false           # Auto-register discovered servers (requires confirmation if false)
-#   quality_threshold: 0.5         # Minimum quality score (0.0-1.0) to suggest a discovery
-
-# --- Semantic Search (RFC-0072) ---
-
-# semantic_search:
-#   enabled: true                  # Enable TF-IDF semantic tool search
-#   max_results: 10                # Maximum results per search query
-#   min_score: 0.1                 # Minimum relevance score (0.0-1.0)
-#   feedback_enabled: true         # Enable relevance feedback learning
-#   feedback_decay: 0.95           # Decay factor for older feedback signals
-
-# --- Tool Profiles (RFC-0073) ---
-
-# tool_profiles:
-#   enabled: true                  # Enable tool usage profiling and analytics
-#   persistence_path: ./data/tool_profiles.json  # Where to persist profile data
-#   persistence_interval: 300s     # How often to flush profiles to disk
-#   max_tools_tracked: 10000       # Maximum number of tools to track
-#   analytics:
-#     latency_histogram: true      # Track latency distribution per tool
-#     error_categorization: true   # Categorize errors by type
-#     usage_trends: true           # Track hourly/daily usage trends
 
 # --- Backends (MCP servers) ---
 
@@ -306,9 +263,9 @@ backends:
   #                               # `additionalProperties` counts as closed;
   #                               # `standard` follows JSON Schema's open
   #                               # default; `off` skips the check.
-  #   allow_flagged_tools:        # Serve a tool whose description failed the
-  #     tool_name: "<digest>"     # tool-poisoning check, pinned to the digest
-  #                               # its `Tool withheld` warning logs.
+  #   # allow_flagged_tools:      # Serve a tool whose description failed the
+  #   #   tool_name: "<digest>"   # tool-poisoning check, pinned to the 64-hex
+  #   #                           # digest its `Tool withheld` warning logs.
   #   env:
   #     TAVILY_API_KEY: "${TAVILY_API_KEY}"
   #   cwd: /tmp                   # Working directory (stdio only)
@@ -342,9 +299,9 @@ backends:
   # accept a repo URL as an argument, so a single backend covers every GitHub repo.
   #
   # For a repo-pinned backend, point `http_url` at the repo-specific route:
-  #   gitmcp_mcp_gateway:
-  #     http_url: "https://gitmcp.io/MikkoParkkola/mcp-gateway/sse"
-  #     description: "GitMCP — docs + search for MikkoParkkola/mcp-gateway"
+  # gitmcp_mcp_gateway:
+  #   http_url: "https://gitmcp.io/MikkoParkkola/mcp-gateway/sse"
+  #   description: "GitMCP — docs + search for MikkoParkkola/mcp-gateway"
   # Repo-pinned routes expose tools named after the repo
   # (e.g. `fetch_mcp_gateway_documentation`, `search_mcp_gateway_code`).
   #

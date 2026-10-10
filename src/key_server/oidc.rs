@@ -15,8 +15,9 @@
 //! # Security properties
 //!
 //! - Discovery and JWKS are fetched only over HTTPS, or plain HTTP to a
-//!   loopback host without any proxy; redirects may only move to HTTPS. A
-//!   cleartext issuer off this machine is refused at load and at verify.
+//!   loopback host without any proxy. A remote redirect may not leave the
+//!   origin (scheme, host, port) of the URL fetched; a loopback fetch follows
+//!   none. A cleartext issuer off this machine is refused at load and at verify.
 //! - Unknown `kid` triggers a single cache refresh before failing; prevents
 //!   indefinite re-fetching if the key truly does not exist.
 //! - Clock leeway of 60 seconds tolerates minor clock skew between the `IdP` and
@@ -119,11 +120,6 @@ pub enum OidcError {
     ClientUnavailable,
 }
 
-/// A redirect from an `https://` fetch may only move to `https://`.
-fn remote_hop_allowed(next: &url::Url) -> bool {
-    next.scheme() == "https"
-}
-
 /// Keep a built client, or log once and keep none: a fallback client would
 /// drop the redirect and proxy policy the builder carries.
 fn built(client: reqwest::Result<reqwest::Client>) -> Option<reqwest::Client> {
@@ -149,27 +145,9 @@ pub struct VerifiedIdentity {
     pub issuer: String,
 }
 
-impl VerifiedIdentity {
-    /// Stable, collision-safe actor identifier derived from `issuer` + `subject`.
-    ///
-    /// A naive `format!("oidc:{issuer}:{subject}")` collides when an issuer
-    /// contains `:` — e.g. issuer `https://idp/a` + subject `b:c` vs issuer
-    /// `https://idp/a:b` + subject `c` both render `oidc:https://idp/a:b:c`
-    /// (MIK-6702 CP.ID.1). Length-prefixing each component makes the boundary
-    /// unambiguous, so distinct (issuer, subject) pairs always map to distinct
-    /// ids. Not a role-escalation path (roles come from the verified identity,
-    /// not the id), but it prevents audit / user-identity row collisions.
-    #[must_use]
-    pub fn stable_actor_id(&self) -> String {
-        format!(
-            "oidc:{}:{}:{}:{}",
-            self.issuer.len(),
-            self.issuer,
-            self.subject.len(),
-            self.subject
-        )
-    }
-}
+// `checked` and `stable_actor_id` live in `oidc_identity.rs` (size ceiling).
+#[path = "oidc_identity.rs"]
+mod identity;
 
 /// The domain of `email` when it has exactly one `@` with a non-empty local
 /// part and domain; `None` otherwise. Callers compare the result with
@@ -277,15 +255,7 @@ impl JwksCache {
         // Not `https_only`: that would refuse the loopback carve-out too.
         // Every fetch picks its client by URL (`client_for`).
         let remote = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                if attempt.previous().len() > 5 {
-                    attempt.error("OIDC fetch exceeded 5 redirects")
-                } else if remote_hop_allowed(attempt.url()) {
-                    attempt.follow()
-                } else {
-                    attempt.error("OIDC refuses a redirect to a non-HTTPS URL")
-                }
-            }))
+            .redirect(remote_redirect_policy())
             .timeout(Duration::from_secs(10));
         let remote = match proxy {
             Some(proxy) => remote.proxy(proxy),
@@ -559,6 +529,13 @@ impl OidcVerifier {
         // An unverified address is dropped here, once, so every consumer of
         // `VerifiedIdentity.email` (allowed_domains, policy, role mapping,
         // grant label, propagated assertion) sees a verified address or "".
+        // An empty `sub` names no one (OIDC Core requires one). Checked before
+        // any later refusal, such as the domain allowlist, so a nameless token
+        // is always reported as nameless and never falls through elsewhere as
+        // a mere "not ours" (MIK-8287).
+        if !crate::identity_grants::names_someone(&claims.iss, &claims.sub) {
+            return Err(identity::missing_subject());
+        }
         let email_verified = matches!(&claims.email_verified, Some(serde_json::Value::Bool(true)))
             || matches!(&claims.email_verified, Some(serde_json::Value::String(v)) if v == "true");
         let email = match claims.email {
@@ -588,13 +565,17 @@ impl OidcVerifier {
             }
         }
 
-        Ok(VerifiedIdentity {
-            subject: claims.sub,
+        // An empty `sub` names nobody (OIDC Core requires one): refused as a
+        // missing required claim, so no identity that collapses every such
+        // token at the issuer is ever made (MIK-8287).
+        VerifiedIdentity::checked(
+            claims.iss,
+            claims.sub,
             email,
-            name: claims.name,
-            groups: claims.groups.unwrap_or_default(),
-            issuer: claims.iss,
-        })
+            claims.name,
+            claims.groups.unwrap_or_default(),
+        )
+        .ok_or_else(identity::missing_subject)
     }
 
     /// Find a decoding key by `kid`, refreshing the JWKS cache if not found.
@@ -789,6 +770,12 @@ fn validate_discovery_document(
     }
     Ok(doc.jwks_uri)
 }
+
+#[path = "oidc_redirect.rs"]
+mod redirect;
+#[cfg(test)]
+use redirect::remote_hop_allowed;
+use redirect::remote_redirect_policy;
 
 #[cfg(test)]
 #[path = "oidc_tests.rs"]

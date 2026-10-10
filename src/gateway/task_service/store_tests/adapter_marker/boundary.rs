@@ -277,6 +277,14 @@ async fn assert_unserved(reader: &TaskStore, owner: &str, id: &str, binding: &Ta
             .unwrap_err(),
         StoreError::Unavailable
     );
+    // MIK-7642: the upstream cancel claim is a write too.
+    assert_eq!(
+        reader
+            .claim_upstream_cancel(owner, id, Some(upstream_for(binding, "handle-1")))
+            .await
+            .unwrap_err(),
+        StoreError::Unavailable
+    );
 }
 
 /// Mutant: the readiness check removed from any store read or marker write.

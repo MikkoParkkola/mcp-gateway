@@ -247,11 +247,19 @@ pub enum Command {
     Import(ProtocolImportCommand),
 
     /// Plan enterprise Kubernetes reconciliation and validation.
-    #[command(subcommand, about = "Kubernetes enterprise deployment commands")]
+    #[command(
+        subcommand,
+        hide = true,
+        about = "Kubernetes enterprise deployment commands"
+    )]
     Kubernetes(KubernetesCommand),
 
     /// Evaluate deterministic adaptive ranking fixtures.
-    #[command(subcommand, about = "Adaptive ranking evaluation commands")]
+    #[command(
+        subcommand,
+        hide = true,
+        about = "Adaptive ranking evaluation commands"
+    )]
     Ranking(RankingCommand),
 
     /// Manage TLS certificates for mTLS authenticated tool access (RFC-0051)
@@ -262,7 +270,11 @@ pub enum Command {
     Tls(TlsCommand),
 
     /// Generate, inspect, and validate `TrustCard` and CBOM metadata.
-    #[command(subcommand, about = "TrustCard and CBOM metadata commands")]
+    #[command(
+        subcommand,
+        hide = true,
+        about = "TrustCard and CBOM metadata commands"
+    )]
     Trust(TrustCommand),
 
     /// Manage caller identity and local personal-capability grants.
@@ -344,8 +356,9 @@ pub enum Command {
         #[arg(long)]
         fix: bool,
 
-        /// Disable colored output
-        #[arg(long)]
+        /// Disable colored output. Hidden (MIK-8044 P2c3a): colour already
+        /// follows the terminal and `NO_COLOR`.
+        #[arg(long, hide = true)]
         no_color: bool,
     },
 
@@ -397,7 +410,7 @@ pub enum Command {
     /// # Both styles work:
     /// mcp-gateway add --command "npx -y tavily-mcp@0.2.22" tavily
     /// ```
-    #[command(about = "Add an MCP backend to gateway.yaml")]
+    #[command(about = "Add an MCP backend to gateway.yaml (or the `--config` file)")]
     Add {
         /// Name for the new backend (used as the config key and registry lookup)
         name: String,
@@ -418,10 +431,6 @@ pub enum Command {
         #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
         env_vars: Vec<String>,
 
-        /// Gateway config file to modify
-        #[arg(short, long, default_value = "gateway.yaml")]
-        config: PathBuf,
-
         /// Rewrite the whole file when the change cannot keep its comments
         /// (the comments are lost); without it such a write is refused
         #[arg(long)]
@@ -433,14 +442,10 @@ pub enum Command {
     },
 
     /// Remove an MCP backend from the gateway configuration
-    #[command(about = "Remove an MCP backend from gateway.yaml")]
+    #[command(about = "Remove an MCP backend from gateway.yaml (or the `--config` file)")]
     Remove {
         /// Name of the backend to remove
         name: String,
-
-        /// Gateway config file to modify
-        #[arg(short, long, default_value = "gateway.yaml")]
-        config: PathBuf,
 
         /// Rewrite the whole file when the change cannot keep its comments
         /// (the comments are lost); without it such a write is refused
@@ -449,7 +454,7 @@ pub enum Command {
     },
 
     /// List configured MCP backends
-    #[command(about = "List all configured backends")]
+    #[command(about = "List the backends configured in gateway.yaml (or the `--config` file)")]
     List {
         /// Output as JSON (codex-compatible)
         #[arg(long)]
@@ -457,20 +462,15 @@ pub enum Command {
         /// List the built-in server library instead: login, default state
         #[arg(long)]
         available: bool,
-        /// Gateway config file to read
-        #[arg(short, long, default_value = "gateway.yaml")]
-        config: PathBuf,
     },
 
     /// Get details about a specific MCP backend
-    #[command(about = "Show details of a configured backend")]
+    #[command(
+        about = "Show details of a backend configured in gateway.yaml (or the `--config` file)"
+    )]
     Get {
         /// Backend name to inspect
         name: String,
-
-        /// Gateway config file to read
-        #[arg(short, long, default_value = "gateway.yaml")]
-        config: PathBuf,
     },
 
     /// Diagnose gateway and backend health
@@ -588,7 +588,11 @@ pub enum Command {
 
     /// Dual-substrate OCI runtime abstraction (MIK-5226, B4-PLATFORM).
     #[cfg(feature = "runtime-substrate")]
-    #[command(subcommand, about = "Sandbox runtime substrate commands (opt-in)")]
+    #[command(
+        subcommand,
+        hide = true,
+        about = "Sandbox runtime substrate commands (opt-in)"
+    )]
     Runtime(RuntimeCommand),
 }
 
@@ -632,6 +636,7 @@ pub enum ToolCommand {
         /// Directory containing capability YAML definitions
         #[arg(
             short = 'C',
+            hide = true,
             long,
             default_value = "capabilities",
             env = "MCP_GATEWAY_CAPABILITIES"
@@ -667,6 +672,7 @@ pub enum ToolCommand {
         /// Directory containing capability YAML definitions
         #[arg(
             short = 'C',
+            hide = true,
             long,
             default_value = "capabilities",
             env = "MCP_GATEWAY_CAPABILITIES"
@@ -691,6 +697,7 @@ pub enum ToolCommand {
         /// Directory containing capability YAML definitions
         #[arg(
             short = 'C',
+            hide = true,
             long,
             default_value = "capabilities",
             env = "MCP_GATEWAY_CAPABILITIES"
@@ -722,6 +729,7 @@ pub enum ToolCommand {
         /// Directory containing capability YAML definitions
         #[arg(
             short = 'C',
+            hide = true,
             long,
             default_value = "capabilities",
             env = "MCP_GATEWAY_CAPABILITIES"

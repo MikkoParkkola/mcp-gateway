@@ -17,7 +17,13 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use signing_gateway::{BackendFixture, HttpGateway};
 
-const ARRIVAL: Duration = Duration::from_secs(20);
+/// How long an expected event may take. A hang bound only: the wait ends when
+/// the event arrives, and under full-suite load the reload, the re-listing and
+/// both deliveries can outrun 20 s (MIK-8252).
+const ARRIVAL: Duration = Duration::from_secs(120);
+/// How long a step that expects no event watches for one. Load can only hide
+/// an event here, never fail a correct run.
+const ABSENCE: Duration = Duration::from_secs(20);
 const QUIET: Duration = Duration::from_millis(1500);
 const LIST_CHANGED: &str = "notifications/tools/list_changed";
 const BEARER: &str = "f24-delivery-admin-token-0123456789";
@@ -66,17 +72,23 @@ impl Events {
         }
     }
 
-    /// Count `tools/list_changed` events until the stream has been quiet for `QUIET`.
-    async fn count_list_changed(&mut self) -> usize {
+    /// Count `tools/list_changed` events: up to `ARRIVAL` for each of the
+    /// `expected` ones, then until the stream has been quiet for `QUIET`, or
+    /// for `ABSENCE` when none is expected.
+    async fn count_list_changed(&mut self, expected: usize) -> usize {
         let mut count = 0;
-        let mut wait = ARRIVAL;
-        while let Some(event) = self.next(wait).await {
-            if event["method"] == LIST_CHANGED {
-                count += 1;
-                wait = QUIET;
+        loop {
+            let wait = match count {
+                n if n < expected => ARRIVAL,
+                0 => ABSENCE,
+                _ => QUIET,
+            };
+            match self.next(wait).await {
+                Some(event) if event["method"] == LIST_CHANGED => count += 1,
+                Some(_) => {}
+                None => return count,
             }
         }
-        count
     }
 }
 
@@ -161,8 +173,8 @@ async fn listeners_after_boot(gateway: &HttpGateway) -> (Events, Events) {
     let mut modern = modern_listen(gateway).await;
     let mut legacy = legacy_stream(gateway).await;
     let _ = (
-        modern.count_list_changed().await,
-        legacy.count_list_changed().await,
+        modern.count_list_changed(0).await,
+        legacy.count_list_changed(0).await,
     );
     (modern, legacy)
 }
@@ -214,8 +226,8 @@ async fn every_tool_set_change_reaches_both_eras_once() {
     // never per backend event, so a step that leaves it unchanged expects none.
     let mut expect = async |action: &str, expected: usize| {
         let (m, l) = (
-            modern.count_list_changed().await,
-            legacy.count_list_changed().await,
+            modern.count_list_changed(expected).await,
+            legacy.count_list_changed(expected).await,
         );
         assert_eq!(
             (m, l),

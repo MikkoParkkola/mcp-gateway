@@ -17,7 +17,6 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -60,7 +59,7 @@ impl DailyAccumulator {
     /// Create a new accumulator initialised to today / zero spend.
     pub fn new() -> Self {
         Self {
-            state: Mutex::new((current_day(), 0)),
+            state: Mutex::new((current_day().unwrap_or(0), 0)),
         }
     }
 
@@ -78,30 +77,27 @@ impl DailyAccumulator {
     /// clock before midnight but locked after a later add rolled over counts
     /// on the newer day instead of resetting it backward.
     pub fn add(&self, micro: u64) -> u64 {
-        let today = current_day();
-        let mut state = self.lock();
-        if today > state.0 {
-            state.0 = today;
-            #[cfg(test)]
-            fire_after_day_publish();
-            state.1 = 0;
-        }
-        state.1 = state.1.saturating_add(micro);
-        state.1
+        self.add_on(current_day().ok(), micro)
     }
 
     /// Current daily spend in micro-USD.
     ///
     /// Returns 0 if the stored day is before today (stale — caller treats as
-    /// fresh day). A stored day ahead of this read's clock is still counted.
+    /// fresh day). A stored day ahead of this read's clock is still counted,
+    /// and so is any day on a clock before 1970 (MIK-8202).
     pub fn current(&self) -> u64 {
+        let today = current_day();
         let state = self.lock();
-        if state.0 >= current_day() { state.1 } else { 0 }
+        if today.is_ok_and(|today| state.0 < today) {
+            0
+        } else {
+            state.1
+        }
     }
 
     /// False once the stored day is before today: [`Self::current`] reads 0.
     fn is_current(&self) -> bool {
-        self.lock().0 >= current_day()
+        !current_day().is_ok_and(|today| self.lock().0 < today)
     }
 }
 
@@ -155,12 +151,9 @@ fn usd(micro: u64) -> f64 {
     micro as f64 / 1_000_000.0
 }
 
-fn current_day() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_secs()
-        / 86_400
+/// Days since the epoch (UTC); `Err` on a clock before 1970.
+fn current_day() -> Result<u64, crate::clock::ClockBeforeEpoch> {
+    crate::clock::unix_secs().map(|secs| secs / 86_400)
 }
 
 // ── EnforcementResult ────────────────────────────────────────────────────────
@@ -609,8 +602,9 @@ impl BudgetEnforcer {
         // shard lock.
         // The new day is published only after the sweep, so every spend that
         // reads the old day sweeps first; concurrent sweeps are idempotent.
-        let today = current_day();
-        let new_day = self.swept_day.load(std::sync::atomic::Ordering::Relaxed) < today;
+        let today = current_day().ok();
+        let swept = self.swept_day.load(std::sync::atomic::Ordering::Relaxed);
+        let new_day = today.is_some_and(|today| swept < today);
         if new_day || super::tally::sweep_due(&self.next_sweep, super::persistence::now_secs()) {
             for (map, limits) in [
                 (&self.tool_daily, &budgets.per_tool),
@@ -619,13 +613,14 @@ impl BudgetEnforcer {
                 rows::sweep_stale(map, limits);
             }
             self.swept_day
-                .fetch_max(today, std::sync::atomic::Ordering::Relaxed);
+                .fetch_max(today.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
         }
         // Same order as `check`: ledger, then map shard, then accumulator.
         let mut pending = locked(&self.ledger);
-        let global = self.global_daily.add(micro);
-        let tool = add_capped(self.tool_maps(), tool_name, &budgets.per_tool, micro);
-        let key = api_key_name.map(|key| add_capped(self.key_maps(), key, &budgets.per_key, micro));
+        let global = self.global_daily.add_on(today, micro);
+        let tool = add_capped(self.tool_maps(), tool_name, &budgets.per_tool, micro, today);
+        let key = api_key_name
+            .map(|key| add_capped(self.key_maps(), key, &budgets.per_key, micro, today));
         #[cfg(test)]
         fire(&AFTER_SPEND_ADDED);
         // A hold from another enforcer (replaced on reload) belongs to its
@@ -666,26 +661,30 @@ impl BudgetEnforcer {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let micro = |usd: f64| (usd.max(0.0) * 1_000_000.0).round() as u64;
         // Through the cap: a snapshot saved before the cap existed may hold
-        // more names than it allows.
+        // more names than it allows. Filed under the snapshot's own UTC day,
+        // so spend restored on a clock before 1970 still counts once the
+        // clock reads that day (MIK-8202).
         let budgets = &self.config.budgets;
+        let day = Some(persisted.saved_at / 86_400);
         // A zero row (a name saved after midnight before it spent again) is
         // not restored: it would take a place in the cap and read 0 anyway.
         for (tool, total) in &persisted.tool_totals {
             let spent = micro(total.total_cost_usd);
             if spent > 0 {
-                self.global_daily.add(spent);
-                add_capped(self.tool_maps(), tool, &budgets.per_tool, spent);
+                self.global_daily.add_on(day, spent);
+                add_capped(self.tool_maps(), tool, &budgets.per_tool, spent, day);
             }
         }
         for (key, &usd) in &persisted.key_totals {
             if micro(usd) > 0 {
-                add_capped(self.key_maps(), key, &budgets.per_key, micro(usd));
+                add_capped(self.key_maps(), key, &budgets.per_key, micro(usd), day);
             }
         }
         let tool_overflow = micro(persisted.tool_overflow_usd);
-        self.global_daily.add(tool_overflow);
-        self.tool_overflow.add(tool_overflow);
-        self.key_overflow.add(micro(persisted.key_overflow_usd));
+        self.global_daily.add_on(day, tool_overflow);
+        self.tool_overflow.add_on(day, tool_overflow);
+        self.key_overflow
+            .add_on(day, micro(persisted.key_overflow_usd));
     }
 
     /// The per-tool day rows.

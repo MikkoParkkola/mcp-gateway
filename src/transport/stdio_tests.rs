@@ -98,7 +98,7 @@ fn new_with_env_and_cwd() {
     );
     assert_eq!(t.env.get("NODE_ENV").unwrap(), "test");
     assert_eq!(t.cwd.as_deref(), Some("/tmp"));
-    assert_eq!(t.request_timeout, std::time::Duration::from_secs(45));
+    assert_eq!(t.request_timeout(), std::time::Duration::from_secs(45));
 }
 
 #[test]

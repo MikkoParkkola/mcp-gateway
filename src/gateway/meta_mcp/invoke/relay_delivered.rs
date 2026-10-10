@@ -249,9 +249,15 @@ fn keep_plan_receipts(
         receipts.retain(|r| !r.in_plan && r.kind != super::Kind::Seam);
         return;
     };
+    // `MIK-8209` K7: each answer leaf's step, so a receipt matches its own
+    // span first; the same walk as the seam pass.
+    let labels = super::seams::answer_parts(answer)
+        .map(|parts| parts.into_iter().map(|(_, label)| label).collect())
+        .unwrap_or_default();
+    let delivered = delivered.with_labels(labels);
     for r in receipts.iter_mut().filter(|r| r.in_plan) {
         let digest = std::mem::take(&mut r.digest);
-        r.digest = fw.retain_delivered(digest, &delivered);
+        r.digest = fw.retain_delivered(digest, &delivered, r.step);
         r.pending_retain = false;
     }
     super::seams::add_seams(fw, receipts, answer);
@@ -259,6 +265,10 @@ fn keep_plan_receipts(
         let digest = std::mem::take(&mut r.digest);
         r.digest = fw.cap_kept(digest);
     }
+    // `MIK-8205` (S4): after capping, which rebuilds each digest without
+    // seams, and against the capped receipts, so a piece the cap cut is no
+    // step's.
+    super::seams::add_subset_seams(fw, receipts, answer);
 }
 
 /// MIK-7998: the single staged receipt kept to a wrapper the gateway's own
@@ -283,7 +293,7 @@ fn keep_to_rewritten(
     match staged.unwrap_or_else(|_| fw.delivered_preferring(&read, &flat, None)) {
         Some(delivered) => {
             let digest = std::mem::take(&mut one.digest);
-            one.digest = fw.retain_delivered(digest, &delivered);
+            one.digest = fw.retain_delivered(digest, &delivered, one.step);
         }
         None => receipts.clear(),
     }

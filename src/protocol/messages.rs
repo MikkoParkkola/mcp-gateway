@@ -90,6 +90,8 @@ pub struct JsonRpcResponse {
     pub(crate) chain_upstream: Option<std::sync::Arc<super::UpstreamChain>>,
 }
 
+#[path = "messages_classify.rs"]
+mod classify;
 #[path = "messages_response_de.rs"]
 mod response_de;
 

@@ -59,9 +59,17 @@ impl Transport for HttpTransport {
             // A stream open's 404 dropped the shared session; heal it first.
             let _ = self.reinit_if_needed().await;
         }
-        let era = self
-            .outbound_era()
-            .or_else(|| is_era_probe(method).then_some(Era::Modern));
+        // A transport still starting has not been told its peer's era: the
+        // cache it reads may hold the verdict of the transport it is about to
+        // replace (a build-first restart, MIK-8012), and after an upgrade that
+        // verdict is Legacy. Its own probe goes out in the dialect the probe
+        // exists in. A started transport keeps the rule above.
+        let era = if is_era_probe(method) && !self.connected.load(Ordering::Relaxed) {
+            Some(Era::Modern)
+        } else {
+            self.outbound_era()
+                .or_else(|| is_era_probe(method).then_some(Era::Modern))
+        };
         let params = if era == Some(Era::Modern) {
             with_modern_meta(method, params)?
         } else {
@@ -199,7 +207,7 @@ impl Transport for HttpTransport {
             return Err(Error::Protocol(format!(
                 "refusing to send `{method}` with the upstream tasks capability: only {allowed} \
                  may carry it",
-                allowed = TASK_CAPABILITY_METHODS.join(" and "),
+                allowed = TASK_CAPABILITY_METHODS.join(", "),
             )));
         }
         if self.outbound_era() != Some(Era::Modern) {
@@ -217,8 +225,19 @@ impl Transport for HttpTransport {
             params: with_task_capability_meta(method, params)?,
         };
 
-        self.send_request_with_headers(&request, extra_headers, identity_key, Some(Era::Modern))
-            .await
+        // The submission alone arms the worker's submit mark (MIK-7642 R10.1):
+        // a `tasks/get` or `tasks/cancel` never runs inside a worker's dispatch.
+        let submission = method == "tools/call";
+        if submission {
+            crate::transport::submit_mark::arm();
+        }
+        let result = self
+            .send_request_with_headers(&request, extra_headers, identity_key, Some(Era::Modern))
+            .await;
+        if submission {
+            crate::transport::submit_mark::disarm();
+        }
+        result
     }
 
     // MIK-6710: HTTP is the only transport whose `request_with_headers`

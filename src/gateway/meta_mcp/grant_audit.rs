@@ -39,12 +39,12 @@ use crate::{Error, Result};
 /// The record kind a grant decision is written as.
 const DECISION_KIND: &str = "identity_grant_decision";
 
-/// An open slot: its notes, and the request id an HTTP answer is refused
-/// under when their write fails (MIK-7663.GH2409.3).
-#[derive(Default)]
+/// An open slot: its notes, the request id an HTTP answer is refused
+/// under when their write fails (MIK-7663.GH2409.3), and the log they go to.
 struct Slot {
     notes: Mutex<Vec<GrantNote>>,
     answer_id: std::sync::OnceLock<RequestId>,
+    logger: Arc<TransparencyLogger>,
 }
 
 tokio::task_local! {
@@ -284,6 +284,8 @@ async fn write_records(
     logger: &Arc<TransparencyLogger>,
     notes: &[GrantNote],
 ) -> std::io::Result<()> {
+    #[cfg(test)]
+    seams::at_write_start().await;
     let mut first_failure = None;
     for note in select_records(notes) {
         // Held across the append: check, write and remember are one step.
@@ -315,6 +317,11 @@ async fn write_records(
             .repeat
             .as_ref()
             .map(|_| deadline.saturating_sub(started.elapsed()));
+        #[cfg(test)]
+        if seams::fail_this_append() {
+            first_failure.get_or_insert(std::io::Error::other("injected append failure"));
+            continue;
+        }
         let written = logger
             .append_bounded_within(cap, move |log| {
                 log.append_event(fields, &envelope).map(|_| ())
@@ -353,9 +360,15 @@ pub(super) async fn with_grant_slot<F: Future>(
     #[cfg(test)]
     BOOKKEEPING.with(|b| b.borrow_mut().slots_opened += 1);
     let guard = SlotGuard {
-        slot: Arc::default(),
+        slot: Arc::new(Slot {
+            notes: Mutex::default(),
+            answer_id: std::sync::OnceLock::new(),
+            logger: Arc::clone(logger),
+        }),
         logger: Arc::clone(logger),
     };
+    #[cfg(test)]
+    seams::on_slot_open(&guard.slot);
     let output = GRANT_SLOT.scope(Arc::clone(&guard.slot), future).await;
     let notes = std::mem::take(&mut *guard.slot.notes.lock().expect("grant slot lock"));
     let answer_id = guard.slot.answer_id.get().cloned();
@@ -364,8 +377,13 @@ pub(super) async fn with_grant_slot<F: Future>(
     if notes.is_empty() {
         return (output, Ok(()), answer_id);
     }
-    // The batch is owned by its own task, so a caller cancelled while the
-    // flush waits cannot drop records that were never submitted.
+    (output, write_owned(logger, notes).await, answer_id)
+}
+
+/// Write `notes` and wait for the append. The batch is owned by its own
+/// task, so a caller cancelled while the flush waits cannot drop records that
+/// were never submitted. `AuditUnavailable` under `FailClosed` when it failed.
+async fn write_owned(logger: &Arc<TransparencyLogger>, notes: Vec<GrantNote>) -> Result<()> {
     let writer = Arc::clone(logger);
     #[cfg(test)]
     BOOKKEEPING.with(|b| b.borrow_mut().flushes_spawned += 1);
@@ -373,14 +391,31 @@ pub(super) async fn with_grant_slot<F: Future>(
     let written = flush
         .await
         .unwrap_or_else(|join| Err(std::io::Error::other(join.to_string())));
-    let written = written.or_else(|error| {
+    written.or_else(|error| {
         tracing::error!(%error, "grant decision record write failed");
         match logger.failure_policy() {
             AuditFailurePolicy::FailClosed => Err(Error::AuditUnavailable),
             AuditFailurePolicy::BestEffort => Ok(()),
         }
-    });
-    (output, written, answer_id)
+    })
+}
+
+/// MIK-8204: append every decision the open slot holds so far, and wait for
+/// the append, before work they cause starts elsewhere (a task worker). The
+/// log's file order is then cause before effect. Notes are taken out, so the
+/// slot's own end-of-request write never repeats them. Outside a slot, or
+/// with nothing noted, there is nothing to write.
+pub(crate) async fn flush_open_slot() -> Result<()> {
+    let Ok((logger, notes)) = GRANT_SLOT.try_with(|slot| {
+        let notes = std::mem::take(&mut *slot.notes.lock().expect("grant slot lock"));
+        (Arc::clone(&slot.logger), notes)
+    }) else {
+        return Ok(());
+    };
+    if notes.is_empty() {
+        return Ok(());
+    }
+    write_owned(&logger, notes).await
 }
 
 /// Note `event` for `(server, tool)` into the open slot. Outside every slot
@@ -471,6 +506,10 @@ pub(crate) async fn slot_rpc<'a, X: Send + 'a>(
     id: RequestId,
     future: impl Future<Output = (JsonRpcResponse, X)> + Send + 'a,
 ) -> (JsonRpcResponse, X) {
+    #[cfg(test)]
+    if logger.is_none() || GRANT_SLOT.try_with(|_| ()).is_ok() {
+        BOOKKEEPING.with(|b| b.borrow_mut().idle_wraps += 1);
+    }
     // Erased, so an opener's future type stays shallow (E0275 at the stdio spawn).
     let future: Pin<Box<dyn Future<Output = (JsonRpcResponse, X)> + Send + 'a>> = Box::pin(future);
     match with_grant_slot(logger, future).await {
@@ -583,10 +622,17 @@ impl super::MetaMcp {
     ) -> JsonRpcResponse {
         // MIK-7996: held to this dispatch's last write, on every exit path.
         let _session = self.hold_session(target.session_id);
-        let (logger, id) = (self.transparency_logger.as_ref(), target.id.clone());
+        let logger = self.transparency_logger.as_ref();
+        // A slot opens only with a log and none open (the HTTP handler opens
+        // one first): otherwise the wrap would box and clone for nothing.
+        let opens_slot = logger.is_some() && GRANT_SLOT.try_with(|_| ()).is_err();
+        let id = opens_slot.then(|| target.id.clone());
         let answer: Pin<Box<dyn Future<Output = JsonRpcResponse> + Send + '_>> =
             Box::pin(self.dispatch_below_gate_shaped_in_slot(target, shape, confirmed_in_band));
-        slot_rpc(logger, id, async { (answer.await, ()) }).await.0
+        match id {
+            Some(id) => slot_rpc(logger, id, async { (answer.await, ()) }).await.0,
+            None => answer.await,
+        }
     }
 }
 
@@ -623,9 +669,16 @@ pub(super) struct GrantBookkeeping {
     pub(super) slots_opened: usize,
     pub(super) notes_taken: usize,
     pub(super) flushes_spawned: usize,
+    /// `slot_rpc` calls that opened no slot (no log, or one already open):
+    /// a box and an id clone spent on nothing (MIK-8014 design item 3).
+    pub(super) idle_wraps: usize,
 }
 
 #[cfg(test)]
 pub(super) fn grant_bookkeeping_for_test() -> GrantBookkeeping {
     BOOKKEEPING.with(|b| *b.borrow())
 }
+
+#[cfg(test)]
+#[path = "grant_audit_seams.rs"]
+pub(crate) mod seams;

@@ -34,6 +34,8 @@ fn logs<T>(op: impl FnOnce() -> T) -> (T, String) {
         .with_max_level(tracing::Level::DEBUG)
         .with_writer(move || Captured(Arc::clone(&writer)))
         .finish();
+    // A callsite another thread cached as off would miss this capture (MIK-8254).
+    crate::test_log_capture::keep_interest_open();
     let out = tracing::subscriber::with_default(subscriber, op);
     let text = String::from_utf8(buffer.lock().unwrap().clone()).unwrap();
     (out, text)

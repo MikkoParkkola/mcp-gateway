@@ -27,6 +27,7 @@ pub(crate) use meta_mcp::publish_identity_grants;
 #[cfg(test)]
 pub(crate) use meta_mcp::{MetaMcp, invoke::audit::with_dispatch_scope};
 mod meta_mcp_helpers;
+mod meta_mcp_helpers_routing;
 mod meta_mcp_helpers_text;
 mod meta_mcp_search_schema;
 mod meta_mcp_tool_defs;
@@ -78,9 +79,9 @@ pub(crate) use server::StdioNonce;
 pub(crate) use server::account_bindings::declare_account_descriptors;
 pub(crate) use server::account_bindings::{ServeMode, sole_operator_asserted};
 /// The test-only allocation meter, for allocation rows outside `gateway`
-/// (`MIK-8201`), without `server` becoming crate-visible. Its one reader
-/// outside `gateway` is a `firewall`-gated row.
-#[cfg(all(test, feature = "firewall"))]
+/// (`MIK-8201`), without `server` becoming crate-visible. The meter needs
+/// only `cfg(test)`; its readers include rows built without `firewall`.
+#[cfg(test)]
 pub(crate) use server::signing_allocation_tests::alloc_meter;
 pub(crate) mod session_id;
 pub mod session_lifecycle;
@@ -137,6 +138,12 @@ pub mod test_helpers {
     pub use super::task_service::{
         ServiceError, StoreLimits, TaskExecutor, TaskService, open_runtime,
     };
+
+    /// The one bound a test uses to say "this wait is a hang guard"
+    /// (MIK-8247, MIK-8288): long enough that a loaded runner never reaches
+    /// it on a green run, so it costs nothing until something is truly stuck.
+    /// Lib tests reach it as `crate::test_wait::HANG_BOUND`.
+    pub const HANG_BOUND: std::time::Duration = std::time::Duration::from_secs(30);
 
     /// Bind `meta` to the HTTP server's change feed, as `serve` does (F24), so
     /// an in-process fixture advertises what the HTTP server advertises.

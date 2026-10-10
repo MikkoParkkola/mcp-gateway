@@ -172,6 +172,9 @@ struct State {
     sketches: sketch::SketchStore,
     /// "Excuse lost" markers, apart from the sketches (`MIK-8201`).
     markers: sketch::Markers,
+    /// A caller's own subset-forward seams: excuse only, apart from the
+    /// evidence entries (`MIK-8205`).
+    seams: seam::seam_excuse::SeamExcuses,
 }
 
 impl State {
@@ -185,6 +188,7 @@ impl State {
         }
         self.sketches.sweep(now, window);
         self.markers.sweep(now);
+        self.seams.sweep(now, window);
     }
 
     /// Remove `fp`'s entry, releasing its pool records: every removal goes
@@ -632,6 +636,7 @@ impl CollusionDetector {
                     .filter(live)
                     .any(|t| t.source == source && t.principal == sender)
                     || state.sketches.holds((source, sender), fp, now, window)
+                    || state.seams.holds((source, sender), fp, now, window)
             };
             let sensitive =
                 |t: &&Holder| t.sensitive.is_some_and(|copies| copies.held(now, window));
@@ -732,7 +737,7 @@ mod reason;
 #[cfg(test)]
 #[path = "collusion_reason_tests.rs"]
 mod reason_tests;
-use reason::CAPACITY_METRIC;
+pub(super) use reason::CAPACITY_METRIC;
 pub(crate) use reason::RelayReason;
 #[path = "collusion_seam.rs"]
 mod seam;
@@ -741,7 +746,7 @@ mod seam;
 mod seam_tests;
 #[path = "collusion_sketch.rs"]
 pub(super) mod sketch;
-pub(crate) use seam::SeamFingerprint;
+pub(crate) use seam::{SeamFingerprint, SeamForms};
 
 #[cfg(test)]
 #[path = "collusion_holders_tests.rs"]

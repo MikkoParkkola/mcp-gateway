@@ -245,14 +245,7 @@ impl std::io::Write for Sink {
 /// Thread-local subscriber over a process-wide TRACE registry (idiom from
 /// `agent_identity_audit_tests`), so no callsite is filtered before it.
 pub(crate) fn posture_records(run: impl FnOnce()) -> Vec<(String, String)> {
-    use tracing_subscriber::prelude::*;
-    static INTEREST: std::sync::Once = std::sync::Once::new();
-    INTEREST.call_once(|| {
-        let _ = tracing::subscriber::set_global_default(
-            tracing_subscriber::Registry::default()
-                .with(tracing::level_filters::LevelFilter::TRACE),
-        );
-    });
+    crate::test_log_capture::keep_interest_open();
     let sink = Sink::default();
     let writer = sink.clone();
     let subscriber = tracing_subscriber::fmt()
@@ -325,7 +318,7 @@ fn gateway_startup_logs_posture_once() {
     let (_, mut unhardened, _) = auth_shapes().swap_remove(1);
     // Auth on requires the audit log; give it a writable home.
     let dir = tempfile::tempdir().unwrap();
-    unhardened.security.transparency_log.enabled = true;
+    unhardened.security.transparency_log.enabled = Some(true);
     unhardened.security.transparency_log.path = dir.path().join("audit.log").display().to_string();
     // The same multi-user shape: only the posture tells the two apart.
     let mut hardened = unhardened.clone();

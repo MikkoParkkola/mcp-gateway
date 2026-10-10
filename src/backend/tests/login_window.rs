@@ -505,6 +505,11 @@ async fn a_health_probe_never_begins_a_login() {
         }
     }
     assert_eq!(browser.opens(), 0, "a probe never opens the browser");
+    assert_eq!(
+        backend.rebuilds_attempted.load(Ordering::SeqCst),
+        0,
+        "an authorization wait is no fault to rebuild (probe.rs guard)"
+    );
 }
 
 /// How [`issuing_server`]'s MCP endpoint behaves after the handshake.
@@ -757,8 +762,8 @@ async fn a_probe_during_a_request_time_login_neither_waits_nor_rebuilds() {
     browser.opened(2, "the call's request-time login").await;
 
     let probed = tokio::time::timeout(
-        Duration::from_secs(2),
-        backend.health_probe(Duration::from_secs(5)),
+        Duration::from_secs(10),
+        backend.health_probe(Duration::from_secs(60)), // outlasts the outer bound
     )
     .await
     .expect("a probe does not queue behind the login holding the OAuth client");
@@ -776,6 +781,12 @@ async fn a_probe_during_a_request_time_login_neither_waits_nor_rebuilds() {
     )
     .await;
     assert!(rebuilt.is_err(), "a rebuild during a login does nothing");
+    // A failed build-first rebuild also keeps the slot (MIK-8012): count.
+    assert_eq!(
+        backend.rebuilds_attempted.load(Ordering::SeqCst),
+        0,
+        "the probe or the restart rebuilt during a login"
+    );
     let entry = backend.shared_entry();
     assert!(
         entry

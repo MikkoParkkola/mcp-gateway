@@ -14,6 +14,8 @@ mod consent;
 pub(crate) mod identity;
 // MIK-6744.STORE.1's offline command entry, a sibling of
 // `initialize_store_offline` and kept out of this file for its size.
+#[cfg(test)]
+mod journey_start_tests;
 mod offline_migration;
 mod provider;
 pub(crate) mod refusal;

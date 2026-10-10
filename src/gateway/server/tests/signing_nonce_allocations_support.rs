@@ -300,7 +300,7 @@ impl Fixture {
         Self::start_with(
             move |url, require_nonce| {
                 let mut config = signing_config_for(url, require_nonce, Target::MutatingUncached);
-                config.security.transparency_log.enabled = true;
+                config.security.transparency_log.enabled = Some(true);
                 config.security.transparency_log.path = log;
                 config
             },
