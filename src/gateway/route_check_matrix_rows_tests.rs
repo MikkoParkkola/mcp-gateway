@@ -498,6 +498,18 @@ async fn task_confirm_submit_row() {
     );
 }
 
+/// `Authorize`, R4a Applies (MIK-8315): a task submit of a personal
+/// capability without a grant is refused at submit exactly as the sync call
+/// is, with the sync call's audit records, no task and no backend call.
+#[tokio::test]
+async fn r4a_authorize_refuses_at_submit_as_the_sync_call_does() {
+    assert_eq!(
+        expect(MethodKind::ToolsCall, Route::TaskSubmit, Stage::Authorize),
+        Expect::Applies
+    );
+    router::task_submit_ungranted().await;
+}
+
 /// `TaskConfirm`, R5 gap (MIK-8160): the same task-augmented call of a
 /// destructive surfaced tool over stdio is admitted as a task with no X14
 /// decision at all: neither X14's challenge nor its refusal.
