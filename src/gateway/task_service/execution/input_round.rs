@@ -29,7 +29,9 @@ use crate::protocol::{JsonRpcError, JsonRpcResponse, RequestId};
 
 #[path = "input_round_clock.rs"]
 mod clock;
-use clock::{Resealed, readable_now, redeeming_dispatch};
+use clock::{
+    ClockWait, Resealed, clock_expired, readable_now, readable_or_fail, redeeming_dispatch,
+};
 
 /// Consecutive state-only rounds one worker resumes before it gives up. A
 /// fixed ceiling that stops a backend looping the gateway forever.
@@ -241,12 +243,17 @@ impl<'a> Settling<'a> {
         // a round that could only fail is settled now, never parked.
         let store = &self.executor.service.store;
         // A round sealed after a wait parks at the very time it was sealed at.
-        let read = match minted_at {
-            Some(read) => Some(read),
-            None => readable_now(store, self.id, cancel_rx).await,
-        };
-        let Some((at, now)) = read else {
-            return;
+        let (at, now) = match minted_at {
+            Some(read) => read,
+            None => match readable_now(store, self.id, cancel_rx).await {
+                ClockWait::Read(at, now) => (at, now),
+                ClockWait::Stopped => return,
+                ClockWait::Expired => {
+                    return self
+                        .settle(TaskTransition::Fail(clock_expired()), false)
+                        .await;
+                }
+            },
         };
         let continuation = self.state.meta_mcp().continuation();
         let Ok(continuation_deadline) =
@@ -574,7 +581,7 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     // An answer taken in time can still reach dispatch late; redeeming then
     // could only fail, so the round is closed as the sweep would close it.
     let deadline = round.continuation_deadline;
-    let (at, now) = readable_now(&executor.service.store, &id, &mut cancel_rx).await?;
+    let (at, now) = readable_or_fail(&executor, ids, &mut cancel_rx).await?;
     let reached = deadline.is_some_and(|d| now >= d);
     executor
         .proceed_unless_late(ids, deadline, reached, at)
@@ -596,7 +603,7 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     // Preparation inside the funnel can outlast the margin. A continuation
     // refused once its envelope has expired was refused for expiry: close the
     // round with that reason rather than fail the task.
-    let (at, now) = readable_now(&executor.service.store, &id, &mut cancel_rx).await?;
+    let (at, now) = readable_or_fail(&executor, ids, &mut cancel_rx).await?;
     let expired = owned.dispatch_log().worker().take_redemption_expired()
         || deadline.is_some_and(|d| rejected_after_expiry(&response, d, now));
     executor

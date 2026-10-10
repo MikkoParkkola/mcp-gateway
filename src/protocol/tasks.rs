@@ -161,7 +161,7 @@ impl Task {
             tool,
             Utc::now(),
             TaskOptions {
-                ttl_ms: Some(86_400_000),
+                ttl_ms: Some(crate::config::DEFAULT_TASK_TTL_MS),
                 poll_interval_ms: Some(1_000),
             },
         )
@@ -224,6 +224,12 @@ impl Task {
     #[must_use]
     pub fn tool(&self) -> &str {
         &self.tool
+    }
+
+    /// The record's retention in milliseconds; `None` is unlimited.
+    #[must_use]
+    pub(crate) const fn ttl_ms(&self) -> Option<u64> {
+        self.wire.ttl_ms
     }
 
     /// Where it has got to.

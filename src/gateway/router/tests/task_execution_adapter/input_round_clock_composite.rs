@@ -1,0 +1,266 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-8202 P2 (design v4): the worker's clock wait is for a single direct
+//! call only. A composite (a `gateway_execute` chain, a playbook) keeps the
+//! base behaviour on a clock before 1970: its step refuses, nothing is held
+//! for the clock, and nothing is parked once the clock reads. A direct call
+//! whose request clock fails at the mint refuses the same way (`:129`).
+//!
+//! Each row judges the outcome: once the store has refused a clock read (or
+//! the task has ended), both clocks are restored. A round held for the clock
+//! would then be minted and parked, so the task would wait for input; a
+//! refused one is gone and the task ends.
+
+use super::super::*;
+use super::input_round::*;
+use super::input_round_clock::has_round;
+use super::support::*;
+use crate::protocol::tasks::TaskStatus;
+use std::time::Duration;
+
+/// The worker's clock retry under test (`CLOCK_RETRY`, 20 ms).
+const CLOCK_RETRY: Duration = Duration::from_millis(20);
+
+fn store(state: &Arc<AppState>) -> &crate::gateway::task_service::TaskStore {
+    &state.task_executor.service.store
+}
+
+/// The task's status as stored, bypassing every request handler.
+fn stored_status(state: &Arc<AppState>, id: &str) -> Option<TaskStatus> {
+    let store = store(state);
+    let owner = store.owner_digest_for_test(id)?;
+    store.get(&owner, id).ok().map(|row| row.task.status())
+}
+
+/// A task-augmented `tools/call` from a client that can be asked for input.
+fn task_call(id: i64, key: &str, name: &str, arguments: Value) -> Value {
+    declaring_elicitation(keyed(
+        modern(
+            id,
+            "tools/call",
+            json!({ "name": name, "arguments": arguments, "task": {} }),
+            true,
+        ),
+        key,
+    ))
+}
+
+/// A one-step playbook at the mock whose failed step is retried.
+fn retrying_playbook() -> crate::playbook::PlaybookEngine {
+    let definition: crate::playbook::PlaybookDefinition = serde_json::from_value(json!({
+        "playbook": "1.0",
+        "name": "clock-retry",
+        "description": "one step at the mock; a failed step is retried",
+        "on_error": "retry",
+        "max_retries": 2,
+        "steps": [ { "name": "ask", "tool": TOOL, "server": BACKEND, "arguments": {} } ]
+    }))
+    .expect("the fixture playbook deserialises");
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    engine.register(definition);
+    engine
+}
+
+/// Release the held backend with the store clock as `store_reads` says (and
+/// the request clock unreadable while `request_clock` is held), wait for the funnel's clock read
+/// or the end, restore both clocks, and return what the task came to: a
+/// terminal status, or `input_required` if a round was held and parked.
+async fn outcome(
+    state: &Arc<AppState>,
+    id: &str,
+    gate: &mut GateHandle,
+    request_clock: Option<crate::clock::test_clock::Forced>,
+    store_reads: Option<chrono::DateTime<chrono::Utc>>,
+) -> Value {
+    // `None`: the store clock reads before 1970. `Some(t)`: it reads `t`,
+    // frozen, whatever the request clock says (the store's own clock is
+    // otherwise `crate::clock`, which the request-clock guard also breaks).
+    let store_at = store_reads.or_else(|| chrono::DateTime::from_timestamp(-1, 0));
+    store(state).set_clock_for_test(store_at);
+    let refused = store(state).refused_reads_for_test();
+    gate.release_all();
+    // Read from the store, not through `tasks/get`: a request handler on a
+    // clock before 1970 may not answer at all, and that is not the outcome.
+    loop {
+        let ended = matches!(
+            stored_status(state, id),
+            Some(
+                TaskStatus::Completed
+                    | TaskStatus::Failed
+                    | TaskStatus::Cancelled
+                    | TaskStatus::InputRequired
+            )
+        );
+        if ended || store(state).refused_reads_for_test() > refused {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    drop(request_clock);
+    store(state).set_clock_for_test(None);
+    loop {
+        let seen = get_task(state, "key-a", id).await;
+        let status = status_of(&seen);
+        if is_terminal(&status) || status == "input_required" {
+            return seen;
+        }
+        // Lets paused time advance, so a worker waiting for the clock
+        // retries and reads the restored one.
+        tokio::time::sleep(CLOCK_RETRY).await;
+    }
+}
+
+/// The task ended with nothing parked: never `input_required`.
+fn assert_ended_unparked(state: &Arc<AppState>, id: &str, settled: &Value, row: &str) {
+    std::assert!(is_terminal(&status_of(settled)), "{row}: {settled}");
+    std::assert!(!has_round(state, id), "{row}: nothing was parked");
+    std::assert!(!settled.to_string().contains(STATE_1), "{row}: {settled}");
+}
+
+/// T21 (chain). A task-owned `gateway_execute` chain whose step asks for
+/// input on a clock before 1970 is refused, as on the base: no round is held
+/// for the clock. Mutant: the `plan_step` scope removed at the chain's step
+/// dispatch (`chain_exec.rs`), so the worker channel arms for the step.
+#[tokio::test(start_paused = true)]
+async fn t21_a_chain_step_on_an_unreadable_clock_is_refused_not_held() {
+    let (mock, mut gate) =
+        MockBackend::holding(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+    let (state, _dir) = state_with(&mock).await;
+    let chain = json!({ "chain": [ { "tool": format!("{BACKEND}:{TOOL}"), "arguments": {} } ] });
+    let id = task_id(
+        &post(
+            &state,
+            "key-a",
+            task_call(1, "t21", "gateway_execute", chain),
+        )
+        .await,
+    );
+    gate.wait_for_dispatch().await;
+    let request_clock = crate::clock::test_clock::before_epoch();
+    let settled = outcome(&state, &id, &mut gate, Some(request_clock), None).await;
+    assert_ended_unparked(&state, &id, &settled, "chain");
+}
+
+/// T22 (playbook). The same through a playbook whose failed step is retried:
+/// every attempt refuses its round, so nothing is held across the engine's
+/// retries either. Mutant: the `plan_step` scope removed at the playbook
+/// invoker (`support.rs`).
+#[tokio::test(start_paused = true)]
+async fn t22_a_retried_playbook_step_on_an_unreadable_clock_holds_nothing() {
+    let (mock, mut gate) =
+        MockBackend::holding(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+    let (state, _dir) = state_with(&mock).await;
+    state.meta_mcp.set_playbook_engine(retrying_playbook());
+    let run = json!({ "name": "clock-retry" });
+    let id = task_id(
+        &post(
+            &state,
+            "key-a",
+            task_call(1, "t22", "gateway_run_playbook", run),
+        )
+        .await,
+    );
+    gate.wait_for_dispatch().await;
+    let request_clock = crate::clock::test_clock::before_epoch();
+    let settled = outcome(&state, &id, &mut gate, Some(request_clock), None).await;
+    assert_ended_unparked(&state, &id, &settled, "playbook");
+}
+
+/// T25 (`worker_clock.rs`, probe then mint). A direct call whose store clock
+/// reads but whose request clock fails at the mint refuses, fail-closed:
+/// nothing is stamped, held or parked. Mutant: a failed mint withholds the
+/// round for the worker instead of refusing.
+#[tokio::test(start_paused = true)]
+async fn t25_a_mint_whose_clock_fails_after_the_probe_refuses() {
+    let (mock, mut gate) =
+        MockBackend::holding(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+    let (state, _dir) = state_with(&mock).await;
+    let id = task_id(&post(&state, "key-a", create(1, "t25")).await);
+    gate.wait_for_dispatch().await;
+    let store_reads = crate::clock::utc_now().expect("the host clock reads");
+    let request_clock = crate::clock::test_clock::before_epoch();
+    let settled = outcome(
+        &state,
+        &id,
+        &mut gate,
+        Some(request_clock),
+        Some(store_reads),
+    )
+    .await;
+    assert_ended_unparked(&state, &id, &settled, "direct");
+    std::assert_eq!(status_of(&settled), "failed", "{settled}");
+}
+
+/// T26 (lead ruling, MIK-8202 P2): a task held for a wall clock that never
+/// recovers ends failed once its own `ttlMs` has elapsed on monotonic time,
+/// with the clock still before 1970. Mutant: the wait ignores the ttl, so the
+/// task stays `working` until cancelled.
+#[tokio::test(start_paused = true)]
+async fn t26_a_wait_on_a_clock_that_never_recovers_fails_after_the_ttl() {
+    never_recovers(None).await;
+}
+
+/// T26b: the same for a task created with no ttl (`tasks.default_ttl_ms = 0`):
+/// the wait is bounded by the release default, never unbounded.
+#[tokio::test(start_paused = true)]
+async fn t26b_an_unlimited_task_waits_no_longer_than_the_default_ttl() {
+    never_recovers(Some(0)).await;
+}
+
+/// Hold a direct call's round on a store clock before 1970, run monotonic
+/// time past the bound, and require the task to end failed while the clock is
+/// still unreadable. `default_ttl_ms` overrides the configured task ttl.
+async fn never_recovers(default_ttl_ms: Option<u64>) {
+    let (mock, mut gate) =
+        MockBackend::holding(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+    let (state, _dir) = state_with(&mock).await;
+    if let Some(ttl) = default_ttl_ms {
+        let mut config = (*state.live_config.get()).clone();
+        config.tasks.default_ttl_ms = ttl;
+        state.live_config.set(config);
+    }
+    let created = post(&state, "key-a", create(1, "t26")).await;
+    let id = task_id(&created);
+    if default_ttl_ms == Some(0) {
+        std::assert!(
+            created.pointer("/result/ttlMs").is_none_or(Value::is_null),
+            "premise: unlimited: {created}"
+        );
+    }
+    gate.wait_for_dispatch().await;
+    store(&state).set_clock_for_test(chrono::DateTime::from_timestamp(-1, 0));
+    let refused = store(&state).refused_reads_for_test();
+    gate.release_all();
+    // The worker is waiting once the store has refused it a read.
+    while store(&state).refused_reads_for_test() <= refused {
+        tokio::task::yield_now().await;
+    }
+    let bound = store(&state)
+        .clock_wait_bound(&id)
+        .expect("the task exists");
+    std::assert_eq!(
+        bound,
+        Duration::from_millis(86_400_000),
+        "premise: the default day"
+    );
+    tokio::time::advance(bound + CLOCK_RETRY).await;
+    // Bounded by the worker's own retries, not by time: past the bound, the
+    // first retry ends the wait. A wait that ignores it keeps retrying, each
+    // retry one more refused read, with the task still working.
+    let past_bound = store(&state).refused_reads_for_test();
+    let ended = loop {
+        let status = stored_status(&state, &id).expect("the task exists");
+        if !matches!(status, TaskStatus::Working | TaskStatus::InputRequired) {
+            break status;
+        }
+        std::assert!(
+            store(&state).refused_reads_for_test() < past_bound + 10,
+            "still {status:?} after ten retries past the bound"
+        );
+        tokio::time::sleep(CLOCK_RETRY).await;
+    };
+    std::assert_eq!(ended, TaskStatus::Failed);
+    let shown = get_task(&state, "key-a", &id).await;
+    std::assert!(shown.to_string().contains("ttl ran out"), "{shown}");
+    std::assert!(!has_round(&state, &id), "nothing was parked");
+}

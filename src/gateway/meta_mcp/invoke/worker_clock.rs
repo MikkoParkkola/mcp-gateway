@@ -98,11 +98,19 @@ impl WorkerChannel {
     }
 }
 
-/// The task worker whose dispatch is being awaited: `None` on a request thread.
+/// The task worker whose dispatch is being awaited: `None` on a request
+/// thread, and inside a plan step. A composite (chain, playbook) runs several
+/// funnel calls in one worker dispatch and resumes through its own envelope,
+/// so it keeps the base refusal on a clock before 1970 (design v4, MIK-8303).
+/// Coupling: `relay::plan_step` (`PLAN_STEP`) therefore also means "no worker
+/// clock deferral"; anything wrapped in it gets the request-thread refusal.
 fn armed() -> Option<(
     std::sync::Arc<crate::gateway::meta_mcp::dispatch_log::DispatchLog>,
     TaskStore,
 )> {
+    if super::relay::in_plan_step() {
+        return None;
+    }
     let log = crate::gateway::meta_mcp::dispatch_log::current_worker()?;
     let store = log.worker().store.lock().clone()?;
     Some((log, store))

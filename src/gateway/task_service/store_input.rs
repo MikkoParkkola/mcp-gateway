@@ -149,6 +149,22 @@ impl TaskStore {
         self.0.now()
     }
 
+    /// How long a wait on a wall clock that reads before 1970 may hold `id`
+    /// (MIK-8202), measured on monotonic time, since that clock cannot date
+    /// the record's own expiry: its `ttlMs`, or for an unlimited task
+    /// (`tasks.default_ttl_ms = 0`) the release default, so no wait is
+    /// unbounded. `None` once the task is gone.
+    pub(crate) fn clock_wait_bound(&self, id: &str) -> Option<std::time::Duration> {
+        let state = self.0.state();
+        let ttl_ms = state
+            .entries
+            .get(id)?
+            .task
+            .ttl_ms()
+            .unwrap_or(crate::config::DEFAULT_TASK_TTL_MS);
+        Some(std::time::Duration::from_millis(ttl_ms))
+    }
+
     /// The clock a continuation redemption samples once, immediately before
     /// it opens the envelope, and reuses for the open, hold and ledger checks
     /// (MIK-8202 AC13). Exactly [`Self::now`]; under test a script may

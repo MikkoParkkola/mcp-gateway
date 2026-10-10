@@ -54,7 +54,7 @@ async fn until(what: &str, mut ready: impl FnMut() -> bool) {
     panic!("never: {what}");
 }
 
-fn has_round(state: &Arc<AppState>, id: &str) -> bool {
+pub(super) fn has_round(state: &Arc<AppState>, id: &str) -> bool {
     store(state).input_round_for_test(id).0.is_some()
 }
 

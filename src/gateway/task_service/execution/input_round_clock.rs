@@ -21,40 +21,96 @@ pub(super) const CLOCK_RETRY: Duration = if cfg!(test) {
     Duration::from_secs(1)
 };
 
-/// The store's now, and the same instant in the seconds round deadlines are
-/// kept in, waiting out a clock before 1970: a round is neither parked nor
-/// resumed nor closed on a time it cannot read, so nothing is lost while the
-/// clock is wrong (MIK-8202). `None` once the task is cancelled; executor
-/// shutdown drops the worker, wait and all.
+/// What a wait for a readable clock came to.
+pub(super) enum ClockWait {
+    /// The store's now, and the same instant in the seconds round deadlines
+    /// are kept in.
+    Read(chrono::DateTime<chrono::Utc>, u64),
+    /// The task was cancelled; nothing is left to run.
+    Stopped,
+    /// The clock stayed unreadable for the task's whole retention, measured on
+    /// monotonic time: the task must end failed ([`clock_expired`]).
+    Expired,
+}
+
+/// The failure a task ends with when the clock stays before 1970 for its
+/// whole retention (MIK-8202).
+pub(super) fn clock_expired() -> crate::protocol::JsonRpcError {
+    crate::protocol::JsonRpcError {
+        code: -32603,
+        message: "host clock reads before 1970; the task's ttl ran out while waiting for it"
+            .to_owned(),
+        data: None,
+    }
+}
+
+/// The store's now, waiting out a clock before 1970: a round is neither
+/// parked nor resumed nor closed on a time it cannot read, so nothing is lost
+/// while the clock is wrong (MIK-8202). Bounded: once the task's own `ttlMs`
+/// has elapsed on monotonic time since the wait began, the wait ends
+/// [`ClockWait::Expired`], since that clock cannot date the record's expiry;
+/// an unlimited task is bounded by the release default ttl. Executor shutdown
+/// drops the worker, wait and all.
 // ponytail: polls on monotonic time and holds this worker's slot while the
 // clock is unreadable; a clock-recovered signal would free it sooner.
 pub(super) async fn readable_now(
     store: &crate::gateway::task_service::store::TaskStore,
     id: &str,
     cancel_rx: &mut watch::Receiver<bool>,
-) -> Option<(chrono::DateTime<chrono::Utc>, u64)> {
-    let mut warned = false;
+) -> ClockWait {
+    let mut since: Option<tokio::time::Instant> = None;
     loop {
         if *cancel_rx.borrow() {
-            return None;
+            return ClockWait::Stopped;
         }
         if let Ok(at) = store.now() {
-            return Some((at, u64::try_from(at.timestamp()).unwrap_or_default()));
+            return ClockWait::Read(at, u64::try_from(at.timestamp()).unwrap_or_default());
         }
-        // Once per round: the operator learns why a worker is held.
-        if !warned {
-            warned = true;
-            telemetry_metrics::counter!("mcp_task_clock_waits_total").increment(1);
-            tracing::warn!(
-                task_id = %id,
-                "the host clock reads before 1970: this input round waits for it, holding a task worker"
-            );
+        match since {
+            None => {
+                since = Some(tokio::time::Instant::now());
+                // Once per round: the operator learns why a worker is held.
+                telemetry_metrics::counter!("mcp_task_clock_waits_total").increment(1);
+                tracing::warn!(
+                    task_id = %id,
+                    "the host clock reads before 1970: this input round waits for it, holding a task worker"
+                );
+            }
+            Some(began)
+                if store
+                    .clock_wait_bound(id)
+                    .is_some_and(|ttl| began.elapsed() >= ttl) =>
+            {
+                tracing::warn!(task_id = %id, "the host clock stayed before 1970 for the task's ttl: the task fails");
+                return ClockWait::Expired;
+            }
+            Some(_) => {}
         }
         tokio::select! {
             biased;
             // A dropped sender can no longer cancel: stop, as `dispatch` does.
-            changed = cancel_rx.changed() => changed.ok()?,
+            changed = cancel_rx.changed() => if changed.is_err() {
+                return ClockWait::Stopped;
+            },
             () = tokio::time::sleep(CLOCK_RETRY) => {}
+        }
+    }
+}
+
+/// [`readable_now`] where no [`Settling`] is at hand: an expired wait fails the
+/// task here. `None` once the task is cancelled or failed.
+pub(super) async fn readable_or_fail(
+    executor: &TaskExecutor,
+    (principal, id, revision): (&str, &str, u64),
+    cancel_rx: &mut watch::Receiver<bool>,
+) -> Option<(chrono::DateTime<chrono::Utc>, u64)> {
+    match readable_now(&executor.service.store, id, cancel_rx).await {
+        ClockWait::Read(at, now) => Some((at, now)),
+        ClockWait::Stopped => None,
+        ClockWait::Expired => {
+            let event = TaskTransition::Fail(clock_expired());
+            executor.settle_cas(principal, id, revision, event).await;
+            None
         }
     }
 }
@@ -79,7 +135,19 @@ pub(super) async fn redeeming_dispatch(
         if !owned.dispatch_log().worker().take_redemption_unreadable() {
             return Some(response);
         }
-        readable_now(store, id, cancel_rx).await?;
+        match readable_now(store, id, cancel_rx).await {
+            ClockWait::Read(..) => {}
+            ClockWait::Stopped => return None,
+            // Settled failed by the caller, as any refused dispatch is.
+            ClockWait::Expired => {
+                let error = clock_expired();
+                return Some(JsonRpcResponse::error(
+                    Some(crate::protocol::RequestId::Number(0)),
+                    error.code,
+                    error.message,
+                ));
+            }
+        }
     }
 }
 
@@ -101,8 +169,14 @@ impl Settling<'_> {
             return Resealed::Nothing;
         };
         let store = &self.executor.service.store;
-        let Some((at, now)) = readable_now(store, self.id, cancel_rx).await else {
-            return Resealed::Done;
+        let (at, now) = match readable_now(store, self.id, cancel_rx).await {
+            ClockWait::Read(at, now) => (at, now),
+            ClockWait::Stopped => return Resealed::Done,
+            ClockWait::Expired => {
+                self.settle(TaskTransition::Fail(clock_expired()), false)
+                    .await;
+                return Resealed::Done;
+            }
         };
         let continuation = self.state.meta_mcp().continuation();
         let Some(result) = withheld.seal(&continuation, now).await else {
