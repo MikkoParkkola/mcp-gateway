@@ -127,6 +127,10 @@ jobs:
       - name: No new raw wall-clock read (MIK-8202)
         if: github.event_name == 'pull_request'
         run: python3 scripts/release/check_clock_baseline.py "origin/${{ github.base_ref }}"
+      # A caller identity is built only by its checked constructor, so one that
+      # names no one can never be made (MIK-8286, identity-collapse).
+      - name: Caller identities are built only through their checked constructors (MIK-8286)
+        run: python3 scripts/release/check_identity_sources.py
       # Every function in the swept areas has a row, whenever it was added
       # (MIK-8195); the area list grows with each wave until it is removed.
       - name: Every function in a swept COV.3 area has an inventory row (MIK-8195)
@@ -1021,6 +1025,8 @@ jobs:
         run: python3 scripts/release/test_c6_resolve.py
       - name: Test the raw clock-read check (MIK-8202)
         run: python3 scripts/release/test_check_clock_baseline.py
+      - name: Test the identity-source check (MIK-8286)
+        run: python3 scripts/release/test_check_identity_sources.py
       - name: Test the macOS exclusion check (MIK-8174)
         run: python3 scripts/release/test_check_macos_exclusions.py
       - name: Test the release-binary test-hook check, and that every workflow calls it

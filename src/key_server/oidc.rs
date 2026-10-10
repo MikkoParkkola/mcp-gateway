@@ -145,27 +145,9 @@ pub struct VerifiedIdentity {
     pub issuer: String,
 }
 
-impl VerifiedIdentity {
-    /// Stable, collision-safe actor identifier derived from `issuer` + `subject`.
-    ///
-    /// A naive `format!("oidc:{issuer}:{subject}")` collides when an issuer
-    /// contains `:` — e.g. issuer `https://idp/a` + subject `b:c` vs issuer
-    /// `https://idp/a:b` + subject `c` both render `oidc:https://idp/a:b:c`
-    /// (MIK-6702 CP.ID.1). Length-prefixing each component makes the boundary
-    /// unambiguous, so distinct (issuer, subject) pairs always map to distinct
-    /// ids. Not a role-escalation path (roles come from the verified identity,
-    /// not the id), but it prevents audit / user-identity row collisions.
-    #[must_use]
-    pub fn stable_actor_id(&self) -> String {
-        format!(
-            "oidc:{}:{}:{}:{}",
-            self.issuer.len(),
-            self.issuer,
-            self.subject.len(),
-            self.subject
-        )
-    }
-}
+// `checked` and `stable_actor_id` live in `oidc_identity.rs` (size ceiling).
+#[path = "oidc_identity.rs"]
+mod identity;
 
 /// The domain of `email` when it has exactly one `@` with a non-empty local
 /// part and domain; `None` otherwise. Callers compare the result with
@@ -547,6 +529,13 @@ impl OidcVerifier {
         // An unverified address is dropped here, once, so every consumer of
         // `VerifiedIdentity.email` (allowed_domains, policy, role mapping,
         // grant label, propagated assertion) sees a verified address or "".
+        // An empty `sub` names no one (OIDC Core requires one). Checked before
+        // any later refusal, such as the domain allowlist, so a nameless token
+        // is always reported as nameless and never falls through elsewhere as
+        // a mere "not ours" (MIK-8287).
+        if !crate::identity_grants::names_someone(&claims.iss, &claims.sub) {
+            return Err(identity::missing_subject());
+        }
         let email_verified = matches!(&claims.email_verified, Some(serde_json::Value::Bool(true)))
             || matches!(&claims.email_verified, Some(serde_json::Value::String(v)) if v == "true");
         let email = match claims.email {
@@ -576,13 +565,17 @@ impl OidcVerifier {
             }
         }
 
-        Ok(VerifiedIdentity {
-            subject: claims.sub,
+        // An empty `sub` names nobody (OIDC Core requires one): refused as a
+        // missing required claim, so no identity that collapses every such
+        // token at the issuer is ever made (MIK-8287).
+        VerifiedIdentity::checked(
+            claims.iss,
+            claims.sub,
             email,
-            name: claims.name,
-            groups: claims.groups.unwrap_or_default(),
-            issuer: claims.iss,
-        })
+            claims.name,
+            claims.groups.unwrap_or_default(),
+        )
+        .ok_or_else(identity::missing_subject)
     }
 
     /// Find a decoding key by `kid`, refreshing the JWKS cache if not found.

@@ -159,7 +159,7 @@ src/gateway/router/identity.rs	grant_subject_from_verified_identity	1	critical	b
 src/gateway/router/identity.rs	strict_header	1	critical	d	strict_header	Refuses repeated, non-UTF-8 or oversize identity headers.
 src/gateway/router/identity.rs	trusted_proxy_identity	1	critical	a,b	trusted_proxy_identity	Identity headers only from trusted proxy peers; refuses removed headers.
 src/gateway/router/identity.rs	caller_key	1	standard	borderline	caller_key	Firewall tenant/budget key; empty means the firewall refuses.
-src/gateway/router/identity.rs	grant_subject_from_cert_identity	1	standard	borderline	grant_subject_from_cert_identity	mTLS subject derivation, with a display-name fallback.
+src/gateway/router/identity.rs	grant_subject_from_cert_identity	1	standard	borderline	grant_subject_from_cert_identity	mTLS subject derivation: the subject the certificate names, or none (no display-name fallback, MIK-8286).
 src/gateway/router/identity.rs	grant_subject_from_oauth_agent	1	standard	borderline	grant_subject_from_oauth_agent	Agent JWT sub used verbatim as the subject.
 src/gateway/router/identity.rs	subject_key	1	standard	borderline	subject_key	Session-ownership and CallerKey encoding; a collision would merge principals.
 src/gateway/router/identity.rs	control_identity	1	critical	d	control_identity	Picks the key per-principal rate and budget limits score on; a fresh session falls to one shared anonymous bucket

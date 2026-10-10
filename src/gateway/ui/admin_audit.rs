@@ -79,8 +79,7 @@ async fn admin_action_layer(
     let subject = request
         .extensions()
         .get::<VerifiedIdentity>()
-        .filter(|id| !id.issuer.is_empty() && !id.subject.is_empty())
-        .map(|id| GrantSubject::new(id.issuer.clone(), id.subject.clone(), None));
+        .and_then(|id| GrantSubject::checked(id.issuer.clone(), id.subject.clone(), None));
 
     let response = run(request).await;
 

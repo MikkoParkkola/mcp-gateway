@@ -359,6 +359,18 @@ pub(crate) async fn fixture_modern_off(answer: Answer) -> Fx {
     fx
 }
 
+/// [`fixture`] with a key server attached, so its temporary tokens are
+/// credentials the auth middleware resolves (MIK-8286 R5).
+pub(crate) async fn fixture_with_key_server(
+    answer: Answer,
+    key_server: Arc<crate::key_server::KeyServer>,
+) -> Fx {
+    KEY_SERVER.with(|k| *k.borrow_mut() = Some(key_server));
+    let fx = fixture_inner(answer, false, |meta| meta).await;
+    KEY_SERVER.with(|k| *k.borrow_mut() = None);
+    fx
+}
+
 /// [`fixture_firewalled`] with sequence-anomaly blocking armed: `read` was only
 /// ever followed by `other`, so a second `read` in one session scores as a
 /// never-seen transition and is blocked.
@@ -375,6 +387,8 @@ pub(crate) async fn fixture_firewalled_anomaly(answer: Answer) -> Fx {
 thread_local! {
     static HARDENED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MODERN_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static KEY_SERVER: std::cell::RefCell<Option<Arc<crate::key_server::KeyServer>>> =
+        const { std::cell::RefCell::new(None) };
     /// A transport that replaces the scripted backend (the egress matrix).
     static TRANSPORT: std::cell::RefCell<Option<Arc<dyn Transport>>> =
         const { std::cell::RefCell::new(None) };
@@ -423,17 +437,12 @@ fn fixture_auth() -> AuthConfig {
     auth
 }
 
-/// The rebuilt Meta-MCP keeps the state's admission store: sync calls and
-/// tasks share one, as `server/task_runtime.rs` wires it.
-async fn fixture_inner(
-    answer: Answer,
-    #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
-    build: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> Fx {
+/// The router state the per-thread knobs ask for.
+async fn fixture_state() -> (Arc<super::AppState>, tempfile::TempDir) {
     let auth = fixture_auth();
     let hardened = HARDENED.with(std::cell::Cell::get);
     let modern_off = MODERN_OFF.with(std::cell::Cell::get);
-    let (mut state, store) = if hardened || modern_off {
+    if hardened || modern_off {
         let mut config = crate::config::Config::default();
         if hardened {
             config.security.posture = crate::security::SecurityPosture::Hardened;
@@ -442,9 +451,21 @@ async fn fixture_inner(
             config.server.modern_protocol = false;
         }
         test_router_app_state_with_auth_and_config(&auth, config).await
+    } else if let Some(key_server) = KEY_SERVER.with(|k| k.borrow().clone()) {
+        super::tests::test_router_app_state_with_auth_and_key_server(&auth, Some(key_server)).await
     } else {
         test_router_app_state_with_auth(&auth).await
-    };
+    }
+}
+
+/// The rebuilt Meta-MCP keeps the state's admission store: sync calls and
+/// tasks share one, as `server/task_runtime.rs` wires it.
+async fn fixture_inner(
+    answer: Answer,
+    #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    let (mut state, store) = fixture_state().await;
     let (calls, seen) = (Arc::new(AtomicUsize::new(0)), Arc::default());
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     for (name, passthrough) in [("alpha", false), ("alpha-pt", true)] {

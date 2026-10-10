@@ -259,6 +259,17 @@ impl<S> Layer<S> for PeerCertIdentityLayer {
     }
 }
 
+/// The answer to every request on a connection whose client certificate
+/// names no subject (MIK-8286): such a certificate is a presented identity
+/// that names nobody, so it is refused as unauthenticated rather than served
+/// as anonymous or as the placeholder every such certificate shares. Checked
+/// before the inner service runs; `/health` included.
+const NAMELESS_CERTIFICATE: &str = "client certificate names no subject (no SAN URI and no CN)";
+
+fn names_nobody(identity: Option<&CertIdentity>) -> bool {
+    identity.is_some_and(|identity| identity.subject_id().is_none())
+}
+
 #[derive(Debug, Clone)]
 struct PeerCertIdentityService<S> {
     inner: S,
@@ -267,22 +278,36 @@ struct PeerCertIdentityService<S> {
 
 impl<S, B> Service<axum::http::Request<B>> for PeerCertIdentityService<S>
 where
-    S: Service<axum::http::Request<B>>,
+    S: Service<axum::http::Request<B>, Response = axum::response::Response>,
 {
     type Response = S::Response;
     type Error = S::Error;
-    type Future = S::Future;
+    type Future = futures::future::Either<
+        S::Future,
+        std::future::Ready<Result<axum::response::Response, S::Error>>,
+    >;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner.poll_ready(cx)
     }
 
     fn call(&mut self, mut request: axum::http::Request<B>) -> Self::Future {
+        if names_nobody(self.identity.as_ref()) {
+            telemetry_metrics::counter!(
+                "mcp_identity_refused_total",
+                "reason" => "nameless_certificate"
+            )
+            .increment(1);
+            warn!("Client certificate names no subject; refused");
+            return futures::future::Either::Right(std::future::ready(Ok(
+                crate::gateway::middleware::errors::unauthenticated_response(NAMELESS_CERTIFICATE),
+            )));
+        }
         if let Some(identity) = self.identity.clone() {
             request.extensions_mut().insert(identity);
         }
 
-        self.inner.call(request)
+        futures::future::Either::Left(self.inner.call(request))
     }
 }
 
