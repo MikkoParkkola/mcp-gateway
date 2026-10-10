@@ -266,6 +266,45 @@ The batch must carry the harness (`run_mutants.py`, `mutants.yml`) byte-identica
 branch, or the run aborts: after a harness change merges, re-copy both files into every open
 `throwaway/mutants-*` branch before pushing it again.
 
+### Moving code between files
+
+A pull request that only moves code (a file split, an extraction) proves it changed nothing with
+git's own move detection. It lists every line the three steps below select in the pull request
+description, and the reviewer judges each one. The steps assume rustfmt-formatted code.
+
+1. Lines git does not mark as moved, and where each moved block starts:
+   `git diff --color=always --color-moved=zebra --color-moved-ws=allow-indentation-change -M <base> <head> -- <paths> | less -R`
+   Moved lines show in the moved colours, and consecutive moved blocks alternate between two
+   colours. List every line in the ordinary added or removed colour, and the first line of every
+   moved block. Expected: `use`, `mod` and `#[path]` lines, a new file's header and module docs,
+   visibility a child module needs (`pub(super)`), and one block start per moved region. A block
+   that starts in the middle of a function needs a look: statements may have been reordered (an
+   edit or a re-indented line can also split a block).
+2. Every line added to a file that existed before the move, moved or not:
+   `git diff --no-color -M -U0 --diff-filter=MR <base> <head> -- <paths> | grep -E '^(--- |\+\+\+ |\+.*[^[:space:]])'`
+   A move adds only wiring to existing files. Anything else is moved code landing inside an
+   existing item (a `#[cfg]` module, an `impl`) or lines swapped between files, which step 1
+   shows as moved. `--diff-filter=MR` keeps modified files and files renamed with changes, so
+   `<paths>` must name both the old and the new path of a renamed file.
+3. Every changed line with a relative path or visibility:
+   `git diff --no-color -M -U0 <base> <head> -- <paths> | grep -E '^(--- |\+\+\+ |[+-](.*[^[:alnum:]_])?((super|self)[[:space:]]*::|pub[[:space:]]*\([[:space:]]*(super|in)([^[:alnum:]_]|$)))'`
+   Code moved to a different module depth with `super::x` unchanged now points elsewhere, and
+   step 1 shows it as moved.
+
+The `--- a/<file>` and `+++ b/<file>` lines in steps 2 and 3 only name the file the lines below
+them come from and go to (`/dev/null` for a deleted or a new file).
+
+Not caught, and why:
+- A bare name that resolves to a different item after the move, or a change in what a macro
+  expands to. Neither shows in the text of the moved lines; the compiler and the test suite
+  cover them.
+- A change to the leading whitespace inside a multi-line string literal that moved with an
+  indentation change. Step 1 ignores indentation so that re-indented code reads as moved; check
+  moved multi-line string literals by hand.
+- A file renamed without changes (shown as `R100`) shows no lines in steps 1 to 3. If the rename
+  changes its module depth, its `super::` and `self::` paths now point elsewhere; check them by
+  hand.
+
 ## Architecture Decisions
 
 Changes affecting public API, config schema, new dependencies, transport protocols, or security features should be discussed in a GitHub issue before implementation. Design docs live in `docs/design/`.
