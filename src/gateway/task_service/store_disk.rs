@@ -33,8 +33,12 @@ pub(super) fn open_blocking(
     let dir_id = dir_identity(dir);
     let lease = acquire_lease(&dir.join(LEASE))?.pinning(pin);
     let loaded = load(dir, limits)?;
+    #[cfg(test)]
+    after_load::run(dir);
     if dir_id.is_none() || dir_identity(dir) != dir_id {
-        tracing::warn!(path = %dir.display(), "task store directory changed while it was opened");
+        // Bound first so the macro head line holds no call (MIK-7725).
+        let shown_path = dir.display();
+        tracing::warn!(path = %shown_path, "task store directory changed while it was opened");
         return Err(StoreError::Storage);
     }
     Ok((lease, loaded, dir_id))
@@ -598,4 +602,48 @@ fn stage_temp(mut file: fs::File, bytes: &[u8], hook: Option<&CommitHook>) -> io
 
 pub(super) fn fire(hook: Option<&CommitHook>, stage: CommitStage) -> io::Result<()> {
     hook.map_or(Ok(()), |hook| hook(stage))
+}
+
+/// Test-only seam inside `open_blocking`: a callback run after the rows are
+/// loaded and before the directory identity is confirmed, so a test can change
+/// the directory at exactly that point. Keyed by store path, like the lock
+/// attempt counter in `fs_lock`, so parallel tests never see each other's.
+#[cfg(test)]
+pub(in crate::gateway::task_service) mod after_load {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+
+    type Seam = Arc<dyn Fn() + Send + Sync>;
+
+    static SEAMS: LazyLock<Mutex<HashMap<PathBuf, Seam>>> = LazyLock::new(Default::default);
+
+    /// Run `seam` once per open of `dir` until it is cleared with `None`.
+    pub(in crate::gateway::task_service) fn set(dir: &Path, seam: Option<Seam>) {
+        let mut seams = SEAMS.lock().unwrap_or_else(PoisonError::into_inner);
+        match seam {
+            Some(seam) => seams.insert(dir.to_path_buf(), seam),
+            None => seams.remove(dir),
+        };
+    }
+
+    /// `open_blocking` on this thread, so a test can capture the log it writes
+    /// (the async open runs it on a blocking-pool thread); the lease is dropped.
+    pub(in crate::gateway::task_service) fn open(
+        dir: &Path,
+        limits: super::StoreLimits,
+    ) -> Result<(), super::StoreError> {
+        super::open_blocking(dir, limits).map(drop)
+    }
+
+    pub(super) fn run(dir: &Path) {
+        let seam = SEAMS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(dir)
+            .cloned();
+        if let Some(seam) = seam {
+            seam();
+        }
+    }
 }

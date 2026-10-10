@@ -30,6 +30,8 @@ mod gateway_writes;
 mod input_round;
 mod qualification;
 #[cfg(unix)]
+mod repaired_rows;
+#[cfg(unix)]
 mod reread;
 mod sealed;
 mod skipped;
