@@ -323,6 +323,8 @@ fn context_after(run: &Indexed<'_>, j: usize) -> Option<String> {
             .flat_map(|&k| run.pieces[k].chars()),
         3,
     )?;
+    // `!run.whole` is a deliberate fail-safe: no input found where a short
+    // context here changes a cut before a starter (#3726 c5).
     if chars.len() < 3 && (rest.len() > CONTEXT_PIECES || !run.whole) {
         return None;
     }
@@ -529,6 +531,8 @@ impl CollusionDetector {
         }
         let (pre, suf) = (common_prefix(&joined, &nl), common_suffix(&joined, &nr));
         let (lo, hi) = (pre.min(n - suf.min(n)), pre.max(n - suf.min(n)));
+        // Deliberate fail-safe: the safe cut already makes a window at an
+        // artificial edge real; the one-char margin drops it anyway (#3726 h1).
         let first = usize::from(left.artificial);
         let Some(last) = (n - K).checked_sub(usize::from(right.artificial)) else {
             return Some(Vec::new());

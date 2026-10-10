@@ -87,6 +87,21 @@ fn the_walk_skips_empty_pieces_inside_the_cap() {
     );
 }
 
+/// The quota can run out partway through a round-robin round: three runs of
+/// 2,000 pieces reach 4,095 after 1,365 rounds, so the next round takes one
+/// piece and stops. Mutant w2 (#3726) took the whole round, 4,098.
+#[test]
+fn the_piece_quota_stops_partway_through_a_round() {
+    let det = detector();
+    let run = vec![String::new(); 2_000];
+    let (_, cut, work) = pass(&det, &[run.clone(), run.clone(), run]);
+    assert!(cut, "the piece cap was not reported");
+    assert_eq!(
+        work.index_visits, MAX_SEAM_PIECES,
+        "the index overshot the cap"
+    );
+}
+
 /// `n` distinct pieces of `len` chars each (a letter, then digits), no
 /// whitespace, so normalisation leaves them as they are.
 fn distinct(n: usize, len: usize) -> Vec<String> {
@@ -286,6 +301,30 @@ fn a_long_label_run_does_not_take_the_text_runs_quota() {
 fn a_collapsing_side_skips_its_span_and_reports_the_cut() {
     let det = detector();
     let padded = format!("{}{}", "a".repeat(10), " ".repeat(5_000));
+    let run = vec![
+        padded,
+        "~".to_owned(),
+        "b".repeat(47),
+        "~".to_owned(),
+        "c".repeat(47),
+    ];
+    let (fps, cut, _) = pass(&det, &[run]);
+    assert!(cut, "the skipped span was not reported");
+    let other = det.fingerprints(&format!("{}{}", "b".repeat(47), "c".repeat(47)));
+    assert!(
+        other.iter().any(|f| fps.contains(f)),
+        "the other span's seams are missing"
+    );
+}
+
+/// A side the byte cap cut at a safe point but left under K normalised
+/// chars (five x's after spaces no cut may start with) is skipped and
+/// reported too, while another span still yields seams. Mutant h3 (#3726)
+/// kept such a side and reported nothing.
+#[test]
+fn a_short_side_after_a_safe_cut_skips_its_span_and_reports_it() {
+    let det = detector();
+    let padded = format!("{}{}{}", "a".repeat(10), " ".repeat(1_019), "x".repeat(5));
     let run = vec![
         padded,
         "~".to_owned(),
