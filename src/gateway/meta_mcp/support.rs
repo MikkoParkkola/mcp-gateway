@@ -571,6 +571,18 @@ impl ToolInvoker for MetaMcpInvoker<'_, '_> {
         }
         answered
     }
+
+    fn sealed_state_in(
+        &self,
+        value: &Value,
+        budget: &mut crate::protocol::continuation::ProbeBudget,
+    ) -> std::result::Result<bool, crate::protocol::continuation::ProbeRefusal> {
+        crate::protocol::continuation::sealed_state_in(
+            self.meta.continuation.keyring(),
+            value,
+            budget,
+        )
+    }
 }
 
 /// Build the `invoke_tool` argument envelope for an internal (chain / playbook)
