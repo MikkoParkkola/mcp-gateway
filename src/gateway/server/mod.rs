@@ -50,6 +50,8 @@ mod stdio_nonce;
 mod stdio_notify;
 mod stdio_refusal;
 mod stdio_route_stage;
+#[cfg(test)]
+pub(crate) mod stdio_seams;
 mod stdio_shutdown;
 mod stdio_single;
 mod stdio_tasks;

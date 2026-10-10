@@ -77,11 +77,6 @@ pub struct JsonRpcResponse {
     /// wire, so no caller can set it.
     #[serde(skip)]
     pub(crate) egress_scanned: bool,
-    /// Server-owned: the in-flight slot of a question this gateway sealed
-    /// that the delivery did not let out (MIK-8131), for the async caller to
-    /// give back. Never on the wire.
-    #[serde(skip)]
-    pub(crate) unsent_hold: Option<String>,
     /// Server-owned chain eligibility; never on the wire, `NotEligible` by default.
     #[serde(skip)]
     pub(crate) chain_source: super::ChainSource,
@@ -106,7 +101,6 @@ impl JsonRpcResponse {
             confirmation_refusal: false,
             delivery_refusal: false,
             egress_scanned: false,
-            unsent_hold: None,
             chain_source: super::ChainSource::NotEligible,
             chain_upstream: None,
         }

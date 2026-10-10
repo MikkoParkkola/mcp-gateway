@@ -21,6 +21,11 @@ fn a_retry_that_finds_a_completed_task_delivers_its_result_private() {
         gateway_writes: crate::gateway::gateway_writes::WriteRecord::default(),
     };
 
+    // No sealed question in this task, so no holds to carry.
+    let stored = crate::gateway::meta_mcp::sealed_hold::Held::new(
+        stored,
+        crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+    );
     let response = BeginOutcome::Existing(stored).into_response(RequestId::Number(9));
 
     let wire = serde_json::to_value(&response).expect("a response serializes");

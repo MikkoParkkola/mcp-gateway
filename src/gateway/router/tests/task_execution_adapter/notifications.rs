@@ -385,3 +385,55 @@ fn control_the_task_notification_method_is_registered_for_2026_07_28() {
         crate::protocol::meta::ADDED_IN_2026_07_28
     );
 }
+
+/// MIK-8176 C2 (D4b guard): a completed task's sealed question delivered by a
+/// task notification frame is handed off at the frame's yield, so the slot
+/// outlives the task when it later expires unread (never read by
+/// tasks/get). Green on base by design (nothing released a task's slot); its
+/// non-vacuity proof is the mutant "the frame never hands its holds off".
+#[tokio::test]
+async fn c2_a_task_frame_delivery_keeps_the_slot_after_the_task_expires() {
+    use super::input_round::{STATE_1, ask, done};
+    use super::input_round_races::state_with_config;
+    use super::slot_release_tasks::{
+        asking_playbook, expire_at, playbook_task_body, sealed_in, settled_unread, settles_at,
+    };
+    let (mock, gate) =
+        MockBackend::holding(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+    let mut gate = ReleasedOnDrop(gate);
+    let mut config = crate::config::Config::default();
+    config.tasks.default_ttl_ms = 60_000;
+    let (state, _dir) = state_with_config(&mock, config).await;
+    state.meta_mcp.set_playbook_engine(asking_playbook());
+    let created = post(&state, "key-a", playbook_task_body("c2-frame")).await;
+    let id = task_id(&created);
+    gate.0.wait_for_dispatch().await;
+    let mut stream = open_listen(&state, "key-a", 7301, json!({ "taskIds": [&id] })).await;
+    gate.0.release_all();
+    let mut carried = None;
+    for _ in 0..4 {
+        let message = expect_message(&mut stream, "the task's notification frames").await;
+        if !sealed_in(&state, &message).is_empty() {
+            carried = Some(message);
+            break;
+        }
+    }
+    std::assert!(
+        carried.is_some(),
+        "a notification frame delivered the completed task's sealed question"
+    );
+    // The listener goes away: a stream suspended after its yield would still
+    // hold the frame's copy and keep the slot whatever the hand-off did.
+    drop(stream);
+    let bound = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !settled_unread(&state, &id) && tokio::time::Instant::now() < bound {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let past_ttl = crate::protocol::continuation::now_unix_secs() + 61;
+    expire_at(&state, &id, past_ttl).await;
+    std::assert_eq!(
+        settles_at(&state, 1).await,
+        1,
+        "the frame-delivered question's slot outlives its expired task"
+    );
+}

@@ -371,6 +371,86 @@ fn logs(x: u8) -> Result<bool, u8> {
         self.assertEqual(result[8], [])
 
 
+class SelectHeadLines(unittest.TestCase):
+    """MIK-8327: a line that is only an optional `let <pattern> =` and a
+    `[::]tokio::select! {` head holds no call, so its count is graded like any
+    line, while nothing in the crate can rebind the name. Anything more on the
+    line, a bare `select!`, or a crate that could rebind it keeps the MIK-7725
+    rule: unverifiable."""
+
+    ARMS = "        () = ready() => 1,\n    };\n"
+
+    def grade(self, head, count, extra=None, cargo=None):
+        source = "fn waits(x: u8) -> bool {\n" + head + self.ARMS + "    x > 0\n}\n"
+        last = source.count("\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = pathlib.Path(tmp)
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_text(source)
+            if extra is not None:
+                (root / "src/other.rs").write_text(extra)
+            if cargo is not None:
+                (root / "Cargo.toml").write_text(cargo)
+            counts = {1: 1, 2: count, 3: 1, 4: 1, last - 1: 1, last: 1}
+            records = "".join(f"DA:{n},{c}\n" for n, c in sorted(counts.items()))
+            lcov = root / "cov.lcov"
+            lcov.write_text(f"SF:/repo/src/lib.rs\n{records}end_of_record\n")
+            inventory = root / "inv.tsv"
+            inventory.write_text(HEADER + "src/lib.rs\twaits\t1\tcritical\td\twaits\tr\n")
+            return cfc.grade(root, inventory, [lcov])[0]
+
+    def assert_hit(self, head, **crate):
+        result = self.grade(head, 3, **crate)
+        self.assertEqual(result[4], [], head)
+        self.assertEqual(result[9], [], head)
+
+    def assert_unverifiable(self, head, **crate):
+        result = self.grade(head, 3, **crate)
+        self.assertEqual(result[4], [2], (head, crate))
+        self.assertEqual(result[9], ["src/lib.rs:2 (head count 3)"], (head, crate))
+
+    def test_a_reached_bare_tokio_select_head_is_graded_by_its_count(self):
+        self.assert_hit("    let unanswered = tokio::select! {\n")
+        self.assert_hit("    tokio::select! {\n")
+        self.assert_hit("    let (a, mut b) = ::tokio::select! {\n")
+        self.assert_hit("    let _ = tokio::select! {\n", cargo='[dependencies]\ntokio = { version = "1" }\n')
+
+    def test_a_call_on_the_select_head_is_still_unverifiable(self):
+        self.assert_unverifiable("    let x = tokio::select! { foo() => 1,\n")
+        self.assert_unverifiable("    tokio::select! { biased; () = ready() => 1,\n")
+        self.assert_unverifiable("    let x = pick(tokio::select! {\n")
+
+    def test_anything_else_on_the_select_head_keeps_it_unverifiable(self):
+        self.assert_unverifiable("    tokio::select! { biased;\n")
+        self.assert_unverifiable("    let x: u8 = tokio::select! {\n")
+        self.assert_unverifiable("    tokio::select! { // why\n")
+        self.assert_unverifiable("    other::select! {\n")
+        self.assert_unverifiable("    let x = select! {\n")
+
+    def test_a_crate_that_could_rebind_the_name_is_not_exempt(self):
+        head = "    let x = tokio::select! {\n"
+        for extra in (
+            "mod tokio { pub use crate::logs as select; }\n",
+            "use crate::logs as tokio;\n",
+            "use crate::logs as select;\n",
+            "macro_rules! select { ($($t:tt)*) => {} }\n",
+        ):
+            with self.subTest(extra=extra):
+                self.assert_unverifiable(head, extra=extra)
+        for cargo in (
+            '[dependencies]\ntokio = { package = "other", version = "1" }\n',
+            '[dependencies.tokio]\npackage = "other"\n',
+        ):
+            with self.subTest(cargo=cargo):
+                self.assert_unverifiable(head, cargo=cargo)
+
+    def test_an_unreached_select_head_is_still_missed(self):
+        result = self.grade("    let unanswered = tokio::select! {\n", 0)
+        self.assertEqual(result[0], "BELOW")
+        self.assertIn(2, result[4])
+        self.assertEqual(result[9], [], "a count-0 head is missed, not unverifiable")
+
+
 class HeadLineCalls(unittest.TestCase):
     """A call on a tracing macro's head line rides that line's hit count, so the
     count cannot show the call ran: the line is graded as missed and listed as
