@@ -70,7 +70,7 @@ async fn create_row(service: &Arc<TaskService>) -> (String, u64) {
     let workers = Arc::new(tokio::sync::Semaphore::new(1));
     let task = Task::create_at(
         "echo",
-        chrono::Utc::now(),
+        crate::clock::utc_now().expect("the test host's clock reads after 1970"),
         TaskOptions {
             ttl_ms: Some(86_400_000),
             poll_interval_ms: Some(1_000),
