@@ -644,9 +644,10 @@ fn reconciled_state(scan: CatalogueScan, webhooks_on: bool) -> Vec<(String, bool
 fn a_partial_scan_leaves_what_a_complete_one_does() {
     for webhooks_on in [false, true] {
         let complete = reconciled_state(CatalogueScan::Complete, webhooks_on);
+        let names: Vec<_> = complete.iter().map(|(name, ..)| name.as_str()).collect();
         assert_eq!(
-            complete.len(),
-            2,
+            names,
+            ["task.settled", "webhook.gone.route.received"],
             "premise: nothing deleted ({webhooks_on})"
         );
         assert_eq!(
