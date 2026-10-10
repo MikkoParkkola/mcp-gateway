@@ -129,8 +129,10 @@ impl Backend {
     pub(crate) fn install_http_for_test(&self, transport: &Arc<crate::transport::HttpTransport>) {
         let entry = self.shared_entry();
         let erased: Arc<dyn crate::transport::Transport> = Arc::clone(transport) as _;
-        *entry.transport.write() = Some(erased);
+        // One pair under the slot's write guard, as `publish` writes it.
+        let mut slot = entry.transport.write();
         *entry.listen.write() = Some(handle_of(transport));
+        *slot = Some(erased);
     }
 
     /// Start the shared slot as a client request would, so an events
