@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Prove items moved out of one Rust file into others unchanged.
 
-Usage: check_moved_items.py [--source <path>] [--impl <Type>]... [--also <path>]... <base> <head> <file>...
+Usage: check_moved_items.py [--source <path>] [--impl <Type>]... <base> <head> <file>...
 
 The items move out of <path> (default src/gateway/server/mod.rs) into each
 <file>, named relative to <path>'s directory (for example background.rs, or
@@ -15,17 +15,8 @@ method may move between impl blocks. `use` and `mod` lines are not compared
 (the compiler checks them). The only differences allowed are the ones a move
 makes: a `pub(super)` visibility added to an item or field, and, in a named
 file, one `super::` less on each `super::` chain (a path one module higher).
-An inline `mod name { .. }` is opened and its items compared one module down,
-the way the same items read in a file module.
-
-A source may be gone at <head> (it became a directory module): it then has no
-items there, and `<stem>/mod.rs`, named as a <file>, is read as the same
-module. `--also <path>` (repository-relative) names a file that held some of
-the items at <base> under another path, such as a child module renamed into
-the new directory; it is read like a named <file>.
-
 Comments and whitespace are ignored; literals are compared whole. Exit 0 when
-equal, 1 on a difference, 2 on a usage error.
+equal, 1 on a difference.
 """
 
 from __future__ import annotations
@@ -67,45 +58,30 @@ def split(toks: list[str]) -> list[list[str]]:
     return out
 
 
-def lift(toks: list[str]) -> list[str]:
-    """Read code one module down as if it were one module up: each module
-    below reaches an ancestor through one more `super ::`, so a maximal chain
-    of k >= 2 reads back as k - 1. Token-wise, so a literal stays whole."""
-    out: list[str] = []
-    i = 0
-    while i < len(toks):
-        k = 0
-        while toks[i + 2 * k : i + 2 * k + 2] == ["super", "::"]:
-            k += 1
-        if k >= 2:
-            out += ["super", "::"] * (k - 1)
-            i += 2 * k
-        else:
-            out.append(toks[i])
-            i += 1
-    return out
-
-
-INLINE_MOD = re.compile(r"^(pub (\( [\w ]+ \) )?)?mod \w+ \{")
-
-
 def items(text: str, moved: bool, impls: tuple[str, ...] = ("Gateway",)) -> list[str]:
     toks = tp.tokens(text)
     if moved:
-        toks = lift(toks)
-    return found_in(tp.moved.reshape(toks), impls)
-
-
-def found_in(toks: list[str], impls: tuple[str, ...]) -> list[str]:
+        # Token-wise, so a string literal with a space stays one token. A file
+        # moved one module down reaches each ancestor through one more
+        # `super ::`, so a maximal chain of k >= 2 reads back as k - 1.
+        out: list[str] = []
+        i = 0
+        while i < len(toks):
+            k = 0
+            while toks[i + 2 * k : i + 2 * k + 2] == ["super", "::"]:
+                k += 1
+            if k >= 2:
+                out += ["super", "::"] * (k - 1)
+                i += 2 * k
+            else:
+                out.append(toks[i])
+                i += 1
+        toks = out
+    toks = tp.moved.reshape(toks)
     found = []
     for it in split(toks):
         s = " ".join(it)
         body = re.sub(r"^(# \[ [^\]]* \] )+", "", s)
-        if INLINE_MOD.match(body):
-            # An inline module's items, one module down: compared with the
-            # same items in a file module, which is read lifted the same way.
-            found += found_in(lift(it[it.index("{") + 1 : -1]), impls)
-            continue
         if body.startswith(("use ", "pub ( crate ) use ", "pub use ", "mod ", "pub mod ", "pub ( crate ) mod ")):
             continue
         owner = next((i for i in impls if body.startswith(f"impl {i} {{")), None)
@@ -130,45 +106,32 @@ def exists(ref: str, path: str) -> bool:
 
 def main() -> int:
     args = sys.argv[1:]
-    source, impls, also = D + "mod.rs", [], []
-    while args[:1] in (["--source"], ["--impl"], ["--also"]) and len(args) > 1:
-        flag, value, args = args[0], args[1], args[2:]
-        if flag == "--source":
-            source = value
-        elif flag == "--impl":
-            impls.append(value)
+    source, impls = D + "mod.rs", []
+    while args[:1] in (["--source"], ["--impl"]) and len(args) > 1:
+        if args[0] == "--source":
+            source = args[1]
         else:
-            also.append(value)
+            impls.append(args[1])
+        args = args[2:]
     if len(args) < 3:
         print(__doc__)
         return 2
     impls_t = tuple(impls) or ("Gateway",)
     base, head, files = args[0], args[1], args[2:]
     here = source.rsplit("/", 1)[0] + "/"
-    # `x.rs` becoming `x/mod.rs` keeps its module: read it unlifted.
-    own_dir = source[: -len(".rs")] + "/mod.rs" if source.endswith(".rs") else None
-
-    def read(ref: str, path: str, moved: bool) -> list[str]:
-        return items(show(ref, path), moved, impls_t) if exists(ref, path) else []
-
-    if not exists(base, source):
-        print(f"{source} does not exist at {base}")
-        return 2
-    a = Counter(read(base, source, False))
-    b = Counter(read(head, source, False))
+    a = Counter(items(show(base, source), False, impls_t))
+    b = Counter(items(show(head, source), False, impls_t))
     for f in files:
-        moved = here + f != own_dir
-        a.update(read(base, here + f, moved))
-        b.update(read(head, here + f, moved))
-    for f in also:
-        a.update(read(base, f, True))
+        if exists(base, here + f):
+            a.update(items(show(base, here + f), True, impls_t))
+        b.update(items(show(head, here + f), True, impls_t))
     problems = [f"only at base: {x[:150]}" for x in sorted((a - b).elements())]
     problems += [f"only at head: {x[:150]}" for x in sorted((b - a).elements())]
     if problems:
         print("\n".join(problems))
         return 1
-    moved_n = sum((b - Counter(read(head, source, False))).values())
-    print(f"items equal: {sum(a.values())} items, {moved_n} of them in {', '.join(files)}")
+    moved = sum((b - Counter(items(show(head, source), False, impls_t))).values())
+    print(f"items equal: {sum(a.values())} items, {moved} of them in {', '.join(files)}")
     return 0
 
 if __name__ == "__main__":
