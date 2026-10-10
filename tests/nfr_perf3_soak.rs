@@ -162,7 +162,18 @@ async fn nfr_perf3_abandoned_state_stays_bounded_under_sustained_load() {
                     // Abandoned on purpose: no `complete`, ever. The deadline is
                     // the only thing that may retire this hold.
                     if in_flight
-                        .hold(&backend, now + CONTINUATION_LIFETIME_SECS, now)
+                        .hold(
+                            &backend,
+                            // Each hold models its own abandoned client, so
+                            // the pool fills, not one client's share (MIK-8293).
+                            &mcp_gateway::protocol::continuation::QuotaKey::new(
+                                mcp_gateway::protocol::continuation::QuotaSource::KeyName(
+                                    &format!("soak-{w}-{seq}"),
+                                ),
+                            ),
+                            now + CONTINUATION_LIFETIME_SECS,
+                            now,
+                        )
                         .await
                         .is_some()
                     {

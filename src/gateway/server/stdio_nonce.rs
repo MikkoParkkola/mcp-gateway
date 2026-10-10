@@ -74,6 +74,7 @@ mod tests {
                 "fixture".to_owned(),
                 None,
                 fingerprint(&first),
+                &crate::protocol::continuation::QuotaKey::for_test("stdio"),
                 digest.clone(),
                 crate::protocol::continuation::now_unix_secs(),
             )

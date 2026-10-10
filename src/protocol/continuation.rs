@@ -112,10 +112,12 @@ impl std::error::Error for ContinuationError {}
 
 mod keyring;
 mod ledger;
+mod quota;
 mod payload;
 
 pub use keyring::Keyring;
 pub use ledger::{ConsumedLedger, ContinuationState, InFlight, Routing};
+pub use quota::{PRINCIPAL_SLOTS, QuotaKey, QuotaSource};
 pub(crate) use payload::clock_now;
 #[cfg(test)]
 pub(crate) use payload::now_unix_secs;

@@ -120,6 +120,9 @@ pub enum Routing {
     Gone,
 }
 
+/// The in-flight table: key -> (replica holding it, deadline, quota key).
+type Held = std::collections::HashMap<String, (String, u64, super::QuotaKey)>;
+
 /// Exchanges this gateway is holding open on behalf of a legacy backend.
 ///
 /// This is the one place the gateway is permitted to hold state, and the reason
@@ -141,8 +144,8 @@ pub enum Routing {
 pub struct InFlight {
     replica: String,
     capacity: usize,
-    /// key -> (replica holding it, deadline).
-    held: tokio::sync::Mutex<std::collections::HashMap<String, (String, u64)>>,
+    /// key -> (replica holding it, deadline, the caller it is charged to).
+    held: tokio::sync::Mutex<Held>,
     /// A lower bound on the earliest deadline held (`u64::MAX` when none), so
     /// a reader skips the walk when nothing can have expired (`MIK-8060`).
     /// Written only under `held`'s lock: `hold` lowers it, a walk sets it to
@@ -161,13 +164,10 @@ pub struct InFlight {
 ///
 /// A free function rather than a method because [`InFlight::guard`] calls it
 /// while already holding the lock.
-pub(super) fn reclaim_abandoned(
-    held: &mut std::collections::HashMap<String, (String, u64)>,
-    now: u64,
-) -> u64 {
+pub(super) fn reclaim_abandoned(held: &mut Held, now: u64) -> u64 {
     let before = held.len();
     let mut earliest = u64::MAX;
-    held.retain(|_, (_, deadline)| {
+    held.retain(|_, (_, deadline, _)| {
         let live = now <= *deadline;
         if live {
             earliest = earliest.min(*deadline);
@@ -210,7 +210,18 @@ impl InFlight {
     /// can see. Growing instead would make the table a memory-exhaustion vector
     /// reachable by any client that starts elicitations and walks away, which
     /// the specification explicitly permits it to do.
-    pub async fn hold(&self, backend_id: &str, expires_at: u64, now: u64) -> Option<String> {
+    ///
+    /// Also `None` when `quota` already holds its share of the table
+    /// ([`super::PRINCIPAL_SLOTS`], MIK-8293), and refused the same way: one
+    /// caller filling the pool would otherwise refuse every other caller's
+    /// questions until its holds expired. Nothing is evicted.
+    pub async fn hold(
+        &self,
+        backend_id: &str,
+        quota: &super::QuotaKey,
+        expires_at: u64,
+        now: u64,
+    ) -> Option<String> {
         // `guard` has already reclaimed against `now`, so the count this
         // refusal reads is of exchanges that are still live. Reclaiming in the
         // capacity branch instead would make the bound the only thing that
@@ -220,10 +231,28 @@ impl InFlight {
         if held.len() >= self.capacity {
             return None;
         }
+        // Counted, never stored: every path that frees a slot (complete,
+        // try_complete, the expiry reclaim) frees the caller's share with it,
+        // so there is no count to fall out of step with the table.
+        // ponytail: a scan of at most `capacity` entries, under a lock the mint
+        // already holds; keep a per-key count map if mints ever become hot.
+        let share = super::PRINCIPAL_SLOTS.min(self.capacity);
+        if held
+            .values()
+            .filter(|(_, _, held_by)| held_by == quota)
+            .count()
+            >= share
+        {
+            tracing::warn!("a caller holds its share of the in-flight table; refusing a new slot");
+            return None;
+        }
         // Named by the gateway, never by the client: two exchanges against one
         // backend must not collide, and no caller may name another's.
         let key = format!("{backend_id}:{}", uuid::Uuid::new_v4());
-        held.insert(key.clone(), (self.replica.clone(), expires_at));
+        held.insert(
+            key.clone(),
+            (self.replica.clone(), expires_at, quota.clone()),
+        );
         self.earliest
             .fetch_min(expires_at, std::sync::atomic::Ordering::Relaxed);
         Some(key)
@@ -247,10 +276,7 @@ impl InFlight {
     /// path wants, and re-reading the clock per call would make one request
     /// observe two different presents. Said here so that a future call site
     /// cannot inherit the absolute reading.
-    async fn guard(
-        &self,
-        now: u64,
-    ) -> tokio::sync::MutexGuard<'_, std::collections::HashMap<String, (String, u64)>> {
+    async fn guard(&self, now: u64) -> tokio::sync::MutexGuard<'_, Held> {
         let mut held = self.held.lock().await;
         // Nothing held expires before the bound, so nothing can be reclaimed:
         // a full table would otherwise cost a walk of every hold per call.
@@ -470,20 +496,23 @@ impl ContinuationState {
     /// capacity refusal before the mint, so a gateway at its limit declines the
     /// question rather than answering it with a handle it cannot honour.
     ///
-    /// `None` when the table is full. The caller turns that into the same
-    /// refusal it gives an unbindable caller: both are properties of this
-    /// gateway's state that a client can do nothing about.
+    /// `None` when the table is full, or when `quota` (the caller, never the
+    /// sealed `principal_fingerprint`, which is finer) holds its share of it
+    /// (MIK-8293). The caller turns that into the same refusal it gives an
+    /// unbindable caller: both are properties of this gateway's state that a
+    /// client can do nothing about.
     pub async fn begin_exchange(
         &self,
         backend_id: String,
         backend_request_state: Option<String>,
         principal_fingerprint: String,
+        quota: &super::QuotaKey,
         original_request_digest: String,
         now: u64,
     ) -> Option<Payload> {
         let hold_key = self
             .in_flight
-            .hold(&backend_id, expiry_for(now), now)
+            .hold(&backend_id, quota, expiry_for(now), now)
             .await?;
         Some(Payload::mint(
             backend_id,
@@ -508,12 +537,13 @@ impl ContinuationState {
         backend_id: String,
         backend_request_state: Option<String>,
         principal_fingerprint: String,
+        quota: &super::QuotaKey,
         original_request_digest: String,
         now: u64,
     ) -> Option<Payload> {
         let hold_key = self
             .in_flight
-            .hold(&backend_id, expiry_for(now), now)
+            .hold(&backend_id, quota, expiry_for(now), now)
             .await?;
         Some(Payload::mint_confirmation(
             backend_id,
@@ -564,3 +594,5 @@ impl Default for ContinuationState {
 
 #[cfg(test)]
 mod in_flight_lifetime;
+#[cfg(test)]
+mod quota_tests;

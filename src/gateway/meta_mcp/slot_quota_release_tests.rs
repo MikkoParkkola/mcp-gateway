@@ -18,6 +18,7 @@ async fn take(continuation: &Arc<ContinuationState>, fingerprint: &str) -> bool 
             "alpha".into(),
             None,
             fingerprint.to_owned(),
+            &crate::protocol::continuation::QuotaKey::for_test(fingerprint),
             "digest".into(),
             now,
         )
@@ -29,14 +30,14 @@ async fn take(continuation: &Arc<ContinuationState>, fingerprint: &str) -> bool 
     true
 }
 
-/// Occupancy, polled briefly: a release on a contended table completes on the
-/// runtime rather than in place (`sealed_hold::release`).
+/// Occupancy once a release settles: a release on a contended table completes
+/// on the runtime rather than in place (`sealed_hold::release`), so this waits
+/// up to the suite's hang bound (`test_wait::HANG_BOUND`, MIK-8222), never a
+/// short window, and returns as soon as the count reaches `want`.
 async fn settled_len(continuation: &ContinuationState, want: usize) -> usize {
+    let bound = tokio::time::Instant::now() + crate::test_wait::HANG_BOUND;
     let mut len = continuation.in_flight().len(now_unix_secs()).await;
-    for _ in 0..50 {
-        if len == want {
-            break;
-        }
+    while len != want && tokio::time::Instant::now() < bound {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         len = continuation.in_flight().len(now_unix_secs()).await;
     }
