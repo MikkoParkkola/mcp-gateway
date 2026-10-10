@@ -382,6 +382,7 @@ pub(super) async fn tools_call(
             retry: &retry,
             verified_identity: verified_identity.as_ref(),
             principal: crate::protocol::mrtr::source_fingerprint(caller.principal_source(None)),
+            quota: caller.quota_key(),
             // The owner `task_intent_for_call` admits under below.
             owner,
             input_capabilities: declared_capabilities,

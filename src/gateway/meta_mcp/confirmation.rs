@@ -297,6 +297,12 @@ pub(super) async fn destructive_confirmation_gate(
                 warn!(tool = %tool_name, "Clock reads before 1970; no confirmation minted");
                 return GateOutcome::refuse(refused(&action_desc));
             };
+            // The caller the slot is charged to (MIK-8293): the caller, not the
+            // sealed `principal`, so a confirmation and the caller's other
+            // rounds share one cap.
+            let Some(quota) = caller.quota_key() else {
+                return GateOutcome::refuse(refused(&action_desc));
+            };
             let Some(payload) = continuation
                 .begin_confirmation_exchange(
                     tool_name.to_owned(),
@@ -305,6 +311,7 @@ pub(super) async fn destructive_confirmation_gate(
                     // empty string is a state some backend never issued.
                     None,
                     principal,
+                    &quota,
                     digest,
                     now,
                 )
@@ -315,6 +322,12 @@ pub(super) async fn destructive_confirmation_gate(
             };
             let Ok(envelope) = continuation.keyring().mint(&payload) else {
                 warn!(tool = %tool_name, "Confirmation envelope mint refused");
+                // No envelope will ever name this slot, so it is given back now
+                // rather than held until it expires (MIK-8311).
+                continuation
+                    .in_flight()
+                    .complete(&payload.hold_key, now)
+                    .await;
                 return GateOutcome::refuse(refused(&action_desc));
             };
             super::sealed_hold::register(continuation, &payload.hold_key, &envelope);

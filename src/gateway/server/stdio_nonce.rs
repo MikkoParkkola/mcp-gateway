@@ -37,6 +37,13 @@ impl StdioNonce {
         NONCE.get_or_init(Self::generate)
     }
 
+    /// Test-only: a fresh nonce for the life of the test process, standing
+    /// in for one stdio process (MIK-8293 S3e).
+    #[cfg(test)]
+    pub(crate) fn leaked_for_test() -> &'static Self {
+        Box::leak(Box::new(Self::generate()))
+    }
+
     /// The bytes the fingerprint is derived from.
     pub(crate) fn bytes(&self) -> &[u8; 32] {
         &self.0
@@ -67,6 +74,7 @@ mod tests {
                 "fixture".to_owned(),
                 None,
                 fingerprint(&first),
+                &crate::protocol::continuation::QuotaKey::for_test("stdio"),
                 digest.clone(),
                 crate::protocol::continuation::now_unix_secs(),
             )
