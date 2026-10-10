@@ -448,6 +448,20 @@ def test_surf5_a_root_inline_module_is_refused() -> None:
     assert any("inline" in p for p in found), found
 
 
+def test_surf5_a_pub_extern_block_is_refused() -> None:
+    found = _lib_api('pub extern "C" {\n    pub fn planted_ext();\n}\n')
+    assert any("extern" in p for p in found), found
+
+
+def test_surf5_hidden_inside_another_attribute_is_not_hidden() -> None:
+    found = _lib_api('#[deprecated(note = "#[doc(hidden)]")]\npub fn planted_f() {}\n')
+    assert any("mcp_gateway::planted_f" in p for p in found), found
+
+
+def test_surf5_a_root_include_is_refused() -> None:
+    found = _lib_api('include!("planted_exports.rs");\n')
+    assert any("include!" in p for p in found), found
+
 def test_surf5_a_keep_listed_item_passes() -> None:
     assert _lib_api("pub fn planted_kept() {}\n", frozenset({"mcp_gateway::planted_kept"})) == []
 
