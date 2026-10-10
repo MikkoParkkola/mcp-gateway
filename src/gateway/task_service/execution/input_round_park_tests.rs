@@ -440,7 +440,10 @@ fn a_late_round_whose_first_close_write_fails_is_closed_by_the_retry() {
         closed = Some(status(&fx));
     });
 
-    assert!(failed_once.load(Ordering::SeqCst), "control: the first write failed");
+    assert!(
+        failed_once.load(Ordering::SeqCst),
+        "control: the first write failed"
+    );
     assert_eq!(closed, Some(TaskStatus::Cancelled));
     assert!(at_level(&records, "WARN", "a late input round was not closed").is_empty());
 }
