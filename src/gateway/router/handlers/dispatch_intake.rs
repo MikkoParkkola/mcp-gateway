@@ -718,3 +718,7 @@ pub(super) async fn intake(
         },
     ))
 }
+
+#[cfg(test)]
+#[path = "dispatch_intake_cancel_key_tests.rs"]
+mod cancel_key_tests;
