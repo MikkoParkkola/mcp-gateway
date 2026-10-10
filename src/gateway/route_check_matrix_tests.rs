@@ -155,6 +155,9 @@ impl Stage {
 #[path = "route_check_matrix_table.rs"]
 mod table;
 pub(crate) use table::expect;
+#[cfg(feature = "firewall")]
+#[path = "route_check_matrix_rows.rs"]
+mod rows;
 
 /// `ALL` lists every variant exactly once: each index in `0..N` is hit once.
 /// A length check alone would pass a list that repeats one variant and
