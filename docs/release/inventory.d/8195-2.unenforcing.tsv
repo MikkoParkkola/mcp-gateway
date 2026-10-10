@@ -20,7 +20,7 @@ src/gateway/server/support.rs	dashboard_link_handoff	1	Builds a log hint string 
 src/gateway/server/task_runtime.rs	within	1	Splits a shutdown window into drain, cancel and close durations; arithmetic only.
 src/gateway/server/task_runtime.rs	settle_store	1	Stops the expiry sweep and closes or retains the task store within a timeout; cleanup ordering with no allow or deny decision (sealing is in TaskExecutor).
 src/gateway/server/tools_changed.rs	fingerprint	1	Hashes a tool list into a digest for change detection; no access decision.
-src/gateway/server/tools_changed.rs	spawn_drain	1	Spawns the task that feeds nudges to decide() and announces list_changed; announcement plumbing, no security decision.
+src/gateway/server/tools_changed.rs	spawn_drain	1	Spawns the task that feeds nudges to decide() and announces list_changed; who hears a change is decided by Announced::backend and Announced::catalogue (critical c, MIK-8350), not here.
 src/gateway/server/tools_changed.rs	drain_until	1	Select loop over nudge channel and shutdown signal calling an announce closure; plumbing.
 src/gateway/server/cleartext.rs	cleartext_http_warning	1	Formats the startup WARN text for a non-refuse cleartext_http mode and decides nothing; cleartext_credential_refusal makes the allow or deny decision.
 src/gateway/server/identity_grants.rs	from	1	Converts a String into StartupFailure::Unrecorded, pure error-type plumbing; start_identity_grant_audit makes the serve-no-grants decision.
