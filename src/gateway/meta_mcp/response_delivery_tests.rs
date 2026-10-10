@@ -737,3 +737,33 @@ fn firewall_delivery_failed_append_preserves_output_and_consumes_one_shot_fault(
 mod minted;
 #[path = "response_delivery_scope_tests.rs"]
 mod scope_tests;
+
+/// MIK-8259 red row: the gateway's own catalogue is the same text on every
+/// `tools/list`, yet each answer re-ran every egress classifier over it
+/// (about 1.2 ms on a 6.2 KB catalogue holding one em dash). A repeated
+/// catalogue must be classified once.
+#[test]
+fn a_repeated_catalogue_is_classified_once() {
+    use crate::security::classification_count::{MARKER, runs};
+    let marker = format!("{MARKER}repeated-catalogue");
+    let description = format!(
+        "{marker} Lists every tool \u{2014} {}",
+        "with a schema. ".repeat(100)
+    );
+    let catalogue = || {
+        JsonRpcResponse::success(
+            RequestId::Number(7),
+            json!({"tools": [{"name": "gateway_list_tools", "description": description}]}),
+        )
+    };
+    let fixture = Fixture::new(FirewallAction::Warn, false, false, false);
+    fixture.finalize("tools/list", catalogue(), &[]);
+    let first = (runs("response_inspect", &marker), runs("kernel", &marker));
+    assert!(
+        first.0 >= 1 && first.1 >= 1,
+        "the first answer is classified: {first:?}"
+    );
+    fixture.finalize("tools/list", catalogue(), &[]);
+    let second = (runs("response_inspect", &marker), runs("kernel", &marker));
+    assert_eq!(second, first, "the repeated catalogue was classified again");
+}

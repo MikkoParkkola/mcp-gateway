@@ -18,6 +18,8 @@ pub mod agent_identity;
 pub mod audit;
 pub(crate) mod audit_rotation_config;
 pub mod caller_identity;
+#[cfg(test)]
+pub(crate) mod classification_count;
 pub mod data_flow;
 #[cfg(feature = "firewall")]
 pub mod firewall;

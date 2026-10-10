@@ -216,6 +216,8 @@ impl ContextIntegrityKernel {
         text: &str,
     ) -> ContextIntegrityClassification {
         let mut findings = Vec::new();
+        #[cfg(test)]
+        crate::security::classification_count::note("kernel", text);
 
         for item in self.response_scanner.scan_text(text) {
             findings.push(ContextIntegrityFinding {

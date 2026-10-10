@@ -206,6 +206,8 @@ pub fn inspect_response(text: &str, action_mode: bool) -> InspectionResult {
         return InspectionResult::clean();
     }
 
+    #[cfg(test)]
+    crate::security::classification_count::note("response_inspect", text);
     let matches = PATTERN_SET.matches(text);
     if !matches.matched_any() {
         return InspectionResult::clean();
