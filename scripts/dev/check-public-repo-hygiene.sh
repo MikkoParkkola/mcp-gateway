@@ -251,7 +251,7 @@ while IFS= read -r file; do
     fi
   done
   for marker in "${internal_path_markers[@]}"; do
-    if printf '%s\n' "$file" | grep -E -q -i -e "$marker"; then
+    if grep -E -q -i -e "$marker" <<<"$file"; then
       report_internal_doc "$file" "path marker /$marker/"
       continue 2
     fi

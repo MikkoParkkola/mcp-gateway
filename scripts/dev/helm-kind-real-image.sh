@@ -67,7 +67,7 @@ diagnose() {
   done
 }
 
-if ! "$KIND" get clusters | grep -qx "$CLUSTER"; then
+if ! grep -qx "$CLUSTER" <<<"$("$KIND" get clusters)"; then
   "$KIND" create cluster --name "$CLUSTER"
   created_cluster=1
 fi
