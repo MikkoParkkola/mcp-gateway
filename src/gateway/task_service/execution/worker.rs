@@ -461,9 +461,9 @@ async fn follow_handle(
 }
 
 /// Make `handle` durable, before anything else is done with it. A refusal
-/// does not stop the job: it is followed either way, and a cancel that lands
-/// meanwhile is seen by the follow's cancel arm, which offers the handle to the
-/// row's one cancel claim (design r8 R8.4, the capture-side case).
+/// does not stop the job: it is followed either way, and once the follow ends
+/// the held handle is offered to the row's one cancel claim
+/// (`follow_upstream_job`; design r8 R8.4, the capture-side case).
 async fn capture_handle(
     executor: &Arc<TaskExecutor>,
     (principal, id, revision): (&str, &str, u64),

@@ -3,8 +3,8 @@
 //! The one durable claim on a cancelled row's upstream `tasks/cancel`
 //! (MIK-7642 PR.D, design r7 R7.3 / r8 R8.4).
 //!
-//! Every sender — the cancel transition, the worker's cancel arm, and the
-//! capture that found its row already cancelled — asks here, and sends only on
+//! Every sender — the cancel transition, the worker's dispatch-phase cancel
+//! arm, and the worker's offer after a refused capture — asks here, and sends only on
 //! [`CancelClaim::Claimed`]. The claim is one compare on
 //! `Record::upstream_cancel_sent` under the store's ordering lock, so exactly
 //! one sender wins per row whatever order they arrive in.
