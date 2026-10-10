@@ -255,8 +255,9 @@ async fn production_client_fetches_loopback_jwks_without_a_proxy() {
     assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
 
-// Every fetch is checked where it happens, so no caller can skip it, and a
-// redirect may only move to https.
+// Every fetch is checked where it happens, so no caller can skip it. A
+// loopback fetch follows no redirect; a remote one may not leave the fetched
+// URL's origin (`remote_redirects_stay_on_the_fetched_origin`).
 #[tokio::test]
 async fn production_client_refuses_cleartext_fetches_and_hops() {
     let cache = JwksCache::new();
@@ -437,6 +438,47 @@ async fn a_discovery_redirected_off_origin_is_refused() {
         0,
         "the other origin was requested"
     );
+}
+
+/// MIK-8281 OIDCPIN.2's discovery half: a discovery redirect on the issuer's
+/// own origin is still followed, and the document it reaches is used.
+#[tokio::test]
+async fn a_discovery_redirected_on_its_own_origin_is_followed() {
+    use std::sync::Arc;
+    let (ca_pem, ca_issuer) = oidc_pin_ca();
+    let issuer_slot: Arc<std::sync::OnceLock<String>> = Arc::default();
+    let named = Arc::clone(&issuer_slot);
+    let issuer = https_server_with(
+        &ca_issuer,
+        axum::Router::new()
+            .route(
+                "/.well-known/openid-configuration",
+                axum::routing::get(|| async { axum::response::Redirect::temporary("/moved") }),
+            )
+            .route(
+                "/moved",
+                axum::routing::get(move || {
+                    let issuer = named.get().cloned().unwrap_or_default();
+                    async move {
+                        axum::Json(serde_json::json!({
+                            "issuer": issuer,
+                            "jwks_uri": format!("{issuer}/keys"),
+                        }))
+                    }
+                }),
+            ),
+    )
+    .await;
+    issuer_slot.set(issuer.clone()).expect("set once");
+
+    let jwks_uri = pinned_cache(&ca_pem)
+        .resolve_jwks_uri(
+            &issuer,
+            &format!("{issuer}/.well-known/openid-configuration"),
+        )
+        .await
+        .expect("a same-origin discovery redirect is followed");
+    assert_eq!(jwks_uri, format!("{issuer}/keys"));
 }
 
 /// MIK-8281 OIDCPIN.2: a JWKS fetch follows a redirect on its own origin and
