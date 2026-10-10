@@ -155,8 +155,11 @@ pub(crate) async fn served_sanitizing() -> (Value, usize) {
 /// P3 (seats' delta improvement): one signing nonce across X14's round trip on
 /// hardened stdio. The challenged call gives its nonce back (the route stage
 /// answered), the redemption carrying the same nonce is admitted and spends
-/// it, and a third call with it is a replay. Returns the three answers.
-pub(crate) async fn stdio_x14_signed_round() -> (Value, Value, Value) {
+/// it, and a third call with it is a replay. A fourth, under a fresh nonce
+/// with the same key and no grant, is the admitted task's retry: X14 lets it
+/// through to admission (`already_admitted` under the stdio owner) and it gets
+/// the task's handle, not a second challenge. Returns the four answers.
+pub(crate) async fn stdio_x14_signed_round() -> (Value, Value, Value, Value) {
     use crate::gateway::meta_mcp::signing::NONCE_META;
     const NONCE: &str = "stdio-x14-round-0001";
     let served = backend_listing(json!([{
@@ -181,7 +184,7 @@ pub(crate) async fn stdio_x14_signed_round() -> (Value, Value, Value) {
         }];
     }))
     .await;
-    let call = |id: u64, extra: Value| {
+    let call = |id: u64, nonce: &str, extra: Value| {
         let mut params = json!({
             "name": TOOL,
             "arguments": {},
@@ -193,7 +196,7 @@ pub(crate) async fn stdio_x14_signed_round() -> (Value, Value, Value) {
                     "extensions": {"io.modelcontextprotocol/tasks": {}}
                 },
                 "io.mcp-gateway/idempotency-key": "x14-round",
-                NONCE_META: NONCE,
+                NONCE_META: nonce,
             },
         });
         if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
@@ -201,7 +204,7 @@ pub(crate) async fn stdio_x14_signed_round() -> (Value, Value, Value) {
         }
         json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params})
     };
-    let challenge = dispatch(&fixture, call(1, json!({}))).await;
+    let challenge = dispatch(&fixture, call(1, NONCE, json!({}))).await;
     let state = challenge["result"]["requestState"].clone();
     let key = challenge["result"]["inputRequests"]
         .as_object()
@@ -211,7 +214,8 @@ pub(crate) async fn stdio_x14_signed_round() -> (Value, Value, Value) {
         "requestState": state,
         "inputResponses": { key: { "action": "accept" } },
     });
-    let redeemed = dispatch(&fixture, call(2, answer)).await;
-    let replay = dispatch(&fixture, call(3, json!({}))).await;
-    (challenge, redeemed, replay)
+    let redeemed = dispatch(&fixture, call(2, NONCE, answer)).await;
+    let replay = dispatch(&fixture, call(3, NONCE, json!({}))).await;
+    let retried = dispatch(&fixture, call(4, "stdio-x14-round-0002", json!({}))).await;
+    (challenge, redeemed, replay, retried)
 }

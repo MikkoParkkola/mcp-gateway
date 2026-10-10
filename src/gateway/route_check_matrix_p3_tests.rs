@@ -297,10 +297,11 @@ async fn stdio_calls_meet_the_tenant_guard() {
 
 /// P3: X14's round trip on hardened stdio spends one signing nonce once. The
 /// challenge gives it back, the same nonce redeems the grant and is spent,
-/// and a third call carrying it is refused as a replay.
+/// and a third call carrying it is refused as a replay. A retry under a fresh
+/// nonce returns the admitted task without asking again (the stdio owner).
 #[tokio::test]
 async fn stdio_x14_round_spends_its_nonce_once() {
-    let (challenge, redeemed, replay) = Box::pin(stdio::stdio_x14_signed_round()).await;
+    let (challenge, redeemed, replay, retried) = Box::pin(stdio::stdio_x14_signed_round()).await;
     assert!(
         challenge.to_string().contains(X14_PROMPT),
         "no X14 challenge: {challenge}"
@@ -314,5 +315,16 @@ async fn stdio_x14_round_spends_its_nonce_once() {
         message(&replay),
         "Nonce replay detected",
         "the spent nonce was not refused as a replay: {replay}"
+    );
+    // The stdio owner's replay: X14 finds the admitted task under the local
+    // operator and lets the retry through, so no second question is asked.
+    assert!(
+        !retried.to_string().contains(X14_PROMPT),
+        "an admitted stdio task was challenged again: {retried}"
+    );
+    assert_eq!(
+        retried.pointer("/result/taskId"),
+        redeemed.pointer("/result/taskId"),
+        "the retry did not get the admitted task: {retried}"
     );
 }

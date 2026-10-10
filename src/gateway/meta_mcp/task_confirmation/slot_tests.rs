@@ -787,3 +787,47 @@ async fn a_stdio_retry_of_an_admitted_task_is_not_asked_again() {
         "an admitted stdio task was challenged again"
     );
 }
+
+/// MIK-8326.X14.4 (WH.4): X14 never classifies a surfaced name this caller may
+/// not invoke, whoever calls it. Defence in depth behind the route stage's
+/// withheld-name answer: a challenge would confirm the tool exists. Control:
+/// the same call from a caller who may invoke it is challenged.
+#[tokio::test]
+async fn x14_does_not_classify_a_name_the_caller_may_not_invoke() {
+    let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
+    let (arguments, task, retry) = (json!({ "id": 1 }), json!({ "ttl": 60_000 }), fresh());
+    let alice = identity();
+    let actor = alice.stable_actor_id();
+    let denied = crate::gateway::meta_mcp::InvokeScope {
+        authorizer: &crate::gateway::authz::DenyAll,
+        ..open_scope()
+    };
+    let outcome = fx
+        .meta
+        .confirm_destructive_task(&TaskConfirmationRequest {
+            id: RequestId::Number(7),
+            tool_name: TOOL,
+            arguments: &arguments,
+            task: Some(&task),
+            retry: &retry,
+            principal: crate::protocol::mrtr::PrincipalSource::Credential(Some(&alice)),
+            admission_actor: Some(&actor),
+            scope: denied,
+            session_id: None,
+            input_capabilities: elicitation(),
+            is_modern: true,
+            admission: &fx.admission,
+        })
+        .await;
+    assert!(
+        matches!(outcome, TaskConfirmation::NotRequired),
+        "X14 decided a withheld tool: {outcome:?}"
+    );
+    assert!(
+        matches!(
+            ask(&fx, &fresh(), elicitation()).await,
+            TaskConfirmation::Answer(_)
+        ),
+        "control: a caller who may invoke it is challenged"
+    );
+}
