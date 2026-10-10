@@ -326,4 +326,6 @@ fn build_output(
 // ============================================================================
 
 #[cfg(test)]
+mod envelope_tests;
+#[cfg(test)]
 mod tests;

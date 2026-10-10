@@ -103,6 +103,11 @@ pub(crate) enum Answer {
     /// completes with its own arguments echoed as text (MIK-8176: a playbook
     /// step can carry an earlier step's envelope into a completed answer).
     AskThenEcho,
+    /// The first `tools/call` asks; later ones are a tiny store: `cmd`
+    /// `"store <text>"` keeps `<text>`, and `"get"` returns what was kept
+    /// (MIK-8323: a backend handed an envelope can return it to a later,
+    /// fresh call).
+    AskThenStore,
 }
 
 /// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
@@ -114,6 +119,8 @@ struct CountingBackend {
     /// The params of every `tools/call`, in order (MIK-8078).
     seen: Arc<std::sync::Mutex<Vec<Value>>>,
     answer: Answer,
+    /// What `Answer::AskThenStore` keeps between calls.
+    kept: Arc<std::sync::Mutex<String>>,
 }
 
 #[async_trait::async_trait]
@@ -131,6 +138,26 @@ impl Transport for CountingBackend {
             .unwrap()
             .push(params.clone().unwrap_or(Value::Null));
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        if matches!(self.answer, Answer::AskThenStore) {
+            let cmd = params
+                .as_ref()
+                .and_then(|p| p.pointer("/arguments/cmd"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let text = if n == 0 {
+                return Ok(JsonRpcResponse::success(id, question(Answer::AskOnce)));
+            } else if let Some(kept) = cmd.strip_prefix("store ") {
+                *self.kept.lock().unwrap() = kept.to_owned();
+                "stored".to_owned()
+            } else {
+                self.kept.lock().unwrap().clone()
+            };
+            return Ok(JsonRpcResponse::success(
+                id,
+                json!({"content": [{"type": "text", "text": text}], "isError": false}),
+            ));
+        }
         if matches!(self.answer, Answer::AskThenEcho) {
             let echoed = params
                 .as_ref()
@@ -259,6 +286,7 @@ pub(crate) fn replace_backend(fx: &Fx, name: &str) -> Arc<AtomicUsize> {
         calls: Arc::clone(&calls),
         seen: Arc::default(),
         answer: Answer::Ok,
+        kept: Arc::default(),
     }));
     assert!(
         fx.state.backends.register(backend),
@@ -735,6 +763,28 @@ pub(crate) async fn send(
     session: Option<&str>,
 ) -> (StatusCode, Value) {
     send_with_headers(fx, uri, key, method, params, session, &[]).await
+}
+
+/// The first string in `value`, or in a JSON document a string carries (a
+/// playbook answer is JSON text in `content`), that opens under `fx`'s
+/// continuation keyring: the one "find the envelope" oracle the envelope rows
+/// share (MIK-8176 cache guards, MIK-8323).
+pub(crate) fn envelope_in(fx: &Fx, value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let continuation = fx.state.meta_mcp.continuation();
+            if continuation.keyring().open_now(text).is_ok() {
+                return Some(text.clone());
+            }
+            serde_json::from_str::<Value>(text)
+                .ok()
+                .filter(|inner| !inner.is_string())
+                .and_then(|inner| envelope_in(fx, &inner))
+        }
+        Value::Array(items) => items.iter().find_map(|item| envelope_in(fx, item)),
+        Value::Object(fields) => fields.values().find_map(|field| envelope_in(fx, field)),
+        _ => None,
+    }
 }
 
 /// [`send`] plus extra request headers, such as the modern era's mirrors.

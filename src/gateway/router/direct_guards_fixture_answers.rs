@@ -95,7 +95,8 @@ pub(super) fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRp
         | Answer::AskSecond
         | Answer::AskEdited(_)
         | Answer::StateOnlyRounds(..)
-        | Answer::AskThenEcho => {
+        | Answer::AskThenEcho
+        | Answer::AskThenStore => {
             unreachable!("answered above")
         }
         Answer::Text(text) => Ok(JsonRpcResponse::success(

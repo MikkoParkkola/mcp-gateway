@@ -12,21 +12,7 @@ use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 /// Whether any string in `value` (or in a JSON document a string carries) is
 /// an envelope that opens under `fx`'s continuation keyring.
 fn carries_envelope(fx: &Fx, value: &Value) -> bool {
-    match value {
-        Value::String(text) => {
-            fx.state
-                .meta_mcp
-                .continuation()
-                .keyring()
-                .open_now(text)
-                .is_ok()
-                || serde_json::from_str::<Value>(text)
-                    .is_ok_and(|inner| !inner.is_string() && carries_envelope(fx, &inner))
-        }
-        Value::Array(items) => items.iter().any(|item| carries_envelope(fx, item)),
-        Value::Object(fields) => fields.values().any(|field| carries_envelope(fx, field)),
-        _ => false,
-    }
+    super::direct_guards_fixture::envelope_in(fx, value).is_some()
 }
 
 /// A signed, keyed modern `tools/call` of `name` on `path`, as `k-std`.
