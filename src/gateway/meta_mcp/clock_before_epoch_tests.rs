@@ -13,7 +13,12 @@ async fn live_continuation(state: &ContinuationState) -> RetryFields {
     let now = crate::protocol::continuation::now_unix_secs();
     let hold_key = state
         .in_flight()
-        .hold("srv", now + 300, now)
+        .hold(
+            "srv",
+            &crate::protocol::continuation::QuotaKey::for_test("caller"),
+            now + 300,
+            now,
+        )
         .await
         .expect("the in-flight table has room for one exchange");
     let payload = Payload::mint(

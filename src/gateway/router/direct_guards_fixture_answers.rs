@@ -93,6 +93,7 @@ pub(super) fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRp
         | Answer::AskBadMeta
         | Answer::AskAndError
         | Answer::AskSecond
+        | Answer::AskAlways
         | Answer::AskEdited(_)
         | Answer::StateOnlyRounds(..)
         | Answer::AskThenEcho => {

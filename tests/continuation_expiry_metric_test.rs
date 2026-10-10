@@ -55,8 +55,28 @@ async fn an_evicted_hold_is_counted_with_its_reason() {
          nothing. Rendered:\n{before}"
     );
 
-    let a = table.hold("backend-1", held_until, 0).await.unwrap();
-    let b = table.hold("backend-2", held_until, 0).await.unwrap();
+    let a = table
+        .hold(
+            "backend-1",
+            &mcp_gateway::protocol::continuation::QuotaKey::new(
+                mcp_gateway::protocol::continuation::QuotaSource::KeyName("test"),
+            ),
+            held_until,
+            0,
+        )
+        .await
+        .unwrap();
+    let b = table
+        .hold(
+            "backend-2",
+            &mcp_gateway::protocol::continuation::QuotaKey::new(
+                mcp_gateway::protocol::continuation::QuotaSource::KeyName("test"),
+            ),
+            held_until,
+            0,
+        )
+        .await
+        .unwrap();
     assert_eq!(table.len(0).await, 2, "premise: both holds are live at t=0");
 
     // The retain is `now <= deadline`, so a read AT the deadline evicts
@@ -98,7 +118,17 @@ async fn an_evicted_hold_is_counted_with_its_reason() {
     // A hold completed before it expired is not an eviction. Without this,
     // an increment placed on removal rather than on expiry would pass every
     // assertion above.
-    let c = table.hold("backend-3", held_until * 3, 0).await.unwrap();
+    let c = table
+        .hold(
+            "backend-3",
+            &mcp_gateway::protocol::continuation::QuotaKey::new(
+                mcp_gateway::protocol::continuation::QuotaSource::KeyName("test"),
+            ),
+            held_until * 3,
+            0,
+        )
+        .await
+        .unwrap();
     assert!(
         table.complete(&c, 0).await,
         "premise: the hold was completed"

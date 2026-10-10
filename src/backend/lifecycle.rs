@@ -119,6 +119,8 @@ impl Backend {
             #[cfg(test)]
             between_install_and_write: parking_lot::Mutex::new(None),
             #[cfg(test)]
+            between_listen_and_transport: parking_lot::Mutex::new(None),
+            #[cfg(test)]
             era_at_publish: parking_lot::Mutex::new(Vec::new()),
             #[cfg(test)]
             oauth_test_seam: parking_lot::Mutex::new(None),
