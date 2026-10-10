@@ -404,7 +404,10 @@ async fn discovery_documents(scopes: &'static [&'static str]) -> String {
         "authorization_endpoint": format!("{base}/authorize"),
         "token_endpoint": format!("{base}/token"),
     });
-    let prm_body = serde_json::json!({ "resource": base, "scopes_supported": scopes });
+    // The configured resource (`{base}/mcp`): an origin-named document is
+    // refused for a path resource (MIK-8320).
+    let prm_body =
+        serde_json::json!({ "resource": format!("{base}/mcp"), "scopes_supported": scopes });
     let app = Router::new()
         .route(
             "/.well-known/oauth-authorization-server",

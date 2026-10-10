@@ -337,9 +337,12 @@ impl OAuthClient {
         // string is left and the two are indistinguishable.
         let mut issuer_source = IssuerSource::Origin;
 
-        // Try to discover protected resource metadata first
-        match ProtectedResourceMetadata::discover(self.client_for(&base_url)?, &base_url).await {
-            Ok(meta) => {
+        // Which protected-resource document describes this backend, held to
+        // the configured resource (MIK-8320, MIK-8324). A mismatch or a policy
+        // refusal is an answer, not a missing document: it ends discovery
+        // rather than falling back (MIK-7701).
+        match self.discover_resource_metadata().await? {
+            Some(meta) => {
                 debug!(resource = %meta.resource, "Found protected resource metadata");
 
                 // Get authorization server from metadata
@@ -358,11 +361,8 @@ impl OAuthClient {
 
                 self.resource_metadata = Some(meta);
             }
-            // A policy refusal is an answer, not a missing document: falling
-            // back would walk past it (MIK-7701).
-            Err(e) if is_ssrf_refusal(&e) => return Err(e),
-            Err(e) => {
-                debug!(error = %e, "No protected resource metadata, using base URL");
+            None => {
+                debug!("No protected resource metadata, using base URL");
                 self.oauth_base_url = Some(base_url.clone());
             }
         }
@@ -595,6 +595,7 @@ fn generate_client_id() -> String {
 mod authorize_tests;
 mod browser;
 pub(crate) mod destination;
+mod discovery;
 #[cfg(test)]
 mod refresh_flight_tests;
 #[cfg(test)]

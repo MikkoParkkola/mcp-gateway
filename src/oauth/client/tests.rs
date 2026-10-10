@@ -962,7 +962,9 @@ async fn serve_oauth_documents(
         "authorization_endpoint": format!("{issuer_claimed}authorize"),
         "token_endpoint": format!("{issuer_claimed}token"),
     });
-    let resource = base.clone();
+    // The configured resource (every client here is built for `{base}/mcp`):
+    // an origin-named document is refused for a path resource (MIK-8320).
+    let resource = format!("{base}/mcp");
     let prm_body = match resource_document {
         ResourceDocument::Absent => None,
         ResourceDocument::WithoutAuthorizationServer => {
