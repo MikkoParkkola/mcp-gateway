@@ -187,7 +187,10 @@ async fn a_settlement_that_lost_to_a_terminal_row_leaves_it_alone() {
     let stored = fx.service.get(OWNER, &fx.id).expect("the owner reads it");
     assert_eq!(stored.task.status(), TaskStatus::Completed);
     let result = stored.task.result().expect("a result").to_string();
-    assert!(result.contains("first"), "the first outcome stands: {result}");
+    assert!(
+        result.contains("first"),
+        "the first outcome stands: {result}"
+    );
     assert_eq!(
         attempts.load(Ordering::SeqCst),
         0,
@@ -227,13 +230,19 @@ async fn a_marker_on_a_moved_or_settled_row_is_refused() {
     fx.move_on(TaskTransition::StatusMessage(Some("busy".into())))
         .await;
 
-    let stale = fx.executor.mark_dispatched(OWNER, &fx.id, fx.revision).await;
+    let stale = fx
+        .executor
+        .mark_dispatched(OWNER, &fx.id, fx.revision)
+        .await;
     assert!(matches!(stale, Marker::Refused), "a moved revision refuses");
     let live = fx
         .executor
         .mark_dispatched(OWNER, &fx.id, fx.stored_revision())
         .await;
-    assert!(matches!(live, Marker::Marked), "control: the live one marks");
+    assert!(
+        matches!(live, Marker::Marked),
+        "control: the live one marks"
+    );
 
     assert!(
         fx.executor
@@ -257,7 +266,10 @@ async fn a_marker_that_cannot_be_written_or_owned_fails() {
     assert!(matches!(nobody, Marker::Failed), "an unhashable principal");
 
     let attempts = fx.fail_writes().await;
-    let unwritable = fx.executor.mark_dispatched(OWNER, &fx.id, fx.revision).await;
+    let unwritable = fx
+        .executor
+        .mark_dispatched(OWNER, &fx.id, fx.revision)
+        .await;
     assert!(matches!(unwritable, Marker::Failed), "a failed write");
     assert_eq!(attempts.load(Ordering::SeqCst), 1, "the write was tried");
 }
@@ -297,14 +309,8 @@ async fn a_job_that_stays_live_is_retained_when_the_budget_runs_out() {
         queries: Arc::clone(&queries),
     });
 
-    let followed = poll_to_terminal(
-        &fx.executor,
-        &fx.owner_digest,
-        &fx.id,
-        &adapter,
-        &handle(),
-    )
-    .await;
+    let followed =
+        poll_to_terminal(&fx.executor, &fx.owner_digest, &fx.id, &adapter, &handle()).await;
 
     assert!(matches!(followed, Followed::Retained));
     assert!(
@@ -315,7 +321,11 @@ async fn a_job_that_stays_live_is_retained_when_the_budget_runs_out() {
         queries.load(Ordering::SeqCst) as u64 <= WORKER_POLL_BUDGET.as_secs() + 1,
         "and never beyond it"
     );
-    assert_eq!(fx.status(), TaskStatus::Working, "nothing was faked terminal");
+    assert_eq!(
+        fx.status(),
+        TaskStatus::Working,
+        "nothing was faked terminal"
+    );
 }
 
 /// A row already settled when the worker reaches the front of the slot queue
@@ -329,14 +339,8 @@ async fn a_row_settled_before_the_poll_is_never_queried() {
     });
     fx.move_on(TaskTransition::Cancel).await;
 
-    let followed = poll_to_terminal(
-        &fx.executor,
-        &fx.owner_digest,
-        &fx.id,
-        &adapter,
-        &handle(),
-    )
-    .await;
+    let followed =
+        poll_to_terminal(&fx.executor, &fx.owner_digest, &fx.id, &adapter, &handle()).await;
 
     assert!(matches!(followed, Followed::Overtaken));
     assert_eq!(queries.load(Ordering::SeqCst), 0, "the peer was not asked");
