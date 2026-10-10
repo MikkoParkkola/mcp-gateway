@@ -369,8 +369,9 @@ async fn a_stdio_task_s_inner_call_is_cached_under_the_operator() {
 
 /// U5: a stdio task runs under the current tool policy. A denied tool is
 /// refused at submit by the route stage (route-check-parity P3, r2.1 H1),
-/// with the policy's own refusal and no task made; the worker re-checks at
-/// run time through the dispatch chokepoint.
+/// with the policy's own refusal, exactly as its synchronous call is, and no
+/// task (MIK-8315); a neighbour still runs. The worker re-checks at run time
+/// through the dispatch chokepoint.
 #[tokio::test]
 async fn a_stdio_task_runs_under_the_current_tool_policy() {
     let denying = ToolPolicy::from_config(&ToolPolicyConfig {
@@ -378,7 +379,8 @@ async fn a_stdio_task_runs_under_the_current_tool_policy() {
         ..ToolPolicyConfig::default()
     });
     let fixture = Box::pin(fixture(Some(denying))).await;
-    let refused = dispatch(&fixture, modern_call(1, DENIED, "u5-denied", true)).await;
+    let sync = dispatch(&fixture, modern_call(1, DENIED, "u5-denied-sync", false)).await;
+    let refused = dispatch(&fixture, modern_call(2, DENIED, "u5-denied", true)).await;
     assert_eq!(refused["error"]["code"], -32600, "{refused}");
     assert_eq!(
         refused["error"]["message"],
@@ -394,6 +396,16 @@ async fn a_stdio_task_runs_under_the_current_tool_policy() {
     assert!(
         refused.pointer("/result/taskId").is_none(),
         "a task was made for a denied tool: {refused}"
+    );
+    assert_eq!(
+        refused.pointer("/error/code"),
+        sync.pointer("/error/code"),
+        "{refused}"
+    );
+    assert_eq!(
+        refused.pointer("/error/message"),
+        sync.pointer("/error/message"),
+        "{refused}"
     );
     assert_eq!(
         fixture.rounds.load(Ordering::SeqCst),

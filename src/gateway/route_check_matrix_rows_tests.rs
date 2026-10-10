@@ -499,6 +499,18 @@ async fn task_confirm_submit_row() {
     );
 }
 
+/// `Authorize`, R4a Applies (MIK-8315): a task submit of a personal
+/// capability without a grant is refused at submit exactly as the sync call
+/// is, with the sync call's audit records, no task and no backend call.
+#[tokio::test]
+async fn r4a_authorize_refuses_at_submit_as_the_sync_call_does() {
+    assert_eq!(
+        expect(MethodKind::ToolsCall, Route::TaskSubmit, Stage::Authorize),
+        Expect::Applies
+    );
+    router::task_submit_ungranted().await;
+}
+
 /// The execution lease's in-flight refusal (`meta_mcp/admission.rs`).
 const LEASE_IN_FLIGHT: &str = "Execution is already in progress";
 

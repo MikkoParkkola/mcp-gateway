@@ -44,10 +44,9 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
             // Grants and the admin rule fire only for the capability provider
             // (server == capabilities.name, meta_mcp/visibility.rs).
             Stage::Authorize => match route {
-                Invoke | Surfaced | TaskWorker | Stdio => Applies,
-                // The submit path runs neither check (dispatch_tools_call.rs:380);
-                // the worker does (policy.rs:98, chokepoint.rs:129).
-                TaskSubmit => ExpectedGap(Ticket::Mik8315),
+                // A task submit passes the sync call's policy at admission
+                // (admit_meta_sync, MIK-8315); its worker checks again.
+                Invoke | Surfaced | TaskSubmit | TaskWorker | Stdio => Applies,
                 Direct => NotApplicable(Na::NotCapabilityProvider),
             },
             // Response-time on every sending route; /mcp legacy calls get
