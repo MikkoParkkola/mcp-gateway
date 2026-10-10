@@ -124,6 +124,7 @@ src/gateway/router/handlers/session_end.rs	mcp_delete_handler	1	critical	a,c	mcp
 src/gateway/router/handlers/sse.rs	mcp_sse_handler	1	critical	c	mcp_sse_handler	SSE stream resumption is scoped to the session owner.
 src/gateway/router/handlers.rs	meta_mcp_dispatch	1	critical	a,b,c,d	meta_mcp_dispatch	Meta route: agent identity, owner, hardened, admin, tool authorization, firewall.
 src/gateway/router/handlers/dispatch_intake.rs	intake	1	critical	a,b,c,d	intake	Meta route prelude: agent identity, owner, hardened, request checks, the unattributed task refusal.
+src/gateway/router/handlers/dispatch_intake.rs	external_tool	1	standard	borderline	Intake::external_tool	Names the tool the response policy and answer shape key on; a wrong name applies another tool's policy.
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	1	critical	a,b,c,d	tools_call	Meta tools/call: admin pre-check, tool authorization, firewall, destructive confirmation, admission.
 src/gateway/router/handlers/metrics_scrape.rs	metrics_handler	1	critical	a,b	metrics_handler	Constant-time bearer comparison against metrics_token; 401 otherwise.
 src/gateway/router/handlers/sse.rs	get_era_refusal	1	standard	d	get_era_refusal	Refuses the removed GET /mcp (405) or an unsupported 2026 version.
