@@ -19,7 +19,7 @@ cleanup() {
 command -v "$KIND" >/dev/null 2>&1
 command -v "$KUBECTL" >/dev/null 2>&1
 
-if ! "$KIND" get clusters | grep -qx "$CLUSTER"; then
+if ! grep -qx "$CLUSTER" <<<"$("$KIND" get clusters)"; then
   "$KIND" create cluster --name "$CLUSTER"
   trap cleanup EXIT
 fi

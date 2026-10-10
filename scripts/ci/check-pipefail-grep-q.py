@@ -8,8 +8,9 @@ on its first match, the writer takes SIGPIPE (141) and the pipeline fails: a
 false red, or under `!` a false pass. Capture the text and match it with a
 here-string (`grep -q pat <<<"$x"`) or read a file instead.
 
-Scans every `scripts/**/*.sh` and `.github/workflows/*.y*ml`, pipefail or
-not: a script that gains `set -o pipefail` later inherits the bug silently.
+Scans every tracked `*.sh` and `*.bash` file and `.github/workflows/*.y*ml`,
+pipefail or not: a script that gains `set -o pipefail` later inherits the bug
+silently.
 Covers `grep`/`egrep`/`fgrep`/`rg` with `-q`, `--quiet` or `--silent`.
 Lexical: a pipe split across a line continuation ending in `|` is missed.
 
@@ -19,6 +20,7 @@ Usage: check-pipefail-grep-q.py [--self-test] [<root>]
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -38,7 +40,13 @@ def check_text(path: str, text: str) -> list[str]:
 
 
 def problems(root: Path) -> list[str]:
-    paths = sorted(root.glob("scripts/**/*.sh")) + sorted(root.glob(".github/workflows/*.y*ml"))
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "*.sh", "*.bash", ".github/workflows/*.yml", ".github/workflows/*.yaml"],
+        cwd=root,
+        capture_output=True,
+        check=True,
+    ).stdout.decode()
+    paths = [root / name for name in tracked.split("\0") if name]
     return [
         e
         for p in paths
@@ -55,6 +63,8 @@ def self_test() -> list[str]:
         "kind clusters": 'if ! "$KIND" get clusters | grep -qx "$CLUSTER"; then\n',
         "rg": 'git log -1 | rg -q "^Local-Tested: "\n',
         "long option": 'cat f | grep --quiet x\n',
+        "split flags": 'if printf "%s\\n" "$file" | grep -E -q -i -e "$marker"; then\n',
+        "compact flags": 'echo "$x" | grep -Eqi pat\n',
         "workflow step": "        run: helm template t c | grep -q '^kind: Deployment'\n",
     }
     good = {

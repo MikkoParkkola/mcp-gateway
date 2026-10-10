@@ -42,7 +42,7 @@ else
   printf 'warn: cert-manager API not found; TLS automation must be disabled or supplied by another issuer\n'
 fi
 
-if "$KUBECTL" api-resources | grep -q '^servicemonitors'; then
+if grep -q '^servicemonitors' <<<"$("$KUBECTL" api-resources)"; then
   printf 'ok: ServiceMonitor API is available\n'
 else
   printf 'warn: ServiceMonitor API not found; use scrape annotations or another metrics path\n'
