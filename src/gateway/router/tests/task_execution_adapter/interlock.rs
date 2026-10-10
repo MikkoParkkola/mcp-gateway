@@ -223,6 +223,7 @@ async fn x4_a_marker_write_failure_settles_completed_not_executed_and_dispatches
     let fetched = poll_until_terminal(&state, "key-a", &id).await;
 
     assert_interrupted_before_dispatch(&fetched);
+    join_worker(&state).await;
     std::assert_eq!(
         mock.calls(),
         0,
@@ -230,7 +231,6 @@ async fn x4_a_marker_write_failure_settles_completed_not_executed_and_dispatches
          means the backend must not be called at all, or a restart could never \
          tell whether it had been: {fetched}"
     );
-    join_worker(&state).await;
 }
 
 /// X4 — a `Weak<AppState>` that no longer upgrades settles the same way.
@@ -250,12 +250,12 @@ async fn x4_a_state_that_no_longer_upgrades_settles_completed_not_executed() {
     let fetched = poll_until_terminal(&state, "key-a", &id).await;
 
     assert_interrupted_before_dispatch(&fetched);
+    join_worker(&state).await;
     std::assert_eq!(
         mock.calls(),
         0,
         "no dispatch context, no dispatch: {fetched}"
     );
-    join_worker(&state).await;
 }
 
 // =====================================================================

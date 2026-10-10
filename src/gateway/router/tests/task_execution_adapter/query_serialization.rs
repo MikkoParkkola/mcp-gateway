@@ -536,6 +536,13 @@ async fn wait_until(what: &str, mut ready: impl AsyncFnMut() -> bool) {
 /// second contender for the slot before releasing the reader. Mutant: the
 /// handle check before each query is dropped, and the worker queries a third
 /// time.
+///
+/// Which exit the worker took is not asserted here: in this scenario the
+/// overtaken exit and the retained one leave the same state (no further query,
+/// no settlement by the worker, slot released, the reader's outcome stored).
+/// The variant is pinned by return value in
+/// `worker_tests::a_row_settled_before_the_poll_is_never_queried`, which calls
+/// `poll_to_terminal` directly.
 #[tokio::test(start_paused = true)]
 async fn a_worker_queued_behind_a_settling_read_asks_nothing_further() {
     let (state, transport, adapter, _store) = armed_fixture(Script::LiveThenHold).await;
@@ -554,7 +561,7 @@ async fn a_worker_queued_behind_a_settling_read_asks_nothing_further() {
     let executor = Arc::clone(&state.task_executor);
     std::assert_eq!(
         executor.query_slot_clones_for_test(&id).await,
-        1,
+        Some(1),
         "the slot is held by the reader alone (one clone); a worker lease would \
          add two, meaning the worker woke early and the held query is its own"
     );
@@ -564,7 +571,7 @@ async fn a_worker_queued_behind_a_settling_read_asks_nothing_further() {
     // adds two clones to the reader's one.
     tokio::time::advance(Duration::from_secs(1)).await;
     wait_until("the worker queueing behind the reader", async || {
-        executor.query_slot_clones_for_test(&id).await == 3
+        executor.query_slot_clones_for_test(&id).await == Some(3)
     })
     .await;
 
@@ -593,7 +600,7 @@ async fn a_worker_queued_behind_a_settling_read_asks_nothing_further() {
     std::assert_eq!(transport.calls(), 1, "one dispatch, nothing resubmitted");
     std::assert_eq!(
         executor.query_slot_clones_for_test(&id).await,
-        0,
+        None,
         "the worker released the slot it acquired and the directory entry went with it"
     );
 }
