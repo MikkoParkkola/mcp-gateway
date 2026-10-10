@@ -20,12 +20,6 @@ pub(super) fn as_task(mut body: Value, key: &str) -> Value {
     keyed(body, key)
 }
 
-fn error_code(settled: &Value) -> Option<i64> {
-    settled
-        .pointer("/result/error/code")
-        .and_then(Value::as_i64)
-}
-
 /// T12. An unsigned task's worker writes its execution decision, traced,
 /// before the task settles. Since MIK-8315 the submit's decision comes first.
 #[tokio::test]
@@ -94,9 +88,11 @@ async fn cancelled_worker_keeps_its_pending_record() {
     }
     row.endpoint.release();
     // The submit's decision (MIK-8315), then the cancelled worker's pending
-    // note, still written.
+    // note, still written. Both are traced, each with its own trace: two
+    // records under one trace would be one actor's, not submit and worker.
     let records = decisions(&row.dir);
     std::assert_eq!(records.len(), 2, "{records:#?}");
+    assert_ne!(trace_of(&records[0]), trace_of(&records[1]), "{records:#?}");
     std::assert_eq!(records[1]["outcome"], json!("ok"), "{records:#?}");
 }
 
@@ -179,9 +175,26 @@ async fn worker_decision_write_failure_settles_as_audit_unavailable() {
         crate::gateway::meta_mcp::grant_audit::seams::fail_append_at_for_test(2);
         let key = format!("d3a-t24-{index}");
         let created = post(&row.state, "key-a", as_task(body(1), &key)).await;
-        let settled = poll_until_terminal(&row.state, "key-a", &task_id(&created)).await;
-        std::assert_eq!(status_of(&settled), "failed", "{variant}: {settled}");
-        std::assert_eq!(error_code(&settled), Some(-32005), "{variant}: {settled}");
+        // Read from the committed store, not `tasks/get`: the read's own
+        // grant re-check would write records and answer in the worker's place.
+        let id = task_id(&created);
+        let stored = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let stored = row
+                    .state
+                    .tasks
+                    .get(&super::submit_authz::alice(), &id)
+                    .expect("the committed task");
+                if super::submit_authz::settled(stored.task.status()) {
+                    break stored;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the task settles");
+        let error = stored.task.error().expect("the worker's failure is stored");
+        std::assert_eq!(error.code, -32005, "{variant}: {}", error.message);
     }
 }
 

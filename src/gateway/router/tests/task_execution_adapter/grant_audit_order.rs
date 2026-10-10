@@ -250,9 +250,9 @@ async fn notes_before_and_after_the_hand_off_are_each_written_once() {
 
 /// O5. An unsigned task's slot is empty at the hand-off: at the moment the
 /// worker spawns, no grant append has run and the armed hold has not fired.
-/// The capability is public, so no decision is noted at submit either: since
-/// MIK-8315 a personal capability's submit-time decision is appended before
-/// the spawn (row 4 of `submit_authz_audit`). Guard: green on base.
+/// The capability is public, so no decision is noted at submit either. The
+/// personal-capability case, whose submit decision IS appended before the
+/// spawn since MIK-8315, is `submit_authz_audit` row 4e.
 #[tokio::test]
 async fn an_empty_slot_appends_nothing_before_the_spawn() {
     let row = armed(true, false, AuditFailurePolicy::BestEffort, |meta| meta).await;

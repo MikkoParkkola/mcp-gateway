@@ -104,7 +104,9 @@ async fn ungranted_invoke_submit_is_refused_like_the_sync_call() {
 }
 
 /// The route-check matrix's `TaskSubmit` x `Authorize` driver: row 1a's
-/// refusal, compared with the sync call on the same fixture.
+/// refusal, compared with the sync call on the same fixture. Gated as the
+/// matrix rows are (`route_check_matrix_tests.rs` `mod rows`).
+#[cfg(feature = "firewall")]
 pub(crate) async fn matrix_ungranted_invoke_submit() {
     let row = ungranted(|meta| meta).await;
     let task = as_task(personal_invoke(2), "sa-matrix");
@@ -144,7 +146,7 @@ pub(super) fn settled(status: crate::protocol::tasks::TaskStatus) -> bool {
     )
 }
 
-fn alice() -> String {
+pub(super) fn alice() -> String {
     crate::key_server::oidc::VerifiedIdentity {
         subject: "alice".to_string(),
         email: "alice@adapter.test".to_string(),

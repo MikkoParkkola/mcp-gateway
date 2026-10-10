@@ -168,12 +168,15 @@ async fn an_allowed_task_appends_its_submit_decision_before_the_spawn() {
 }
 
 /// 4f. A stalled audit sink fails the submit within its bound instead of
-/// hanging it: under `FailClosed` the submit answers `AuditUnavailable`
-/// (-32005) and creates no task. The outer bound only guards the suite.
+/// hanging it: the submit's own append is the write that stalls, and under
+/// `FailClosed` the submit answers `AuditUnavailable` (-32005) and creates no
+/// task. The outer bound only guards the suite.
 #[tokio::test]
 async fn a_stalled_sink_fails_the_submit_within_its_bound() {
     let row = armed(true, false, AuditFailurePolicy::FailClosed, |meta| meta).await;
-    let release = crate::gateway::meta_mcp::grant_audit_fixture::stall_log(&row.log).await;
+    // The log's append bound, shortened as the other stall rows do; the
+    // submit's grant record is the next write, and it is held.
+    let gate = row.log.stall_next_write_for_test(Duration::from_millis(200));
     let rows = committed(&row);
     let answer = tokio::time::timeout(
         Duration::from_secs(10),
@@ -181,7 +184,7 @@ async fn a_stalled_sink_fails_the_submit_within_its_bound() {
     )
     .await
     .expect("the submit hung on a stalled audit sink");
-    release();
+    gate.release();
     assert!(answer.pointer("/result/taskId").is_none(), "{answer}");
     std::assert_eq!(answer.pointer("/error/code"), Some(&json!(-32005)), "{answer}");
     std::assert_eq!(committed(&row), rows, "a task row was committed");
