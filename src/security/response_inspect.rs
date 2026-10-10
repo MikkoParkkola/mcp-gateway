@@ -197,6 +197,10 @@ static PATTERN_SET: LazyLock<RegexSet> = LazyLock::new(|| {
     RegexSet::new(patterns).expect("All response inspection patterns must compile")
 });
 
+/// Matched pattern indices per exact text (MIK-8259).
+static INSPECTION_MEMO: LazyLock<crate::security::text_memo::TextMemo<Vec<usize>>> =
+    LazyLock::new(|| crate::security::text_memo::TextMemo::new("response_inspect"));
+
 /// Inspect response text for security patterns.
 ///
 /// `action_mode`: `true` = block on HIGH/CRITICAL; `false` = observe only.
@@ -206,17 +210,25 @@ pub fn inspect_response(text: &str, action_mode: bool) -> InspectionResult {
         return InspectionResult::clean();
     }
 
-    #[cfg(test)]
-    crate::security::classification_count::note("response_inspect", text);
-    let matches = PATTERN_SET.matches(text);
-    if !matches.matched_any() {
+    // The matched patterns depend on the text alone (the set is a compiled
+    // static), so a repeated catalogue reuses them (MIK-8259); `action_mode`
+    // and every finding are applied per call below.
+    let matches = INSPECTION_MEMO.get_or_compute(text, || {
+        #[cfg(test)]
+        crate::security::classification_count::note("response_inspect", text);
+        PATTERN_SET
+            .matches(text)
+            .into_iter()
+            .collect::<Vec<usize>>()
+    });
+    if matches.is_empty() {
         return InspectionResult::clean();
     }
 
     let mut findings = Vec::new();
     let mut should_block = false;
 
-    for idx in &matches {
+    for &idx in &matches {
         let (_, category, severity, description) = PATTERNS[idx];
         if action_mode && matches!(severity, Severity::High | Severity::Critical) {
             should_block = true;
