@@ -324,3 +324,47 @@ class Lexer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MovedRows(unittest.TestCase):
+    """MIK-8291 (split-baselines): an allowlisted assert moved by a split
+    carries its row; a new row needs an identical (fn, assertion) row that
+    left. Changed text, or a changed fn, fails safe."""
+
+    def setUp(self):
+        self.found = scan("assert!(start.elapsed() < Duration::from_secs(1));")
+        self.assertion = self.found[0].assertion
+        self.old = guard.Row(PATH, "case", self.assertion, "converted in PR2 (MIK-8222)")
+        self.new_path = PATH.replace(".rs", "_split.rs")
+
+    def moved(self, **change):
+        finding = self.found[0]._replace(path=self.new_path, **change)
+        row = guard.Row(self.new_path, finding.fn, finding.assertion, self.old.reason)
+        return [finding], row
+
+    def test_t1_an_assert_moved_by_a_split_carries_its_row(self):
+        found, row = self.moved()
+        self.assertEqual(guard.judge(found, [row], [self.old]), [])
+
+    def test_t2_a_new_assert_with_no_row_leaving_fails(self):
+        found, row = self.moved()
+        errors = guard.judge(self.found + found, [self.old, row], [self.old])
+        self.assertTrue(any("NEW ROW" in e for e in errors), errors)
+
+    def test_t3_an_assert_whose_text_changed_in_the_move_fails(self):
+        found, row = self.moved(assertion=self.assertion.replace("1", "2"))
+        errors = guard.judge(found, [row], [self.old])
+        self.assertTrue(any("NEW ROW" in e for e in errors), errors)
+
+    def test_t4_an_assert_whose_fn_changed_in_the_move_fails(self):
+        found, row = self.moved(fn="renamed")
+        errors = guard.judge(found, [row], [self.old])
+        self.assertTrue(any("NEW ROW" in e for e in errors), errors)
+
+    def test_t5_one_leaving_row_carries_one_new_row(self):
+        found_a, row_a = self.moved()
+        third = PATH.replace(".rs", "_other.rs")
+        found_b = [found_a[0]._replace(path=third)]
+        row_b = row_a._replace(path=third)
+        errors = guard.judge(found_a + found_b, [row_a, row_b], [self.old])
+        self.assertEqual(sum("NEW ROW" in e for e in errors), 1, errors)
