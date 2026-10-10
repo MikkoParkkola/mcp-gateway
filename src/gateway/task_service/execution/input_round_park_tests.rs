@@ -151,6 +151,7 @@ async fn park(fx: &Fixture, ids: Ids<'_>, tool: &str, arguments: Value) {
     let owned = owned_context(fx);
     let host = LiveHost::Http(Arc::clone(&fx.state));
     let call = call(tool, arguments);
+    let (_cancel, mut cancel_rx) = tokio::sync::watch::channel(false);
     Settling::new(
         &fx.executor,
         &host,
@@ -160,7 +161,7 @@ async fn park(fx: &Fixture, ids: Ids<'_>, tool: &str, arguments: Value) {
         ids.id,
         ids.revision,
     )
-    .park(round())
+    .park(round(), &mut cancel_rx)
     .await;
 }
 
@@ -204,6 +205,11 @@ async fn park_targets(fx: &Fixture, ids: Ids<'_>, tool: &str) -> bool {
     )
     .park_targets()
     .await
+}
+
+/// The time a late close is judged at.
+fn at() -> chrono::DateTime<chrono::Utc> {
+    crate::clock::utc_now().expect("clock after 1970")
 }
 
 fn own(fx: &Fixture) -> Ids<'_> {
@@ -373,7 +379,7 @@ async fn a_late_round_with_no_resolvable_owner_is_left_open() {
     let fx = fixture().await;
 
     fx.executor
-        .close_late_round("", &fx.id, fx.revision, 10)
+        .close_late_round("", &fx.id, fx.revision, 10, at())
         .await;
 
     assert_eq!(status(&fx), TaskStatus::Working);
@@ -387,7 +393,7 @@ fn a_late_round_that_cannot_be_closed_twice_is_logged() {
     let records = logged(async {
         let fx = fixture().await;
         fx.executor
-            .close_late_round(OWNER, "no-such-task", fx.revision, 10)
+            .close_late_round(OWNER, "no-such-task", fx.revision, 10, at())
             .await;
     });
 
@@ -403,7 +409,7 @@ fn a_late_round_for_a_moved_row_is_not_retried_or_logged() {
     let records = logged(async {
         let fx = fixture().await;
         fx.executor
-            .close_late_round(OWNER, &fx.id, fx.revision + 9, 10)
+            .close_late_round(OWNER, &fx.id, fx.revision + 9, 10, at())
             .await;
         assert_eq!(status(&fx), TaskStatus::Working);
     });
@@ -435,7 +441,7 @@ fn a_late_round_whose_first_close_write_fails_is_closed_by_the_retry() {
             })))
             .await;
         fx.executor
-            .close_late_round(OWNER, &fx.id, fx.revision, 10)
+            .close_late_round(OWNER, &fx.id, fx.revision, 10, at())
             .await;
         closed = Some(status(&fx));
     });

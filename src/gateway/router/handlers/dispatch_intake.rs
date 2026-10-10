@@ -100,6 +100,25 @@ impl Intake<'_> {
     }
 }
 
+/// The key a `/mcp` caller's explicit cancel of its own call `id` is
+/// registered and looked up under (MIK-7642 PR.C, design r6 PR.C): the route,
+/// the caller's key (`identity::caller_key`: its subject, else its
+/// authenticated credential), its session (none for a modern-by-header
+/// caller, whose session id is empty), and the client's id.
+pub(super) fn mcp_cancel_key(
+    caller: (
+        Option<&crate::identity_grants::GrantSubject>,
+        Option<&CertIdentity>,
+        Option<&AuthenticatedClient>,
+    ),
+    session_id: &str,
+    id: &Value,
+) -> Option<crate::gateway::router::inflight_calls::CallKey> {
+    let owner = crate::gateway::router::identity::caller_key(caller.0, caller.1, caller.2);
+    let session = (!session_id.is_empty()).then_some(session_id);
+    crate::gateway::router::inflight_calls::CallKey::new("/mcp", Some(&owner), session, id)
+}
+
 /// The prelude, run once per request. `Err` is a finished answer the
 /// dispatcher returns as it is.
 #[allow(
@@ -521,6 +540,23 @@ pub(super) async fn intake(
     // era, version, mirrored-header and removed-method checks ran accepted a
     // malformed or disabled modern notification as though it had been honoured.
     if method.starts_with("notifications/") {
+        // MIK-7642 PR.C: a cancel aborts this caller's own in-flight call
+        // under that id, if one is running; never forwarded (MIK-8072).
+        if method == "notifications/cancelled" {
+            let aborted = request
+                .get("params")
+                .and_then(|params| params.get("requestId"))
+                .and_then(|id| {
+                    let caller = (
+                        grant_subject.as_ref(),
+                        cert_identity.as_ref(),
+                        client.as_ref(),
+                    );
+                    mcp_cancel_key(caller, &session_id, id)
+                })
+                .is_some_and(|key| state.meta_mcp.inflight_calls().cancel(&key));
+            debug!(aborted, "Client cancel never forwarded");
+        }
         debug!(notification = %method, "Handling notification");
         return Err(build_accepted_response(&session_id));
     }
@@ -682,3 +718,7 @@ pub(super) async fn intake(
         },
     ))
 }
+
+#[cfg(test)]
+#[path = "dispatch_intake_cancel_key_tests.rs"]
+mod cancel_key_tests;

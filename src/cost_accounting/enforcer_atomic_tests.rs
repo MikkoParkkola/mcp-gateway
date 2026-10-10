@@ -140,7 +140,10 @@ fn an_add_inside_the_day_reset_window_is_kept() {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    let acc = Arc::new(DailyAccumulator::stale(current_day() - 1, 700));
+    let acc = Arc::new(DailyAccumulator::stale(
+        current_day().expect("clock after 1970") - 1,
+        700,
+    ));
     assert_eq!(acc.current(), 0, "yesterday's spend is not today's");
     let (done, landed) = mpsc::channel();
     let inner = Arc::clone(&acc);
@@ -240,7 +243,7 @@ fn dropping_a_settled_hold_keeps_other_reservations() {
 /// number that would read as budget left.
 #[test]
 fn a_daily_total_saturates_instead_of_wrapping() {
-    let acc = DailyAccumulator::stale(current_day(), u64::MAX - 1);
+    let acc = DailyAccumulator::stale(current_day().expect("clock after 1970"), u64::MAX - 1);
     assert_eq!(acc.add(5), u64::MAX);
 }
 
@@ -249,7 +252,7 @@ fn a_daily_total_saturates_instead_of_wrapping() {
 /// reset the day backward and erase the newer day's spend.
 #[test]
 fn an_add_on_an_earlier_day_never_resets_backward() {
-    let acc = DailyAccumulator::stale(current_day() + 1, 700);
+    let acc = DailyAccumulator::stale(current_day().expect("clock after 1970") + 1, 700);
     assert_eq!(acc.add(5), 705, "the newer day's spend was erased");
     assert_eq!(acc.current(), 705, "the newer day's spend is still counted");
 }

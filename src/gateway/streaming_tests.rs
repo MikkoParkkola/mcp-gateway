@@ -716,3 +716,28 @@ mod listen_graceful;
 
 #[path = "streaming_tests/credential_at_write.rs"]
 mod credential_at_write;
+
+/// MIK-8288: session expiry follows the runtime's clock, the same clock the
+/// reaper's ticker runs on, so a test can drive a TTL on a paused clock
+/// instead of racing it on wall time. Red while expiry read the std clock:
+/// the advance moved the ticker's time and not the session's age.
+#[tokio::test(start_paused = true)]
+async fn session_expiry_follows_a_paused_clock() {
+    let ttl = Duration::from_secs(60);
+    let m =
+        NotificationMultiplexer::new(Arc::new(BackendRegistry::new()), StreamingConfig::default());
+    let owner = SessionOwner::Credential("alice".to_owned());
+    let (id, receiver) = m.get_or_create_session_for(None, &owner);
+    drop(receiver);
+    assert!(
+        m.reap_expired_sessions(ttl).is_empty(),
+        "premise: a new session is not expired"
+    );
+    tokio::time::advance(ttl + Duration::from_millis(1)).await;
+    let reaped = m.reap_expired_sessions(ttl);
+    assert_eq!(
+        reaped,
+        vec![id],
+        "the session's age did not follow the paused clock"
+    );
+}
