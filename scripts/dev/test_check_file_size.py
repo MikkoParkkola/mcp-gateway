@@ -375,3 +375,16 @@ class MovedRows(unittest.TestCase):
             {"src/a.rs": "", "src/c.rs": text(fake)},
         )
         self.assertTrue(any("src/c.rs" in e for e in errors), errors)
+
+    def test_m9_a_row_under_the_ceiling_cannot_cancel_a_rising_total(self):
+        # A hand-edited 5-line row would be -795 lines of "excess" and hide
+        # m6's rise from the total rule; each row's excess counts from 0.
+        lines = code(0, 850)
+        part = lines[:150] + code(5000, 800)
+        errors = self.ratchet(
+            {"src/a.rs": 850},
+            {"src/b.rs": 950, "src/z.rs": 5},
+            {"src/a.rs": text(lines)},
+            {"src/a.rs": text(lines[150:]), "src/b.rs": text(part), "src/z.rs": text(code(7000, 5))},
+        )
+        self.assertTrue(any("total" in e for e in errors), errors)
