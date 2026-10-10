@@ -12,6 +12,7 @@ use std::sync::atomic::Ordering;
 use serde_json::Value;
 
 use super::direct_guards_fixture::{Answer, post_direct, post_meta_invoke};
+use crate::gateway::meta_mcp::MetaMcp;
 
 /// What one call through a route produced.
 pub(crate) struct Sent {
@@ -136,5 +137,59 @@ pub(crate) async fn direct_chained() -> Sent {
     let (_, body) =
         super::direct_guards_fixture::send(&fx, "/mcp/alpha", "k-std", "tools/call", params, None)
             .await;
+    sent(&fx, body)
+}
+
+/// `alpha`'s `read` surfaced under its own name on the Meta-MCP.
+fn surfacing(meta: MetaMcp) -> MetaMcp {
+    meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+        server: "alpha".to_string(),
+        tool: "read".to_string(),
+    }])
+}
+
+/// `tools/call read` on `/mcp`: the surfaced-name route (R2), with `meta`
+/// as the params' `_meta` when given.
+async fn call_surfaced(
+    fx: &super::direct_guards_fixture::Fx,
+    args: Value,
+    meta: Option<Value>,
+) -> Value {
+    let mut params = serde_json::json!({ "name": "read", "arguments": args });
+    if let Some(meta) = meta {
+        params["_meta"] = meta;
+    }
+    super::direct_guards_fixture::send(fx, "/mcp", "k-std", "tools/call", params, None)
+        .await
+        .1
+}
+
+/// R2 with a chain signer emitting on request, the call carrying a chain nonce.
+pub(crate) async fn surfaced_chained() -> Sent {
+    use crate::gateway::chain_test_support::{NONCE_KEY, signer};
+    let fx = super::direct_guards_fixture::fixture_built(Answer::Ok, |meta| {
+        let mut meta = surfacing(meta);
+        meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest);
+        meta
+    })
+    .await;
+    let body = call_surfaced(
+        &fx,
+        serde_json::json!({}),
+        Some(serde_json::json!({ NONCE_KEY: "matrix-nonce" })),
+    )
+    .await;
+    sent(&fx, body)
+}
+
+/// R2 on the firewalled fixture writing audit rows to `audit`.
+pub(crate) async fn surfaced_firewalled(audit: &Path, args: Value) -> Sent {
+    let fx = super::direct_guards_fixture::fixture_firewalled_audited_built(
+        Answer::Ok,
+        audit.to_path_buf(),
+        surfacing,
+    )
+    .await;
+    let body = call_surfaced(&fx, args, None).await;
     sent(&fx, body)
 }

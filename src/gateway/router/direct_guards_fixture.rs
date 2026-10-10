@@ -268,6 +268,20 @@ pub(crate) async fn fixture_firewalled_audited(answer: Answer, audit: std::path:
     fx
 }
 
+/// [`fixture_firewalled_audited`], arming the replaced `MetaMcp` with `build`
+/// (the route x check matrix's surfaced-name route, MIK-8137 b3).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_audited_built(
+    answer: Answer,
+    audit: std::path::PathBuf,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    AUDIT_LOG.with(|a| *a.borrow_mut() = Some(audit));
+    let fx = fixture_inner(answer, true, build).await;
+    AUDIT_LOG.with(|a| *a.borrow_mut() = None);
+    fx
+}
+
 /// [`fixture_firewalled`] with a firewall rule for `read` and a client
 /// circuit breaker that opens after one counted failure, so a cell can tell a
 /// refusal the gateway excludes from client accounting from one it charges.

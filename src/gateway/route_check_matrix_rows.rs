@@ -39,6 +39,10 @@ async fn blocked_call(route: Route, audit: &std::path::Path) -> (Value, usize) {
             let sent = router::direct_firewalled(audit, args).await;
             (sent.body, sent.backend_calls)
         }
+        Route::Surfaced => {
+            let sent = router::surfaced_firewalled(audit, args).await;
+            (sent.body, sent.backend_calls)
+        }
         Route::Stdio => {
             let sent = stdio::stdio_firewalled(audit, args).await;
             (sent.body, sent.backend_calls)
@@ -52,7 +56,7 @@ async fn blocked_call(route: Route, audit: &std::path::Path) -> (Value, usize) {
 /// request row at all; the dispatch-time rescan still stops the send.
 #[tokio::test]
 async fn route_firewall_rows() {
-    for route in [Route::Invoke, Route::Direct, Route::Stdio] {
+    for route in [Route::Invoke, Route::Surfaced, Route::Direct, Route::Stdio] {
         let dir = tempfile::tempdir().expect("tempdir");
         let audit = dir.path().join("audit.jsonl");
         let (body, backend_calls) = blocked_call(route, &audit).await;
@@ -261,4 +265,25 @@ async fn chain_link_rows() {
             "{route:?}: no origin link on the answer: {body}"
         );
     }
+}
+
+/// ChainLink, R2 gap (MIK-8159): the same signed request by surfaced name
+/// succeeds and reaches its backend, but the answer carries no origin link,
+/// because the surfaced reply drops the chain source.
+#[tokio::test]
+async fn chain_link_surfaced_gap_row() {
+    use crate::gateway::chain_test_support::chain_of;
+    assert_eq!(
+        expect(MethodKind::ToolsCall, Route::Surfaced, Stage::ChainLink),
+        Expect::ExpectedGap(super::Ticket::Mik8159)
+    );
+    let sent = router::surfaced_chained().await;
+    assert!(sent.body.get("error").is_none(), "refused: {}", sent.body);
+    assert_eq!(sent.backend_calls, 1, "premise: the call ran: {}", sent.body);
+    assert!(
+        chain_of(&sent.body["result"]).is_none(),
+        "R2 now carries an origin link; MIK-8159 may have closed this gap, flip \
+         the row to Applies: {}",
+        sent.body
+    );
 }
