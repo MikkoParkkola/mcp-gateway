@@ -54,6 +54,17 @@ async fn until(what: &str, mut ready: impl FnMut() -> bool) {
     panic!("never: {what}");
 }
 
+/// The continuation slots held now. Each row has one caller, so this is that
+/// caller's quota share (MIK-8293): a round charges it once, however it seals.
+async fn slots(state: &Arc<AppState>) -> usize {
+    state
+        .meta_mcp
+        .continuation()
+        .in_flight()
+        .len(crate::protocol::continuation::now_unix_secs())
+        .await
+}
+
 pub(super) fn has_round(state: &Arc<AppState>, id: &str) -> bool {
     store(state).input_round_for_test(id).0.is_some()
 }
@@ -104,6 +115,7 @@ async fn a_round_asked_on_an_unreadable_clock_is_sealed_after_the_wait_and_redee
         .unwrap();
     std::assert_eq!(sealed.issued_at, t, "sealed at the store's checked time");
     std::assert_eq!(sealed.backend_request_state.as_deref(), Some(STATE_1));
+    std::assert_eq!(slots(&state).await, 1, "the reseal charges the caller once");
     let shown = get_task(&state, "key-a", &id).await;
     std::assert!(!shown.to_string().contains(&token), "{shown}");
     std::assert!(!shown.to_string().contains(STATE_1), "{shown}");
@@ -119,6 +131,30 @@ async fn a_round_asked_on_an_unreadable_clock_is_sealed_after_the_wait_and_redee
     let settled = poll_until_terminal(&state, "key-a", &id).await;
     std::assert_eq!(status_of(&settled), "completed", "{settled}");
     std::assert_eq!(mock.calls(), 2);
+    std::assert_eq!(slots(&state).await, 0, "the answer frees the slot");
+}
+
+/// MIK-8293 x AC12 (control for the row above). A round minted at once on a
+/// readable clock holds one slot for its caller and frees it on the answer, so
+/// both ways a round seals charge the same share. Mutant: a second hold taken
+/// at seal (both rows read 2).
+#[tokio::test(start_paused = true)]
+async fn a_round_minted_at_once_charges_its_caller_one_slot() {
+    let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+    let (state, _dir) = state_with(&mock).await;
+    let id = task_id(&post(&state, "key-a", create(1, "quota-once")).await);
+    until("the round parks", || has_round(&state, &id)).await;
+    std::assert_eq!(slots(&state).await, 1, "one slot for the round");
+    let redeemed = post(
+        &state,
+        "key-a",
+        update(2, &id, json!({ "confirm": answer() })),
+    )
+    .await;
+    std::assert!(redeemed.get("error").is_none(), "{redeemed}");
+    let settled = poll_until_terminal(&state, "key-a", &id).await;
+    std::assert_eq!(status_of(&settled), "completed", "{settled}");
+    std::assert_eq!(slots(&state).await, 0, "the answer frees the slot");
 }
 
 /// AC12 GUARD. A call with no task worker is refused at once on an unreadable
