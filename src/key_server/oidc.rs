@@ -541,6 +541,13 @@ impl OidcVerifier {
         // An unverified address is dropped here, once, so every consumer of
         // `VerifiedIdentity.email` (allowed_domains, policy, role mapping,
         // grant label, propagated assertion) sees a verified address or "".
+        // An empty `sub` names no one (OIDC Core requires one). Checked before
+        // any later refusal, such as the domain allowlist, so a nameless token
+        // is always reported as nameless and never falls through elsewhere as
+        // a mere "not ours" (MIK-8287).
+        if !crate::identity_grants::names_someone(&claims.iss, &claims.sub) {
+            return Err(identity::missing_subject());
+        }
         let email_verified = matches!(&claims.email_verified, Some(serde_json::Value::Bool(true)))
             || matches!(&claims.email_verified, Some(serde_json::Value::String(v)) if v == "true");
         let email = match claims.email {
@@ -580,11 +587,7 @@ impl OidcVerifier {
             claims.name,
             claims.groups.unwrap_or_default(),
         )
-        .ok_or_else(|| {
-            OidcError::JwtError(jsonwebtoken::errors::Error::from(
-                jsonwebtoken::errors::ErrorKind::MissingRequiredClaim("sub".to_owned()),
-            ))
-        })
+        .ok_or_else(identity::missing_subject)
     }
 
     /// Find a decoding key by `kid`, refreshing the JWKS cache if not found.

@@ -3,7 +3,7 @@
 //! How a `VerifiedIdentity` is made and keyed: the checked constructor every
 //! production source goes through (MIK-8286) and the stable actor id.
 
-use super::VerifiedIdentity;
+use super::{OidcError, VerifiedIdentity};
 
 impl VerifiedIdentity {
     /// The only way production code builds a caller's verified identity
@@ -45,4 +45,12 @@ impl VerifiedIdentity {
             self.subject
         )
     }
+}
+
+/// The refusal for a token whose identity names no one: an existing variant,
+/// so the public error type is unchanged (MIK-8287).
+pub(super) fn missing_subject() -> OidcError {
+    OidcError::JwtError(jsonwebtoken::errors::Error::from(
+        jsonwebtoken::errors::ErrorKind::MissingRequiredClaim("sub".to_owned()),
+    ))
 }

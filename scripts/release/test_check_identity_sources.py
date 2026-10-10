@@ -135,5 +135,43 @@ class RealTree(unittest.TestCase):
             cis.ALLOWED.update(saved)
 
 
+class CodeReviewBypasses(unittest.TestCase):
+    """Each bypass the code-review seats found (MIK-8286 round 1) now fails."""
+
+    LIT = "fn mint() -> VerifiedIdentity { VerifiedIdentity { subject: s } }\n"
+
+    def test_a_cfg_that_also_compiles_outside_tests_is_production(self):
+        root = tree({"src/a.rs": "#[cfg(any(test, unix))]\n" + self.LIT}, "mod a;\n")
+        self.assertEqual(len(cis.violations(root)), 1, cis.violations(root))
+
+    def test_a_cfg_all_with_test_is_test_code(self):
+        root = tree({"src/a.rs": "#[cfg(all(test, unix))]\n" + self.LIT}, "mod a;\n")
+        self.assertEqual(cis.violations(root), [])
+
+    def test_production_reachability_wins_whatever_the_walk_order(self):
+        root = tree({
+            "src/a.rs": "#[cfg(test)]\n#[path = \"shared.rs\"]\nmod t;\n",
+            "src/b.rs": "#[path = \"shared.rs\"]\nmod p;\n",
+            "src/shared.rs": self.LIT,
+        }, "mod a;\nmod b;\n")
+        self.assertEqual(len(cis.violations(root)), 1, cis.violations(root))
+
+    def test_a_renamed_import_fails(self):
+        root = tree({"src/a.rs": "use crate::key_server::oidc::VerifiedIdentity as Vi;\n"}, "mod a;\n")
+        self.assertTrue(any("imported as" in v for v in cis.violations(root)))
+
+    def test_a_spaced_constructor_path_fails(self):
+        root = tree({"src/a.rs": "fn f() { GrantSubject :: new (a, b, None); }\n"}, "mod a;\n")
+        self.assertEqual(len(cis.violations(root)), 1, cis.violations(root))
+
+    def test_an_enum_or_crate_visible_carrier_read_back_fails(self):
+        for carrier in (
+            "#[derive(Deserialize)]\npub(crate) enum Tok { A(VerifiedIdentity) }\n",
+            "#[derive(Deserialize)]\npub(crate) struct Tok(GrantSubject);\n",
+        ):
+            root = tree({"src/a.rs": carrier + "fn load(v: Value) -> Tok { serde_json::from_value(v).unwrap() }\n"},
+                        "mod a;\n")
+            self.assertTrue(any("deserializes" in v for v in cis.violations(root)), carrier)
+
 if __name__ == "__main__":
     unittest.main()

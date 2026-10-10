@@ -590,9 +590,18 @@ async fn nameless_certificates_never_share_a_cached_personal_result() {
     let nameless = nameless_cert();
     let a = invoke_capability(&fx, "k-std", &nameless, "placeholder_probe").await;
     let b = invoke_capability(&fx, "k-budget", &nameless, "placeholder_probe").await;
-    assert!(
-        !(a.to_string().contains("served-2") && b.to_string().contains("served-2")),
-        "caller B was served caller A's cached personal result: A={a} B={b}"
+    // Neither nameless caller is served: both are refused (no subject, so
+    // the personal capability's owner grant cannot match), and the upstream
+    // saw only the control's one request. Today A runs (served-2) and B is
+    // served A's cached answer.
+    for (who, body) in [("A", &a), ("B", &b)] {
+        let text = body.to_string();
+        assert!(!text.contains("served-"), "caller {who} was served: {text}");
+    }
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "no nameless call reached the upstream"
     );
 }
 

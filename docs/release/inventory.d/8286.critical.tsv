@@ -1,1 +1,2 @@
 src/gateway/server/support.rs	names_nobody	1	critical	c	names_nobody	Refuses a client certificate naming no subject (no SAN URI, no CN) before anything runs (MIK-8286)
+src/gateway/router/identity.rs	is_this_certificates	1	critical	c	is_this_certificates	A certificate-derived subject, or a nameless certificate's display-name placeholder, is recognised as the certificate's so it never keys as itself (MIK-8286)

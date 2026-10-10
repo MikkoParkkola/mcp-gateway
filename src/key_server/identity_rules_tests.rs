@@ -587,3 +587,26 @@ async fn an_empty_subject_is_refused_as_a_missing_claim() {
         "no token is issued: {body}"
     );
 }
+
+/// MIK-8286 code review: an empty `sub` is refused as nameless even when a
+/// later check (here the domain allowlist) would also refuse it, so the
+/// public path refuses it with 401 instead of treating the token as "not
+/// ours". Mutant: the subject checked after the domain filter.
+#[tokio::test]
+async fn an_empty_subject_is_nameless_before_any_domain_refusal() {
+    let h = Harness::start(&config_yaml("[\"corp.com\"]", "")).await;
+    let token = h.mint(
+        ISS_A,
+        "",
+        &json!({"email": "x@elsewhere.invalid", "email_verified": true}),
+    );
+    let err = h.verify(&token).await.expect_err("refused");
+    assert!(
+        matches!(
+            &err,
+            OidcError::JwtError(e)
+                if matches!(e.kind(), jsonwebtoken::errors::ErrorKind::MissingRequiredClaim(c) if c == "sub")
+        ),
+        "refused as nameless, not as a domain mismatch: {err}"
+    );
+}

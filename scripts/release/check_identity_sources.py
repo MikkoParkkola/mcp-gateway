@@ -94,11 +94,33 @@ MOD_DECL = re.compile(r"(?:pub(?:\([^)]*\))?\s+)?mod\s+(?:r#)?(\w+)\s*;")
 ATTR_BLOCK = re.compile(r"(?:#\[[^\]]*\]\s*)+$")
 
 
+def requires_test(cond: str) -> bool:
+    """Whether a `cfg(..)` condition can hold only under `test`: `test`
+    itself, or an `all(..)` with `test` among its top-level terms. `any(test,
+    unix)` or `not(test)` also compile outside tests, so they are production."""
+    cond = cond.strip()
+    if cond == "test":
+        return True
+    m = re.fullmatch(r"all\((.*)\)", cond, re.S)
+    if not m:
+        return False
+    depth, term, terms = 0, "", []
+    for ch in m.group(1):
+        depth += (ch == "(") - (ch == ")")
+        if ch == "," and depth == 0:
+            terms.append(term)
+            term = ""
+        else:
+            term += ch
+    terms.append(term)
+    return any(requires_test(t) for t in terms)
+
+
 def gated_spans(code: str) -> list[tuple[int, int]]:
     """Spans of items under `#[cfg(test)]` (or any cfg naming `test`)."""
     spans = []
     for m in re.finditer(r"#\[cfg\(([^\]]*)\)\]", code):
-        if not re.search(r"(?<!not\()\btest\b", m.group(1)):
+        if not requires_test(m.group(1)):
             continue
         k = m.end()
         while (a := re.match(r"\s*#\[[^\]]*\]", code[k:])):
@@ -114,7 +136,9 @@ def module_files(root: Path) -> dict[Path, bool]:
     todo += [(p, False) for p in sorted((root / "src/bin").glob("*.rs"))]
     while todo:
         path, test = todo.pop()
-        if not path.exists() or (path in seen and (seen[path] or not test)):
+        # Skip a revisit unless it upgrades a test-only file to production:
+        # production reachability wins, whatever order the walk finds it in.
+        if not path.exists() or (path in seen and (test or not seen[path])):
             continue
         seen[path] = test
         code = mask(path.read_text(encoding="utf-8"))
@@ -179,6 +203,7 @@ def self_literals(code: str) -> list[tuple[int, str]]:
 
 
 TYPES = ("VerifiedIdentity", "GrantSubject", "CertIdentity")
+RENAMED = re.compile(r"\b(" + "|".join(("VerifiedIdentity", "GrantSubject", "CertIdentity")) + r")\s+as\s+(\w+)")
 ALIAS = re.compile(r"\btype\s+\w+(?:<[^>]*>)?\s*=\s*(?:[\w:]+::)?(" + "|".join(TYPES) + r")\b")
 # Deserialization from untrusted bytes into a caller identity, or a struct
 # carrying one: each must be a listed read-back with its check site.
@@ -201,13 +226,14 @@ def carriers(texts: dict[str, str]) -> set[str]:
     while True:
         grown = set(found)
         for code in texts.values():
-            for sm in re.finditer(r"\bstruct\s+(\w+)[^{;]*\{", code):
+            for sm in re.finditer(r"\b(?:struct|enum)\s+(\w+)[^{;(]*[{(]", code):
                 # Only types serde can build from bytes carry an identity in.
-                derives = ATTR_BLOCK.search(code[: sm.start()].rstrip().removesuffix("pub").rstrip())
+                before = re.sub(r"pub(\([^)]*\))?\s*$", "", code[: sm.start()].rstrip()).rstrip()
+                derives = ATTR_BLOCK.search(before)
                 if not (derives and "Deserialize" in derives.group(0)):
                     continue
-                body = code[sm.end() : block_end(code, sm.end() - 1)]
-                if any(re.search(r":\s*[^,]*\b" + re.escape(t) + r"\b", body) for t in found):
+                body = code[sm.end() - 1 : block_end(code, sm.end() - 1)]
+                if any(re.search(r"\b" + re.escape(t) + r"\b", body) for t in found):
                     grown.add(sm.group(1))
         if grown == found:
             return found
@@ -236,6 +262,10 @@ def violations(root: Path) -> list[str]:
     names = re.compile(r"\b(" + "|".join(sorted(carrier)) + r")\b")
     for rel, code in sorted(texts.items()):
         gated = gated_spans(code)
+        for m in RENAMED.finditer(code):
+            if not any(s <= m.start() < e for s, e in gated):
+                line = code.count("\n", 0, m.start()) + 1
+                found.append(f"{rel}:{line}: `{m.group(1)}` imported as `{m.group(2)}` hides its constructions from this check")
         for m in ALIAS.finditer(code):
             if not any(s <= m.start() < e for s, e in gated):
                 line = code.count("\n", 0, m.start()) + 1
@@ -260,7 +290,7 @@ def violations(root: Path) -> list[str]:
             if construct.endswith("{"):
                 pattern = r"\b" + re.escape(construct[:-2]) + r"\s*\{"
             else:
-                pattern = r"\bGrantSubject::new\("
+                pattern = r"\bGrantSubject\s*::\s*new\s*\("
             for m in re.finditer(pattern, code):
                 before = code[max(0, m.start() - 40) : m.start()]
                 if construct.endswith("{") and (
@@ -272,12 +302,11 @@ def violations(root: Path) -> list[str]:
         for at, construct in sorted(hits):
             if any(s <= at < e for s, e in gated):
                 continue
-            if True:
-                fn = enclosing_fn(code, at)
-                if (rel, fn, construct) in ALLOWED or (construct == "GrantSubject::new(" and rel in RULE_SITES):
-                    continue
-                line = code.count("\n", 0, at) + 1
-                found.append(f"{rel}:{line}: `{construct}` in fn `{fn or '<module>'}` builds an identity outside its checked constructor")
+            fn = enclosing_fn(code, at)
+            if (rel, fn, construct) in ALLOWED or (construct == "GrantSubject::new(" and rel in RULE_SITES):
+                continue
+            line = code.count("\n", 0, at) + 1
+            found.append(f"{rel}:{line}: `{construct}` in fn `{fn or '<module>'}` builds an identity outside its checked constructor")
     return found
 
 
