@@ -279,3 +279,112 @@ class Wiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def code(start: int, count: int) -> list[str]:
+    """`count` distinct, non-trivial source lines."""
+    return [f"    let v{i} = {i};" for i in range(start, start + count)]
+
+
+def text(lines: list[str]) -> str:
+    return "".join(f"{line}\n" for line in lines)
+
+
+class MovedRows(unittest.TestCase):
+    """MIK-8291 (split-baselines): a new row may carry lines moved from a row
+    that shrank or left. The total excess may not rise, a listed row may not
+    grow, and a new row's excess over the ceiling must be covered by moved
+    lines; changed text does not match and fails safe."""
+
+    HEADER = ["// SPDX-FileCopyrightText: 2026 Mikko Parkkola", "use super::*;"]
+
+    def ratchet(self, base, head, base_texts, head_texts):
+        return load_gate(Path("/nonexistent")).check_ratchet(base, head, base_texts, head_texts)
+
+    def test_m1_a_whole_file_rename_passes(self):
+        lines = code(0, 1000)
+        errors = self.ratchet({"src/a.rs": 1000}, {"src/b.rs": 1000}, {"src/a.rs": text(lines)}, {"src/b.rs": text(lines)})
+        self.assertEqual(errors, [])
+
+    def test_m2_a_split_leaving_one_part_over_the_ceiling_passes(self):
+        lines = code(0, 1000)
+        moved, kept = lines[:848], lines[848:]
+        part = self.HEADER + moved
+        errors = self.ratchet(
+            {"src/a.rs": 1000},
+            {"src/b.rs": len(part)},
+            {"src/a.rs": text(lines)},
+            {"src/a.rs": text(kept), "src/b.rs": text(part)},
+        )
+        self.assertEqual(errors, [])
+
+    def test_m3_a_new_oversized_file_with_nothing_moved_fails(self):
+        lines = code(0, 1000)
+        errors = self.ratchet(
+            {"src/a.rs": 1000},
+            {"src/a.rs": 1000, "src/c.rs": 850},
+            {"src/a.rs": text(lines)},
+            {"src/a.rs": text(lines), "src/c.rs": text(code(5000, 850))},
+        )
+        self.assertTrue(any("src/c.rs" in e for e in errors), errors)
+
+    def test_m4_a_listed_row_that_grows_fails(self):
+        lines = code(0, 1000)
+        errors = self.ratchet({"src/a.rs": 1000}, {"src/a.rs": 1001}, {"src/a.rs": text(lines)}, {"src/a.rs": text(lines + code(9000, 1))})
+        self.assertTrue(any("src/a.rs" in e for e in errors), errors)
+
+    def test_m5_a_new_row_bigger_than_what_moved_fails(self):
+        lines = code(0, 1000)
+        part = lines[:50] + code(5000, 850)
+        errors = self.ratchet(
+            {"src/a.rs": 1000},
+            {"src/a.rs": 950, "src/b.rs": 900},
+            {"src/a.rs": text(lines)},
+            {"src/a.rs": text(lines[50:]), "src/b.rs": text(part)},
+        )
+        self.assertTrue(any("src/b.rs" in e for e in errors), errors)
+
+    def test_m6_a_total_excess_that_rises_fails(self):
+        # The source drops under the ceiling (excess 50 -> 0) while the new
+        # file's excess (150) is fully carried: only the total rule refuses.
+        lines = code(0, 850)
+        part = lines[:150] + code(5000, 800)
+        errors = self.ratchet(
+            {"src/a.rs": 850},
+            {"src/b.rs": 950},
+            {"src/a.rs": text(lines)},
+            {"src/a.rs": text(lines[150:]), "src/b.rs": text(part)},
+        )
+        self.assertTrue(any("total" in e for e in errors), errors)
+
+    def test_m7_text_changed_in_the_move_fails_safe(self):
+        lines = code(0, 1000)
+        renamed = [line.replace("let", "let mut") for line in lines]
+        errors = self.ratchet({"src/a.rs": 1000}, {"src/b.rs": 1000}, {"src/a.rs": text(lines)}, {"src/b.rs": text(renamed)})
+        self.assertTrue(any("src/b.rs" in e for e in errors), errors)
+
+    def test_m8_closing_braces_freed_by_deletion_carry_nothing(self):
+        # Trivial lines do not match: deleting code from a listed file frees
+        # its `}` lines, which a fabricated file may not claim.
+        source = [x for i in range(500) for x in (f"    fn f{i}() {{", "    }")]
+        fake = ["}"] * 900
+        errors = self.ratchet(
+            {"src/a.rs": 1000},
+            {"src/c.rs": 900},
+            {"src/a.rs": text(source)},
+            {"src/a.rs": "", "src/c.rs": text(fake)},
+        )
+        self.assertTrue(any("src/c.rs" in e for e in errors), errors)
+
+    def test_m9_a_row_under_the_ceiling_cannot_cancel_a_rising_total(self):
+        # A hand-edited 5-line row would be -795 lines of "excess" and hide
+        # m6's rise from the total rule; each row's excess counts from 0.
+        lines = code(0, 850)
+        part = lines[:150] + code(5000, 800)
+        errors = self.ratchet(
+            {"src/a.rs": 850},
+            {"src/b.rs": 950, "src/z.rs": 5},
+            {"src/a.rs": text(lines)},
+            {"src/a.rs": text(lines[150:]), "src/b.rs": text(part), "src/z.rs": text(code(7000, 5))},
+        )
+        self.assertTrue(any("total" in e for e in errors), errors)

@@ -106,7 +106,12 @@ def write_baseline(sizes: dict[str, int]) -> None:
     )
 
 
-def check_ratchet(base: dict[str, int], head: dict[str, int]) -> list[str]:
+def check_ratchet(
+    base: dict[str, int],
+    head: dict[str, int],
+    base_texts: dict[str, str] | None = None,
+    head_texts: dict[str, str] | None = None,
+) -> list[str]:
     """Errors for a head baseline that adds a row or raises an allowance over `base`.
 
     The baseline is the count ratchet (MIK-8210): the number of files allowed
