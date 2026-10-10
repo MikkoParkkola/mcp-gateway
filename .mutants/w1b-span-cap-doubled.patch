@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_seam_excuse.rs b/src/security/firewall/collusion_seam_excuse.rs
+index 672be17a2..0d7d2fcea 100644
+--- a/src/security/firewall/collusion_seam_excuse.rs
++++ b/src/security/firewall/collusion_seam_excuse.rs
+@@ -459,7 +459,7 @@ impl CollusionDetector {
+         let mut seen = std::collections::HashSet::new();
+         for (attempted, (r, a, b)) in spans(&indexed).enumerate() {
+             count!(candidates, 1);
+-            if attempted == MAX_SEAM_SPANS {
++            if attempted == 2 * MAX_SEAM_SPANS {
+                 cut = true;
+                 break;
+             }

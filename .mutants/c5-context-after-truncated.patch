@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_seam_excuse.rs b/src/security/firewall/collusion_seam_excuse.rs
+index 672be17a2..c598b7798 100644
+--- a/src/security/firewall/collusion_seam_excuse.rs
++++ b/src/security/firewall/collusion_seam_excuse.rs
+@@ -327,7 +327,7 @@ fn context_after(run: &Indexed<'_>, j: usize) -> Option<String> {
+     )?;
+     // `!run.whole` is a deliberate fail-safe, withholds, never admits: the
+     // span it skips holds only real text (#3726 c5).
+-    if chars.len() < 3 && (rest.len() > CONTEXT_PIECES || !run.whole) {
++    if chars.len() < 3 && rest.len() > CONTEXT_PIECES {
+         return None;
+     }
+     Some(chars.into_iter().collect())

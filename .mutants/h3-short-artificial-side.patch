@@ -1,0 +1,15 @@
+diff --git a/src/security/firewall/collusion_seam_excuse.rs b/src/security/firewall/collusion_seam_excuse.rs
+index 672be17a2..30debedec 100644
+--- a/src/security/firewall/collusion_seam_excuse.rs
++++ b/src/security/firewall/collusion_seam_excuse.rs
+@@ -517,9 +517,7 @@ impl CollusionDetector {
+     fn boundary_hashes(&self, left: &Side, right: &Side) -> Option<Vec<u64>> {
+         let joined = self.normalized(&format!("{}{}", left.text, right.text));
+         let (nl, nr) = (self.normalized(&left.text), self.normalized(&right.text));
+-        if (left.artificial && nl.chars().count() < K)
+-            || (right.artificial && nr.chars().count() < K)
+-        {
++        if false {
+             return None;
+         }
+         let bounds: Vec<usize> = joined

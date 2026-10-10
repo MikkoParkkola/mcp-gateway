@@ -1,0 +1,8 @@
+head_sha	cbd5f5e5ccd110c61f2327152eb2191ba53b4ebb
+h1-no-margin	linux	h1-no-margin.patch	--lib -- the_window_at_an_artificial_edge_is_not_hashed
+c5-context-after-truncated	linux	c5-context-after-truncated.patch	--lib -- cut_context_past_the_piece_cap_skips_the_span
+p1-owner-not-unique	linux	p1-owner-not-unique.patch	--lib -- a_piece_two_receipts_of_one_step_hold_gets_no_subset_seams
+h3-short-artificial-side	linux	h3-short-artificial-side.patch	--lib -- a_short_side_after_a_safe_cut_skips_its_span_and_reports_it a_short_right_side_after_a_safe_cut_skips_its_span_and_reports_it
+h3r-right-arm-only	linux	h3r-right-arm-only.patch	--lib -- a_short_right_side_after_a_safe_cut_skips_its_span_and_reports_it
+w2-no-piece-quota	linux	w2-no-piece-quota.patch	--lib -- the_piece_quota_stops_partway_through_a_round
+w1b-span-cap-doubled	linux	w1b-span-cap-doubled.patch	--lib -- span_candidates_stop_at_the_cap the_span_cap_counts_spans_when_no_fingerprint_is_kept

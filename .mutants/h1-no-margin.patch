@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_seam_excuse.rs b/src/security/firewall/collusion_seam_excuse.rs
+index 672be17a2..b838bc186 100644
+--- a/src/security/firewall/collusion_seam_excuse.rs
++++ b/src/security/firewall/collusion_seam_excuse.rs
+@@ -535,7 +535,7 @@ impl CollusionDetector {
+         let (lo, hi) = (pre.min(n - suf.min(n)), pre.max(n - suf.min(n)));
+         // Deliberate fail-safe, withholds, never admits: the safe cut already
+         // makes a window at an artificial edge real; the margin drops it (#3726 h1).
+-        let first = usize::from(left.artificial);
++        let first = 0;
+         let Some(last) = (n - K).checked_sub(usize::from(right.artificial)) else {
+             return Some(Vec::new());
+         };
