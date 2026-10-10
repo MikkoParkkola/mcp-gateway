@@ -218,10 +218,21 @@ impl TaskStore {
         round: InputRound,
         at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
+        // MIK-8176 D3: the round's sealed continuation is owned by the row it
+        // parks on. Taken here, on the worker's task, where its hold was
+        // registered; the blocking write below runs outside that scope.
+        let holds = round.request_state.as_deref().map_or_else(
+            crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none,
+            |sealed| {
+                crate::gateway::meta_mcp::sealed_hold::carried(&serde_json::json!({
+                    "requestState": sealed
+                }))
+            },
+        );
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
         tokio::task::spawn_blocking(move || {
-            shared.require_input_blocking(&owner, &id, revision, requested, round, at)
+            shared.require_input_blocking(&owner, &id, revision, (requested, round, holds), at)
         })
         .await
         .map_err(|_| StoreError::Storage)?
@@ -306,8 +317,11 @@ impl Shared {
         owner: &str,
         id: &str,
         revision: u64,
-        requested: InputRequired,
-        round: InputRound,
+        (requested, round, holds): (
+            InputRequired,
+            InputRound,
+            crate::gateway::meta_mcp::sealed_hold::CarriedHolds,
+        ),
         at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
         let _order = self.order();
@@ -350,7 +364,7 @@ impl Shared {
         }
         let bytes = self.fits_cap(&record)?;
         self.commit(&record_name(task.id()), &bytes)?;
-        Ok(self.publish(task, record))
+        Ok(self.publish(task, record, super::HoldUpdate::Replace(holds)))
     }
 
     fn close_round_blocking(
@@ -388,7 +402,7 @@ impl Shared {
         record.set_model(&task);
         let bytes = self.fits_cap(&record)?;
         self.commit(&record_name(task.id()), &bytes)?;
-        Ok(self.publish(task, record))
+        Ok(self.publish(task, record, super::HoldUpdate::Drop))
     }
 
     /// Apply the one-shot clock a test armed for the moment a resume commits.
@@ -456,7 +470,11 @@ impl Shared {
         let bytes = self.fits_cap(&record)?;
         if !completing {
             self.commit(&record_name(task.id()), &bytes)?;
-            return Ok(ProvideOutcome::Partial(self.publish(task, record)));
+            return Ok(ProvideOutcome::Partial(self.publish(
+                task,
+                record,
+                super::HoldUpdate::Carry,
+            )));
         }
         // The permit is taken inside this write and before the CAS to
         // `working`: no free worker means nothing is written.
@@ -472,7 +490,7 @@ impl Shared {
         #[cfg(test)]
         self.after_resume_commit();
         Ok(ProvideOutcome::Resumed {
-            task: self.publish(task, record),
+            task: self.publish(task, record, super::HoldUpdate::Drop),
             round,
             slot,
         })

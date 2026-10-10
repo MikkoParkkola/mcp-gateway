@@ -26,6 +26,8 @@ const ASKING: &str = "ask";
 /// Asks after [`SLOW`], so a cancel can arrive first.
 const SLOW_ASKING: &str = "slow_ask";
 const SLOW: Duration = Duration::from_millis(800);
+/// An interim round with `requestState` and no questions (MIK-8177).
+const STATE_ONLY: &str = "state_only";
 
 type Stdout = Lines<BufReader<DuplexStream>>;
 
@@ -45,6 +47,7 @@ async fn spawn_backend() -> String {
                 "tools/list" => json!({"tools": [
                     {"name": ASKING, "inputSchema": {"type": "object"}},
                     {"name": SLOW_ASKING, "inputSchema": {"type": "object"}},
+                    {"name": STATE_ONLY, "inputSchema": {"type": "object"}},
                 ]}),
                 "tools/call" => {
                     let params = request.get("params").cloned().unwrap_or_default();
@@ -52,6 +55,15 @@ async fn spawn_backend() -> String {
                         tokio::time::sleep(SLOW).await;
                     }
                     let tenant = params["arguments"]["customer_id"].clone();
+                    if params["name"] == STATE_ONLY {
+                        return axum::Json(json!({"jsonrpc": "2.0", "id": request.get("id"),
+                        "result": {
+                            "resultType": "input_required",
+                            "requestState": "backend-state",
+                            "content": [{"type": "text",
+                                         "text": json!({"customer_id": tenant}).to_string()}],
+                        }}));
+                    }
                     json!({
                         "resultType": "input_required",
                         "inputRequests": {"k1": {
@@ -212,6 +224,21 @@ fn delivered(answer: &Value) -> bool {
         && !text.contains("backend-state")
 }
 
+/// Whether any string in `value` (or in a JSON document a string carries) is
+/// a live envelope under `meta`'s continuation keyring.
+fn carries_envelope(meta: &MetaMcp, value: &Value) -> bool {
+    match value {
+        Value::String(text) => {
+            meta.continuation().keyring().open_now(text).is_ok()
+                || serde_json::from_str::<Value>(text)
+                    .is_ok_and(|inner| !inner.is_string() && carries_envelope(meta, &inner))
+        }
+        Value::Array(items) => items.iter().any(|item| carries_envelope(meta, item)),
+        Value::Object(fields) => fields.values().any(|field| carries_envelope(meta, field)),
+        _ => false,
+    }
+}
+
 /// Control: a sealed question the writer takes keeps its slot for the retry.
 #[tokio::test]
 async fn a_delivered_stdio_question_keeps_its_slot() {
@@ -266,6 +293,45 @@ async fn a_stdio_question_refused_by_its_delivery_record_gives_its_slot_back() {
         session.held().await,
         0,
         "the refused question kept its slot: {refused}"
+    );
+}
+
+/// MIK-8177.STATE.1, stdio arm: a state-only interim round (a sealed
+/// `requestState`, no questions) whose delivery record cannot be written
+/// never leaves, so its slot is given back, while an unrelated delivered
+/// question keeps its own. Guard, not a red proof: stage 3's scoped stdio
+/// release already frees it on base (measured, with the positive control
+/// below); it pins that the state-only shape stays covered.
+#[tokio::test]
+async fn a_stdio_state_only_round_refused_by_its_delivery_record_gives_its_slot_back() {
+    let mut session = open(Setup::LogFailClosed, 1 << 20).await;
+    session.send(&call(4, ASKING, "t1")).await;
+    let kept = session.answer(4).await;
+    assert!(
+        delivered(&kept),
+        "the unrelated question is delivered: {kept}"
+    );
+    // Positive control: a delivered state-only round is sealed and holds a
+    // slot, so the refused one below had a slot to give back.
+    session.send(&call(3, STATE_ONLY, "t1")).await;
+    let sealed = session.answer(3).await;
+    assert_eq!(
+        session.held().await,
+        2,
+        "a delivered state-only round holds its slot: {sealed}"
+    );
+    session
+        .meta
+        .transparency_log()
+        .expect("the session logs")
+        .fail_next_append_of_kind_for_test("response_delivery_attempt");
+    session.send(&call(5, STATE_ONLY, "t1")).await;
+    let refused = session.answer(5).await;
+    assert_eq!(refused["error"]["code"], json!(-32005), "{refused}");
+    assert_eq!(
+        session.held().await,
+        2,
+        "only the delivered rounds' slots are held: {refused}"
     );
 }
 
@@ -330,5 +396,130 @@ async fn a_stdio_question_still_queued_at_session_end_gives_its_slot_back() {
         meta.continuation().in_flight().len(now).await,
         1,
         "want the taken question's slot only: the queued one never left"
+    );
+}
+
+/// [`call`] under an idempotency key, so execution admission owns it.
+fn keyed_call(id: i64, key: &str) -> Value {
+    let mut body = call(id, ASKING, "t1");
+    body["params"]["_meta"][crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    body
+}
+
+/// Send `body` and cancel request `id` after its answer has settled and
+/// before it is queued, so the answer is dropped unsent.
+async fn cancel_after_commit(session: &mut Session, body: &Value, id: i64) {
+    let pause = crate::gateway::server::stdio_seams::pause_after_commit_for_test();
+    session.send(body).await;
+    timeout(HANG_BOUND, pause.reached())
+        .await
+        .expect("the answer settles and reaches the enqueue");
+    let cancel = crate::gateway::server::stdio_seams::watch_cancel_for_test();
+    session
+        .send(
+            &json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                      "params": {"requestId": id, "reason": "test"}}),
+        )
+        .await;
+    // The cancel is recorded before the paused answer is released.
+    timeout(HANG_BOUND, cancel.seen())
+        .await
+        .expect("the serve loop records the cancel");
+    pause.release();
+}
+
+/// A keyed `gateway_run_playbook` of a one-step playbook whose step asks:
+/// the question nests in the playbook output, so execution admission
+/// retains it (unlike a top-level `gateway_invoke` question).
+fn keyed_playbook_call(meta: &MetaMcp, id: i64, key: &str) -> Value {
+    let definition: crate::playbook::PlaybookDefinition = serde_json::from_value(json!({
+        "playbook": "1.0",
+        "name": "ask-once",
+        "description": "one step whose backend stops to ask",
+        "steps": [ { "name": "step", "tool": ASKING, "server": BACKEND,
+                     "arguments": {"customer_id": "t1"} } ]
+    }))
+    .expect("the playbook fixture deserialises");
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    engine.register(definition);
+    meta.set_playbook_engine(engine);
+    let mut body = call(id, ASKING, "t1");
+    body["params"]["name"] = json!("gateway_run_playbook");
+    body["params"]["arguments"] = json!({"name": "ask-once"});
+    body["params"]["_meta"][crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    body
+}
+
+/// C1-stdio-nested (SLOT.8 stored-delivery arm over stdio; MIK-8176 lead
+/// re-ruling): a keyed playbook's nested question is retained by execution
+/// admission. Cancelled after settlement and before the enqueue, its frame is
+/// dropped unsent and the request's holds go with it, yet a replay under the
+/// same key delivers the stored question. The store must own the slot: after
+/// the replay is delivered, the slot is still held. Red on base.
+#[tokio::test]
+async fn c1_stdio_a_replayed_nested_question_keeps_its_slot() {
+    let mut session = open(Setup::Plain, 1 << 20).await;
+    let first = keyed_playbook_call(&session.meta, 5, "c1-stdio-nested");
+    cancel_after_commit(&mut session, &first, 5).await;
+    let mut repeat = first.clone();
+    repeat["id"] = json!(6);
+    session.send(&repeat).await;
+    let replay = session.next_frame().await;
+    assert_eq!(
+        replay["id"],
+        json!(6),
+        "the cancelled answer was never sent: {replay}"
+    );
+    assert!(
+        replay.get("error").is_none() && carries_envelope(&session.meta, &replay),
+        "the replay delivers the stored nested question: {replay}"
+    );
+    assert_eq!(
+        session.held().await,
+        1,
+        "the replayed question's slot is still held (the store owns it)"
+    );
+}
+
+/// C1-stdio guard (SLOT.8, execution-admission store; MIK-8176): execution
+/// admission does not retain a TOP-LEVEL input-required response
+/// (`complete_delivery_read` returns before storing one; a question nested
+/// in a playbook output is retained, and rows C1/C1b cover that shape). A
+/// keyed top-level question cancelled after settlement and before the
+/// enqueue is dropped unsent: its slot is released at once, not held until
+/// expiry, and a replay under the same key is refused as unavailable
+/// (MIK-8297). If admission ever retains this shape, this row fails: the
+/// store would then have to own the slot.
+#[tokio::test]
+async fn c1_stdio_a_cancelled_unsent_question_is_not_retained_and_frees_its_slot() {
+    let mut session = open(Setup::Plain, 1 << 20).await;
+    cancel_after_commit(&mut session, &keyed_call(5, "c1-stdio"), 5).await;
+    session.send(&keyed_call(6, "c1-stdio")).await;
+    let replay = session.next_frame().await;
+    assert_eq!(
+        replay["id"],
+        json!(6),
+        "the cancelled answer was never sent: {replay}"
+    );
+    assert_eq!(
+        replay["error"]["code"],
+        json!(409),
+        "admission retained no question to replay: {replay}"
+    );
+    assert!(
+        replay.to_string().contains("unavailable"),
+        "the refusal is Unavailable: {replay}"
+    );
+    assert_eq!(
+        session.held().await,
+        0,
+        "the dropped question's slot is released, not held until expiry"
+    );
+    // MIK-8176 (d) evidence: a fresh key recovers the question.
+    session.send(&keyed_call(7, "c1-stdio-fresh")).await;
+    let fresh = session.answer(7).await;
+    assert!(
+        delivered(&fresh),
+        "a fresh key delivers the question again: {fresh}"
     );
 }

@@ -123,10 +123,6 @@ impl<'a> Settling<'a> {
                 return;
             };
             response = inspect_settled(self.state, self.call, self.id, next);
-            self.state
-                .meta_mcp()
-                .release_unsent_hold(&mut response)
-                .await; // MIK-8131
         }
     }
 
@@ -402,6 +398,13 @@ impl TaskExecutor {
         self.round_outcome(|tx| async move {
             #[cfg(test)]
             super::resume_seams::at(super::resume_seams::ResumePoint::Spawned).await;
+            // MIK-8176 D3: the parked round's slot is owned by its row until
+            // the resume redeems it. Adopt the row's holds into this worker's
+            // scope FIRST: the completing commit below drops the row's, and
+            // the slot must never be left with no owner before its redeem.
+            crate::gateway::meta_mcp::sealed_hold::adopt(
+                executor.service.store.round_holds(&digest, &id),
+            );
             let workers = Arc::clone(&executor.workers);
             // An answer stamped on a clock before 1970 is refused for now, as
             // the store refuses it, and the round stays open (MIK-8202).
@@ -571,8 +574,7 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     executor
         .proceed_unless_late(ids, deadline, expired, at)
         .await?;
-    let mut response = inspect_settled(&state, &call, &id, response);
-    state.meta_mcp().release_unsent_hold(&mut response).await; // MIK-8131
+    let response = inspect_settled(&state, &call, &id, response);
     Settling::new(&executor, &state, &owned, &call, &principal, &id, revision)
         .settle_or_ask(response, &mut cancel_rx)
         .await;

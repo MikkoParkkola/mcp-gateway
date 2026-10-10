@@ -104,7 +104,7 @@ async fn a_dropped_stdio_session_stops_its_task_workers() {
     let task = service
         .get(LOCAL_OPERATOR_PRINCIPAL, &id)
         .expect("the task is in its store");
-    let wire = crate::gateway::task_route::task_envelope(&task.task, "complete");
+    let wire = serde_json::to_value(task.task.wire()).expect("the task serializes");
     let committed_answer = task.task.status() == crate::protocol::tasks::TaskStatus::Completed
         && wire.pointer("/result/content/0/text") == Some(&Value::from("done"));
     assert!(

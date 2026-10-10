@@ -637,6 +637,18 @@ impl IdempotencyCache {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// Every completed value the cache retains, for tests (MIK-8176 cache guards).
+    #[cfg(test)]
+    pub(crate) fn completed_values_for_test(&self) -> Vec<Value> {
+        self.entries
+            .iter()
+            .filter_map(|entry| match &entry.state {
+                IdempotencyState::Completed(value, _) => Some(value.clone()),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 #[cfg(kani)]

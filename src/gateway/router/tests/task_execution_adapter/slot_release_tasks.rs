@@ -19,7 +19,7 @@ async fn held(state: &Arc<AppState>) -> usize {
 
 /// Wait (bounded) until `held` reaches `want`: a release runs on a spawned
 /// task, so it lands shortly after the drop that triggers it.
-async fn settles_at(state: &Arc<AppState>, want: usize) -> usize {
+pub(super) async fn settles_at(state: &Arc<AppState>, want: usize) -> usize {
     let bound = tokio::time::Instant::now() + Duration::from_secs(2);
     loop {
         let now = held(state).await;
@@ -124,6 +124,52 @@ const CELLS: [Cell; 8] = [
     Cell::BoundedSettleReleases,
 ];
 
+/// B11: a settle whose result no record can keep commits the bounded failure,
+/// which carries no question, and the slot is given back.
+async fn bounded_settle_releases(key: &str) -> Option<String> {
+    // Measured, never guessed. The cap sits between the initial record's
+    // stored size and the result's own size, so no record that keeps the
+    // result fits and every fallback short of the bounded failure is refused.
+    // The bounded record is then measured the same way and must fit too. A
+    // change in any of the three sizes fails this setup loudly instead of
+    // turning the row green or red for another reason.
+    let (initial, result) = record_sizes(&format!("{key}-measure")).await;
+    let cap = initial + (result - initial) / 2;
+    if !(initial < cap && cap < result) {
+        return Some(format!(
+            "no room for a cap: initial record {initial} B, result alone {result} B"
+        ));
+    }
+    let mock = MockBackend::answering(Answer::Sequence(vec![long_question(), done()]));
+    let mut config = crate::config::Config::default();
+    config.tasks.max_record_bytes = cap;
+    let (state, _dir) = state_with_config(&mock, config).await;
+    state.meta_mcp.set_playbook_engine(asking_playbook());
+    let created = post(&state, "key-a", playbook_task_body(key)).await;
+    if created.get("error").is_some() {
+        return Some(format!(
+            "the {cap} B cap refused the request itself: {created}"
+        ));
+    }
+    let id = task_id(&created);
+    let settled = poll_until_terminal(&state, "key-a", &id).await;
+    if status_of(&settled) != "failed" || !sealed_in(&state, &settled).is_empty() {
+        let stored = state.task_executor.service.store.record_bytes_for_test(&id);
+        return Some(format!(
+            "not a bounded failure without a question (initial {initial} B, result {result} B, cap {cap} B, stored record {stored:?} B): status {}",
+            status_of(&settled)
+        ));
+    }
+    let bounded = state.task_executor.service.store.record_bytes_for_test(&id);
+    if bounded.is_none_or(|bytes| bytes >= cap) {
+        return Some(format!(
+            "the bounded record {bounded:?} B does not fit the {cap} B cap"
+        ));
+    }
+    let after = settles_at(&state, 0).await;
+    (after != 0).then(|| format!("bounded settle still holds {after} slots"))
+}
+
 async fn run(cell: Cell) -> Option<String> {
     let key = format!("slot-tasks-{cell:?}");
     match cell {
@@ -178,50 +224,7 @@ async fn run(cell: Cell) -> Option<String> {
             let after = settles_at(&state, 0).await;
             (after != 0).then(|| format!("round dropped at its TTL still holds {after} slots"))
         }
-        Cell::BoundedSettleReleases => {
-            // Measured, never guessed. The cap sits between the initial
-            // record's stored size and the result's own size, so no record
-            // that keeps the result fits and every fallback short of the
-            // bounded failure is refused. The bounded record is then measured
-            // the same way and must fit too. A change in any of the three
-            // sizes fails this setup loudly instead of turning the row green
-            // or red for another reason.
-            let (initial, result) = record_sizes(&format!("{key}-measure")).await;
-            let cap = initial + (result - initial) / 2;
-            if !(initial < cap && cap < result) {
-                return Some(format!(
-                    "no room for a cap: initial record {initial} B, result alone {result} B"
-                ));
-            }
-            let mock = MockBackend::answering(Answer::Sequence(vec![long_question(), done()]));
-            let mut config = crate::config::Config::default();
-            config.tasks.max_record_bytes = cap;
-            let (state, _dir) = state_with_config(&mock, config).await;
-            state.meta_mcp.set_playbook_engine(asking_playbook());
-            let created = post(&state, "key-a", playbook_task_body(&key)).await;
-            if created.get("error").is_some() {
-                return Some(format!(
-                    "the {cap} B cap refused the request itself: {created}"
-                ));
-            }
-            let id = task_id(&created);
-            let settled = poll_until_terminal(&state, "key-a", &id).await;
-            if status_of(&settled) != "failed" || !sealed_in(&state, &settled).is_empty() {
-                let stored = state.task_executor.service.store.record_bytes_for_test(&id);
-                return Some(format!(
-                    "not a bounded failure without a question (initial {initial} B, result {result} B, cap {cap} B, stored record {stored:?} B): status {}",
-                    status_of(&settled)
-                ));
-            }
-            let bounded = state.task_executor.service.store.record_bytes_for_test(&id);
-            if !bounded.is_some_and(|bytes| bytes < cap) {
-                return Some(format!(
-                    "the bounded record {bounded:?} B does not fit the {cap} B cap"
-                ));
-            }
-            let after = settles_at(&state, 0).await;
-            (after != 0).then(|| format!("bounded settle still holds {after} slots"))
-        }
+        Cell::BoundedSettleReleases => bounded_settle_releases(&key).await,
         Cell::RecreateDeliversKeeps => {
             let (state, _dir, id) = completed_playbook_task(&key).await;
             let again = post(&state, "key-a", playbook_task_body(&key)).await;
@@ -281,7 +284,7 @@ async fn completed_playbook_task(key: &str) -> (Arc<AppState>, tempfile::TempDir
 }
 
 /// The keyed task-augmented `gateway_run_playbook` call for `key`.
-fn playbook_task_body(key: &str) -> Value {
+pub(super) fn playbook_task_body(key: &str) -> Value {
     keyed(
         declaring_elicitation(modern(
             1,
@@ -294,7 +297,7 @@ fn playbook_task_body(key: &str) -> Value {
 }
 
 /// Whether `id` has settled, read from the store without a tasks/get.
-fn settled_unread(state: &Arc<AppState>, id: &str) -> bool {
+pub(super) fn settled_unread(state: &Arc<AppState>, id: &str) -> bool {
     state
         .task_executor
         .service
@@ -304,7 +307,9 @@ fn settled_unread(state: &Arc<AppState>, id: &str) -> bool {
 }
 
 /// Run the sweep with the store clock at `secs` until `id` is gone, bounded.
-async fn expire_at(state: &Arc<AppState>, id: &str, secs: u64) {
+/// The row MUST be gone: a row that was never deleted would hold its slot for
+/// a reason that has nothing to do with holds.
+pub(super) async fn expire_at(state: &Arc<AppState>, id: &str, secs: u64) {
     let sweep = state
         .task_executor
         .start_expiry(Duration::from_millis(20))
@@ -322,6 +327,15 @@ async fn expire_at(state: &Arc<AppState>, id: &str, secs: u64) {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     drop(sweep);
+    std::assert!(
+        state
+            .task_executor
+            .service
+            .store
+            .status_for_test(id)
+            .is_none(),
+        "row not deleted at TTL: the sweep never removed {id}"
+    );
 }
 
 /// MATRIX.1's task cell (A3 names it).
@@ -378,7 +392,7 @@ async fn record_sizes(key: &str) -> (usize, usize) {
 
 /// A one-step playbook whose step's backend asks: the carrier the plan names
 /// for a completed answer that nests a sealed question (t3 C0, F2).
-fn asking_playbook() -> crate::playbook::PlaybookEngine {
+pub(super) fn asking_playbook() -> crate::playbook::PlaybookEngine {
     let definition: crate::playbook::PlaybookDefinition = serde_json::from_value(json!({
         "playbook": "1.0",
         "name": "ask-once",
@@ -393,7 +407,7 @@ fn asking_playbook() -> crate::playbook::PlaybookEngine {
 
 /// Every string in `value` that opens as a continuation under `state`'s
 /// keyring, with the slot it names.
-fn sealed_in(state: &Arc<AppState>, value: &Value) -> Vec<String> {
+pub(super) fn sealed_in(state: &Arc<AppState>, value: &Value) -> Vec<String> {
     // A string that is itself a JSON document (an answer `gateway_invoke`
     // text-wraps into `content[].text`) is searched inside as well.
     fn strings(value: &Value, out: &mut Vec<String>) {
@@ -453,6 +467,16 @@ async fn c0_a_completed_playbook_task_carries_its_steps_sealed_question() {
         "no sealed question in the completed result: {settled}"
     );
     std::assert_eq!(held(&state).await, 1, "its slot is held: {settled}");
+    let counts = state.meta_mcp.continuation();
+    let counts = counts.hold_counts();
+    eprintln!(
+        "c0 hold counts: registered {} unscoped {} unhanded_drops {}",
+        counts.registered.load(std::sync::atomic::Ordering::Relaxed),
+        counts.unscoped.load(std::sync::atomic::Ordering::Relaxed),
+        counts
+            .unhanded_drops
+            .load(std::sync::atomic::Ordering::Relaxed),
+    );
     // For B11's record cap: the completed result's size.
     eprintln!(
         "c0 completed result bytes: {}",
@@ -460,12 +484,12 @@ async fn c0_a_completed_playbook_task_carries_its_steps_sealed_question() {
     );
 }
 
-/// C0 (replay-cache arm, `/mcp`): is a final answer that carries a sealed
-/// question cached, so a keyed repeat replays it? The SLOT.8 cache rows need
-/// such a carrier; if none is cached, the arm is recorded unreachable with
-/// this row as the proof.
+/// C0 (stored-replay arm, `/mcp`): a keyed playbook call whose output nests a
+/// sealed question is replayed by execution admission's stored delivery (not
+/// the idempotency cache, which never retains a non-final answer). The SLOT.8
+/// rows C1/C1b build on this carrier.
 #[tokio::test]
-async fn c0_a_keyed_playbook_call_on_mcp_replays_its_sealed_question_from_the_cache() {
+async fn c0_a_keyed_playbook_call_on_mcp_replays_its_sealed_question_from_the_store() {
     let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
     let (state, _dir) = state_with(&mock).await;
     state.meta_mcp.set_playbook_engine(asking_playbook());
@@ -493,7 +517,7 @@ async fn c0_a_keyed_playbook_call_on_mcp_replays_its_sealed_question_from_the_ca
     std::assert_eq!(
         mock.calls(),
         1,
-        "the repeat was served from the cache, not dispatched again"
+        "the repeat was served from the stored delivery, not dispatched again"
     );
 }
 
@@ -625,5 +649,84 @@ async fn b5_a_resume_cancelled_in_either_window_gives_the_slot_back() {
         failures.is_empty(),
         "B5 windows failed:\n{}",
         failures.join("\n")
+    );
+}
+
+/// A keyed playbook call whose question nests in the playbook output (so
+/// execution admission stores it), answered over SSE and dropped unread, then
+/// repeated as JSON. Returns the state once the replay has delivered the
+/// stored question without a second backend call.
+async fn replay_after_a_dropped_sse_answer(key: &str) -> (Arc<AppState>, tempfile::TempDir) {
+    let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+    let (state, dir) = state_with(&mock).await;
+    state.meta_mcp.set_playbook_engine(asking_playbook());
+    let body = keyed(
+        declaring_elicitation(modern(
+            1,
+            "tools/call",
+            json!({ "name": "gateway_run_playbook", "arguments": { "name": "ask-once" } }),
+            true,
+        )),
+        key,
+    );
+    let mut request = http_request(Some("key-a"), &body);
+    request.headers_mut().insert(
+        axum::http::header::ACCEPT,
+        axum::http::HeaderValue::from_static("application/json, text/event-stream"),
+    );
+    let response = create_router(Arc::clone(&state))
+        .oneshot(request)
+        .await
+        .expect("the router must answer");
+    std::assert_eq!(response.status(), StatusCode::OK);
+    // The client goes away: the SSE body is never read.
+    drop(response);
+    settle_quiet().await;
+    let replay = post(&state, "key-a", body).await;
+    std::assert_eq!(
+        mock.calls(),
+        1,
+        "the repeat was served from the store: {replay}"
+    );
+    std::assert!(
+        !sealed_in(&state, &replay).is_empty(),
+        "the replay delivers the stored question: {replay}"
+    );
+    (state, dir)
+}
+
+/// C1 (SLOT.8, stored-delivery arm; d4 seat rulings): execution admission
+/// settles before the answer is handed off, so an SSE answer whose body is
+/// dropped unread releases the request's holds while the store still holds
+/// the sealed question, and a replay delivers it. The store must own the
+/// slot: after the replay is delivered, the slot is still held. Red on base.
+#[tokio::test]
+async fn c1_a_replay_after_a_dropped_sse_answer_keeps_the_slot() {
+    let (state, _dir) = replay_after_a_dropped_sse_answer("c1-dropped-sse").await;
+    std::assert_eq!(
+        settles_at(&state, 1).await,
+        1,
+        "the replayed question's slot is still held (the store owns it)"
+    );
+}
+
+/// C1b (SLOT.8: "a failed first emission followed by a successful replay
+/// keeps it"): the delivered replay hands the stored holds off, so the slot
+/// outlives the stored entry once retention reclaims it. Red on base.
+#[tokio::test]
+async fn c1b_a_delivered_replay_keeps_the_slot_after_its_entry_is_reclaimed() {
+    let (state, _dir) = replay_after_a_dropped_sse_answer("c1b-dropped-sse").await;
+    std::assert!(
+        state
+            .meta_mcp
+            .execution_admission()
+            .reclaim_all_dated_for_test()
+            >= 1,
+        "retention reclaimed the stored delivery"
+    );
+    std::assert_eq!(
+        settles_at(&state, 1).await,
+        1,
+        "the delivered replay's slot outlives its reclaimed entry"
     );
 }

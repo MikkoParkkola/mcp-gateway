@@ -6,8 +6,9 @@
 //! the wire only through a function that takes it as `Held<…>` or calls
 //! `.deliver(`, which moves its holds into the reader's scope or frame. Every
 //! production projection of such a payload is found by source shape and must
-//! sit in such a function, or on [`DECISION_ONLY`] with the reason it never
-//! reaches the wire.
+//! sit in such a function, on [`DECISION_ONLY`] with the reason it never
+//! reaches the wire, or on [`OWNED_ELSEWHERE`] with who owns its holds. Each
+//! entry excuses one projection shape in one fn, nothing else in it.
 use std::path::{Path, PathBuf};
 
 /// Shapes that project a retained payload: a task's wire form or stored
@@ -16,35 +17,100 @@ const PROJECTIONS: &[&str] = &[
     r"\.wire\(\)",
     r"\.result\(\)",
     r"GuardOutcome::CachedResult\(",
+    r"SyncAdmission::Replay\(",
     r"\bfn task_envelope\(",
 ];
 
-/// `(file under src/gateway, enclosing fn)`: projections that only decide,
-/// each with why it never reaches the wire.
-const DECISION_ONLY: &[(&str, &str, &str)] = &[(
-    "task_service/record.rs",
-    "backend_result",
-    "staged into the relay receipt (task_replay.rs), never serialized to a client",
-)];
+/// `(file under src/gateway, enclosing fn, the one projection shape excused,
+/// why)`: projections that only decide and never reach the wire. Only the
+/// named shape is excused: another projection added to the same fn fails A1.
+const DECISION_ONLY: &[(&str, &str, &str, &str)] = &[
+    (
+        "task_service/record.rs",
+        "backend_result",
+        r"\.result\(\)",
+        "staged into the relay receipt (task_replay.rs), never serialized to a client",
+    ),
+    (
+        "task_service/store_targets.rs",
+        "settle_bounded_blocking",
+        r"\.result\(\)",
+        "re-filters the offered holds against the committed result (MIK-8176 M1); the result is only matched, never serialized",
+    ),
+];
 
-fn production_sources() -> Vec<PathBuf> {
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        for entry in std::fs::read_dir(dir).expect("src/gateway is readable") {
+/// `(file under src/gateway, enclosing fn, the one projection shape excused,
+/// why)`: projections that DO reach the wire, with their holds owned
+/// elsewhere. Only the named shape is excused.
+const OWNED_ELSEWHERE: &[(&str, &str, &str, &str)] = &[
+    (
+        "router/backend_handlers/direct_dispatch.rs",
+        "admit",
+        r"GuardOutcome::CachedResult\(",
+        "a CachedResult carries no question the cache was handed directly (final-only store; nested-question output is routed to execution admission). An envelope can reach a cached answer only after playbook interpolation hands it to a step backend, which can also return it uncached, so cache ownership would not close it: that is MIK-8323 (no sealed envelope to a backend). Pinned by the_idempotency_cache_keeps_no_question_it_was_handed_directly and an_echoed_envelope_in_the_cache_needs_its_own_arguments_to_replay",
+    ),
+    (
+        "meta_mcp/invoke/pre_dispatch.rs",
+        "admit_idempotency_key",
+        r"GuardOutcome::CachedResult\(",
+        "same as direct_dispatch.rs::admit: the cache keeps no question it is handed directly; the interpolation path is MIK-8323",
+    ),
+    (
+        "meta_mcp/admission.rs",
+        "admit_operation",
+        r"SyncAdmission::Replay\(",
+        "builds the SyncAdmission::Replay right after `ExecutionAdmission::admit` adopted the stored delivery's holds into this request's scope (MIK-8176); pinned by rows C1 and C1-stdio",
+    ),
+    (
+        "router/handlers/dispatch_tools_call.rs",
+        "tools_call",
+        r"SyncAdmission::Replay\(",
+        "a SyncAdmission::Replay whose stored delivery's holds `ExecutionAdmission::admit` already adopted into this request's scope (MIK-8176); pinned by row C1",
+    ),
+    (
+        "server/stdio_dispatch.rs",
+        "dispatch_tools_call",
+        r"SyncAdmission::Replay\(",
+        "a SyncAdmission::Replay whose stored delivery's holds `ExecutionAdmission::admit` already adopted into this request's scope (MIK-8176); pinned by row C1-stdio",
+    ),
+];
+
+/// Which `.rs` files [`sources`] collects.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Files {
+    /// Test and fixture files excluded.
+    Production,
+    /// Every file, tests included.
+    All,
+}
+
+/// The `.rs` files under `sub` (relative to the crate root).
+fn sources(sub: &str, files: Files) -> Vec<PathBuf> {
+    fn walk(dir: &Path, files: Files, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("a source directory is readable") {
             let path = entry.expect("a directory entry").path();
             let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.contains("test") || name.contains("fixture") {
+            // A test file names `test`/`tests` as a whole word (`tests`,
+            // `x_tests.rs`, `test_x.rs`, `x_test_support.rs`); a production
+            // module that merely contains the letters (`attestation.rs`) is
+            // still scanned.
+            let test_file = name
+                .split(['_', '.'])
+                .any(|word| word == "test" || word == "tests")
+                || name.contains("fixture");
+            if files == Files::Production && test_file {
                 continue;
             }
             if path.is_dir() {
-                walk(&path, out);
-            } else if name.ends_with(".rs") {
+                walk(&path, files, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
                 out.push(path);
             }
         }
     }
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join(sub);
     let mut out = Vec::new();
-    walk(&root, &mut out);
+    walk(&root, files, &mut out);
     out
 }
 
@@ -77,7 +143,7 @@ fn every_retained_output_projection_delivers_its_holds() {
     let alias = regex::Regex::new(r"\buse\b.*\b(wire|result|CachedResult|task_envelope)\b.*\bas\b")
         .expect("a valid pattern");
     let mut unguarded = Vec::new();
-    for file in production_sources() {
+    for file in sources("src/gateway", Files::Production) {
         let text = std::fs::read_to_string(&file).expect("a readable source file");
         let rel = file.strip_prefix(&root).expect("under src/gateway");
         let rel = rel.to_string_lossy().replace('\\', "/");
@@ -98,9 +164,17 @@ fn every_retained_output_projection_delivers_its_holds() {
                 continue;
             };
             let guarded = body.contains("Held<") || body.contains(".deliver(");
+            // Excused only for the shape the entry names, on this very line.
             let listed = DECISION_ONLY
                 .iter()
-                .any(|(f, n, _)| *f == rel && *n == name);
+                .chain(OWNED_ELSEWHERE)
+                .any(|(f, n, shape, _)| {
+                    *f == rel
+                        && *n == name
+                        && regex::Regex::new(shape)
+                            .expect("a valid pattern")
+                            .is_match(line)
+                });
             if !guarded && !listed {
                 unguarded.push(format!("{rel}:{}: {name}", i + 1));
             }
@@ -113,16 +187,11 @@ fn every_retained_output_projection_delivers_its_holds() {
     );
 }
 
-/// What `Held` may expose: `deliver` (the only way to the payload), its
-/// constructor, and decision methods that answer about the payload without
-/// handing it out. Anything else in `held.rs` fails A2.
-const HELD_SURFACE: &[&str] = &[
-    "new",
-    "deliver",
-    "status",
-    "revision",
-    "serves_backend_output",
-];
+/// What `Held` may expose: its constructor and `deliver` (the only way to the
+/// payload). Exactly the methods that exist: a name listed ahead of its
+/// method would let a later method of that name hand the payload out.
+/// Anything else in `held.rs` fails A2.
+const HELD_SURFACE: &[&str] = &["new", "deliver"];
 
 /// A2 (N2, lead pin): `Held` hands its payload out only through `deliver`.
 /// Its fields are private to `held.rs`, so the compiler confines every access
@@ -161,7 +230,7 @@ fn held_exposes_nothing_but_deliver_and_decisions() {
 /// copy is gone.
 #[tokio::test]
 async fn deliver_moves_the_holds_onto_a_frame() {
-    use super::{CarriedHolds, Held, HoldPolicy, HoldSink, carried, hand_off, register, scoped};
+    use super::{CarriedHolds, Held, HoldSink, carried, hand_off, register, scoped};
     use crate::protocol::continuation::{ContinuationState, now_unix_secs};
     let continuation = std::sync::Arc::new(ContinuationState::new());
     let now = now_unix_secs();
@@ -171,7 +240,7 @@ async fn deliver_moves_the_holds_onto_a_frame() {
         .expect("a fresh state has a slot")
         .hold_key;
     let answer = serde_json::json!({ "requestState": "env-retained" });
-    let holds = scoped(HoldPolicy::Release, async {
+    let holds = scoped(async {
         register(&continuation, &key, "env-retained");
         carried(&answer)
     })
@@ -192,25 +261,9 @@ async fn deliver_moves_the_holds_onto_a_frame() {
 /// The production call sites of `name` under `src/`, as `file` paths
 /// relative to `src/`, deduplicated and sorted.
 fn callers_of(name: &str) -> Vec<String> {
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        for entry in std::fs::read_dir(dir).expect("src is readable") {
-            let path = entry.expect("a directory entry").path();
-            let file = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if file.contains("test") || file.contains("fixture") {
-                continue;
-            }
-            if path.is_dir() {
-                walk(&path, out);
-            } else if file.ends_with(".rs") {
-                out.push(path);
-            }
-        }
-    }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let call = regex::Regex::new(&format!(r"sealed_hold::{name}\(")).expect("a valid pattern");
-    let mut files = Vec::new();
-    walk(&root, &mut files);
-    let mut found: Vec<String> = files
+    let mut found: Vec<String> = sources("src", Files::Production)
         .into_iter()
         .filter(|f| {
             std::fs::read_to_string(f)
@@ -264,20 +317,7 @@ fn every_mint_site_and_scope_boundary_has_its_matrix_cell() {
     let boundaries = callers_of("scoped");
     let listed: Vec<&str> = BOUNDARY_CELLS.iter().map(|(file, _)| *file).collect();
     assert_eq!(boundaries, listed, "a scope boundary has no matrix cell");
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway");
-    let mut sources = Vec::new();
-    fn all(dir: &Path, out: &mut Vec<PathBuf>) {
-        for entry in std::fs::read_dir(dir).expect("readable") {
-            let path = entry.expect("an entry").path();
-            if path.is_dir() {
-                all(&path, out);
-            } else if path.extension().is_some_and(|e| e == "rs") {
-                out.push(path);
-            }
-        }
-    }
-    all(&src, &mut sources);
-    let text: String = sources
+    let text: String = sources("src/gateway", Files::All)
         .iter()
         .map(|f| std::fs::read_to_string(f).unwrap_or_default())
         .collect();
@@ -287,4 +327,35 @@ fn every_mint_site_and_scope_boundary_has_its_matrix_cell() {
         .filter(|cell| !text.contains(&format!("fn {cell}(")))
         .collect();
     assert!(missing.is_empty(), "matrix cells missing: {missing:?}");
+}
+
+/// H2 (MIK-8176 D9): the release points that predate scoped holds are gone
+/// from production code. A slot is released only by its scope (or its
+/// retained owner) dropping a hold that was never handed off; a second,
+/// explicit release path would race it. The names are assembled so this
+/// file does not match itself.
+#[test]
+fn the_pre_scope_release_points_are_gone() {
+    let retired = [
+        ["release_unsent", "_hold"].concat(),
+        ["release_unless", "_carried"].concat(),
+        ["release_direct", "_hold"].concat(),
+        ["sealed", "_question"].concat(),
+        ["unsent", "_hold"].concat(),
+    ];
+    let word = |name: &str| regex::Regex::new(&format!(r"\b{name}\b")).expect("a valid pattern");
+    let patterns: Vec<_> = retired.iter().map(|name| word(name)).collect();
+    let mut found = Vec::new();
+    for file in sources("src", Files::Production) {
+        let text = std::fs::read_to_string(&file).expect("a source file is readable");
+        for (name, pattern) in retired.iter().zip(&patterns) {
+            if pattern.is_match(&text) {
+                found.push(format!("{}: {name}", file.display()));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "retired release points are back: {found:?}"
+    );
 }

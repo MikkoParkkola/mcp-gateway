@@ -7,9 +7,7 @@
 //! outermost boundary. The answer that becomes an HTTP response carries the
 //! holds whose envelope it contains ([`carried`]), and the JSON reply hands
 //! them off once its delivery record is written ([`hand_off`]). A hold whose
-//! last copy goes without ever being handed off gives its slot back, under a
-//! [`HoldPolicy::Release`] scope; a [`HoldPolicy::CountOnly`] scope (a
-//! transport whose handoff lands in a later stage) only counts it.
+//! last copy goes without ever being handed off gives its slot back.
 
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,16 +18,6 @@ use tracing::warn;
 
 use crate::protocol::continuation::ContinuationState;
 
-/// What a request scope does with a hold that was never handed off.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum HoldPolicy {
-    /// Count it; its slot waits for expiry. For a transport whose handoff
-    /// is not wired yet: releasing there would free a delivered slot.
-    CountOnly,
-    /// Give its slot back.
-    Release,
-}
-
 /// One minted slot, shared (behind an `Arc`) by every copy of the answer
 /// that carries it. The slot's fate follows its last clone.
 pub(crate) struct SealedHold {
@@ -37,7 +25,6 @@ pub(crate) struct SealedHold {
     hold_key: String,
     /// The envelope the mint sealed, so a carrier can be recognised.
     envelope: String,
-    policy: HoldPolicy,
     /// Set once any copy reaches a transport; the slot then lives until
     /// redeemed or expired.
     handed_off: AtomicBool,
@@ -52,9 +39,7 @@ impl Drop for SealedHold {
             .hold_counts()
             .unhanded_drops
             .fetch_add(1, Ordering::Relaxed);
-        if self.policy == HoldPolicy::Release {
-            release(&self.continuation, &self.hold_key);
-        }
+        release(&self.continuation, &self.hold_key);
     }
 }
 
@@ -77,7 +62,6 @@ fn release(continuation: &Arc<ContinuationState>, key: &str) {
 
 /// The holds minted while one request is served.
 struct Holds {
-    policy: HoldPolicy,
     held: Mutex<Vec<Arc<SealedHold>>>,
 }
 
@@ -86,15 +70,13 @@ tokio::task_local! {
     static HOLDS: Arc<Holds>;
 }
 
-/// Run `future` inside a request scope under `policy`, collecting the holds
-/// its mints take. Inside an open scope this adds nothing: the outermost
-/// boundary owns the holds and its policy governs them.
-pub(crate) async fn scoped<F: Future>(policy: HoldPolicy, future: F) -> F::Output {
+/// Run `future` inside a request scope, collecting the holds its mints take.
+/// Inside an open scope this adds nothing: the outermost boundary owns them.
+pub(crate) async fn scoped<F: Future>(future: F) -> F::Output {
     if HOLDS.try_with(|_| ()).is_ok() {
         return future.await;
     }
     let holds = Arc::new(Holds {
-        policy,
         held: Mutex::default(),
     });
     HOLDS.scope(holds, future).await
@@ -115,7 +97,6 @@ pub(crate) fn register(continuation: &Arc<ContinuationState>, hold_key: &str, en
                 continuation: Arc::clone(continuation),
                 hold_key: hold_key.to_owned(),
                 envelope: envelope.to_owned(),
-                policy: holds.policy,
                 handed_off: AtomicBool::new(false),
             });
             holds
@@ -171,10 +152,20 @@ pub(crate) fn carried(answer: &Value) -> CarriedHolds {
     if held.is_empty() {
         return CarriedHolds::default();
     }
-    let reseal = answer.get("requestState").and_then(Value::as_str);
+    carried_from(&CarriedHolds(held), answer)
+}
+
+/// The holds in `holds` whose envelope `value` still carries: the same test
+/// `carried` applies to the open scope, applied to holds a retained copy owns
+/// (a stored result re-filtered against what the store actually committed).
+pub(crate) fn carried_from(holds: &CarriedHolds, value: &Value) -> CarriedHolds {
+    let reseal = value.get("requestState").and_then(Value::as_str);
     CarriedHolds(
-        held.into_iter()
-            .filter(|hold| contains(answer, &hold.envelope) || reopens(hold, reseal))
+        holds
+            .0
+            .iter()
+            .filter(|hold| contains(value, &hold.envelope) || reopens(hold, reseal))
+            .cloned()
             .collect(),
     )
 }
@@ -209,7 +200,7 @@ fn reopens(hold: &SealedHold, token: Option<&str>) -> bool {
 /// treats them as its own mints: `carried` finds them in the answer it builds
 /// and its transport hands them off. Outside a scope this drops the reader's
 /// clones only; the retained copy's own clones keep the slot.
-fn adopt(holds: CarriedHolds) {
+pub(crate) fn adopt(holds: CarriedHolds) {
     let _ = HOLDS.try_with(|scope| {
         scope
             .held
@@ -233,8 +224,7 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        Arc, CarriedHolds, ContinuationState, HoldPolicy, Ordering, carried, hand_off, register,
-        scoped,
+        Arc, CarriedHolds, ContinuationState, Ordering, carried, hand_off, register, scoped,
     };
 
     /// Registered, unscoped and dropped-without-handoff counts.
@@ -263,13 +253,13 @@ mod tests {
     }
 
     /// A nested scope adds nothing: the outermost opener owns the holds, so
-    /// an inner scope ending cannot drop them early, and its policy governs.
+    /// an inner scope ending cannot drop them early; the outer one's end does.
     #[tokio::test]
     async fn an_inner_scope_does_not_own_the_holds() {
         let continuation = Arc::new(ContinuationState::new());
         let key = slot(&continuation).await;
-        scoped(HoldPolicy::CountOnly, async {
-            scoped(HoldPolicy::Release, async {
+        scoped(async {
+            scoped(async {
                 register(&continuation, &key, "env");
             })
             .await;
@@ -283,8 +273,8 @@ mod tests {
         assert_eq!(counts(&continuation), [1, 0, 1]);
         assert_eq!(
             held(&continuation).await,
-            1,
-            "the outer count-only policy governs"
+            0,
+            "the outer scope's end gives the never-handed-off slot back"
         );
     }
 
@@ -292,7 +282,7 @@ mod tests {
     #[tokio::test]
     async fn a_cancelled_request_drops_its_holds() {
         let continuation = Arc::new(ContinuationState::new());
-        let mut request = Box::pin(scoped(HoldPolicy::CountOnly, async {
+        let mut request = Box::pin(scoped(async {
             register(&continuation, "k1", "env-1");
             register(&continuation, "k2", "env-2");
             std::future::pending::<()>().await;
@@ -318,7 +308,7 @@ mod tests {
     async fn release_frees_only_what_was_never_handed_off() {
         let continuation = Arc::new(ContinuationState::new());
         let (kept, freed) = (slot(&continuation).await, slot(&continuation).await);
-        scoped(HoldPolicy::Release, async {
+        scoped(async {
             register(&continuation, &kept, "env-kept");
             register(&continuation, &freed, "env-freed");
             hand_off(&carried(&json!({"content": [{"text": "see env-kept"}]})));
@@ -341,7 +331,7 @@ mod tests {
     #[tokio::test]
     async fn carried_finds_the_envelope_in_any_string() {
         let continuation = Arc::new(ContinuationState::new());
-        scoped(HoldPolicy::CountOnly, async {
+        scoped(async {
             register(&continuation, "k", "env-123");
             assert_eq!(carried(&json!({"a": [{"b": "x env-123 y"}]})).0.len(), 1);
             assert_eq!(
@@ -359,7 +349,7 @@ mod tests {
     async fn carried_holds_outlive_their_scope_until_handed_off_or_dropped() {
         let continuation = Arc::new(ContinuationState::new());
         let (sent, lost) = (slot(&continuation).await, slot(&continuation).await);
-        let (delivered, cancelled) = scoped(HoldPolicy::Release, async {
+        let (delivered, cancelled) = scoped(async {
             register(&continuation, &sent, "env-sent");
             register(&continuation, &lost, "env-lost");
             (
@@ -390,7 +380,7 @@ mod tests {
     async fn a_cancelled_release_request_gives_its_slots_back() {
         let continuation = Arc::new(ContinuationState::new());
         let (one, two) = (slot(&continuation).await, slot(&continuation).await);
-        let mut request = Box::pin(scoped(HoldPolicy::Release, async {
+        let mut request = Box::pin(scoped(async {
             register(&continuation, &one, "env-1");
             register(&continuation, &two, "env-2");
             std::future::pending::<()>().await;
@@ -415,7 +405,7 @@ mod tests {
         let minted = continuation.keyring().mint(&payload).expect("mint");
         let resealed = continuation.keyring().mint(&payload).expect("reseal");
         assert_ne!(minted, resealed, "a reseal is a different envelope");
-        let carried = scoped(HoldPolicy::Release, async {
+        let carried = scoped(async {
             register(&continuation, &payload.hold_key, &minted);
             let body = json!({"jsonrpc": "2.0", "id": 1,
                               "result": {"resultType": "input_required", "requestState": resealed}});
@@ -446,7 +436,7 @@ mod tests {
             .expect("a fresh state has a slot");
         let minted = continuation.keyring().mint(&payload).expect("mint");
         let resealed = continuation.keyring().mint(&payload).expect("reseal");
-        let kept = scoped(HoldPolicy::Release, async {
+        let kept = scoped(async {
             register(&continuation, &payload.hold_key, &minted);
             let _clock = crate::clock::test_clock::before_epoch();
             carried(&json!({"requestState": resealed})).0.len()

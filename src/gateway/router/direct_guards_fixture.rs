@@ -94,6 +94,15 @@ pub(crate) enum Answer {
     /// A failed dispatch dressed as an `accounts.v1` account refusal, with
     /// the given message (MIK-8139: a backend can forge the marker).
     ForgedAccount(&'static str),
+    /// State-only interim rounds (`requestState`, no questions; MIK-8177):
+    /// calls before the given index answer a harmless round, the call at it a
+    /// round whose `content` carries the given text, every later call
+    /// succeeds. Index 0 refuses the initial round, 1 a resumed one.
+    StateOnlyRounds(usize, &'static str),
+    /// The first `tools/call` asks (as [`Answer::AskOnce`]); every later one
+    /// completes with its own arguments echoed as text (MIK-8176: a playbook
+    /// step can carry an earlier step's envelope into a completed answer).
+    AskThenEcho,
 }
 
 /// One `Transport` shared by `alpha` and `alpha-pt`, scripted with `Answer`
@@ -122,6 +131,38 @@ impl Transport for CountingBackend {
             .unwrap()
             .push(params.clone().unwrap_or(Value::Null));
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
+        if matches!(self.answer, Answer::AskThenEcho) {
+            let echoed = params
+                .as_ref()
+                .and_then(|p| p.get("arguments"))
+                .cloned()
+                .unwrap_or(Value::Null)
+                .to_string();
+            return Ok(JsonRpcResponse::success(
+                id,
+                if n == 0 {
+                    question(Answer::AskOnce)
+                } else {
+                    json!({"content": [{"type": "text", "text": echoed}], "isError": false})
+                },
+            ));
+        }
+        if let Answer::StateOnlyRounds(at, text) = self.answer {
+            let round = |text: &str| {
+                json!({"resultType": "input_required", "requestState": format!("state-{n}"),
+                       "content": [{"type": "text", "text": text}]})
+            };
+            return Ok(JsonRpcResponse::success(
+                id,
+                match n.cmp(&at) {
+                    std::cmp::Ordering::Less => round("nothing to see"),
+                    std::cmp::Ordering::Equal => round(text),
+                    std::cmp::Ordering::Greater => {
+                        json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
+                    }
+                },
+            ));
+        }
         if matches!(
             self.answer,
             Answer::AskOnce

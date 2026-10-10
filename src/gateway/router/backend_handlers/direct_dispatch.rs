@@ -46,8 +46,6 @@ pub(super) struct Admitted<'a> {
     pub(super) idem_reservation: Option<crate::idempotency::IdempotencyReservation>,
     /// The signing nonce this call registered, if it registered one.
     pub(super) nonce: Option<AdmittedNonce>,
-    /// An interim answer's sealed envelope and hold key (MIK-8078).
-    pub(super) sealed: Option<(String, String)>,
     /// MIK-7642 PR.C: this call's explicit-cancel registration, held for the
     /// request's life so the caller's own cancel can find it.
     pub(super) cancel_entry: Option<crate::gateway::router::inflight_calls::Registered>,
@@ -262,7 +260,6 @@ pub(super) async fn admit<'a>(
         sanitized: None,
         idem_reservation: None,
         nonce: None,
-        sealed: None,
         cancel_entry,
         cancel_on,
     };
@@ -368,11 +365,10 @@ async fn forward_sanitized(
             envelope.declared,
         ),
     );
-    let guards = (client, &mut admitted.sealed);
     let forward = DirectRouteGuards::after_dispatch(
         state,
         (seen, seal),
-        guards,
+        client,
         (&admission, admitted.cancel_entry.as_ref()),
         forward,
     )
@@ -476,11 +472,10 @@ async fn forward_plain(
                 envelope.declared,
             ),
         );
-        let guards = (client, &mut admitted.sealed);
         let guarded = DirectRouteGuards::after_dispatch(
             state,
             (seen, seal),
-            guards,
+            client,
             (&admission, admitted.cancel_entry.as_ref()),
             forward,
         )
@@ -569,11 +564,6 @@ async fn finish_response(
     }
     let auth = (admitted.auth, admitted.call.tool);
     let response = finish_tail(scope, envelope, preflight, auth, response);
-    // MIK-8078: a sealed question keeps its slot only if the answer that
-    // leaves still carries it; every step that could refuse or replace it ran.
-    let sealed = admitted.sealed.take();
-    let delivered = response.result.as_ref();
-    state.meta_mcp.release_direct_hold(sealed, delivered).await;
     build_http_response(&Egressed::of(response), StatusCode::OK)
 }
 
