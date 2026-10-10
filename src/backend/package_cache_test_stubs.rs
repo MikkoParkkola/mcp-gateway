@@ -9,15 +9,18 @@
 
 /// Answers the handshake, injects the failure as a JSON-RPC error frame, and
 /// counts its own spawns in `$SPAWN_LOG` so the *number of calls to the inner
-/// start* is observable from outside the transport.
+/// start* is observable from outside the transport. With
+/// `$MCP_GATEWAY_TEST_RELEASE` set, a retry spawn (any after the first) logs
+/// itself and then waits for that file before it answers, so a test can hold a
+/// repair open for as long as it needs and end it on an event.
 pub(super) const STUB: &str = r#"count=0
 if [ -f "$MCP_GATEWAY_TEST_SPAWN_LOG" ]; then
     count=$(wc -l < "$MCP_GATEWAY_TEST_SPAWN_LOG")
 fi
 printf 'spawned\n' >> "$MCP_GATEWAY_TEST_SPAWN_LOG"
 count=$((count + 1))
-if [ "$count" -gt 1 ] && [ -n "${MCP_GATEWAY_TEST_RETRY_DELAY:-}" ]; then
-    sleep "$MCP_GATEWAY_TEST_RETRY_DELAY"
+if [ "$count" -gt 1 ] && [ -n "${MCP_GATEWAY_TEST_RELEASE:-}" ]; then
+    while [ ! -f "$MCP_GATEWAY_TEST_RELEASE" ]; do sleep 0.05; done
 fi
 
 while IFS= read -r request; do
