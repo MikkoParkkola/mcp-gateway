@@ -4,7 +4,8 @@
 
 # Load environment files before config processing.
 # Supports ~ expansion. Files that don't exist are silently skipped.
-# Variables are set into the process environment for {env.VAR} resolution.
+# Their variables resolve `${VAR}` and `env:VAR` references and `MCP_GATEWAY_*`
+# overrides in this file; they are not exported into the process environment.
 env_files:
   - ~/.mcp-gateway/.env
   # - ~/.config/mcp-gateway/secrets.env
@@ -298,9 +299,9 @@ backends:
   # accept a repo URL as an argument, so a single backend covers every GitHub repo.
   #
   # For a repo-pinned backend, point `http_url` at the repo-specific route:
-  #   gitmcp_mcp_gateway:
-  #     http_url: "https://gitmcp.io/MikkoParkkola/mcp-gateway/sse"
-  #     description: "GitMCP — docs + search for MikkoParkkola/mcp-gateway"
+  # gitmcp_mcp_gateway:
+  #   http_url: "https://gitmcp.io/MikkoParkkola/mcp-gateway/sse"
+  #   description: "GitMCP — docs + search for MikkoParkkola/mcp-gateway"
   # Repo-pinned routes expose tools named after the repo
   # (e.g. `fetch_mcp_gateway_documentation`, `search_mcp_gateway_code`).
   #

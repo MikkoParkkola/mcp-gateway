@@ -148,23 +148,94 @@ fn load(yaml: &str, dir: &Path) -> Result<Config, String> {
     Config::load(Some(&path)).map_err(|e| e.to_string())
 }
 
+/// Set in the child that runs a test's body.
+const CHILD: &str = "MIK_8299_ISOLATED";
+/// Printed by the child once the body ran, so a filter matching no test fails.
+const CHILD_OK: &str = "mik-8299: the isolated body ran";
+
+/// Run the calling test in a child with an empty environment and a fresh
+/// home, so no `MCP_GATEWAY_*` override, env file or home config from the
+/// developer's or the CI runner's environment reaches `Config::load` (#3752
+/// review). True in the child, which runs the body; the parent returns false
+/// once the child has passed.
+fn in_clean_child(test: &str) -> bool {
+    if std::env::var_os(CHILD).is_some() {
+        return true;
+    }
+    let home = tempfile::tempdir().expect("child home");
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test executable"));
+    child
+        .args(["--exact", test, "--nocapture"])
+        .env_clear()
+        .env(CHILD, "1")
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path());
+    // What a process needs to start and make temp dirs, never a config input.
+    for keep in ["PATH", "SYSTEMROOT", "SystemRoot", "TEMP", "TMP", "TMPDIR"] {
+        if let Some(value) = std::env::var_os(keep) {
+            child.env(keep, value);
+        }
+    }
+    let output = child.output().expect("run the isolated child");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains(CHILD_OK),
+        "isolated `{test}` failed or ran no test:\n{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    false
+}
+
+/// The `# key:` blocks the example carries, in file order. Pinned, so a
+/// block-finder regression that drops one fails here instead of passing.
+const EXPECTED_BLOCKS: &[&str] = &[
+    "cleartext_http",
+    "cluster_domain",
+    "bearer_token",
+    "api_keys",
+    "dashboard_session",
+    "security",
+    "warm_start",
+    "surfaced_tools",
+    "cost_governance",
+    "security",
+    "security",
+    "tavily",
+    "context7",
+    "pieces",
+    "gitmcp_mcp_gateway",
+    "gitmcp_docs",
+    "google",
+];
+
 #[test]
 fn the_full_example_loads_as_shipped() {
+    if !in_clean_child("the_full_example_loads_as_shipped") {
+        return;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     let lines: Vec<&str> = EXAMPLE.lines().collect();
-    if let Err(error) = load(&with_block(&lines, None, dir.path()), dir.path()) {
-        panic!("examples/gateway-full.yaml does not load as shipped: {error}");
-    }
+    let config = load(&with_block(&lines, None, dir.path()), dir.path())
+        .unwrap_or_else(|e| panic!("examples/gateway-full.yaml does not load as shipped: {e}"));
+    assert!(
+        config.backends.is_empty(),
+        "every backend in the example is commented out: {:?}",
+        config.backends.keys()
+    );
+    println!("{CHILD_OK}");
 }
 
 #[test]
 fn every_commented_block_in_the_full_example_loads_when_uncommented() {
+    if !in_clean_child("every_commented_block_in_the_full_example_loads_when_uncommented") {
+        return;
+    }
     let lines: Vec<&str> = EXAMPLE.lines().collect();
     let all = blocks(&lines);
-    assert!(
-        all.len() >= 10,
-        "the block finder found only {} blocks",
-        all.len()
+    let keys: Vec<&str> = all.iter().map(|b| b.key.as_str()).collect();
+    assert_eq!(
+        keys, EXPECTED_BLOCKS,
+        "the commented blocks found in the example"
     );
     let mut refused = Vec::new();
     for block in &all {
@@ -182,6 +253,7 @@ fn every_commented_block_in_the_full_example_loads_when_uncommented() {
         "examples/gateway-full.yaml has blocks that refuse to load when uncommented:\n{}",
         refused.join("\n")
     );
+    println!("{CHILD_OK}");
 }
 
 /// Write `yaml` to a fresh `gateway.yaml` and load it, with no env file.
@@ -194,13 +266,20 @@ fn load_plain(yaml: &str) -> Result<Config, String> {
 
 #[test]
 fn a_backends_section_with_only_comments_under_it_loads_as_none() {
+    if !in_clean_child("a_backends_section_with_only_comments_under_it_loads_as_none") {
+        return;
+    }
     let config = load_plain("backends:\n  # tavily:\n  #   command: \"true\"\n")
         .unwrap_or_else(|e| panic!("an empty backends section is refused: {e}"));
     assert!(config.backends.is_empty());
+    println!("{CHILD_OK}");
 }
 
 #[test]
 fn a_backends_section_of_the_wrong_type_is_still_refused() {
+    if !in_clean_child("a_backends_section_of_the_wrong_type_is_still_refused") {
+        return;
+    }
     for yaml in [
         "backends: [tavily]\n",
         "backends: tavily\n",
@@ -211,4 +290,5 @@ fn a_backends_section_of_the_wrong_type_is_still_refused() {
             "{yaml:?} loaded; only an empty section may read as none"
         );
     }
+    println!("{CHILD_OK}");
 }
