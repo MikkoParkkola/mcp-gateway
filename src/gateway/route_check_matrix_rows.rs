@@ -236,3 +236,29 @@ async fn mrtr_undeclared_rows() {
         assert_eq!(backend_calls, 1, "{route:?}: the question was asked once: {body}");
     }
 }
+
+/// ChainLink: with a chain signer emitting on request and a chain nonce on
+/// the call, the answer carries the gateway's origin link on every route the
+/// table says Applies.
+#[tokio::test]
+async fn chain_link_rows() {
+    use crate::gateway::chain_test_support::chain_of;
+    for route in [Route::Invoke, Route::Direct, Route::Stdio] {
+        assert_eq!(
+            expect(MethodKind::ToolsCall, route, Stage::ChainLink),
+            Expect::Applies,
+            "{route:?}"
+        );
+        let body = match route {
+            Route::Invoke => router::invoke_chained().await.body,
+            Route::Direct => router::direct_chained().await.body,
+            Route::Stdio => stdio::stdio_chained().await.body,
+            other => unreachable!("not driven here: {other:?}"),
+        };
+        assert!(body.get("error").is_none(), "{route:?}: refused: {body}");
+        assert!(
+            chain_of(&body["result"]).is_some(),
+            "{route:?}: no origin link on the answer: {body}"
+        );
+    }
+}

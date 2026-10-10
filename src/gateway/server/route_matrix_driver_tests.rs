@@ -61,11 +61,13 @@ pub(crate) struct Sent {
     pub(crate) seen: Vec<Value>,
 }
 
-/// R5: stdio `tools/call gateway_invoke alpha read` on a Meta-MCP holding
-/// `firewall` (its only instance), as the stdio server wires it.
+/// R5: stdio `tools/call gateway_invoke alpha read` with `args`, its params
+/// carrying `meta` as `_meta` when given, on a Meta-MCP that `arm` prepares
+/// (a firewall, a chain signer) as the stdio server would. The backend
+/// answers `answer`.
 async fn stdio_call(
-    firewall: Option<Arc<crate::security::firewall::Firewall>>,
-    args: Value,
+    arm: impl FnOnce(&mut MetaMcp),
+    (args, meta): (Value, Option<Value>),
     answer: Value,
 ) -> Sent {
     let calls = Arc::new(AtomicUsize::new(0));
@@ -84,19 +86,20 @@ async fn stdio_call(
     }) as Arc<dyn crate::transport::Transport>);
     backend.get_tools_shared().await.expect("warm the tool cache");
     assert!(registry.register(backend));
-    let mut meta = MetaMcp::new(registry);
-    meta.set_firewall(firewall);
-    let meta = Arc::new(meta);
+    let mut gateway_meta = MetaMcp::new(registry);
+    arm(&mut gateway_meta);
+    let gateway_meta = Arc::new(gateway_meta);
     let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
-    let request = json!({
-        "jsonrpc": "2.0", "id": 7, "method": "tools/call",
-        "params": { "name": "gateway_invoke",
-            "arguments": { "server": "alpha", "tool": "read", "arguments": args } },
-    });
-    let body = super::Gateway::dispatch_single(&meta, &policy, &mtls, &request, "stdio-matrix")
+    let mut params = json!({ "name": "gateway_invoke",
+        "arguments": { "server": "alpha", "tool": "read", "arguments": args } });
+    if let Some(meta) = meta {
+        params["_meta"] = meta;
+    }
+    let request = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params });
+    let body = super::Gateway::dispatch_single(&gateway_meta, &policy, &mtls, &request, "stdio-matrix")
         .await
         .expect("a request is answered");
     let seen = seen.lock().expect("seen lock").clone();
@@ -131,12 +134,17 @@ pub(crate) async fn stdio_firewalled_answering(
         },
         None,
     ));
-    stdio_call(Some(firewall), args, text_result(answer)).await
+    stdio_call(
+        |meta| meta.set_firewall(Some(firewall)),
+        (args, None),
+        text_result(answer),
+    )
+    .await
 }
 
 /// R5 with no firewall: what the stdio route itself does to the arguments.
 pub(crate) async fn stdio_plain(args: Value) -> Sent {
-    stdio_call(None, args, text_result("ok")).await
+    stdio_call(|_| {}, (args, None), text_result("ok")).await
 }
 
 /// A plain text tool result.
@@ -155,5 +163,16 @@ pub(crate) async fn stdio_asking() -> Sent {
         }},
         "requestState": "backend-state-1"
     });
-    stdio_call(None, json!({}), question).await
+    stdio_call(|_| {}, (json!({}), None), question).await
+}
+
+/// R5 with a chain signer emitting on request, the call carrying a chain nonce.
+pub(crate) async fn stdio_chained() -> Sent {
+    use crate::gateway::chain_test_support::{NONCE_KEY, signer};
+    stdio_call(
+        |meta| meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest),
+        (json!({}), Some(json!({ NONCE_KEY: "matrix-nonce" }))),
+        text_result("ok"),
+    )
+    .await
 }

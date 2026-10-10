@@ -104,3 +104,37 @@ pub(crate) async fn direct_asking() -> Sent {
         .await;
     sent(&fx, body)
 }
+
+/// R1 `/mcp` `gateway_invoke alpha read` with a chain signer emitting on
+/// request, the call carrying a chain nonce.
+pub(crate) async fn invoke_chained() -> Sent {
+    use crate::gateway::chain_test_support::{NONCE_KEY, signer};
+    let fx = super::direct_guards_fixture::fixture(Answer::Ok, |meta| {
+        meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest);
+    })
+    .await;
+    let params = serde_json::json!({
+        "name": "gateway_invoke",
+        "arguments": { "server": "alpha", "tool": "read", "arguments": {} },
+        "_meta": { NONCE_KEY: "matrix-nonce" },
+    });
+    let (_, body) =
+        super::direct_guards_fixture::send(&fx, "/mcp", "k-std", "tools/call", params, None).await;
+    sent(&fx, body)
+}
+
+/// R3 `/mcp/alpha` `tools/call read` with the same signer and nonce.
+pub(crate) async fn direct_chained() -> Sent {
+    use crate::gateway::chain_test_support::{NONCE_KEY, signer};
+    let fx = super::direct_guards_fixture::fixture(Answer::Ok, |meta| {
+        meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest);
+    })
+    .await;
+    let params = serde_json::json!({
+        "name": "read", "arguments": {}, "_meta": { NONCE_KEY: "matrix-nonce" },
+    });
+    let (_, body) =
+        super::direct_guards_fixture::send(&fx, "/mcp/alpha", "k-std", "tools/call", params, None)
+            .await;
+    sent(&fx, body)
+}
