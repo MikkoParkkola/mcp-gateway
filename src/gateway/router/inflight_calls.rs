@@ -54,8 +54,19 @@ pub(crate) async fn explicitly_cancellable<T>(
         })
 }
 
+/// Whether a call failed because its own caller cancelled it: its
+/// registration was aborted, and `error` is the one [`explicitly_cancellable`]
+/// answers that abort with. Both, so a backend that returns the same error
+/// is never mistaken for the caller's cancel.
+pub(crate) fn cancelled_by_caller(
+    entry: Option<&Registered>,
+    error: Option<&crate::Error>,
+) -> bool {
+    entry.is_some_and(Registered::cancelled) && error.is_some_and(is_client_cancelled)
+}
+
 /// Whether `e` is the error [`explicitly_cancellable`] answers an abort with.
-pub(crate) fn is_client_cancelled(e: &crate::Error) -> bool {
+fn is_client_cancelled(e: &crate::Error) -> bool {
     matches!(e, crate::Error::JsonRpc { code, message, data: None }
         if *code == CLIENT_CANCELLED_CODE && message == CLIENT_CANCELLED_MESSAGE)
 }

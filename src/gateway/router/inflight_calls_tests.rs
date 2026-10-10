@@ -74,3 +74,38 @@ fn a_registration_knows_whether_its_caller_cancelled_it() {
     assert!(cancelled.cancelled());
     assert!(!running.cancelled());
 }
+
+/// The caller's cancel is told from a backend that returns the same error by
+/// the registration, not by the error's fields. Mutant: either half of
+/// `cancelled_by_caller` dropped.
+#[tokio::test]
+async fn only_an_aborted_registration_makes_a_failure_the_callers_cancel() {
+    let calls = Arc::new(InFlightCalls::default());
+    let (aborted, on_abort) = calls.register(key("alice", None, &json!(1))).unwrap();
+    let (running, _) = calls.register(key("alice", None, &json!(2))).unwrap();
+    assert!(calls.cancel(&key("alice", None, &json!(1))));
+    let minted =
+        super::explicitly_cancellable(Some(on_abort), std::future::pending::<crate::Result<()>>())
+            .await
+            .expect_err("the abort is an error");
+    // A backend's own error, spelled exactly like the gateway's.
+    let echoed = crate::Error::JsonRpc {
+        code: super::CLIENT_CANCELLED_CODE,
+        message: super::CLIENT_CANCELLED_MESSAGE.to_owned(),
+        data: None,
+    };
+    let other = crate::Error::Protocol("backend failed".to_owned());
+    assert!(super::cancelled_by_caller(Some(&aborted), Some(&minted)));
+    assert!(
+        !super::cancelled_by_caller(Some(&running), Some(&echoed)),
+        "a backend echo on a live call"
+    );
+    assert!(
+        !super::cancelled_by_caller(Some(&aborted), Some(&other)),
+        "another failure"
+    );
+    assert!(
+        !super::cancelled_by_caller(None, Some(&minted)),
+        "an unregistered call"
+    );
+}

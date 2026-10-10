@@ -167,6 +167,7 @@ src/gateway/router/identity.rs	subject_key	1	standard	borderline	subject_key	Ses
 src/gateway/router/identity.rs	control_identity	1	critical	d	control_identity	Picks the key per-principal rate and budget limits score on; a fresh session falls to one shared anonymous bucket
 src/gateway/router/inflight_calls.rs	explicitly_cancellable	1	standard	borderline	explicitly_cancellable	Makes the dispatch abortable by its registration; the key carries the isolation
 src/gateway/router/inflight_calls.rs	is_client_cancelled	1	standard	borderline	is_client_cancelled	Recognises only the gateway's own abort error, so a backend failure still strikes the client breaker
+src/gateway/router/inflight_calls.rs	cancelled_by_caller	1	standard	borderline	cancelled_by_caller	A failure is the caller's own cancel only when its registration was aborted and the error is the gateway's; a backend echo still counts
 src/gateway/router/inflight_calls.rs	new	1	critical	c	CallKey::new	Refuses a key without an owner, so an ownerless caller's cancels always drop
 src/gateway/router/inflight_calls.rs	register	1	critical	c	InFlightCalls::register	Refuses a duplicate live key, leaving the live call untouched (D5)
 src/gateway/router/inflight_calls.rs	cancel	1	critical	c	InFlightCalls::cancel	Aborts only the call registered under the caller's exact key

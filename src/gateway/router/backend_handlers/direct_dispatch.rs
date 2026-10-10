@@ -369,8 +369,14 @@ async fn forward_sanitized(
         ),
     );
     let guards = (client, &mut admitted.sealed);
-    let forward =
-        DirectRouteGuards::after_dispatch(state, (seen, seal), guards, &admission, forward).await;
+    let forward = DirectRouteGuards::after_dispatch(
+        state,
+        (seen, seal),
+        guards,
+        (&admission, admitted.cancel_entry.as_ref()),
+        forward,
+    )
+    .await;
     settle_parked(parked, &forward, &mut admitted);
     // The spend is settled; an unsettled reservation is given back here.
     drop(admission);
@@ -471,9 +477,14 @@ async fn forward_plain(
             ),
         );
         let guards = (client, &mut admitted.sealed);
-        let guarded =
-            DirectRouteGuards::after_dispatch(state, (seen, seal), guards, &admission, forward)
-                .await;
+        let guarded = DirectRouteGuards::after_dispatch(
+            state,
+            (seen, seal),
+            guards,
+            (&admission, admitted.cancel_entry.as_ref()),
+            forward,
+        )
+        .await;
         settle_parked(parked, &guarded, admitted);
         guarded
     } else {
@@ -736,11 +747,8 @@ async fn answer_failure(mut admitted: Admitted<'_>, e: crate::Error, method: &st
     // MIK-7642 PR.C: the caller's own cancel is its choice, not a failure: no
     // breaker strike, and answered 200 as on `/mcp`. The key still settles as
     // dispatched (ADR-012 consequence 1), so a retry never re-runs the call.
-    let own_cancel = admitted
-        .cancel_entry
-        .as_ref()
-        .is_some_and(crate::gateway::router::inflight_calls::Registered::cancelled);
-    if own_cancel && crate::gateway::router::inflight_calls::is_client_cancelled(&e) {
+    let entry = admitted.cancel_entry.as_ref();
+    if crate::gateway::router::inflight_calls::cancelled_by_caller(entry, Some(&e)) {
         let response = JsonRpcResponse::error(
             Some(admitted.failed.id.clone()),
             crate::gateway::router::inflight_calls::CLIENT_CANCELLED_CODE,
