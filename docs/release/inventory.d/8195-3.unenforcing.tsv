@@ -1,0 +1,32 @@
+src/identity_propagation/account_strategies.rs	strategy	1	Minter::strategy coerces the held Arc into the trait object (same allocation); the mint decision is made in propagate on the strategy.
+src/identity_propagation/account_strategies.rs	managed	1	Minter::managed is a plain variant getter returning the vault if any; decisions are made by the vault and by the caller of managed_vault.
+src/identity_propagation/account_strategies.rs	after_upstream_401	1	PreparedAccountCredential::after_upstream_401 only forwards to ManagedLease::after_upstream_401 (the decider) or returns the refusal unchanged.
+src/identity_propagation/account_strategies.rs	headers	1	PreparedAccountCredential::headers is a plain getter; headers were validated in validate_and_audit_mint.
+src/identity_propagation/account_strategies.rs	cache_binding	1	PreparedAccountCredential::cache_binding is a plain getter; the binding is computed at mint time.
+src/identity_propagation/account_strategies.rs	declared	1	AccountStrategyRegistry::declared is a read-lock map lookup returning a clone; callers decide.
+src/identity_propagation/account_strategies.rs	installed	1	AccountStrategyRegistry::installed is a read-lock map lookup returning an Arc; callers decide.
+src/identity_propagation/account_strategies.rs	managed_vault	1	AccountStrategyRegistry::managed_vault chains installed() and Minter::managed() lookups; the vault and callers decide.
+src/identity_propagation/mod.rs	fmt	2	PropagationError::fmt is Display formatting of error text; it decides nothing.
+src/identity_propagation/mod.rs	audit_subject	1	audit_subject derives a label ("unauthenticated" or stable actor id) for audit records only; identity binding is decided elsewhere.
+src/identity_propagation/token_exchange.rs	new	1	TokenExchangeStrategy::new only delegates to with_http_client with the default client; construction wiring is in with_http_client.
+src/identity_propagation/token_exchange.rs	reap_expired	1	TokenExchangeStrategy::reap_expired is cache housekeeping that drops expired entries (skipped on unreadable clock); expiry is enforced at read time in cached().
+src/identity_propagation/token_exchange.rs	store	1	TokenExchangeStrategy::store inserts a cache entry (reaping first when at MAX_CACHE_ENTRIES) and never refuses; reads are gated in cached().
+src/gateway/input_bridge.rs	kind	1	Returns the kind for a ServerRequest variant; pure mapping, the relay-or-refuse decision is made in from_method.
+src/gateway/input_bridge.rs	method	2	Delegates to kind().method(); formatting a string, decides nothing.
+src/gateway/input_bridge.rs	prefix	2	Delegates to kind().prefix(); the ingress admit decision is made in is_bridge_reply_id.
+src/gateway/input_bridge.rs	params	1	Re-serializes already-deserialized params for the wire; the closed-set refusal happens earlier in from_method and plan.
+src/gateway/input_bridge.rs	send_request_committing	1	Default wrapper that calls send_request then fires the delivery receipt commit; it admits or refuses nothing, the checks live in the gate and ask.
+src/gateway/input_bridge.rs	observe	1	Emits a bridged-round counter with phase and width labels only; metrics plumbing, no decision.
+src/gateway/meta_mcp/task_confirmation/helpers.rs	record	1	Increments the destructive_confirmation_total counter; the refusal itself is decided by callers via refuse.
+src/personal_accounts/config/adapters.rs	spec	1	Plain getter returning the configured credential text; decisions are made by the callers.
+src/personal_accounts/config/adapters.rs	label	1	Formats a configuration-coordinate label for error messages; decides nothing.
+src/personal_accounts/config/journey.rs	default_cookie_name	1	Returns the serde default cookie name "token"; validate_session decides whether a cookie name is acceptable.
+src/personal_accounts/config/journey.rs	hosted_error	1	Constructs an AccountsConfigError::Hosted value; the refusing callers decide.
+src/personal_accounts/config/references.rs	reference_name	1	Strips the env: prefix to name a reference in an error message; resolve_key makes the decision.
+src/personal_accounts/provider.rs	new	1	Wraps the Arc<LiveEnv> in EnvSecrets and decides nothing; the scheme refusal is made in EnvSecrets::resolve.
+src/personal_accounts/provider.rs	refresh	1	Trait-method plumbing that forwards to refresh_inner, which makes the token-response refusals.
+src/personal_accounts/provider/grant_flow.rs	as_str	1	Maps a token-type-hint enum to its RFC 7009 wire string; no decision.
+src/personal_accounts/provider/grant_flow.rs	authorize_extra	1	Maps the closed config enum to fixed literal query pairs; shadowing a pinned parameter is prevented by the closed type, not by any check here.
+src/personal_accounts/provider/http.rs	get_metadata	1	Trait plumbing that forwards to get_inner, where guard makes the refusal.
+src/personal_accounts/provider/http.rs	post_token	1	Trait plumbing that forwards to post_inner, where guard makes the refusal.
+src/personal_accounts/provider/http.rs	names_certificate_failure	1	Purely diagnostic: Certificate and Unclassified are both terminal, so a miss changes only what an operator reads.

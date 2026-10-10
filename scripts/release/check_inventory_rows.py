@@ -71,6 +71,14 @@ SWEPT_AREAS = (
     "src/personal_accounts/worker_journeys.rs",
     # MIK-8195 W8: the stdio read judge.
     "src/gateway/outbound/stdio.rs",
+    # MIK-8195 W3: identity propagation, the input bridge and the rest of
+    # personal_accounts (config/ and provider).
+    "src/identity_propagation/",
+    "src/gateway/input_bridge.rs",
+    "src/gateway/meta_mcp/task_confirmation",
+    "src/config/account_bindings.rs",
+    "src/personal_accounts/config/",
+    "src/personal_accounts/provider",
 )
 # Diffing against git's empty tree reads every line of <head> as added.
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
