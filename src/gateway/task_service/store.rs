@@ -28,8 +28,6 @@ use disk::acquire_lease;
 #[cfg(test)]
 pub(super) use disk::read_bounded;
 use disk::{Fault, fire, open_blocking, write_record};
-#[path = "store_cancel.rs"]
-pub(crate) mod cancel;
 #[path = "store_disk.rs"]
 mod disk;
 #[path = "store_expiry.rs"]

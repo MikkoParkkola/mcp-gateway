@@ -17,7 +17,7 @@ src/gateway/server/warmstart.rs	cancel	1	Warm-start lifecycle: cancels a pending
 src/gateway/server/warmstart.rs	drop	1	Warm-start lifecycle: aborts warm-ups when the warmer is dropped
 src/gateway/task_service/execution/input_round.rs	settle_with	1	Settles a round with the gateway-written members; the owner-scoped write is settle_cas_with
 src/gateway/task_service/service.rs	health_view	1	Read-only health counters for the status route
-src/gateway/task_service/store_cancel.rs	claim_upstream_cancel	1	spawn_blocking wrapper over claim_upstream_cancel_blocking, which carries the checks
+src/gateway/task_service/store_targets.rs	claim_upstream_cancel	1	spawn_blocking wrapper over claim_upstream_cancel_blocking, which carries the checks
 src/gateway/task_service/store_disk.rs	deserialize	1	Serde entry for AdmissionCopy; the refusal is AdmissionCopyVisitor::visit_map
 src/gateway/task_service/store_disk.rs	expecting	1	Serde error text for AdmissionCopyVisitor
 src/gateway/task_service/store_disk.rs	visit_seq	1	A non-object admission member reads as no admission; the refusal it feeds is in load

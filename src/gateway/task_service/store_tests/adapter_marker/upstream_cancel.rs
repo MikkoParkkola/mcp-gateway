@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::gateway::task_service::record::UpstreamRecord;
-use crate::gateway::task_service::store::cancel::CancelClaim;
+use crate::gateway::task_service::store::targets::CancelClaim;
 
 fn descriptor(binding: &TaskBinding, handle: &str) -> UpstreamRecord {
     UpstreamRecord {

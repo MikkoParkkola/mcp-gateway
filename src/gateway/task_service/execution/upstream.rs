@@ -25,7 +25,7 @@ use crate::gateway::meta_mcp::invoke::audit::{DispatchNotes, with_dispatch_scope
 use crate::gateway::task_service::ErrorAuthor;
 use crate::gateway::task_service::record::UpstreamRecord;
 use crate::gateway::task_service::store::StoreError;
-use crate::gateway::task_service::store::cancel::CancelClaim;
+use crate::gateway::task_service::store::targets::CancelClaim;
 use crate::protocol::JsonRpcError;
 use crate::protocol::tasks::{TaskStatus, TaskTransition};
 

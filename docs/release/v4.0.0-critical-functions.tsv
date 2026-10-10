@@ -270,7 +270,7 @@ src/gateway/task_service/service.rs	update	1	standard	c	TaskService::update	task
 src/gateway/task_service/service.rs	reread_sealed	1	critical	d	TaskService::reread_sealed	Lowers the seal only after a repaired row's key is imported, so that key is never admitted as new in between (MIK-8052)
 src/gateway/task_service/service.rs	move_seal	1	standard	borderline	TaskService::move_seal	Moves this service's share of the admission seal
 src/gateway/task_service/service.rs	release_seal	1	standard	borderline	TaskService::release_seal	Releases this service's share of the admission seal once
-src/gateway/task_service/store_cancel.rs	claim_upstream_cancel_blocking	1	critical	c	Shared::claim_upstream_cancel_blocking	Owner-scoped; claims only a cancelled row, once; refuses an offered descriptor not bound to the record's admitted operation or over the handle bound
+src/gateway/task_service/store_targets.rs	claim_upstream_cancel_blocking	1	critical	c	Shared::claim_upstream_cancel_blocking	Owner-scoped; claims only a cancelled row, once; refuses an offered descriptor not bound to the record's admitted operation or over the handle bound
 src/gateway/task_service/store_disk.rs	acquire_lease	1	critical	d	acquire_lease	Refuses a lease file that is not a private regular file (or, on Windows, has a non-private DACL)
 src/gateway/task_service/store.rs	admit	1	critical	d	admit	Per-principal task quota and record-size limit
 src/gateway/task_service/store.rs	admits_upstream_descriptor	1	critical	c	TaskStore::admits_upstream_descriptor	Reads the candidate record only through the owner filter
