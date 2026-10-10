@@ -48,7 +48,9 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
 
             // TaskConfirm (X14): surfaced tools only (task_confirmation.rs:164).
             (Invoke | Direct, TaskConfirm) => NotApplicable(Na::NotSurfacedName),
-            (Surfaced | TaskSubmit, TaskConfirm) => Applies,
+            // A plain surfaced call carries no task member; its task form is R4a.
+            (Surfaced, TaskConfirm) => NotApplicable(Na::NoTaskMember),
+            (TaskSubmit, TaskConfirm) => Applies,
             (TaskWorker, TaskConfirm) => NotApplicable(Na::DecidedAtSubmit),
             (Stdio, TaskConfirm) => ExpectedGap(Ticket::Mik8160),
 

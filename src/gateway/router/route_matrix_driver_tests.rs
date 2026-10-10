@@ -313,3 +313,39 @@ pub(crate) async fn direct_spend_then_resend() -> (Value, Value) {
     let (_, again) = signed_call(&fx, who, "n2", serde_json::json!({})).await;
     (refused, again)
 }
+
+/// R4a: a modern task-augmented `tools/call read` by its surfaced name on
+/// `/mcp`, declaring form elicitation. `read` carries no annotations, so X14
+/// treats it as destructive (or unclassified) and must challenge first.
+pub(crate) async fn task_submit_surfaced() -> Sent {
+    let fx = super::direct_guards_fixture::fixture_built(Answer::Ok, surfacing).await;
+    let params = serde_json::json!({
+        "name": "read",
+        "arguments": {},
+        "task": {},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {
+                "elicitation": {"form": {}},
+                "extensions": {"io.modelcontextprotocol/tasks": {}}
+            },
+            crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "x14-submit"
+        }
+    });
+    let headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tools/call"),
+        ("mcp-name", "read"),
+    ];
+    let (_, body) = super::direct_guards_fixture::send_with_headers(
+        &fx,
+        "/mcp",
+        "k-std",
+        "tools/call",
+        params,
+        None,
+        &headers,
+    )
+    .await;
+    sent(&fx, body)
+}

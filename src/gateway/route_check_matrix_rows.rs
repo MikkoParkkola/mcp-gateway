@@ -371,3 +371,29 @@ async fn nonce_give_back_direct_row() {
     assert_ne!(again["error"]["message"], REPLAY, "R3 kept the nonce: {again}");
     assert_eq!(again["error"], refused["error"], "R3: not the same refusal again: {again}");
 }
+
+/// X14's refusal for a caller it cannot bind a confirmation to
+/// (meta_mcp/task_confirmation.rs). The fixture's `k-std` is a shared key with
+/// no verified identity, so this is the X14 outcome the design names for it.
+const X14_UNBINDABLE: &str =
+    "this destructive call cannot be confirmed for a caller this gateway cannot name";
+
+/// TaskConfirm, R4a Applies: a task-augmented call of a destructive (or
+/// unclassified) surfaced tool is decided by X14 before any dispatch. For a
+/// caller with no verified identity that decision is X14's own refusal
+/// (-32003), and the backend is never called.
+#[tokio::test]
+async fn task_confirm_submit_row() {
+    assert_eq!(
+        expect(MethodKind::ToolsCall, Route::TaskSubmit, Stage::TaskConfirm),
+        Expect::Applies
+    );
+    let sent = router::task_submit_surfaced().await;
+    assert_eq!(sent.body["error"]["code"], -32003, "R4a: {}", sent.body);
+    assert_eq!(
+        sent.body["error"]["message"], X14_UNBINDABLE,
+        "R4a: not decided by X14: {}",
+        sent.body
+    );
+    assert_eq!(sent.backend_calls, 0, "R4a: dispatched before X14: {}", sent.body);
+}

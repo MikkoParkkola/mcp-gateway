@@ -65,6 +65,9 @@ pub(crate) enum Stage {
 pub(crate) enum Na {
     /// The route answers without sending anything to a backend.
     NoBackendSend,
+    /// The route's request carries no task member, and X14 governs only
+    /// task-augmented calls.
+    NoTaskMember,
     /// The route has no signing nonce of its own.
     TransportHasNoNonce,
     /// The task submit already decided this stage for the worker.
