@@ -15,7 +15,7 @@ src/gateway/server/warmstart.rs	warm	1	Warm-start lifecycle: entry for one backe
 src/gateway/server/warmstart.rs	hook	1	Warm-start lifecycle: reload hook that schedules warm-ups
 src/gateway/server/warmstart.rs	cancel	1	Warm-start lifecycle: cancels a pending warm-up
 src/gateway/server/warmstart.rs	drop	1	Warm-start lifecycle: aborts warm-ups when the warmer is dropped
-src/gateway/task_service/execution/input_round.rs	settle_with	1	Settles a round with the gateway-written members; the owner-scoped write is settle_cas_with
+src/gateway/task_service/execution/input_round.rs	settle_with	1	Settles a round with the gateway-written members; the owner-scoped write is settle_cas_by
 src/gateway/task_service/service.rs	health_view	1	Read-only health counters for the status route
 src/gateway/task_service/store_targets.rs	claim_upstream_cancel	1	spawn_blocking wrapper over claim_upstream_cancel_blocking, which carries the checks
 src/gateway/task_service/store_disk.rs	deserialize	1	Serde entry for AdmissionCopy; the refusal is AdmissionCopyVisitor::visit_map
@@ -104,34 +104,30 @@ src/gateway/router/handlers/session_end.rs	sse_deprecated_handler	1	Answers the 
 src/gateway/router/handlers/sse.rs	unsupported_version_error	1	Builds the unsupported-version JSON-RPC error; the refusal is decided by its callers
 src/transport/stdio.rs	kill_tree_now	1	Process lifecycle (MIK-7923): ends a retired stdio transport's process tree; no access decision
 src/gateway/router/handlers/dispatch_intake.rs	params	1	Returns the request params or the narrowed listen copy; decides nothing
-src/gateway/router/helpers.rs	bodiless_accepted	1	Strips the placeholder body from a 202 direct answer and passes every other answer through unchanged.
-src/gateway/router/helpers.rs	extract_request_id	1	Converts a JSON string or integer into a request id, nothing else.
-src/gateway/router/helpers.rs	merge_client_meta	1	Copies the client's self-asserted request metadata, never an authorization input, into a meta-tool's arguments.
-src/gateway/router/helpers.rs	insert_client_meta	1	Inserts the client's metadata object into the arguments unless one is already present.
-src/gateway/router/helpers.rs	client_meta_insert_required	1	Reports whether the metadata merge would insert anything, a pure precondition over non-authorizing metadata.
-src/gateway/router/helpers.rs	merge_client_meta_ref	1	Borrowed form of the metadata merge that copies only when an insertion is needed.
-src/gateway/router/watch_poll.rs	application_value	1	Extracts the structured content or first text item from an already-gated tool result.
-src/gateway/router/watch_poll.rs	new	1	Stores a weak handle to the gateway state for the watch host.
-src/gateway/router/authorization.rs	transport	1	Returns the constant HTTP transport label written into refusal audit lines.
-src/gateway/router/handlers.rs	unsupported_version_error	1	Builds the protocol-version error frame listing the revisions the client may retry on.
-src/gateway/router/handlers.rs	sse_deprecated_handler	1	Answers the retired SSE endpoint with a fixed 410 migration message.
-src/gateway/router/handlers.rs	backends_overall_healthy	1	Computes overall gateway health from backend breaker and health-tracker status.
-src/gateway/router/mod.rs	probe_ok	1	Answers the liveness probe with a constant ok.
-src/gateway/router/accounts/offer.rs	new	1	Stores the journey facade and live config in the offer holder, a plain constructor.
-src/gateway/router/accounts/offer.rs	envelope	1	Formats the accounts.v1 data object for an already-decided refusal.
-src/gateway/router/accounts/offer.rs	install_connect_offers	1	Installs the optional connect-offer holder; without it refusals pass unchanged, so no enforcer depends on it.
-src/gateway/router/accounts/offer.rs	offers	1	Reads the installed connect-offer holder, an accessor.
-src/gateway/router/identity.rs	reason	1	Names the refusal rule as a fixed string for metrics, logs and the refusal text.
-src/gateway/router/identity.rs	ignored	1	Increments the ignored-identity-header counter.
-src/gateway/router/backend_handlers/direct_audit.rs	sha256_of	1	Formats the canonical SHA-256 of the request params for the audit record.
-src/gateway/router/backend_handlers/direct_audit.rs	direct_outcome	1	Classifies an already-sent direct-route answer into an audit outcome label.
 src/gateway/router/accounts/envelope.rs	body	1	Formats the accounts.v1 error body with the code as its message.
 src/gateway/router/accounts/envelope.rs	body_with_message	1	Formats the accounts.v1 error body JSON.
+src/gateway/router/accounts/offer.rs	envelope	1	Formats the accounts.v1 data object for an already-decided refusal.
+src/gateway/router/accounts/offer.rs	install_connect_offers	1	Installs the optional connect-offer holder; without it refusals pass unchanged, so no enforcer depends on it.
+src/gateway/router/accounts/offer.rs	new	1	Stores the journey facade and live config in the offer holder, a plain constructor.
+src/gateway/router/accounts/offer.rs	offers	1	Reads the installed connect-offer holder, an accessor.
+src/gateway/router/authorization.rs	transport	1	Returns the constant HTTP transport label written into refusal audit lines.
+src/gateway/router/backend_handlers/direct_audit.rs	direct_outcome	1	Classifies an already-sent direct-route answer into an audit outcome label.
+src/gateway/router/backend_handlers/direct_audit.rs	sha256_of	1	Formats the canonical SHA-256 of the request params for the audit record.
+src/gateway/router/handlers.rs	backends_overall_healthy	1	Computes overall gateway health from backend breaker and health-tracker status.
+src/gateway/router/handlers.rs	sse_deprecated_handler	1	Answers the retired SSE endpoint with a fixed 410 migration message.
+src/gateway/router/handlers.rs	unsupported_version_error	1	Builds the protocol-version error frame listing the revisions the client may retry on.
+src/gateway/router/helpers.rs	bodiless_accepted	1	Strips the placeholder body from a 202 direct answer and passes every other answer through unchanged.
+src/gateway/router/helpers.rs	client_meta_insert_required	1	Reports whether the metadata merge would insert anything, a pure precondition over non-authorizing metadata.
+src/gateway/router/helpers.rs	extract_request_id	1	Converts a JSON string or integer into a request id, nothing else.
+src/gateway/router/helpers.rs	insert_client_meta	1	Inserts the client's metadata object into the arguments unless one is already present.
+src/gateway/router/helpers.rs	merge_client_meta	1	Copies the client's self-asserted request metadata, never an authorization input, into a meta-tool's arguments.
+src/gateway/router/helpers.rs	merge_client_meta_ref	1	Borrowed form of the metadata merge that copies only when an insertion is needed.
+src/gateway/router/identity.rs	ignored	1	Increments the ignored-identity-header counter.
+src/gateway/router/identity.rs	reason	1	Names the refusal rule as a fixed string for metrics, logs and the refusal text.
+src/gateway/router/mod.rs	probe_ok	1	Answers the liveness probe with a constant ok.
 src/gateway/router/trace_span.rs	span_for	1	Builds a debug tracing span from the method and matched route only.
-src/gateway/server/run_steps.rs	webhook_routes	1	Builds the webhook routes the router puts behind its origin gate; the gate decides (MIK-8144)
-src/gateway/server/run_steps.rs	generate_gateway_key_pair	1	Generates the JWKS signing key pair; makes no access decision (MIK-8144)
-src/gateway/server/run_steps.rs	managed_recovery_adapters	1	Lists the recovery adapters that are configured backends; makes no access decision (MIK-8144)
-src/gateway/server/stdio_writer.rs	stdout_queue	1	Queue construction (MIK-8176): creates the stdout writer's bounded queue and, in test builds only, reports the stdio session's Meta-MCP to a test seam; it decides nothing
+src/gateway/router/watch_poll.rs	application_value	1	Extracts the structured content or first text item from an already-gated tool result.
+src/gateway/router/watch_poll.rs	new	1	Stores a weak handle to the gateway state for the watch host.
 src/gateway/server/background.rs	drop	1	AbortOnDrop::drop: aborts the owned task; no access decision
 src/gateway/server/background.rs	new	1	AbortOnDrop::new: wraps a task handle so dropping it aborts the task; no access decision
 src/gateway/server/background.rs	poll_export_source	1	Polls one log exporter for the SIEM export; makes no access decision
@@ -146,6 +142,116 @@ src/gateway/server/construct.rs	shutdown_account_custody	1	Releases account cust
 src/gateway/server/construct.rs	with_env	1	Builder: sets the evaluated environment; no access decision
 src/gateway/server/construct.rs	with_watched_config	1	Builder: sets the watched config path; no access decision
 src/gateway/server/background.rs	stop	1	AbortOnDrop::stop: aborts the owned task and waits for it to end; no access decision (moved from persistence.rs, MIK-8144)
+src/gateway/server/run_steps.rs	generate_gateway_key_pair	1	Generates the JWKS signing key pair; makes no access decision (MIK-8144)
+src/gateway/server/run_steps.rs	managed_recovery_adapters	1	Lists the recovery adapters that are configured backends; makes no access decision (MIK-8144)
+src/gateway/server/run_steps.rs	webhook_routes	1	Builds the webhook routes the router puts behind its origin gate; the gate decides (MIK-8144)
 src/gateway/server/stdio_single.rs	observe_stdio_inbound	1	Records the inbound protocol observation; makes no access decision
 src/gateway/server/stdio_single.rs	run_stdio	1	Starts stdio mode on the process stdin/stdout and delegates to run_stdio_on; no decision of its own (MIK-8144 move)
 src/gateway/server/stdio_single.rs	stdio_take_merged_client_meta	1	Moves the client _meta into the call arguments; makes no access decision
+src/gateway/server/stdio_writer.rs	stdout_queue	1	Queue construction (MIK-8176): creates the stdout writer's bounded queue and, in test builds only, reports the stdio session's Meta-MCP to a test seam; it decides nothing
+src/gateway/task_service/execution.rs	begin	1	Takes the handoff for a fresh id and spawns commit_and_run; admission and dispatch gating happen in the worker
+src/gateway/task_service/execution.rs	cancel_remaining	1	Cancels running workers at shutdown and waits a bound for them to end
+src/gateway/task_service/execution.rs	cancel_signal	1	Forwards a cancel signal to the handoff registry
+src/gateway/task_service/execution.rs	commit_to_service	1	Maps a CommitFailure to a ServiceError
+src/gateway/task_service/execution.rs	drain	1	Shutdown join of handoffs and worker permits under a timeout
+src/gateway/task_service/execution.rs	fail_marker	1	Test seam: asks the observer to inject a marker failure
+src/gateway/task_service/execution.rs	fail_state_upgrade	1	Test seam: asks the observer to inject a host-upgrade failure
+src/gateway/task_service/execution.rs	into_response	1	Maps a BeginOutcome to its JSON-RPC response; the refusals it renders were decided by admission
+src/gateway/task_service/execution.rs	is_terminal	1	Status predicate for the three terminal states
+src/gateway/task_service/execution.rs	notify_observer	1	Test seam: tells the commit observer a stage was reached
+src/gateway/task_service/execution.rs	observe_commits	1	Test/debug seam installing a commit observer
+src/gateway/task_service/execution.rs	on_publication	1	Installs the write-once publication callback for the events source
+src/gateway/task_service/execution.rs	published	1	Publishes a committed transition to the hook, log and subscribers
+src/gateway/task_service/execution.rs	recovery	1	Getter for the installed recovery adapter
+src/gateway/task_service/execution.rs	reread_sealed	1	Drives TaskService::reread_sealed_deferring each sweep and publishes rows it settled; the seal ordering is decided there
+src/gateway/task_service/execution.rs	seal	1	Cancels the shutdown token so later workers never start; lifecycle, not a security refusal
+src/gateway/task_service/execution.rs	spawn_worker	1	Spawns a worker under the shutdown token inside relay-receipt and continuation-slot accounting scopes; no allow or deny
+src/gateway/task_service/execution/context.rs	authorizer	1	Getter for the captured router authorizer
+src/gateway/task_service/execution/context.rs	dispatch_log	1	Getter for the dispatch log
+src/gateway/task_service/execution/context.rs	host	1	Getter for the task host
+src/gateway/task_service/execution/context.rs	principal	1	Getter for the admission principal
+src/gateway/task_service/execution/context.rs	session_id	1	Getter for the session id
+src/gateway/task_service/execution/context.rs	with_caller_key	1	Sets the caller key used for hints, A/B arm and key holds; not an authorization identity
+src/gateway/task_service/execution/context.rs	with_surface_request	1	Sets the meta-tool surface the task's hints follow
+src/gateway/task_service/execution/expiry.rs	drop	1	Signals the sweep loop to stop on drop
+src/gateway/task_service/execution/expiry.rs	finish	1	Turns the first sweep failure into the loop's result
+src/gateway/task_service/execution/expiry.rs	shutdown	1	Signals and joins the sweep loop
+src/gateway/task_service/execution/input_round.rs	close_round	1	Forwards to the store's close_round and publishes; the ownership check is Shared::close_round_blocking
+src/gateway/task_service/execution/input_round.rs	input_outcome_of	1	Maps StoreError variants to InputOutcome; the store decides NotFound, including for a foreign task
+src/gateway/task_service/execution/input_round.rs	new	1	Settling constructor; stores borrowed fields
+src/gateway/task_service/execution/input_round.rs	settle	1	Delegates to settle_with with an empty write record; the owner-scoped write is settle_cas_with
+src/gateway/task_service/execution/input_round.rs	settle_interrupted	1	Builds the not_executed payload and settles through settle_cas; resume_flow decides the host is gone
+src/gateway/task_service/execution/input_round.rs	unix_secs	1	Converts a timestamp to unix seconds
+src/gateway/task_service/execution/observe.rs	accept_when_free	1	Waits a bound for a producing worker to release a handoff
+src/gateway/task_service/execution/observe.rs	cancel_signal	1	Raises the cancel watch for an owned handoff
+src/gateway/task_service/execution/observe.rs	drop	1	Releases handoff ownership on drop
+src/gateway/task_service/execution/observe.rs	executor	1	Getter for the handoff's executor
+src/gateway/task_service/execution/observe.rs	fail_marker	1	Trait default for a test injection seam; returns false
+src/gateway/task_service/execution/observe.rs	fail_state_upgrade	1	Trait default for a test injection seam; returns false
+src/gateway/task_service/execution/observe.rs	is_empty	1	Registry emptiness check
+src/gateway/task_service/execution/observe.rs	join	1	Waits until no handoff remains (drain)
+src/gateway/task_service/execution/observe.rs	len	1	Registry size
+src/gateway/task_service/execution/observe.rs	new	1	HandoffRegistry constructor
+src/gateway/task_service/execution/observe.rs	release	1	Removes a handoff and wakes waiters
+src/gateway/task_service/execution/observe.rs	row_moved	1	Wakes waiters after the owner moves its row
+src/gateway/task_service/execution/observe.rs	try_accept	1	Constructs a Handoff guard if the id is not already owned by a worker
+src/gateway/task_service/execution/observe.rs	try_insert	1	Compare-and-insert of handoff ownership for concurrency, not principal ownership
+src/gateway/task_service/execution/observe.rs	wake_waiters	1	Bumps the release generation to wake waiters
+src/gateway/task_service/execution/pause_hook.rs	install_from_env	1	Debug-only: installs the pause observer when the test env var is set
+src/gateway/task_service/execution/pause_hook.rs	reached	1	Debug-only test observer that writes a marker and pauses at Published
+src/gateway/task_service/execution/recovery.rs	recover_interrupted_deferring	1	Startup settlement of interrupted rows through the Recover write, by what each record proves; deferral is not a trust claim
+src/gateway/task_service/execution/recovery.rs	recovery_event	1	Chooses deferral or the restart result for an interrupted row; trust is decided later on an owner read
+src/gateway/task_service/execution/recovery.rs	restart_result	1	Builds the gateway's restart result payload
+src/gateway/task_service/execution/settle_followed.rs	rebuild_task_receipt	1	Rebuilds the task receipt from the stored result
+src/gateway/task_service/execution/settle_followed.rs	stage_followed_result	1	Stages a followed job's stored result as the relay receipt; no allow or deny
+src/gateway/task_service/execution/settlement.rs	abandoned_input_round	1	Builds the gateway's abandoned-round payload
+src/gateway/task_service/execution/settlement.rs	as_result_object	1	Wraps a non-object result as a text block
+src/gateway/task_service/execution/settlement.rs	interrupted_before_dispatch	1	Builds the gateway's not_executed payload
+src/gateway/task_service/execution/settlement.rs	interrupted_result	1	Builds an interrupted-result JSON payload
+src/gateway/task_service/execution/settlement.rs	strip_http_status	1	Removes the internal HTTP-status channel from an error before it is stored
+src/gateway/task_service/execution/upstream.rs	acquire_query_lease	1	Takes the per-record query slot (serialization, not authorization)
+src/gateway/task_service/execution/upstream.rs	query_slot	1	Creates or returns the per-record query mutex
+src/gateway/task_service/execution/upstream.rs	release	1	Releases a query lease and its directory entry
+src/gateway/task_service/execution/upstream.rs	release_query_slot	1	Drops a query slot's directory entry when unused
+src/gateway/task_service/execution/worker.rs	is_terminal	1	Status predicate for the three terminal states
+src/gateway/task_service/execution/worker.rs	settle_cas	1	Delegates to settle_cas_by with the gateway as author; the owner-scoped decision is there
+src/gateway/task_service/execution/worker.rs	settle_cas_with	1	Delegates to settle_cas_by with the given author; the owner-scoped decision is there
+src/gateway/task_service/execution/worker.rs	settle_descriptor_refused	1	Builds the descriptor-refusal payload and settles through settle_cas; run_dispatched decides the refusal
+src/gateway/task_service/execution/worker.rs	settle_interrupted	1	Builds the not_executed payload and settles through settle_cas; run_dispatched decides the host is gone
+src/gateway/task_service/execution/worker.rs	split_create	1	Maps CreateOutcome to BeginOutcome and the worker permit
+src/gateway/task_service/host.rs	meta_mcp	1	Getter for the host's MetaMcp
+src/gateway/task_service/host.rs	upgrade	1	Upgrades the weak host reference; a gone host settles interrupted
+src/gateway/task_service/record.rs	set_model	1	Stores the task snapshot and drops the continuation on terminal status; housekeeping
+src/gateway/task_service/service.rs	admission	1	Read-only reference to the admission authority
+src/gateway/task_service/service.rs	admission_arc	1	Shares the admission Arc with the store's expiry transaction
+src/gateway/task_service/service.rs	shutdown	1	Closes the store and releases this service's seal share
+src/gateway/task_service/service.rs	skipped_records	1	Getter for the store's skipped-row counts
+src/gateway/task_service/store.rs	close	1	Async hop to close_blocking
+src/gateway/task_service/store.rs	close_blocking	1	Joins writers, releases the lease and clears the image
+src/gateway/task_service/store.rs	commit	1	Writes a record durably and poisons readiness on uncertain durability
+src/gateway/task_service/store.rs	create	1	Async hop to create_blocking, where the duplicate, quota and size checks run
+src/gateway/task_service/store.rs	hook	2	Non-test commit hook; always None
+src/gateway/task_service/store.rs	mark_dispatched	1	Async hop to mark_dispatched_blocking, where ownership is checked
+src/gateway/task_service/store.rs	mark_upstream	1	Async hop to mark_upstream_blocking, where ownership and the digest binding are checked
+src/gateway/task_service/store.rs	order	1	Lock accessor for the ordering lock
+src/gateway/task_service/store.rs	publish	1	Inserts a committed record into the readable image
+src/gateway/task_service/store.rs	serialize	1	Serializes a record to JSON bytes
+src/gateway/task_service/store.rs	state	1	Lock accessor for state
+src/gateway/task_service/store_disk.rs	expecting	2	Serde error text for the Members visitor
+src/gateway/task_service/store_disk.rs	fire	1	Fires the test-only commit hook
+src/gateway/task_service/store_disk.rs	stage_temp	1	Writes and syncs the temp file
+src/gateway/task_service/store_disk.rs	write_record	1	Durable write sequence (temp, sync, rename, dir sync); privacy is create_temp's
+src/gateway/task_service/store_expiry.rs	expire	1	Async hop to expire_blocking
+src/gateway/task_service/store_expiry.rs	expired_candidates	1	Snapshots terminal rows past retention for the sweep
+src/gateway/task_service/store_expiry.rs	interrupted	1	Selects non-terminal rows for startup recovery
+src/gateway/task_service/store_expiry.rs	skipped_records	1	Getter for skipped-row counts
+src/gateway/task_service/store_input.rs	close_round	1	Async hop to close_round_blocking, where ownership is checked
+src/gateway/task_service/store_input.rs	now	1	Clock source for deadline decisions (wall time in production)
+src/gateway/task_service/store_input.rs	now	2	Forwards the store clock
+src/gateway/task_service/store_input.rs	provide_input	1	Async hop to provide_input_blocking, where ownership and outstanding keys are checked
+src/gateway/task_service/store_input.rs	reason	1	Formats the round-closed sentence
+src/gateway/task_service/store_input.rs	require_input	1	Async hop to require_input_blocking, where ownership is checked
+src/gateway/task_service/store_targets.rs	add_targets	1	Async hop to add_targets_blocking, where ownership is checked
+src/gateway/task_service/store_targets.rs	settle_bounded_by	1	Async hop to settle_bounded_blocking, where ownership and revision are checked
+src/gateway/task_service/store_unix.rs	sync_dir	1	fsync of the store directory
+src/gateway/task_service/store_unix.rs	sync_file	1	fsync of a record file
