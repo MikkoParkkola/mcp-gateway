@@ -17,6 +17,12 @@ Test code is found structurally: the module tree is walked from
 `src/lib.rs` and `src/main.rs`, `#[path]` modules followed, and `#[cfg(test)]`
 carried from a gated declaration to its file. Item-level `#[cfg(test)]` gates
 only its own item. File names decide nothing.
+
+Known limit: deserialization whose target type is inferred with no identity
+type written on the statement or in the function's return type (a bare
+`let x = serde_json::from_str(s)?` used later) is not seen; a lexical check
+cannot know that type. The checked constructors and the stored-token
+read-back check still refuse a nameless identity wherever it is used.
 """
 
 from __future__ import annotations
@@ -197,7 +203,7 @@ def self_literals(code: str) -> list[tuple[int, str]]:
         for m in re.finditer(r"(?<!->)(?<!-> )\bSelf\s*\{", code[start:end]):
             out.append((start + m.start(), f"{im.group(1)} {{"))
         if im.group(1) == "GrantSubject":
-            for m in re.finditer(r"\bSelf::new\(", code[start:end]):
+            for m in re.finditer(r"\bSelf\s*::\s*new\s*\(", code[start:end]):
                 out.append((start + m.start(), "GrantSubject::new("))
     return out
 

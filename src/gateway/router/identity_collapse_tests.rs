@@ -109,7 +109,9 @@ async fn gateway(idp: &Idp) -> (Arc<AppState>, tempfile::TempDir) {
             discovery_url: None,
             auto_discover: false,
             audiences: vec![AUD.to_owned()],
-            allowed_domains: Vec::new(),
+            // An allowlist, so a nameless token from another domain proves
+            // the subject is judged before the domain (MIK-8286 review).
+            allowed_domains: vec!["corp.invalid".to_owned()],
         }],
         policies: vec![KeyServerPolicyConfig {
             match_criteria: PolicyMatchConfig {
@@ -186,8 +188,16 @@ async fn a_recognised_credential_that_names_nobody_is_refused_on_a_public_path()
     let idp = Idp::start().await;
     let (state, _store) = gateway(&idp).await;
     let empty_sub = idp.token("", &json!({}));
+    let elsewhere = idp.token(
+        "",
+        &json!({"email": "x@elsewhere.invalid", "email_verified": true}),
+    );
     for (case, bearer) in [
         ("empty-sub bearer", empty_sub.as_str()),
+        (
+            "empty-sub bearer from a disallowed domain",
+            elsewhere.as_str(),
+        ),
         ("stored nameless token", STORED_NAMELESS),
     ] {
         let (status, body) = initialize(&state, Some(bearer)).await;
