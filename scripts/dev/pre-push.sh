@@ -8,6 +8,15 @@
 # Bypass: SKIP_PREPUSH=1 (logged, audit-only).
 set -euo pipefail
 
+# Every step names itself; any non-zero exit says which step stopped the push,
+# whatever printed last (MIK-8328: a red gate must never read as green).
+current_step="setup"
+step() {
+  current_step="$1"
+  echo "[pre-push] $1"
+}
+trap 'rc=$?; if [[ $rc -ne 0 ]]; then echo "FAIL: pre-push stopped at step: ${current_step} (exit ${rc})" >&2; fi' EXIT
+
 if [[ "${SKIP_PREPUSH:-0}" == "1" ]]; then
   echo "WARN: pre-push bypassed via SKIP_PREPUSH=1" >&2
   exit 0
@@ -27,30 +36,30 @@ if [[ -f Cargo.toml ]]; then
   # changelog.yml skips this repository's throwaway/ branches (red-first and
   # mutant probes), so the hook does too.
   if [[ "$(git rev-parse --abbrev-ref HEAD)" != throwaway/* ]]; then
-    echo "[pre-push] changelog fragment"
+    step "changelog fragment"
     python3 scripts/release/changelog_fragments.py check --base "$base" --head HEAD
   fi
-  echo "[pre-push] file size"
+  step "file size"
   python3 scripts/dev/check-file-size.py --base "$base"
-  echo "[pre-push] inventory rows"
+  step "inventory rows"
   python3 scripts/release/check_inventory_rows.py "$base" HEAD
-  echo "[pre-push] timing asserts"
+  step "timing asserts"
   python3 scripts/dev/check-timing-asserts.py --base "$base"
-  echo "[pre-push] C6 obligations"
+  step "C6 obligations"
   # One line per obligation: show them all only when one is unresolved.
   c6="$(python3 scripts/release/c6_resolve.py --tree HEAD)" || { printf '%s\n' "$c6"; exit 1; }
   printf '%s\n' "${c6##*$'\n'}"
-  echo "[pre-push] scope acceptance"
+  step "scope acceptance"
   python3 scripts/release/check_scope_acceptance.py --check
-  echo "[pre-push] clock baseline"
+  step "clock baseline"
   python3 scripts/release/check_clock_baseline.py "$base"
 
-  echo "[pre-push] commit message hygiene"
+  step "commit message hygiene"
   # This branch's own commits. With no argument the script falls back to the
   # upstream, else origin/main, which is far behind the release line.
   scripts/dev/check-commit-message-hygiene.sh "$base..HEAD"
 
-  echo "[pre-push] public repo hygiene"
+  step "public repo hygiene"
   scripts/dev/check-public-repo-hygiene.sh
 
   # Cargo's own exit code decides, never a pipe's: the full output goes to a
@@ -71,16 +80,16 @@ if [[ -f Cargo.toml ]]; then
     rm -f "$log"
   }
 
-  echo "[pre-push] cargo fmt --check"
+  step "cargo fmt --check"
   run_cargo "cargo fmt" fmt --all --check
 
-  echo "[pre-push] cargo clippy --all-targets --all-features -D warnings"
+  step "cargo clippy --all-targets --all-features -D warnings"
   run_cargo "clippy all-features" clippy --all-targets --all-features --quiet -- -D warnings
 
-  echo "[pre-push] cargo clippy --all-targets --no-default-features -D warnings"
+  step "cargo clippy --all-targets --no-default-features -D warnings"
   run_cargo "clippy no-default-features" clippy --all-targets --no-default-features --quiet -- -D warnings
 
-  echo "[pre-push] cargo test --lib"
+  step "cargo test --lib"
   run_cargo "cargo test --lib" test --lib --quiet
 fi
 
