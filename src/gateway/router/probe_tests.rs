@@ -286,17 +286,38 @@ where
 
 /// F23b T6: every refusal by the backend's own limiter is counted, on the
 /// request path, and nothing else is. One token, three requests: the first is
-/// admitted, the next two meet the empty bucket.
+/// admitted, and the rest meet the empty bucket.
+///
+/// The counter is compared with the refusals the test observed, not with a
+/// fixed 2 (MIK-8292). The limiter refills on the real clock, so a host slow
+/// enough to stretch three requests past a second refuses fewer of them. A
+/// refill changes both sides alike, so it cannot flip the row; a counter that
+/// skips a refusal still does.
 #[cfg(feature = "metrics")]
 #[test]
 fn rate_limited_counter_counts_each_limiter_refusal() {
     let backend = limited_backend();
+    let refused = std::cell::Cell::new(0_usize);
     let total = rate_limited_total_after(|| async {
         for _ in 0..3 {
-            let _ = backend.request("tools/list", None).await;
+            if matches!(
+                backend.request("tools/list", None).await,
+                Err(crate::Error::RateLimited(_))
+            ) {
+                refused.set(refused.get() + 1);
+            }
         }
     });
-    assert_eq!(total.as_deref(), Some("2"));
+    let refused = refused.get();
+    assert!(
+        refused >= 1,
+        "no request was refused, so nothing was counted"
+    );
+    assert_eq!(
+        total.as_deref(),
+        Some(refused.to_string().as_str()),
+        "the counter disagrees with the {refused} refusals observed"
+    );
 }
 
 /// F23b T6b: the notification path is gated by the same `admit`, so its
