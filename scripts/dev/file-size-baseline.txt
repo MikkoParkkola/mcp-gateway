@@ -2,7 +2,6 @@
 # The gate ratchets: a listed file may shrink, never grow, and nothing new
 # may cross. Delete a row once the file drops under the ceiling.
 # 16 files, 10798 lines of excess.
-1744 src/gateway/server/mod.rs
 1603 src/protocol_revision_telemetry.rs
 1174 tests/mik_7212_mrtr7_stdio_acs.rs
 1138 tests/mik_7214_header_9_acs.rs
