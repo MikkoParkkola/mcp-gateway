@@ -34,7 +34,7 @@ mod race;
 #[path = "package_cache_log_tests.rs"]
 mod logging;
 
-#[path = "package_cache_test_stubs.rs"]
+#[path = "package_cache_stubs_tests.rs"]
 mod stubs;
 use stubs::{DYING_STUB, DYING_UNRELATED_STUB, LEAKY_DYING_STUB, STUB};
 
