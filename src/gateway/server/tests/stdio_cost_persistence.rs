@@ -277,7 +277,7 @@ async fn stdio_saves_spend_periodically_before_exit() {
     // Several ticks per round: see `advance_until_saved` (MIK-8216).
     for round in 1..=2 {
         std::fs::remove_file(&costs).expect("remove costs.json; only a save can bring it back");
-        let landed = super::advance_until_saved(&costs).await;
+        let landed = crate::gateway::server::persistence::advance_until_saved(&costs).await;
         assert!(
             landed.is_ok(),
             "no periodic save in round {round} while stdin stayed open: the save {}",
