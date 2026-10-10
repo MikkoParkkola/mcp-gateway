@@ -6,7 +6,7 @@
 //! is decided here, from clap's built `Command`, instead of by regex over
 //! the derive source: an attribute nobody modelled can no longer hide a flag.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use clap::{Arg, Command};
 
@@ -14,8 +14,13 @@ use clap::{Arg, Command};
 #[derive(Default)]
 pub struct Walk {
     pub items: BTreeMap<String, Option<String>>,
+    /// Items `--help` does not list: hidden themselves, or under a hidden
+    /// command (clap does not mark a hidden command's descendants hidden).
+    pub hidden: BTreeSet<String>,
     origins: BTreeMap<String, String>,
     pub errors: Vec<String>,
+    /// Inside a hidden command while walking.
+    scope_hidden: bool,
 }
 
 impl Walk {
@@ -26,10 +31,21 @@ impl Walk {
             )),
             Some(_) => {}
             None => {
+                if self.scope_hidden {
+                    self.hidden.insert(id.clone());
+                }
                 self.origins.insert(id.clone(), origin);
                 self.items.insert(id, alias_of);
             }
         }
+    }
+
+    /// `add` for an item that is hidden by its own attribute.
+    fn add_hidden_if(&mut self, hide: bool, id: String, alias_of: Option<String>, origin: String) {
+        if hide {
+            self.hidden.insert(id.clone());
+        }
+        self.add(id, alias_of, origin);
     }
 }
 
@@ -107,6 +123,8 @@ fn visit(w: &mut Walk, b: &Command, u: &Command, path: &str, ancestors: &[&Comma
             }
             continue;
         };
+        let outer = w.scope_hidden;
+        w.scope_hidden = outer || sc.is_hide_set();
         w.add(sub.clone(), None, format!("command {sub}"));
         for alias in sc.get_all_aliases() {
             w.add(
@@ -138,17 +156,19 @@ fn visit(w: &mut Walk, b: &Command, u: &Command, path: &str, ancestors: &[&Comma
             );
         }
         visit(w, sc, us, &sub, &chain);
+        w.scope_hidden = outer;
     }
 }
 
 fn emit_arg(w: &mut Walk, path: &str, a: &Arg) {
     let origin = format!("arg {} on {path}", a.get_id());
+    let hide = a.is_hide_set();
     if a.is_positional() {
         let name = a
             .get_value_names()
             .and_then(|n| n.first())
             .map_or_else(|| a.get_id().to_string(), ToString::to_string);
-        w.add(format!("{path} <{name}>"), None, origin);
+        w.add_hidden_if(hide, format!("{path} <{name}>"), None, origin);
         return;
     }
     let canonical = match (a.get_long(), a.get_short()) {
@@ -156,25 +176,28 @@ fn emit_arg(w: &mut Walk, path: &str, a: &Arg) {
         (None, Some(s)) => format!("{path} -{s}"),
         (None, None) => return,
     };
-    w.add(canonical.clone(), None, origin.clone());
+    w.add_hidden_if(hide, canonical.clone(), None, origin.clone());
     if a.get_long().is_some()
         && let Some(s) = a.get_short()
     {
-        w.add(
+        w.add_hidden_if(
+            hide,
             format!("{path} -{s}"),
             Some(canonical.clone()),
             origin.clone(),
         );
     }
     for l in a.get_all_aliases().unwrap_or_default() {
-        w.add(
+        w.add_hidden_if(
+            hide,
             format!("{path} --{l}"),
             Some(canonical.clone()),
             origin.clone(),
         );
     }
     for s in a.get_all_short_aliases().unwrap_or_default() {
-        w.add(
+        w.add_hidden_if(
+            hide,
             format!("{path} -{s}"),
             Some(canonical.clone()),
             origin.clone(),
@@ -248,9 +271,30 @@ pub fn compare(w: &Walk, rows: &BTreeMap<String, String>) -> Vec<String> {
             }
         }
     }
-    for id in rows.keys() {
-        if !w.items.contains_key(id) {
-            out.push(format!("stale row: `{id}` is not in the CLI"));
+    for (id, class) in rows {
+        let removed = class.starts_with("REMOVE");
+        match (w.items.contains_key(id), removed) {
+            (false, false) => out.push(format!("stale row: `{id}` is not in the CLI")),
+            (true, true) => out.push(format!("REMOVE row `{id}` is still in the CLI")),
+            _ => {}
+        }
+    }
+    out.extend(visibility(w, rows));
+    out
+}
+
+/// KEEP rows are listed by `--help`; AUTO and INTERNAL rows are not (MIK-8044 SURF.3).
+#[must_use]
+pub fn visibility(w: &Walk, rows: &BTreeMap<String, String>) -> Vec<String> {
+    let mut out = Vec::new();
+    for id in w.items.keys() {
+        let Some(class) = rows.get(id) else { continue };
+        let hidden = w.hidden.contains(id);
+        if class.starts_with("KEEP") && hidden {
+            out.push(format!("KEEP row `{id}` is hidden from --help"));
+        }
+        if (class.starts_with("AUTO") || class.starts_with("INTERNAL")) && !hidden {
+            out.push(format!("{class} row `{id}` is listed by --help"));
         }
     }
     out

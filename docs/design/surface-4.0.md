@@ -161,6 +161,11 @@ Generated from the tables at the end; each row there carries the reason and migr
 
 ### routes
 
+INTERNAL routes stay mounted with the answers they give today: admin-only routes refuse a
+non-admin, control-plane reads serve the Auditor, `/ui/api/status` gives a non-admin the redacted
+counts, and `/sse` answers 410 Gone pointing to `POST /mcp` (MIK-8044.SURF.4b).
+`tests/webui_management_tests/internal_routes.rs` pins each one per route, method and caller.
+
 | Area | KEEP | AUTO | INTERNAL, hidden but honoured | INTERNAL | REMOVE |
 |---|---|---|---|---|---|
 | `/.well-known` | 2 |  |  |  |  |
