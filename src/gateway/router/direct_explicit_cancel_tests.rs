@@ -222,6 +222,30 @@ async fn a_callers_own_cancel_stops_its_catalogue_read() {
     let (status, answer) = pending.await.expect("the listing task joins");
     assert_eq!(answer["error"]["code"], json!(-32800), "{answer}");
     assert_eq!(status, StatusCode::OK, "{answer}");
+    let backend_id = gw.upstream.calls.lock()[0].clone();
+    assert_eq!(*gw.upstream.cancels.lock(), vec![backend_id]);
+}
+
+/// A caller's own cancels are no evidence about the backend: five in a row
+/// (the capability budget's default sample) leave the tool callable. Mutant:
+/// the cancelled dispatch scored as a backend failure.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_callers_own_cancels_never_spend_the_backends_error_budget() {
+    let gw = Arc::new(gateway().await);
+    for id in 1..=5 {
+        let pending = held_call(&gw, id, "alpha").await;
+        assert_eq!(send(&gw, cancel(id), "alpha").await.0, StatusCode::ACCEPTED);
+        tokio::time::timeout(Duration::from_secs(30), gw.upstream.cancelled.notified())
+            .await
+            .expect("the backend receives a cancel");
+        let (_, answer) = pending.await.expect("the call task joins");
+        assert_eq!(answer["error"]["code"], json!(-32800), "{answer}");
+    }
+    // The five aborted handlers are still parked upstream, ahead of this one.
+    gw.upstream.release.add_permits(6);
+    let (status, answer) = send(&gw, call(6), "alpha").await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert!(answer.get("error").is_none(), "still callable: {answer}");
 }
 
 /// C4 (MIK-8072 kept): another caller naming the same client id cancels

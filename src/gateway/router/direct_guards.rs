@@ -111,6 +111,16 @@ impl DirectRouteGuards {
         forward: Result<JsonRpcResponse>,
     ) -> Result<JsonRpcResponse> {
         let meta = &state.meta_mcp;
+        // MIK-7642 PR.C: a call its caller cancelled says nothing about the
+        // backend's health, so it is no error-budget sample: one caller's
+        // cancels must not disable a capability or kill a backend for all.
+        // A failed dispatch spends nothing, so nothing else is skipped.
+        if forward
+            .as_ref()
+            .is_err_and(crate::gateway::router::inflight_calls::is_client_cancelled)
+        {
+            return forward;
+        }
         meta.account_dispatch(call, DirectOutcome::from_response(&forward), admission);
         let warnings = &admission.warnings;
         let mut response = forward?;
