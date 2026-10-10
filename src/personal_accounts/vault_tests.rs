@@ -750,7 +750,10 @@ fn the_propagation_entry_mints_what_prepare_mints_for_a_verified_identity() {
     let tmp = tempfile::TempDir::new().expect("root");
     seed(
         tmp.path(),
-        &[(key_for(Principal::Verified(&alice)), unexpired_grant(ALICE_TOKEN))],
+        &[(
+            key_for(Principal::Verified(&alice)),
+            unexpired_grant(ALICE_TOKEN),
+        )],
     );
     block_on(async {
         let (vault, _) = strategy(tmp.path(), false);
@@ -807,11 +810,16 @@ impl AccountCustody for BusyOnRejection {
 #[test]
 fn a_custody_refusal_reconnecting_cannot_fix_leaves_the_401_as_it_was() {
     let alice = identity();
-    for error in [(|| CustodyError::Busy) as fn() -> CustodyError, || CustodyError::ShuttingDown] {
+    for error in [(|| CustodyError::Busy) as fn() -> CustodyError, || {
+        CustodyError::ShuttingDown
+    }] {
         let tmp = tempfile::TempDir::new().expect("root");
         seed(
             tmp.path(),
-            &[(key_for(Principal::Verified(&alice)), unexpired_grant(ALICE_TOKEN))],
+            &[(
+                key_for(Principal::Verified(&alice)),
+                unexpired_grant(ALICE_TOKEN),
+            )],
         );
         block_on(async {
             let (inner, _) = custody(tmp.path());
@@ -827,7 +835,11 @@ fn a_custody_refusal_reconnecting_cannot_fix_leaves_the_401_as_it_was() {
                 .expect("the seeded grant leases");
             let refused = crate::Error::Config("backend answered 401".into());
             let answered = held.after_upstream_401(refused).await;
-            assert_eq!(answered.to_string(), "Configuration error: backend answered 401", "{answered}");
+            assert_eq!(
+                answered.to_string(),
+                "Configuration error: backend answered 401",
+                "{answered}"
+            );
         });
     }
 }
