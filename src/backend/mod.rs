@@ -255,6 +255,11 @@ pub struct Backend {
     /// transport pooled cannot show through the slot (MIK-8012).
     #[cfg(test)]
     pub(crate) rebuilds_attempted: std::sync::atomic::AtomicUsize,
+    /// The OAuth client of the last HTTP transport a start built: a row ages
+    /// its token on demand instead of sleeping one out (MIK-8269).
+    #[cfg(test)]
+    pub(crate) last_oauth_client:
+        parking_lot::Mutex<Option<Arc<tokio::sync::Mutex<crate::oauth::OAuthClient>>>>,
     /// Run once by the next publish between its era install and its slot
     /// write: where a concurrent era writer must not land (MIK-8012 HOLD.1).
     #[cfg(test)]
