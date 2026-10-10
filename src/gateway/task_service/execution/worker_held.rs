@@ -58,7 +58,7 @@ async fn capture_handle(
     handle: &str,
 ) -> bool {
     executor
-        .notify_observer(super::CommitStage::BeforeCapture, id)
+        .notify_observer(super::super::CommitStage::BeforeCapture, id)
         .await;
     let capture = UpstreamCapture {
         backend: job.server.clone(),
