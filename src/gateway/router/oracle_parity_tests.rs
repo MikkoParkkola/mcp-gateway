@@ -232,3 +232,26 @@ async fn s3b_failed_fill_standard_withholds_and_forwards_the_missing_name() {
     };
     assert_residual("S3b", state).await;
 }
+
+/// S5 and S6 with a catalogue reason (schema, descriptor): a name the list
+/// withholds is never sent under a truncated Standard list or `Off` either;
+/// only the missing name keeps the stated residual. The policy rows above
+/// cannot tell, as later checks also stop a policy-withheld send (mutant MW).
+#[tokio::test]
+async fn s5_s6_catalogue_reasons_withhold_and_forward_the_missing_name() {
+    for reason in [Reason::Schema, Reason::Descriptor] {
+        let truncated = State {
+            list: List::Truncated,
+            mode: InputSchemaEnforcement::Standard,
+            reason,
+            ..State::WARM
+        };
+        assert_residual(&format!("S5 {reason:?}"), truncated).await;
+        let off = State {
+            mode: InputSchemaEnforcement::Off,
+            reason,
+            ..State::WARM
+        };
+        assert_residual(&format!("S6 {reason:?}"), off).await;
+    }
+}

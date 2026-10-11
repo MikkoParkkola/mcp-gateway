@@ -88,8 +88,9 @@ impl MetaMcp {
     /// the caller cannot see it (withheld, or lacked by a complete list).
     /// Recorded in the request's memo, so the meta gate answers it absent
     /// whatever the catalogue does next. `false` for a capability (the route
-    /// authorize answers those), a per-user backend's allowed name (MIK-8356's
-    /// check owns it), a backend-wide refusal and anything unproven.
+    /// authorize answers those), a per-user backend's allowed name that its
+    /// caller verdict did not withhold (MIK-8356's check owns it), a
+    /// backend-wide refusal and anything unproven.
     pub(crate) async fn invisible_at_route(
         &self,
         (server, tool): (&str, &str),
@@ -106,9 +107,15 @@ impl MetaMcp {
             // Whatever the backend-wide checks say: the gate answers them
             // for this name as for a missing one.
             Withholding::Refused
-        } else if backend.keeps_per_user_catalogues()
-            || self.admit_backend_wide(server, tool).is_err()
-        {
+        } else if backend.keeps_per_user_catalogues() {
+            // MIK-8356's caller verdict judged it earlier in this request: a
+            // name it withheld or lacks takes the path a refused one takes,
+            // so both are answered by the same layer, with the same status.
+            return matches!(
+                recorded_visibility(server, tool),
+                Some(Visibility::Withheld(_))
+            );
+        } else if self.admit_backend_wide(server, tool).is_err() {
             return false;
         } else {
             match self
