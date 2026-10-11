@@ -21,9 +21,10 @@ use super::CollusionDetector;
 use super::sketch::{P0, Reservation, Shape, Sketch, shape};
 use super::thin::thinned_middle;
 
-/// The most sampled fingerprints a plan answer's bounded view stores
-/// (4 × 1 MiB of text, one k-gram in four): an answer past it is dropped
-/// whole, never partly kept, so it caps what one retention can select.
+/// The most sampled fingerprints one retention can select from: 4 × 1 MiB
+/// of text, one k-gram in four. In 2a an answer is at most 1 MiB of text
+/// (`DELIVERED_SET_CAP`), well under it; P3's bounded view (PR 2b) will
+/// drop an answer past it whole. The headroom is sized for it.
 pub(super) const PLAN_ANSWER_FPS: usize = 1 << 20;
 
 /// Fingerprints kept per over-bound step at staging (`step_ev`), before
@@ -113,12 +114,15 @@ pub(crate) struct BigStep {
 
 impl BigStep {
     /// The attachments of a step whose sampled fingerprints are `fps`, for
-    /// `caller` from `source`; `None` when the sketch store has no room (the
-    /// pair's excuse is then marked lost by the store).
+    /// `caller` from `source`, within `room` bytes of the plan; `None` when
+    /// the sketch store or the plan has no room, and the pair's excuse is
+    /// then marked lost. The fit is checked before the filter is built, so a
+    /// skipped step never pays for one (F5).
     pub(crate) fn new(
         detector: &Arc<CollusionDetector>,
         (source, caller): (&str, &str),
         fps: &[u64],
+        room: usize,
     ) -> Option<Self> {
         let mut fps = fps.to_vec();
         fps.sort_unstable();
@@ -128,6 +132,13 @@ impl BigStep {
         // attachment byte is inside the sketch store's global budget.
         let reservation = detector.reserve_step(source, caller, fps.len(), step_ev.len() * 8)?;
         let shape = reservation.shape()?;
+        if shape.bytes() + step_ev.len() * 8 > room {
+            drop(reservation);
+            detector.mark_step_lost(source, caller);
+            telemetry_metrics::counter!(super::CAPACITY_METRIC, "bound" => "plan_step_fps_skipped")
+                .increment(1);
+            return None;
+        }
         Some(Self {
             step_all: Some(Sketch::build(&fps, shape)),
             step_ev: step_ev.into_boxed_slice(),
@@ -152,6 +163,11 @@ impl BigStep {
     /// The selection itself is transient: what stays until record is the
     /// sketch, whose bytes the reservation charged.
     pub(crate) fn keep_to(&mut self, found: &HashSet<u64>) {
+        // Retention runs once: a second call finds no filter and keeps the
+        // first call's evidence and excuse.
+        let Some(step_all) = self.step_all.take() else {
+            return;
+        };
         let detector = Arc::clone(&self.reservation.detector);
         let evidence: Vec<u64> = self
             .step_ev
@@ -160,9 +176,6 @@ impl BigStep {
             .filter(|fp| found.contains(fp))
             .collect();
         self.evidence = (!evidence.is_empty()).then(|| evidence.into());
-        let Some(step_all) = self.step_all.take() else {
-            return;
-        };
         let selection: Vec<u64> = found
             .iter()
             .copied()
@@ -305,7 +318,7 @@ impl CollusionDetector {
 
     /// Mark `caller`'s excuse from `source` lost for room: a step whose
     /// attachments did not fit the plan (F5).
-    pub(crate) fn mark_step_lost(&self, source: &str, caller: &str) {
+    fn mark_step_lost(&self, source: &str, caller: &str) {
         let pair = (self.digest(source), self.digest(caller));
         let until = Instant::now() + self.params.window;
         let mut state = self.state.lock();
@@ -322,6 +335,21 @@ impl CollusionDetector {
     pub(crate) fn sketch_positions(&self, source: &str, principal: &str) -> Vec<usize> {
         let pair = (self.digest(source), self.digest(principal));
         self.state.lock().sketches.positions_with_pending(pair)
+    }
+
+    /// Whether a live sketch of `principal`'s from `source` holds `fp`.
+    pub(crate) fn sketch_holds(&self, source: &str, principal: &str, fp: u64) -> bool {
+        let pair = (self.digest(source), self.digest(principal));
+        let window = self.params.window;
+        self.state
+            .lock()
+            .sketches
+            .holds(pair, fp, Instant::now(), window)
+    }
+
+    /// One k-gram in `sample_rate()` is a sampled fingerprint.
+    pub(crate) fn sample_rate(&self) -> u64 {
+        self.sample
     }
 
     /// Bytes of every live and pending sketch.

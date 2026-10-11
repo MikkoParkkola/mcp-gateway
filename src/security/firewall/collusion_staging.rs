@@ -98,20 +98,13 @@ impl super::Firewall {
         let Some(fps) = self.fps_of_leaves(&leaves, values, &joins) else {
             return digest;
         };
+        let room = super::PLAN_STAGED_CAP.saturating_sub(staged.total());
         let Some(big) =
-            super::super::collusion::big::BigStep::new(detector, (&source, &caller), &fps)
+            super::super::collusion::big::BigStep::new(detector, (&source, &caller), &fps, room)
         else {
             return digest;
         };
-        let bytes = big.bytes();
-        if staged.total().saturating_add(bytes) > super::PLAN_STAGED_CAP {
-            drop(big);
-            detector.mark_step_lost(&source, &caller);
-            telemetry_metrics::counter!(super::CAPACITY_METRIC, "bound" => "plan_step_fps_skipped")
-                .increment(1);
-            return digest;
-        }
-        staged.add_attachment(bytes);
+        staged.add_attachment(big.bytes());
         digest.big = Some(Box::new(big));
         digest
     }

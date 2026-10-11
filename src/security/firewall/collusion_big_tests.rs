@@ -110,41 +110,57 @@ fn every_admitted_shape_meets_its_target_rate() {
 
 /// `MIK-8066` T17 (F4): a big step's evidence is thinned at staging and
 /// again at record time with the same predicate, so its miss rate follows
-/// the larger rate. A step with about 15 × `STEP_EV_BUDGET` candidates stages
-/// at m = 16 (about 30,720 survive against the 32,768 budget; m = 8 would keep
-/// twice that); the record-time selector then keeps every staged candidate the
-/// answer holds (m = 1). Over N = 20,000 seeded 200-char relays (n = 153),
-/// the miss count is inside the exact binomial band for q = 1/(4·16):
-/// P = 0.308093, 5,853..=6,474 (each tail ≤ 1e-6). At q = 1/4 it would be
-/// about 920.
+/// the larger rate. A step of 3.06M k-grams (about 765k sampled) stages,
+/// through production's `stage_thinned`, at m = 16 against twice
+/// `STEP_EV_BUDGET` (m = 8 would keep about 95k). A delivery whose staged
+/// evidence fits the record's room keeps it all (m = 1). Over 20,000
+/// disjoint 153-k-gram windows of the step itself, a window is missed when
+/// fewer than 2 of its k-grams are in the staged set: inside the exact
+/// binomial band for q = 1/(4·16): P = 0.308093, 5,853..=6,474 (each tail
+/// ≤ 1e-6). At q = 1/4 it would be about 920.
 #[test]
 fn a_big_steps_miss_rate_uses_the_larger_thinning() {
+    use std::collections::HashSet;
+
+    use super::super::thin::thinned_middle;
+
+    const WINDOWS: usize = 20_000;
+    const WINDOW: usize = 153;
+    let budget = 2 * STEP_EV_BUDGET;
     let mut s = 0x8066_B163_0000_0001u64;
-    let mut next = || {
-        s = s
-            .wrapping_mul(6_364_136_223_846_793_005)
-            .wrapping_add(1_442_695_040_888_963_407);
-        mix(s.wrapping_add(0x9E37_79B9_7F4A_7C15))
-    };
-    let step: Vec<u64> = (0..15 * STEP_EV_BUDGET * 4)
-        .map(|_| next())
+    let raw: Vec<u64> = (0..WINDOWS * WINDOW)
+        .map(|_| {
+            s = s
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            mix(s.wrapping_add(0x9E37_79B9_7F4A_7C15))
+        })
+        .collect();
+    let step: Vec<u64> = raw
+        .iter()
+        .copied()
         .filter(|h| h.is_multiple_of(4))
         .collect();
-    let (m_stage, staged) = stage_thinned(&step, STEP_EV_BUDGET);
-    assert_eq!(m_stage, 16, "the staging rate for 15 × the budget");
+    let (m_stage, staged) = stage_thinned(&step, budget);
+    assert_eq!(m_stage, 16, "the staging rate for the step");
     assert!(
-        staged.len() <= STEP_EV_BUDGET && staged.iter().all(|&h| keep_thinned(h, m_stage)),
+        staged.len() <= budget && staged.iter().all(|&h| keep_thinned(h, m_stage)),
         "the staged candidates are not thinned at the stated rate ({})",
         staged.len()
     );
-    let mut missed = 0usize;
-    for _ in 0..20_000 {
-        let kept = (0..153)
-            .map(|_| next())
-            .filter(|h| h.is_multiple_of(4) && keep_thinned(*h, m_stage))
-            .count();
-        missed += usize::from(kept < 2);
-    }
+    let (m_record, recorded) = thinned_middle(&staged[..4_000], &[], 4_096);
+    assert_eq!(
+        (m_record, recorded.len()),
+        (1, 4_000),
+        "a delivery whose staged evidence fits the room keeps it all"
+    );
+    let staged: HashSet<u64> = staged.into_iter().collect();
+    let missed = raw
+        .as_chunks::<WINDOW>()
+        .0
+        .iter()
+        .filter(|window| window.iter().filter(|h| staged.contains(h)).count() < 2)
+        .count();
     assert!(
         (5_853..=6_474).contains(&missed),
         "{missed} of 20,000 missed, outside q = 1/64"
@@ -175,7 +191,7 @@ fn a_bloom_hit_on_foreign_text_is_never_evidence() {
     // Large enough that its own entries, not the headroom, fill the filter,
     // so chance hits occur at about the sizing target.
     let step: Vec<u64> = (0..100_000).map(|_| sampled()).collect();
-    let mut big = BigStep::new(&detector, ("alpha:read", "alice"), &step)
+    let mut big = BigStep::new(&detector, ("alpha:read", "alice"), &step, usize::MAX)
         .expect("premise: the store has room");
     let own: HashSet<u64> = step.iter().copied().collect();
     let filter = big.step_all.as_ref().expect("premise: the filter is built");

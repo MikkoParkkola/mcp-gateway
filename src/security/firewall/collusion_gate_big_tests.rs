@@ -164,6 +164,44 @@ fn step_of(seed: u64, chars: usize) -> (String, Value) {
     (text, step)
 }
 
+/// `MIK-8066` T17 spot check (end to end, lead ruling): a 13 KiB P1 step
+/// delivered whole stages every sampled fingerprint (m = 1), and its
+/// middle's evidence fits `record_held_at`'s room (4,096 less the receipt's
+/// fingerprints), so the record keeps it all: every middle window with at
+/// least 2 sampled fingerprints is evidence against bob. A record that
+/// thins against a smaller room (mutant "record room halved") drops some.
+/// This is what sees `record_held_at` drift from the selector T17 calls.
+#[test]
+fn a_big_steps_staged_evidence_that_fits_the_room_is_recorded_whole() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    let (text, step) = step_of(701, 13 * 1024);
+    let answer = json!({"whole": text});
+    assert!(
+        deliver_step(&fw, &step, super::super::DELIVERED_SET_CAP, &answer),
+        "premise: under the bound"
+    );
+    let word = |i: usize| !text.as_bytes()[i].is_ascii_whitespace();
+    let windows: Vec<&str> = (4 * 1024..9 * 1024)
+        .step_by(7)
+        .filter(|&at| word(at - 1) && word(at) && word(at + 59) && word(at + 60))
+        .map(|at| &text[at..at + 60])
+        .filter(|w| detector.fingerprints(w).len() >= 2)
+        .collect();
+    assert!(
+        windows.len() >= 100,
+        "premise: middle windows with 2+ sampled fingerprints ({})",
+        windows.len()
+    );
+    let passed = windows.iter().filter(|w| !relays(&fw, "bob", w)).count();
+    assert_eq!(
+        passed,
+        0,
+        "{passed} of {} middle windows were never recorded",
+        windows.len()
+    );
+}
+
 /// `MIK-8066` T13 (F1): four same-source P1 steps of one plan, all staged
 /// before any retention, reserve four distinct sketch positions for their
 /// caller at staging. Peeking at the free positions without reserving
@@ -176,11 +214,13 @@ fn same_source_steps_of_one_plan_hold_distinct_positions() {
         crate::security::firewall::PlanStaging::starting_at(super::super::DELIVERED_SET_CAP);
     staged.set_caller("alice");
     // Held: a dropped receipt abandons its reservation.
-    let _held: Vec<_> = (0..4)
+    let held: Vec<_> = (0..4)
         .map(|seed| {
-            let (_, step) = step_of(200 + seed, 100 * 1024);
-            fw.receipt_digest("alpha", "read", &step, Some(&staged))
-                .expect("staged")
+            let (text, step) = step_of(200 + seed, 100 * 1024);
+            let digest = fw
+                .receipt_digest("alpha", "read", &step, Some(&staged))
+                .expect("staged");
+            (text, digest)
         })
         .collect();
     let mut positions = detector.sketch_positions(SOURCE, "alice");
@@ -189,6 +229,40 @@ fn same_source_steps_of_one_plan_hold_distinct_positions() {
         positions,
         vec![0, 1, 2, 3],
         "four distinct pending positions"
+    );
+    // Each step is kept to an answer of its text beside 800 KiB of foreign
+    // text, so its sketch carries the foreign text's chance matches too.
+    for (seed, (text, digest)) in (0u64..).zip(held) {
+        let answer = json!({"whole": text, "foreign": filler(300 + seed, 800 * 1024)});
+        let delivered = fw
+            .delivered_for_plan(&answer, Some(&staged))
+            .expect("premise: the answer is under the bound");
+        let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered, None));
+        fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &kept);
+    }
+    // B3': a stranger's sampled fingerprint is excused by the pair's live
+    // sketches at under 3·P0. One-sided exact band: at a rate of 3·P0
+    // (P0 = 0.0035), P(Bin(200,000, 0.0105) <= 1,886) = 9.6e-7. The design
+    // rate is about P0 (some 656 expected).
+    let sample = detector.sample_rate();
+    let mut s = 0x8066_B163_0000_0013u64;
+    let excused = (0..200_000)
+        .filter(|_| {
+            s = s.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = s;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            let h = z ^ (z >> 31);
+            detector.sketch_holds(SOURCE, "alice", h - h % sample)
+        })
+        .count();
+    assert!(
+        excused > 0,
+        "premise: the steps' sketches were published ({excused})"
+    );
+    assert!(
+        excused <= 1_886,
+        "{excused} of 200,000 strangers excused: the pair's rate reaches 3·P0"
     );
 }
 
@@ -291,12 +365,15 @@ fn oversized_step(seed: u64) -> Value {
 }
 
 /// `MIK-8066` T12 (F3): two P2 steps whose attachments pass 1 MiB while
-/// their capped receipts stay small. A later 100 KiB step is staged whole,
-/// exactly as the release line stages it. Charging attachments to the
-/// counter that decides capping (mutant `f3_shared_counter`) would cap it.
+/// their capped receipts stay small. A later 100 KiB step is staged whole
+/// and kept to its answer exactly as the release line keeps it: the same
+/// staged length, retained count and fingerprints as a plan with no
+/// attachments. Letting attachments drive the capping switch (mutant
+/// `f3_shared_counter`) caps it.
 #[test]
 fn a_big_step_never_caps_a_later_small_step() {
     let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
     let staged = crate::security::firewall::PlanStaging::default();
     staged.set_caller("alice");
     for seed in [7, 8] {
@@ -305,17 +382,33 @@ fn a_big_step_never_caps_a_later_small_step() {
     }
     let bound = super::super::DELIVERED_SET_CAP;
     assert!(
-        staged.total() > bound,
-        "premise: the attachments passed the bound ({})",
+        staged.baseline() < bound && bound < staged.total(),
+        "premise: attachments passed the bound, receipts did not ({} / {})",
+        staged.baseline(),
         staged.total()
     );
-    let (_, small) = step_of(9, 100 * 1024);
-    let digest = fw
-        .receipt_digest("alpha", "read", &small, Some(&staged))
-        .expect("staged");
-    assert!(
-        digest.is_deferred(),
-        "a later small step was capped at staging"
+    let (text, small) = step_of(9, 100 * 1024);
+    let answer = json!({"whole": text});
+    let keep = |plan: &crate::security::firewall::PlanStaging| {
+        let digest = fw.receipt_digest("alpha", "read", &small, Some(plan))?;
+        let deferred = digest.is_deferred();
+        let delivered = fw.delivered_for_plan(&answer, Some(plan))?;
+        let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered, None));
+        Some((
+            deferred,
+            kept.staged_len(),
+            kept.retained_len(),
+            kept.fingerprints(detector),
+        ))
+    };
+    let release_line = crate::security::firewall::PlanStaging::default();
+    release_line.set_caller("bob");
+    let expected = keep(&release_line).expect("premise: the release line keeps it");
+    assert!(expected.0, "premise: the release line stages it whole");
+    assert_eq!(
+        keep(&staged),
+        Some(expected),
+        "a later small step was staged differently"
     );
 }
 
@@ -432,6 +525,12 @@ fn a_short_extract_of_a_big_step_the_sample_missed_is_still_excused() {
         deliver_step(&fw, &step, bound, &answer),
         "premise: under the bound"
     );
+    // Alice's step record is evidence (T4b), so bob passing here means it
+    // holds no exact entry of the extract: her excuse can only be the sketch.
+    assert!(
+        !relays(&fw, "bob", &window),
+        "premise: the staged evidence holds none of the extract"
+    );
     deliver(&fw, "carol", &window);
     assert!(
         relays(&fw, "bob", &window),
@@ -443,45 +542,86 @@ fn a_short_extract_of_a_big_step_the_sample_missed_is_still_excused() {
     );
 }
 
-/// `MIK-8066` T15 (F1 cost): oversized steps of one plan are admitted with
-/// attachments while the plan's total room and the sketch store allow; the
-/// first that does not fit is skipped and marked, and every admitted one
-/// holds a distinct pending position inside the per-pair cap.
-#[test]
-fn a_plan_admits_attachments_until_full_then_skips_and_marks() {
+/// Oversized steps staged for alice until one is refused attachments, with
+/// `preseed` live sketches of alice's from `SOURCE` first. N is read from
+/// the charges, then checked against both sides: every admitted step fit
+/// the plan's 4 MiB, the refused one met less room than one step's
+/// attachments, the store's pending bytes are exactly the attachment bytes
+/// the plan charged, and the N pending positions follow the live ones.
+fn admit_until_full(preseed: usize) {
     let fw = firewall();
     let detector = fw.collusion_detector().expect("relay detection on");
+    for seed in 0..preseed {
+        deliver(&fw, "alice", &filler(900 + seed as u64, 20 * 1024));
+    }
+    assert_eq!(
+        detector.sketch_positions(SOURCE, "alice"),
+        (0..preseed).collect::<Vec<_>>(),
+        "premise: the live sketches hold the first positions"
+    );
+    let bytes_before = detector.sketch_bytes_held();
+    let cap = 4 * super::super::DELIVERED_SET_CAP;
     let staged = crate::security::firewall::PlanStaging::default();
     staged.set_caller("alice");
-    let mut admitted = 0;
+    let mut attachments = Vec::new();
     // Held: a dropped receipt abandons its reservation.
     let mut held = Vec::new();
-    for seed in 20..40 {
+    let room_at_refusal = loop {
+        assert!(
+            attachments.len() < 20,
+            "attachments were never refused room"
+        );
         let (base, total) = (staged.baseline(), staged.total());
+        let seed = 20 + attachments.len() as u64;
         held.push(
             fw.receipt_digest("alpha", "read", &oversized_step(seed), Some(&staged))
                 .expect("staged"),
         );
-        let attached = (staged.total() - total) > (staged.baseline() - base);
-        if !attached {
-            break;
+        let receipt = staged.baseline() - base;
+        let attached = staged.total() - total - receipt;
+        if attached == 0 {
+            break cap - (total + receipt);
         }
-        admitted += 1;
-    }
+        assert!(
+            total + receipt + attached <= cap,
+            "a step was admitted past the plan's room"
+        );
+        attachments.push(attached);
+    };
+    let admitted = attachments.len();
     assert!(admitted >= 1, "no oversized step was given attachments");
-    assert!(admitted < 20, "attachments were never refused room");
+    let largest = attachments.iter().copied().max().unwrap_or(0);
+    assert!(
+        room_at_refusal < largest + largest / 10,
+        "a step was refused with room for its attachments ({room_at_refusal} left)"
+    );
     assert!(
         detector.excuse_lost(SOURCE, "alice"),
         "the skipped step was not marked"
     );
-    let positions = detector.sketch_positions(SOURCE, "alice");
     assert_eq!(
-        positions.len(),
-        admitted,
-        "one pending position per admitted step"
+        detector.sketch_bytes_held() - bytes_before,
+        attachments.iter().sum::<usize>(),
+        "the store's pending bytes differ from the plan's attachment charges"
     );
-    assert!(
-        detector.sketch_bytes_held() <= 8 * 1024 * 1024,
-        "pending sketches passed the pair cap"
+    assert_eq!(
+        detector.sketch_positions(SOURCE, "alice"),
+        (0..preseed + admitted).collect::<Vec<_>>(),
+        "one pending position per admitted step, after the live ones"
     );
+}
+
+/// `MIK-8066` T15 (F1 cost): oversized steps of one plan are admitted with
+/// attachments while the plan's room allows; the first that does not fit
+/// is skipped and marked.
+#[test]
+fn a_plan_admits_attachments_until_full_then_skips_and_marks() {
+    admit_until_full(0);
+}
+
+/// `MIK-8066` T15 variant: with two live sketches already held, the
+/// pending positions shift past them and N is still read from the charges.
+#[test]
+fn a_plan_beside_live_sketches_admits_at_shifted_positions() {
+    admit_until_full(2);
 }
