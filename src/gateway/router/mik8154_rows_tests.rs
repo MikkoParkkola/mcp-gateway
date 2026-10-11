@@ -335,3 +335,343 @@ async fn c2b_an_all_passthrough_chain_forwards() {
         "c2b: the NUL did not reach the passthrough backend: {seen:?}"
     );
 }
+
+/// A surfaced `read` on the passthrough backend (`alpha-pt`), sanitize on,
+/// as one side of the twin set, called with a NUL in its arguments.
+async fn np_call(spec: super::withheld_twin_tests::Spec) -> super::withheld_twin_tests::Answered {
+    use super::withheld_twin_tests::{Kind, twin_on};
+    let twin = sanitizing(true, twin_on("alpha-pt", Kind::Audited, spec, |meta| meta)).await;
+    twin.call_modern("read", &json!({"arguments": {"cmd": NUL}}))
+        .await
+}
+
+/// NP1 (design r3 D1, r3.1 F13/F14): a surfaced name withheld from the
+/// caller on a passthrough backend, called with a NUL, gets exactly the
+/// answer an absent surfaced name gets: same code, message and HTTP status,
+/// and the backend sees nothing. Green on base (both sanitized) and after the
+/// fix (a withheld name counts as non-passthrough); with NP2 it pins D1: the
+/// mutant "the passthrough decision ignores visibility" turns this red.
+#[tokio::test]
+async fn np1_a_withheld_surfaced_passthrough_name_answers_a_nul_as_absent() {
+    use super::withheld_twin_tests::{Absence, Reason, Side, Spec};
+    for reason in [Reason::Policy, Reason::Descriptor, Reason::Schema] {
+        let withheld = np_call(Spec::of(reason, Side::Withheld)).await;
+        let absent = np_call(Spec::of(reason, Side::Absent(Absence::NotSurfaced))).await;
+        assert_eq!(
+            (withheld.status, &withheld.body["error"]),
+            (absent.status, &absent.body["error"]),
+            "np1 {reason:?}: withheld and absent differ"
+        );
+        assert_eq!(withheld.calls, 0, "np1 {reason:?}: the backend ran");
+    }
+}
+
+/// NP2 (design r3 D1, P4): the same surfaced passthrough tool, visible to the
+/// caller, forwards the NUL to its backend. RED on base: `/mcp` sanitizes a
+/// surfaced passthrough call.
+#[tokio::test]
+async fn np2_a_visible_surfaced_passthrough_name_forwards_a_nul() {
+    use super::withheld_twin_tests::{Kind, Reason, Side, Spec, twin_on};
+    let spec = Spec::of(Reason::Policy, Side::Control);
+    let twin = sanitizing(true, twin_on("alpha-pt", Kind::Audited, spec, |meta| meta)).await;
+    let answered = twin
+        .call_modern("read", &json!({"arguments": {"cmd": NUL}}))
+        .await;
+    assert!(
+        answered.body.get("error").is_none(),
+        "np2: {}",
+        answered.body
+    );
+    assert!(
+        twin.forwarded_nul(),
+        "np2: the NUL did not reach the passthrough backend"
+    );
+}
+
+/// [`send_raw`] as a modern-era request: the method and name headers echo the
+/// body (the hardened posture serves the direct route no legacy `tools/call`).
+async fn send_raw_modern(fx: &Fx, uri: &str, key: &str, body: &Value) -> Value {
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("authorization", format!("Bearer {key}"))
+        .header("content-type", "application/json")
+        .header(
+            "mcp-protocol-version",
+            crate::protocol::meta::MODERN_VERSIONS[0],
+        )
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "read")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+/// S4 (frozen S2/S2', test plan K4): the signed request's protocol fields are
+/// validated, never rewritten in place. A NUL or a control character in the
+/// `id`, the signing nonce or the chain nonce is refused, and the backend sees
+/// nothing; a NUL is the sanitizer's -32600. RED where today the field passes
+/// unsanitized (the nonces leave the request before sanitization) or a control
+/// character is stripped silently (the `id`); the red run records which.
+#[tokio::test]
+async fn s4_signed_protocol_fields_are_validated_not_rewritten() {
+    use crate::gateway::meta_mcp::signing::NONCE_META;
+    use crate::protocol::meta::{KEY_CLIENT_CAPABILITIES, KEY_PROTOCOL_VERSION, MODERN_VERSIONS};
+    use crate::protocol::mrtr::CHAIN_NONCE_META;
+    let mut accepted = Vec::new();
+    for (field, bad) in [
+        ("id", NUL),
+        ("id", "a\u{7}b"),
+        ("nonce", NUL),
+        ("nonce", "a\u{7}b"),
+        ("chain", NUL),
+        ("chain", "a\u{7}b"),
+    ] {
+        let fx = sanitizing(
+            true,
+            super::direct_guards_fixture::fixture_hardened_signed(Answer::Ok, true),
+        )
+        .await;
+        let mut meta = json!({
+            KEY_PROTOCOL_VERSION: MODERN_VERSIONS[0],
+            KEY_CLIENT_CAPABILITIES: {},
+            NONCE_META: format!("s4-{field}"),
+        });
+        match field {
+            "nonce" => meta[NONCE_META] = json!(bad),
+            "chain" => meta[CHAIN_NONCE_META] = json!(bad),
+            _ => {}
+        }
+        let id = if field == "id" { json!(bad) } else { json!(1) };
+        let body = json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": "read", "arguments": {}, "_meta": meta}});
+        let answer = send_raw_modern(&fx, "/mcp/alpha", "k-std", &body).await;
+        let refused = answer.get("error").is_some() && calls(&fx) == 0;
+        let nul_exact = bad != NUL || message(&answer) == NUL_REFUSED;
+        if !(refused && nul_exact) {
+            accepted.push(format!("{field} {bad:?}: {answer}"));
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "s4: not refused as the rule says:\n{}",
+        accepted.join("\n")
+    );
+}
+
+/// C3 (SAN.2, test plan M3): the setting's doc comment states exactly what it
+/// covers: on by default; the whole request, at intake, before any check; the
+/// four routes; a passthrough backend is exempt from sanitization only; a NUL
+/// is refused and control characters are stripped; and no NFC claim (the
+/// sanitizer does not normalise). RED: today it reads "(null byte rejection,
+/// control char stripping, NFC)" with no route scope.
+#[test]
+fn c3_the_sanitize_input_doc_states_the_rules() {
+    let source = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/config/features/security.rs"
+    ));
+    let field = source
+        .find("pub sanitize_input: bool")
+        .expect("the sanitize_input field");
+    let doc: String = source[..field]
+        .lines()
+        .rev()
+        .skip(1)
+        .take_while(|line| line.trim_start().starts_with("///"))
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    let mut missing: Vec<&str> = [
+        "default",
+        "whole request",
+        "before",
+        "/mcp/{name}",
+        "stdio",
+        "task",
+        "passthrough",
+        "sanitization only",
+        "nul",
+        "control character",
+    ]
+    .into_iter()
+    .filter(|phrase| !doc.contains(phrase))
+    .collect();
+    if doc.contains("nfc") {
+        missing.push("(no NFC claim)");
+    }
+    assert!(missing.is_empty(), "c3: the doc lacks {missing:?}: {doc}");
+}
+
+/// P3 (option (a)): a keyed task submit of `gateway_invoke` on the
+/// passthrough backend carries the NUL to its backend: the worker runs the
+/// request as submitted, and passthrough holds for tasks too. RED: `/mcp`
+/// sanitizes the submit at intake today, so the NUL is refused.
+#[tokio::test]
+async fn p3_a_task_submit_to_a_passthrough_target_forwards_a_nul() {
+    let fx = sanitizing(true, fixture_built(Answer::Ok, |meta| meta)).await;
+    let submit = json!({
+        "name": "gateway_invoke",
+        "arguments": {"server": "alpha-pt", "tool": "read", "arguments": {"cmd": NUL}},
+        "task": {},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {
+                "extensions": {"io.modelcontextprotocol/tasks": {}}
+            },
+            crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "p3-k"
+        }
+    });
+    let headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tools/call"),
+        ("mcp-name", "gateway_invoke"),
+    ];
+    let (_, created) = super::direct_guards_fixture::send_with_headers(
+        &fx,
+        "/mcp",
+        "k-std",
+        "tools/call",
+        submit,
+        None,
+        &headers,
+    )
+    .await;
+    assert!(
+        created.pointer("/result/taskId").is_some(),
+        "p3: the submit was refused: {created}"
+    );
+    let reached = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while calls(&fx) == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(reached.is_ok(), "p3: the worker never reached the backend");
+    assert!(
+        forwarded_nul(&fx),
+        "p3: the NUL did not reach the passthrough backend"
+    );
+}
+
+/// A signed, sanitizing fixture serving playbook `pb`, whose steps read on
+/// `servers` with `cmd` taken from the run's `x` input.
+async fn playbook_fixture(servers: [&str; 2]) -> Fx {
+    let steps: Vec<Value> = servers
+        .iter()
+        .enumerate()
+        .map(|(n, server)| {
+            json!({"name": format!("s{n}"), "tool": "read", "server": server,
+                   "arguments": {"cmd": "$inputs.x"}})
+        })
+        .collect();
+    let definition: crate::playbook::PlaybookDefinition = serde_json::from_value(json!({
+        "playbook": "1.0", "name": "pb", "description": "two reads", "steps": steps
+    }))
+    .expect("the playbook deserialises");
+    sanitizing(
+        true,
+        super::direct_guards_fixture::fixture_hardened_signed_built(
+            Answer::Ok,
+            true,
+            move |meta| {
+                let mut engine = crate::playbook::PlaybookEngine::new();
+                engine.register(definition);
+                meta.set_playbook_engine(engine);
+                meta
+            },
+        ),
+    )
+    .await
+}
+
+/// Run playbook `pb` with `x` = a NUL, signed; the whole body.
+async fn run_with_nul(fx: &Fx) -> Value {
+    use crate::gateway::meta_mcp::signing::NONCE_META;
+    let params = json!({
+        "name": "gateway_run_playbook",
+        "arguments": {"name": "pb", "arguments": {"x": NUL}},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+            NONCE_META: "pb-n1",
+        }
+    });
+    let headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tools/call"),
+        ("mcp-name", "gateway_run_playbook"),
+    ];
+    super::direct_guards_fixture::send_with_headers(
+        fx,
+        "/mcp",
+        "k-std",
+        "tools/call",
+        params,
+        None,
+        &headers,
+    )
+    .await
+    .1
+}
+
+/// C2c CONTROL (S3/S3'): a playbook with one passthrough step and one other
+/// step is sanitized as a whole, so the NUL is refused and no step runs.
+#[tokio::test]
+async fn c2c_a_mixed_playbook_is_sanitized() {
+    let fx = playbook_fixture(["alpha-pt", "alpha"]).await;
+    let body = run_with_nul(&fx).await;
+    assert_eq!(message(&body), NUL_REFUSED, "c2c: {body}");
+    assert_eq!(calls(&fx), 0, "c2c: a step ran");
+}
+
+/// C2d (S3/S3'): a playbook whose every step is on the passthrough backend
+/// forwards the NUL to it. RED: `/mcp` sanitizes every playbook run today.
+#[tokio::test]
+async fn c2d_an_all_passthrough_playbook_forwards_a_nul() {
+    let fx = playbook_fixture(["alpha-pt", "alpha-pt"]).await;
+    let body = run_with_nul(&fx).await;
+    assert!(body.get("error").is_none(), "c2d: {body}");
+    assert!(
+        forwarded_nul(&fx),
+        "c2d: the NUL did not reach the passthrough backend"
+    );
+}
+
+/// CAP1 CONTROL (lead, r3.2 F8): a 7a cache-at-capacity refusal on the
+/// direct route answers HTTP 503 with the cache's message, and the backend
+/// does not run, before and after PR 2. 7b's refusals get /mcp's status
+/// mapping in their own function; 7a's keep theirs. The mutant that sends 7a
+/// through the 7b mapping (503 becomes 400) turns this red.
+#[tokio::test]
+async fn cap1_a_7a_capacity_refusal_answers_503() {
+    let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
+    for n in 0..crate::idempotency::MAX_ENTRIES {
+        cache.mark_in_flight(&format!("cap1-fill-{n}"));
+    }
+    let installed = std::sync::Arc::clone(&cache);
+    let fx = fixture_built(Answer::Ok, move |mut meta| {
+        meta.enable_idempotency(installed, std::time::Duration::from_secs(300));
+        meta
+    })
+    .await;
+    let (status, body) = post_direct(
+        &fx,
+        "alpha",
+        "k-std",
+        "read",
+        json!({}),
+        Some("cap1-k"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        "cap1: {body}"
+    );
+    assert!(message(&body).contains("at capacity"), "cap1: {body}");
+    assert_eq!(calls(&fx), 0, "cap1: dispatched");
+}

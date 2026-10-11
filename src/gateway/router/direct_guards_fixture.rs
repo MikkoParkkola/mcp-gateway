@@ -294,7 +294,7 @@ pub(crate) async fn fixture_sanitizing(answer: Answer, on: bool) -> Fx {
 
 /// Any fixture builder, run with `security.sanitize_input` = `on` (MIK-8154
 /// rows: the firewalled and code-mode fixtures under sanitization).
-pub(crate) async fn sanitizing<F: std::future::Future<Output = Fx>>(on: bool, build: F) -> Fx {
+pub(crate) async fn sanitizing<T, F: std::future::Future<Output = T>>(on: bool, build: F) -> T {
     SANITIZE.with(|s| s.set(on));
     let fx = build.await;
     SANITIZE.with(|s| s.set(false));
