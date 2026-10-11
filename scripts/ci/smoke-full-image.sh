@@ -172,10 +172,12 @@ if ! UID_LINE="$(docker exec "${ROOT_CASE}" sh -c \
     'for d in /proc/[0-9]*; do [ "$(cat "$d/comm" 2>/dev/null)" = mcp-gateway ] && exec grep -m1 "^Uid:" "$d/status"; done; exit 1')"; then
   fail "cannot read the uid of the gateway process"
 fi
-case "${UID_LINE}" in
-  *1001*) ;;
-  *) fail "the gateway runs as '${UID_LINE}', not the image's user 1001" ;;
-esac
+# `Uid:` is followed by the real, effective, saved and filesystem uids;
+# compared as numbers, so 10010 or 21001 cannot pass as 1001.
+read -r _ REAL_UID EFFECTIVE_UID _ <<< "${UID_LINE}"
+if [ "${REAL_UID}" != 1001 ] || [ "${EFFECTIVE_UID}" != 1001 ]; then
+  fail "the gateway runs as '${UID_LINE}', not the image's user 1001"
+fi
 docker exec "${ROOT_CASE}" sh -c 'ip -V' > /dev/null \
   || fail "EXTRA_APT_PACKAGES=iproute2 left no ip(8) in the image"
 docker rm -f "${ROOT_CASE}" > /dev/null

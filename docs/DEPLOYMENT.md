@@ -192,11 +192,11 @@ gateway's own settings belong in `-e` or the config file.
 of the entrypoint, so `docker stop` sends `SIGTERM` to every process in the
 entrypoint's process group: the install, a `*.sh` step, and the command a sourced
 `.envsh` step is running. The container then stops at once with exit status 143.
-A step that ignores or traps `SIGTERM` itself is ended by Docker's own stop
-timeout (`--stop-timeout`, 10 s by default) and a `SIGKILL`. Once the gateway is
-running, tini passes the stop to it, and the gateway shuts down its backends in
-order; each stdio backend runs in its own process group, so tini does not signal
-it directly. The default image is unchanged: the gateway itself is PID 1.
+A step that ignores or traps `SIGTERM` and is still running when Docker's stop
+timeout (`--stop-timeout`, 10 s by default) runs out is ended with a `SIGKILL`.
+Once the gateway is running, tini passes the stop to it, and the gateway
+coordinates its backends' shutdown; each stdio backend runs in its own process
+group, so tini does not signal it directly. The default image is unchanged: the gateway itself is PID 1.
 
 The `-full` health check allows 60 s before an unanswered probe counts. An
 install that takes longer can still finish (it is bounded at 300 s), but the
