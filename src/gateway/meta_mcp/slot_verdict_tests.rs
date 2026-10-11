@@ -124,3 +124,84 @@ async fn c11_per_user_one_resolution_per_call() {
     assert_eq!(fx.caller.calls(), 1, "premise: not dispatched: {answer}");
     assert_eq!(fx.mints(), before + 1, "C11: resolutions for one call");
 }
+
+/// alpha lists `BACKEND` through `gateway_list_tools`: a real fill of alpha's
+/// own slot, the way a caller's slot becomes warm (and indexed).
+async fn warm_by_listing(meta: &super::MetaMcp) {
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    meta.list_tools(
+        &json!({"server": super::slot_verdict_fixture::BACKEND}),
+        None,
+        &super::identified_caller(&alpha),
+    )
+    .await
+    .expect("gateway_list_tools answers");
+}
+
+/// The disabled-capability list as alpha sees it, with [`TOOL`] disabled.
+fn disabled_as_alpha(meta: &super::MetaMcp) -> Value {
+    let cfg = meta.capability_budget_config.read().clone();
+    for _ in 0..=cfg.window_size.max(cfg.min_samples) {
+        meta.kill_switch.record_capability_failure(
+            super::slot_verdict_fixture::BACKEND,
+            TOOL,
+            &cfg,
+        );
+    }
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    meta.list_disabled_capabilities(super::identified_caller(&alpha).scope(), None)
+        .expect("the disabled list answers")
+}
+
+fn names_tool(listed: &Value) -> bool {
+    listed["disabled_capabilities"]
+        .as_array()
+        .is_some_and(|all| all.iter().any(|e| e["capability"] == TOOL))
+}
+
+/// L1 (SLOTVIS.1): with alpha's slot warm, a disabled tool alpha's own
+/// catalogue withholds or lacks is not named; alpha's valid one is. RED on
+/// base: the disabled list judges the shared slot (valid).
+#[tokio::test]
+async fn l1_disabled_list_judges_the_callers_slot() {
+    for (slot, named) in [
+        (CallerSlot::Valid, true),
+        (CallerSlot::Invalid, false),
+        (CallerSlot::Lacks, false),
+    ] {
+        let fx = per_user(slot, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+        warm_by_listing(&fx.meta).await;
+        let listed = disabled_as_alpha(&fx.meta);
+        assert_eq!(names_tool(&listed), named, "L1 {slot:?}: {listed}");
+    }
+}
+
+/// L6a (SLOTVIS.6 listing clause): alpha's slot is cold (never listed), so
+/// the disabled list withholds that backend's tools from alpha, even one its
+/// own catalogue would offer. RED on base: the shared slot names it.
+#[tokio::test]
+async fn l6a_cold_caller_disabled_list_withholds() {
+    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+    let listed = disabled_as_alpha(&fx.meta);
+    assert!(!names_tool(&listed), "L6a: a cold caller is named the tool: {listed}");
+}
+
+/// L3c (SLOTVIS.3, counts): with alpha's slot warm, the backend count alpha
+/// is given leaves out a tool alpha's catalogue withholds, exactly as one it
+/// lacks; alpha's valid tool is counted. RED on base: counts walk the
+/// shared snapshot.
+#[tokio::test]
+async fn l3c_counts_use_the_callers_slot() {
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    let mut totals = Vec::new();
+    for slot in [CallerSlot::Valid, CallerSlot::Invalid, CallerSlot::Lacks] {
+        let fx = per_user(slot, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+        warm_by_listing(&fx.meta).await;
+        let (total, _) = fx
+            .meta
+            .admitted_counts(super::identified_caller(&alpha).scope(), None);
+        totals.push(total.phrase());
+    }
+    assert_eq!(totals[1], totals[2], "L3c: withheld vs lacked counts differ");
+    assert_ne!(totals[0], totals[1], "L3c: the withheld tool is counted");
+}
