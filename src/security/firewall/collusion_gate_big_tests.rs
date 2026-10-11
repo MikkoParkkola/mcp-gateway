@@ -668,9 +668,12 @@ fn admit_until_full(preseed: usize) {
         detector.excuse_lost(SOURCE, "alice"),
         "the skipped step was not marked"
     );
+    // `MIK-8066` A3: a step's leaf hashes are charged to the plan total but
+    // held beside the receipt, never in the sketch store.
+    let leaf_bytes: usize = held.iter().map(|d| d.leaf_hash_bytes()).sum();
     assert_eq!(
         detector.sketch_bytes_held() - bytes_before,
-        attachments.iter().sum::<usize>(),
+        attachments.iter().sum::<usize>() - leaf_bytes,
         "the store's pending bytes differ from the plan's attachment charges"
     );
     assert_eq!(
