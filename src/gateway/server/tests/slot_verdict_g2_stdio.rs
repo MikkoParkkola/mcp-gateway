@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
+use super::super::stdio_tasks::{self, StdioTasks};
 use super::super::{STDIO_SESSION_ID, StdioClient, StdioTelemetry};
 use crate::config::{AuthConfig, InputSchemaEnforcement, SurfacedToolConfig};
 use crate::gateway::Gateway;
@@ -52,10 +53,19 @@ fn valid() -> Value {
     json!({"type": "object", "properties": {"folder": {"type": "string"}}})
 }
 
+/// The session's durable task store, held for the life of a row that needs one.
+struct TaskStore {
+    tasks: Arc<StdioTasks>,
+    _expiry: crate::gateway::task_service::execution::ExpirySweep,
+    _dir: tempfile::TempDir,
+}
+
 /// A stdio gateway over the sole operator's managed backend, both slots warm.
 struct Stdio {
     gateway: DirectAccountGateway,
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
+    /// `None` serves no `tasks/*`, as the rows that need no task store.
+    tasks: Option<TaskStore>,
 }
 
 impl Stdio {
@@ -89,7 +99,11 @@ impl Stdio {
             Slot::Lacks => {}
         }
         backend.store_per_user_tools_for_test(&DirectAccountGateway::operator_binding(), own);
-        Self { gateway, meta }
+        Self {
+            gateway,
+            meta,
+            tasks: None,
+        }
     }
 
     /// One stdio `tools/call` of [`TOOL`]: the answer, and the `tools/call`
@@ -109,7 +123,7 @@ impl Stdio {
                 session_id: STDIO_SESSION_ID,
                 channel: &crate::gateway::input_bridge::NoClientChannel,
                 handshake_capabilities: Declared::NONE,
-                tasks: None,
+                tasks: self.tasks.as_ref().map(|store| &*store.tasks),
                 modern: false,
                 sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
             },
@@ -186,7 +200,7 @@ impl Stdio {
                 session_id: STDIO_SESSION_ID,
                 channel: &crate::gateway::input_bridge::NoClientChannel,
                 handshake_capabilities: Declared::NONE,
-                tasks: None,
+                tasks: self.tasks.as_ref().map(|store| &*store.tasks),
                 modern: false,
                 sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
             },
@@ -227,7 +241,11 @@ async fn tools_list_never_serves_a_rotated_grants_slot_stdio() {
     );
     let backend = gateway.backends().get(BACKEND).expect("the backend");
     backend.store_shared_tools_for_test(vec![tool(TOOL, &valid())]);
-    let stdio = Stdio { gateway, meta };
+    let stdio = Stdio {
+        gateway,
+        meta,
+        tasks: None,
+    };
     let filled = stdio
         .rpc(
             1,
@@ -262,19 +280,28 @@ async fn tools_list_never_serves_a_rotated_grants_slot_stdio() {
 /// The stdio gateway over the sole operator's managed backend, [`TOOL`]
 /// surfaced and the shared slot warm: the operator's slot is cold.
 fn operator_stdio() -> Stdio {
+    operator_stdio_armed(|_| {})
+}
+
+/// [`operator_stdio`] with `arm` applied to the Meta-MCP before it is shared.
+fn operator_stdio_armed(arm: impl FnOnce(&mut crate::gateway::meta_mcp::MetaMcp)) -> Stdio {
     let mut gateway =
         DirectAccountGateway::new_in(ServeMode::Stdio, AuthConfig::default(), &Binding::Connected);
-    let meta = Arc::new(
-        gateway
-            .take_meta()
-            .with_surfaced_tools(vec![SurfacedToolConfig {
-                server: BACKEND.to_string(),
-                tool: TOOL.to_string(),
-            }]),
-    );
+    let mut meta = gateway
+        .take_meta()
+        .with_surfaced_tools(vec![SurfacedToolConfig {
+            server: BACKEND.to_string(),
+            tool: TOOL.to_string(),
+        }]);
+    arm(&mut meta);
+    let meta = Arc::new(meta);
     let backend = gateway.backends().get(BACKEND).expect("the backend");
     backend.store_shared_tools_for_test(vec![tool(TOOL, &valid())]);
-    Stdio { gateway, meta }
+    Stdio {
+        gateway,
+        meta,
+        tasks: None,
+    }
 }
 
 impl Stdio {
@@ -324,5 +351,181 @@ async fn initialize_never_counts_a_rotated_grants_slot_stdio() {
         stdio.greeting_count(3).await,
         cold,
         "initialize counted the rotated grant's stale slot"
+    );
+}
+
+/// The `_meta` of a modern call declaring form elicitation and tasks.
+fn modern_meta() -> Value {
+    json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {
+            "elicitation": {"form": {}},
+            "extensions": {"io.modelcontextprotocol/tasks": {}}
+        },
+        "io.modelcontextprotocol/clientInfo": {"name": "mik-8356", "version": "1"}
+    })
+}
+
+impl Stdio {
+    /// Open the session's durable task store (the fixture otherwise serves
+    /// `tasks: None`, so X14 never runs).
+    async fn with_tasks(mut self) -> Self {
+        let dir = tempfile::tempdir().expect("store root");
+        let mut config = crate::config::Config::default();
+        config.tasks.store_dir = dir.path().display().to_string();
+        let policy = Arc::new(crate::security::ToolPolicy::default());
+        let (tasks, expiry) = stdio_tasks::open(
+            &config,
+            &crate::config::EnvOverlay::default(),
+            &self.meta,
+            &policy,
+        )
+        .await
+        .expect("the stdio store opens");
+        self.tasks = Some(TaskStore {
+            tasks,
+            _expiry: expiry,
+            _dir: dir,
+        });
+        self
+    }
+
+    /// One modern task `tools/call` of [`TOOL`]: the answer, and the
+    /// `tools/call` sends it added at the backend.
+    async fn task_call(&self) -> (Value, usize) {
+        let before = self.gateway.tool_calls().len();
+        let mut meta = modern_meta();
+        meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("slot-verdict-p1");
+        let answer = self
+            .rpc(
+                1,
+                "tools/call",
+                json!({"name": TOOL, "arguments": {"folder": "inbox"},
+                    "task": {}, "_meta": meta}),
+            )
+            .await;
+        (answer, self.gateway.tool_calls().len() - before)
+    }
+}
+
+/// P1 + P4, stdio twin (withheld, lacked), with a task store open: a modern
+/// task call naming a surfaced tool the sole operator's own catalogue
+/// withholds or lacks gets no confirmation prompt and makes no task. It
+/// answers exactly as the same call where nothing surfaces the tool, and
+/// sends nothing. RED on base: the shared slot (valid) decides.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn p1_stdio_withheld_task_call_gets_no_prompt_and_no_task() {
+    let enforcement = InputSchemaEnforcement::Closed;
+    let unknown = Stdio::new(Slot::Lacks, false, enforcement)
+        .with_tasks()
+        .await;
+    let (absent, _) = unknown.task_call().await;
+    assert!(
+        absent.pointer("/result/taskId").is_none(),
+        "premise: an unknown name made a task: {absent}"
+    );
+    for slot in [Slot::Invalid, Slot::Lacks] {
+        let stdio = Stdio::new(slot, true, enforcement).with_tasks().await;
+        let (answer, sent) = stdio.task_call().await;
+        assert!(
+            answer.pointer("/result/taskId").is_none(),
+            "P4 stdio {slot:?}: a task was made: {answer}"
+        );
+        assert!(
+            answer.pointer("/result/inputRequests").is_none(),
+            "P1 stdio {slot:?}: a confirmation prompt was issued: {answer}"
+        );
+        assert_eq!(sent, 0, "P1 stdio {slot:?}: dispatched; {answer}");
+        assert_eq!(
+            answer, absent,
+            "P1 stdio {slot:?}: {answer} vs unknown {absent}"
+        );
+    }
+}
+
+/// Whether a stdio answer is a refusal (a JSON-RPC error or an error result).
+fn refused(answer: &Value) -> bool {
+    answer.get("error").is_some() || answer.pointer("/result/isError") == Some(&json!(true))
+}
+
+/// F5(a), stdio (guard, kills M18): a `gateway_execute` chain whose second
+/// static target route authorize refuses (`run_command` is on the default
+/// tool-policy deny list), with the operator's slot cold, resolves no
+/// credential and asks the backend nothing (no `tools/list`, no call). A
+/// verdict taken ahead of authorize would fill and release for the first
+/// target before the second is refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn f5a_stdio_route_authorize_refusal_resolves_nothing() {
+    let stdio = operator_stdio();
+    let (releases, requests) = (stdio.gateway.releases(), stdio.gateway.requests().len());
+    let answer = stdio
+        .rpc(
+            1,
+            "tools/call",
+            json!({"name": "gateway_execute", "arguments": {"chain": [
+                {"tool": format!("{BACKEND}:{TOOL}"), "arguments": {"folder": "inbox"}},
+                {"tool": format!("{BACKEND}:run_command"), "arguments": {}}
+            ]}}),
+        )
+        .await;
+    assert!(
+        refused(&answer),
+        "premise: the chain was not refused: {answer}"
+    );
+    assert_eq!(
+        stdio.gateway.releases(),
+        releases,
+        "F5(a) stdio: a credential was resolved: {answer}"
+    );
+    assert_eq!(
+        stdio.gateway.requests().len(),
+        requests,
+        "F5(a) stdio: the backend was asked: {answer}"
+    );
+}
+
+/// F5(b), stdio (guard, kills M17): a request the request firewall refuses (a
+/// path-traversal argument) resolves nothing and fills nothing for a surfaced
+/// tool with the operator's slot cold. A verdict taken ahead of the firewall
+/// would fill and release.
+#[cfg(feature = "firewall")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn f5b_stdio_firewall_refusal_resolves_nothing() {
+    let stdio = operator_stdio_armed(|meta| {
+        let firewall = Arc::new(
+            crate::security::firewall::Firewall::from_config(
+                crate::security::firewall::FirewallConfig {
+                    enabled: true,
+                    scan_responses: true,
+                    scan_requests: true,
+                    ..crate::security::firewall::FirewallConfig::default()
+                },
+                None,
+            )
+            .with_continuations(meta.continuation()),
+        );
+        meta.set_firewall(Some(firewall));
+    });
+    let (releases, requests) = (stdio.gateway.releases(), stdio.gateway.requests().len());
+    let answer = stdio
+        .rpc(
+            1,
+            "tools/call",
+            json!({"name": TOOL, "arguments": {"folder": "../../../etc/passwd"}}),
+        )
+        .await;
+    assert!(
+        refused(&answer),
+        "premise: the firewall let it through: {answer}"
+    );
+    assert_eq!(
+        stdio.gateway.releases(),
+        releases,
+        "F5(b) stdio: a credential was resolved: {answer}"
+    );
+    assert_eq!(
+        stdio.gateway.requests().len(),
+        requests,
+        "F5(b) stdio: the backend was asked: {answer}"
     );
 }

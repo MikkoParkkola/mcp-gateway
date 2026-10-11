@@ -149,6 +149,12 @@ impl DirectAccountGateway {
         self.custody.refreshes()
     }
 
+    /// Credential releases custody made: one per `prepare` (MIK-8356 F5: a
+    /// refused call resolves nothing).
+    pub(crate) fn releases(&self) -> usize {
+        self.custody.releases()
+    }
+
     /// Revoke the sole operator's seeded grant and reconnect it under a new
     /// generation, through live custody (MIK-8356: the old slot stays warm and
     /// indexed, but no longer belongs to the current grant).
