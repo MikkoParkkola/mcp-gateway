@@ -3,6 +3,8 @@
 //! MIK-8365: the transparency-log HMAC key is resolved once at load, like
 //! message signing's key, and never parsed again.
 
+use std::path::Path;
+
 use super::TransparencyLogConfig;
 use crate::config::env_overlay::{EnvOverlay, SecretRefsRead, digest};
 use crate::config::secret_ref::{self, SecretRef};
@@ -12,14 +14,6 @@ use crate::{Error, Result};
 const FIELD: &str = "security.transparency_log.shared_secret";
 
 impl TransparencyLogConfig {
-    /// Why the key did not resolve, when the log is off and it did not
-    /// (MIK-8365). `audit verify` refuses on it: an empty key would verify a
-    /// signed log hash-only, and the reference text is public.
-    #[must_use]
-    pub fn unresolved_secret(&self) -> Option<&str> {
-        self.unresolved_secret.as_deref()
-    }
-
     /// Resolve `shared_secret` as written: `${VAR}` templates, `env:NAME`,
     /// `file:PATH`, or a literal. One read: the first failure is the answer,
     /// and the resolved bytes are the key even when they look like a reference.
@@ -86,5 +80,32 @@ impl TransparencyLogConfig {
             )));
         }
         Ok(())
+    }
+}
+
+impl crate::config::Config {
+    /// The key and key id `audit verify` checks a log with, read from the
+    /// gateway config at `path` (MIK-6700 HMAC.3). Fails closed: a config that
+    /// does not load, or whose key did not resolve while the log was off
+    /// (MIK-8365), is an error, never an empty key (that would verify a signed
+    /// log hash-only) and never the reference's public text.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::load`], and [`Error::ConfigValidation`] naming the field
+    /// when the key did not resolve.
+    pub fn audit_verify_config(
+        path: Option<&Path>,
+    ) -> Result<crate::security::transparency_log::TransparencyLogConfig> {
+        let config = Self::load(path)?;
+        let log = &config.security.transparency_log;
+        if let Some(reason) = &log.unresolved_secret {
+            return Err(Error::ConfigValidation(reason.clone()));
+        }
+        Ok(crate::security::transparency_log::TransparencyLogConfig {
+            key_id: log.key_id.clone(),
+            shared_secret: log.shared_secret.clone(),
+            ..crate::security::transparency_log::TransparencyLogConfig::default()
+        })
     }
 }
