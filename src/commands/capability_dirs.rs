@@ -25,10 +25,12 @@ pub(crate) enum CapabilityDirs {
 pub(crate) const NONE_FOUND: &str = "No capability files found in the configured directories";
 
 /// Resolve the directories for `flag` (clap fills it from `-C` or the env
-/// var) and the global `--config`. A config that is missing or unreadable is
-/// reported as the loader words it, since that names only the path; any other
-/// load error is replaced by a pointer to `doctor`, because its text can
-/// quote a value from the file.
+/// var) and the global `--config`. The config file is picked as the loader
+/// picks it (the named one, else `Config::fallback_config_path`), so the
+/// message names the file the loader read. A named file that is missing or a
+/// picked file that cannot be opened is reported by its path; a file that
+/// opens but will not load gets a pointer to `doctor` instead of the load
+/// error, whose text can quote a value from the file.
 pub(crate) fn resolve(
     flag: Option<PathBuf>,
     config: Option<&Path>,
@@ -36,21 +38,28 @@ pub(crate) fn resolve(
     if let Some(dir) = flag {
         return Ok(CapabilityDirs::Override(dir));
     }
-    match Config::load(config) {
+    let picked = match config {
+        Some(named) if !named.exists() => {
+            return Err(format!("Config file not found: {}", named.display()));
+        }
+        Some(named) => Some(named.to_path_buf()),
+        None => Config::fallback_config_path(),
+    };
+    if let Some(path) = picked.as_deref()
+        && let Err(error) = std::fs::File::open(path)
+    {
+        return Err(format!(
+            "Cannot read config file {}: {error}",
+            path.display()
+        ));
+    }
+    match Config::load(picked.as_deref()) {
         Ok(cfg) => Ok(CapabilityDirs::Configured(
             cfg.capabilities.directories.clone(),
         )),
-        Err(e) => {
-            let text = e.to_string();
-            // Errors raised before the file is read (Config::prepare) quote
-            // no file content.
-            if text.contains("Config file not found") || text.contains("Cannot read config file") {
-                return Err(text);
-            }
-            let path = config
-                .map(Path::to_path_buf)
-                .or_else(|| super::doctor::resolve_config_path(None))
-                .unwrap_or_else(|| PathBuf::from("gateway.yaml"));
+        Err(_) => {
+            // No file at all loads as the defaults, so an error names one.
+            let path = picked.unwrap_or_else(|| PathBuf::from("gateway.yaml"));
             Err(format!(
                 "could not load {}; run `{}` to see why",
                 path.display(),

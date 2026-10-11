@@ -181,7 +181,7 @@ pub struct OAuthClient {
 
     /// Seconds before expiry at which the background task proactively refreshes.
     ///
-    /// The task triggers when `time_until_expiry < max(lifetime * 10%, buffer)`.
+    /// `None` derives it from the token (see [`refresh_buffer`]).
     token_refresh_buffer_secs: Option<u64>,
 
     /// Where advertised URLs may point (the backend's destination policy).
@@ -596,7 +596,8 @@ impl OAuthClient {
 
     /// Return true if the token should be proactively refreshed.
     ///
-    /// Triggers when remaining lifetime is below `max(lifetime * 10%, buffer)`.
+    /// Triggers when the remaining lifetime is below [`refresh_buffer`]: a set
+    /// buffer, else max(300 s, 10 % of the token lifetime).
     #[must_use]
     pub fn needs_proactive_refresh(&self) -> bool {
         let token = self.current_token.read();

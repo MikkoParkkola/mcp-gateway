@@ -78,7 +78,11 @@ use mcp_gateway::{
 /// definition for every hint that names it (MIK-8375 defines the same; the
 /// two are reconciled when both land).
 pub(crate) fn check_config_command(path: &std::path::Path) -> String {
-    format!("mcp-gateway doctor --config {}", path.display())
+    // One shell word, so a path with a space or a quote still copies whole.
+    let text = path.to_string_lossy();
+    let arg =
+        shlex::try_quote(&text).map_or_else(|_| text.to_string(), std::borrow::Cow::into_owned);
+    format!("mcp-gateway doctor --config {arg}")
 }
 
 // ── init ─────────────────────────────────────────────────────────────────────

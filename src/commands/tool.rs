@@ -159,10 +159,18 @@ async fn tool_completions(
     capabilities: Option<PathBuf>,
     config: Option<&Path>,
 ) -> ExitCode {
-    // A catalogue that cannot be read still yields a completion script, as
-    // before, just without tool names.
-    let tool_names: Vec<String> = match catalogue(capabilities, config).await {
-        Ok((cat, _)) => cat.all().iter().map(|c| c.name.clone()).collect(),
+    // A config that will not load stops completions as it stops the other
+    // commands. A `-C` directory that cannot be read still yields a script,
+    // as before, just without tool names.
+    let dirs = match capability_dirs::resolve(capabilities, config) {
+        Ok(dirs) => dirs,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let tool_names: Vec<String> = match capability_dirs::load(&dirs).await {
+        Ok(cat) => cat.all().iter().map(|c| c.name.clone()).collect(),
         Err(_) => Vec::new(),
     };
     let target = ShellTarget::from_shell(shell).unwrap_or(ShellTarget::Bash);
