@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 //! `MIK-8066.BIG.3` unit rows: the reservation headroom, the reserved
-//! shape, and the staging-time thinning. Deterministic: closed-form sums or
-//! seeded draws, never the detector's per-process key.
+//! shape, the staging-time thinning, and the evidence split. Deterministic:
+//! closed-form sums or seeded draws; the one row that needs filter hits
+//! (T8) picks them under the run's own filter and asserts they exist.
 
 use super::super::sketch::shape;
 use super::super::thin::{keep_thinned, mix};
@@ -129,8 +130,13 @@ fn a_big_steps_miss_rate_uses_the_larger_thinning() {
         .map(|_| next())
         .filter(|h| h.is_multiple_of(4))
         .collect();
-    let (m_stage, _) = stage_thinned(&step, STEP_EV_BUDGET);
+    let (m_stage, staged) = stage_thinned(&step, STEP_EV_BUDGET);
     assert_eq!(m_stage, 16, "the staging rate for 15 × the budget");
+    assert!(
+        staged.len() <= STEP_EV_BUDGET && staged.iter().all(|&h| keep_thinned(h, m_stage)),
+        "the staged candidates are not thinned at the stated rate ({})",
+        staged.len()
+    );
     let mut missed = 0usize;
     for _ in 0..20_000 {
         let kept = (0..153)
@@ -143,4 +149,54 @@ fn a_big_steps_miss_rate_uses_the_larger_thinning() {
         (5_853..=6_474).contains(&missed),
         "{missed} of 20,000 missed, outside q = 1/64"
     );
+}
+
+/// `MIK-8066` T8 (guard): a foreign fingerprint the step's Bloom filter holds
+/// by chance enters the excuse selection but is never evidence; evidence is
+/// only `step_ev`'s exact entries the answer delivered. Mutant "Bloom hit
+/// recorded as evidence" makes the foreign hits evidence.
+#[test]
+fn a_bloom_hit_on_foreign_text_is_never_evidence() {
+    use std::collections::HashSet;
+    use std::sync::Arc;
+
+    use super::super::{CollusionDetector, RelayParams};
+    use super::BigStep;
+
+    let detector = Arc::new(CollusionDetector::new(RelayParams::default()));
+    let mut s = 0x8066_B163_0000_0008u64;
+    let mut sampled = || {
+        s = s
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        let h = mix(s);
+        h - h % detector.sample
+    };
+    // Large enough that its own entries, not the headroom, fill the filter,
+    // so chance hits occur at about the sizing target.
+    let step: Vec<u64> = (0..100_000).map(|_| sampled()).collect();
+    let mut big = BigStep::new(&detector, ("alpha:read", "alice"), &step)
+        .expect("premise: the store has room");
+    let own: HashSet<u64> = step.iter().copied().collect();
+    let filter = big.step_all.as_ref().expect("premise: the filter is built");
+    let foreign: HashSet<u64> = (0..200_000)
+        .map(|_| sampled())
+        .filter(|h| !own.contains(h) && filter.holds(*h))
+        .collect();
+    assert!(!foreign.is_empty(), "premise: the filter has chance hits");
+    let delivered: HashSet<u64> = big.step_ev[..10].iter().copied().collect();
+    big.keep_to(&delivered.union(&foreign).copied().collect());
+    assert!(
+        big.selection
+            .as_ref()
+            .is_some_and(|sel| sel.iter().any(|h| foreign.contains(h))),
+        "premise: the chance hits reached the excuse selection"
+    );
+    let evidence: HashSet<u64> = big
+        .evidence()
+        .expect("own text delivered")
+        .iter()
+        .copied()
+        .collect();
+    assert_eq!(evidence, delivered, "a Bloom hit became evidence");
 }

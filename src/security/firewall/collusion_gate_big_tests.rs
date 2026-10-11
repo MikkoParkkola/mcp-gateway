@@ -401,11 +401,12 @@ fn a_step_whose_attachments_never_fit_marks_its_excuse_lost() {
 
 /// `MIK-8066` T16 (F2): a 512 KiB P1 step stages its evidence thinned
 /// (m >= 2: about 131k sampled fingerprints against the 32,768 budget). The
-/// answer delivers it whole; alice relays a 60-char extract, picked under
-/// this run's key, mid-word at both ends, whose fingerprints no thinning at
-/// m >= 2 keeps, so it is outside the staged evidence. She is still excused,
-/// by the Bloom-selected sketch. Skipping the sketch when the evidence
-/// intersection is empty (mutant `f2_skip_on_empty_evidence`) refuses her.
+/// answer delivers only a 60-char extract, picked under this run's key,
+/// mid-word at both ends, whose fingerprints no thinning at m >= 2 keeps, so
+/// the staged evidence and the answer share nothing. Alice relaying it is
+/// still excused, by the Bloom-selected sketch. Skipping the sketch when the
+/// evidence intersection is empty (mutant `f2_skip_on_empty_evidence`)
+/// refuses her.
 #[test]
 fn a_short_extract_of_a_big_step_the_sample_missed_is_still_excused() {
     use crate::security::firewall::collusion::CollusionDetector;
@@ -426,7 +427,7 @@ fn a_short_extract_of_a_big_step_the_sample_missed_is_still_excused() {
         })
         .expect("an extract no thinning at m >= 2 keeps")
         .to_owned();
-    let answer = json!({"whole": text});
+    let answer = json!({"extract": window});
     let bound = super::super::DELIVERED_SET_CAP;
     assert!(
         deliver_step(&fw, &step, bound, &answer),
