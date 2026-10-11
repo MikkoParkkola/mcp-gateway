@@ -34,6 +34,29 @@ fn write_log(path: &Path, secret: &str) {
     }
 }
 
+/// Remove `sig` and `key_id` from the first `n` entries. Both are outside the
+/// entry hash, so the chain stays intact and those entries read as unsigned.
+fn strip_leading_signatures(log: &Path, n: usize) {
+    let content = std::fs::read_to_string(log).expect("read");
+    let mut lines: Vec<serde_json::Value> = content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("json"))
+        .collect();
+    for entry in lines.iter_mut().take(n) {
+        let map = entry.as_object_mut().expect("object");
+        map.remove("sig");
+        map.remove("key_id");
+    }
+    let mut rewritten = lines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    rewritten.push('\n');
+    std::fs::write(log, rewritten).expect("write");
+}
+
 /// An exporter configured with no signing key: `with_signing_secret("")`
 /// is how the gateway wires an empty `shared_secret`.
 fn keyless_exporter(dir: &Path, log: &Path) -> LogExporter {
@@ -98,19 +121,7 @@ fn verify_and_export_agree_on_a_mixed_log() {
     let dir = tempfile::tempdir().expect("tempdir");
     let log = dir.path().join("inv.jsonl");
     write_log(&log, SECRET);
-    let content = std::fs::read_to_string(&log).expect("read");
-    let mut lines: Vec<serde_json::Value> = content
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l).expect("json"))
-        .collect();
-    for entry in lines.iter_mut().take(2) {
-        let map = entry.as_object_mut().expect("object");
-        map.remove("sig");
-        map.remove("key_id");
-    }
-    let rewritten: String = lines.iter().map(|e| format!("{e}\n")).collect();
-    std::fs::write(&log, rewritten).expect("write");
+    strip_leading_signatures(&log, 2);
 
     assert!(
         log_contains_signed_entry(&log).expect("scan"),
@@ -164,19 +175,7 @@ fn a_small_batch_forwards_the_unsigned_prefix_then_halts_at_the_signed_entry() {
     let dir = tempfile::tempdir().expect("tempdir");
     let log = dir.path().join("inv.jsonl");
     write_log(&log, SECRET);
-    let content = std::fs::read_to_string(&log).expect("read");
-    let mut lines: Vec<serde_json::Value> = content
-        .lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l).expect("json"))
-        .collect();
-    for entry in lines.iter_mut().take(2) {
-        let map = entry.as_object_mut().expect("object");
-        map.remove("sig");
-        map.remove("key_id");
-    }
-    let rewritten: String = lines.iter().map(|e| format!("{e}\n")).collect();
-    std::fs::write(&log, rewritten).expect("write");
+    strip_leading_signatures(&log, 2);
 
     let sink = CollectingSink::new();
     let mut exp = keyless_exporter(dir.path(), &log).with_max_batch(2);
