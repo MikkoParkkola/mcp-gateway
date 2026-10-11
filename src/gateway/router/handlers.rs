@@ -426,6 +426,12 @@ async fn meta_mcp_dispatch(
                 cache_scope_advertised = is_modern,
                 "tools/list surface inputs and cache scope"
             );
+            // MIK-8356: a rotated or revoked managed grant's slot is never this
+            // caller's listing view; one recheck for every listing path.
+            state
+                .meta_mcp
+                .revalidate_caller_slots(invoke_scope.caller)
+                .await;
             state.meta_mcp.handle_tools_list_with_url_override(
                 id,
                 params,

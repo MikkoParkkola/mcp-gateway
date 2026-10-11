@@ -116,7 +116,7 @@ impl MetaMcp {
     /// yields (MIK-8356 design R4.2, gpt r3 F2). Run at a listing's async
     /// entry, so the synchronous readers after it read a rotated or revoked
     /// grant's slot as cold, never as the caller's.
-    pub(super) async fn revalidate_caller_slots(&self, caller: CallerProof<'_>) {
+    pub(crate) async fn revalidate_caller_slots(&self, caller: CallerProof<'_>) {
         for backend in self.backends.all() {
             let Some(vault) = self
                 .account_strategies
