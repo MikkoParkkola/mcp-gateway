@@ -195,14 +195,15 @@ pub(crate) fn discovery_extensions() -> std::collections::HashMap<String, Value>
 /// constant: a test can perturb `extensions` here and observe the wire value
 /// change, which is the only way to prove the populate is wired rather than
 /// left at its `Default` (design test plan §5.1, §4.1).
-/// Only `tools.listChanged` can be true, and only on [`ChangeFeed::Http`] (F24).
+/// Only `tools.listChanged` can be true, and only for a feed that delivers it
+/// to this caller (F24, MIK-8278).
 pub(crate) fn build_server_capabilities(
     extensions: std::collections::HashMap<String, Value>,
     feed: super::ChangeFeed,
 ) -> ServerCapabilities {
     ServerCapabilities {
         tools: Some(ToolsCapability {
-            list_changed: feed == super::ChangeFeed::Http,
+            list_changed: feed.announces_tools(),
             #[cfg(feature = "spec-preview")]
             filtering: Some(true),
             #[cfg(feature = "spec-preview")]

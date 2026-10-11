@@ -34,6 +34,8 @@
 
 mod backend;
 #[cfg(test)]
+pub(crate) use backend::listing_watches_started;
+#[cfg(test)]
 mod cache_error_tests;
 pub mod definition;
 #[cfg(feature = "discovery")]
