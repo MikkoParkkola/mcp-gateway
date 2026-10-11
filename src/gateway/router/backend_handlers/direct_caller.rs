@@ -233,6 +233,33 @@ pub(super) async fn read_envelope(
     // the request: parse, telemetry and every forwarding arm see no token.
     let attestation = super::take_attestation_token(json_request.get_mut("params"));
 
+    // MIK-8154 SAN.1: the one sanitize step, honouring `sanitize_input`, before
+    // anything parses or judges the request: its protocol fields validated
+    // (S2'), then the whole request sanitized unless the backend this route
+    // names is `passthrough` (option (a)).
+    if state.sanitize_input {
+        let sanitized = crate::security::sanitize::validate_protocol_fields(&json_request)
+            .and_then(|()| {
+                if state.meta_mcp.backend_is_passthrough(name) {
+                    Ok(None)
+                } else {
+                    crate::security::sanitize::sanitize_request(&json_request).map(Some)
+                }
+            });
+        match sanitized {
+            Ok(Some(clean)) => json_request = clean,
+            Ok(None) => {}
+            Err(e) => {
+                return Err(super::super::helpers::build_http_error_response(
+                    None,
+                    -32600,
+                    e.to_string(),
+                    StatusCode::BAD_REQUEST,
+                ));
+            }
+        }
+    }
+
     let (id, method, params) = match super::super::helpers::parse_request(&json_request) {
         Ok(parsed) => parsed,
         Err(response) => {

@@ -139,7 +139,15 @@ pub(super) async fn meta_mcp_handler(
                     guard_for_scope,
                     Box::pin(crate::gateway::meta_mcp::invoke::relay::collecting_http(
                         Arc::clone(&state.meta_mcp),
-                        meta_mcp_dispatch(state, http_request),
+                        // One visibility judgement per request (MIK-8340),
+                        // from intake's sanitize exemption (MIK-8154 D1) to
+                        // the dispatch: the scope rides this future, so a
+                        // notification-first stream polling it after the
+                        // handler returns still reads the same answers.
+                        crate::gateway::meta_mcp::visible::with_visibility_memo(meta_mcp_dispatch(
+                            state,
+                            http_request,
+                        )),
                     )),
                 )
                 .await
@@ -452,19 +460,16 @@ async fn meta_mcp_dispatch(
                 .unzip();
             let answer_id = id.clone();
             // Boxed: an inline future would enlarge this dispatcher's own state.
-            // One visibility judgement per request (MIK-8340): the route stage
-            // and the dispatch read the same answer for a surfaced name.
-            let call = Box::pin(crate::gateway::meta_mcp::visible::with_visibility_memo(
-                dispatch_tools_call::tools_call(
-                    &state,
-                    &intake,
-                    id,
-                    &router_authorizer,
-                    invoke_scope,
-                    &mut signing_context,
-                    &mut response_targets,
-                    &mut execution,
-                ),
+            // The request's visibility memo is already open (see the handler).
+            let call = Box::pin(dispatch_tools_call::tools_call(
+                &state,
+                &intake,
+                id,
+                &router_authorizer,
+                invoke_scope,
+                &mut signing_context,
+                &mut response_targets,
+                &mut execution,
             ));
             let called = match cancel_on {
                 Some(cancel_on) => cancel_on.run(call).await,

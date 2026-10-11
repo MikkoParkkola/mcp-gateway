@@ -133,6 +133,7 @@ mod builders;
 mod call_dispatch;
 mod caller_context;
 mod handlers;
+pub(crate) mod passthrough;
 mod session_tools;
 pub use caller_context::MetaMcpCallerContext;
 

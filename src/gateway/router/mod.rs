@@ -36,6 +36,7 @@ mod authorization;
 pub use authorization::CallerStanding;
 pub(crate) use authorization::{
     ADMIN_META_TOOLS, OwnedRouterAuthorizer, RouterAuthorizer, backend_tool_targets_for_call,
+    sanitize_exempt,
 };
 mod backend_handlers;
 mod handlers;

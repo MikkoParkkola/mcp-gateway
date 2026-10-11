@@ -33,8 +33,7 @@ use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 use crate::protocol::RequestId;
 use crate::security::{
-    AgentIdentity, extract_agent_identity, log_agent_identity, sanitize_json_value,
-    validate_agent_identity,
+    AgentIdentity, extract_agent_identity, log_agent_identity, validate_agent_identity,
 };
 
 /// What the prelude hands the frame judge: consumed by value on the listen
@@ -334,6 +333,19 @@ pub(super) async fn intake(
     let raw_id = crate::protocol::mrtr::raw_request_id(&request);
     // A failed grant-decision write refuses under this id (MIK-7663.GH2409.3).
     crate::gateway::meta_mcp::grant_audit::note_answer_id(raw_id.as_ref());
+    // MIK-8154 S2': the protocol fields are validated before signing and the
+    // chain nonce take them off the request, and never rewritten.
+    if state.sanitize_input
+        && let Err(e) = crate::security::sanitize::validate_protocol_fields(&request)
+    {
+        return Err(build_error_response(
+            None,
+            -32600,
+            e.to_string(),
+            &session_id,
+            StatusCode::BAD_REQUEST,
+        ));
+    }
     // Hardened signs every `tools/call` here, not only `gateway_invoke`
     // (GH1942.HARDEN.1 row 7).
     let mut signing_context = state.meta_mcp.signing_enabled().then(|| {
@@ -357,9 +369,34 @@ pub(super) async fn intake(
             ));
         }
     };
-    // Optionally sanitize input
-    let mut request = if state.sanitize_input {
-        match sanitize_json_value(&request) {
+    // MIK-8154 SAN.1: one sanitize step, after the call's backend targets are
+    // mapped on the caller's view (a surfaced name judged through the request's
+    // visibility memo) and before restore and every check; a request whose
+    // every target is `passthrough` is exempt (option (a)).
+    let exempt = state.sanitize_input && {
+        let authorizer = super::super::RouterAuthorizer {
+            state,
+            client: client.as_ref(),
+            oauth_agent_identity: oauth_agent_identity.as_ref(),
+            cert_identity: cert_identity.as_ref(),
+            principal: super::super::authorization::refusal_principal(
+                client.as_ref(),
+                oauth_agent_identity.as_ref(),
+                cert_identity.as_ref(),
+            ),
+        };
+        let scope = crate::gateway::meta_mcp::InvokeScope {
+            authorizer: &authorizer,
+            is_admin: client.as_ref().is_some_and(|c| c.admin),
+            api_key_name: client.as_ref().map(|c| c.name.as_str()),
+            agent_id: agent_identity.proven_agent_id(),
+            grant_subject: grant_subject.as_ref(),
+        };
+        let view = crate::gateway::meta_mcp::visible::TargetView::Caller(scope, Some(&session_id));
+        super::super::sanitize_exempt(&state.meta_mcp, &request, view).0
+    };
+    let mut request = if state.sanitize_input && !exempt {
+        match crate::security::sanitize::sanitize_request(&request) {
             Ok(sanitized) => sanitized,
             Err(e) => {
                 return Err(build_error_response(
