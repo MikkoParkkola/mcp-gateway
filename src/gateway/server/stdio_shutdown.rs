@@ -87,6 +87,26 @@ pub(super) async fn final_cost_save(
 
 impl Gateway {
     pub(super) fn persist_stdio_protocol_telemetry(sink: &StdioTelemetry) {
+        use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+        static CALLS: AtomicU64 = AtomicU64::new(0);
+        static SOME: AtomicU64 = AtomicU64::new(0);
+        static TOTAL_US: AtomicU64 = AtomicU64::new(0);
+        let started = std::time::Instant::now();
+        let has_sink = Self::persist_stdio_protocol_telemetry_inner(sink);
+        let us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let total = TOTAL_US.fetch_add(us, Relaxed) + us;
+        let some = SOME.fetch_add(u64::from(has_sink), Relaxed) + u64::from(has_sink);
+        let n = CALLS.fetch_add(1, Relaxed) + 1;
+        if n % 100 == 0 {
+            eprintln!(
+                "T14DIAG {} persist calls={n} with_sink={some} total_ms={} last_us={us}",
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0),
+                total / 1000
+            );
+        }
+    }
+
+    fn persist_stdio_protocol_telemetry_inner(sink: &StdioTelemetry) -> bool {
         let mut sink = sink
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -98,6 +118,7 @@ impl Gateway {
                 "failed to persist stdio protocol-revision telemetry; measurement window is incomplete"
             );
         }
+        sink.is_some()
     }
 
     /// The protocol telemetry save, on a detached thread under `deadline`.
