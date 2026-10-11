@@ -172,26 +172,32 @@ async fn byte_cap_after_append() {
 /// continuation or retry; `verify` takes the unchained path.
 #[tokio::test]
 async fn interim_replies_from_chained_backends() {
-    let upstream = FakeUpstream::start(Mode::InputRequired).await;
-    let d = HttpGateway::start(d_config(&upstream.url, "require", "on_request")).await;
-    let response = call(&d, Route::Invoke, Some("n-i1")).await;
-    assert_refused(&response, "interim");
-    assert_eq!(upstream.calls().len(), 1, "no retry reached the upstream");
-    assert!(
-        !response.to_string().contains("requestState"),
-        "no continuation: {response}"
-    );
-    let upstream = FakeUpstream::start(Mode::InputRequired).await;
-    let d = HttpGateway::start(d_config(&upstream.url, "verify", "on_request")).await;
-    let response = call(&d, Route::Invoke, Some("n-i1b")).await;
-    assert_ne!(
-        response["error"]["code"], -32001,
-        "verify never refuses an interim: {response}"
-    );
-    assert!(
-        !response.to_string().contains(oracle::CHAIN_KEY),
-        "{response}"
-    );
+    for route in MCP_ROUTES {
+        let upstream = FakeUpstream::start(Mode::InputRequired).await;
+        let d = HttpGateway::start(d_config(&upstream.url, "require", "on_request")).await;
+        let response = call(&d, route, Some("n-i1")).await;
+        assert_refused(&response, "interim");
+        assert_eq!(
+            upstream.calls().len(),
+            1,
+            "{route:?}: no retry reached the upstream"
+        );
+        assert!(
+            !response.to_string().contains("requestState"),
+            "{route:?}: no continuation: {response}"
+        );
+        let upstream = FakeUpstream::start(Mode::InputRequired).await;
+        let d = HttpGateway::start(d_config(&upstream.url, "verify", "on_request")).await;
+        let response = call(&d, route, Some("n-i1b")).await;
+        assert_ne!(
+            response["error"]["code"], -32001,
+            "{route:?}: verify never refuses an interim: {response}"
+        );
+        assert!(
+            !response.to_string().contains(oracle::CHAIN_KEY),
+            "{route:?}: {response}"
+        );
+    }
 }
 
 /// K3: an unsolicited task handle to a synchronous `require` call is refused
@@ -205,22 +211,37 @@ async fn require_refuses_an_unsolicited_task_handle() {
     assert_eq!(upstream.calls().len(), 1, "nothing polled or retried");
 }
 
+/// K3 by the surfaced name (MIK-8159.CHAIN.2): the same raw-receipt refusal,
+/// answered after one upstream call and before any poll or retry.
+#[tokio::test]
+async fn require_refuses_an_unsolicited_task_handle_by_name() {
+    let upstream = FakeUpstream::start(Mode::TaskHandle).await;
+    let d = HttpGateway::start(d_config(&upstream.url, "require", "on_request")).await;
+    assert_refused(&call(&d, Route::Surfaced, Some("n-k3s")).await, "interim");
+    assert_eq!(upstream.calls().len(), 1, "refused on the first answer");
+}
+
 /// Z1: a chained backend bypasses the response cache: both calls reach the
 /// upstream, each chained over its own challenge.
 #[tokio::test]
 async fn chained_backend_bypasses_the_response_cache() {
-    let upstream = FakeUpstream::start(Mode::Honest).await;
-    let mut config = d_config(&upstream.url, "verify", "on_request");
-    config["cache"] = json!({"enabled": true, "default_ttl": "5m", "max_entries": 100});
-    let d = HttpGateway::start(config).await;
-    let first = call(&d, Route::Invoke, Some("n-z1a")).await;
-    let second = call(&d, Route::Invoke, Some("n-z1b")).await;
-    assert_eq!(
-        upstream.calls().len(),
-        2,
-        "no cache hit for a chained backend"
-    );
-    assert!(client_verify(&first, "n-z1a").is_ok() && client_verify(&second, "n-z1b").is_ok());
+    for route in MCP_ROUTES {
+        let upstream = FakeUpstream::start(Mode::Honest).await;
+        let mut config = d_config(&upstream.url, "verify", "on_request");
+        config["cache"] = json!({"enabled": true, "default_ttl": "5m", "max_entries": 100});
+        let d = HttpGateway::start(config).await;
+        let first = call(&d, route, Some("n-z1a")).await;
+        let second = call(&d, route, Some("n-z1b")).await;
+        assert_eq!(
+            upstream.calls().len(),
+            2,
+            "{route:?}: no cache hit for a chained backend"
+        );
+        assert!(
+            client_verify(&first, "n-z1a").is_ok() && client_verify(&second, "n-z1b").is_ok(),
+            "{route:?}: {first} {second}"
+        );
+    }
 }
 
 /// X1: surfaces outside the claim stay unchained even for a `verify`
