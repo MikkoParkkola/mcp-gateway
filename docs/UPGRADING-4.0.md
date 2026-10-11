@@ -897,9 +897,9 @@ config and reports the error.
   and a misspelt one such as `MCP_GATEWAY_SERVER__PROT` is still ignored without a word. Only the
   file is checked, so deployments that set `MCP_GATEWAY_TOKEN`, `MCP_GATEWAY_LOG_LEVEL` or
   `MCP_GATEWAY_LOG_FORMAT` load as before. The variables CLI flags own (`MCP_GATEWAY_CONFIG`,
-  `MCP_GATEWAY_CAPABILITIES`, `MCP_GATEWAY_LOG_LEVEL` and the rest of `mcp-gateway --help`'s
-  `[env: ...]` names) are never read as config keys, so `MCP_GATEWAY_CAPABILITIES` sets the tool
-  subcommands' directory without breaking a config load.
+  `MCP_GATEWAY_CAPABILITIES`, `MCP_GATEWAY_LOG_LEVEL`, and every other `[env: ...]` name shown
+  by a subcommand's `--help`) are never read as config keys, so `MCP_GATEWAY_CAPABILITIES` sets
+  the tool subcommands' directory without breaking a config load.
 - **YAML merge keys (`<<:`) were never applied**, and are now refused as a key named `<<`. Write
   the merged keys out in full.
 
