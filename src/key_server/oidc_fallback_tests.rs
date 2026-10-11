@@ -433,12 +433,13 @@ async fn a_discovery_timeout_falls_back() {
     );
     let cfg: KeyServerConfig = serde_yaml::from_str(&yaml).expect("key server yaml");
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(300))
+        .timeout(Duration::from_secs(2))
         .build()
         .expect("client");
     let v = OidcVerifier::with_http_client(cfg.oidc, client);
     verify(&v, &mint(&fx, &fx.k_fb))
         .await
         .expect("the fallback key validates");
+    assert_eq!(hits(&fx).0, 1, "discovery was not attempted");
     assert_eq!(hits(&fx).2, 1, "the fallback was not fetched");
 }

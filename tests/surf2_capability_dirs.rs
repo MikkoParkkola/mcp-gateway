@@ -475,6 +475,7 @@ fn an_env_overlay_beats_the_config_file() {
     let env = [("MCP_GATEWAY_CAPABILITIES__DIRECTORIES", value.as_str())];
     let out = run(root.path(), &env, &with_config(&cfg, &["tool", "list"]));
     let shown = both(&out);
+    assert!(out.status.success(), "{shown}");
     assert!(
         shown.contains("env_cap") && !shown.contains("file_cap"),
         "{shown}"

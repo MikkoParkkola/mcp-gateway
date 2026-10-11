@@ -113,3 +113,26 @@ fn an_answer_without_expires_in_has_no_lifetime() {
     let json = serde_json::to_value(&token).expect("serialize");
     assert!(json.get("lifetime_secs").is_none(), "{json}");
 }
+
+/// C6 (guard): a token stored before `lifetime_secs` existed loads, and its
+/// buffer is the 300 s floor.
+#[test]
+fn an_old_stored_token_loads_with_the_floor_buffer() {
+    let token: TokenInfo = serde_json::from_value(serde_json::json!({
+        "access_token": "tok",
+        "expires_at": unix_now() + 3600,
+    }))
+    .expect("an old token loads");
+    assert_eq!(token.lifetime_secs, None);
+    assert_eq!(
+        crate::oauth::client::refresh_buffer(None, token.lifetime_secs),
+        300
+    );
+}
+
+/// C2a: `oauth: {}` leaves the buffer unset, not 300.
+#[test]
+fn an_empty_oauth_block_leaves_the_buffer_unset() {
+    let cfg: crate::config::OAuthConfig = serde_yaml::from_str("{}\n").expect("parse");
+    assert_eq!(cfg.token_refresh_buffer_secs, None);
+}

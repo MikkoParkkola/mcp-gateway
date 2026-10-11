@@ -27,10 +27,10 @@ pub(crate) const NONE_FOUND: &str = "No capability files found in the configured
 /// Resolve the directories for `flag` (clap fills it from `-C` or the env
 /// var) and the global `--config`. The config file is picked as the loader
 /// picks it (the named one, else `Config::fallback_config_path`), so the
-/// message names the file the loader read. A named file that is missing or a
-/// picked file that cannot be opened is reported by its path; a file that
-/// opens but will not load gets a pointer to `doctor` instead of the load
-/// error, whose text can quote a value from the file.
+/// message names the file the loader read. A named file that is missing is
+/// reported by its path; any other config that will not load (unreadable
+/// included, or a bad environment overlay with no file) gets a pointer to
+/// `doctor` instead of the load error, whose text can quote a value.
 pub(crate) fn resolve(
     flag: Option<PathBuf>,
     config: Option<&Path>,
@@ -49,13 +49,17 @@ pub(crate) fn resolve(
         return Ok(CapabilityDirs::Configured(cfg.capabilities.directories));
     }
     // The load error itself is never printed: its text can quote a value.
-    // No file at all loads as the defaults, so an error names one.
-    let path = picked.unwrap_or_else(|| PathBuf::from("gateway.yaml"));
-    Err(format!(
-        "could not load {}; run `{}` to see why",
-        path.display(),
-        super::check_config_command(&path)
-    ))
+    Err(match picked {
+        Some(path) => format!(
+            "could not load {}; run `{}` to see why",
+            path.display(),
+            super::check_config_command(&path)
+        ),
+        // No file: the environment overlay is what failed.
+        None => "could not load the configuration from the environment; run \
+                 `mcp-gateway doctor` to see why"
+            .to_owned(),
+    })
 }
 
 /// Load the capabilities `dirs` names. An override directory that does not
