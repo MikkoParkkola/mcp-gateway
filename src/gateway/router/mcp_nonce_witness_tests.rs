@@ -176,6 +176,8 @@ async fn a_spend_refusal_after_a_cold_schema_fetch_keeps_the_nonce() {
         "alpha-pt must be cold before the refused call"
     );
 
+    let fills = cold.list_fills();
+
     let who = ("k-budget", "alpha-pt");
     let (_, refused) = signed_call(&fx, who, "n2", json!({})).await;
     assert_eq!(code(&refused), Some(-32003), "the spend refusal: {refused}");
@@ -183,11 +185,47 @@ async fn a_spend_refusal_after_a_cold_schema_fetch_keeps_the_nonce() {
         cold.has_cached_tools(),
         "the refused call fetched tools/list"
     );
+    assert!(cold.list_fills() > fills, "and the fill was counted");
 
     let (_, again) = signed_call(&fx, who, "n2", json!({})).await;
     assert!(
         refused_as_replay(&again),
         "the nonce was given back after a fetch: {again}"
+    );
+    assert_eq!(dispatched(&fx), 1);
+}
+
+/// R-schema-off (gpt code r1): with the input-schema check off, a call on a
+/// cold slot fills no tool list, so the spend refusal acted on nothing and
+/// gives its nonce back: the re-send meets the budget again, not a replay.
+/// Red on the snapshot rule (a cold slot counted as a fetch whatever the
+/// mode); the fill counter must not move.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn a_spend_refusal_with_the_schema_check_off_gives_the_nonce_back() {
+    use super::direct_continuation_tests::budget;
+    use super::direct_guards_fixture::fixture_hardened_signed_schema_off;
+    let fx = fixture_hardened_signed_schema_off(Answer::Ok, budget).await;
+    let (_, first) = signed_call(&fx, ("k-budget", "alpha"), "n1", json!({})).await;
+    assert!(first.get("error").is_none(), "the paying call: {first}");
+    let cold = fx.state.backends.get("alpha-pt").expect("fixture backend");
+    assert!(!cold.has_cached_tools(), "premise: alpha-pt is cold");
+    let fills = cold.list_fills();
+
+    let who = ("k-budget", "alpha-pt");
+    let (_, refused) = signed_call(&fx, who, "n2", json!({})).await;
+    assert_eq!(code(&refused), Some(-32003), "the spend refusal: {refused}");
+    assert_eq!(
+        cold.list_fills(),
+        fills,
+        "premise: the check filled nothing"
+    );
+
+    let (_, again) = signed_call(&fx, who, "n2", json!({})).await;
+    assert_eq!(
+        code(&again),
+        Some(-32003),
+        "the nonce was kept though nothing acted: {again}"
     );
     assert_eq!(dispatched(&fx), 1);
 }
@@ -203,27 +241,51 @@ fn blocked_answer() -> String {
 /// its continuation in `redeem_retry`, then the chokepoint refuses it. The
 /// consume dropped the witness: a fresh call under that nonce is a replay.
 /// Red on base: it is served (the /mcp twin of `f2d_giveback`, which refunds).
+/// Run twice: with a backend question that carries its own `requestState`,
+/// and with one that carries none (muse code r1: the consume is the caller's
+/// continuation, whatever state the backend issued).
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn a_chokepoint_refusal_after_a_consume_keeps_the_nonce() {
     use super::direct_guards_fixture::fixture_hardened_signed_firewalled;
-    let fx = fixture_hardened_signed_firewalled(Answer::AskOnce).await;
-    let who = ("k-std", "alpha");
-    let (_, asked) = signed_call(&fx, who, "n1", json!({})).await;
-    let blocked = json!({"k1": {"action": "accept", "content": {"account": blocked_answer()}}});
-    let hostile = json!({"requestState": state_of(&asked), "inputResponses": blocked});
-    let (_, refused) = signed_call(&fx, who, "n2", hostile).await;
-    assert_eq!(
-        code(&refused),
-        Some(-32600),
-        "the chokepoint refusal: {refused}"
-    );
-    assert_eq!(dispatched(&fx), 1, "the hostile answer was not sent");
+    for (label, answer) in [
+        ("backend state", Answer::AskOnce),
+        ("no backend state", Answer::AskNoState),
+    ] {
+        let fx = fixture_hardened_signed_firewalled(answer).await;
+        let who = ("k-std", "alpha");
+        let (_, asked) = signed_call(&fx, who, "n1", json!({})).await;
+        let state = state_of(&asked);
+        let blocked = json!({"k1": {"action": "accept", "content": {"account": blocked_answer()}}});
+        let hostile = json!({"requestState": state, "inputResponses": blocked});
+        let (_, refused) = signed_call(&fx, who, "n2", hostile).await;
+        assert_eq!(
+            code(&refused),
+            Some(-32600),
+            "{label}: the chokepoint refusal: {refused}"
+        );
+        assert_eq!(
+            dispatched(&fx),
+            1,
+            "{label}: the hostile answer was not sent"
+        );
 
-    let (_, fresh) = signed_call(&fx, who, "n2", json!({})).await;
-    assert!(
-        refused_as_replay(&fresh),
-        "the nonce was given back after a consume: {fresh}"
-    );
-    assert_eq!(dispatched(&fx), 1);
+        let (_, fresh) = signed_call(&fx, who, "n2", json!({})).await;
+        assert!(
+            refused_as_replay(&fresh),
+            "{label}: the nonce was given back after a consume: {fresh}"
+        );
+        assert_eq!(dispatched(&fx), 1);
+
+        // The consume itself: the same continuation, honestly answered under a
+        // fresh nonce, is refused as already redeemed.
+        let honest = json!({"requestState": state, "inputResponses": answers()});
+        let (_, again) = signed_call(&fx, who, "n3", honest).await;
+        assert_eq!(
+            code(&again),
+            Some(-32602),
+            "{label}: the continuation was consumed: {again}"
+        );
+        assert_eq!(dispatched(&fx), 1);
+    }
 }

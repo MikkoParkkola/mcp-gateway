@@ -502,6 +502,20 @@ thread_local! {
     /// A transport that replaces the scripted backend (the egress matrix).
     static TRANSPORT: std::cell::RefCell<Option<Arc<dyn Transport>>> =
         const { std::cell::RefCell::new(None) };
+    /// Both backends run `input_schema_enforcement = "off"` (MIK-8353 3a).
+    static SCHEMA_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// [`fixture_hardened_signed_built`] with the input-schema check off on both
+/// backends, so a call never fills a tool list before dispatch.
+pub(crate) async fn fixture_hardened_signed_schema_off(
+    answer: Answer,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    SCHEMA_OFF.with(|s| s.set(true));
+    let fx = fixture_hardened_signed_built(answer, true, build).await;
+    SCHEMA_OFF.with(|s| s.set(false));
+    fx
 }
 
 #[cfg(feature = "firewall")]

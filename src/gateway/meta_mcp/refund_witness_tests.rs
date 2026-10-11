@@ -44,12 +44,8 @@ fn a_mint_or_an_account_credential_is_an_effect() {
 
 #[test]
 fn a_cold_schema_check_is_an_effect() {
-    assert_eq!(
-        schema_effect(false),
-        Effect::Took,
-        "a fetch or a wait on one"
-    );
-    assert_eq!(schema_effect(true), Effect::None, "held metadata");
+    assert_eq!(schema_effect(true), Effect::Took, "a fill passed admission");
+    assert_eq!(schema_effect(false), Effect::None, "no fill");
 }
 
 #[test]

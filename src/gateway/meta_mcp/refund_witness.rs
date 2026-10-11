@@ -58,11 +58,13 @@ impl RefundWitness {
     }
 }
 
-/// `resolve_dispatch`'s report: `minted` is a propagation mint (never cached),
-/// `account` an account credential resolved for the call.
+/// `resolve_dispatch`'s report: `minted` is a propagated credential resolved
+/// for the call, `account` an account credential.
 ///
-/// Conservative (lead ruling, 2026-10-11): any account credential counts,
-/// since the resolver does not yet say whether it contacted the provider.
+/// Conservative (lead ruling, 2026-10-11): both count whether or not they
+/// contacted anyone. A propagated credential may come from a strategy's own
+/// cache (token exchange keeps exchanged tokens), and the account resolver
+/// does not yet say whether it refreshed.
 pub(crate) fn dispatch_effect(minted: bool, account: bool) -> Effect {
     if minted || account {
         Effect::Took
@@ -71,15 +73,13 @@ pub(crate) fn dispatch_effect(minted: bool, account: bool) -> Effect {
     }
 }
 
-/// The undeclared-key check's report: `cached_before` is whether the binding's
-/// tools were cached before the check. A cold slot fetches, or waits on
-/// another request's fetch.
-pub(crate) fn schema_effect(cached_before: bool) -> Effect {
-    if cached_before {
-        Effect::None
-    } else {
-        Effect::Took
-    }
+/// The undeclared-key check's report: `filled` is whether a list fill on the
+/// backend passed admission while the check ran. Read from the fill itself,
+/// not from the slot's freshness before the check: a slot that expires in
+/// between still fetches, and a check that never fetches (enforcement `off`,
+/// held metadata, joining a fill already under way) acted on nothing.
+pub(crate) fn schema_effect(filled: bool) -> Effect {
+    if filled { Effect::Took } else { Effect::None }
 }
 
 /// `redeem_retry`'s report: `redeemed` is whether it consumed a continuation.

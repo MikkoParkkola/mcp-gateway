@@ -107,6 +107,11 @@ pub(super) fn fixture_backend_config(name: &str, passthrough: bool) -> BackendCo
                 token_exchange_scope: None,
             }
         }),
+        input_schema_enforcement: if super::SCHEMA_OFF.with(std::cell::Cell::get) {
+            crate::config::InputSchemaEnforcement::Off
+        } else {
+            crate::config::InputSchemaEnforcement::default()
+        },
         ..BackendConfig::default()
     }
 }

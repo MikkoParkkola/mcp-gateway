@@ -14,6 +14,7 @@ use super::{
     grant, identity, slots,
 };
 use crate::gateway::meta_mcp::MetaMcp;
+use crate::gateway::meta_mcp::refund_witness::RefundWitness;
 use crate::gateway::meta_mcp::signing::{NONCE_META, SigningInvocationContext, SigningScope};
 use crate::security::message_signing::MessageSigner;
 
@@ -63,7 +64,9 @@ fn budget(meta: MetaMcp) -> MetaMcp {
 
 /// K-spend-refresh: alice's work grant is expired, so resolving the account
 /// credential refreshes it; the spend budget then refuses the call. Red on
-/// base: the refusal refunds the nonce though the refresh took effect.
+/// base: the refusal refunds the nonce though the refresh took effect. The
+/// context holds the witness as admission leaves it, so the row is red under
+/// mutant mF-account, not only at the stub.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_spend_refusal_after_a_refresh_keeps_the_nonce() {
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, 0))]);
@@ -102,6 +105,9 @@ async fn a_spend_refusal_after_a_refresh_keeps_the_nonce() {
         !signing.awaits_admission(),
         "premise: the nonce was admitted"
     );
+    // What admission does on both adapters (`admit_meta_sync`): the context
+    // holds the witness, so only the refresh can cost the refund.
+    signing.keep_witness(RefundWitness::at_capture());
     caller.signing = Some(&signing);
     let response = Box::pin(meta.handle_tools_call(
         crate::protocol::RequestId::Number(7),

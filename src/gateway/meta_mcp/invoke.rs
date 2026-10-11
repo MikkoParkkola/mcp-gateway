@@ -38,7 +38,7 @@ use super::super::meta_mcp_helpers::{extract_required_str, parse_tool_arguments}
 #[cfg(test)]
 use super::super::recovery::ErrorCategory;
 use super::MetaMcp;
-use super::refund_witness::{self as rw, RefundWitness};
+use super::refund_witness as rw;
 mod side_effect_markers;
 mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
@@ -201,28 +201,28 @@ impl MetaMcp {
         // is no re-mint or drift.
         let backend = self.backends.get(server);
         let target = (server, backend.as_ref().map(|backend| backend.instance()));
-        // MIK-8353 3a: the refund witness, carried by value through every
-        // may-effect step below; a refusal hands back what survived.
-        let witness = caller
-            .signing
-            .and_then(super::signing::SigningInvocationContext::take_witness);
-        let propagation::ResolvedDispatch {
-            caller_credential,
-            account_credential,
-            binding: dispatch_binding,
-        } = self
+        // MIK-8353 3a: the refund witness, carried through every may-effect
+        // step below; any exit hands back what survived.
+        let mut witness = nonce_settle::Witnessed::take(caller);
+        let resolved = self
             .resolve_dispatch(
                 (server, tool),
                 backend.as_deref(),
                 caller_proof,
                 verified_identity,
             )
-            .await?;
+            .await;
+        if resolved.is_err() {
+            // A failed resolution may have minted or refreshed before it failed.
+            witness.spend();
+        }
+        let propagation::ResolvedDispatch {
+            caller_credential,
+            account_credential,
+            binding: dispatch_binding,
+        } = resolved?;
         let minted = caller_credential.cache_binding.is_some();
-        let witness = RefundWitness::carry(
-            witness,
-            rw::dispatch_effect(minted, account_credential.is_some()),
-        );
+        witness.carry(rw::dispatch_effect(minted, account_credential.is_some()));
         // Who the response cache keys on, in one place and one namespace per
         // source (`support::caller_cache_principal`). The binding when identity
         // propagation is minting per-user credentials, then the verified OIDC
@@ -298,11 +298,11 @@ impl MetaMcp {
             .protocol_revision
             .and_then(crate::protocol::meta::served_revision);
 
-        // Cached before the check, or the check fetches (or waits on a fetch).
-        let cached_before = backend
-            .as_ref()
-            .is_none_or(|b| b.has_cached_tools_for(dispatch_binding.as_deref()));
-        if let Some(refusal) = self
+        // Whether the check below fills a list from the backend: counted at
+        // the fill, so a slot that expires mid-check still counts.
+        let fills = || backend.as_ref().map_or(0, |b| b.list_fills());
+        let fills_before = fills();
+        let checked = self
             .answer_undeclared_key(
                 caller,
                 session_id,
@@ -314,11 +314,13 @@ impl MetaMcp {
                 verified_identity,
                 &mut idem_reservation,
             )
-            .await?
-        {
+            .await;
+        // Carried before either exit below, so neither hands back a witness
+        // the check's fill spent.
+        witness.carry(rw::schema_effect(fills() != fills_before));
+        if let Some(refusal) = checked? {
             return Ok(refusal);
         }
-        let witness = RefundWitness::carry(witness, rw::schema_effect(cached_before));
 
         // Counted only for a call the cache would otherwise have served, so an
         // `unresolved_principal` count always means a real bypass.
@@ -371,7 +373,6 @@ impl MetaMcp {
             Err(error) => {
                 // The refusal records nothing outside the gateway; whatever
                 // witness survived the steps above decides the refund.
-                nonce_settle::hand_back(caller, witness);
                 nonce_settle::ask_refund(caller);
                 return Err(error);
             }
@@ -405,15 +406,13 @@ impl MetaMcp {
                     // would answer an honest retry with a side effect nothing
                     // performed), and the signing nonce is asked back. A
                     // refused redeem consumed nothing, so the witness stands.
-                    nonce_settle::hand_back(caller, witness);
                     nonce_settle::give_back_unsent(caller, &mut idem_reservation);
                     return Err(error);
                 }
             };
-        let witness = RefundWitness::carry(
-            witness,
-            rw::retry_effect(outbound_retry.request_state.is_some()),
-        );
+        // Redeemed: a continuation the caller presented was consumed, whatever
+        // state the backend issued with it.
+        witness.carry(rw::retry_effect(caller.retry.request_state.is_some()));
 
         let egress = relay::Egress {
             arguments: &arguments,
@@ -439,15 +438,12 @@ impl MetaMcp {
         ) {
             Ok(permit) => permit,
             Err(error) => {
-                nonce_settle::hand_back(caller, witness);
                 nonce_settle::give_back_unsent(caller, &mut idem_reservation);
                 return Err(error);
             }
         };
         // Dispatch: the witness goes with the send (the nonce stays spent).
-        if let Some(witness) = witness {
-            witness.spend();
-        }
+        witness.spend();
         nonce_settle::mark_dispatched(caller);
         // Boxed: the dispatch future is the largest thing this frame ever
         // holds, and inlining it puts `invoke_tool_traced` over
