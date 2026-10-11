@@ -689,13 +689,20 @@ impl FirewallVerdict {
     /// argument and the pattern it matched.
     pub(crate) fn refusal_words_content(&self) -> bool {
         self.findings.first().is_some_and(|finding| {
-            !matches!(
-                finding.scan_type,
+            // Exhaustive on purpose: a new scan type must choose a side here.
+            match finding.scan_type {
                 ScanType::BudgetExceeded
-                    | ScanType::CrossTenantReach
-                    | ScanType::SequenceAnomaly
-                    | ScanType::CollusionRelay
-            )
+                | ScanType::CrossTenantReach
+                | ScanType::SequenceAnomaly
+                | ScanType::CollusionRelay => false,
+                ScanType::Credentials
+                | ScanType::Pii
+                | ScanType::PromptInjection
+                | ScanType::ShellInjection
+                | ScanType::PathTraversal
+                | ScanType::SqlInjection
+                | ScanType::MemoryPoisoning => true,
+            }
         })
     }
 
@@ -796,8 +803,11 @@ mod verification;
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[path = "refusal_words_tests.rs"]
+mod refusal_words_tests;
+#[cfg(test)]
 #[path = "tenant_audit_tests.rs"]
 mod tenant_audit_tests;
-#[cfg(test)]
+
 #[path = "firewall_tests.rs"]
 mod tests;

@@ -536,8 +536,11 @@ async fn http_task_run_playbook_is_refused_at_creation() {
 /// stateful controls word a refusal with counts and scores only.
 fn assert_names_nothing_operator_defined(answer: &serde_json::Value) {
     let text = message(answer);
+    let words_name_a_target = text
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|word| matches!(word, "alpha" | "read" | "write"));
     assert!(
-        !text.contains("alpha") && !text.contains("read"),
+        !words_name_a_target,
         "a step refusal names its target: {answer}"
     );
 }

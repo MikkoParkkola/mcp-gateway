@@ -547,11 +547,14 @@ impl MetaMcpInvoker<'_, '_> {
 /// The one answer a refused playbook step gets (A3): a step's server and tool
 /// are operator-defined, so the reason never names them.
 pub(crate) const STEP_NOT_PERMITTED: &str = "step not permitted for this caller";
+/// Its JSON-RPC code and HTTP status.
+pub(crate) const STEP_NOT_PERMITTED_CODE: i32 = -32003;
+pub(crate) const STEP_NOT_PERMITTED_STATUS: u16 = 403;
 
 pub(crate) fn step_not_permitted() -> crate::Error {
     crate::Error::Forbidden {
-        code: -32003,
-        status: 403,
+        code: STEP_NOT_PERMITTED_CODE,
+        status: STEP_NOT_PERMITTED_STATUS,
         message: STEP_NOT_PERMITTED.to_string(),
     }
 }

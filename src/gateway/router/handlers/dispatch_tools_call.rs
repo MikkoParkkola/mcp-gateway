@@ -18,7 +18,8 @@ use crate::gateway::meta_mcp::admission::SyncLease;
 use crate::gateway::meta_mcp::invoke::RouteRefusal;
 use crate::gateway::meta_mcp::signing::SigningInvocationContext;
 use crate::gateway::meta_mcp::{
-    InvokeScope, MetaMcpCallerContext, STEP_NOT_PERMITTED, error_response_preserving_status,
+    InvokeScope, MetaMcpCallerContext, STEP_NOT_PERMITTED, STEP_NOT_PERMITTED_CODE,
+    STEP_NOT_PERMITTED_STATUS, error_response_preserving_status,
 };
 use crate::gateway::router::AppState;
 use crate::gateway::router::authorization::{
@@ -190,9 +191,9 @@ pub(super) async fn tools_call(
                     state,
                     target.as_target(),
                     id,
-                    -32003,
+                    STEP_NOT_PERMITTED_CODE,
                     STEP_NOT_PERMITTED.to_string(),
-                    StatusCode::FORBIDDEN,
+                    step_status(),
                 )
                 .await);
         }
@@ -267,9 +268,9 @@ pub(super) async fn tools_call(
                             state,
                             target,
                             id,
-                            -32003,
+                            STEP_NOT_PERMITTED_CODE,
                             STEP_NOT_PERMITTED.to_string(),
-                            StatusCode::FORBIDDEN,
+                            step_status(),
                         )
                         .await);
                 }
@@ -573,4 +574,9 @@ pub(super) async fn tools_call(
         .await
     };
     Ok(response)
+}
+
+/// The HTTP status of the neutral step refusal.
+fn step_status() -> StatusCode {
+    StatusCode::from_u16(STEP_NOT_PERMITTED_STATUS).unwrap_or(StatusCode::FORBIDDEN)
 }
