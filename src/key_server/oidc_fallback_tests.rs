@@ -32,6 +32,8 @@ const KID: &str = "k1";
 #[derive(Clone)]
 enum Discovery {
     Status(u16, String),
+    /// Never answers: the request times out at the client.
+    Stall,
 }
 
 struct State {
@@ -41,6 +43,10 @@ struct State {
     hits_discovery: AtomicUsize,
     hits_disc_jwks: AtomicUsize,
     hits_fb_jwks: AtomicUsize,
+    /// When set, every discovery request waits here until the barrier's count
+    /// of requests has arrived, so concurrent first lookups all see the cold
+    /// cache before any of them records a fallback (D10b).
+    gate: Mutex<Option<Arc<tokio::sync::Barrier>>>,
 }
 
 struct Fixture {
@@ -80,6 +86,7 @@ async fn start() -> Fixture {
         hits_discovery: AtomicUsize::new(0),
         hits_disc_jwks: AtomicUsize::new(0),
         hits_fb_jwks: AtomicUsize::new(0),
+        gate: Mutex::new(None),
     });
     let (s1, s2, s3) = (Arc::clone(&state), Arc::clone(&state), Arc::clone(&state));
     let app = Router::new()
@@ -89,8 +96,15 @@ async fn start() -> Fixture {
                 let s = Arc::clone(&s1);
                 async move {
                     s.hits_discovery.fetch_add(1, Ordering::SeqCst);
-                    let Discovery::Status(code, body) = s.discovery.lock().clone();
-                    answer(code, body)
+                    let gate = s.gate.lock().clone();
+                    if let Some(gate) = gate {
+                        gate.wait().await;
+                    }
+                    let discovery = s.discovery.lock().clone();
+                    match discovery {
+                        Discovery::Status(code, body) => answer(code, body),
+                        Discovery::Stall => std::future::pending().await,
+                    }
                 }
             }),
         )
@@ -351,9 +365,13 @@ fn concurrent_first_lookups_log_the_fallback_once() {
             let fx = start().await;
             set_discovery(&fx, 404, "{}");
             let v = verifier(&fx, "");
+            // All 8 discovery requests are held until the 8th arrives, so each
+            // lookup has passed the cold-cache check before any records.
+            *fx.state.gate.lock() = Some(Arc::new(tokio::sync::Barrier::new(8)));
             let token = mint(&fx, &fx.k_fb);
             let all = futures::future::join_all((0..8).map(|_| verify(&v, &token))).await;
             assert!(all.iter().all(Result::is_ok), "{all:?}");
+            assert_eq!(hits(&fx).0, 8, "every lookup reached discovery cold");
         });
     });
     assert_eq!(count(&logs, "WARN", "OIDC discovery for"), 1, "{logs:?}");
@@ -374,4 +392,53 @@ async fn a_fallback_stands_at_most_five_minutes() {
             Some(Duration::from_secs(expected))
         );
     }
+}
+
+/// D8b (guard): `auto_discover: false` goes straight to the issuer's JWKS,
+/// never asking discovery.
+#[tokio::test]
+async fn auto_discover_off_goes_straight_to_the_issuer_jwks() {
+    let fx = start().await;
+    let v = verifier(&fx, "    auto_discover: false\n");
+    verify(&v, &mint(&fx, &fx.k_fb))
+        .await
+        .expect("the issuer jwks key validates");
+    assert_eq!(hits(&fx).0, 0, "discovery was asked");
+}
+
+/// D8c (guard): an explicit `jwks_uri` overrides discovery and fallback.
+#[tokio::test]
+async fn an_explicit_jwks_uri_overrides_both() {
+    let fx = start().await;
+    set_discovery(&fx, 404, "{}");
+    let extra = format!("    jwks_uri: \"{}/disc/jwks\"\n", fx.issuer);
+    let v = verifier(&fx, &extra);
+    verify(&v, &mint(&fx, &fx.k_disc))
+        .await
+        .expect("the named key validates");
+    assert_eq!((hits(&fx).0, hits(&fx).2), (0, 0));
+}
+
+/// D11: a derived discovery that times out falls back. The handler never
+/// answers; the client's own timeout ends the request, so a slow host only
+/// delays the row and cannot change its outcome.
+#[tokio::test]
+async fn a_discovery_timeout_falls_back() {
+    let fx = start().await;
+    *fx.state.discovery.lock() = Discovery::Stall;
+    let yaml = format!(
+        "enabled: true\nadmin_token: \"surf2-admin\"\noidc:\n  - issuer: \"{}\"\n    \
+         audiences: [\"{AUD}\"]\n",
+        fx.issuer
+    );
+    let cfg: KeyServerConfig = serde_yaml::from_str(&yaml).expect("key server yaml");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(300))
+        .build()
+        .expect("client");
+    let v = OidcVerifier::with_http_client(cfg.oidc, client);
+    verify(&v, &mint(&fx, &fx.k_fb))
+        .await
+        .expect("the fallback key validates");
+    assert_eq!(hits(&fx).2, 1, "the fallback was not fetched");
 }

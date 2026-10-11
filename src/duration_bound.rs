@@ -48,9 +48,11 @@ pub(crate) fn opt_secs<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<u64>, D::Error> {
     match Option::<u64>::deserialize(deserializer)? {
-        Some(secs) if secs > MAX_DURATION.as_secs() => Err(serde::de::Error::custom(too_long(
-            &format!("{secs} seconds"),
-        ))),
+        // Never the value: MIK-8375's rule for config errors, which changes
+        // `secs` and `millis` the same way.
+        Some(secs) if secs > MAX_DURATION.as_secs() => {
+            Err(serde::de::Error::custom(too_long("this duration")))
+        }
         other => Ok(other),
     }
 }

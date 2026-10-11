@@ -45,28 +45,17 @@ pub(crate) fn resolve(
         Some(named) => Some(named.to_path_buf()),
         None => Config::fallback_config_path(),
     };
-    if let Some(path) = picked.as_deref()
-        && let Err(error) = std::fs::File::open(path)
-    {
-        return Err(format!(
-            "Cannot read config file {}: {error}",
-            path.display()
-        ));
+    if let Ok(cfg) = Config::load(picked.as_deref()) {
+        return Ok(CapabilityDirs::Configured(cfg.capabilities.directories));
     }
-    match Config::load(picked.as_deref()) {
-        Ok(cfg) => Ok(CapabilityDirs::Configured(
-            cfg.capabilities.directories.clone(),
-        )),
-        Err(_) => {
-            // No file at all loads as the defaults, so an error names one.
-            let path = picked.unwrap_or_else(|| PathBuf::from("gateway.yaml"));
-            Err(format!(
-                "could not load {}; run `{}` to see why",
-                path.display(),
-                super::check_config_command(&path)
-            ))
-        }
-    }
+    // The load error itself is never printed: its text can quote a value.
+    // No file at all loads as the defaults, so an error names one.
+    let path = picked.unwrap_or_else(|| PathBuf::from("gateway.yaml"));
+    Err(format!(
+        "could not load {}; run `{}` to see why",
+        path.display(),
+        super::check_config_command(&path)
+    ))
 }
 
 /// Load the capabilities `dirs` names. An override directory that does not

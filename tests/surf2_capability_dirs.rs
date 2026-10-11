@@ -417,3 +417,66 @@ fn a_variable_entry_expands_as_the_gateway_does() {
     let out = run(root.path(), &env, &with_config(&cfg, &["tool", "list"]));
     assert!(both(&out).contains("var_cap"), "{}", both(&out));
 }
+
+/// E4b: every command stops on a config that will not load, naming `doctor`
+/// and never the bad value; completions included.
+#[test]
+fn every_command_stops_on_a_broken_config() {
+    let root = tempfile::tempdir().expect("root");
+    let cfg = root.path().join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        &cfg,
+        "server:\n  port: surf2-cap-sentinel\n",
+    )
+    .expect("config");
+    let out_dir = root.path().join("skills_out");
+    let out_dir = out_dir.to_str().expect("utf-8");
+    for cmd in [
+        vec!["tool", "inspect", "alpha"],
+        vec!["tool", "invoke", "alpha"],
+        vec!["tool", "completions", "bash"],
+        vec!["skills", "generate", "--out-dir", out_dir],
+    ] {
+        let out = run(root.path(), &[], &with_config(&cfg, &cmd));
+        let shown = both(&out);
+        assert_eq!(out.status.code(), Some(1), "{cmd:?}: {shown}");
+        assert!(shown.contains("doctor"), "{cmd:?}: {shown}");
+        assert!(!shown.contains("surf2-cap-sentinel"), "{cmd:?}: {shown}");
+    }
+}
+
+/// gpt impl: with no `--config`, the message names the config the loader
+/// picked (here `./gateway.yaml`, found by the search).
+#[test]
+fn the_message_names_the_picked_config() {
+    let root = tempfile::tempdir().expect("root");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        root.path().join("gateway.yaml"),
+        "server:\n  port: surf2-cap-sentinel\n",
+    )
+    .expect("config");
+    let out = run(root.path(), &[], &["tool", "list"]);
+    let shown = both(&out);
+    assert_eq!(out.status.code(), Some(1), "{shown}");
+    assert!(shown.contains("could not load gateway.yaml"), "{shown}");
+}
+
+/// E9b: a config file and an env overlay both name directories; the overlay
+/// wins, as `Config::load` orders them for the gateway.
+#[test]
+fn an_env_overlay_beats_the_config_file() {
+    let root = tempfile::tempdir().expect("root");
+    let (from_file, from_env) = (root.path().join("file_caps"), root.path().join("env_caps"));
+    capability(&from_file, "file_cap", "From the file", "yaml");
+    capability(&from_env, "env_cap", "From the env", "yaml");
+    let cfg = root.path().join("gateway.yaml");
+    config(&cfg, &[from_file.to_str().expect("utf-8")], "");
+    let value = format!("[\"{}\"]", from_env.display());
+    let env = [("MCP_GATEWAY_CAPABILITIES__DIRECTORIES", value.as_str())];
+    let out = run(root.path(), &env, &with_config(&cfg, &["tool", "list"]));
+    let shown = both(&out);
+    assert!(
+        shown.contains("env_cap") && !shown.contains("file_cap"),
+        "{shown}"
+    );
+}
