@@ -393,20 +393,26 @@ async fn l8_a_call_cancelled_after_dispatch_settles() {
     assert_eq!(count.load(Ordering::SeqCst), 1, "l8: the backend ran twice");
 }
 
-/// A signed fixture whose idempotency cache the row holds, so it can age the
-/// cache (a forced 7a miss) while the execution store keeps its entries.
-async fn signed_with_cache() -> (Fx, Arc<crate::idempotency::IdempotencyCache>) {
+/// A cache the row holds, so it can age it (a forced 7a miss) while the
+/// execution store keeps its entries; and the arming that installs it.
+fn held_cache() -> (
+    Arc<crate::idempotency::IdempotencyCache>,
+    impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
+) {
     let cache = Arc::new(crate::idempotency::IdempotencyCache::new());
     let installed = Arc::clone(&cache);
-    let fx = super::direct_guards_fixture::fixture_hardened_signed_built(
-        Answer::Ok,
-        true,
-        move |mut meta| {
-            meta.enable_idempotency(installed, std::time::Duration::from_secs(300));
-            meta
-        },
-    )
-    .await;
+    let arm = move |mut meta: crate::gateway::meta_mcp::MetaMcp| {
+        meta.enable_idempotency(installed, std::time::Duration::from_secs(300));
+        meta
+    };
+    (cache, arm)
+}
+
+/// A signed fixture whose idempotency cache the row holds.
+async fn signed_with_cache() -> (Fx, Arc<crate::idempotency::IdempotencyCache>) {
+    let (cache, arm) = held_cache();
+    let fx =
+        super::direct_guards_fixture::fixture_hardened_signed_built(Answer::Ok, true, arm).await;
     (fx, cache)
 }
 
@@ -542,4 +548,101 @@ async fn l6_a_forced_7a_miss_with_a_7b_hit_replays_through_direct_delivery() {
     assert_eq!(status, 200, "l6 again: {again}");
     assert!(!message(&again).contains(DUPLICATE), "l6 again: {again}");
     assert_eq!(calls(&fx), 1, "l6 again: dispatched");
+}
+
+/// A backend whose `read` declares `_claim` and `_full` as its own
+/// arguments, answering every call at once.
+struct Declares {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Declares {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        let body = if method == "tools/list" {
+            json!({"tools": [{"name": "read", "inputSchema": {"type": "object", "properties": {
+                "cmd": {"type": "string"}, "_claim": {"type": "string"}, "_full": {"type": "string"}
+            }}}]})
+        } else {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
+        };
+        Ok(crate::protocol::JsonRpcResponse::success(
+            crate::protocol::RequestId::Number(1),
+            body,
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// L10: on the direct route `_claim` and `_full` are the backend's own
+/// arguments, never gateway controls. Two direct calls under K that differ
+/// only there are two requests: with 7a aged out, the second is refused by
+/// the store, never replayed the first's answer. RED before the direct
+/// representation bound the arguments as sent.
+#[tokio::test]
+async fn l10_backend_arguments_named_like_gateway_controls_stay_distinct() {
+    let (cache, arm) = held_cache();
+    let count = Arc::new(AtomicUsize::new(0));
+    let backend = Declares {
+        calls: Arc::clone(&count),
+    };
+    let fx = fixture_built_on(Arc::new(backend), arm).await;
+    for (key, field) in [("l10-claim", "_claim"), ("l10-full", "_full")] {
+        let before = count.load(Ordering::SeqCst);
+        let first = json!({"cmd": "x", field: "a"});
+        let (_, body) = post_direct(&fx, "alpha", "k-std", "read", first, Some(key), None).await;
+        assert!(body.get("error").is_none(), "premise {field}: {body}");
+        let ran = count.load(Ordering::SeqCst);
+        assert_eq!(
+            ran,
+            before + 1,
+            "premise {field}: the backend did not run: {body}"
+        );
+        cache.advance_for_test(PAST_THE_CACHE);
+        let second = json!({"cmd": "x", field: "b"});
+        let (_, body) = post_direct(&fx, "alpha", "k-std", "read", second, Some(key), None).await;
+        assert_eq!(
+            message(&body),
+            MISMATCH,
+            "l10 {field}: replayed another request: {body}"
+        );
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            ran,
+            "l10 {field}: the backend ran"
+        );
+    }
+}
+
+/// L11: a dispatched call the backend answered with an error settles the
+/// lease with that answer, as 7a stores it. With 7a aged out, the retry is
+/// replayed the same error, not "Secured execution result is unavailable",
+/// and the backend runs once. RED before the failure path settled the lease.
+#[tokio::test]
+async fn l11_a_dispatched_failure_settles_the_lease_with_its_answer() {
+    let (cache, arm) = held_cache();
+    // A failed dispatch: the backend's refusal as an error, past dispatch.
+    let fx = fixture_built(Answer::FailedWith("l11 backend refusal"), arm).await;
+    let first = keyed(&fx, Via::Direct, "l11").await;
+    assert!(first.get("error").is_some(), "premise: {first}");
+    cache.advance_for_test(PAST_THE_CACHE);
+    let retry = keyed(&fx, Via::Direct, "l11").await;
+    assert_eq!(retry.get("error"), first.get("error"), "l11: {retry}");
+    assert_eq!(calls(&fx), 1, "l11: the backend ran again");
 }
