@@ -555,3 +555,82 @@ async fn f5b_stdio_firewall_refusal_resolves_nothing() {
         "F5(b) stdio: the backend was asked: {answer}"
     );
 }
+
+/// What the managed backend answers the first call with, so a replay of it
+/// is recognisable.
+const STORED: &str = "stored-output-r1-stdio";
+
+/// A signed, keyed modern `gateway_invoke` of [`TOOL`] carrying `nonce`.
+fn signed_keyed_invoke(nonce: &str) -> Value {
+    json!({
+        "name": "gateway_invoke",
+        "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"folder": "inbox"}},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {},
+            crate::gateway::meta_mcp::signing::NONCE_META: nonce,
+            crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "r1-stdio-signed",
+        }
+    })
+}
+
+/// R1-stdio-signed, end to end (MIK-8356 delta review): on stdio, signing
+/// prepares a `gateway_invoke` before the route stage records the caller
+/// verdict. The sole operator's signed keyed call dispatches while its own
+/// slot offers [`TOOL`]; its slot then withholds it (invalid schema). The
+/// same call with the same key and a fresh nonce answers -32601 and is never
+/// served the stored output. The real stdio path, no hand-built signing
+/// context: the layers that skip the policy for a prepared target refuse it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn r1_stdio_signed_keyed_replay_of_a_withheld_name_answers_absent() {
+    let stdio = operator_stdio_armed(|meta| {
+        meta.enable_message_signing(
+            crate::security::message_signing::MessageSigner::new(
+                b"r1-stdio-signing-secret-at-least-32-bytes!!".to_vec(),
+                None,
+                "r1-stdio".to_owned(),
+            ),
+            std::time::Duration::from_secs(300),
+            false,
+        );
+    });
+    let backend = stdio.gateway.backends().get(BACKEND).expect("the backend");
+    let binding = DirectAccountGateway::operator_binding();
+    backend.store_per_user_tools_for_test(
+        &binding,
+        vec![tool(TOOL, &valid()), tool(SIBLING, &valid())],
+    );
+    stdio.gateway.answer_next(json!({
+        "content": [{"type": "text", "text": STORED}], "isError": false
+    }));
+    let first = stdio
+        .rpc(1, "tools/call", signed_keyed_invoke("r1-stdio-nonce-0001"))
+        .await;
+    assert!(
+        first.to_string().contains(STORED),
+        "premise: the signed call dispatches and answers: {first}"
+    );
+    let sent = stdio.gateway.tool_calls().len();
+    let withheld = json!({"type": "object", "properties": 7});
+    backend.store_per_user_tools_for_test(
+        &binding,
+        vec![tool(TOOL, &withheld), tool(SIBLING, &valid())],
+    );
+    let replay = stdio
+        .rpc(2, "tools/call", signed_keyed_invoke("r1-stdio-nonce-0002"))
+        .await;
+    assert!(
+        !replay.to_string().contains(STORED),
+        "R1-stdio-signed: a withheld name's signed retry was served the stored output: {replay}"
+    );
+    assert_eq!(
+        replay.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "R1-stdio-signed: {replay}"
+    );
+    assert_eq!(
+        stdio.gateway.tool_calls().len(),
+        sent,
+        "R1-stdio-signed: the retry reached the backend: {replay}"
+    );
+}
