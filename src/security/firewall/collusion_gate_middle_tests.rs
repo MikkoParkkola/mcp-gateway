@@ -17,6 +17,7 @@ use std::fmt::Write;
 use serde_json::json;
 
 use super::{CollusionAction, CollusionConfig, RelayCaller};
+use crate::security::firewall::collusion::CollusionDetector;
 use crate::security::firewall::{Firewall, FirewallConfig, ScanType};
 
 const SOURCE: &str = "alpha:read";
@@ -193,16 +194,24 @@ fn a_middle_sample_never_truncates_leaf_evidence() {
     );
 }
 
-/// `MIK-8066.CAP.2` M7 (C6), a guard: a plan step kept to its answer
-/// records the fingerprints the answer delivered as retained ones (at most
-/// `RECORD_CAP`, MIK-7992), so its middle was evidence before CAP.2 and
-/// stays so, with its holder excused. (The plan path CAP.2 changes is a step
-/// recorded without being kept: `a_deferred_digest_is_capped_where_it_is_recorded`.)
+/// `MIK-8066.CAP.2` M7 (test plan A1), a guard on plan-path recording: a
+/// plan step kept to its answer records the fingerprints the answer
+/// delivered as retained ones (`DeliveryDigest::capped`, MIK-7992), and for
+/// a short relay the middle sample cannot reliably catch, they are its only
+/// witness. The 64 KiB step fills the per-delivery bound with its head,
+/// tail and retained fingerprints, so no middle sample is recorded. The row
+/// picks, under this process's key, a 60-char window of the early middle
+/// that (1) has at least 2 fingerprints, all tracked after recording, and
+/// (2) has none the sample keeps at any rate of 2 or more. Bob relaying it
+/// is refused only through plan-path recording: drop the retained
+/// fingerprints (mutant a8) and the sample, at m = 8, keeps none of them.
+/// A window qualifies with about 8% probability and thousands are tried, so
+/// the pick always exists; it is asserted.
 #[test]
-fn the_middle_of_a_plan_step_cut_after_retention_is_evidence() {
+fn a_kept_plan_steps_short_relay_is_caught_by_its_retained_fingerprints() {
     let fw = firewall();
-    let text = filler(17, 12 * 1024);
-    let run = middle_run(&fw, &text, 5_000);
+    let detector = fw.collusion_detector().expect("relay detection on");
+    let text = filler(17, 64 * 1024);
     let step = json!({"content": [{"type": "text", "text": text}]});
     let digest = fw
         .receipt_digest("alpha", "read", &step, Some(&std::cell::Cell::new(0)))
@@ -211,7 +220,6 @@ fn the_middle_of_a_plan_step_cut_after_retention_is_evidence() {
     let delivered = fw
         .delivered_for_plan(&answer, None)
         .expect("under the bound");
-    assert_eq!(fw.relay_text_cuts(), 0, "premise: staged whole");
     let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered, None));
     assert_eq!(
         fw.relay_text_cuts(),
@@ -220,8 +228,25 @@ fn the_middle_of_a_plan_step_cut_after_retention_is_evidence() {
     );
     fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &kept);
     assert!(
-        relays(&fw, "bob", &run),
-        "the step's cut middle was never receipted"
+        detector.source_truncated() > 0,
+        "premise: the bound is full, so no middle sample was recorded"
     );
-    assert!(!relays(&fw, "alice", &run), "the holder was refused");
+    let half = super::super::RECORD_CAP / 2;
+    let window = (half + 64..text.len() / 2)
+        .step_by(7)
+        .map(|at| &text[at..at + 60])
+        .find(|w| {
+            let fps = detector.fingerprints(w);
+            fps.len() >= 2
+                && fps.iter().all(|&fp| detector.tracks(fp))
+                && !fps
+                    .iter()
+                    .any(|&fp| CollusionDetector::thinning_keeps(fp, 2))
+        })
+        .expect("a window only plan-path recording witnesses");
+    assert!(
+        relays(&fw, "bob", window),
+        "a kept step's retained fingerprints were lost"
+    );
+    assert!(!relays(&fw, "alice", window), "the holder was refused");
 }

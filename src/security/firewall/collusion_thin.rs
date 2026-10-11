@@ -89,6 +89,16 @@ impl CollusionDetector {
         self.state.lock().sketches.positions_of(pair).len()
     }
 
+    /// Whether `fp` is tracked as evidence now (tests only).
+    pub(crate) fn tracks(&self, fp: u64) -> bool {
+        self.state.lock().entries.contains_key(&fp)
+    }
+
+    /// Whether the middle sample keeps `fp` at one in `m` (tests only).
+    pub(crate) fn thinning_keeps(fp: u64, m: u64) -> bool {
+        keep_thinned(fp, m)
+    }
+
     /// Deliveries recorded without a sketch for lack of room (tests only).
     pub(crate) fn sketches_refused(&self) -> u64 {
         self.state.lock().sketches.refused
