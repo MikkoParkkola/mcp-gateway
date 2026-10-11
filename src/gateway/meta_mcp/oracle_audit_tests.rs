@@ -119,3 +119,104 @@ async fn a3_a_dispatching_call_during_an_outage_still_fails_closed() {
         "A3: a dispatching call's failed decision write did not fail closed: {answered}"
     );
 }
+
+/// A second personal capability, owned by bob: alice holds no grant for it.
+const OTHER: &str = "calendar_peek_day";
+
+/// A gateway logging to `dir` under `FailClosed` where alice is granted
+/// [`PERSONAL`]; [`OTHER`] is defined (withheld from alice, `defines`) or not.
+fn mixed(
+    endpoint: &Endpoint,
+    dir: &tempfile::TempDir,
+    defines: bool,
+) -> (MetaMcp, Arc<crate::security::TransparencyLogger>) {
+    let log = logger(dir, AuditFailurePolicy::FailClosed);
+    let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()))
+        .with_identity_grants(grants(vec![grant("g1", ALICE, ALICE)]));
+    meta.enable_transparency_log(Arc::clone(&log));
+    let caps = capability_backend(endpoint.port, ALICE);
+    if defines {
+        let other = crate::capability::parse_capability(&format!(
+            "name: {OTHER}\n\
+             description: Peek one calendar day\n\
+             metadata:\n\
+             \x20 exposure: personal\n\
+             \x20 read_only: true\n\
+             \x20 identity_owner:\n\
+             \x20   authority: api_key\n\
+             \x20   subject: bob\n\
+             providers:\n\
+             \x20 primary:\n\
+             \x20   service: rest\n\
+             \x20   config:\n\
+             \x20     base_url: http://localhost:{}\n\
+             \x20     path: /read\n\
+             \x20     method: GET\n",
+            endpoint.port
+        ))
+        .expect("the second capability parses");
+        caps.register_capability(other)
+            .expect("the second capability registers");
+    }
+    meta.set_capabilities(caps);
+    (meta, log)
+}
+
+/// alice's chain: the granted [`PERSONAL`], then [`OTHER`].
+async fn chain(meta: &MetaMcp) -> Value {
+    let who = api_key("alice");
+    let response = Box::pin(meta.handle_tools_call(
+        RequestId::Number(1),
+        "gateway_execute",
+        json!({"chain": [
+            {"tool": format!("{CAPS}:{PERSONAL}"), "arguments": {}},
+            {"tool": format!("{CAPS}:{OTHER}"), "arguments": {}}
+        ]}),
+        Some("o-audit-chain"),
+        context(&who),
+    ))
+    .await;
+    serde_json::to_value(&response).expect("a response serialises")
+}
+
+/// A3a (v3 item 1): in one request, the withheld step's own decision append
+/// fails and nothing else does. The chain answers as the chain whose second
+/// step is undefined, and the granted step's record is still written. RED on
+/// base: the failed append answers -32005.
+#[tokio::test]
+async fn a3a_a_withheld_steps_failed_record_is_isolated() {
+    use super::grant_audit::seams;
+    let endpoint = Endpoint::start(false).await;
+    let (absent_dir, dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let absent = chain(&mixed(&endpoint, &absent_dir, false).0).await;
+    let (withheld, _log) = mixed(&endpoint, &dir, true);
+    // The withheld step's note is written at once, before the request-end
+    // flush of the granted step's: the first grant-record append from now.
+    seams::fail_append_at_for_test(1);
+    let answered = chain(&withheld).await;
+    assert_eq!(answered, absent, "A3a: withheld {answered} vs undefined {absent}");
+    assert!(
+        decisions(&dir).iter().any(|d| d.to_string().contains(PERSONAL)),
+        "A3a: the granted step's record was not written: {:?}",
+        decisions(&dir)
+    );
+}
+
+/// A3b (v3 item 1): in the same request, the granted step's request-end
+/// append fails: that call answers -32005, as MIK-8340 row 7b pins (D3-a kept
+/// for what dispatched). GREEN on base; mutant MA2 (unrelated notes made
+/// best-effort) must fail it.
+#[tokio::test]
+async fn a3b_another_steps_failed_record_still_fails_closed() {
+    use super::grant_audit::seams;
+    let endpoint = Endpoint::start(false).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (withheld, _log) = mixed(&endpoint, &dir, true);
+    seams::fail_append_at_for_test(2);
+    let answered = chain(&withheld).await;
+    assert_eq!(
+        answered.pointer("/error/code"),
+        Some(&json!(-32005)),
+        "A3b: the granted step's failed record did not fail closed: {answered}"
+    );
+}

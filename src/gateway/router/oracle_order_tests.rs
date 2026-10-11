@@ -191,6 +191,31 @@ async fn o3_a_retained_result_is_not_replayed_for_an_invisible_name() {
     assert_cells("O3", &cells);
 }
 
+/// D1 (one judgement per request, MIK-8340 row 14's pattern): a missing name
+/// whose catalogue gains it after the route stage judged it stays absent and
+/// unsent. RED on base: the meta layer refills, finds it, and dispatches.
+#[tokio::test]
+async fn d1_a_refill_after_the_route_stage_keeps_a_missing_name_absent() {
+    let state = State {
+        gains: true,
+        ..State::WARM
+    };
+    let absent = twin(Side::Absent, state).await;
+    let gained = std::sync::Arc::clone(&absent.drifted);
+    let backend = absent.fx.state.backends.get(SERVER).expect("alpha");
+    crate::gateway::meta_mcp::visible::seams::after_route_stage(move || {
+        gained.store(true, Ordering::SeqCst);
+        backend.invalidate_tools_cache();
+    });
+    let answered = absent.call(Entry::Invoke, json!({})).await;
+    assert_eq!(answered.calls, 0, "D1: the refilled name was sent: {}", answered.body);
+    assert!(
+        answered.body.to_string().contains("does not list a tool named"),
+        "D1: the missing name did not answer absent: {}",
+        answered.body
+    );
+}
+
 /// B1: a withheld target let past the gate (test seam) is answered by the
 /// dispatch-time recheck with the absent answer, never its specific refusal,
 /// and is not sent. RED on base: the route stage's policy refusal names it.
@@ -200,7 +225,7 @@ async fn b1_the_dispatch_backstop_answers_a_withheld_target_absent() {
     for entry in [Entry::Invoke, Entry::Direct] {
         let withheld = twin(Side::Withheld, State::WARM).await;
         let absent = twin(Side::Absent, State::WARM).await;
-        crate::gateway::meta_mcp::withheld_gate::seams::skip_gate_for_test();
+        let _skip = crate::gateway::meta_mcp::withheld_gate::seams::skip_gate_for_test();
         let w = withheld.call(entry, json!({})).await;
         let a = absent.call(entry, json!({})).await;
         cells.extend(mismatch(&format!("B1 {entry:?}"), &w, &a));

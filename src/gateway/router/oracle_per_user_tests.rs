@@ -26,6 +26,7 @@ use crate::key_server::oidc::VerifiedIdentity;
 /// The router over one per-user backend, with what it was asked.
 struct Gateway {
     router: axum::Router,
+    backend: Arc<crate::backend::Backend>,
     caller: Arc<Asked>,
     shared: Arc<Asked>,
     mints: Arc<AtomicUsize>,
@@ -46,8 +47,20 @@ impl Gateway {
 /// alpha's slot `slot` in `warmth`, the active profile denying `denied`, the
 /// request firewall on when `firewalled`.
 async fn gateway(slot: CallerSlot, warmth: Warmth, denied: &str, firewalled: bool) -> Gateway {
+    gateway_shared(slot, &valid(), warmth, denied, firewalled).await
+}
+
+/// [`gateway`] with the shared slot's schema for [`TOOL`] set to `shared`.
+async fn gateway_shared(
+    slot: CallerSlot,
+    shared: &Value,
+    warmth: Warmth,
+    denied: &str,
+    firewalled: bool,
+) -> Gateway {
     let (backend, caller, shared) =
-        per_user_backend(slot, &valid(), warmth, InputSchemaEnforcement::Closed);
+        per_user_backend(slot, shared, warmth, InputSchemaEnforcement::Closed);
+    let kept = Arc::clone(&backend);
     let (mut state, store) =
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
@@ -93,6 +106,7 @@ async fn gateway(slot: CallerSlot, warmth: Warmth, denied: &str, firewalled: boo
     state_mut.transparency_log = Some(transparency_logger(&audit[1]));
     Gateway {
         router: create_router(state),
+        backend: kept,
         caller,
         shared,
         mints,
@@ -160,6 +174,11 @@ async fn p1_a_policy_withheld_name_answers_absent_with_no_fill_or_mint() {
         if w != a {
             cells.push(format!("P1 {entry:?}: withheld {w:?} vs missing {a:?}"));
         }
+        // Calibration (v2 item 8): the missing name's fill does mint, so the
+        // withheld side's zero is not a counter that never moves.
+        if absent.mints() == 0 {
+            cells.push(format!("P1 {entry:?}: premise: the missing name minted nothing"));
+        }
         let (mints, lists, sent) = (withheld.mints(), withheld.caller.lists(), withheld.dispatched());
         if (mints, lists, sent) != (0, 0, 0) {
             cells.push(format!(
@@ -211,4 +230,79 @@ async fn c2_a_firewall_refused_direct_call_resolves_no_credential() {
     );
     assert_eq!(gw.mints(), 0, "C2: a refused call resolved a credential: {answer:?}");
     assert_eq!(gw.dispatched(), 0, "C2: sent: {answer:?}");
+}
+
+/// alpha's `tools/list` on the direct route: fills alpha's own slot.
+async fn list_as_alpha(gw: &Gateway) {
+    let body = json!({"jsonrpc": "2.0", "id": 8, "method": "tools/list", "params": {}});
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri(format!("/mcp/{BACKEND}"))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .expect("request");
+    request.extensions_mut().insert(VerifiedIdentity {
+        subject: "alpha".to_string(),
+        email: "alpha@example.invalid".to_string(),
+        name: None,
+        groups: vec![],
+        issuer: "https://issuer.example.invalid".to_string(),
+    });
+    let response = gw.router.clone().oneshot(request).await.expect("response");
+    assert_eq!(response.status(), StatusCode::OK, "premise: alpha's listing answered");
+}
+
+/// P3: the per-user lifecycle. Cold slot, then listed (warm), then evicted:
+/// at each step the withheld name answers as the missing one, unsent, and its
+/// own call mints nothing.
+#[tokio::test]
+async fn p3_parity_holds_across_the_caller_slot_lifecycle() {
+    let withheld = gateway(CallerSlot::Valid, Warmth::Cold, TOOL, false).await;
+    let absent = gateway(CallerSlot::Lacks, Warmth::Cold, "other", false).await;
+    let mut cells = Vec::new();
+    for step in ["cold", "listed", "evicted"] {
+        match step {
+            "listed" => {
+                list_as_alpha(&withheld).await;
+                list_as_alpha(&absent).await;
+            }
+            "evicted" => {
+                withheld.backend.evict_identity_slots("alpha");
+                absent.backend.evict_identity_slots("alpha");
+            }
+            _ => {}
+        }
+        let minted = withheld.mints();
+        let w = call(&withheld, Entry::Invoke, json!({"q": "x"})).await;
+        let a = call(&absent, Entry::Invoke, json!({"q": "x"})).await;
+        if w != a {
+            cells.push(format!("P3 {step}: withheld {w:?} vs missing {a:?}"));
+        }
+        if withheld.mints() != minted || withheld.dispatched() != 0 {
+            cells.push(format!(
+                "P3 {step}: the withheld call minted {} and sent {}",
+                withheld.mints() - minted,
+                withheld.dispatched()
+            ));
+        }
+    }
+    assert!(cells.is_empty(), "P3:\n{}", cells.join("\n"));
+}
+
+/// P5: each caller's verdict comes from its own slot. alpha's slot offers
+/// [`TOOL`] while the shared slot withholds it (invalid schema): alpha's
+/// call dispatches once. GREEN on base (MIK-8356); mutant MP1 (the gate
+/// judges a per-user backend by its shared slot) must fail it.
+#[tokio::test]
+async fn p5_the_caller_slot_not_the_shared_one_decides() {
+    let gw = gateway_shared(
+        CallerSlot::Valid,
+        &crate::gateway::meta_mcp::slot_verdict_fixture::invalid(),
+        Warmth::Warm,
+        "other",
+        false,
+    )
+    .await;
+    let answer = call(&gw, Entry::Invoke, json!({"q": "x"})).await;
+    assert_eq!(gw.caller.calls(), 1, "P5: alpha's offered tool was not sent: {answer:?}");
 }

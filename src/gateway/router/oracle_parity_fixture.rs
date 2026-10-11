@@ -117,6 +117,8 @@ pub(super) struct State {
     /// O3: both twins first list [`TOOL`] valid; once `drifted` is set, each
     /// lists it as its side and reason say.
     pub(super) drift: bool,
+    /// D1: once `drifted` is set, both twins list [`TOOL`] valid.
+    pub(super) gains: bool,
 }
 
 impl State {
@@ -128,6 +130,7 @@ impl State {
         destructive: false,
         signed: false,
         drift: false,
+        gains: false,
     };
 }
 
@@ -138,6 +141,8 @@ struct Scripted {
     destructive: bool,
     /// `Some` before the drift: list [`TOOL`] valid regardless of side.
     drifted: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// `Some` for D1: list [`TOOL`] valid once the flag is set.
+    gained: Option<Arc<std::sync::atomic::AtomicBool>>,
     list: List,
     calls: Arc<AtomicUsize>,
     lists: Arc<AtomicUsize>,
@@ -159,8 +164,12 @@ impl crate::transport::Transport for Scripted {
                     .drifted
                     .as_ref()
                     .is_some_and(|drifted| !drifted.load(Ordering::SeqCst));
+                let gained = self
+                    .gained
+                    .as_ref()
+                    .is_some_and(|gained| gained.load(Ordering::SeqCst));
                 // The tool sits on the first page only.
-                if before_drift && cursor.is_none() {
+                if (before_drift || gained) && cursor.is_none() {
                     tools.push(listed_tool(Reason::Policy, self.destructive));
                 } else if self.holds && cursor.is_none() {
                     tools.push(listed_tool(self.reason, self.destructive));
@@ -239,6 +248,7 @@ pub(super) async fn twin_surfacing(side: Side, state: State, surface_tool: bool)
             reason: state.reason,
             destructive: state.destructive,
             drifted: state.drift.then(|| Arc::clone(&drifted)),
+            gained: state.gains.then(|| Arc::clone(&drifted)),
             list: state.list,
             calls: Arc::clone(&calls),
             lists: Arc::clone(&lists),
@@ -336,7 +346,7 @@ impl Twin {
             "premise: {:?} key denies {denied:?}",
             self.side
         );
-        if !(state.warm && state.list == List::Complete) || state.drift {
+        if !(state.warm && state.list == List::Complete) || state.drift || state.gains {
             return;
         }
         let backend = self.fx.state.backends.get(SERVER).expect("alpha");
