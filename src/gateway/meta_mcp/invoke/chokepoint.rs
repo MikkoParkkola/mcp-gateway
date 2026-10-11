@@ -78,17 +78,6 @@ pub(super) struct Outbound<'a> {
     pub(super) answers: Option<&'a Value>,
 }
 
-/// Why [`MetaMcp::authorize_route_target`] stopped a call. The two are
-/// answered differently, so they are told apart by type, never by code.
-#[derive(Debug)]
-pub(crate) enum RouteRefusal {
-    /// A surfaced name this caller may not invoke: answer it exactly as a
-    /// name that matches no tool (`-32601`), through the normal response path.
-    Withheld(Error),
-    /// The authorization refusal, answered as the route answers one.
-    Refused(Error),
-}
-
 impl MetaMcp {
     /// Pass or refuse one send. See the module documentation.
     pub(super) fn chokepoint(
@@ -119,32 +108,21 @@ impl MetaMcp {
     }
 
     /// The single route-stage authorize that `/mcp` and stdio both run, before
-    /// the request firewall, X14 and admission (route-check-parity P3).
-    ///
-    /// A surfaced tool called by its own name that this caller may not invoke
-    /// ends here as the name that matches no tool (`-32601`), so no later stage
-    /// can confirm it exists (MIK-8326). Every target is then authorized as the
-    /// dispatch chokepoint will re-check it, with the route's allow record.
+    /// the request firewall, X14 and admission (route-check-parity P3). Every
+    /// target is authorized as the dispatch chokepoint will re-check it, with
+    /// the route's allow record. A surfaced name withheld from this caller
+    /// never reaches here: it resolves to no target (MIK-8340), and the meta
+    /// direct route answers it as a name that matches no tool.
     ///
     /// # Errors
-    /// [`RouteRefusal::Withheld`] for the withheld name,
-    /// [`RouteRefusal::Refused`] for an authorization refusal.
+    /// The authorization refusal.
     pub(crate) fn authorize_route_target(
         &self,
         scope: InvokeScope<'_>,
-        session_id: Option<&str>,
-        tool_name: &str,
         (server, tool): (&str, &str),
         arguments: &Value,
-    ) -> std::result::Result<(), RouteRefusal> {
-        if self.surfaced_tool_server(tool_name) == Some(server)
-            && tool == tool_name
-            && let Some(absent) = self.withheld_surfaced_in(server, tool, scope, session_id)
-        {
-            return Err(RouteRefusal::Withheld(absent));
-        }
+    ) -> Result<()> {
         self.recheck_target(scope, (server, tool), arguments, Emit::Audit)
-            .map_err(RouteRefusal::Refused)
     }
 
     /// The route-stage request scan on this Meta-MCP's own firewall, for the

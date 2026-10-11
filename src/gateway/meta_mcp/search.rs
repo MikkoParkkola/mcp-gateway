@@ -148,9 +148,7 @@ impl MetaMcp {
                 }
                 let tool = capability.to_mcp_tool();
                 if !profile.tool_allowed(&tool.name)
-                    || self
-                        .may_invoke(&cap.name, &tool.name, scope, session_id)
-                        .is_err()
+                    || !self.shows_tool(&cap.name, &tool, scope, session_id)
                 {
                     continue;
                 }
@@ -202,8 +200,7 @@ impl MetaMcp {
                     .filter(|t| profile.tool_allowed(&t.name))
                     .filter(|t| {
                         let scope = caller.scope();
-                        self.may_invoke(&backend.name, &t.name, scope, session_id)
-                            .is_ok()
+                        self.shows_tool(&backend.name, t, scope, session_id)
                     })
                     .map(|tool| {
                         let mut t = tool.clone();
@@ -254,9 +251,7 @@ impl MetaMcp {
                 }
                 let tool = capability.to_mcp_tool();
                 if !profile.tool_allowed(&tool.name)
-                    || self
-                        .may_invoke(&cap.name, &tool.name, scope, session_id)
-                        .is_err()
+                    || !self.shows_tool(&cap.name, &tool, scope, session_id)
                 {
                     continue;
                 }
@@ -268,7 +263,7 @@ impl MetaMcp {
                         .chains_with
                         .iter()
                         .filter(|t| {
-                            self.may_invoke(&cap.name, t, scope, session_id).is_ok()
+                            self.shows_name(&cap.name, t, scope, session_id)
                                 && cap.is_listed_in(t, &mut seen)
                         })
                         .cloned()
@@ -311,8 +306,7 @@ impl MetaMcp {
                     .filter(|t| profile.tool_allowed(&t.name))
                     .filter(|t| {
                         let scope = caller.scope();
-                        self.may_invoke(&backend.name, &t.name, scope, session_id)
-                            .is_ok()
+                        self.shows_tool(&backend.name, t, scope, session_id)
                     })
                     .map(|tool| {
                         let mut t = tool.clone();
@@ -495,7 +489,7 @@ impl MetaMcp {
                 .get_tools_for_state(&current_state)
                 .into_iter()
                 .filter(|t| profile.tool_allowed(&t.name) && tool_matches_role(t, role_filter))
-                .filter(|t| self.may_invoke(server, &t.name, scope, session_id).is_ok())
+                .filter(|t| self.shows_tool(server, t, scope, session_id))
                 .collect();
             let mut out = json!({
                 "server": server,
@@ -530,7 +524,7 @@ impl MetaMcp {
             .clone()
             .into_iter()
             .filter(|t| profile.tool_allowed(&t.name) && tool_matches_role(t, role_filter))
-            .filter(|t| self.may_invoke(server, &t.name, scope, session_id).is_ok())
+            .filter(|t| self.shows_tool(server, t, scope, session_id))
             .collect();
 
         let mut out = json!({
@@ -572,9 +566,7 @@ impl MetaMcp {
             for tool in cap.get_tools_for_state(&current_state) {
                 if !profile.tool_allowed(&tool.name)
                     || !tool_matches_role(&tool, role_filter)
-                    || self
-                        .may_invoke(&cap.name, &tool.name, caller.scope(), session_id)
-                        .is_err()
+                    || !self.shows_tool(&cap.name, &tool, caller.scope(), session_id)
                 {
                     continue;
                 }
@@ -609,9 +601,7 @@ impl MetaMcp {
                 for tool in tools.iter() {
                     if !profile.tool_allowed(&tool.name)
                         || !tool_matches_role(tool, role_filter)
-                        || self
-                            .may_invoke(&backend.name, &tool.name, caller.scope(), session_id)
-                            .is_err()
+                        || !self.shows_tool(&backend.name, tool, caller.scope(), session_id)
                     {
                         continue;
                     }
