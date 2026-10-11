@@ -619,7 +619,12 @@ impl Firewall {
         }
         let (leaves, values) = delivery_parts(answer);
         if let Some(delivered) = Delivered::of_parts(leaves, values) {
-            return Some(delivered.with_answer(answer));
+            // D8: retention reads even a leaf reading through its sampled,
+            // charged view; no room means unread.
+            return Some(match view::build(detector, answer, None) {
+                Ok(view) => delivered.with_answer(answer).with_found_view(view),
+                Err(why) => Delivered::of_mode(Mode::Unread(why)),
+            });
         }
         Some(match view::build(detector, answer, None) {
             Ok(view) => Delivered::of_mode(Mode::View(view)).with_answer(answer),

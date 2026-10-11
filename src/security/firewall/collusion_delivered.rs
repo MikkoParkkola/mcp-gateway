@@ -31,8 +31,9 @@ pub(crate) struct Delivered<'v> {
 
 /// How a plan's answer was read.
 pub(crate) enum Mode {
-    /// Leaf by leaf, under the 1 MiB bound.
-    Leaves,
+    /// Leaf by leaf, under the 1 MiB bound, with the answer's sampled view
+    /// for retention's lookups (D8; `None` only for rows built from leaves).
+    Leaves(Option<super::view::AnswerView>),
     /// Over the bound: a bounded sampled view (D1).
     View(super::view::AnswerView),
     /// Not readable (D6): past a cap, or no `VIEW_BYTES` room.
@@ -63,7 +64,7 @@ impl<'v> Delivered<'v> {
             found: OnceCell::new(),
             answer: None,
             labels: Vec::new(),
-            mode: Mode::Leaves,
+            mode: Mode::Leaves(None),
         })
     }
 
@@ -107,6 +108,12 @@ impl<'v> Delivered<'v> {
         }
     }
 
+    /// This leaf reading with the answer's sampled view for retention (D8).
+    pub(in super::super) fn with_found_view(mut self, view: super::view::AnswerView) -> Self {
+        self.mode = Mode::Leaves(Some(view));
+        self
+    }
+
     /// The view an over-bound answer was read as, if any.
     pub(crate) fn view(&self) -> Option<&super::view::AnswerView> {
         match &self.mode {
@@ -131,8 +138,8 @@ impl<'v> Delivered<'v> {
     /// What retention reads the answer through (D8).
     pub(crate) fn found(&self, detector: &CollusionDetector) -> super::view::Found<'_> {
         match &self.mode {
-            Mode::View(view) => super::view::Found::View(view),
-            Mode::Leaves | Mode::Unread(_) => super::view::Found::Set(self.kgrams(detector)),
+            Mode::View(view) | Mode::Leaves(Some(view)) => super::view::Found::View(view),
+            Mode::Leaves(None) | Mode::Unread(_) => super::view::Found::Set(self.kgrams(detector)),
         }
     }
 

@@ -520,7 +520,7 @@ impl DeliveryDigest {
             self.leaf_fingerprints(detector),
             self.join_fingerprints(detector),
         );
-        let found = delivered.kgrams(detector);
+        let found = delivered.found(detector);
         let mut retained = Vec::new();
         let mut segments = Vec::with_capacity(self.segments.len());
         let mut gap = false;
@@ -536,7 +536,7 @@ impl DeliveryDigest {
                     detector
                         .fingerprints(&segment.text)
                         .into_iter()
-                        .filter(|fp| found.contains(fp)),
+                        .filter(|&fp| found.contains(fp)),
                 );
                 gap = true;
             }
@@ -658,13 +658,13 @@ impl DeliveryDigest {
             self.leaf_fingerprints(detector),
             self.join_fingerprints(detector),
         );
-        let found = delivered.kgrams(detector);
+        let found = delivered.found(detector);
         let mut retained: Vec<u64> = self
             .segments
             .iter()
             .filter(|s| !delivered.holds(s))
             .flat_map(|s| detector.fingerprints(&s.text))
-            .filter(|fp| found.contains(fp))
+            .filter(|&fp| found.contains(fp))
             .collect();
         retained.extend(own_span_delivered_runs(detector, delivered, step, &whole));
         let mut in_step = self.step_runs_kgrams(detector, delivered);
@@ -761,13 +761,13 @@ impl DeliveryDigest {
     fn with_original(
         mut self,
         detector: &CollusionDetector,
-        found: &HashSet<u64>,
+        found: view::Found<'_>,
         (original, joins): (Vec<u64>, Vec<u64>),
         mut retained: Vec<u64>,
         in_step: &HashSet<u64>,
     ) -> Self {
         let across = self.run_kgrams(detector);
-        let kept = |fp: &u64| found.contains(fp) || across.contains(fp) || in_step.contains(fp);
+        let kept = |fp: &u64| found.contains(*fp) || across.contains(fp) || in_step.contains(fp);
         retained.extend(original.into_iter().filter(kept));
         let mut seen = HashSet::new();
         retained.retain(|fp| seen.insert(*fp));

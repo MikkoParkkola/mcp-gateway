@@ -201,7 +201,10 @@ fn a_bloom_hit_on_foreign_text_is_never_evidence() {
         .collect();
     assert!(!foreign.is_empty(), "premise: the filter has chance hits");
     let delivered: HashSet<u64> = big.step_ev[..10].iter().copied().collect();
-    big.keep_to(&delivered.union(&foreign).copied().collect());
+    let found: HashSet<u64> = delivered.union(&foreign).copied().collect();
+    big.keep_to(super::super::super::collusion_digest::view::Found::Set(
+        &found,
+    ));
     assert!(
         big.excuse
             .as_ref()

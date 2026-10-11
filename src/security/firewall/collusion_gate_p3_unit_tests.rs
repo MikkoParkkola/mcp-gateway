@@ -234,3 +234,76 @@ fn leaf_hashes_are_charged_to_the_total_not_the_baseline() {
         staged.total()
     );
 }
+
+/// D8 condition 1: retention through the sampled view keeps exactly what
+/// retention through the full unsampled set keeps, for plans whose steps the
+/// answer delivers only in part (so the lookups decide what is kept). The
+/// two sets differ on every unsampled k-gram, so a retention that ever looked
+/// one up would keep something different.
+#[test]
+fn retention_through_the_view_keeps_what_the_full_set_keeps() {
+    use super::super::Delivered;
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    for seed in 0..4u64 {
+        let texts: Vec<String> = (0..4)
+            .map(|i| filler(1100 + seed * 10 + i, 6 * 1024))
+            .collect();
+        let step = json!({ "content": texts[..3].to_vec() });
+        let partial = texts[1][..3 * 1024].to_owned();
+        let shown = vec![texts[0].clone(), partial, texts[3].clone()];
+        let answer = Value::Array(shown.iter().cloned().map(Value::String).collect());
+        let keep = |delivered: &Delivered<'_>| {
+            let staged = PlanStaging::default();
+            let digest = fw
+                .receipt_digest("alpha", "read", &step, Some(&staged))
+                .expect("staged");
+            let kept = fw.cap_kept(fw.retain_delivered(digest, delivered, None));
+            let mut fps = kept.fingerprints(detector);
+            fps.sort_unstable();
+            (fps, kept.staged_len(), kept.retained_len())
+        };
+        let by_view = fw
+            .delivered_for_plan(&answer, None)
+            .expect("under the bound");
+        let leaves: Vec<&str> = shown.iter().map(String::as_str).collect();
+        let by_set = Delivered::of_leaves(leaves).expect("under the bound");
+        assert_eq!(
+            keep(&by_view),
+            keep(&by_set),
+            "retention through the view differs from the full set (seed {seed})"
+        );
+    }
+}
+
+/// Each auxiliary reservation is charged before the build allocates: an
+/// answer whose walk references do not fit takes the unread path and is
+/// counted, and a long combining run shows in the build's first reservation.
+#[test]
+fn auxiliary_reservations_are_charged_first() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    let many: Vec<Value> = (0..40_000).map(|i| json!(format!("leaf{i:05}"))).collect();
+    let answer = Value::Array(many);
+    detector.set_view_budget(40_000 * 32);
+    let delivered = fw.delivered_for_plan(&answer, None);
+    assert!(
+        delivered
+            .as_ref()
+            .is_some_and(super::super::Delivered::is_unread),
+        "an answer whose walk references do not fit was read"
+    );
+    assert_eq!(
+        detector.view_budget_refusals(),
+        1,
+        "the refusal was not counted"
+    );
+    detector.set_view_budget(VIEW_BYTES);
+    let marks = format!("a{}", "\u{301}".repeat(5_000));
+    let probe = detector.view_build_probe(&json!({ "text": marks }));
+    let &(reserved, _) = probe.first().expect("the build reserved");
+    assert!(
+        reserved >= 5_000 * 8,
+        "a 5,000-mark combining run was not reserved ({reserved} B)"
+    );
+}

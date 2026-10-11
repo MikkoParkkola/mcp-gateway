@@ -19,6 +19,18 @@ use super::walk::delivery_parts;
 /// Bytes reserved per answer node for the walks' reference lists.
 const REF_BYTES_PER_NODE: usize = 64;
 
+/// Bytes reserved per char of the longest combining run: the NFC iterator
+/// buffers one combining sequence (a char and its class) at a time.
+const COMBINING_BYTES_PER_CHAR: usize = 8;
+
+/// What the preflight measured of an answer it admits.
+pub(crate) struct Measured {
+    /// Every key and every value.
+    pub(crate) nodes: usize,
+    /// The longest run of chars with a nonzero canonical combining class.
+    pub(crate) combining: usize,
+}
+
 /// Why an answer could not be read as a view (D6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Unreadable {
@@ -33,6 +45,8 @@ pub(crate) enum Unreadable {
 /// A built view: sorted distinct sampled hashes, and the charge for them.
 pub(crate) struct AnswerView {
     entries: Box<[u64]>,
+    /// Held for its `Drop`: releases the view's `VIEW_BYTES` charge.
+    #[cfg_attr(not(test), expect(dead_code, reason = "held for its Drop"))]
     charge: ViewCharge,
 }
 
@@ -48,6 +62,7 @@ impl AnswerView {
     }
 
     /// Bytes this view holds against `VIEW_BYTES`.
+    #[cfg(test)]
     pub(crate) fn charge_bytes(&self) -> usize {
         self.charge.bytes()
     }
@@ -56,11 +71,22 @@ impl AnswerView {
 /// The allocation-free preflight (D2): text plus a segment per leaf, nodes
 /// (every key and every value) and depth, each against its cap. Iterative,
 /// with a stack bounded by the depth cap, so deep input cannot overflow.
-pub(crate) fn preflight(detector: &CollusionDetector, answer: &Value) -> Result<usize, Unreadable> {
+pub(crate) fn preflight(
+    detector: &CollusionDetector,
+    answer: &Value,
+) -> Result<Measured, Unreadable> {
     let text_cap = detector.views.answer_text_cap.load(Ordering::Relaxed);
     let per_leaf = std::mem::size_of::<super::Segment>();
     let node_cap = text_cap / 16;
-    let (mut text, mut nodes) = (0usize, 0usize);
+    let (mut text, mut nodes, mut combining) = (0usize, 0usize, 0usize);
+    let ccc = icu_normalizer::properties::CanonicalCombiningClassMapBorrowed::new();
+    let mut runs = |s: &str| {
+        let mut run = 0usize;
+        for c in s.chars() {
+            run = if ccc.get_u8(c) == 0 { 0 } else { run + 1 };
+            combining = combining.max(run);
+        }
+    };
     let mut stack: Vec<(&Value, usize)> = Vec::with_capacity(MAX_ANSWER_DEPTH + 1);
     stack.push((answer, 0));
     while let Some((value, depth)) = stack.pop() {
@@ -69,12 +95,16 @@ pub(crate) fn preflight(detector: &CollusionDetector, answer: &Value) -> Result<
             return Err(Unreadable::Shape);
         }
         match value {
-            Value::String(s) => text += s.len() + per_leaf,
+            Value::String(s) => {
+                text += s.len() + per_leaf;
+                runs(s);
+            }
             Value::Array(items) => stack.extend(items.iter().map(|v| (v, depth + 1))),
             Value::Object(map) => {
                 for (k, v) in map {
                     nodes += 1;
                     text += k.len() + per_leaf;
+                    runs(k);
                     stack.push((v, depth + 1));
                 }
             }
@@ -84,7 +114,8 @@ pub(crate) fn preflight(detector: &CollusionDetector, answer: &Value) -> Result<
             return Err(Unreadable::Shape);
         }
     }
-    Ok(nodes)
+    drop(runs);
+    Ok(Measured { nodes, combining })
 }
 
 /// The growing entry buffer, every capacity change reserved first.
@@ -131,8 +162,8 @@ pub(crate) fn build(
     answer: &Value,
     probe: Option<&mut Vec<(usize, usize)>>,
 ) -> Result<AnswerView, Unreadable> {
-    let nodes = preflight(detector, answer)?;
-    let refs = nodes * REF_BYTES_PER_NODE;
+    let measured = preflight(detector, answer)?;
+    let refs = measured.nodes * REF_BYTES_PER_NODE + measured.combining * COMBINING_BYTES_PER_CHAR;
     let charge = detector
         .views
         .budget

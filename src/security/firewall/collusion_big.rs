@@ -13,7 +13,6 @@
 //!
 //! A Bloom hit is never evidence: only `step_ev`'s exact entries are.
 
-use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
