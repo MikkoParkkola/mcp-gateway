@@ -206,14 +206,20 @@ fn many_tiny_leaves_are_read_in_one_pass() {
     let work = super::seam::FORM_WORK.with_borrow(Clone::clone);
     let n = chars.len();
     assert_eq!(
-        work.iter().map(|&(form, _, _)| form).collect::<Vec<_>>(),
+        work.iter().map(|form| form.chars).collect::<Vec<_>>(),
         [2 * n - 1, n],
         "each form read once: line-joined, then run together"
     );
-    for (form, hashed, visited) in work {
-        let grams = form - super::K + 1;
-        assert_eq!(hashed, grams, "each k-gram hashed once");
-        assert!(visited <= grams, "each k-gram visited at most once more");
+    for form in work {
+        let grams = form.chars - super::K + 1;
+        // ASCII: normalizing changes no char count, so a second pass over
+        // any of the text shows as more chars normalized than the form has.
+        assert_eq!(form.normalized, form.chars, "each char normalized once");
+        assert_eq!(form.hashed, grams, "each k-gram hashed once");
+        assert!(
+            form.visited <= grams,
+            "each k-gram visited at most once more"
+        );
     }
 }
 
