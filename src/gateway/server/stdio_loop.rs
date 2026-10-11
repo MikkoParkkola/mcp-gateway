@@ -506,6 +506,7 @@ impl Gateway {
             let request_id: Option<crate::protocol::RequestId> = request
                 .get("id")
                 .and_then(|id| serde_json::from_value(id.clone()).ok());
+            let diag_read_at = std::time::Instant::now();
             let task = {
                 let meta_mcp = Arc::clone(&meta_mcp);
                 let tool_policy = Arc::clone(&tool_policy);
@@ -524,6 +525,7 @@ impl Gateway {
                 // MIK-8176: this request's slots are owned by its task, from
                 // dispatch through the writer queue.
                 Box::pin(crate::gateway::meta_mcp::sealed_hold::scoped(async move {
+                    let diag_t0 = std::time::Instant::now();
                     let ((response, staged), hidden) = Self::dispatch_streaming_notifications(
                         Box::pin(Self::dispatch_single_staged(
                             &meta_mcp,
@@ -545,6 +547,7 @@ impl Gateway {
                         Some(meta_mcp.notification_screen("stdio", session_id)),
                     )
                     .await;
+                    let diag_t1 = std::time::Instant::now();
                     Self::persist_stdio_protocol_telemetry(&telemetry);
                     #[cfg(test)]
                     if let Some(gate) = gate {
@@ -571,11 +574,13 @@ impl Gateway {
                     // cancel check and the enqueue.
                     #[cfg(test)]
                     super::stdio_seams::after_commit().await;
+                    let diag_t2 = std::time::Instant::now();
                     if let Some(response) = response
                         && let Ok(permit) = writer.reserve().await
                     {
                         cancelled.send_unless_cancelled(answers.as_ref(), permit, response);
                     }
+                    diag_spans([diag_read_at, diag_t0, diag_t1, diag_t2, std::time::Instant::now()]);
                 }))
             };
             if spawned {
@@ -700,5 +705,30 @@ impl Gateway {
         self.stdio_teardown(shutdown_deadline, warmer, task_store)
             .await;
         Ok(())
+    }
+}
+
+/// T14DIAG: per-request spans (read->start, dispatch, commit, reserve+send),
+/// summed and printed per 100 requests. Throwaway diagnostic.
+fn diag_spans(t: [std::time::Instant; 5]) {
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    static N: AtomicU64 = AtomicU64::new(0);
+    static SUM: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    static MAX: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    for i in 0..4 {
+        let us = u64::try_from(t[i + 1].duration_since(t[i]).as_micros()).unwrap_or(u64::MAX);
+        SUM[i].fetch_add(us, Relaxed);
+        MAX[i].fetch_max(us, Relaxed);
+    }
+    let n = N.fetch_add(1, Relaxed) + 1;
+    if n % 100 == 0 {
+        let take = |a: &[AtomicU64; 4]| -> Vec<u64> { a.iter().map(|x| x.swap(0, Relaxed)).collect() };
+        let (sum, max) = (take(&SUM), take(&MAX));
+        eprintln!(
+            "T14DIAG {} spans n={n} avg_us[queue,dispatch,commit,send]={:?} max_us={:?}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0),
+            sum.iter().map(|s| s / 100).collect::<Vec<_>>(),
+            max
+        );
     }
 }

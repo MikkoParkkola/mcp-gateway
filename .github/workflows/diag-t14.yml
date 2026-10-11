@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
-      - run: cargo test --all-features --lib --no-run
+      - run: cargo test --release --all-features --lib --no-run
       # Each iteration runs every gateway::server row in parallel (t14 among
       # them, as in the full suite) and prints t14's captured output only when
       # it fails; iteration 0 also prints a passing trace for comparison.
@@ -26,5 +26,5 @@ jobs:
           set +e +o pipefail
           for i in 1 2 3; do
             echo "== run $i"
-            cargo test --all-features --lib gateway::server::signing_allocation_tests::stdio_list_changed::t14_a_burst_while_stdout_is_full_is_decided_and_told_at_most_twice -- --exact --nocapture 2>&1 | grep -E 'T14DIAG [0-9]+ (persist|t14|reload begin)|test result|panicked'
+            cargo test --release --all-features --lib gateway::server::signing_allocation_tests::stdio_list_changed::t14_a_burst_while_stdout_is_full_is_decided_and_told_at_most_twice -- --exact --nocapture 2>&1 | grep -E 'T14DIAG [0-9]+ (persist|spans|t14|reload begin)|test result|panicked'
           done
