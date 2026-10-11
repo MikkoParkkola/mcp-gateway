@@ -16,19 +16,23 @@ use crate::protocol::{JsonRpcRequest, RequestId};
 
 /// The backend answers `slow` and `initialize` only after this.
 const SLOW: Duration = Duration::from_secs(4);
-/// How long a caller waits before dropping the exchange.
-const PATIENCE: Duration = Duration::from_millis(300);
-/// How long a cancel has to arrive.
-const ARRIVAL: Duration = Duration::from_millis(1500);
+/// How long a row watches for a cancel that must NOT arrive, or for a second
+/// one after the first. An absence has no event to wait for.
+const QUIET: Duration = Duration::from_millis(1500);
 
 /// Every message the backend received, with its `MCP-Session-Id`.
 type Seen = Arc<Mutex<Vec<(Value, Option<String>)>>>;
 
-async fn backend() -> (String, Seen) {
+/// Woken each time the backend records a message, so a row waits for what it
+/// needs (a request in flight, a cancel) instead of for a clock.
+type Arrived = Arc<tokio::sync::Notify>;
+
+async fn backend() -> (String, Seen, Arrived) {
     let seen = Seen::default();
-    let record = Arc::clone(&seen);
+    let arrived = Arrived::default();
+    let (record, wake) = (Arc::clone(&seen), Arc::clone(&arrived));
     let app = axum::Router::new().fallback(move |headers: HeaderMap, body: String| {
-        let record = Arc::clone(&record);
+        let (record, wake) = (Arc::clone(&record), Arc::clone(&wake));
         async move {
             let message: Value = serde_json::from_str(&body).unwrap_or_default();
             let session = headers
@@ -36,6 +40,7 @@ async fn backend() -> (String, Seen) {
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string);
             record.lock().unwrap().push((message.clone(), session));
+            wake.notify_one();
             let Some(id) = message.get("id").cloned() else {
                 return axum::http::StatusCode::ACCEPTED.into_response();
             };
@@ -48,7 +53,7 @@ async fn backend() -> (String, Seen) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await });
-    (format!("http://{addr}/mcp"), seen)
+    (format!("http://{addr}/mcp"), seen, arrived)
 }
 
 fn request(id: i64, method: &str) -> JsonRpcRequest {
@@ -60,22 +65,86 @@ fn request(id: i64, method: &str) -> JsonRpcRequest {
     }
 }
 
-/// Send `request` shaped for `era`, give up after [`PATIENCE`] (dropping the
-/// exchange if it has not finished), then return the cancels that arrived.
+/// How a row's exchange ends.
+#[derive(Clone, Copy)]
+enum Exchange {
+    /// The caller gives up as soon as the backend has recorded the request.
+    DroppedOnceReceived,
+    /// The caller waits for the answer.
+    Answered,
+}
+
+/// The messages of `method` the backend has recorded.
+fn count(seen: &Seen, method: &str) -> usize {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .filter(|(m, _)| m["method"] == method)
+        .count()
+}
+
+/// Wait until the backend has recorded `wanted` messages of `method`.
+async fn backend_has(seen: &Seen, arrived: &Arrived, method: &str, wanted: usize) {
+    crate::test_pause::within(method, async {
+        while count(seen, method) < wanted {
+            arrived.notified().await;
+        }
+    })
+    .await;
+}
+
+/// Send `request` shaped for `era` on `transport` and end the exchange as
+/// `exchange` says. A dropped exchange is dropped the moment the backend has
+/// the request, however long that took: the backend answers `slow` and
+/// `initialize` only after [`SLOW`], so the drop always comes first.
+async fn run_exchange(
+    transport: &super::HttpTransport,
+    (seen, arrived): (&Seen, &Arrived),
+    request: &JsonRpcRequest,
+    identity: Option<&str>,
+    (era, exchange): (Option<Era>, Exchange),
+) {
+    let send = transport.send_request_with_headers(request, &[], identity, era);
+    match exchange {
+        Exchange::Answered => {
+            let answer = crate::test_pause::within("the answer", send).await;
+            assert!(answer.is_ok(), "the backend answers: {answer:?}");
+        }
+        Exchange::DroppedOnceReceived => {
+            tokio::select! {
+                answer = send => panic!("answered before it was dropped: {answer:?}"),
+                () = backend_has(seen, arrived, &request.method, 1) => {}
+            }
+        }
+    }
+}
+
+/// Run `request` as `exchange` says, then return the cancels that arrived
+/// within [`QUIET`] of the end of the exchange.
 async fn cancels_after(
     url: &str,
-    seen: &Seen,
+    (seen, arrived): (&Seen, &Arrived),
     request: &JsonRpcRequest,
-    era: Option<Era>,
+    (era, exchange): (Option<Era>, Exchange),
 ) -> Vec<(Value, Option<String>)> {
     let transport = super::make_transport(url);
     super::set_default_session(&transport, "session-a");
-    let _ = tokio::time::timeout(
-        PATIENCE,
-        transport.send_request_with_headers(request, &[], None, era),
+    run_exchange(
+        &transport,
+        (seen, arrived),
+        request,
+        None,
+        (era, exchange),
     )
     .await;
-    tokio::time::sleep(ARRIVAL).await;
+    cancels_within_quiet(seen).await
+}
+
+/// The cancels the backend has recorded after [`QUIET`] more: an absence has
+/// no event to wait for, so the window is the observation.
+async fn cancels_within_quiet(seen: &Seen) -> Vec<(Value, Option<String>)> {
+    // timing: absence
+    tokio::time::sleep(QUIET).await;
     seen.lock()
         .unwrap()
         .iter()
@@ -87,16 +156,25 @@ async fn cancels_after(
 /// Whether the backend received `method`: a row that expects no cancel must
 /// first show the request was in flight, or it passes for nothing sent.
 fn received(seen: &Seen, method: &str) -> bool {
-    seen.lock()
-        .unwrap()
-        .iter()
-        .any(|(m, _)| m["method"] == method)
+    count(seen, method) > 0
 }
 
 #[tokio::test]
 async fn a_dropped_legacy_request_is_cancelled_once_by_its_own_id() {
-    let (url, seen) = backend().await;
-    let cancels = cancels_after(&url, &seen, &request(41, "slow"), None).await;
+    let (url, seen, arrived) = backend().await;
+    let transport = super::make_transport(&url);
+    super::set_default_session(&transport, "session-a");
+    run_exchange(
+        &transport,
+        (&seen, &arrived),
+        &request(41, "slow"),
+        None,
+        (None, Exchange::DroppedOnceReceived),
+    )
+    .await;
+    // The cancel is an event to wait for; only a second one is an absence.
+    backend_has(&seen, &arrived, "notifications/cancelled", 1).await;
+    let cancels = cancels_within_quiet(&seen).await;
     assert_eq!(cancels.len(), 1, "exactly one cancel: {cancels:?}");
     let (cancel, session) = &cancels[0];
     assert_eq!(cancel["params"]["requestId"], json!(41), "{cancel}");
@@ -110,15 +188,27 @@ async fn a_dropped_legacy_request_is_cancelled_once_by_its_own_id() {
 
 #[tokio::test]
 async fn an_answered_request_is_never_cancelled() {
-    let (url, seen) = backend().await;
-    let cancels = cancels_after(&url, &seen, &request(42, "fast"), None).await;
+    let (url, seen, arrived) = backend().await;
+    let cancels = cancels_after(
+        &url,
+        (&seen, &arrived),
+        &request(42, "fast"),
+        (None, Exchange::Answered),
+    )
+    .await;
     assert!(cancels.is_empty(), "{cancels:?}");
 }
 
 #[tokio::test]
 async fn a_dropped_initialize_is_never_cancelled() {
-    let (url, seen) = backend().await;
-    let cancels = cancels_after(&url, &seen, &request(43, "initialize"), None).await;
+    let (url, seen, arrived) = backend().await;
+    let cancels = cancels_after(
+        &url,
+        (&seen, &arrived),
+        &request(43, "initialize"),
+        (None, Exchange::DroppedOnceReceived),
+    )
+    .await;
     assert!(received(&seen, "initialize"), "precondition: it was sent");
     assert!(cancels.is_empty(), "{cancels:?}");
 }
@@ -126,8 +216,14 @@ async fn a_dropped_initialize_is_never_cancelled() {
 /// Dropping the POST closes a modern backend's stream, which is its cancel.
 #[tokio::test]
 async fn a_dropped_modern_request_sends_no_notification() {
-    let (url, seen) = backend().await;
-    let cancels = cancels_after(&url, &seen, &request(44, "slow"), Some(Era::Modern)).await;
+    let (url, seen, arrived) = backend().await;
+    let cancels = cancels_after(
+        &url,
+        (&seen, &arrived),
+        &request(44, "slow"),
+        (Some(Era::Modern), Exchange::DroppedOnceReceived),
+    )
+    .await;
     assert!(received(&seen, "slow"), "precondition: it was sent");
     assert!(cancels.is_empty(), "{cancels:?}");
 }
@@ -139,9 +235,10 @@ async fn a_dropped_modern_request_sends_no_notification() {
 async fn a_dropped_recovery_resend_is_cancelled_once_on_the_fresh_session() {
     use crate::transport::Transport as _;
     let seen = Seen::default();
-    let record = Arc::clone(&seen);
+    let arrived = Arrived::default();
+    let (record, wake) = (Arc::clone(&seen), Arc::clone(&arrived));
     let app = axum::Router::new().fallback(move |headers: HeaderMap, body: String| {
-        let record = Arc::clone(&record);
+        let (record, wake) = (Arc::clone(&record), Arc::clone(&wake));
         async move {
             let message: Value = serde_json::from_str(&body).unwrap_or_default();
             let session = headers
@@ -152,6 +249,7 @@ async fn a_dropped_recovery_resend_is_cancelled_once_on_the_fresh_session() {
                 .lock()
                 .unwrap()
                 .push((message.clone(), session.clone()));
+            wake.notify_one();
             let Some(id) = message.get("id").cloned() else {
                 return axum::http::StatusCode::ACCEPTED.into_response();
             };
@@ -176,12 +274,16 @@ async fn a_dropped_recovery_resend_is_cancelled_once_on_the_fresh_session() {
 
     let transport = super::make_transport(&format!("http://{addr}/mcp"));
     super::set_default_session(&transport, "stale");
-    let _ = tokio::time::timeout(
-        Duration::from_secs(2),
-        transport.request("tools/list", None),
-    )
-    .await;
-    tokio::time::sleep(ARRIVAL).await;
+    // The resend is the second `tools/list` the backend records; drop the
+    // call there, however long the recovery took.
+    let call = transport.request("tools/list", None);
+    tokio::select! {
+        answer = call => panic!("answered before it was dropped: {answer:?}"),
+        () = backend_has(&seen, &arrived, "tools/list", 2) => {}
+    }
+    backend_has(&seen, &arrived, "notifications/cancelled", 1).await;
+    // timing: absence
+    tokio::time::sleep(QUIET).await;
 
     let messages = seen.lock().unwrap().clone();
     let lists: Vec<_> = messages
@@ -210,19 +312,22 @@ async fn a_dropped_recovery_resend_is_cancelled_once_on_the_fresh_session() {
 /// stateful backend sees it on the same session as the request.
 #[tokio::test]
 async fn the_cancel_carries_the_callers_identity() {
-    let (url, seen) = backend().await;
+    let (url, seen, arrived) = backend().await;
     let transport = super::make_transport(&url);
     super::set_default_session(&transport, "shared-session");
     transport
         .sessions
         .write()
         .insert("alice".to_string(), "alice-session".to_string());
-    let _ = tokio::time::timeout(
-        PATIENCE,
-        transport.send_request_with_headers(&request(45, "slow"), &[], Some("alice"), None),
+    run_exchange(
+        &transport,
+        (&seen, &arrived),
+        &request(45, "slow"),
+        Some("alice"),
+        (None, Exchange::DroppedOnceReceived),
     )
     .await;
-    tokio::time::sleep(ARRIVAL).await;
+    backend_has(&seen, &arrived, "notifications/cancelled", 1).await;
     let cancels: Vec<_> = seen
         .lock()
         .unwrap()
