@@ -96,7 +96,20 @@ async fn an_enforced_input_round_is_refused_and_its_hold_released() {
         "{refused}"
     );
     // The continuation the funnel sealed before the gates ran is given back:
-    // nothing redeemable outlives the refused round.
+    // nothing redeemable outlives the refused round. It was minted, in the
+    // scope, and dropped there without reaching a transport, so the empty
+    // table below is a release, not a mint that never happened.
+    let counts = meta.continuation().hold_counts();
+    let read = |n: &std::sync::atomic::AtomicU64| n.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        [
+            read(&counts.registered),
+            read(&counts.unscoped),
+            read(&counts.unhanded_drops)
+        ],
+        [1, 0, 1],
+        "one hold registered in the scope and dropped unhanded"
+    );
     assert_eq!(
         meta.continuation().in_flight().len(now).await,
         0,

@@ -218,7 +218,15 @@ pub(crate) async fn stdio_answering_gated(
 ) -> Sent {
     stdio_call(
         |meta| meta.set_context_integrity_kernel(kernel),
-        (json!({}), None),
+        // A modern client that declares form elicitation, so the question
+        // clears the capability gate (MRTR.9) and reaches the content gate.
+        (
+            json!({}),
+            Some(json!({
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}}
+            })),
+        ),
         answer,
     )
     .await
