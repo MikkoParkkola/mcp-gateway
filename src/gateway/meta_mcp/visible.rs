@@ -338,6 +338,16 @@ pub(crate) fn carry_dispatch(server: &str, carried: Carried) {
     let _ = VISIBILITY_MEMO.try_with(|memo| memo.1.lock().insert(server.to_owned(), carried));
 }
 
+/// Read the resolution carried for `server` without consuming it: the step
+/// resume fingerprint derives from the same resolution its dispatch will
+/// use (MIK-8356 fold F6).
+pub(crate) fn with_carried<R>(server: &str, read: impl FnOnce(&Carried) -> R) -> Option<R> {
+    VISIBILITY_MEMO
+        .try_with(|memo| memo.1.lock().get(server).map(read))
+        .ok()
+        .flatten()
+}
+
 /// Take the resolution carried for `server`, consuming it: a later
 /// invocation on the same server resolves again.
 pub(crate) fn take_carried(server: &str) -> Option<Carried> {

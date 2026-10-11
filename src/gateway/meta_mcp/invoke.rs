@@ -755,6 +755,15 @@ impl MetaMcp {
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
         (server, tool): (&str, &str),
     ) -> Result<Option<String>> {
+        // A resolution the caller verdict carried for this step is the one
+        // its dispatch will use: derive from it, with no second mint (fold F6).
+        if let Some(binding) =
+            super::visible::with_carried(server, |carried| carried.resolved.binding.clone())
+        {
+            return Ok(crate::protocol::mrtr::source_fingerprint(
+                caller.principal_source(binding.as_deref()),
+            ));
+        }
         let backend = self.backends.get(server);
         let proof = CallerProof::new(caller.verified_identity, caller.provenance());
         let resolved = self
