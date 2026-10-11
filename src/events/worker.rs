@@ -70,9 +70,8 @@ impl EventsHub {
             // Removed: the record went with it and this settles nothing. Not
             // removed (a store error, or a refresh re-bound the row): the
             // record goes back to pending and the next attempt re-checks.
-            let next = crate::clock::utc_or_epoch() + REFUSAL_RETRY;
             let retry = Settle::Retry {
-                next,
+                next: retry_after_refusal(&record),
                 status: "access_revoked",
             };
             self.settle(services, &record, retry).await;
@@ -87,7 +86,7 @@ impl EventsHub {
                 return;
             }
             self.revoke(&sub).await;
-            self.settle(services, &record, refusal_retry("access_revoked"))
+            self.settle(services, &record, refusal_retry("access_revoked", &record))
                 .await;
             return;
         }
@@ -97,7 +96,13 @@ impl EventsHub {
             self.settle(services, &record, quiet_dead(reason)).await;
             return;
         }
-        if self.overdue(&record, crate::clock::utc_or_epoch()) {
+        // The retry window is an access check: on a clock that cannot be read
+        // the record is neither sent nor buried (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            self.settle(services, &record, clock_unsent(&record)).await;
+            return;
+        };
+        if self.overdue(&record, now) {
             if !self.recorded_or_retry(services, &ctx, "exhausted").await {
                 return;
             }
@@ -109,7 +114,8 @@ impl EventsHub {
         // or the record runs past its bounds above (MIK-7976).
         if verdict == Verdict::Unoffered {
             if self.recorded_or_retry(services, &ctx, HELD).await {
-                self.settle(services, &record, refusal_retry(HELD)).await;
+                self.settle(services, &record, refusal_retry(HELD, &record))
+                    .await;
             }
             return;
         }
@@ -118,7 +124,7 @@ impl EventsHub {
         // the current row signs, so a secret rotated since the claim counts.
         if self.store.signing_row(&record).is_none() {
             // Pending again, for the next expiry pass (MIK-8061).
-            self.settle(services, &record, unsent_now("cancelled"))
+            self.settle(services, &record, unsent_now("cancelled", &record))
                 .await;
             return;
         }
@@ -221,7 +227,7 @@ impl EventsHub {
             Verdict::Admits if !services.admits_subscription(sub, grant(record)).await => {
                 services.audit_outcome(&ended("access_revoked")).await;
                 self.revoke(sub).await;
-                self.settle(services, record, refusal_retry("access_revoked"))
+                self.settle(services, record, refusal_retry("access_revoked", record))
                     .await;
                 return;
             }
@@ -229,13 +235,14 @@ impl EventsHub {
             Verdict::Refuses => {
                 services.audit_outcome(&ended("access_revoked")).await;
                 self.revoke(sub).await;
-                self.settle(services, record, refusal_retry("access_revoked"))
+                self.settle(services, record, refusal_retry("access_revoked", record))
                     .await;
                 return;
             }
             Verdict::Unoffered => {
                 services.audit_outcome(&ended(HELD)).await;
-                self.settle(services, record, refusal_retry(HELD)).await;
+                self.settle(services, record, refusal_retry(HELD, record))
+                    .await;
                 return;
             }
         }
@@ -243,23 +250,19 @@ impl EventsHub {
         // row that signs is read after it, never before.
         let Some(current) = self.store.signing_row(record) else {
             services.audit_outcome(&ended("cancelled")).await;
-            self.settle(services, record, unsent_now("cancelled")).await;
+            self.settle(services, record, unsent_now("cancelled", record))
+                .await;
             return;
         };
         // An expired row kept for its burials still signs but is not sent to: unsent, and the next
         // expiry pass settles it (MIK-8061). A clock before 1970 reads it expired (MIK-8202).
         if !current.live_now() {
             services.audit_outcome(&ended("subscription_expired")).await;
-            self.settle(services, record, unsent_now("subscription_expired"))
+            self.settle(services, record, unsent_now("subscription_expired", record))
                 .await;
             return;
         }
-        // Past its bounds after the wait for the record: dead, unsent, and the
-        // record just written says how that attempt ended.
-        if self.overdue(record, crate::clock::utc_or_epoch()) {
-            services.audit_outcome(&ended("exhausted")).await;
-            self.settle(services, record, quiet_dead(DeadReason::Exhausted))
-                .await;
+        if self.settled_unsendable(services, record, &ended).await {
             return;
         }
         #[cfg(test)]
@@ -267,7 +270,8 @@ impl EventsHub {
         // MIK-7907 WINDOW.1: admitted under the reload gate (`admits_now`).
         if !services.live.admit(|| self.admits_now(&record.name)) {
             services.audit_outcome(&ended(HELD)).await;
-            self.settle(services, record, unsent_later(HELD)).await;
+            self.settle(services, record, unsent_later(HELD, record))
+                .await;
             return;
         }
         // Charged once the attempt is on record, so a retry after an audit
@@ -286,6 +290,27 @@ impl EventsHub {
         let answer = self
             .send_event(url, &current, event_id, frame, sub.read_key.as_deref())
             .await;
+        self.settle_answer(services, ctx, answer, verdict, &ended)
+            .await;
+    }
+
+    /// Judge, record and settle the answer to a send.
+    async fn settle_answer<'a>(
+        &self,
+        services: &Services,
+        ctx: &Ctx<'_>,
+        answer: Result<super::client::Answer, CallbackFailure>,
+        verdict: Option<ReadVerdict>,
+        ended: &(impl Fn(&'static str) -> Attempt<'a> + Sync),
+    ) {
+        let (sub, record) = (ctx.sub, ctx.record);
+        // The signer refused on a clock that cannot be read: nothing was sent,
+        // so nothing is counted and no failure window moves (MIK-8202).
+        if matches!(answer, Err(CallbackFailure::ClockUnreadable)) {
+            services.audit_outcome(&ended(CLOCK_UNREADABLE)).await;
+            self.settle(services, record, clock_unsent(record)).await;
+            return;
+        }
         let (outcome, status) = self.judge(record, &answer);
         let delivered = matches!(outcome, Settle::Delivered);
         services
@@ -305,6 +330,30 @@ impl EventsHub {
             tracing::warn!(subscription = %sub.id, "events: sustained delivery failure, subscription suspended");
         }
         self.settle(services, record, outcome).await;
+    }
+
+    /// Settle a record that cannot go out after the waits before its send:
+    /// past its bounds it is dead and unsent; on a clock that cannot be read
+    /// it is neither sent nor buried (MIK-8202). The record just written says
+    /// how that attempt ended. `true` when settled here.
+    async fn settled_unsendable<'a>(
+        &self,
+        services: &Services,
+        record: &OutboxRecord,
+        ended: &(impl Fn(&'static str) -> Attempt<'a> + Sync),
+    ) -> bool {
+        let Ok(now) = crate::clock::utc_now() else {
+            services.audit_outcome(&ended(CLOCK_UNREADABLE)).await;
+            self.settle(services, record, clock_unsent(record)).await;
+            return true;
+        };
+        if !self.overdue(record, now) {
+            return false;
+        }
+        services.audit_outcome(&ended("exhausted")).await;
+        self.settle(services, record, quiet_dead(DeadReason::Exhausted))
+            .await;
+        true
     }
 
     /// MIN.2 E1: the delivery is a read by the subscription's caller, on the
@@ -393,7 +442,7 @@ impl EventsHub {
     /// refused its record: an audit outage, not a send (MIK-7944).
     async fn retry_unsent(&self, services: &Services, record: &OutboxRecord) {
         let retry = Settle::Unsent {
-            next: crate::clock::utc_or_epoch() + REFUSAL_RETRY,
+            next: retry_after_refusal(record),
             status: "audit_unavailable",
         };
         self.settle(services, record, retry).await;
@@ -413,16 +462,10 @@ impl EventsHub {
             Settle::Dead { .. } => Some(self.receipts.lock().await),
             _ => None,
         };
+        // Read on the attempt's own task, not the blocking pool.
+        let now = crate::clock::utc_now();
         let settled = self
-            .blocking(move |store| {
-                store.settle(
-                    &id,
-                    created_at,
-                    outcome,
-                    crate::clock::utc_or_epoch(),
-                    policy,
-                )
-            })
+            .blocking(move |store| store.settle(&id, created_at, outcome, now, policy))
             .await;
         let (evicted, buried) = settled.map_or((Vec::new(), false), |s| (s.evicted, s.buried));
         #[cfg(test)]
@@ -501,7 +544,11 @@ impl EventsHub {
         answer: &Result<super::client::Answer, CallbackFailure>,
     ) -> (Settle, &'static str) {
         let policy = self.retry_policy();
-        let now = crate::clock::utc_or_epoch();
+        // On a clock that cannot be read the record's own date stands in: the
+        // answer's clock-free outcomes (2xx, 410, 413, the attempt cap) still
+        // hold, and the next retry is dated from it, never from 1969. The next
+        // attempt's window check fails closed (MIK-8202).
+        let now = crate::clock::utc_now().unwrap_or(record.next_attempt_at);
         let first = record.first_attempt_at.unwrap_or(now);
         judge(
             answer,
@@ -640,26 +687,46 @@ fn grant(record: &OutboxRecord) -> Option<&str> {
 /// Back to pending after a refusal before the POST, ending `status`: a
 /// revoked subscription's record goes with it, a held one waits.
 /// Pending again at once, the attempt not counted: nothing was sent.
-fn unsent_now(status: &'static str) -> Settle {
+fn unsent_now(status: &'static str, record: &OutboxRecord) -> Settle {
     Settle::Unsent {
-        next: crate::clock::utc_or_epoch(),
+        next: crate::clock::utc_now().unwrap_or(record.next_attempt_at),
         status,
     }
 }
+
+/// Back to pending, unsent and uncounted, because the host clock reads before
+/// 1970: the record keeps its own date and no failure window moves. The one
+/// path for every clock refusal in an attempt, so a new outcome cannot charge
+/// a send it never made (MIK-8202).
+fn clock_unsent(record: &OutboxRecord) -> Settle {
+    Settle::Unsent {
+        next: record.next_attempt_at,
+        status: CLOCK_UNREADABLE,
+    }
+}
+
+/// The status of an attempt the host clock refused (MIK-8202).
+const CLOCK_UNREADABLE: &str = "clock_unreadable";
 
 /// Held unsent after a refused send admission; retried later (MIK-7907).
-fn unsent_later(status: &'static str) -> Settle {
+fn unsent_later(status: &'static str, record: &OutboxRecord) -> Settle {
     Settle::Unsent {
-        next: crate::clock::utc_or_epoch() + REFUSAL_RETRY,
+        next: retry_after_refusal(record),
         status,
     }
 }
 
-fn refusal_retry(status: &'static str) -> Settle {
+fn refusal_retry(status: &'static str, record: &OutboxRecord) -> Settle {
     Settle::Retry {
-        next: crate::clock::utc_or_epoch() + REFUSAL_RETRY,
+        next: retry_after_refusal(record),
         status,
     }
+}
+
+/// A refusal's retry date, or the record's own date on a clock that cannot be
+/// read: never a date in 1969 (MIK-8202).
+fn retry_after_refusal(record: &OutboxRecord) -> chrono::DateTime<chrono::Utc> {
+    crate::clock::utc_now().map_or(record.next_attempt_at, |now| now + REFUSAL_RETRY)
 }
 
 /// Dead without a new HTTP status: the subscription's last error stands.

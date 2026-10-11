@@ -743,7 +743,7 @@ async fn a_sweep_frees_a_stale_slot_before_it_starts_a_restored_key() {
         .expect("weather row");
     let tail = super::super::tail_policy(&crate::config::EventsConfig::default());
     hub.store
-        .remove(&weather.id, Utc::now(), tail)
+        .remove(&weather.id, Ok(Utc::now()), tail)
         .expect("removed");
     *host.targets.lock() = vec![
         target("weather", true, CredentialUse::Free),

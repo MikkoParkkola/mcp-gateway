@@ -249,12 +249,12 @@ impl EventsHub {
     ) -> crate::Result<Arc<Self>> {
         // The startup sweep removes expired rows and opt-in tails: retention,
         // which skips its pass on a clock before 1970 rather than delete what
-        // it cannot date. The epoch dates nothing as ended, so nothing goes;
-        // every lease check refuses on its own read of the clock (MIK-8202).
-        let now = crate::clock::utc_or_epoch();
-        let store = store::Store::open(store_dir, now, tail_policy(config)).map_err(|e| {
-            crate::Error::Config(format!("events store {}: {e}", store_dir.display()))
-        })?;
+        // it cannot date; every lease check refuses on its own read of the
+        // clock (MIK-8202).
+        let store = store::Store::open(store_dir, crate::clock::utc_now(), tail_policy(config))
+            .map_err(|e| {
+                crate::Error::Config(format!("events store {}: {e}", store_dir.display()))
+            })?;
         Ok(Arc::new_cyclic(|me| Self {
             me: me.clone(),
             config: config.clone(),

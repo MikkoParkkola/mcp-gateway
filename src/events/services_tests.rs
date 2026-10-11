@@ -47,7 +47,7 @@ fn presented(name: &str, secret: &str) -> ApiKeyRef {
 
 #[test]
 fn the_receipt_is_signed_only_when_stamping_is_on() {
-    let bare = services(Vec::new()).provenance("hooks", "webhook.c.r.received");
+    let bare = services(Vec::new()).provenance("hooks", "webhook.c.r.received", chrono::Utc::now());
     assert_eq!(bare["receipt"]["subject_kind"], "event");
     assert!(bare.get("signature").is_none());
     let signer = crate::attestation::BnautAttestationSigner::new(b"k".to_vec(), "id")
@@ -56,7 +56,7 @@ fn the_receipt_is_signed_only_when_stamping_is_on() {
         provenance: Some(Arc::new(signer)),
         ..services(Vec::new())
     }
-    .provenance("hooks", "webhook.c.r.received");
+    .provenance("hooks", "webhook.c.r.received", chrono::Utc::now());
     assert_eq!(stamped["receipt"]["backend_id"], "hooks");
     assert!(stamped["signature"].as_str().is_some_and(|s| !s.is_empty()));
 }

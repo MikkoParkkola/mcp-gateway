@@ -36,14 +36,14 @@ fn retried(store: &Store, created: DateTime<Utc>, now: DateTime<Utc>) {
         status: "http_5xx",
     };
     store
-        .settle("a", created, retry, now, super::ROOMY)
+        .settle("a", created, retry, Ok(now), super::ROOMY)
         .expect("io");
 }
 
 /// A crash: the store is dropped without settling and opened again.
 fn restarted(store: Store, dir: &std::path::Path, now: DateTime<Utc>) -> Store {
     drop(store);
-    Store::open(dir, now, TAIL).expect("reopen")
+    Store::open(dir, Ok(now), TAIL).expect("reopen")
 }
 
 /// T32 as its design row places it: a crash between attempts 2 and 3 loses

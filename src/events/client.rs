@@ -169,7 +169,12 @@ impl CallbackClient {
         read: ReadBody,
     ) -> Result<Answer, (CallbackFailure, bool)> {
         self.check_literal(url).map_err(|failure| (failure, true))?;
-        let timestamp = crate::clock::utc_or_epoch().timestamp().to_string();
+        // A signer refuses on a clock that cannot be read (before 1970):
+        // nothing is sent (MIK-8202).
+        let timestamp = crate::clock::utc_now()
+            .map_err(|_| (CallbackFailure::ClockUnreadable, true))?
+            .timestamp()
+            .to_string();
         let signature = sign(keys, webhook_id, &timestamp, &body);
         let mut response = self
             .http
@@ -188,7 +193,7 @@ impl CallbackClient {
             .headers()
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| retry_after(v, crate::clock::utc_or_epoch()));
+            .and_then(|v| retry_after(v, crate::clock::utc_now().ok()));
         let mut answer = Answer {
             status: status.as_u16(),
             retry_after,
@@ -260,11 +265,15 @@ pub(crate) fn decode_whsec(secret: &str) -> Option<Vec<u8>> {
 
 /// A `Retry-After` value: delta-seconds, or an HTTP-date (RFC 9110
 /// section 10.2.3), as the wait from `now`. A date in the past waits zero.
-fn retry_after(value: &str, now: chrono::DateTime<chrono::Utc>) -> Option<Duration> {
+/// `now` is `None` on a clock that cannot be read: a delay in seconds still
+/// stands, and only an HTTP date, which needs the clock, is ignored
+/// (MIK-8202).
+fn retry_after(value: &str, now: Option<chrono::DateTime<chrono::Utc>>) -> Option<Duration> {
     let value = value.trim();
     if let Ok(seconds) = value.parse::<u64>() {
         return Some(Duration::from_secs(seconds));
     }
+    let now = now?;
     let at = chrono::DateTime::parse_from_rfc2822(value).ok()?;
     Some(
         (at.with_timezone(&chrono::Utc) - now)

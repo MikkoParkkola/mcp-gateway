@@ -75,15 +75,6 @@ pub(crate) fn unix_secs() -> Result<u64, ClockBeforeEpoch> {
     since_epoch().map(|d| d.as_secs())
 }
 
-/// Now, or the epoch on a clock that cannot be read: the value the raw reads
-/// it replaces gave, so a site moved onto it behaves exactly as before.
-/// MIK-8202 P3 seam only. Each caller is migrated to a class-correct
-/// handling of `utc_now()` in the same batch, and this function is deleted
-/// with the last of them; do not add a caller.
-pub(crate) fn utc_or_epoch() -> DateTime<Utc> {
-    utc_now().unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
-}
-
 /// Milliseconds since the Unix epoch.
 pub(crate) fn unix_millis() -> Result<u64, ClockBeforeEpoch> {
     since_epoch().map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
@@ -105,6 +96,18 @@ pub(crate) fn utc_now() -> Result<DateTime<Utc>, ClockBeforeEpoch> {
     let since = since_epoch()?;
     let secs = i64::try_from(since.as_secs()).map_err(|_| ClockBeforeEpoch)?;
     DateTime::from_timestamp(secs, since.subsec_nanos()).ok_or(ClockBeforeEpoch)
+}
+
+/// Stamp an audit row's `timestamp`. A recorder whose row must not vanish:
+/// on a clock that cannot be read the row is kept undated, with `timestamp`
+/// `null` and `clock_invalid` `true`, the marker the firewall audit uses.
+pub(crate) fn stamp_audit_row(fields: &mut serde_json::Map<String, serde_json::Value>) {
+    if let Ok(now) = utc_now() {
+        fields.insert("timestamp".into(), now.to_rfc3339().into());
+    } else {
+        fields.insert("timestamp".into(), serde_json::Value::Null);
+        fields.insert("clock_invalid".into(), true.into());
+    }
 }
 
 /// An access check: `check` is the site's own comparison against now in

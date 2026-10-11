@@ -81,14 +81,14 @@ impl OperationalSource {
         let Some(hub) = self.hub.upgrade() else {
             return;
         };
-        hub.emit(SourceEvent {
+        hub.emit_dated(|occurred_at| SourceEvent {
             kind: SourceKind::GatewayOperational,
             name: name.into(),
             backend: backend.into(),
             scope,
             owner: None,
             upstream_id: hex::encode(rand::random::<[u8; 16]>()),
-            occurred_at: crate::clock::utc_or_epoch(),
+            occurred_at,
             data,
             lifecycle_key: None,
         });

@@ -135,6 +135,14 @@ impl State<'_> {
         let Some(hub) = hub.upgrade() else {
             return false;
         };
+        // One reading dates every note this flush emits. On a clock that cannot
+        // be read (before 1970) none is emitted and each is counted (MIK-8202).
+        let Ok(occurred_at) = crate::clock::utc_now() else {
+            for _ in &due {
+                hub.count_clock_drop();
+            }
+            return false;
+        };
         for (kind, uri) in due {
             if !self.shared.need.lock().emits(kind, uri.as_deref()) {
                 continue;
@@ -152,7 +160,7 @@ impl State<'_> {
                 scope: Visibility::Backend(backend),
                 owner: None,
                 upstream_id: uuid::Uuid::new_v4().to_string(),
-                occurred_at: crate::clock::utc_or_epoch(),
+                occurred_at,
                 data: uri.map_or_else(|| json!({}), |uri| json!({ "uri": uri })),
                 lifecycle_key: None,
             });

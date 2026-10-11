@@ -176,7 +176,16 @@ impl EventsHub {
         granted_by: u64,
     ) {
         let name = format!("backend.{backend}.resource_updated");
-        let now = crate::clock::utc_or_epoch();
+        // A 1969 `now` reads expired rows live and would revoke them, dropping
+        // their records with no expiry burial. Skipped: the next complete read
+        // revokes again, and delivery is idle on such a clock (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            tracing::warn!(
+                clock_unreadable = true,
+                "events: absent resources not revoked; the host clock reads before 1970"
+            );
+            return;
+        };
         let gone: Vec<_> = self
             .store
             .subscriptions()

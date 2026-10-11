@@ -509,21 +509,30 @@ impl EventsHub {
         let ticker = Arc::downgrade(&source);
         tokio::spawn(async move {
             loop {
-                let now = crate::clock::utc_or_epoch();
-                let next = now
-                    .duration_trunc(crate::duration_bound::delta!(minutes, 1))
-                    .unwrap_or(now)
-                    + crate::duration_bound::delta!(minutes, 1);
-                let wait = (next - now).to_std().unwrap_or_default();
+                // A clock that cannot be read (before 1970) waits a plain
+                // minute and skips the tick: nothing fires, nothing is
+                // recorded as fired, nothing is pruned (MIK-8202).
+                let wait =
+                    crate::clock::utc_now().map_or(std::time::Duration::from_secs(60), |now| {
+                        let next = now
+                            .duration_trunc(crate::duration_bound::delta!(minutes, 1))
+                            .unwrap_or(now)
+                            + crate::duration_bound::delta!(minutes, 1);
+                        (next - now).to_std().unwrap_or_default()
+                    });
                 tokio::time::sleep(wait).await;
+                let Ok(minute) = crate::clock::utc_now() else {
+                    tracing::warn!(
+                        clock_unreadable = true,
+                        "events: schedule tick skipped; the host clock reads before 1970"
+                    );
+                    continue;
+                };
                 let Some(source) = ticker.upgrade() else {
                     return;
                 };
                 // Off the runtime: a minute with many due timers syncs a file each.
-                let joined = tokio::task::spawn_blocking(move || {
-                    source.tick_at(crate::clock::utc_or_epoch());
-                })
-                .await;
+                let joined = tokio::task::spawn_blocking(move || source.tick_at(minute)).await;
                 if let Err(error) = joined {
                     tracing::warn!(%error, "events: schedule tick task failed");
                 }

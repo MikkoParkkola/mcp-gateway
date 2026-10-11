@@ -176,12 +176,14 @@ impl Services {
                 let provider_same = provider_sha256.is_some()
                     && crate::gateway::auth::live::provider_fingerprint(ks, issuer)
                         == *provider_sha256;
-                let now =
-                    u64::try_from(crate::clock::utc_or_epoch().timestamp()).unwrap_or(u64::MAX);
                 // The verifier requires `iat`, so a binding without one is
-                // refused rather than exempt.
-                let young = issued_at
-                    .is_some_and(|iat| iat.saturating_add(ks.config.max_oidc_token_age_secs) > now);
+                // refused rather than exempt; a clock that cannot be read
+                // (before 1970) leaves no bearer young (MIK-8202).
+                let young = issued_at.is_some_and(|iat| {
+                    crate::clock::unix_secs().is_ok_and(|now| {
+                        iat.saturating_add(ks.config.max_oidc_token_age_secs) > now
+                    })
+                });
                 ks.config.delegated_bearer
                     && provider_same
                     && young
@@ -226,12 +228,14 @@ impl Services {
 
     /// The provenance receipt for one occurrence, as `_meta` carries it:
     /// signed when stamping is on, the bare receipt otherwise (§3.6).
-    pub(crate) fn provenance(&self, backend: &str, name: &str) -> Value {
-        let receipt = crate::trust::RuntimeProvenanceReceipt::event(
-            backend,
-            name,
-            crate::clock::utc_or_epoch().to_rfc3339(),
-        );
+    pub(crate) fn provenance(
+        &self,
+        backend: &str,
+        name: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Value {
+        let receipt =
+            crate::trust::RuntimeProvenanceReceipt::event(backend, name, now.to_rfc3339());
         match &self.provenance {
             Some(signer) => serde_json::to_value(receipt.sign(signer)),
             None => serde_json::to_value(json!({ "receipt": receipt })),
@@ -471,10 +475,7 @@ impl Services {
         };
         let mut fields = Map::new();
         fields.insert("action".into(), "events.delivery_outcome".into());
-        fields.insert(
-            "timestamp".into(),
-            crate::clock::utc_or_epoch().to_rfc3339().into(),
-        );
+        crate::clock::stamp_audit_row(&mut fields);
         fields.insert("event_id".into(), attempt.event_id.into());
         fields.insert("subscription_id".into(), attempt.subscription_id.into());
         fields.insert("outcome_of_attempt".into(), attempt.number.into());
@@ -507,10 +508,7 @@ impl Services {
         for e in evicted {
             let mut fields = Map::new();
             fields.insert("action".into(), "events.dead_letter_evicted".into());
-            fields.insert(
-                "timestamp".into(),
-                crate::clock::utc_or_epoch().to_rfc3339().into(),
-            );
+            crate::clock::stamp_audit_row(&mut fields);
             fields.insert("event_id".into(), e.event_id.into());
             fields.insert("subscription_id".into(), e.subscription_id.into());
             fields.insert("reason".into(), e.reason.into());

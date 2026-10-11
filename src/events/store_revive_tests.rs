@@ -57,7 +57,7 @@ fn a_revived_record_keeps_its_dead_letters_stamp() {
     crate::events::records::write_record(&dir.path().join("dead"), "e1.json", &saved)
         .expect("restore the dead letter");
     drop(store);
-    let reopened = Store::open(dir.path(), now, TAIL).expect("reopen");
+    let reopened = Store::open(dir.path(), Ok(now), TAIL).expect("reopen");
     assert!(
         reopened
             .due(now, &HashSet::new(), ROOMY)
@@ -143,7 +143,7 @@ fn a_re_admitted_occurrence_under_a_held_id_is_coalesced() {
         next: now,
         status: "http_5xx",
     };
-    store.settle("e1", now, retry, now, ROOMY).expect("io");
+    store.settle("e1", now, retry, Ok(now), ROOMY).expect("io");
     store.suspend("s1").expect("io");
     assert_eq!(
         store.enqueue(later(2, "c24="), OUTBOX).expect("io"),

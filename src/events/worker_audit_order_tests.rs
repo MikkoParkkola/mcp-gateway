@@ -393,7 +393,7 @@ async fn a_dead_letter_record_names_the_host_stamped_on_the_occurrence() {
     // The subscription leaves while the burial is being recorded.
     let tail = crate::events::tail_policy(&config_default());
     hub.store
-        .remove("sub_worker", Utc::now(), tail)
+        .remove("sub_worker", Ok(Utc::now()), tail)
         .expect("removed");
     hub.dead_lettered(&services, &record, DeadReason::Gone)
         .await;

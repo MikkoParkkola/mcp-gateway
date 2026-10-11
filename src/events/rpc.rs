@@ -538,7 +538,9 @@ impl EventsHub {
                     // A refresh may have reactivated a suspended row.
                     self.runtime.wake.notify_one();
                     let throttled = self.runtime.rates.empty(&id, std::time::Instant::now())
-                        && self.store.has_due(&id, crate::clock::utc_or_epoch());
+                        // The subscribe's own read: an earlier `now` can
+                        // only under-report a due record (MIK-8202).
+                        && self.store.has_due(&id, now);
                     let answer = subscribe_answer(&id, expires_at, existing.as_ref(), throttled);
                     return Ok(self.held_answer(answer, &id));
                 }
@@ -715,7 +717,7 @@ impl EventsHub {
         let tail = super::tail_policy(&self.config);
         let removed = id.clone();
         let was_there = blocking(self, move |store| {
-            store.remove(&removed, crate::clock::utc_or_epoch(), tail)
+            store.remove(&removed, crate::clock::utc_now(), tail)
         })
         .await?;
         self.govern(

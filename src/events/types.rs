@@ -107,6 +107,9 @@ pub(crate) enum CallbackFailure {
     Http5xx,
     /// A 2xx or 3xx answer that did not echo the challenge.
     ChallengeFailed,
+    /// Not sent: the host clock reads before 1970, so the request could not
+    /// be signed with a timestamp (MIK-8202). Settled unsent, never counted.
+    ClockUnreadable,
 }
 
 impl CallbackFailure {
@@ -118,6 +121,7 @@ impl CallbackFailure {
             Self::Http4xx => "http_4xx",
             Self::Http5xx => "http_5xx",
             Self::ChallengeFailed => "challenge_failed",
+            Self::ClockUnreadable => "clock_unreadable",
         }
     }
 }

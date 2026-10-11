@@ -27,7 +27,7 @@ pub(in crate::events::store) fn load(
     state: &mut State,
     outbox_dir: &Path,
     dead_dir: &Path,
-    now: DateTime<Utc>,
+    now: Option<DateTime<Utc>>,
 ) -> std::io::Result<()> {
     for (_, dead) in load_records::<DeadLetter>(dead_dir) {
         let size = dead_size(&dead);
@@ -57,7 +57,11 @@ pub(in crate::events::store) fn load(
         }
         if record.state == OutboxState::InFlight {
             record.state = OutboxState::Pending;
-            record.next_attempt_at = now;
+            // Undated, it keeps its own date, at or before its claim, so it
+            // is due once the clock reads (MIK-8202).
+            if let Some(now) = now {
+                record.next_attempt_at = now;
+            }
             write_record(outbox_dir, &OutboxRecord::file(&record.event_id), &record)?.durable()?;
         }
         state.outbox.insert(record.event_id.clone(), record);

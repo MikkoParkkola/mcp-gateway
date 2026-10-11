@@ -79,7 +79,7 @@ impl Run {
         };
         if let Err(error) = written.and_then(|()| {
             hub.store
-                .apply_holds(&judge, crate::clock::utc_or_epoch(), hub.hold_bound())
+                .apply_holds(&judge, crate::clock::utc_now(), hub.hold_bound())
         }) {
             tracing::warn!(%error, "events: a watch hold stamp was not written; retried at the next poll");
         }
@@ -163,9 +163,7 @@ impl WatchSource {
                 ..Judged::default()
             })
         };
-        if let Err(error) =
-            store.apply_holds(&judge, crate::clock::utc_or_epoch(), hub.hold_bound())
-        {
+        if let Err(error) = store.apply_holds(&judge, crate::clock::utc_now(), hub.hold_bound()) {
             tracing::warn!(%error, "events: a watch hold stamp was not written; retried at the next replay");
         }
     }

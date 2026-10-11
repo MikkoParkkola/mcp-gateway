@@ -93,17 +93,20 @@ fn retry_after_reads_seconds_and_http_dates() {
     let now = chrono::DateTime::parse_from_rfc3339("2026-10-02T12:00:00Z")
         .expect("time")
         .with_timezone(&chrono::Utc);
-    assert_eq!(retry_after(" 120 ", now), Some(Duration::from_secs(120)));
     assert_eq!(
-        retry_after("Fri, 02 Oct 2026 12:01:30 GMT", now),
+        retry_after(" 120 ", Some(now)),
+        Some(Duration::from_secs(120))
+    );
+    assert_eq!(
+        retry_after("Fri, 02 Oct 2026 12:01:30 GMT", Some(now)),
         Some(Duration::from_secs(90))
     );
     assert_eq!(
-        retry_after("Fri, 02 Oct 2026 11:00:00 GMT", now),
+        retry_after("Fri, 02 Oct 2026 11:00:00 GMT", Some(now)),
         Some(Duration::ZERO),
         "a past date waits nothing"
     );
-    assert_eq!(retry_after("soon", now), None);
+    assert_eq!(retry_after("soon", Some(now)), None);
 }
 
 /// A body that never left the process is reported as unsent, so the read

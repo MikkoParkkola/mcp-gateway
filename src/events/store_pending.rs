@@ -420,14 +420,20 @@ impl Store {
     /// on the wire stays cancelled: nothing is written back for it. A
     /// settlement the disk refused leaves the record pending, due after
     /// [`SETTLE_RETRY`], never stranded in flight.
+    ///
+    /// On a clock that cannot be read (before 1970, MIK-8202) nothing is
+    /// dated: a delivery is removed without stamping `last_delivery_at`, a
+    /// retry keeps the caller's date, and a burial is deferred: the record
+    /// stays pending with `dead_as`, and the next readable attempt buries it.
     pub(crate) fn settle(
         &self,
         event_id: &str,
         created_at: DateTime<Utc>,
         outcome: Settle,
-        now: DateTime<Utc>,
+        now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
         policy: DeadPolicy,
     ) -> std::io::Result<Settled> {
+        let now = now.ok();
         let mut state = self.state.lock();
         // Only the claimed occurrence: a later one under the same id, admitted
         // after the claim was cancelled, is not settled by the old answer.
@@ -463,7 +469,10 @@ impl Store {
                 });
             } else if let Some(left) = state.outbox.get_mut(event_id) {
                 left.state = OutboxState::Pending;
-                left.next_attempt_at = now + SETTLE_RETRY;
+                // Undated, the record keeps its own date rather than 1969.
+                if let Some(now) = now {
+                    left.next_attempt_at = now + SETTLE_RETRY;
+                }
                 match outcome {
                     Settle::Dead { reason, .. } => left.dead_as = Some(reason),
                     // Still not a send: the refusal counts even if its write failed.
@@ -489,8 +498,8 @@ impl Store {
         // The subscription's delivery history is a status line: a failed
         // write of it never undoes the settlement.
         if let Err(error) = self.touch(&mut state, &sub_id, |s| {
-            if delivered {
-                s.last_delivery_at = Some(now);
+            if delivered && now.is_some() {
+                s.last_delivery_at = now;
             }
             s.last_error = error.map(str::to_owned);
         }) {
@@ -506,7 +515,7 @@ impl Store {
         state: &mut State,
         mut record: OutboxRecord,
         outcome: Settle,
-        now: DateTime<Utc>,
+        now: Option<DateTime<Utc>>,
         policy: DeadPolicy,
     ) -> std::io::Result<Settled> {
         let event_id = record.event_id.clone();
@@ -532,6 +541,15 @@ impl Store {
                 if let Some(status) = status {
                     record.last_status = Some(status.to_owned());
                 }
+                let Some(now) = now else {
+                    // No dead_at of 1969: the burial waits, pending with its
+                    // reason and its date, for the next readable attempt.
+                    record.state = OutboxState::Pending;
+                    record.dead_as = Some(reason);
+                    write_record(&self.outbox_dir, &file, &record)?.durable()?;
+                    state.outbox.insert(event_id, record);
+                    return Ok(Settled::default());
+                };
                 // Entombed first: once the dead letter is durable, load drops
                 // the outbox file even if the unlink below never happens.
                 // Eviction runs last, so it never removes that marker first.

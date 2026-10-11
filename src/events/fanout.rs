@@ -147,6 +147,13 @@ impl EventsHub {
 
     /// Build, scan and write one subscription's record.
     async fn offer(self: &Arc<Self>, services: &Services, event: &SourceEvent, sub: &Subscription) {
+        // One read dates the provenance receipt, the record and any burial.
+        // A clock that cannot be read (before 1970) drops the occurrence,
+        // counted: nothing is signed, queued or buried with 1969 (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            self.count_clock_drop();
+            return;
+        };
         let id = event_id(event.kind, &event.upstream_id, &sub.id);
         let mut data = event.data.clone();
         // Attribution before redaction (MIN.2 row E1): what the source named.
@@ -169,9 +176,8 @@ impl EventsHub {
             &id,
             event,
             &data,
-            &services.provenance(&event.backend, &event.name),
+            &services.provenance(&event.backend, &event.name, now),
         );
-        let now = crate::clock::utc_or_epoch();
         let record = OutboxRecord {
             v: 1,
             event_id: id,
@@ -253,7 +259,8 @@ impl EventsHub {
     /// cause that made it (design r3 G3). `false` when a subscription could not be removed.
     pub(crate) fn withdraw_rows(&self, judged: &[Subscription]) -> bool {
         let tail = super::tail_policy(&self.config);
-        let now = crate::clock::utc_or_epoch();
+        // A commanded removal: it happens on any clock (MIK-8202).
+        let now = crate::clock::utc_now();
         #[cfg(test)]
         self.before_withdraw.pause_blocking();
         let mut all_removed = true;
@@ -429,7 +436,7 @@ impl EventsHub {
         let judge = |sub: &Subscription| super::reload::judge(sub, shapes);
         if let Err(error) =
             self.store
-                .apply_holds(&judge, crate::clock::utc_or_epoch(), self.hold_bound())
+                .apply_holds(&judge, crate::clock::utc_now(), self.hold_bound())
         {
             tracing::warn!(%error, "events: a held subscription's stamp was not written; retried at the next refresh");
         }
@@ -457,7 +464,7 @@ impl EventsHub {
         let snapshot = refused.clone();
         let removed = self
             .blocking(move |store| {
-                store.remove_where(&snapshot.id, crate::clock::utc_or_epoch(), tail, |row| {
+                store.remove_where(&snapshot.id, crate::clock::utc_now(), tail, |row| {
                     // A re-grant under the same id is not the row judged.
                     row.incarnation == snapshot.incarnation
                         && row.credential_principal == snapshot.credential_principal

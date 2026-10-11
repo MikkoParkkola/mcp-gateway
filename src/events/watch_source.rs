@@ -747,10 +747,7 @@ impl Run {
         };
         let mut fields = Map::new();
         fields.insert("action".into(), "events.watch_backoff".into());
-        fields.insert(
-            "timestamp".into(),
-            crate::clock::utc_or_epoch().to_rfc3339().into(),
-        );
+        crate::clock::stamp_audit_row(&mut fields);
         fields.insert("event_name".into(), self.name.clone().into());
         fields.insert("failures".into(), failures.into());
         let envelope = crate::security::audit::AuditEnvelope::gateway();

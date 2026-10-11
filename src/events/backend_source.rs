@@ -375,14 +375,14 @@ impl EventsHub {
                 }
                 latest.remove(&backend);
             }
-            hub.emit(SourceEvent {
+            hub.emit_dated(|occurred_at| SourceEvent {
                 kind: SourceKind::BackendNotification,
                 name: event_name(&backend),
                 backend: backend.clone(),
                 scope: Visibility::Backend(backend),
                 owner: None,
                 upstream_id: uuid::Uuid::new_v4().to_string(),
-                occurred_at: crate::clock::utc_or_epoch(),
+                occurred_at,
                 data: json!({}),
                 lifecycle_key: None,
             });
