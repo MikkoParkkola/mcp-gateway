@@ -1,0 +1,20 @@
+head_sha	7ecbf0a5fe19ab4d55f4778f9a2c65f8399562ec
+B4-naming-explicit	linux	B4-naming-explicit.patch	--lib -- h1_no_grant_operator
+B4-noview-proceed	linux	B4-noview-proceed.patch	--lib -- h1_no_grant_operator
+B4-noview-proceed_byname	linux	B4-noview-proceed_byname.patch	--lib -- no_grant_operator_call_by_name
+B4-noview-unrecorded	linux	B4-noview-unrecorded.patch	--lib -- h1_no_grant_operator
+B4-noview-marker	linux	B4-noview-marker.patch	--lib -- slot_verdict
+B4-search-codemode	linux	B4-search-codemode.patch	--lib -- i2f_index_written
+B4-search-search	linux	B4-search-search.patch	--lib -- i2f_index_written
+B4-search-listall	linux	B4-search-listall.patch	--lib -- i2f_index_written
+B4-search-always	linux	B4-search-always.patch	--lib -- i2h_
+B4-keycheck	linux	B4-keycheck.patch	--lib -- i2g_index_written
+B4-known-caller	linux	B4-known-caller.patch	--lib -- k1_known_ness
+B4-known-servers	linux	B4-known-servers.patch	--lib -- k1_known_ness
+B4-known-counts	linux	B4-known-counts.patch	--lib -- k1_known_ness
+B4-label	linux	B4-label.patch	--lib -- m1_a_descriptor_block
+B4-guard-policy	linux	B4-guard-policy.patch	--lib -- r1_keyed_replay_after
+B4-guard-policy_task	linux	B4-guard-policy_task.patch	--lib -- r1b_explicit_task_of
+B4-guard-admission	linux	B4-guard-admission.patch	--lib -- r1_signed_admission_of
+B4-guard-stamp	linux	B4-guard-stamp.patch	--lib -- r1_signed_dispatch_of
+B4-direct-order	linux	B4-direct-order.patch	--lib -- r1_direct_keyed_replay

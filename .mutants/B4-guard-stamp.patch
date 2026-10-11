@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/grant_audit.rs b/src/gateway/meta_mcp/grant_audit.rs
+index 42d6e03fe..82f31b448 100644
+--- a/src/gateway/meta_mcp/grant_audit.rs
++++ b/src/gateway/meta_mcp/grant_audit.rs
+@@ -667,7 +667,6 @@ impl super::MetaMcp {
+         {
+             // Signing ran the policy before the route stage could record this
+             // request's verdict (stdio): refuse a withheld name here.
+-            super::visible::refuse_withheld(server, tool)?;
+             stamp_prepared(server, tool);
+             Ok(())
+         } else {

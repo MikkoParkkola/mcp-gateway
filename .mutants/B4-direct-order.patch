@@ -1,0 +1,20 @@
+diff --git a/src/gateway/router/backend_handlers/direct_dispatch.rs b/src/gateway/router/backend_handlers/direct_dispatch.rs
+index f71c820a7..fb67f47c7 100644
+--- a/src/gateway/router/backend_handlers/direct_dispatch.rs
++++ b/src/gateway/router/backend_handlers/direct_dispatch.rs
+@@ -215,7 +215,6 @@ pub(super) async fn admit<'a>(
+         cancel_entry,
+         cancel_on,
+     };
+-    guard_and_sanitize(scope, envelope, propagation, &mut admitted).await?;
+     // After authorize, the firewall and the caller's catalogue (MIK-8356 F3).
+     if envelope.method == "tools/call"
+         && let Err(e) =
+@@ -237,6 +236,7 @@ pub(super) async fn admit<'a>(
+         &mut admitted,
+         (guarded, replay),
+     )?;
++    guard_and_sanitize(scope, envelope, propagation, &mut admitted).await?;
+     Ok(admitted)
+ }
+ 

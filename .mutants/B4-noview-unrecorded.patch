@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/caller_verdict.rs b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+index cd27f5e5c..66cce0cfc 100644
+--- a/src/gateway/meta_mcp/invoke/caller_verdict.rs
++++ b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+@@ -118,7 +118,7 @@ impl MetaMcp {
+             }
+             return Ok(match naming {
+                 TargetNaming::SurfacedName => {
+-                    visible::record_visibility(
++                    let _ = (
+                         server,
+                         tool,
+                         Visibility::Withheld(Withholding::Lacked),

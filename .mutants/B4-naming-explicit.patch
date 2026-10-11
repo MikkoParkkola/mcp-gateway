@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/caller_verdict.rs b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+index cd27f5e5c..4d3e4c5db 100644
+--- a/src/gateway/meta_mcp/invoke/caller_verdict.rs
++++ b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+@@ -49,7 +49,7 @@ impl TargetNaming {
+     /// call's own name is that surfaced tool.
+     pub(crate) fn of(meta: &MetaMcp, tool_name: &str, (server, tool): (&str, &str)) -> Self {
+         if tool == tool_name && meta.surfaced_server_unscoped(tool_name) == Some(server) {
+-            Self::SurfacedName
++            Self::ExplicitBackend
+         } else {
+             Self::ExplicitBackend
+         }

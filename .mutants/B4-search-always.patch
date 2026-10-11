@@ -1,0 +1,31 @@
+diff --git a/src/gateway/meta_mcp/search.rs b/src/gateway/meta_mcp/search.rs
+index 7584b37d4..f97052fed 100644
+--- a/src/gateway/meta_mcp/search.rs
++++ b/src/gateway/meta_mcp/search.rs
+@@ -196,7 +196,7 @@ impl MetaMcp {
+             .await;
+             // An empty fill is a fill: index any slot this caller has filled,
+             // never one a failed fill left unpopulated (MIK-8356).
+-            if fetched.is_some() || backend.holds_tools_for(binding.as_deref()) {
++            if true {
+                 self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
+             }
+             if let Some(tools) = fetched {
+@@ -307,7 +307,7 @@ impl MetaMcp {
+                     .await;
+             // An empty fill is a fill: index any slot this caller has filled,
+             // never one a failed fill left unpopulated (MIK-8356).
+-            if fetched.is_some() || backend.holds_tools_for(binding.as_deref()) {
++            if true {
+                 self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
+             }
+             if let Some(tools) = fetched {
+@@ -611,7 +611,7 @@ impl MetaMcp {
+                     .await;
+             // An empty fill is a fill: index any slot this caller has filled,
+             // never one a failed fill left unpopulated (MIK-8356).
+-            if fetched.is_some() || backend.holds_tools_for(binding.as_deref()) {
++            if true {
+                 self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
+             }
+             if let Some(tools) = fetched {

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/caller_verdict.rs b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+index cd27f5e5c..c60c945ab 100644
+--- a/src/gateway/meta_mcp/invoke/caller_verdict.rs
++++ b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+@@ -196,7 +196,7 @@ impl MetaMcp {
+             CatalogueVerdict::Offers => (Some(Visibility::Visible), SlotJudgement::Offered),
+             CatalogueVerdict::Withholds => {
+                 let reason = if backend.is_blocked_tool(tool) {
+-                    Withholding::Descriptor
++                    Withholding::Schema
+                 } else {
+                     Withholding::Schema
+                 };

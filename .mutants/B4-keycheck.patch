@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/key_check.rs b/src/gateway/router/backend_handlers/key_check.rs
+index 68067aa13..12f3babf3 100644
+--- a/src/gateway/router/backend_handlers/key_check.rs
++++ b/src/gateway/router/backend_handlers/key_check.rs
+@@ -52,7 +52,7 @@ pub(super) async fn key_refusal(
+         let verdict = backend.catalogue_verdict(identity_key, headers, tool).await;
+         // The check may have filled the caller's slot: index it once filled
+         // (MIK-8356), whatever the verdict.
+-        if backend.holds_tools_for(identity_key) {
++        if false {
+             let proof = crate::identity_propagation::CallerProof::new(
+                 failed.identity,
+                 crate::identity_propagation::CallerProvenance::classify(

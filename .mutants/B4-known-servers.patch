@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/surfaced.rs b/src/gateway/meta_mcp/surfaced.rs
+index 1c2fa665a..c91f171b4 100644
+--- a/src/gateway/meta_mcp/surfaced.rs
++++ b/src/gateway/meta_mcp/surfaced.rs
+@@ -251,7 +251,7 @@ impl MetaMcp {
+                         .count()
+                 })
+             };
+-            let known = !hidden && !cold && self.listing_known(&b, scope);
++            let known = !hidden && !cold && b.cached_tools_known();
+             let status = b.status();
+             let killed = self.kill_switch.is_killed(&status.name);
+             let mut entry = json!({

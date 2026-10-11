@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/caller_verdict.rs b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+index cd27f5e5c..22ce540f9 100644
+--- a/src/gateway/meta_mcp/invoke/caller_verdict.rs
++++ b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+@@ -114,7 +114,7 @@ impl MetaMcp {
+         // name (MIK-6745 section 9.2, predicate D).
+         if self.has_no_view_for(&backend, proof).await {
+             if let Some(principal) = self.principal_for(&backend, proof) {
+-                backend.record_no_view(&principal.stable_actor_id());
++                let _ = principal;
+             }
+             return Ok(match naming {
+                 TargetNaming::SurfacedName => {
