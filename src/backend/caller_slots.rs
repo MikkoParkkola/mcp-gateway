@@ -22,6 +22,20 @@ impl Backend {
         Vec::new()
     }
 
+    /// Mark per-user slot `binding`'s held list as a truncated drain, as a
+    /// paging fill past its budget leaves it (test plan L11).
+    #[cfg(test)]
+    pub(crate) fn mark_per_user_truncated_for_test(&self, binding: &str) {
+        let key = super::PoolKey::PerUser {
+            binding: binding.to_string(),
+        };
+        self.pool
+            .get(&key)
+            .expect("a filled per-user slot")
+            .tools_truncated
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// The bindings of per-user slots whose catalogue has ever been stored:
     /// the census I2e holds the index against.
     #[cfg(test)]

@@ -938,3 +938,61 @@ async fn c11b_second_step_same_server_resolves_again() {
     );
     assert_eq!(fx.mints(), before + 2, "C11b: resolutions for two steps");
 }
+
+/// L11a: alpha's slot holds a TRUNCATED list (a paging drain past its
+/// budget) that lacks [`TOOL`]. A partial list proves nothing about an unseen
+/// name, so the count alpha is given is a lower bound ("at least"), never an
+/// exact total. RED on base: counts walk the shared snapshot and report an
+/// exact "2 tools".
+#[tokio::test]
+async fn l11a_truncated_caller_slot_counts_at_least() {
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    let fx = per_user(
+        CallerSlot::Lacks,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::Yes,
+    );
+    warm_by_listing(&fx.meta).await;
+    let backend = fx
+        .meta
+        .backends
+        .get(super::slot_verdict_fixture::BACKEND)
+        .expect("the backend");
+    backend.mark_per_user_truncated_for_test(super::slot_verdict_fixture::BINDING);
+    let (total, _) = fx
+        .meta
+        .admitted_counts(super::identified_caller(&alpha).scope(), None);
+    let phrase = total.phrase();
+    assert!(
+        phrase.starts_with("at least"),
+        "L11a: a truncated caller slot gave an exact count: {phrase}"
+    );
+}
+
+/// L11b: alpha's slot is filled but empty (a complete list with no tools).
+/// The disabled list then names none of that backend's tools to alpha. RED
+/// on base: the shared slot names [`TOOL`].
+#[tokio::test]
+async fn l11b_empty_caller_slot_withholds() {
+    let fx = per_user(
+        CallerSlot::Lacks,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::Yes,
+    );
+    warm_by_listing(&fx.meta).await;
+    let backend = fx
+        .meta
+        .backends
+        .get(super::slot_verdict_fixture::BACKEND)
+        .expect("the backend");
+    backend.store_per_user_tools_for_test(super::slot_verdict_fixture::BINDING, Vec::new());
+    let listed = disabled_as_alpha(&fx.meta);
+    assert!(
+        !names_tool(&listed),
+        "L11b: an empty caller slot named the tool: {listed}"
+    );
+}
