@@ -102,7 +102,7 @@ src/gateway/router/backend_handlers.rs	charged_binding	1	standard	borderline	cha
 src/gateway/router/backend_handlers/relay.rs	direct_control_identity	1	standard	borderline	direct_control_identity	Firewall per-caller key; falls back to a shared bucket.
 src/gateway/router/backend_handlers/relay.rs	direct_caller	1	standard	borderline	direct_caller	Per-caller key for every per-caller control on the direct route; falls back to the shared bucket
 src/gateway/router/backend_handlers.rs	direct_route_attestation_scope	1	standard	borderline	direct_route_attestation_scope	Sets the scope an attestation token must grant per method.
-src/gateway/router/backend_handlers.rs	dispatch_in_scope	1	standard	d	dispatch_in_scope	Refuses methods the peer's protocol era removed before they reach the wire.
+src/gateway/router/backend_handlers/direct_send.rs	send_in_scope	1	standard	d	send_in_scope	Refuses methods the peer's protocol era removed before they reach the wire.
 src/gateway/router/backend_handlers.rs	is_task_method	1	standard	borderline	is_task_method	Selects which methods get the task-owner refusal.
 src/gateway/router/backend_handlers.rs	passthrough_identity_key	1	standard	borderline	passthrough_identity_key	Session bucket key from the credential digest; a collision would mix callers.
 src/gateway/router/backend_handlers.rs	sign_and_record	1	critical	d	sign_and_record	Signs a direct delivery when a signing nonce was admitted, then stages it for relay detection
