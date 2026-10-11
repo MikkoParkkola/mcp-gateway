@@ -163,3 +163,164 @@ async fn a_stop_sends_its_session_delete_without_a_login() {
         "premise: the stop reached its session DELETE (its header build ran)"
     );
 }
+
+/// LOGINDL.13: the waited mark lands on the caller's own Provenance even
+/// though the detached task, not the caller, runs the login. Read after that
+/// login has ended (no attempt in flight, no outcome on the cohort, nothing
+/// dispatched), so only the waited bit can make the deadline
+/// `AuthorizationPending`. Green at base (the login runs in the caller's
+/// scope); after the change it fails if the task does not carry the scopes.
+#[tokio::test]
+async fn a_detached_login_marks_its_callers_own_provenance_waited() {
+    use crate::oauth::login_gate::Provenance;
+    let (backend, browser, _dir) = approved_start(Upstream::Plain, Duration::from_secs(5)).await;
+    super::token_lapse::lapse(&backend).await;
+    assert!(
+        !backend.login_gate.in_flight(),
+        "premise: no login in flight, so the caller marks nothing before its token step"
+    );
+
+    let classified = Provenance::scope(&backend.login_gate, async {
+        // The caller's deadline, as an event: its request is dropped the
+        // moment the login it began opens the browser.
+        let mut request = Box::pin(backend.request("tools/list", None));
+        let url = tokio::select! {
+            done = &mut request => panic!("premise: the request ended without a login: {done:?}"),
+            url = browser.opened(2, "the caller's request-time login") => url,
+        };
+        drop(request);
+        approve_if_listening(&url).await;
+        within("the login to end", async {
+            while backend.login_gate.in_flight() {
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        Provenance::expired(
+            "login-window",
+            Error::BackendTimeout("login-window".to_string()),
+        )
+    })
+    .await;
+
+    assert!(
+        variant(&classified).starts_with("AuthorizationPending"),
+        "the login the caller waited on did not mark the caller's own Provenance: {classified:?}"
+    );
+}
+
+/// LOGINDL.16: a caller whose token arrives from the detached login it waited
+/// on, and whose own request then stalls, timed out on the backend, not on
+/// the login: `mark_dispatched` runs on the joined success too. Green at base
+/// (the inline token step marks it); after the change it fails if the joined
+/// path skips the mark.
+#[tokio::test]
+async fn a_fill_served_by_its_approved_login_then_stalled_is_a_backend_timeout() {
+    static PAGES: super::token_lapse::Pages = super::token_lapse::Pages::new();
+    let (backend, browser, _dir) = approved_start(
+        Upstream::ListStallsCounted(Duration::ZERO, &PAGES),
+        Duration::from_secs(10),
+    )
+    .await;
+    super::token_lapse::lapse(&backend).await;
+    let first_pages = PAGES.first.load(Ordering::SeqCst);
+
+    let fill = {
+        let backend = Arc::clone(&backend);
+        tokio::spawn(async move { backend.tools_for_check(None, &[], false).await })
+    };
+    let url = browser.opened(2, "the fill's request-time login").await;
+    assert!(
+        approve_if_listening(&url).await,
+        "premise: the fill was still waiting when the person approved"
+    );
+    super::token_lapse::arrived(&PAGES.first, first_pages + 1, "the fill's first page").await;
+
+    let error = within("the fill's own deadline", fill)
+        .await
+        .expect("fill task")
+        .expect_err("the second page never comes");
+    assert!(
+        !variant(&error).starts_with("AuthorizationPending"),
+        "a fill that sent its pages timed out on the backend, not the login: {error:?}"
+    );
+}
+
+/// A fill on `backend` whose deadline fires during the request-time login it
+/// began: returns that login's authorization URL.
+async fn fill_abandons_a_login(
+    backend: &Arc<Backend>,
+    browser: &super::login_window::Browser,
+) -> String {
+    let fill = within(
+        "the fill's own deadline",
+        Box::pin(backend.tools_for_check(None, &[], false)),
+    )
+    .await;
+    assert!(fill.is_err(), "premise: the fill's deadline fired");
+    browser.opened(2, "the fill's request-time login").await
+}
+
+/// LOGINDL.4 (restart): a restart ends the request-time login a fill left
+/// open, so approving it afterwards reaches no listener. Green at base, where
+/// the deadline already ended it; after the change it fails if the detached
+/// task ignores the Lead's cancel.
+#[tokio::test]
+async fn a_restart_ends_a_detached_request_time_login() {
+    let (backend, browser, _dir) = approved_start(Upstream::Plain, Duration::from_secs(1)).await;
+    super::token_lapse::lapse(&backend).await;
+    let url = fill_abandons_a_login(&backend, &browser).await;
+
+    let restart = {
+        let backend = Arc::clone(&backend);
+        tokio::spawn(async move { backend.force_restart().await })
+    };
+    browser.opened(3, "the restart's own login").await;
+    assert!(
+        !approve_if_listening(&url).await,
+        "the restart left the fill's request-time login open"
+    );
+    restart.abort();
+}
+
+/// LOGINDL.4 (stop): a stop ends the request-time login a fill left open.
+#[tokio::test]
+async fn a_stop_ends_a_detached_request_time_login() {
+    let (backend, browser, _dir) = approved_start(Upstream::Plain, Duration::from_secs(1)).await;
+    super::token_lapse::lapse(&backend).await;
+    let url = fill_abandons_a_login(&backend, &browser).await;
+
+    within("the stop", backend.stop())
+        .await
+        .expect("the stop succeeds");
+    assert!(
+        !approve_if_listening(&url).await,
+        "the stop left the fill's request-time login open"
+    );
+    assert!(
+        !backend.login_gate.in_flight(),
+        "a login is still in flight after the stop"
+    );
+}
+
+/// LOGINDL.11: a forced restart's own start leads a fresh login: it captures
+/// its cancel epoch and cohort after its own cancel, so it never shares the
+/// `Cancelled` it caused.
+#[tokio::test]
+async fn a_forced_restart_leads_a_fresh_login_after_its_own_cancel() {
+    let (backend, browser, _dir) = approved_start(Upstream::Plain, Duration::from_secs(1)).await;
+    super::token_lapse::lapse(&backend).await;
+    fill_abandons_a_login(&backend, &browser).await;
+
+    let restart = {
+        let backend = Arc::clone(&backend);
+        tokio::spawn(async move { backend.force_restart().await })
+    };
+    let url = browser.opened(3, "the restart's own fresh login").await;
+    super::login_window::approve(&url).await;
+    let restarted = within("the restart", restart).await.expect("restart task");
+    assert!(
+        restarted.is_ok(),
+        "the restart shared a cancelled login instead of leading its own: {restarted:?}"
+    );
+}
