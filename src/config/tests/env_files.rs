@@ -567,3 +567,139 @@ fn a_reference_to_a_key_another_file_owns_is_still_refused() {
         "a key supplied only by another env file does not resolve here"
     );
 }
+
+// -------------------------------------------------------------------------
+// MIK-8367: a CLI-owned `MCP_GATEWAY_*` name is not a config override
+// -------------------------------------------------------------------------
+
+/// A 0600 config listing one capabilities directory, `listed-in-config`, and
+/// one owner-only env file holding `env`. The path is single-quoted: a plain
+/// scalar would cut it at a ` #`, and double quotes would read a Windows `\`
+/// as an escape.
+fn config_with_env_file(dir: &std::path::Path, env: &str) -> std::path::PathBuf {
+    let env_path = dir.join("cli.env");
+    write_owner_only(&env_path, env).expect("write env file");
+    let config_path = dir.join("config.yaml");
+    write_owner_only(
+        &config_path,
+        format!(
+            "env_files:\n  - '{}'\ncapabilities:\n  directories:\n    - listed-in-config\n",
+            env_path.display()
+        ),
+    )
+    .expect("write config");
+    config_path
+}
+
+/// MIK-8367.ENV.4: `MCP_GATEWAY_CAPABILITIES` is the tool subcommands'
+/// directory. On base the overlay read it as the `capabilities` key, a string
+/// where a struct belongs, and every config load failed. `serve` loads through
+/// `load_evaluated`; `doctor` among others through `load`. Both must load
+/// and keep the config's own directories.
+#[test]
+fn the_cli_capabilities_variable_neither_breaks_a_load_nor_replaces_config_directories() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = config_with_env_file(dir.path(), "MCP_GATEWAY_CAPABILITIES=/elsewhere\n");
+
+    let tolerant = Config::load(Some(&path)).expect("the tolerant loader loads");
+    let evaluated = Config::load_evaluated(Some(&path)).expect("serve's loader loads");
+    assert_eq!(
+        evaluated
+            .overlay
+            .resolve("MCP_GATEWAY_CAPABILITIES")
+            .as_deref(),
+        Some("/elsewhere"),
+        "the env file must have been applied, or this row proves nothing"
+    );
+    for config in [tolerant, evaluated.config] {
+        assert_eq!(config.capabilities.directories, vec!["listed-in-config"]);
+    }
+}
+
+/// MIK-8367.ENV.2/ENV.4: the provider itself emits no key for any CLI-owned
+/// name, so a partial exclusion fails here even where `Config` has no field
+/// of that name yet. The nested `SERVER__PORT` is the control.
+#[test]
+fn the_overlay_emits_no_key_for_any_cli_owned_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("all.env");
+    let mut env = String::new();
+    for name in CLI_OWNED_ENV {
+        env.push_str(name);
+        env.push_str("=x\n");
+    }
+    env.push_str("MCP_GATEWAY_SERVER__PORT=9090\n");
+    write_owner_only(&path, &env).expect("write env file");
+
+    let overlay = EnvOverlay::from_paths(std::slice::from_ref(&path));
+    let data = OverlayEnv::new(&overlay).data().expect("provider data");
+    let dict = data.get(&Profile::Default).expect("the default profile");
+
+    assert!(
+        dict.contains_key("server"),
+        "the control override is missing: {dict:?}"
+    );
+    for name in CLI_OWNED_ENV {
+        let key = name.trim_start_matches(OverlayEnv::PREFIX).to_lowercase();
+        assert!(
+            !dict.contains_key(&key),
+            "{name} reached the config as `{key}`"
+        );
+    }
+}
+
+/// MIK-8367.ENV.3: only the exact CLI names are skipped. A nested override,
+/// including one under `capabilities`, still reaches the config. This row
+/// catches an over-broad (prefix) skip; a missing skip is caught by the two
+/// rows above, since the nested key here replaces the colliding string anyway.
+#[test]
+fn nested_overrides_still_apply_beside_a_cli_owned_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = config_with_env_file(
+        dir.path(),
+        "MCP_GATEWAY_CAPABILITIES=/elsewhere\n\
+         MCP_GATEWAY_CAPABILITIES__NAME=from-env\n\
+         MCP_GATEWAY_SERVER__PORT=9090\n",
+    );
+
+    let config = Config::load(Some(&path)).expect("loads");
+    assert_eq!(config.capabilities.name, "from-env");
+    assert_eq!(config.server.port, 9090);
+}
+
+/// MIK-8367.ENV.2: `CLI_OWNED_ENV` is exactly the set of env names clap's
+/// flags own. A new `env = "MCP_GATEWAY_..."` flag fails here until it is
+/// listed, and so excluded from the overlay. A listed name that no flag owns
+/// any more fails too, so the list cannot rot into hiding a real config key.
+#[test]
+fn the_cli_owned_list_is_exactly_the_clis_env_names() {
+    use clap::CommandFactory;
+
+    fn walk(command: &clap::Command, names: &mut std::collections::BTreeSet<String>) {
+        for arg in command.get_arguments() {
+            if let Some(env) = arg.get_env() {
+                names.insert(env.to_string_lossy().into_owned());
+            }
+        }
+        for sub in command.get_subcommands() {
+            walk(sub, names);
+        }
+    }
+
+    let mut clap_names = std::collections::BTreeSet::new();
+    walk(&crate::cli::Cli::command(), &mut clap_names);
+    let listed: std::collections::BTreeSet<String> = CLI_OWNED_ENV
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+
+    assert!(
+        clap_names.contains("MCP_GATEWAY_CAPABILITIES"),
+        "the walk must reach subcommand flags, or this test proves nothing: {clap_names:?}"
+    );
+    assert!(
+        clap_names.contains("MCP_GATEWAY_CA_CERT"),
+        "the walk must reach flattened argument groups too: {clap_names:?}"
+    );
+    assert_eq!(listed, clap_names);
+}

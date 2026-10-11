@@ -8,6 +8,7 @@
 mod accounts;
 #[cfg(feature = "webui")]
 mod add_remove;
+mod api_key_rewrite;
 mod backend_url_keys;
 mod cap;
 pub(crate) mod color;

@@ -13,15 +13,49 @@ use std::collections::BTreeSet;
 /// it changed, the backends it could not edit, and the backends it left on
 /// their alias because the value is not an address of that key's scheme
 /// (renaming would switch transport, or leave a `url` that does not load).
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Default, PartialEq, Eq)]
 pub(crate) struct UrlRewrite {
     pub text: String,
     pub changed: Vec<usize>,
     pub skipped: Vec<String>,
     pub kept: Vec<String>,
-    /// What the same rewrite did with the retired `meta_mcp.cache_tools`
-    /// (MIK-8064).
-    pub retired: super::retired_config_keys::Retired,
+    /// What the same rewrite did with each removed key the file set
+    /// (MIK-8064, MIK-8044).
+    pub removed: Vec<super::retired_config_keys::Removal>,
+    /// What the same rewrite did with each plaintext API key (MIK-8044).
+    pub api_keys: Vec<super::api_key_rewrite::KeyRewrite>,
+}
+
+/// `text` is the whole config file, which can hold a plaintext API key (one
+/// `upgrade` had to leave, or before hashing), so `Debug` prints its length
+/// only (CWE-532). The other fields hold line numbers, backend and entry
+/// names, and outcomes, never key material.
+impl std::fmt::Debug for UrlRewrite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UrlRewrite")
+            .field(
+                "text",
+                &format_args!("<{} bytes redacted>", self.text.len()),
+            )
+            .field("changed", &self.changed)
+            .field("skipped", &self.skipped)
+            .field("kept", &self.kept)
+            .field("removed", &self.removed)
+            .field("api_keys", &self.api_keys)
+            .finish()
+    }
+}
+
+impl UrlRewrite {
+    /// The keys left in the file that stop it loading.
+    pub(crate) fn blocking(&self) -> usize {
+        self.removed.iter().filter(|r| r.blocks_load()).count()
+            + self
+                .api_keys
+                .iter()
+                .filter(|k| matches!(k, super::api_key_rewrite::KeyRewrite::Left { .. }))
+                .count()
+    }
 }
 
 /// The transport key a `url` stands for, by scheme. A private copy of the
@@ -102,7 +136,8 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
             changed: Vec::new(),
             skipped,
             kept,
-            retired: super::retired_config_keys::Retired::Absent,
+            removed: Vec::new(),
+            api_keys: Vec::new(),
         };
     }
     UrlRewrite {
@@ -110,7 +145,8 @@ pub(crate) fn rewrite_url_aliases(text: &str, only: Option<&BTreeSet<String>>) -
         changed,
         skipped,
         kept,
-        retired: super::retired_config_keys::Retired::Absent,
+        removed: Vec::new(),
+        api_keys: Vec::new(),
     }
 }
 

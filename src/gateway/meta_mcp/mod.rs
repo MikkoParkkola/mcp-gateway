@@ -98,6 +98,7 @@ mod interim_promotion_tests;
 pub(crate) mod invoke;
 mod prompt_cache;
 mod protocol;
+pub(crate) mod refund_witness;
 mod resources;
 pub(crate) mod response_security;
 pub(crate) use response_security::error_response_preserving_status;
@@ -122,8 +123,11 @@ pub(crate) mod visible;
 pub use visibility::InvokeScope;
 
 pub use prompt_cache::{CacheKeyDeriver, stable_tool_order, tool_schema_fingerprint};
-pub(crate) use support::Authentication;
 pub use support::prune_constant_signals;
+pub(crate) use support::{
+    Authentication, STEP_NOT_PERMITTED, STEP_NOT_PERMITTED_CODE, STEP_NOT_PERMITTED_STATUS,
+    step_not_permitted,
+};
 pub(crate) use task_confirmation::{
     AdmissionOwner, TaskConfirmation, TaskConfirmationRequest, task_admission_request,
 };

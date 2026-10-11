@@ -203,18 +203,30 @@ async fn two_identical_steps_both_run() {
 
 /// PRK.2: no step settles the client's OWN entry: after a keyed run, a direct
 /// call under the same key with step 0's exact tool and arguments is not
-/// served step 0's answer; it reaches the backend. Red on base: step 0
-/// settled the client's entry, so the direct call is served it without a call.
+/// served step 0's answer. Red on base: step 0 settled the client's entry, so
+/// the direct call was served it without a call. Since MIK-8154.LEASE.1 the
+/// direct route shares the execution store, where the key belongs to the
+/// playbook's execution: the direct call is refused with the store's
+/// mismatch, never served a step's answer, and the backend does not run.
 #[tokio::test]
 async fn a_step_never_settles_the_clients_own_key() {
     let fx = served(Answer::Ok, vec![reads("one", &["one"], json!({}))]).await;
     run(&fx, "one", Some("pk-own"), "pk-o1").await;
     let before = calls(&fx);
-    direct(&fx, "one", "pk-own", "pk-o2").await;
+    let answer = direct(&fx, "one", "pk-own", "pk-o2").await;
+    assert!(
+        answer.get("result").is_none(),
+        "served a step's entry: {answer}"
+    );
+    assert_eq!(
+        answer.pointer("/error/message").and_then(Value::as_str),
+        Some("JSON-RPC error 409: Idempotency key belongs to another execution or representation"),
+        "{answer}"
+    );
     assert_eq!(
         calls(&fx),
-        before + 1,
-        "the direct call was served a step's entry"
+        before,
+        "the backend ran under the playbook's key"
     );
 }
 

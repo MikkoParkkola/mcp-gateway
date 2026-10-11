@@ -227,7 +227,7 @@ async fn a_stdio_request_writes_no_telemetry_window() {
         written, 0,
         "{PINGS} answered stdio requests wrote the telemetry window {written} times on the request path"
     );
-    drop(session.client);
+    session.close().await;
 }
 
 /// SHUTDOWN.1 (stdin EOF): every request observed before EOF is in the saved
@@ -327,7 +327,7 @@ async fn the_saver_persists_observed_requests_while_the_session_runs() {
     })
     .await;
     assert!(saved > PINGS, "the saver wrote {saved} stdio requests");
-    drop(session.client);
+    session.close().await;
 }
 
 /// SHUTDOWN.1 (Option A condition): a dispatch that never completes cannot
@@ -350,14 +350,22 @@ async fn a_stop_with_a_hung_dispatch_still_ends_and_saves() {
         .expect("the trigger was taken")
         .send(())
         .expect("the gateway holds the trigger's receiver");
+    // stdin and stdout stay open until the session has ended: only the stop
+    // may end it, never an EOF from dropping the client (review round 1).
     let Session {
-        task, data, _dir, ..
+        client,
+        lines,
+        task,
+        data,
+        _dir,
+        ..
     } = session;
     timeout(HUNG_STOP_BOUND, task)
         .await
         .expect("a stop with a hung dispatch still ends the session")
         .expect("no panic")
         .expect("Ok");
+    drop((client, lines));
     let saved = load_durable_window(&data)
         .expect("the window file reads")
         .snapshot;

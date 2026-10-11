@@ -9,7 +9,6 @@ use tracing::{debug, info, warn};
 
 use super::BuiltMetaMcp;
 use super::Gateway;
-#[cfg(feature = "cost-governance")]
 use super::persistence;
 use super::stdio_refusal::{admit_stdio_request, stdio_busy_batch_response, stdio_busy_response};
 use super::warmstart::build_warm_start_list;
@@ -615,6 +614,10 @@ impl Gateway {
                     // cancel check and the enqueue.
                     #[cfg(test)]
                     super::stdio_seams::after_commit().await;
+                    #[cfg(test)]
+                    if response.is_some() && writer.capacity() == 0 {
+                        super::stdio_seams::answer_found_queue_full();
+                    }
                     if let Some(response) = response
                         && let Ok(permit) = writer.reserve().await
                     {
@@ -715,8 +718,11 @@ impl Gateway {
             let abort = dispatches.shutdown();
             stdio_shutdown::bounded_step(shutdown_deadline, "dispatch abort", abort).await;
         }
-        // No tick starts from here; a tick write still in flight finishes
-        // first, because the final save waits for the sink lock (MIK-8364).
+        // Abort the saver: no new tick is scheduled after this. `drop` does not
+        // await the abort, so a tick already past its interval may still start
+        // its thread, and a tick thread may still be writing. Either is safe:
+        // every save holds the sink lock, and the final save below waits for
+        // it, so no two saves overlap and no delta is counted twice (MIK-8364).
         drop(telemetry_saver);
         Self::persist_stdio_telemetry_bounded(shutdown_deadline, &protocol_telemetry_sink).await;
         #[cfg(feature = "cost-governance")]

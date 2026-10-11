@@ -166,7 +166,6 @@ agent_auth:
   agents: []
 cost_governance:
   enabled: false
-  currency: USD
   budgets:
     daily: null
     per_tool: {}

@@ -160,8 +160,10 @@ impl OutboundFrame {
         self.assessment.as_deref()
     }
 
-    /// Whether a sink bound to `destination` may write this frame. An
-    /// unjudged frame carries no key and binds nowhere.
+    /// Whether a sink bound to `destination` may write this frame. A judged
+    /// frame binds to the caller it was judged for. An unjudged frame carries
+    /// no key, so any sink may write it: the fast path, taken only when there
+    /// is nothing to judge (see [`Self::unjudged`]).
     fn bound_to(&self, destination: &str) -> bool {
         self.key.as_deref().is_none_or(|key| key == destination)
     }
@@ -395,5 +397,8 @@ pub(crate) fn noted_reads() -> Option<ReadAttribution> {
     crate::security::tenant_reads::noted()
 }
 
+#[cfg(all(test, feature = "firewall"))]
+#[path = "coverage_tests.rs"]
+mod coverage_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod tests;

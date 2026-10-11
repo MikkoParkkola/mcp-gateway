@@ -605,7 +605,7 @@ async fn t4_a_bridged_undeclared_last_round_is_not_kept_by_the_lease() {
     let owner = AdmissionOwner::for_test(caller.owner_principal());
     let id = crate::protocol::RequestId::Number(1);
     let Ok(SyncAdmission::Owned(lease)) =
-        m.admit_meta_sync(owner, &caller, "gateway_invoke", &args(), None, &id)
+        m.admit_meta_sync_for_test(owner, &caller, "gateway_invoke", &args(), None, &id)
     else {
         panic!("a keyed call takes the lease");
     };
@@ -618,7 +618,7 @@ async fn t4_a_bridged_undeclared_last_round_is_not_kept_by_the_lease() {
         .await
         .expect_err("the undeclared last round is refused");
     lease.complete_secured(&error_response_preserving_status(id.clone(), &error));
-    let again = m.admit_meta_sync(owner, &caller, "gateway_invoke", &args(), None, &id);
+    let again = m.admit_meta_sync_for_test(owner, &caller, "gateway_invoke", &args(), None, &id);
     assert!(
         matches!(again, Ok(SyncAdmission::Owned(_))),
         "the refusal was kept by the lease and would be replayed"

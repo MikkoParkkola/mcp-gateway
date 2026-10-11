@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Enforced response transforms and their control fields.
+//! Enforced response transforms and their control fields. An input round
+//! the content gate enforces on is refused outright (MIK-8325).
 
 use super::*;
 
 #[tokio::test]
-async fn an_enforced_transform_preserves_the_continuation_handle() {
+async fn an_enforced_input_round_is_refused_and_its_hold_released() {
     use crate::backend::Backend;
     use crate::config::{BackendConfig, FailsafeConfig};
     use crate::context_integrity::{
@@ -40,10 +41,8 @@ async fn an_enforced_transform_preserves_the_continuation_handle() {
     backend.set_transport_for_test(transport);
     let _ = registry.register(backend);
 
-    // Every decision kind is Strip so the test turns on the transform exit
-    // rather than on which finding the classifier happens to raise. Strip and
-    // Summarize deliver a string, and a string is what takes the scalar-wrap
-    // path this test guards; Deny withholds and legitimately ends the exchange.
+    // Every decision kind is Strip so the test turns on the enforced exit
+    // rather than on which finding the classifier happens to raise.
     let policy = ContextIntegrityPolicy {
         mode: ContextIntegrityPolicyMode::Enforce,
         untrusted_instruction_decision: ContextIntegrityDecisionKind::Strip,
@@ -76,69 +75,53 @@ async fn an_enforced_transform_preserves_the_continuation_handle() {
             )),
         )
     };
-    let result = meta
-        .invoke_tool(
-            &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
-            Some("session-1"),
-            &caller,
-        )
-        .await
-        .unwrap();
-
-    // Without these two the assertion below could pass on an untransformed
-    // result -- a green that proves nothing.
-    assert_eq!(
-        result["_context_integrity"]["policy"]["mode"], "enforce",
-        "{result:#}"
-    );
-    assert_eq!(
-        result["_context_integrity"]["policy"]["decision"], "strip",
-        "the fixture must reach the transform exit, not deny: {result:#}"
-    );
-    // The handle without the discriminator is a result that lies about which
-    // of the two it is: a live continuation token on a payload that claims to
-    // be a finished call.
-    assert_eq!(
-        result["resultType"], "input_required",
-        "an enforced transform must not silently complete an unfinished round: {result:#}"
-    );
-    // Asserted as "a handle is still there", not as a byte comparison against
-    // the backend's own state: the gateway seals its own continuation and hands
-    // that to the client, so the backend's opaque value is exactly what must
-    // NOT appear here. Both halves are checked, because either alone would pass
-    // on a result that ends the exchange or on one that leaks the backend's
-    // state verbatim.
-    let handle = result["requestState"].as_str().unwrap_or_else(|| {
-        panic!("an enforced transform must not end the multi-round exchange: {result:#}")
-    });
+    let now = crate::protocol::continuation::now_unix_secs();
+    // In a request scope, as every route runs it (HTTP, stdio, the task
+    // worker): a mint outside one registers no hold, so its release could not
+    // be observed here.
+    let refused = crate::gateway::meta_mcp::sealed_hold::scoped(meta.invoke_tool(
+        &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
+        Some("session-1"),
+        &caller,
+    ))
+    .await
+    .expect_err("a follow-up question the content gate blocked ends the call");
+    // The gate's existing delivery refusal: no new code or message (MIK-8325).
+    let rpc = refused.to_rpc_code();
+    assert_eq!(rpc, -32600, "{refused}");
     assert!(
-        !handle.is_empty(),
-        "an enforced transform must not end the multi-round exchange: {result:#}"
+        refused
+            .to_string()
+            .contains(crate::gateway::meta_mcp::invoke::egress::REFUSAL),
+        "{refused}"
     );
-    assert_ne!(
-        handle, "opaque-continuation-handle",
-        "the backend's own continuation state must not cross to the client: {result:#}"
-    );
+    // The continuation the funnel sealed before the gates ran is given back:
+    // nothing redeemable outlives the refused round. It was minted, in the
+    // scope, and dropped there without reaching a transport, so the empty
+    // table below is a release, not a mint that never happened.
+    let continuation = meta.continuation();
+    let counts = continuation.hold_counts();
+    let read = |n: &std::sync::atomic::AtomicU64| n.load(std::sync::atomic::Ordering::Relaxed);
     assert_eq!(
-        result["isError"],
-        json!(false),
-        "isError must survive as a boolean: {result:#}"
+        [
+            read(&counts.registered),
+            read(&counts.unscoped),
+            read(&counts.unhanded_drops)
+        ],
+        [1, 0, 1],
+        "one hold registered in the scope and dropped unhanded"
     );
-    // The questions are the attacker-controlled text enforcement just stripped.
-    // Re-emitting them as structured JSON would hand back a machine-actionable
-    // copy of the payload the kernel removed.
-    assert!(
-        result.get("inputRequests").is_none(),
-        "the stripped questions must not cross back as structured JSON: {result:#}"
-    );
-    // The kernel renders the whole result into the stripped text, so the marker
-    // reappears there by design. What must not survive is the envelope FIELD:
-    // rebuilding from a named list is what keeps an uninspected `_meta` from
-    // being handed back after enforcement judged the payload untrusted.
-    assert!(
-        result.get("_meta").is_none(),
-        "only named protocol fields may survive enforcement, not the whole envelope: {result:#}"
-    );
+    // The drop releases the slot in place when the table is free, or from a
+    // spawned task when it is busy (`sealed_hold::release`). Under a loaded
+    // full run either path can be taken, so wait for the release, bounded,
+    // rather than read the table once (MIK-8354).
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while meta.continuation().in_flight().len(now).await != 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the sealed envelope's hold is released within 10 s");
 }
 
 /// A completed result carrying a stray `requestState` must not acquire one.
