@@ -38,6 +38,7 @@ use super::super::meta_mcp_helpers::{extract_required_str, parse_tool_arguments}
 #[cfg(test)]
 use super::super::recovery::ErrorCategory;
 use super::MetaMcp;
+use super::refund_witness::{self as rw, RefundWitness};
 mod side_effect_markers;
 mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
@@ -202,8 +203,9 @@ impl MetaMcp {
         let target = (server, backend.as_ref().map(|backend| backend.instance()));
         // MIK-8353 3a: the refund witness, carried by value through every
         // may-effect step below; a refusal hands back what survived.
-        use crate::gateway::meta_mcp::refund_witness::{self as rw, RefundWitness};
-        let witness = caller.signing.and_then(|signing| signing.take_witness());
+        let witness = caller
+            .signing
+            .and_then(super::signing::SigningInvocationContext::take_witness);
         let propagation::ResolvedDispatch {
             caller_credential,
             account_credential,

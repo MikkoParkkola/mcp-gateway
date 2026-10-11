@@ -629,6 +629,14 @@ pub(crate) fn stdio_refund_through_delivery() -> [Delivered; 3] {
     const NONCE: &str = "stdio-settle-nonce-0001";
     runtime().block_on(async {
         let fixture = Fixture::start_hardened().await;
+        // The refusal must be effect-free to earn a refund (NONCEFX.9): a
+        // cold schema slot would fetch `tools/list` first and keep the nonce.
+        let backend = fixture.meta.backends.get(BACKEND).expect("backend");
+        backend
+            .get_tools_shared()
+            .await
+            .expect("warm the schema slot");
+        assert!(backend.has_cached_tools(), "premise: the schema is warm");
         let send = |extra: Value| {
             let fixture = &fixture;
             async move {

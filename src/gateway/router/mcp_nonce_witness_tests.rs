@@ -4,7 +4,7 @@
 //! step that may have taken effect keeps its nonce spent. A refund needs the
 //! refund witness, and a credential mint or refresh, a backend `tools/list`
 //! or a consumed continuation drops it. Each KEEP row pairs with a REFUND
-//! control on the effect-free path (mcp_nonce_tests.rs n1a, n1b).
+//! control on the effect-free path (`mcp_nonce_tests.rs` n1a, n1b).
 
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -16,7 +16,7 @@ const SUBJECT: &str = "alice";
 
 /// Seed `SUBJECT`'s per-user slot on each backend with the scripted
 /// transport, so a propagated call dispatches to it (as
-/// slot_quota_direct_tests.rs does).
+/// `slot_quota_direct_tests.rs` does).
 fn seed_caller_slots(fx: &Fx) {
     for backend in ["alpha", "alpha-pt"] {
         let registered = fx.state.backends.get(backend).expect("fixture backend");
@@ -202,7 +202,7 @@ fn blocked_answer() -> String {
 /// K-choke-consume: a valid retry whose answers the firewall blocks consumes
 /// its continuation in `redeem_retry`, then the chokepoint refuses it. The
 /// consume dropped the witness: a fresh call under that nonce is a replay.
-/// Red on base: it is served (the /mcp twin of f2d_giveback, which refunds).
+/// Red on base: it is served (the /mcp twin of `f2d_giveback`, which refunds).
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn a_chokepoint_refusal_after_a_consume_keeps_the_nonce() {
