@@ -431,7 +431,9 @@ async fn mcp_task_refused_after_its_grant_was_consumed_keeps_its_nonce() {
         "premise: the redemption did not consume the grant: {}",
         seen.refused
     );
-    assert_eq!(resent, redeemed, "the refused re-send consumed a grant");
+    // Here the re-send carries a new grant, which X14 consumes before the
+    // nonce check: exactly one more, never the first grant again.
+    assert_eq!(resent, redeemed + 1, "the re-send's new grant: {}", seen.resent);
     assert!(
         message(&seen.refused).contains("kill switch"),
         "premise: admission's kill-switch refusal: {}",

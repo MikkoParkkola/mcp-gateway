@@ -80,6 +80,13 @@ async fn send_task(fx: &super::direct_guards_fixture::Fx, params: Value) -> Valu
     .1
 }
 
+/// Loads `alpha`'s tool list into its cache, so X14 classifies `read` from
+/// its listed annotation instead of confirming an unknown tool.
+async fn warm(fx: &super::direct_guards_fixture::Fx) {
+    let backend = fx.state.backends.get("alpha").expect("alpha is registered");
+    backend.get_tools().await.expect("alpha lists its tools");
+}
+
 /// Waits (up to 10 s) until the backend has seen more than `seen` calls.
 async fn backend_calls_past(calls: &std::sync::atomic::AtomicUsize, seen: usize) -> usize {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -104,6 +111,7 @@ pub(crate) async fn mcp_x14_consumed_then_refused() -> McpConsumedThenRefused {
         super::direct_guards_fixture::fixture_hardened_signed_built(Answer::Ok, true, surfacing),
     )
     .await;
+    warm(&fx).await;
     let meta = &fx.state.meta_mcp;
     let none = serde_json::json!({});
     meta.kill_switch().kill("alpha");
@@ -114,7 +122,10 @@ pub(crate) async fn mcp_x14_consumed_then_refused() -> McpConsumedThenRefused {
     let refused = send_task(&fx, signed_task_read("h1-n1", "h1-a", &answer)).await;
     let after = meta.continuation().ledger().len().await;
     meta.kill_switch().revive("alpha");
-    let resent = send_task(&fx, signed_task_read("h1-n1", "h1-b", &none)).await;
+    // X14 runs before nonce admission here, so the same nonce reaches the
+    // nonce check only with a new grant: X14 asks again and consumes it.
+    let again = send_task(&fx, signed_task_read("h1-n1", "h1-b", &none)).await;
+    let resent = send_task(&fx, signed_task_read("h1-n1", "h1-b", &accepting(&again))).await;
     let after_resend = meta.continuation().ledger().len().await;
     let calls_before_honest = calls.load(Ordering::SeqCst);
     let asked = send_task(&fx, signed_task_read("h1-n2", "h1-c", &none)).await;
@@ -132,7 +143,8 @@ pub(crate) async fn mcp_x14_consumed_then_refused() -> McpConsumedThenRefused {
 }
 
 /// MIK-8353 H1-mcp-control: the same admission refusal with no grant consumed.
-/// `read` is unannotated on this fixture, so X14 has nothing to ask. With
+/// `read` is listed unannotated on this fixture and the catalogue is warmed,
+/// so X14 classifies it harmless and has nothing to ask. With
 /// `alpha` killed, the signed task call is refused by admission; the backend is
 /// revived and the same nonce re-sent, then sent a third time. Returns (the
 /// refusal, the re-send, the third send, the backend calls once the re-send's
@@ -140,6 +152,7 @@ pub(crate) async fn mcp_x14_consumed_then_refused() -> McpConsumedThenRefused {
 pub(crate) async fn mcp_task_refused_without_grant() -> (Value, Value, Value, usize) {
     let fx = super::direct_guards_fixture::fixture_hardened_signed_built(Answer::Ok, true, surfacing)
         .await;
+    warm(&fx).await;
     let meta = &fx.state.meta_mcp;
     let none = serde_json::json!({});
     meta.kill_switch().kill("alpha");
