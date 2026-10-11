@@ -6,6 +6,9 @@ use mcp_gateway::cli::{Cli, InitProfile};
 use mcp_gateway::config::{BackendConfig, Config, TransportConfig};
 use mcp_gateway::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
 use mcp_gateway::gateway::test_helpers::write_config_fixture;
+#[cfg(unix)]
+#[path = "main_audit_secret_tests.rs"]
+mod audit_secret;
 #[path = "main_cli_parse_tests.rs"]
 mod cli_parse;
 #[path = "main_dangling_tests.rs"]
