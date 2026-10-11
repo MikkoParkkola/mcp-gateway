@@ -38,8 +38,9 @@ fn a_plan_step_digest_is_capped_later_as_a_delivery_is_now() {
 }
 
 /// MIK-7992: a plan step's digest recorded without being kept to its plan's
-/// answer is capped where it is recorded: the cut is counted and the middle
-/// of an over-cap text is not recorded, as for any other delivery.
+/// answer is capped where it is recorded: the cut is counted. Its middle is
+/// then evidence through the thinned sample (`MIK-8066.CAP.2`), as for any
+/// other cut delivery, and its holder stays excused.
 #[test]
 fn a_deferred_digest_is_capped_where_it_is_recorded() {
     let (fw, _dir) = observing(|_| {});
@@ -58,8 +59,12 @@ fn a_deferred_digest_is_capped_where_it_is_recorded() {
 
     assert_eq!(fw.relay_text_cuts(), 1, "the cap applied at the sink");
     assert!(
-        egress(&fw, RelayCaller::Keyed("bob")).findings.is_empty(),
-        "the dropped middle was recorded"
+        !egress(&fw, RelayCaller::Keyed("bob")).findings.is_empty(),
+        "the cut middle was never receipted"
+    );
+    assert!(
+        egress(&fw, RelayCaller::Keyed("carol")).findings.is_empty(),
+        "the holder was refused"
     );
 }
 

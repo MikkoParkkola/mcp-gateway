@@ -16,6 +16,8 @@ use crate::security::firewall::{
 
 #[path = "collusion_gate_excuse_tests.rs"]
 mod excuse;
+#[path = "collusion_gate_middle_tests.rs"]
+mod middle;
 #[path = "collusion_gate_plan_tests.rs"]
 mod plan;
 

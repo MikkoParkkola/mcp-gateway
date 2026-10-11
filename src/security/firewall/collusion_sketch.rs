@@ -268,6 +268,13 @@ impl SketchStore {
     /// backstop, any pair's for the global cap, oldest first) until it
     /// fits. `None`, counted, when it cannot fit even then: the delivery is
     /// recorded without a sketch.
+    /// Cap the store at the bytes it holds now, so the next sketch must
+    /// evict (tests only, `MIK-8066.CAP.2`).
+    #[cfg(test)]
+    pub(super) fn cap_at_live(&mut self) {
+        self.cap = self.bytes;
+    }
+
     pub(super) fn reserve(&mut self, pair: Pair, n: usize) -> Option<Reservation> {
         let pair_cap = self.pair_cap;
         loop {
