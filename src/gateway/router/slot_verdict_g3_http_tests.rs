@@ -32,6 +32,10 @@ pub(super) struct Gateway {
     pub(super) caller: Arc<Asked>,
     pub(super) shared: Arc<Asked>,
     pub(super) mints: Arc<AtomicUsize>,
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(dead_code, reason = "read only by the firewall-gated rows")
+    )]
     firewall_audit: PathBuf,
     _store: tempfile::TempDir,
     _files: [tempfile::NamedTempFile; 3],
@@ -52,6 +56,10 @@ impl Gateway {
     }
 
     /// The `policy_targets` of each response row the firewall audited.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(dead_code, reason = "read only by the firewall-gated rows")
+    )]
     fn response_targets_audited(&self) -> Vec<Value> {
         std::fs::read_to_string(&self.firewall_audit)
             .unwrap_or_default()
