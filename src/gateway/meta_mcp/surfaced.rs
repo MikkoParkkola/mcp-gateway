@@ -29,8 +29,12 @@ pub(crate) enum ArgsPolicy {
     /// A backend tool's: a JSON string is decoded as a whole.
     BackendWhole,
     /// A meta tool whose handler reads its own `arguments` as they are, but
-    /// decodes an inner `arguments` (and a `chain` step's) itself.
+    /// decodes an inner `arguments` itself.
     MetaParsedInner,
+    /// [`Self::MetaParsedInner`] whose handler also reads a `chain`, decoding
+    /// each step's `arguments` (`gateway_execute`). Only this one has a
+    /// `chain` the sanitize step decodes (MIK-8378).
+    MetaParsedChain,
     /// A meta tool whose handler reads its own `arguments` as they are.
     MetaOpaque,
 }
@@ -42,7 +46,7 @@ pub(crate) enum ArgsPolicy {
 /// handler. A new meta tool takes its row here, with its policy.
 pub(crate) const META_TOOLS: &[(&str, ArgsPolicy)] = &[
     ("gateway_search", ArgsPolicy::MetaOpaque),
-    ("gateway_execute", ArgsPolicy::MetaParsedInner),
+    ("gateway_execute", ArgsPolicy::MetaParsedChain),
     ("gateway_list_servers", ArgsPolicy::MetaOpaque),
     ("gateway_list_tools", ArgsPolicy::MetaOpaque),
     ("gateway_search_tools", ArgsPolicy::MetaOpaque),

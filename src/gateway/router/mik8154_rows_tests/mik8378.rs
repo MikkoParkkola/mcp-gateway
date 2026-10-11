@@ -76,6 +76,21 @@ async fn e2c_a_dirty_chain_step_key_is_refused() {
     assert_eq!(calls(&fx), 0, "e2c: dispatched");
 }
 
+/// MIK-8378 (lead ruling, sanitizer matches dispatch): `gateway_invoke`
+/// ignores a `chain`, so an encoded NUL in one is neither decoded nor
+/// refused, and the call dispatches as it would without it.
+#[tokio::test]
+async fn an_ignored_invoke_chain_is_not_decoded_and_dispatches() {
+    let fx = plain().await;
+    let encoded = json!({"cmd": "a\u{0}b"}).to_string();
+    let params = json!({"name": "gateway_invoke", "arguments": {"server": "alpha",
+        "tool": "read", "arguments": {},
+        "chain": [{"tool": "alpha:read", "arguments": encoded}]}});
+    let (_, body) = send(&fx, "/mcp", "k-std", "tools/call", params, None).await;
+    assert!(body.get("error").is_none(), "ignored chain refused: {body}");
+    assert_eq!(calls(&fx), 1, "not dispatched: {body}");
+}
+
 /// ENV.2 position 2: a dirty own key of `gateway_invoke`'s `arguments._meta`.
 #[tokio::test]
 async fn e2e_a_dirty_invoke_meta_key_is_refused() {

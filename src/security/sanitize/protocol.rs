@@ -141,12 +141,13 @@ fn validate_keys(value: &Value) -> Result<()> {
 }
 
 /// Where an `arguments` slot sits in the request: a meta tool's own (the
-/// gateway parses the inner `arguments` and chain steps inside it), any other
-/// tool's own (its contents are the tool's, plain values), or one the gateway
-/// parses inside a meta tool's.
+/// gateway parses the inner `arguments` inside it, and for a chained one the
+/// `chain` steps too), any other tool's own (its contents are the tool's,
+/// plain values), or one the gateway parses inside a meta tool's.
 #[derive(Clone, Copy)]
 enum Slot {
     Meta,
+    MetaChain,
     Tool,
     Inner,
 }
@@ -190,6 +191,7 @@ pub(super) fn sanitize_value(key: &str, value: &Value, route: ProtocolRoute) -> 
         .map_or(ArgsPolicy::BackendWhole, args_policy)
     {
         ArgsPolicy::MetaParsedInner => Some(Slot::Meta),
+        ArgsPolicy::MetaParsedChain => Some(Slot::MetaChain),
         ArgsPolicy::MetaOpaque => None,
         ArgsPolicy::BackendWhole => Some(Slot::Tool),
     };
@@ -244,16 +246,20 @@ fn sanitize_slot(value: &Value, slot: Slot) -> Result<Value> {
     }
 }
 
-/// A meta call's arguments: its inner `arguments` and each `chain` step's
-/// `arguments` (`gateway_execute`, dispatched through the invoke funnel,
-/// which decodes them) are slots too; an inner slot holds a tool's own arguments,
+/// A meta call's arguments: its inner `arguments` is a slot too and, for a
+/// chained meta tool (`gateway_execute`, dispatched through the invoke funnel,
+/// which decodes them), each `chain` step's `arguments`. Another meta tool's
+/// `chain` is not read by its handler, so it is sanitized as plain values,
+/// never decoded (MIK-8378). An inner slot holds a tool's own arguments,
 /// sanitized as plain values.
 fn sanitize_arguments(map: &serde_json::Map<String, Value>, slot: Slot) -> Result<Value> {
     match slot {
         Slot::Tool | Slot::Inner => sanitize_json_value(&Value::Object(map.clone())),
-        Slot::Meta => sanitize_object(map, |key, member| match (key, member) {
+        Slot::Meta | Slot::MetaChain => sanitize_object(map, |key, member| match (key, member) {
             ("arguments", _) => Some(sanitize_slot(member, Slot::Inner)),
-            ("chain", Value::Array(steps)) => Some(sanitize_steps(steps)),
+            ("chain", Value::Array(steps)) if matches!(slot, Slot::MetaChain) => {
+                Some(sanitize_steps(steps))
+            }
             _ => None,
         }),
     }
@@ -318,20 +324,22 @@ mod tests {
         assert!(sanitize_request(&request, ProtocolRoute::Meta).is_err());
     }
 
-    /// S9h (MIK-8378): the sanitize step matches the keys it decodes by as
-    /// sanitized where ENV.2 refuses nothing. A dirty `arguments` key in a
-    /// `chain` step under `gateway_invoke` (ENV.2 checks chain steps for
-    /// `gateway_execute` only) still reaches the decode, so the encoded NUL
-    /// under it is refused. S9d pinned this before ENV.2 refused its key.
+    /// MIK-8378: a `chain` is decoded only where its handler reads one
+    /// (`gateway_execute`). `gateway_invoke` ignores a `chain`, so its steps
+    /// are sanitized as plain values: an encoded string stays a string, and
+    /// an escaped NUL inside it is not refused.
     #[test]
-    fn s9h_a_dirty_step_arguments_key_does_not_skip_the_decode() {
-        let step = json!({"tool": "alpha:read",
-            "arg\u{7}uments": json!({"cmd": "a\u{0}b"}).to_string()});
+    fn an_ignored_chain_is_not_decoded() {
+        let encoded = json!({"cmd": "a\u{0}b"}).to_string();
         let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-            "params": {"name": "gateway_invoke", "arguments": {"chain": [step]}}});
-        let refused = sanitize_request(&request, ProtocolRoute::Meta)
-            .expect_err("the encoded NUL is decoded and refused");
-        assert!(refused.to_string().contains("null bytes"), "{refused}");
+            "params": {"name": "gateway_invoke", "arguments": {"server": "alpha",
+                "tool": "read", "arguments": {},
+                "chain": [{"tool": "alpha:read", "arguments": encoded}]}}});
+        let clean = sanitize_request(&request, ProtocolRoute::Meta).expect("sanitizes");
+        assert_eq!(
+            clean["params"]["arguments"]["chain"][0]["arguments"],
+            json!(encoded)
+        );
     }
 
     /// Round-4 seat gpt: a raw control character that makes an encoded
@@ -407,7 +415,8 @@ mod tests {
     #[test]
     fn args_policy_resolves_each_kind_of_tool() {
         use super::{ArgsPolicy, args_policy};
-        for name in ["gateway_execute", "gateway_invoke", "gateway_run_playbook"] {
+        assert_eq!(args_policy("gateway_execute"), ArgsPolicy::MetaParsedChain);
+        for name in ["gateway_invoke", "gateway_run_playbook"] {
             assert_eq!(args_policy(name), ArgsPolicy::MetaParsedInner, "{name}");
         }
         assert_eq!(args_policy("gateway_list_servers"), ArgsPolicy::MetaOpaque);
