@@ -618,3 +618,128 @@ async fn c14_http_descriptor_blocked_target_resolves_nothing() {
         "C14-http: a slot was filled for a blocked target"
     );
 }
+
+/// C10 over HTTP `/mcp` (withheld, lacked): C1 at argument-key enforcement
+/// Off. RED on base: F13 returns before reading the slot, so it dispatches.
+#[tokio::test]
+async fn c10_http_per_user_visibility_runs_with_enforcement_off() {
+    let off = InputSchemaEnforcement::Off;
+    let unknown = gateway(CallerSlot::Lacks, off, Surfaced::No).await;
+    let absent = post_as_alpha(&unknown.router, "/mcp", &tools_call(TOOL)).await;
+    assert_eq!(
+        absent.1.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "premise: an unknown name answers -32601 at Off: {absent:?}"
+    );
+    for slot in [CallerSlot::Invalid, CallerSlot::Lacks] {
+        let gw = gateway(slot, off, Surfaced::Yes).await;
+        let answer = post_as_alpha(&gw.router, "/mcp", &tools_call(TOOL)).await;
+        assert_eq!(
+            gw.dispatched(),
+            0,
+            "C10-http {slot:?}: dispatched; {answer:?}"
+        );
+        assert_eq!(
+            answer, absent,
+            "C10-http {slot:?}: {answer:?} vs unknown {absent:?}"
+        );
+    }
+}
+
+/// C6b in Standard mode (guard, kills M13): an undeclared key against a
+/// level that states `additionalProperties: false` keeps today's wrapped
+/// refusal on the direct route, never -32601. alpha's slot is given the
+/// closed schema directly, since `valid()` leaves the level open.
+#[tokio::test]
+async fn c6b_standard_direct_route_argument_key_refusal_unchanged() {
+    use crate::gateway::meta_mcp::slot_verdict_fixture::BINDING;
+    let gw = gateway(
+        CallerSlot::Valid,
+        InputSchemaEnforcement::Standard,
+        Surfaced::Yes,
+    )
+    .await;
+    let closed: crate::protocol::Tool = serde_json::from_value(json!({
+        "name": TOOL, "description": "A ledger tool.",
+        "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}},
+            "additionalProperties": false}
+    }))
+    .expect("a tool");
+    gw.meta
+        .backends
+        .get(BACKEND)
+        .expect("the backend")
+        .store_per_user_tools_for_test(BINDING, vec![closed]);
+    let body = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+        "params": {"name": TOOL, "arguments": {"q": "x", "invented": 1}}});
+    let answer = post_as_alpha(&gw.router, &direct(), &body).await;
+    assert_eq!(
+        gw.dispatched(),
+        0,
+        "premise: an undeclared key was dispatched: {answer:?}"
+    );
+    assert_eq!(
+        answer.1.pointer("/result/isError"),
+        Some(&json!(true)),
+        "C6b-standard: the argument-key refusal changed shape: {answer:?}"
+    );
+}
+
+/// An upstream whose `tools/list` answers without a tools array: an unreadable
+/// page, which the direct route judges as a TRUNCATED listing.
+struct UnreadableList;
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for UnreadableList {
+    async fn request(
+        &self,
+        _method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        Ok(crate::protocol::JsonRpcResponse::success(
+            crate::protocol::RequestId::Number(1),
+            json!({"tools": "not-a-list"}),
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// I2b, second half: after ONLY a Truncated `/mcp/{BACKEND}` `tools/list` as
+/// alpha, the index holds no entry for alpha. Red-by-absence on the stub.
+#[tokio::test]
+async fn i2b_truncated_direct_route_listing_leaves_no_index_entry() {
+    use crate::gateway::meta_mcp::slot_verdict_fixture::{BINDING, indexed_binding_for};
+    let gw = gateway_cold(CallerSlot::Valid, Surfaced::Yes).await;
+    gw.meta
+        .backends
+        .get(BACKEND)
+        .expect("the backend")
+        .set_pooled_transport_for_test(
+            &crate::backend::PoolKey::PerUser {
+                binding: BINDING.to_string(),
+            },
+            Arc::new(UnreadableList),
+        );
+    let list = json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}});
+    let answer = post_as_alpha(&gw.router, &direct(), &list).await;
+    assert!(
+        answer.1.pointer("/result/tools").is_some(),
+        "premise: the direct listing was not answered: {answer:?}"
+    );
+    assert_eq!(
+        indexed_binding_for(&gw.meta, "alpha"),
+        None,
+        "I2b: a Truncated direct-route listing wrote an index entry"
+    );
+}
