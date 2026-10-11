@@ -269,7 +269,6 @@ impl Gateway {
         Option<serde_json::Value>,
     > {
         use super::super::router::helpers::parse_request_ref;
-        use crate::protocol::JsonRpcResponse;
 
         let (id, method, params) = match parse_request_ref(request) {
             Ok((id, method, params)) => (id, method.to_string(), params),
@@ -302,16 +301,12 @@ impl Gateway {
             request_shape.declared_log_level(),
         );
 
-        // Notifications have no id — send no response
-        if method.starts_with("notifications/") {
+        // A notification gets no response. `parse_request_ref` already refused
+        // a request without an id (-32600 "Missing id"), so anything else
+        // reaching here carries one.
+        let Some(id) = id.filter(|_| !method.starts_with("notifications/")) else {
             debug!(notification = %method, "stdio: notification (no response)");
             return Err(None);
-        }
-
-        // Requests must have an id
-        let Some(id) = id else {
-            let resp = JsonRpcResponse::error(None, -32600, "Missing id");
-            return Err(Some(resp.to_value_lossy()));
         };
 
         Ok((id, method, params, request_shape))
