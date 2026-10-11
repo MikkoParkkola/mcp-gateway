@@ -22,6 +22,8 @@ use crate::gateway::Gateway;
 const FLOOD: usize = super::super::STDOUT_QUEUE_DEPTH + 200;
 /// Bound on each wait for a frame in the reading control.
 const ARRIVAL: Duration = Duration::from_secs(10);
+/// Real-time bound on a whole paused-clock row: only a true hang reaches it.
+const HANG_BOUND: Duration = Duration::from_secs(300);
 
 struct Served {
     stdin: DuplexStream,
@@ -98,35 +100,80 @@ fn batch(id: usize) -> String {
 }
 
 /// Close stdin with stdout still unread and require `run_stdio_on` to return
-/// `Ok` within the drain deadline plus a margin.
+/// `Ok` within its contract: the drain deadline plus the teardown deadline.
+///
+/// The writer stays blocked on the unread stdout, so the drain must run to
+/// its deadline. From EOF the clock is paused (MIK-8360): once every task is
+/// idle, tokio advances it to the next deadline, so the row measures the
+/// product's own bound on a clock load cannot move. A parked reader never
+/// returns at all, which [`watched`] reports in real time.
 async fn eof_returns_while_stdout_is_unread(mut served: Served) {
+    tokio::time::pause();
+    let eof = tokio::time::Instant::now();
     drop(served.stdin);
-    let bound = super::super::STDIO_DRAIN_TIMEOUT + Duration::from_secs(15);
-    timeout(bound, &mut served.task)
+    (&mut served.task)
         .await
-        .unwrap_or_else(|_| panic!("run_stdio_on must return within {bound:?} of EOF"))
         .expect("the serve task does not panic")
         .expect("run_stdio_on returns Ok");
+    let contract =
+        super::super::STDIO_DRAIN_TIMEOUT + super::super::stdio_shutdown::STDIO_TEARDOWN_TIMEOUT;
+    let took = eof.elapsed();
+    assert!(
+        took <= contract,
+        "run_stdio_on returned {took:?} after EOF, past its {contract:?} contract"
+    );
     // Held until here: dropping the reader would unblock the writer.
     drop(served.stdout);
 }
 
+/// Run `row` on its own current-thread runtime on a spawned thread, failing
+/// if it has not finished within [`HANG_BOUND`] of real time. The row pauses
+/// its runtime's clock; this watchdog runs outside it, so a hang still fails
+/// the test (the stuck thread is leaked, not joined).
+fn watched<F>(row: impl FnOnce() -> F + Send + 'static)
+where
+    F: std::future::Future<Output = ()>,
+{
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime")
+            .block_on(row());
+        let _ = done.send(());
+    });
+    match finished.recv_timeout(HANG_BOUND) {
+        Ok(()) => {}
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("run_stdio_on never returned after EOF: the reader is parked")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("the row panicked; its message is above")
+        }
+    }
+}
+
 /// T1. Parse errors past a full queue do not park the reader.
-#[tokio::test]
-async fn parse_errors_on_a_full_stdout_do_not_park_the_reader() {
-    let mut served = serve(64).await;
-    let flood = vec!["{not json"; FLOOD].join("\n");
-    send(&mut served.stdin, &flood).await;
-    eof_returns_while_stdout_is_unread(served).await;
+#[test]
+fn parse_errors_on_a_full_stdout_do_not_park_the_reader() {
+    watched(|| async {
+        let mut served = serve(64).await;
+        let flood = vec!["{not json"; FLOOD].join("\n");
+        send(&mut served.stdin, &flood).await;
+        eof_returns_while_stdout_is_unread(served).await;
+    });
 }
 
 /// T2 (AC2). Batches past a full queue do not park the reader.
-#[tokio::test]
-async fn batches_on_a_full_stdout_do_not_park_the_reader() {
-    let mut served = serve(64).await;
-    let flood: Vec<String> = (0..FLOOD).map(batch).collect();
-    send(&mut served.stdin, &flood.join("\n")).await;
-    eof_returns_while_stdout_is_unread(served).await;
+#[test]
+fn batches_on_a_full_stdout_do_not_park_the_reader() {
+    watched(|| async {
+        let mut served = serve(64).await;
+        let flood: Vec<String> = (0..FLOOD).map(batch).collect();
+        send(&mut served.stdin, &flood.join("\n")).await;
+        eof_returns_while_stdout_is_unread(served).await;
+    });
 }
 
 /// T3. Positive control: a client that reads loses nothing. Every batch item,
