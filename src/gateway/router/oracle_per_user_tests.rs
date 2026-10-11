@@ -124,6 +124,11 @@ enum Entry {
 
 /// alpha's call of [`TOOL`] on `entry` with `args`, the body without `id`.
 async fn call(gw: &Gateway, entry: Entry, args: Value) -> (StatusCode, Value) {
+    call_as(gw, entry, args, true).await
+}
+
+/// [`call`], as alpha (`identified`) or as a caller with no principal.
+async fn call_as(gw: &Gateway, entry: Entry, args: Value, identified: bool) -> (StatusCode, Value) {
     let (uri, params) = match entry {
         Entry::Invoke => (
             "/mcp".to_string(),
@@ -142,13 +147,15 @@ async fn call(gw: &Gateway, entry: Entry, args: Value) -> (StatusCode, Value) {
         .header("content-type", "application/json")
         .body(axum::body::Body::from(body.to_string()))
         .expect("request");
-    request.extensions_mut().insert(VerifiedIdentity {
-        subject: "alpha".to_string(),
-        email: "alpha@example.invalid".to_string(),
-        name: None,
-        groups: vec![],
-        issuer: "https://issuer.example.invalid".to_string(),
-    });
+    if identified {
+        request.extensions_mut().insert(VerifiedIdentity {
+            subject: "alpha".to_string(),
+            email: "alpha@example.invalid".to_string(),
+            name: None,
+            groups: vec![],
+            issuer: "https://issuer.example.invalid".to_string(),
+        });
+    }
     let response = gw.router.clone().oneshot(request).await.expect("response");
     let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
@@ -368,4 +375,23 @@ fn rescript(gw: &Gateway, holds: bool) {
         asked: Arc::clone(&gw.caller),
     };
     gw.backend.set_pooled_transport_for_test(&key, Arc::new(upstream));
+}
+
+/// ORACLE.4, no principal (lead ruling 2026-10-11, MIK-8356 R3.7): on the
+/// direct route, a caller with no principal on a required per-user backend
+/// answers -32601 as on every other entry, not the identity refusal (403,
+/// -32003), and resolves no credential. RED on base: `propagate_identity`
+/// answers it first.
+#[tokio::test]
+async fn c5_direct_no_principal_answers_absent_and_resolves_nothing() {
+    let gw = gateway(CallerSlot::Valid, Warmth::Warm, "other", false).await;
+    let answer = call_as(&gw, Entry::Direct, json!({"q": "x"}), false).await;
+    let mut cells = Vec::new();
+    if (answer.0, answer.1.pointer("/error/code")) != (StatusCode::OK, Some(&json!(-32601))) {
+        cells.push(format!("C5: answered {answer:?}"));
+    }
+    if (gw.mints(), gw.dispatched()) != (0, 0) {
+        cells.push(format!("C5: minted {}, sent {}", gw.mints(), gw.dispatched()));
+    }
+    assert!(cells.is_empty(), "C5:\n{}", cells.join("\n"));
 }
