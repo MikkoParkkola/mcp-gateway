@@ -53,6 +53,9 @@ async fn task_run_with_nul(fx: &Fx, key: &str) -> Value {
     });
     let mut submit_meta = modern.clone();
     submit_meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    // The fixture enforces message signing: every call carries a fresh nonce.
+    let nonce_meta = crate::gateway::meta_mcp::signing::NONCE_META;
+    submit_meta[nonce_meta] = json!(format!("{key}-submit"));
     let submit = json!({
         "name": "gateway_run_playbook",
         "arguments": {"name": "pb", "arguments": {"x": NUL}},
@@ -74,20 +77,16 @@ async fn task_run_with_nul(fx: &Fx, key: &str) -> Value {
     let get_headers = [
         ("mcp-protocol-version", "2026-07-28"),
         ("mcp-method", "tasks/get"),
+        ("mcp-name", id.as_str()),
     ];
-    let get = json!({"taskId": id, "_meta": modern});
+    let mut poll = 0u32;
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            let (_, body) = send(
-                fx,
-                "/mcp",
-                "k-std",
-                "tasks/get",
-                get.clone(),
-                None,
-                &get_headers,
-            )
-            .await;
+            poll += 1;
+            let mut get_meta = modern.clone();
+            get_meta[nonce_meta] = json!(format!("{key}-get-{poll}"));
+            let get = json!({"taskId": id, "_meta": get_meta});
+            let (_, body) = send(fx, "/mcp", "k-std", "tasks/get", get, None, &get_headers).await;
             if body.pointer("/result/status").and_then(Value::as_str) != Some("working") {
                 return body;
             }

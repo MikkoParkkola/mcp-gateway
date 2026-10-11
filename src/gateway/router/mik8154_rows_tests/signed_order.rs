@@ -47,7 +47,7 @@ fn modern_meta(nonce: Value) -> Value {
 #[tokio::test]
 async fn s6_a_routing_alias_made_by_sanitization_is_refused() {
     let params = json!({
-        "name": "gateway\u{7}invoke",
+        "name": "gateway_\u{7}invoke",
         "arguments": {"server": "alpha", "tool": "read", "arguments": {}},
         "_meta": modern_meta(json!("s6-n1")),
     });
