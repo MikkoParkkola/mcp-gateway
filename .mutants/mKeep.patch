@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/signing.rs b/src/gateway/meta_mcp/signing.rs
+index 796983717..76641d224 100644
+--- a/src/gateway/meta_mcp/signing.rs
++++ b/src/gateway/meta_mcp/signing.rs
+@@ -543,7 +543,7 @@ impl super::MetaMcp {
+             // Admitted: the witness stays with the call for its settle; the
+             // invoke path carries it through its may-effect steps (MIK-8353 3a).
+             (Ok(_), Some(witness)) => match caller.signing {
+-                Some(signing) => signing.keep_witness(witness),
++                Some(_signing) => witness.spend(),
+                 None => witness.spend(),
+             },
+             (_, None) => {}

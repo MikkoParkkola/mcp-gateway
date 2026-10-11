@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/nonce_settle.rs b/src/gateway/meta_mcp/invoke/nonce_settle.rs
+index 1629173b1..ef1de7ad5 100644
+--- a/src/gateway/meta_mcp/invoke/nonce_settle.rs
++++ b/src/gateway/meta_mcp/invoke/nonce_settle.rs
+@@ -76,7 +76,7 @@ impl<'c, 'a> Witnessed<'c, 'a> {
+ impl Drop for Witnessed<'_, '_> {
+     fn drop(&mut self) {
+         match (self.caller.signing, self.witness.take()) {
+-            (Some(signing), Some(witness)) => signing.keep_witness(witness),
++            (Some(_signing), Some(witness)) => witness.spend(),
+             (None, Some(witness)) => witness.spend(),
+             (_, None) => {}
+         }

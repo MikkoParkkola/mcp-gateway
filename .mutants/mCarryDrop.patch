@@ -1,0 +1,18 @@
+diff --git a/src/gateway/meta_mcp/refund_witness.rs b/src/gateway/meta_mcp/refund_witness.rs
+index b77bbccba..1de52d1f9 100644
+--- a/src/gateway/meta_mcp/refund_witness.rs
++++ b/src/gateway/meta_mcp/refund_witness.rs
+@@ -47,7 +47,12 @@ impl RefundWitness {
+     /// a step that reports [`Effect::None`].
+     pub(crate) fn carry(witness: Option<Self>, effect: Effect) -> Option<Self> {
+         match effect {
+-            Effect::None => witness,
++            Effect::None => {
++                if let Some(witness) = witness {
++                    witness.spend();
++                }
++                None
++            }
+             Effect::Took => {
+                 if let Some(witness) = witness {
+                     witness.spend();

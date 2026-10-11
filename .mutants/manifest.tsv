@@ -1,0 +1,12 @@
+head_sha	4545e0724e88c8b7880a36beb8b1e9e43ac07ae8
+# MIK-8353 slice 3a (NONCEFX.9) after code review r2: the refund witness on the invoke path.
+mGate	linux	mGate.patch	--lib -- mcp_nonce refund_witness signing_unspent signed_budget_tests chokepoint_tests stdio_settles_a_refund_once
+mF-mint	linux	mF-mint.patch	--lib -- mcp_nonce refund_witness signing_unspent signed_budget_tests chokepoint_tests stdio_settles_a_refund_once
+mF-account	linux	mF-account.patch	--lib -- mcp_nonce refund_witness signing_unspent signed_budget_tests chokepoint_tests stdio_settles_a_refund_once
+mF-schema	linux	mF-schema.patch	--lib -- mcp_nonce refund_witness signing_unspent signed_budget_tests chokepoint_tests stdio_settles_a_refund_once
+mF-retry	linux	mF-retry.patch	--lib -- mcp_nonce refund_witness signing_unspent signed_budget_tests chokepoint_tests stdio_settles_a_refund_once
+mKeep	linux	mKeep.patch	--lib -- mcp_nonce refund_witness signing_unspent signed_budget_tests chokepoint_tests stdio_settles_a_refund_once
+mDropSpends	linux	mDropSpends.patch	--lib -- mcp_nonce refund_witness signing_unspent signed_budget_tests chokepoint_tests stdio_settles_a_refund_once
+mOldRetry	linux	mOldRetry.patch	--lib -- mcp_nonce refund_witness signing_unspent signed_budget_tests chokepoint_tests stdio_settles_a_refund_once
+mOldSchema	linux	mOldSchema.patch	--lib -- mcp_nonce refund_witness signing_unspent signed_budget_tests chokepoint_tests stdio_settles_a_refund_once
+mCarryDrop	linux	mCarryDrop.patch	--lib -- mcp_nonce refund_witness signing_unspent signed_budget_tests chokepoint_tests stdio_settles_a_refund_once

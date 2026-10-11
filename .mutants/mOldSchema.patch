@@ -1,0 +1,26 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index dec9555c0..2de6cdcf1 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -302,6 +302,9 @@ impl MetaMcp {
+         // the fill, so a slot that expires mid-check still counts.
+         let fills = || backend.as_ref().map_or(0, |b| b.list_fills());
+         let fills_before = fills();
++        let cold_before = !backend
++            .as_ref()
++            .is_none_or(|b| b.has_cached_tools_for(dispatch_binding.as_deref()));
+         let checked = self
+             .answer_undeclared_key(
+                 caller,
+@@ -317,7 +320,10 @@ impl MetaMcp {
+             .await;
+         // Carried before either exit below, so neither hands back a witness
+         // the check's fill spent.
+-        witness.carry(rw::schema_effect(fills() != fills_before));
++        witness.carry(rw::schema_effect({
++            let _ = fills() != fills_before;
++            cold_before
++        }));
+         if let Some(refusal) = checked? {
+             return Ok(refusal);
+         }

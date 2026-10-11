@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index dec9555c0..ce3127d03 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -317,7 +317,7 @@ impl MetaMcp {
+             .await;
+         // Carried before either exit below, so neither hands back a witness
+         // the check's fill spent.
+-        witness.carry(rw::schema_effect(fills() != fills_before));
++        witness.carry(rw::schema_effect(false && fills() != fills_before));
+         if let Some(refusal) = checked? {
+             return Ok(refusal);
+         }

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index dec9555c0..4595b4f75 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -412,7 +412,7 @@ impl MetaMcp {
+             };
+         // Redeemed: a continuation the caller presented was consumed, whatever
+         // state the backend issued with it.
+-        witness.carry(rw::retry_effect(caller.retry.request_state.is_some()));
++        witness.carry(rw::retry_effect(false && caller.retry.request_state.is_some()));
+ 
+         let egress = relay::Egress {
+             arguments: &arguments,
