@@ -453,7 +453,7 @@ fn indexed_binding_for(meta: &super::MetaMcp, subject: &str) -> Option<String> {
 #[tokio::test]
 async fn i3b_index_entry_removed_on_grant_revocation() {
     let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
-    let _beta_upstream = super::slot_verdict_fixture::add_caller(&fx.meta, "beta");
+    let _beta_upstream = super::slot_verdict_fixture::add_caller(&fx.meta, "beta", &valid());
     warm_by_listing(&fx.meta).await;
     let beta = super::catalogue_per_caller_tests::identity("beta");
     fx.meta
@@ -517,7 +517,7 @@ fn assert_index_covers_populated_slots(meta: &super::MetaMcp, row: &str) {
 async fn i2e_index_covers_every_populated_slot() {
     let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
     warm_by_listing(&fx.meta).await;
-    let _beta_upstream = super::slot_verdict_fixture::add_caller(&fx.meta, "beta");
+    let _beta_upstream = super::slot_verdict_fixture::add_caller(&fx.meta, "beta", &valid());
     let beta = super::catalogue_per_caller_tests::identity("beta");
     let _ = Box::pin(fx.meta.handle_tools_call(
         crate::protocol::RequestId::Number(2),
@@ -543,4 +543,99 @@ async fn i2e_index_covers_every_populated_slot() {
     let gx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, off, Surfaced::Yes);
     let _ = call_as_alpha(&gx.meta, TOOL, json!({"q": "x"})).await;
     assert_index_covers_populated_slots(&gx.meta, "I2e (dispatch-path fill)");
+}
+
+/// [`TOOL`] disabled, then the disabled list as `caller` sees it.
+fn disabled_for(meta: &super::MetaMcp, caller: &super::MetaMcpCallerContext<'_>) -> Value {
+    let cfg = meta.capability_budget_config.read().clone();
+    for _ in 0..=cfg.window_size.max(cfg.min_samples) {
+        meta.kill_switch.record_capability_failure(
+            super::slot_verdict_fixture::BACKEND,
+            TOOL,
+            &cfg,
+        );
+    }
+    meta.list_disabled_capabilities(caller.scope(), None)
+        .expect("the disabled list answers")
+}
+
+/// L5 (SLOTVIS.5, parity): with alpha's slot warm, the disabled list and the
+/// predictions answer byte-identically whether alpha's catalogue withholds
+/// [`TOOL`] (invalid schema) or lacks it. RED on base: the withheld case
+/// answers from the shared slot and names the tool.
+#[tokio::test]
+async fn l5_withheld_answers_exactly_as_lacked() {
+    let mut answers = Vec::new();
+    for slot in [CallerSlot::Invalid, CallerSlot::Lacks] {
+        let fx = per_user(slot, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+        warm_by_listing(&fx.meta).await;
+        let disabled = disabled_as_alpha(&fx.meta);
+        let predicted = predictions_for_alpha(&fx.meta);
+        answers.push((disabled, predicted));
+    }
+    assert_eq!(answers[0].0, answers[1].0, "L5: disabled list, withheld vs lacked");
+    assert_eq!(answers[0].1, answers[1].1, "L5: predictions, withheld vs lacked");
+    // Equal is not enough: on base both answer from the shared slot and name
+    // the tool alike. SLOTVIS.5 also says neither names it.
+    assert!(!names_tool(&answers[0].0), "L5: the disabled list names the tool: {}", answers[0].0);
+    assert!(!predicts_tool(&answers[0].1), "L5: the tool is predicted: {:?}", answers[0].1);
+}
+
+/// L10: two callers on one per-user backend: alpha's catalogue holds
+/// [`TOOL`] with an invalid schema, beta's with a valid one, the shared slot
+/// valid. alpha is not named the disabled tool; beta is. Neither's entry ever
+/// answers for the other. RED on base: alpha is named (the shared slot).
+#[tokio::test]
+async fn l10_two_callers_judged_each_by_their_own_slot() {
+    let fx = per_user(CallerSlot::Invalid, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+    let _beta_upstream = super::slot_verdict_fixture::add_caller(&fx.meta, "beta", &valid());
+    warm_by_listing(&fx.meta).await;
+    let beta = super::catalogue_per_caller_tests::identity("beta");
+    fx.meta
+        .list_tools(
+            &json!({"server": super::slot_verdict_fixture::BACKEND}),
+            None,
+            &super::identified_caller(&beta),
+        )
+        .await
+        .expect("beta lists");
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    let for_beta = disabled_for(&fx.meta, &super::identified_caller(&beta));
+    assert!(names_tool(&for_beta), "premise: beta's valid tool is not named: {for_beta}");
+    let for_alpha = disabled_for(&fx.meta, &super::identified_caller(&alpha));
+    assert!(!names_tool(&for_alpha), "L10: alpha is named a tool its slot withholds: {for_alpha}");
+}
+
+/// L9 (case 1, kimi r2 F1): an anonymous caller has no view of a `required`
+/// per-user backend, so none of its tools reaches it through the disabled
+/// list or the counts. RED on base (measured 2026-10-11): both answer from
+/// the shared slot (named; "2 tools").
+#[tokio::test]
+async fn l9_required_backend_anonymous_caller_sees_none() {
+    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Warm, CLOSED, Surfaced::Yes);
+    let anonymous = super::anonymous_caller();
+    let disabled = disabled_for(&fx.meta, &anonymous);
+    assert!(!names_tool(&disabled), "L9: anonymous is named the tool: {disabled}");
+    let (total, _) = fx.meta.admitted_counts(anonymous.scope(), None);
+    let counted = total.phrase();
+    assert!(!counted.starts_with('2'), "L9: anonymous is counted the tools: {counted}");
+}
+
+/// L9-servers (guard): `list_servers` already hides a `required` per-user
+/// backend's tools from an anonymous caller (`has_no_view_for`,
+/// `tools_count` 0, `tools_known` false). Green on base; keeps the caller-slot
+/// change from reopening it.
+#[tokio::test]
+async fn l9_servers_keep_the_required_backend_hidden() {
+    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Warm, CLOSED, Surfaced::Yes);
+    let servers = fx
+        .meta
+        .list_servers(&super::anonymous_caller(), None)
+        .await
+        .expect("list_servers answers")
+        .to_string();
+    assert!(
+        servers.contains("\"tools_count\":0") && servers.contains("\"tools_known\":false"),
+        "L9-servers: {servers}"
+    );
 }

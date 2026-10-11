@@ -255,12 +255,12 @@ pub(super) fn per_user(
 }
 
 /// Give `subject` its own upstream slot on [`BACKEND`] (binding
-/// `{subject}@ledger`, as `PerIdentityMint` names it), serving [`TOOL`] with a
-/// valid schema. For rows that need a second principal.
-pub(super) fn add_caller(meta: &MetaMcp, subject: &str) -> Arc<Asked> {
+/// `{subject}@ledger`, as `PerIdentityMint` names it), serving [`TOOL`] with
+/// `schema`. For rows that need a second principal.
+pub(super) fn add_caller(meta: &MetaMcp, subject: &str, schema: &Value) -> Arc<Asked> {
     let backend = meta.backends.get(BACKEND).expect("the backend");
     let asked = Arc::new(Asked::default());
-    let tools = vec![tool(TOOL, &valid()), tool(SIBLING, &valid())];
+    let tools = vec![tool(TOOL, schema), tool(SIBLING, &valid())];
     backend.set_pooled_transport_for_test(
         &PoolKey::PerUser {
             binding: format!("{subject}@ledger"),
