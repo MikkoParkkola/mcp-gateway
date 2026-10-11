@@ -58,12 +58,12 @@ backend" and "fails a capability file" first.**
 | 31 | Tool calls with undeclared argument keys are refused | Stop sending the key, or set `input_schema_enforcement: standard` (or `off`) on that backend |
 | 32 | An API key or key-server rule with no `backends` reaches no backend | Add `backends: ["*"]` for the old behaviour, or list the backends it needs; the gateway warns per affected key at startup |
 | 33 | `/metrics` requires its own scrape token | Set `server.metrics_token`; give Prometheus the token through a dedicated scrape job |
-| 34 | The inbound WebSocket listener is gone; `server.ws_port` is ignored with a warning | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
+| 34 | The inbound WebSocket listener is gone; `server.ws_port` is refused at load and `mcp-gateway upgrade` deletes it | Delete `server.ws_port`; connect clients over HTTP (`POST /mcp`) or stdio |
 | 35 | A config or env file other users can read fails the load (Unix) | `chmod 600` the file; on Kubernetes keep the chart's `fsGroup` and `defaultMode` |
 | 36 | The Helm chart pins its pod identity to 1001 and caps the `state` volume at `1Gi` | Remove any `runAsUser`, `runAsGroup` or `fsGroup` override other than 1001; raise `stateVolume.sizeLimit` if HOME outgrows `1Gi` |
 | 37 | More than one replica is refused while per-process state is on; the chart defaults to one replica | Keep `replicaCount: 1`, or set `server.modern_protocol: false` with the key server and accounts off |
 | 38 | A credential over plain HTTP on a network bind refuses the start | Enable `mtls`, or set `server.cleartext_http` to say who protects the traffic |
-| 39 | `server.request_timeout` is ignored with a warning; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
+| 39 | `server.request_timeout` is refused at load and `mcp-gateway upgrade` deletes it; `server.max_body_size` caps every route, oversize gets HTTP 413 / JSON-RPC -32600 | Delete `server.request_timeout` and bound calls with per-backend `timeout`; keep `max_body_size` positive, lower it if you relied on the 2 MiB webhook cap |
 | 40 | A secret reference that resolves to nothing fails the load | Set the variable the error names, or write `${VAR:-}` where empty is intended |
 | 41 | API keys are configured as sha256 digests; a plaintext `key` fails the load | Replace each `key` with `key_sha256` from `mcp-gateway hash-key`; clients keep the same key |
 | 42 | `webhooks.rate_limit` is enforced, per endpoint, default 100 per minute | Raise it above your provider's peak rate, or set `0` for no limit; library users: the `mcp_gateway::session_sandbox` and `mcp_gateway::tunnel` modules are removed |
@@ -169,7 +169,7 @@ backend" and "fails a capability file" first.**
 | 142 | `mcp_gateway::gateway::destructive_confirmation::ConfirmationOutcome` gained the variant `Undelivered` and is not `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles. `require_destructive_confirmation` now returns `Undelivered` when no session could carry the question; a timed-out or cancelled question stays `Unsupported` | Add an `Undelivered` arm handled like `Unsupported`, or end the `match` with a wildcard arm |
 | 143 | The `gateway_search_tools` output schema describes each `matches` row as `anyOf` a tool row (`server`, `tool`, `description`, `score`) or an event row (`kind: event`, `name`, `description`, `inputSchema`); it described tool rows only, so a strict client rejected an answer holding an event. `limit` now caps tool and event rows together: an answer could hold `limit` tools plus `limit` events | A client that reads the row schema at `items.properties` reads `items.anyOf[0].properties` for tool rows and `items.anyOf[1]` for event rows; one that sizes for `2 × limit` rows gets at most `limit` |
 | 144 | `ProvidersConfig::process` and `ProvidersConfig::integrity` are no longer public fields: a program built on the crate reads them through `process()` and `integrity()` and cannot set them, so only the loader marks a definition `Integrity::Verified`; `register_capability` replacing a definition drops its cached answers | An embedder that read the fields calls the getters; one that set `integrity` loads the definition through the capability loader instead |
-| 145 | The `plugin` command is removed (`search`, `install`, `uninstall`, `list`), with `mcp_gateway::registry::marketplace` and `mcp_gateway::config::MarketplaceConfig`; a `marketplace:` block in the config loads and warns once | Delete the `marketplace:` block and `~/.mcp-gateway/plugins`; add tools as `backends:` entries or capability files (`mcp-gateway cap`) |
+| 145 | The `plugin` command is removed (`search`, `install`, `uninstall`, `list`), with `mcp_gateway::registry::marketplace` and `mcp_gateway::config::MarketplaceConfig`; a `marketplace:` block in the config is refused at load and `mcp-gateway upgrade` deletes it | Delete the `marketplace:` block and `~/.mcp-gateway/plugins`; add tools as `backends:` entries or capability files (`mcp-gateway cap`) |
 | 146 | An OAuth backend whose authorization server, authorization endpoint, token endpoint or registration endpoint is `http://` to a host off this machine fails at connect, and so does a redirect from one to such a URL; a capability that sends a credential (`auth.required`, or a header, query or body template that fills in `{env.X}` or `{keychain.X}`) and names an `http://` `base_url` or `endpoint` off this machine fails to load, and a templated one is refused at call time. `http://` to a loopback host is allowed, and is no longer proxied | Serve the authorization server and the capability's API over `https://`, or on a loopback host (`localhost`, `127.0.0.1`, `[::1]`). `allow_cleartext_credentials` does not cover either |
 | 147 | A capability whose declared output root is not object-shaped (an array, a string, a type list) advertises `outputSchema` as an object and publishes `structuredContent` under `items` | Read `structuredContent.items` for the nine shipped capabilities listed below, and for your own; the text content is unchanged |
 | 148 | An `http_url` backend with no `streamable_http` key POSTs `initialize` first and falls back to the legacy SSE `GET` only when that POST is refused with a 4xx that is not about the credential or a retry (any but 401, 403, 407, 408, 429); `add --url` no longer writes `streamable_http: false`. An explicit `true` or `false` is tried first, and when the server refuses it with such a 4xx the other transport is tried once, with a warning naming the backend and the value to set. `TransportConfig::Http::streamable_http` is now `Option<bool>` | None. A config the old `add --url` wrote keeps working; to skip the refused request, set the value the warning names or remove the key. MCP Events follow the transport the backend connected with; a subscribe starts an undetected backend first, a failed start answers `-32000`, and SSE is refused with `-32014` |
@@ -869,14 +869,17 @@ The error is printed on one line. Fix the spelling of each named key, or delete 
 check runs on `gateway_reload_config` and on file-watch reloads: a refused reload keeps the running
 config and reports the error.
 
-- **Retired keys load and warn once; they are not refused (#2360).** `backends.<name>.idle_timeout`
-  was retired in 3.x and never had an effect. `backends.<name>.circuit_breaker` was never read:
-  every backend's breaker uses `failsafe.circuit_breaker`. `server.ws_port` (item 34) and
-  `server.request_timeout` (item 39) also warn and are ignored. Each warning names the key and says
-  why, for example `` `backends.x.idle_timeout` is ignored since 4.0: backend idle hibernation was
-  never implemented, ... ``. Delete the keys when convenient; use `stop_when_idle_for` on a
-  `command` backend for idle shutdown, and tune `failsafe.circuit_breaker` for breakers. A retired
-  key is matched only at its own place: `server.idle_timeout` is refused like a misspelling.
+- **Removed keys are refused at load, and `mcp-gateway upgrade` deletes them (MIK-8044).**
+  `backends.<name>.idle_timeout` was retired in 3.x and never had an effect.
+  `backends.<name>.circuit_breaker` was never read: every backend's breaker uses
+  `failsafe.circuit_breaker`. `server.ws_port` (item 34), `server.request_timeout` (item 39),
+  `marketplace` (item 145) and `cost_governance.currency` never had an effect either. One refusal
+  names every such key and says why, for example `` `backends.x.idle_timeout` was removed in 4.0:
+  backend idle hibernation was never implemented, ... ``, and ends with "Run `mcp-gateway upgrade`,
+  which deletes them, or delete them by hand." Use `stop_when_idle_for` on a `command` backend for
+  idle shutdown, and tune `failsafe.circuit_breaker` for breakers. A removed key is matched only at
+  its own place: `server.idle_timeout` is refused like a misspelling. (From #2360 until this
+  change they loaded and warned.) `meta_mcp.cache_tools` still loads and warns once.
 - **Keys whose own name starts with `_` or `x-` are annotations (#2360).** They load wherever
   this key check applies and are never read. A few sections reject every extra key while they are
   parsed (for example `auth.dashboard_session`), and an annotation there still fails the load. Annotations are never read, so notes such as `_legacy_env: {...}` or a top-level `x-anchors:` block keep
@@ -997,7 +1000,7 @@ restart, not on a config reload.
 - **enterprise-alpha:** the manifests drop the `prometheus.io/*` annotations and read the token
   from the optional Secret `mcp-gateway-metrics` (key `token`).
 
-## 34. The inbound WebSocket listener is removed, and `server.ws_port` is ignored
+## 34. The inbound WebSocket listener is removed, and `server.ws_port` is refused
 
 **Startup:** prints a notice
 
@@ -1006,10 +1009,10 @@ text frames back: it never served MCP, sat outside the Origin/Host guard and had
 authentication, so no client could reach a tool through it.
 
 - **The listener is gone.** Clients connect via stdio or HTTP (`POST /mcp`).
-- **`server.ws_port` in the config file is a retired key: it loads, opens no listener, and warns
-  once**, on start and on reload, with `server.ws_port` is ignored since 4.0: the inbound
-  WebSocket listener was removed in 4.0 and no WebSocket listener is opened; ... Remove
-  server.ws_port. Delete the key. (Before #2360 it refused the load.) Like every `MCP_GATEWAY_*` variable,
+- **`server.ws_port` in the config file is a removed key: the load is refused**, on start and on
+  reload, naming it: `` `server.ws_port` was removed in 4.0: the inbound WebSocket listener was
+  removed in 4.0 and no WebSocket listener is opened; ... Remove server.ws_port. ``
+  `mcp-gateway upgrade` deletes it. Like every `MCP_GATEWAY_*` variable,
   `MCP_GATEWAY_SERVER__WS_PORT` is not checked; it is now ignored, so remove it too.
 - **Outbound WebSocket is a backend transport** (`ws_url`, see §47). Only the inbound listener is
   removed.
@@ -1167,7 +1170,7 @@ The shipped deployments keep starting (item 21):
 - **compose:** sets `MCP_GATEWAY_SERVER__CLEARTEXT_HTTP: host_local_publish` beside its loopback
   publish.
 
-## 39. `server.request_timeout` is ignored, and `server.max_body_size` is enforced
+## 39. `server.request_timeout` is refused, and `server.max_body_size` is enforced
 
 **Startup:** prints a notice; refuses to start, only while `server.max_body_size` is `0`
 
@@ -1175,15 +1178,13 @@ In 3.x neither key did anything. No server-wide timeout existed: each call is bo
 backend's `timeout`. `/mcp` and `/mcp/{name}` capped bodies at a hard-coded 10 MiB, and every
 other route, webhooks included, used the framework's 2 MiB default.
 
-- **`server.request_timeout` is removed and ignored; delete it.** It never did anything. Set
-  per-backend `timeout` to bound calls. The config still loads, on start and on reload, and the
-  gateway warns once:
+- **`server.request_timeout` is removed; `mcp-gateway upgrade` deletes it.** It never did
+  anything. Set per-backend `timeout` to bound calls. A config that still sets it is refused, on
+  start and on reload, with:
 
   ```text
-  `server.request_timeout` is ignored since 4.0: the server-wide request timeout was removed in 4.0; it was never enforced. Calls are bounded by the per-backend `timeout`. Remove server.request_timeout.
+  `server.request_timeout` was removed in 4.0: the server-wide request timeout was removed in 4.0; it was never enforced. Calls are bounded by the per-backend `timeout`. Remove server.request_timeout.
   ```
-
-  (Before #2360 this refused the load.)
 - **`server.max_body_size` is now enforced on every route**, read once at startup
   (default 10 MiB). `0` would refuse every body, so it now fails the load; set a positive byte
   count.
@@ -3919,7 +3920,7 @@ pin.
 
 ## 145. The `plugin` command and the `marketplace` config block are removed
 
-**Startup:** no notice, a removed CLI surface (a leftover `marketplace` block logs one warning, not the upgrade notice)
+**Startup:** no notice, a removed CLI surface (a leftover `marketplace` block is refused at load; `mcp-gateway upgrade` deletes it)
 
 `mcp-gateway plugin search`, `install`, `uninstall` and `list` are gone. `install` downloaded a
 manifest and wrote it under `marketplace.plugin_dir`, but no gateway path ever loaded what it
@@ -3928,8 +3929,9 @@ wrote: an installed plugin added no backend, tool or capability. The default mar
 command (`--marketplace-url`, `--plugin-dir`, `MCP_GATEWAY_MARKETPLACE_URL`,
 `MCP_GATEWAY_PLUGIN_DIR`) are gone with it.
 
-- **`marketplace` in the config file is a retired key: it loads, does nothing, and warns once**,
-  on start and on reload, with `` `marketplace` is ignored since 4.0: the `plugin` command was removed in 4.0, and nothing else read this block: no gateway path loaded the plugins it installed. Remove the marketplace block. ``
+- **`marketplace` in the config file is a removed key: the load is refused**, on start and on
+  reload, with `` `marketplace` was removed in 4.0: the `plugin` command was removed in 4.0, and nothing else read this block: no gateway path loaded the plugins it installed. Remove the marketplace block. ``
+  `mcp-gateway upgrade` deletes the block.
 - **Library break:** the `mcp_gateway::registry::marketplace` module and
   `mcp_gateway::config::MarketplaceConfig` are removed, and `Config` has no `marketplace` field.
 

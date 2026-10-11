@@ -11,7 +11,6 @@ pub use mcp_gateway::config_persistence::CommentLoss;
 use mcp_gateway::config_persistence::{edit_config, edit_config_text};
 
 use super::backend_url_keys::{UrlRewrite, rewrite_url_aliases};
-use super::retired_config_keys::Retired;
 
 /// `--force` rewrites a file whose comments cannot be kept; without it that
 /// write is refused and nothing is written.
@@ -75,22 +74,26 @@ pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<U
         let text =
             current.ok_or_else(|| format!("Failed to read {}: it was removed", path.display()))?;
         let rewrite = rewrite_of(text);
-        let save =
-            !rewrite.changed.is_empty() || matches!(rewrite.retired, Retired::Removed { .. });
-        let saved = save.then(|| rewrite.text.clone());
+        // Saved exactly when some pass changed the text.
+        let saved = (rewrite.text != *text).then(|| rewrite.text.clone());
         done = Some(rewrite);
         Ok(saved)
     })?;
     Ok(done.expect("edit_config_text ran the edit"))
 }
 
-/// The URL alias rewrite of `text`, with the retired key dropped in the same
-/// pass, so the file is written once.
+/// The URL alias rewrite of `text`, with the removed keys dropped and the
+/// plaintext API keys hashed in the same pass, so the file is written once.
 fn rewrite_of(text: &str) -> UrlRewrite {
     let mut rewrite = rewrite_url_aliases(text, None);
-    let (dropped, retired) = super::retired_config_keys::drop_cache_tools(&rewrite.text);
-    rewrite.retired = retired;
+    let (dropped, removed) = super::retired_config_keys::drop_removed_keys(&rewrite.text);
+    rewrite.removed = removed;
     if let Some(text) = dropped {
+        rewrite.text = text;
+    }
+    let (hashed, api_keys) = super::api_key_rewrite::hash_plaintext_api_keys(&rewrite.text);
+    rewrite.api_keys = api_keys;
+    if let Some(text) = hashed {
         rewrite.text = text;
     }
     rewrite

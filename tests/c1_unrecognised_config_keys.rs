@@ -490,13 +490,6 @@ async fn refused_reload_keeps_the_running_config() {
     assert_eq!(live.get().backends["keep"].description, "after");
 }
 
-/// C8, #2360: `server.request_timeout` was never enforced; it loads and warns.
-#[test]
-fn removed_request_timeout_loads() {
-    let (_dir, _path, result) = load("server:\n  request_timeout: 30s\n");
-    result.expect("a retired request_timeout must load");
-}
-
 /// #2360: `_` and `x-` keys are the operator's notes, at any depth, and load.
 #[test]
 fn annotation_keys_load() {
@@ -516,14 +509,29 @@ fn annotation_key_configures_nothing() {
     assert!(!config.key_server.enabled);
 }
 
-/// #2360: the operator's shape, many retired keys and a note block, loads.
+/// The operator's #2360 shape, many removed keys beside a note block, names
+/// every removed key in one refusal and none of the notes (MIK-8044).
+#[test]
+fn removed_keys_beside_annotations_all_named() {
+    let message = refusal(
+        "server:\n  request_timeout: 30s\nbackends:\n  a:\n    command: y\n    idle_timeout: 5m\n  \
+         b:\n    http_url: \"http://127.0.0.1:1/mcp\"\n    _legacy: {k: v}\n  c:\n    command: z\n    idle_timeout: 10m\n",
+        &[
+            "server.request_timeout",
+            "backends.a.idle_timeout",
+            "backends.c.idle_timeout",
+        ],
+    );
+    assert!(!message.contains("_legacy"), "got: {message}");
+}
+
+/// #2360: a retired key that still loads, beside a note block, loads.
 #[test]
 fn retired_and_annotation_keys_together_load() {
     let (_dir, _path, result) = load(
-        "server:\n  request_timeout: 30s\nbackends:\n  a:\n    command: y\n    idle_timeout: 5m\n  \
-         b:\n    http_url: \"http://127.0.0.1:1/mcp\"\n    _legacy: {k: v}\n  c:\n    command: z\n    idle_timeout: 10m\n",
+        "meta_mcp:\n  cache_tools: false\nbackends:\n  b:\n    http_url: \"http://127.0.0.1:1/mcp\"\n    _legacy: {k: v}\n",
     );
-    result.expect("retired plus annotation keys must load");
+    result.expect("a retired key plus annotation keys must load");
 }
 
 /// #2360: typo protection stays for every other key, and a mixed file names
@@ -531,11 +539,11 @@ fn retired_and_annotation_keys_together_load() {
 #[test]
 fn misspelt_key_beside_ignored_keys_still_refused() {
     let message = refusal(
-        "server:\n  request_timeout: 30s\nbackends:\n  x:\n    command: y\n    idle_timeout: 5m\n    \
+        "meta_mcp:\n  cache_tools: false\nbackends:\n  x:\n    command: y\n    \
          idel_timeout: 5m\n    _note: n\n",
         &["backends.x.idel_timeout"],
     );
-    for ignored in ["backends.x.idle_timeout", "server.request_timeout", "_note"] {
+    for ignored in ["cache_tools", "_note"] {
         assert!(
             !message.contains(ignored),
             "{ignored} must not be refused; got: {message}"
@@ -560,22 +568,28 @@ fn a_dotted_key_is_not_an_annotation() {
     refusal("server:\n  \"a._b\": 1\n", &["server.a._b"]);
 }
 
-/// #2360: a transport conflict is not retired and not a note; still refused.
+/// #2360: a transport conflict is not a removed key and not a note; one
+/// refusal names it as a conflict and the removed key as removed.
 #[test]
-fn unselected_transport_key_beside_retired_key_refused() {
+fn unselected_transport_key_beside_removed_key_refused() {
     let message = refusal(
         "backends:\n  x:\n    command: y\n    http_url: \"http://127.0.0.1:1/mcp\"\n    idle_timeout: 5m\n",
-        &["backends.x.http_url"],
+        &[
+            "backends.x.http_url",
+            "`backends.x.idle_timeout` was removed in 4.0",
+        ],
     );
-    assert!(!message.contains("idle_timeout"), "got: {message}");
+    assert!(message.contains("mcp-gateway upgrade"), "got: {message}");
 }
 
-/// Flow style is valid YAML and loads like the block form: the retired key
-/// loads there too (#2360), and a misspelling is still refused.
+/// Flow style is valid YAML and loads like the block form: a removed key is
+/// refused there too, and so is a misspelling.
 #[test]
-fn retired_key_loads_in_flow_style_mappings() {
-    let (_dir, _path, result) = load("backends: {demo: {command: \"echo hi\", idle_timeout: 10m}}");
-    result.expect("flow-style retired key must load");
+fn removed_key_refused_in_flow_style_mappings() {
+    removed_key_refused(
+        "backends: {demo: {command: \"echo hi\", idle_timeout: 10m}}",
+        "backends.demo.idle_timeout",
+    );
     refusal(
         "backends: {demo: {command: \"echo hi\", idel_timeout: 10m}}",
         &["backends.demo.idel_timeout"],
