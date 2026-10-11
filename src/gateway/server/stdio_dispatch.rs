@@ -255,7 +255,7 @@ impl Gateway {
         // MIK-8154 SAN.1: mapped on the caller's view (the request's memo),
         // then sanitized unless every target is `passthrough` (option (a)).
         if sanitize == InputSanitizing::On
-            && !super::super::router::sanitize_exempt(meta_mcp, request, view).0
+            && !super::super::router::sanitize_exempt(meta_mcp, request, view)
         {
             *request = crate::security::sanitize::sanitize_request(request).map_err(|error| {
                 JsonRpcResponse::error(None, -32600, error.to_string()).to_value_lossy()

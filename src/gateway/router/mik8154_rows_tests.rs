@@ -34,6 +34,8 @@ async fn send_raw(fx: &Fx, uri: &str, key: &str, body: &Value) -> Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
+mod c2e;
+
 fn calls(fx: &Fx) -> usize {
     fx.calls.load(Ordering::SeqCst)
 }
@@ -559,18 +561,7 @@ async fn p3_a_task_submit_to_a_passthrough_target_forwards_a_nul() {
 /// A signed, sanitizing fixture serving playbook `pb`, whose steps read on
 /// `servers` with `cmd` taken from the run's `x` input.
 async fn playbook_fixture(servers: [&str; 2]) -> Fx {
-    let steps: Vec<Value> = servers
-        .iter()
-        .enumerate()
-        .map(|(n, server)| {
-            json!({"name": format!("s{n}"), "tool": "read", "server": server,
-                   "arguments": {"cmd": "$inputs.x"}})
-        })
-        .collect();
-    let definition: crate::playbook::PlaybookDefinition = serde_json::from_value(json!({
-        "playbook": "1.0", "name": "pb", "description": "two reads", "steps": steps
-    }))
-    .expect("the playbook deserialises");
+    let definition = playbook_definition(servers);
     sanitizing(
         true,
         super::direct_guards_fixture::fixture_hardened_signed_built(
@@ -585,6 +576,23 @@ async fn playbook_fixture(servers: [&str; 2]) -> Fx {
         ),
     )
     .await
+}
+
+/// Playbook `pb`: one `read` step on each of `servers`.
+fn playbook_definition(servers: [&str; 2]) -> crate::playbook::PlaybookDefinition {
+    let steps: Vec<Value> = servers
+        .iter()
+        .enumerate()
+        .map(|(n, server)| {
+            json!({"name": format!("s{n}"), "tool": "read", "server": server,
+                   "arguments": {"cmd": "$inputs.x"}})
+        })
+        .collect();
+    let definition: crate::playbook::PlaybookDefinition = serde_json::from_value(json!({
+        "playbook": "1.0", "name": "pb", "description": "two reads", "steps": steps
+    }))
+    .expect("the playbook deserialises");
+    definition
 }
 
 /// Run playbook `pb` with `x` = a NUL, signed; the whole body.

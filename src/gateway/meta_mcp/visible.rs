@@ -241,10 +241,13 @@ impl MetaMcp {
 
 /// One visibility judgement per request (MIK-8340, perflane MIK-8356 R3.1):
 /// the first answer [`MetaMcp::tool_visible_to`] gives for a `(server, tool)`
-/// within a request, kept for the rest of that request.
+/// within a request, kept for the rest of that request. It also keeps the
+/// digest of the playbook definition intake judged the sanitize exemption on
+/// (MIK-8154 C2e), so the run refuses a definition reloaded since.
 #[derive(Default)]
 pub(crate) struct VisibilityMemo(
     parking_lot::Mutex<std::collections::HashMap<(String, String), Visibility>>,
+    parking_lot::Mutex<Option<String>>,
 );
 
 impl VisibilityMemo {
@@ -264,6 +267,20 @@ impl VisibilityMemo {
             .entry((server.to_owned(), tool.to_owned()))
             .or_insert(judged)
     }
+}
+
+/// Record the digest of the playbook definition intake judged, in the open
+/// request's memo. Outside a memo there is no request to bind it to.
+pub(crate) fn record_judged_playbook(digest: String) {
+    let _ = VISIBILITY_MEMO.try_with(|memo| *memo.1.lock() = Some(digest));
+}
+
+/// The digest [`record_judged_playbook`] kept for this request, if any.
+pub(crate) fn judged_playbook() -> Option<String> {
+    VISIBILITY_MEMO
+        .try_with(|memo| memo.1.lock().clone())
+        .ok()
+        .flatten()
 }
 
 tokio::task_local! {

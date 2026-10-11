@@ -396,7 +396,7 @@ pub(super) async fn intake(
             grant_subject: grant_subject.as_ref(),
         };
         let view = crate::gateway::meta_mcp::visible::TargetView::Caller(scope, Some(&session_id));
-        super::super::sanitize_exempt(&state.meta_mcp, &request, view).0
+        super::super::sanitize_exempt(&state.meta_mcp, &request, view)
     };
     let mut request = if state.sanitize_input && !exempt {
         match crate::security::sanitize::sanitize_request(&request) {

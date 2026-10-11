@@ -22,38 +22,38 @@ use crate::security::validate_tool_name;
 /// surfaced name is judged through `tool_visible_to` (the request's memo), so
 /// a name withheld from the caller has no target and the request is sanitized
 /// exactly as an absent name's is. A playbook's steps are read from the live
-/// engine; the digest of the definition judged is returned so the run can
-/// refuse a different one (C2e). Any other shape, and a call with no target,
-/// is not exempt.
+/// engine, and the digest of the definition judged is kept in the request's
+/// memo so the run refuses a different one (C2e). Any other shape, and a call
+/// with no target, is not exempt.
 pub(crate) fn sanitize_exempt(
     meta_mcp: &MetaMcp,
     request: &Value,
     view: crate::gateway::meta_mcp::visible::TargetView<'_>,
-) -> (bool, Option<String>) {
+) -> bool {
     if request.get("method").and_then(Value::as_str) != Some("tools/call") {
-        return (false, None);
+        return false;
     }
     let params = request.get("params");
     let Some(name) = params.and_then(|p| p.get("name")).and_then(Value::as_str) else {
-        return (false, None);
+        return false;
     };
     let empty = Value::Object(serde_json::Map::new());
     let arguments = params.and_then(|p| p.get("arguments")).unwrap_or(&empty);
-    let (servers, digest) = if name == "gateway_run_playbook" {
+    let servers: Vec<String> = if name == "gateway_run_playbook" {
         let playbook = arguments.get("name").and_then(Value::as_str).unwrap_or("");
-        match meta_mcp.playbook_step_servers(playbook) {
-            Some((servers, digest)) => (servers, Some(digest)),
-            None => return (false, None),
-        }
+        let Some((servers, digest)) = meta_mcp.playbook_step_servers(playbook) else {
+            return false;
+        };
+        crate::gateway::meta_mcp::visible::record_judged_playbook(digest);
+        servers
     } else {
         let targets = backend_tool_targets_for_call(meta_mcp, name, arguments, view);
-        (targets.into_iter().map(|t| t.server).collect(), None)
+        targets.into_iter().map(|t| t.server).collect()
     };
-    let exempt = !servers.is_empty()
+    !servers.is_empty()
         && servers
             .iter()
-            .all(|server| meta_mcp.backend_is_passthrough(server));
-    (exempt, digest)
+            .all(|server| meta_mcp.backend_is_passthrough(server))
 }
 
 pub(crate) fn backend_tool_targets_for_call<'a>(
