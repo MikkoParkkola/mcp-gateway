@@ -223,7 +223,7 @@ pub(super) async fn tools_call(
 
     // Firewall: pre-invocation request scan
     #[cfg(feature = "firewall")]
-    for target in &backend_targets {
+    for (index, target) in backend_targets.iter().enumerate() {
         if let Some(ref fw) = state.firewall {
             let target = target.as_target();
             let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
@@ -259,6 +259,20 @@ pub(super) async fn tools_call(
                 );
             }
             if let Some((code, reason)) = verdict.request_refusal() {
+                // A content finding about a step names the operator's
+                // definition: it answers as every other step refusal does (A3).
+                if index >= request_targets && verdict.refusal_words_content() {
+                    return Err(refused
+                        .answer(
+                            state,
+                            target,
+                            id,
+                            -32003,
+                            STEP_NOT_PERMITTED.to_string(),
+                            StatusCode::FORBIDDEN,
+                        )
+                        .await);
+                }
                 return Err(refused
                     .answer(state, target, id, code, reason, StatusCode::BAD_REQUEST)
                     .await);

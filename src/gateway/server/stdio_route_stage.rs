@@ -77,21 +77,22 @@ impl Gateway {
         // The stateful controls key on the one client this process serves; an
         // empty identity would refuse every call unscored.
         #[cfg(feature = "firewall")]
-        for target in &targets {
+        for (index, target) in targets.iter().enumerate() {
             let checked = target.as_target();
-            if let Some((code, message)) = meta_mcp.route_request_scan(
+            let kind = if index < request_targets {
+                crate::gateway::meta_mcp::invoke::ScanTarget::Request
+            } else {
+                crate::gateway::meta_mcp::invoke::ScanTarget::Step
+            };
+            if let Some(refusal) = meta_mcp.route_request_scan(
                 session_id,
                 (checked.server, checked.tool, checked.arguments),
                 (
                     super::STDIO_CREDENTIAL_PRINCIPAL,
                     super::STDIO_CREDENTIAL_PRINCIPAL,
+                    kind,
                 ),
             ) {
-                let refusal = crate::Error::Forbidden {
-                    code,
-                    status: 400,
-                    message,
-                };
                 return RouteStage::Answer(error_response_preserving_status(id.clone(), &refusal));
             }
         }

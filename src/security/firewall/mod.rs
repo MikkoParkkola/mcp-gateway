@@ -683,6 +683,22 @@ impl FirewallVerdict {
         })
     }
 
+    /// Whether the finding a refusal words (the first) came from a content scan
+    /// of the arguments, not from a stateful control. A stateful control's
+    /// text carries counts and scores only; a content scan's names the
+    /// argument and the pattern it matched.
+    pub(crate) fn refusal_words_content(&self) -> bool {
+        self.findings.first().is_some_and(|finding| {
+            !matches!(
+                finding.scan_type,
+                ScanType::BudgetExceeded
+                    | ScanType::CrossTenantReach
+                    | ScanType::SequenceAnomaly
+                    | ScanType::CollusionRelay
+            )
+        })
+    }
+
     fn blocked_only_by(&self, also: impl Fn(&Finding) -> bool) -> bool {
         !self.allowed
             && !self.findings.is_empty()

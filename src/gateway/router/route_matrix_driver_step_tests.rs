@@ -30,6 +30,25 @@ pub(crate) async fn playbook_exposed(
     (definition, runs): (Value, usize),
     exposed: &[String],
 ) -> (Vec<Value>, usize) {
+    playbook_run(audit, budget, (definition, runs), (exposed, "k-std")).await
+}
+
+/// [`playbook_budgeted`] as the API key `key` (the fixture's `k-deny` may not
+/// invoke `read`).
+pub(crate) async fn playbook_as(
+    audit: &Path,
+    key: &str,
+    (definition, runs): (Value, usize),
+) -> (Vec<Value>, usize) {
+    playbook_run(audit, 10, (definition, runs), (&[], key)).await
+}
+
+async fn playbook_run(
+    audit: &Path,
+    budget: usize,
+    (definition, runs): (Value, usize),
+    (exposed, key): (&[String], &str),
+) -> (Vec<Value>, usize) {
     let definition = serde_json::from_value(definition).expect("the playbook deserialises");
     let fx = crate::gateway::router::direct_guards_fixture::fixture_firewalled_budget_built(
         Answer::Ok,
@@ -49,7 +68,7 @@ pub(crate) async fn playbook_exposed(
         let (_, body) = crate::gateway::router::direct_guards_fixture::send(
             &fx,
             "/mcp",
-            "k-std",
+            key,
             "tools/call",
             params,
             None,

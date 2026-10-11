@@ -100,6 +100,16 @@ impl DirectPermit {
     }
 }
 
+/// Whose target a route-stage scan is looking at.
+#[cfg(feature = "firewall")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScanTarget {
+    /// A target the request names.
+    Request,
+    /// A playbook step the definition names, not the request.
+    Step,
+}
+
 /// Why [`MetaMcp::authorize_route_target`] stopped a call. The two are
 /// answered differently, so they are told apart by type, never by code.
 #[derive(Debug)]
@@ -188,13 +198,17 @@ impl MetaMcp {
     /// (anomaly, tenant guard, budget) `check_request` runs once per logical
     /// call, with its request audit row. `None` passes; `Some` is the shared
     /// refusal every route answers. The dispatch rescan stays stateless.
+    ///
+    /// A [`ScanTarget::Step`] is a playbook step the definition names, not the
+    /// request: a content finding about it is answered with the neutral step
+    /// refusal, as every other refusal of a step is (A3).
     #[cfg(feature = "firewall")]
     pub(crate) fn route_request_scan(
         &self,
         session_id: &str,
         (server, tool, arguments): (&str, &str, &Value),
-        (caller, control_identity): (&str, &str),
-    ) -> Option<(i32, String)> {
+        (caller, control_identity, target): (&str, &str, ScanTarget),
+    ) -> Option<Error> {
         let firewall = self.firewall.as_deref()?;
         let verdict = firewall.check_request(
             session_id,
@@ -212,7 +226,15 @@ impl MetaMcp {
                 "Firewall: request warning"
             );
         }
-        verdict.request_refusal()
+        let (code, message) = verdict.request_refusal()?;
+        if target == ScanTarget::Step && verdict.refusal_words_content() {
+            return Some(crate::gateway::meta_mcp::step_not_permitted());
+        }
+        Some(Error::Forbidden {
+            code,
+            status: 400,
+            message,
+        })
     }
 
     /// Target authorization, identity grants and the admin-capability rule,

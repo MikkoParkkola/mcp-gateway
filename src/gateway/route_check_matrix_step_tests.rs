@@ -9,7 +9,7 @@
 //! steps are counted, a skipped branch included; the tenant guard measures
 //! the template arguments, never the rendered ones.
 
-use super::rows::{audit_rows, message};
+use super::rows::{BLOCKED, audit_rows, message};
 use crate::gateway::router::route_matrix_driver_tests as router;
 use crate::gateway::server::route_matrix_driver_tests::{
     playbook_of, stdio_params_counted, stdio_playbook_flaky, stdio_playbook_runs,
@@ -52,6 +52,7 @@ async fn stdio_playbook_steps_spend_the_call_budget() {
         "not refused by the budget: {}",
         answers[1]
     );
+    assert_names_nothing_operator_defined(&answers[1]);
     assert_eq!(
         sends, 1,
         "the second run reached the backend: {}",
@@ -423,6 +424,7 @@ async fn stdio_playbook_steps_spend_the_tenant_guard() {
         "not refused by the tenant guard: {}",
         answers[0]
     );
+    assert_names_nothing_operator_defined(&answers[0]);
     assert_eq!(sends, 0, "a step ran before the refusal: {}", answers[0]);
 }
 
@@ -528,4 +530,89 @@ async fn http_task_run_playbook_is_refused_at_creation() {
         body.pointer("/result/taskId").is_none(),
         "a task was created: {body}"
     );
+}
+
+/// A refusal of a playbook step never names the step's server or tool (A3): the
+/// stateful controls word a refusal with counts and scores only.
+fn assert_names_nothing_operator_defined(answer: &serde_json::Value) {
+    let text = message(answer);
+    assert!(
+        !text.contains("alpha") && !text.contains("read"),
+        "a step refusal names its target: {answer}"
+    );
+}
+
+const NEUTRAL_STEP_REFUSAL: &str = "step not permitted for this caller";
+
+/// A playbook of one `read` step whose literal `cmd` argument is the blocked
+/// pattern the content scan refuses.
+fn blocked_literal_playbook() -> serde_json::Value {
+    let mut definition = playbook_of(&["read"]);
+    definition["steps"][0]["arguments"] = json!({ "cmd": BLOCKED });
+    definition
+}
+
+/// STEPFW.5 (finding: the literal-template refusal moved to the route): a
+/// blocked pattern written into a step's own arguments is refused at the route,
+/// whole, before any step runs, with the neutral step answer (it names neither
+/// the argument nor the pattern), and the operator still gets the blocking
+/// request row. Red on the base: the step ran and failed inside the playbook,
+/// so the call itself was not an error.
+#[tokio::test]
+async fn stdio_playbook_literal_blocked_template_is_refused_at_the_route() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audit = dir.path().join("audit.jsonl");
+    let params = vec![json!({ "name": "gateway_run_playbook", "arguments": { "name": "steps" } })];
+    let (answers, sends) = stdio_params_counted(
+        &audit,
+        budget(10),
+        (
+            Some(blocked_literal_playbook()),
+            ToolPolicyConfig::default(),
+            params,
+        ),
+    )
+    .await;
+    assert_eq!(answers[0]["error"]["code"], -32003, "{}", answers[0]);
+    assert_eq!(message(&answers[0]), NEUTRAL_STEP_REFUSAL, "{}", answers[0]);
+    assert_eq!(sends, 0, "{}", answers[0]);
+    assert!(
+        audit_rows(&audit, "request")
+            .iter()
+            .any(|row| row["action"] == "block"),
+        "the operator has no blocking request row"
+    );
+}
+
+/// STEPFW.5 over `/mcp`: the same literal refusal through the router's own
+/// firewall and refusal path.
+#[tokio::test]
+async fn http_playbook_literal_blocked_template_is_refused_at_the_route() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audit = dir.path().join("audit.jsonl");
+    let (answers, sends) =
+        router::playbook_budgeted(&audit, 10, (blocked_literal_playbook(), 1)).await;
+    assert_eq!(answers[0]["error"]["code"], -32003, "{}", answers[0]);
+    assert_eq!(message(&answers[0]), NEUTRAL_STEP_REFUSAL, "{}", answers[0]);
+    assert_eq!(sends, 0, "{}", answers[0]);
+    assert!(
+        audit_rows(&audit, "request")
+            .iter()
+            .any(|row| row["action"] == "block"),
+        "the operator has no blocking request row"
+    );
+}
+
+/// STEPFW.1c over `/mcp`: a key that may not invoke the step's tool is refused
+/// the whole playbook with the neutral step answer, before the step runs. Red on
+/// the base: the dispatch recheck refused the step inside a run that still
+/// answered as a success.
+#[tokio::test]
+async fn http_playbook_with_a_denied_step_is_refused_whole() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audit = dir.path().join("audit.jsonl");
+    let (answers, sends) = router::playbook_as(&audit, "k-deny", (playbook_of(&["read"]), 1)).await;
+    assert_eq!(answers[0]["error"]["code"], -32003, "{}", answers[0]);
+    assert_eq!(message(&answers[0]), NEUTRAL_STEP_REFUSAL, "{}", answers[0]);
+    assert_eq!(sends, 0, "{}", answers[0]);
 }
