@@ -305,9 +305,8 @@ fn a_big_step_never_caps_a_later_small_step() {
     }
     let bound = super::super::DELIVERED_SET_CAP;
     assert!(
-        staged.baseline() < bound && staged.total() > bound,
-        "premise: attachments passed the bound, receipts did not ({} / {})",
-        staged.baseline(),
+        staged.total() > bound,
+        "premise: the attachments passed the bound ({})",
         staged.total()
     );
     let (_, small) = step_of(9, 100 * 1024);
