@@ -9,7 +9,8 @@
 use serde_json::{Value, json};
 
 use super::slot_verdict_fixture::{
-    CallerSlot, Surfaced, TOOL, Warmth, call_as_alpha, invalid, per_user, valid,
+    CallerSlot, Surfaced, TOOL, Warmth, call_as_alpha, indexed_binding_for, invalid, per_user,
+    valid,
 };
 use crate::config::InputSchemaEnforcement;
 
@@ -493,13 +494,7 @@ async fn l6b_evicted_caller_disabled_list_withholds() {
 
 /// The binding the caller-slot index holds for alpha on `BACKEND`.
 fn indexed_binding_for_alpha(meta: &super::MetaMcp) -> Option<String> {
-    let alpha = super::catalogue_per_caller_tests::identity("alpha");
-    let backend = meta
-        .backends
-        .get(super::slot_verdict_fixture::BACKEND)
-        .expect("the backend");
-    let caller = super::identified_caller(&alpha);
-    meta.caller_slot_binding_for(&backend, super::MetaMcp::proof_of(&caller))
+    indexed_binding_for(meta, "alpha")
 }
 
 /// I2a (index write site: catalogue fill; asked by MIK-8350): after ONLY a
@@ -573,17 +568,6 @@ async fn i2d_index_written_by_dispatch_fill() {
         "I2d: the dispatch-path fill wrote no index entry (lists: {})",
         fx.caller.lists()
     );
-}
-
-/// The binding the caller-slot index holds for `subject` on `BACKEND`.
-fn indexed_binding_for(meta: &super::MetaMcp, subject: &str) -> Option<String> {
-    let who = super::catalogue_per_caller_tests::identity(subject);
-    let backend = meta
-        .backends
-        .get(super::slot_verdict_fixture::BACKEND)
-        .expect("the backend");
-    let caller = super::identified_caller(&who);
-    meta.caller_slot_binding_for(&backend, super::MetaMcp::proof_of(&caller))
 }
 
 /// I3b (asked by MIK-8350 AC2): revoking alpha's grant
@@ -994,5 +978,61 @@ async fn l11b_empty_caller_slot_withholds() {
     assert!(
         !names_tool(&listed),
         "L11b: an empty caller slot named the tool: {listed}"
+    );
+}
+
+/// I3 (idle eviction): once alpha's slot is idle-evicted, the index no longer
+/// names it. The premise (indexed first) makes this red on the stub.
+/// Red-by-absence.
+#[tokio::test]
+async fn i3_index_entry_removed_on_idle_eviction() {
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::Yes,
+    );
+    warm_by_listing(&fx.meta).await;
+    assert_eq!(
+        indexed_binding_for_alpha(&fx.meta).as_deref(),
+        Some(super::slot_verdict_fixture::BINDING),
+        "I3 premise: alpha is not indexed"
+    );
+    let backend = fx
+        .meta
+        .backends
+        .get(super::slot_verdict_fixture::BACKEND)
+        .expect("the backend");
+    assert!(
+        backend.evict_idle_per_user_entries(std::time::Duration::ZERO) >= 1,
+        "premise: alpha's slot was not evicted"
+    );
+    assert_eq!(
+        indexed_binding_for_alpha(&fx.meta),
+        None,
+        "I3: still indexed"
+    );
+}
+
+/// I1 (guard, design R3.5, gpt F7): a fill that fails stores nothing, so it
+/// writes no index entry. Green on the stub trivially; after the
+/// implementation it kills an index written at credential resolution
+/// instead of at the slot store (the r2 design gpt rejected).
+#[tokio::test]
+async fn i1_failed_fill_writes_no_index_entry() {
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::ColdFailing,
+        CLOSED,
+        Surfaced::Yes,
+    );
+    let _ = call_as_alpha(&fx.meta, TOOL, json!({"q": "x"})).await;
+    assert!(fx.caller.lists() >= 1, "premise: no fill was attempted");
+    assert_eq!(
+        indexed_binding_for_alpha(&fx.meta),
+        None,
+        "I1: a failed fill was indexed"
     );
 }

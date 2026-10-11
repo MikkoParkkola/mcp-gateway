@@ -321,3 +321,11 @@ pub(crate) async fn call_as_alpha(meta: &MetaMcp, name: &str, arguments: Value) 
     .await;
     serde_json::to_value(&response).expect("a response serialises")
 }
+
+/// The binding the caller-slot index holds for `subject` on [`BACKEND`].
+pub(crate) fn indexed_binding_for(meta: &MetaMcp, subject: &str) -> Option<String> {
+    let who = identity(subject);
+    let backend = meta.backends.get(BACKEND).expect("the backend");
+    let caller = identified_caller(&who);
+    meta.caller_slot_binding_for(&backend, MetaMcp::proof_of(&caller))
+}

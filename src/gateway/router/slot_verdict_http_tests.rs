@@ -347,3 +347,24 @@ async fn c6d_direct_route_verdict_precedes_direct_guards() {
         "C6d: the direct guard answered before the caller verdict: {answer:?}"
     );
 }
+
+/// I2b (index write site: direct-route listing; asked by MIK-8350): after
+/// ONLY a complete `tools/list` on `/mcp/{BACKEND}` as alpha, the index names
+/// alpha's slot. Red-by-absence on the stub.
+#[tokio::test]
+async fn i2b_index_written_by_direct_route_listing() {
+    use crate::gateway::meta_mcp::slot_verdict_fixture::{BINDING, indexed_binding_for};
+    let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
+    let list = json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}});
+    let lists = gw.caller.lists();
+    let answer = post_as_alpha(&gw.router, &direct(), &list).await;
+    assert!(
+        gw.caller.lists() > lists || answer.1.pointer("/result/tools").is_some(),
+        "premise: the direct listing did not reach alpha's slot: {answer:?}"
+    );
+    assert_eq!(
+        indexed_binding_for(&gw.meta, "alpha").as_deref(),
+        Some(BINDING),
+        "I2b: the direct-route listing wrote no index entry"
+    );
+}
