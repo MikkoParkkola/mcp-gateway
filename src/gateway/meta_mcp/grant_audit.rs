@@ -576,11 +576,25 @@ impl super::MetaMcp {
         session_id: Option<&str>,
         caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
+        let sourced = self.invoke_tool_with_source(args, session_id, caller).await;
+        sourced.map(|sourced| sourced.0)
+    }
+
+    /// [`Self::invoke_tool`] keeping the result's chain source and upstream
+    /// chain, for a reply that links it (MIK-8159: a backend tool called by
+    /// its own name).
+    pub(super) async fn invoke_tool_with_source(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+        caller: &super::MetaMcpCallerContext<'_>,
+    ) -> Result<super::response_security::Sourced> {
         let logger = self.transparency_logger.as_ref();
         // Erased: the dispatch futures recurse (a chain step is an
         // invocation), and a concrete type here overflows auto-trait checks.
-        let future: Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> =
-            Box::pin(self.invoke_tool_in_slot(args, session_id, caller));
+        let future: Pin<
+            Box<dyn Future<Output = Result<super::response_security::Sourced>> + Send + '_>,
+        > = Box::pin(self.invoke_tool_sourced(args, session_id, caller));
         let outcome = slot_result(logger, future).await;
         // #2450: every step that got past the authorization chokepoint is a
         // target of the task's result, whatever it then did: an error, or an

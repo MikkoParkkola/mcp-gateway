@@ -132,8 +132,19 @@ impl MetaMcp {
     ) -> JsonRpcResponse {
         let invoke_args =
             admission::named_tool_envelope(server_name, tool_name, &arguments, caller);
-        match self.invoke_tool(&invoke_args, session_id, caller).await {
-            Ok(content) => JsonRpcResponse::success_serialized(id, content),
+        match self
+            .invoke_tool_with_source(&invoke_args, session_id, caller)
+            .await
+        {
+            // The dispatch's chain source rides on a success only, as on
+            // `gateway_invoke` (A3 R5): every error stays `NotEligible`.
+            Ok((content, source, upstream)) => {
+                let mut response = JsonRpcResponse::success_serialized(id, content);
+                if response.error.is_none() {
+                    (response.chain_source, response.chain_upstream) = (source, upstream);
+                }
+                response
+            }
             Err(e) => error_response_preserving_status(id, &e),
         }
     }
