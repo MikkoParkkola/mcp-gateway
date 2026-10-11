@@ -115,7 +115,16 @@ impl<'a> Refused<'a> {
         };
         crate::security::security_metrics::meta_refused(code);
         if let Some(Err(error)) = self.write(state, refusal).await {
-            tracing::warn!(%error, "withheld-target refusal record write failed (counted, not answered)");
+            // Counted by the log's own `mcp_audit_append_failures_total`;
+            // named here with its trace id so the operator sees the gap.
+            let trace_id = crate::gateway::trace::current().unwrap_or_default();
+            tracing::warn!(
+                %error,
+                trace_id,
+                server = target.server,
+                tool = target.tool,
+                "withheld-target refusal record write failed (counted, not answered)"
+            );
         }
     }
 
