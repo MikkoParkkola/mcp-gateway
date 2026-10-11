@@ -376,7 +376,6 @@ async fn repeated_metadata_in_chain_steps_keeps_the_cross_step_join() {
 /// keep its `part` whole, so the cross-step join is recorded and excused.
 /// Red until MIK-8251: the copies spend the room and `part` is lost.
 #[tokio::test]
-#[ignore = "MIK-8251: late redaction copies of a staged leaf crowd out a step's part"]
 async fn late_redaction_copies_keep_the_cross_step_join() {
     let parts = ["a".repeat(32), "b".repeat(32), "c".repeat(32)];
     let joined = parts.concat();
