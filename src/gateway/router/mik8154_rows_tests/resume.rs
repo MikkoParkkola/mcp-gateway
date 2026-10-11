@@ -147,3 +147,32 @@ async fn r4_a_resume_still_exempt_forwards_as_submitted() {
     assert_eq!(calls(&fx), 2, "r4: the resumed round was not sent: {done}");
     assert!(forwarded_nul(&fx), "r4: the resumed round lost the NUL");
 }
+
+/// R5 (MIK-8378, lead ruling (a)): a resume applies intake's full rule. A
+/// stored `gateway_invoke` call whose own argument key is dirty (admitted by
+/// a process with sanitizing off, resumed by one restarted with it on) is
+/// refused by key validation on re-admission, never stripped into `server`.
+#[tokio::test]
+async fn r5_a_resume_refuses_a_dirty_meta_key_it_stored() {
+    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
+    let host = crate::gateway::task_service::host::LiveHost::Http(std::sync::Arc::clone(&fx.state));
+    let call = crate::gateway::task_service::TaskCall {
+        tool: "gateway_invoke".to_owned(),
+        arguments: json!({"ser\u{7}ver": "alpha", "tool": "read", "arguments": {}}),
+    };
+    let caller = crate::gateway::meta_mcp::anonymous_caller();
+    let refused = match host.readmit(&call, &caller, None).await {
+        Ok((arguments, _)) => panic!("r5: re-admitted, stripped to {arguments}"),
+        Err(refused) => serde_json::to_value(&*refused).expect("a response serializes"),
+    };
+    assert_eq!(
+        refused.pointer("/error/code"),
+        Some(&json!(-32600)),
+        "r5: {refused}"
+    );
+    assert!(
+        refused.to_string().contains("control characters"),
+        "r5: not the key validation's refusal: {refused}"
+    );
+    assert_eq!(calls(&fx), 0, "r5: dispatched");
+}
