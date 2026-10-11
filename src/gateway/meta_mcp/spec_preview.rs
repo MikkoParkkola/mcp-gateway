@@ -82,9 +82,7 @@ impl MetaMcp {
             for t in cap.get_tools() {
                 if profile.tool_allowed(&t.name)
                     && tool_text_matches(&t, query)
-                    && self
-                        .may_invoke(&cap.name, &t.name, scope, session_id)
-                        .is_ok()
+                    && self.shows_tool(&cap.name, &t, scope, session_id)
                 {
                     tools.push(t);
                 }
@@ -112,9 +110,7 @@ impl MetaMcp {
             for tool in cache_guard.iter() {
                 let mut t = tool.clone();
                 if !profile.tool_allowed(&t.name)
-                    || self
-                        .may_invoke(&backend.name, &t.name, scope, session_id)
-                        .is_err()
+                    || !self.shows_tool(&backend.name, &t, scope, session_id)
                 {
                     continue;
                 }
@@ -134,7 +130,7 @@ impl MetaMcp {
             let already = tools.iter().any(|x| x.name == t.name);
             if !already
                 && tool_text_matches(&t, query)
-                && self.may_invoke(&server, &t.name, scope, session_id).is_ok()
+                && self.shows_tool(&server, &t, scope, session_id)
             {
                 tools.push(t);
             }
@@ -204,8 +200,7 @@ impl MetaMcp {
             let found = cap.get_tools().into_iter().find(|t| t.name == name);
             if found.is_some() {
                 // A withheld tool resolves as an absent one: `-32601`.
-                return found
-                    .filter(|_| self.may_invoke(&cap.name, name, scope, session_id).is_ok());
+                return found.filter(|t| self.shows_tool(&cap.name, t, scope, session_id));
             }
         }
 
@@ -216,9 +211,7 @@ impl MetaMcp {
                 continue;
             }
             if let Some(tool) = backend.get_cached_tool(name)
-                && self
-                    .may_invoke(&backend.name, name, scope, session_id)
-                    .is_ok()
+                && self.shows_tool(&backend.name, &tool, scope, session_id)
             {
                 return Some(tool);
             }
@@ -270,7 +263,7 @@ impl MetaMcp {
                     .into_iter()
                     .map(|t| t.name)
                     .filter(|n| profile.tool_allowed(n))
-                    .filter(|n| self.may_invoke(&cap.name, n, scope, session_id).is_ok()),
+                    .filter(|n| self.shows_name(&cap.name, n, scope, session_id)),
             );
         }
         for backend in self.backends.all() {
@@ -286,7 +279,7 @@ impl MetaMcp {
                     .get_cached_tool_names()
                     .into_iter()
                     .filter(|n| profile.tool_allowed(n))
-                    .filter(|n| self.may_invoke(&backend.name, n, scope, session_id).is_ok()),
+                    .filter(|n| self.shows_name(&backend.name, n, scope, session_id)),
             );
         }
         names

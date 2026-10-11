@@ -517,7 +517,8 @@ impl MetaMcp {
         let target = if tool_name == "gateway_invoke" {
             field("server").zip(field("tool"))
         } else {
-            self.surfaced_tool_server(tool_name)
+            self.surfaced_tools_map
+                .unscoped(tool_name)
                 .map(|server| (server, tool_name))
         };
         let Some(result) = replay.result.as_ref() else {

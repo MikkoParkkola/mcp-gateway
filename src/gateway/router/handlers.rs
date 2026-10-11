@@ -450,15 +450,19 @@ async fn meta_mcp_dispatch(
                 .unzip();
             let answer_id = id.clone();
             // Boxed: an inline future would enlarge this dispatcher's own state.
-            let call = Box::pin(dispatch_tools_call::tools_call(
-                &state,
-                &intake,
-                id,
-                &router_authorizer,
-                invoke_scope,
-                &mut signing_context,
-                &mut response_targets,
-                &mut execution,
+            // One visibility judgement per request (MIK-8340): the route stage
+            // and the dispatch read the same answer for a surfaced name.
+            let call = Box::pin(crate::gateway::meta_mcp::visible::with_visibility_memo(
+                dispatch_tools_call::tools_call(
+                    &state,
+                    &intake,
+                    id,
+                    &router_authorizer,
+                    invoke_scope,
+                    &mut signing_context,
+                    &mut response_targets,
+                    &mut execution,
+                ),
             ));
             let called = match cancel_on {
                 Some(cancel_on) => cancel_on.run(call).await,

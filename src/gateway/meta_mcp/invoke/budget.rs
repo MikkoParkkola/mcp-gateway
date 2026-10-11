@@ -105,9 +105,9 @@ impl MetaMcp {
             .predict_next(tool_key, 0.30, 3)
             .into_iter()
             .filter(|p| {
-                p.tool.split_once(':').is_some_and(|(server, tool)| {
-                    self.may_invoke(server, tool, scope, session_id).is_ok()
-                })
+                p.tool
+                    .split_once(':')
+                    .is_some_and(|(server, tool)| self.shows_name(server, tool, scope, session_id))
             })
             .map(|p| json!({"tool": p.tool, "confidence": p.confidence}))
             .collect()

@@ -287,16 +287,13 @@ impl MetaMcp {
     /// shared entry is the one its call runs on.
     fn classify_surfaced(&self, request: &TaskConfirmationRequest<'_>) -> Option<Classification> {
         let tool_name = request.tool_name;
-        let server = self.surfaced_tool_server(tool_name)?;
-        // A name this caller may not invoke is not this gate's to classify:
-        // it answers as a name that matches no tool, and a challenge would
-        // confirm the tool exists (MIK-8326).
-        if self
-            .may_invoke(server, tool_name, request.scope, request.session_id)
-            .is_err()
-        {
-            return None;
-        }
+        // A name withheld from this caller (refused, invalid schema or
+        // descriptor-blocked) is not this gate's to classify: it answers as a
+        // name that matches no tool, and a challenge would confirm the tool
+        // exists (MIK-8326, MIK-8340).
+        let server = self
+            .surfaced_for(tool_name, request.scope, request.session_id)
+            .visible_server()?;
         let backend = self.backends.get(server)?;
         if request.verified_identity.is_some() && backend.identity_propagation_config().is_some() {
             debug!(
