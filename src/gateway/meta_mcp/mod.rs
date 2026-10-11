@@ -834,6 +834,8 @@ mod slot_verdict_index_tests;
 #[cfg(test)]
 mod slot_verdict_listing_tests;
 #[cfg(test)]
+mod slot_verdict_listing_variant_tests;
+#[cfg(test)]
 mod slot_verdict_tests;
 #[cfg(test)]
 mod task_notify_tests;
