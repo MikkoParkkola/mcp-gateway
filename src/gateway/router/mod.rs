@@ -187,6 +187,9 @@ mod meta_dispatch_edge_tests;
 mod probe_tests;
 #[cfg(test)]
 mod r2_identity_keys_tests;
+/// MIK-8356: router entry rows for per-user calls judged by the caller's slot.
+#[cfg(test)]
+mod slot_verdict_http_tests;
 #[cfg(test)]
 mod r2_input_keys_tests;
 #[cfg(test)]

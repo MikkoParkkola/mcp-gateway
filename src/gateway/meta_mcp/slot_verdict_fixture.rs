@@ -24,17 +24,17 @@ use crate::identity_propagation::{
 };
 use crate::protocol::{JsonRpcResponse, RequestId};
 
-pub(super) const BACKEND: &str = "ledger_hub";
+pub(crate) const BACKEND: &str = "ledger_hub";
 /// The slot `PerIdentityMint` binds subject `alpha` to on audience `ledger`.
-pub(super) const BINDING: &str = "alpha@ledger";
-pub(super) const TOOL: &str = "read";
+pub(crate) const BINDING: &str = "alpha@ledger";
+pub(crate) const TOOL: &str = "read";
 const SIBLING: &str = "note";
 
-pub(super) fn valid() -> Value {
+pub(crate) fn valid() -> Value {
     json!({"type": "object", "properties": {"q": {"type": "string"}}})
 }
 
-pub(super) fn invalid() -> Value {
+pub(crate) fn invalid() -> Value {
     json!({"type": "array"})
 }
 
@@ -47,7 +47,7 @@ fn tool(name: &str, schema: &Value) -> crate::protocol::Tool {
 
 /// What alpha's own catalogue holds for [`TOOL`].
 #[derive(Clone, Copy, Debug)]
-pub(super) enum CallerSlot {
+pub(crate) enum CallerSlot {
     /// The tool, with a structurally invalid schema ("withheld").
     Invalid,
     /// The tool, with a valid schema.
@@ -58,7 +58,7 @@ pub(super) enum CallerSlot {
 
 /// Whether alpha's slot is already filled when the row starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Warmth {
+pub(crate) enum Warmth {
     Warm,
     Cold,
     /// Cold, and alpha's upstream refuses `tools/list`.
@@ -68,24 +68,37 @@ pub(super) enum Warmth {
 /// Whether [`TOOL`] is surfaced (answers to its own name). `No` builds the
 /// canonical absent twin: a name the gateway does not know at all.
 #[derive(Clone, Copy, Debug)]
-pub(super) enum Surfaced {
+pub(crate) enum Surfaced {
     Yes,
     No,
 }
 
+impl Surfaced {
+    /// The `surfaced_tools` configuration this choice means.
+    pub(crate) fn configs(self) -> Vec<crate::config::SurfacedToolConfig> {
+        match self {
+            Self::Yes => vec![crate::config::SurfacedToolConfig {
+                server: BACKEND.to_string(),
+                tool: TOOL.to_string(),
+            }],
+            Self::No => Vec::new(),
+        }
+    }
+}
+
 /// Counts of what an upstream was asked.
 #[derive(Default)]
-pub(super) struct Asked {
-    pub(super) lists: AtomicUsize,
-    pub(super) calls: AtomicUsize,
+pub(crate) struct Asked {
+    pub(crate) lists: AtomicUsize,
+    pub(crate) calls: AtomicUsize,
 }
 
 impl Asked {
-    pub(super) fn calls(&self) -> usize {
+    pub(crate) fn calls(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
     }
 
-    pub(super) fn lists(&self) -> usize {
+    pub(crate) fn lists(&self) -> usize {
         self.lists.load(Ordering::SeqCst)
     }
 }
@@ -131,7 +144,7 @@ impl crate::transport::Transport for Upstream {
 }
 
 /// [`PerIdentityMint`], counting each resolution (O2: "resolved N times").
-pub(super) struct CountingMint(pub(super) Arc<AtomicUsize>);
+pub(crate) struct CountingMint(pub(crate) Arc<AtomicUsize>);
 
 #[async_trait::async_trait]
 impl crate::identity_propagation::IdentityPropagation for CountingMint {
@@ -149,18 +162,18 @@ impl crate::identity_propagation::IdentityPropagation for CountingMint {
 }
 
 /// One built fixture: the gateway and what its upstreams and mint saw.
-pub(super) struct PerUser {
-    pub(super) meta: MetaMcp,
+pub(crate) struct PerUser {
+    pub(crate) meta: MetaMcp,
     /// alpha's upstream (its own slot).
-    pub(super) caller: Arc<Asked>,
+    pub(crate) caller: Arc<Asked>,
     /// The shared upstream.
-    pub(super) shared: Arc<Asked>,
-    pub(super) mints: Arc<AtomicUsize>,
+    pub(crate) shared: Arc<Asked>,
+    pub(crate) mints: Arc<AtomicUsize>,
     _audit: tempfile::NamedTempFile,
 }
 
 impl PerUser {
-    pub(super) fn mints(&self) -> usize {
+    pub(crate) fn mints(&self) -> usize {
         self.mints.load(Ordering::SeqCst)
     }
 }
@@ -168,13 +181,27 @@ impl PerUser {
 /// The per-user gateway: `shared` is the shared slot's schema for [`TOOL`],
 /// `slot` alpha's own catalogue, `warmth` whether alpha's slot is filled.
 /// With `Surfaced::Yes`, [`TOOL`] answers to its own name.
-pub(super) fn per_user(
+pub(crate) fn per_user(
     slot: CallerSlot,
     shared: &Value,
     warmth: Warmth,
     enforcement: InputSchemaEnforcement,
     surfaced: Surfaced,
 ) -> PerUser {
+    let (backend, caller_asked, shared_asked) =
+        per_user_backend(slot, shared, warmth, enforcement);
+    per_user_on(backend, caller_asked, shared_asked, surfaced)
+}
+
+/// The per-user backend alone, with its two upstreams' counters (alpha's
+/// slot, then the shared one), for a fixture that mounts it elsewhere (the
+/// router rows).
+pub(crate) fn per_user_backend(
+    slot: CallerSlot,
+    shared: &Value,
+    warmth: Warmth,
+    enforcement: InputSchemaEnforcement,
+) -> (Arc<Backend>, Arc<Asked>, Arc<Asked>) {
     let backend = Arc::new(Backend::new(
         BACKEND,
         BackendConfig {
@@ -220,16 +247,18 @@ pub(super) fn per_user(
     if warmth == Warmth::Warm {
         backend.store_per_user_tools_for_test(BINDING, caller_tools);
     }
+    (backend, caller_asked, shared_asked)
+}
+
+fn per_user_on(
+    backend: Arc<Backend>,
+    caller_asked: Arc<Asked>,
+    shared_asked: Arc<Asked>,
+    surfaced: Surfaced,
+) -> PerUser {
     let registry = Arc::new(BackendRegistry::new());
     assert!(registry.register(backend), "fixture registration");
-    let surfaced_tools = match surfaced {
-        Surfaced::Yes => vec![crate::config::SurfacedToolConfig {
-            server: BACKEND.to_string(),
-            tool: TOOL.to_string(),
-        }],
-        Surfaced::No => Vec::new(),
-    };
-    let mut meta = MetaMcp::new(registry).with_surfaced_tools(surfaced_tools);
+    let mut meta = MetaMcp::new(registry).with_surfaced_tools(surfaced.configs());
     let audit = tempfile::NamedTempFile::new().expect("tempfile");
     meta.enable_transparency_log(Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
@@ -257,7 +286,7 @@ pub(super) fn per_user(
 /// Give `subject` its own upstream slot on [`BACKEND`] (binding
 /// `{subject}@ledger`, as `PerIdentityMint` names it), serving [`TOOL`] with
 /// `schema`. For rows that need a second principal.
-pub(super) fn add_caller(meta: &MetaMcp, subject: &str, schema: &Value) -> Arc<Asked> {
+pub(crate) fn add_caller(meta: &MetaMcp, subject: &str, schema: &Value) -> Arc<Asked> {
     let backend = meta.backends.get(BACKEND).expect("the backend");
     let asked = Arc::new(Asked::default());
     let tools = vec![tool(TOOL, schema), tool(SIBLING, &valid())];
@@ -275,7 +304,7 @@ pub(super) fn add_caller(meta: &MetaMcp, subject: &str, schema: &Value) -> Arc<A
 }
 
 /// alpha's call of `name` with `arguments`, as the JSON the client receives.
-pub(super) async fn call_as_alpha(meta: &MetaMcp, name: &str, arguments: Value) -> Value {
+pub(crate) async fn call_as_alpha(meta: &MetaMcp, name: &str, arguments: Value) -> Value {
     let alpha = identity("alpha");
     let response = Box::pin(meta.handle_tools_call(
         RequestId::Number(1),
