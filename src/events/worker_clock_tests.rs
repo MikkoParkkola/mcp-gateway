@@ -10,6 +10,8 @@ use std::sync::Arc;
 use chrono::Utc;
 
 use super::{counting_callback, logged_services, offer, queued, queued_with};
+#[path = "worker_clock_flap_tests.rs"]
+mod flap;
 use crate::clock::test_clock::{Forced, before_epoch};
 use crate::duration_bound::delta;
 use crate::events::EventsHub;
