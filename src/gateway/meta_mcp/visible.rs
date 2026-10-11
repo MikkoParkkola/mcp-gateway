@@ -408,15 +408,6 @@ pub(crate) mod seams {
             hook();
         }
     }
-
-    /// What the open request's memo holds for `(server, tool)`, if anything
-    /// (MIK-8356 row F2). `None` outside a request scope too.
-    pub(crate) fn recorded(server: &str, tool: &str) -> Option<super::Visibility> {
-        super::VISIBILITY_MEMO
-            .try_with(|memo| memo.recorded(server, tool))
-            .ok()
-            .flatten()
-    }
 }
 
 /// MIK-8340 memo semantics (seats gpt-20261011T084206Z-14299 and

@@ -311,7 +311,9 @@ async fn f2_route_stage_records_no_shared_verdict_for_per_user() {
     let seen = Arc::new(parking_lot::Mutex::new(None));
     let probe = Arc::clone(&seen);
     seams::after_route_stage(move || {
-        *probe.lock() = Some(seams::recorded(BACKEND, TOOL));
+        *probe.lock() = Some(crate::gateway::meta_mcp::visible::recorded_visibility(
+            BACKEND, TOOL,
+        ));
     });
     let answer = post_as_alpha(&gw.router, "/mcp", &tools_call(TOOL)).await;
     let recorded = seen.lock().take();
