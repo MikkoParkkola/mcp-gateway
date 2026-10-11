@@ -72,27 +72,10 @@ fn with_surfaced_tools_drops_collision_with_meta_tool() {
 #[test]
 fn with_surfaced_tools_drops_all_known_meta_tool_names() {
     // GIVEN: all known meta-tool names as surfaced tools
-    let meta_names = vec![
-        "gateway_search",
-        "gateway_execute",
-        "gateway_list_servers",
-        "gateway_list_tools",
-        "gateway_search_tools",
-        "gateway_invoke",
-        "gateway_get_stats",
-        "gateway_cost_report",
-        "gateway_webhook_status",
-        "gateway_run_playbook",
-        "gateway_kill_server",
-        "gateway_revive_server",
-        "gateway_list_disabled_capabilities",
-        "gateway_set_profile",
-        "gateway_get_profile",
-        "gateway_list_profiles",
-        "gateway_set_state",
-        "gateway_reload_config",
-        "gateway_reload_capabilities",
-    ];
+    let meta_names: Vec<&str> = super::super::surfaced::META_TOOLS
+        .iter()
+        .map(|(name, _)| *name)
+        .collect();
     let tools: Vec<SurfacedToolConfig> = meta_names
         .iter()
         .map(|name| SurfacedToolConfig {
@@ -578,23 +561,21 @@ fn inspect_discovery_value_redacts_credentials_when_not_blocking() {
 #[test]
 fn meta_tool_names_are_the_dispatch_arms() {
     let source = include_str!("../call_dispatch.rs");
-    // Each arm's pattern must be string literals joined by `|`, with no guard:
-    // anything else (a constant, a guard, a non-literal) fails here rather
-    // than reading as a name the arm may not route.
+    // Each arm's pattern must be one string literal, with no guard: one name,
+    // one handler, so two names of different policies cannot share an arm.
+    // Anything else (an `|`, a constant, a guard) fails here rather than
+    // reading as a name the arm may not route.
     let mut arms = std::collections::BTreeSet::new();
     for pattern in match_arm_patterns(source, "let result = match tool_name {") {
         if pattern == "_" {
             continue;
         }
-        assert!(!pattern.contains(" if "), "a guarded meta arm: {pattern}");
-        for alternative in pattern.split('|').map(str::trim) {
-            let name = alternative
-                .strip_prefix('"')
-                .and_then(|rest| rest.strip_suffix('"'))
-                .filter(|name| !name.contains('"'))
-                .unwrap_or_else(|| panic!("a meta arm that is not a literal: {pattern}"));
-            arms.insert(name);
-        }
+        let name = pattern
+            .strip_prefix('"')
+            .and_then(|rest| rest.strip_suffix('"'))
+            .filter(|name| !name.contains('"'))
+            .unwrap_or_else(|| panic!("a meta arm that is not one literal: {pattern}"));
+        assert!(arms.insert(name), "a meta name with two arms: {name}");
     }
     let listed: std::collections::BTreeSet<&str> = super::super::surfaced::META_TOOLS
         .iter()
@@ -627,9 +608,9 @@ fn exactly_the_three_parsing_meta_tools_decode_inside() {
 /// `source`, whitespace-trimmed, read by depth: an arm ends at a comma or a
 /// block body's closing brace at the match's own depth, so a pattern split
 /// across lines is still one pattern. String literals and line comments are
-/// skipped, and a comment before an arm is left out of its pattern. ponytail: a char literal holding a bracket would skew the depth;
-/// the meta match has none, and a skew fails the comparison rather than
-/// passing it.
+/// skipped, and a comment before an arm is left out of its pattern. Limit: a
+/// char literal holding a bracket would skew the depth; the meta match has
+/// none, and a skew fails the comparison rather than passing it.
 fn match_arm_patterns<'a>(source: &'a str, head: &str) -> Vec<&'a str> {
     let open = source.find(head).expect("the match") + head.len();
     let bytes = source.as_bytes();
