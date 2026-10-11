@@ -19,7 +19,7 @@ mod is_connected_count;
 #[cfg(feature = "firewall")]
 mod judge_allocations;
 mod signing_nonce_allocations;
-mod signing_nonce_allocations_support;
+pub(in crate::gateway::server) mod signing_nonce_allocations_support;
 mod trust_card_list_allocations;
 mod visibility_allocations;
 mod visibility_reload_race;

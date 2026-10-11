@@ -84,9 +84,9 @@ pub(crate) enum Na {
 /// The ticket that closes an expected gap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Ticket {
-    Mik8150,
     Mik8154,
     Mik8159,
+    Mik8353,
 }
 
 /// What a (method, route, stage) row asserts.
@@ -192,11 +192,12 @@ fn the_table_answers_every_route_and_stage() {
             }
         }
     }
-    // Today's gaps: R1/R2/R5 nonce, R2 chain link, R3 rescan, sanitize and
-    // lease and R4a nonce give-back (D2). P3 closed R5 route firewall,
-    // sanitize and X14; MIK-8315 closed authorize (D3).
+    // Today's gaps: R1 nonce (relay), R2 chain link, R3 sanitize and lease and
+    // R4a nonce give-back (D2). P3 closed R5 route firewall, sanitize and X14;
+    // MIK-8315 closed authorize (D3); MIK-8150 closed R2 and R5 nonce give-back
+    // (admission); MIK-8351 closed R3 rescan.
     assert_eq!(
-        gaps, 8,
+        gaps, 5,
         "the gap count moved: update the table and this pin"
     );
 }
@@ -224,6 +225,8 @@ const DRIVEN: &[(Route, Stage)] = &[
     (Route::Invoke, Stage::Lease),
     (Route::Invoke, Stage::NonceGiveBack),
     (Route::Direct, Stage::NonceGiveBack),
+    (Route::Surfaced, Stage::NonceGiveBack),
+    (Route::Stdio, Stage::NonceGiveBack),
     (Route::Invoke, Stage::ChainLink),
     (Route::Surfaced, Stage::ChainLink),
     (Route::Direct, Stage::ChainLink),
@@ -280,11 +283,6 @@ const UNDRIVEN: &[(Route, Stage, &str)] = &[
     ),
     (
         Route::Surfaced,
-        Stage::NonceGiveBack,
-        "gap MIK-8150: driven red-first by MIK-8150.NONCE.4",
-    ),
-    (
-        Route::Surfaced,
         Stage::ResponseFirewall,
         "R1 drives the same egress; MIK-8314",
     ),
@@ -316,7 +314,7 @@ const UNDRIVEN: &[(Route, Stage, &str)] = &[
     (
         Route::TaskSubmit,
         Stage::NonceGiveBack,
-        "gap MIK-8150: driven red-first by MIK-8150.NONCE.6",
+        "gap MIK-8353: a task-submit refusal keeps the nonce until every effect is marked; driven red-first by MIK-8353.NONCEFX.3",
     ),
     (
         Route::TaskWorker,
@@ -352,11 +350,6 @@ const UNDRIVEN: &[(Route, Stage, &str)] = &[
         Route::Stdio,
         Stage::Lease,
         "needs a held stdio backend; MIK-8314",
-    ),
-    (
-        Route::Stdio,
-        Stage::NonceGiveBack,
-        "gap MIK-8150: driven red-first by MIK-8150.NONCE.5",
     ),
 ];
 

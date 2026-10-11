@@ -23,7 +23,7 @@
 use serde_json::Value;
 
 use crate::gateway::authz::{Emit, ToolTarget};
-use crate::gateway::meta_mcp::{InvokeScope, MetaMcp, MetaMcpCallerContext};
+use crate::gateway::meta_mcp::{InvokeScope, MetaMcp};
 use crate::{Error, Result};
 
 #[cfg(test)]
@@ -45,6 +45,9 @@ pub(super) enum Source {
     Retry,
     /// A bridged input round (legacy client) carrying its answers.
     Bridged,
+    /// A `tools/call` on the direct per-backend route, its answers included
+    /// on a redeemed retry (MIK-8351).
+    Direct,
 }
 
 impl Source {
@@ -66,6 +69,7 @@ impl Source {
             Self::Step => "step",
             Self::Retry => "retry",
             Self::Bridged => "bridged",
+            Self::Direct => "direct",
         }
     }
 }
@@ -73,16 +77,34 @@ impl Source {
 /// The caller-controlled bytes one send carries: the tool arguments and, on a
 /// retry or a bridged round, the client's answers. Operator-injected secrets
 /// are added after the chokepoint and are not caller input (note r2, item 2).
-pub(super) struct Outbound<'a> {
-    pub(super) arguments: &'a Value,
-    pub(super) answers: Option<&'a Value>,
+pub(in crate::gateway) struct Outbound<'a> {
+    pub(in crate::gateway) arguments: &'a Value,
+    pub(in crate::gateway) answers: Option<&'a Value>,
+}
+
+/// Proof that one direct-route `tools/call` passed the chokepoint (MIK-8351).
+///
+/// The only way the direct route can send a `tools/call`: its send takes one
+/// by value, and only [`MetaMcp::direct_send_permit`] here can build one, so
+/// a direct send that skipped the chokepoint does not compile, as for the
+/// meta route's [`Permit`].
+#[must_use = "a permit is consumed by the send it was minted for"]
+pub(in crate::gateway) struct DirectPermit(Permit);
+
+#[cfg(test)]
+impl DirectPermit {
+    /// A permit for a send whose test is not about the chokepoint. Test builds
+    /// only: production can mint one solely through the chokepoint.
+    pub(in crate::gateway) fn for_test() -> Self {
+        Self(Permit(()))
+    }
 }
 
 impl MetaMcp {
     /// Pass or refuse one send. See the module documentation.
     pub(super) fn chokepoint(
         &self,
-        caller: &MetaMcpCallerContext<'_>,
+        scope: InvokeScope<'_>,
         session_id: Option<&str>,
         (server, tool): (&str, &str),
         outbound: &Outbound<'_>,
@@ -94,17 +116,30 @@ impl MetaMcp {
             outbound.arguments.is_object(),
             "the chokepoint judges dispatched objects"
         );
-        self.recheck_target(
-            caller.scope(),
-            (server, tool),
-            outbound.arguments,
-            Emit::Silent,
-        )?;
+        self.recheck_target(scope, (server, tool), outbound.arguments, Emit::Silent)?;
         #[cfg(feature = "firewall")]
-        self.rescan_outbound(caller, session_id, (server, tool), outbound, source)?;
+        self.rescan_outbound(scope, session_id, (server, tool), outbound, source)?;
         #[cfg(not(feature = "firewall"))]
         let _ = (session_id, source, outbound.answers);
         Ok(Permit(()))
+    }
+
+    /// Pass or refuse one direct-route `tools/call` (MIK-8351, MIK-8154 SAN.3):
+    /// the same re-check the meta route's sends get, on the bytes the direct
+    /// route is about to send, its redeemed answers included.
+    ///
+    /// # Errors
+    /// The chokepoint's refusal: nothing was sent, so the caller gives back
+    /// what it took.
+    pub(in crate::gateway) fn direct_send_permit(
+        &self,
+        scope: InvokeScope<'_>,
+        session_id: Option<&str>,
+        (server, tool): (&str, &str),
+        outbound: &Outbound<'_>,
+    ) -> Result<DirectPermit> {
+        self.chokepoint(scope, session_id, (server, tool), outbound, Source::Direct)
+            .map(DirectPermit)
     }
 
     /// The single route-stage authorize that `/mcp` and stdio both run, before
@@ -211,7 +246,7 @@ impl MetaMcp {
     #[cfg(feature = "firewall")]
     fn rescan_outbound(
         &self,
-        caller: &MetaMcpCallerContext<'_>,
+        scope: InvokeScope<'_>,
         session_id: Option<&str>,
         (server, tool): (&str, &str),
         outbound: &Outbound<'_>,
@@ -245,7 +280,7 @@ impl MetaMcp {
         }
         let labels = crate::security::response_policy::ResponseCorrelation {
             session_id: session_id.unwrap_or(""),
-            caller: caller.authorizer.caller_name().unwrap_or("anonymous"),
+            caller: scope.authorizer.caller_name().unwrap_or("anonymous"),
             external_server: server,
             external_tool: tool,
             subject: None,

@@ -272,11 +272,11 @@ async fn resubmitting_a_completed_task_after_revoke_is_refused() {
     resubmit_after_revoke(false).await;
 }
 
-const WEBHOOK: &str = "register_webhook";
+pub(super) const WEBHOOK: &str = "register_webhook";
 
 /// A capability that registers a caller-addressed destination with a third
 /// party: `admin_capability_rule` classifies it as an admin action.
-fn webhook_backend() -> Arc<crate::capability::CapabilityBackend> {
+pub(super) fn webhook_backend() -> Arc<crate::capability::CapabilityBackend> {
     let definition = crate::capability::parse_capability(&format!(
         "name: {WEBHOOK}\n\
          description: registers a caller-supplied address with a third party\n\

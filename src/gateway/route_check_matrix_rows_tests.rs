@@ -340,9 +340,8 @@ async fn chain_link_surfaced_gap_row() {
 /// `ChokepointRescan`, R1 and the R3 gap. A continuation retry whose answer
 /// carries a blocked pattern reaches bytes the route-layer scan never judged.
 /// R1 Applies: the dispatch rescan refuses it with a blocking `event=dispatch`
-/// row and the backend is asked only once (the question). R3 gap (MIK-8154
-/// SAN.3): the direct route never reaches the chokepoint, so no dispatch row
-/// is ever written.
+/// row and the backend is asked only once (the question). F2d (MIK-8351): the
+/// direct route now does the same, its row marked `source: direct`.
 #[tokio::test]
 async fn chokepoint_rescan_rows() {
     let row = |route| expect(MethodKind::ToolsCall, route, Stage::ChokepointRescan);
@@ -364,33 +363,25 @@ async fn chokepoint_rescan_rows() {
         sent.body
     );
 
-    assert_eq!(
-        row(Route::Direct),
-        Expect::ExpectedGap(super::Ticket::Mik8154)
-    );
+    // F2d (MIK-8351, which took MIK-8154 SAN.3): the direct route's redeemed
+    // retry passes the same chokepoint, so the hostile answer is refused with a
+    // `source: direct` dispatch row and only the question reached the backend.
+    assert_eq!(row(Route::Direct), Expect::Applies);
     let dir = tempfile::tempdir().expect("tempdir");
     let audit = dir.path().join("audit.jsonl");
     let sent = router::direct_retry_answering(&audit, BLOCKED).await;
     let dispatched = audit_rows(&audit, "dispatch");
     assert!(
-        dispatched.is_empty(),
-        "R3 wrote a dispatch row, so the direct route now passes the chokepoint; \
-         MIK-8154 SAN.3 may have closed this gap, flip the row to Applies: {dispatched:?}"
-    );
-    // The hostile answer really went out unscanned: the retry succeeded, the
-    // backend was asked twice, and the second send carried the blocked text.
-    assert!(
-        sent.body.get("error").is_none(),
-        "R3: the retry was refused, so this payload cannot show the missing \
-         chokepoint: {}",
+        dispatched
+            .iter()
+            .any(|row| row["action"] == "block" && row["source"] == "direct"),
+        "F2d: not refused by the dispatch rescan on the direct route: {dispatched:?}; {}",
         sent.body
     );
-    assert_eq!(sent.backend_calls, 2, "R3: {}", sent.body);
-    assert!(
-        sent.seen
-            .get(1)
-            .is_some_and(|params| params.to_string().contains(BLOCKED.trim())),
-        "R3: the second send did not carry the blocked answer: {:?}",
+    assert_eq!(sent.body["error"]["code"], -32600, "F2d: {}", sent.body);
+    assert_eq!(
+        sent.backend_calls, 1,
+        "F2d: the hostile answer was sent: {:?}",
         sent.seen
     );
 }
@@ -404,7 +395,7 @@ const PROSE: &str = "The orchard ledger for the north slope records seven rows o
     pears, the grafting dates for each rootstock, the hours the drip lines ran during the \
     dry weeks of August, and which crew pruned the older trees after the second frost.";
 
-/// `NonceGiveBack`, R1 gap (MIK-8150 NONCE.3): a relay refusal after nonce
+/// `NonceGiveBack`, R1 gap (MIK-8353, split from MIK-8150 NONCE.3): a relay refusal after nonce
 /// admission keeps the nonce, so the clean re-send under it is refused as a
 /// replay. The first refusal must be the relay check's own (-32002), so the
 /// row cannot pass on some other refusal.
@@ -412,7 +403,7 @@ const PROSE: &str = "The orchard ledger for the north slope records seven rows o
 async fn nonce_give_back_invoke_relay_gap_row() {
     assert_eq!(
         expect(MethodKind::ToolsCall, Route::Invoke, Stage::NonceGiveBack),
-        Expect::ExpectedGap(super::Ticket::Mik8150)
+        Expect::ExpectedGap(super::Ticket::Mik8353)
     );
     let (relayed, resent) = router::invoke_relay_then_resend(PROSE).await;
     assert_eq!(
@@ -422,7 +413,7 @@ async fn nonce_give_back_invoke_relay_gap_row() {
     assert_eq!(
         resent["error"]["message"], REPLAY,
         "the re-send was not refused as a replay, so the relay refusal now gives the \
-         nonce back; MIK-8150 NONCE.3 may have closed this gap, flip the row: {resent}"
+         nonce back; MIK-8353 may have closed this gap, flip the row: {resent}"
     );
 }
 
@@ -511,6 +502,19 @@ async fn r4a_authorize_refuses_at_submit_as_the_sync_call_does() {
     router::task_submit_ungranted().await;
 }
 
+/// `Authorize` before `TaskConfirm`, R4a (MIK-8331): a caller the grant or the
+/// admin rule refuses gets the sync call's answer for a surfaced task call,
+/// never X14's challenge. X14 never classifies a surfaced capability, which
+/// each row asserts as its premise with a scope the policy admits.
+#[tokio::test]
+async fn r4a_authorize_precedes_the_x14_challenge() {
+    assert_eq!(
+        expect(MethodKind::ToolsCall, Route::TaskSubmit, Stage::Authorize),
+        Expect::Applies
+    );
+    router::task_submit_authorized_before_x14().await;
+}
+
 /// The execution lease's in-flight refusal (`meta_mcp/admission.rs`).
 const LEASE_IN_FLIGHT: &str = "Execution is already in progress";
 
@@ -535,4 +539,63 @@ async fn lease_row() {
         "R1: the second call was not refused by the lease: {second}"
     );
     assert_eq!(calls, 1, "R1: the backend ran twice");
+}
+
+/// `NonceGiveBack`, R2 Applies (MIK-8150 NONCE.4): a surfaced-name call that
+/// execution admission refuses (409, the key reused for other arguments) after
+/// its nonce was admitted gives the nonce back. The honest call re-sent under
+/// that nonce is served, once; a third send under it is a replay.
+#[tokio::test]
+async fn nonce_give_back_surfaced_row() {
+    let (refused, resent, third, calls) = router::surfaced_admission_then_resend().await;
+    assert_eq!(
+        refused["error"]["code"], 409,
+        "premise: admission's own refusal: {refused}"
+    );
+    assert!(
+        resent.get("error").is_none() && resent["result"]["isError"] != true,
+        "R2 kept the nonce: the re-send was refused: {resent}"
+    );
+    assert_eq!(
+        calls, 2,
+        "R2: the first call and the honest re-send each reach the backend once; \
+         the refusal and the replay never do"
+    );
+    assert!(
+        message(&third).contains(REPLAY),
+        "the nonce was given back twice: {third}"
+    );
+    assert_eq!(
+        expect(MethodKind::ToolsCall, Route::Surfaced, Stage::NonceGiveBack),
+        Expect::Applies
+    );
+}
+
+/// `NonceGiveBack`, R5 Applies (MIK-8150 NONCE.5): over stdio, a call that
+/// execution admission refuses (409) after its nonce was admitted gives the
+/// nonce back: the honest re-send is served once, a third send is a replay.
+#[test]
+fn nonce_give_back_stdio_row() {
+    let (refused, resent, third, calls) = stdio::stdio_admission_then_resend();
+    assert_eq!(
+        refused["error"]["code"], 409,
+        "premise: admission's own refusal: {refused}"
+    );
+    assert!(
+        resent.get("error").is_none() && resent["result"]["isError"] != true,
+        "R5 kept the nonce: the re-send was refused: {resent}"
+    );
+    assert_eq!(
+        calls, 2,
+        "R5: the first call and the honest re-send each reach the backend once; \
+         the refusal and the replay never do"
+    );
+    assert!(
+        message(&third).contains(REPLAY),
+        "the nonce was given back twice: {third}"
+    );
+    assert_eq!(
+        expect(MethodKind::ToolsCall, Route::Stdio, Stage::NonceGiveBack),
+        Expect::Applies
+    );
 }

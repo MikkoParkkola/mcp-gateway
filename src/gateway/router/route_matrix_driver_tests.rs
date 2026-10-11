@@ -546,6 +546,16 @@ pub(crate) async fn task_submit_ungranted() {
     super::tests::task_execution_adapter::submit_authz::matrix_ungranted_invoke_submit().await;
 }
 
+/// R4a `Authorize` before `TaskConfirm` (MIK-8331): a task call by a surfaced
+/// name from a caller without the grant, and from a non-admin for an admin
+/// capability, answers as the sync call with no X14 challenge, and X14 does
+/// not classify the surfaced capability for an admitted scope. Panics
+/// otherwise.
+pub(crate) async fn task_submit_authorized_before_x14() {
+    super::tests::task_execution_adapter::x14_authorize_order::matrix_authorize_precedes_x14()
+        .await;
+}
+
 /// A backend whose `tools/call` signals `entered`, then waits for `gate`
 /// before answering: a call held in flight while a second one arrives.
 struct Held {
@@ -627,4 +637,54 @@ pub(crate) async fn concurrent_same_key() -> (Value, usize) {
         .expect("the first call finished once released")
         .expect("the first call did not panic");
     (second, calls.load(Ordering::SeqCst))
+}
+
+/// R2, MIK-8150 NONCE.4: on the hardened, signed fixture surfacing
+/// `alpha/read`, a keyed surfaced-name call runs under `s1`; the key reused for
+/// other arguments is refused by execution admission (409) under `s2`; the
+/// honest call is re-sent under `s2` with its own key; then a third call under
+/// `s2`. Returns (the admission refusal, the re-send, the third send, the
+/// backend's `tools/call` count).
+pub(crate) async fn surfaced_admission_then_resend() -> (Value, Value, Value, usize) {
+    use crate::gateway::meta_mcp::signing::NONCE_META;
+    use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
+    let fx =
+        super::direct_guards_fixture::fixture_hardened_signed_built(Answer::Ok, true, surfacing)
+            .await;
+    let call = |key: &'static str, nonce: &'static str, args: Value| {
+        let fx = &fx;
+        async move {
+            let params = serde_json::json!({ "name": "read", "arguments": args, "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+                NONCE_META: nonce,
+                IDEMPOTENCY_KEY_META: key,
+            }});
+            let headers = [
+                ("mcp-protocol-version", "2026-07-28"),
+                ("mcp-method", "tools/call"),
+                ("mcp-name", "read"),
+            ];
+            super::direct_guards_fixture::send_with_headers(
+                fx,
+                "/mcp",
+                "k-std",
+                "tools/call",
+                params,
+                None,
+                &headers,
+            )
+            .await
+            .1
+        }
+    };
+    let first = call("s-k1", "s1", serde_json::json!({})).await;
+    assert!(
+        first.get("error").is_none(),
+        "premise: the first call ran: {first}"
+    );
+    let refused = call("s-k1", "s2", serde_json::json!({ "cmd": "other" })).await;
+    let resent = call("s-k2", "s2", serde_json::json!({ "cmd": "other" })).await;
+    let third = call("s-k3", "s2", serde_json::json!({ "cmd": "other" })).await;
+    (refused, resent, third, fx.calls.load(Ordering::SeqCst))
 }

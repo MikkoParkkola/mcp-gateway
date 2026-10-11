@@ -43,6 +43,8 @@ mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
 pub(crate) mod audit;
 mod chokepoint; // MIK-8137 b1: the dispatch chokepoint every send passes
+// MIK-8351: the direct route's tools/call send passes it too.
+pub(in crate::gateway) use chokepoint::{DirectPermit, Outbound};
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
 pub(crate) mod egress;
 mod nonce_settle; // MIK-8150: refund requests and dispatch marks of a signed execution
@@ -79,12 +81,13 @@ mod post_dispatch;
 mod pre_dispatch;
 mod projection;
 mod propagation;
+pub(crate) mod worker_clock; // MIK-8202 AC12/AC13: the task worker's clock channel
 use bridge_dispatch::{BridgeDispatcher, run_input_bridge, undeclared_input_request};
 pub(super) use bridge_dispatch::{
     REQUIRED_CAPABILITIES_DATA_KEY, UNSUPPORTED_ELICITATION_MODE_DATA_KEY,
 };
 pub(super) use continuation::retry_origin_backend;
-use continuation::{OutboundRetry, mint_continuation, redeem_retry, unbindable_continuation};
+use continuation::{OutboundRetry, redeem_retry, unbindable_continuation};
 pub(super) use errors::BudgetOutcome;
 #[cfg(test)]
 use errors::classify_dispatch_error;
@@ -396,8 +399,14 @@ impl MetaMcp {
             answers,
         };
         let source = chokepoint::Source::of_call(answers);
-        let permit = (self.chokepoint(caller, session_id, (server, tool), &outbound, source))
-            .inspect_err(|_| nonce_settle::give_back_unsent(caller, &mut idem_reservation))?;
+        let permit = (self.chokepoint(
+            caller.scope(),
+            session_id,
+            (server, tool),
+            &outbound,
+            source,
+        ))
+        .inspect_err(|_| nonce_settle::give_back_unsent(caller, &mut idem_reservation))?;
         nonce_settle::mark_dispatched(caller);
         // Boxed: the dispatch future is the largest thing this frame ever
         // holds, and inlining it puts `invoke_tool_traced` over
@@ -555,6 +564,7 @@ impl MetaMcp {
         // never be shown is a redeemable envelope for an exchange that cannot
         // happen. Its slot is held in this request's scope: released with the
         // scope unless the answer carrying it is handed off (MIK-8176).
+        let mut withheld = None;
         if let Some(interim) = interim {
             // The caller the slot is charged to (MIK-8293); a caller no
             // quota key names is refused like an unbindable one.
@@ -565,7 +575,7 @@ impl MetaMcp {
                 );
                 return Err(unbindable_continuation(server, tool));
             };
-            let Some((envelope, _)) = mint_continuation(
+            match worker_clock::mint_or_withhold(
                 &self.continuation,
                 caller.principal_source(dispatch_binding.as_deref()),
                 &quota,
@@ -575,23 +585,33 @@ impl MetaMcp {
                 interim.request_state,
             )
             .await
-            else {
-                warn!(
-                    server,
-                    tool, trace_id, "Cannot mint a continuation for this caller; refusing"
-                );
-                return Err(unbindable_continuation(server, tool));
-            };
-            result["requestState"] = json!(&envelope);
-            // MIK-7994: the envelope is the gateway's text, up to 8 KiB, and
-            // must not take the receipt's capped budget from the backend's
-            // prompt. Noted at the value layer: `tool_value` still reads
-            // `requestState` to know the answer is interim, not wrapped.
-            gateway_writes::note(
-                gateway_writes::Layer::Value,
-                gateway_writes::REQUEST_STATE,
-                &result,
-            );
+            {
+                worker_clock::Minted::Sealed(envelope) => {
+                    result["requestState"] = json!(&envelope);
+                    // MIK-7994: the envelope is the gateway's text, up to 8 KiB, and
+                    // must not take the receipt's capped budget from the backend's
+                    // prompt. Noted at the value layer: `tool_value` still reads
+                    // `requestState` to know the answer is interim, not wrapped.
+                    gateway_writes::note(
+                        gateway_writes::Layer::Value,
+                        gateway_writes::REQUEST_STATE,
+                        &result,
+                    );
+                }
+                // MIK-8202 AC12: a task worker seals this later. The backend's
+                // state is withheld from the payload meanwhile (MRTR.2).
+                worker_clock::Minted::Withheld(binding, state) => {
+                    result["requestState"] = Value::Null;
+                    withheld = Some((binding, state));
+                }
+                worker_clock::Minted::Refused => {
+                    warn!(
+                        server,
+                        tool, trace_id, "Cannot mint a continuation for this caller; refusing"
+                    );
+                    return Err(unbindable_continuation(server, tool));
+                }
+            }
         } else {
             // MRTR.2a holds for an unusable round too (MIK-8078).
             continuation::withhold_unsealed_state(&mut result);
@@ -606,6 +626,12 @@ impl MetaMcp {
             caller_key: None,
         };
         let (gated, effect) = self.gate_payload(&call, result)?;
+        // The gates have run on the payload; the worker takes it, unminted.
+        if let Some(withheld) = withheld
+            && worker_clock::hand_to_worker(withheld, gated.clone())
+        {
+            return Err(unbindable_continuation(server, tool));
+        }
         result = gated;
         self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
         // A chained backend is eligible only with a checked upstream outcome.

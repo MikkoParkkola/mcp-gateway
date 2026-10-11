@@ -102,7 +102,7 @@ src/gateway/router/backend_handlers.rs	charged_binding	1	standard	borderline	cha
 src/gateway/router/backend_handlers/relay.rs	direct_control_identity	1	standard	borderline	direct_control_identity	Firewall per-caller key; falls back to a shared bucket.
 src/gateway/router/backend_handlers/relay.rs	direct_caller	1	standard	borderline	direct_caller	Per-caller key for every per-caller control on the direct route; falls back to the shared bucket
 src/gateway/router/backend_handlers.rs	direct_route_attestation_scope	1	standard	borderline	direct_route_attestation_scope	Sets the scope an attestation token must grant per method.
-src/gateway/router/backend_handlers.rs	dispatch_in_scope	1	standard	d	dispatch_in_scope	Refuses methods the peer's protocol era removed before they reach the wire.
+src/gateway/router/backend_handlers/direct_send.rs	send_in_scope	1	standard	d	send_in_scope	Refuses methods the peer's protocol era removed before they reach the wire.
 src/gateway/router/backend_handlers.rs	is_task_method	1	standard	borderline	is_task_method	Selects which methods get the task-owner refusal.
 src/gateway/router/backend_handlers.rs	passthrough_identity_key	1	standard	borderline	passthrough_identity_key	Session bucket key from the credential digest; a collision would mix callers.
 src/gateway/router/backend_handlers.rs	sign_and_record	1	critical	d	sign_and_record	Signs a direct delivery when a signing nonce was admitted, then stages it for relay detection
@@ -253,7 +253,7 @@ src/gateway/task_service/execution/input_round.rs	resume_flow	1	critical	d	resum
 src/gateway/task_service/execution/input_round.rs	close_late_round	1	critical	c,d	TaskExecutor::close_late_round	Hashes the principal to its owner and closes a resumed round that passed its continuation deadline, stamped at the time the deadline was judged at, never a second clock read
 src/gateway/task_service/execution/input_round.rs	proceed_unless_late	1	critical	d	TaskExecutor::proceed_unless_late	The one place both late-deadline checks of a resume close the round
 src/gateway/task_service/execution/input_round.rs	park	1	critical	c,d	Settling::park	Parks a round only on the owner's row, only with a continuation that opens and is not yet due, and only with a deadline it can date; otherwise settles abandoned
-src/gateway/task_service/execution/input_round.rs	readable_now	1	critical	d	readable_now	The now every round deadline check and park stamp reads; waits out a clock before 1970 so no round is closed, abandoned or stranded on it
+src/gateway/task_service/execution/input_round_clock.rs	readable_now	1	critical	d	readable_now	The now every round deadline check and park stamp reads; waits out a clock before 1970 so no round is closed, abandoned or stranded on it
 src/gateway/task_service/execution/input_round.rs	round_deadline	1	critical	borderline	round_deadline	Opens the sealed continuation (authenticates) to derive the deadline; refuses unopenable ones
 src/gateway/task_service/execution/input_round.rs	dispatch	1	standard	borderline	dispatch	Builds the worker's authorizer and caller context for the resume dispatch
 src/gateway/task_service/execution/recovery.rs	transition_digest_write	1	standard	borderline	TaskExecutor::transition_digest_write	Digest-level transition that skips principal hashing; safe only if no request path reaches it

@@ -109,7 +109,7 @@ async fn a_replayed_direct_cost_warning_stays_out_of_the_receipt() {
     })
     .await;
     let text = warning(&keyed_read(&fx, "a", "key-8011").await);
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    fx.lapse_window();
     let reads = fx.reads();
     let replay = keyed_read(&fx, "a", "key-8011").await;
     assert_eq!(
@@ -151,7 +151,7 @@ async fn a_replayed_direct_provenance_stamp_stays_out_of_the_receipt() {
     })
     .await;
     let text = provenance_text(&keyed_read(&fx, "a", "key-8025").await);
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    fx.lapse_window();
     let reads = fx.reads();
     let replay = keyed_read(&fx, "a", "key-8025").await;
     assert_eq!(

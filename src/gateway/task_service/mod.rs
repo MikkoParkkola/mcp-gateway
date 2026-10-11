@@ -7,7 +7,6 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::gateway::subscription_registry::SubscriptionRegistry;
 use crate::idempotency::admission::ExecutionAdmission;
@@ -62,9 +61,12 @@ pub use crate::protocol::tasks::{TaskOptions, TaskStatus, TaskTransition};
 #[cfg(test)]
 pub(crate) use execution::{CommitObserver, CommitStage};
 #[cfg(test)]
-pub(crate) use service::CreateOutcome;
+pub(crate) use record::CONTINUATION_DEADLINE_MARGIN_SECS;
 #[cfg(test)]
-pub(crate) use {record::CONTINUATION_DEADLINE_MARGIN_SECS, store::TaskStore};
+pub(crate) use service::CreateOutcome;
+pub(crate) use store::TaskStore;
+#[cfg(test)]
+pub(crate) use store::input::RedemptionRead;
 
 /// Open the durable store, import restored bindings, build the executor, and
 /// settle whatever a previous process left mid-flight.
@@ -82,11 +84,9 @@ pub async fn open_runtime(
     limits: StoreLimits,
     subscriptions: Arc<SubscriptionRegistry>,
 ) -> Result<(Arc<TaskService>, Arc<TaskExecutor>), ServiceError> {
-    let admission = ExecutionAdmission::new(Arc::new(|| {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_secs())
-    }));
+    // The fallible wall clock: a clock before 1970 never expires or reclaims
+    // an admitted key (MIK-8202).
+    let admission = ExecutionAdmission::new_fallible(Arc::new(crate::clock::unix_secs));
     open_runtime_with_admission(store_dir, max_workers, limits, subscriptions, admission).await
 }
 

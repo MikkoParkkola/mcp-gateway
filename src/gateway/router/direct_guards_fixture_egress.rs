@@ -138,3 +138,23 @@ pub(super) fn backend_transport(
         })
     })
 }
+
+/// [`super::fixture_firewalled`] with `build` arming the `MetaMcp` (MIK-8351:
+/// a key budget on the firewalled fixture, for the give-back rows).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_built(
+    answer: Answer,
+    build: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
+) -> Fx {
+    fixture_inner(answer, true, build).await
+}
+
+/// [`super::fixture_hardened_signed`] with the production firewall too
+/// (MIK-8351: a signed direct retry the chokepoint refuses).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_hardened_signed_firewalled(answer: Answer) -> Fx {
+    super::HARDENED.with(|h| h.set(true));
+    let fx = fixture_inner(answer, true, |meta| super::signing(meta, true)).await;
+    super::HARDENED.with(|h| h.set(false));
+    fx
+}

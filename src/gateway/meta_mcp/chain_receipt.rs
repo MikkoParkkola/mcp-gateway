@@ -145,12 +145,16 @@ pub(crate) fn receive(
     })))
 }
 
-/// Seconds since the epoch, for freshness checks.
-pub(crate) fn now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
+/// Seconds since the epoch, for freshness checks. A clock before 1970 is
+/// the receipt's refusal: freshness cannot be judged, and 0 would accept any
+/// receipt dated within the replay window of the epoch.
+pub(crate) fn now() -> crate::Result<u64> {
+    crate::clock::unix_secs().map_err(|error| {
+        crate::Error::json_rpc(
+            -32001,
+            format!("upstream signature chain did not verify: clock unreadable ({error})"),
+        )
+    })
 }
 
 impl super::super::MetaMcp {
@@ -193,12 +197,14 @@ impl super::super::MetaMcp {
             crate::gateway::meta_mcp::invoke::audit::note_uninspected(self);
             return Err(refusal("challenge"));
         };
-        match receive(identity, policy, result, challenge, now()) {
+        match now().and_then(|now| receive(identity, policy, result, challenge, now)) {
             Ok(outcome) => {
                 *slot.lock() = ChainReceipt::Checked(outcome);
                 Ok(())
             }
             Err(error) => {
+                // Always removed, even when the clock refused before `receive`.
+                strip_chain(result);
                 *slot.lock() = ChainReceipt::Refused;
                 // MIN.1: refused unread, so its tenants are recorded as not read.
                 crate::gateway::meta_mcp::invoke::audit::note_uninspected(self);

@@ -257,7 +257,8 @@ tokio::task_local! {
     /// The receipts of the delivery this task owns (§13.3 "Recording").
     static RELAY_RECEIPTS: RefCell<Vec<Receipt>>;
     static RELAY_STAGED: Cell<usize>; // What it staged so far (MIK-7992).
-    /// Set while one step of a plan dispatches, with the step's label.
+    /// Set while one step of a plan dispatches, with the step's label. Also
+    /// turns off the task worker's clock deferral (`worker_clock::armed`).
     static PLAN_STEP: Option<u32>;
 }
 
@@ -268,6 +269,14 @@ tokio::task_local! {
 pub(crate) async fn plan_step<F: std::future::Future>(label: Option<u32>, step: F) -> F::Output {
     let label = PLAN_STEP.try_with(|outer| *outer).unwrap_or(label);
     PLAN_STEP.scope(label, step).await
+}
+
+/// Whether this task is inside a plan step: a `gateway_execute` chain step or
+/// a playbook step. Set on the step's call, so anything nested in it inherits
+/// it. The task worker's clock wait is for a single direct call only
+/// (MIK-8202 AC12/AC13): a composite keeps refusing on a clock before 1970.
+pub(crate) fn in_plan_step() -> bool {
+    PLAN_STEP.try_with(|_| ()).is_ok()
 }
 
 /// Run `delivery` with a receipt collector: the HTTP and stdio dispatches

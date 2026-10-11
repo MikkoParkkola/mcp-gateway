@@ -130,8 +130,7 @@ pub(super) async fn intake(
     state: &Arc<AppState>,
     http_request: axum::http::Request<axum::body::Body>,
 ) -> Result<(JudgeInputs, Option<SigningInvocationContext>, Intake<'_>), axum::response::Response> {
-    // Extract headers and authenticated client from request
-    let headers = http_request.headers().clone();
+    // Extract the authenticated client from the request.
     let client = http_request
         .extensions()
         .get::<AuthenticatedClient>()
@@ -146,6 +145,13 @@ pub(super) async fn intake(
     let verified_identity = http_request.extensions().get::<VerifiedIdentity>().cloned();
     // MCP Events caps a subscription at the credential's own expiry.
     let presented = events::Presented::capture(&http_request);
+    // The headers are taken, not copied. `Presented::capture` above is the last
+    // reader of the request's own headers; below, the request is read only for
+    // its URI, its extensions and its body, and the body read takes its limit
+    // from the extensions (`DefaultBodyLimit`), not from a header.
+    let (mut parts, body) = http_request.into_parts();
+    let headers = std::mem::take(&mut parts.headers);
+    let http_request = axum::http::Request::from_parts(parts, body);
 
     // === OWASP ASI03: per-agent identity ===
     //
@@ -722,3 +728,7 @@ pub(super) async fn intake(
 #[cfg(test)]
 #[path = "dispatch_intake_cancel_key_tests.rs"]
 mod cancel_key_tests;
+
+#[cfg(test)]
+#[path = "dispatch_intake_presented_tests.rs"]
+mod presented_tests;

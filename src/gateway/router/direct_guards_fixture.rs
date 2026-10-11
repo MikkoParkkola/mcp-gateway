@@ -372,8 +372,8 @@ use egress::backend_transport;
 pub(crate) use egress::fixture_hardened_signed_built_on;
 #[cfg(feature = "firewall")]
 pub(crate) use egress::{
-    fixture_audited_built_on, fixture_audited_on, fixture_firewalled_on, fixture_inspecting_on,
-    meta_firewall,
+    fixture_audited_built_on, fixture_audited_on, fixture_firewalled_built, fixture_firewalled_on,
+    fixture_hardened_signed_firewalled, fixture_inspecting_on, meta_firewall,
 };
 pub(crate) use quota::fixture_propagating;
 use quota::{fixture_backend_config, fixture_failsafe, leaked_transparency_log};
