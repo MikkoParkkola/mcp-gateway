@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8365 key change, as the upgrade note gives it: stop, move both log
 //! sets signed with the old key aside, start with the new key. The governance
-//! store's grants and policies live in `store/` (`control_plane_store.rs`
-//! `open_store`, `store/file.rs` `grants_file`/`policies_file`), not in the
-//! log, so they survive; the gateway starts both logs as fresh chains.
+//! store's rows live in `store/` (`control_plane_store.rs` `open_store`,
+//! `store/file.rs` `grants_file`/`policies_file`), not in the log, so they
+//! survive; the gateway starts both logs as fresh chains. (Enforced grants and
+//! policies come from the identity-grants file and the config, not `store/`.)
 
 use std::path::Path;
 use std::sync::Arc;
