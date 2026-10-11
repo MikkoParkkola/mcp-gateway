@@ -42,7 +42,7 @@ use crate::protocol::meta::Declared;
 use crate::protocol::mrtr::RetryFields;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
-use super::MetaMcp;
+use super::{InvokeScope, MetaMcp};
 
 mod helpers;
 pub(crate) use helpers::{AdmissionOwner, task_admission_request};
@@ -149,6 +149,11 @@ pub(crate) struct TaskConfirmationRequest<'a> {
     /// already-admitted lookup asks about. Never the binding above: admission
     /// keys on the owner, and two renderings of one caller miss each other.
     pub owner: &'a str,
+    /// What this caller may invoke, and its session: a surfaced name it may
+    /// not invoke is never classified (MIK-8326), whoever calls this gate.
+    pub scope: InvokeScope<'a>,
+    /// The session the call runs in, for the routing profile.
+    pub session_id: Option<&'a str>,
     /// What this request declared it can be asked.
     pub input_capabilities: Declared,
     /// Whether the request was written against the modern revision.
@@ -283,6 +288,15 @@ impl MetaMcp {
     fn classify_surfaced(&self, request: &TaskConfirmationRequest<'_>) -> Option<Classification> {
         let tool_name = request.tool_name;
         let server = self.surfaced_tool_server(tool_name)?;
+        // A name this caller may not invoke is not this gate's to classify:
+        // it answers as a name that matches no tool, and a challenge would
+        // confirm the tool exists (MIK-8326).
+        if self
+            .may_invoke(server, tool_name, request.scope, request.session_id)
+            .is_err()
+        {
+            return None;
+        }
         let backend = self.backends.get(server)?;
         if request.verified_identity.is_some() && backend.identity_propagation_config().is_some() {
             debug!(

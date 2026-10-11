@@ -84,11 +84,9 @@ pub(crate) enum Na {
 /// The ticket that closes an expected gap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Ticket {
-    Mik8149,
     Mik8150,
     Mik8154,
     Mik8159,
-    Mik8160,
 }
 
 /// What a (method, route, stage) row asserts.
@@ -162,6 +160,10 @@ pub(crate) use table::expect;
 #[path = "route_check_matrix_rows_tests.rs"]
 mod rows;
 
+#[cfg(feature = "firewall")]
+#[path = "route_check_matrix_p3_tests.rs"]
+mod p3;
+
 /// `ALL` lists every variant exactly once: each index in `0..N` is hit once.
 /// A length check alone would pass a list that repeats one variant and
 /// misses another.
@@ -191,9 +193,10 @@ fn the_table_answers_every_route_and_stage() {
         }
     }
     // Today's gaps: R1/R2/R5 nonce, R2 chain link, R3 rescan, sanitize and
-    // lease, R4a nonce give-back (D2), R5 route firewall, sanitize and X14.
+    // lease and R4a nonce give-back (D2). P3 closed R5 route firewall,
+    // sanitize and X14; MIK-8315 closed authorize (D3).
     assert_eq!(
-        gaps, 11,
+        gaps, 8,
         "the gap count moved: update the table and this pin"
     );
 }

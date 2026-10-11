@@ -23,7 +23,7 @@ use crate::security::{ToolPolicy, ToolPolicyConfig};
 
 pub(crate) const BACKEND: &str = "fixture";
 pub(crate) const TOOL: &str = "echo";
-const DENIED: &str = "forbidden";
+pub(super) const DENIED: &str = "forbidden";
 
 /// A counting backend answering every tool at once.
 pub(crate) async fn backend() -> (String, Arc<AtomicUsize>) {
@@ -80,9 +80,11 @@ pub(crate) async fn backend_listing(tools: Value) -> (String, Arc<AtomicUsize>) 
 pub(crate) struct Fixture {
     pub(super) tasks: Arc<StdioTasks>,
     pub(super) meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
-    policy: Arc<ToolPolicy>,
+    pub(super) policy: Arc<ToolPolicy>,
     mtls: Arc<crate::mtls::MtlsPolicy>,
-    rounds: Arc<AtomicUsize>,
+    pub(super) rounds: Arc<AtomicUsize>,
+    /// `security.sanitize_input` as `run_stdio_on` reads it from the config.
+    sanitize: crate::gateway::server::stdio_single::InputSanitizing,
     pub(super) store: tempfile::TempDir,
     pub(super) expiry: Option<crate::gateway::task_service::execution::ExpirySweep>,
     _data: tempfile::TempDir,
@@ -146,13 +148,16 @@ pub(crate) async fn fixture_on_with(
         policy: tool_policy,
         mtls: built.mtls_policy,
         rounds,
+        sanitize: crate::gateway::server::stdio_single::InputSanitizing::from_setting(
+            config.security.sanitize_input,
+        ),
         store,
         expiry: Some(expiry),
         _data: data,
     }
 }
 
-fn keyed(key: &str) -> RetryFields {
+pub(super) fn keyed(key: &str) -> RetryFields {
     RetryFields {
         idempotency_key: Some(key.to_owned()),
         ..RetryFields::default()
@@ -160,7 +165,7 @@ fn keyed(key: &str) -> RetryFields {
 }
 
 /// The intent stdio builds for a keyed task-augmented `gateway_invoke`.
-fn intent(tasks: &StdioTasks, tool: &str, retry: &RetryFields) -> TaskIntent {
+pub(super) fn intent(tasks: &StdioTasks, tool: &str, retry: &RetryFields) -> TaskIntent {
     let arguments = json!({"server": BACKEND, "tool": tool, "arguments": {}});
     tasks
         .intent(&IntentRequest {
@@ -281,6 +286,7 @@ pub(crate) async fn dispatch(fixture: &Fixture, request: Value) -> Value {
             handshake_capabilities: Declared::NONE,
             tasks: Some(&fixture.tasks),
             modern: false,
+            sanitize: fixture.sanitize,
         },
         &super::super::StdioTelemetry::default(),
     )
@@ -296,6 +302,11 @@ async fn settle(fixture: &Fixture, tool: &str, key: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or_else(|| panic!("a task handle: {created}"))
         .to_owned();
+    wait_terminal(fixture, id).await
+}
+
+/// Wait until task `id` is terminal, and return its id.
+pub(super) async fn wait_terminal(fixture: &Fixture, id: String) -> String {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         let task = fixture
@@ -357,8 +368,10 @@ async fn a_stdio_task_s_inner_call_is_cached_under_the_operator() {
 }
 
 /// U5: a stdio task runs under the current tool policy. A denied tool is
-/// refused at submit exactly as its synchronous call is, with no task
-/// (MIK-8315); a neighbour still runs.
+/// refused at submit by the route stage (route-check-parity P3, r2.1 H1),
+/// with the policy's own refusal, exactly as its synchronous call is, and no
+/// task (MIK-8315); a neighbour still runs. The worker re-checks at run time
+/// through the dispatch chokepoint.
 #[tokio::test]
 async fn a_stdio_task_runs_under_the_current_tool_policy() {
     let denying = ToolPolicy::from_config(&ToolPolicyConfig {
@@ -368,7 +381,22 @@ async fn a_stdio_task_runs_under_the_current_tool_policy() {
     let fixture = Box::pin(fixture(Some(denying))).await;
     let sync = dispatch(&fixture, modern_call(1, DENIED, "u5-denied-sync", false)).await;
     let refused = dispatch(&fixture, modern_call(2, DENIED, "u5-denied", true)).await;
-    assert!(refused.pointer("/result/taskId").is_none(), "{refused}");
+    assert_eq!(refused["error"]["code"], -32600, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        format!(
+            "Protocol error: Tool '{DENIED}' on server '{BACKEND}' is blocked by security policy"
+        ),
+        "not refused by the tool policy at submit: {refused}"
+    );
+    assert_eq!(
+        refused["error"]["data"]["gateway_http_status"], 403,
+        "{refused}"
+    );
+    assert!(
+        refused.pointer("/result/taskId").is_none(),
+        "a task was made for a denied tool: {refused}"
+    );
     assert_eq!(
         refused.pointer("/error/code"),
         sync.pointer("/error/code"),
@@ -479,6 +507,7 @@ async fn an_unnamed_tasks_method_fails_closed() {
             handshake_capabilities: Declared::NONE,
             tasks: Some(&fixture.tasks),
             modern: false,
+            sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
     );
     let answer = fixture

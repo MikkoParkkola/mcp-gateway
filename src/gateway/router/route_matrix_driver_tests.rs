@@ -414,29 +414,7 @@ impl crate::transport::Transport for Destructive {
 /// `accept` and presented by another key (`k-budget`); then by `k-std`. With
 /// the backend calls counted after each.
 pub(crate) async fn task_submit_surfaced() -> TaskConfirmRound {
-    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let transport = std::sync::Arc::new(Destructive {
-        calls: std::sync::Arc::clone(&calls),
-    });
-    let fx = super::direct_guards_fixture::fixture_built_on(transport, surfacing).await;
-    let params = serde_json::json!({
-        "name": "read",
-        "arguments": {},
-        "task": {},
-        "_meta": {
-            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-            "io.modelcontextprotocol/clientCapabilities": {
-                "elicitation": {"form": {}},
-                "extensions": {"io.modelcontextprotocol/tasks": {}}
-            },
-            crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "x14-submit"
-        }
-    });
-    let headers = [
-        ("mcp-protocol-version", "2026-07-28"),
-        ("mcp-method", "tools/call"),
-        ("mcp-name", "read"),
-    ];
+    let (fx, calls, params) = task_submit_fixture(Surfacing::On).await;
     let send = |key: &'static str, params: serde_json::Value| {
         super::direct_guards_fixture::send_with_headers(
             &fx,
@@ -445,7 +423,7 @@ pub(crate) async fn task_submit_surfaced() -> TaskConfirmRound {
             "tools/call",
             params,
             None,
-            &headers,
+            &TASK_SUBMIT_HEADERS,
         )
     };
     let (_, challenge) = send("k-std", params.clone()).await;
@@ -481,6 +459,83 @@ pub(crate) struct TaskConfirmRound {
     pub after_other_key: usize,
     /// The accepted answer presented by `k-std`.
     pub same_key: serde_json::Value,
+}
+
+/// Whether the fixture surfaces `read` (P3, MIK-8326).
+#[derive(Clone, Copy)]
+pub(crate) enum Surfacing {
+    /// `read` is surfaced on `/mcp`.
+    On,
+    /// Nothing is surfaced, so the name `read` matches no tool.
+    Off,
+}
+
+/// The modern era's header mirrors for a `tools/call read`.
+const TASK_SUBMIT_HEADERS: [(&str, &str); 3] = [
+    ("mcp-protocol-version", "2026-07-28"),
+    ("mcp-method", "tools/call"),
+    ("mcp-name", "read"),
+];
+
+/// The R4a fixture, surfacing `read` per `surfacing_mode`, with its backend
+/// call counter and the task-augmented call's params.
+async fn task_submit_fixture(
+    surfacing_mode: Surfacing,
+) -> (
+    super::direct_guards_fixture::Fx,
+    std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    serde_json::Value,
+) {
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let transport = std::sync::Arc::new(Destructive {
+        calls: std::sync::Arc::clone(&calls),
+    });
+    let fx = match surfacing_mode {
+        Surfacing::On => super::direct_guards_fixture::fixture_built_on(transport, surfacing).await,
+        Surfacing::Off => {
+            super::direct_guards_fixture::fixture_built_on(transport, |meta| meta).await
+        }
+    };
+    let params = serde_json::json!({
+        "name": "read",
+        "arguments": {},
+        "task": {},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {
+                "elicitation": {"form": {}},
+                "extensions": {"io.modelcontextprotocol/tasks": {}}
+            },
+            crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "x14-submit"
+        }
+    });
+    (fx, calls, params)
+}
+
+/// One R4a call sent with the API key `key`, on a fixture that surfaces
+/// `read` per `surfacing_mode`. Returns the HTTP status with the answer.
+/// `k-deny` is the fixture's key denied `read` (P3, MIK-8326).
+pub(crate) async fn task_submit_read_as(
+    key: &str,
+    surfacing_mode: Surfacing,
+) -> (axum::http::StatusCode, Sent) {
+    let (fx, calls, params) = task_submit_fixture(surfacing_mode).await;
+    let (status, body) = super::direct_guards_fixture::send_with_headers(
+        &fx,
+        "/mcp",
+        key,
+        "tools/call",
+        params,
+        None,
+        &TASK_SUBMIT_HEADERS,
+    )
+    .await;
+    let sent = Sent {
+        body,
+        backend_calls: calls.load(Ordering::SeqCst),
+        seen: Vec::new(),
+    };
+    (status, sent)
 }
 
 /// R4a `Authorize` (MIK-8315): a modern task-augmented `gateway_invoke` of a

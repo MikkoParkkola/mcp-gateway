@@ -1,13 +1,14 @@
 diff --git a/src/gateway/server/stdio_dispatch.rs b/src/gateway/server/stdio_dispatch.rs
-index 7bc8310a2..55f9f5960 100644
+index d35957eaa..ae237e923 100644
 --- a/src/gateway/server/stdio_dispatch.rs
 +++ b/src/gateway/server/stdio_dispatch.rs
-@@ -219,7 +219,7 @@ impl Gateway {
+@@ -230,8 +230,7 @@ impl Gateway {
+                 meta_mcp.signing_scope(),
+             )
          });
-         let restored = (signing_context.as_mut()).map_or(Ok(()), |c| c.restore(request));
-         let id = restored.is_ok().then_some(raw_id).flatten();
--        match restored.and(crate::protocol::mrtr::take_chain_nonce(request)) {
-+        match restored.and(Ok(crate::protocol::mrtr::take_chain_nonce(request).unwrap_or(None))) {
-             Ok(chain_nonce) => Ok((signing_context, chain_nonce)),
-             Err(error) => Err(crate::protocol::JsonRpcResponse::error(
-                 id,
+-        let chain_nonce = crate::protocol::mrtr::take_chain_nonce(request)
+-            .map_err(|error| refuse(raw_id.clone(), &error))?;
++        let chain_nonce = crate::protocol::mrtr::take_chain_nonce(request).unwrap_or(None);
+         if sanitize == InputSanitizing::On {
+             *request =
+                 crate::security::sanitize::sanitize_json_value(request).map_err(|error| {

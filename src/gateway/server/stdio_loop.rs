@@ -90,6 +90,8 @@ impl Gateway {
         let _stop_tasks = task_store.as_ref().map(|(tasks, _)| tasks.stop_on_drop());
         // MIK-7217.STDIO.1: read once, as the store is; discover lists 2026-07-28 by it.
         let modern = self.config.server.modern_protocol;
+        let sanitize =
+            super::stdio_single::InputSanitizing::from_setting(self.config.security.sanitize_input);
 
         // Account strategies must exist before stdio can admit a request, just
         // as they do before the HTTP listener starts serving.
@@ -436,7 +438,7 @@ impl Gateway {
                                 &tool_policy,
                                 &mtls_policy,
                                 request,
-                                session_id,
+                                (session_id, sanitize),
                                 &telemetry,
                                 &reads,
                             )),
@@ -534,6 +536,7 @@ impl Gateway {
                                 handshake_capabilities,
                                 tasks: tasks.as_deref(),
                                 modern,
+                                sanitize,
                             },
                             &telemetry,
                         )),

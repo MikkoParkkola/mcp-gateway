@@ -83,6 +83,7 @@ mod mik7642_backend_cancel;
 mod owner2_stdio_tasks;
 #[cfg(feature = "firewall")]
 pub(super) mod route_matrix_stdio_tasks;
+mod stdio_task_policy_recheck;
 mod submit_authz_stdio;
 // MIK-7839.CANCEL.3: a dropped run_stdio future stops its task workers.
 mod stdio_session_drop;

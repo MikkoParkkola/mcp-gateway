@@ -133,26 +133,14 @@ async fn apply_backend_tool_call_security(
                 "Firewall: direct backend request warning"
             );
         }
-        if !verdict.allowed {
-            let desc = verdict
-                .findings
-                .first()
-                .map_or("Security firewall blocked this request", |f| {
-                    f.description.as_str()
-                });
-            // OWASP ASI10: an anomaly block carries -32002 on every route, as
-            // on the meta route, so a caller can tell it from other refusals.
-            if verdict.is_asi10_block() {
-                return Err(backend_security_error_with_status(
-                    id,
-                    -32002,
-                    &format!("Anomaly detection blocked: {desc}"),
-                    StatusCode::FORBIDDEN,
-                ));
-            }
-            return Err(backend_security_error(
+        if let Some((code, message)) = verdict.request_refusal() {
+            // The shared wording's code, ASI10's -32002 included, with this
+            // route's own HTTP status (403).
+            return Err(backend_security_error_with_status(
                 id,
-                &format!("Firewall blocked: {desc}"),
+                code,
+                &message,
+                StatusCode::FORBIDDEN,
             ));
         }
         let target = (backend_name, tool_name);

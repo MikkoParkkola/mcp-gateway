@@ -33,6 +33,27 @@ pub(super) struct StdioClient<'a> {
     /// `server.modern_protocol` at stdio start: whether `server/discover`
     /// lists 2026-07-28 (MIK-7217.STDIO.1, design D7).
     pub(super) modern: bool,
+    /// `security.sanitize_input` at stdio start, applied at intake exactly as
+    /// `/mcp` applies it (MIK-8149.REQFW.2).
+    pub(super) sanitize: InputSanitizing,
+}
+
+/// Whether stdio intake sanitizes each request (`security.sanitize_input`).
+/// An enum, not a `bool`, because it selects behaviour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum InputSanitizing {
+    /// Requests pass to dispatch as received.
+    Off,
+    /// Every request is sanitized before it is judged: a NUL is refused,
+    /// control characters are stripped (`security::sanitize`).
+    On,
+}
+
+impl InputSanitizing {
+    /// The mode the `security.sanitize_input` setting selects.
+    pub(super) const fn from_setting(on: bool) -> Self {
+        if on { Self::On } else { Self::Off }
+    }
 }
 
 /// Copy only the fields backend target mapping routes on.
@@ -115,8 +136,9 @@ pub(super) fn stdio_caller_context<'a>(
     era: crate::protocol::meta::Era,
 ) -> MetaMcpCallerContext<'a> {
     MetaMcpCallerContext {
-        // stdio has no task route: the extension's handle is read back over
-        // `tasks/get`, which only the HTTP surface serves.
+        // No task here: this fixture is a synchronous call. Production stdio
+        // serves `tasks/*` when its store is open, and fills the task after
+        // the route stage, X14 included, has run (MIK-8160.X14.3).
         task: None,
         execution: None,
         signing: None,
@@ -212,6 +234,7 @@ impl Gateway {
                 handshake_capabilities: crate::protocol::meta::Declared::NONE,
                 tasks: None,
                 modern: false,
+                sanitize: InputSanitizing::Off,
             },
             &StdioTelemetry::default(),
         )
