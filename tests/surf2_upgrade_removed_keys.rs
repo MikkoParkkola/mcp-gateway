@@ -268,3 +268,114 @@ fn a_dry_run_writes_nothing() {
     assert!(out.status.success(), "{}", text(&out));
     assert_eq!(read(&s.config), yaml);
 }
+
+/// An `auth.api_keys` list holding `entries`, indented as list items.
+fn api_keys(entries: &str) -> String {
+    format!("auth:\n  enabled: true\n  api_keys:\n{entries}")
+}
+
+/// T2: a key held in a file or built from a variable is never hashed or read.
+#[test]
+fn upgrade_leaves_file_and_variable_keys() {
+    for value in ["file:/run/k", "\"a-${SURF2_K}\""] {
+        upgrade_refuses(
+            &api_keys(&format!(
+                "    - name: c1\n      key: {value}\n      backends: [\"*\"]\n"
+            )),
+            &[],
+            &["c1", "hash-key"],
+        );
+    }
+}
+
+/// T3: a key whose digest is already set loses its plaintext line only.
+#[test]
+fn upgrade_drops_a_key_whose_digest_is_set() {
+    let digest = api_key_digest_spec(PLAINTEXT.as_bytes());
+    upgrade_deletes(
+        &api_keys(&format!(
+            "    - name: c1\n      key: \"{PLAINTEXT}\"\n      key_sha256: \"{digest}\"\n      backends: [\"*\"]\n"
+        )),
+        &api_keys(&format!(
+            "    - name: c1\n      key_sha256: \"{digest}\"\n      backends: [\"*\"]\n"
+        )),
+    );
+}
+
+/// T3, T3c: a digest that is not this key's, or one held in the environment,
+/// is a conflict for the operator; the variable is never read.
+#[test]
+fn upgrade_leaves_a_key_beside_another_digest() {
+    for digest in ["\"sha256:00\"", "env:SURF2_D"] {
+        upgrade_refuses(
+            &api_keys(&format!(
+                "    - name: c1\n      key: \"{PLAINTEXT}\"\n      key_sha256: {digest}\n      backends: [\"*\"]\n"
+            )),
+            &[],
+            &["c1", "hash-key"],
+        );
+    }
+}
+
+/// T3b: a key on a list item's first line keeps the item marker.
+#[test]
+fn upgrade_hashes_a_list_head_key_in_place() {
+    let digest = api_key_digest_spec(PLAINTEXT.as_bytes());
+    upgrade_deletes(
+        &api_keys(&format!(
+            "    - key: \"{PLAINTEXT}\"  # old\n      name: c1\n      backends: [\"*\"]\n"
+        )),
+        &api_keys(&format!(
+            "    - key_sha256: \"{digest}\"\n      name: c1\n      backends: [\"*\"]\n"
+        )),
+    );
+}
+
+/// T3b: dropping a list item's first line would orphan the item, so it stays.
+#[test]
+fn upgrade_leaves_a_list_head_key_whose_digest_is_set() {
+    let digest = api_key_digest_spec(PLAINTEXT.as_bytes());
+    upgrade_refuses(
+        &api_keys(&format!(
+            "    - key: \"{PLAINTEXT}\"\n      key_sha256: \"{digest}\"\n      name: c1\n      backends: [\"*\"]\n"
+        )),
+        &[],
+        &["c1"],
+    );
+}
+
+/// T3 (P5): only the entry with a key changes, and escapes are decoded
+/// before hashing.
+#[test]
+fn upgrade_hashes_the_decoded_key_of_one_entry() {
+    let other = api_key_digest_spec(b"other");
+    let digest = api_key_digest_spec("p\tq\u{e9}".as_bytes());
+    let entry = |key: &str| {
+        api_keys(&format!(
+            "    - name: a\n      key_sha256: \"{other}\"\n      backends: [\"*\"]\n    - name: b\n      {key}\n      backends: [\"*\"]\n"
+        ))
+    };
+    upgrade_deletes(
+        &entry("key: \"p\\tq\\u00e9\""),
+        &entry(&format!("key_sha256: \"{digest}\"")),
+    );
+}
+
+/// T3 (P5): a key spread over several lines is left.
+#[test]
+fn upgrade_leaves_a_multi_line_key() {
+    upgrade_refuses(
+        &api_keys("    - name: c1\n      key: |\n        pt\n      backends: [\"*\"]\n"),
+        &[],
+        &["c1"],
+    );
+}
+
+/// T7b: a comment after a removed key stays, byte for byte.
+#[test]
+fn upgrade_keeps_the_comment_after_a_removed_key() {
+    upgrade_deletes(
+        "server:\n  ws_port: 1\n  # the port we serve\n  port: 39400\n",
+        "server:\n  # the port we serve\n  port: 39400\n",
+    );
+}
