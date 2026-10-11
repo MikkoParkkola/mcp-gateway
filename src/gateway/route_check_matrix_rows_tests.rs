@@ -147,6 +147,216 @@ async fn sanitize_rows() {
         off.body
     );
 
+    assert_eq!(
+        row(Route::Direct),
+        Expect::ExpectedGap(super::Ticket::Mik8154)
+    );
+    let direct_off = router::direct_sanitizing(false, with_nul()).await;
+    assert!(
+        !nul_reached(&direct_off.seen),
+        "R3 off: the NUL reached the backend, so the direct route now honours the \
+         setting; MIK-8154 may have closed this gap, flip the row to Applies"
+    );
+    assert!(
+        direct_off.body.to_string().contains(NUL_REFUSED),
+        "R3 off: stopped, but not by the sanitizer: {}",
+        direct_off.body
+    );
+
+    assert_eq!(
+        row(Route::Stdio),
+        Expect::ExpectedGap(super::Ticket::Mik8149)
+    );
+    // Built from config by the production Gateway, with the setting ON: stdio
+    // still passes the NUL (the gap). The OFF run is the control.
+    for on in [true, false] {
+        let (body, calls) = stdio::stdio_sanitizing(on).await;
+        assert!(
+            !body.to_string().contains(NUL_REFUSED),
+            "R5 sanitize_input={on}: stdio now refuses the NUL; MIK-8149 may have \
+             closed this gap, flip the row to Applies: {body}"
+        );
+        assert_eq!(
+            calls, 1,
+            "R5 sanitize_input={on}: the call did not reach the backend: {body}"
+        );
+        // The backend echoes `cmd`; `gateway_invoke` wraps its result as text.
+        // The NUL arrived unchanged, not stripped.
+        let inner: serde_json::Value = body["result"]["content"][0]["text"]
+            .as_str()
+            .and_then(|text| serde_json::from_str(text).ok())
+            .unwrap_or_default();
+        assert_eq!(
+            inner["content"][0]["text"], "a\u{0}b",
+            "R5 sanitize_input={on}: the backend did not get the NUL as sent: {body}"
+        );
+    }
+}
+
+/// A backend answer carrying a credential the response firewall blocks. Built
+/// at compile time so no key-shaped literal sits in the source.
+const WITH_SECRET: &str = concat!(
+    "benign prefix ",
+    "gh",
+    "p_",
+    "0123456789abcdefghij0123456789abcdef"
+);
+
+/// The response firewall's own refusal.
+const RESPONSE_BLOCKED: &str = "Response blocked by security firewall";
+
+/// `ResponseFirewall`: on every sending route the secret-bearing answer is
+/// refused by the response firewall itself (its -32600 message) and the
+/// secret never reaches the client.
+#[tokio::test]
+async fn response_firewall_rows() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audit = dir.path().join("audit.jsonl");
+    for route in [Route::Invoke, Route::Direct, Route::Stdio] {
+        assert_eq!(
+            expect(MethodKind::ToolsCall, route, Stage::ResponseFirewall),
+            Expect::Applies,
+            "{route:?}"
+        );
+        let body = match route {
+            Route::Invoke => router::invoke_answering(WITH_SECRET).await.body,
+            Route::Direct => router::direct_answering(WITH_SECRET).await.body,
+            Route::Stdio => {
+                stdio::stdio_firewalled_answering(&audit, json!({}), WITH_SECRET)
+                    .await
+                    .body
+            }
+            other => unreachable!("not driven here: {other:?}"),
+        };
+        assert_eq!(body["error"]["code"], -32600, "{route:?}: {body}");
+        assert_eq!(
+            body["error"]["message"], RESPONSE_BLOCKED,
+            "{route:?}: {body}"
+        );
+        assert!(
+            !body.to_string().contains(&WITH_SECRET[14..]),
+            "{route:?}: the secret leaked: {body}"
+        );
+    }
+}
+
+/// `MrtrUndeclared`: a backend question of a type the client never declared is
+/// refused with the MRTR.9 capability refusal (-32021, naming the undeclared
+/// capability), after exactly one backend send, on every sending route.
+#[tokio::test]
+async fn mrtr_undeclared_rows() {
+    for route in [Route::Invoke, Route::Direct, Route::Stdio] {
+        assert_eq!(
+            expect(MethodKind::ToolsCall, route, Stage::MrtrUndeclared),
+            Expect::Applies,
+            "{route:?}"
+        );
+        let (body, backend_calls) = match route {
+            Route::Invoke => {
+                let sent = router::invoke_asking().await;
+                (sent.body, sent.backend_calls)
+            }
+            Route::Direct => {
+                let sent = router::direct_asking().await;
+                (sent.body, sent.backend_calls)
+            }
+            Route::Stdio => {
+                let sent = stdio::stdio_asking().await;
+                (sent.body, sent.backend_calls)
+            }
+            other => unreachable!("not driven here: {other:?}"),
+        };
+        assert_eq!(body["error"]["code"], -32021, "{route:?}: {body}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("the client did not declare")),
+            "{route:?}: refused, but not by the MRTR.9 gate: {body}"
+        );
+        assert_eq!(
+            backend_calls, 1,
+            "{route:?}: the question was asked once: {body}"
+        );
+    }
+}
+
+/// `ChainLink`: with a chain signer emitting on request and a chain nonce on
+/// the call, the answer carries the gateway's origin link on every route the
+/// table says Applies.
+#[tokio::test]
+async fn chain_link_rows() {
+    use crate::gateway::chain_test_support::chain_of;
+    for route in [Route::Invoke, Route::Direct, Route::Stdio] {
+        assert_eq!(
+            expect(MethodKind::ToolsCall, route, Stage::ChainLink),
+            Expect::Applies,
+            "{route:?}"
+        );
+        let body = match route {
+            Route::Invoke => router::invoke_chained().await.body,
+            Route::Direct => router::direct_chained().await.body,
+            Route::Stdio => stdio::stdio_chained().await.body,
+            other => unreachable!("not driven here: {other:?}"),
+        };
+        assert!(body.get("error").is_none(), "{route:?}: refused: {body}");
+        assert!(
+            chain_of(&body["result"]).is_some(),
+            "{route:?}: no origin link on the answer: {body}"
+        );
+    }
+}
+
+/// `ChainLink`, R2 gap (MIK-8159): the same signed request by surfaced name
+/// succeeds and reaches its backend, but the answer carries no origin link,
+/// because the surfaced reply drops the chain source.
+#[tokio::test]
+async fn chain_link_surfaced_gap_row() {
+    use crate::gateway::chain_test_support::chain_of;
+    assert_eq!(
+        expect(MethodKind::ToolsCall, Route::Surfaced, Stage::ChainLink),
+        Expect::ExpectedGap(super::Ticket::Mik8159)
+    );
+    let sent = router::surfaced_chained().await;
+    assert!(sent.body.get("error").is_none(), "refused: {}", sent.body);
+    assert_eq!(
+        sent.backend_calls, 1,
+        "premise: the call ran: {}",
+        sent.body
+    );
+    assert!(
+        chain_of(&sent.body["result"]).is_none(),
+        "R2 now carries an origin link; MIK-8159 may have closed this gap, flip \
+         the row to Applies: {}",
+        sent.body
+    );
+}
+
+/// `ChokepointRescan`, R1 and the R3 gap. A continuation retry whose answer
+/// carries a blocked pattern reaches bytes the route-layer scan never judged.
+/// R1 Applies: the dispatch rescan refuses it with a blocking `event=dispatch`
+/// row and the backend is asked only once (the question). F2d (MIK-8351): the
+/// direct route now does the same, its row marked `source: direct`.
+#[tokio::test]
+async fn chokepoint_rescan_rows() {
+    let row = |route| expect(MethodKind::ToolsCall, route, Stage::ChokepointRescan);
+
+    assert_eq!(row(Route::Invoke), Expect::Applies);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audit = dir.path().join("audit.jsonl");
+    let sent = router::invoke_retry_answering(&audit, BLOCKED).await;
+    let dispatched = audit_rows(&audit, "dispatch");
+    assert!(
+        dispatched.iter().any(|row| row["action"] == "block"),
+        "R1: not refused by the dispatch rescan: {dispatched:?}; {}",
+        sent.body
+    );
+    assert_eq!(sent.body["error"]["code"], -32600, "R1: {}", sent.body);
+    assert_eq!(
+        sent.backend_calls, 1,
+        "R1: the hostile answer was sent: {}",
+        sent.body
+    );
+
     // F2d (MIK-8351, which took MIK-8154 SAN.3): the direct route's redeemed
     // retry passes the same chokepoint, so the hostile answer is refused with a
     // `source: direct` dispatch row and only the question reached the backend.

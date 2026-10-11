@@ -95,6 +95,17 @@ fn mint_permit(
     )
 }
 
+/// MIK-8351: a send the chokepoint refused gives back everything it took:
+/// the nonce, the idempotency key (released now, not left to the unarmed
+/// drop), and the spend admission and continuation slot, which the caller
+/// drops with the refusal.
+fn give_back_refused(state: &AppState, admitted: &mut Admitted<'_>) {
+    give_back_nonce(state, admitted);
+    if let Some(mut reservation) = admitted.idem_reservation.take() {
+        reservation.release();
+    }
+}
+
 /// A refusal before dispatch: give back the nonce this call admitted
 /// (MIK-7698).
 fn give_back_nonce(state: &AppState, admitted: &mut Admitted<'_>) {
@@ -376,7 +387,7 @@ async fn forward_sanitized(
     let permit = match mint_permit(scope, Some(&sanitized_params)) {
         Ok(permit) => permit,
         Err(e) => {
-            give_back_nonce(state, &mut admitted);
+            give_back_refused(state, &mut admitted);
             // Not dispatched: the spend reservation is given back on drop.
             drop(admission);
             return build_http_response(
@@ -442,6 +453,54 @@ async fn forward_sanitized(
     }
 }
 
+/// One plain-arm send, not yet awaited.
+type PlainSend<'a> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = crate::Result<JsonRpcResponse>> + Send + 'a>,
+>;
+
+/// The plain arm's send (MIK-8351): a `tools/call` takes the chokepoint's
+/// permit on its params; every other method the permit-free door, which cannot
+/// name `tools/call`. A letter-case variant of `tools/call` gets neither: it
+/// is not served (-32601). A refusal gives back what the call took.
+fn plain_send<'a>(
+    scope: Scope<'a>,
+    envelope: &Envelope,
+    propagation: &'a Propagation,
+    admitted: &mut Admitted<'_>,
+) -> Result<PlainSend<'a>, Rejection> {
+    let (method, id, backend) = (envelope.method.as_str(), scope.id, &scope.route.backend);
+    let headers = (
+        propagation.headers.as_slice(),
+        propagation.identity_key.as_deref(),
+    );
+    let params = envelope.params.clone();
+    if method == "tools/call" {
+        return match mint_permit(scope, envelope.params.as_ref()) {
+            Ok(permit) => Ok(Box::pin(super::direct_send::dispatch_tool_call(
+                permit, backend, id, params, headers,
+            ))),
+            Err(e) => {
+                give_back_refused(scope.state, admitted);
+                Err(build_http_response(
+                    &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
+                    StatusCode::OK,
+                ))
+            }
+        };
+    }
+    let Some(other) = super::direct_send::NonToolMethod::new(method) else {
+        return Err(build_http_error_response(
+            Some(id.clone()),
+            crate::protocol::era::METHOD_NOT_FOUND_CODE,
+            format!("{method} is not served on /mcp/{{name}}; use tools/call"),
+            StatusCode::OK,
+        ));
+    };
+    Ok(Box::pin(super::direct_send::dispatch_non_call(
+        other, backend, id, params, headers,
+    )))
+}
+
 /// Forward to the backend as sent. `tools/list` drains the whole upstream
 /// catalogue so it can be filtered per caller and answered without a cursor
 /// (A3). The outer `Err` is a refusal raised before dispatch.
@@ -494,49 +553,13 @@ async fn forward_plain(
     } else {
         Admission::default()
     };
-    // A `tools/call` takes the chokepoint's permit (MIK-8351); every other
-    // method the permit-free door, which cannot name `tools/call`. A letter-case
-    // variant of `tools/call` gets neither: it is not served.
-    let headers = (
-        propagation.headers.as_slice(),
-        propagation.identity_key.as_deref(),
-    );
-    let params = envelope.params.clone();
-    let dispatch: std::pin::Pin<
-        Box<dyn std::future::Future<Output = crate::Result<JsonRpcResponse>> + Send + '_>,
-    > = if method == "tools/call" {
-        match mint_permit(scope, envelope.params.as_ref()) {
-            Ok(permit) => Box::pin(super::direct_send::dispatch_tool_call(
-                permit,
-                &route.backend,
-                id,
-                params,
-                headers,
-            )),
-            Err(e) => {
-                give_back_nonce(state, admitted);
-                drop(admission);
-                return Err(build_http_response(
-                    &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
-                    StatusCode::OK,
-                ));
-            }
+    let dispatch = match plain_send(scope, envelope, propagation, admitted) {
+        Ok(dispatch) => dispatch,
+        Err(refused) => {
+            // Not dispatched: the spend admission is given back on drop.
+            drop(admission);
+            return Err(refused);
         }
-    } else if let Some(other) = super::direct_send::NonToolMethod::new(method) {
-        Box::pin(super::direct_send::dispatch_non_call(
-            other,
-            &route.backend,
-            id,
-            params,
-            headers,
-        ))
-    } else {
-        return Err(build_http_error_response(
-            Some(id.clone()),
-            crate::protocol::era::METHOD_NOT_FOUND_CODE,
-            format!("{method} is not served on /mcp/{{name}}; use tools/call"),
-            StatusCode::OK,
-        ));
     };
     let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(super::dispatch_armed(

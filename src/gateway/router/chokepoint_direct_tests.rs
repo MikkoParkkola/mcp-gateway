@@ -209,7 +209,7 @@ async fn f7b_direct_string_arguments_that_parse_to_a_non_object_are_refused() {
 /// Absent `arguments` (guard and hostile pin): a clean call with no
 /// `arguments` is sent unchanged; one carrying a blocked pattern in another
 /// params field is refused at entry, because with no `arguments` the entry
-/// scan judges the whole params (backend_handlers.rs:96). Mutant: absent
+/// scan judges the whole params (`backend_handlers.rs:96`). Mutant: absent
 /// arguments judged as `{}`.
 #[cfg(feature = "firewall")]
 #[tokio::test]
