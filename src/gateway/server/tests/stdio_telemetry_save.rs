@@ -118,6 +118,13 @@ impl Session {
     }
 
     async fn handshake(&mut self) {
+        self.initialize().await;
+        self.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+            .await;
+    }
+
+    /// `initialize` alone, answered, with nothing else in flight after it.
+    async fn initialize(&mut self) {
         self.send(
             &json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
             "protocolVersion": "2025-06-18", "capabilities": {},
@@ -125,8 +132,6 @@ impl Session {
         )
         .await;
         self.answer(0).await;
-        self.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
-            .await;
     }
 
     async fn pings(&mut self) {
@@ -253,7 +258,10 @@ async fn a_signal_stop_ends_stdio_and_saves_every_observed_request() {
 async fn a_request_observed_during_the_drain_is_in_the_final_save() {
     let mut trigger = None;
     let mut session = Session::start(Some(&mut trigger)).await;
-    session.handshake().await;
+    // `initialize` only: a `notifications/initialized` dispatched after the
+    // hold is armed would take the one-shot hold instead of the ping (seen
+    // when a final save placed before the drain still passed this row).
+    session.initialize().await;
     let (reached, release) = session.hold.arm();
     let reached = reached.notified();
     // Its own revision on `_meta`, so the final save can be checked for
