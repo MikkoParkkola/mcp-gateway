@@ -157,3 +157,27 @@ async fn s9h_an_encoded_nul_in_a_chain_step_never_reaches_a_backend() {
     );
     assert_eq!(message(&body), NUL_REFUSED, "s9h: {body}");
 }
+
+/// S9k (round-5 seat): an encoded `arguments` string that does not decode is
+/// refused at the sanitize step with the decoder's own -32602 and the
+/// request's own id, on `/mcp` (`gateway_invoke`'s inner) and on
+/// `/mcp/{name}`, so a client can match the refusal to its request. Nothing
+/// runs. RED before the fix: the refusal carried no id.
+#[tokio::test]
+async fn s9k_an_undecodable_encoded_arguments_keeps_the_request_id() {
+    let invoke = json!({"name": "gateway_invoke", "arguments":
+        {"server": "alpha", "tool": "read", "arguments": "not json"}});
+    let direct = json!({"name": "read", "arguments": "not json"});
+    for (uri, params) in [("/mcp", invoke), ("/mcp/alpha", direct)] {
+        let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
+        let body = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});
+        let answer = send_raw(&fx, uri, "k-std", &body).await;
+        assert_eq!(
+            answer.pointer("/error/code"),
+            Some(&json!(-32602)),
+            "s9k {uri}: {answer}"
+        );
+        assert_eq!(answer.get("id"), Some(&json!(7)), "s9k {uri}: {answer}");
+        assert_eq!(calls(&fx), 0, "s9k {uri}: dispatched");
+    }
+}

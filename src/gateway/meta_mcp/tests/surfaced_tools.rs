@@ -578,22 +578,24 @@ fn inspect_discovery_value_redacts_credentials_when_not_blocking() {
 #[test]
 fn meta_tool_names_are_the_dispatch_arms() {
     let source = include_str!("../call_dispatch.rs");
-    let start = source
-        .find("let result = match tool_name {")
-        .expect("the dispatch's meta match");
-    let end = start
-        + source[start..]
-            .find("\n            _ => {")
-            .expect("the meta match's fallback arm");
-    // Every string literal naming a gateway tool before an arm's `=>`, so a
-    // guard or an `|` pattern still counts; an arm naming a constant reads as
-    // a missing name and fails the comparison rather than passing it.
-    let arms: std::collections::BTreeSet<&str> = source[start..end]
-        .lines()
-        .filter_map(|line| line.split_once("=>").map(|(pattern, _)| pattern))
-        .flat_map(|pattern| pattern.split('"').skip(1).step_by(2))
-        .filter(|literal| literal.starts_with("gateway_"))
-        .collect();
+    // Each arm's pattern must be string literals joined by `|`, with no guard:
+    // anything else (a constant, a guard, a non-literal) fails here rather
+    // than reading as a name the arm may not route.
+    let mut arms = std::collections::BTreeSet::new();
+    for pattern in match_arm_patterns(source, "let result = match tool_name {") {
+        if pattern == "_" {
+            continue;
+        }
+        assert!(!pattern.contains(" if "), "a guarded meta arm: {pattern}");
+        for alternative in pattern.split('|').map(str::trim) {
+            let name = alternative
+                .strip_prefix('"')
+                .and_then(|rest| rest.strip_suffix('"'))
+                .filter(|name| !name.contains('"'))
+                .unwrap_or_else(|| panic!("a meta arm that is not a literal: {pattern}"));
+            arms.insert(name);
+        }
+    }
     let listed: std::collections::BTreeSet<&str> = super::super::surfaced::META_TOOLS
         .iter()
         .map(|(name, _)| *name)
@@ -619,4 +621,54 @@ fn exactly_the_three_parsing_meta_tools_decode_inside() {
         parsed,
         ["gateway_execute", "gateway_invoke", "gateway_run_playbook"]
     );
+}
+
+/// The pattern of every arm of the `match` that opens with `head` in
+/// `source`, whitespace-trimmed, read by depth: an arm ends at a comma or a
+/// block body's closing brace at the match's own depth, so a pattern split
+/// across lines is still one pattern. String literals and line comments are
+/// skipped, and a comment before an arm is left out of its pattern. ponytail: a char literal holding a bracket would skew the depth;
+/// the meta match has none, and a skew fails the comparison rather than
+/// passing it.
+fn match_arm_patterns<'a>(source: &'a str, head: &str) -> Vec<&'a str> {
+    let open = source.find(head).expect("the match") + head.len();
+    let bytes = source.as_bytes();
+    let (mut patterns, mut depth, mut start, mut i) = (Vec::new(), 0usize, Some(open), open);
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                i += 1;
+                while bytes[i] != b'"' {
+                    i += if bytes[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                let eol = source[i..].find('\n').map_or(bytes.len(), |n| i + n);
+                // A comment before an arm is not part of its pattern.
+                if start.is_some_and(|from| source[from..i].trim().is_empty()) {
+                    start = Some(eol);
+                }
+                i = eol;
+            }
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' => depth -= 1,
+            b'}' if depth == 0 => break,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 && start.is_none() {
+                    start = Some(i + 1);
+                }
+            }
+            b',' if depth == 0 => start = Some(i + 1),
+            b'=' if depth == 0 && bytes.get(i + 1) == Some(&b'>') => {
+                if let Some(from) = start.take() {
+                    patterns.push(source[from..i].trim());
+                }
+                i += 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    patterns
 }
