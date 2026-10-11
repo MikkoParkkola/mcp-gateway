@@ -10,6 +10,7 @@ use super::Route;
 use super::rows::{BLOCKED, X14_PROMPT, audit_rows, blocked_call, message};
 use crate::gateway::router::route_matrix_driver_tests::{self as router, Surfacing};
 use crate::gateway::server::route_matrix_driver_tests as stdio;
+use crate::gateway::router::route_matrix_x14_nonce_tests as x14;
 
 /// MIK-8149.REQFW.1: on stdio a blocked argument is refused by the route-stage
 /// request firewall: a blocking `event=request` audit row, the code and
@@ -400,4 +401,78 @@ async fn stdio_blocked_task_call_makes_no_task() {
         "a task was made for a blocked call: {body}"
     );
     assert_eq!(calls, 0, "{body}");
+}
+
+/// MIK-8353 H1-mcp: on `/mcp` X14 consumes a task call's grant BEFORE nonce
+/// admission, and admission then refuses it (the backend is killed). A refund
+/// witness minted at admission would be fresh after that consume, so the
+/// nonce must stay spent. Oracles as E2E.1: the ledger grew by one across the
+/// redemption; the refusal is the kill switch's own; the same nonce re-sent
+/// once revived is a nonce replay; nothing ran before the honest round; a
+/// fresh nonce's honest round runs the backend once. Green on base (MIK-8150's
+/// task guard). Mutant mH1: the witness minted unconditionally at admission
+/// (run with the veto off).
+#[tokio::test]
+async fn mcp_task_refused_after_its_grant_was_consumed_keeps_its_nonce() {
+    let seen = Box::pin(x14::mcp_x14_consumed_then_refused()).await;
+    assert!(
+        seen.challenge.to_string().contains(X14_PROMPT),
+        "premise: no X14 challenge: {}",
+        seen.challenge
+    );
+    assert_eq!(
+        seen.ledger.1,
+        seen.ledger.0 + 1,
+        "premise: the redemption did not consume the grant: {}",
+        seen.refused
+    );
+    assert!(
+        message(&seen.refused).contains("kill switch"),
+        "premise: admission's kill-switch refusal: {}",
+        seen.refused
+    );
+    assert_eq!(
+        message(&seen.resent),
+        "Nonce replay detected",
+        "a nonce whose grant was consumed was given back: {}",
+        seen.resent
+    );
+    assert_eq!(seen.calls_before_honest, 0, "the backend ran before the honest round");
+    assert!(
+        seen.honest.pointer("/result/taskId").is_some(),
+        "control: the honest round did not create its task: {}",
+        seen.honest
+    );
+    assert_eq!(
+        seen.calls_after_honest, 1,
+        "control: the honest round did not run the backend exactly once"
+    );
+}
+
+/// MIK-8353 H1-mcp-control: the same admission refusal of a signed task call
+/// with NO grant consumed (nothing for X14 to ask) gives the nonce back: once
+/// revived, the same nonce is accepted once (its task runs the backend) and a
+/// third send is a replay. Red on base: MIK-8150 keeps every task call's nonce
+/// spent. Kills: the refund site removed.
+#[tokio::test]
+async fn mcp_task_refused_without_a_grant_gives_its_nonce_back() {
+    let (refused, resent, third, calls) = Box::pin(x14::mcp_task_refused_without_grant()).await;
+    assert!(
+        !refused.to_string().contains(X14_PROMPT),
+        "premise: X14 asked, so a grant path was taken: {refused}"
+    );
+    assert!(
+        message(&refused).contains("kill switch"),
+        "premise: admission's kill-switch refusal: {refused}"
+    );
+    assert!(
+        resent.pointer("/result/taskId").is_some(),
+        "the refused task call kept its nonce: {resent}"
+    );
+    assert_eq!(calls, 1, "the re-sent task did not run the backend once");
+    assert_eq!(
+        message(&third),
+        "Nonce replay detected",
+        "the nonce was given back twice: {third}"
+    );
 }
