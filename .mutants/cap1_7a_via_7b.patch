@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_idempotency.rs b/src/gateway/router/backend_handlers/direct_idempotency.rs
+index 22e499c2c..a70d51ab7 100644
+--- a/src/gateway/router/backend_handlers/direct_idempotency.rs
++++ b/src/gateway/router/backend_handlers/direct_idempotency.rs
+@@ -79,7 +79,7 @@ pub(super) fn idempotency_outcome(
+             crate::gateway::meta_mcp::Authentication::of(caller.client.as_ref()),
+             envelope.params.as_ref(),
+         )
+-        .map_err(|e| refused(scope, &e))
++        .map_err(|e| lease_refused(scope, &e))
+ }
+ 
+ /// Stage 7b: the lease a keyed `tools/call` holds through dispatch, or the

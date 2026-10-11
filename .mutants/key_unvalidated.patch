@@ -1,0 +1,13 @@
+diff --git a/src/security/sanitize/protocol.rs b/src/security/sanitize/protocol.rs
+index 729018f53..3302f0932 100644
+--- a/src/security/sanitize/protocol.rs
++++ b/src/security/sanitize/protocol.rs
+@@ -26,7 +26,7 @@ pub(crate) fn validate_protocol_fields(request: &Value, nonces: &[&str]) -> Resu
+     let meta = request.pointer("/params/_meta");
+     // The idempotency key too: stripped, two keys could become one.
+     let key = crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
+-    for field in nonces.iter().chain(std::iter::once(&key)) {
++    for field in nonces.iter().chain(std::iter::once(&key).filter(|_| false)) {
+         if let Some(Value::String(text)) = meta.and_then(|meta| meta.get(field)) {
+             validate_protocol_text(text)?;
+         }
