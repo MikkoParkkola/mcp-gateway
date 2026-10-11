@@ -269,10 +269,13 @@ fn unread_holders_never_make_text_common() {
     );
 }
 
-/// `MIK-8066` T19 (D2/D8): `VIEW_BYTES` admits views while it has room. With
-/// the budget set to three views' independently measured charge, four
-/// over-bound answers read at once give three views and one unread answer;
-/// the three holders are excused, the fourth is refused for lost room.
+/// `MIK-8066` T19 (D2/D8): `VIEW_BYTES` admits views while it has room. A
+/// build is charged its transient peak (growth, pre-dedup), a held view only
+/// its entries. The budget is two held views plus the largest build peak of
+/// the first three, each measured independently: the third build fits in
+/// exactly the room left, the fourth does not. Four over-bound answers read
+/// at once give three views and one unread answer; the three holders are
+/// excused, the fourth is refused for lost room.
 #[test]
 fn views_are_admitted_while_the_view_budget_has_room() {
     let fw = firewall();
@@ -284,7 +287,13 @@ fn views_are_admitted_while_the_view_budget_has_room() {
             (text, step, answer)
         })
         .collect();
-    detector.set_view_budget(3 * detector.view_charge_of(&plans[0].2));
+    let peak = (0..3)
+        .map(|i| detector.view_build_peak(&plans[i].2))
+        .max()
+        .expect("three plans");
+    let held = detector.view_charge_of(&plans[0].2) + detector.view_charge_of(&plans[1].2);
+    assert!(held > 0 && peak > 0, "the fixture views were not charged");
+    detector.set_view_budget(held + peak);
     let callers: Vec<String> = (0..4).map(|i| format!("holder{i}")).collect();
     let staged: Vec<PlanStaging> = callers
         .iter()

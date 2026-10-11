@@ -464,8 +464,17 @@ impl CollusionDetector {
                 .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// (reserved bytes, live buffer bytes) at every growth and
-    /// at compaction while `answer`'s view is built.
+    /// The most `VIEW_BYTES` a build of `answer` reserves at once.
+    pub(crate) fn view_build_peak(&self, answer: &serde_json::Value) -> usize {
+        self.view_build_probe(answer)
+            .iter()
+            .map(|&(reserved, _)| reserved)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// (reserved bytes, live buffer bytes) at the first reservation, every
+    /// growth and compaction while `answer`'s view is built.
     pub(crate) fn view_build_probe(&self, answer: &serde_json::Value) -> Vec<(usize, usize)> {
         let mut probe = Vec::new();
         let _ = super::super::collusion_digest::view::build(self, answer, Some(&mut probe));

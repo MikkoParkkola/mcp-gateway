@@ -156,7 +156,8 @@ impl Entries<'_> {
 }
 
 /// Build `answer`'s view (D1/D2), or say why it cannot be read (D6).
-/// `probe` records (reserved, live) bytes at every growth and at compaction.
+/// `probe` records (reserved, live) bytes at the first reservation, at every
+/// growth and at compaction.
 pub(crate) fn build(
     detector: &CollusionDetector,
     answer: &Value,
@@ -175,6 +176,7 @@ pub(crate) fn build(
         refs,
         probe,
     };
+    entries.note(0);
     let entry_cap = detector.views.entry_cap.load(Ordering::Relaxed);
     let (all, values_len) = delivery_parts(answer);
     let values = &all[..values_len.min(all.len())];
