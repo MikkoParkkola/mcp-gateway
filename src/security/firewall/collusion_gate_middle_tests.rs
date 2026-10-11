@@ -198,20 +198,22 @@ fn a_middle_sample_never_truncates_leaf_evidence() {
 /// plan step kept to its answer records the fingerprints the answer
 /// delivered as retained ones (`DeliveryDigest::capped`, MIK-7992), and for
 /// a short relay the middle sample cannot reliably catch, they are its only
-/// witness. The 64 KiB step fills the per-delivery bound with its head,
-/// tail and retained fingerprints, so no middle sample is recorded. The row
-/// picks, under this process's key, a 60-char window of the early middle
-/// that (1) has at least 2 fingerprints, all tracked after recording, and
-/// (2) has none the sample keeps at any rate of 2 or more. Bob relaying it
-/// is refused only through plan-path recording. Drop the retained
-/// fingerprints (mutant a8) and the row goes red at its premise: head and
-/// tail alone (about 1,500) never fill the bound. Were it past that, the
-/// sample at m = 8 would keep none of the window. Only windows in about the
-/// first 13 KiB are tracked (truncation keeps the head, the tail and the
-/// first retained fingerprints); there, about 1,400 windows are tried at
-/// about 8% each, so the pick always exists, and it is asserted. Residual:
-/// the pick is made from tracked fingerprints, so a partial loss of retained
-/// fingerprints that still fills the bound is not detected here.
+/// witness.
+///
+/// The window is picked BEFORE the cap, from the digest retention kept, so
+/// a mutant of `capped()` or of recording cannot change the pick: under
+/// this process's key, the first 60-char window of the early middle (before
+/// 10 KiB) that has at least 2 fingerprints, all retained, and none the
+/// middle sample keeps at any rate of 2 or more. Then:
+/// - working code: recording keeps the head, the tail, then retained
+///   fingerprints in text order up to the per-delivery bound (about 3 KiB to
+///   13 KiB of a 64 KiB step), so the window is tracked and bob is refused;
+/// - `capped()` dropping retained (mutant a8): the sample, at m = 8, keeps
+///   none of the window, so bob is not refused, and the row fails at its own
+///   assertion.
+/// A window qualifies with about 8% probability and about 1,000 are tried.
+/// Residual: a partial loss of retained fingerprints that spares this window
+/// is not detected here.
 #[test]
 fn a_kept_plan_steps_short_relay_is_caught_by_its_retained_fingerprints() {
     let fw = firewall();
@@ -225,30 +227,24 @@ fn a_kept_plan_steps_short_relay_is_caught_by_its_retained_fingerprints() {
     let delivered = fw
         .delivered_for_plan(&answer, None)
         .expect("under the bound");
-    let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered, None));
-    assert_eq!(
-        fw.relay_text_cuts(),
-        1,
-        "premise: capped once kept to the answer"
-    );
-    fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &kept);
-    assert!(
-        detector.source_truncated() > 0,
-        "premise: the bound is full, so no middle sample was recorded"
-    );
+    let retained = fw.retain_delivered(digest, &delivered, None);
+    let held: std::collections::HashSet<u64> =
+        retained.fingerprints(detector).into_iter().collect();
     let half = super::super::RECORD_CAP / 2;
-    let window = (half + 64..text.len() / 2)
+    let window = (half + 64..10 * 1024)
         .step_by(7)
         .map(|at| &text[at..at + 60])
         .find(|w| {
             let fps = detector.fingerprints(w);
             fps.len() >= 2
-                && fps.iter().all(|&fp| detector.tracks(fp))
+                && fps.iter().all(|fp| held.contains(fp))
                 && !fps
                     .iter()
                     .any(|&fp| CollusionDetector::thinning_keeps(fp, 2))
         })
-        .expect("a window only plan-path recording witnesses");
+        .expect("a retained window no sample at m >= 2 keeps");
+    let kept = fw.cap_kept(retained);
+    fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &kept);
     assert!(
         relays(&fw, "bob", window),
         "a kept step's retained fingerprints were lost"
