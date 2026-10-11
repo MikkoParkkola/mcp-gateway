@@ -128,6 +128,12 @@ pub(crate) struct DeliveryDigest {
     /// at staging and kept only through a view retention, which keeps no
     /// whole segments: what subset-forward seam ownership reads instead.
     pub(super) leaf_hashes: Option<std::sync::Arc<[u64]>>,
+    /// `MIK-8066` A5: a view cut's `VIEW_BYTES` charge, held from retention
+    /// until this digest is recorded and dropped.
+    cut_charge: Option<super::collusion::budget::ViewCharge>,
+    /// A5: a view cut was refused its charge; its record marks the caller's
+    /// excuse lost.
+    pub(super) cut_lost: bool,
 }
 
 /// A receipt's judgement by its plan's answer (`MIK-8066` D9, A2). Every
@@ -292,6 +298,8 @@ impl DeliveryDigest {
             judged: Judged::default(),
             recorded: AtomicBool::default(),
             leaf_hashes: None,
+            cut_charge: None,
+            cut_lost: false,
         };
         (digest, cut)
     }
@@ -364,6 +372,8 @@ impl DeliveryDigest {
             judged: Judged::default(),
             recorded: AtomicBool::default(),
             leaf_hashes: None,
+            cut_charge: None,
+            cut_lost: false,
         };
         (digest, false)
     }
@@ -399,6 +409,8 @@ impl DeliveryDigest {
             judged: Judged::default(),
             recorded: AtomicBool::default(),
             leaf_hashes: None,
+            cut_charge: None,
+            cut_lost: false,
         };
         Some((digest, cut || joins_cut || kept < self.retained.len()))
     }
@@ -616,6 +628,8 @@ impl DeliveryDigest {
             judged: Judged::Unread { receipt, step },
             recorded: AtomicBool::default(),
             leaf_hashes: None,
+            cut_charge: None,
+            cut_lost: false,
         }
     }
 
@@ -693,6 +707,8 @@ impl DeliveryDigest {
             judged: Judged::default(),
             recorded: AtomicBool::default(),
             leaf_hashes: None,
+            cut_charge: None,
+            cut_lost: false,
         };
         kept.with_original(detector, found, original, retained, &HashSet::new())
     }
@@ -727,6 +743,26 @@ impl DeliveryDigest {
         );
         cut.sort_unstable();
         cut.dedup();
+        // A5: the cut is charged from here to record, reserved while any
+        // earlier charge is still held. Without room it is thinned to what
+        // its record keeps and the excuse is marked lost (fail closed).
+        let (cut, cut_charge, refused) = match detector.views.budget.reserve(cut.len() * 8) {
+            Some(charge) => (cut, Some(charge), false),
+            None => {
+                detector
+                    .views
+                    .cut_refusals
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                telemetry_metrics::counter!(
+                    super::collusion::CAPACITY_METRIC,
+                    "bound" => "plan_view_cut_budget"
+                )
+                .increment(1);
+                let (_, thinned) = CollusionDetector::thinned_for_record(Vec::new(), &cut);
+                (thinned, None, true)
+            }
+        };
+        let cut_lost = self.cut_lost || refused;
         Self {
             segments: Vec::new(),
             retained: Vec::new(),
@@ -739,6 +775,8 @@ impl DeliveryDigest {
             judged: Judged::default(),
             recorded: AtomicBool::default(),
             leaf_hashes: None,
+            cut_charge,
+            cut_lost,
         }
     }
 
@@ -839,6 +877,8 @@ impl DeliveryDigest {
             judged: Judged::default(),
             recorded: AtomicBool::default(),
             leaf_hashes: None,
+            cut_charge: None,
+            cut_lost: false,
         };
         kept.with_original(detector, found, original, retained, &in_step)
     }

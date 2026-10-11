@@ -758,7 +758,7 @@ impl Firewall {
             return digest.into_unread(|d| {
                 let capped = self.capped(d);
                 let receipt = capped.as_ref().unwrap_or(d);
-                let (fps, middle) = CollusionDetector::unread_evidence(
+                let (fps, middle) = CollusionDetector::thinned_for_record(
                     receipt.fingerprints(detector),
                     receipt.cut_fps.as_deref().unwrap_or_default(),
                 );

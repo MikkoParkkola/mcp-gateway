@@ -525,11 +525,12 @@ impl CollusionDetector {
         }
     }
 
-    /// An unread receipt's evidence as its record will keep it (D6), computed
-    /// once at retention so nothing larger is held until record: `fps` to the
-    /// per-delivery bound, and `cut` thinned into the room left. An unread
-    /// holder keeps no sketch, so the rest of the cut is never needed.
-    pub(crate) fn unread_evidence(mut fps: Vec<u64>, cut: &[u64]) -> (Vec<u64>, Vec<u64>) {
+    /// Evidence as its record will keep it, computed once at retention so
+    /// nothing larger is held until record: `fps` to the per-delivery bound,
+    /// and `cut` thinned into the room left. For an unread receipt (D6),
+    /// whose holder keeps no sketch, and for a view cut refused its charge
+    /// (A5), whose excuse is lost.
+    pub(crate) fn thinned_for_record(mut fps: Vec<u64>, cut: &[u64]) -> (Vec<u64>, Vec<u64>) {
         fps.truncate(MAX_SOURCE_FINGERPRINTS);
         let room = MAX_SOURCE_FINGERPRINTS.saturating_sub(fps.len());
         let (_, middle) = thin::thinned_middle(cut, &fps, room);

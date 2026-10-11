@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use super::RelayCaller;
 use super::big::{SOURCE, deliver, filler, firewall, refusal, relays, step_of};
 use crate::security::firewall::collusion::CollusionDetector;
+use crate::security::firewall::collusion::big::VIEW_BYTES;
 use crate::security::firewall::{Firewall, PlanStaging};
 
 /// `caller`'s plan of `steps` on one shared staging, kept to one `answer`
@@ -326,6 +327,9 @@ fn views_are_admitted_while_the_view_budget_has_room() {
             .is_some_and(super::super::Delivered::is_unread),
         "the 4th answer, past the view budget, did not take D6"
     );
+    // Admission is decided. Retention's view cuts are charged too (A5), so
+    // the full budget is restored for them: this row tests admission only.
+    detector.set_view_budget(VIEW_BYTES);
     for (i, (digest, d)) in digests.into_iter().zip(&delivered).enumerate() {
         if let (Some(digest), Some(d)) = (digest, d) {
             let kept = fw.cap_kept(fw.retain_delivered(digest, d, None));

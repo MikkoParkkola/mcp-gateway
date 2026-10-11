@@ -76,6 +76,8 @@ impl Firewall {
         };
         // `MIK-8205`: read before capping, which keeps no seams.
         let seams = digest.seam_excuses.clone();
+        // A5: a view cut refused its charge keeps only thinned evidence.
+        let cut_lost = digest.cut_lost;
         // MIK-7992: the one sink every record passes, so a plan step's
         // receipt never kept to its plan's answer is recorded capped too.
         let capped = self.capped(digest);
@@ -92,6 +94,9 @@ impl Firewall {
         );
         if let Some(seams) = seams {
             detector.record_seam_excuses_at(source, caller.key(), &seams, now);
+        }
+        if cut_lost {
+            detector.mark_step_lost(source, caller.key());
         }
     }
 
