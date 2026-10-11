@@ -172,13 +172,38 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
         }
     }
     let mut outcome = round_failure.map_or(Ok(()), Err);
+    // Rows whose upstream cancel is still unconfirmed: deleting one ends its
+    // retries, which an operator must hear (MIK-8347).
+    let pending: std::collections::HashMap<String, (String, String)> = service
+        .store
+        .pending_cancels(None, i64::MAX)
+        .into_iter()
+        .filter_map(|(owner, id)| {
+            let send = service.store.pending_cancel(&owner, &id)?;
+            let backend = send.backend.unwrap_or_default();
+            Some((id, (backend, send.handle)))
+        })
+        .collect();
     for (id, revision) in candidates {
         match service
             .store
             .expire(&id, revision, service.admission_arc())
             .await
         {
-            Ok(()) => tracing::debug!(task_id = %id, "expired task record deleted"),
+            Ok(()) => {
+                service.cancel_sends.release_row(&id);
+                if let Some((backend, handle)) = pending.get(&id) {
+                    let (backend, handle) = (backend.as_str(), handle.as_str());
+                    tracing::error!(
+                        task_id = %id,
+                        backend,
+                        handle,
+                        reason = "expired",
+                        "upstream tasks/cancel given up; the upstream job may still be running"
+                    );
+                }
+                tracing::debug!(task_id = %id, "expired task record deleted");
+            }
             // Terminal is absorbing, so a candidate cannot legitimately be
             // running by the time it is deleted; if one is, it is not expiry's
             // to end and the row simply stays.
@@ -191,5 +216,8 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
             }
         }
     }
+    // Due upstream cancels are retried detached (MIK-8347): the sweep never
+    // awaits a peer, so a stop is never held by one.
+    drop(executor.flush_pending_cancels(None));
     outcome
 }

@@ -14,7 +14,7 @@ use serde_json::json;
 use super::{Followed, Marker, WORKER_POLL_BUDGET, poll_to_terminal};
 use crate::gateway::subscription_registry::{DEFAULT_MAX_LISTENERS, SubscriptionRegistry};
 use crate::gateway::task_service::execution::{
-    TaskExecutor, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+    CancelDelivery, TaskExecutor, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
 };
 use crate::gateway::task_service::store::CommitStage;
 use crate::gateway::task_service::{
@@ -305,7 +305,9 @@ struct LivePeer {
 #[async_trait::async_trait]
 impl UpstreamRecovery for LivePeer {
     /// These rows assert nothing about upstream cancels (MIK-7642 PR.D rows do).
-    async fn cancel(&self, _handle: &UpstreamHandle, _deadline: Duration) {}
+    async fn cancel(&self, _handle: &UpstreamHandle, _deadline: Duration) -> CancelDelivery {
+        CancelDelivery::Confirmed
+    }
 
     async fn claims(&self, _backend: &str) -> bool {
         true
