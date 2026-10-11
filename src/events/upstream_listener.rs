@@ -63,6 +63,9 @@ pub(super) struct Shared {
     /// Test pause as a task starts its reconnect backoff (T35).
     #[cfg(test)]
     pub before_backoff: Arc<crate::test_pause::Slot>,
+    /// What ended each of the task's waits, and when it began one (T35).
+    #[cfg(test)]
+    pub waits: super::upstream_session::WaitProbe,
     /// Whether the task ran where a login may begin, read as it starts
     /// (MIK-8269): background upkeep must not.
     #[cfg(test)]
@@ -602,6 +605,8 @@ impl UpstreamListeners {
             before_park: Arc::clone(&self.before_park),
             #[cfg(test)]
             before_backoff: Arc::default(),
+            #[cfg(test)]
+            waits: Default::default(),
             #[cfg(test)]
             ran_interactive: Mutex::default(),
         })

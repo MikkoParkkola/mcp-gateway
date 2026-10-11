@@ -3,8 +3,6 @@
 //! T35 (design r3, R1a d2 MEDIUM and d1 MED5): a revival signal reaches a
 //! task parked while its backend was gone, whenever it was sent.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
-
 use axum::http::StatusCode;
 use axum::response::IntoResponse as _;
 
@@ -12,12 +10,12 @@ use super::*;
 use crate::backend::{Backend, BackendRegistry};
 use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
 
-/// A peer that counts every request and answers none usefully.
-async fn counting_peer(hits: Arc<AtomicUsize>) -> String {
+/// A peer that signals every request it gets and answers none usefully.
+async fn counting_peer(contacted: Arc<tokio::sync::Notify>) -> String {
     let app = axum::Router::new().fallback(move || {
-        let hits = Arc::clone(&hits);
+        let contacted = Arc::clone(&contacted);
         async move {
-            hits.fetch_add(1, Ordering::SeqCst);
+            contacted.notify_one();
             StatusCode::SERVICE_UNAVAILABLE.into_response()
         }
     });
@@ -48,7 +46,8 @@ fn backend_at(url: String) -> Arc<Backend> {
 
 /// T35, parked half: the backend registers and its revival is signalled
 /// after the task found it gone but before the task waits. The task still
-/// retries at once, not at its 30 s timer.
+/// retries at once: its park ended by the revival, not by its 30 s timer.
+/// Asserts the cause of the wake, not how long it took.
 #[tokio::test]
 async fn t35_a_revival_sent_as_the_task_parks_is_not_missed() {
     let shared = shared();
@@ -62,23 +61,19 @@ async fn t35_a_revival_sent_as_the_task_parks_is_not_missed() {
     let task = tokio::spawn(run(Arc::clone(&shared), Arc::clone(&registry), Weak::new()));
     crate::test_pause::within("the task finding b gone", reached.notified()).await;
 
-    let hits = Arc::new(AtomicUsize::new(0));
-    assert!(registry.register(backend_at(counting_peer(Arc::clone(&hits)).await)));
+    let contacted = Arc::new(tokio::sync::Notify::new());
+    assert!(registry.register(backend_at(counting_peer(Arc::clone(&contacted)).await)));
     // What `revive_backend` sends for a live entry.
     shared.wake.send_modify(|n| *n += 1);
     release.notify_one();
 
-    let contacted = tokio::time::timeout(Duration::from_secs(5), async {
-        while hits.load(Ordering::SeqCst) == 0 {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await;
+    crate::test_pause::within("the revived backend being contacted", contacted.notified()).await;
     shared.stop.cancel();
     let _ = task.await;
-    assert!(
-        contacted.is_ok(),
-        "the revived backend is contacted at once, not at the 30 s timer"
+    assert_eq!(
+        shared.waits.ends().first(),
+        Some(&WaitEnd::Revival),
+        "the park ended by the revival, not by its 30 s timer"
     );
 }
 
@@ -99,8 +94,8 @@ async fn at_first_backoff() -> (
         .add(&Interest::ResourcesChanged)
         .expect("room");
     let registry = Arc::new(BackendRegistry::new());
-    let hits = Arc::new(AtomicUsize::new(0));
-    assert!(registry.register(backend_at(counting_peer(hits).await)));
+    let contacted = Arc::new(tokio::sync::Notify::new());
+    assert!(registry.register(backend_at(counting_peer(contacted).await)));
     let (reached, release) = shared.before_backoff.arm();
     let task = tokio::spawn(run(Arc::clone(&shared), Arc::clone(&registry), Weak::new()));
     crate::test_pause::within("the first backoff", reached.notified()).await;
@@ -115,40 +110,45 @@ async fn at_first_backoff() -> (
 /// config reload and `revive_backend` do.
 async fn re_register(shared: &Shared, registry: &BackendRegistry) {
     assert!(registry.remove("b"));
-    let hits = Arc::new(AtomicUsize::new(0));
-    assert!(registry.register(backend_at(counting_peer(hits).await)));
+    let contacted = Arc::new(tokio::sync::Notify::new());
+    assert!(registry.register(backend_at(counting_peer(contacted).await)));
     shared.wake.send_modify(|n| *n += 1);
 }
 
 /// T35, backoff half: a backend re-registered while its task backs off is
-/// reconnected at once, not at the end of the backoff.
+/// reconnected at once: the backoff ended by the revival, not by its deadline.
+/// The row sends the revival once the task reports it is waiting, and asserts
+/// the cause of the reconnect, not how long it took.
 #[tokio::test]
 async fn t35_a_re_registration_during_backoff_cuts_it() {
     let (shared, registry, task, release, next) = at_first_backoff().await;
     release.notify_one();
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    crate::test_pause::within("the backoff wait to begin", shared.waits.began.notified()).await;
     re_register(&shared, &registry).await;
-    let reconnected = tokio::time::timeout(Duration::from_millis(700), next.notified()).await;
+    crate::test_pause::within("the reconnect", next.notified()).await;
     shared.stop.cancel();
     let _ = task.await;
-    assert!(
-        reconnected.is_ok(),
-        "the re-registered backend is reconnected before the backoff ends"
+    assert_eq!(
+        shared.waits.ends(),
+        [WaitEnd::Revival],
+        "the re-registered backend is reconnected by the revival, not at the backoff's end"
     );
 }
 
 /// T35 (gpt delta review): a registration after the task's registry check
-/// but before its backoff begins is not missed.
+/// but before its backoff begins is not missed: the backoff still ends by the
+/// revival, whatever the load made the reconnect cost.
 #[tokio::test]
 async fn t35_a_re_registration_before_the_backoff_begins_cuts_it() {
     let (shared, registry, task, release, next) = at_first_backoff().await;
     re_register(&shared, &registry).await;
     release.notify_one();
-    let reconnected = tokio::time::timeout(Duration::from_millis(700), next.notified()).await;
+    crate::test_pause::within("the reconnect", next.notified()).await;
     shared.stop.cancel();
     let _ = task.await;
-    assert!(
-        reconnected.is_ok(),
+    assert_eq!(
+        shared.waits.ends(),
+        [WaitEnd::Revival],
         "a registration signalled before the backoff still cuts it"
     );
 }
