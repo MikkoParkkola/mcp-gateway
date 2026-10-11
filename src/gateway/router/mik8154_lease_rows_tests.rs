@@ -514,6 +514,11 @@ async fn l6_a_forced_7a_miss_with_a_7b_hit_replays_through_direct_delivery() {
     let (status, replay) = signed_direct(&fx, "l6", "a", "l6-n2").await;
     assert_eq!(status, 200, "l6 fresh: {replay}");
     assert_eq!(calls(&fx), 1, "l6 fresh: the backend ran again");
+    assert_eq!(
+        super::backend_handlers::direct_lease_seams::replay_held_7a(),
+        Some(false),
+        "l6 fresh: the 7a reservation was still held when the replay's delivery began"
+    );
     let signature = &replay["result"]["_signature"];
     assert_eq!(
         signature["sig"],

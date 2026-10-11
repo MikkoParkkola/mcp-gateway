@@ -160,6 +160,20 @@ pub(crate) mod seams {
         HOLD.with(|hold| *hold.borrow_mut() = Some((entered, gate)));
     }
 
+    thread_local! {
+        static REPLAY_HELD: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// Whether the last 7b replay on this thread still held a 7a reservation
+    /// when its delivery began (test plan G1); taken once.
+    pub(crate) fn replay_held_7a() -> Option<bool> {
+        REPLAY_HELD.with(std::cell::Cell::take)
+    }
+
+    pub(in crate::gateway::router::backend_handlers) fn note_replay(held_7a: bool) {
+        REPLAY_HELD.with(|cell| cell.set(Some(held_7a)));
+    }
+
     pub(in crate::gateway::router::backend_handlers) async fn before_mark() {
         let held = HOLD.with(|hold| hold.borrow_mut().take());
         if let Some((entered, gate)) = held {

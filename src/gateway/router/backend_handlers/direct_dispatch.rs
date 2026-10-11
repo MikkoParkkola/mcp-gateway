@@ -248,6 +248,8 @@ pub(super) async fn admit<'a>(
         None => replay,
     };
     if let Some(mut response) = replay {
+        #[cfg(test)]
+        super::direct_idempotency::seams::note_replay(admitted.idem_reservation.is_some());
         crate::gateway::meta_mcp::invoke::audit::note_cached();
         // A replay is a delivery too: it renews this caller's own copy,
         // shaped for this request's era (MIK-8022).
