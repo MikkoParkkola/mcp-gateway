@@ -211,7 +211,7 @@ async fn d1_a_refill_after_the_route_stage_keeps_a_missing_name_absent() {
     let absent = twin(Side::Absent, state).await;
     let gained = std::sync::Arc::clone(&absent.drifted);
     let backend = absent.fx.state.backends.get(SERVER).expect("alpha");
-    crate::gateway::meta_mcp::visible::seams::after_route_stage(move || {
+    crate::gateway::meta_mcp::withheld_gate::seams::after_gate(move || {
         gained.store(true, Ordering::SeqCst);
         // A complete list that now holds the name replaces the slot, as a
         // direct listing landing between the stages would.

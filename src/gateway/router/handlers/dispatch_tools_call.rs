@@ -293,6 +293,11 @@ pub(super) async fn tools_call(
             }
         }
     }
+    // The route stage is done; the window a catalogue change must not reach
+    // (MIK-8340, one judgement per request).
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::route_stage_done();
+
     let api_key_name = client.as_ref().map(|c| c.name.as_str());
     // Authorization reads the PROVEN principal. This value reaches
     // `IdentityGrantRequest.agent_id` -> `GrantAgent::matches`, which
@@ -422,10 +427,10 @@ pub(super) async fn tools_call(
             Some(session_id.as_str()),
         )
         .await;
-    // The route stage is done; the window a catalogue change must not reach
-    // (MIK-8340, one judgement per request).
+    // The gate has judged; the window a catalogue change must not reach
+    // (MIK-8361, one judgement per request).
     #[cfg(test)]
-    crate::gateway::meta_mcp::visible::seams::route_stage_done();
+    crate::gateway::meta_mcp::withheld_gate::seams::gate_done();
     if invisible {
         // A backend-wide refusal (kill switch) is answered as admission
         // answers it for a missing name: the same 400.

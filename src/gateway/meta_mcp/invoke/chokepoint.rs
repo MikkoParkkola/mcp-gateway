@@ -193,7 +193,16 @@ impl MetaMcp {
             // Even an unwritable record answers so: the call dispatches
             // nothing (D3-a narrowed, lead ruling 2026-10-11).
             Some(cap) if cap.name == server => Err(Error::ToolNotFound(tool.to_string())),
-            _ => Ok(()),
+            _ => {
+                // Recorded before every later reader (MIK-8356's caller
+                // verdict included), so a policy-refused target resolves no
+                // credential (R5.1) and the gate answers it absent.
+                let withheld = crate::gateway::meta_mcp::visible::Visibility::Withheld(
+                    crate::gateway::meta_mcp::visible::Withholding::Refused,
+                );
+                crate::gateway::meta_mcp::visible::record_visibility(server, tool, withheld);
+                Ok(())
+            }
         }
     }
 

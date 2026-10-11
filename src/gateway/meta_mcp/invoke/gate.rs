@@ -138,6 +138,11 @@ impl MetaMcp {
         if crate::gateway::meta_mcp::withheld_gate::seams::gate_skipped() {
             return None;
         }
+        // A playbook step's target is the definition's, not the caller's: it
+        // keeps the neutral step refusal (A3, MIK-8362).
+        if crate::playbook::current_step().is_some() {
+            return None;
+        }
         let answer = self.gate_answer((server, tool), caller, session_id).await?;
         // Answered before anything acted: the signing nonce is given back, as
         // for a name that matches no tool (MIK-8340 A4).
@@ -163,6 +168,9 @@ impl MetaMcp {
         session_id: Option<&str>,
         refusal: Error,
     ) -> Result<GuardedValue> {
+        if crate::playbook::current_step().is_some() {
+            return Err(refusal);
+        }
         match self.gate_answer((server, tool), caller, session_id).await {
             Some(answer) => {
                 caller.signing.inspect(|signing| signing.want_refund());
