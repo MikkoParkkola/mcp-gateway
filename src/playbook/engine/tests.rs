@@ -675,6 +675,15 @@ impl ToolInvoker for RefusingInvoker {
         }
         Ok(json!({ "ok": true }))
     }
+
+    fn sealed_state_in(
+        &self,
+        _value: &Value,
+        _budget: &mut crate::protocol::continuation::ProbeBudget,
+    ) -> Result<bool, crate::protocol::continuation::ProbeRefusal> {
+        // A test double holds no keyring, so it sealed nothing.
+        Ok(false)
+    }
 }
 
 /// MIK-8325: a firewall refusal is final, like a denial: retrying it cannot
