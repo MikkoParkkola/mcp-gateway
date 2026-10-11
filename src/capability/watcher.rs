@@ -90,11 +90,6 @@ impl CapabilityWatcher {
             move |result: std::result::Result<Event, notify::Error>| {
                 match result {
                     Ok(event) => {
-                        let lens: Vec<String> = event.paths.iter().map(|p| match std::fs::metadata(p) {
-                            Ok(m) => format!("{}={}", p.display(), m.len()),
-                            Err(e) => format!("{}=ERR({})", p.display(), e.kind()),
-                        }).collect();
-                        eprintln!("T14DIAG {} watcher event kind={:?} paths={:?}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0), event.kind, lens);
                         // Only react to relevant events on YAML files
                         let is_relevant = matches!(
                             event.kind,
@@ -107,12 +102,10 @@ impl CapabilityWatcher {
                         if is_relevant {
                             debug!(paths = ?event.paths, kind = ?event.kind, "Capability file change");
                             // Non-blocking send - if channel is full, skip this event
-                            let sent = event_tx.try_send(());
-                        eprintln!("T14DIAG {} watcher relevant try_send ok={}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0), sent.is_ok());
+                            let _ = event_tx.try_send(());
                         }
                     }
                     Err(e) => {
-                        eprintln!("T14DIAG {} watcher error {e}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
                         error!(error = %e, "File watcher error");
                     }
                 }
@@ -181,7 +174,6 @@ impl CapabilityWatcher {
             loop {
                 tokio::select! {
                     Some(()) = event_rx.recv() => {
-                        eprintln!("T14DIAG {} reload task got event backend={}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0), backend.name);
                         last_event = Some(Instant::now());
                         pending_reload = true;
                     }
@@ -209,10 +201,7 @@ impl CapabilityWatcher {
                                     }
 
                                     info!(backend = %backend.name, "Hot-reloading capabilities...");
-                                    eprintln!("T14DIAG {} reload begin backend={}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0), backend.name);
-                                    let reloaded = backend.reload().await;
-                                    eprintln!("T14DIAG {} reload end backend={} result={:?} changes_some={}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0), backend.name, reloaded.as_ref().map_err(ToString::to_string), changes.is_some());
-                                    match reloaded {
+                                    match backend.reload().await {
                                         Ok(count) => {
                                             info!(
                                                 backend = %backend.name,

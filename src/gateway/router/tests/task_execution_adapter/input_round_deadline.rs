@@ -573,3 +573,76 @@ async fn an_answer_on_a_clock_before_1970_is_refused_and_the_round_stays_open() 
     .await;
     std::assert!(taken.get("error").is_none(), "{taken}");
 }
+
+/// The answer path's busy refusal: a second answer while the first still
+/// holds the round (its write held at the store) is told to retry, and the
+/// first one goes on to be taken. Mutant: a held round answered as taken.
+#[tokio::test]
+async fn a_second_answer_while_the_first_holds_the_round_is_busy() {
+    let (_mock, state, _dir, id) = parked_round("answer-busy").await;
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let hold = std::sync::Mutex::new(Some((entered_tx, release_rx)));
+    state
+        .task_executor
+        .barrier_on_record_write(Arc::new(move || {
+            let first = hold.lock().expect("hold").take();
+            if let Some((entered, release)) = first {
+                let _ = entered.send(());
+                let _ = release.recv();
+            }
+        }))
+        .await;
+    state
+        .task_executor
+        .stretch_produce_seam_wait_for_test(Duration::from_millis(20));
+    let first = {
+        let (state, id) = (Arc::clone(&state), id.clone());
+        tokio::spawn(async move {
+            post(
+                &state,
+                "key-a",
+                update(2, &id, json!({ "confirm": answer() })),
+            )
+            .await
+        })
+    };
+    tokio::task::spawn_blocking(move || entered_rx.recv())
+        .await
+        .expect("join")
+        .expect("the first answer holds its write");
+    let second = post(
+        &state,
+        "key-a",
+        update(3, &id, json!({ "confirm": answer() })),
+    )
+    .await;
+    std::assert_eq!(message(&second), "task busy, retry", "{second}");
+    release_tx.send(()).expect("release");
+    let first = first.await.expect("first answer");
+    std::assert!(first.get("error").is_none(), "{first}");
+}
+
+/// The answer path's failed close: an answer after the deadline finds the
+/// round closed, the close write fails, the caller is told the round closed,
+/// and the round is left open for the sweep to close. Mutant: the failed
+/// close reported as settled, or the round dropped without a write.
+#[tokio::test]
+async fn a_late_answer_whose_close_write_fails_is_left_for_the_sweep() {
+    let (_mock, state, _dir, id) = parked_round("answer-close-fails").await;
+    let due = deadline(&state, &id);
+    clock(&state, due + 1);
+    state.task_executor.fail_next_record_write_for_test().await;
+    let refused = post(
+        &state,
+        "key-a",
+        update(2, &id, json!({ "confirm": answer() })),
+    )
+    .await;
+    std::assert!(refused.get("error").is_some(), "{refused}");
+    std::assert_eq!(
+        status_of(&get_task(&state, "key-a", &id).await),
+        "input_required",
+        "the failed close left the round for the sweep"
+    );
+}

@@ -93,7 +93,7 @@ async fn a_direct_call_held_past_both_passes_leaves_no_cost_under_its_session() 
         .await
         .expect("router answers");
     assert_eq!(ended.status(), StatusCode::NO_CONTENT, "the session ended");
-    lifecycle.reap(now_unix() + END_GRACE.as_secs() + 1);
+    lifecycle.reap(now_unix().expect("clock after 1970") + END_GRACE.as_secs() + 1);
     wire.release.notify_one();
     let answered = pending
         .await

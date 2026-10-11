@@ -1,6 +1,6 @@
 name: Diag t14 Windows
-# Throwaway diagnostic (MIK-8359): t14 in a loop on Windows with T14DIAG
-# prints. Deleted with its branch.
+# Throwaway diagnostic (MIK-8359): t14 in a loop on Windows. Deleted with its
+# branch.
 on:
   pull_request:
     branches: [docs/ranking-1-release-line]
@@ -15,16 +15,25 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
       - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
-      - run: cargo test --release --all-features --lib --no-run
-      # Each iteration runs every gateway::server row in parallel (t14 among
-      # them, as in the full suite) and prints t14's captured output only when
-      # it fails; iteration 0 also prints a passing trace for comparison.
-      # Timing pass: t14 alone, three times, every T14DIAG line kept.
-      - name: t14 timing
+      - run: cargo test --all-features --lib --no-run
+      # Fix proof: every gateway::server row in parallel (t14 among them, the
+      # condition t14 failed 3 of 6 times on base), up to 41 iterations,
+      # stopping at 3 t14 failures.
+      - name: t14 loop
         shell: bash
         run: |
           set +e +o pipefail
-          for i in 1 2 3; do
-            echo "== run $i"
-            cargo test --release --all-features --lib gateway::server::signing_allocation_tests::stdio_list_changed::t14_a_burst_while_stdout_is_full_is_decided_and_told_at_most_twice -- --exact --nocapture 2>&1 | grep -E 'T14DIAG [0-9]+ (persist|spans|t14|reload begin)|test result|panicked'
+          fails=0
+          runs=0
+          for i in $(seq 1 41); do
+            out=$(cargo test --all-features --lib gateway::server:: 2>&1)
+            runs=$i
+            echo "iteration $i failed tests: $(echo "$out" | grep -o 'test [^ ]* \.\.\. FAILED' | tr '\n' ' ')"
+            echo "iteration $i $(echo "$out" | grep -o 'test result: [^;]*; [^;]*' | tail -1)"
+            if echo "$out" | grep -q 't14_a_burst_while_stdout_is_full_is_decided_and_told_at_most_twice ... FAILED'; then
+              fails=$((fails+1))
+              echo "$out" | sed -n '/---- .*t14_a_burst_while_stdout_is_full/,/^failures:$/p' | head -30
+            fi
+            [ "$fails" -ge 3 ] && break
           done
+          echo "t14 failures: $fails of $runs"

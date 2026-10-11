@@ -592,3 +592,7 @@ mod reader_tests;
 #[cfg(test)]
 #[path = "export_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "export_clock_tests.rs"]
+mod clock_tests;

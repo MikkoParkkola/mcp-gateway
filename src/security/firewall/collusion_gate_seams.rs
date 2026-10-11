@@ -4,7 +4,8 @@
 //! `MIK-8205`: the gate's side of a caller's own subset-forward seams (the
 //! seam pass itself is `collusion_seam_excuse.rs`, in the detector).
 
-use std::time::Instant;
+#[cfg(test)]
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -30,7 +31,7 @@ impl Firewall {
         // receipt never kept to its plan's answer is recorded capped too.
         let capped = self.capped(digest);
         let digest = capped.as_ref().unwrap_or(digest);
-        let now = Instant::now();
+        let now = self.relay.now();
         detector.record_cut_fingerprints_at(
             source,
             caller.key(),
@@ -80,5 +81,17 @@ impl Firewall {
             by_step.entry(steps[r]).or_default().push(fp);
         }
         by_step.into_iter().collect()
+    }
+}
+
+impl Firewall {
+    /// Freeze this firewall's receipt clock `by` past its current reading, so
+    /// a row ages its receipts without sleeping and without wall time moving
+    /// them afterwards (MIK-8354). Per instance: other firewalls keep the real
+    /// clock, which parallel tests need.
+    #[cfg(test)]
+    pub(crate) fn advance_collusion_clock_for_test(&self, by: Duration) {
+        let mut frozen = self.relay.frozen.lock();
+        *frozen = Some(frozen.unwrap_or_else(Instant::now) + by);
     }
 }
