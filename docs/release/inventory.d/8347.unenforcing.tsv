@@ -1,0 +1,8 @@
+src/gateway/task_service/execution/observe.rs	started	1	The trait default returns no start feed; an adapter with a feed overrides it, and its absence only leaves the sweep as the retry trigger.
+src/gateway/task_service/execution/pending_cancel.rs	backoff_after	1	A constant back-off table; the bound itself is enforced by record_cancel_attempt_blocking.
+src/gateway/task_service/execution/pending_cancel.rs	flush_pending_cancels	1	Maps the public flush call onto flush with its due mode; the selection and lock decisions are in flush.
+src/gateway/task_service/store_pending_cancel.rs	reason	1	A fixed log label for a give-up reason.
+src/gateway/task_service/store_pending_cancel.rs	age_secs	1	Converts the age constant to seconds, saturating.
+src/gateway/task_service/store_pending_cancel.rs	send_of	1	Projects a record's pending cancel for a sender; the decisions are made by send and record_cancel_attempt_blocking.
+src/gateway/task_service/store_pending_cancel.rs	pending_cancel	1	A read of one row's pending cancel under the state lock; it decides nothing.
+src/gateway/task_service/store_pending_cancel.rs	record_cancel_attempt	1	Runs record_cancel_attempt_blocking on a blocking thread; that function makes every decision.
