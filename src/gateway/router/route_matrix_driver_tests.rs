@@ -757,7 +757,8 @@ pub(crate) async fn surfaced_admission_then_resend() -> (Value, Value, Value, us
 
 /// What a refused submit left behind (MIK-8326): the answer and HTTP status,
 /// the backend's call count, the firewall audit log's event names, the tasks
-/// committed and the idempotency responses stored.
+/// committed, the legacy idempotency responses stored and the execution
+/// admission entries (the store modern keyed calls reserve in).
 pub(crate) struct Trace {
     pub(crate) status: axum::http::StatusCode,
     pub(crate) body: Value,
@@ -765,18 +766,23 @@ pub(crate) struct Trace {
     pub(crate) events: Vec<String>,
     pub(crate) committed: usize,
     pub(crate) stored_keys: usize,
+    pub(crate) admitted: usize,
 }
 
 /// The event names in a firewall audit log; none when nothing was written.
 pub(crate) fn audit_events(path: &Path) -> Vec<String> {
-    std::fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
+    let log = match std::fs::read_to_string(path) {
+        Ok(log) => log,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(e) => panic!("unreadable audit log {}: {e}", path.display()),
+    };
+    log.lines()
         .map(|line| {
-            serde_json::from_str::<Value>(line)
-                .unwrap_or_else(|e| panic!("malformed audit row {line:?}: {e}"))["event"]
+            let row: Value = serde_json::from_str(line)
+                .unwrap_or_else(|e| panic!("malformed audit row {line:?}: {e}"));
+            row["event"]
                 .as_str()
-                .unwrap_or_default()
+                .unwrap_or_else(|| panic!("audit row without an event: {line}"))
                 .to_owned()
         })
         .collect()
@@ -832,5 +838,6 @@ pub(crate) async fn task_submit_traced(
             .store
             .committed_count_for_test(),
         stored_keys: fx.state.meta_mcp.idempotency_completed_for_test().len(),
+        admitted: fx.state.meta_mcp.execution_admission().snapshot().entries,
     }
 }

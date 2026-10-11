@@ -36,14 +36,15 @@ pub(crate) async fn stdio_task_read(
 }
 
 /// What a stdio task submit left behind (MIK-8326): the answer, the backend's
-/// call count, the firewall audit log's event names, the tasks committed and
-/// the idempotency responses stored.
+/// call count, the firewall audit log's event names, the tasks committed, the
+/// legacy idempotency responses stored and the execution admission entries.
 pub(crate) struct StdioTrace {
     pub(crate) body: Value,
     pub(crate) backend_calls: usize,
     pub(crate) events: Vec<String>,
     pub(crate) committed: usize,
     pub(crate) stored_keys: usize,
+    pub(crate) admitted: usize,
 }
 
 /// [`stdio_task_read`] with the production firewall on, writing to `audit`.
@@ -110,6 +111,7 @@ async fn stdio_task_run(
         ),
         committed: fixture.tasks.service.store.committed_count_for_test(),
         stored_keys: fixture.meta.idempotency_completed_for_test().len(),
+        admitted: fixture.meta.execution_admission().snapshot().entries,
     }
 }
 

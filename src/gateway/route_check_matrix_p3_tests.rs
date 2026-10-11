@@ -137,7 +137,7 @@ async fn mcp_withheld_surfaced_task_leaves_what_a_missing_name_leaves() {
         (&missing.body, &missing.events),
         (
             withheld.backend_calls,
-            withheld.stored_keys,
+            withheld.stored_keys + withheld.admitted,
             withheld.committed,
         ),
     );
@@ -166,7 +166,7 @@ async fn stdio_withheld_surfaced_task_leaves_what_a_missing_name_leaves() {
         (&missing.body, &missing.events),
         (
             withheld.backend_calls,
-            withheld.stored_keys,
+            withheld.stored_keys + withheld.admitted,
             withheld.committed,
         ),
     );
@@ -188,7 +188,8 @@ fn assert_visible_control(body: &serde_json::Value, events: &[String]) {
 
 /// A withheld call answered and audited as the missing name was, refused
 /// before the request firewall, X14 and admission: no `request` row, no
-/// challenge, and no backend call, stored key or committed task.
+/// challenge, and no backend call, key (legacy cache or execution admission)
+/// or committed task.
 #[cfg(feature = "firewall")]
 fn assert_refused_as_missing(
     (withheld, withheld_events): (&serde_json::Value, &[String]),
