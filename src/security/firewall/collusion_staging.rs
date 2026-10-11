@@ -109,3 +109,33 @@ impl super::Firewall {
         digest
     }
 }
+
+#[cfg(test)]
+impl super::Firewall {
+    /// A plan step's (receipt bytes, attachment bytes) by the sizing rules
+    /// alone, for a plan that staged `total_before` bytes before it: the
+    /// receipt as `receipt_digest` caps it (joins only once the plan is past
+    /// `DELIVERED_SET_CAP`), the attachments at sketch position `position`
+    /// (tests only: a row derives its expected admissions from these).
+    pub(crate) fn sized_step(
+        &self,
+        result: &serde_json::Value,
+        position: usize,
+        total_before: usize,
+    ) -> (usize, usize) {
+        let (leaves, values) = super::delivery_parts(result);
+        let joins = super::key_path_joins(result);
+        let fps = self
+            .fps_of_leaves(&leaves, values, &joins)
+            .map(|fps| fps.to_vec())
+            .unwrap_or_default();
+        let (receipt, _) = super::DeliveryDigest::of_parts(&leaves, values, false);
+        let receipt = if total_before < super::DELIVERED_SET_CAP {
+            receipt
+        } else {
+            receipt.with_joins(joins).0
+        };
+        let attachment = super::super::collusion::big::BigStep::sized_attachment(&fps, position);
+        (receipt.staged_len(), attachment)
+    }
+}

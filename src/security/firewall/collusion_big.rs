@@ -238,6 +238,19 @@ impl BigStep {
         })
     }
 
+    /// The attachment bytes a step of sampled fingerprints `fps` charges at
+    /// sketch position `position`, by the sizing rules alone (its sketch
+    /// shape plus its thinned evidence), with no store or plan involved:
+    /// what a row derives its expected admissions from (tests only).
+    #[cfg(test)]
+    pub(crate) fn sized_attachment(fps: &[u64], position: usize) -> usize {
+        let mut fps = fps.to_vec();
+        fps.sort_unstable();
+        fps.dedup();
+        let (_, step_ev) = stage_thinned(&fps, STEP_EV_BUDGET);
+        reservation_shape(fps.len(), position).bytes() + step_ev.len() * 8
+    }
+
     /// A copy of the staged evidence candidates, for the one record arm
     /// that meets a step never judged (D9: recorded as unread, fail closed).
     pub(crate) fn staged_evidence(&self) -> Arc<[u64]> {

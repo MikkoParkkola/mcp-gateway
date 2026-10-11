@@ -551,12 +551,6 @@ impl DeliveryDigest {
         kept
     }
 
-    /// Bytes this receipt's leaf hashes charged to its plan's total (A3).
-    #[cfg(test)]
-    pub(crate) fn leaf_hash_bytes(&self) -> usize {
-        self.leaf_hashes.as_deref().map_or(0, |h| h.len() * 8)
-    }
-
     /// Whether this is a plan step past the bound, staged with attachments.
     pub(crate) fn is_staged_step(&self) -> bool {
         matches!(self.judged, Judged::Staged(_))

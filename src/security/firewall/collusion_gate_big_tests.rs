@@ -422,8 +422,11 @@ pub(super) fn refusal(fw: &Firewall, who: &str, text: &str) -> Option<String> {
 }
 
 /// A P2 step: 11 leaves of 100 KiB, over the bound on its own.
+/// Distinct value leaves in each [`oversized_step`].
+const STEP_LEAVES: u64 = 11;
+
 fn oversized_step(seed: u64) -> Value {
-    let leaves: Vec<String> = (0..11)
+    let leaves: Vec<String> = (0..STEP_LEAVES)
         .map(|i| filler(seed * 100 + i, 100 * 1024))
         .collect();
     json!({ "parts": leaves })
@@ -668,12 +671,35 @@ fn admit_until_full(preseed: usize) {
         detector.excuse_lost(SOURCE, "alice"),
         "the skipped step was not marked"
     );
+    // The admissions, derived from the fixture alone: each step's receipt
+    // and attachments by the sizing rules, its leaf hashes from its leaf
+    // count, replayed against the plan's 4 MiB as the plan charges them.
+    let leaf_hash_bytes = usize::try_from(STEP_LEAVES).expect("small") * 8;
+    let mut derived = 0usize;
+    let mut total = 0usize;
+    loop {
+        let step = oversized_step(20 + derived as u64);
+        let (receipt, attachment) = fw.sized_step(&step, preseed + derived, total);
+        total += receipt;
+        if attachment > cap.saturating_sub(total) {
+            break;
+        }
+        total += attachment;
+        if total + leaf_hash_bytes <= cap {
+            total += leaf_hash_bytes;
+        }
+        derived += 1;
+    }
+    assert_eq!(derived, 5, "premise: the fixture derives five admissions");
+    assert_eq!(
+        admitted, derived,
+        "admissions differ from the fixture's derivation"
+    );
     // `MIK-8066` A3: a step's leaf hashes are charged to the plan total but
     // held beside the receipt, never in the sketch store.
-    let leaf_bytes: usize = held.iter().map(|d| d.leaf_hash_bytes()).sum();
     assert_eq!(
         detector.sketch_bytes_held() - bytes_before,
-        attachments.iter().sum::<usize>() - leaf_bytes,
+        attachments.iter().sum::<usize>() - admitted * leaf_hash_bytes,
         "the store's pending bytes differ from the plan's attachment charges"
     );
     assert_eq!(
