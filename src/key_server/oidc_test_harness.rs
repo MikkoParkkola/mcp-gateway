@@ -100,6 +100,11 @@ impl Harness {
 
     /// POST `/auth/token`; returns the status and the JSON body.
     pub(crate) async fn exchange(&self, token: &str) -> (u16, Value) {
+        self.exchange_scoped(token, "").await
+    }
+
+    /// As [`Self::exchange`], requesting `scope` (`backends:a,b tools:x`).
+    pub(crate) async fn exchange_scoped(&self, token: &str, scope: &str) -> (u16, Value) {
         let resp = reqwest::Client::new()
             .post(format!("http://{}/auth/token", self.addr))
             .form(&[
@@ -112,7 +117,7 @@ impl Harness {
                     "subject_token_type",
                     "urn:ietf:params:oauth:token-type:id_token",
                 ),
-                ("scope", ""),
+                ("scope", scope),
             ])
             .send()
             .await

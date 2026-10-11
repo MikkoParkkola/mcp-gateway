@@ -14,7 +14,6 @@
 //! also subscribes to, so what precedes the sentinel is all it was sent.
 //! Tests must run on the default one-thread `#[tokio::test]` runtime.
 
-use std::cell::Cell;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,6 +34,7 @@ use crate::identity_propagation::{
     IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
 };
 use crate::key_server::oidc::VerifiedIdentity;
+use crate::key_server::oidc_test_harness::{Harness, ISS_A, config_yaml};
 use crate::key_server::{KeyServer, TemporaryToken};
 use crate::protocol::{JsonRpcResponse, RequestId, Tool};
 
@@ -44,7 +44,7 @@ pub(super) const LIST_CHANGED: &str = "notifications/tools/list_changed";
 const SENTINEL: &str = "notifications/resources/list_changed";
 
 /// A tool with `name` whose description is `description`.
-pub(super) fn tool(name: &str, description: &str) -> Tool {
+pub(in crate::gateway::server) fn tool(name: &str, description: &str) -> Tool {
     serde_json::from_value(json!({
         "name": name, "description": description, "inputSchema": { "type": "object" }
     }))
@@ -154,7 +154,7 @@ pub(super) fn principal_token(subject: &str) -> TemporaryToken {
     }
 }
 
-fn per_user_backend(name: &str, required: bool) -> Arc<Backend> {
+pub(in crate::gateway::server) fn per_user_backend(name: &str, required: bool) -> Arc<Backend> {
     let backend = Arc::new(Backend::new(
         name,
         BackendConfig {
@@ -187,7 +187,7 @@ fn shared_backend(name: &str) -> Arc<Backend> {
 }
 
 /// The pool binding a principal's slot on `backend` has.
-pub(super) fn binding(subject: &str, backend: &str) -> String {
+pub(in crate::gateway::server) fn binding(subject: &str, backend: &str) -> String {
     format!("{subject}@{backend}")
 }
 
@@ -207,7 +207,6 @@ pub(super) struct World {
     pub key_server: Arc<KeyServer>,
     pub caps: Arc<crate::capability::CapabilityBackend>,
     feed: tokio::sync::mpsc::UnboundedSender<ToolsNudge>,
-    seq: Cell<usize>,
     /// The minted id of each legacy session, by the label a row gave it:
     /// production mints every id (F9), so the label is not the id.
     minted: std::cell::RefCell<std::collections::HashMap<String, String>>,
@@ -223,6 +222,28 @@ impl World {
 
     /// As [`Self::start`], with `configure` applied to the Meta-MCP last.
     pub(super) async fn start_with(configure: impl FnOnce(MetaMcp) -> MetaMcp) -> Self {
+        let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
+        Self::start_on(key_server, configure).await
+    }
+
+    /// As [`Self::start`], with a real OIDC key server: one provider
+    /// (`ISS_A`) whose policy grants every backend, and delegated bearers on.
+    pub(super) async fn start_oidc() -> (Self, Harness) {
+        let extra = format!(
+            "delegated_bearer: true\npolicies:\n  - match: {{ issuer: \"{ISS_A}\" }}\n    \
+             scopes: {{ backends: [\"*\"], tools: [\"*\"], rate_limit: 0 }}\n"
+        );
+        let oidc = Harness::start(&config_yaml("[]", &extra)).await;
+        (
+            Self::start_on(Arc::clone(&oidc.ks), |meta| meta).await,
+            oidc,
+        )
+    }
+
+    async fn start_on(
+        key_server: Arc<KeyServer>,
+        configure: impl FnOnce(MetaMcp) -> MetaMcp,
+    ) -> Self {
         let auth = AuthConfig {
             enabled: true,
             api_keys: vec![
@@ -235,7 +256,6 @@ impl World {
             ],
             ..AuthConfig::default()
         };
-        let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
         let audit = tempfile::NamedTempFile::new().expect("tempfile");
         let logger = crate::security::TransparencyLogger::open(Arc::new(
             crate::security::TransparencyLogConfig {
@@ -292,7 +312,6 @@ impl World {
             key_server,
             caps,
             feed,
-            seq: Cell::new(0),
             minted: std::cell::RefCell::default(),
             _shutdown: shutdown,
             _store: store,
@@ -311,8 +330,11 @@ impl World {
 
     /// Everything queued so far has been decided and announced.
     pub(super) async fn settle(&self) {
-        let n = self.seq.get() + 1;
-        self.seq.set(n);
+        // One sequence for the process: the seam's record is per thread and
+        // never cleared, so a second World in one test must not reuse a
+        // marker the first one already finished.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let label = format!("{SETTLE_PREFIX}{n}");
         self.feed
             .send(ToolsNudge::Catalogue {
@@ -352,6 +374,14 @@ impl World {
             .set_pooled_transport_for_test(&key, Arc::new(Wire(tools)));
     }
 
+    /// `alpha`'s shared slot answers calls (with `{}`), so an invocation
+    /// through it succeeds.
+    #[cfg(feature = "spec-preview")]
+    pub(super) fn alpha_answers_calls(&self, tools: Vec<Tool>) {
+        self.backend("alpha")
+            .set_pooled_transport_for_test(&PoolKey::Shared, Arc::new(Wire(tools)));
+    }
+
     /// Register or rewrite the hidden capability, and nudge its catalogue.
     pub(super) fn set_capability(&self, description: &str) {
         let definition = crate::capability::parse_capability(&capability_yaml(description))
@@ -378,11 +408,42 @@ impl World {
 impl World {
     /// `POST /mcp` with `bearer`.
     pub(super) async fn post(&self, bearer: &str, method: &str, params: Value) -> Value {
-        let request = axum::http::Request::builder()
+        self.post_as(bearer, None, method, params).await
+    }
+
+    /// `POST /mcp` with `bearer`, inside legacy session `id` (its minted id).
+    pub(super) async fn post_in(
+        &self,
+        bearer: &str,
+        id: &str,
+        method: &str,
+        params: Value,
+    ) -> Value {
+        let minted = self
+            .minted
+            .borrow()
+            .get(id)
+            .cloned()
+            .expect("a legacy session");
+        self.post_as(bearer, Some(&minted), method, params).await
+    }
+
+    async fn post_as(
+        &self,
+        bearer: &str,
+        session: Option<&str>,
+        method: &str,
+        params: Value,
+    ) -> Value {
+        let mut request = axum::http::Request::builder()
             .method("POST")
             .uri("/mcp")
             .header("authorization", format!("Bearer {bearer}"))
-            .header("content-type", "application/json")
+            .header("content-type", "application/json");
+        if let Some(session) = session {
+            request = request.header("mcp-session-id", session);
+        }
+        let request = request
             .body(Body::from(
                 json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })
                     .to_string(),
@@ -474,6 +535,24 @@ impl World {
     pub(super) fn dashboard_cookie(&self) -> String {
         let handle = self.state.dashboard_bootstrap.issue_session();
         format!("{}={handle}", crate::gateway::auth::SESSION_COOKIE)
+    }
+
+    /// As [`Self::legacy`], owned as the router owns it, so a POST under
+    /// `bearer` may carry its session id ([`Self::post_in`]).
+    pub(super) async fn legacy_owned(&self, id: &str, bearer: &str) -> Ear {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {bearer}").parse().expect("a header value"),
+        );
+        let held = crate::gateway::auth::live::held_credential(&headers);
+        let owner = crate::gateway::router::tests::audience_owner(&self.state, held.as_ref()).await;
+        let (minted, rx) =
+            self.state
+                .multiplexer
+                .get_or_create_session_scoped(Some(id), &owner, held);
+        self.minted.borrow_mut().insert(id.to_string(), minted);
+        Ear::Legacy(rx)
     }
 
     /// A legacy GET session opened with exactly these request headers.

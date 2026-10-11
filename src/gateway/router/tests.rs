@@ -473,6 +473,22 @@ pub(crate) async fn audience_state(
     meta_fixture::test_router_app_state_with_meta(auth, key_server, configure).await
 }
 
+/// The streaming-session owner the router derives for `held` (as
+/// `handlers::owner::session_owner` does), for the audience rows that open a
+/// legacy session and then POST into it.
+pub(crate) async fn audience_owner(
+    state: &Arc<AppState>,
+    held: Option<&crate::gateway::auth::live::HeldCredential>,
+) -> crate::gateway::session_id::SessionOwner {
+    let auth = super::build_auth_state(state);
+    match crate::gateway::auth::live::current_client(&auth, held).await {
+        Some(c) if c.authenticated && !c.principal.is_empty() => {
+            crate::gateway::session_id::SessionOwner::Credential(c.principal)
+        }
+        _ => crate::gateway::session_id::SessionOwner::Anonymous,
+    }
+}
+
 /// Authenticated fixture whose executor capacity comes from the supplied config.
 pub(super) async fn test_router_app_state_with_auth_and_config(
     auth: &AuthConfig,

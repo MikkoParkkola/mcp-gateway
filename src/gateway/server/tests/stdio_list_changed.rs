@@ -38,6 +38,8 @@ pub(super) struct Serve {
     lines: Lines<BufReader<DuplexStream>>,
     task: JoinHandle<crate::Result<()>>,
     dir: tempfile::TempDir,
+    /// The serving gateway's registry, for rows that change a backend.
+    backends: std::sync::Arc<crate::backend::BackendRegistry>,
 }
 
 impl Serve {
@@ -182,6 +184,7 @@ tasks:\n  store_dir: {}\n",
             .await
             .expect("gateway boots")
             .with_data_dir(serve_dir.path().join("data"));
+        let backends = std::sync::Arc::clone(&gateway.backends);
         let (client, input) = tokio::io::duplex(1 << 20);
         let (output, stdout) = tokio::io::duplex(stdout_bytes);
         let task = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
@@ -190,6 +193,7 @@ tasks:\n  store_dir: {}\n",
             lines: BufReader::new(stdout).lines(),
             task,
             dir: serve_dir,
+            backends,
         }
     }
 }
@@ -583,6 +587,84 @@ async fn t15_initialized_inside_a_batch_starts_announcing() {
     assert!(
         serve.list_changed_within(ARRIVAL).await,
         "a batched notifications/initialized did not start announcing"
+    );
+    serve.close().await;
+}
+
+/// A5/C1 (MIK-8350), RED first half (killer M3): the stdio scope's tool
+/// policy denies `PROBE`, so adding it changes nothing the client can see
+/// and sends nothing; adding a capability the policy allows sends one.
+#[tokio::test]
+async fn a5_c1_a_change_hidden_from_the_stdio_scope_sends_nothing() {
+    let mut serve =
+        serve_with(|_| format!("security:\n  tool_policy:\n    deny: [\"{PROBE}\"]\n")).await;
+    legacy(&mut serve, true).await;
+    let open = |description: &str| {
+        capability_yaml()
+            .replace(PROBE, "stdionote_open")
+            .replace("A probe capability for MIK-8278.", description)
+    };
+    let write_open = |serve: &Serve, description: &str| {
+        std::fs::write(serve.caps().join("stdionote_open.yaml"), open(description))
+            .expect("write capability");
+    };
+    // Load both: the allowed capability's announcement shows the watcher
+    // has read the directory, so the probe's absence below is the policy.
+    serve.add_probe();
+    write_open(&serve, "open one");
+    assert!(
+        serve.list_changed_within(ARRIVAL).await,
+        "premise: loading the allowed capability is told"
+    );
+    while serve.list_changed_within(Duration::from_secs(1)).await {}
+    assert!(
+        !serve.tool_names(1).await.iter().any(|n| n == PROBE),
+        "premise: the policy hides the probe from tools/list"
+    );
+    // The hidden change: the denied probe's description.
+    std::fs::write(
+        serve.caps().join(format!("{PROBE}.yaml")),
+        capability_yaml().replace("A probe capability for MIK-8278.", "rewritten"),
+    )
+    .expect("rewrite capability");
+    assert!(
+        !serve.list_changed_within(SILENCE).await,
+        "the stdio scope cannot see the probe: RED on base"
+    );
+    write_open(&serve, "open two");
+    assert!(
+        serve.list_changed_within(ARRIVAL).await,
+        "a change the stdio scope can see is told"
+    );
+    serve.close().await;
+}
+
+/// C2 (MIK-8350), RED (killer M3): the stdio operator sees `beta` through
+/// its shared slot; another principal's per-user slot changing sends the
+/// stdio client nothing.
+#[tokio::test]
+async fn c2_another_principals_slot_change_sends_the_stdio_client_nothing() {
+    use crate::gateway::server::tools_changed::audience_fixture::{
+        binding, per_user_backend, tool,
+    };
+    let mut serve = serve(false).await;
+    let beta = per_user_backend("beta", false);
+    beta.store_shared_tools_for_test(vec![tool("shared_tool", "s")]);
+    let base = crate::gateway::server::stdio_seams::decisions();
+    assert!(serve.backends.register(std::sync::Arc::clone(&beta)));
+    assert!(
+        decided(base + 1).await,
+        "premise: the registration is decided"
+    );
+    legacy(&mut serve, true).await;
+    // The held registration change is told once `initialized` arrives;
+    // drain it and any startup-scan frame until the session is quiet.
+    assert!(serve.list_changed_within(ARRIVAL).await, "premise: told");
+    while serve.list_changed_within(Duration::from_secs(1)).await {}
+    beta.store_per_user_tools_for_test(&binding("B", "beta"), vec![tool("b_tool", "b")]);
+    assert!(
+        !serve.list_changed_within(SILENCE).await,
+        "B's slot is not the stdio client's view: RED on base"
     );
     serve.close().await;
 }

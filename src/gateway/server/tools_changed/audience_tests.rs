@@ -406,11 +406,10 @@ async fn l3_a_warmed_listen_listener_is_silent_for_another_principals_slot() {
     );
 }
 
-/// L2 (MIK-8350), RED partial (killer M7): listeners under three different
+/// L2 (MIK-8350), RED (killer M7): listeners under three different
 /// credentials (a policy-limited key, an unlimited key, a key-server
 /// principal) on one nudge: only the credentials that see `read` are told.
-/// Pairs for the other `InvokeScope` fields (admin, agent id, grant subject,
-/// session profile, promotion) need fixtures that do not compile on base.
+/// The single-input pairs are in `audience_l2_tests`.
 #[tokio::test]
 async fn l2_one_nudge_tells_only_the_credentials_that_see_the_change() {
     let w = World::start().await;
@@ -454,4 +453,94 @@ async fn m_b2_a_withheld_frame_does_not_consume_the_change() {
         1,
         "the retried change is delivered: RED on base"
     );
+}
+
+/// How a K-row principal presents its OIDC identity.
+#[derive(Clone, Copy, Debug)]
+enum Oidc {
+    /// The ID token exchanged at `/auth/token` for a temporary token.
+    Exchanged,
+    /// The ID token itself, as a delegated bearer.
+    Delegated,
+}
+
+/// `subject`'s bearer, minted by the harness's provider and presented as `how`.
+async fn oidc_bearer(
+    h: &crate::key_server::oidc_test_harness::Harness,
+    how: Oidc,
+    subject: &str,
+) -> String {
+    use crate::key_server::oidc_test_harness::ISS_A;
+    let email = serde_json::json!({ "email": format!("{subject}@corp.example") });
+    let id_token = h.mint(ISS_A, subject, &email);
+    match how {
+        Oidc::Delegated => id_token,
+        Oidc::Exchanged => {
+            let (status, body) = h.exchange(&id_token).await;
+            assert_eq!(status, 200, "premise: the exchange succeeds: {body}");
+            body["access_token"]
+                .as_str()
+                .expect("an access token")
+                .to_string()
+        }
+    }
+}
+
+/// As [`duo`], with principals A and B holding real OIDC credentials.
+async fn oidc_duo(
+    how: Oidc,
+) -> (
+    World,
+    crate::key_server::oidc_test_harness::Harness,
+    String,
+    String,
+) {
+    let (w, h) = World::start_oidc().await;
+    let (a, b) = (
+        oidc_bearer(&h, how, "A").await,
+        oidc_bearer(&h, how, "B").await,
+    );
+    w.slot_serves("beta", "A", vec![tool("a_tool", "a")]);
+    w.slot_serves("beta", "B", vec![tool("b_tool", "b")]);
+    for (bearer, own) in [(&a, "a_tool"), (&b, "b_tool")] {
+        let seen = w.discovered(bearer, "beta").await;
+        assert!(seen.contains(&own.to_string()), "{how:?} premise: {seen:?}");
+    }
+    w.settle().await;
+    (w, h, a, b)
+}
+
+/// K1/K2 (MIK-8350), RED negative half (killer M18): an OIDC principal (an
+/// exchanged temporary token, or the ID token as a delegated bearer) is not
+/// told of another principal's slot change, over listen (K1) or a legacy
+/// GET session (K2). Its key equalling a POST's is IMPL, after MIK-8356.
+async fn oidc_principal_is_silent_for_another_principals_slot(listen: bool) {
+    let mut told_a = Vec::new();
+    for how in [Oidc::Exchanged, Oidc::Delegated] {
+        let (w, _h, a, b) = oidc_duo(how).await;
+        let (mut ear_a, mut ear_b) = if listen {
+            (w.listen(&a).await, w.listen(&b).await)
+        } else {
+            (w.legacy("a", &a), w.legacy("b", &b))
+        };
+        w.store_user("beta", "B", vec![tool("b_tool", "b"), tool("b_more", "m")]);
+        assert_eq!(ear_b.told(&w).await, 1, "{how:?}: B's own view changed");
+        told_a.push((how, ear_a.told(&w).await));
+    }
+    // Both credential kinds run before the verdict, so each one's premises
+    // are exercised on base, not only the first one's.
+    assert!(
+        told_a.iter().all(|(_, n)| *n == 0),
+        "A not told of B's change: RED on base: {told_a:?}"
+    );
+}
+
+#[tokio::test]
+async fn k1_an_oidc_listen_listener_is_silent_for_another_principals_slot() {
+    oidc_principal_is_silent_for_another_principals_slot(true).await;
+}
+
+#[tokio::test]
+async fn k2_an_oidc_legacy_session_is_silent_for_another_principals_slot() {
+    oidc_principal_is_silent_for_another_principals_slot(false).await;
 }
