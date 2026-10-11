@@ -110,6 +110,17 @@ fn a_bare_known_agent_does_not_print_the_entry() {
     for text in &texts {
         assert!(text.contains("known_agents"), "{text}");
     }
+    // A qualified entry with a bad source or a wrongly typed id, through both
+    // loaders: serde's own detail goes through the same redaction.
+    for entry in [
+        format!("{{source: {sentinel}, id: x}}"),
+        format!("{{source: mtls, id: [{sentinel}]}}"),
+    ] {
+        let texts = load_errors(&format!(
+            "security:\n  agent_identity:\n    known_agents: [{entry}]\n"
+        ));
+        assert_free_of(&texts, sentinel);
+    }
 }
 
 /// CFGLEAK.3: a YAML syntax error has no value to hide and keeps its place.
@@ -247,6 +258,14 @@ fn message_edges_drop_the_value() {
                 "x: invalid value: string \"{s} invalid type: q, expected r\", expected an integer at line 1 column 4"
             ),
             "x: invalid value: string, expected an integer at line 1 column 4".to_owned(),
+        ),
+        (
+            format!("x: invalid type: string \"{s} invalid value: q, expected r\", expected u16"),
+            "x: invalid type: string, expected u16".to_owned(),
+        ),
+        (
+            format!("x: unknown variant `{s} invalid type: q, expected r`, expected `a` or `b`"),
+            "x: unknown variant, expected `a` or `b`".to_owned(),
         ),
         (
             "found unexpected end of stream at line 4 column 1".to_owned(),
