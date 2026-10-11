@@ -38,8 +38,19 @@ async fn direct(
             "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}}
         }
     });
+    // `_meta` is merged, not replaced, so an idempotency key rides beside the
+    // protocol version and the declared capabilities.
     if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
-        params.extend(extra.clone());
+        for (name, value) in extra {
+            if name == "_meta"
+                && let (Some(Value::Object(meta)), Some(more)) =
+                    (params.get_mut("_meta"), value.as_object())
+            {
+                meta.extend(more.clone());
+                continue;
+            }
+            params.insert(name.clone(), value.clone());
+        }
     }
     let headers = [
         ("mcp-protocol-version", "2026-07-28"),
@@ -250,4 +261,113 @@ async fn a_non_call_method_is_forwarded_without_a_permit() {
     let params = json!({"note": BLOCKED});
     let (_, body) = send(&fx, "/mcp/alpha", "k-std", "ping", params, None).await;
     assert_eq!(dispatched(&fx), 1, "ping was not forwarded: {body}");
+}
+
+/// F2d-giveback, nonce (grok t2 HIGH): a signed direct retry the chokepoint
+/// refuses consumes no signing nonce, so a fresh signed call under that nonce
+/// is served, as R18 shows for a refused redeem. Red on base: the hostile
+/// retry was sent. Mutant m6: the nonce kept on the chokepoint refusal.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn f2d_giveback_a_refused_direct_send_consumes_no_nonce() {
+    use super::direct_continuation_tests::signed_call;
+    use super::direct_guards_fixture::fixture_hardened_signed_firewalled;
+    for backend in BACKENDS {
+        let fx = fixture_hardened_signed_firewalled(Answer::AskOnce).await;
+        let who = ("k-std", backend);
+        let (_, asked) = signed_call(&fx, who, &format!("{backend}-n1"), json!({})).await;
+        let n2 = format!("{backend}-n2");
+        let hostile =
+            json!({"requestState": state_of(&asked), "inputResponses": answering(BLOCKED)});
+        let (_, refused) = signed_call(&fx, who, &n2, hostile).await;
+        assert_eq!(code(&refused), Some(-32600), "{backend}: {refused}");
+        assert_eq!(dispatched(&fx), 1, "{backend}: the hostile answer was sent");
+        let (status, fresh) = signed_call(&fx, who, &n2, json!({})).await;
+        assert_eq!(status, StatusCode::OK, "{backend}: nonce burned: {fresh}");
+        assert!(fresh.get("error").is_none(), "{backend}: {fresh}");
+        assert_eq!(dispatched(&fx), 2, "{backend}: the fresh call was not sent");
+    }
+}
+
+/// F2d-giveback, idempotency key: a direct retry the chokepoint refuses holds
+/// no idempotency key, so a fresh call under that key reaches the backend, as
+/// R6b shows for a refused seal. Red on base. Mutant m6b: the reservation
+/// kept on the chokepoint refusal.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn f2d_giveback_a_refused_direct_send_holds_no_key() {
+    use super::direct_guards_fixture::fixture_firewalled;
+    use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
+    for backend in BACKENDS {
+        let fx = fixture_firewalled(Answer::AskOnce).await;
+        let who = ("k-std", backend);
+        let (_, asked) = direct(&fx, who, json!({}), json!({})).await;
+        let keyed = |key: &str| json!({ IDEMPOTENCY_KEY_META: key });
+        let mut hostile =
+            json!({"requestState": state_of(&asked), "inputResponses": answering(BLOCKED)});
+        hostile["_meta"] = keyed(&format!("k-8351-{backend}"));
+        let (_, refused) = direct(&fx, who, json!({}), hostile).await;
+        assert_eq!(code(&refused), Some(-32600), "{backend}: {refused}");
+        assert_eq!(dispatched(&fx), 1, "{backend}: the hostile answer was sent");
+        let fresh = json!({"_meta": keyed(&format!("k-8351-{backend}"))});
+        let (_, again) = direct(&fx, who, json!({}), fresh).await;
+        assert_eq!(dispatched(&fx), 2, "{backend}: the key was held: {again}");
+    }
+}
+
+/// F2d-giveback, spend: a direct retry the chokepoint refuses keeps no spend
+/// reservation. `k-budget` has 2.5 at 1.0 a call: the question spends 1.0;
+/// the refused retry reserves 1.0 and must give it back, so the recorded spend
+/// stays at the question's and a fresh call still fits (a leaked reservation
+/// would make it 3.0 and refuse it). Red on base. Mutant m6c: the admission
+/// kept on the chokepoint refusal.
+#[cfg(all(feature = "firewall", feature = "cost-governance"))]
+#[tokio::test]
+async fn f2d_giveback_a_refused_direct_send_keeps_no_spend() {
+    use super::direct_guards_fixture::fixture_firewalled_built;
+    use crate::cost_accounting::config::CostGovernanceConfig;
+    for backend in BACKENDS {
+        let mut cfg = CostGovernanceConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        cfg.tool_costs.insert("read".to_string(), 1.0);
+        cfg.budgets.per_key.insert("k-budget".to_string(), 2.5);
+        let registry =
+            std::sync::Arc::new(crate::cost_accounting::registry::CostRegistry::new(&cfg));
+        let enforcer = std::sync::Arc::new(crate::cost_accounting::enforcer::BudgetEnforcer::new(
+            cfg,
+            std::sync::Arc::clone(&registry),
+        ));
+        let fx = fixture_firewalled_built(Answer::AskOnce, move |meta| {
+            meta.with_cost_governance(enforcer, registry)
+        })
+        .await;
+        let spend = || {
+            let enforcer = fx.state.meta_mcp.budget_enforcer.as_ref().expect("armed");
+            enforcer
+                .snapshot()
+                .key_daily
+                .get("k-budget")
+                .copied()
+                .unwrap_or(0.0)
+        };
+        let who = ("k-budget", backend);
+        let (_, asked) = direct(&fx, who, json!({}), json!({})).await;
+        let after_question = spend();
+        let hostile =
+            json!({"requestState": state_of(&asked), "inputResponses": answering(BLOCKED)});
+        let (_, refused) = direct(&fx, who, json!({}), hostile).await;
+        assert_eq!(code(&refused), Some(-32600), "{backend}: {refused}");
+        assert!(
+            (spend() - after_question).abs() < f64::EPSILON,
+            "{backend}: the refused send was charged"
+        );
+        let (_, fresh) = direct(&fx, who, json!({}), json!({})).await;
+        assert!(
+            fresh.get("error").is_none(),
+            "{backend}: the fresh call did not fit; a reservation leaked: {fresh}"
+        );
+        assert_eq!(dispatched(&fx), 2, "{backend}: the fresh call was not sent");
+    }
 }
