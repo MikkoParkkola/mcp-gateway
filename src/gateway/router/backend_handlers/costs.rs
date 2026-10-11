@@ -15,7 +15,8 @@ use crate::gateway::auth::AuthenticatedClient;
 
 /// GET /api/costs — REST endpoint for per-key and aggregate cost views.
 ///
-/// - `?key=<name>`: view cost for a single API key
+/// - `?key=<name>`: view cost for a single API key (URL-decoded; 404 when it
+///   has no spend)
 /// - `X-Cost-Session-Id: <id>` header: view cost for one session
 /// - neither: aggregate view across all sessions and keys
 pub(in crate::gateway::router) async fn costs_handler(
@@ -39,19 +40,12 @@ pub(in crate::gateway::router) async fn costs_handler(
             .into_response();
     }
 
-    let query: HashMap<String, String> = request
-        .uri()
-        .query()
-        .map(|q| {
-            q.split('&')
-                .filter_map(|part| {
-                    let mut kv = part.splitn(2, '=');
-                    let k = kv.next()?;
-                    let v = kv.next().unwrap_or("");
-                    Some((k.to_string(), v.to_string()))
-                })
-                .collect()
-        })
+    // URL-decoded (MIK-8369): a key name with a space or a reserved character
+    // is selected by its escaped form, `+` is a space, and a repeated
+    // selector keeps its last value. Decoding into a map of strings is lossy
+    // and never rejects, so there is no malformed-query branch.
+    let query: HashMap<String, String> = axum::extract::Query::try_from_uri(request.uri())
+        .map(|axum::extract::Query(query)| query)
         .unwrap_or_default();
 
     // A session id is a bearer handle, so it travels in a header, never the
@@ -75,19 +69,18 @@ pub(in crate::gateway::router) async fn costs_handler(
     }
     let tracker = state.meta_mcp.cost_tracker();
 
+    // A selector that names nothing with spend is an error: 404 with the same
+    // body, never 200 (MIK-8369).
+    let none = |message: String| (StatusCode::NOT_FOUND, Json(json!({ "error": message })));
     let body = if let Some(key_name) = query.get("key") {
         match tracker.key_snapshot(key_name) {
             Some(snap) => serde_json::to_value(snap).unwrap_or(serde_json::json!(null)),
-            None => serde_json::json!({
-                "error": format!("No data for key '{key_name}'")
-            }),
+            None => return none(format!("No data for key '{key_name}'")).into_response(),
         }
     } else if let Some(session_id) = session {
         match tracker.session_snapshot(&session_id) {
             Some(snap) => serde_json::to_value(snap).unwrap_or(serde_json::json!(null)),
-            None => serde_json::json!({
-                "error": format!("No data for session '{session_id}'")
-            }),
+            None => return none(format!("No data for session '{session_id}'")).into_response(),
         }
     } else {
         // Aggregate view: all sessions, all keys, totals
