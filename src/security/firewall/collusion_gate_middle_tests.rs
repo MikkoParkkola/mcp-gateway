@@ -202,8 +202,8 @@ fn a_middle_sample_never_truncates_leaf_evidence() {
 ///
 /// The window is picked BEFORE the cap, from the digest retention kept, so
 /// a mutant of `capped()` or of recording cannot change the pick: under
-/// this process's key, the first 60-char window of the early middle (before
-/// 10 KiB) that has at least 2 fingerprints, all retained, and none the
+/// this process's key, the first 60-char window of the early middle, mid-word
+/// at both ends, that has at least 2 fingerprints, all retained, and none the
 /// middle sample keeps at any rate of 2 or more. Then:
 /// - working code: recording keeps the head, the tail, then retained
 ///   fingerprints in text order up to the per-delivery bound (about 3 KiB to
@@ -211,7 +211,8 @@ fn a_middle_sample_never_truncates_leaf_evidence() {
 /// - `capped()` dropping retained (mutant a8): the sample, at m = 8, keeps
 ///   none of the window, so bob is not refused, and the row fails at its own
 ///   assertion.
-/// A window qualifies with about 8% probability and about 1,000 are tried.
+/// A window qualifies with about 8% probability and about 650 mid-word
+/// starts are tried.
 /// Residual: a partial loss of retained fingerprints that spares this window
 /// is not detected here.
 #[test]
@@ -230,9 +231,20 @@ fn a_kept_plan_steps_short_relay_is_caught_by_its_retained_fingerprints() {
     let retained = fw.retain_delivered(digest, &delivered, None);
     let held: std::collections::HashSet<u64> =
         retained.fingerprints(detector).into_iter().collect();
-    let half = super::super::RECORD_CAP / 2;
-    let window = (half + 64..10 * 1024)
+    // Recording keeps the head and tail (about RECORD_CAP / 4 sampled
+    // fingerprints), then retained ones in text order up to the per-delivery
+    // bound (`MAX_SOURCE_FINGERPRINTS`, 4,096): text up to about
+    // half + 4 * (4,096 - RECORD_CAP / 4). Search three quarters of that.
+    const PER_DELIVERY: usize = 4 * 1_024;
+    let cap = super::super::RECORD_CAP;
+    let half = cap / 2;
+    let cutoff = half + 3 * (PER_DELIVERY - cap / 4);
+    let word = |i: usize| !text.as_bytes()[i].is_ascii_whitespace();
+    let window = (half + 64..cutoff)
         .step_by(7)
+        // Mid-word at both ends: a k-gram the egress forms across the
+        // window's edge (a space or another field) is then in no step text.
+        .filter(|&at| word(at - 1) && word(at) && word(at + 59) && word(at + 60))
         .map(|at| &text[at..at + 60])
         .find(|w| {
             let fps = detector.fingerprints(w);
