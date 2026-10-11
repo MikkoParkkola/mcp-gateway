@@ -112,7 +112,8 @@ impl MetaMcp {
                     }
                     backend.get_cached_tools_snapshot()
                 }
-                super::listing_view::ListingView::Cold => continue,
+                super::listing_view::ListingView::Cold
+                | super::listing_view::ListingView::NoView => continue,
                 super::listing_view::ListingView::Caller(binding) => {
                     backend.get_cached_tools_snapshot_for(Some(&binding))
                 }
@@ -221,7 +222,8 @@ impl MetaMcp {
                 continue;
             }
             let found = match self.listing_view(&backend, scope) {
-                super::listing_view::ListingView::Cold => None,
+                super::listing_view::ListingView::Cold
+                | super::listing_view::ListingView::NoView => None,
                 super::listing_view::ListingView::Shared
                 | super::listing_view::ListingView::Caller(_) => {
                     self.listing_tool(&backend, name, scope)

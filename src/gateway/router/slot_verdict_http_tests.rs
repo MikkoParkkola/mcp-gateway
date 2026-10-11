@@ -7,7 +7,7 @@
 //! and nothing reaches the upstream (O1, O2).
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 
 use axum::body::to_bytes;
 use axum::http::StatusCode;
@@ -23,27 +23,27 @@ use crate::gateway::meta_mcp::slot_verdict_fixture::{
 };
 use crate::key_server::oidc::VerifiedIdentity;
 
-const CLOSED: InputSchemaEnforcement = InputSchemaEnforcement::Closed;
+pub(super) const CLOSED: InputSchemaEnforcement = InputSchemaEnforcement::Closed;
 
 /// The router over one per-user backend, with its upstream counters.
-struct Gateway {
-    router: axum::Router,
-    meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
-    caller: Arc<Asked>,
-    shared: Arc<Asked>,
+pub(super) struct Gateway {
+    pub(super) router: axum::Router,
+    pub(super) meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
+    pub(super) caller: Arc<Asked>,
+    pub(super) shared: Arc<Asked>,
     /// Every credential resolution the gateway made.
-    mints: Arc<AtomicUsize>,
+    pub(super) mints: Arc<AtomicUsize>,
     _store: tempfile::TempDir,
     _audit: [tempfile::NamedTempFile; 2],
 }
 
 impl Gateway {
-    fn dispatched(&self) -> usize {
+    pub(super) fn dispatched(&self) -> usize {
         self.caller.calls() + self.shared.calls()
     }
 }
 
-async fn gateway(
+pub(super) async fn gateway(
     slot: CallerSlot,
     enforcement: InputSchemaEnforcement,
     surfaced: Surfaced,
@@ -51,7 +51,7 @@ async fn gateway(
     gateway_with_shared(slot, &valid(), enforcement, surfaced).await
 }
 
-async fn gateway_with_shared(
+pub(super) async fn gateway_with_shared(
     slot: CallerSlot,
     shared_schema: &Value,
     enforcement: InputSchemaEnforcement,
@@ -81,7 +81,7 @@ async fn gateway_armed(
 }
 
 /// The router fixture with alpha's slot cold (never listed).
-async fn gateway_cold(slot: CallerSlot, surfaced: Surfaced) -> Gateway {
+pub(super) async fn gateway_cold(slot: CallerSlot, surfaced: Surfaced) -> Gateway {
     gateway_built(
         (slot, &valid(), Warmth::Cold),
         CLOSED,
@@ -92,7 +92,7 @@ async fn gateway_cold(slot: CallerSlot, surfaced: Surfaced) -> Gateway {
     .await
 }
 
-async fn gateway_built(
+pub(super) async fn gateway_built(
     (slot, shared_schema, warmth): (CallerSlot, &Value, Warmth),
     enforcement: InputSchemaEnforcement,
     surfaced: Surfaced,
@@ -132,7 +132,11 @@ async fn gateway_built(
 
 /// POST `body` to `uri` as alpha (auth is off in this state, so the verified
 /// identity rides in as a request extension).
-async fn post_as_alpha(router: &axum::Router, uri: &str, body: &Value) -> (StatusCode, Value) {
+pub(super) async fn post_as_alpha(
+    router: &axum::Router,
+    uri: &str,
+    body: &Value,
+) -> (StatusCode, Value) {
     let mut request = axum::http::Request::builder()
         .method("POST")
         .uri(uri)
@@ -155,7 +159,7 @@ async fn post_as_alpha(router: &axum::Router, uri: &str, body: &Value) -> (Statu
     )
 }
 
-fn tools_call(name: &str) -> Value {
+pub(super) fn tools_call(name: &str) -> Value {
     json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
         "params": {"name": name, "arguments": {"q": "x"}}})
 }
@@ -189,7 +193,7 @@ async fn c1_http_per_user_caller_slot_withholds_by_name() {
 }
 
 /// The direct route `/mcp/{BACKEND}`.
-fn direct() -> String {
+pub(super) fn direct() -> String {
     format!("/mcp/{BACKEND}")
 }
 
@@ -273,7 +277,7 @@ async fn c6b_direct_route_argument_key_refusal_unchanged() {
 
 /// A modern task `tools/call` of `name` on `/mcp` as alpha, with the headers
 /// a 2026-07-28 client sends.
-async fn task_call_as_alpha(router: &axum::Router, name: &str) -> (StatusCode, Value) {
+pub(super) async fn task_call_as_alpha(router: &axum::Router, name: &str) -> (StatusCode, Value) {
     let mut meta = super::tests::modern_meta();
     meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("slot-verdict-p4");
     let body = json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
@@ -515,106 +519,5 @@ async fn p2_order_x14_precedes_the_require_chain_refusal() {
     assert!(
         !answer.1.to_string().contains("signature chain"),
         "P2-order: the require-chain refusal came before X14; P2 needs its own row: {answer:?}"
-    );
-}
-
-/// P1 + P4 with alpha's slot cold (SLOTVIS.6; kills M19): the caller verdict
-/// fills alpha's slot as alpha before any reader runs, so a modern task call
-/// naming a tool alpha's own catalogue withholds or lacks gets no prompt and
-/// makes no task. It answers exactly as the same call where nothing surfaces
-/// the tool, though the shared slot offers it throughout.
-#[tokio::test]
-async fn p1_p4_cold_http_withheld_task_call_gets_no_prompt_and_no_task() {
-    let unknown = gateway_cold(CallerSlot::Lacks, Surfaced::No).await;
-    let absent = task_call_as_alpha(&unknown.router, TOOL).await;
-    for slot in [CallerSlot::Invalid, CallerSlot::Lacks] {
-        let gw = gateway_cold(slot, Surfaced::Yes).await;
-        let answer = task_call_as_alpha(&gw.router, TOOL).await;
-        assert!(
-            answer.1.pointer("/result/taskId").is_none(),
-            "P4 cold {slot:?}: a task was made: {answer:?}"
-        );
-        assert_eq!(
-            gw.dispatched(),
-            0,
-            "P1/P4 cold {slot:?}: dispatched; {answer:?}"
-        );
-        assert_eq!(
-            answer, absent,
-            "P1/P4 cold {slot:?}: {answer:?} vs unknown {absent:?}"
-        );
-    }
-}
-
-/// A `gateway_execute` chain over `/mcp` as alpha.
-async fn execute_as_alpha(gw: &Gateway, steps: &[&str]) -> (StatusCode, Value) {
-    let chain: Vec<Value> = steps
-        .iter()
-        .map(|tool| json!({"tool": format!("{BACKEND}:{tool}"), "arguments": {"q": "x"}}))
-        .collect();
-    let body = json!({"jsonrpc": "2.0", "id": 13, "method": "tools/call",
-        "params": {"name": "gateway_execute", "arguments": {"chain": chain}}});
-    post_as_alpha(&gw.router, "/mcp", &body).await
-}
-
-/// C11b over HTTP (kills M15): every chain step resolves alpha's credential
-/// exactly once. The caller verdict's resolution is carried to the one step
-/// it judged; a later step naming the same tool resolves again, and a step
-/// naming another tool on the same backend never takes a resolution carried
-/// for a different tool. Two steps, two resolutions, in both shapes.
-#[tokio::test]
-async fn c11b_http_each_step_resolves_once() {
-    let sibling = "note";
-    for steps in [[TOOL, TOOL], [sibling, TOOL]] {
-        let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::No).await;
-        let before = gw.mints.load(Ordering::SeqCst);
-        let answer = execute_as_alpha(&gw, &steps).await;
-        assert_eq!(
-            gw.dispatched(),
-            2,
-            "premise {steps:?}: both steps dispatch: {answer:?}"
-        );
-        assert_eq!(
-            gw.mints.load(Ordering::SeqCst),
-            before + 2,
-            "C11b-http {steps:?}: resolutions for two steps: {answer:?}"
-        );
-    }
-}
-
-/// C14 over HTTP (design R5.2 step 0; kills M20): a descriptor-blocked target
-/// passes route authorize, which judges policy only, and reaches the caller
-/// verdict. The verdict judges descriptor and policy before anything else, so
-/// no credential is resolved and no slot is filled; the call is refused and
-/// nothing is dispatched.
-#[tokio::test]
-async fn c14_http_descriptor_blocked_target_resolves_nothing() {
-    let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::No).await;
-    gw.meta
-        .backends
-        .get(BACKEND)
-        .expect("the backend")
-        .block_tool_for_test(TOOL);
-    let mints = gw.mints.load(Ordering::SeqCst);
-    let lists = gw.caller.lists() + gw.shared.lists();
-    let args = json!({"server": BACKEND, "tool": TOOL, "arguments": {"q": "x"}});
-    let body = json!({"jsonrpc": "2.0", "id": 14, "method": "tools/call",
-        "params": {"name": "gateway_invoke", "arguments": args}});
-    let answer = post_as_alpha(&gw.router, "/mcp", &body).await;
-    assert!(
-        answer.1.get("error").is_some()
-            || answer.1.pointer("/result/isError") == Some(&json!(true)),
-        "premise: the blocked target is not refused: {answer:?}"
-    );
-    assert_eq!(gw.dispatched(), 0, "C14-http: dispatched: {answer:?}");
-    assert_eq!(
-        gw.mints.load(Ordering::SeqCst),
-        mints,
-        "C14-http: a credential was resolved for a blocked target"
-    );
-    assert_eq!(
-        gw.caller.lists() + gw.shared.lists(),
-        lists,
-        "C14-http: a slot was filled for a blocked target"
     );
 }

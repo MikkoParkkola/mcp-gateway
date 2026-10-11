@@ -57,6 +57,11 @@ struct Fx {
 /// The router over the sole operator's managed backend, [`TOOL`] surfaced,
 /// the shared slot warm with a valid [`TOOL`] and the operator's slot cold.
 async fn fixture() -> Fx {
+    fixture_with(&Binding::Connected).await
+}
+
+/// [`fixture`] with the operator's grant in state `binding`.
+async fn fixture_with(binding: &Binding) -> Fx {
     let audit = tempfile::tempdir().unwrap();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
@@ -72,7 +77,7 @@ async fn fixture() -> Fx {
         .expect("open log"),
     );
     let auth = sole_operator();
-    let mut gateway = DirectAccountGateway::new(auth.clone(), &Binding::Connected);
+    let mut gateway = DirectAccountGateway::new(auth.clone(), binding);
     let (mut state, store) = super::tests::test_router_app_state_with_auth(&auth).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = gateway.backends();
@@ -266,5 +271,111 @@ async fn initialize_never_counts_a_rotated_grants_slot_http() {
         greeting_count(&fx, 3).await,
         cold,
         "initialize counted the rotated grant's stale slot"
+    );
+}
+
+/// Whether the sole operator's plain `tools/list` shows the surfaced [`TOOL`].
+async fn lists_tool(fx: &Fx, id: u64) -> bool {
+    let answer = rpc(fx, id, "tools/list", json!({})).await;
+    answer
+        .pointer("/result/tools")
+        .and_then(Value::as_array)
+        .is_some_and(|tools| tools.iter().any(|t| t["name"] == TOOL))
+}
+
+/// L9-managed (lead ruling 2026-10-11, design R3.7): the sole operator of a
+/// managed-account backend with no current grant has no view of it, so its
+/// plain `tools/list` does not show the backend's surfaced tool, though the
+/// shared slot holds it. The cold rule's shared view is for a caller whose
+/// own slot is merely not loaded yet (control: the connected operator, cold,
+/// is shown it). RED before `NoView`: the shared entry is shown to both.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tools_list_hides_the_surfaced_tool_from_an_operator_with_no_grant() {
+    let connected = fixture().await;
+    assert!(
+        lists_tool(&connected, 1).await,
+        "premise: the connected operator, cold, is shown the shared surfaced entry"
+    );
+    let unconnected = fixture_with(&Binding::Unconnected).await;
+    assert!(
+        !lists_tool(&unconnected, 2).await,
+        "L9-managed: an operator with no grant is shown the surfaced tool"
+    );
+}
+
+/// `gateway_invoke` of `tool` on [`BACKEND`] as the sole operator.
+async fn invoke_named(fx: &Fx, id: u64, tool: &str) -> Value {
+    rpc(
+        fx,
+        id,
+        "tools/call",
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": BACKEND, "tool": tool, "arguments": {"folder": "inbox"}}}),
+    )
+    .await
+}
+
+/// L9-managed call (lead ruling 2026-10-11; design R3.7; MIK-6745 consent
+/// journey section 9.2): the sole operator of a managed-account backend with
+/// no current grant has no view of it.
+/// - By surfaced name, which names no backend, the call answers -32601,
+///   exactly as an unknown name: no connect offer, nothing dispatched.
+/// - Through `gateway_invoke` naming the backend, the account's connect
+///   offer is the answer (predicate D), and it is the same for the surfaced
+///   tool and for a name the backend does not have: the offer tells the
+///   operator about its own account, never about the tool.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn no_grant_operator_call_by_name_is_absent_and_invoke_offer_ignores_the_tool() {
+    let fx = fixture_with(&Binding::Unconnected).await;
+    let by_name = rpc(
+        &fx,
+        1,
+        "tools/call",
+        json!({"name": TOOL, "arguments": {"folder": "inbox"}}),
+    )
+    .await;
+    let unknown = rpc(
+        &fx,
+        2,
+        "tools/call",
+        json!({"name": "no_such_tool", "arguments": {"folder": "inbox"}}),
+    )
+    .await;
+    assert_eq!(
+        by_name.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "L9-managed call: the surfaced name is not answered as absent: {by_name}"
+    );
+    assert_eq!(
+        by_name.pointer("/error/code"),
+        unknown.pointer("/error/code"),
+        "L9-managed call: {by_name} vs unknown {unknown}"
+    );
+    assert!(
+        !by_name.to_string().to_lowercase().contains("connect"),
+        "L9-managed call: a call by surfaced name carried a connect offer: {by_name}"
+    );
+    let offered = invoke_named(&fx, 3, TOOL).await;
+    let offered_missing = invoke_named(&fx, 4, "no_such_tool").await;
+    assert_ne!(
+        offered.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "premise: an explicit dispatch to the backend keeps its account answer: {offered}"
+    );
+    // The connect journey stays: an explicit-backend dispatch tells the
+    // operator its account is not connected (MIK-6745 section 9.2, D and R).
+    assert!(
+        offered.to_string().contains("no connected account"),
+        "L9-managed invoke: the account-not-connected answer is gone: {offered}"
+    );
+    assert_eq!(
+        offered.pointer("/error/code"),
+        offered_missing.pointer("/error/code"),
+        "L9-managed invoke: the account answer differs by tool: {offered} vs {offered_missing}"
+    );
+    assert_eq!(
+        fx.gateway.tool_calls().len(),
+        0,
+        "L9-managed: a no-grant call reached the backend"
     );
 }

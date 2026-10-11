@@ -16,18 +16,28 @@ use std::sync::{Arc, Weak};
 use super::Backend;
 use super::pool::{PoolKey, PooledEntry};
 
-/// One caller's indexed slot.
+/// One caller's index entry on this backend.
 #[derive(Debug)]
-pub(crate) struct CallerSlot {
-    binding: String,
-    entry: Weak<PooledEntry>,
+pub(crate) enum CallerSlot {
+    /// The caller's own catalogue is stored in this per-user slot.
+    Held {
+        binding: String,
+        entry: Weak<PooledEntry>,
+    },
+    /// The caller has no view of this backend (a managed account with no
+    /// current grant), as the last listing entry's check found it. Written
+    /// only from `MetaMcp::has_no_view_for` (MIK-8356, design R3.7).
+    NoView,
 }
 
 impl CallerSlot {
     /// The binding, while its slot is still the live, unretired one.
     fn live_binding(&self) -> Option<&str> {
-        let entry = self.entry.upgrade()?;
-        (!entry.retired.load(Ordering::SeqCst)).then_some(self.binding.as_str())
+        let CallerSlot::Held { binding, entry } = self else {
+            return None;
+        };
+        let entry = entry.upgrade()?;
+        (!entry.retired.load(Ordering::SeqCst)).then_some(binding.as_str())
     }
 }
 
@@ -50,11 +60,26 @@ impl Backend {
         }
         self.caller_slots.insert(
             principal_id.to_string(),
-            CallerSlot {
+            CallerSlot::Held {
                 binding: binding.to_string(),
                 entry: Arc::downgrade(&entry),
             },
         );
+    }
+
+    /// Record that `principal_id` has no view of this backend. Replaced by
+    /// the next fill of its own slot, or cleared when a later check finds a
+    /// view again.
+    pub(crate) fn record_no_view(&self, principal_id: &str) {
+        self.caller_slots
+            .insert(principal_id.to_string(), CallerSlot::NoView);
+    }
+
+    /// Whether the index records that `principal_id` has no view here.
+    pub(crate) fn caller_has_no_view(&self, principal_id: &str) -> bool {
+        self.caller_slots
+            .get(principal_id)
+            .is_some_and(|slot| matches!(*slot, CallerSlot::NoView))
     }
 
     /// The binding of the slot that holds `principal_id`'s own catalogue on
@@ -76,8 +101,10 @@ impl Backend {
     /// Compared by identity, never by binding: a replacement slot readmitted
     /// under the same binding keeps its entry (gpt r3 F8).
     pub(super) fn forget_caller_slot(&self, evicted: &Arc<PooledEntry>) {
-        self.caller_slots
-            .retain(|_, slot| !std::ptr::eq(slot.entry.as_ptr(), Arc::as_ptr(evicted)));
+        self.caller_slots.retain(|_, slot| match slot {
+            CallerSlot::Held { entry, .. } => !std::ptr::eq(entry.as_ptr(), Arc::as_ptr(evicted)),
+            CallerSlot::NoView => true,
+        });
     }
 
     /// Every binding the index currently points at (test plan I2e).

@@ -74,6 +74,18 @@ pub(super) async fn gateway(
     surfaced: Surfaced,
     configure: impl FnOnce(&mut crate::config::BackendConfig),
 ) -> Gateway {
+    gateway_armed(slot, shared_schema, warmth, surfaced, configure, |_| {}).await
+}
+
+/// [`gateway`] with `arm` applied to the Meta-MCP before it is mounted.
+pub(super) async fn gateway_armed(
+    slot: CallerSlot,
+    shared_schema: &Value,
+    warmth: Warmth,
+    surfaced: Surfaced,
+    configure: impl FnOnce(&mut crate::config::BackendConfig),
+    arm: impl FnOnce(&mut crate::gateway::meta_mcp::MetaMcp),
+) -> Gateway {
     let (backend, caller, shared) =
         per_user_backend_with(slot, shared_schema, warmth, CLOSED, configure);
     let (mut state, store) =
@@ -111,6 +123,7 @@ pub(super) async fn gateway(
         meta.set_firewall(Some(Arc::clone(&firewall)));
         state_mut.firewall = Some(firewall);
     }
+    arm(&mut meta);
     state_mut.meta_mcp = Arc::new(meta);
     state_mut.transparency_log = Some(transparency_logger(&files[1]));
     Gateway {
@@ -372,4 +385,49 @@ async fn g3_c6c_shared_backend_lacked_keeps_text_a() {
         "C6c: a shared backend's lacked tool no longer answers text A: {body}"
     );
     assert!(!text.contains("-32601"), "C6c: answered as absent: {body}");
+}
+
+/// F5(b), step variant (guard, kills M17): a playbook step whose declared
+/// arguments the request firewall refuses at the route (`ScanTarget::Step`,
+/// MIK-8362) resolves nothing and fills nothing, for a per-user target with a
+/// cold caller slot. A verdict taken ahead of the firewall would fill and mint.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn g5_f5b_step_firewall_refusal_resolves_nothing() {
+    let definition = serde_json::from_value(json!({
+        "playbook": "1.0", "name": "steps", "description": "steps",
+        "steps": [{"name": "s0", "tool": TOOL, "server": BACKEND,
+            "arguments": {"q": "../../../etc/passwd"}}]
+    }))
+    .expect("the playbook deserialises");
+    let gw = gateway_armed(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        Surfaced::Yes,
+        |_| {},
+        |meta| {
+            let mut engine = crate::playbook::PlaybookEngine::new();
+            engine.register(definition);
+            meta.set_playbook_engine(engine);
+        },
+    )
+    .await;
+    let (mints, requests) = (gw.mints(), gw.requests());
+    let call = tools_call("gateway_run_playbook", &json!({"name": "steps"}));
+    let answer = post_as_alpha(&gw.router, "/mcp", &call).await;
+    assert!(
+        refused(&answer),
+        "premise: the firewall let the step through: {answer:?}"
+    );
+    assert_eq!(
+        gw.mints(),
+        mints,
+        "F5(b)-step: a credential was resolved: {answer:?}"
+    );
+    assert_eq!(
+        gw.requests(),
+        requests,
+        "F5(b)-step: the backend was asked: {answer:?}"
+    );
 }

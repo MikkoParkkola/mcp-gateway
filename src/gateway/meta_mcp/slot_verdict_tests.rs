@@ -315,3 +315,151 @@ async fn c11b_second_step_same_server_resolves_again() {
     );
     assert_eq!(fx.mints(), before + 2, "C11b: resolutions for two steps");
 }
+
+/// L9-call (lead ruling 2026-10-11, design R3.7): an anonymous caller on a
+/// `required` per-user backend has no principal, so no slot can hold its
+/// catalogue: it lacks every tool there. A call by surfaced name and through
+/// `gateway_invoke` answers as a name the gateway does not know (-32601),
+/// with no credential resolved, no slot filled and nothing dispatched. RED
+/// before the ruling's fix: the call fails credential resolution with a
+/// refusal that names the backend.
+#[tokio::test]
+async fn l9_call_anonymous_on_required_backend_answers_as_absent() {
+    let backend = super::slot_verdict_fixture::BACKEND;
+    let invoke = json!({"server": backend, "tool": TOOL, "arguments": {"q": "x"}});
+    for (name, args) in [(TOOL, json!({"q": "x"})), ("gateway_invoke", invoke)] {
+        let fx = per_user(
+            CallerSlot::Valid,
+            &valid(),
+            Warmth::Warm,
+            CLOSED,
+            Surfaced::Yes,
+        );
+        let (mints, lists) = (fx.mints(), fx.caller.lists() + fx.shared.lists());
+        let answer = anonymous_call(&fx.meta, name, args).await;
+        assert_eq!(
+            answer.pointer("/error/code"),
+            Some(&json!(-32601)),
+            "L9-call {name}: not answered as absent: {answer}"
+        );
+        assert_eq!(
+            fx.caller.calls() + fx.shared.calls(),
+            0,
+            "L9-call {name}: dispatched"
+        );
+        assert_eq!(
+            fx.mints(),
+            mints,
+            "L9-call {name}: a credential was resolved"
+        );
+        assert_eq!(
+            fx.caller.lists() + fx.shared.lists(),
+            lists,
+            "L9-call {name}: a slot was filled"
+        );
+    }
+    // By surfaced name, byte-identical to the same call where nothing
+    // surfaces the tool.
+    let twin = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Warm,
+        CLOSED,
+        Surfaced::No,
+    );
+    let absent = anonymous_call(&twin.meta, TOOL, json!({"q": "x"})).await;
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Warm,
+        CLOSED,
+        Surfaced::Yes,
+    );
+    let answer = anonymous_call(&fx.meta, TOOL, json!({"q": "x"})).await;
+    assert_eq!(
+        answer, absent,
+        "L9-call by name: {answer} vs absent {absent}"
+    );
+}
+
+/// `name` called by an anonymous caller.
+async fn anonymous_call(meta: &super::MetaMcp, name: &str, arguments: Value) -> Value {
+    let response = Box::pin(meta.handle_tools_call(
+        crate::protocol::RequestId::Number(1),
+        name,
+        arguments,
+        None,
+        super::anonymous_caller(),
+    ))
+    .await;
+    serde_json::to_value(&response).expect("a response serialises")
+}
+
+/// C10, F-STEP variant (withheld, lacked): C5 at argument-key enforcement
+/// Off. RED on base: the step dispatches on the shared slot's verdict.
+#[tokio::test]
+async fn c10_step_per_user_visibility_runs_with_enforcement_off() {
+    let off = InputSchemaEnforcement::Off;
+    let mut answers = Vec::new();
+    for slot in [CallerSlot::Invalid, CallerSlot::Lacks] {
+        let fx = per_user(slot, &valid(), Warmth::Warm, off, Surfaced::No);
+        let answer = chain_step_as_alpha(&fx.meta).await;
+        assert_eq!(
+            fx.caller.calls() + fx.shared.calls(),
+            0,
+            "C10-step {slot:?}: dispatched; {answer}"
+        );
+        assert_eq!(
+            answer.pointer("/error/code"),
+            Some(&json!(-32601)),
+            "C10-step {slot:?}: {answer}"
+        );
+        answers.push(answer);
+    }
+    assert_eq!(
+        answers[0], answers[1],
+        "C10-step: withheld vs lacked differ"
+    );
+}
+
+/// F5(a), step variant (guard, kills M18): a one-step `gateway_execute` chain
+/// whose per-user target route authorize refuses (test authorizer `DenyOne`),
+/// with alpha's slot cold, resolves no credential and asks the backend nothing
+/// (no `tools/list`, no call). A verdict taken ahead of authorize would fill
+/// and mint.
+#[tokio::test]
+async fn f5a_step_route_authorize_refusal_resolves_nothing() {
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::No,
+    );
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    let deny = crate::gateway::authz::DenyOne { tool: TOOL };
+    let caller = super::MetaMcpCallerContext {
+        authorizer: &deny,
+        ..super::identified_caller(&alpha)
+    };
+    let asked = |fx: &super::slot_verdict_fixture::PerUser| {
+        fx.caller.calls() + fx.caller.lists() + fx.shared.calls() + fx.shared.lists()
+    };
+    let (mints, requests) = (fx.mints(), asked(&fx));
+    let step = format!("{}:{TOOL}", super::slot_verdict_fixture::BACKEND);
+    let response = Box::pin(fx.meta.handle_tools_call(
+        crate::protocol::RequestId::Number(1),
+        "gateway_execute",
+        json!({"chain": [{"tool": step, "arguments": {"q": "x"}}]}),
+        None,
+        caller,
+    ))
+    .await;
+    let answer = serde_json::to_value(&response).expect("a response serialises");
+    assert!(
+        answer.get("error").is_some() || answer.pointer("/result/isError") == Some(&json!(true)),
+        "premise: the denied step is not refused: {answer}"
+    );
+    assert_eq!(fx.mints(), mints, "F5(a)-step: a credential was resolved");
+    assert_eq!(asked(&fx), requests, "F5(a)-step: the backend was asked");
+}

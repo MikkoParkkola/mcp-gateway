@@ -221,6 +221,8 @@ mod slot_verdict_g2_managed_http_tests;
 mod slot_verdict_g3_http_tests;
 #[cfg(test)]
 mod slot_verdict_http_tests;
+#[cfg(test)]
+mod slot_verdict_http_variant_tests;
 /// E1: SSO admins through the role mapping (MIK-7570.ADMINSSO.1).
 #[cfg(test)]
 mod sso_admin_tests;
