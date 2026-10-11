@@ -16,7 +16,7 @@ async fn a_start_queued_behind_a_failed_login_shares_its_outcome() {
     let browser = Browser::new();
     let backend = login_backend(&origin, dir.path(), &browser, Duration::from_secs(30), None);
 
-    let lead = spawn_start(&backend);
+    let first = spawn_start(&backend);
     let url = browser
         .opened(1, "the first start opening the browser")
         .await;
@@ -32,7 +32,7 @@ async fn a_start_queued_behind_a_failed_login_shares_its_outcome() {
 
     // The token endpoint refuses the code: the login fails.
     approve(&url).await;
-    let led = within("the first start", lead)
+    let first_error = within("the first start", first)
         .await
         .expect("start task")
         .expect_err("the token endpoint refused the code");
@@ -42,8 +42,8 @@ async fn a_start_queued_behind_a_failed_login_shares_its_outcome() {
         .expect_err("the queued start shares the failed login's end");
 
     assert!(
-        variant(&led).starts_with("OAuth") && variant(&shared) == variant(&led),
-        "the queued start returns the failed login's typed error: {led:?} / {shared:?}"
+        variant(&first_error).starts_with("OAuth") && variant(&shared) == variant(&first_error),
+        "the queued start returns the failed login's typed error: {first_error:?} / {shared:?}"
     );
     assert_eq!(
         browser.opens(),
