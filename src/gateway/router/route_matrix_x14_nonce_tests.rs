@@ -93,9 +93,11 @@ async fn warm(fx: &super::direct_guards_fixture::Fx) {
 /// terminal, and returns its status (empty if it never was).
 async fn terminal_status(fx: &super::direct_guards_fixture::Fx, id: &str) -> String {
     const TERMINAL: [&str; 3] = ["completed", "failed", "cancelled"];
+    // The modern era mirrors the task id in `Mcp-Name` (-32020 otherwise).
     let headers = [
         ("mcp-protocol-version", "2026-07-28"),
         ("mcp-method", "tasks/get"),
+        ("mcp-name", id),
     ];
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
@@ -120,7 +122,7 @@ async fn terminal_status(fx: &super::direct_guards_fixture::Fx, id: &str) -> Str
             return status.to_owned();
         }
         if tokio::time::Instant::now() >= deadline {
-            return String::new();
+            return format!("never terminal; last tasks/get answer: {got}");
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
