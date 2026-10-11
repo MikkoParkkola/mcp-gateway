@@ -193,7 +193,8 @@ pub(super) async fn tools_call(
                     id,
                     STEP_NOT_PERMITTED_CODE,
                     STEP_NOT_PERMITTED.to_string(),
-                    step_status(),
+                    StatusCode::from_u16(STEP_NOT_PERMITTED_STATUS)
+                        .unwrap_or(StatusCode::FORBIDDEN),
                 )
                 .await);
         }
@@ -270,7 +271,8 @@ pub(super) async fn tools_call(
                             id,
                             STEP_NOT_PERMITTED_CODE,
                             STEP_NOT_PERMITTED.to_string(),
-                            step_status(),
+                            StatusCode::from_u16(STEP_NOT_PERMITTED_STATUS)
+                                .unwrap_or(StatusCode::FORBIDDEN),
                         )
                         .await);
                 }
@@ -574,9 +576,4 @@ pub(super) async fn tools_call(
         .await
     };
     Ok(response)
-}
-
-/// The HTTP status of the neutral step refusal.
-fn step_status() -> StatusCode {
-    StatusCode::from_u16(STEP_NOT_PERMITTED_STATUS).unwrap_or(StatusCode::FORBIDDEN)
 }
