@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8202: the live rows a watch source reads. Liveness is judged on the
-//! wall clock through `Subscription::live_now`, so a clock before 1970 reads
-//! no row as live: a lease that cannot be dated holds nothing and admits
-//! nothing, where chrono's 1969 date read every ended lease as live.
+//! caller's one reading of the wall clock; a clock before 1970 reads no row
+//! as live: a lease that cannot be dated holds nothing and admits nothing,
+//! where chrono's 1969 date read every ended lease as live.
 
 use serde_json::Value;
 
@@ -17,11 +17,15 @@ impl WatchSource {
         principal: &str,
         name: &str,
         arguments: &Value,
+        now: Result<chrono::DateTime<chrono::Utc>, crate::clock::ClockBeforeEpoch>,
     ) -> Vec<Subscription> {
+        let Ok(now) = now else {
+            return Vec::new();
+        };
         hub.store
             .subscriptions()
             .into_iter()
-            .filter(|s| s.live_now() && s.principal == principal && s.name == name)
+            .filter(|s| s.live(now) && s.principal == principal && s.name == name)
             .filter(|s| s.arguments == *arguments)
             .collect()
     }

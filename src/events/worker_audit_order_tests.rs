@@ -331,7 +331,7 @@ async fn a_failure_after_unsent_claims_is_judged_by_its_sends() {
     record.attempt = 3;
     record.unsent = 2;
     record.first_attempt_at = Some(Utc::now());
-    let (settle, _) = hub.judge(&record, &super::status(503));
+    let (settle, _) = hub.judge(&record, &super::status(503), crate::clock::utc_now());
     assert!(
         matches!(settle, Settle::Retry { .. }),
         "one send of two allowed: {settle:?}"

@@ -137,7 +137,7 @@ impl EventsHub {
             // An occurrence that carries its owner was authorized where it was
             // made: the record it describes may be gone (an expired task).
             if event.owner.is_some() {
-                self.offer(services, event, &sub).await;
+                self.offer(services, event, &sub, now).await;
                 continue;
             }
             match source.authorize_row(&sub).await {
@@ -148,23 +148,30 @@ impl EventsHub {
                     self.revoke(&sub).await;
                     continue;
                 }
+                // The source could not judge on this clock: the row is kept
+                // and this occurrence dropped and counted (MIK-8202).
+                Err(refusal) if refusal.is_clock_unreadable() => {
+                    self.count_clock_drop();
+                    continue;
+                }
                 // Anything else (a store hiccup) skips this occurrence only.
                 Err(_) => continue,
             }
-            self.offer(services, event, &sub).await;
+            self.offer(services, event, &sub, now).await;
         }
         self.runtime.wake.notify_one();
     }
 
     /// Build, scan and write one subscription's record.
-    async fn offer(self: &Arc<Self>, services: &Services, event: &SourceEvent, sub: &Subscription) {
-        // One read dates the provenance receipt, the record and any burial.
-        // A clock that cannot be read (before 1970) drops the occurrence,
-        // counted: nothing is signed, queued or buried with 1969 (MIK-8202).
-        let Ok(now) = crate::clock::utc_now() else {
-            self.count_clock_drop();
-            return;
-        };
+    /// `now` is the fan-out's one reading: it dates the provenance receipt,
+    /// the record and any burial (MIK-8202).
+    async fn offer(
+        self: &Arc<Self>,
+        services: &Services,
+        event: &SourceEvent,
+        sub: &Subscription,
+        now: DateTime<Utc>,
+    ) {
         let id = event_id(event.kind, &event.upstream_id, &sub.id);
         let mut data = event.data.clone();
         // Attribution before redaction (MIN.2 row E1): what the source named.

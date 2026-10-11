@@ -394,7 +394,7 @@ impl EventSource for WatchSource {
         };
         // ponytail: scans the store per check; an index by principal is the
         // upgrade if many watch rows make fan-out measurable.
-        let rows = Self::rows(&hub, principal, name, arguments);
+        let rows = Self::rows(&hub, principal, name, arguments, crate::clock::utc_now());
         if rows.iter().any(|row| self.holder(row, &target).is_none()) {
             // The key is judged against the capability's current definition,
             // which a mid-write read can change: skip, keep (MIK-8122). A

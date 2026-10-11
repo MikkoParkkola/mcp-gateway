@@ -557,4 +557,211 @@ async fn a_replay_the_clock_cannot_judge_is_unavailable_not_revoked() {
         hub.replay_dead("evt_rp", &actor).await
     };
     assert_eq!(refused, Err(ReplayRefusal::Unavailable));
+    // A clock that cannot date the lease at all: transient too, never a
+    // subscription gone.
+    let refused = {
+        let _clock = before_epoch();
+        hub.replay_dead("evt_rp", &actor).await
+    };
+    assert_eq!(refused, Err(ReplayRefusal::Unavailable));
+}
+
+/// Fan-out matched an occurrence on one reading and stamped the record with
+/// it; the outbox takes the record on that reading, never a second read, so
+/// a clock that fails in between cannot drop it uncounted.
+#[tokio::test]
+async fn the_outbox_takes_a_record_on_its_fan_out_reading() {
+    use crate::events::outbox::{Enqueued, OutboxCaps};
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    queued(&hub, 9, "evt_q1");
+    let record = OutboxRecord {
+        event_id: "evt_q2".into(),
+        ..stored(dir.path(), "evt_q1")
+    };
+    let _clock = before_epoch();
+    let caps = OutboxCaps {
+        global: 10,
+        per_subscription: 10,
+    };
+    assert_eq!(
+        hub.store.enqueue(record, caps).expect("io"),
+        Enqueued::Written,
+        "dropped on a second read of the clock"
+    );
+}
+
+/// A webhook-kind source offering [`NAME`] that admits its first `admits`
+/// checks, then answers `then`.
+struct ClockBlind {
+    admits: usize,
+    asked: std::sync::atomic::AtomicUsize,
+    then: fn() -> crate::events::types::RpcError,
+}
+
+impl ClockBlind {
+    /// Admits `admits` checks, then cannot judge on the clock.
+    fn after(admits: usize) -> Arc<Self> {
+        Arc::new(Self {
+            admits,
+            asked: std::sync::atomic::AtomicUsize::new(0),
+            then: crate::events::types::RpcError::clock_unreadable,
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::events::EventSource for ClockBlind {
+    fn kind(&self) -> crate::events::types::SourceKind {
+        crate::events::types::SourceKind::Webhook
+    }
+    fn descriptors(&self) -> Vec<crate::events::types::EventDescriptor> {
+        vec![super::descriptor(
+            NAME,
+            crate::events::types::SourceKind::Webhook,
+        )]
+    }
+    fn matches(
+        &self,
+        _principal: &str,
+        _arguments: &serde_json::Value,
+        _event: &crate::events::fanout::SourceEvent,
+    ) -> bool {
+        true
+    }
+    async fn authorize(
+        &self,
+        _principal: &str,
+        _name: &str,
+        _arguments: &serde_json::Value,
+    ) -> Result<(), crate::events::types::RpcError> {
+        let asked = self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if asked < self.admits {
+            Ok(())
+        } else {
+            Err((self.then)())
+        }
+    }
+}
+
+/// A source that cannot judge on the clock, at the attempt's first source
+/// check (`admits` 0) or at the re-check after the attempt is on record
+/// (`admits` 1): neither an admission nor a refusal. Nothing is sent or
+/// revoked, the record is kept unsent with its date, and the row stays.
+#[tokio::test]
+async fn a_source_that_cannot_judge_on_the_clock_sends_and_revokes_nothing() {
+    for admits in [0, 1] {
+        let dir = tempfile::tempdir().expect("dir");
+        let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
+        let services = logged_services(dir.path());
+        hub.register_source(ClockBlind::after(admits));
+        let (port, accepted) = counting_callback().await;
+        queued(&hub, port, "evt_cb");
+        let before = stored(dir.path(), "evt_cb");
+        Box::pin(hub.attempt(&services, "evt_cb")).await;
+        let posts = accepted.load(std::sync::atomic::Ordering::SeqCst);
+        assert_kept_unsent(&hub, dir.path(), &before, "evt_cb", posts);
+        assert!(
+            hub.store.get("sub_worker").is_some(),
+            "revoked on a verdict the clock could not judge (admits {admits})"
+        );
+    }
+}
+
+/// Fan-out to a source that cannot judge on the clock: the row is kept and
+/// the occurrence dropped and counted as a clock drop.
+#[tokio::test]
+async fn fan_out_to_a_source_that_cannot_judge_on_the_clock_counts_a_drop() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
+    let services = logged_services(dir.path());
+    hub.register_source(ClockBlind::after(0));
+    queued(&hub, 9, "evt_fo");
+    let event = crate::events::fanout::SourceEvent {
+        kind: crate::events::types::SourceKind::Webhook,
+        name: NAME.into(),
+        backend: "b".into(),
+        scope: crate::events::types::Visibility::Owner,
+        owner: None,
+        upstream_id: "u1".into(),
+        occurred_at: now(),
+        data: serde_json::json!({}),
+        lifecycle_key: None,
+    };
+    hub.fan_out(&services, &event).await;
+    assert_eq!(hub.runtime.clock_drops(), 1, "the drop is counted");
+    assert!(hub.store.get("sub_worker").is_some(), "the row was revoked");
+}
+
+/// A refusal judged on a readable clock whose revocation finds the clock
+/// unreadable: the row is kept by the revocation guard, and the record goes
+/// back to pending unsent and uncounted, since nothing was sent.
+#[tokio::test]
+async fn a_refusal_whose_revocation_cannot_read_the_clock_counts_no_send() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
+    let services = logged_services(dir.path());
+    hub.register_source(Arc::new(ClockBlind {
+        admits: 0,
+        asked: std::sync::atomic::AtomicUsize::new(0),
+        then: crate::events::types::RpcError::forbidden,
+    }));
+    let (port, accepted) = counting_callback().await;
+    queued(&hub, port, "evt_rv");
+    let before = stored(dir.path(), "evt_rv");
+    // The credential check admits on any clock here; the source's refusal
+    // stands, and the clock fails from the claim on.
+    let _admits = crate::events::services::forced_verdict::answer(
+        crate::events::services::AccessVerdict::Admits,
+    );
+    let clock = Box::pin(clock_fails_at(
+        &hub.after_claim,
+        hub.attempt(&services, "evt_rv"),
+    ))
+    .await;
+    drop(clock);
+    assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(
+        hub.store.get("sub_worker").is_some(),
+        "revoked on an unreadable clock"
+    );
+    let after = stored(dir.path(), "evt_rv");
+    assert_eq!(after.state, OutboxState::Pending);
+    assert_eq!(after.last_status.as_deref(), Some("access_revoked"));
+    assert_eq!(after.sends(), before.sends(), "a refusal counted as a send");
+}
+
+/// A source that answers a plain internal error (a store it could not read)
+/// gives no verdict, at either check: nothing is sent or revoked, and the
+/// record goes back to pending unsent and uncounted, to retry later.
+#[tokio::test]
+async fn a_source_error_delivers_nothing_and_settles_unsent() {
+    for admits in [0, 1] {
+        let dir = tempfile::tempdir().expect("dir");
+        let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
+        let services = logged_services(dir.path());
+        hub.register_source(Arc::new(ClockBlind {
+            admits,
+            asked: std::sync::atomic::AtomicUsize::new(0),
+            then: crate::events::types::RpcError::internal,
+        }));
+        let (port, accepted) = counting_callback().await;
+        queued(&hub, port, "evt_se");
+        let before = stored(dir.path(), "evt_se");
+        Box::pin(hub.attempt(&services, "evt_se")).await;
+        assert_eq!(
+            accepted.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "delivered on a source error (admits {admits})"
+        );
+        assert!(hub.store.get("sub_worker").is_some(), "revoked");
+        let after = stored(dir.path(), "evt_se");
+        assert_eq!(after.state, OutboxState::Pending);
+        assert_eq!(after.last_status.as_deref(), Some("source_unavailable"));
+        assert_eq!(after.sends(), before.sends(), "counted as a send");
+        assert!(
+            after.next_attempt_at > before.next_attempt_at,
+            "retried at once"
+        );
+    }
 }

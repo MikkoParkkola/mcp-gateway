@@ -567,3 +567,31 @@ async fn timers_past_the_cap_are_refused_at_fan_out() {
         .expect_err("past the cap");
     assert_eq!(refused.code, -32012);
 }
+
+/// MIK-8202: the timer cap judges every lease on one reading, never a fresh
+/// read per row. With the thread's clock reading before 1970, every row live
+/// at the supplied reading still counts, so no key is ranked past the cap by
+/// a row the scan lost. An authorization the clock cannot judge answers the
+/// explicit clock error, never -32012 (which revokes).
+#[tokio::test]
+async fn the_timer_cap_judges_every_lease_on_one_reading() {
+    let dir = tempfile::tempdir().expect("dir");
+    let mut config = crate::config::EventsConfig::default();
+    config.schedule.max_timers_per_principal = 2;
+    let hub = hub(dir.path(), &config);
+    let source = ScheduleSource::new(&hub, dir.path().join("schedule"));
+    let timers = [json!({"cron": "0 1 * * *"}), json!({"cron": "0 2 * * *"})];
+    for (n, arguments) in timers.iter().enumerate() {
+        admit(&hub, &format!("sub_{n}"), "p", arguments);
+    }
+    let key = super::parts(&timers[0]).expect("parts").key;
+    let now = crate::clock::utc_now().expect("a readable clock");
+    let _clock = crate::clock::test_clock::before_epoch();
+    assert_eq!(source.held_by("p", now).len(), 2, "a live row lost");
+    assert_eq!(source.holders(&key, now).len(), 1, "a live holder lost");
+    let refused = source
+        .authorize("p", NAME, &timers[0])
+        .await
+        .expect_err("no verdict on an unreadable clock");
+    assert!(refused.is_clock_unreadable(), "{refused:?}");
+}

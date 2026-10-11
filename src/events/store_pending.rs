@@ -132,7 +132,9 @@ impl Store {
         caps: OutboxCaps,
     ) -> std::io::Result<Enqueued> {
         let mut state = self.state.lock();
-        self.enqueue_locked(&mut state, record, caps)
+        // The record's fan-out stamp is the one reading that matched it.
+        let now = record.created_at;
+        self.enqueue_locked(&mut state, record, caps, now)
     }
 
     fn enqueue_locked(
@@ -140,6 +142,7 @@ impl Store {
         state: &mut State,
         record: OutboxRecord,
         caps: OutboxCaps,
+        now: DateTime<Utc>,
     ) -> std::io::Result<Enqueued> {
         // An expired row kept for its burials takes no new record, so the
         // worker can always settle it (MIK-8061); nor does a held one: what
@@ -147,8 +150,8 @@ impl Store {
         if !state
             .subs
             .get(&record.subscription_id)
-            // A clock before 1970 reads no lease live (MIK-8202).
-            .is_some_and(Subscription::live_now)
+            // Judged on the caller's reading, never a second read (MIK-8202).
+            .is_some_and(|sub| sub.live(now))
             || state.held.contains_key(&record.subscription_id)
         {
             return Ok(Enqueued::NoSubscription);
@@ -282,7 +285,7 @@ impl Store {
         if state.outbox.contains_key(event_id) {
             return Ok(Revived::AlreadyPending);
         }
-        let placed = self.enqueue_locked(&mut state, record, caps);
+        let placed = self.enqueue_locked(&mut state, record, caps, now);
         match placed {
             Ok(Enqueued::Written) => {}
             Ok(Enqueued::NoSubscription) => return Ok(Revived::NoSubscription),

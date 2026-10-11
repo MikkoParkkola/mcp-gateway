@@ -104,7 +104,7 @@ impl WatchSource {
         self.watch_class(name)
             .or_else(|| {
                 let hub = self.hub.upgrade()?;
-                Self::rows(&hub, principal, name, arguments)
+                Self::rows(&hub, principal, name, arguments, crate::clock::utc_now())
                     .first()
                     .map(|row| self.effective_class(row))
             })

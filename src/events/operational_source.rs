@@ -177,7 +177,7 @@ impl EventSource for OperationalSource {
         // 1970) is no verdict on the principal: an internal error, never the
         // -32012 that ends the subscription (MIK-8202).
         let Ok(now) = crate::clock::utc_now() else {
-            return Err(RpcError::internal());
+            return Err(RpcError::clock_unreadable());
         };
         let Some(standing) = self.standing(principal, now) else {
             return Err(RpcError::forbidden());

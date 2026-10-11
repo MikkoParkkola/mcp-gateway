@@ -120,9 +120,10 @@ impl EventsHub {
             .dead_letter_by_id(event_id)
             .ok_or(ReplayRefusal::NotFound)?;
         // A lease is not judged on a clock before 1970: nothing is replayed
-        // to a subscription it cannot date (MIK-8202).
+        // to a subscription it cannot date, and the refusal is transient, not
+        // a subscription gone (MIK-8202).
         let Ok(now) = crate::clock::utc_now() else {
-            return Err(ReplayRefusal::SubscriptionGone);
+            return Err(ReplayRefusal::Unavailable);
         };
         let sub = self
             .store

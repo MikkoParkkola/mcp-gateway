@@ -481,7 +481,13 @@ async fn an_operator_record_asks_no_backend_grant() {
         data: json!({}),
         lifecycle_key: None,
     };
-    hub.offer(&services, &event, &sub).await;
+    hub.offer(
+        &services,
+        &event,
+        &sub,
+        crate::clock::utc_now().expect("clock"),
+    )
+    .await;
     let due = hub
         .store
         .due(

@@ -119,7 +119,17 @@ async fn failures_before_a_byte_is_written_are_reported_unsent() {
     let closed_port = url::Url::parse("https://127.0.0.1:1/h").expect("url");
     for url in [&refused_literal, &closed_port] {
         let outcome = client
-            .post_tracked(url, "sub", "evt", &keys, b"{}".to_vec(), ReadBody::Discard)
+            .post_tracked(
+                url,
+                "sub",
+                "evt",
+                Signing {
+                    keys: &keys,
+                    now: crate::clock::utc_now(),
+                },
+                b"{}".to_vec(),
+                ReadBody::Discard,
+            )
             .await;
         assert!(
             matches!(outcome, Err((CallbackFailure::ConnectionRefused, true))),

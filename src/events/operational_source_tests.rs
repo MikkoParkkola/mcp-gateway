@@ -482,5 +482,9 @@ async fn standing_is_judged_on_one_clock_reading() {
             refused.code, -32012,
             "an unreadable clock ended the subscription"
         );
+        assert!(
+            refused.is_clock_unreadable(),
+            "a clock failure not told apart: {refused:?}"
+        );
     }
 }

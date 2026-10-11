@@ -151,9 +151,18 @@ impl CallbackClient {
         body: Vec<u8>,
         read: ReadBody,
     ) -> Result<Answer, CallbackFailure> {
-        self.post_tracked(url, subscription_id, webhook_id, keys, body, read)
-            .await
-            .map_err(|(failure, _)| failure)
+        // The challenge POST's own reading dates its signature (MIK-8202).
+        let now = crate::clock::utc_now();
+        self.post_tracked(
+            url,
+            subscription_id,
+            webhook_id,
+            Signing { keys, now },
+            body,
+            read,
+        )
+        .await
+        .map_err(|(failure, _)| failure)
     }
 
     /// [`Self::post`], and with a failure whether it came before any byte of
@@ -164,14 +173,15 @@ impl CallbackClient {
         url: &url::Url,
         subscription_id: &str,
         webhook_id: &str,
-        keys: &[&[u8]],
+        signing: Signing<'_>,
         body: Vec<u8>,
         read: ReadBody,
     ) -> Result<Answer, (CallbackFailure, bool)> {
+        let Signing { keys, now } = signing;
         self.check_literal(url).map_err(|failure| (failure, true))?;
-        // A signer refuses on a clock that cannot be read (before 1970):
-        // nothing is sent (MIK-8202).
-        let timestamp = crate::clock::utc_now()
+        // The sender's reading dates the signature. A signer refuses on a
+        // clock that cannot be read (before 1970): nothing is sent (MIK-8202).
+        let timestamp = now
             .map_err(|_| (CallbackFailure::ClockUnreadable, true))?
             .timestamp()
             .to_string();
@@ -237,6 +247,13 @@ fn classify(error: &reqwest::Error) -> CallbackFailure {
 
 /// Standard Webhooks `webhook-signature`: one `v1,<base64 HMAC-SHA256>` per
 /// key over `id.timestamp.body`, space-separated, newest key first.
+/// What signs one POST: the keys, and the sender's one reading of the clock,
+/// which dates the signature (MIK-8202).
+pub(crate) struct Signing<'a> {
+    pub keys: &'a [&'a [u8]],
+    pub now: Result<chrono::DateTime<chrono::Utc>, crate::clock::ClockBeforeEpoch>,
+}
+
 pub(crate) fn sign(keys: &[&[u8]], id: &str, timestamp: &str, body: &[u8]) -> String {
     keys.iter()
         .map(|key| {
