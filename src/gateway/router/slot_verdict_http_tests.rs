@@ -28,6 +28,7 @@ const CLOSED: InputSchemaEnforcement = InputSchemaEnforcement::Closed;
 /// The router over one per-user backend, with its upstream counters.
 struct Gateway {
     router: axum::Router,
+    meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     caller: Arc<Asked>,
     shared: Arc<Asked>,
     _store: tempfile::TempDir,
@@ -69,10 +70,12 @@ async fn gateway_with_shared(
     meta.set_identity_propagation(Arc::new(CountingMint(Arc::new(AtomicUsize::new(0)))));
     meta.enable_transparency_log(transparency_logger(&audit[0]));
     meta.set_multi_user(true);
-    state_mut.meta_mcp = Arc::new(meta);
+    let meta = Arc::new(meta);
+    state_mut.meta_mcp = Arc::clone(&meta);
     state_mut.transparency_log = Some(transparency_logger(&audit[1]));
     Gateway {
         router: create_router(state),
+        meta,
         caller,
         shared,
         _store: store,
@@ -302,5 +305,45 @@ async fn f2_route_stage_records_no_shared_verdict_for_per_user() {
         recorded,
         Some(None),
         "F2: at the route stage the memo held {recorded:?} (Some(None) = probed, nothing recorded); answer {answer:?}"
+    );
+}
+
+/// Disable [`TOOL`] through the error budget, which the direct route's first
+/// guard (`admit_target`, S1) refuses.
+fn disable_tool(meta: &crate::gateway::meta_mcp::MetaMcp) {
+    let cfg = meta.capability_budget_config.read().clone();
+    for _ in 0..=cfg.window_size.max(cfg.min_samples) {
+        meta.kill_switch
+            .record_capability_failure(BACKEND, TOOL, &cfg);
+    }
+}
+
+/// C6d (fold gpt F3): on the direct route the caller verdict runs before
+/// `DirectRouteGuards::run`. With [`TOOL`] disabled (an armed S1 refusal), a
+/// tool alpha's catalogue withholds answers -32601, not the guard's refusal;
+/// alpha's valid tool reaches the guard and is refused by it (control). RED
+/// on base: the guard answers first for both.
+#[tokio::test]
+async fn c6d_direct_route_verdict_precedes_direct_guards() {
+    let control = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
+    disable_tool(&control.meta);
+    let refused = post_as_alpha(&control.router, &direct(), &tools_call(TOOL)).await;
+    assert_ne!(
+        refused.1.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "premise: the armed guard does not refuse alpha's valid tool: {refused:?}"
+    );
+    assert_eq!(
+        control.dispatched(),
+        0,
+        "premise: the guard let it through: {refused:?}"
+    );
+    let gw = gateway(CallerSlot::Invalid, CLOSED, Surfaced::Yes).await;
+    disable_tool(&gw.meta);
+    let answer = post_as_alpha(&gw.router, &direct(), &tools_call(TOOL)).await;
+    assert_eq!(
+        answer.1.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "C6d: the direct guard answered before the caller verdict: {answer:?}"
     );
 }
