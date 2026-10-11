@@ -268,7 +268,7 @@ impl Gateway {
         ),
         Option<serde_json::Value>,
     > {
-        use super::super::router::helpers::parse_request_ref;
+        use super::super::router::helpers::{is_notification_method, parse_request_ref};
 
         let (id, method, params) = match parse_request_ref(request) {
             Ok((id, method, params)) => (id, method.to_string(), params),
@@ -306,9 +306,10 @@ impl Gateway {
         // and carries an id is a request, and HTTP refuses it, so it is refused
         // here too. Every other notification stays silent, whatever its id, era
         // or revision. `parse_request_ref` already refused a request without an
-        // id (-32600 "Missing id"), so only a notification takes the second arm.
+        // id (-32600 "Missing id"), and both use `is_notification_method`, so only
+        // a notification takes the second arm.
         let id = match id {
-            Some(id) if !method.starts_with("notifications/") => id,
+            Some(id) if !is_notification_method(&method) => id,
             id => {
                 if let (Some(id), crate::protocol::meta::RequestShape::Modern(_)) =
                     (id.as_ref(), &request_shape)
