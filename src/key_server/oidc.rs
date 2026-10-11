@@ -780,3 +780,7 @@ use redirect::remote_redirect_policy;
 #[cfg(test)]
 #[path = "oidc_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "oidc_fallback_tests.rs"]
+mod fallback_tests;

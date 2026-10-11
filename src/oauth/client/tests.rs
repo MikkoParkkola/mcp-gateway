@@ -729,3 +729,58 @@ fn a_configured_client_id_belongs_to_the_operator_and_survives() {
         "a configured client id is not the previous issuer's to take away"
     );
 }
+
+// MIK-8044.SURF.2 (AUTO): an unset refresh buffer derives from the token's
+// lifetime, max(300 s, 10 %). Built through serde so the rows compile before
+// the fields exist (base proof).
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+/// C3: unset buffer, a one-hour token with 330 s left refreshes (10 % of 3600
+/// is 360, above the 300 s floor).
+#[test]
+fn an_unset_buffer_derives_from_the_token_lifetime() {
+    let storage = Arc::new(
+        TokenStorage::new(std::env::temp_dir().join("oauth_test_surf2_lifetime")).unwrap(),
+    );
+    let client = OAuthClient::new(
+        Client::new(),
+        "backend".to_string(),
+        "http://localhost".to_string(),
+        vec![],
+        storage,
+        OAuthClientConfig::default(),
+    );
+    let token: TokenInfo = serde_json::from_value(serde_json::json!({
+        "access_token": "tok",
+        "expires_at": unix_now() + 330,
+        "lifetime_secs": 3600,
+    }))
+    .expect("token json");
+    *client.current_token.write() = Some(token);
+    assert!(client.needs_proactive_refresh());
+}
+
+/// C4a: a token answer's `expires_in` is stored as the token's lifetime.
+#[test]
+fn a_token_answer_stores_its_lifetime() {
+    let token = TokenInfo::from_response("tok".to_string(), None, None, Some(3600), None);
+    let json = serde_json::to_value(&token).expect("serialize");
+    assert_eq!(json["lifetime_secs"], serde_json::json!(3600), "{json}");
+}
+
+/// C5: an unset buffer is not written back as a number.
+#[test]
+fn an_unset_buffer_is_not_serialized() {
+    let cfg: crate::config::OAuthConfig = serde_yaml::from_str("enabled: true\n").expect("parse");
+    let text = serde_yaml::to_string(&cfg).expect("serialize");
+    assert!(!text.contains("token_refresh_buffer_secs"), "{text}");
+    let back: crate::config::OAuthConfig = serde_yaml::from_str(&text).expect("reload");
+    let again = serde_yaml::to_string(&back).expect("serialize again");
+    assert!(!again.contains("token_refresh_buffer_secs"), "{again}");
+}
