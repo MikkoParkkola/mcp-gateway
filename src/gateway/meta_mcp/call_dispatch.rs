@@ -479,7 +479,10 @@ impl MetaMcp {
         let result = match tool_name {
             "gateway_search" => self.code_mode_search(&arguments, session_id, caller).await,
             "gateway_execute" => self.code_mode_execute(&arguments, session_id, caller).await,
-            "gateway_list_servers" => self.list_servers(caller, session_id).await,
+            "gateway_list_servers" => {
+                self.revalidate_caller_slots(Self::proof_of(caller)).await;
+                self.list_servers(caller, session_id).await
+            }
             "gateway_list_tools" => self.list_tools(&arguments, session_id, caller).await,
             "gateway_search_tools" => self.search_tools(&arguments, session_id, caller).await,
             "gateway_invoke" => {
@@ -498,6 +501,7 @@ impl MetaMcp {
             "gateway_kill_server" => self.kill_server(&arguments),
             "gateway_revive_server" => self.revive_server(&arguments),
             "gateway_list_disabled_capabilities" => {
+                self.revalidate_caller_slots(Self::proof_of(caller)).await;
                 self.list_disabled_capabilities(caller.scope(), session_id)
             }
             "gateway_set_profile" => self.set_profile(&arguments, session_id, caller.is_admin),

@@ -63,6 +63,12 @@ impl Backend {
             .and_then(|slot| slot.live_binding().map(str::to_owned))
     }
 
+    /// Forget `principal_id`'s entry: its current grant no longer yields the
+    /// indexed binding (a rotated or revoked managed grant).
+    pub(crate) fn forget_caller_principal(&self, principal_id: &str) {
+        self.caller_slots.remove(principal_id);
+    }
+
     /// Forget every entry pointing at `evicted`, which has just left the pool.
     /// Compared by identity, never by binding: a replacement slot readmitted
     /// under the same binding keeps its entry (gpt r3 F8).

@@ -135,7 +135,7 @@ impl MetaMcp {
         }
 
         // Include session-promoted tools that match the query and aren't already listed
-        let promoted = self.promoted_tools_for_session(session_id);
+        let promoted = self.promoted_tools_for_caller(session_id, scope);
         for (server, t) in promoted {
             let already = tools.iter().any(|x| x.name == t.name);
             if !already

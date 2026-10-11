@@ -126,4 +126,31 @@ impl MetaMcp {
             ListingView::Shared | ListingView::Cold => backend.get_cached_tool(tool),
         }
     }
+
+    /// The session's promoted tools as this caller's listing shows them
+    /// (design R3.3, gpt r3 F4): a per-user backend's entry is the caller's
+    /// own Tool while its slot is warm, and is omitted while it is cold, so a
+    /// promotion never shows the shared catalogue's view of a per-user tool.
+    #[cfg(feature = "spec-preview")]
+    pub(crate) fn promoted_tools_for_caller(
+        &self,
+        session_id: Option<&str>,
+        scope: InvokeScope<'_>,
+    ) -> Vec<(String, Tool)> {
+        self.promoted_tools_for_session(session_id)
+            .into_iter()
+            .filter_map(|(server, tool)| {
+                let Some(backend) = self.backends.get(&server) else {
+                    return Some((server, tool));
+                };
+                match self.listing_view(&backend, scope) {
+                    ListingView::Shared => Some((server, tool)),
+                    ListingView::Cold => None,
+                    ListingView::Caller(binding) => backend
+                        .get_cached_tool_for(Some(&binding), &tool.name)
+                        .map(|own| (server, own)),
+                }
+            })
+            .collect()
+    }
 }

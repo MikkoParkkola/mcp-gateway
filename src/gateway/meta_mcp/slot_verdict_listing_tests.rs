@@ -424,3 +424,72 @@ async fn l7_passthrough_backend_tools_withheld_from_name_only_listings() {
         total.phrase()
     );
 }
+
+/// alpha's plain `tools/list` in session `s1`, and its [`TOOL`] entry if any.
+#[cfg(feature = "spec-preview")]
+fn promoted_entry_for_alpha(meta: &super::MetaMcp) -> Option<serde_json::Value> {
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    let response = meta.handle_tools_list_for_session(
+        crate::protocol::RequestId::Number(1),
+        Some("s1"),
+        super::identified_caller(&alpha).scope(),
+    );
+    let body = serde_json::to_value(&response).expect("a response serialises");
+    body.pointer("/result/tools")?
+        .as_array()?
+        .iter()
+        .find(|t| t["name"] == super::slot_verdict_fixture::TOOL)
+        .cloned()
+}
+
+/// L3e (design R3.3, gpt r3 F4; lead ruling 2026-10-11), single-user as L3a:
+/// a tool promoted into alpha's session on a per-user backend is listed as
+/// alpha's own Tool while alpha's slot is warm (the shared slot holds a
+/// DIFFERENT valid schema), and not at all while it is cold: a promotion
+/// never shows the shared catalogue's view of a per-user tool.
+#[cfg(feature = "spec-preview")]
+#[tokio::test]
+async fn l3e_promoted_tool_follows_the_callers_slot() {
+    let shared = json!({"type": "object", "properties": {"z": {"type": "integer"}}});
+    let promote = |meta: &super::MetaMcp| {
+        meta.promote_tool_for_session(
+            Some("s1"),
+            &format!(
+                "{}:{}",
+                super::slot_verdict_fixture::BACKEND,
+                super::slot_verdict_fixture::TOOL
+            ),
+        );
+    };
+    let cold = per_user(
+        CallerSlot::Valid,
+        &shared,
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::No,
+    );
+    cold.meta.set_multi_user(false);
+    promote(&cold.meta);
+    assert_eq!(
+        promoted_entry_for_alpha(&cold.meta),
+        None,
+        "L3e: a cold caller's promoted entry shows the shared view"
+    );
+    let warm = per_user(
+        CallerSlot::Valid,
+        &shared,
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::No,
+    );
+    warm.meta.set_multi_user(false);
+    warm_by_listing(&warm.meta).await;
+    promote(&warm.meta);
+    let listed =
+        promoted_entry_for_alpha(&warm.meta).expect("L3e: alpha's promoted tool is not listed");
+    assert_eq!(
+        listed["inputSchema"],
+        super::slot_verdict_fixture::valid(),
+        "L3e: not alpha's schema: {listed}"
+    );
+}

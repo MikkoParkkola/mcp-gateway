@@ -110,6 +110,33 @@ impl MetaMcp {
         }
     }
 
+    /// Re-check this caller's indexed slot on every managed-account backend
+    /// against its current grant, read without refreshing or minting
+    /// (`view_binding`), and forget an entry the current grant no longer
+    /// yields (MIK-8356 design R4.2, gpt r3 F2). Run at a listing's async
+    /// entry, so the synchronous readers after it read a rotated or revoked
+    /// grant's slot as cold, never as the caller's.
+    pub(super) async fn revalidate_caller_slots(&self, caller: CallerProof<'_>) {
+        for backend in self.backends.all() {
+            let Some(vault) = self
+                .account_strategies
+                .managed_vault(backend.account_descriptor_id())
+            else {
+                continue;
+            };
+            let Some(principal) = self.principal_for(&backend, caller) else {
+                continue;
+            };
+            let id = principal.stable_actor_id();
+            let Some(indexed) = backend.caller_slot_binding(&id) else {
+                continue;
+            };
+            if vault.view_binding(principal).await.as_deref() != Some(indexed.as_str()) {
+                backend.forget_caller_principal(&id);
+            }
+        }
+    }
+
     /// Whether `backend` must be omitted from a per-caller catalogue
     /// aggregation, and the credential to fetch it with if not.
     ///
