@@ -106,21 +106,33 @@ fn a_file_reference_resolves_and_is_tracked_for_reload() {
 }
 
 /// TLOG.3: with the log on, a reference that does not resolve refuses the
-/// load, naming the field and never a value.
+/// load with the resolver's own diagnostic (not a length refusal), naming the
+/// field and never a value.
 #[test]
 fn an_unresolved_reference_refuses_the_load() {
     let dir = tempfile::tempdir().expect("tempdir");
+    let missing = dir.path().join("absent.key");
     let cases = [
-        format!("env:{VAR}"),
-        format!("${{{VAR}}}"),
-        format!("file:{}", dir.path().join("absent.key").display()),
+        (
+            format!("env:{VAR}"),
+            "references missing environment variable".to_owned(),
+        ),
+        (format!("${{{VAR}}}"), "which is not set".to_owned()),
+        (
+            format!("file:{}", missing.display()),
+            format!("references file:{}", missing.display()),
+        ),
     ];
-    for (i, secret) in cases.iter().enumerate() {
+    for (i, (secret, diagnostic)) in cases.iter().enumerate() {
         let case = dir.path().join(format!("case{i}"));
         std::fs::create_dir(&case).expect("case dir");
         // Unset: the env file holds another variable.
         let unset = config(&case, true, secret, "MCP_GW_8365_OTHER=1\n");
         let text = refusal(&unset);
+        assert!(
+            text.contains(diagnostic.as_str()),
+            "{secret}: not the resolver's refusal: {text}"
+        );
         assert!(!text.contains(KEY), "{secret}: a value leaked: {text}");
     }
     let empty = config(
@@ -129,7 +141,11 @@ fn an_unresolved_reference_refuses_the_load() {
         &format!("env:{VAR}"),
         &format!("{VAR}=\n"),
     );
-    refusal(&empty);
+    let text = refusal(&empty);
+    assert!(
+        text.contains("which is empty"),
+        "not the empty-variable refusal: {text}"
+    );
 }
 
 /// TLOG.3 control: with the log off, an unset reference is not consulted.
@@ -181,4 +197,104 @@ fn an_empty_secret_stays_unsigned() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = config(dir.path(), true, "", "");
     assert_eq!(logger_key(&path), "");
+}
+
+/// r1.1: a disabled log still resolves a reference it can, since `audit
+/// verify` reads the key whatever the flag says.
+#[test]
+fn a_disabled_log_still_resolves_a_reference_it_can() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = config(
+        dir.path(),
+        false,
+        &format!("${{{VAR}}}"),
+        &format!("{VAR}={KEY}\n"),
+    );
+    let loaded = Config::load_evaluated(Some(&path)).expect("the config loads");
+    assert_eq!(loaded.config.security.transparency_log.shared_secret, KEY);
+}
+
+/// r1.1 T3e/T3f: a disabled log whose reference does not resolve loads, but
+/// never keeps the reference text as its key: that text is public and would
+/// let a forged log verify. Mutant: the text kept verbatim on failure.
+#[test]
+fn a_disabled_logs_unresolved_reference_never_becomes_the_key() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let missing = dir.path().join("absent.key");
+    for (i, secret) in [format!("env:{VAR}"), format!("file:{}", missing.display())]
+        .iter()
+        .enumerate()
+    {
+        let case = dir.path().join(format!("case{i}"));
+        std::fs::create_dir(&case).expect("case dir");
+        let path = config(&case, false, secret, "MCP_GW_8365_OTHER=1\n");
+        let loaded = Config::load_evaluated(Some(&path)).expect("a disabled log loads");
+        assert_eq!(
+            loaded.config.security.transparency_log.shared_secret, "",
+            "{secret}: the reference text was kept as the key"
+        );
+    }
+}
+
+/// C2: a resolved key is opaque. A value that begins like a reference, or
+/// carries a `${` template, is the key verbatim and is never parsed again.
+#[test]
+fn a_resolved_key_that_looks_like_a_reference_is_used_verbatim() {
+    for (i, value) in [
+        format!("env:ANOTHER_NAME_{KEY}"),
+        format!("file:/not/a/path/{KEY}"),
+        format!("${{NOT_EXPANDED}}{KEY}"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let secret = dir.path().join(format!("k{i}.key"));
+        write_0600(&secret, value);
+        let path = config(dir.path(), true, &format!("file:{}", secret.display()), "");
+        assert_eq!(&logger_key(&path), value, "a resolved key was parsed again");
+    }
+}
+
+/// M1: literal mode (config editors) neither resolves a reference nor holds
+/// its text to the key minimum.
+#[test]
+fn literal_mode_does_not_length_check_a_reference() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = config(
+        dir.path(),
+        true,
+        &format!("env:{VAR}"),
+        "MCP_GW_8365_OTHER=1\n",
+    );
+    let loaded = Config::load_literal(Some(&path)).expect("literal mode keeps the reference");
+    assert_eq!(
+        loaded.security.transparency_log.shared_secret,
+        format!("env:{VAR}")
+    );
+}
+
+/// TLOG.2 reload: an unchanged key file reports nothing; a rotated one is
+/// reported, like every other secret file.
+#[test]
+fn a_rotated_key_file_is_reported_on_reload() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let secret = dir.path().join("tlog.key");
+    write_0600(&secret, KEY);
+    let path = config(dir.path(), true, &format!("file:{}", secret.display()), "");
+    let startup = Config::load_evaluated(Some(&path)).expect("the config loads");
+    let unchanged = Config::load_with_overlay(Some(&path), &startup.env_paths).expect("reload");
+    assert!(
+        unchanged
+            .overlay
+            .rotated_secret_files(&startup.overlay)
+            .is_empty()
+    );
+    write_0600(&secret, &format!("{KEY}-rotated"));
+    let rotated = Config::load_with_overlay(Some(&path), &startup.env_paths).expect("reload");
+    assert_eq!(
+        rotated.overlay.rotated_secret_files(&startup.overlay),
+        vec![format!("file:{}", secret.display())],
+        "a rotated key file was not reported"
+    );
 }
