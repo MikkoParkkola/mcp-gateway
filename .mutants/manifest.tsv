@@ -1,0 +1,10 @@
+head_sha	968f4294df5b4174190c15575a52addf1a252206
+# MIK-8154 PR2 mutation proofs (test plan M3 table; C2e per proposal b').
+c2e_sync_skip	linux	c2e_sync_skip.patch	--lib -- mik8154_rows_tests::c2e
+c2e_worker_drop	linux	c2e_worker_drop.patch	--lib -- mik8154_rows_tests::c2e
+np_ignores_visibility	linux	np_ignores_visibility.patch	--lib -- mik8154_rows_tests::np withheld_parity_tests::np3
+cap1_7a_via_7b	linux	cap1_7a_via_7b.patch	--lib -- mik8154_rows_tests::cap1
+s3b_sanitize_late	linux	s3b_sanitize_late.patch	--lib -- mik8154_rows_tests::s3b
+passthrough_ignored	linux	passthrough_ignored.patch	--lib -- mik8154_rows_tests::p mik8154_rows_tests::c2 mik8154_rows_tests::np2 p3::p2_stdio
+s8_zero_targets_exempt	linux	s8_zero_targets_exempt.patch	--lib -- mik8154_rows_tests::s8
+s4_fields_unvalidated	linux	s4_fields_unvalidated.patch	--lib -- mik8154_rows_tests::s4

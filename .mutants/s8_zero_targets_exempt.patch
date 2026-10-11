@@ -1,0 +1,14 @@
+diff --git a/src/gateway/router/authorization.rs b/src/gateway/router/authorization.rs
+index 37487fd86..67ab42a6b 100644
+--- a/src/gateway/router/authorization.rs
++++ b/src/gateway/router/authorization.rs
+@@ -50,8 +50,7 @@ pub(crate) fn sanitize_exempt(
+         let targets = backend_tool_targets_for_call(meta_mcp, name, arguments, view);
+         targets.into_iter().map(|t| t.server).collect()
+     };
+-    !servers.is_empty()
+-        && servers
++    servers
+             .iter()
+             .all(|server| meta_mcp.backend_is_passthrough(server))
+ }

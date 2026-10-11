@@ -1,0 +1,25 @@
+diff --git a/src/gateway/router/authorization.rs b/src/gateway/router/authorization.rs
+index 37487fd86..9c4524cd7 100644
+--- a/src/gateway/router/authorization.rs
++++ b/src/gateway/router/authorization.rs
+@@ -54,6 +54,7 @@ pub(crate) fn sanitize_exempt(
+         && servers
+             .iter()
+             .all(|server| meta_mcp.backend_is_passthrough(server))
++        && false
+ }
+ 
+ pub(crate) fn backend_tool_targets_for_call<'a>(
+diff --git a/src/gateway/router/backend_handlers/direct_caller.rs b/src/gateway/router/backend_handlers/direct_caller.rs
+index e04941e04..a28dd2e18 100644
+--- a/src/gateway/router/backend_handlers/direct_caller.rs
++++ b/src/gateway/router/backend_handlers/direct_caller.rs
+@@ -243,7 +243,7 @@ pub(super) async fn read_envelope(
+             &crate::gateway::PROTOCOL_NONCES,
+         )
+         .and_then(|()| {
+-            if state.meta_mcp.backend_is_passthrough(name) {
++            if false && state.meta_mcp.backend_is_passthrough(name) {
+                 Ok(None)
+             } else {
+                 crate::security::sanitize::sanitize_request(&json_request).map(Some)

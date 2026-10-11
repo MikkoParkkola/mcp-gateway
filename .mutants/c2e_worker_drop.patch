@@ -1,0 +1,13 @@
+diff --git a/src/gateway/task_service/execution/worker.rs b/src/gateway/task_service/execution/worker.rs
+index f1f20c657..e111b9049 100644
+--- a/src/gateway/task_service/execution/worker.rs
++++ b/src/gateway/task_service/execution/worker.rs
+@@ -242,7 +242,7 @@ async fn run_dispatched(
+     // MIK-8154 C2e: the run compares the playbook against the definition the
+     // submit's intake judged, as a synchronous run does.
+     let dispatch = crate::gateway::meta_mcp::visible::with_judged_playbook(
+-        intent.owned.judged_playbook(),
++        None::<String>,
+         dispatch,
+     );
+     let mut dispatch = Box::pin(crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
