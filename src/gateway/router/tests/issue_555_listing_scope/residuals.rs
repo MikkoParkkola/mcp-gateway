@@ -345,7 +345,7 @@ async fn set_state_visible_tools_counts_admitted() {
     );
 }
 
-/// T30: a refused playbook step is recorded without naming its target.
+/// T30: a refused playbook step is answered without naming its target.
 #[tokio::test]
 async fn playbook_step_refusal_names_nothing_withheld() {
     let f = fixture(Auth::Keys).await;
@@ -358,25 +358,19 @@ async fn playbook_step_refusal_names_nothing_withheld() {
     let mut engine = crate::playbook::PlaybookEngine::new();
     engine.register(definition);
     f.state.meta_mcp.set_playbook_engine(engine);
-    let run = |key: &'static str| {
-        let router = f.router.clone();
-        async move {
-            payload(
-                &call_tool(
-                    &router,
-                    Some(key),
-                    "gateway_run_playbook",
-                    json!({ "name": "probe", "arguments": {} }),
-                )
-                .await,
-            )
-        }
-    };
-    let scoped = run("alpha-only").await;
-    let reason = scoped["step_errors"]["hidden"]
-        .as_str()
-        .unwrap_or_else(|| panic!("step must fail: {scoped}"));
-    assert_eq!(reason, "step not permitted for this caller", "{scoped}");
+    // The route authorizes every step before any runs (MIK-8362), so a caller
+    // who may not reach one step is refused the whole call, neutrally.
+    let scoped = call_tool(
+        &f.router,
+        Some("alpha-only"),
+        "gateway_run_playbook",
+        json!({ "name": "probe", "arguments": {} }),
+    )
+    .await;
+    assert_eq!(
+        scoped["error"]["message"], "step not permitted for this caller",
+        "{scoped}"
+    );
     assert!(
         !scoped.to_string().contains("beta"),
         "step error named the target: {scoped}"

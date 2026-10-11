@@ -19,8 +19,6 @@ use serde::{Deserialize, Serialize};
 pub struct CostGovernanceConfig {
     /// Master enable switch.  When `false`, all checks are bypassed.
     pub enabled: bool,
-    /// Currency code (informational only; all values stored as USD internally).
-    pub currency: String,
     /// Global and scoped budget limits.
     pub budgets: BudgetLimits,
     /// Alert thresholds and actions (sorted by `at_percent` ascending on load).
@@ -43,7 +41,6 @@ impl Default for CostGovernanceConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            currency: "USD".to_string(),
             budgets: BudgetLimits::default(),
             alerts: vec![
                 AlertRule {
@@ -111,7 +108,6 @@ mod tests {
     fn default_config_is_disabled() {
         let cfg = CostGovernanceConfig::default();
         assert!(!cfg.enabled);
-        assert_eq!(cfg.currency, "USD");
         assert_eq!(cfg.default_cost, 0.0);
         assert!(cfg.tool_costs.is_empty());
         assert!(cfg.alternatives.is_none());

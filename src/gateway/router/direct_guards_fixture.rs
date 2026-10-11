@@ -384,6 +384,8 @@ pub(crate) use egress::{
 };
 pub(crate) use quota::fixture_propagating;
 use quota::{fixture_backend_config, fixture_failsafe, leaked_transparency_log};
+#[cfg(feature = "firewall")]
+pub(crate) use quota::{fixture_firewalled_budget_built, fixture_propagating_budgeted};
 pub(crate) use requests::{
     initialize, post_direct, post_meta_invoke, post_meta_invoke_nonce, send, send_with_headers,
 };
@@ -506,6 +508,8 @@ thread_local! {
         const { std::cell::Cell::new(None) };
     static CLIENT_BREAKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static ANOMALY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Calls per window the call budget allows; 0 leaves the budget off (MIK-8362).
+    static BUDGET: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static RELAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static META_FIREWALL: std::cell::RefCell<Option<Arc<crate::security::firewall::Firewall>>> =
         const { std::cell::RefCell::new(None) };
@@ -630,6 +634,11 @@ async fn fixture_inner(
             credential_redaction: true,
             rules,
             audit_log: AUDIT_LOG.with(|a| a.borrow().clone()),
+            budget: crate::security::firewall::budget_guard::BudgetGuardConfig {
+                enabled: BUDGET.with(std::cell::Cell::get) > 0,
+                max_calls_per_window: BUDGET.with(std::cell::Cell::get),
+                window_secs: 3_600,
+            },
             anomaly_detection: anomaly,
             anomaly_threshold: 0.7,
             anomaly_block_threshold: anomaly.then_some(0.9),

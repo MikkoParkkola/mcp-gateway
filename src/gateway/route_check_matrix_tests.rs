@@ -163,6 +163,10 @@ mod rows;
 #[path = "route_check_matrix_p3_tests.rs"]
 mod p3;
 
+#[cfg(feature = "firewall")]
+#[path = "route_check_matrix_step_tests.rs"]
+mod step;
+
 /// `ALL` lists every variant exactly once: each index in `0..N` is hit once.
 /// A length check alone would pass a list that repeats one variant and
 /// misses another.
