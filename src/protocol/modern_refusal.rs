@@ -10,9 +10,8 @@
 //! (`StdioClient::modern`), so sharing them would refuse every modern call in
 //! a batch.
 //!
-//! Each function takes the request's [`RequestFields`], so a legacy or malformed
-//! request never reaches it: those shapes are refused (or not) by their own
-//! callers, exactly as before.
+//! The callers call these only for a `Modern` request shape, so a legacy or
+//! malformed request is refused (or not) by its own caller, exactly as before.
 
 use super::meta::{MODERN_VERSIONS, REMOVED_IN_2026_07_28, RequestFields, required_capability};
 use super::{JsonRpcResponse, RequestId};
