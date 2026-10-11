@@ -405,16 +405,18 @@ The source is `server:tool`.
   tail-only excerpt still matches. The cap sits under the detector's 4,096-fingerprint keep
   limit (about 8K characters in each of a split copy's two forms, kept in text order); the
   64 KiB first proposed would have
-  dropped every tail fingerprint. Each cut is counted. The middle of a larger result is an
-  in-model gap, not a stated residual: §14.5 (MIK-8066 CAP.2) governs.
-- **Evasion bound (stated for operators and the final review).** Per delivered result, only its
-  first and last 3 KiB of text are compared, at most 4,096 fingerprints. Content taken only from
-  the rest of a larger result is never detected today, so a source that pads a result can move
-  content out of view; this is an open in-model gap (§14.5, MIK-8066 CAP.2), not an accepted bound. The egress side has no cap: every string of the forwarded params is checked, so
-  padding the relayed payload hides nothing. Below the fingerprint size nothing matches: a shared
-  run under 48 characters never counts, a longer run keeps about 1 in 4 of its k-grams (§3), and
-  `min_matches` (default 2) are needed. Acceptable for `observe`; whether `block` needs sampling
-  across the whole result is put to the final review.
+  dropped every tail fingerprint. Each cut is counted. The middle of a larger result is evidence
+  through a thinned sample (MIK-8066 CAP.2, §14.3 B1′).
+- **Detection bound (stated for operators and the final review).** Per delivered result, its
+  first and last 3 KiB of text are compared whole; the rest is compared through a thinned sample
+  (MIK-8066 CAP.2), all within at most 4,096 fingerprints. A relay taken from the middle of a
+  larger result is caught at the B1′ rate of §14.3 (for a 500-char relay: missed about 1 in
+  100,000 times from a 64 KiB result, 78% from a 1 MiB one), so padding a result lowers, but no
+  longer removes, the chance of detection. The egress side has no cap: every string of the
+  forwarded params is checked, so padding the relayed payload hides nothing. Below the
+  fingerprint size nothing matches: a shared run under 48 characters never counts, a longer run
+  keeps about 1 in 4 of its k-grams (§3), and `min_matches` (default 2) are needed. Acceptable
+  for `observe`; whether `block` needs a thicker sample is the B2 trade-off in §14.3.
 - Sensitive: `server:tool` matches `sources`, OR the result's gateway-attached
   `_context_integrity.classification.data_classes` holds `personal_data`, `financial_data` or
   `guarded_material`. The gateway's own attach overwrites any backend-supplied

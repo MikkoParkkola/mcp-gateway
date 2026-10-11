@@ -170,7 +170,11 @@ fn the_text_walker_reads_values_then_keys_and_skips_nothing() {
 /// fingerprint joins them).
 #[test]
 fn an_over_cap_text_keeps_exact_head_and_tail_on_char_boundaries() {
-    assert_eq!(RECORD_CAP, 6 * 1024, "the documented evasion bound");
+    assert_eq!(
+        RECORD_CAP,
+        6 * 1024,
+        "the record cap: head and tail kept whole"
+    );
     for len in [RECORD_CAP - 1, RECORD_CAP] {
         let text = "x".repeat(len);
         let (digest, cut) = DeliveryDigest::of_leaves(&[&text], false);
