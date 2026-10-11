@@ -4,7 +4,7 @@
 //! directory with its own HOME and state dir, the built binary run in it, a
 //! gateway started on an OS-chosen port, an MCP client session over its HTTP
 //! endpoint, and a local stdio peer with one tool. Moved here unchanged from
-//! e2e_first_run_journey.rs (MIK-8044 SURF.7).
+//! `e2e_first_run_journey.rs` (MIK-8044 SURF.7).
 
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};

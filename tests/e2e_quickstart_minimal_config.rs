@@ -152,7 +152,7 @@ async fn a_fresh_home_serves_a_tool_call_from_the_documented_minimal_config() {
 }
 
 /// Every key 4.0 removed, as a 3.x config set them; each refuses the load but
-/// `meta_mcp.cache_tools`, which only warns (src/config/strict_keys.rs).
+/// `meta_mcp.cache_tools`, which only warns (`src/config/strict_keys.rs`).
 const REFUSING: [&str; 6] = [
     "server.ws_port",
     "server.request_timeout",
@@ -242,13 +242,7 @@ async fn a_three_x_config_is_refused_then_serves_after_upgrade() {
     let state = state.display().to_string();
     ws.run_ok(&["-c", "gateway.yaml", "upgrade", "--data-dir", &state]);
     let upgraded = std::fs::read_to_string(&config).expect("config");
-    for key in REFUSING.iter().copied().chain(["cache_tools", PLAINTEXT]) {
-        let leaf = key.rsplit('.').next().expect("a leaf");
-        assert!(
-            !upgraded.contains(leaf),
-            "upgrade left `{key}`:\n{upgraded}"
-        );
-    }
+    assert_upgraded(&upgraded, &backend);
 
     // The same call, served, with the same key as the bearer.
     let gateway = Gateway::start(&ws).await;
@@ -256,12 +250,79 @@ async fn a_three_x_config_is_refused_then_serves_after_upgrade() {
         Session::open(&format!("{}/mcp", gateway.url), Some(PLAINTEXT.to_string())).await;
     search_then_invoke(&mut session, &gateway, &backend).await;
     let log = gateway.logs();
-    for key in REFUSING.iter().copied().chain(["cache_tools"]) {
+    for said in ["Removed config key", "cache_tools"] {
         assert!(
-            !log.contains(key),
-            "the upgraded config still names `{key}`:\n{log}"
+            !log.contains(said),
+            "the upgraded config still warns `{said}`:\n{log}"
         );
     }
+
+    // The key still guards `/mcp`: no bearer, or a wrong one, is refused.
+    let mcp = format!("{}/mcp", gateway.url);
+    for bearer in [None, Some("surf7-a-wrong-key")] {
+        let status = initialize_status(&mcp, bearer).await;
+        assert_eq!(status, 401, "bearer {bearer:?} was not refused");
+    }
+}
+
+/// The upgraded file, read as YAML: no removed path is left, `auth` is still
+/// on, and the plaintext key became its digest (#3824).
+fn assert_upgraded(upgraded: &str, backend: &str) {
+    let yaml: serde_yaml::Value =
+        serde_yaml::from_str(upgraded).expect("the upgraded file is YAML");
+    let at = |path: &[&str]| path.iter().try_fold(&yaml, |v, k| v.get(*k));
+    for path in [
+        &["server", "ws_port"][..],
+        &["server", "request_timeout"],
+        &["marketplace"],
+        &["cost_governance", "currency"],
+        &["meta_mcp", "cache_tools"],
+        &["backends", backend, "idle_timeout"],
+        &["backends", backend, "circuit_breaker"],
+    ] {
+        assert!(at(path).is_none(), "upgrade left {path:?}:\n{upgraded}");
+    }
+    assert_eq!(
+        at(&["auth", "enabled"]),
+        Some(&serde_yaml::Value::Bool(true)),
+        "{upgraded}"
+    );
+    let key = &at(&["auth", "api_keys"]).expect("api_keys")[0];
+    assert!(
+        key.get("key").is_none(),
+        "the plaintext key stayed:\n{upgraded}"
+    );
+    assert!(
+        key.get("key_sha256")
+            .and_then(serde_yaml::Value::as_str)
+            .is_some_and(|d| d.starts_with("sha256:")),
+        "no digest:\n{upgraded}"
+    );
+    assert!(
+        !upgraded.contains(PLAINTEXT),
+        "the plaintext is still in the file"
+    );
+}
+
+/// The HTTP status `/mcp` answers an `initialize` sent with `bearer`, or none.
+async fn initialize_status(mcp: &str, bearer: Option<&str>) -> u16 {
+    let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-06-18", "capabilities": {},
+        "clientInfo": { "name": "surf7", "version": "1" } } });
+    let mut request = journey::http_client()
+        .post(mcp)
+        .header("content-type", "application/json")
+        .header("accept", "application/json")
+        .json(&body);
+    if let Some(bearer) = bearer {
+        request = request.bearer_auth(bearer);
+    }
+    request
+        .send()
+        .await
+        .expect("the gateway answers")
+        .status()
+        .as_u16()
 }
 
 /// The documented launcher itself, unchanged: the reference server's `echo`
