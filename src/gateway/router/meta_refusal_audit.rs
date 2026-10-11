@@ -100,6 +100,25 @@ impl<'a> Refused<'a> {
             .await
     }
 
+    /// MIK-8361: record a requested target the caller may not see, refused
+    /// by `code` at the route, which then takes the missing name's path. The
+    /// record names the real reason, as every refusal's does; it is written
+    /// best-effort (a failed write is counted, never answered), so an outage
+    /// cannot tell a withheld name from a missing one (D3-a narrowed).
+    pub(super) async fn note_withheld(&self, state: &AppState, target: ToolTarget<'_>, code: i32) {
+        let tenants = state.meta_mcp.request_tenants(target.arguments);
+        let refusal = Refusal {
+            outcome: AuditOutcome::Denied(code),
+            server: target.server,
+            tool: Some(target.tool),
+            tenants,
+        };
+        crate::security::security_metrics::meta_refused(code);
+        if let Some(Err(error)) = self.write(state, refusal).await {
+            tracing::warn!(%error, "withheld-target refusal record write failed (counted, not answered)");
+        }
+    }
+
     async fn record(
         self,
         state: &AppState,
@@ -112,9 +131,40 @@ impl<'a> Refused<'a> {
         // D4: every meta-route refusal decided before dispatch is counted
         // here, with or without a log; the meta layer never sees it.
         crate::security::security_metrics::meta_refused(code);
-        let Some(log) = state.transparency_log.as_ref() else {
+        let Some(written) = self.write(state, refusal).await else {
             return build_error_response(Some(id), code, message, self.session_id, status);
         };
+        let failure_policy = state
+            .transparency_log
+            .as_ref()
+            .map(|log| log.failure_policy());
+        match written {
+            Ok(()) => build_error_response(Some(id), code, message, self.session_id, status),
+            Err(error) if failure_policy == Some(AuditFailurePolicy::FailClosed) => {
+                tracing::error!(%error, "meta-route refusal audit write failed; answering 503");
+                let error = crate::Error::AuditUnavailable;
+                build_error_response(
+                    Some(id),
+                    error.to_rpc_code(),
+                    error.to_string(),
+                    self.session_id,
+                    StatusCode::SERVICE_UNAVAILABLE,
+                )
+            }
+            Err(error) => {
+                tracing::warn!(%error, "Transparency log write failed (non-fatal)");
+                build_error_response(Some(id), code, message, self.session_id, status)
+            }
+        }
+    }
+
+    /// The refusal record, written; `None` with no transparency log.
+    async fn write(
+        &self,
+        state: &AppState,
+        refusal: Refusal<'_>,
+    ) -> Option<Result<(), crate::Error>> {
+        let log = state.transparency_log.as_ref()?;
         let otel_trace_id = self
             .arguments
             .get("_meta")
@@ -126,7 +176,7 @@ impl<'a> Refused<'a> {
             trace_id: Some(trace_id.clone()),
             otel_trace_id: otel_trace_id.clone(),
             outcome: refusal.outcome,
-            who: self.who,
+            who: self.who.clone(),
         };
         let request_hash = format!(
             "sha256:{}",
@@ -157,24 +207,7 @@ impl<'a> Refused<'a> {
                 )
             })
             .await;
-        match written {
-            Ok(()) => build_error_response(Some(id), code, message, self.session_id, status),
-            Err(error) if log.failure_policy() == AuditFailurePolicy::FailClosed => {
-                tracing::error!(%error, "meta-route refusal audit write failed; answering 503");
-                let error = crate::Error::AuditUnavailable;
-                build_error_response(
-                    Some(id),
-                    error.to_rpc_code(),
-                    error.to_string(),
-                    self.session_id,
-                    StatusCode::SERVICE_UNAVAILABLE,
-                )
-            }
-            Err(error) => {
-                tracing::warn!(%error, "Transparency log write failed (non-fatal)");
-                build_error_response(Some(id), code, message, self.session_id, status)
-            }
-        }
+        Some(written.map_err(Into::into))
     }
 }
 

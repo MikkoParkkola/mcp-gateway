@@ -186,11 +186,24 @@ pub(super) async fn tools_call(
         // A requested target the caller cannot see takes the missing name's
         // path (MIK-8361); a step's target keeps the strict authorize.
         let routed = if index < request_targets {
-            state.meta_mcp.authorize_requested_target(
+            match state.meta_mcp.authorize_requested_target(
                 invoke_scope,
                 (checked.server, checked.tool),
                 checked.arguments,
-            )
+            ) {
+                // Its record names the real reason; the answer is the
+                // missing name's, later (MIK-8361).
+                Ok(Some(withheld)) => {
+                    let code = match &withheld {
+                        crate::Error::Forbidden { code, .. } => *code,
+                        other => other.to_rpc_code(),
+                    };
+                    refused.note_withheld(state, checked, code).await;
+                    Ok(())
+                }
+                Ok(None) => Ok(()),
+                Err(refusal) => Err(refusal),
+            }
         } else {
             state.meta_mcp.authorize_route_target(
                 invoke_scope,

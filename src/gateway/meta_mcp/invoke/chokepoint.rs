@@ -178,6 +178,9 @@ impl MetaMcp {
     /// it absent after the firewall. On the capability backend a missing
     /// name is refused here as not found, so the withheld one is too.
     ///
+    /// `Ok(Some(refusal))` is a withheld target that passes, with the refusal
+    /// its record names; `Ok(None)` a target the caller may see.
+    ///
     /// # Errors
     /// `ToolNotFound` for a capability the caller may not reach.
     pub(crate) fn authorize_requested_target(
@@ -185,9 +188,9 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         (server, tool): (&str, &str),
         arguments: &Value,
-    ) -> Result<()> {
-        let Err(_refusal) = self.authorize_route_target(scope, (server, tool), arguments) else {
-            return Ok(());
+    ) -> Result<Option<Error>> {
+        let Err(refusal) = self.authorize_route_target(scope, (server, tool), arguments) else {
+            return Ok(None);
         };
         match self.get_capabilities() {
             // Even an unwritable record answers so: the call dispatches
@@ -201,7 +204,7 @@ impl MetaMcp {
                     crate::gateway::meta_mcp::visible::Withholding::Refused,
                 );
                 crate::gateway::meta_mcp::visible::record_visibility(server, tool, withheld);
-                Ok(())
+                Ok(Some(refusal))
             }
         }
     }

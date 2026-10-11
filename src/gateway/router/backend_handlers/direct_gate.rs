@@ -45,5 +45,31 @@ pub(super) async fn guard_before_credential(
         (&scope.route.backend, &failed),
     )
     .await?;
+    // A caller with no principal on a required per-user backend can hold no
+    // slot there: it lacks every tool, -32601 as on every other entry
+    // (MIK-8356 R3.7), before any credential is resolved for it.
+    let backend = &scope.route.backend;
+    if backend.keeps_per_user_catalogues()
+        && scope
+            .state
+            .meta_mcp
+            .lacks_principal_on_required(backend, caller.proof())
+    {
+        let tool = envelope
+            .params
+            .as_ref()
+            .and_then(|params| params.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let absent = crate::gateway::meta_mcp::visible::absent_name(tool);
+        let response = crate::gateway::meta_mcp::response_security::error_response_preserving_status(
+            scope.id.clone(),
+            &absent,
+        );
+        return Err(super::super::helpers::build_http_response(
+            &crate::gateway::meta_mcp::invoke::egress::Egressed::gateway_own(response),
+            axum::http::StatusCode::OK,
+        ));
+    }
     Ok(())
 }

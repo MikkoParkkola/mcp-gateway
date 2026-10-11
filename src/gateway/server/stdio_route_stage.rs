@@ -70,11 +70,13 @@ impl Gateway {
             // A requested target the caller cannot see takes the missing
             // name's path (MIK-8361); a step's target keeps the strict one.
             let routed = if index < request_targets {
-                meta_mcp.authorize_requested_target(
-                    scope,
-                    (checked.server, checked.tool),
-                    checked.arguments,
-                )
+                meta_mcp
+                    .authorize_requested_target(
+                        scope,
+                        (checked.server, checked.tool),
+                        checked.arguments,
+                    )
+                    .map(|_| ())
             } else {
                 meta_mcp.authorize_route_target(scope, (checked.server, checked.tool), checked.arguments)
             };
