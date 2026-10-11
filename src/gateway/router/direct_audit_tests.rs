@@ -115,14 +115,9 @@ fn direct_call(tenant: &str, idempotency_key: Option<&str>) -> String {
     json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": params}).to_string()
 }
 
-/// POST as a modern, anonymous client: the era that carries an idempotency key.
-/// The body declares the revision the header does, as `/mcp` requires of it
-/// and the direct route now does too (MIK-8040).
-async fn post_modern(fx: &Fixture, uri: &str, body: &str) -> (StatusCode, Value) {
-    post_modern_as(fx, uri, body, &Caller::Modern).await
-}
-
-/// [`post_modern`] as `caller`, which must be a modern one.
+/// POST as a modern `caller`: the era that carries an idempotency key. The
+/// body declares the revision the header does, as `/mcp` requires of it and
+/// the direct route now does too (MIK-8040).
 async fn post_modern_as(
     fx: &Fixture,
     uri: &str,

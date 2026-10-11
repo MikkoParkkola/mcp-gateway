@@ -223,24 +223,8 @@ pub(crate) fn validate_protocol_text(text: &str) -> Result<()> {
     Ok(())
 }
 
-/// Validate `id` and both nonces before anything takes them off the request
-/// (MIK-8154 S2'), whatever its backends: these fields are the gateway's.
-///
-/// # Errors
-///
-/// `Error::Protocol` for the first field that fails [`validate_protocol_text`].
-pub(crate) fn validate_protocol_fields(request: &Value, nonces: &[&str]) -> Result<()> {
-    if let Some(Value::String(id)) = request.get("id") {
-        validate_protocol_text(id)?;
-    }
-    let meta = request.pointer("/params/_meta");
-    for field in nonces {
-        if let Some(Value::String(text)) = meta.and_then(|meta| meta.get(field)) {
-            validate_protocol_text(text)?;
-        }
-    }
-    Ok(())
-}
+mod protocol;
+pub(crate) use protocol::validate_protocol_fields;
 
 /// The one sanitize step (MIK-8154 SAN.1): the whole request, `id` kept as is
 /// (validated); a request whose every target is `passthrough` skips it.
@@ -260,7 +244,7 @@ pub(crate) fn sanitize_request(request: &Value) -> Result<Value> {
         let clean = if key == "id" {
             value.clone()
         } else {
-            sanitize_json_value(value)?
+            protocol::sanitize_value(value)?
         };
         sanitized.insert(sanitize_string(key)?, clean);
     }

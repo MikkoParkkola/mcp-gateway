@@ -17,7 +17,7 @@ const CHANGED: &str = "The playbook changed after this call was admitted; retry 
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn c2e1_a_sync_run_reloaded_after_intake_is_refused() {
-    let fx = playbook_fixture(["alpha-pt", "alpha-pt"]).await;
+    let fx = Box::pin(playbook_fixture(["alpha-pt", "alpha-pt"])).await;
     let meta = std::sync::Arc::clone(&fx.state.meta_mcp);
     crate::gateway::meta_mcp::visible::seams::after_route_stage(move || {
         let mut engine = crate::playbook::PlaybookEngine::new();
@@ -33,7 +33,7 @@ async fn c2e1_a_sync_run_reloaded_after_intake_is_refused() {
 /// passthrough backend.
 #[tokio::test]
 async fn c2e4_a_sync_run_with_no_reload_runs() {
-    let fx = playbook_fixture(["alpha-pt", "alpha-pt"]).await;
+    let fx = Box::pin(playbook_fixture(["alpha-pt", "alpha-pt"])).await;
     let body = run_with_nul(&fx).await;
     assert!(body.get("error").is_none(), "c2e4: {body}");
     assert!(
@@ -102,7 +102,7 @@ async fn task_run_with_nul(fx: &Fx, key: &str) -> Value {
 /// refusal, and no step runs.
 #[tokio::test]
 async fn c2e2_a_task_reloaded_before_its_run_is_refused() {
-    let fx = playbook_fixture(["alpha-pt", "alpha-pt"]).await;
+    let fx = Box::pin(playbook_fixture(["alpha-pt", "alpha-pt"])).await;
     let meta = std::sync::Arc::clone(&fx.state.meta_mcp);
     crate::gateway::meta_mcp::visible::seams::before_task_dispatch(move || {
         let mut engine = crate::playbook::PlaybookEngine::new();
@@ -123,7 +123,7 @@ async fn c2e2_a_task_reloaded_before_its_run_is_refused() {
 /// the passthrough backend.
 #[tokio::test]
 async fn c2e5_a_task_with_no_reload_runs() {
-    let fx = playbook_fixture(["alpha-pt", "alpha-pt"]).await;
+    let fx = Box::pin(playbook_fixture(["alpha-pt", "alpha-pt"])).await;
     let got = task_run_with_nul(&fx, "c2e5-k").await;
     assert_eq!(
         got.pointer("/result/status"),
@@ -140,11 +140,11 @@ async fn c2e5_a_task_with_no_reload_runs() {
 /// exemption and records no digest, so a task whose playbook is reloaded
 /// before its run runs the reloaded definition: no judgement, no comparison.
 /// (C2e3, a persisted record with no digest, is unreachable: a restart
-/// settles a task rather than running it, task_service recovery.rs.)
+/// settles a task rather than running it, `task_service` `recovery.rs`.)
 #[tokio::test]
 async fn c2e3_a_task_with_no_judgement_runs_a_reloaded_playbook() {
     let definition = playbook_definition(["alpha-pt", "alpha-pt"]);
-    let fx = sanitizing(
+    let fx = Box::pin(sanitizing(
         false,
         super::super::direct_guards_fixture::fixture_hardened_signed_built(
             Answer::Ok,
@@ -156,7 +156,7 @@ async fn c2e3_a_task_with_no_judgement_runs_a_reloaded_playbook() {
                 meta
             },
         ),
-    )
+    ))
     .await;
     let meta = std::sync::Arc::clone(&fx.state.meta_mcp);
     crate::gateway::meta_mcp::visible::seams::before_task_dispatch(move || {

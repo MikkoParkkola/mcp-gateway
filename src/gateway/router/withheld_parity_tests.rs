@@ -468,7 +468,7 @@ async fn row11_route_targets_resolve_a_withheld_name_as_absent() {
 async fn np3_intakes_judgement_is_the_requests_one() {
     let spec = Spec::of(Reason::Schema, Side::Withheld);
     let sanitizing = super::direct_guards_fixture::sanitizing;
-    let unrepaired = sanitizing(true, twin(spec))
+    let unrepaired = Box::pin(sanitizing(true, twin(spec)))
         .await
         .call_plain(spec.tool)
         .await;
@@ -478,7 +478,7 @@ async fn np3_intakes_judgement_is_the_requests_one() {
         "premise: the withheld name is not answered as absent: {}",
         unrepaired.body
     );
-    let raced = sanitizing(true, twin(spec)).await;
+    let raced = Box::pin(sanitizing(true, twin(spec))).await;
     let backend = raced
         .fx
         .state

@@ -37,7 +37,7 @@ fn refused(scope: Scope<'_>, e: &crate::Error) -> Rejection {
 }
 
 /// A 7b refusal, answered with the HTTP status `/mcp` gives the same refusal
-/// (dispatch_tools_call.rs): 409 for 409, otherwise 400 (MIK-8154 ANON.1,
+/// (`dispatch_tools_call.rs`): 409 for 409, otherwise 400 (MIK-8154 ANON.1,
 /// design r3.2). Its own function: 7a's refusals keep [`refused`], so a 7a
 /// cache-at-capacity 503 stays 503 (row CAP1).
 fn lease_refused(scope: Scope<'_>, e: &crate::Error) -> Rejection {

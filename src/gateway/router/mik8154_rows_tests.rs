@@ -19,7 +19,7 @@ const NUL: &str = "a\u{0}b";
 const NUL_REFUSED: &str = "Protocol error: Input contains null bytes which are not allowed";
 const BLOCKED_SPLIT: &str = "; rm\u{7} -rf / ";
 
-/// A whole JSON-RPC body POSTed to `uri` as `key` (the envelope rows need an
+/// A whole JSON-RPC body posted to `uri` as `key` (the envelope rows need an
 /// `id` and `method` the helpers fix).
 async fn send_raw(fx: &Fx, uri: &str, key: &str, body: &Value) -> Value {
     let request = axum::http::Request::builder()
@@ -35,6 +35,7 @@ async fn send_raw(fx: &Fx, uri: &str, key: &str, body: &Value) -> Value {
 }
 
 mod c2e;
+mod encoded;
 mod signed_order;
 
 fn calls(fx: &Fx) -> usize {
@@ -60,7 +61,7 @@ fn forwarded_nul(fx: &Fx) -> bool {
 /// setting says. RED: refused today.
 #[tokio::test]
 async fn s1_direct_honours_sanitize_input_off() {
-    let fx = sanitizing(false, fixture_built(Answer::Ok, |meta| meta)).await;
+    let fx = Box::pin(sanitizing(false, fixture_built(Answer::Ok, |meta| meta))).await;
     let (_, body) = post_direct(
         &fx,
         "alpha",
@@ -78,7 +79,7 @@ async fn s1_direct_honours_sanitize_input_off() {
     assert!(forwarded_nul(&fx), "s1: the NUL did not reach the backend");
 }
 
-fn direct_call(id: Value, method: &str) -> Value {
+fn direct_call(id: &Value, method: &str) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "method": method,
            "params": {"name": "read", "arguments": {}}})
 }
@@ -86,12 +87,12 @@ fn direct_call(id: Value, method: &str) -> Value {
 /// S2a: a NUL in `id` on the direct route is refused, never rewritten. RED.
 #[tokio::test]
 async fn s2a_direct_refuses_a_nul_in_the_id() {
-    let fx = sanitizing(true, fixture_built(Answer::Ok, |meta| meta)).await;
+    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
     let body = send_raw(
         &fx,
         "/mcp/alpha",
         "k-std",
-        &direct_call(json!(NUL), "tools/call"),
+        &direct_call(&json!(NUL), "tools/call"),
     )
     .await;
     assert_eq!(
@@ -106,12 +107,12 @@ async fn s2a_direct_refuses_a_nul_in_the_id() {
 /// S2b: a NUL in `method` on the direct route is refused. RED.
 #[tokio::test]
 async fn s2b_direct_refuses_a_nul_in_the_method() {
-    let fx = sanitizing(true, fixture_built(Answer::Ok, |meta| meta)).await;
+    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
     let body = send_raw(
         &fx,
         "/mcp/alpha",
         "k-std",
-        &direct_call(json!(1), "tools/\u{0}call"),
+        &direct_call(&json!(1), "tools/\u{0}call"),
     )
     .await;
     assert_eq!(
@@ -126,8 +127,8 @@ async fn s2b_direct_refuses_a_nul_in_the_method() {
 /// S2c CONTROL: a NUL in `params._meta` is refused (green today).
 #[tokio::test]
 async fn s2c_direct_refuses_a_nul_in_params_meta() {
-    let fx = sanitizing(true, fixture_built(Answer::Ok, |meta| meta)).await;
-    let mut body = direct_call(json!(1), "tools/call");
+    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
+    let mut body = direct_call(&json!(1), "tools/call");
     body["params"]["_meta"] = json!({"note": NUL});
     let body = send_raw(&fx, "/mcp/alpha", "k-std", &body).await;
     assert_eq!(message(&body), NUL_REFUSED, "s2c: {body}");
@@ -139,12 +140,12 @@ async fn s2c_direct_refuses_a_nul_in_params_meta() {
 /// direct route does not route on `method`); it must stay so.
 #[tokio::test]
 async fn s2d_direct_strips_a_control_character_in_the_method() {
-    let fx = sanitizing(true, fixture_built(Answer::Ok, |meta| meta)).await;
+    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
     let body = send_raw(
         &fx,
         "/mcp/alpha",
         "k-std",
-        &direct_call(json!(1), "tools/\u{7}call"),
+        &direct_call(&json!(1), "tools/\u{7}call"),
     )
     .await;
     assert!(body.get("error").is_none(), "s2d: {body}");
@@ -156,7 +157,7 @@ async fn s2d_direct_strips_a_control_character_in_the_method() {
 /// call is refused. RED: today the firewall sees the split pattern.
 #[tokio::test]
 async fn s3_direct_firewall_judges_sanitized_bytes() {
-    let fx = sanitizing(true, fixture_firewalled(Answer::Ok)).await;
+    let fx = Box::pin(sanitizing(true, fixture_firewalled(Answer::Ok))).await;
     let args = json!({"cmd": BLOCKED_SPLIT});
     let (_, body) = post_direct(&fx, "alpha", "k-std", "read", args, None, None).await;
     assert!(
@@ -170,7 +171,7 @@ async fn s3_direct_firewall_judges_sanitized_bytes() {
 /// validation, so the call resolves `read`. RED: refused as an invalid name.
 #[tokio::test]
 async fn s3b_direct_validates_the_sanitized_tool_name() {
-    let fx = sanitizing(true, fixture_built(Answer::Ok, |meta| meta)).await;
+    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
     let (_, body) = post_direct(&fx, "alpha", "k-std", "re\u{7}ad", json!({}), None, None).await;
     assert!(body.get("error").is_none(), "s3b: {body}");
     assert_eq!(calls(&fx), 1, "s3b: not dispatched");
@@ -181,7 +182,7 @@ async fn s3b_direct_validates_the_sanitized_tool_name() {
 #[tokio::test]
 async fn s5_mcp_and_direct_sanitize_alike() {
     for on in [true, false] {
-        let mcp = sanitizing(on, fixture_built(Answer::Ok, |meta| meta)).await;
+        let mcp = Box::pin(sanitizing(on, fixture_built(Answer::Ok, |meta| meta))).await;
         let (_, via_mcp) = post_meta_invoke(
             &mcp,
             "k-std",
@@ -192,7 +193,7 @@ async fn s5_mcp_and_direct_sanitize_alike() {
             None,
         )
         .await;
-        let direct = sanitizing(on, fixture_built(Answer::Ok, |meta| meta)).await;
+        let direct = Box::pin(sanitizing(on, fixture_built(Answer::Ok, |meta| meta))).await;
         let (_, via_direct) = post_direct(
             &direct,
             "alpha",
@@ -216,7 +217,7 @@ async fn s5_mcp_and_direct_sanitize_alike() {
 #[tokio::test]
 async fn s8_a_call_with_no_backend_target_is_sanitized_as_today() {
     for on in [true, false] {
-        let fx = sanitizing(on, fixture_built(Answer::Ok, |meta| meta)).await;
+        let fx = Box::pin(sanitizing(on, fixture_built(Answer::Ok, |meta| meta))).await;
         let params = json!({"name": "gateway_list_servers", "arguments": {"note": NUL}});
         let (_, body) = send(&fx, "/mcp", "k-std", "tools/call", params, None).await;
         assert_eq!(
@@ -228,7 +229,7 @@ async fn s8_a_call_with_no_backend_target_is_sanitized_as_today() {
 }
 
 /// The matrix rows' blocked argument: the payload is `; rm -rf / ` (the
-/// `BLOCKED` row constant in route_check_matrix_rows_tests.rs). It is built
+/// `BLOCKED` row constant in `route_check_matrix_rows_tests.rs`). It is built
 /// with `concat!` only because the authoring tooling refuses that literal in
 /// its input; the bytes are identical.
 const BLOCKED: &str = concat!("; r", "m -r", "f / ");
@@ -237,7 +238,7 @@ const BLOCKED: &str = concat!("; r", "m -r", "f / ");
 /// (option (a): passthrough holds on every route). RED: sanitized today.
 #[tokio::test]
 async fn p1_mcp_invoke_of_a_passthrough_target_forwards_a_nul() {
-    let fx = sanitizing(true, fixture_built(Answer::Ok, |meta| meta)).await;
+    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
     let (_, body) = post_meta_invoke(
         &fx,
         "k-std",
@@ -259,7 +260,7 @@ async fn p1_mcp_invoke_of_a_passthrough_target_forwards_a_nul() {
 /// (today's only passthrough reader); it must stay so.
 #[tokio::test]
 async fn p5_direct_passthrough_forwards_a_nul() {
-    let fx = sanitizing(true, fixture_built(Answer::Ok, |meta| meta)).await;
+    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
     let (_, body) = post_direct(
         &fx,
         "alpha-pt",
@@ -283,10 +284,10 @@ async fn p5_direct_passthrough_forwards_a_nul() {
 #[tokio::test]
 async fn c1_passthrough_still_meets_the_request_firewall() {
     let args = json!({"cmd": BLOCKED});
-    let mcp = sanitizing(true, fixture_firewalled(Answer::Ok)).await;
+    let mcp = Box::pin(sanitizing(true, fixture_firewalled(Answer::Ok))).await;
     let (_, via_mcp) =
         post_meta_invoke(&mcp, "k-std", "alpha-pt", "read", args.clone(), None, None).await;
-    let direct = sanitizing(true, fixture_firewalled(Answer::Ok)).await;
+    let direct = Box::pin(sanitizing(true, fixture_firewalled(Answer::Ok))).await;
     let (_, via_direct) = post_direct(&direct, "alpha-pt", "k-std", "read", args, None, None).await;
     assert!(via_mcp.get("error").is_some(), "c1 /mcp: {via_mcp}");
     assert!(via_direct.get("error").is_some(), "c1 direct: {via_direct}");
@@ -310,10 +311,10 @@ fn chain(servers: [&str; 2]) -> Value {
 /// sanitized as a whole, so the NUL is refused (as everything is today).
 #[tokio::test]
 async fn c2a_a_mixed_chain_is_sanitized() {
-    let fx = sanitizing(
+    let fx = Box::pin(sanitizing(
         true,
         fixture_built(Answer::Ok, |meta| meta.with_code_mode(true)),
-    )
+    ))
     .await;
     let params = chain(["alpha-pt", "alpha"]);
     let (_, body) = send(&fx, "/mcp", "k-std", "tools/call", params, None).await;
@@ -324,10 +325,10 @@ async fn c2a_a_mixed_chain_is_sanitized() {
 /// C2b: a chain whose every step is passthrough forwards the NUL. RED.
 #[tokio::test]
 async fn c2b_an_all_passthrough_chain_forwards() {
-    let fx = sanitizing(
+    let fx = Box::pin(sanitizing(
         true,
         fixture_built(Answer::Ok, |meta| meta.with_code_mode(true)),
-    )
+    ))
     .await;
     let params = chain(["alpha-pt", "alpha-pt"]);
     let (_, body) = send(&fx, "/mcp", "k-std", "tools/call", params, None).await;
@@ -343,7 +344,11 @@ async fn c2b_an_all_passthrough_chain_forwards() {
 /// as one side of the twin set, called with a NUL in its arguments.
 async fn np_call(spec: super::withheld_twin_tests::Spec) -> super::withheld_twin_tests::Answered {
     use super::withheld_twin_tests::{Kind, twin_on};
-    let twin = sanitizing(true, twin_on("alpha-pt", Kind::Audited, spec, |meta| meta)).await;
+    let twin = Box::pin(sanitizing(
+        true,
+        twin_on("alpha-pt", Kind::Audited, spec, |meta| meta),
+    ))
+    .await;
     twin.call_modern("read", &json!({"arguments": {"cmd": NUL}}))
         .await
 }
@@ -358,8 +363,12 @@ async fn np_call(spec: super::withheld_twin_tests::Spec) -> super::withheld_twin
 async fn np1_a_withheld_surfaced_passthrough_name_answers_a_nul_as_absent() {
     use super::withheld_twin_tests::{Absence, Reason, Side, Spec};
     for reason in [Reason::Policy, Reason::Descriptor, Reason::Schema] {
-        let withheld = np_call(Spec::of(reason, Side::Withheld)).await;
-        let absent = np_call(Spec::of(reason, Side::Absent(Absence::NotSurfaced))).await;
+        let withheld = Box::pin(np_call(Spec::of(reason, Side::Withheld))).await;
+        let absent = Box::pin(np_call(Spec::of(
+            reason,
+            Side::Absent(Absence::NotSurfaced),
+        )))
+        .await;
         assert_eq!(
             (withheld.status, &withheld.body["error"]),
             (absent.status, &absent.body["error"]),
@@ -376,7 +385,11 @@ async fn np1_a_withheld_surfaced_passthrough_name_answers_a_nul_as_absent() {
 async fn np2_a_visible_surfaced_passthrough_name_forwards_a_nul() {
     use super::withheld_twin_tests::{Kind, Reason, Side, Spec, twin_on};
     let spec = Spec::of(Reason::Policy, Side::Control);
-    let twin = sanitizing(true, twin_on("alpha-pt", Kind::Audited, spec, |meta| meta)).await;
+    let twin = Box::pin(sanitizing(
+        true,
+        twin_on("alpha-pt", Kind::Audited, spec, |meta| meta),
+    ))
+    .await;
     let answered = twin
         .call_modern("read", &json!({"arguments": {"cmd": NUL}}))
         .await;
@@ -432,10 +445,10 @@ async fn s4_signed_protocol_fields_are_validated_not_rewritten() {
         ("chain", NUL),
         ("chain", "a\u{7}b"),
     ] {
-        let fx = sanitizing(
+        let fx = Box::pin(sanitizing(
             true,
             super::direct_guards_fixture::fixture_hardened_signed(Answer::Ok, true),
-        )
+        ))
         .await;
         let mut meta = json!({
             KEY_PROTOCOL_VERSION: MODERN_VERSIONS[0],
@@ -514,7 +527,7 @@ fn c3_the_sanitize_input_doc_states_the_rules() {
 /// sanitizes the submit at intake today, so the NUL is refused.
 #[tokio::test]
 async fn p3_a_task_submit_to_a_passthrough_target_forwards_a_nul() {
-    let fx = sanitizing(true, fixture_built(Answer::Ok, |meta| meta)).await;
+    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
     let submit = json!({
         "name": "gateway_invoke",
         "arguments": {"server": "alpha-pt", "tool": "read", "arguments": {"cmd": NUL}},
@@ -563,7 +576,7 @@ async fn p3_a_task_submit_to_a_passthrough_target_forwards_a_nul() {
 /// `servers` with `cmd` taken from the run's `x` input.
 async fn playbook_fixture(servers: [&str; 2]) -> Fx {
     let definition = playbook_definition(servers);
-    sanitizing(
+    Box::pin(sanitizing(
         true,
         super::direct_guards_fixture::fixture_hardened_signed_built(
             Answer::Ok,
@@ -575,7 +588,7 @@ async fn playbook_fixture(servers: [&str; 2]) -> Fx {
                 meta
             },
         ),
-    )
+    ))
     .await
 }
 
@@ -630,7 +643,7 @@ async fn run_with_nul(fx: &Fx) -> Value {
 /// step is sanitized as a whole, so the NUL is refused and no step runs.
 #[tokio::test]
 async fn c2c_a_mixed_playbook_is_sanitized() {
-    let fx = playbook_fixture(["alpha-pt", "alpha"]).await;
+    let fx = Box::pin(playbook_fixture(["alpha-pt", "alpha"])).await;
     let body = run_with_nul(&fx).await;
     assert_eq!(message(&body), NUL_REFUSED, "c2c: {body}");
     assert_eq!(calls(&fx), 0, "c2c: a step ran");
@@ -640,7 +653,7 @@ async fn c2c_a_mixed_playbook_is_sanitized() {
 /// forwards the NUL to it. RED: `/mcp` sanitizes every playbook run today.
 #[tokio::test]
 async fn c2d_an_all_passthrough_playbook_forwards_a_nul() {
-    let fx = playbook_fixture(["alpha-pt", "alpha-pt"]).await;
+    let fx = Box::pin(playbook_fixture(["alpha-pt", "alpha-pt"])).await;
     let body = run_with_nul(&fx).await;
     assert!(body.get("error").is_none(), "c2d: {body}");
     assert!(

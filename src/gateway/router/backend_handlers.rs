@@ -65,6 +65,7 @@ use relay::{
 /// Order of checks matches `meta_mcp_handler`:
 /// 1. `validate_tool_name` — rejects dangerous names before any policy lookup.
 /// 2. `tool_policy.check` — enforces global allow/deny rules.
+///
 /// Sanitization is not here: the whole request is sanitized at intake
 /// (MIK-8154 SAN.1, `direct_caller::read_envelope`).
 #[allow(clippy::result_large_err)]
