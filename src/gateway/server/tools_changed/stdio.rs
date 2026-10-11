@@ -72,7 +72,10 @@ impl StdioAnnouncer {
                     // Every nudge is decided, so the record of what was last
                     // announced stays current. One client, one view: a shared
                     // or a per-user change is the same notification to it.
-                    if decide_on((&backends, &meta_mcp), &announced, nudge).is_some() {
+                    let shown = format!("{nudge:?}");
+                    let outcome = decide_on((&backends, &meta_mcp), &announced, nudge);
+                    eprintln!("T14DIAG {} stdio drain nudge={shown} decided={:?}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0), outcome.as_ref().map(|o| o.0.clone()));
+                    if outcome.is_some() {
                         #[cfg(test)]
                         crate::gateway::server::stdio_seams::decided();
                         if *ready.borrow() {

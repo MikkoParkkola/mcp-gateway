@@ -274,6 +274,7 @@ fn decide_on(
             // whether or not its tools changed.
             meta_mcp.events_capabilities_reloaded(&name);
             let visible = catalogue_fingerprint(meta_mcp, &name);
+            eprintln!("T14DIAG {} decide catalogue name={name} visible={visible} tools={:?}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0), meta_mcp.capability_tools(&name).map(|t| t.iter().map(|t| t.name.to_string()).collect::<Vec<_>>()));
             if !announced.lock().catalogue(&name, visible) {
                 return None;
             }

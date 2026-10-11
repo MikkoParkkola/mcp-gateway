@@ -1,0 +1,43 @@
+name: Diag t14 Windows
+# Throwaway diagnostic (MIK-8359): t14 in a loop on Windows with T14DIAG
+# prints. Deleted with its branch.
+on:
+  pull_request:
+    branches: [docs/ranking-1-release-line]
+permissions:
+  contents: read
+jobs:
+  diag:
+    if: ${{ github.head_ref == 'throwaway/diag-t14-windows' }}
+    runs-on: windows-2025
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+      - run: cargo test --all-features --lib --no-run
+      # Each iteration runs every gateway::server row in parallel (t14 among
+      # them, as in the full suite) and prints t14's captured output only when
+      # it fails; iteration 0 also prints a passing trace for comparison.
+      - name: t14 loop
+        shell: bash
+        run: |
+          fails=0
+          for i in $(seq 0 40); do
+            out=$(cargo test --all-features --lib -q gateway::server:: 2>&1)
+            if echo "$out" | grep -q 't14_a_burst_while_stdout_is_full_is_decided_and_told_at_most_twice ... FAILED'; then
+              fails=$((fails+1))
+              echo "::group::iteration $i t14 FAILED ($fails)"
+              echo "$out" | sed -n '/---- .*t14_a_burst_while_stdout_is_full/,/^----\|^failures:$/p'
+              echo "::endgroup::"
+            else
+              echo "iteration $i t14 ok ($(echo "$out" | grep -o 'test result: [^.]*' | tail -1))"
+            fi
+            if [ "$i" -eq 0 ]; then
+              echo "::group::iteration 0 passing trace"
+              cargo test --all-features --lib -q t14_a_burst_while_stdout_is_full -- --nocapture 2>&1 | grep -E 'T14DIAG|test result'
+              echo "::endgroup::"
+            fi
+            [ "$fails" -ge 3 ] && break
+          done
+          echo "t14 failures: $fails"

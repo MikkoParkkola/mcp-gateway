@@ -534,7 +534,9 @@ async fn t14_a_burst_while_stdout_is_full_is_decided_and_told_at_most_twice() {
         .await
         .expect("stdin accepts the flood");
     let base = decisions();
+    eprintln!("T14DIAG {} t14 flood written base={base}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0));
     for n in 0..5 {
+        eprintln!("T14DIAG {} t14 writing burst{n} decisions={}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0), decisions());
         std::fs::write(
             serve.caps().join(format!("stdionote_burst{n}.yaml")),
             capability_yaml().replace(PROBE, &format!("stdionote_burst{n}")),

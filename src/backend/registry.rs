@@ -411,6 +411,7 @@ impl BackendRegistry {
     pub(crate) fn catalogue_hook(&self) -> crate::capability::CatalogueChanged {
         let feed = self.change_feed.get().cloned();
         Arc::new(move |name: &str| {
+            eprintln!("T14DIAG {} catalogue hook name={name} feed_some={}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0), feed.is_some());
             if let Some(feed) = &feed {
                 let _ = feed.send(super::tools_nudge::ToolsNudge::Catalogue {
                     name: name.to_string(),
