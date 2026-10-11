@@ -40,7 +40,7 @@ pub struct TransparencyLogConfig {
     /// Key identifier written into `key_id` for rotation tracking.
     pub key_id: String,
     /// HMAC secret: `${VAR}`, `env:NAME`, `file:PATH` or a literal, resolved
-    /// once at load; 32 bytes or more while the log is on (MIK-8365).
+    /// once at load; 32+ bytes, not all zero, while the log is on (MIK-8365).
     /// When empty, `sig` / `key_id` are omitted from each entry — the hash
     /// chain alone still provides tamper evidence.
     pub shared_secret: String,
@@ -351,12 +351,10 @@ impl MessageSigningConfig {
                 reference.resolve(&format!("security.message_signing.{field}"), overlay)?
             }
         };
-        if resolved.len() < 32 || resolved.bytes().all(|byte| byte == 0) {
-            return Err(Self::signing_config_error(
-                field,
-                "must contain at least 32 bytes and must not be all zero",
-            ));
-        }
+        crate::security::message_signing::validate_key(
+            &format!("security.message_signing.{field}"),
+            &resolved,
+        )?;
         Ok(resolved)
     }
 

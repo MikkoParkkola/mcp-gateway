@@ -148,9 +148,9 @@ fn an_unresolved_reference_refuses_the_load() {
     );
 }
 
-/// TLOG.3 control: with the log off, an unset reference is not consulted.
+/// TLOG.3 control: with the log off, an unset reference does not refuse the load.
 #[test]
-fn a_disabled_log_does_not_consult_its_reference() {
+fn a_disabled_logs_unset_reference_does_not_refuse_the_load() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = config(
         dir.path(),
@@ -167,6 +167,7 @@ fn a_disabled_log_does_not_consult_its_reference() {
 fn a_secret_under_32_bytes_is_refused() {
     let short = "x".repeat(31);
     let dir = tempfile::tempdir().expect("tempdir");
+    // YAML's `\0` escape: 32 NUL bytes.
     let literal = config(dir.path(), true, &short, "");
     refusal(&literal);
     let by_ref = dir.path().join("by_ref");
@@ -221,9 +222,13 @@ fn a_disabled_log_still_resolves_a_reference_it_can() {
 fn a_disabled_logs_unresolved_reference_never_becomes_the_key() {
     let dir = tempfile::tempdir().expect("tempdir");
     let missing = dir.path().join("absent.key");
-    for (i, secret) in [format!("env:{VAR}"), format!("file:{}", missing.display())]
-        .iter()
-        .enumerate()
+    for (i, secret) in [
+        format!("env:{VAR}"),
+        format!("${{{VAR}}}"),
+        format!("file:{}", missing.display()),
+    ]
+    .iter()
+    .enumerate()
     {
         let case = dir.path().join(format!("case{i}"));
         std::fs::create_dir(&case).expect("case dir");
@@ -296,5 +301,28 @@ fn a_rotated_key_file_is_reported_on_reload() {
         rotated.overlay.rotated_secret_files(&startup.overlay),
         vec![format!("file:{}", secret.display())],
         "a rotated key file was not reported"
+    );
+}
+
+/// The weak-key rule message signing applies: an all-zero key of full length
+/// is refused, as a literal and through a reference, naming the field.
+#[test]
+fn an_all_zero_key_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let literal = config(dir.path(), true, &"\\0".repeat(32), "");
+    let text = refusal(&literal);
+    assert!(
+        text.contains("must not be all zero"),
+        "not the weak-key refusal: {text}"
+    );
+    let by_ref = dir.path().join("by_ref");
+    std::fs::create_dir(&by_ref).expect("case dir");
+    let secret = by_ref.join("zero.key");
+    write_0600(&secret, &"\0".repeat(40));
+    let path = config(&by_ref, true, &format!("file:{}", secret.display()), "");
+    let text = refusal(&path);
+    assert!(
+        text.contains("must not be all zero"),
+        "not the weak-key refusal: {text}"
     );
 }

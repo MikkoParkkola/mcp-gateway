@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mcp_gateway::security::TransparencyLogger;
-use mcp_gateway::security::transparency_log::{TransparencyLogConfig, VerifyMode, verify_audit_log};
+use mcp_gateway::security::transparency_log::{
+    TransparencyLogConfig, VerifyMode, verify_audit_log,
+};
 
 use mcp_gateway::config::Config;
 
@@ -65,7 +67,11 @@ fn audit_verify_uses_the_resolved_key_and_rejects_the_reference_text() {
     let honest = dir.path().join("honest.jsonl");
     write_log(&honest, KEY);
     let result = verify_audit_log(&honest, &verify_config, VerifyMode::Live, None).expect("verify");
-    assert!(result.ok, "the honest log failed: {:?}", result.error_message);
+    assert!(
+        result.ok,
+        "the honest log failed: {:?}",
+        result.error_message
+    );
     assert_eq!(result.entries_checked, 3);
 
     let forged = dir.path().join("forged.jsonl");
