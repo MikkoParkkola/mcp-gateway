@@ -430,7 +430,6 @@ fn upgrade_never_reads_an_existing_referent() {
         let s = setup(&yaml, current());
         let out = gateway_bin::command(s.dir.path(), gateway_bin::Inherit::Environment)
             .env("SURF2_PRESENT", PLAINTEXT)
-            .env("SURF2_DIGEST", &digest)
             .arg("--config")
             .arg(&s.config)
             .arg("upgrade")
@@ -457,7 +456,10 @@ fn upgrade_exits_1_on_a_file_it_cannot_parse() {
     let out = upgrade(&s, &[]);
     let printed = text(&out);
     assert_eq!(out.status.code(), Some(1), "{printed}");
-    assert!(printed.contains("could not be read as YAML"), "{printed}");
+    assert!(
+        printed.contains("could not be read as a config"),
+        "{printed}"
+    );
     assert_eq!(read(&s.config), yaml);
 }
 
@@ -486,5 +488,43 @@ fn upgrade_exits_1_on_a_file_that_is_not_a_mapping() {
     let printed = text(&out);
     assert_eq!(out.status.code(), Some(1), "{printed}");
     assert!(printed.contains("not a mapping"), "{printed}");
+    assert_eq!(read(&s.config), yaml);
+}
+
+/// A file of comments only loads as the defaults: nothing to rewrite, exit 0.
+#[test]
+fn upgrade_passes_a_comments_only_file() {
+    let yaml = "# nothing set yet\n";
+    let s = setup(yaml, current());
+    let out = upgrade(&s, &[]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(read(&s.config), yaml);
+}
+
+/// gpt delta: the refusal never quotes the file. A tagged value the parse
+/// rejects would otherwise reach the output in the parser's message.
+#[test]
+fn the_unreadable_file_refusal_quotes_no_value() {
+    let yaml = "auth:\n  bearer_token: !!int surf2-secret-token\n";
+    let s = setup(yaml, current());
+    let out = upgrade(&s, &[]);
+    let printed = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{printed}");
+    assert!(!printed.contains("surf2-secret-token"), "{printed}");
+    assert!(printed.contains("line 2"), "{printed}");
+}
+
+/// gpt delta: an explicit null document is not "empty"; the loader refuses
+/// it, so upgrade must not pass it.
+#[test]
+fn upgrade_exits_1_on_a_null_document() {
+    let yaml = "~\n";
+    let s = setup(yaml, current());
+    assert!(
+        Config::load(Some(&s.config)).is_err(),
+        "the premise: the loader refuses a null document"
+    );
+    let out = upgrade(&s, &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", text(&out));
     assert_eq!(read(&s.config), yaml);
 }

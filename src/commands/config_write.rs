@@ -66,22 +66,7 @@ pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<U
     // Refuses a FIFO or a device at once, before waiting for the lock.
     let text = super::regular_file::read_regular_text(path)
         .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
-    // A file that is not a mapping of keys will not load either; saying
-    // "nothing changed" would let `upgrade` pass on it (MIK-8044). An empty
-    // file loads as the defaults and has nothing to rewrite.
-    if super::retired_config_keys::loose(&text).is_none() {
-        let why = match serde_yaml::from_str::<serde_yaml::Value>(&text) {
-            Ok(doc) if doc.is_null() => None,
-            Ok(_) => Some("its top level is not a mapping of keys".to_owned()),
-            Err(e) => Some(e.to_string()),
-        };
-        if let Some(why) = why {
-            return Err(format!(
-                "{} could not be read as YAML: {why}; nothing was upgraded.",
-                path.display()
-            ));
-        }
-    }
+    refuse_unreadable(path, &text)?;
     if mode == RewriteMode::DryRun {
         return Ok(rewrite_of(&text));
     }
@@ -89,6 +74,9 @@ pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<U
     edit_config_text(path, |current| {
         let text =
             current.ok_or_else(|| format!("Failed to read {}: it was removed", path.display()))?;
+        // Again on the text read under the lock: a write since the first read
+        // may have made the file unreadable.
+        refuse_unreadable(path, text)?;
         let rewrite = rewrite_of(text);
         // Saved exactly when some pass changed the text.
         let saved = (rewrite.text != *text).then(|| rewrite.text.clone());
@@ -96,6 +84,38 @@ pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<U
         Ok(saved)
     })?;
     Ok(done.expect("edit_config_text ran the edit"))
+}
+
+/// Refuse a config that will not load because it cannot be read as a mapping
+/// of keys: saying "nothing changed" would let `upgrade` pass on it
+/// (MIK-8044). A file of only comments and blank lines loads as the defaults
+/// and passes. The reason names a line and column, never the parser's own
+/// message, which can quote a value from the file (a secret, say).
+fn refuse_unreadable(path: &Path, text: &str) -> Result<(), String> {
+    let blank = text
+        .lines()
+        .all(|line| line.trim().is_empty() || line.trim_start().starts_with('#'));
+    if blank || super::retired_config_keys::loose(text).is_some() {
+        return Ok(());
+    }
+    let why = match serde_yaml::from_str::<serde_yaml::Value>(text) {
+        Ok(doc) if doc.is_mapping() => "it has a key the gateway's loader cannot read".to_owned(),
+        Ok(_) => "its top level is not a mapping of keys".to_owned(),
+        Err(e) => e.location().map_or_else(
+            || "it is not valid YAML".to_owned(),
+            |at| {
+                format!(
+                    "it is not valid YAML at line {}, column {}",
+                    at.line(),
+                    at.column()
+                )
+            },
+        ),
+    };
+    Err(format!(
+        "{} could not be read as a config: {why}; nothing was upgraded.",
+        path.display()
+    ))
 }
 
 /// The URL alias rewrite of `text`, with the removed keys dropped and the
