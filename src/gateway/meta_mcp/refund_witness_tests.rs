@@ -14,7 +14,9 @@ fn an_effect_drops_the_witness() {
 fn no_effect_keeps_the_witness() {
     let kept = RefundWitness::carry(Some(RefundWitness::at_capture()), Effect::None);
     assert!(kept.is_some());
-    kept.map(RefundWitness::spend);
+    if let Some(kept) = kept {
+        kept.spend();
+    }
     assert!(
         RefundWitness::carry(None, Effect::None).is_none(),
         "nothing to keep"

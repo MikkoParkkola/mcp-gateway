@@ -37,3 +37,17 @@ pub(crate) fn give_back_unsent(
     }
     ask_refund(caller);
 }
+
+/// Hand a refused call's surviving witness back to its signing context, so the
+/// settle may refund (MIK-8353 slice 3a). `None` (a may-effect step dropped
+/// it) leaves the nonce spent.
+pub(crate) fn hand_back(
+    caller: &MetaMcpCallerContext<'_>,
+    witness: Option<crate::gateway::meta_mcp::refund_witness::RefundWitness>,
+) {
+    match (caller.signing, witness) {
+        (Some(signing), Some(witness)) => signing.keep_witness(witness),
+        (None, Some(witness)) => witness.spend(),
+        (_, None) => {}
+    }
+}

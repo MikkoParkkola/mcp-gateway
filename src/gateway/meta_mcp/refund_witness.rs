@@ -45,35 +45,46 @@ pub(crate) enum Effect {
 impl RefundWitness {
     /// The one place a may-effect step decides the witness: it survives only
     /// a step that reports [`Effect::None`].
-    // STUB (red-first): keeps the witness whatever the report.
     pub(crate) fn carry(witness: Option<Self>, effect: Effect) -> Option<Self> {
-        let _ = effect;
-        witness
+        match effect {
+            Effect::None => witness,
+            Effect::Took => {
+                if let Some(witness) = witness {
+                    witness.spend();
+                }
+                None
+            }
+        }
     }
 }
 
 /// `resolve_dispatch`'s report: `minted` is a propagation mint (never cached),
 /// `account` an account credential resolved for the call.
-// STUB (red-first): reports no effect.
+///
+/// Conservative (lead ruling, 2026-10-11): any account credential counts,
+/// since the resolver does not yet say whether it contacted the provider.
 pub(crate) fn dispatch_effect(minted: bool, account: bool) -> Effect {
-    let _ = (minted, account);
-    Effect::None
+    if minted || account {
+        Effect::Took
+    } else {
+        Effect::None
+    }
 }
 
 /// The undeclared-key check's report: `cached_before` is whether the binding's
 /// tools were cached before the check. A cold slot fetches, or waits on
 /// another request's fetch.
-// STUB (red-first): reports no effect.
 pub(crate) fn schema_effect(cached_before: bool) -> Effect {
-    let _ = cached_before;
-    Effect::None
+    if cached_before {
+        Effect::None
+    } else {
+        Effect::Took
+    }
 }
 
 /// `redeem_retry`'s report: `redeemed` is whether it consumed a continuation.
-// STUB (red-first): reports no effect.
 pub(crate) fn retry_effect(redeemed: bool) -> Effect {
-    let _ = redeemed;
-    Effect::None
+    if redeemed { Effect::Took } else { Effect::None }
 }
 
 #[cfg(test)]
