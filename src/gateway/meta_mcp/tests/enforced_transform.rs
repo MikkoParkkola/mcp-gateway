@@ -76,14 +76,16 @@ async fn an_enforced_input_round_is_refused_and_its_hold_released() {
         )
     };
     let now = crate::protocol::continuation::now_unix_secs();
-    let refused = meta
-        .invoke_tool(
-            &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
-            Some("session-1"),
-            &caller,
-        )
-        .await
-        .expect_err("a follow-up question the content gate blocked ends the call");
+    // In a request scope, as every route runs it (HTTP, stdio, the task
+    // worker): a mint outside one registers no hold, so its release could not
+    // be observed here.
+    let refused = crate::gateway::meta_mcp::sealed_hold::scoped(meta.invoke_tool(
+        &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
+        Some("session-1"),
+        &caller,
+    ))
+    .await
+    .expect_err("a follow-up question the content gate blocked ends the call");
     // The gate's existing delivery refusal: no new code or message (MIK-8325).
     let rpc = refused.to_rpc_code();
     assert_eq!(rpc, -32600, "{refused}");

@@ -8,7 +8,9 @@
 use super::super::*;
 use super::input_round::*;
 use super::support::*;
-use crate::context_integrity::ContextIntegrityDecisionKind::{self, Quarantine, Strip, Summarize};
+use crate::context_integrity::ContextIntegrityDecisionKind::{
+    self, Deny, Quarantine, Strip, Summarize,
+};
 
 /// The refusal the gate already answers a blocked delivery with.
 const REFUSAL: &str = crate::gateway::meta_mcp::invoke::egress::REFUSAL;
@@ -105,6 +107,14 @@ async fn s4_a_quarantined_question_fails_the_task_with_the_same_refusal() {
     assert_refused_task(&mock, &settled, "quarantine");
 }
 
+/// S4b (deny): a denied question ends the task with the same refusal, so all
+/// four enforcing decisions are covered.
+#[tokio::test]
+async fn s4b_a_denied_question_fails_the_task_with_the_same_refusal() {
+    let (mock, settled) = task_ended(Deny, "s4b").await;
+    assert_refused_task(&mock, &settled, "deny");
+}
+
 /// S5 (guard): an enforced finished result is not a round and is delivered
 /// as before: `Ok`, the kernel's text, no refusal.
 #[tokio::test]
@@ -160,7 +170,7 @@ async fn s6_a_chain_stops_at_an_enforced_question() {
     let mock = MockBackend::answering(Answer::Sequence(vec![injected_question(), done()]));
     let (state, _dir) = gated_state(&mock, Strip).await;
     let read = post(&state, "key-a", chain(1, 2)).await;
-    std::assert!(read.get("error").is_some(), "the chain fails: {read}");
+    std::assert_eq!(read["error"]["code"], -32600, "the gate's refusal: {read}");
     std::assert!(read.to_string().contains(REFUSAL), "{read}");
     std::assert_eq!(mock.calls(), 1, "the second step never runs");
 }
@@ -200,7 +210,8 @@ async fn s7_a_playbook_aborts_at_an_enforced_question() {
     let (state, _dir) = gated_state(&mock, Strip).await;
     state.meta_mcp.set_playbook_engine(playbook("abort"));
     let read = post(&state, "key-a", run_playbook(1)).await;
-    std::assert!(read.get("error").is_some(), "the playbook aborts: {read}");
+    std::assert_eq!(read["error"]["code"], -32600, "the playbook aborts: {read}");
+    std::assert!(read.to_string().contains(REFUSAL), "{read}");
     std::assert_eq!(mock.calls(), 1, "the second step never runs");
 }
 
