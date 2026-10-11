@@ -459,12 +459,26 @@ impl EventsHub {
     /// Delete subscription `refused`, the snapshot the access check refused,
     /// with its pending records (F9), unless a refresh has since re-bound it
     /// to another credential.
+    ///
+    /// Not on a clock that cannot be read (before 1970, MIK-8202): an access
+    /// check then reads every expiring credential as expired, so the refusal
+    /// may be the clock's, and a revocation deletes the row for good. Nothing
+    /// is sent on such a clock; the next check on a readable one revokes a
+    /// refusal that still stands.
     pub(super) async fn revoke(self: &Arc<Self>, refused: &Subscription) {
+        let Ok(now) = crate::clock::utc_now() else {
+            tracing::warn!(
+                clock_unreadable = true,
+                subscription = %refused.id,
+                "events: refused subscription kept; the host clock reads before 1970"
+            );
+            return;
+        };
         let tail = super::tail_policy(&self.config);
         let snapshot = refused.clone();
         let removed = self
             .blocking(move |store| {
-                store.remove_where(&snapshot.id, crate::clock::utc_now(), tail, |row| {
+                store.remove_where(&snapshot.id, Ok(now), tail, |row| {
                     // A re-grant under the same id is not the row judged.
                     row.incarnation == snapshot.incarnation
                         && row.credential_principal == snapshot.credential_principal

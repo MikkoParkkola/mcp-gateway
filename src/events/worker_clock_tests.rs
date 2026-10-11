@@ -159,6 +159,45 @@ async fn a_hold_pass_on_an_unreadable_clock_changes_nothing() {
     assert!(held_until > now(), "a real bound");
 }
 
+/// E1b: a hold that has already lapsed is not revived by a resume pass on
+/// an unreadable clock: at 1969 every row reads live, and the resume would
+/// clear the lapsed `held_until`.
+#[tokio::test]
+async fn a_lapsed_hold_is_not_revived_on_an_unreadable_clock() {
+    use crate::events::store::{Held, Judged};
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    queued(&hub, 9, "evt_l");
+    let hold = |_: &crate::events::records::Subscription| {
+        Some(Judged {
+            held: Some(Held {
+                reason: "not offered",
+                key: None,
+            }),
+            ..Judged::default()
+        })
+    };
+    // Held two hours ago for one hour: lapsed an hour ago.
+    hub.store
+        .apply_holds(&hold, Ok(now() - delta!(hours, 2)), delta!(hours, 1))
+        .expect("io");
+    let lapsed = hub.store.get("sub_worker").and_then(|r| r.held_until);
+    assert!(lapsed.is_some_and(|at| at < now()), "premise: lapsed");
+    let resume = |_: &crate::events::records::Subscription| Some(Judged::default());
+    {
+        let _clock = before_epoch();
+        let skipped = hub
+            .store
+            .apply_holds(&resume, crate::clock::utc_now(), delta!(hours, 1));
+        assert!(skipped.is_err(), "the caller is told to retry");
+    }
+    assert_eq!(
+        hub.store.get("sub_worker").and_then(|r| r.held_until),
+        lapsed,
+        "a lapsed hold was revived on an unreadable clock"
+    );
+}
+
 /// E1c: a burial on an unreadable clock is deferred: the record stays
 /// pending with its reason and its date, with no 1969 `dead_at` and nothing
 /// evicted. Recovery: the next attempt on a readable clock buries it, dated.
@@ -169,7 +208,13 @@ async fn a_burial_on_an_unreadable_clock_waits_for_a_readable_one() {
     let services = Arc::new(logged_services(dir.path()));
     offer(&hub, &[NAME]);
     queued(&hub, 9, "evt_c");
+    // In flight, as the worker holds it when it settles.
+    assert!(matches!(
+        hub.store.claim("evt_c", now()).expect("io"),
+        crate::events::store::Claim::Ready(_)
+    ));
     let record = stored(dir.path(), "evt_c");
+    assert_eq!(record.state, OutboxState::InFlight, "premise: claimed");
     let gone = crate::events::store::Settle::Dead {
         reason: crate::events::outbox::DeadReason::Gone,
         status: None,
@@ -307,7 +352,13 @@ async fn a_clock_that_fails_at_the_last_window_read_sends_and_buries_nothing() {
 #[tokio::test]
 async fn a_signer_that_cannot_read_the_clock_sends_nothing_and_counts_nothing() {
     let dir = tempfile::tempdir().expect("dir");
-    let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
+    // One counted failure would suspend the row, so a refusal that moved
+    // the failure window fails this row.
+    let config = crate::config::EventsConfig {
+        suspend_min_attempts: 1,
+        ..private_callbacks()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
     let services = logged_services(dir.path());
     offer(&hub, &[NAME]);
     let (port, accepted) = counting_callback().await;
@@ -323,7 +374,30 @@ async fn a_signer_that_cannot_read_the_clock_sends_nothing_and_counts_nothing() 
     assert_kept_unsent(&hub, dir.path(), &before, "evt_e3c", posts);
     let row = hub.store.get("sub_worker").expect("row");
     assert!(row.active, "suspended for a send it never made");
-    assert_eq!(row.failed_since, None, "the failure window moved");
+}
+
+/// A refusal judged on an unreadable clock may be the clock's (every
+/// expiring credential then reads expired), and a revocation deletes the row
+/// for good: on such a clock the row and its records are kept. On a readable
+/// clock the same revocation deletes them.
+#[tokio::test]
+async fn a_revocation_on_an_unreadable_clock_keeps_the_row() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    queued(&hub, 9, "evt_r");
+    let row = hub.store.get("sub_worker").expect("premise: admitted");
+    let record = dir.path().join("outbox").join(OutboxRecord::file("evt_r"));
+    {
+        let _clock = before_epoch();
+        hub.revoke(&row).await;
+    }
+    assert!(
+        hub.store.get("sub_worker").is_some(),
+        "revoked on a refusal the clock may have caused"
+    );
+    assert!(record.exists(), "its pending record was cancelled");
+    hub.revoke(&row).await;
+    assert!(hub.store.get("sub_worker").is_none(), "control: revoked");
 }
 
 /// E5: the expiry watermark does not move on an unreadable clock (it was

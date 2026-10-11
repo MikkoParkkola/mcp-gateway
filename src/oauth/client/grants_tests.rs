@@ -492,6 +492,27 @@ fn restoring_a_client_id_without_a_discovered_issuer_is_a_no_op() {
 /// after the send.
 #[tokio::test]
 async fn an_unreadable_clock_sends_no_token_request() {
+    use std::sync::atomic::Ordering;
+    let (issuer, calls) = counting_token_endpoint().await;
+    let dir = tempfile::tempdir().unwrap();
+    let client = client(dir.path(), &issuer, &["client_credentials"]);
+
+    let refused = {
+        let _clock = crate::clock::test_clock::before_epoch();
+        client.try_client_credentials().await
+    };
+
+    let Err(Error::OAuth(message)) = refused else {
+        panic!("a refusal: {refused:?}");
+    };
+    assert!(message.contains("before 1970"), "{message}");
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "nothing was sent");
+    assert!(!client.has_valid_token(), "no token was cached");
+}
+
+/// A token endpoint that answers every request with a token and counts the
+/// requests it received.
+async fn counting_token_endpoint() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
     use axum::{Router, routing::post};
     use std::sync::atomic::{AtomicUsize, Ordering};
     let calls = Arc::new(AtomicUsize::new(0));
@@ -511,12 +532,24 @@ async fn an_unreadable_clock_sends_no_token_request() {
         }),
     );
     tokio::spawn(async move { axum::serve(listener, app).await });
+    (issuer, calls)
+}
+
+/// MIK-8202 P3: an authorization-code exchange on a clock before 1970 is
+/// refused before anything is sent, as the client-credentials grant is: the
+/// code is not spent on a token the gateway could not date.
+#[tokio::test]
+async fn an_unreadable_clock_sends_no_code_exchange() {
+    use std::sync::atomic::Ordering;
+    let (issuer, calls) = counting_token_endpoint().await;
     let dir = tempfile::tempdir().unwrap();
-    let client = client(dir.path(), &issuer, &["client_credentials"]);
+    let client = client(dir.path(), &issuer, &[]);
 
     let refused = {
         let _clock = crate::clock::test_clock::before_epoch();
-        client.try_client_credentials().await
+        client
+            .exchange_code("code", "http://127.0.0.1:9/cb", "verifier")
+            .await
     };
 
     let Err(Error::OAuth(message)) = refused else {
@@ -524,5 +557,4 @@ async fn an_unreadable_clock_sends_no_token_request() {
     };
     assert!(message.contains("before 1970"), "{message}");
     assert_eq!(calls.load(Ordering::SeqCst), 0, "nothing was sent");
-    assert!(!client.has_valid_token(), "no token was cached");
 }
