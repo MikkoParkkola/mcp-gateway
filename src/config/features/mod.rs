@@ -52,5 +52,6 @@ pub use security::{
 pub(crate) use signature_chain::validate_backend_chains;
 pub use signature_chain::{ChainEmit, ChainMode, SignatureChainConfig};
 pub use streaming::StreamingConfig;
+pub(crate) use tasks::DEFAULT_TTL_MS as DEFAULT_TASK_TTL_MS;
 pub use tasks::{DEFAULT_MAX_WORKERS, TasksConfig};
 pub use webhooks::WebhookConfig;

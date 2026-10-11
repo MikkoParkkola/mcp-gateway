@@ -16,6 +16,7 @@ mod backend_transport;
 mod config_file;
 mod env_overlay;
 mod features;
+pub(crate) use features::DEFAULT_TASK_TTL_MS;
 mod flagged_tools;
 mod input_schema;
 pub(crate) mod log_once;
