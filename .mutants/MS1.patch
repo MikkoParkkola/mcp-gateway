@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/call_dispatch.rs b/src/gateway/meta_mcp/call_dispatch.rs
+index 84bdd9719..ec8907625 100644
+--- a/src/gateway/meta_mcp/call_dispatch.rs
++++ b/src/gateway/meta_mcp/call_dispatch.rs
+@@ -69,6 +69,9 @@ impl MetaMcp {
+             super::visible::Surfaced::Withheld(server, reason) => {
+                 self.record_withheld(server, tool_name, reason, caller, session_id)
+                     .await;
++                if let Err(refusal) = self.may_invoke(server, tool_name, caller.scope(), session_id) {
++                    return Some(error_response_preserving_status(id, &refusal));
++                }
+             }
+             super::visible::Surfaced::Absent => {}
+         }

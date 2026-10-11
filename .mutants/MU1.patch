@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/invoke/chokepoint.rs b/src/gateway/meta_mcp/invoke/chokepoint.rs
+index a2607d47f..e1367696b 100644
+--- a/src/gateway/meta_mcp/invoke/chokepoint.rs
++++ b/src/gateway/meta_mcp/invoke/chokepoint.rs
+@@ -199,7 +199,6 @@ impl MetaMcp {
+             // No gate answers a backend that is not registered: its refusal
+             // stays the strict one, recorded fail-closed (MIK-8387 owns its
+             // parity).
+-            _ if self.backends.get(server).is_none() => Err(refusal),
+             _ => {
+                 // Recorded before every later reader (MIK-8356's caller
+                 // verdict included), so a policy-refused target resolves no

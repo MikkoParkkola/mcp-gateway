@@ -1,0 +1,19 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index 29e8a475f..1e7c41e03 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -149,6 +149,14 @@ impl MetaMcp {
+         let tool = extract_required_str(args, "tool")?;
+         // MIK-8361: a name this caller cannot see is answered as missing,
+         // before the policy, signing, idempotency, credential or dispatch.
++        let _ = self
++            .resolve_dispatch(
++                (server, tool),
++                self.backends.get(server).as_deref(),
++                caller_proof,
++                verified_identity,
++            )
++            .await;
+         if let Some(answer) = self.withheld_gate((server, tool), caller, session_id).await {
+             return answer;
+         }

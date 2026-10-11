@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/gate.rs b/src/gateway/meta_mcp/invoke/gate.rs
+index 8aad8aa74..4673343ad 100644
+--- a/src/gateway/meta_mcp/invoke/gate.rs
++++ b/src/gateway/meta_mcp/invoke/gate.rs
+@@ -244,7 +244,7 @@ impl MetaMcp {
+         if let Err(refusal) = self.admit_backend_wide(server, tool) {
+             return Some(Err(refusal));
+         }
+-        if backend.keeps_per_user_catalogues() {
++        if backend.keeps_per_user_catalogues() && refused {
+             // Lead ruling (8356 x 8361): a policy-withheld name answers -32601
+             // at once, with no fill and no credential; every other name is
+             // MIK-8356's caller-slot check's.

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/gate.rs b/src/gateway/meta_mcp/invoke/gate.rs
+index 8aad8aa74..e6df06ab4 100644
+--- a/src/gateway/meta_mcp/invoke/gate.rs
++++ b/src/gateway/meta_mcp/invoke/gate.rs
+@@ -259,7 +259,7 @@ impl MetaMcp {
+         // One judgement per request: a verdict the route stage recorded
+         // stands, so a catalogue refill since cannot turn an answered-absent
+         // name into a dispatch (MIK-8340's rule).
+-        let judged = match recorded_visibility(server, tool) {
++        let judged = match recorded_visibility(server, tool).filter(|_| false) {
+             Some(Visibility::Withheld(reason)) => Some(reason),
+             _ if refused => Some(Withholding::Refused),
+             _ => match self.shared_verdict(&backend, tool, headers).await {

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/gate.rs b/src/gateway/meta_mcp/invoke/gate.rs
+index 8aad8aa74..ea601b57a 100644
+--- a/src/gateway/meta_mcp/invoke/gate.rs
++++ b/src/gateway/meta_mcp/invoke/gate.rs
+@@ -330,7 +330,7 @@ pub(super) fn count_meta_denial(
+         .and_then(Value::as_str)
+         .zip(args.get("tool").and_then(Value::as_str))
+         .and_then(|(server, tool)| crate::gateway::meta_mcp::visible::denial_code(server, tool));
+-    if let Some(code) = code {
++    if let Some(code) = code.filter(|_| false) {
+         meta_refused(code);
+         return Some(crate::security::audit::AuditOutcome::Denied(code));
+     }

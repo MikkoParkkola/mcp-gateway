@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/grant_audit.rs b/src/gateway/meta_mcp/grant_audit.rs
+index 42d6e03fe..65af95c34 100644
+--- a/src/gateway/meta_mcp/grant_audit.rs
++++ b/src/gateway/meta_mcp/grant_audit.rs
+@@ -438,7 +438,7 @@ pub(super) async fn note_withheld_best_effort<T>(server: &str, noting: impl FnOn
+         .try_with(|slot| slot.notes.lock().expect("grant slot lock").len())
+         .ok();
+     let output = noting();
+-    let taken = before.and_then(|before| {
++    let taken = before.filter(|_| false).and_then(|before| {
+         GRANT_SLOT
+             .try_with(|slot| {
+                 let mut held = slot.notes.lock().expect("grant slot lock");

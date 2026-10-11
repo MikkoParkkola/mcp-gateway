@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/invoke/gate.rs b/src/gateway/meta_mcp/invoke/gate.rs
+index 8aad8aa74..a1b5ac9da 100644
+--- a/src/gateway/meta_mcp/invoke/gate.rs
++++ b/src/gateway/meta_mcp/invoke/gate.rs
+@@ -185,6 +185,7 @@ impl MetaMcp {
+         self.active_profile(session_id)
+             .check(server, tool)
+             .err()
++            .filter(|_| false)
+             .map(Error::Protocol)
+     }
+ 
