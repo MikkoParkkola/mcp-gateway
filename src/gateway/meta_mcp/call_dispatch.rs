@@ -224,6 +224,9 @@ impl MetaMcp {
         if let Err(error) = caller.retry.solicited_input_responses() {
             return error_response_preserving_status(id, &error);
         }
+        if let Err(error) = caller.retry.refuse_on_playbook_run(tool_name) {
+            return error_response_preserving_status(id, &error);
+        }
 
         // Admin gate for the meta-tools that change the gateway for every
         // session, enforced HERE at the dispatcher.

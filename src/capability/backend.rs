@@ -756,6 +756,8 @@ fn build_success_tool_result(capability: &CapabilityDefinition, result: Value) -
 
 #[path = "backend_listing.rs"]
 mod listing;
+#[cfg(test)]
+pub(crate) use listing::listing_watches_started;
 #[path = "backend_rug_pull.rs"]
 mod rug_pull;
 

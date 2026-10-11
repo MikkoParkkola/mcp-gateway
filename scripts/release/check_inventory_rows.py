@@ -90,6 +90,19 @@ SWEPT_AREAS = (
     "src/gateway/server/mod.rs",
     "src/gateway/server/persistence.rs",
     "src/transport/stdio.rs",
+    # MIK-8195 W2: gateway/server outside stdio, mod.rs and persistence.rs
+    # (those two are W7), listed one by one.
+    "src/gateway/server/cleartext.rs",
+    "src/gateway/server/control_plane_store.rs",
+    "src/gateway/server/events_wiring.rs",
+    "src/gateway/server/identity_grants.rs",
+    "src/gateway/server/listener.rs",
+    "src/gateway/server/provenance_signer.rs",
+    "src/gateway/server/start_checks.rs",
+    "src/gateway/server/support.rs",
+    "src/gateway/server/task_runtime.rs",
+    "src/gateway/server/tools_changed.rs",
+    "src/gateway/server/warmstart.rs",
     # MIK-8195 W1: the HTTP transport.
     "src/transport/http/",
 )
