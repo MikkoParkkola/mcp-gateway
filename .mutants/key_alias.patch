@@ -1,0 +1,15 @@
+diff --git a/src/security/sanitize/protocol.rs b/src/security/sanitize/protocol.rs
+index 1267b6a5c..ad96bbaac 100644
+--- a/src/security/sanitize/protocol.rs
++++ b/src/security/sanitize/protocol.rs
+@@ -48,9 +48,7 @@ pub(crate) fn validate_protocol_fields(
+         Some(Value::Object(map)) => map.keys().try_for_each(|key| validate_protocol_text(key)),
+         _ => Ok(()),
+     };
+-    own_keys(Some(request))?;
+-    own_keys(request.get("params"))?;
+-    meta.map_or(Ok(()), validate_keys)?;
++    let _ = own_keys;
+     let client_capabilities = meta.and_then(|meta| meta.get(KEY_CLIENT_CAPABILITIES));
+     for capabilities in [request.pointer("/params/capabilities"), client_capabilities] {
+         capabilities.map_or(Ok(()), validate_keys)?;

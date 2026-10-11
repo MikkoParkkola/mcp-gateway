@@ -1,0 +1,20 @@
+head_sha	29bc43d3b7e0cd8acb1bc96b6e21468f2a11d70a
+# MIK-8154 PR2 mutation proofs, final head: test plan M3, C2e (b'), F2, B, seat fixes.
+c2e_sync_skip	linux	c2e_sync_skip.patch	--lib -- mik8154_rows_tests::c2e
+worker_drops_judgement	linux	worker_drops_judgement.patch	--lib -- mik8154_rows_tests::c2e
+np_ignores_visibility	linux	np_ignores_visibility.patch	--lib -- mik8154_rows_tests::np withheld_parity_tests::np3
+cap1_7a_via_7b	linux	cap1_7a_via_7b.patch	--lib -- mik8154_rows_tests::cap1
+s3b_sanitize_late	linux	s3b_sanitize_late.patch	--lib -- mik8154_rows_tests::s3b
+passthrough_ignored	linux	passthrough_ignored.patch	--lib -- mik8154_rows_tests::p mik8154_rows_tests::c2 mik8154_rows_tests::np2 p3::p2_stdio
+s8_zero_targets_exempt	linux	s8_zero_targets_exempt.patch	--lib -- mik8154_rows_tests::s8
+s4_fields_unvalidated	linux	s4_fields_unvalidated.patch	--lib -- mik8154_rows_tests::s4_ mik8154_rows_tests::s2d mik8154_rows_tests::s10
+f2_send_skip	linux	f2_send_skip.patch	--lib -- mik8154_rows_tests::c2e::r
+s9_encoded_skip	linux	s9_encoded_skip.patch	--lib -- mik8154_rows_tests::encoded::s9
+slot_key_raw	linux	slot_key_raw.patch	--lib -- mik8154_rows_tests::encoded::s9d
+key_alias	linux	key_alias.patch	--lib -- mik8154_rows_tests::encoded::s4d
+invoke_nonce_any_route	linux	invoke_nonce_any_route.patch	--lib -- mik8154_rows_tests::encoded::s4c
+s4b_invoke_nonce_unvalidated	linux	s4b_invoke_nonce_unvalidated.patch	--lib -- signed_order::s4b sanitize::protocol::tests::s4e
+key_unvalidated	linux	key_unvalidated.patch	--lib -- mik8154_rows_tests::s4_
+resume_skip	linux	resume_skip.patch	--lib -- mik8154_rows_tests::resume::r3
+direct_route_as_meta	linux	direct_route_as_meta.patch	--lib -- mik8154_rows_tests::encoded::s9f
+chain_skip	linux	chain_skip.patch	--lib -- sanitize::protocol::tests::s9g mik8154_rows_tests::encoded::s9h

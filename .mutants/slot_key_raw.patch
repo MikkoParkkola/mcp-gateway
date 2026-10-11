@@ -1,0 +1,15 @@
+diff --git a/src/security/sanitize/protocol.rs b/src/security/sanitize/protocol.rs
+index 1267b6a5c..45f80e294 100644
+--- a/src/security/sanitize/protocol.rs
++++ b/src/security/sanitize/protocol.rs
+@@ -151,8 +151,9 @@ fn sanitize_object(
+ ) -> Result<Value> {
+     let mut sanitized = serde_json::Map::with_capacity(map.len());
+     for (key, member) in map {
++        let raw = key;
+         let key = sanitize_string(key)?;
+-        let clean = match special(&key, member) {
++        let clean = match special(raw, member) {
+             Some(handled) => handled?,
+             None => sanitize_json_value(member)?,
+         };

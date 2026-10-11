@@ -1,0 +1,26 @@
+diff --git a/src/gateway/router/authorization.rs b/src/gateway/router/authorization.rs
+index 523cdc8c4..ec65bd9c8 100644
+--- a/src/gateway/router/authorization.rs
++++ b/src/gateway/router/authorization.rs
+@@ -57,7 +57,7 @@ pub(crate) fn sanitize_exempt(
+         .map(|server| meta_mcp.passthrough_instance(server))
+         .collect();
+     match instances {
+-        Some(instances) if !instances.is_empty() => {
++        Some(instances) if false && !instances.is_empty() => {
+             crate::gateway::meta_mcp::visible::record_exempt_instances(&instances);
+             true
+         }
+diff --git a/src/gateway/router/backend_handlers/direct_caller.rs b/src/gateway/router/backend_handlers/direct_caller.rs
+index bd45a2ce0..21de7f360 100644
+--- a/src/gateway/router/backend_handlers/direct_caller.rs
++++ b/src/gateway/router/backend_handlers/direct_caller.rs
+@@ -501,7 +501,7 @@ fn sanitized(state: &AppState, name: &str, request: Value) -> Result<Value, Reje
+         ProtocolRoute::Direct,
+     )
+     .map_err(refused)?;
+-    if let Some(instance) = state.meta_mcp.passthrough_instance(name) {
++    if let Some(instance) = state.meta_mcp.passthrough_instance(name).filter(|_| false) {
+         crate::gateway::meta_mcp::visible::record_exempt_instances(&[instance]);
+         return Ok(request);
+     }
