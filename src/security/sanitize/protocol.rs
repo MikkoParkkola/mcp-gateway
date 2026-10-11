@@ -329,6 +329,11 @@ mod tests {
             ("gateway_kill_server", json!("{\"server\": \"alpha\"}")),
             ("gateway_list_tools", json!("{\"server\": \"alpha\"}")),
             ("gateway_get_stats", json!("not json")),
+            // A parsing meta tool's own string is not decoded either: only
+            // its inner `arguments` are (its handler refuses the string).
+            ("gateway_invoke", json!("not json")),
+            ("gateway_invoke", json!("{\"server\": \"alpha\"}")),
+            ("gateway_execute", json!("{\"chain\": []}")),
         ] {
             let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                 "params": {"name": name, "arguments": arguments}});
