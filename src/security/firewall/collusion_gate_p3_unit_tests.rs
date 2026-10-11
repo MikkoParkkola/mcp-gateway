@@ -251,7 +251,7 @@ fn retention_through_the_view_keeps_what_the_full_set_keeps() {
             .collect();
         let step = json!({ "content": texts[..3].to_vec() });
         let partial = texts[1][..3 * 1024].to_owned();
-        let shown = vec![texts[0].clone(), partial, texts[3].clone()];
+        let shown = [texts[0].clone(), partial, texts[3].clone()];
         let answer = Value::Array(shown.iter().cloned().map(Value::String).collect());
         let keep = |delivered: &Delivered<'_>| {
             let staged = PlanStaging::default();
