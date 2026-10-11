@@ -38,6 +38,27 @@ impl RefreshStall {
     }
 }
 
+/// Releases the stall when dropped, so a row that fails before its own
+/// release cannot leave a refresh parked at the token server.
+struct ReleaseOnDrop(Arc<RefreshStall>);
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+/// The background renewer's first check comes one period after its transport
+/// connects. While less has passed since the start was spawned, a refresh at
+/// the token server cannot be the renewer's. A literal, so the timing gate
+/// can read the window; the assertion below ties it to the renewer's period,
+/// so a change there breaks the build rather than this premise.
+const RENEWER_FIRST_CHECK: Duration = Duration::from_secs(60);
+const _: () = assert!(
+    RENEWER_FIRST_CHECK.as_nanos() == crate::oauth::OAuthClient::RENEWAL_CHECK_PERIOD.as_nanos(),
+    "RENEWER_FIRST_CHECK must equal OAuthClient::RENEWAL_CHECK_PERIOD"
+);
+
 /// An authorization server that issues an access token good for `expires_in`
 /// seconds plus a refresh token, holding every refresh as `stall` says, and an
 /// MCP endpoint at `/mcp` that answers the handshake, `tools/list` and
@@ -52,10 +73,10 @@ async fn refreshing_server(stall: Arc<RefreshStall>, expires_in: u64) -> String 
         "authorization_endpoint": format!("{origin}/authorize"),
         "token_endpoint": format!("{origin}/token"),
     });
-    let token = move |body: String| {
+    let token = move |axum::Form(form): axum::Form<HashMap<String, String>>| {
         let stall = Arc::clone(&stall);
         async move {
-            if body.contains("grant_type=refresh_token") {
+            if form.get("grant_type").map(String::as_str) == Some("refresh_token") {
                 stall.arrivals.fetch_add(1, Ordering::SeqCst);
                 let released = stall.release.notified();
                 if !stall.released.load(Ordering::SeqCst) {
@@ -122,19 +143,29 @@ fn spawn_start(backend: &Arc<Backend>) -> tokio::task::JoinHandle<Result<()>> {
 }
 
 /// A backend on a fresh [`refreshing_server`], started through an approved
-/// login.
-async fn started(stall: &Arc<RefreshStall>) -> (Arc<Backend>, Arc<Browser>, tempfile::TempDir) {
+/// login, and the instant just before that start was spawned: its renewer
+/// cannot check before [`RENEWER_FIRST_CHECK`] has passed since then.
+async fn started(
+    stall: &Arc<RefreshStall>,
+) -> (
+    Arc<Backend>,
+    Arc<Browser>,
+    tempfile::TempDir,
+    std::time::Instant,
+) {
     let origin = refreshing_server(Arc::clone(stall), 3600).await;
     let dir = tempfile::tempdir().unwrap();
     let browser = Browser::new();
     let backend = login_backend(&origin, dir.path(), &browser, Duration::from_secs(5), None);
+    let spawned = std::time::Instant::now();
     let start = spawn_start(&backend);
-    approve(&browser.opened(1, "the start opening the browser").await).await;
+    let url = browser.opened(1, "the start opening the browser").await;
+    within("the login callback answering", approve(&url)).await;
     within("the start completing with a token", start)
         .await
         .expect("start task")
         .expect("the approved login starts the backend");
-    (backend, browser, dir)
+    (backend, browser, dir, spawned)
 }
 
 /// RACE.1: the stored token has lapsed. A non-interactive rebuild passes its
@@ -145,9 +176,14 @@ async fn started(stall: &Arc<RefreshStall>) -> (Arc<Backend>, Arc<Browser>, temp
 #[tokio::test]
 async fn a_probe_rebuild_leaves_a_transport_whose_token_is_being_refreshed() {
     let stall = Arc::new(RefreshStall::default());
-    let (backend, browser, _dir) = started(&stall).await;
+    let (backend, browser, _dir, spawned) = started(&stall).await;
+    let _release = ReleaseOnDrop(Arc::clone(&stall));
     let old = pooled(&backend).expect("premise: the backend started");
-    super::token_lapse::lapse(&backend).await;
+    within(
+        "the stored token lapsing",
+        super::token_lapse::lapse(&backend),
+    )
+    .await;
 
     let gate = Arc::new(MarkWindowGate::default());
     *backend.restart_take_gate.lock() = Some(Arc::clone(&gate));
@@ -173,6 +209,12 @@ async fn a_probe_rebuild_leaves_a_transport_whose_token_is_being_refreshed() {
     stall
         .reached(1, "the call's refresh stalling at the server")
         .await;
+    // The renewer refreshes through the same `refresh_token()` as the call,
+    // so the stub cannot tell them apart; its first check can, by time.
+    assert!(
+        spawned.elapsed() < RENEWER_FIRST_CHECK,
+        "premise: the stalled refresh arrived before the renewer could check, so it is the call's"
+    );
     gate.release.notify_one();
 
     // A hang here names its suspect: the replacement start waiting on the
@@ -193,6 +235,10 @@ async fn a_probe_rebuild_leaves_a_transport_whose_token_is_being_refreshed() {
         stall.arrivals(),
         1,
         "the stalled refresh is the call's alone; the rebuild refreshed nothing"
+    );
+    assert!(
+        spawned.elapsed() < RENEWER_FIRST_CHECK,
+        "premise: the renewer still could not have refreshed when that count was read"
     );
     assert!(
         still_pooled(&backend, &old),
@@ -237,7 +283,7 @@ async fn a_start_that_publishes_while_the_probe_waits_stays_pooled() {
     };
     within("the probe's refused start", gate.reached.notified()).await;
 
-    approve(&url).await;
+    within("the login callback answering", approve(&url)).await;
     within("the start publishing", start)
         .await
         .expect("start task")
