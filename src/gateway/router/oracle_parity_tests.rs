@@ -311,7 +311,8 @@ enum Entry {
 /// A shell-injection argument the request firewall blocks, assembled at run
 /// time (the probe's and the route check matrix's finding).
 fn tripping() -> Value {
-    json!({ "cmd": [";", " rm", " -rf", " / "].concat() })
+    let cmd = [";", " rm", " -rf", " / "].concat();
+    json!({ "cmd": cmd })
 }
 
 /// The arguments a row runs with.
