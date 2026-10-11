@@ -526,3 +526,86 @@ class Lexer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Members(unittest.TestCase):
+    """MIK-8360.TABLE.1: each flaky-under-load member's ORIGINAL code, quoted
+    verbatim from the release line before its fix (c5e432970 unless noted),
+    and the rule that refuses it, or the stated miss it falls under."""
+
+    # The new-code helpers, borrowed so NewCode's own rows do not run twice.
+    scan = NewCode.scan
+    assertRefused = NewCode.assertRefused
+    assertPasses = NewCode.assertPasses
+
+    def test_collusion_elapsed_bound(self):
+        # src/security/firewall/collusion_seam_tests.rs:201-208
+        body = (
+            "let start = std::time::Instant::now();\n"
+            "let seams = det.seam_fingerprints(&parts);\n"
+            "assert!(!seams.is_empty());\n"
+            'assert!(\n    start.elapsed() < std::time::Duration::from_secs(5),\n    "{:?}",\n    start.elapsed()\n);'
+        )
+        self.assertRefused(body, guard.FLOOR)
+
+    def test_prompts_builder_window(self):
+        # src/gateway/meta_mcp/tests/backend_lists.rs:399
+        body = "let meta = MetaMcp::new(registry).with_prompts_resources_fetch_timeout(Duration::from_secs(1));"
+        self.assertRefused(body, guard.SETTER)
+
+    def test_sub4_timeout_field(self):
+        # tests/mik_7272_sub4_adr012_acs.rs:239-252, in the assert-free helper `backend_for`
+        body = (
+            "let config = BackendConfig {\n    enabled: true,\n    stop_when_idle_for: None,\n"
+            "    timeout: Duration::from_millis(300),\n    env: HashMap::default(),\n    ..BackendConfig::default()\n};"
+        )
+        self.assertRefused(body, guard.FIELD, attrs="")
+
+    def test_early_exit_fail_fast_timeout(self):
+        # src/transport/stdio_early_exit_tests.rs:14-15, :32-35
+        prelude = "const ROW_LIMIT: Duration = Duration::from_secs(5);"
+        body = (
+            "tokio::time::timeout(ROW_LIMIT, t.start())\n    .await\n"
+            '    .expect("start must fail fast, not wait out the request timeout")\n'
+            '    .expect_err("a child that died before initialize cannot start")\n    .to_string();'
+        )
+        self.assertRefused(body, guard.FLOOR, prelude=prelude)
+
+    def test_child_tree_deadline_bound(self):
+        # src/transport/stdio_child_tree_tests.rs:555-558
+        prelude = "const REAP_DEADLINE: Duration = Duration::from_secs(5);"
+        body = (
+            "assert!(\n    at.elapsed() < REAP_DEADLINE + Duration::from_millis(500),\n"
+            '    "a tree waited behind the others"\n);'
+        )
+        self.assertRefused(body, guard.FLOOR, prelude=prelude)
+
+    def test_env_poll_sleep_window(self):
+        # src/config_reload/env_poll_e2e_tests.rs:144-149
+        body = (
+            "tokio::time::sleep(Duration::from_secs(5)).await;\n"
+            "let attempts = counts.attempts.load(Ordering::SeqCst);\n"
+            'assert!(\n    attempts >= 3,\n    "an unchanged failing file must be retried; {attempts} reloads ran"\n);'
+        )
+        self.assertRefused(body, guard.SLEEP)
+
+    def test_fanout_sleep_window(self):
+        # src/events/fanout_tests.rs:309-319 (from evcore's report)
+        body = (
+            "tokio::time::sleep(std::time::Duration::from_millis(200)).await;\n"
+            'std::fs::set_permissions(&unlock, std::fs::Permissions::from_mode(0o700)).expect("unlock");\n'
+            'assert!(\n    crate::test_log_capture::count(&records, "WARN", "startup reconcile could not remove") >= 1,\n'
+            '    "a failed attempt is logged: {records:?}"\n);'
+        )
+        self.assertRefused(body, guard.SLEEP)
+
+    def test_t35_is_ok_wait(self):
+        # src/events/upstream_session_wake_tests.rs:71-82 (MIK-8359, e2etests fixes it)
+        body = (
+            "let contacted = tokio::time::timeout(Duration::from_secs(5), async {\n"
+            "    while hits.load(Ordering::SeqCst) == 0 {\n"
+            "        tokio::time::sleep(Duration::from_millis(20)).await;\n    }\n})\n.await;\n"
+            "shared.stop.cancel();\n"
+            'assert!(\n    contacted.is_ok(),\n    "the revived backend is contacted at once, not at the 30 s timer"\n);'
+        )
+        self.assertRefused(body, guard.IS_OK)

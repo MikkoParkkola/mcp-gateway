@@ -19,13 +19,41 @@ refused when W is under 5 s or cannot be resolved. A fn on a paused clock
 Test code is a test path, or a product file from its first `#[cfg(test)]`.
 A const reaches a file `include!`d by the file that defines it.
 
-Stated misses: a `sleep` used as a window; a timeout that is expected to
-elapse and is then asserted on; a window passed in through a constructor or
-helper; `timeout_at`; a `select!` arm on `sleep`; a `let`-bound result first
-consumed over 2000 characters later; a fn that pauses the clock partway, which
-is skipped whole; a commented-out `include!`, or a file included by two files
-(the last includer's consts are used). A same-named binding that shadows the
-timeout's result can be read as consuming it: that fails loudly, never quietly.
+New or changed test code (`--base`) meets stricter rules: an elapsed bound or
+failing timeout under 10 s (the floor); a `sleep` used as a window; a timeout
+expected to elapse, then asserted; a poll budget under 10 s; a short product
+timer slept against; and (MIK-8360) a short timeout reaching a product through
+a timeout-named builder or call (`.with_x_timeout(1 s)`), a timeout-named field
+(`timeout: 300 ms`), or a `timeout(W, ..)` whose result is asserted `is_ok`.
+A `// timing:` tag from the closed set, a `timing-oracle:`, or a paused clock
+exempts a site.
+
+Stated misses: `timeout_at`; a `select!` arm on `sleep`; a `let`-bound result
+first consumed over 2000 characters later; a fn that pauses the clock partway,
+which is skipped whole; a commented-out `include!`, or a file included by two
+files (the last includer's consts are used). A same-named binding that shadows
+the timeout's result can be read as consuming it: that fails loudly, never
+quietly. And, for MIK-8360 (none is lexical; the fix pattern follows each):
+- a bounded wait whose clock starts before its premise holds (MIK-8359 t14):
+  wait first on a premise signal that moves without the event under test;
+- a bound derived from a product timeout plus a fixed margin (#3826): any
+  margin can be outrun; await the event and keep the bound a hang guard;
+- a literal window handed to a generic helper whose builder sees only its
+  parameter, or a timing-named const passed as an argument;
+- a short window as a positional constructor argument with no timing name
+  (`relay_state(mock, 1)`, `transport(url, 1 s)`);
+- `timeout(..).await.is_ok()` returned from a helper and asserted by the caller;
+- `x.reset_timeout = ..` assignments and shorthand `timeout,` fields;
+- a race between a test bound and a longer product timer told only by a
+  message (messages are blanked): assert the error kind or cause instead;
+- `ttl`, `interval` and `period` fields: legitimate when waited out by event,
+  refused only beside a waited real-clock sleep (the product-timer rule);
+- product code after a file's first `#[cfg(test)]` is read as test code.
+- a bare `.timeout(D)` method (an HTTP client's request timeout): 77 test
+  sites at MIK-8360's base, too many to gate without a separate decision;
+  a short one bounds the success path, so prefer the 10 s floor;
+- a sleep used as a window inside a helper whose caller holds the assert
+  (MIK-8354's `short_window`): the rule looks for the assert in the same fn.
 
 The allowlist is shrink-only: with `--base <ref>` a row absent from the list
 at `ref` fails. The comparison is skipped only when `ref` has no list.
@@ -518,6 +546,18 @@ ORACLE = "malformed timing-oracle"
 ABSENCE = "absence tag on a collector not named for absence"
 BUDGET = "poll budget under 10 s"
 TIMER = "short product timer slept against on the real clock"
+SETTER = "short timeout set through a timeout-named builder or call"
+FIELD = "short timeout field"
+IS_OK = "timeout whose result is asserted is_ok, under the 10 s floor"
+# MIK-8360 R3a: `.with_x_timeout(D)` / `.set_x_timeout(D)`, and any other
+# call named for a timeout given a literal Duration (not `timeout(` itself,
+# which the floor already judges, nor `timeout_at`).
+SETTER_CALL = re.compile(r"\.(?:with|set)_\w*timeout\w*\(")
+NAMED_CALL = re.compile(r"(?<![\w.:])(?!timeout\(|timeout_at\()(\w*timeout\w*)\(")
+# MIK-8360 R3b: a struct-literal field named for a timeout. Unit by suffix: a
+# bare number counts only under `_secs`/`_ms`/`_millis`.
+TIMEOUT_FIELD = re.compile(r"(?<![\w.])(timeout|\w+_timeout|timeout_\w+)\s*:\s*([^,}\n]+)")
+FIELD_UNITS = {"_secs": 1.0, "_ms": 1e-3, "_millis": 1e-3}
 REASONS = ("absence", "lower-bound", "first-poll", "fixture", "precondition")
 HANG_BOUND = re.compile(r"(?:\w+::)*HANG_BOUND\b")
 TAG_LINE = re.compile(r"//\s*timing:(.*)$")
@@ -826,6 +866,68 @@ def scan_new_shapes(path, code, raw, start, added, scope, oracle_ok, tag_ok) -> 
                 if value is not None and value < FLOOR_S and touches(line_of(at), line_of(waited[-1][0])):
                     found.append(Finding(path, fn, m.group(0), line_of(at), value, TIMER))
                     break
+
+        found += timeout_shapes(path, fn, code, (body_open, body_end), touches, seconds, exempt)
+    return found
+
+
+def timeout_shapes(path, fn, code, span, touches, seconds, exempt) -> list[Finding]:
+    """MIK-8360: a short timeout reaching a product by name, with no sleep.
+
+    R3a a timeout-named builder or call; R3b a timeout-named field; R1b a
+    `timeout(W, ..)` whose result is asserted `is_ok`. A window that does not
+    resolve passes R3a and R3b (a generic helper's parameter), and fails R1b
+    (its expiry fails the test, as the floor reads a `.expect`).
+    """
+    body_open, body_end = span
+    line_of = lambda at: code.count("\n", 0, at) + 1  # noqa: E731
+    found: list[Finding] = []
+
+    def short(expr: str, at: int) -> float | None:
+        value = seconds(expr, at)
+        return value if value is not None and value < FLOOR_S else None
+
+    for m in SETTER_CALL.finditer(code, body_open, body_end):
+        args, _ = call_args(code, m.end() - 1)
+        expr, line = split_top(args, (",",))[0][1].strip(), line_of(m.start())
+        if (value := short(expr, m.start())) is not None and touches(line, line) and not exempt(line, expr):
+            found.append(Finding(path, fn, f"{m.group(0)}{expr})", line, value, SETTER))
+    for m in NAMED_CALL.finditer(code, body_open, body_end):
+        args, _ = call_args(code, m.end() - 1)
+        line = line_of(m.start())
+        for _, arg in split_top(args, (",",)):
+            expr = arg.strip()
+            if DURATION.fullmatch(expr) and (value := short(expr, m.start())) is not None:
+                if touches(line, line) and not exempt(line, expr):
+                    found.append(Finding(path, fn, f"{m.group(1)}(.., {expr})", line, value, SETTER))
+                break
+    for m in TIMEOUT_FIELD.finditer(code, body_open, body_end):
+        name, expr, line = m.group(1), m.group(2).strip(), line_of(m.start())
+        unit = next((u for suffix, u in FIELD_UNITS.items() if name.endswith(suffix)), None)
+        if unit is not None and NUMBER.match(expr):
+            value = float(expr.replace("_", "")) * unit
+            value = value if value < FLOOR_S else None
+        elif DURATION.search(expr) or "::" in expr or expr.isupper():
+            value = short(expr, m.start())
+        else:
+            value = None
+        if value is not None and touches(line, line) and not exempt(line, expr):
+            found.append(Finding(path, fn, f"{name}: {expr}", line, value, FIELD))
+    for m in TIMEOUT.finditer(code, body_open, body_end):
+        args, end = call_args(code, m.end() - 1)
+        inline = re.match(r"\s*\.await\s*\.\s*is_ok\(\)", code[end : end + 40]) and re.search(
+            r"(?:debug_)?assert!\s*\(\s*$", code[max(0, m.start() - 80) : m.start()]
+        )
+        bound = LET_BOUND.search(code[max(0, m.start() - 120) : m.start()])
+        later = bound and re.match(r"\s*\.await\s*;", code[end : end + 40]) and re.search(
+            rf"(?:debug_)?assert!\s*\(\s*{bound.group(1)}\s*\.\s*is_ok\(\)", code[end:body_end]
+        )
+        if not (inline or later):
+            continue
+        expr, line = split_top(args, (",",))[0][1].strip(), line_of(m.start())
+        value = seconds(expr, m.start())
+        if (value is None or value < FLOOR_S) and touches(line, line) and not exempt(line, expr):
+            found.append(Finding(path, fn, f"timeout({expr}, ..)", line, value, IS_OK))
     return found
 
 
