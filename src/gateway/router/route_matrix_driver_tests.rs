@@ -210,6 +210,31 @@ pub(crate) async fn surfaced_chained() -> Sent {
     sent(&fx, body)
 }
 
+/// [`surfaced_chained`] whose backend answers `text` under the team-shared
+/// context-integrity baseline, which withholds an injected instruction.
+pub(crate) async fn surfaced_chained_gated(text: &'static str) -> Sent {
+    use crate::context_integrity::{
+        ContextIntegrityKernel, ContextIntegrityPolicy, ContextIntegrityPolicyPreset,
+    };
+    use crate::gateway::chain_test_support::{NONCE_KEY, signer};
+    let fx = super::direct_guards_fixture::fixture_built(Answer::Text(text), |meta| {
+        let mut meta = surfacing(meta);
+        meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest);
+        meta.set_context_integrity_kernel(ContextIntegrityKernel::new(
+            ContextIntegrityPolicy::from_preset(ContextIntegrityPolicyPreset::TeamShared),
+        ));
+        meta
+    })
+    .await;
+    let body = call_surfaced(
+        &fx,
+        serde_json::json!({}),
+        Some(serde_json::json!({ NONCE_KEY: "matrix-nonce" })),
+    )
+    .await;
+    sent(&fx, body)
+}
+
 /// R2 on the firewalled fixture writing audit rows to `audit`.
 pub(crate) async fn surfaced_firewalled(audit: &Path, args: Value) -> Sent {
     let fx = super::direct_guards_fixture::fixture_firewalled_audited_built(
