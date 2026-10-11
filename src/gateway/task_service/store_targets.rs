@@ -513,7 +513,32 @@ pub(crate) enum CancelClaim {
     NotOurs,
 }
 
+/// Where a row's upstream cancel stands (MIK-8347).
+#[cfg(test)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum UpstreamCancelState {
+    /// Claimed, not yet confirmed; `attempts` counts failed sends only.
+    Pending { attempts: u8 },
+    /// Confirmed, or given up: never sent again.
+    Done,
+}
+
 impl TaskStore {
+    /// The row's upstream cancel, if one was claimed.
+    #[cfg(test)]
+    pub(crate) fn upstream_cancel_state(
+        &self,
+        owner: &str,
+        id: &str,
+    ) -> Option<UpstreamCancelState> {
+        let state = self.0.state();
+        let entry = owned(&state, owner, id).ok()?;
+        entry
+            .record
+            .upstream_cancel_sent
+            .then_some(UpstreamCancelState::Done)
+    }
+
     /// Claim the single upstream `tasks/cancel` of a cancelled row.
     ///
     /// `offered` is the descriptor a sender holds but the row may not: the

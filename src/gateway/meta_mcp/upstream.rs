@@ -28,7 +28,9 @@ use serde_json::{Value, json};
 
 use super::MetaMcp;
 use crate::backend::{Backend, BackendRegistry};
-use crate::gateway::task_service::{UpstreamAnswer, UpstreamHandle, UpstreamRecovery};
+use crate::gateway::task_service::{
+    CancelDelivery, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+};
 use crate::protocol::extensions::Extension;
 use crate::protocol::{JsonRpcError, JsonRpcResponse};
 
@@ -213,6 +215,10 @@ impl UpstreamRecovery for NativeUpstreamTasks {
         self.eligible(backend).await.is_some()
     }
 
+    fn started(&self) -> Option<tokio::sync::broadcast::Receiver<String>> {
+        Some(self.backends.subscribe_started())
+    }
+
     async fn query(&self, handle: &UpstreamHandle, deadline: Duration) -> UpstreamAnswer {
         // Never interactive (MIK-8269), its discovery included: recovery is
         // background upkeep under a bound, and a bound that fires mid-login
@@ -250,7 +256,7 @@ impl UpstreamRecovery for NativeUpstreamTasks {
         .await
     }
 
-    async fn cancel(&self, handle: &UpstreamHandle, deadline: Duration) {
+    async fn cancel(&self, handle: &UpstreamHandle, deadline: Duration) -> CancelDelivery {
         // Never interactive (MIK-8269), as `query`.
         crate::oauth::login_gate::non_interactive(async {
             // This is the row's one send, so a start in flight (a restarted
@@ -281,6 +287,7 @@ impl UpstreamRecovery for NativeUpstreamTasks {
             }
         })
         .await;
+        CancelDelivery::Confirmed
     }
 }
 
@@ -597,6 +604,10 @@ mod provenance_tests;
 #[cfg(test)]
 #[path = "upstream/login_scope_tests.rs"]
 mod login_scope_tests;
+
+#[cfg(test)]
+#[path = "upstream/cancel_delivery_tests.rs"]
+mod cancel_delivery_tests;
 
 #[cfg(test)]
 mod tests {

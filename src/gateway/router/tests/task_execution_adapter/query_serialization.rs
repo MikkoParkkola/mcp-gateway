@@ -39,7 +39,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use crate::gateway::task_service::{UpstreamAnswer, UpstreamHandle, UpstreamRecovery};
+use crate::gateway::task_service::{UpstreamAnswer, UpstreamHandle, UpstreamRecovery, CancelDelivery};
 
 /// The opaque handle the peer answers the task-augmented call with.
 const UPSTREAM_HANDLE: &str = "upstream-job-serialization";
@@ -297,7 +297,9 @@ impl BarrierRecovery {
 #[async_trait::async_trait]
 impl UpstreamRecovery for BarrierRecovery {
     /// This suite asserts nothing about upstream cancels (MIK-7642 PR.D rows do).
-    async fn cancel(&self, _handle: &UpstreamHandle, _deadline: Duration) {}
+    async fn cancel(&self, _handle: &UpstreamHandle, _deadline: Duration) -> CancelDelivery {
+        CancelDelivery::Confirmed
+    }
 
     async fn claims(&self, backend: &str) -> bool {
         self.claims.fetch_add(1, Ordering::SeqCst);

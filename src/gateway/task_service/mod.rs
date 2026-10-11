@@ -45,8 +45,8 @@ pub use execution::TaskExecutor;
 /// constructor — so the only thing an outside caller can write is `task: None`.
 pub use execution::TaskIntent;
 pub(crate) use execution::{
-    InputOutcome, OwnedAdmissionRequest, OwnedCallerContext, TaskCall, UpstreamAnswer,
-    UpstreamHandle, UpstreamRecovery,
+    CancelDelivery, InputOutcome, OwnedAdmissionRequest, OwnedCallerContext, TaskCall,
+    UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
 };
 pub(crate) use record::{CommittedTask, ErrorAuthor, Target};
 /// Re-exported at crate-public visibility for the same reason as

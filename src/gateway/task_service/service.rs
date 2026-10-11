@@ -81,6 +81,8 @@ pub struct TaskService {
     /// `None` once released: a re-read that finishes after shutdown cannot
     /// put a share back (seat-2 review).
     sealed: Arc<parking_lot::Mutex<Option<usize>>>,
+    /// The per-row send locks of upstream cancels (MIK-8347).
+    pub(crate) cancel_sends: super::execution::pending_cancel::CancelSends,
 }
 
 impl TaskService {
@@ -116,6 +118,7 @@ impl TaskService {
             store,
             admission,
             sealed: Arc::new(parking_lot::Mutex::new(Some(sealed))),
+            cancel_sends: super::execution::pending_cancel::CancelSends::default(),
         })
     }
 

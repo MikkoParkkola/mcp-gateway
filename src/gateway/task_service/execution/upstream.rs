@@ -203,7 +203,9 @@ impl TaskExecutor {
         };
         let deadline = crate::gateway::meta_mcp::upstream::QUERY_DEADLINE;
         match send {
-            CancelSend::Inline => adapter.cancel(&handle, deadline).await,
+            CancelSend::Inline => {
+                adapter.cancel(&handle, deadline).await;
+            }
             CancelSend::Detach => {
                 tokio::spawn(async move { adapter.cancel(&handle, deadline).await });
             }

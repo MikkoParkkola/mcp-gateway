@@ -315,6 +315,20 @@ pub(crate) enum UpstreamAnswer {
     Unavailable,
 }
 
+/// What one upstream `tasks/cancel` attempt established (MIK-8347).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CancelDelivery {
+    /// The peer answered, with a result or a JSON-RPC error: it received the
+    /// cancel, and sending it again changes nothing.
+    Confirmed,
+    /// Sent toward an eligible backend, but it timed out or failed in
+    /// transport. Counts against the row's attempt bound.
+    Failed,
+    /// Not sent: the backend was unclaimed, needed a login, or was still
+    /// starting. Does not count against the attempt bound.
+    NotReady,
+}
+
 /// I5 seam, reduced from r3's `checkpoint`/`query` pair.
 ///
 /// It can name neither a tool nor arguments, so "never resubmit the original
@@ -336,11 +350,18 @@ pub(crate) trait UpstreamRecovery: Send + Sync {
     async fn query(&self, handle: &UpstreamHandle, deadline: Duration) -> UpstreamAnswer;
 
     /// The adapter's one write: a single bounded `tasks/cancel` naming
-    /// `handle`, best effort, its answer ignored. Called only by the sender
-    /// that won the row's durable cancel claim, so it is never retried here.
-    /// Required, with no default: an adapter that silently dropped cancels
-    /// would leave every owner's cancel unsent.
-    async fn cancel(&self, handle: &UpstreamHandle, deadline: Duration);
+    /// `handle`. Called only by the holder of the row's cancel claim, which
+    /// retries on what this reports (MIK-8347); the adapter itself never
+    /// retries. Required, with no default: an adapter that silently dropped
+    /// cancels would leave every owner's cancel unsent.
+    async fn cancel(&self, handle: &UpstreamHandle, deadline: Duration) -> CancelDelivery;
+
+    /// Names of backends whose start has just succeeded, published after the
+    /// start lock is released (MIK-8347). `None` when the adapter has no such
+    /// feed; the periodic sweep still retries.
+    fn started(&self) -> Option<tokio::sync::broadcast::Receiver<String>> {
+        None
+    }
 }
 
 #[cfg(test)]

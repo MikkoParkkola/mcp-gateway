@@ -6,6 +6,7 @@ mod context;
 mod expiry;
 mod input_round;
 mod observe;
+pub(crate) mod pending_cancel;
 #[cfg(debug_assertions)]
 pub(crate) mod pause_hook;
 mod recovery;
@@ -28,8 +29,8 @@ pub(crate) use context::{OwnedAdmissionRequest, OwnedCallerContext};
 pub(crate) use expiry::ExpirySweep;
 pub(crate) use input_round::InputOutcome;
 pub(crate) use observe::{
-    CancelOutcome, CommitObserver, CommitStage, DrainOutcome, UpstreamAnswer, UpstreamHandle,
-    UpstreamRecovery,
+    CancelDelivery, CancelOutcome, CommitObserver, CommitStage, DrainOutcome, UpstreamAnswer,
+    UpstreamHandle, UpstreamRecovery,
 };
 use observe::{Handoff, HandoffRegistry};
 pub(in crate::gateway::task_service) use recovery::recovery_event;

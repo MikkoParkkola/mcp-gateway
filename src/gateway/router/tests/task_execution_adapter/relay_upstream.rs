@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use crate::gateway::task_service::{UpstreamAnswer, UpstreamHandle, UpstreamRecovery};
+use crate::gateway::task_service::{UpstreamAnswer, UpstreamHandle, UpstreamRecovery, CancelDelivery};
 use crate::security::firewall::{CollusionAction, CollusionConfig, Firewall, FirewallConfig};
 
 /// What the upstream task finally answers, long enough for several fingerprints.
@@ -88,7 +88,9 @@ struct Recovery(Arc<AtomicUsize>, Answering);
 #[async_trait::async_trait]
 impl UpstreamRecovery for Recovery {
     /// This suite asserts nothing about upstream cancels (MIK-7642 PR.D rows do).
-    async fn cancel(&self, _handle: &UpstreamHandle, _deadline: Duration) {}
+    async fn cancel(&self, _handle: &UpstreamHandle, _deadline: Duration) -> CancelDelivery {
+        CancelDelivery::Confirmed
+    }
 
     async fn claims(&self, backend: &str) -> bool {
         backend == BACKEND

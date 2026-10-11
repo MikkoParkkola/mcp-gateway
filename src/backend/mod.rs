@@ -230,6 +230,9 @@ pub struct Backend {
     /// Where this backend's transports may connect; stamped by its registry.
     /// Unstamped means `Configured`: a backend no config governs.
     destination: std::sync::OnceLock<crate::security::ssrf::DestinationPolicy>,
+    /// Where this backend says its shared start succeeded; stamped by its
+    /// registry (MIK-8347). Unstamped: nobody listens.
+    started: std::sync::OnceLock<tokio::sync::broadcast::Sender<String>>,
     /// Set, and never cleared, when a start began before any stamp: whatever
     /// that start built may still be alive somewhere (pooled, closing, held
     /// by a request), so a hardened pairing refuses this backend (MIK-7700).
@@ -316,6 +319,11 @@ pub(crate) struct MarkWindowGate {
 }
 
 impl Backend {
+    /// Set by [`BackendRegistry`]; the first stamp wins.
+    pub(crate) fn stamp_started(&self, feed: tokio::sync::broadcast::Sender<String>) {
+        let _ = self.started.set(feed);
+    }
+
     /// Set by [`BackendRegistry`]; the first stamp wins.
     pub(crate) fn stamp_destination(&self, policy: crate::security::ssrf::DestinationPolicy) {
         let _ = self.destination.set(policy);
@@ -567,6 +575,10 @@ mod destination_tests;
 #[cfg(test)]
 #[path = "publish_order_tests.rs"]
 mod publish_order_tests;
+
+#[cfg(test)]
+#[path = "started_feed_tests.rs"]
+mod started_feed_tests;
 #[cfg(test)]
 #[path = "stop_race_tests.rs"]
 mod stop_race_tests;

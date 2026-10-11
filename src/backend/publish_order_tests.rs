@@ -17,7 +17,7 @@ use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
 
 /// An MCP server on loopback that answers the handshake, so a start runs all
 /// the way to publish.
-async fn upstream() -> String {
+pub(super) async fn upstream() -> String {
     let app = axum::Router::new().fallback(|axum::Json(message): axum::Json<Value>| async move {
         let Some(id) = message.get("id").cloned() else {
             return StatusCode::ACCEPTED.into_response();
