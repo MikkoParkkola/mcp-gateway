@@ -213,18 +213,6 @@ impl Entries<'_> {
     }
 }
 
-/// Build `answer`'s view (D1/D2), or say why it cannot be read (D6).
-/// `probe` records (reserved, live) bytes at the first reservation, at every
-/// growth and at compaction.
-pub(crate) fn build(
-    detector: &CollusionDetector,
-    answer: &Value,
-    probe: Option<&mut Vec<(usize, usize)>>,
-) -> Result<AnswerView, Unreadable> {
-    let walk = reserve_walk(detector, answer)?;
-    build_with(detector, answer, walk, probe)
-}
-
 /// The preflight, then the walks' charge (D2/D8): the reference lists every
 /// walk of `answer` builds (the gate's leaf reading, the view's forms, the
 /// label walk and the seam pass) and the normalizer's combining buffer,
@@ -250,7 +238,9 @@ pub(crate) struct WalkCharge {
     refs: usize,
 }
 
-/// [`build`] within an already reserved walk charge.
+/// Build `answer`'s view (D1/D2) within its reserved walk charge, or say
+/// why it cannot be read (D6). `probe` records (reserved, live) bytes at the
+/// first reservation, at every growth and at compaction.
 pub(crate) fn build_with(
     detector: &CollusionDetector,
     answer: &Value,

@@ -558,10 +558,24 @@ impl CollusionDetector {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// `answer`'s view built exactly as the gate builds it: the walks'
+    /// reservation, then the view within it (tests only).
+    fn view_by_production_path(
+        &self,
+        answer: &serde_json::Value,
+        probe: Option<&mut Vec<(usize, usize)>>,
+    ) -> Result<
+        super::super::collusion_digest::view::AnswerView,
+        super::super::collusion_digest::view::Unreadable,
+    > {
+        let view = super::super::collusion_digest::view::reserve_walk(self, answer)?;
+        super::super::collusion_digest::view::build_with(self, answer, view, probe)
+    }
+
     /// The `VIEW_BYTES` charge `answer`'s view would take,
     /// computed from the view's length, not from the budget counter.
     pub(crate) fn view_charge_of(&self, answer: &serde_json::Value) -> usize {
-        super::super::collusion_digest::view::build(self, answer, None)
+        self.view_by_production_path(answer, None)
             .map_or(0, |v| v.charge_bytes())
     }
 
@@ -573,7 +587,7 @@ impl CollusionDetector {
     /// The sorted sampled view of `answer`, built without the
     /// over-bound gate (unit rows only).
     pub(crate) fn view_of(&self, answer: &serde_json::Value) -> Option<Vec<u64>> {
-        super::super::collusion_digest::view::build(self, answer, None)
+        self.view_by_production_path(answer, None)
             .ok()
             .map(|v| v.entries().to_vec())
     }
@@ -609,7 +623,7 @@ impl CollusionDetector {
     /// growth and compaction while `answer`'s view is built.
     pub(crate) fn view_build_probe(&self, answer: &serde_json::Value) -> Vec<(usize, usize)> {
         let mut probe = Vec::new();
-        let _ = super::super::collusion_digest::view::build(self, answer, Some(&mut probe));
+        let _ = self.view_by_production_path(answer, Some(&mut probe));
         probe
     }
 

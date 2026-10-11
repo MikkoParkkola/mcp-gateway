@@ -394,3 +394,22 @@ fn combining_runs_across_leaves_are_reserved() {
         "combining runs across leaves were not reserved ({reserved} B)"
     );
 }
+
+/// `MIK-8066` 2b seat H4 (gpt): a finished view keeps the walks' charge
+/// (64 B per node, reserved before the first walk) for as long as it lives,
+/// because the answer's label walk and seam pass run while it is judged.
+/// 2,000 leaves: the view's charge covers 2,001 nodes' walks plus its
+/// entries.
+#[test]
+fn a_view_holds_its_walk_charge_while_it_lives() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    let leaves: Vec<Value> = (0..2_000).map(|i| json!(filler(1300 + i, 600))).collect();
+    let answer = Value::Array(leaves);
+    let entries = detector.view_of(&answer).expect("a view").len();
+    let nodes = 2_001;
+    assert!(
+        detector.view_charge_of(&answer) >= nodes * 64 + entries * 8,
+        "a finished view released its walk charge"
+    );
+}
