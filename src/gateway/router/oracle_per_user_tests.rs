@@ -267,23 +267,20 @@ async fn p3_parity_holds_across_the_caller_slot_lifecycle() {
                 list_as_alpha(&absent).await;
             }
             "evicted" => {
+                // Eviction drops the scripted slot with its transport; the
+                // same catalogue is served again, so the refill succeeds.
                 withheld.backend.evict_identity_slots("alpha");
                 absent.backend.evict_identity_slots("alpha");
+                rescript(&withheld, true);
+                rescript(&absent, false);
             }
             _ => {}
         }
         let minted = withheld.mints();
         let w = call(&withheld, Entry::Invoke, json!({"q": "x"})).await;
         let a = call(&absent, Entry::Invoke, json!({"q": "x"})).await;
-        // Eviction drops the fixture's scripted slot, so the missing name's
-        // refill fails: P4's stated outage residual. There the withheld name
-        // is held to its own answer, -32601.
-        let parity = step != "evicted";
-        if parity && w != a {
+        if w != a {
             cells.push(format!("P3 {step}: withheld {w:?} vs missing {a:?}"));
-        }
-        if !parity && w.1.pointer("/error/code") != Some(&json!(-32601)) {
-            cells.push(format!("P3 {step}: withheld answered {w:?}"));
         }
         if withheld.mints() != minted || withheld.dispatched() != 0 {
             cells.push(format!(
@@ -312,4 +309,63 @@ async fn p5_the_caller_slot_not_the_shared_one_decides() {
     .await;
     let answer = call(&gw, Entry::Invoke, json!({"q": "x"})).await;
     assert_eq!(gw.caller.calls(), 1, "P5: alpha's offered tool was not sent: {answer:?}");
+}
+
+/// alpha's upstream after an eviction: the catalogue it served before
+/// ([`TOOL`] valid when `holds`, else only the sibling), counted into the
+/// gateway's own caller counters.
+struct Rescripted {
+    holds: bool,
+    asked: Arc<Asked>,
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Rescripted {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        let body = if method == "tools/list" {
+            self.asked.lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut tools = vec![json!({"name": "note", "description": "A ledger tool.",
+                "inputSchema": valid()})];
+            if self.holds {
+                tools.push(json!({"name": TOOL, "description": "A ledger tool.",
+                    "inputSchema": valid()}));
+            }
+            json!({ "tools": tools })
+        } else {
+            self.asked.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
+        };
+        Ok(crate::protocol::JsonRpcResponse::success(
+            crate::protocol::RequestId::Number(1),
+            body,
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// Seed alpha's slot again after an eviction, serving what it served before.
+fn rescript(gw: &Gateway, holds: bool) {
+    let key = crate::backend::PoolKey::PerUser {
+        binding: crate::gateway::meta_mcp::slot_verdict_fixture::BINDING.to_string(),
+    };
+    let upstream = Rescripted {
+        holds,
+        asked: Arc::clone(&gw.caller),
+    };
+    gw.backend.set_pooled_transport_for_test(&key, Arc::new(upstream));
 }
