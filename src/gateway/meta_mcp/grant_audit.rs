@@ -423,7 +423,7 @@ pub(crate) async fn flush_open_slot() -> Result<()> {
 pub(super) const WITHHELD_RECORD_FAILED: &str = "The audit record of a withheld surfaced call could not be written; \
      the call is answered as a name that matches no tool";
 
-/// The FailClosed exception of MIK-8340 A5 item 9, for the withheld surfaced
+/// The `FailClosed` exception of MIK-8340 A5 item 9, for the withheld surfaced
 /// call's own grant record ONLY: run `noting`, then write the decisions it
 /// noted into the open slot at once and on their own task. Their write never
 /// becomes the request's verdict (under `FailClosed` the slot's end-of-request

@@ -175,7 +175,7 @@ async fn row10_caller_valid_schema_is_listed_from_the_callers_view() {
 /// budget has disabled it on `meta`.
 fn disabled_listing(meta: &MetaMcp) -> Value {
     let cfg = meta.capability_budget_config.read().clone();
-    for _ in 0..(cfg.window_size.max(cfg.min_samples) + 1) {
+    for _ in 0..=cfg.window_size.max(cfg.min_samples) {
         meta.kill_switch
             .record_capability_failure(BACKEND, TOOL, &cfg);
     }
