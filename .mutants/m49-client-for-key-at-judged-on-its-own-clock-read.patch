@@ -1,0 +1,14 @@
+diff --git a/src/gateway/auth_resolved.rs b/src/gateway/auth_resolved.rs
+index cec8b6373..06bd1c352 100644
+--- a/src/gateway/auth_resolved.rs
++++ b/src/gateway/auth_resolved.rs
+@@ -254,7 +254,8 @@ impl ResolvedAuthConfig {
+             .api_keys
+             .iter()
+             .find(|k| k.name == name && hex::encode(&k.digest[..6]) == principal)?;
+-        (!crate::config::api_key_expired(key.expires_at, now)).then(|| Self::client_of(key))
++        let _ = now;
++        (!crate::config::api_key_expired_now(key.expires_at)).then(|| Self::client_of(key))
+     }
+ 
+     /// Check rate limit for a client. Returns true if allowed, false if rate limited.

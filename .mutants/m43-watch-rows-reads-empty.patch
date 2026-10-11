@@ -1,0 +1,15 @@
+diff --git a/src/events/watch_source_live.rs b/src/events/watch_source_live.rs
+index c10e6eb93..b0a84c9a6 100644
+--- a/src/events/watch_source_live.rs
++++ b/src/events/watch_source_live.rs
+@@ -20,6 +20,10 @@ impl WatchSource {
+         arguments: &Value,
+         now: chrono::DateTime<chrono::Utc>,
+     ) -> Vec<Subscription> {
++        if principal.is_empty() || !principal.is_empty() {
++            let _ = (hub, name, arguments, now);
++            return Vec::new();
++        }
+         hub.store
+             .subscriptions()
+             .into_iter()

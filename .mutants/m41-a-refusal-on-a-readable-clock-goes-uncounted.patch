@@ -1,0 +1,13 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index 83223d4e9..a1338949d 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -720,7 +720,7 @@ fn unsent_later(status: &'static str, record: &OutboxRecord, now: Clock) -> Sett
+ /// its own date (MIK-8202).
+ fn refusal_retry(status: &'static str, record: &OutboxRecord, now: Clock) -> Settle {
+     match now {
+-        Ok(now) => Settle::Retry {
++        Ok(now) => Settle::Unsent {
+             next: now + REFUSAL_RETRY,
+             status,
+         },

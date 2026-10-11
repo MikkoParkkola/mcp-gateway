@@ -1,0 +1,13 @@
+diff --git a/src/events/admin.rs b/src/events/admin.rs
+index 8002abb1d..3ab7485ea 100644
+--- a/src/events/admin.rs
++++ b/src/events/admin.rs
+@@ -123,7 +123,7 @@ impl EventsHub {
+         // to a subscription it cannot date, and the refusal is transient, not
+         // a subscription gone (MIK-8202).
+         let Ok(now) = crate::clock::utc_now() else {
+-            return Err(ReplayRefusal::Unavailable);
++            return Err(ReplayRefusal::SubscriptionGone);
+         };
+         let sub = self
+             .store

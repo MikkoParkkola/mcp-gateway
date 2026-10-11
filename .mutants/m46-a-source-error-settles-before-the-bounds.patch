@@ -1,0 +1,14 @@
+diff --git a/src/events/worker_settle.rs b/src/events/worker_settle.rs
+index e297930de..fbdc247ae 100644
+--- a/src/events/worker_settle.rs
++++ b/src/events/worker_settle.rs
+@@ -51,7 +51,8 @@ impl EventsHub {
+         verdict: Verdict,
+     ) -> bool {
+         match verdict {
+-            Verdict::Admits | Verdict::Unoffered | Verdict::Unavailable => return false,
++            Verdict::Admits | Verdict::Unoffered => return false,
++            Verdict::Unavailable => self.settle(services, record, clock_unsent(record)).await,
+             Verdict::Refuses => self.revoke_before_send(services, ctx, sub, record).await,
+             Verdict::Undated => self.settle(services, record, clock_unsent(record)).await,
+         }

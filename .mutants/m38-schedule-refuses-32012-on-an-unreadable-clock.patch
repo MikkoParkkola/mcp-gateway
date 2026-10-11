@@ -1,0 +1,13 @@
+diff --git a/src/events/schedule_source.rs b/src/events/schedule_source.rs
+index f93730573..bc0834479 100644
+--- a/src/events/schedule_source.rs
++++ b/src/events/schedule_source.rs
+@@ -403,7 +403,7 @@ impl EventSource for ScheduleSource {
+         // the cap and answer -32012, which revokes. On a clock before 1970 the
+         // answer is no verdict at all (MIK-8202).
+         let Ok(now) = crate::clock::utc_now() else {
+-            return Err(RpcError::clock_unreadable());
++            return Err(RpcError::forbidden());
+         };
+         let held = self.held_by(principal, now);
+         if held.contains_key(&key) {

@@ -1,0 +1,13 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index d0d31f307..cdd684ade 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -252,7 +252,7 @@ impl Store {
+         // A clock before 1970 dates no lease: nothing is revived, and the
+         // replay is refused as transient (MIK-8202).
+         let Ok(now) = clock() else {
+-            return Ok(Revived::Undated);
++            return Ok(Revived::NoSubscription);
+         };
+         let Some(stamp) = state
+             .dead

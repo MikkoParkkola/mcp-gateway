@@ -1,0 +1,13 @@
+diff --git a/src/events/worker_settle.rs b/src/events/worker_settle.rs
+index e297930de..8743506f1 100644
+--- a/src/events/worker_settle.rs
++++ b/src/events/worker_settle.rs
+@@ -77,7 +77,7 @@ impl EventsHub {
+             // that waits needs the verdict read again after this check.
+             Verdict::Admits => services.admission(sub, grant(record)).await,
+             Verdict::Refuses => AccessVerdict::Refuses,
+-            Verdict::Undated => AccessVerdict::Undated,
++            Verdict::Undated => AccessVerdict::Admits,
+             Verdict::Unavailable => {
+                 services.audit_outcome(&ended(SOURCE_UNAVAILABLE)).await;
+                 self.settle_with(services, record, |now| {

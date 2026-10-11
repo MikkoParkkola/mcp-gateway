@@ -1,0 +1,13 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index 83223d4e9..4324912ab 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -346,7 +346,7 @@ impl EventsHub {
+         };
+         // An expired row kept for its burials still signs but is not sent
+         // to: unsent, and the next expiry pass settles it (MIK-8061).
+-        if !current.live(now) {
++        if !crate::clock::utc_now().is_ok_and(|n| current.live(n)) {
+             services.audit_outcome(&ended("subscription_expired")).await;
+             self.settle_with(services, record, |now| {
+                 unsent_now("subscription_expired", record, now)

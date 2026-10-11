@@ -1,0 +1,23 @@
+head_sha	ab03ecbcca03f315dd17ccc635c227307300c8cc
+m29-worker-reads-a-source-clock-error-as-admits	linux	m29-worker-reads-a-source-clock-error-as-admits.patch	--lib a_source_that_cannot_judge_on_the_clock
+m30-fan-out-skips-a-source-clock-error-uncounted	linux	m30-fan-out-skips-a-source-clock-error-uncounted.patch	--lib fan_out_to_a_source_that_cannot_judge_on_the_clock
+m31-a-no-send-refusal-counted-as-a-send	linux	m31-a-no-send-refusal-counted-as-a-send.patch	--lib a_source_error_delivers_nothing_and_settles_unsent
+m32-operational-answers-a-plain-internal-error	linux	m32-operational-answers-a-plain-internal-error.patch	--lib standing_is_judged_on_one_clock_reading
+m26c-watch-holders-read-the-clock-per-row	linux	m26c-watch-holders-read-the-clock-per-row.patch	--lib a_watch_row_undated_by_the_clock_is_kept_and_not_called
+m33-recheck-reads-a-source-clock-error-as-admits	linux	m33-recheck-reads-a-source-clock-error-as-admits.patch	--lib a_source_that_cannot_judge_on_the_clock
+m34-schedule-cap-reads-the-clock-per-row	linux	m34-schedule-cap-reads-the-clock-per-row.patch	--lib the_timer_cap_judges_every_lease_on_one_reading
+m38-schedule-refuses-32012-on-an-unreadable-clock	linux	m38-schedule-refuses-32012-on-an-unreadable-clock.patch	--lib the_timer_cap_judges_every_lease_on_one_reading
+m35-worker-lease-judged-on-a-second-read	linux	m35-worker-lease-judged-on-a-second-read.patch	--lib the_events_clock_is_read_only_at_its_decision_points
+m36-replay-lease-failure-reads-as-gone	linux	m36-replay-lease-failure-reads-as-gone.patch	--lib a_replay_the_clock_cannot_judge
+m37-enqueue-reads-the-clock-again	linux	m37-enqueue-reads-the-clock-again.patch	--lib the_outbox_takes_a_record_on_its_fan_out_reading
+m39-a-source-error-admits	linux	m39-a-source-error-admits.patch	--lib a_source_error_delivers_nothing_and_settles_unsent
+m40-a-helper-reads-the-clock-again	linux	m40-a-helper-reads-the-clock-again.patch	--lib the_events_clock_is_read_only_at_its_decision_points
+m41-a-refusal-on-a-readable-clock-goes-uncounted	linux	m41-a-refusal-on-a-readable-clock-goes-uncounted.patch	--lib an_unoffered_record_is_held_until_exhausted_and_keeps_its_subscription
+m42-a-refusal-on-a-pre-1970-clock-is-counted	linux	m42-a-refusal-on-a-pre-1970-clock-is-counted.patch	--lib a_refusal_whose_revocation_cannot_read_the_clock
+m43-watch-rows-reads-empty	linux	m43-watch-rows-reads-empty.patch	--lib a_holder_without_access_is_skipped_not_revoked
+m44-watch-check-admits-on-an-unreadable-clock	linux	m44-watch-check-admits-on-an-unreadable-clock.patch	--lib a_watch_check_on_an_unreadable_clock_answers_clock_unreadable
+m45-charged-before-the-clock-refuses-the-send	linux	m45-charged-before-the-clock-refuses-the-send.patch	--lib a_signer_that_cannot_read_the_clock_sends_nothing_and_counts_nothing
+m46-a-source-error-settles-before-the-bounds	linux	m46-a-source-error-settles-before-the-bounds.patch	--lib a_source_error_does_not_keep_an_overdue_record
+m47-an-undated-revive-reads-as-gone	linux	m47-an-undated-revive-reads-as-gone.patch	--lib a_revive_the_clock_cannot_date_is_undated
+m48-class-for-reads-the-clock-again	linux	m48-class-for-reads-the-clock-again.patch	--lib the_events_clock_is_read_only_at_its_decision_points
+m49-client-for-key-at-judged-on-its-own-clock-read	linux	m49-client-for-key-at-judged-on-its-own-clock-read.patch	--lib a_key_is_judged_at_the_callers_reading

@@ -1,0 +1,13 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index 83223d4e9..606012586 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -724,7 +724,7 @@ fn refusal_retry(status: &'static str, record: &OutboxRecord, now: Clock) -> Set
+             next: now + REFUSAL_RETRY,
+             status,
+         },
+-        Err(_) => Settle::Unsent {
++        Err(_) => Settle::Retry {
+             next: record.next_attempt_at,
+             status,
+         },

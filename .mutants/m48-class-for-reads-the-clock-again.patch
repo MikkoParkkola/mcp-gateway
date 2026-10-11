@@ -1,0 +1,13 @@
+diff --git a/src/events/watch_source_hold.rs b/src/events/watch_source_hold.rs
+index 6dbce7c34..b367051ff 100644
+--- a/src/events/watch_source_hold.rs
++++ b/src/events/watch_source_hold.rs
+@@ -111,7 +111,7 @@ impl WatchSource {
+         self.watch_class(name)
+             .or_else(|| {
+                 let hub = self.hub.upgrade()?;
+-                Self::rows(&hub, principal, name, arguments, now)
++                Self::rows(&hub, principal, name, arguments, crate::clock::utc_now().unwrap_or(now))
+                     .first()
+                     .map(|row| self.effective_class(row))
+             })

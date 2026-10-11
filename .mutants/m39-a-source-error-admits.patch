@@ -1,0 +1,13 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index 83223d4e9..64694e047 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -163,7 +163,7 @@ impl EventsHub {
+                 Err(e) if e.code == -32011 => Verdict::Unoffered,
+                 // Any other answer (a store the source could not read) is no
+                 // verdict: never an admission (MIK-8202).
+-                Err(_) => Verdict::Unavailable,
++                Err(_) => Verdict::Admits,
+             },
+             None if sub.name.starts_with(super::backend_source::NAME_PREFIX) => Verdict::Refuses,
+             None => Verdict::Unoffered,

@@ -1,0 +1,13 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index 83223d4e9..823ac482c 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -708,7 +708,7 @@ const SOURCE_UNAVAILABLE: &str = "source_unavailable";
+ /// Held unsent after a refused send admission or a source that could not
+ /// judge; uncounted, retried later (MIK-7907, MIK-8202).
+ fn unsent_later(status: &'static str, record: &OutboxRecord, now: Clock) -> Settle {
+-    Settle::Unsent {
++    Settle::Retry {
+         next: retry_after_refusal(record, now),
+         status,
+     }

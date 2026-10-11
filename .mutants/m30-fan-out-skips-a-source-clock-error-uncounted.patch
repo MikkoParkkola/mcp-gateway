@@ -1,0 +1,15 @@
+diff --git a/src/events/fanout.rs b/src/events/fanout.rs
+index 8cbb4ba28..4c6155cc5 100644
+--- a/src/events/fanout.rs
++++ b/src/events/fanout.rs
+@@ -150,10 +150,6 @@ impl EventsHub {
+                 }
+                 // The source could not judge on this clock: the row is kept
+                 // and this occurrence dropped and counted (MIK-8202).
+-                Err(refusal) if refusal.is_clock_unreadable() => {
+-                    self.count_clock_drop();
+-                    continue;
+-                }
+                 // Anything else (a store hiccup) skips this occurrence only.
+                 Err(_) => continue,
+             }

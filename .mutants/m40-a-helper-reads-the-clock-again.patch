@@ -1,0 +1,14 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index 83223d4e9..d3cdc4d20 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -734,7 +734,8 @@ fn refusal_retry(status: &'static str, record: &OutboxRecord, now: Clock) -> Set
+ /// A refusal's retry date, or the record's own date on a clock that cannot be
+ /// read: never a date in 1969 (MIK-8202).
+ fn retry_after_refusal(record: &OutboxRecord, now: Clock) -> chrono::DateTime<chrono::Utc> {
+-    now.map_or(record.next_attempt_at, |now| now + REFUSAL_RETRY)
++    let _ = now;
++    crate::clock::utc_now().map_or(record.next_attempt_at, |now| now + REFUSAL_RETRY)
+ }
+ 
+ /// One reading of the wall clock, as the worker's decision points take it

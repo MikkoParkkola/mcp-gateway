@@ -1,0 +1,12 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index 83223d4e9..890360943 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -157,7 +157,6 @@ impl EventsHub {
+                 Err(e) if e.code == -32012 => Verdict::Refuses,
+                 // The source could not judge on this clock: neither an
+                 // admission nor a refusal (MIK-8202).
+-                Err(e) if e.is_clock_unreadable() => Verdict::Undated,
+                 // Not found now (a catalogue that could not read the type,
+                 // MIK-8037): held like a type no source offers.
+                 Err(e) if e.code == -32011 => Verdict::Unoffered,

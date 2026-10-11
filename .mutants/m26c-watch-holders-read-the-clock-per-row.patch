@@ -1,0 +1,13 @@
+diff --git a/src/events/watch_source_live.rs b/src/events/watch_source_live.rs
+index c10e6eb93..4b441d767 100644
+--- a/src/events/watch_source_live.rs
++++ b/src/events/watch_source_live.rs
+@@ -62,7 +62,7 @@ impl Run {
+             .into_iter()
+             // Its own class only: a poller never holds, resumes or polls
+             // for a row admitted under another class (MIK-8122).
+-            .filter(|s| s.live(now) && self.owns(s))
++            .filter(|s| crate::clock::utc_now().is_ok_and(|n| s.live(n)) && self.owns(s))
+             .collect()
+     }
+ }

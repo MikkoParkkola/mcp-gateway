@@ -1,0 +1,13 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index d0d31f307..9f9fc4fc3 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -153,7 +153,7 @@ impl Store {
+             .subs
+             .get(&record.subscription_id)
+             // Judged on the caller's reading, never a second read (MIK-8202).
+-            .is_some_and(|sub| sub.live(now))
++            .is_some_and(|sub| crate::clock::utc_now().is_ok_and(|n| sub.live(n)))
+             || state.held.contains_key(&record.subscription_id)
+         {
+             return Ok(Enqueued::NoSubscription);
