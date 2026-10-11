@@ -691,12 +691,17 @@ impl DeliveryDigest {
     /// record sketches as the excuse and samples as evidence. Never deferred,
     /// so capping keeps the cut as it is.
     fn retaining_view(self, detector: &CollusionDetector, view: &view::AnswerView) -> Self {
-        let mut cut: Vec<u64> = self
-            .segments
+        // Every form the leaves path fingerprints (each run's leaves, joined
+        // and run together), so a step of leaves shorter than a k-gram still
+        // has its joined text; and a cut an earlier view retention kept (the
+        // rewritten route retains twice), so a second view never erases it.
+        let forms: Vec<String> = self.runs().iter().flat_map(|run| run_forms(run)).collect();
+        let mut cut: Vec<u64> = forms
             .iter()
-            .flat_map(|s| detector.sampled_kgram_stream(s.text.chars()))
+            .flat_map(|form| detector.sampled_kgram_stream(form.chars()))
             .chain(self.join_fingerprints(detector))
             .chain(self.retained.iter().copied())
+            .chain(self.cut_fps.iter().flat_map(|kept| kept.iter().copied()))
             .filter(|&h| view.contains(h))
             .collect();
         cut.sort_unstable();
