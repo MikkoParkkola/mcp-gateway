@@ -717,6 +717,53 @@ fn a_plan_admits_attachments_until_full_then_skips_and_marks() {
     admit_until_full(0);
 }
 
+/// `MIK-8066` A3 refinement: a staged big step whose leaf hashes do not fit
+/// the plan's remaining room keeps none and is marked lost, the safe
+/// direction (no hashes, no subset seam, a lost-room refusal). The plan
+/// starts where the step's receipt and attachments fit but its 100,000 leaf
+/// hashes (800 KB) do not: both sizes derived from the fixture by the sizing
+/// rules. Inverted mutant m17b (skipped step keeps its hashes, not marked).
+#[test]
+fn a_step_whose_leaf_hashes_do_not_fit_keeps_none_and_is_marked_lost() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    let leaves: Vec<String> = (0..100_000).map(|i| format!("leaf{i:011}")).collect();
+    let step = json!({ "parts": leaves });
+    let cap = 4 * super::super::DELIVERED_SET_CAP;
+    let bound = super::super::DELIVERED_SET_CAP;
+    let (receipt, attachment) = fw.sized_step(&step, 0, bound);
+    let hashes = leaves.len() * 8;
+    // Room for the receipt, the attachments and half the hashes.
+    let start = cap - receipt - attachment - hashes / 2;
+    assert!(
+        start >= bound,
+        "premise: the plan starts past the bound ({start})"
+    );
+    let staged = crate::security::firewall::PlanStaging::starting_at(start);
+    staged.set_caller("alice");
+    let digest = fw
+        .receipt_digest("alpha", "read", &step, Some(&staged))
+        .expect("staged");
+    assert!(
+        digest.is_staged_step(),
+        "premise: the step was admitted with attachments"
+    );
+    assert!(
+        staged.total() <= cap,
+        "the plan total passed its cap ({} > {cap})",
+        staged.total()
+    );
+    let hash = fw.leaf_hash(&leaves[0]).expect("relay detection on");
+    assert!(
+        !digest.holds_leaf_hash(hash),
+        "a step whose leaf hashes did not fit kept them"
+    );
+    assert!(
+        detector.excuse_lost(SOURCE, "alice"),
+        "a step skipped for leaf-hash room was not marked lost"
+    );
+}
+
 /// `MIK-8066` T15 variant: with two live sketches already held, the
 /// pending positions shift past them and N is still read from the charges.
 #[test]
