@@ -200,16 +200,21 @@ async fn cs_http_control_character_nonce_is_refused_never_rewritten() {
     let backend = BackendFixture::start(backend_result()).await;
     let gateway = HttpGateway::start(chain_config(&backend.url)).await;
     let session = gateway.initialize().await;
-    let dirty = gateway
-        .call(
-            &session,
-            &chained(signed_invoke("cs-3", "hmac-cs-3"), "a\u{0}b\u{1}c"),
-        )
-        .await;
-    assert!(
-        dirty.get("error").is_some(),
-        "the dirty nonce was not refused: {dirty}"
-    );
+    // A NUL alone and a control character alone are each refused, and no
+    // signature chain is minted for either.
+    for (id, dirty) in [("cs-3n", "a\u{0}b"), ("cs-3c", "a\u{1}b")] {
+        let refused = gateway
+            .call(
+                &session,
+                &chained(signed_invoke(id, &format!("hmac-{id}")), dirty),
+            )
+            .await;
+        assert!(
+            refused.get("error").is_some(),
+            "{dirty:?} was not refused: {refused}"
+        );
+        assert!(unchained(&refused), "{dirty:?} minted a chain: {refused}");
+    }
     let nonce = "a b\u{e9}c";
     let response = gateway
         .call(

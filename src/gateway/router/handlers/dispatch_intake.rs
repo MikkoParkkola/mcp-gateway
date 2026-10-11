@@ -409,9 +409,10 @@ pub(super) async fn intake(
             crate::security::sanitize::ProtocolRoute::Meta,
         ) {
             Ok(sanitized) => sanitized,
+            // The protocol fields passed validation, so the id is answered.
             Err(e) => {
                 return Err(build_error_response(
-                    None,
+                    raw_id.clone(),
                     e.to_rpc_code(),
                     e.to_string(),
                     &session_id,

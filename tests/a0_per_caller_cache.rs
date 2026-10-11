@@ -754,8 +754,9 @@ async fn direct_route_refuses_untrusted_peer_identity_header() {
     assert_eq!(delivery(&trusted.1).as_deref(), Some("call-1"));
 }
 
-/// T6 control — trust OFF: the headers are ignored, both requests are the
-/// anonymous principal, and they pool. Headers are not trusted by default.
+/// T6 control — trust OFF: the headers are ignored, both requests are the one
+/// principal their shared certificate proves, and they pool. Headers are not
+/// trusted by default.
 #[tokio::test]
 async fn direct_route_ignores_identity_headers_when_trust_is_off() {
     // One verified certificate on both calls: a keyed direct call needs an

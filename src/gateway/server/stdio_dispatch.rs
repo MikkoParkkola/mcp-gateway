@@ -264,9 +264,7 @@ impl Gateway {
                 request,
                 crate::security::sanitize::ProtocolRoute::Meta,
             )
-            .map_err(|error| {
-                JsonRpcResponse::error(None, -32600, error.to_string()).to_value_lossy()
-            })?;
+            .map_err(|error| refuse(raw_id.clone(), &error))?;
         }
         if let Some(context) = signing_context.as_mut() {
             context

@@ -487,9 +487,11 @@ pub(super) async fn forward_notification(
 /// `passthrough` (option (a)), whose instance is then recorded (F2).
 fn sanitized(state: &AppState, name: &str, request: Value) -> Result<Value, Rejection> {
     use crate::security::sanitize::{ProtocolRoute, sanitize_request, validate_protocol_fields};
-    let refused = |e: crate::Error| {
+    // A protocol-field refusal answers no id (the id may be what is dirty);
+    // past validation, the request's own id is answered.
+    let refused = |id, e: crate::Error| {
         super::super::helpers::build_http_error_response(
-            None,
+            id,
             e.to_rpc_code(),
             e.to_string(),
             StatusCode::BAD_REQUEST,
@@ -500,10 +502,11 @@ fn sanitized(state: &AppState, name: &str, request: Value) -> Result<Value, Reje
         &crate::gateway::PROTOCOL_NONCES,
         ProtocolRoute::Direct,
     )
-    .map_err(refused)?;
+    .map_err(|e| refused(None, e))?;
     if let Some(instance) = state.meta_mcp.passthrough_instance(name) {
         crate::gateway::meta_mcp::visible::record_exempt_instances(&[instance]);
         return Ok(request);
     }
-    sanitize_request(&request, ProtocolRoute::Direct).map_err(refused)
+    let id = crate::protocol::mrtr::raw_request_id(&request);
+    sanitize_request(&request, ProtocolRoute::Direct).map_err(|e| refused(id, e))
 }

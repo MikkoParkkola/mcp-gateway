@@ -26,7 +26,7 @@ use super::MetaMcp;
 /// Surfacing refuses a backend tool under any of them, so a meta name always
 /// resolves to the gateway's own handler (MIK-8154 relies on it); kept equal
 /// to the dispatch arms by `meta_tool_names_are_the_dispatch_arms`.
-pub(super) const META_TOOL_NAMES: &[&str] = &[
+pub(crate) const META_TOOL_NAMES: &[&str] = &[
     "gateway_search",
     "gateway_execute",
     "gateway_list_servers",

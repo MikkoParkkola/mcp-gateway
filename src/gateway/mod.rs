@@ -18,6 +18,9 @@ pub(crate) const PROTOCOL_NONCES: [&str; 2] = [
     meta_mcp::signing::NONCE_META,
     crate::protocol::mrtr::CHAIN_NONCE_META,
 ];
+/// Every meta-tool name: the sanitize step leaves these tools' own
+/// `arguments` undecoded, as dispatch does (MIK-8154).
+pub(crate) use meta_mcp::META_TOOL_NAMES;
 /// Where the CLI runner notes a child it started for the call's invocation
 /// record (MIK-7926.FIX.2), without `meta_mcp` becoming crate-visible.
 pub(crate) use meta_mcp::invoke::audit::note_process;

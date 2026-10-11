@@ -113,6 +113,7 @@ mod slot_quota_release_tests;
 mod spec_preview;
 mod support;
 mod surfaced;
+pub(crate) use surfaced::META_TOOL_NAMES;
 mod task_confirmation;
 pub(crate) mod task_notify;
 mod task_replay;

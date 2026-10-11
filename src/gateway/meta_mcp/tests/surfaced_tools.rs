@@ -585,10 +585,14 @@ fn meta_tool_names_are_the_dispatch_arms() {
         + source[start..]
             .find("\n            _ => {")
             .expect("the meta match's fallback arm");
+    // Every string literal naming a gateway tool before an arm's `=>`, so a
+    // guard or an `|` pattern still counts; an arm naming a constant reads as
+    // a missing name and fails the comparison rather than passing it.
     let arms: std::collections::BTreeSet<&str> = source[start..end]
         .lines()
-        .filter_map(|line| line.trim().strip_prefix('"'))
-        .filter_map(|rest| rest.split_once("\" =>").map(|(name, _)| name))
+        .filter_map(|line| line.split_once("=>").map(|(pattern, _)| pattern))
+        .flat_map(|pattern| pattern.split('"').skip(1).step_by(2))
+        .filter(|literal| literal.starts_with("gateway_"))
         .collect();
     let listed: std::collections::BTreeSet<&str> = super::super::surfaced::META_TOOL_NAMES
         .iter()

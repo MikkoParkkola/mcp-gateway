@@ -135,11 +135,22 @@ pub(super) fn sanitize_value(key: &str, value: &Value, route: ProtocolRoute) -> 
         .get("name")
         .and_then(Value::as_str)
         .map(sanitize_string);
-    let meta = route == ProtocolRoute::Meta
-        && matches!(name, Some(Ok(name)) if META_PARSED.contains(&name.as_str()));
-    let slot = if meta { Slot::Meta } else { Slot::Tool };
+    // On a meta route a meta tool's own `arguments` are read by its handler
+    // as they are: decoded inside only for the parsing meta tools, never
+    // decoded as a whole (round-5 seats: decoding them made a string payload
+    // the gateway refused act). Everything else is a backend tool's.
+    let name = match (route, name) {
+        (ProtocolRoute::Meta, Some(Ok(name))) => Some(name),
+        _ => None,
+    };
+    let slot = match name.as_deref() {
+        Some(name) if META_PARSED.contains(&name) => Some(Slot::Meta),
+        Some(name) if crate::gateway::META_TOOL_NAMES.contains(&name) => None,
+        _ => Some(Slot::Tool),
+    };
     sanitize_object(params, |key, member| {
-        (key == "arguments").then(|| sanitize_slot(member, slot))
+        slot.filter(|_| key == "arguments")
+            .map(|slot| sanitize_slot(member, slot))
     })
 }
 
@@ -264,7 +275,8 @@ mod tests {
 
     /// Round-4 seat gpt: a raw control character that makes an encoded
     /// `arguments` invalid JSON until it is stripped does not hide an escaped
-    /// NUL: the cleaned string is what is decoded.
+    /// NUL: the client's own bytes are decoded, once, by the gateway's
+    /// decoder, which refuses them, so no stripped form is ever decoded.
     #[test]
     fn s9i_stripping_cannot_turn_an_encoded_nul_into_a_plain_string() {
         let raw = "{\"cmd\":\"\\u0000\"}\u{7}";
@@ -303,6 +315,32 @@ mod tests {
                 validate_protocol_fields(&request, &[], ProtocolRoute::Meta).is_err(),
                 "{request}"
             );
+        }
+    }
+
+    /// Round-5 seats (both): on a meta route a meta tool's own `arguments`
+    /// string is never decoded as a whole, as its handler never decodes it:
+    /// a string payload stays a string (dispatch refuses it, as before), and
+    /// an invalid one is not refused here for a tool that ignores arguments.
+    #[test]
+    fn s9j_a_meta_tools_own_arguments_string_is_not_decoded() {
+        for (name, arguments) in [
+            ("gateway_kill_server", json!("{\"server\": \"alpha\"}")),
+            ("gateway_list_tools", json!("{\"server\": \"alpha\"}")),
+            ("gateway_get_stats", json!("not json")),
+        ] {
+            let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": name, "arguments": arguments}});
+            let clean = sanitize_request(&request, ProtocolRoute::Meta).expect("sanitizes");
+            assert_eq!(clean["params"]["arguments"], arguments, "{name}");
+        }
+    }
+
+    /// The parsing meta tools are meta tools: one roster, `META_TOOL_NAMES`.
+    #[test]
+    fn meta_parsed_is_part_of_the_meta_roster() {
+        for name in super::META_PARSED {
+            assert!(crate::gateway::META_TOOL_NAMES.contains(&name), "{name}");
         }
     }
 }
