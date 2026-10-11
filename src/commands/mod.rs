@@ -11,6 +11,7 @@ mod add_remove;
 mod api_key_rewrite;
 mod backend_url_keys;
 mod cap;
+mod capability_dirs;
 pub(crate) mod color;
 #[cfg(feature = "config-export")]
 mod config_export;
@@ -71,6 +72,14 @@ use mcp_gateway::{
     cli::{InitProfile, TlsCommand},
     mtls::{CaParams, CertGenerator, LeafCertParams},
 };
+
+/// The command that shows why the config at `path` does not load: doctor's
+/// own `--config`, never the global flag before the subcommand. One
+/// definition for every hint that names it (MIK-8375 defines the same; the
+/// two are reconciled when both land).
+pub(crate) fn check_config_command(path: &std::path::Path) -> String {
+    format!("mcp-gateway doctor --config {}", path.display())
+}
 
 // ── init ─────────────────────────────────────────────────────────────────────
 

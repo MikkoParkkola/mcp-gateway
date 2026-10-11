@@ -48,6 +48,11 @@ pub struct TokenInfo {
     /// OAuth `client_secret` stored alongside the token (optional; prefer Keychain).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_secret: Option<String>,
+
+    /// The `expires_in` of the answer that issued this token: its lifetime,
+    /// from which an unset refresh buffer is derived (MIK-8044).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifetime_secs: Option<u64>,
 }
 
 fn default_token_type() -> String {
@@ -124,6 +129,7 @@ impl std::fmt::Debug for TokenInfo {
             .field("token_endpoint", &self.token_endpoint)
             .field("client_id", &self.client_id)
             .field("client_secret", &redact_opt(&self.client_secret))
+            .field("lifetime_secs", &self.lifetime_secs)
             .finish()
     }
 }
@@ -157,6 +163,7 @@ impl TokenInfo {
             token_endpoint: None,
             client_id: None,
             client_secret: None,
+            lifetime_secs: expires_in,
         }
     }
 

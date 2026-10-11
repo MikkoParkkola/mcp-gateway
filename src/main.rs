@@ -146,7 +146,9 @@ async fn run(cli: Cli) -> ExitCode {
             };
             mcp_gateway::validator::cli_handler::run_validate_command(&paths, &config).await
         }
-        Some(Command::Tool(tool_cmd)) => commands::run_tool_command(tool_cmd).await,
+        Some(Command::Tool(tool_cmd)) => {
+            commands::run_tool_command(tool_cmd, config_path.as_deref()).await
+        }
         Some(Command::Skills(SkillsCommand::Generate {
             capabilities,
             server,
@@ -155,8 +157,16 @@ async fn run(cli: Cli) -> ExitCode {
             install,
             dry_run,
         })) => {
-            commands::run_skills_generate(capabilities, server, category, out_dir, install, dry_run)
-                .await
+            commands::run_skills_generate(
+                capabilities,
+                config_path.as_deref(),
+                server,
+                category,
+                out_dir,
+                install,
+                dry_run,
+            )
+            .await
         }
         Some(Command::Skills(SkillsCommand::Import { source, registry })) => {
             commands::run_skills_import(source, registry).await

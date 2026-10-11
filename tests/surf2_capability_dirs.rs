@@ -104,7 +104,8 @@ fn tool_inspect_reads_the_configured_directories() {
 }
 
 /// E1c: `tool invoke` loads the tool and reaches execution: its request to
-/// the capability's own host (`api.invalid`) fails, not the catalogue load.
+/// the capability's own host (`api.invalid`) fails in transport, not the
+/// catalogue load.
 #[test]
 fn tool_invoke_reads_the_configured_directories() {
     let (root, cfg) = setup();
@@ -115,7 +116,7 @@ fn tool_invoke_reads_the_configured_directories() {
     );
     let shown = both(&out);
     assert!(
-        shown.contains("api.invalid") && !shown.contains("Failed to load capabilities"),
+        shown.contains("Transport error") && !shown.contains("Failed to load capabilities"),
         "{shown}"
     );
 }
@@ -165,10 +166,8 @@ fn walk(dir: &Path) -> Vec<String> {
                 found.extend(walk(&path));
             } else {
                 found.push(path.display().to_string());
-                if let Ok(text) = std::fs::read_to_string(&path) {
-                    if text.contains("alpha") {
-                        found.push("alpha (content)".to_owned());
-                    }
+                if std::fs::read_to_string(&path).is_ok_and(|text| text.contains("alpha")) {
+                    found.push("alpha (content)".to_owned());
                 }
             }
         }
@@ -404,4 +403,17 @@ fn the_fallback_search_finds_the_config() {
     );
     let out = run(root.path(), &[], &["tool", "list"]);
     assert!(both(&out).contains("found_cap"), "{}", both(&out));
+}
+
+/// E15: a `${VAR}` entry expands as the gateway expands it.
+#[test]
+fn a_variable_entry_expands_as_the_gateway_does() {
+    let root = tempfile::tempdir().expect("root");
+    let dir = root.path().join("var_caps");
+    capability(&dir, "var_cap", "From a variable", "yaml");
+    let cfg = root.path().join("gateway.yaml");
+    config(&cfg, &["${SURF2_CAPS_DIR}"], "");
+    let env = [("SURF2_CAPS_DIR", dir.to_str().expect("utf-8"))];
+    let out = run(root.path(), &env, &with_config(&cfg, &["tool", "list"]));
+    assert!(both(&out).contains("var_cap"), "{}", both(&out));
 }

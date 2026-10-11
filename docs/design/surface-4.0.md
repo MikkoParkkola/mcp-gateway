@@ -362,7 +362,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `backends.<name>.oauth.enabled` | KEEP | `true` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:141 |
 | `backends.<name>.oauth.scopes` | KEEP | — | how a user declares a backend and its credentials | - | src/config/backend_config.rs:144 |
 | `backends.<name>.oauth.shared_account` | KEEP | — | how a user declares a backend and its credentials | - | src/config/backend_config.rs:183 |
-| `backends.<name>.oauth.token_refresh_buffer_secs` | AUTO | `300` | unset: refresh at max(300 s, 10 % of the token lifetime) before expiry, today's 300 s as the floor | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/backend_config.rs:172 |
+| `backends.<name>.oauth.token_refresh_buffer_secs` | AUTO | `300` | unset: refresh at max(300 s, 10 % of the token lifetime) before expiry, today's 300 s as the floor | shipped: unset derives max(300 s, 10 % of the token lifetime); a set value is still read and bounded; hidden from the reference, `init` and examples; `doctor` lists it when set (src/oauth/client/tests.rs `an_unset_buffer_derives_from_the_token_lifetime`) | src/config/backend_config.rs:172 |
 | `backends.<name>.passthrough` | KEEP | `false` | per-backend security opt-out; stays explicit | - | src/config/backend_config.rs:65 |
 | `backends.<name>.protocol_version` | AUTO | `None` | negotiated in `initialize` | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/backend_config.rs:220 |
 | `backends.<name>.runtime_profile` | KEEP | `None` | multi-user and provenance deployments (MULTI_USER.md) | - | src/config/backend_config.rs:86 |
@@ -517,7 +517,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `key_server.oidc` | KEEP | `Vec::new()` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:58 |
 | `key_server.oidc[].allowed_domains` | KEEP | — | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:293 |
 | `key_server.oidc[].audiences` | KEEP | — | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:290 |
-| `key_server.oidc[].auto_discover` | AUTO | `true` | try OIDC discovery, then `{issuer}/.well-known/jwks.json`; `jwks_uri` still overrides both | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/key_server.rs:284 |
+| `key_server.oidc[].auto_discover` | AUTO | `true` | try OIDC discovery, then `{issuer}/.well-known/jwks.json`; `jwks_uri` still overrides both | shipped: derived discovery that cannot be reached falls back to `{issuer}/.well-known/jwks.json` for at most 300 s; a refused document or an explicit `discovery_url` never falls back; hidden key, still read (src/key_server/oidc_fallback_tests.rs) | src/config/features/key_server.rs:284 |
 | `key_server.oidc[].discovery_url` | KEEP | — | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:278 |
 | `key_server.oidc[].issuer` | KEEP | — | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:270 |
 | `key_server.oidc[].jwks_uri` | KEEP | — | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:274 |
@@ -1131,8 +1131,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway skills generate` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/skills.rs:47 |
 | `mcp-gateway skills generate --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/skills.rs:47 |
 | `mcp-gateway skills generate -h` | KEEP | short alias of `--help` | - | src/cli/skills.rs:47 |
-| `mcp-gateway skills generate --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/skills.rs:47 |
-| `mcp-gateway skills generate -C` | AUTO | short alias of `--capabilities` | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/skills.rs:47 |
+| `mcp-gateway skills generate --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs) | src/cli/skills.rs:47 |
+| `mcp-gateway skills generate -C` | AUTO | short alias of `--capabilities` | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs) | src/cli/skills.rs:47 |
 | `mcp-gateway skills generate --category` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/skills.rs:47 |
 | `mcp-gateway skills generate --dry-run` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/skills.rs:47 |
 | `mcp-gateway skills generate --install` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/skills.rs:47 |
@@ -1206,14 +1206,14 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway tool completions` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:717 |
 | `mcp-gateway tool completions --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:717 |
 | `mcp-gateway tool completions -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:717 |
-| `mcp-gateway tool completions --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:717 |
-| `mcp-gateway tool completions -C` | AUTO | short alias of `--capabilities` | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:717 |
+| `mcp-gateway tool completions --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs) | src/cli/mod.rs:717 |
+| `mcp-gateway tool completions -C` | AUTO | short alias of `--capabilities` | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs) | src/cli/mod.rs:717 |
 | `mcp-gateway tool completions <SHELL>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:717 |
 | `mcp-gateway tool inspect` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:686 |
 | `mcp-gateway tool inspect --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:686 |
 | `mcp-gateway tool inspect -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:686 |
-| `mcp-gateway tool inspect --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:686 |
-| `mcp-gateway tool inspect -C` | AUTO | short alias of `--capabilities` | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:686 |
+| `mcp-gateway tool inspect --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs) | src/cli/mod.rs:686 |
+| `mcp-gateway tool inspect -C` | AUTO | short alias of `--capabilities` | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs) | src/cli/mod.rs:686 |
 | `mcp-gateway tool inspect --format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:686 |
 | `mcp-gateway tool inspect -f` | KEEP | short alias of `--format` | - | src/cli/mod.rs:686 |
 | `mcp-gateway tool inspect <TOOL>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:686 |
@@ -1222,8 +1222,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway tool invoke -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:627 |
 | `mcp-gateway tool invoke --args` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:627 |
 | `mcp-gateway tool invoke -a` | KEEP | short alias of `--args` | - | src/cli/mod.rs:627 |
-| `mcp-gateway tool invoke --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:627 |
-| `mcp-gateway tool invoke -C` | AUTO | short alias of `--capabilities` | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:627 |
+| `mcp-gateway tool invoke --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs) | src/cli/mod.rs:627 |
+| `mcp-gateway tool invoke -C` | AUTO | short alias of `--capabilities` | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs) | src/cli/mod.rs:627 |
 | `mcp-gateway tool invoke --format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:627 |
 | `mcp-gateway tool invoke -f` | KEEP | short alias of `--format` | - | src/cli/mod.rs:627 |
 | `mcp-gateway tool invoke <KEY=VALUE>` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:627 |
@@ -1231,8 +1231,8 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `mcp-gateway tool list` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:666 |
 | `mcp-gateway tool list --help` | KEEP | clap-generated: prints this command's usage | - | src/cli/mod.rs:666 |
 | `mcp-gateway tool list -h` | KEEP | short alias of `--help` | - | src/cli/mod.rs:666 |
-| `mcp-gateway tool list --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:666 |
-| `mcp-gateway tool list -C` | AUTO | short alias of `--capabilities` | flag stays as a hidden override, still honoured; `MCP_GATEWAY_CAPABILITIES` likewise | src/cli/mod.rs:666 |
+| `mcp-gateway tool list --capabilities` | AUTO | defaults to `./capabilities` and ignores the config; derive from `capabilities.directories` of the loaded config (env MCP_GATEWAY_CAPABILITIES) | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs) | src/cli/mod.rs:666 |
+| `mcp-gateway tool list -C` | AUTO | short alias of `--capabilities` | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs) | src/cli/mod.rs:666 |
 | `mcp-gateway tool list --format` | KEEP | user-facing command or flag for setup, operation or capability authoring | - | src/cli/mod.rs:666 |
 | `mcp-gateway tool list -f` | KEEP | short alias of `--format` | - | src/cli/mod.rs:666 |
 | `mcp-gateway trust` | INTERNAL | TrustCard and CBOM metadata for catalogue maintainers | `#[command(hide = true)]`: still runs, gone from `--help`; UPGRADING names it | src/cli/mod.rs:266 |
@@ -1313,7 +1313,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 |---|---|---|---|---|
 | `MCP_GATEWAY_<SECTION>__<KEY>` | KEEP | env form of any KEEP config key (container deployments); follows the key's class | - | src/config/mod.rs:193 |
 | `MCP_GATEWAY_AUTH__ENABLED` | KEEP | documented overlay spelling of `auth.enabled` (Helm chart) | - | deploy/helm/mcp-gateway/templates/_helpers.tpl:170 |
-| `MCP_GATEWAY_CAPABILITIES` | AUTO | env form of `-C/--capabilities`; derive from the config's `capabilities.directories` | hidden override, still honoured; UPGRADING entry | src/cli/mod.rs:637 |
+| `MCP_GATEWAY_CAPABILITIES` | AUTO | env form of `-C/--capabilities`; derive from the config's `capabilities.directories` | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs) | src/cli/mod.rs:637 |
 | `MCP_GATEWAY_CA_CERT` | KEEP | credentials for `dashboard-link` and `events dead-letters` against a remote gateway | - | src/cli/dashboard_link.rs:31 |
 | `MCP_GATEWAY_CLIENT_CERT` | KEEP | credentials for `dashboard-link` and `events dead-letters` against a remote gateway | - | src/cli/dashboard_link.rs:23 |
 | `MCP_GATEWAY_CLIENT_KEY` | KEEP | credentials for `dashboard-link` and `events dead-letters` against a remote gateway | - | src/cli/dashboard_link.rs:26 |

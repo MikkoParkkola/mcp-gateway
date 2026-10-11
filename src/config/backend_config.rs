@@ -167,12 +167,14 @@ pub struct OAuthConfig {
     /// Override when a provider requires a specific redirect URI path.
     #[serde(default)]
     pub callback_path: Option<String>,
-    /// Seconds before expiry to proactively refresh the token (default: 300).
+    /// Seconds before expiry to refresh the token. Unset: the larger of
+    /// 300 s and 10 % of the token's lifetime (MIK-8044).
     #[serde(
-        default = "default_token_refresh_buffer",
-        deserialize_with = "crate::duration_bound::secs"
+        default,
+        deserialize_with = "crate::duration_bound::opt_secs",
+        skip_serializing_if = "Option::is_none"
     )]
-    pub token_refresh_buffer_secs: u64,
+    pub token_refresh_buffer_secs: Option<u64>,
     /// Explicitly bless this gateway-held OAuth token for shared use across
     /// every caller on a multi-user gateway (ADR-008 INV-2).
     ///
@@ -206,9 +208,6 @@ impl std::fmt::Debug for OAuthConfig {
     }
 }
 
-pub(super) fn default_token_refresh_buffer() -> u64 {
-    300
-}
 pub(super) fn default_true() -> bool {
     true
 }

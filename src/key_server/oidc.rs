@@ -116,6 +116,9 @@ pub enum OidcError {
     InsecureFetch,
 
     /// The HTTP client could not be built at startup, so nothing is fetched.
+    #[error("OIDC discovery answered HTTP {0}")]
+    DiscoveryStatus(u16),
+
     #[error("OIDC HTTP client is unavailable; see the startup log")]
     ClientUnavailable,
 }
@@ -194,6 +197,9 @@ struct IdTokenClaims {
 /// Cached JWKS entry.
 struct CachedJwks {
     keys: JwkSet,
+    /// The URI the keys came from. Keys are reused only for that URI, so a
+    /// fallback's keys stop serving once discovery names another (MIK-8044).
+    source: String,
     fetched_at: Instant,
     ttl: Duration,
 }
@@ -206,6 +212,24 @@ impl CachedJwks {
 
 /// Minimal OIDC discovery document (`.well-known/openid-configuration`).
 /// Only the fields needed to locate and trust the signing keys are parsed.
+/// How long a fallback JWKS URI stands before discovery is tried again.
+const FALLBACK_TTL: Duration = Duration::from_secs(300);
+
+/// Why discovery gave no JWKS URI: it could not be reached (the derived URL
+/// may fall back), or it answered with a document that is refused.
+enum DiscoveryError {
+    Unreachable(OidcError),
+    Refused(OidcError),
+}
+
+impl DiscoveryError {
+    fn into_inner(self) -> OidcError {
+        match self {
+            Self::Unreachable(e) | Self::Refused(e) => e,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct OidcDiscoveryDocument {
     issuer: String,
@@ -239,6 +263,8 @@ pub struct JwksCache {
     loopback: Option<reqwest::Client>,
     /// How long to cache a fetched JWKS (default 1 hour).
     ttl: Duration,
+    /// Cap on how long a fallback JWKS URI stands (MIK-8044).
+    fallback_ttl: Duration,
 }
 
 impl JwksCache {
@@ -277,6 +303,7 @@ impl JwksCache {
             http: built(remote.build()),
             loopback: built(loopback.build()),
             ttl: Duration::from_secs(3600),
+            fallback_ttl: FALLBACK_TTL,
         }
     }
 
@@ -309,6 +336,7 @@ impl JwksCache {
             loopback: Some(http.clone()),
             http: Some(http),
             ttl: Duration::from_secs(3600),
+            fallback_ttl: FALLBACK_TTL,
         }
     }
 
@@ -333,26 +361,101 @@ impl JwksCache {
         {
             return Ok(cached.jwks_uri.clone());
         }
-
-        let client = self.client_for(discovery_url)?;
-        debug!(issuer = %issuer, "Fetching OIDC discovery from {discovery_url}");
-        let doc: OidcDiscoveryDocument = client.get(discovery_url).send().await?.json().await?;
-        let jwks_uri = validate_discovery_document(issuer, doc)?;
-
-        self.discovery.insert(
-            issuer.to_string(),
-            CachedDiscovery {
-                jwks_uri: jwks_uri.clone(),
-                fetched_at: Instant::now(),
-                ttl: self.ttl,
-            },
-        );
+        let jwks_uri = self
+            .discover(issuer, discovery_url)
+            .await
+            .map_err(DiscoveryError::into_inner)?;
+        self.record_discovery(issuer, &jwks_uri, self.ttl);
         Ok(jwks_uri)
     }
 
-    /// Return the cached JWKS for `issuer`, or fetch from `jwks_uri` if stale.
-    ///
-    /// If `force_refresh` is `true`, the cache is bypassed regardless of TTL.
+    /// `resolve_jwks_uri` for a discovery URL derived from the issuer: when
+    /// discovery cannot be reached (connection, timeout, a non-2xx status, a
+    /// body that is not a discovery document), the keys come from
+    /// `{issuer}/.well-known/jwks.json`. A document that answers but fails
+    /// validation is refused, never fallen back from (MIK-8044).
+    pub async fn resolve_derived_jwks_uri(&self, issuer: &str) -> Result<String, OidcError> {
+        if let Some(cached) = self.discovery.get(issuer)
+            && !cached.is_stale()
+        {
+            return Ok(cached.jwks_uri.clone());
+        }
+        match self.discover(issuer, &default_discovery_url(issuer)).await {
+            Ok(jwks_uri) => {
+                self.record_discovery(issuer, &jwks_uri, self.ttl);
+                Ok(jwks_uri)
+            }
+            Err(DiscoveryError::Refused(e)) => Err(e),
+            Err(DiscoveryError::Unreachable(e)) => Ok(self.record_fallback(issuer, &e)),
+        }
+    }
+
+    /// Fetch and validate the discovery document at `discovery_url`.
+    async fn discover(&self, issuer: &str, discovery_url: &str) -> Result<String, DiscoveryError> {
+        let client = self
+            .client_for(discovery_url)
+            .map_err(DiscoveryError::Refused)?;
+        debug!(issuer = %issuer, "Fetching OIDC discovery from {discovery_url}");
+        let unreachable = |e: reqwest::Error| DiscoveryError::Unreachable(e.into());
+        let resp = client
+            .get(discovery_url)
+            .send()
+            .await
+            .map_err(unreachable)?;
+        // Not `error_for_status`: it passes 3xx, which is no discovery answer.
+        if !resp.status().is_success() {
+            return Err(DiscoveryError::Unreachable(OidcError::DiscoveryStatus(
+                resp.status().as_u16(),
+            )));
+        }
+        let doc: OidcDiscoveryDocument = resp.json().await.map_err(unreachable)?;
+        validate_discovery_document(issuer, doc).map_err(DiscoveryError::Refused)
+    }
+
+    fn record_discovery(&self, issuer: &str, jwks_uri: &str, ttl: Duration) {
+        self.discovery.insert(
+            issuer.to_string(),
+            CachedDiscovery {
+                jwks_uri: jwks_uri.to_string(),
+                fetched_at: Instant::now(),
+                ttl,
+            },
+        );
+    }
+
+    /// Record `{issuer}/.well-known/jwks.json` as the issuer's JWKS URI for at
+    /// most five minutes, so discovery is retried after that. The WARN is
+    /// logged only by the call that inserts, so racing first lookups log once.
+    fn record_fallback(&self, issuer: &str, why: &OidcError) -> String {
+        use dashmap::mapref::entry::Entry;
+        let fallback = default_jwks_uri(issuer);
+        let ttl = self.ttl.min(self.fallback_ttl);
+        match self.discovery.entry(issuer.to_string()) {
+            Entry::Occupied(entry) if !entry.get().is_stale() => entry.get().jwks_uri.clone(),
+            entry => {
+                let record = CachedDiscovery {
+                    jwks_uri: fallback.clone(),
+                    fetched_at: Instant::now(),
+                    ttl,
+                };
+                match entry {
+                    Entry::Occupied(mut slot) => {
+                        slot.insert(record);
+                    }
+                    Entry::Vacant(slot) => {
+                        slot.insert(record);
+                    }
+                }
+                warn!(
+                    issuer = %issuer,
+                    error = %why,
+                    "OIDC discovery for {issuer} failed; using {fallback}"
+                );
+                fallback
+            }
+        }
+    }
+
     pub async fn get_or_fetch(
         &self,
         issuer: &str,
@@ -362,6 +465,7 @@ impl JwksCache {
         if !force_refresh
             && let Some(cached) = self.inner.get(issuer)
             && !cached.is_stale()
+            && cached.source == jwks_uri
         {
             return Ok(cached.keys.clone());
         }
@@ -374,6 +478,7 @@ impl JwksCache {
             issuer.to_string(),
             CachedJwks {
                 keys: jwks.clone(),
+                source: jwks_uri.to_string(),
                 fetched_at: Instant::now(),
                 ttl: self.ttl,
             },
@@ -425,6 +530,30 @@ impl OidcVerifier {
             providers,
             jwks_cache: Arc::new(JwksCache::with_http_client(http)),
         }
+    }
+
+    /// As [`Self::with_http_client`], with the cache and fallback lifetimes
+    /// set, so a test can let one expire while the other stands.
+    #[cfg(test)]
+    pub(crate) fn with_ttls(
+        providers: Vec<KeyServerProviderConfig>,
+        http: reqwest::Client,
+        ttl: Duration,
+        fallback_ttl: Duration,
+    ) -> Self {
+        let mut cache = JwksCache::with_http_client(http);
+        cache.ttl = ttl;
+        cache.fallback_ttl = fallback_ttl;
+        Self {
+            providers,
+            jwks_cache: Arc::new(cache),
+        }
+    }
+
+    /// The lifetime of the issuer's recorded discovery entry, if any.
+    #[cfg(test)]
+    pub(crate) fn discovery_ttl(&self, issuer: &str) -> Option<Duration> {
+        self.jwks_cache.discovery.get(issuer).map(|d| d.ttl)
     }
 
     /// Verify an OIDC ID token and return the extracted identity.
@@ -480,13 +609,20 @@ impl OidcVerifier {
         let jwks_uri = if let Some(uri) = provider.jwks_uri.clone() {
             uri
         } else if provider.auto_discover {
-            let discovery_url = provider
-                .discovery_url
-                .clone()
-                .unwrap_or_else(|| default_discovery_url(&provider.issuer));
-            self.jwks_cache
-                .resolve_jwks_uri(&provider.issuer, &discovery_url)
-                .await?
+            // An explicit discovery URL is the operator's choice: its failure
+            // stands. Only the URL derived from the issuer falls back.
+            match provider.discovery_url.as_deref() {
+                Some(discovery_url) => {
+                    self.jwks_cache
+                        .resolve_jwks_uri(&provider.issuer, discovery_url)
+                        .await?
+                }
+                None => {
+                    self.jwks_cache
+                        .resolve_derived_jwks_uri(&provider.issuer)
+                        .await?
+                }
+            }
         } else {
             default_jwks_uri(&provider.issuer)
         };

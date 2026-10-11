@@ -634,14 +634,8 @@ pub enum ToolCommand {
         tool: String,
 
         /// Directory containing capability YAML definitions
-        #[arg(
-            short = 'C',
-            hide = true,
-            long,
-            default_value = "capabilities",
-            env = "MCP_GATEWAY_CAPABILITIES"
-        )]
-        capabilities: PathBuf,
+        #[arg(short = 'C', hide = true, long, env = "MCP_GATEWAY_CAPABILITIES")]
+        capabilities: Option<PathBuf>,
 
         /// JSON argument blob (merged with key=value pairs)
         #[arg(short, long)]
@@ -661,23 +655,16 @@ pub enum ToolCommand {
 
     /// List tools from a local capability catalogue
     ///
-    /// Scans a local directory of capability YAML files (default
-    /// `./capabilities`, or `MCP_GATEWAY_CAPABILITIES`) and prints each tool
-    /// with its description and authentication requirement. This is a local
-    /// catalogue scan and is independent of your server config: it does not
-    /// reflect `-c gateway.yaml` or `capabilities.enabled`. A configured
-    /// gateway exposes its tools over MCP at runtime, not via this command.
+    /// Reads the capability YAML files of the directories your gateway serves
+    /// (the config's `capabilities.directories`; `./capabilities` with no
+    /// config) and prints each tool with its description and authentication
+    /// requirement. `-C` or `MCP_GATEWAY_CAPABILITIES` names another
+    /// directory. `capabilities.enabled` does not change what is read.
     #[command(about = "List tools from a local capability catalogue")]
     List {
         /// Directory containing capability YAML definitions
-        #[arg(
-            short = 'C',
-            hide = true,
-            long,
-            default_value = "capabilities",
-            env = "MCP_GATEWAY_CAPABILITIES"
-        )]
-        capabilities: PathBuf,
+        #[arg(short = 'C', hide = true, long, env = "MCP_GATEWAY_CAPABILITIES")]
+        capabilities: Option<PathBuf>,
 
         /// Output format
         #[arg(short, long, default_value = "table", value_enum)]
@@ -695,14 +682,8 @@ pub enum ToolCommand {
         tool: String,
 
         /// Directory containing capability YAML definitions
-        #[arg(
-            short = 'C',
-            hide = true,
-            long,
-            default_value = "capabilities",
-            env = "MCP_GATEWAY_CAPABILITIES"
-        )]
-        capabilities: PathBuf,
+        #[arg(short = 'C', hide = true, long, env = "MCP_GATEWAY_CAPABILITIES")]
+        capabilities: Option<PathBuf>,
 
         /// Output format
         #[arg(short, long, default_value = "table", value_enum)]
@@ -727,13 +708,7 @@ pub enum ToolCommand {
         shell: Shell,
 
         /// Directory containing capability YAML definitions
-        #[arg(
-            short = 'C',
-            hide = true,
-            long,
-            default_value = "capabilities",
-            env = "MCP_GATEWAY_CAPABILITIES"
-        )]
-        capabilities: PathBuf,
+        #[arg(short = 'C', hide = true, long, env = "MCP_GATEWAY_CAPABILITIES")]
+        capabilities: Option<PathBuf>,
     },
 }

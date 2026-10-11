@@ -5,12 +5,13 @@
 //! discovery document that answers but fails validation stays an error.
 //!
 //! One loopback server is the issuer. It serves two key sets under one `kid`:
-//! K_disc at `/disc/jwks` (the URI a good discovery document names) and K_fb
-//! at `/.well-known/jwks.json` (the fallback). Every row checks which key
+//! `K_disc` at `/disc/jwks` (the URI a good discovery document names) and
+//! `K_fb` at `/.well-known/jwks.json` (the fallback). Every row checks which key
 //! validated and how often each path was fetched.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 use axum::Router;
 use axum::http::StatusCode;
@@ -264,4 +265,111 @@ async fn a_good_discovery_document_uses_its_jwks() {
         .expect("the discovered key validates");
     assert!(verify(&v, &mint(&fx, &fx.k_fb)).await.is_err());
     assert_eq!(hits(&fx).2, 0);
+}
+
+fn verifier_ttls(fx: &Fixture, ttl: Duration, fallback_ttl: Duration) -> OidcVerifier {
+    let yaml = format!(
+        "enabled: true\nadmin_token: \"surf2-admin\"\noidc:\n  - issuer: \"{}\"\n    \
+         audiences: [\"{AUD}\"]\n",
+        fx.issuer
+    );
+    let cfg: KeyServerConfig = serde_yaml::from_str(&yaml).expect("key server yaml");
+    cfg.validate().expect("valid key server config");
+    OidcVerifier::with_ttls(cfg.oidc, reqwest::Client::new(), ttl, fallback_ttl)
+}
+
+fn good_discovery(fx: &Fixture) -> String {
+    json!({"issuer": fx.issuer, "jwks_uri": format!("{}/disc/jwks", fx.issuer)}).to_string()
+}
+
+/// D9: after the fallback's lifetime, a recovered discovery's keys serve and
+/// the fallback's keys (same `kid`, still fresh in the JWKS cache) do not.
+#[tokio::test]
+async fn a_fallback_stops_serving_once_discovery_recovers() {
+    let fx = start().await;
+    set_discovery(&fx, 404, "{}");
+    let v = verifier_ttls(&fx, Duration::from_secs(3600), Duration::from_millis(200));
+    verify(&v, &mint(&fx, &fx.k_fb))
+        .await
+        .expect("the fallback key validates");
+    set_discovery(&fx, 200, &good_discovery(&fx));
+    // Poll until the fallback record lapses and discovery is tried again.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let disc_token = mint(&fx, &fx.k_disc);
+    while verify(&v, &disc_token).await.is_err() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "discovery never took over"
+        );
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        verify(&v, &mint(&fx, &fx.k_fb)).await.is_err(),
+        "the fallback key still serves"
+    );
+}
+
+/// D10: inside one fallback lifetime, a second verification neither asks
+/// discovery again nor logs again.
+#[test]
+fn one_fallback_is_fetched_and_logged_once() {
+    use crate::test_log_capture::{count, records};
+    let mut discovery_hits = 0;
+    let logs = records(|| {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        rt.block_on(async {
+            let fx = start().await;
+            set_discovery(&fx, 404, "{}");
+            let v = verifier(&fx, "");
+            for _ in 0..2 {
+                verify(&v, &mint(&fx, &fx.k_fb))
+                    .await
+                    .expect("the fallback key validates");
+            }
+            discovery_hits = hits(&fx).0;
+        });
+    });
+    assert_eq!(discovery_hits, 1);
+    assert_eq!(count(&logs, "WARN", "OIDC discovery for"), 1, "{logs:?}");
+}
+
+/// D10b: concurrent first lookups all validate and log the fallback once.
+#[test]
+fn concurrent_first_lookups_log_the_fallback_once() {
+    use crate::test_log_capture::{count, records};
+    let logs = records(|| {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        rt.block_on(async {
+            let fx = start().await;
+            set_discovery(&fx, 404, "{}");
+            let v = verifier(&fx, "");
+            let token = mint(&fx, &fx.k_fb);
+            let all = futures::future::join_all((0..8).map(|_| verify(&v, &token))).await;
+            assert!(all.iter().all(Result::is_ok), "{all:?}");
+        });
+    });
+    assert_eq!(count(&logs, "WARN", "OIDC discovery for"), 1, "{logs:?}");
+}
+
+/// D10c: a fallback stands for min(cache lifetime, 300 s).
+#[tokio::test]
+async fn a_fallback_stands_at_most_five_minutes() {
+    for (ttl, expected) in [(60, 60), (3600, 300)] {
+        let fx = start().await;
+        set_discovery(&fx, 404, "{}");
+        let v = verifier_ttls(&fx, Duration::from_secs(ttl), Duration::from_secs(300));
+        verify(&v, &mint(&fx, &fx.k_fb))
+            .await
+            .expect("the fallback key validates");
+        assert_eq!(
+            v.discovery_ttl(&fx.issuer),
+            Some(Duration::from_secs(expected))
+        );
+    }
 }

@@ -182,7 +182,7 @@ pub struct OAuthClient {
     /// Seconds before expiry at which the background task proactively refreshes.
     ///
     /// The task triggers when `time_until_expiry < max(lifetime * 10%, buffer)`.
-    token_refresh_buffer_secs: u64,
+    token_refresh_buffer_secs: Option<u64>,
 
     /// Where advertised URLs may point (the backend's destination policy).
     destination: crate::security::ssrf::DestinationPolicy,
@@ -251,8 +251,9 @@ pub struct OAuthClientConfig {
     pub callback_port: Option<u16>,
     /// Callback URL path (default: `"/oauth/callback"`).
     pub callback_path: Option<String>,
-    /// Seconds before expiry to proactively refresh (default: 300).
-    pub token_refresh_buffer_secs: u64,
+    /// Seconds before expiry to refresh; `None` derives it from the token's
+    /// lifetime ([`refresh_buffer`]).
+    pub token_refresh_buffer_secs: Option<u64>,
 }
 
 // Manual `Debug` that redacts the fixed OAuth client secret (CWE-532, mirrors
@@ -613,13 +614,24 @@ impl OAuthClient {
 
         let remaining = expires_at.saturating_sub(now);
 
-        // Compute 10% of total lifetime using the stored expires_at as a proxy.
-        // We don't store issued_at, so approximate lifetime as (expires_at - now + remaining)
-        // which simplifies to: use a fixed fraction of the buffer itself.
-        // Practical rule: trigger refresh at max(buffer, 10% of remaining_at_last_check).
-        // Since we check every 60s, use the simpler form: remaining < buffer.
-        remaining < self.token_refresh_buffer_secs
+        remaining < refresh_buffer(self.token_refresh_buffer_secs, t.lifetime_secs)
     }
+}
+
+/// The floor of a derived refresh buffer, and the whole buffer for a token
+/// that carries no lifetime.
+const REFRESH_BUFFER_FLOOR_SECS: u64 = 300;
+
+/// Seconds before expiry to refresh: the set value, else the larger of 300 s
+/// and 10 % of the token's lifetime, else 300 s (MIK-8044). A token shorter
+/// than 300 s therefore refreshes at every check, as it did with the fixed
+/// 300 s buffer.
+pub(crate) fn refresh_buffer(set: Option<u64>, lifetime_secs: Option<u64>) -> u64 {
+    set.unwrap_or_else(|| {
+        lifetime_secs.map_or(REFRESH_BUFFER_FLOOR_SECS, |life| {
+            (life / 10).max(REFRESH_BUFFER_FLOOR_SECS)
+        })
+    })
 }
 
 /// MIK-8207: a token answer whose `expires_in` is above 100 years is
