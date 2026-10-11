@@ -155,7 +155,7 @@ pub(super) async fn fixture_with(ttl_ms: Option<u64>, handle: Handle) -> Fixture
     let workers = Arc::new(tokio::sync::Semaphore::new(1));
     let task = Task::create_at(
         TOOL,
-        chrono::Utc::now(),
+        crate::clock::utc_now().expect("a clock after 1970"),
         TaskOptions {
             ttl_ms,
             poll_interval_ms: Some(1_000),
