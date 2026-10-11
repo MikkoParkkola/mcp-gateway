@@ -21,7 +21,13 @@ const CLOSED: InputSchemaEnforcement = InputSchemaEnforcement::Closed;
 /// never to the replacement, which would receive the old credential.
 #[tokio::test]
 async fn g3_c12_reload_between_verdict_and_dispatch() {
-    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Warm, CLOSED, Surfaced::Yes);
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Warm,
+        CLOSED,
+        Surfaced::Yes,
+    );
     let (replacement, repl_caller, repl_shared) =
         per_user_backend(CallerSlot::Valid, &valid(), Warmth::Warm, CLOSED);
     let alpha = identity("alpha");
@@ -36,7 +42,10 @@ async fn g3_c12_reload_between_verdict_and_dispatch() {
             "premise: {verdict:?}"
         );
         assert!(fx.meta.backends.remove(BACKEND), "premise: reload removes");
-        assert!(fx.meta.backends.register(replacement), "premise: reload registers");
+        assert!(
+            fx.meta.backends.register(replacement),
+            "premise: reload registers"
+        );
         let response = Box::pin(fx.meta.handle_tools_call(
             crate::protocol::RequestId::Number(1),
             TOOL,

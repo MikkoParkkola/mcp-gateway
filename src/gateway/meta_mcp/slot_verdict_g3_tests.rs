@@ -34,7 +34,13 @@ async fn step_as_alpha(meta: &super::MetaMcp) -> Value {
 /// Red on the parent: the shared Invalid withholds the first step.
 #[tokio::test]
 async fn g3_f3_step_flip_guard() {
-    let fx = per_user(CallerSlot::Valid, &invalid(), Warmth::Warm, CLOSED, Surfaced::No);
+    let fx = per_user(
+        CallerSlot::Valid,
+        &invalid(),
+        Warmth::Warm,
+        CLOSED,
+        Surfaced::No,
+    );
     let answer = step_as_alpha(&fx.meta).await;
     assert_eq!(
         fx.caller.calls() + fx.shared.calls(),
@@ -42,7 +48,13 @@ async fn g3_f3_step_flip_guard() {
         "F3: a step valid in the caller's slot (invalid in the shared one) did not dispatch: {answer}"
     );
 
-    let fx = per_user(CallerSlot::Invalid, &valid(), Warmth::Warm, CLOSED, Surfaced::No);
+    let fx = per_user(
+        CallerSlot::Invalid,
+        &valid(),
+        Warmth::Warm,
+        CLOSED,
+        Surfaced::No,
+    );
     let answer = step_as_alpha(&fx.meta).await;
     assert_eq!(
         fx.caller.calls() + fx.shared.calls(),
@@ -67,20 +79,22 @@ fn slot_of(subject: &str) -> PoolKey {
 /// entry), returning whether the listing answered.
 async fn list_as(meta: &super::MetaMcp, subject: &str) -> bool {
     let who = identity(subject);
-    meta.list_tools(
-        &json!({"server": BACKEND}),
-        None,
-        &identified_caller(&who),
-    )
-    .await
-    .is_ok()
+    meta.list_tools(&json!({"server": BACKEND}), None, &identified_caller(&who))
+        .await
+        .is_ok()
 }
 
 /// I6 (guard): the index is bounded by the pool's admission. 64 principals are
 /// admitted and indexed; the 65th is refused a slot and gets no entry.
 #[tokio::test]
 async fn g3_i6_index_bounded_by_admission() {
-    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::Yes,
+    );
     let backend = fx.meta.backends.get(BACKEND).expect("the backend");
     // alpha already holds one slot (the fixture opened it); 63 more fill the pool.
     let others: Vec<String> = (1..64).map(|i| format!("p{i}")).collect();
@@ -89,7 +103,10 @@ async fn g3_i6_index_bounded_by_admission() {
     }
     warm_by_listing(&fx.meta).await;
     for subject in &others {
-        assert!(list_as(&fx.meta, subject).await, "premise: {subject} listing");
+        assert!(
+            list_as(&fx.meta, subject).await,
+            "premise: {subject} listing"
+        );
     }
     assert_eq!(
         backend.populated_per_user_bindings_for_test().len(),
@@ -123,7 +140,13 @@ async fn g3_i6_index_bounded_by_admission() {
 /// a principal with no slot opens no pool entry, mints nothing, fills nothing.
 #[tokio::test]
 async fn g3_i7_index_read_has_no_side_effects() {
-    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::Yes,
+    );
     let backend = fx.meta.backends.get(BACKEND).expect("the backend");
     let (mints, lists) = (fx.mints(), fx.caller.lists() + fx.shared.lists());
     let populated = backend.populated_per_user_bindings_for_test();
@@ -133,7 +156,11 @@ async fn g3_i7_index_read_has_no_side_effects() {
     );
 
     assert_eq!(indexed_binding_for(&fx.meta, "beta"), None, "a cold key");
-    assert_eq!(indexed_binding_for(&fx.meta, "alpha"), None, "alpha, unfilled");
+    assert_eq!(
+        indexed_binding_for(&fx.meta, "alpha"),
+        None,
+        "alpha, unfilled"
+    );
 
     assert!(
         !backend.pool_has_slot_for_test(&slot_of("beta")),

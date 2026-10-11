@@ -166,21 +166,54 @@ fn shared_catalogue(config: &mut crate::config::BackendConfig) {
 /// parent and on the fix.
 #[tokio::test]
 async fn g3_f4_shared_backend_route_filter_unchanged() {
-    let control = gateway(CallerSlot::Valid, &valid(), Warmth::Cold, Surfaced::Yes, shared_catalogue)
-        .await;
-    let ok = post_as_alpha(&control.router, "/mcp", &tools_call(TOOL, &json!({"q": "x"}))).await;
+    let control = gateway(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        Surfaced::Yes,
+        shared_catalogue,
+    )
+    .await;
+    let ok = post_as_alpha(
+        &control.router,
+        "/mcp",
+        &tools_call(TOOL, &json!({"q": "x"})),
+    )
+    .await;
     assert_eq!(
         control.shared.calls(),
         1,
         "premise: a valid shared schema must dispatch on the shared upstream: {ok:?}"
     );
 
-    let withheld = gateway(CallerSlot::Valid, &invalid(), Warmth::Cold, Surfaced::Yes, shared_catalogue)
-        .await;
-    let answer = post_as_alpha(&withheld.router, "/mcp", &tools_call(TOOL, &json!({"q": "x"}))).await;
-    let absent_gw = gateway(CallerSlot::Valid, &invalid(), Warmth::Cold, Surfaced::No, shared_catalogue)
-        .await;
-    let absent = post_as_alpha(&absent_gw.router, "/mcp", &tools_call(TOOL, &json!({"q": "x"}))).await;
+    let withheld = gateway(
+        CallerSlot::Valid,
+        &invalid(),
+        Warmth::Cold,
+        Surfaced::Yes,
+        shared_catalogue,
+    )
+    .await;
+    let answer = post_as_alpha(
+        &withheld.router,
+        "/mcp",
+        &tools_call(TOOL, &json!({"q": "x"})),
+    )
+    .await;
+    let absent_gw = gateway(
+        CallerSlot::Valid,
+        &invalid(),
+        Warmth::Cold,
+        Surfaced::No,
+        shared_catalogue,
+    )
+    .await;
+    let absent = post_as_alpha(
+        &absent_gw.router,
+        "/mcp",
+        &tools_call(TOOL, &json!({"q": "x"})),
+    )
+    .await;
     assert_eq!(
         absent.1.pointer("/error/code"),
         Some(&json!(-32601)),
@@ -199,15 +232,34 @@ async fn g3_f4_shared_backend_route_filter_unchanged() {
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn g3_p5_withheld_answer_touches_no_response_targets() {
-    let unknown = gateway(CallerSlot::Lacks, &valid(), Warmth::Warm, Surfaced::No, |_| {}).await;
-    let absent = post_as_alpha(&unknown.router, "/mcp", &tools_call(TOOL, &json!({"q": "x"}))).await;
+    let unknown = gateway(
+        CallerSlot::Lacks,
+        &valid(),
+        Warmth::Warm,
+        Surfaced::No,
+        |_| {},
+    )
+    .await;
+    let absent = post_as_alpha(
+        &unknown.router,
+        "/mcp",
+        &tools_call(TOOL, &json!({"q": "x"})),
+    )
+    .await;
     let absent_rows = unknown.response_targets_audited();
     assert!(
         !absent_rows.is_empty(),
         "premise: the firewall audited no response row for the absent answer: {absent:?}"
     );
 
-    let gw = gateway(CallerSlot::Invalid, &valid(), Warmth::Warm, Surfaced::Yes, |_| {}).await;
+    let gw = gateway(
+        CallerSlot::Invalid,
+        &valid(),
+        Warmth::Warm,
+        Surfaced::Yes,
+        |_| {},
+    )
+    .await;
     let answer = post_as_alpha(&gw.router, "/mcp", &tools_call(TOOL, &json!({"q": "x"}))).await;
     assert_eq!(
         answer.1.pointer("/error/code"),
@@ -220,7 +272,10 @@ async fn g3_p5_withheld_answer_touches_no_response_targets() {
         !rows.iter().any(|row| row.to_string().contains(BACKEND)),
         "P5: a response row names the withheld backend: {rows:?}"
     );
-    assert_eq!(rows, absent_rows, "P5: response rows differ from the absent twin's");
+    assert_eq!(
+        rows, absent_rows,
+        "P5: response rows differ from the absent twin's"
+    );
 }
 
 fn refused(answer: &(StatusCode, Value)) -> bool {
@@ -234,17 +289,35 @@ fn refused(answer: &(StatusCode, Value)) -> bool {
 /// first target before the second is refused. Guard: kills M18.
 #[tokio::test]
 async fn g3_f5a_route_authorize_refusal_resolves_nothing() {
-    let gw = gateway(CallerSlot::Valid, &valid(), Warmth::Cold, Surfaced::No, |_| {}).await;
+    let gw = gateway(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        Surfaced::No,
+        |_| {},
+    )
+    .await;
     let (mints, requests) = (gw.mints(), gw.requests());
     let body = json!({"jsonrpc": "2.0", "id": 11, "method": "tools/call",
-        "params": {"name": "gateway_execute", "arguments": {"chain": [
-            {"tool": format!("{BACKEND}:note"), "arguments": {"q": "x"}},
-            {"tool": format!("{BACKEND}:run_command"), "arguments": {}}
-        ]}}});
+    "params": {"name": "gateway_execute", "arguments": {"chain": [
+        {"tool": format!("{BACKEND}:note"), "arguments": {"q": "x"}},
+        {"tool": format!("{BACKEND}:run_command"), "arguments": {}}
+    ]}}});
     let answer = post_as_alpha(&gw.router, "/mcp", &body).await;
-    assert!(refused(&answer), "premise: the chain was not refused: {answer:?}");
-    assert_eq!(gw.mints(), mints, "F5(a): a credential was resolved: {answer:?}");
-    assert_eq!(gw.requests(), requests, "F5(a): the backend was asked: {answer:?}");
+    assert!(
+        refused(&answer),
+        "premise: the chain was not refused: {answer:?}"
+    );
+    assert_eq!(
+        gw.mints(),
+        mints,
+        "F5(a): a credential was resolved: {answer:?}"
+    );
+    assert_eq!(
+        gw.requests(),
+        requests,
+        "F5(a): the backend was asked: {answer:?}"
+    );
 }
 
 /// F5(b): a request the request firewall refuses (a path-traversal argument)
@@ -254,13 +327,31 @@ async fn g3_f5a_route_authorize_refusal_resolves_nothing() {
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn g3_f5b_firewall_refusal_resolves_nothing() {
-    let gw = gateway(CallerSlot::Valid, &valid(), Warmth::Cold, Surfaced::Yes, |_| {}).await;
+    let gw = gateway(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        Surfaced::Yes,
+        |_| {},
+    )
+    .await;
     let (mints, requests) = (gw.mints(), gw.requests());
     let args = json!({"q": "../../../etc/passwd"});
     let answer = post_as_alpha(&gw.router, "/mcp", &tools_call(TOOL, &args)).await;
-    assert!(refused(&answer), "premise: the firewall let it through: {answer:?}");
-    assert_eq!(gw.mints(), mints, "F5(b): a credential was resolved: {answer:?}");
-    assert_eq!(gw.requests(), requests, "F5(b): the backend was asked: {answer:?}");
+    assert!(
+        refused(&answer),
+        "premise: the firewall let it through: {answer:?}"
+    );
+    assert_eq!(
+        gw.mints(),
+        mints,
+        "F5(b): a credential was resolved: {answer:?}"
+    );
+    assert_eq!(
+        gw.requests(),
+        requests,
+        "F5(b): the backend was asked: {answer:?}"
+    );
 }
 
 /// C6c (control): a shared-catalogue backend (`edits`) whose complete list
