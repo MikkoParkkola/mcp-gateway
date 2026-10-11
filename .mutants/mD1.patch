@@ -1,0 +1,12 @@
+diff --git a/src/security/firewall/collusion_view.rs b/src/security/firewall/collusion_view.rs
+index 61b2ead9a..0814d411e 100644
+--- a/src/security/firewall/collusion_view.rs
++++ b/src/security/firewall/collusion_view.rs
+@@ -247,7 +247,6 @@ pub(crate) fn reserve_walk(
+     let measured = preflight(detector, answer)?;
+     let refs = measured.nodes * REF_BYTES_PER_NODE
+         + measured.combining * COMBINING_BYTES_PER_CHAR
+-        + measured.path_refs * PATH_REF_BYTES
+         + measured.strings * PATH_ENTRY_BYTES;
+     let charge = detector
+         .views

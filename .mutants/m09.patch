@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_digest.rs b/src/security/firewall/collusion_digest.rs
+index 445bf9368..f817794ee 100644
+--- a/src/security/firewall/collusion_digest.rs
++++ b/src/security/firewall/collusion_digest.rs
+@@ -765,7 +765,7 @@ impl DeliveryDigest {
+         };
+         let cut_lost = self.cut_lost || refused;
+         Self {
+-            segments: Vec::new(),
++            segments: self.segments,
+             retained: Vec::new(),
+             sensitive: self.sensitive,
+             deferred: false,

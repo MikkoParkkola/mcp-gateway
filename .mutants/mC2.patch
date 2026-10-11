@@ -1,0 +1,14 @@
+diff --git a/src/security/firewall/collusion_digest.rs b/src/security/firewall/collusion_digest.rs
+index 445bf9368..48911f7f9 100644
+--- a/src/security/firewall/collusion_digest.rs
++++ b/src/security/firewall/collusion_digest.rs
+@@ -739,8 +739,7 @@ impl DeliveryDigest {
+             self.join_fingerprints(detector)
+                 .into_iter()
+                 .chain(self.retained.iter().copied())
+-                .chain(self.cut_fps.iter().flat_map(|kept| kept.iter().copied()))
+-                .filter(|&h| view.contains(h)),
++                    .filter(|&h| view.contains(h)),
+         );
+         cut.sort_unstable();
+         cut.dedup();

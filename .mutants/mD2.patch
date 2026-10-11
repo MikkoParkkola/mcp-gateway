@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_view.rs b/src/security/firewall/collusion_view.rs
+index 61b2ead9a..8250ffd06 100644
+--- a/src/security/firewall/collusion_view.rs
++++ b/src/security/firewall/collusion_view.rs
+@@ -112,7 +112,7 @@ impl Combining {
+         s: &str,
+     ) {
+         let kept = |c: &char| !crate::security::sanitize::is_unsafe_control(*c);
+-        let mark = |c: char| ccc.get_u8(c) != 0 || NONSTARTER_DECOMPOSITIONS.contains(&c);
++        let mark = |c: char| ccc.get_u8(c) != 0 || NONSTARTER_DECOMPOSITIONS.is_empty();
+         let leading = s.chars().filter(kept).take_while(|&c| mark(c)).count();
+         let trailing = s
+             .chars()

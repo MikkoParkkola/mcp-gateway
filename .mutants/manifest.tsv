@@ -1,0 +1,11 @@
+head_sha	22b3bb487efc596439150e8876a5518930d53571
+m09	linux	m09.patch	--lib -- security::firewall::collusion_gate::tests::p3::an_omitted_head_is_not_excused_and_a_delivered_middle_is --exact
+m10	linux	m10.patch	--lib -- security::firewall::collusion_gate::tests::p3::an_answer_past_the_text_cap_fails_closed --exact
+m13	linux	m13.patch	--lib -- security::firewall::collusion_gate::tests::p3::an_answer_past_the_text_cap_fails_closed --exact
+m27	linux	m27.patch	--lib -- security::firewall::collusion_gate::tests::p3::an_answer_past_the_text_cap_fails_closed --exact
+mC1	linux	mC1.patch	--lib -- security::firewall::collusion_gate::tests::p3::a_short_leaf_step_kept_through_a_view_is_evidence_for_its_joined_text --exact
+mC2	linux	mC2.patch	--lib -- security::firewall::collusion_gate::tests::p3::a_second_view_retention_keeps_the_first_ones_cut --exact
+mD1	linux	mD1.patch	--lib -- security::firewall::collusion_gate::tests::p3_units::copied_key_paths_are_reserved --exact
+mD2	linux	mD2.patch	--lib -- security::firewall::collusion_gate::tests::p3_units::nonstarter_decompositions_are_reserved_as_combining_runs --exact
+mD3a	linux	mD3a.patch	--lib -- security::firewall::collusion_gate::tests::p3::an_unread_receipt_holds_only_what_its_record_keeps --exact
+mA5	linux	mA5.patch	--lib -- security::firewall::collusion_gate::tests::p3::view_cuts_past_the_budget_are_refused_and_marked_lost --exact

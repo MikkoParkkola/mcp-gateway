@@ -1,0 +1,18 @@
+diff --git a/src/security/firewall/collusion_gate.rs b/src/security/firewall/collusion_gate.rs
+index dc77794b4..42e538a1c 100644
+--- a/src/security/firewall/collusion_gate.rs
++++ b/src/security/firewall/collusion_gate.rs
+@@ -759,8 +759,11 @@ impl Firewall {
+                 let capped = self.capped(d);
+                 let receipt = capped.as_ref().unwrap_or(d);
+                 let (fps, middle) = CollusionDetector::thinned_for_record(
+-                    receipt.fingerprints(detector),
+-                    receipt.cut_fps.as_deref().unwrap_or_default(),
++                    {
++                        let _ = receipt;
++                        Vec::new()
++                    },
++                    &[],
+                 );
+                 UnreadReceipt {
+                     fps,

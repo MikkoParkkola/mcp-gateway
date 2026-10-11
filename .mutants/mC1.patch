@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_digest.rs b/src/security/firewall/collusion_digest.rs
+index 445bf9368..0a4a7bf84 100644
+--- a/src/security/firewall/collusion_digest.rs
++++ b/src/security/firewall/collusion_digest.rs
+@@ -727,7 +727,7 @@ impl DeliveryDigest {
+         // One run's forms at a time, hashed as they stream.
+         let mut cut: Vec<u64> = Vec::new();
+         for run in self.runs() {
+-            for form in run_forms(&run) {
++            for form in run.iter().map(|s| s.text.clone()) {
+                 cut.extend(
+                     detector
+                         .sampled_kgram_stream(form.chars())

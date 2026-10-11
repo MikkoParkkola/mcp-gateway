@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_digest.rs b/src/security/firewall/collusion_digest.rs
+index 445bf9368..63a3f0eb5 100644
+--- a/src/security/firewall/collusion_digest.rs
++++ b/src/security/firewall/collusion_digest.rs
+@@ -747,7 +747,7 @@ impl DeliveryDigest {
+         // A5: the cut is charged from here to record, reserved while any
+         // earlier charge is still held. Without room it is thinned to what
+         // its record keeps and the excuse is marked lost (fail closed).
+-        let cut_charge = detector.views.budget.reserve(cut.len() * 8);
++        let cut_charge = detector.views.budget.reserve(0 * cut.len());
+         let refused = cut_charge.is_none();
+         let cut = if refused {
+             detector

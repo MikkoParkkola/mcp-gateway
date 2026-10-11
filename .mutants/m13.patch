@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_big.rs b/src/security/firewall/collusion_big.rs
+index b9ad67d7a..09341b6b8 100644
+--- a/src/security/firewall/collusion_big.rs
++++ b/src/security/firewall/collusion_big.rs
+@@ -358,7 +358,7 @@ impl BigStep {
+         } = self;
+         drop(step_all);
+         let charge = reservation.split_evidence();
+-        drop(reservation);
++        std::mem::forget(reservation);
+         UnreadStep {
+             evidence: StepEvidence {
+                 fps: step_ev.into_vec(),
