@@ -17,11 +17,14 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::{
-    served_sanitizing, stdio_blocked_task, stdio_sanitizing, stdio_task_read, stdio_task_surfaced,
+    served_sanitizing, stdio_blocked_task, stdio_sanitizing, stdio_task_read,
+    stdio_task_refused_without_a_grant, stdio_task_surfaced, stdio_x14_consumed_then_refused,
     stdio_x14_signed_round,
 };
 
-/// A backend serving one tool, `read`, counting the `tools/call` sends.
+/// A backend serving two tools, `read` and `write`, counting the `tools/call`
+/// sends. `write` is advertised so a policy denial of it is the policy's doing,
+/// never an unknown-tool refusal (MIK-8362 STEPFW.1c).
 struct Counting {
     calls: Arc<AtomicUsize>,
     /// The result every `tools/call` answers.
@@ -36,7 +39,10 @@ impl crate::transport::Transport for Counting {
         _params: Option<Value>,
     ) -> crate::Result<JsonRpcResponse> {
         let body = if method == "tools/list" {
-            json!({ "tools": [{ "name": "read", "inputSchema": { "type": "object" } }] })
+            json!({ "tools": [
+                { "name": "read", "inputSchema": { "type": "object" } },
+                { "name": "write", "inputSchema": { "type": "object" } }
+            ] })
         } else {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.answer.clone()
@@ -89,7 +95,16 @@ async fn stdio_meta(
 
 /// One stdio `tools/call` with `params` through the real stdio dispatch.
 async fn stdio_send(gateway_meta: &Arc<MetaMcp>, params: Value) -> Value {
-    let policy = Arc::new(crate::security::ToolPolicy::default());
+    stdio_send_under(gateway_meta, params, crate::security::ToolPolicy::default()).await
+}
+
+/// [`stdio_send`] under the tool policy `policy`.
+async fn stdio_send_under(
+    gateway_meta: &Arc<MetaMcp>,
+    params: Value,
+    policy: crate::security::ToolPolicy,
+) -> Value {
+    let policy = Arc::new(policy);
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
@@ -208,6 +223,28 @@ pub(crate) async fn stdio_asking() -> Sent {
         "requestState": "backend-state-1"
     });
     stdio_call(|_| {}, (json!({}), None), question).await
+}
+
+/// R5 whose backend answers `answer` under the context-integrity `kernel`
+/// (MIK-8325 S8: an enforced follow-up question over stdio).
+pub(crate) async fn stdio_answering_gated(
+    kernel: crate::context_integrity::ContextIntegrityKernel,
+    answer: Value,
+) -> Sent {
+    stdio_call(
+        |meta| meta.set_context_integrity_kernel(kernel),
+        // A modern client that declares form elicitation, so the question
+        // clears the capability gate (MRTR.9) and reaches the content gate.
+        (
+            json!({}),
+            Some(json!({
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}}
+            })),
+        ),
+        answer,
+    )
+    .await
 }
 
 /// R5 with a chain signer emitting on request, the call carrying a chain nonce.
@@ -352,6 +389,164 @@ pub(crate) async fn stdio_twice(
     (first, second, calls.load(Ordering::SeqCst))
 }
 
+/// MIK-8362: `runs` `gateway_run_playbook` calls of the playbook `definition`
+/// (steps on `alpha`) over one stdio Meta-MCP whose firewall config `tune`
+/// adjusts and whose tool policy is `policy`. Returns each answer and the
+/// backend's sends.
+pub(crate) async fn stdio_playbook_runs(
+    audit: &Path,
+    tune: impl FnOnce(&mut crate::security::firewall::FirewallConfig),
+    (definition, policy): (Value, crate::security::ToolPolicyConfig),
+    runs: usize,
+) -> (Vec<Value>, usize) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let backend = Arc::new(Counting {
+        calls: Arc::clone(&calls),
+        answer: text_result("ok"),
+    });
+    stdio_playbook_over(backend, calls, audit, tune, (definition, policy, runs)).await
+}
+
+/// [`stdio_playbook_runs`] over a backend whose first `tools/call` fails with a
+/// transport error and whose later ones answer `ok`: an engine retry
+/// (`on_error: retry`) is the only thing that sends the step a second time.
+pub(crate) async fn stdio_playbook_flaky(
+    audit: &Path,
+    tune: impl FnOnce(&mut crate::security::firewall::FirewallConfig),
+    (definition, runs): (Value, usize),
+) -> (Vec<Value>, usize) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let backend = Arc::new(FailsFirst {
+        calls: Arc::clone(&calls),
+    });
+    let policy = crate::security::ToolPolicyConfig::default();
+    stdio_playbook_over(backend, calls, audit, tune, (definition, policy, runs)).await
+}
+
+async fn stdio_playbook_over(
+    backend: Arc<dyn crate::transport::Transport>,
+    calls: Arc<AtomicUsize>,
+    audit: &Path,
+    tune: impl FnOnce(&mut crate::security::firewall::FirewallConfig),
+    (definition, policy, runs): (Value, crate::security::ToolPolicyConfig, usize),
+) -> (Vec<Value>, usize) {
+    let params = json!({ "name": "gateway_run_playbook", "arguments": { "name": "steps" } });
+    stdio_params_over(
+        (backend, calls),
+        audit,
+        tune,
+        (Some(definition), policy, vec![params; runs]),
+    )
+    .await
+}
+
+/// Each of `params` as a stdio `tools/call` over `backend`, with the playbook
+/// `definition` (if any) registered, under the firewall `tune` adjusts and the
+/// tool policy `policy`. Returns each answer and the backend's sends.
+pub(crate) async fn stdio_params_over(
+    (backend, calls): (Arc<dyn crate::transport::Transport>, Arc<AtomicUsize>),
+    audit: &Path,
+    tune: impl FnOnce(&mut crate::security::firewall::FirewallConfig),
+    (definition, policy, params): (Option<Value>, crate::security::ToolPolicyConfig, Vec<Value>),
+) -> (Vec<Value>, usize) {
+    let firewall = audited_firewall_with(audit, tune);
+    let arm = arm_firewall(firewall);
+    let definition =
+        definition.map(|value| serde_json::from_value(value).expect("the playbook deserialises"));
+    let gateway_meta = stdio_meta(
+        move |meta| {
+            arm(meta);
+            if let Some(definition) = definition {
+                let mut engine = crate::playbook::PlaybookEngine::new();
+                engine.register(definition);
+                meta.set_playbook_engine(engine);
+            }
+        },
+        backend,
+    )
+    .await;
+    let mut answers = Vec::new();
+    for params in params {
+        answers.push(
+            stdio_send_under(
+                &gateway_meta,
+                params,
+                crate::security::ToolPolicy::from_config(&policy),
+            )
+            .await,
+        );
+    }
+    (answers, calls.load(Ordering::SeqCst))
+}
+
+/// [`stdio_params_over`] on the counting backend answering `ok`.
+pub(crate) async fn stdio_params_counted(
+    audit: &Path,
+    tune: impl FnOnce(&mut crate::security::firewall::FirewallConfig),
+    (definition, policy, params): (Option<Value>, crate::security::ToolPolicyConfig, Vec<Value>),
+) -> (Vec<Value>, usize) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let backend = Arc::new(Counting {
+        calls: Arc::clone(&calls),
+        answer: text_result("ok"),
+    });
+    stdio_params_over((backend, calls), audit, tune, (definition, policy, params)).await
+}
+
+/// A backend serving `read` whose first `tools/call` fails and whose later
+/// ones answer `ok`, counting every send (the failed one included).
+struct FailsFirst {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for FailsFirst {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
+        if method == "tools/list" {
+            let body =
+                json!({ "tools": [{ "name": "read", "inputSchema": { "type": "object" } }] });
+            return Ok(JsonRpcResponse::success(RequestId::Number(1), body));
+        }
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Err(crate::Error::json_rpc(-32001, "flaky backend"));
+        }
+        Ok(JsonRpcResponse::success(
+            RequestId::Number(1),
+            text_result("ok"),
+        ))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// The playbook `steps` with one `read` step on `alpha` per name in `tools`
+/// (a step per entry, in order).
+pub(crate) fn playbook_of(tools: &[&str]) -> Value {
+    let steps: Vec<Value> = tools
+        .iter()
+        .enumerate()
+        .map(|(index, tool)| {
+            json!({ "name": format!("s{index}"), "tool": tool, "server": "alpha",
+                "arguments": {} })
+        })
+        .collect();
+    json!({ "playbook": "1.0", "name": "steps", "description": "steps", "steps": steps })
+}
+
 /// R5, MIK-8150 NONCE.5: on the production-built hardened stdio gateway, a
 /// keyed signed `gateway_invoke` runs under `t1`; the key reused for other
 /// arguments is refused by execution admission (409) under `t2`; the honest
@@ -408,5 +603,85 @@ pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value, usize) {
         let resent = call("t-k2", "stdio-adm-t2-0001", "other").await;
         let third = call("t-k3", "stdio-adm-t2-0001", "other").await;
         (refused, resent, third, fixture.backend.tools_call_count())
+    })
+}
+
+/// One stdio answer's delivery: whether the frame delivers a result, and how
+/// many nonces were given back across its dispatch and its delivery tail.
+pub(crate) struct Delivered {
+    pub(crate) delivers_result: bool,
+    pub(crate) given_back: usize,
+}
+
+/// MIK-8353 STDIO-SETTLE: on the production-built hardened stdio gateway, a
+/// signed `gateway_invoke` carrying a forged continuation (refused before its
+/// backend, so the call settles a refund), then the honest call re-sent under
+/// that nonce, then a third send under it. Each goes through the staged
+/// dispatch and `judge_and_commit`, the delivery tail stdio's loop runs, so a
+/// give-back in either place is counted. Blocking: the fixture owns its
+/// current-thread runtime, which the give-back count is kept on.
+pub(crate) fn stdio_refund_through_delivery() -> [Delivered; 3] {
+    use super::signing_allocation_tests::signing_nonce_allocations_support::{
+        BACKEND, Fixture, SESSION, TOOL, runtime,
+    };
+    use crate::gateway::meta_mcp::signing::{NONCE_META, given_back_on_this_thread};
+    const NONCE: &str = "stdio-settle-nonce-0001";
+    runtime().block_on(async {
+        let fixture = Fixture::start_hardened().await;
+        let send = |extra: Value| {
+            let fixture = &fixture;
+            async move {
+                let mut params = serde_json::json!({"name": "gateway_invoke",
+                    "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {}},
+                    "_meta": {NONCE_META: NONCE}});
+                if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
+                    params.extend(extra.clone());
+                }
+                let request = serde_json::json!({
+                    "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params});
+                let before = given_back_on_this_thread();
+                let reads = fixture.meta.stdio_reads();
+                let ((answer, staged), hidden) = crate::gateway::outbound::read_scoped(
+                    reads.guard(),
+                    Box::pin(super::Gateway::dispatch_single_staged(
+                        &fixture.meta,
+                        &fixture.tool_policy,
+                        &fixture.mtls_policy,
+                        request.clone(),
+                        super::StdioClient {
+                            session_id: SESSION,
+                            channel: &crate::gateway::input_bridge::NoClientChannel,
+                            handshake_capabilities: crate::protocol::meta::Declared::NONE,
+                            tasks: None,
+                            modern: false,
+                            sanitize: super::stdio_single::InputSanitizing::Off,
+                        },
+                        &super::StdioTelemetry::default(),
+                    )),
+                )
+                .await;
+                let answer = answer.expect("a request carrying an id is answered");
+                let frame = super::Gateway::judge_and_commit(
+                    &fixture.meta,
+                    &reads,
+                    SESSION,
+                    (answer, request.get("params"), hidden.as_ref()),
+                    staged,
+                )
+                .await;
+                Delivered {
+                    delivers_result: frame.delivers_result(),
+                    given_back: given_back_on_this_thread() - before,
+                }
+            }
+        };
+        let forged = serde_json::json!({
+            "requestState": "forged",
+            "inputResponses": {"q": {"action": "accept"}},
+        });
+        let refused = send(forged).await;
+        let resent = send(serde_json::json!({})).await;
+        let third = send(serde_json::json!({})).await;
+        [refused, resent, third]
     })
 }

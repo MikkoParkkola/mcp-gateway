@@ -70,7 +70,7 @@ fn admit(
     caller: &MetaMcpCallerContext<'_>,
     id: i64,
 ) -> crate::Result<SyncAdmission> {
-    fixture.meta.admit_meta_sync(
+    fixture.meta.admit_meta_sync_for_test(
         crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
         caller,
         "gateway_invoke",

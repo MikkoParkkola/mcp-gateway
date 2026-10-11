@@ -22,9 +22,9 @@ use super::Config;
 use super::config_file::ConfigFile;
 use crate::{Error, Result};
 
-/// Keys that were removed, with the reason. A retired key loads and is ignored,
-/// with one warning carrying its explanation (#2360).
-const RETIRED_BACKEND_KEYS: &[(&str, &str)] = &[
+/// Backend keys removed in 4.0, with the reason. Each is a load error naming
+/// `mcp-gateway upgrade`, which deletes it (MIK-8044).
+const REMOVED_BACKEND_KEYS: &[(&str, &str)] = &[
     (
         "idle_timeout",
         "backend idle hibernation was never implemented, so the key never had an \
@@ -37,8 +37,10 @@ const RETIRED_BACKEND_KEYS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Removed keys outside `backends`, by path segments, with the reason.
-const RETIRED_KEYS: &[(&[&str], &str)] = &[
+/// Keys outside `backends` removed in 4.0, by path segments, with the reason.
+/// Each is a load error naming `mcp-gateway upgrade`, which deletes it
+/// (MIK-8044). None ever had an effect.
+const REMOVED_KEYS: &[(&[&str], &str)] = &[
     (
         &["server", "ws_port"],
         "the inbound WebSocket listener was removed in 4.0 and no WebSocket listener is \
@@ -51,23 +53,33 @@ const RETIRED_KEYS: &[(&[&str], &str)] = &[
          Calls are bounded by the per-backend `timeout`. Remove server.request_timeout",
     ),
     (
-        &["meta_mcp", "cache_tools"],
-        "nothing ever read it, so tool lists were cached the same way whatever it said; \
-         `meta_mcp.cache_ttl` sets how long they are kept. Delete it, or run `mcp-gateway upgrade`, \
-         which removes it or says why it cannot",
-    ),
-    (
         &["marketplace"],
         "the `plugin` command was removed in 4.0, and nothing else read this block: no \
          gateway path loaded the plugins it installed. Remove the marketplace block",
     ),
+    (
+        &["cost_governance", "currency"],
+        "every cost is stored and reported in USD; the key only labelled it. Remove \
+         cost_governance.currency",
+    ),
 ];
+
+/// Keys retired in 4.0 that still load, with the reason, warned once (#2360).
+const RETIRED_KEYS: &[(&[&str], &str)] = &[(
+    &["meta_mcp", "cache_tools"],
+    "nothing ever read it, so tool lists were cached the same way whatever it said; \
+     `meta_mcp.cache_ttl` sets how long they are kept. Delete it, or run `mcp-gateway upgrade`, \
+     which removes it or says why it cannot",
+)];
 
 /// A key the file carries that nothing reads and that still loads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Ignored {
-    /// Removed in 4.0; warned once with the reason.
+    /// Retired in 4.0 and still loads; warned once with the reason.
     Retired(&'static str),
+    /// Removed in 4.0; refused with the reason. Kept here, not with the keys
+    /// nothing knows, so the refusal can say why and what deletes it.
+    Removed(&'static str),
     /// A `_` or `x-` key: the operator's own note, never a setting.
     Annotation,
 }
@@ -163,13 +175,48 @@ pub(super) fn refuse_unrecognised_keys(
     // keys would have loaded. Once per key per config file: a refused reload is
     // retried every poll and must not repeat these.
     log_ignored(path, &ignored);
-    if found.is_empty() {
-        return Ok(());
-    }
-    Err(Error::ConfigValidation(refusal(path, &found, &backend)))
+    let removed: Vec<(&str, &str)> = ignored
+        .iter()
+        .filter_map(|(key, kind)| match kind {
+            Ignored::Removed(why) => Some((key.as_str(), *why)),
+            _ => None,
+        })
+        .collect();
+    let message = match (found.is_empty(), removed.is_empty()) {
+        (true, true) => return Ok(()),
+        (false, true) => refusal(path, &found, &backend),
+        (true, false) => removed_refusal(path, &removed),
+        (false, false) => format!(
+            "{} {}",
+            refusal(path, &found, &backend),
+            removed_refusal(path, &removed)
+        ),
+    };
+    Err(Error::ConfigValidation(message))
 }
 
-/// The warning for a retired key; UPGRADING items 29 and 39 quote it.
+/// The refusal of keys removed in 4.0, each with why it went (MIK-8044).
+/// UPGRADING quotes [`removed_reason`].
+fn removed_refusal(path: &Path, removed: &[(&str, &str)]) -> String {
+    let keys: Vec<&str> = removed.iter().map(|(key, _)| *key).collect();
+    let mut message = format!(
+        "Removed config key(s) in {}: {}.",
+        path.display(),
+        keys.join(", ")
+    );
+    for (key, why) in removed {
+        let _ = write!(message, " {}", removed_reason(key, why));
+    }
+    message.push_str(" Run `mcp-gateway upgrade`, which deletes them, or delete them by hand.");
+    message
+}
+
+/// One removed key's sentence in the refusal.
+fn removed_reason(key: &str, why: &str) -> String {
+    format!("`{key}` was removed in 4.0: {why}.")
+}
+
+/// The warning for a retired key that still loads; UPGRADING quotes it.
 fn retired_warning(key: &str, why: &str) -> String {
     format!("`{key}` is ignored since 4.0: {why}.")
 }
@@ -183,6 +230,8 @@ fn log_ignored(path: &Path, ignored: &IgnoredKeys) {
             Ignored::Retired(why) => {
                 tracing::warn!(config = %path.display(), "{}", retired_warning(key, why));
             }
+            // Refused, and the refusal carries the reason.
+            Ignored::Removed(_) => {}
             Ignored::Annotation => tracing::debug!(
                 config = %path.display(),
                 "`{key}` is an annotation (`_` or `x-` key) and is not read"
@@ -216,12 +265,21 @@ fn ignored_by_serde(
             && is_annotation(leaf)
         {
             ignored.insert(path, Ignored::Annotation);
-        } else if let Some((_, why)) = segments(&key).and_then(|segs| {
-            RETIRED_KEYS
+        } else if let Some(kind) = segments(&key).and_then(|segs| {
+            let is =
+                |(p, _): &&(&[&str], &str)| segs.iter().map(String::as_str).eq(p.iter().copied());
+            REMOVED_KEYS
                 .iter()
-                .find(|(retired, _)| segs.iter().map(String::as_str).eq(retired.iter().copied()))
+                .find(is)
+                .map(|(_, why)| Ignored::Removed(why))
+                .or_else(|| {
+                    RETIRED_KEYS
+                        .iter()
+                        .find(is)
+                        .map(|(_, why)| Ignored::Retired(why))
+                })
         }) {
-            ignored.insert(path, Ignored::Retired(why));
+            ignored.insert(path, kind);
         } else {
             found.insert(path);
         }
@@ -279,7 +337,17 @@ fn dotted(key: &KeyPath<'_>) -> String {
 /// for every key of a transport other than the one the backend selects. A
 /// retired or annotation key directly under a backend goes to `ignored`.
 fn unread_backend_keys(raw: &str, ignored: &mut IgnoredKeys) -> BackendFindings {
-    let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(raw) else {
+    // A repeated key fails the strict parse but loads, last value winning; the
+    // loader's own reading is the fallback, so a repeat elsewhere in the file
+    // cannot switch this check off (MIK-8044, B1).
+    let Some(doc) = serde_yaml::from_str::<serde_yaml::Value>(raw)
+        .ok()
+        .or_else(|| {
+            serde_yaml::from_str::<figment::value::Dict>(raw)
+                .ok()
+                .and_then(|dict| serde_yaml::to_value(dict).ok())
+        })
+    else {
         return BackendFindings::new();
     };
     let Some(backends) = doc.get("backends").and_then(serde_yaml::Value::as_mapping) else {
@@ -315,8 +383,8 @@ fn unread_backend_keys(raw: &str, ignored: &mut IgnoredKeys) -> BackendFindings 
         for key in keys {
             let path = format!("backends.{name}.{key}");
             if !is_backend_key(key) {
-                if let Some((_, why)) = RETIRED_BACKEND_KEYS.iter().find(|(name, _)| *name == key) {
-                    ignored.insert(path, Ignored::Retired(why));
+                if let Some((_, why)) = REMOVED_BACKEND_KEYS.iter().find(|(name, _)| *name == key) {
+                    ignored.insert(path, Ignored::Removed(why));
                 } else if is_annotation(key) {
                     ignored.insert(path, Ignored::Annotation);
                 } else {
@@ -423,8 +491,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        A2A_BACKEND_KEYS, KNOWN_BACKEND_KEYS, RETIRED_KEYS, is_annotation, missing_feature_for,
-        retired_warning,
+        A2A_BACKEND_KEYS, KNOWN_BACKEND_KEYS, REMOVED_KEYS, RETIRED_KEYS, is_annotation,
+        missing_feature_for, removed_reason, retired_warning,
     };
 
     /// COLLUDE.1 §13.1 B4: a build without `firewall` names the feature for
@@ -444,6 +512,17 @@ mod tests {
         assert_eq!(
             missing_feature_for("security.firewalls", "firewalls", without),
             None
+        );
+    }
+
+    /// MIK-8044 (T5b): a build without `cost-governance` still names the
+    /// feature for the block, `currency` included: the feature is the first
+    /// fix, and the removed-key refusal follows once it is on.
+    #[test]
+    fn a_cost_governance_key_names_the_missing_feature() {
+        assert_eq!(
+            missing_feature_for("cost_governance", "cost_governance", |_| false),
+            Some("cost-governance")
         );
     }
 
@@ -558,14 +637,14 @@ mod tests {
         walk(&config, "");
     }
 
-    /// #2360: UPGRADING quotes the `request_timeout` warning verbatim.
+    /// UPGRADING quotes the `request_timeout` refusal verbatim (MIK-8044).
     #[test]
-    fn upgrading_quotes_the_request_timeout_warning() {
-        let (_, why) = RETIRED_KEYS
+    fn upgrading_quotes_the_request_timeout_refusal() {
+        let (_, why) = REMOVED_KEYS
             .iter()
             .find(|(path, _)| *path == ["server", "request_timeout"])
-            .expect("request_timeout is retired");
-        let quote = retired_warning("server.request_timeout", why);
+            .expect("request_timeout is removed");
+        let quote = removed_reason("server.request_timeout", why);
         assert!(
             include_str!("../../docs/UPGRADING-4.0.md").contains(&quote),
             "UPGRADING must quote: {quote}"
@@ -583,12 +662,12 @@ mod tests {
         let write = crate::gateway::test_helpers::write_owner_only;
         write(
             &ok,
-            "backends:\n  x:\n    command: y\n    idle_timeout: 5m\n    _note: n\n",
+            "meta_mcp:\n  cache_tools: false\nbackends:\n  x:\n    command: y\n    _note: n\n",
         )
         .expect("write ok");
         write(
             &bad,
-            "backends:\n  x:\n    command: y\n    idle_timeout: 5m\n    idel: 1\n",
+            "meta_mcp:\n  cache_tools: false\nbackends:\n  x:\n    command: y\n    idel: 1\n",
         )
         .expect("write bad");
         let logs = records(|| {
@@ -596,7 +675,7 @@ mod tests {
             crate::config::Config::load(Some(&ok)).expect("reloads");
             crate::config::Config::load(Some(&bad)).expect_err("typo refuses");
         });
-        let retired = "`backends.x.idle_timeout` is ignored since 4.0";
+        let retired = "`meta_mcp.cache_tools` is ignored since 4.0";
         assert_eq!(count(&logs, "WARN", retired), 2, "once per file: {logs:?}");
         assert_eq!(
             count(&logs, "DEBUG", "`backends.x._note` is an annotation"),
@@ -621,10 +700,10 @@ mod tests {
         assert!(err.contains("max_segment_byte"), "{err}");
     }
 
-    /// The `plugin` command is retired in 4.0: a config that still carries its
-    /// `marketplace` block loads, and says once that the block does nothing.
+    /// The `plugin` command is removed in 4.0: a config that still carries its
+    /// `marketplace` block is refused with the reason, and warns nothing.
     #[test]
-    fn retired_marketplace_block_loads_and_warns_once() {
+    fn removed_marketplace_block_is_refused_not_warned() {
         use crate::test_log_capture::{count, records};
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gateway.yaml");
@@ -633,12 +712,18 @@ mod tests {
             "marketplace:\n  marketplace_url: https://plugins.example\n  plugin_dir: /tmp/p\n",
         )
         .expect("write config");
+        let mut refusal = String::new();
         let logs = records(|| {
-            crate::config::Config::load(Some(&path)).expect("loads");
-            crate::config::Config::load(Some(&path)).expect("reloads");
+            refusal = crate::config::Config::load(Some(&path))
+                .expect_err("refused")
+                .to_string();
         });
-        let retired = "`marketplace` is ignored since 4.0";
-        assert_eq!(count(&logs, "WARN", retired), 1, "{logs:?}");
+        assert!(
+            refusal.contains("`marketplace` was removed in 4.0")
+                && refusal.contains("mcp-gateway upgrade"),
+            "{refusal}"
+        );
+        assert_eq!(count(&logs, "WARN", "`marketplace`"), 0, "{logs:?}");
     }
 
     /// MIK-8064: `meta_mcp.cache_tools` was read by nothing; a config that
@@ -674,14 +759,14 @@ mod tests {
         );
     }
 
-    /// UPGRADING quotes the `marketplace` warning verbatim.
+    /// UPGRADING quotes the `marketplace` refusal verbatim (MIK-8044).
     #[test]
-    fn upgrading_quotes_the_marketplace_warning() {
-        let (_, why) = RETIRED_KEYS
+    fn upgrading_quotes_the_marketplace_refusal() {
+        let (_, why) = REMOVED_KEYS
             .iter()
             .find(|(path, _)| *path == ["marketplace"])
-            .expect("marketplace is retired");
-        let quote = retired_warning("marketplace", why);
+            .expect("marketplace is removed");
+        let quote = removed_reason("marketplace", why);
         assert!(
             include_str!("../../docs/UPGRADING-4.0.md").contains(&quote),
             "UPGRADING must quote: {quote}"

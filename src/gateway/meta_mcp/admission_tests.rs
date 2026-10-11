@@ -127,7 +127,7 @@ fn admit(
     args: &Value,
     id: i64,
 ) -> Result<SyncAdmission> {
-    meta.admit_meta_sync(
+    meta.admit_meta_sync_for_test(
         crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
         caller,
         tool,
@@ -169,7 +169,7 @@ fn set_state_idempotency_is_bound_to_legacy_session() {
     caller.is_modern = false;
     let args = json!({"state":"triage"});
 
-    let Ok(SyncAdmission::Owned(owner)) = meta.admit_meta_sync(
+    let Ok(SyncAdmission::Owned(owner)) = meta.admit_meta_sync_for_test(
         crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
         &caller,
         "gateway_set_state",
@@ -186,7 +186,7 @@ fn set_state_idempotency_is_bound_to_legacy_session() {
     ));
 
     assert_replay(
-        meta.admit_meta_sync(
+        meta.admit_meta_sync_for_test(
             crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
             &caller,
             "gateway_set_state",
@@ -197,7 +197,7 @@ fn set_state_idempotency_is_bound_to_legacy_session() {
         2,
     );
 
-    let error = refusal(meta.admit_meta_sync(
+    let error = refusal(meta.admit_meta_sync_for_test(
         crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
         &caller,
         "gateway_set_state",

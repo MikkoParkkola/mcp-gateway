@@ -66,12 +66,58 @@ fn sources() -> Vec<(String, String)> {
 
 /// ADM-SWEEP (`MIK-8193`): every production admission of a call goes through
 /// one owner spelling. The synchronous lease is entered only through
-/// `admit_meta_sync`, each call site naming its `AdmissionOwner` (HTTP: the
-/// routed task owner; stdio: the reserved local owner), and an execution
-/// admission request is built only at the two reviewed sites. A new path
-/// fails here until it is reviewed into the lists.
+/// `admit_meta_sync` and the direct route's `direct_route_admission`
+/// (MIK-8154), each call site naming its `AdmissionOwner` (HTTP and the direct
+/// route: the routed task owner; stdio: the reserved local owner);
+/// `admit_sync` is called only from those two; and an execution admission
+/// request is built only at the reviewed sites. A new path fails here until it
+/// is reviewed into the lists.
 #[test]
 fn adm_sweep_every_admission_uses_one_owner_spelling() {
+    let failures = adm_sweep(&sources());
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// A1 (MIK-8154): the sweep is not vacuous. An `admit_sync` call planted in
+/// an unreviewed file, a second one inside a reviewed file, and the direct
+/// route's site naming a free-standing owner, each fail it.
+#[test]
+fn a1_the_sweep_fails_a_planted_site_and_a_free_standing_owner() {
+    let mut planted = sources();
+    planted.push((
+        "gateway/router/planted.rs".to_owned(),
+        "meta.admit_sync(true, None, Some(\"owner\"), r, s, t, a, || x, id)".to_owned(),
+    ));
+    assert!(
+        !adm_sweep(&planted).is_empty(),
+        "a planted admit_sync passed"
+    );
+    let mut second = sources();
+    let admission = second
+        .iter_mut()
+        .find(|(rel, _)| rel == "gateway/meta_mcp/admission.rs")
+        .expect("the admission module");
+    admission
+        .1
+        .push_str("\nfn planted() { meta.admit_sync(true, None, None, r, s, t, a, || x, id); }\n");
+    assert!(
+        !adm_sweep(&second).is_empty(),
+        "a second admit_sync inside a reviewed file passed"
+    );
+    let mut free = sources();
+    let site = free
+        .iter_mut()
+        .find(|(rel, _)| rel == "gateway/router/backend_handlers/direct_idempotency.rs")
+        .expect("the direct route's admission site");
+    site.1 = site.1.replace(
+        "AdmissionOwner::routed(&admission_owner)",
+        "AdmissionOwner::routed(\"anyone\")",
+    );
+    assert!(!adm_sweep(&free).is_empty(), "a free-standing owner passed");
+}
+
+/// The sweep over `sources`: every failure found, empty when it holds.
+fn adm_sweep(sources: &[(String, String)]) -> Vec<String> {
     let expected_sync: BTreeMap<&str, &str> = [
         (
             "gateway/router/handlers/dispatch_tools_call.rs",
@@ -80,6 +126,10 @@ fn adm_sweep_every_admission_uses_one_owner_spelling() {
         (
             "gateway/server/stdio_dispatch.rs",
             "AdmissionOwner::local_operator()",
+        ),
+        (
+            "gateway/router/backend_handlers/direct_idempotency.rs",
+            "AdmissionOwner::routed(&admission_owner)",
         ),
     ]
     .into_iter()
@@ -91,45 +141,67 @@ fn adm_sweep_every_admission_uses_one_owner_spelling() {
     ]
     .into_iter()
     .collect();
+    // One call in each: the count, not the file, so a second call inside a
+    // reviewed file fails too.
+    let expected_admit_sync: BTreeMap<&str, usize> = [
+        ("gateway/meta_mcp/admission.rs", 1),
+        ("gateway/meta_mcp/direct_route.rs", 1),
+    ]
+    .into_iter()
+    .collect();
     let mut sync_sites = BTreeMap::new();
     let mut mode_sites = BTreeSet::new();
-    for (rel, text) in sources() {
-        for (at, _) in text.match_indices(".admit_meta_sync(") {
-            let owner = text[at..]
-                .split(',')
-                .next()
-                .map(|first| {
-                    first
-                        .trim_start_matches(".admit_meta_sync(")
-                        .trim()
-                        .to_owned()
-                })
-                .unwrap_or_default();
-            sync_sites.insert(rel.clone(), owner);
+    let mut admit_sync_sites = BTreeMap::new();
+    for (rel, text) in sources {
+        for entry in [".admit_meta_sync(", ".direct_route_admission("] {
+            for (at, _) in text.match_indices(entry) {
+                let owner = text[at..]
+                    .split(',')
+                    .next()
+                    .map(|first| first.trim_start_matches(entry).trim().to_owned())
+                    .unwrap_or_default();
+                sync_sites.insert(rel.clone(), owner);
+            }
+        }
+        let calls = text.matches(".admit_sync(").count();
+        if calls > 0 {
+            admit_sync_sites.insert(rel.clone(), calls);
         }
         if text.contains("mode: Mode::Sync") || text.contains("mode: Mode::Task") {
             mode_sites.insert(rel.clone());
         }
     }
+    let mut failures = Vec::new();
     for (file, owner) in &sync_sites {
         let want = expected_sync
             .get(file.as_str())
             .copied()
             .unwrap_or("<unreviewed site>");
-        assert!(
-            owner.ends_with(want),
-            "{file}: admit_meta_sync must name the reviewed owner {want}, got {owner}"
-        );
+        if !owner.ends_with(want) {
+            failures.push(format!(
+                "{file}: the lease entry must name the reviewed owner {want}, got {owner}"
+            ));
+        }
     }
     let sync_files: BTreeSet<&str> = sync_sites.keys().map(String::as_str).collect();
     let expected_files: BTreeSet<&str> = expected_sync.keys().copied().collect();
-    assert_eq!(
-        sync_files, expected_files,
-        "admit_meta_sync call sites changed"
-    );
+    if sync_files != expected_files {
+        failures.push(format!("lease entry sites changed: {sync_files:?}"));
+    }
+    let admit_sync: BTreeMap<&str, usize> = admit_sync_sites
+        .iter()
+        .map(|(file, calls)| (file.as_str(), *calls))
+        .collect();
+    if admit_sync != expected_admit_sync {
+        failures.push(format!(
+            "admit_sync called outside the two owner-spelling entry points: {admit_sync:?}"
+        ));
+    }
     let modes: BTreeSet<&str> = mode_sites.iter().map(String::as_str).collect();
-    assert_eq!(
-        modes, expected_modes,
-        "execution admission requests built elsewhere"
-    );
+    if modes != expected_modes {
+        failures.push(format!(
+            "execution admission requests built elsewhere: {modes:?}"
+        ));
+    }
+    failures
 }

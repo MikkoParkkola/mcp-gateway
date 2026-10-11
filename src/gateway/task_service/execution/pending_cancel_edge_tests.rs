@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8347 edge rows: what a send does when the clock, the row or the store
-//! cannot be trusted. Each keeps the cancel recoverable or gives it up loudly;
-//! none sends twice or loses it silently.
+//! cannot be trusted. Each keeps the cancel recoverable or gives it up loudly,
+//! and none loses it silently. T15 delivers it twice on purpose: an outcome
+//! the store could not write is sent again after restart, which the design
+//! allows because a peer ignores a second cancel of a finished task.
 
 use serde_json::{Value, json};
 

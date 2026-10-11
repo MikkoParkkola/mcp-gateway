@@ -491,7 +491,7 @@ fn mik_8341_admission_refuses_a_playbook_retry_before_reserving() {
     // `admit_operation` would surface as its -32003 instead (grok c2).
     let allowed = ctx(&AllowAll);
     let caller = allowed.with_retry(&retry);
-    let admitted = meta.admit_meta_sync(
+    let admitted = meta.admit_meta_sync_for_test(
         crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
         &caller,
         "gateway_run_playbook",
@@ -521,7 +521,7 @@ fn mik_8341_admission_refuses_a_playbook_retry_before_reserving() {
     let mut owned = ctx(&AllowAll);
     owned.credential_principal = Some("cred:mik-8341");
     let caller = owned.with_retry(&honest);
-    let admitted = meta.admit_meta_sync(
+    let admitted = meta.admit_meta_sync_for_test(
         crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
         &caller,
         "gateway_run_playbook",

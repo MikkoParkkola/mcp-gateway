@@ -150,6 +150,9 @@ mod mcp_nonce_admission_tests;
 mod mcp_nonce_tests;
 #[cfg(test)]
 mod meta_fingerprint_tests;
+/// MIK-8154.LEASE.1 rows: the direct route takes the shared execution lease.
+#[cfg(test)]
+mod mik8154_lease_rows_tests;
 #[cfg(test)]
 mod mrtr9_lease_tests;
 #[cfg(test)]
@@ -161,6 +164,8 @@ mod playbook_key_tests;
 mod reload_status_tests;
 #[cfg(all(test, feature = "firewall"))]
 pub(super) mod route_matrix_driver_tests;
+#[cfg(all(test, feature = "firewall"))]
+pub(super) mod route_matrix_x14_nonce_tests;
 #[cfg(test)]
 mod slot_quota_direct_tests;
 #[cfg(test)]

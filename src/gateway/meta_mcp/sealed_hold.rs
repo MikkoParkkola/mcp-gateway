@@ -349,6 +349,21 @@ mod tests {
         .await;
     }
 
+    /// A successful answer that does not carry the envelope keeps no hold:
+    /// a slot is kept by the envelope leaving, never by the answer being a
+    /// success (MIK-8078's "release only on error" mutant, re-homed here from
+    /// R22 by MIK-8325, where a withheld question became an error).
+    #[tokio::test]
+    async fn a_success_without_the_envelope_keeps_no_hold() {
+        let continuation = Arc::new(ContinuationState::new());
+        scoped(async {
+            register(&continuation, "k", "env-123");
+            let finished = json!({"content": [{"type": "text", "text": "done"}], "isError": false});
+            assert_eq!(carried(&finished).0.len(), 0, "{finished}");
+        })
+        .await;
+    }
+
     /// The bridge: holds an answer carries outlive the scope that minted them
     /// (the reply is finalized after it ends). Not handed off (finalization
     /// cancelled or replaced) they give the slot back; handed off, they keep it.
