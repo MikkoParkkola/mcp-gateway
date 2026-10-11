@@ -4,7 +4,6 @@
 //! parent of the caller-verdict commits: C6c and F4 (controls), P5 (red).
 //! Every test name starts with `g3_`.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -32,11 +31,8 @@ pub(super) struct Gateway {
     pub(super) caller: Arc<Asked>,
     pub(super) shared: Arc<Asked>,
     pub(super) mints: Arc<AtomicUsize>,
-    #[cfg_attr(
-        not(feature = "firewall"),
-        expect(dead_code, reason = "read only by the firewall-gated rows")
-    )]
-    firewall_audit: PathBuf,
+    #[cfg(feature = "firewall")]
+    firewall_audit: std::path::PathBuf,
     _store: tempfile::TempDir,
     _files: [tempfile::NamedTempFile; 3],
 }
@@ -56,10 +52,7 @@ impl Gateway {
     }
 
     /// The `policy_targets` of each response row the firewall audited.
-    #[cfg_attr(
-        not(feature = "firewall"),
-        expect(dead_code, reason = "read only by the firewall-gated rows")
-    )]
+    #[cfg(feature = "firewall")]
     fn response_targets_audited(&self) -> Vec<Value> {
         std::fs::read_to_string(&self.firewall_audit)
             .unwrap_or_default()
@@ -98,6 +91,7 @@ pub(super) async fn gateway(
     meta.set_identity_propagation(Arc::new(CountingMint(Arc::clone(&mints))));
     meta.enable_transparency_log(transparency_logger(&files[0]));
     meta.set_multi_user(true);
+    #[cfg(feature = "firewall")]
     let firewall_audit = files[2].path().to_path_buf();
     #[cfg(feature = "firewall")]
     {
@@ -124,6 +118,7 @@ pub(super) async fn gateway(
         caller,
         shared,
         mints,
+        #[cfg(feature = "firewall")]
         firewall_audit,
         _store: store,
         _files: files,
