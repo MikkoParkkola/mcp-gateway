@@ -60,6 +60,7 @@ DASHBOARD (opens once, then remembered in this browser):
 
 Or create the config manually:
 
+<!-- quickstart-minimal-config -->
 ```yaml
 server:
   port: 39400
@@ -74,6 +75,7 @@ capabilities:
 
 backends: {}
 ```
+<!-- /quickstart-minimal-config -->
 
 ### 3. Add Capabilities
 
