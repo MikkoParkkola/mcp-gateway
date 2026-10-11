@@ -8,6 +8,11 @@
 //! with the data directory in a tempdir. Writes are counted per window file
 //! by `durable::write_seam`, and the saved counts are read back with
 //! `load_durable_window`, the loader an operator's report uses.
+//!
+//! The saved window holds the process-wide counter registry, so in a test
+//! binary it also carries other tests' observations. Counts are therefore
+//! asserted as lower bounds (a missing save reads 0), and the drain-window
+//! row tracks its own request by a revision label no other test sends.
 
 use std::time::Duration;
 
@@ -29,8 +34,10 @@ const PINGS: u64 = 20;
 /// A saver interval no row outlives, so the only saves a row sees are the
 /// ones it is about (MIK-8364).
 const NO_TICK: Duration = Duration::from_secs(3600);
-/// The revision the drain-window row's held request names on `_meta`.
-const HELD_REVISION: &str = "2025-11-25";
+/// The revision the drain-window row's held request names on `_meta`: a
+/// measured label no other request-sending test uses, because the saved
+/// window holds the process-wide registry (see the module note).
+const HELD_REVISION: &str = "2024-10-07";
 
 struct Session {
     client: DuplexStream,
@@ -264,8 +271,8 @@ async fn a_request_observed_during_the_drain_is_in_the_final_save() {
     session.initialize().await;
     let (reached, release) = session.hold.arm();
     let reached = reached.notified();
-    // Its own revision on `_meta`, so the final save can be checked for
-    // exactly this request: the handshake negotiated 2025-06-18.
+    // Its own revision on `_meta`, so the final save can be checked for this
+    // request: the handshake negotiated 2025-06-18.
     session
         .send(
             &json!({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {
@@ -283,9 +290,8 @@ async fn a_request_observed_during_the_drain_is_in_the_final_save() {
     crate::test_pause::within("the drain starting after the stop", drained).await;
     release.notify_one();
     let saved = session.wait_end().await;
-    assert_eq!(
-        saved.by_revision.get(HELD_REVISION).copied().unwrap_or(0),
-        1,
+    assert!(
+        saved.by_revision.get(HELD_REVISION).copied().unwrap_or(0) >= 1,
         "the request observed during the drain is missing from the final save: {saved:?}"
     );
 }
