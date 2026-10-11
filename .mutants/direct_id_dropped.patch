@@ -1,0 +1,11 @@
+diff --git a/src/gateway/router/backend_handlers/direct_caller.rs b/src/gateway/router/backend_handlers/direct_caller.rs
+index 7dfa115e0..af5f8094b 100644
+--- a/src/gateway/router/backend_handlers/direct_caller.rs
++++ b/src/gateway/router/backend_handlers/direct_caller.rs
+@@ -508,5 +508,5 @@ fn sanitized(state: &AppState, name: &str, request: Value) -> Result<Value, Reje
+         return Ok(request);
+     }
+     let id = crate::protocol::mrtr::raw_request_id(&request);
+-    sanitize_request(&request, ProtocolRoute::Direct).map_err(|e| refused(id, e))
++    sanitize_request(&request, ProtocolRoute::Direct).map_err(|e| refused(None, e))
+ }

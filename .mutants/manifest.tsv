@@ -1,0 +1,6 @@
+head_sha	ea4fe3b883585b90854864fdcb50dc5a470f58d4
+# MIK-8154 PR2 round-6 follow-up: S9k id fix, roster test parser.
+mcp_id_dropped	linux	mcp_id_dropped.patch	--lib -- mik8154_rows_tests::encoded::s9k
+direct_id_dropped	linux	direct_id_dropped.patch	--lib -- mik8154_rows_tests::encoded::s9k
+drift_alias_line	linux	drift_alias_line.patch	--lib -- surfaced_tools::meta_tool_names_are_the_dispatch_arms
+drift_guard_literal	linux	drift_guard_literal.patch	--lib -- surfaced_tools::meta_tool_names_are_the_dispatch_arms

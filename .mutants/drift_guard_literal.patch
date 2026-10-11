@@ -1,0 +1,17 @@
+diff --git a/src/gateway/meta_mcp/call_dispatch.rs b/src/gateway/meta_mcp/call_dispatch.rs
+index 0578bd4c0..00e5f71fa 100644
+--- a/src/gateway/meta_mcp/call_dispatch.rs
++++ b/src/gateway/meta_mcp/call_dispatch.rs
+@@ -491,11 +491,10 @@ impl MetaMcp {
+                     value
+                 })
+             }
+-            "gateway_get_stats" => self.get_stats(&arguments, caller.is_admin).await,
+             "gateway_cost_report" => self.get_cost_report(&arguments, session_id, caller).await,
+             "gateway_webhook_status" => self.webhook_status(),
+             "gateway_run_playbook" => self.run_playbook(&arguments, caller).await,
+-            "gateway_kill_server" => self.kill_server(&arguments),
++            "gateway_kill_server" if tool_name != "gateway_get_stats" => self.kill_server(&arguments),
+             "gateway_revive_server" => self.revive_server(&arguments),
+             "gateway_list_disabled_capabilities" => {
+                 self.list_disabled_capabilities(caller.scope(), session_id)
