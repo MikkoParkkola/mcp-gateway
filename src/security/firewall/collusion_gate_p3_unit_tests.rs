@@ -194,19 +194,23 @@ fn answers_past_the_walk_caps_are_unread_without_walking() {
 /// `keep_to` reserves its selection from `VIEW_BYTES` before collecting.
 /// With room for the view but not the selection, the sketch is abandoned and
 /// counted, the holder marked, and the step's evidence is still offered.
+/// The budget is lowered once the view is built (a build is charged its
+/// transient peak, a held view only its entries): what the view holds plus
+/// 64 bytes, too little for any selection.
 #[test]
 fn a_selection_without_view_room_abandons_its_sketch_and_keeps_evidence() {
     let fw = firewall();
     let detector = fw.collusion_detector().expect("relay detection on");
     let (text, step) = step_of(1021, 100 * 1024);
     let answer = json!({"whole": text});
-    detector.set_view_budget(detector.view_charge_of(&answer) + 64);
     let staged = PlanStaging::starting_at(1024 * 1024);
     staged.set_caller("alice");
     if let (Some(digest), Some(delivered)) = (
         fw.receipt_digest("alpha", "read", &step, Some(&staged)),
         fw.delivered_for_plan(&answer, Some(&staged)),
     ) {
+        assert!(!delivered.is_unread(), "premise: the answer was read");
+        detector.set_view_budget(detector.view_bytes() + 64);
         let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered, None));
         fw.record_digest(super::RelayCaller::Keyed("alice"), "alpha", "read", &kept);
     }
