@@ -119,6 +119,10 @@ pub(crate) enum Begin {
     /// A restart or shutdown cancelled logins since this caller set out, or
     /// the backend is stopped: it begins nothing.
     Refused,
+    /// The caller's captured cohort already ended without a token: it shares
+    /// that end instead of opening another login (MIK-8339, read under the
+    /// state lock `release` sets it under).
+    Ended(LoginOutcome),
 }
 
 /// The caller leading a login, which ends it with [`Lead::end`]. Dropped
@@ -189,9 +193,28 @@ struct State {
 }
 
 /// A backend's one login at a time. See the module docs.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct LoginGate {
     state: Mutex<State>,
+    /// `(epoch, closed)`, published under the state lock by every cancel
+    /// and by `close` (MIK-8339): detached work before a login begins waits
+    /// on it, so a restart or stop ends that work too.
+    revoked: watch::Sender<(u64, bool)>,
+    /// Test-only: request-time token steps of this backend that detached
+    /// (MIK-8339 LOGINDL.10, .15). Per gate, so parallel tests never share it.
+    #[cfg(test)]
+    detached: std::sync::atomic::AtomicUsize,
+}
+
+impl Default for LoginGate {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(State::default()),
+            revoked: watch::Sender::new((0, false)),
+            #[cfg(test)]
+            detached: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
 }
 
 impl LoginGate {
@@ -220,11 +243,21 @@ impl LoginGate {
     }
 
     /// Lead a new login, or join the one in flight. `since` is the epoch
-    /// the caller captured when it set out, if it is a start.
-    pub(crate) fn begin(self: &Arc<Self>, since: Option<u64>) -> Begin {
+    /// the caller captured when it set out; `cohort` the cohort it captured
+    /// before it queued, whose recorded failure it shares rather than opening
+    /// a second login (MIK-8339). Checked in this order, under one lock:
+    /// refused, ended, join, lead.
+    pub(crate) fn begin(
+        self: &Arc<Self>,
+        since: Option<u64>,
+        cohort: Option<&Arc<Cohort>>,
+    ) -> Begin {
         let mut state = self.state.lock();
         if state.closed || since.is_some_and(|epoch| epoch != state.epoch) {
             return Begin::Refused;
+        }
+        if let Some(outcome) = cohort.and_then(|cohort| cohort.outcome()) {
+            return Begin::Ended(outcome.clone());
         }
         if let Some(attempt) = &state.attempt {
             return Begin::Join(Arc::clone(attempt));
@@ -285,6 +318,7 @@ impl LoginGate {
         let attempt = {
             let mut state = self.state.lock();
             state.epoch += 1;
+            self.revoked.send_replace((state.epoch, state.closed));
             state.attempt.clone()
         };
         if let Some(attempt) = attempt {
@@ -296,8 +330,64 @@ impl LoginGate {
     /// The backend stopped: refuse every later login, then end the one in
     /// flight as [`Self::cancel_and_join`] does.
     pub(crate) async fn close(&self) {
-        self.state.lock().closed = true;
+        {
+            let mut state = self.state.lock();
+            state.closed = true;
+            self.revoked.send_replace((state.epoch, true));
+        }
         self.cancel_and_join().await;
+    }
+
+    /// Test-only: count a detached token step of this backend.
+    #[cfg(test)]
+    pub(crate) fn note_detached(&self) {
+        self.detached.fetch_add(1, Ordering::SeqCst);
+    }
+
+    /// Test-only: detached token steps of this backend so far.
+    #[cfg(test)]
+    pub(crate) fn detached_for_test(&self) -> usize {
+        self.detached.load(Ordering::SeqCst)
+    }
+
+    /// Resolve when a restart or stop has revoked work that set out at
+    /// `since`: the backend closed, or the cancel epoch moved (MIK-8339).
+    /// Lock-free: it reads the published `(epoch, closed)`.
+    pub(crate) async fn revoked_since(&self, since: u64) {
+        let mut rx = self.revoked.subscribe();
+        // The sender lives in `self`, so the channel cannot close here.
+        let _ = rx
+            .wait_for(|(epoch, closed)| *closed || *epoch != since)
+            .await;
+    }
+
+    /// Whether work that set out at `since` has been revoked, read under
+    /// the state lock (the re-check on a success path before Lead).
+    pub(crate) fn is_revoked(&self, since: u64) -> bool {
+        let state = self.state.lock();
+        state.closed || state.epoch != since
+    }
+
+    /// The error for detached work whose own bound expired before it led or
+    /// joined a login (MIK-8339): the captured cohort's recorded end, else
+    /// `AuthorizationPending` while a login of that cohort is open, else
+    /// `otherwise` (the backend's timeout). Both reads under one lock.
+    pub(crate) fn classify(&self, cohort: &Arc<Cohort>, backend: &str, otherwise: Error) -> Error {
+        let state = self.state.lock();
+        if let Some(outcome) = cohort.outcome() {
+            return outcome.to_error(backend);
+        }
+        let pending = state
+            .attempt
+            .as_ref()
+            .is_some_and(|attempt| Arc::ptr_eq(&attempt.cohort, cohort));
+        if pending {
+            Error::AuthorizationPending {
+                backend: backend.to_string(),
+            }
+        } else {
+            otherwise
+        }
     }
 }
 
@@ -329,6 +419,52 @@ pub(crate) async fn set_out<F: std::future::Future>(epoch: u64, work: F) -> F::O
 /// before any `tokio::spawn`, as [`interactive`] is.
 pub(crate) fn set_out_epoch() -> Option<u64> {
     SET_OUT.try_with(|epoch| *epoch).ok()
+}
+
+/// The caller's task-local scopes, captured synchronously in the caller so a
+/// detached task re-enters the SAME Arcs (MIK-8339): marks the task makes
+/// (`mark_waited` inside `authorize_shared`) land on the caller's own
+/// Provenance and fill.
+pub(crate) struct Carried {
+    provenance: Option<Arc<Provenance>>,
+    fill: Option<Arc<AtomicBool>>,
+    set_out: Option<u64>,
+}
+
+/// Capture the current scopes; call it in the caller, never in the task.
+pub(crate) fn carry_scopes() -> Carried {
+    Carried {
+        provenance: PROVENANCE.try_with(Arc::clone).ok(),
+        fill: FILL.try_with(Arc::clone).ok(),
+        set_out: SET_OUT.try_with(|epoch| *epoch).ok(),
+    }
+}
+
+impl Carried {
+    /// Run `work` inside the captured scopes.
+    pub(crate) async fn run<F: std::future::Future>(self, work: F) -> F::Output {
+        let Self {
+            provenance,
+            fill,
+            set_out,
+        } = self;
+        let work = async move {
+            match set_out {
+                Some(epoch) => SET_OUT.scope(epoch, work).await,
+                None => work.await,
+            }
+        };
+        let work = async move {
+            match fill {
+                Some(mark) => FILL.scope(mark, work).await,
+                None => work.await,
+            }
+        };
+        match provenance {
+            Some(provenance) => PROVENANCE.scope(provenance, work).await,
+            None => work.await,
+        }
+    }
 }
 
 /// Run `work` as a caller that never begins or waits on a login (the health
@@ -445,15 +581,66 @@ impl Provenance {
 mod tests {
     use super::*;
 
+    /// MIK-8339 LOGINDL.8b: a caller whose captured cohort's login already
+    /// failed shares that failure at `begin`, read under the state lock: it
+    /// opens no second login, and nothing is left in flight.
+    #[test]
+    fn a_failed_cohort_ends_its_queued_callers_at_begin() {
+        let gate = Arc::new(LoginGate::default());
+        let queued = gate.cohort();
+        let Begin::Lead(lead) = gate.begin(None, None) else {
+            panic!("no login in flight, so the first caller leads");
+        };
+        lead.end(Some(&Error::OAuth("invalid_grant".into())));
+
+        match gate.begin(None, Some(&queued)) {
+            Begin::Ended(outcome) => assert_eq!(Some(&outcome), queued.outcome()),
+            _ => panic!("a caller of a failed cohort opened or joined another login"),
+        }
+        assert!(!gate.in_flight(), "nothing is left in flight");
+        assert!(
+            matches!(gate.begin(None, Some(&gate.cohort())), Begin::Lead(_)),
+            "a caller of the fresh cohort leads"
+        );
+    }
+
+    /// MIK-8339: `classify` reads the captured cohort's end, then its
+    /// pending login, else the fallback, all under one lock.
+    #[test]
+    fn classify_prefers_the_cohorts_end_then_its_pending_login() {
+        let gate = Arc::new(LoginGate::default());
+        let cohort = gate.cohort();
+        let timeout = || Error::BackendTimeout("b".into());
+        assert!(matches!(
+            gate.classify(&cohort, "b", timeout()),
+            Error::BackendTimeout(_)
+        ));
+        let Begin::Lead(lead) = gate.begin(None, None) else {
+            panic!("first caller leads");
+        };
+        assert!(matches!(
+            gate.classify(&cohort, "b", timeout()),
+            Error::AuthorizationPending { .. }
+        ));
+        lead.end(Some(&Error::AuthorizationIncomplete {
+            backend: "b".into(),
+            window_secs: 300,
+        }));
+        assert!(matches!(
+            gate.classify(&cohort, "b", timeout()),
+            Error::AuthorizationIncomplete { .. }
+        ));
+    }
+
     #[test]
     fn an_unfinished_login_ends_its_cohort_and_the_next_caller_begins_afresh() {
         let gate = Arc::new(LoginGate::default());
         let queued = gate.cohort();
-        let Begin::Lead(lead) = gate.begin(None) else {
+        let Begin::Lead(lead) = gate.begin(None, None) else {
             panic!("no login in flight, so the first caller leads");
         };
         assert!(gate.pending_in(&queued));
-        assert!(matches!(gate.begin(None), Begin::Join(_)));
+        assert!(matches!(gate.begin(None, None), Begin::Join(_)));
 
         lead.end(Some(&Error::AuthorizationCancelled {
             backend: "b".into(),
@@ -462,14 +649,14 @@ mod tests {
         assert_eq!(queued.outcome(), Some(&LoginOutcome::Cancelled));
         assert!(!gate.pending_in(&queued));
         assert!(gate.cohort().outcome().is_none(), "a fresh cohort");
-        assert!(matches!(gate.begin(None), Begin::Lead(_)));
+        assert!(matches!(gate.begin(None, None), Begin::Lead(_)));
     }
 
     #[test]
     fn a_login_that_got_a_token_sets_no_outcome() {
         let gate = Arc::new(LoginGate::default());
         let cohort = gate.cohort();
-        let Begin::Lead(lead) = gate.begin(None) else {
+        let Begin::Lead(lead) = gate.begin(None, None) else {
             panic!("leads");
         };
         lead.end(None);
@@ -481,10 +668,10 @@ mod tests {
     async fn an_abandoned_lead_frees_the_gate_and_cancels_its_joiners() {
         let gate = Arc::new(LoginGate::default());
         let cohort = gate.cohort();
-        let Begin::Lead(lead) = gate.begin(None) else {
+        let Begin::Lead(lead) = gate.begin(None, None) else {
             panic!("leads");
         };
-        let Begin::Join(joined) = gate.begin(None) else {
+        let Begin::Join(joined) = gate.begin(None, None) else {
             panic!("joins the lead's login");
         };
 
@@ -496,7 +683,7 @@ mod tests {
             "an abandoned login sets no outcome"
         );
         assert!(
-            matches!(gate.begin(None), Begin::Lead(_)),
+            matches!(gate.begin(None, None), Begin::Lead(_)),
             "the next caller leads"
         );
     }
@@ -510,7 +697,7 @@ mod tests {
         assert!(matches!(gate.begin(Some(gate.epoch())), Begin::Lead(_)));
         gate.close().await;
         assert!(
-            matches!(gate.begin(None), Begin::Refused),
+            matches!(gate.begin(None, None), Begin::Refused),
             "a stopped backend logs in no more"
         );
     }
@@ -529,7 +716,7 @@ mod tests {
     #[tokio::test]
     async fn an_abandoned_lead_holds_the_gate_until_its_listeners_close() {
         let gate = Arc::new(LoginGate::default());
-        let Begin::Lead(mut lead) = gate.begin(None) else {
+        let Begin::Lead(mut lead) = gate.begin(None, None) else {
             panic!("no login in flight, so the first caller leads");
         };
         let listeners = lead.take_listeners_guard().expect("guard handed once");
@@ -538,13 +725,13 @@ mod tests {
         assert!(gate.in_flight(), "released while its listeners still ran");
 
         drop(listeners);
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
             while gate.in_flight() {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .expect("released once its listeners closed");
-        assert!(matches!(gate.begin(None), Begin::Lead(_)));
+        assert!(matches!(gate.begin(None, None), Begin::Lead(_)));
     }
 }

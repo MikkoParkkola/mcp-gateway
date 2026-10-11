@@ -298,9 +298,13 @@ impl Transport for HttpTransport {
         let message_url = self.get_message_url();
 
         for (bucket, id) in sessions {
-            let request = match self
-                .build_mcp_headers(HeaderMode::Close, Some(&bucket))
-                .await
+            // A close uses or refreshes a credential, never a login (MIK-8339):
+            // this one choke point covers every close path (restart, stop,
+            // idle stop, pool eviction, identity-slot teardown).
+            let request = match crate::oauth::login_gate::non_interactive(
+                self.build_mcp_headers(HeaderMode::Close, Some(&bucket)),
+            )
+            .await
             {
                 Ok(headers) => self.client.delete(&message_url).headers(headers),
                 Err(error) => {
