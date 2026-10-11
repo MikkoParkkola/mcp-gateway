@@ -53,6 +53,48 @@ pub(super) struct Admitted<'a> {
     pub(super) cancel_on: Option<crate::gateway::router::inflight_calls::CancelOn>,
 }
 
+/// MIK-8351 (MIK-8154 SAN.3): pass the dispatch chokepoint on the bytes this
+/// `tools/call` is about to send, its redeemed answers included, as every meta
+/// send does. The caller is judged as the route's own entry check judges it.
+fn mint_permit(
+    scope: Scope<'_>,
+    params: Option<&Value>,
+) -> crate::Result<crate::gateway::meta_mcp::invoke::DirectPermit> {
+    let caller = scope.caller;
+    let client = caller.client.as_ref();
+    let authorizer = super::super::authorization::RouterAuthorizer {
+        state: scope.state,
+        client,
+        oauth_agent_identity: caller.oauth_agent_identity.as_ref(),
+        cert_identity: caller.cert_identity.as_ref(),
+        principal: caller.proven.clone(),
+    };
+    let invoke_scope = crate::gateway::meta_mcp::InvokeScope {
+        authorizer: &authorizer,
+        is_admin: client.is_some_and(|c| c.admin),
+        api_key_name: client.map(|c| c.name.as_str()),
+        agent_id: caller
+            .agent_identity
+            .as_ref()
+            .and_then(crate::security::AgentIdentity::proven_agent_id),
+        grant_subject: caller.grant_subject.as_ref(),
+    };
+    let empty = Value::Object(serde_json::Map::new());
+    let arguments = params.and_then(|p| p.get("arguments")).unwrap_or(&empty);
+    let answers = params.and_then(|p| p.get("inputResponses"));
+    let tool = params
+        .and_then(|p| p.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let session = format!("direct:{}", scope.name);
+    scope.state.meta_mcp.direct_send_permit(
+        invoke_scope,
+        Some(&session),
+        (scope.name, tool),
+        &crate::gateway::meta_mcp::invoke::Outbound { arguments, answers },
+    )
+}
+
 /// A refusal before dispatch: give back the nonce this call admitted
 /// (MIK-7698).
 fn give_back_nonce(state: &AppState, admitted: &mut Admitted<'_>) {
@@ -330,19 +372,31 @@ async fn forward_sanitized(
         drop(admission);
         return refused;
     }
+    // After redeem, on the exact bytes sent: the answers are in the params now.
+    let permit = match mint_permit(scope, Some(&sanitized_params)) {
+        Ok(permit) => permit,
+        Err(e) => {
+            give_back_nonce(state, &mut admitted);
+            // Not dispatched: the spend reservation is given back on drop.
+            drop(admission);
+            return build_http_response(
+                &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
+                StatusCode::OK,
+            );
+        }
+    };
     // Forward the sanitized params to the backend
     let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(super::dispatch_armed(
         admitted.idem_reservation.as_mut(),
         crate::gateway::router::inflight_calls::explicitly_cancellable(
             cancel_on,
-            super::dispatch_in_scope(
+            super::direct_send::dispatch_tool_call(
+                permit,
                 &route.backend,
-                &envelope.method,
                 id,
                 Some(sanitized_params),
-                &propagation.headers,
-                propagation.identity_key.as_deref(),
+                (&propagation.headers, propagation.identity_key.as_deref()),
             ),
         ),
     ))
@@ -440,14 +494,50 @@ async fn forward_plain(
     } else {
         Admission::default()
     };
-    let dispatch = super::dispatch_in_scope(
-        &route.backend,
-        method,
-        id,
-        envelope.params.clone(),
-        &propagation.headers,
+    // A `tools/call` takes the chokepoint's permit (MIK-8351); every other
+    // method the permit-free door, which cannot name `tools/call`. A letter-case
+    // variant of `tools/call` gets neither: it is not served.
+    let headers = (
+        propagation.headers.as_slice(),
         propagation.identity_key.as_deref(),
     );
+    let params = envelope.params.clone();
+    let dispatch: std::pin::Pin<
+        Box<dyn std::future::Future<Output = crate::Result<JsonRpcResponse>> + Send + '_>,
+    > = if method == "tools/call" {
+        match mint_permit(scope, envelope.params.as_ref()) {
+            Ok(permit) => Box::pin(super::direct_send::dispatch_tool_call(
+                permit,
+                &route.backend,
+                id,
+                params,
+                headers,
+            )),
+            Err(e) => {
+                give_back_nonce(state, admitted);
+                drop(admission);
+                return Err(build_http_response(
+                    &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
+                    StatusCode::OK,
+                ));
+            }
+        }
+    } else if let Some(other) = super::direct_send::NonToolMethod::new(method) {
+        Box::pin(super::direct_send::dispatch_non_call(
+            other,
+            &route.backend,
+            id,
+            params,
+            headers,
+        ))
+    } else {
+        return Err(build_http_error_response(
+            Some(id.clone()),
+            crate::protocol::era::METHOD_NOT_FOUND_CODE,
+            format!("{method} is not served on /mcp/{{name}}; use tools/call"),
+            StatusCode::OK,
+        ));
+    };
     let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(super::dispatch_armed(
         admitted.idem_reservation.as_mut(),

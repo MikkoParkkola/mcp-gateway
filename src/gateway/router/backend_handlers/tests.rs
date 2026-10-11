@@ -535,7 +535,7 @@ mod identity_propagation_audit {
     }
 }
 
-// MIK-7217.OUTBOUND.1 — the direct route's `dispatch_in_scope` is the one
+// MIK-7217.OUTBOUND.1 — the direct route's send (`direct_send`) is the one
 // place every direct-route request funnels through with a CLIENT-CHOSEN
 // method string (unlike the meta-dispatch call sites in era_gate_tests.rs,
 // which each hardcode their own method). It must refuse a method the peer's
@@ -639,15 +639,21 @@ mod era_gate {
     // `ping` is picked deliberately: it is NOT one of the three methods any
     // meta-dispatch call site already gates (resources/subscribe,
     // resources/unsubscribe, logging/setLevel), so a pass here can only come
-    // from `dispatch_in_scope` itself doing the check, not from some other
+    // from the direct route's send itself doing the check, not from some other
     // gate this row would be fooled by.
     #[tokio::test]
     async fn dispatch_in_scope_refuses_a_removed_method_to_a_modern_backend() {
         let (backend, mock) = backend_with_era("modern", true).await;
 
-        let response = dispatch_in_scope(&backend, "ping", &RequestId::Number(7), None, &[], None)
-            .await
-            .expect("the gateway answers the refusal itself; the transport call does not error");
+        let response = super::direct_send::dispatch_non_call(
+            super::direct_send::NonToolMethod::new("ping").expect("not tools/call"),
+            &backend,
+            &RequestId::Number(7),
+            None,
+            (&[], None),
+        )
+        .await
+        .expect("the gateway answers the refusal itself; the transport call does not error");
 
         let error = response
             .error
@@ -676,9 +682,15 @@ mod era_gate {
     async fn dispatch_in_scope_still_forwards_a_removed_method_to_a_legacy_backend() {
         let (backend, mock) = backend_with_era("legacy", false).await;
 
-        let response = dispatch_in_scope(&backend, "ping", &RequestId::Number(7), None, &[], None)
-            .await
-            .expect("legacy peer answers");
+        let response = super::direct_send::dispatch_non_call(
+            super::direct_send::NonToolMethod::new("ping").expect("not tools/call"),
+            &backend,
+            &RequestId::Number(7),
+            None,
+            (&[], None),
+        )
+        .await
+        .expect("legacy peer answers");
 
         assert!(
             response.error.is_none(),
