@@ -35,7 +35,7 @@ END = "<!-- surface-appendix:end -->"
 QS_START = "<!-- quickstart-minimal-config -->"
 QS_END = "<!-- /quickstart-minimal-config -->"
 # SURF.7's end-to-end test that the minimal block loads and serves a call.
-SURF7_TEST = "e2e_fresh_home.rs"
+SURF7_TEST = "e2e_quickstart_minimal_config.rs"
 MINIMAL_MAX_LINES = 15
 
 WORD = {"INTERNAL": "hidden", "AUTO": "derived", "REMOVE": "removed"}

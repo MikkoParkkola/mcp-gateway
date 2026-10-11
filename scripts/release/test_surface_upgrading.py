@@ -221,15 +221,15 @@ backends:
 
 
 def test_r2_the_minimal_setup_block() -> None:
-    assert su.minimal_setup_errors(QS, {"e2e_fresh_home.rs"}) == []
-    assert su.minimal_setup_errors(QS.replace("<!-- quickstart-minimal-config -->\n", ""), {"e2e_fresh_home.rs"})
-    assert su.minimal_setup_errors(QS + QS, {"e2e_fresh_home.rs"})
-    assert su.minimal_setup_errors(QS.replace("backends:\n  everything:\n    command: \"npx -y @modelcontextprotocol/server-everything\"\n", ""), {"e2e_fresh_home.rs"})
+    assert su.minimal_setup_errors(QS, {"e2e_quickstart_minimal_config.rs"}) == []
+    assert su.minimal_setup_errors(QS.replace("<!-- quickstart-minimal-config -->\n", ""), {"e2e_quickstart_minimal_config.rs"})
+    assert su.minimal_setup_errors(QS + QS, {"e2e_quickstart_minimal_config.rs"})
+    assert su.minimal_setup_errors(QS.replace("backends:\n  everything:\n    command: \"npx -y @modelcontextprotocol/server-everything\"\n", ""), {"e2e_quickstart_minimal_config.rs"})
     assert su.minimal_setup_errors(QS, set()), "a missing SURF.7 test passed"
     fifteen = QS.replace("    command:", "\n" * 0 + "    command:").replace("```yaml\n", "```yaml\n" + "# pad\n" * 10)
-    assert su.minimal_setup_errors(fifteen, {"e2e_fresh_home.rs"}) == [], fifteen
+    assert su.minimal_setup_errors(fifteen, {"e2e_quickstart_minimal_config.rs"}) == [], fifteen
     sixteen = fifteen.replace("```yaml\n", "```yaml\n# pad\n")
-    assert su.minimal_setup_errors(sixteen, {"e2e_fresh_home.rs"}), "16 lines passed"
+    assert su.minimal_setup_errors(sixteen, {"e2e_quickstart_minimal_config.rs"}), "16 lines passed"
 
 
 def test_r1_the_repository_is_current() -> None:
