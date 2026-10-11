@@ -179,13 +179,18 @@ pub(super) fn spawn_drain(
     tokio::spawn(drain_until(rx, shutdown, move |nudge: ToolsNudge| {
         let (state, announced) = (Arc::clone(&state), Arc::clone(&announced));
         async move {
-            let Some((name, reach)) = decide(&state, &announced, nudge) else {
-                return;
-            };
-            match reach {
-                Reach::Tools => state.announce_tools_changed(&name).await,
-                Reach::View => state.announce_backend_view_changed(&name).await,
+            #[cfg(test)]
+            let label = drain_seam::label(&nudge);
+            if let Some((name, reach)) = decide(&state, &announced, nudge) {
+                #[cfg(test)]
+                drain_seam::park().await;
+                match reach {
+                    Reach::Tools => state.announce_tools_changed(&name).await,
+                    Reach::View => state.announce_backend_view_changed(&name).await,
+                }
             }
+            #[cfg(test)]
+            drain_seam::finished(label);
         }
     }));
 }
@@ -362,7 +367,13 @@ mod views;
 pub(super) mod stdio;
 
 #[cfg(test)]
+mod audience_fixture;
+#[cfg(test)]
+mod audience_tests;
+#[cfg(test)]
 mod decision_tests;
+#[cfg(test)]
+mod drain_seam;
 #[cfg(test)]
 mod tests {
     use super::*;
