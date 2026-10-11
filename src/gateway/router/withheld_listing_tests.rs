@@ -92,15 +92,12 @@ fn surfaces() -> Vec<Surface> {
 fn names(value: &Value, tool: &str) -> bool {
     match value {
         Value::Object(map) => {
-            ["name", "tool"]
-                .iter()
-                .any(|key| {
-                    map.get(*key).and_then(Value::as_str).is_some_and(|name| {
-                        // Code mode names a tool `server:tool`.
-                        name == tool || name.rsplit_once(':').is_some_and(|(_, t)| t == tool)
-                    })
+            ["name", "tool"].iter().any(|key| {
+                map.get(*key).and_then(Value::as_str).is_some_and(|name| {
+                    // Code mode names a tool `server:tool`.
+                    name == tool || name.rsplit_once(':').is_some_and(|(_, t)| t == tool)
                 })
-                || map.values().any(|v| names(v, tool))
+            }) || map.values().any(|v| names(v, tool))
         }
         Value::Array(items) => items.iter().any(|v| names(v, tool)),
         Value::String(text) => serde_json::from_str::<Value>(text)
@@ -144,7 +141,9 @@ async fn row9_listings_omit_a_withheld_tool_as_an_absent_one() {
             // Fresh twins per surface: a listing can promote or remember.
             let withheld = twin(spec).await;
             let absent = twin(spec.with_side(Side::Absent(Absence::NotInCatalogue))).await;
-            let w = withheld.request(surface.method, surface.params.clone()).await;
+            let w = withheld
+                .request(surface.method, surface.params.clone())
+                .await;
             let a = absent.request(surface.method, surface.params.clone()).await;
             let cell = format!("{reason:?} x {}", surface.label);
             if surface.names_tools {

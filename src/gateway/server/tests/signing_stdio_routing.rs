@@ -74,9 +74,19 @@ async fn stdio_followup_routing_projection_preserves_backend_target_identity() {
             .iter()
             .map(|(s, t)| ((*s).to_string(), (*t).to_string()))
             .collect();
-        let full = backend_tool_targets_for_call(&meta_mcp, tool_name, arguments);
+        let full = backend_tool_targets_for_call(
+            &meta_mcp,
+            tool_name,
+            arguments,
+            crate::gateway::meta_mcp::visible::TargetView::Dispatched,
+        );
         let projected_args = project(arguments);
-        let projected = backend_tool_targets_for_call(&meta_mcp, tool_name, &projected_args);
+        let projected = backend_tool_targets_for_call(
+            &meta_mcp,
+            tool_name,
+            &projected_args,
+            crate::gateway::meta_mcp::visible::TargetView::Dispatched,
+        );
         let full_ids: Vec<(String, String)> = full
             .iter()
             .map(|t| (t.server.clone(), t.tool.clone()))

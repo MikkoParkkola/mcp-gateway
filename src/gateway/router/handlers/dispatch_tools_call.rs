@@ -15,7 +15,6 @@ use tracing::warn;
 use super::dispatch_intake::Intake;
 use super::tasks;
 use crate::gateway::meta_mcp::admission::SyncLease;
-use crate::gateway::meta_mcp::invoke::RouteRefusal;
 use crate::gateway::meta_mcp::signing::SigningInvocationContext;
 use crate::gateway::meta_mcp::{
     InvokeScope, MetaMcpCallerContext, error_response_preserving_status,
@@ -151,7 +150,15 @@ pub(super) async fn tools_call(
         ));
     }
 
-    let backend_targets = backend_tool_targets_for_call(&state.meta_mcp, tool_name, &arguments);
+    let backend_targets = backend_tool_targets_for_call(
+        &state.meta_mcp,
+        tool_name,
+        &arguments,
+        crate::gateway::meta_mcp::visible::TargetView::Caller(
+            invoke_scope,
+            Some(session_id.as_str()),
+        ),
+    );
     // Computed once (MIK-8014): the firewall's per-caller controls and the
     // caller context below key on the same caller.
     let caller_key = crate::gateway::router::identity::caller_key(
@@ -165,26 +172,20 @@ pub(super) async fn tools_call(
     );
     for target in &backend_targets {
         // The one route-stage authorize /mcp and stdio share (P3). A surfaced
-        // name this caller may not invoke is answered as a name that matches
-        // no tool, through the tail exactly as the meta layer answers one, so
-        // neither the firewall, X14 nor admission sees it (MIK-8326, A3).
+        // name withheld from this caller is not a target (MIK-8340): the meta
+        // layer answers it as a name that matches no tool.
         let checked = target.as_target();
         match state.meta_mcp.authorize_route_target(
             invoke_scope,
-            Some(session_id.as_str()),
-            tool_name,
             (checked.server, checked.tool),
             checked.arguments,
         ) {
             Ok(()) => {}
-            Err(RouteRefusal::Withheld(absent)) => {
-                return Ok(error_response_preserving_status(id, &absent));
-            }
-            Err(RouteRefusal::Refused(crate::Error::Forbidden {
+            Err(crate::Error::Forbidden {
                 code,
                 status,
                 message,
-            })) => {
+            }) => {
                 // Answered here, not in the meta layer, so the refusal keeps
                 // the route's own answer (its HTTP status included).
                 let status = StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN);
@@ -194,7 +195,7 @@ pub(super) async fn tools_call(
             }
             // Any other refusal (an unwritable grant record) is answered as
             // the meta layer answers it.
-            Err(RouteRefusal::Refused(other)) => {
+            Err(other) => {
                 return Ok(error_response_preserving_status(id, &other));
             }
         }
@@ -437,6 +438,7 @@ pub(super) async fn tools_call(
                 agent_declared,
                 grant_subject: grant_subject.clone(),
                 is_admin: client.as_ref().is_some_and(|c| c.admin),
+                scope: invoke_scope,
                 input_capabilities: declared_capabilities,
                 session_id: Some(session_id.as_str()),
                 protocol_revision: protocol_revision_owned.as_deref(),

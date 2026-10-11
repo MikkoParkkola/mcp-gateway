@@ -62,6 +62,20 @@ pub(crate) async fn fixture_audited_built_on(
     fx
 }
 
+/// [`super::fixture_hardened_signed_built`] with `transport` answering for both
+/// backends (the MIK-8340 twin's signed variant).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_hardened_signed_built_on(
+    transport: Arc<dyn Transport>,
+    require_nonce: bool,
+    build: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
+) -> Fx {
+    TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
+    let fx = super::fixture_hardened_signed_built(Answer::Ok, require_nonce, build).await;
+    TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
 /// `transport` behind no firewall, with response inspection in action mode:
 /// only the content inspection can withhold what it answers.
 // Its only consumer is the egress matrix, which is `firewall`-gated.

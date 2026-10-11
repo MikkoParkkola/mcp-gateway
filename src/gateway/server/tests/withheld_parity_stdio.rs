@@ -12,9 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use serde_json::{Value, json};
 
 use super::owner2_stdio_tasks::{BACKEND, Fixture, dispatch, fixture_on_with};
-use crate::gateway::router::withheld_twin_tests::{
-    ASKING, Absence, Reason, Side, Spec, catalogue,
-};
+use crate::gateway::router::withheld_twin_tests::{ASKING, Absence, Reason, Side, Spec, catalogue};
 
 /// The reasons a stdio row runs on.
 const REASONS: [Reason; 3] = [Reason::Policy, Reason::Schema, Reason::Descriptor];
@@ -85,16 +83,26 @@ async fn twin_with(spec: Spec, configure: impl FnOnce(&mut crate::config::Config
         })
     });
     let surfaced = spec.surfaced_on(BACKEND);
-    let fixture = Box::pin(fixture_on_with((url, Arc::clone(&calls)), policy, |config| {
-        config.meta_mcp.surfaced_tools = surfaced;
-        configure(config);
-    }))
+    let fixture = Box::pin(fixture_on_with(
+        (url, Arc::clone(&calls)),
+        policy,
+        |config| {
+            config.meta_mcp.surfaced_tools = surfaced;
+            configure(config);
+        },
+    ))
     .await;
     let backend = fixture.meta.backends.get(BACKEND).expect("backend");
-    backend.get_tools_shared().await.expect("warm the catalogue");
+    backend
+        .get_tools_shared()
+        .await
+        .expect("warm the catalogue");
     let blocked = backend.is_blocked_tool(spec.tool);
     let descriptor_withheld = spec.reason == Reason::Descriptor
-        && matches!(spec.side, Side::Withheld | Side::Absent(Absence::NotSurfaced));
+        && matches!(
+            spec.side,
+            Side::Withheld | Side::Absent(Absence::NotSurfaced)
+        );
     assert_eq!(
         blocked, descriptor_withheld,
         "premise: `{}` blocked={blocked} on {spec:?}",
@@ -208,7 +216,11 @@ async fn row1_stdio_bogus_request_state_answers_as_absent() {
         let extra = json!({"requestState": "not-an-envelope"});
         let (withheld, absent) = Box::pin(modern_pair(spec, &extra)).await;
         cells.extend(mismatch("row 1", reason, &withheld, &absent));
-        assert_eq!(withheld.calls, 0, "row 1 stdio ({reason:?}): {}", withheld.body);
+        assert_eq!(
+            withheld.calls, 0,
+            "row 1 stdio ({reason:?}): {}",
+            withheld.body
+        );
     }
     assert_cells("row 1", &cells);
 }
@@ -272,7 +284,10 @@ async fn row4b_stdio_plain_task_answers_as_absent() {
         let extra = json!({"task": {}, "_meta": {"io.mcp-gateway/idempotency-key": "wh-4b"}});
         let (withheld, absent) = Box::pin(modern_pair(spec, &extra)).await;
         if withheld.body.pointer("/result/taskId").is_some() {
-            cells.push(format!("row 4b stdio ({reason:?}): a task was made: {}", withheld.body));
+            cells.push(format!(
+                "row 4b stdio ({reason:?}): a task was made: {}",
+                withheld.body
+            ));
         }
         cells.extend(mismatch("row 4b", reason, &withheld, &absent));
     }
@@ -386,7 +401,11 @@ async fn direct_task_call(fx: &Twin, tool: &str) -> Value {
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
     );
-    caller.task = Some(super::owner2_stdio_tasks::intent(&fx.fixture.tasks, tool, &retry));
+    caller.task = Some(super::owner2_stdio_tasks::intent(
+        &fx.fixture.tasks,
+        tool,
+        &retry,
+    ));
     let arguments = json!({});
     let answered = fx
         .fixture
@@ -416,7 +435,11 @@ async fn row13_require_chain_refusal_answers_as_absent() {
         "premise: the visible control is not refused for its chain: {visible}"
     );
     let withheld = twin_with(spec, require_chain).await;
-    let absent = twin_with(spec.with_side(Side::Absent(Absence::NotSurfaced)), require_chain).await;
+    let absent = twin_with(
+        spec.with_side(Side::Absent(Absence::NotSurfaced)),
+        require_chain,
+    )
+    .await;
     // The decision is compared, not the task: an id and its clock are minted
     // per task (test plan r2.1: no task creation compared).
     let decision = |mut body: Value| {
@@ -472,10 +495,18 @@ async fn reuse_after(
         into.extend(more.clone());
     }
     let probe = twin_with(spec, configure).await.call(SIBLING, &extra).await;
-    assert_eq!(probe.calls, 1, "premise: the probe did not dispatch: {}", probe.body);
+    assert_eq!(
+        probe.calls, 1,
+        "premise: the probe did not dispatch: {}",
+        probe.body
+    );
     let fx = twin_with(spec, configure).await;
     let refused = fx.call(first, &extra).await;
-    assert!(refused.body.get("error").is_some(), "premise: {}", refused.body);
+    assert!(
+        refused.body.get("error").is_some(),
+        "premise: {}",
+        refused.body
+    );
     let reuse = fx.call(SIBLING, &extra).await;
     (unminted(reuse.body.clone()) != unminted(probe.body.clone()))
         .then(|| format!("reuse {} vs untouched {}", reuse.body, probe.body))
@@ -512,4 +543,53 @@ async fn row8b_stdio_absent_name_refusal_refunds_the_signing_nonce() {
     if let Some(m) = reuse_after("no_such_tool", &nonce, signed).await {
         panic!("row 8b stdio (absent first): {m}");
     }
+}
+
+/// MIK-8160.X14.2 (control): a modern task call of a HARMLESS surfaced tool
+/// over stdio is admitted as before. X14 answers NotRequired: a `taskId`, no
+/// X14 challenge, and the task runs.
+#[tokio::test]
+async fn x14_2_a_harmless_surfaced_stdio_task_is_admitted() {
+    let spec = Spec::of(Reason::Policy, Side::Control);
+    assert!(!spec.destructive, "premise: the control tool is harmless");
+    let fx = twin(spec).await;
+    let mut extra = json!({"task": {}, "_meta": modern_meta()});
+    extra["_meta"]["io.mcp-gateway/idempotency-key"] = json!("x14-2");
+    let answered = fx.call(spec.tool, &extra).await;
+    let task_id = answered
+        .body
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| {
+            panic!(
+                "X14.2: no task for a harmless surfaced tool: {}",
+                answered.body
+            )
+        })
+        .to_owned();
+    assert!(
+        answered.body.pointer("/result/inputRequests").is_none(),
+        "X14.2: a harmless tool was challenged: {}",
+        answered.body
+    );
+    let done = super::owner2_stdio_tasks::wait_terminal(&fx.fixture, task_id).await;
+    let task = fx
+        .fixture
+        .tasks
+        .service
+        .get(crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL, &done)
+        .expect("the local operator owns its task");
+    assert!(
+        matches!(
+            task.task.status(),
+            crate::protocol::tasks::TaskStatus::Completed
+        ),
+        "X14.2: the admitted task did not run: {:?}",
+        task.task.status()
+    );
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        1,
+        "X14.2: the task reached its backend once"
+    );
 }

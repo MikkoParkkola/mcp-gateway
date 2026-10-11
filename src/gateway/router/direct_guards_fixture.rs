@@ -369,6 +369,8 @@ mod quota;
 use answers::{call_answer, listing, question};
 use egress::backend_transport;
 #[cfg(feature = "firewall")]
+pub(crate) use egress::fixture_hardened_signed_built_on;
+#[cfg(feature = "firewall")]
 pub(crate) use egress::{
     fixture_audited_built_on, fixture_audited_on, fixture_firewalled_on, fixture_inspecting_on,
     meta_firewall,
@@ -393,19 +395,6 @@ pub(crate) async fn fixture_hardened_signed_built(
     HARDENED.with(|h| h.set(true));
     let fx = fixture_inner(answer, false, |meta| build(signing(meta, require_nonce))).await;
     HARDENED.with(|h| h.set(false));
-    fx
-}
-
-/// [`fixture_hardened_signed_built`] with `transport` answering for both
-/// backends (the MIK-8340 twin's signed variant).
-pub(crate) async fn fixture_hardened_signed_built_on(
-    transport: Arc<dyn Transport>,
-    require_nonce: bool,
-    build: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> Fx {
-    TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
-    let fx = fixture_hardened_signed_built(Answer::Ok, require_nonce, build).await;
-    TRANSPORT.with(|t| *t.borrow_mut() = None);
     fx
 }
 

@@ -418,6 +418,37 @@ pub(crate) async fn flush_open_slot() -> Result<()> {
     write_owned(&logger, notes).await
 }
 
+/// Run `noting`, then write the decisions it noted into the open slot at
+/// once and on their own: the write's verdict is returned, never left for the
+/// slot's end-of-request write, where under `FailClosed` it would become the
+/// request's answer. For a record the design makes best-effort (MIK-8340 A3:
+/// a withheld surfaced call answers as an absent name even when its record
+/// fails). Outside a slot `noting` runs alone.
+pub(super) async fn note_best_effort<T>(noting: impl FnOnce() -> T) -> (T, std::io::Result<()>) {
+    let before = GRANT_SLOT
+        .try_with(|slot| slot.notes.lock().expect("grant slot lock").len())
+        .ok();
+    let output = noting();
+    let taken = before.and_then(|before| {
+        GRANT_SLOT
+            .try_with(|slot| {
+                let mut held = slot.notes.lock().expect("grant slot lock");
+                let at = before.min(held.len());
+                (Arc::clone(&slot.logger), held.split_off(at))
+            })
+            .ok()
+    });
+    let Some((logger, notes)) = taken.filter(|(_, notes)| !notes.is_empty()) else {
+        return (output, Ok(()));
+    };
+    // Owned by its own task, as `write_owned` is: a cancelled caller cannot
+    // drop records that were never submitted.
+    let written = tokio::spawn(async move { write_records(&logger, &notes).await })
+        .await
+        .unwrap_or_else(|join| Err(std::io::Error::other(join.to_string())));
+    (output, written)
+}
+
 /// Note `event` for `(server, tool)` into the open slot. Outside every slot
 /// the call is refused (-32005) and the record still written on a spawned
 /// task; under test that panics unless the cell opted in.

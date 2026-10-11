@@ -17,9 +17,9 @@
 //! - `support.rs` — free functions: tag collection, ranking helpers, `MetaMcpInvoker`, augment
 //! - `surfaced.rs` — `with_surfaced_tools`, `resolve_surfaced_tool`, `list_servers`
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use std::{collections::HashMap, sync::Arc};
 
 #[cfg(feature = "spec-preview")]
 use dashmap::DashMap;
@@ -117,6 +117,7 @@ pub(crate) mod task_notify;
 mod task_replay;
 pub(crate) mod upstream;
 mod visibility;
+pub(crate) mod visible;
 
 pub use visibility::InvokeScope;
 
@@ -282,8 +283,9 @@ pub struct MetaMcp {
     /// Fast lookup map for surfaced tool dispatch: tool name → server name.
     ///
     /// Pre-built from `surfaced_tools` so `handle_tools_call` only pays one
-    /// `HashMap` lookup instead of a linear scan on every call.
-    pub(super) surfaced_tools_map: HashMap<String, String>,
+    /// `HashMap` lookup instead of a linear scan on every call. Read through
+    /// [`MetaMcp::surfaced_for`] for any decision about a caller (MIK-8340).
+    pub(super) surfaced_tools_map: visible::SurfacedMap,
 
     /// Which meta-tools this gateway exposes, from `MetaMcpConfig::exposed_meta_tools`.
     ///
@@ -507,7 +509,7 @@ impl MetaMcp {
             #[cfg(feature = "cost-governance")]
             cost_registry: None,
             surfaced_tools: Vec::new(),
-            surfaced_tools_map: HashMap::new(),
+            surfaced_tools_map: visible::SurfacedMap::default(),
             meta_tool_exposure: MetaToolExposure::expose_all(),
             meta_catalogues: catalogue_cache::MetaCatalogues::default(),
             meta_projections: crate::trust::SharedProjections::default(),
@@ -802,18 +804,15 @@ pub(super) use test_callers::{anonymous_caller, callback_capability, identified_
 pub(super) mod grant_audit_fixture;
 #[cfg(test)]
 mod grant_decision_audit_tests;
-/// MIK-8340 row 7: a failed grant record on a withheld name answers as absent.
-#[cfg(test)]
-mod grant_withheld_parity_tests;
-/// MIK-8340 row 10: a listing follows the caller's own catalogue.
-#[cfg(test)]
-mod withheld_catalogue_tests;
 #[cfg(test)]
 mod grant_decision_slot_tests;
 #[cfg(test)]
 mod grant_replay_dedupe_tests;
 #[cfg(test)]
 mod grant_slot_wrap_tests;
+/// MIK-8340 row 7: a failed grant record on a withheld name answers as absent.
+#[cfg(test)]
+mod grant_withheld_parity_tests;
 #[cfg(test)]
 mod guide_alloc_tests;
 #[cfg(test)]
@@ -821,6 +820,9 @@ mod guide_alloc_tests;
 mod policy_epoch_tests;
 #[cfg(test)]
 mod task_notify_tests;
+/// MIK-8340 row 10: a listing follows the caller's own catalogue.
+#[cfg(test)]
+mod withheld_catalogue_tests;
 
 mod session_end;
 

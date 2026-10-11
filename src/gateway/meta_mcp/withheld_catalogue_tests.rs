@@ -48,7 +48,11 @@ struct Listing(Value);
 
 #[async_trait::async_trait]
 impl crate::transport::Transport for Listing {
-    async fn request(&self, _method: &str, _params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+    async fn request(
+        &self,
+        _method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
         Ok(JsonRpcResponse::success(
             RequestId::Number(1),
             json!({"tools": self.0}),
@@ -114,9 +118,13 @@ fn gateway(caller: Option<&Value>, shared: &Value) -> MetaMcp {
 /// `gateway_list_tools` for `BACKEND` as alpha.
 async fn listing(meta: &MetaMcp) -> Value {
     let alpha = identity("alpha");
-    meta.list_tools(&json!({"server": BACKEND}), None, &identified_caller(&alpha))
-        .await
-        .expect("gateway_list_tools answers")
+    meta.list_tools(
+        &json!({"server": BACKEND}),
+        None,
+        &identified_caller(&alpha),
+    )
+    .await
+    .expect("gateway_list_tools answers")
 }
 
 /// The listed entry named `name`, if any.
@@ -141,7 +149,10 @@ async fn row10_caller_invalid_schema_is_listed_as_absent() {
         entry(&withheld, TOOL).is_none(),
         "row 10: a tool the caller's schema withholds is listed: {withheld}"
     );
-    assert_eq!(withheld, absent, "row 10: withheld {withheld} vs absent {absent}");
+    assert_eq!(
+        withheld, absent,
+        "row 10: withheld {withheld} vs absent {absent}"
+    );
 }
 
 /// Row 10, caller valid / shared invalid (control): the caller's listing
@@ -152,6 +163,10 @@ async fn row10_caller_valid_schema_is_listed_from_the_callers_view() {
     let shown = entry(&listed, TOOL)
         .unwrap_or_else(|| panic!("row 10 control: the caller's valid tool is hidden: {listed}"));
     if let Some(schema) = shown.get("inputSchema") {
-        assert_eq!(schema, &valid(), "row 10 control: not the caller's schema bytes");
+        assert_eq!(
+            schema,
+            &valid(),
+            "row 10 control: not the caller's schema bytes"
+        );
     }
 }

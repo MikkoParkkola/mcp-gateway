@@ -72,6 +72,7 @@ impl Gateway {
                         meta_mcp,
                         tool,
                         &routing_keys,
+                        super::super::meta_mcp::visible::TargetView::Dispatched,
                     ),
                 )
             } else {

@@ -53,7 +53,15 @@ async fn gateway(
 }
 
 async fn call(fx: &Fixture, who: (&str, &str)) -> Value {
-    let (_, body) = post_with(fx, Some("a"), PERSONAL, &json!({}), &json!({}), Some(verified(who))).await;
+    let (_, body) = post_with(
+        fx,
+        Some("a"),
+        PERSONAL,
+        &json!({}),
+        &json!({}),
+        Some(verified(who)),
+    )
+    .await;
     envelope(&body)
 }
 
@@ -77,7 +85,11 @@ fn row7_http_one_grant_record_and_failclosed_answers_as_absent() {
     let counted_dir = tempfile::tempdir().unwrap();
     let (counted, _) = runtime.block_on(gateway(endpoint.port, &counted_dir, true));
     let refused = runtime.block_on(call(&counted, BOB));
-    assert_eq!(endpoint.arrivals(), 1, "premise: the withheld call ran: {refused}");
+    assert_eq!(
+        endpoint.arrivals(),
+        1,
+        "premise: the withheld call ran: {refused}"
+    );
     let one = decisions(&counted_dir).len();
     // Under a failing decision record.
     let dir = tempfile::tempdir().unwrap();

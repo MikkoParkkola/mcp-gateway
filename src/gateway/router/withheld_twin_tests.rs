@@ -222,11 +222,7 @@ pub(super) async fn twin_built(spec: Spec, arm: impl FnOnce(MetaMcp) -> MetaMcp)
 }
 
 /// [`twin_built`] on the fixture `kind`.
-pub(super) async fn twin_of(
-    kind: Kind,
-    spec: Spec,
-    arm: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> Twin {
+pub(super) async fn twin_of(kind: Kind, spec: Spec, arm: impl FnOnce(MetaMcp) -> MetaMcp) -> Twin {
     let dir = tempfile::tempdir().expect("tempdir");
     let audit = dir.path().join("audit.jsonl");
     let calls = Arc::new(AtomicUsize::new(0));
@@ -245,7 +241,10 @@ pub(super) async fn twin_of(
     };
     for name in ["alpha", "alpha-pt"] {
         let backend = fx.state.backends.get(name).expect("fixture backend");
-        backend.get_tools_shared().await.expect("warm the catalogue");
+        backend
+            .get_tools_shared()
+            .await
+            .expect("warm the catalogue");
     }
     let twin = Twin {
         fx,
@@ -330,7 +329,9 @@ impl Twin {
         if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
             for (k, v) in extra {
                 if k == "_meta" {
-                    if let (Some(meta), Some(more)) = (params["_meta"].as_object_mut(), v.as_object()) {
+                    if let (Some(meta), Some(more)) =
+                        (params["_meta"].as_object_mut(), v.as_object())
+                    {
                         meta.extend(more.clone());
                     }
                 } else {

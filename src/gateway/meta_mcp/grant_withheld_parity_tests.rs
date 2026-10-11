@@ -10,11 +10,11 @@ use serde_json::{Value, json};
 
 use std::sync::Arc;
 
+use super::MetaMcp;
 use super::grant_audit_fixture::{
     CAPS, DECISION_KIND, Endpoint, PERSONAL, capability_backend, decisions, grant, grants, logger,
 };
 use super::grant_decision_audit_tests::{api_key, context, gateway};
-use super::MetaMcp;
 use crate::protocol::RequestId;
 use crate::security::audit::AuditFailurePolicy;
 
@@ -34,8 +34,8 @@ fn denied_gateway(
     dir: &tempfile::TempDir,
 ) -> (MetaMcp, Arc<crate::security::TransparencyLogger>) {
     let log = logger(dir, AuditFailurePolicy::FailClosed);
-    let mut meta =
-        MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new())).with_identity_grants(grants(vec![]));
+    let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()))
+        .with_identity_grants(grants(vec![]));
     meta.enable_transparency_log(Arc::clone(&log));
     meta.set_capabilities(capability_backend(endpoint.port, ALICE));
     (meta, log)
@@ -83,7 +83,11 @@ fn row7_failed_grant_record_on_a_withheld_name_answers_as_absent() {
             AuditFailurePolicy::FailClosed,
         ));
         let refused = call(&probe).await;
-        assert_eq!(endpoint.arrivals(), 1, "premise: withheld reached the endpoint: {refused}");
+        assert_eq!(
+            endpoint.arrivals(),
+            1,
+            "premise: withheld reached the endpoint: {refused}"
+        );
     });
     let dir = tempfile::tempdir().unwrap();
     let absent_dir = tempfile::tempdir().unwrap();
@@ -111,5 +115,9 @@ fn row7_failed_grant_record_on_a_withheld_name_answers_as_absent() {
         1,
         "row 7: the next decision record did not append"
     );
-    assert_eq!(endpoint.arrivals(), 0, "row 7: the withheld call reached the endpoint");
+    assert_eq!(
+        endpoint.arrivals(),
+        0,
+        "row 7: the withheld call reached the endpoint"
+    );
 }

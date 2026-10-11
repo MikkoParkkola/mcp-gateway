@@ -66,7 +66,9 @@ async fn row1_bogus_request_state_answers_as_absent() {
         let (withheld, absent, requests) = Box::pin(modern_pair(spec, &extra)).await;
         cells.extend(mismatch("row 1", reason, &withheld, &absent));
         if !requests.is_empty() {
-            cells.push(format!("row 1 ({reason:?}): request audit rows {requests:?}"));
+            cells.push(format!(
+                "row 1 ({reason:?}): request audit rows {requests:?}"
+            ));
         }
         assert_eq!(withheld.calls, 0, "row 1 ({reason:?}): {}", withheld.body);
     }
@@ -140,7 +142,10 @@ async fn row4b_plain_task_answers_as_absent() {
         }});
         let (withheld, absent, _) = Box::pin(modern_pair(spec, &extra)).await;
         if withheld.body.pointer("/result/taskId").is_some() {
-            cells.push(format!("row 4b ({reason:?}): a task was made: {}", withheld.body));
+            cells.push(format!(
+                "row 4b ({reason:?}): a task was made: {}",
+                withheld.body
+            ));
         }
         cells.extend(mismatch("row 4b", reason, &withheld, &absent));
     }
@@ -272,7 +277,10 @@ async fn row12_x14_never_challenges_a_withheld_destructive_tool() {
         );
         let withheld = twin(spec).await.call_modern(spec.tool, &extra).await;
         if challenged(&withheld.body) {
-            cells.push(format!("row 12 ({reason:?}): X14 engaged: {}", withheld.body));
+            cells.push(format!(
+                "row 12 ({reason:?}): X14 engaged: {}",
+                withheld.body
+            ));
         }
     }
     assert_cells("row 12", &cells);
@@ -289,12 +297,24 @@ async fn row8_withheld_call_parks_no_idempotency_key() {
     let keyed = json!({"_meta": {crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "wh-8"}});
     let fx = twin(spec).await;
     let withheld = fx.call_modern(spec.tool, &keyed).await;
-    assert!(withheld.body.get("error").is_some(), "premise: {}", withheld.body);
+    assert!(
+        withheld.body.get("error").is_some(),
+        "premise: {}",
+        withheld.body
+    );
     let absent = fx.call_modern("no_such_tool", &keyed).await;
-    assert!(absent.body.get("error").is_some(), "premise: {}", absent.body);
+    assert!(
+        absent.body.get("error").is_some(),
+        "premise: {}",
+        absent.body
+    );
     let reuse = fx.call_modern(SIBLING, &keyed).await;
     let probe = twin(spec).await.call_modern(SIBLING, &keyed).await;
-    assert_eq!(reuse.calls, 1, "row 8: the reused key did not dispatch: {}", reuse.body);
+    assert_eq!(
+        reuse.calls, 1,
+        "row 8: the reused key did not dispatch: {}",
+        reuse.body
+    );
     // A trace id is minted per call; nothing else may differ.
     let untraced = |mut body: Value| {
         if let Some(result) = body["result"].as_object_mut() {
@@ -335,13 +355,26 @@ async fn nonce_reuse_after(first: &str) -> Option<String> {
         .await
         .call_modern(SIBLING, &signed)
         .await;
-    assert_eq!(probe.calls, 1, "premise: the probe did not dispatch: {}", probe.body);
+    assert_eq!(
+        probe.calls, 1,
+        "premise: the probe did not dispatch: {}",
+        probe.body
+    );
     let fx = twin_of(Kind::Signed, spec, |meta| meta).await;
     let refused = fx.call_modern(first, &signed).await;
-    assert!(refused.body.get("error").is_some(), "premise: {}", refused.body);
+    assert!(
+        refused.body.get("error").is_some(),
+        "premise: {}",
+        refused.body
+    );
     let reuse = fx.call_modern(SIBLING, &signed).await;
     ((reuse.status, untraced(reuse.body.clone())) != (probe.status, untraced(probe.body.clone())))
-        .then(|| format!("reuse {} {} vs untouched {}", reuse.status, reuse.body, probe.body))
+        .then(|| {
+            format!(
+                "reuse {} {} vs untouched {}",
+                reuse.status, reuse.body, probe.body
+            )
+        })
 }
 
 /// Row 8, nonce half (ORACLE.3): a withheld call spends no signing nonce.
@@ -362,4 +395,65 @@ async fn row8b_absent_name_refusal_refunds_the_signing_nonce() {
     if let Some(mismatch) = nonce_reuse_after("no_such_tool").await {
         panic!("row 8b (absent first): {mismatch}");
     }
+}
+
+/// The scope a row-11 caller asks with: refused for the policy reason,
+/// allowed otherwise (schema and descriptor withhold for every caller).
+fn row11_scope(reason: Reason) -> crate::gateway::meta_mcp::InvokeScope<'static> {
+    static ALLOW: crate::gateway::authz::AllowAll = crate::gateway::authz::AllowAll;
+    static DENY: crate::gateway::authz::DenyAll = crate::gateway::authz::DenyAll;
+    crate::gateway::meta_mcp::InvokeScope {
+        authorizer: if reason == Reason::Policy {
+            &DENY
+        } else {
+            &ALLOW
+        },
+        is_admin: false,
+        api_key_name: None,
+        agent_id: None,
+        grant_subject: None,
+    }
+}
+
+/// Row 11 (unit, lead ruling): the route-target builder resolves a surfaced
+/// name withheld from the caller to no target, exactly as the absent name,
+/// and the visible control to its one target. RED before the caller-taking
+/// builder (MIK-8340).
+#[tokio::test]
+async fn row11_route_targets_resolve_a_withheld_name_as_absent() {
+    use super::withheld_twin_tests::TOOL;
+    use crate::gateway::meta_mcp::visible::TargetView;
+    let arguments = json!({});
+    let targets = |fx: &super::withheld_twin_tests::Twin, scope| {
+        super::backend_tool_targets_for_call(
+            &fx.fx.state.meta_mcp,
+            TOOL,
+            &arguments,
+            TargetView::Caller(scope, None),
+        )
+        .len()
+    };
+    let mut cells = Vec::new();
+    for reason in REASONS {
+        let spec = Spec::of(reason, Side::Withheld);
+        let withheld = targets(&twin(spec).await, row11_scope(reason));
+        let absent = targets(
+            &twin(spec.with_side(Side::Absent(Absence::NotSurfaced))).await,
+            row11_scope(reason),
+        );
+        let visible = targets(
+            &twin(spec.with_side(Side::Control)).await,
+            row11_scope(Reason::Schema),
+        );
+        assert_eq!(
+            visible, 1,
+            "premise ({reason:?}): the visible control has its target"
+        );
+        if (withheld, absent) != (0, 0) {
+            cells.push(format!(
+                "row 11 ({reason:?}): withheld {withheld} vs absent {absent} targets"
+            ));
+        }
+    }
+    assert_cells("row 11", &cells);
 }
