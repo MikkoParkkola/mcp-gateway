@@ -134,3 +134,76 @@ async fn l2_promotion_two_sessions_of_one_key_differ_only_in_promotion() {
     let told = [promoted.told(&w).await, plain.told(&w).await];
     assert_eq!(told, [0, 0], "read is hidden from both: RED on base");
 }
+
+/// The caller-identity config of the grant-subject row: a trusted proxy at
+/// the fixture's loopback peer, asserting subjects under `proxy`.
+fn proxy_identity() -> crate::security::caller_identity::CallerIdentityConfig {
+    crate::security::caller_identity::CallerIdentityConfig {
+        mode: crate::security::caller_identity::CallerIdentityMode::TrustedProxy,
+        trusted_proxies: vec![super::audience_fixture::PROXY_PEER.ip()],
+        authority: "proxy".to_string(),
+        ..Default::default()
+    }
+}
+
+/// A personal capability `alice_cal` owned by `proxy:alice`.
+fn alice_cal(description: &str) -> String {
+    format!(
+        "fulcrum: \"1.0\"\nname: alice_cal\ndescription: {description}\n\
+schema:\n  input:\n    type: object\n    properties: {{}}\n\
+metadata:\n  exposure: personal\n  identity_owner:\n    authority: proxy\n    subject: alice\n\
+providers:\n  primary:\n    service: rest\n    config:\n      base_url: https://example.invalid\n      path: /cal\n      method: GET\n\
+auth:\n  required: false\n  type: none\n"
+    )
+}
+
+/// `proxy:alice`'s grant on `alice_cal`.
+fn alice_grant() -> crate::identity_grants::LocalIdentityGrantStore {
+    use crate::identity_grants::{GrantAgent, GrantScope, GrantSubject, IdentityGrant};
+    let alice = GrantSubject::new("proxy", "alice", None);
+    crate::identity_grants::LocalIdentityGrantStore::from_grants([IdentityGrant {
+        grant_id: "g-alice".to_string(),
+        subject: alice.clone(),
+        agent: GrantAgent::Any,
+        capability: "alice_cal".to_string(),
+        tool: None,
+        scope: GrantScope::Any,
+        owner: Some(alice),
+        expires_at: None,
+        revoked_at: None,
+        provenance: "mik-8350".to_string(),
+        reason: "L2 grant-subject pair".to_string(),
+    }])
+}
+
+/// L2-grant-subject (MIK-8350), RED (killer M7e): one API key behind a
+/// trusted proxy asserting two end users, so one principal and two grant
+/// subjects. Only alice may see her personal capability, so its change tells
+/// only alice's listener.
+#[tokio::test]
+async fn l2_grant_subject_one_key_two_asserted_users_differ_only_in_subject() {
+    let w = World::start_with(|meta| {
+        meta.with_caller_identity(proxy_identity())
+            .with_identity_grants(alice_grant())
+    })
+    .await;
+    w.set_capability_yaml(&alice_cal("one"));
+    w.settle().await;
+    let alice = w.discovered_as(STD, Some("alice"), "caps").await;
+    let bob = w.discovered_as(STD, Some("bob"), "caps").await;
+    assert!(
+        alice.contains(&"alice_cal".to_string()),
+        "premise: alice sees her capability: {alice:?}"
+    );
+    assert!(
+        !bob.contains(&"alice_cal".to_string()),
+        "premise: bob does not: {bob:?}"
+    );
+    let mut ears = [
+        w.listen_as(STD, Some("alice")).await,
+        w.listen_as(STD, Some("bob")).await,
+    ];
+    w.set_capability_yaml(&alice_cal("two"));
+    let told = [ears[0].told(&w).await, ears[1].told(&w).await];
+    assert_eq!(told, [1, 0], "only alice sees alice_cal: RED on base");
+}

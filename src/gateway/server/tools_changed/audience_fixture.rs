@@ -200,6 +200,24 @@ auth:\n  required: false\n  type: none\n"
     )
 }
 
+/// The loopback peer a row's trusted proxy speaks from.
+pub(super) const PROXY_PEER: std::net::SocketAddr =
+    std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 9);
+
+/// Mark `request` as sent by the trusted proxy at [`PROXY_PEER`], asserting
+/// `subject`; untouched without one.
+fn proxied(request: &mut axum::http::Request<Body>, subject: Option<&str>) {
+    if let Some(subject) = subject {
+        request.headers_mut().insert(
+            "x-gateway-identity-subject",
+            subject.parse().expect("a header value"),
+        );
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(PROXY_PEER));
+    }
+}
+
 /// The gateway under test and the handles rows drive it with.
 pub(super) struct World {
     pub state: Arc<AppState>,
@@ -384,8 +402,13 @@ impl World {
 
     /// Register or rewrite the hidden capability, and nudge its catalogue.
     pub(super) fn set_capability(&self, description: &str) {
-        let definition = crate::capability::parse_capability(&capability_yaml(description))
-            .expect("a capability");
+        self.set_capability_yaml(&capability_yaml(description));
+    }
+
+    /// Register or rewrite the capability `yaml` defines, and nudge the
+    /// catalogue.
+    pub(super) fn set_capability_yaml(&self, yaml: &str) {
+        let definition = crate::capability::parse_capability(yaml).expect("a capability");
         self.caps
             .register_capability(definition)
             .expect("registers");
@@ -408,7 +431,7 @@ impl World {
 impl World {
     /// `POST /mcp` with `bearer`.
     pub(super) async fn post(&self, bearer: &str, method: &str, params: Value) -> Value {
-        self.post_as(bearer, None, method, params).await
+        self.post_as(bearer, (None, None), method, params).await
     }
 
     /// `POST /mcp` with `bearer`, inside legacy session `id` (its minted id).
@@ -425,13 +448,16 @@ impl World {
             .get(id)
             .cloned()
             .expect("a legacy session");
-        self.post_as(bearer, Some(&minted), method, params).await
+        self.post_as(bearer, (Some(&minted), None), method, params)
+            .await
     }
 
+    /// `POST /mcp` with `bearer`, in a session and from a trusted proxy
+    /// asserting a subject, each when given.
     async fn post_as(
         &self,
         bearer: &str,
-        session: Option<&str>,
+        (session, subject): (Option<&str>, Option<&str>),
         method: &str,
         params: Value,
     ) -> Value {
@@ -443,12 +469,13 @@ impl World {
         if let Some(session) = session {
             request = request.header("mcp-session-id", session);
         }
-        let request = request
+        let mut request = request
             .body(Body::from(
                 json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })
                     .to_string(),
             ))
             .expect("a request");
+        proxied(&mut request, subject);
         let response = self.router.clone().oneshot(request).await.expect("served");
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -480,9 +507,20 @@ impl World {
     /// The names `gateway_list_tools` shows `bearer` for `server`, which also
     /// warms the caller's own slot when `server` is per-user.
     pub(super) async fn discovered(&self, bearer: &str, server: &str) -> Vec<String> {
+        self.discovered_as(bearer, None, server).await
+    }
+
+    /// As [`Self::discovered`], from a trusted proxy asserting `subject`.
+    pub(super) async fn discovered_as(
+        &self,
+        bearer: &str,
+        subject: Option<&str>,
+        server: &str,
+    ) -> Vec<String> {
         let reply = self
-            .post(
+            .post_as(
                 bearer,
+                (None, subject),
                 "tools/call",
                 json!({ "name": "gateway_list_tools", "arguments": { "server": server } }),
             )
@@ -577,6 +615,11 @@ impl World {
     /// A 2026 `subscriptions/listen` stream held by `bearer`, past its
     /// acknowledgement, through the real route.
     pub(super) async fn listen(&self, bearer: &str) -> Ear {
+        self.listen_as(bearer, None).await
+    }
+
+    /// As [`Self::listen`], from a trusted proxy asserting `subject`.
+    pub(super) async fn listen_as(&self, bearer: &str, subject: Option<&str>) -> Ear {
         let body = json!({
             "jsonrpc": "2.0", "id": "listen", "method": "subscriptions/listen",
             "params": {
@@ -597,6 +640,8 @@ impl World {
             .header("accept", "application/json, text/event-stream")
             .body(Body::from(body.to_string()))
             .expect("a request");
+        let mut request = request;
+        proxied(&mut request, subject);
         let response = self.router.clone().oneshot(request).await.expect("served");
         assert!(
             response.status().is_success(),
