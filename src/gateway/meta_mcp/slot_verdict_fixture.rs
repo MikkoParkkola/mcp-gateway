@@ -269,7 +269,7 @@ pub(crate) fn per_user_backend_with(
     (backend, caller_asked, shared_asked)
 }
 
-fn per_user_on(
+pub(crate) fn per_user_on(
     backend: Arc<Backend>,
     caller_asked: Arc<Asked>,
     shared_asked: Arc<Asked>,

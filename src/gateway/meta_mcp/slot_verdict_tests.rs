@@ -1036,3 +1036,40 @@ async fn i1_failed_fill_writes_no_index_entry() {
         "I1: a failed fill was indexed"
     );
 }
+
+/// L7 (design R4.2, gpt r3 F1): a Passthrough-strategy per-user backend.
+/// A passthrough caller's credential reaches the gateway only on the direct
+/// route, so no meta-route listing can select that caller's own slot;
+/// name-only listings withhold the backend's tools (stated over-withholding;
+/// `gateway_list_tools` and search are not name-only). RED on base: the
+/// disabled list and the counts read the shared slot.
+#[tokio::test]
+async fn l7_passthrough_backend_tools_withheld_from_name_only_listings() {
+    use super::slot_verdict_fixture::{per_user_backend_with, per_user_on};
+    let (backend, caller, shared) = per_user_backend_with(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Warm,
+        CLOSED,
+        |config| {
+            if let Some(idp) = config.identity_propagation.as_mut() {
+                idp.strategy = crate::identity_propagation::PropagationStrategyKind::Passthrough;
+            }
+        },
+    );
+    let fx = per_user_on(backend, caller, shared, Surfaced::Yes);
+    let listed = disabled_as_alpha(&fx.meta);
+    assert!(
+        !names_tool(&listed),
+        "L7: a passthrough backend's tool is named: {listed}"
+    );
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    let (total, _) = fx
+        .meta
+        .admitted_counts(super::identified_caller(&alpha).scope(), None);
+    assert!(
+        !total.phrase().starts_with('2'),
+        "L7: a passthrough backend's tools are counted: {}",
+        total.phrase()
+    );
+}
