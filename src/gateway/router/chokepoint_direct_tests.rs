@@ -221,3 +221,33 @@ async fn absent_direct_arguments_keep_the_whole_params_scan() {
         "hostile: refused by the entry scan: {refused}"
     );
 }
+
+/// A `tools/call` spelled in another letter case is refused -32601 and never
+/// forwarded: the only door to a backend for a tool call is the one that
+/// takes the chokepoint's permit (upgrading.d/8351.md). Red on base: the
+/// variant was forwarded unchecked.
+#[tokio::test]
+async fn a_case_variant_tools_call_is_refused_not_forwarded() {
+    use super::direct_guards_fixture::{fixture, send};
+    for method in ["TOOLS/CALL", "Tools/Call"] {
+        let fx = fixture(Answer::Ok, |_| {}).await;
+        let params = json!({"name": "read", "arguments": {}});
+        let (_, body) = send(&fx, "/mcp/alpha", "k-std", method, params, None).await;
+        assert_eq!(dispatched(&fx), 0, "{method}: forwarded: {body}");
+        assert_eq!(body["error"]["code"], -32601, "{method}: {body}");
+    }
+}
+
+/// Guard (grok t1): a non-call method is not a tool send, so it takes no
+/// permit and no dispatch rescan; a blocked pattern in `ping` params is still
+/// forwarded, as before. The send count, not the absence of a dispatch row,
+/// is the oracle: an allowed send writes no dispatch row either.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_non_call_method_is_forwarded_without_a_permit() {
+    use super::direct_guards_fixture::{fixture_firewalled, send};
+    let fx = fixture_firewalled(Answer::Ok).await;
+    let params = json!({"note": BLOCKED});
+    let (_, body) = send(&fx, "/mcp/alpha", "k-std", "ping", params, None).await;
+    assert_eq!(dispatched(&fx), 1, "ping was not forwarded: {body}");
+}
