@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! INTERNAL routes stay mounted with today's answers (MIK-8044 SURF.4b).
+//! INTERNAL routes stay mounted with today's answers (MIK-8044.SURF.8, formerly SURF.4b).
 //!
 //! Every row of docs/design/surface-4.0.md "## Surface: routes" whose class is
 //! INTERNAL has rows here keyed by (path, method). The expected codes were
@@ -730,3 +730,6 @@ async fn ui_status_redacts_for_a_non_admin() {
     let json: Value = serde_json::from_slice(&body).expect("status is JSON");
     assert_eq!(json["servers"][0]["name"], "docs", "{json}");
 }
+
+#[path = "internal_routes_served.rs"]
+mod served;
