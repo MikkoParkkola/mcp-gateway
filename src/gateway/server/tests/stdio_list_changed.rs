@@ -610,3 +610,47 @@ async fn t15_initialized_inside_a_batch_starts_announcing() {
     );
     serve.close().await;
 }
+
+/// T14DIAG W-mt arm (MIK-8364 measurement, throwaway): the t14 flood on a
+/// production-like multi-thread runtime, stdout read as it arrives. If the
+/// sink mutex serialises requests, 4 workers still answer about one request
+/// per first-persist time; the span lines show where the time goes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t14diag_mt_flood_throughput() {
+    const FLOOD: u64 = 1224;
+    // A pipe large enough that the answers never wait on the reader.
+    let mut serve = serve_on(|_| String::new(), 1 << 20).await;
+    legacy(&mut serve, true).await;
+    let mut pings = Vec::new();
+    for id in 1..=FLOOD {
+        let line = serde_json::to_vec(&json!({"jsonrpc": "2.0", "id": id, "method": "ping"}))
+            .expect("a frame serialises");
+        pings.extend_from_slice(&line);
+        pings.push(b'\n');
+    }
+    let start = std::time::Instant::now();
+    serve
+        .client
+        .write_all(&pings)
+        .await
+        .expect("stdin accepts the flood");
+    let mut answered = 0u64;
+    while answered < FLOOD {
+        match serve.next(Duration::from_secs(300)).await {
+            Some(frame) if frame["id"].is_u64() => answered += 1,
+            Some(_) => {}
+            None => break,
+        }
+    }
+    eprintln!(
+        "T14DIAG {} mt answered={answered} of {FLOOD} total_ms={} per_request_us={}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0),
+        start.elapsed().as_millis(),
+        start.elapsed().as_micros() / u128::from(answered.max(1))
+    );
+    assert_eq!(answered, FLOOD, "every ping answered");
+    serve.close().await;
+}

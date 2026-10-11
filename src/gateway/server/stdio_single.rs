@@ -262,9 +262,17 @@ impl Gateway {
             Some(session_id),
             crate::protocol_revision_telemetry::Transport::Stdio,
         );
-        if let Some(sink) = sink
-            && let Err(error) = sink.persist_global()
-        {
+        #[cfg(test)]
+        let diag_s1 = std::time::Instant::now();
+        #[cfg(test)]
+        let diag_has_sink = sink.is_some();
+        let persisted =
+            sink.map(crate::protocol_revision_telemetry::DurableTelemetrySink::persist_global);
+        #[cfg(test)]
+        if diag_has_sink {
+            super::stdio_seams::diag_acc("S1_first_persist", super::stdio_seams::diag_us(diag_s1));
+        }
+        if let Some(Err(error)) = persisted {
             warn!(
                 %error,
                 "failed to persist inbound stdio protocol-revision observation; measurement window is incomplete"

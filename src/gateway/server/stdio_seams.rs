@@ -189,3 +189,40 @@ pub(crate) fn final_send_pause(key: usize) {
         let _ = release.recv_timeout(std::time::Duration::from_secs(20));
     }
 }
+
+/// T14DIAG (MIK-8364 measurement, throwaway): accumulate microseconds per
+/// named span and print the average and max every 100 samples.
+pub(crate) fn diag_acc(name: &'static str, us: u64) {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    static ACC: Mutex<Option<HashMap<&'static str, (u64, u64, u64, u64)>>> = Mutex::new(None);
+    let mut guard = ACC
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let map = guard.get_or_insert_with(HashMap::new);
+    let e = map.entry(name).or_insert((0, 0, 0, 0));
+    e.0 += 1;
+    e.1 += us;
+    e.2 = e.2.max(us);
+    e.3 += 1;
+    if e.0 % 100 == 0 {
+        eprintln!(
+            "T14DIAG {} span {name} n={} avg_us={} max_us={}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0),
+            e.0,
+            e.1 / e.3,
+            e.2
+        );
+        e.1 = 0;
+        e.2 = 0;
+        e.3 = 0;
+    }
+}
+
+/// Microseconds since `start`, saturating.
+pub(crate) fn diag_us(start: std::time::Instant) -> u64 {
+    u64::try_from(start.elapsed().as_micros()).unwrap_or(u64::MAX)
+}

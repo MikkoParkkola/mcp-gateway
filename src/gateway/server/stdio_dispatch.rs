@@ -45,10 +45,19 @@ impl Gateway {
         // Scoped so the guard is gone before the first await below: see
         // [`StdioTelemetry`].
         let parsed = {
+            #[cfg(test)]
+            let diag_wait = std::time::Instant::now();
             let mut sink = protocol_telemetry_sink
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            Self::parse_and_observe(&request, session_id, sink.as_mut())
+            #[cfg(test)]
+            super::stdio_seams::diag_acc("S2_lock_wait", super::stdio_seams::diag_us(diag_wait));
+            #[cfg(test)]
+            let diag_held = std::time::Instant::now();
+            let parsed = Self::parse_and_observe(&request, session_id, sink.as_mut());
+            #[cfg(test)]
+            super::stdio_seams::diag_acc("S2_lock_held", super::stdio_seams::diag_us(diag_held));
+            parsed
         };
         let (id, method, params, request_shape) = match parsed {
             Ok(parsed) => parsed,

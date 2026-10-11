@@ -71,6 +71,8 @@ impl Gateway {
         let warmer = WarmerGuard::new(&self.backends, WarmStartMode::Stdio, None);
         let protocol_telemetry_sink = Arc::new(StdioTelemetry::new(
             match crate::protocol_revision_telemetry::DurableTelemetrySink::open(&data_dir) {
+                // T14DIAG (MIK-8364 W-nosink / L-nosink arms): no sink at all.
+                Ok(_) if std::env::var_os("T14DIAG_NOSINK").is_some() => None,
                 Ok(sink) => Some(sink),
                 Err(error) => {
                     warn!(
@@ -524,6 +526,8 @@ impl Gateway {
                 // MIK-8176: this request's slots are owned by its task, from
                 // dispatch through the writer queue.
                 Box::pin(crate::gateway::meta_mcp::sealed_hold::scoped(async move {
+                    #[cfg(test)]
+                    let diag_dispatch = std::time::Instant::now();
                     let ((response, staged), hidden) = Self::dispatch_streaming_notifications(
                         Box::pin(Self::dispatch_single_staged(
                             &meta_mcp,
@@ -545,6 +549,11 @@ impl Gateway {
                         Some(meta_mcp.notification_screen("stdio", session_id)),
                     )
                     .await;
+                    #[cfg(test)]
+                    super::stdio_seams::diag_acc(
+                        "D_dispatch",
+                        super::stdio_seams::diag_us(diag_dispatch),
+                    );
                     Self::persist_stdio_protocol_telemetry(&telemetry);
                     #[cfg(test)]
                     if let Some(gate) = gate {
