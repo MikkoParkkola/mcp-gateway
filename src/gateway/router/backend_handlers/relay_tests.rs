@@ -79,8 +79,11 @@ async fn blocking_state() -> (Arc<AppState>, tempfile::TempDir) {
         },
         ..FirewallConfig::default()
     };
-    Arc::get_mut(&mut state).expect("state is unique").firewall =
-        Some(Arc::new(Firewall::from_config(config, None)));
+    // With its gateway's keyring, as the gateway builds it (#2210, MIK-8276).
+    let keys = state.meta_mcp.continuation();
+    Arc::get_mut(&mut state).expect("state is unique").firewall = Some(Arc::new(
+        Firewall::from_config(config, None).with_continuations(keys),
+    ));
     (state, store)
 }
 
@@ -240,12 +243,12 @@ async fn staging_a_catalogue_result_classifies_only_when_relay_is_on() {
     let (mut inactive, _store) =
         crate::gateway::router::tests::test_router_app_state_with_auth(&AuthConfig::default())
             .await;
+    let keys = inactive.meta_mcp.continuation();
     Arc::get_mut(&mut inactive)
         .expect("state is unique")
-        .firewall = Some(Arc::new(Firewall::from_config(
-        FirewallConfig::default(),
-        None,
-    )));
+        .firewall = Some(Arc::new(
+        Firewall::from_config(FirewallConfig::default(), None).with_continuations(keys),
+    ));
     assert!(
         !inactive
             .firewall
@@ -272,8 +275,11 @@ async fn blocking_state_for(source: &str) -> (Arc<AppState>, tempfile::TempDir) 
         },
         ..FirewallConfig::default()
     };
-    Arc::get_mut(&mut state).expect("state is unique").firewall =
-        Some(Arc::new(Firewall::from_config(config, None)));
+    // With its gateway's keyring, as the gateway builds it (#2210, MIK-8276).
+    let keys = state.meta_mcp.continuation();
+    Arc::get_mut(&mut state).expect("state is unique").firewall = Some(Arc::new(
+        Firewall::from_config(config, None).with_continuations(keys),
+    ));
     (state, store)
 }
 

@@ -55,17 +55,20 @@ async fn stdio_on(backend: Arc<Planted>, setup: Setup) -> (Arc<MetaMcp>, Option<
         meta.enable_response_inspection_action_mode();
         return (Arc::new(meta), None);
     }
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_responses: true,
-            scan_requests: false,
-            credential_redaction: true,
-            rules,
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_responses: true,
+                scan_requests: false,
+                credential_redaction: true,
+                rules,
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .with_continuations(meta.continuation()),
+    );
     meta.set_firewall(Some(Arc::clone(&firewall)));
     (Arc::new(meta), Some(firewall))
 }

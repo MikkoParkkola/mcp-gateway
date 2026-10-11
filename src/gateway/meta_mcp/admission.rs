@@ -486,25 +486,6 @@ impl MetaMcp {
         Ok(target)
     }
 
-    /// #2450: a task-augmented call skips `admit_meta_sync`, but its durable
-    /// admission can answer a repeat from the stored task, so the same policy
-    /// runs first: the target's invocation policy, else the keyed plan check.
-    pub(crate) fn check_task_admission_policy(
-        &self,
-        caller: &super::MetaMcpCallerContext<'_>,
-        tool_name: &str,
-        arguments: &Value,
-        session: Option<&str>,
-    ) -> Result<()> {
-        if self
-            .check_target_policy(caller, tool_name, arguments, session)?
-            .is_none()
-        {
-            self.authorize_execution_plan(caller, tool_name, arguments, session)?;
-        }
-        Ok(())
-    }
-
     /// Protect one outer logical meta invocation, including all its inner steps.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn admit_meta_sync(
@@ -518,15 +499,28 @@ impl MetaMcp {
     ) -> Result<SyncAdmission> {
         // One admission authority per key, for every transport: a task is
         // admitted durably under `Mode::Task` by its handoff (a lease too would
-        // self-mismatch); it runs no backend work here, and its worker's own
-        // dispatch re-applies policy. Signing admission owns its own calls.
-        if caller.task.is_some() || caller.awaits_signing_admission() {
+        // self-mismatch). Signing admission owns its own calls, and a signed
+        // call was authorized when signing prepared it.
+        if caller.awaits_signing_admission() {
             return Ok(SyncAdmission::Unprotected);
         }
-        let is_modern = caller.is_modern;
+        // A task passes the policy the synchronous call passes below (the
+        // target's invocation policy, else the keyed plan check), here, before
+        // a task or its key exists; its worker checks again at dispatch
+        // (MIK-8315). A repeat is answered from the stored task only after it.
+        if caller.task.is_some() {
+            if self
+                .check_target_policy(caller, tool_name, arguments, session)?
+                .is_none()
+            {
+                self.authorize_execution_plan(caller, tool_name, arguments, session)?;
+            }
+            return Ok(SyncAdmission::Unprotected);
+        }
+        caller.retry.refuse_on_playbook_run(tool_name)?; // MIK-8341: before any reservation
         // These operations cannot execute on a sessionless protocol. Preserve
         // their protocol refusal before asking for or reserving a retry key.
-        if is_modern {
+        if caller.is_modern {
             match tool_name {
                 "gateway_set_profile" => {
                     return Err(Error::Protocol(super::NO_SESSION_FOR_PROFILE.to_string()));
@@ -551,7 +545,7 @@ impl MetaMcp {
         {
             let full = execution_arguments_cow(&mut operation_arguments);
             return self.admit_sync(
-                is_modern,
+                caller.is_modern,
                 verified_identity,
                 owner_principal,
                 retry,
@@ -578,7 +572,7 @@ impl MetaMcp {
             operation["playbook"] = json!(crate::hashing::canonical_json_sha256(&value));
         }
         let mut admission = self.admit_operation(
-            is_modern,
+            caller.is_modern,
             verified_identity,
             owner_principal,
             retry,

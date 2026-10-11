@@ -81,7 +81,7 @@ MODERN_PROTOCOL="2026-07-28"
 
 # cell -> ref port config client-protocol
 cell_ref()    { case "$1" in A) echo "$REF_A";; B) echo "$REF_B";; *) echo "$REF_C";; esac; }
-cell_port()   { case "$1" in A) echo 39420;; B) echo 39421;; C) echo 39422;; D) echo 39423;; E) echo 39424;; esac; }
+cell_port()   { python3 "$HERE/schedule.py" cell-port "$1"; }
 
 # rep number -> the cell order that rep runs, a FRESH PERMUTATION of all five
 # cells, deterministic in SEED. Not a rotation: under a rotation every cyclic
@@ -228,6 +228,22 @@ GW_PORT=""
 
 port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && { exec 3>&- 2>/dev/null || true; return 0; }; return 1; }
 
+# Every cell port must sit outside the host's ephemeral range, or a live
+# outgoing connection can hold it when that cell's gateway starts (the graded
+# run of 2026-10-11 voided at rep C9 on exactly that). Refused at second 0,
+# before any rep, rather than found 50 minutes in. A diagnostic run on a host
+# with no readable range is warned and continues; a graded run is refused.
+require_ports_clear() {
+  local rc=0
+  python3 "$HERE/schedule.py" ports-clear || rc=$?
+  [[ $rc == 0 ]] && return 0
+  if [[ $rc == 2 && "$GRADED" != 1 ]]; then
+    echo "warning: no readable ephemeral port range; a diagnostic run continues" >&2
+    return 0
+  fi
+  die "cell ports must sit outside the ephemeral port range (schedule.CELL_PORTS)"
+}
+
 stop_gateway() {
   if [[ -n "$GW_PID" ]] && kill -0 "$GW_PID" 2>/dev/null; then
     kill "$GW_PID" 2>/dev/null || true
@@ -258,7 +274,8 @@ start_gateway() {
 
   # One gateway at a time. A second listener on any cell port voids the run.
   local other
-  for other in 39420 39421 39422 39423 39424; do
+  for other in A B C D E; do
+    other="$(cell_port "$other")"
     if port_open "$other"; then
       die "$rep: port $other already has a listener"
     fi
@@ -396,6 +413,8 @@ do_measure() {
       }
     done
   fi
+  # After the cheap refusals, before any config, pin or rep.
+  require_ports_clear
   render_configs "$run"
 
   python3 - "$run/pins.json" "$K6_IMAGE_DIGEST" \
@@ -471,6 +490,7 @@ PY
 # the same thing. Its output is never scored.
 do_smoke() {
   local run="$1" cell="${2:-C}"
+  require_ports_clear
   render_configs "$run"
   run_rep "$cell" "smoke-$cell" "$run" warmup
   echo "[smoke] ok: cell $cell plumbing clean; see $run/smoke-$cell.health.json"

@@ -184,6 +184,25 @@ impl RetryFields {
         Ok(self.input_responses.clone())
     }
 
+    /// Refuse retry fields on a playbook run (MIK-8341). A playbook never
+    /// answers `input_required` at top level, so a run has no continuation to
+    /// resume; admitted, the fields would open a new round that re-runs every
+    /// step. Present in any form counts (`inputResponses: {}`,
+    /// `requestState: ""`). One predicate for every site that must refuse
+    /// first: the dispatcher, synchronous admission and signing's prediction.
+    pub(crate) fn refuse_on_playbook_run(&self, tool_name: &str) -> crate::Result<()> {
+        if tool_name == "gateway_run_playbook" && self.is_retry() {
+            return Err(crate::Error::JsonRpc {
+                code: -32602,
+                message: "a playbook run has no continuation to resume: send it without \
+                          requestState or inputResponses"
+                    .to_owned(),
+                data: None,
+            });
+        }
+        Ok(())
+    }
+
     /// Read the retry fields from a `tools/call` params object.
     #[must_use]
     pub fn from_params(params: Option<&Value>) -> Self {
@@ -569,8 +588,11 @@ pub fn source_fingerprint(source: PrincipalSource<'_>) -> Option<String> {
 
 /// [`source_fingerprint`] for a caller bound by its verified identity alone.
 ///
-/// Kept as the identity-only spelling every non-stdio site uses; it is the
-/// same derivation, not a second one.
+/// Not a caller binding: every gateway site binds through
+/// `MetaMcpCallerContext::principal_source`, which also binds a key-only
+/// caller (MIK-8137). Its one production caller is the direct route's A2A
+/// round, whose caller cannot reach `principal_source` yet (MIK-8330). It is
+/// the same derivation as the `Credential` arm, not a second one.
 #[must_use]
 pub fn principal_fingerprint(
     identity: Option<&crate::key_server::oidc::VerifiedIdentity>,

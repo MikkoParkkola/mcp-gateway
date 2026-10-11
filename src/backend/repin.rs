@@ -19,7 +19,9 @@ impl Backend {
     /// pairing stamped one is refused here rather than published unpinned.
     ///
     /// The listen handle goes in first, so a reader that sees the transport
-    /// always sees its event stream (MIK-7897 LIFE.3a).
+    /// always sees its event stream (MIK-7897 LIFE.3a), and both go in under
+    /// the slot's write guard, so no reader sees one without the other
+    /// (MIK-8125).
     ///
     /// `on_publish` runs after both checks pass and just before the slot write,
     /// in the same synchronous step, and what it returns is held until the
@@ -46,12 +48,24 @@ impl Backend {
         if let Some(between) = self.between_install_and_write.lock().take() {
             between();
         }
+        // The handle and the transport change as one pair under the slot's
+        // write guard: a reader of the detected flavour holds the read guard
+        // across both (`flavour_of`), so it sees the old pair or the new one,
+        // never the new handle beside the old transport, which reads as
+        // undetected and would admit an ineligible backend's events (MIK-8125).
+        // Lock order transport, then listen, as that reader takes them.
+        let mut slot = entry.transport.write();
         *entry.listen.write() = listen;
+        #[cfg(test)]
+        if let Some(between) = self.between_listen_and_transport.lock().take() {
+            between();
+        }
         // The verdict a reader of the slot will see the instant the transport
         // lands in it, read before the write so nothing after it can mask it.
         #[cfg(test)]
         self.era_at_publish.lock().push(entry.era.cached_now());
-        *entry.transport.write() = Some(Arc::clone(transport));
+        *slot = Some(Arc::clone(transport));
+        drop(slot);
         drop(held);
         Ok(())
     }

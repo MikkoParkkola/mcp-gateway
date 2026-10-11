@@ -514,18 +514,21 @@ fn inspect_discovery_value_redacts_credentials_when_not_blocking() {
         "tools": [{"name": "t", "description": format!("token: {token} for auth")}]
     });
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
-    meta.set_firewall(Some(Arc::new(Firewall::from_config(
-        FirewallConfig {
-            rules: vec![FirewallRule {
-                tool_match: "tools/list".to_string(),
-                action: FirewallAction::Warn,
-                reason: None,
-                scan: Vec::new(),
-            }],
-            ..FirewallConfig::default()
-        },
-        None,
-    ))));
+    meta.set_firewall(Some(Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                rules: vec![FirewallRule {
+                    tool_match: "tools/list".to_string(),
+                    action: FirewallAction::Warn,
+                    reason: None,
+                    scan: Vec::new(),
+                }],
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .with_continuations(meta.continuation()),
+    )));
 
     meta.inspect_discovery_value(&mut surface)
         .expect("a Warn verdict serves the list");

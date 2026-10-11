@@ -144,19 +144,34 @@ async fn app_state_with_rules(
 }
 
 /// The engine every fixture here uses: response scanning and credential
-/// redaction on, request scanning off.
+/// redaction on, request scanning off, with a keyring of its own.
 fn response_firewall(rules: Vec<FirewallRule>) -> Arc<Firewall> {
-    Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_responses: true,
-            scan_requests: false,
-            credential_redaction: true,
-            rules,
-            ..FirewallConfig::default()
-        },
-        None,
-    ))
+    response_firewall_keyed(
+        rules,
+        Arc::new(crate::protocol::continuation::ContinuationState::new()),
+    )
+}
+
+/// [`response_firewall`] exempting `keys`, for a second instance that must
+/// pair with the first's gateway (#2210, MIK-8276).
+fn response_firewall_keyed(
+    rules: Vec<FirewallRule>,
+    keys: Arc<crate::protocol::continuation::ContinuationState>,
+) -> Arc<Firewall> {
+    Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_responses: true,
+                scan_requests: false,
+                credential_redaction: true,
+                rules,
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .with_continuations(keys),
+    )
 }
 
 /// Production wiring: `AppState` and the Meta-MCP each hold their OWN
@@ -171,8 +186,9 @@ async fn split_firewall_app_state(
     Arc<Firewall>,
     tempfile::TempDir,
 ) {
-    let handler = response_firewall(rules.clone());
-    let meta = response_firewall(rules);
+    let meta = response_firewall(rules.clone());
+    let keys = meta.continuations_for_test().expect("keyed");
+    let handler = response_firewall_keyed(rules, keys);
     let (state, store_dir) = state_with_firewalls(Arc::clone(&handler), Arc::clone(&meta)).await;
     (state, handler, meta, store_dir)
 }
@@ -212,6 +228,15 @@ async fn state_with_firewalls_and_auth(
     // Deliberately ARMED: the inner result-security gate must keep its own
     // obligation. This regression is about the router's obligation running
     // ahead of it, not about removing it.
+    // Both firewalls exempt the keyring this gateway mints with, as startup
+    // pairs them (#2210, MIK-8276); a fixture that splits them must share one.
+    meta.share_keyring_with_for_test(&meta_firewall);
+    assert!(
+        handler_firewall
+            .continuations_for_test()
+            .is_some_and(|keys| Arc::ptr_eq(&keys, &meta.continuation())),
+        "the router's firewall must exempt the gateway's keyring"
+    );
     meta.set_firewall(Some(meta_firewall));
     let meta_mcp = Arc::new(meta);
 

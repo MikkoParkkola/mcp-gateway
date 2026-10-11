@@ -18,20 +18,24 @@ async fn firewalled(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDi
 
 /// The firewalled gateway with no backend registered yet.
 async fn firewalled_state() -> (Arc<AppState>, tempfile::TempDir) {
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_responses: true,
-            scan_requests: false,
-            credential_redaction: true,
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_responses: true,
+                scan_requests: false,
+                credential_redaction: true,
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .keyed_for_test(),
+    );
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta(
         &two_principal_auth(),
         None,
         |mut meta| {
+            meta.share_keyring_with_for_test(&firewall);
             meta.set_firewall(Some(firewall));
             meta
         },

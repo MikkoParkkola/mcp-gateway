@@ -219,6 +219,8 @@ async fn service_03_an_identical_retry_recovers_the_one_task() {
     else {
         panic!("an identical retry must recover Existing")
     };
+    // A store-facade read, outside any request scope: adopts nothing.
+    let retried = retried.deliver(crate::gateway::meta_mcp::sealed_hold::HoldSink::Scope);
 
     assert_eq!(retried.task.id(), created.task.id());
     assert_eq!(retried.task.id(), first.id());

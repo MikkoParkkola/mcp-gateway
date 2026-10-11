@@ -238,23 +238,26 @@ async fn a_dispatched_round_refused_by_the_firewall_settles_the_key_as_a_refusal
     let _ = registry.register(backend);
 
     let mut meta = MetaMcp::new(registry);
-    meta.set_firewall(Some(Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_responses: true,
-            // The rule blocks on a finding, not on the tool: round one's
-            // question is clean and must be carried, or the row would pass
-            // without ever reaching a dispatched round.
-            rules: vec![FirewallRule {
-                tool_match: "book".into(),
-                action: FirewallAction::Block,
-                scan: vec![],
-                reason: None,
-            }],
-            ..FirewallConfig::default()
-        },
-        None,
-    ))));
+    meta.set_firewall(Some(Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_responses: true,
+                // The rule blocks on a finding, not on the tool: round one's
+                // question is clean and must be carried, or the row would pass
+                // without ever reaching a dispatched round.
+                rules: vec![FirewallRule {
+                    tool_match: "book".into(),
+                    action: FirewallAction::Block,
+                    scan: vec![],
+                    reason: None,
+                }],
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .with_continuations(meta.continuation()),
+    )));
     meta.enable_idempotency(
         Arc::new(crate::idempotency::IdempotencyCache::new()),
         Duration::from_secs(300),

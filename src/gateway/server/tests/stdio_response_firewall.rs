@@ -85,22 +85,26 @@ impl Stdio {
             .await
             .expect("warm the tool cache");
         assert!(registry.register(backend));
-        let firewall = Arc::new(Firewall::from_config(
-            FirewallConfig {
-                enabled: true,
-                scan_responses: true,
-                scan_requests: false,
-                credential_redaction: true,
-                rules,
-                ..FirewallConfig::default()
-            },
-            None,
-        ));
+        let firewall = Arc::new(
+            Firewall::from_config(
+                FirewallConfig {
+                    enabled: true,
+                    scan_responses: true,
+                    scan_requests: false,
+                    credential_redaction: true,
+                    rules,
+                    ..FirewallConfig::default()
+                },
+                None,
+            )
+            .keyed_for_test(),
+        );
         let mut meta = MetaMcp::new(registry).with_surfaced_tools(vec![SurfacedToolConfig {
             server: "demo".to_string(),
             tool: TOOL.to_string(),
         }]);
         meta.set_firewall(Some(Arc::clone(&firewall)));
+        meta.share_keyring_with_for_test(&firewall);
         Self {
             meta: Arc::new(meta),
             firewall,

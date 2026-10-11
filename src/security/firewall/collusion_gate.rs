@@ -12,6 +12,9 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::collusion::egress_parts;
+#[cfg(test)]
+pub(super) use super::collusion::egress_text;
 use super::collusion::{
     CAPACITY_METRIC, CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams,
     RelayReason, SeamForms,
@@ -347,10 +350,10 @@ impl Firewall {
                 ),
             )),
             _ => detector
-                .check_egress_flows_at(
+                .check_egress_fingerprints_at(
                     caller.key(),
                     (&target, self.relay.egress_flows(&target)),
-                    &egress_text(params),
+                    detector.egress_fingerprints(&egress_parts(params)),
                     Instant::now(),
                 )
                 .map(|f| {
@@ -752,33 +755,6 @@ fn relay_finding(description: String, matched: String) -> Finding {
         matched,
         location: FindingLocation::RequestArgs,
     }
-}
-
-/// The text a backend receives in `value`: every string leaf, newline-joined
-/// (content split over short fields at word boundaries still matches), the
-/// leaves once more run together, since a copy split mid-word over fields
-/// shorter than a fingerprint is still one the backend can join, then every
-/// object key, since a key reaches the backend like a value. What a caller
-/// is delivered is read by [`delivery_parts`].
-pub(super) fn egress_text(value: &Value) -> String {
-    fn visit<'v>(value: &'v Value, leaves: &mut Vec<&'v str>, keys: &mut Vec<&'v str>) {
-        match value {
-            Value::String(s) => leaves.push(s),
-            Value::Array(items) => items.iter().for_each(|v| visit(v, leaves, keys)),
-            Value::Object(map) => map.iter().for_each(|(k, v)| {
-                keys.push(k);
-                visit(v, leaves, keys);
-            }),
-            _ => {}
-        }
-    }
-    let (mut leaves, mut keys): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
-    visit(value, &mut leaves, &mut keys);
-    let joined = (leaves.len() > 1).then(|| leaves.concat());
-    let mut parts = leaves;
-    parts.extend(joined.as_deref());
-    parts.extend(keys);
-    parts.join("\n")
 }
 
 /// The gateway-attached context-integrity verdict names a sensitive class.

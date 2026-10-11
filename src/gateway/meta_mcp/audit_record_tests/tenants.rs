@@ -39,16 +39,19 @@ fn reply_naming(tenant: &str, extra_text: &str) -> Value {
 
 /// Attribution on: `arg_keys` set, the guard itself off (observe-only).
 fn attributing(mut meta: MetaMcp) -> MetaMcp {
-    meta.set_firewall(Some(Arc::new(Firewall::from_config(
-        FirewallConfig {
-            tenant_guard: TenantGuardConfig {
-                arg_keys: vec!["customer_id".to_string()],
-                ..TenantGuardConfig::default()
+    meta.set_firewall(Some(Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                tenant_guard: TenantGuardConfig {
+                    arg_keys: vec!["customer_id".to_string()],
+                    ..TenantGuardConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ))));
+            None,
+        )
+        .with_continuations(meta.continuation()),
+    )));
     meta
 }
 
@@ -567,20 +570,24 @@ async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     backend.set_transport_for_test(Arc::new(CountedLost(Arc::clone(&calls))));
     let _ = registry.register(Arc::clone(&backend));
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                sources: vec!["alpha:*".to_string()],
-                ..CollusionConfig::default()
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources: vec!["alpha:*".to_string()],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+            None,
+        )
+        .keyed_for_test(),
+    );
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    meta.share_keyring_with_for_test(&firewall);
     let meta = idempotent(meta);
     let who = api_key_caller();
     let retry = keyed("lost-round-notice");

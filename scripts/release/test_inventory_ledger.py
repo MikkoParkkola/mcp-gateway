@@ -41,7 +41,7 @@ class Repo:
         self.commit("base")
 
     def git(self, *args: str, check: bool = True) -> subprocess.CompletedProcess:
-        return subprocess.run(["git", *args], cwd=self.root, capture_output=True, text=True, check=check)
+        return subprocess.run(["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", *args], cwd=self.root, capture_output=True, text=True, check=check)
 
     def write(self, path: str, text: str) -> None:
         file = self.root / path

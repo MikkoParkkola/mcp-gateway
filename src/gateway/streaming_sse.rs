@@ -202,6 +202,9 @@ pub struct TaskFrame {
     pub restored_output: bool,
     /// Records the delivery once the stream's own gates have passed.
     pub delivery: Box<dyn TaskFrameDelivery>,
+    /// The holds of the sealed questions the frame carries (MIK-8176 D4b),
+    /// handed off immediately before the frame is yielded.
+    pub(crate) holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds,
 }
 
 /// The bookkeeping of a task frame that is about to be written.
@@ -312,6 +315,10 @@ pub(crate) fn subscription_stream(
                     // and committed as it is written; withheld when blocked.
                     // Stored task output is judged as a read of stored data.
                     let sent = task.as_ref().map(|_| tagged.clone());
+                    // Taken before `task` is consumed below; dropped unless the
+                    // frame is yielded, so a frame stopped at any gate hands
+                    // nothing off and the stored row keeps the slot.
+                    let frame_holds = task.as_ref().map(|task| task.holds.clone());
                     let judged = if task.as_ref().is_some_and(|task| task.restored_output) {
                         judge.judge_restored_document(tagged)
                     } else {
@@ -338,6 +345,11 @@ pub(crate) fn subscription_stream(
                     let Some(data) = sse_data(&recorded) else {
                         continue;
                     };
+                    // The fourth handoff point (MIK-8176 D4b): the frame goes
+                    // out now, so the questions it carries are delivered.
+                    if let Some(holds) = &frame_holds {
+                        crate::gateway::meta_mcp::sealed_hold::hand_off(holds);
+                    }
                     yield Ok(Event::default().event("message").data(data));
                 }
                 Err(broadcast::error::RecvError::Closed) => break,

@@ -288,21 +288,24 @@ async fn link_out_covers_firewall_redaction_stdio() {
     use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule};
     const CANARY: &str = concat!("gh", "p_abcdefghijklmnopqrstuvwxyz1234567890");
     let mut gateway = meta(Some(ChainEmit::OnRequest));
-    gateway.set_firewall(Some(Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_requests: false,
-            scan_responses: true,
-            rules: vec![FirewallRule {
-                tool_match: "echo".into(),
-                action: FirewallAction::Allow,
-                scan: vec![],
-                reason: None,
-            }],
-            ..FirewallConfig::default()
-        },
-        None,
-    ))));
+    gateway.set_firewall(Some(Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_requests: false,
+                scan_responses: true,
+                rules: vec![FirewallRule {
+                    tool_match: "echo".into(),
+                    action: FirewallAction::Allow,
+                    scan: vec![],
+                    reason: None,
+                }],
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .with_continuations(gateway.continuation()),
+    )));
     let mut leaky = body();
     leaky["content"][0]["text"] = json!(format!("hello {CANARY}"));
     let out = deliver(

@@ -303,6 +303,63 @@ async fn a_foreign_reap_leaks_rather_than_signals() {
     assert!(after > before, "the descendant's heartbeat stopped");
 }
 
+/// A leader that ignores SIGTERM, with a descendant that inherits the trap,
+/// still ends with its group on close, and is reaped. Test idea from #3419
+/// (terafin).
+#[tokio::test]
+async fn close_ends_a_group_that_ignores_sigterm() {
+    let (w, t) = started(&resists_term(), None).await;
+    let child = descendant(w.path()).await;
+    let pid = leader(&t).await;
+    t.close().await.expect("close");
+    assert_killed(pid).await;
+    assert_eq!(kernel_view(pid), None, "the leader is reaped");
+    gone(child).await;
+}
+
+/// A close cancelled while the SIGTERM-ignoring leader still runs: close
+/// hands the tree to the reaper before its first await, so the cancel lands
+/// after the handover and the reaper still ends the group. #3419's "drop
+/// after a cancelled close" cannot arise here: no tree is left for a drop to
+/// signal. `close` is polled once, then dropped. Test idea from #3419
+/// (terafin).
+#[tokio::test]
+async fn a_close_cancelled_while_the_leader_runs_still_ends_the_group() {
+    let (w, t) = started(&resists_term(), None).await;
+    let child = descendant(w.path()).await;
+    let pid = leader(&t).await;
+    assert_eq!(
+        kernel_view(pid),
+        Some(false),
+        "precondition: the leader runs"
+    );
+    // An owned boxed future, so the drop below really cancels it.
+    let mut close = t.close();
+    assert!(
+        futures::poll!(&mut close).is_pending(),
+        "precondition: close was still pending when cancelled"
+    );
+    drop(close);
+    assert!(t.child.lock().tree.is_none(), "close handed the tree over");
+    assert_killed(pid).await;
+    gone(child).await;
+}
+
+/// A leader and descendant that ignore SIGTERM; the leader outlives its
+/// stdin closing (`wait`), so only a group SIGKILL ends it.
+fn resists_term() -> String {
+    format!("trap '' TERM\n{DESCENDANT}\nwhile IFS= read -r l; do :; done\nwait")
+}
+
+/// The reaper settled the tree of leader `pid`, and the leader died of SIGKILL.
+async fn assert_killed(pid: Pid) {
+    use std::os::unix::process::ExitStatusExt as _;
+    let counts = finished(pid).await;
+    assert_settled((counts.sent, counts.refused));
+    let signal = counts.status.and_then(|s| s.signal());
+    assert_eq!(signal, Some(9), "the leader was killed by SIGKILL");
+}
+
 /// D1: a member forking in a tight loop while close runs. Each child
 /// records its own pid before it sleeps, so a child whose parent dies
 /// between fork and record still registers; late registrations get a
@@ -536,6 +593,7 @@ async fn a_dropped_transport_hands_its_tree_to_the_reaper() {
     let pid = leader(&t).await;
     drop(Arc::into_inner(t).expect("the only handle"));
     assert_settled(sent_after(pid).await);
+    assert_eq!(kernel_view(pid), None, "the leader is reaped");
     gone(child).await;
 }
 

@@ -106,6 +106,8 @@ mod response_security_tests;
 pub(crate) mod sealed_hold;
 mod search;
 pub(crate) mod signing;
+#[cfg(test)]
+mod slot_quota_release_tests;
 #[cfg(feature = "spec-preview")]
 mod spec_preview;
 mod support;

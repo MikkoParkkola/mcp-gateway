@@ -317,16 +317,19 @@ fn firewall_only_gateway() -> MetaMcp {
     use crate::security::firewall::{Firewall, FirewallConfig};
 
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
-    meta.set_firewall(Some(Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_responses: true,
-            scan_requests: false,
-            credential_redaction: true,
-            ..FirewallConfig::default()
-        },
-        None,
-    ))));
+    meta.set_firewall(Some(Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_responses: true,
+                scan_requests: false,
+                credential_redaction: true,
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .with_continuations(meta.continuation()),
+    )));
     meta
 }
 

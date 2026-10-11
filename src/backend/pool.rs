@@ -414,6 +414,13 @@ impl Backend {
             .and_then(|entry| entry.value().transport.read().clone())
     }
 
+    /// Test-only: the shared slot, so a test can hold its start lock as a
+    /// start in flight does.
+    #[cfg(test)]
+    pub(crate) fn shared_entry_for_test(&self) -> Arc<PooledEntry> {
+        self.shared_entry()
+    }
+
     #[cfg(test)]
     pub(crate) fn set_transport_for_test(&self, transport: Arc<dyn Transport>) {
         let entry = self.shared_entry();

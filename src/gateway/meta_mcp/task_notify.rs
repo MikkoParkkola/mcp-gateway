@@ -46,6 +46,10 @@ pub(crate) struct PendingTaskFrame {
     pub restored_output: bool,
     withheld: bool,
     staged: super::invoke::relay::StagedReceipts,
+    /// The holds of the sealed questions the frame carries (MIK-8176 D4b):
+    /// handed off by the stream just before the frame is yielded, dropped
+    /// with it otherwise. The stored row keeps its own.
+    pub(crate) holds: super::sealed_hold::CarriedHolds,
 }
 
 impl MetaMcp {
@@ -61,10 +65,17 @@ impl MetaMcp {
     pub(crate) async fn task_notification_frame(
         &self,
         notification: &Value,
-        stored: Option<&CommittedTask>,
+        stored: Option<super::sealed_hold::Held<CommittedTask>>,
         refused: impl FnOnce(&CommittedTask) -> bool + Send,
         subscription: &SubscriptionId,
     ) -> Option<PendingTaskFrame> {
+        // MIK-8176 D4b: the stored task is delivered onto this frame, so the
+        // holds of what the frame carries go out with it and are handed off
+        // only when it is yielded. This stream runs outside any request scope.
+        let mut taken = super::sealed_hold::CarriedHolds::none();
+        let stored =
+            stored.map(|held| held.deliver(super::sealed_hold::HoldSink::Frame(&mut taken)));
+        let stored = stored.as_ref();
         // The collector is outside the slot, so receipts outlive the slot's
         // own write (grant decisions); they are handed back, recorded or
         // dropped by `finish_task_frame`.
@@ -112,11 +123,15 @@ impl MetaMcp {
             })
             .await;
         let (frame, withheld, restored_output) = decided?;
+        // Only the holds the frame as built still carries: a withheld or
+        // refused frame carries none, and the row keeps the slot.
+        let holds = super::sealed_hold::carried_from(&taken, &frame);
         Some(PendingTaskFrame {
             frame,
             restored_output,
             withheld,
             staged,
+            holds,
         })
     }
 

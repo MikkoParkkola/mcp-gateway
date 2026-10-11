@@ -42,6 +42,7 @@ fn reads_firewall(
     window_secs: u64,
     reads: &Arc<ReadHistory>,
     arg_keys: &[&str],
+    keys: &Arc<crate::protocol::continuation::ContinuationState>,
 ) -> Arc<Firewall> {
     Arc::new(
         Firewall::from_config(
@@ -57,7 +58,8 @@ fn reads_firewall(
             },
             None,
         )
-        .with_reads(Arc::clone(reads)),
+        .with_reads(Arc::clone(reads))
+        .with_continuations(Arc::clone(keys)),
     )
 }
 
@@ -83,9 +85,11 @@ async fn keyed_state(
     arg_keys: &[&str],
 ) -> (Arc<AppState>, tempfile::TempDir) {
     let reads = ReadHistory::shared();
+    // One keyring for both, as startup pairs them (#2210, MIK-8276).
+    let keys = Arc::new(crate::protocol::continuation::ContinuationState::new());
     let (handler, meta) = (
-        reads_firewall(mode, window, &reads, arg_keys),
-        reads_firewall(mode, window, &reads, arg_keys),
+        reads_firewall(mode, window, &reads, arg_keys, &keys),
+        reads_firewall(mode, window, &reads, arg_keys, &keys),
     );
     let (state, store) =
         super::super::state_with_firewalls_and_auth(handler, meta, &one_key()).await;

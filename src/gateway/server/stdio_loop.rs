@@ -62,27 +62,13 @@ impl Gateway {
             &meta_mcp,
         )
         .await?;
-        // Give stdio the same explicit reload context as HTTP.
+        // MIK-8278: this session announces tool-list changes to an
+        // initialize-era client, so it may say so; the feed is installed
+        // before warm-start and the capability load, so their nudges count.
+        meta_mcp.set_change_feed(crate::gateway::ChangeFeed::StdioLegacy);
+        let (nudges, nudge_rx) = tokio::sync::mpsc::unbounded_channel();
+        self.backends.set_change_feed(nudges);
         let warmer = WarmerGuard::new(&self.backends, WarmStartMode::Stdio, None);
-        if let Some(path) = self.reload_path() {
-            let live_config = Arc::new(
-                LiveConfig::new(self.config.clone())
-                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
-            );
-            let reload_ctx = Arc::new(
-                ReloadContext::new(
-                    path.clone(),
-                    Arc::clone(&live_config),
-                    Arc::clone(&self.backends),
-                    self.config.failsafe.clone(),
-                    self.config.meta_mcp.cache_ttl,
-                )?
-                .with_env(Arc::clone(&self.env))
-                .with_identity_grant_sink_opt(grant_sink.clone())
-                .with_on_registered(warmer.hook()),
-            );
-            meta_mcp.set_reload_context(reload_ctx);
-        }
         let protocol_telemetry_sink = Arc::new(StdioTelemetry::new(
             match crate::protocol_revision_telemetry::DurableTelemetrySink::open(&data_dir) {
                 Ok(sink) => Some(sink),
@@ -104,6 +90,8 @@ impl Gateway {
         let _stop_tasks = task_store.as_ref().map(|(tasks, _)| tasks.stop_on_drop());
         // MIK-7217.STDIO.1: read once, as the store is; discover lists 2026-07-28 by it.
         let modern = self.config.server.modern_protocol;
+        let sanitize =
+            super::stdio_single::InputSanitizing::from_setting(self.config.security.sanitize_input);
 
         // Account strategies must exist before stdio can admit a request, just
         // as they do before the HTTP listener starts serving.
@@ -170,6 +158,30 @@ impl Gateway {
             meta_mcp.set_playbook_engine(engine);
         }
 
+        // Give stdio the same explicit reload context as HTTP, built once the
+        // capability backend is installed, so a reload refreshes and announces
+        // the catalogue the session serves (MIK-8278).
+        if let Some(path) = self.reload_path() {
+            let live_config = Arc::new(
+                LiveConfig::new(self.config.clone())
+                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+            );
+            let reload_ctx = Arc::new(
+                ReloadContext::new(
+                    path.clone(),
+                    Arc::clone(&live_config),
+                    Arc::clone(&self.backends),
+                    self.config.failsafe.clone(),
+                    self.config.meta_mcp.cache_ttl,
+                )?
+                .with_env(Arc::clone(&self.env))
+                .with_identity_grant_sink_opt(grant_sink.clone())
+                .with_capabilities(meta_mcp.get_capabilities())
+                .with_on_registered(warmer.hook()),
+            );
+            meta_mcp.set_reload_context(reload_ctx);
+        }
+
         // Warm-start backends (same as HTTP mode). Held for the rest of the
         // function: dropping the guard aborts the retry tasks, so cancelling
         // `run_stdio` anywhere cancels them too, not only the EOF path below.
@@ -215,6 +227,30 @@ impl Gateway {
         // memory growth.
         let (writer, queue) = self.stdout_queue(&meta_mcp);
         let mut writer_task = tokio::spawn(Self::run_stdout_writer(output, queue));
+
+        // MIK-8278: decide this session's tool-list changes and tell its
+        // client, and watch the capability catalogue as HTTP does. The
+        // watchers stop with the announcer, so they end on every exit path.
+        let announcer = super::tools_changed::stdio::StdioAnnouncer::start(
+            (Arc::clone(&self.backends), Arc::clone(&meta_mcp)),
+            nudge_rx,
+            writer.clone(),
+        );
+        let _capability_watcher = meta_mcp.get_capabilities().and_then(|cap_backend| {
+            cap_backend.spawn_listing_watch(Arc::clone(&self.backends), announcer.shutdown());
+            crate::capability::CapabilityWatcher::start(
+                cap_backend,
+                announcer.shutdown(),
+                Some(self.backends.catalogue_hook()),
+            )
+            .inspect_err(|error| warn!(%error, "stdio: capability hot-reload disabled"))
+            .ok()
+        });
+        #[cfg(test)]
+        super::stdio_seams::announcer_started(announcer.drain_alive());
+        // Whether this session began with `initialize`: only such a client
+        // is told of changes (a modern one was told `listChanged: false`).
+        let mut legacy_handshake = false;
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = STDIO_SESSION_ID;
@@ -334,7 +370,24 @@ impl Gateway {
                 {
                     dispatches.cancel(&id);
                 }
+                #[cfg(test)]
+                super::stdio_seams::cancel_recorded();
                 continue;
+            }
+
+            // Marked, then dispatched as before: announcing starts here.
+            // Alone or inside a batch: a legacy client may send it either way.
+            let is_initialized = |frame: &serde_json::Value| {
+                frame.get("method").and_then(serde_json::Value::as_str)
+                    == Some("notifications/initialized")
+            };
+            if legacy_handshake
+                && (is_initialized(&request)
+                    || request
+                        .as_array()
+                        .is_some_and(|frames| frames.iter().any(is_initialized)))
+            {
+                announcer.initialized();
             }
 
             // A batch is spawned like a single request (MIK-7684): dispatched
@@ -377,37 +430,32 @@ impl Gateway {
                     }
                     // MIK-8176: the batch's slots are owned here, from
                     // dispatch through the writer queue.
-                    Box::pin(crate::gateway::meta_mcp::sealed_hold::scoped(
-                        crate::gateway::meta_mcp::sealed_hold::HoldPolicy::Release,
-                        async {
-                            // Boxed: the dispatch future is tens of kilobytes.
-                            let (responses, _) = Self::dispatch_streaming_notifications(
-                                Box::pin(Self::dispatch_batch_read(
-                                    &meta_mcp,
-                                    &tool_policy,
-                                    &mtls_policy,
-                                    request,
-                                    session_id,
-                                    &telemetry,
-                                    &reads,
-                                )),
-                                &writer,
+                    Box::pin(crate::gateway::meta_mcp::sealed_hold::scoped(async {
+                        // Boxed: the dispatch future is tens of kilobytes.
+                        let (responses, _) = Self::dispatch_streaming_notifications(
+                            Box::pin(Self::dispatch_batch_read(
+                                &meta_mcp,
+                                &tool_policy,
+                                &mtls_policy,
+                                request,
+                                (session_id, sanitize),
+                                &telemetry,
                                 &reads,
-                                Some(meta_mcp.notification_screen("stdio", session_id)),
-                            )
-                            .await;
-                            Self::persist_stdio_protocol_telemetry(&telemetry);
-                            if !responses.is_empty() {
-                                drop(
-                                    writer
-                                        .send(crate::gateway::outbound::StdioReads::batch_of(
-                                            responses,
-                                        ))
-                                        .await,
-                                );
-                            }
-                        },
-                    ))
+                            )),
+                            &writer,
+                            &reads,
+                            Some(meta_mcp.notification_screen("stdio", session_id)),
+                        )
+                        .await;
+                        Self::persist_stdio_protocol_telemetry(&telemetry);
+                        if !responses.is_empty() {
+                            drop(
+                                writer
+                                    .send(crate::gateway::outbound::StdioReads::batch_of(responses))
+                                    .await,
+                            );
+                        }
+                    }))
                     .await;
                     drop(slot);
                 });
@@ -421,6 +469,7 @@ impl Gateway {
             let spawned =
                 request.get("method").and_then(serde_json::Value::as_str) != Some("initialize");
             if !spawned {
+                legacy_handshake = true;
                 handshake_capabilities = crate::protocol::meta::Declared::from_handshake(
                     request.pointer("/params/capabilities"),
                 );
@@ -474,58 +523,60 @@ impl Gateway {
                 let gate = initialize_gate.clone().filter(|_| !spawned);
                 // MIK-8176: this request's slots are owned by its task, from
                 // dispatch through the writer queue.
-                Box::pin(crate::gateway::meta_mcp::sealed_hold::scoped(
-                    crate::gateway::meta_mcp::sealed_hold::HoldPolicy::Release,
-                    async move {
-                        let ((response, staged), hidden) = Self::dispatch_streaming_notifications(
-                            Box::pin(Self::dispatch_single_staged(
+                Box::pin(crate::gateway::meta_mcp::sealed_hold::scoped(async move {
+                    let ((response, staged), hidden) = Self::dispatch_streaming_notifications(
+                        Box::pin(Self::dispatch_single_staged(
+                            &meta_mcp,
+                            &tool_policy,
+                            &mtls_policy,
+                            request,
+                            StdioClient {
+                                session_id,
+                                channel: &*channel,
+                                handshake_capabilities,
+                                tasks: tasks.as_deref(),
+                                modern,
+                                sanitize,
+                            },
+                            &telemetry,
+                        )),
+                        &writer,
+                        &reads,
+                        Some(meta_mcp.notification_screen("stdio", session_id)),
+                    )
+                    .await;
+                    Self::persist_stdio_protocol_telemetry(&telemetry);
+                    #[cfg(test)]
+                    if let Some(gate) = gate {
+                        drop(gate.acquire().await);
+                    }
+                    // Room first, then the cancel check and the enqueue under
+                    // one lock: no frame for the id is queued after its cancel
+                    // was processed, however long the queue was full.
+                    let params = params.flatten();
+                    let response = match response {
+                        Some(value) => Some(
+                            Self::judge_and_commit(
                                 &meta_mcp,
-                                &tool_policy,
-                                &mtls_policy,
-                                request,
-                                StdioClient {
-                                    session_id,
-                                    channel: &*channel,
-                                    handshake_capabilities,
-                                    tasks: tasks.as_deref(),
-                                    modern,
-                                },
-                                &telemetry,
-                            )),
-                            &writer,
-                            &reads,
-                            Some(meta_mcp.notification_screen("stdio", session_id)),
-                        )
-                        .await;
-                        Self::persist_stdio_protocol_telemetry(&telemetry);
-                        #[cfg(test)]
-                        if let Some(gate) = gate {
-                            drop(gate.acquire().await);
-                        }
-                        // Room first, then the cancel check and the enqueue under
-                        // one lock: no frame for the id is queued after its cancel
-                        // was processed, however long the queue was full.
-                        let params = params.flatten();
-                        let response = match response {
-                            Some(value) => Some(
-                                Self::judge_and_commit(
-                                    &meta_mcp,
-                                    &reads,
-                                    session_id,
-                                    (value, params.as_ref(), hidden.as_ref()),
-                                    staged,
-                                )
-                                .await,
-                            ),
-                            None => None,
-                        };
-                        if let Some(response) = response
-                            && let Ok(permit) = writer.reserve().await
-                        {
-                            cancelled.send_unless_cancelled(answers.as_ref(), permit, response);
-                        }
-                    },
-                ))
+                                &reads,
+                                session_id,
+                                (value, params.as_ref(), hidden.as_ref()),
+                                staged,
+                            )
+                            .await,
+                        ),
+                        None => None,
+                    };
+                    // MIK-8176 C1-stdio: the settled answer, before the
+                    // cancel check and the enqueue.
+                    #[cfg(test)]
+                    super::stdio_seams::after_commit().await;
+                    if let Some(response) = response
+                        && let Ok(permit) = writer.reserve().await
+                    {
+                        cancelled.send_unless_cancelled(answers.as_ref(), permit, response);
+                    }
+                }))
             };
             if spawned {
                 let slot = slot.expect("a spawned request holds the slot it was admitted on");
@@ -575,6 +626,9 @@ impl Gateway {
             }
         }
 
+        // The read loop is over: the session is ending, so nothing more is
+        // announced, though accepted requests still drain (MIK-8278).
+        announcer.stop();
         // `writer.is_closed()` as well as the flag: stdout can die during the
         // wait for a line that never comes, and the loop then leaves by the EOF
         // arm. Reporting that as an ordinary EOF would hand the operator the
@@ -623,6 +677,9 @@ impl Gateway {
         }
         // Every sender gone, then the writer joined: the task drains its queue
         // and returns, which is what flushes the responses the drain produced.
+        // The announcer holds a sender too: stopped when the read loop ended,
+        // dropped before the join so the queue can close.
+        drop(announcer);
         drop(writer);
         drop(channel);
         match tokio::time::timeout_at(deadline, &mut writer_task).await {

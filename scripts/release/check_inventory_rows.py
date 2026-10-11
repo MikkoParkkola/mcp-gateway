@@ -69,6 +69,37 @@ SWEPT_AREAS = (
     "src/personal_accounts/service.rs",
     "src/personal_accounts/worker.rs",
     "src/personal_accounts/worker_journeys.rs",
+    # MIK-8195 W4: oauth (non-client) and the stdio server modules.
+    "src/oauth/callback.rs",
+    "src/oauth/metadata.rs",
+    "src/oauth/storage.rs",
+    "src/oauth/token_file.rs",
+    "src/gateway/server/stdio",
+    # MIK-8195 W8: the stdio read judge.
+    "src/gateway/outbound/stdio.rs",
+    # MIK-8195 W3: identity propagation, the input bridge and the rest of
+    # personal_accounts (config/ and provider).
+    "src/identity_propagation/",
+    "src/gateway/input_bridge.rs",
+    "src/gateway/meta_mcp/task_confirmation",
+    "src/config/account_bindings.rs",
+    "src/personal_accounts/config/",
+    "src/personal_accounts/provider",
+    # MIK-8195 W2: gateway/server outside stdio, mod.rs and persistence.rs
+    # (those two are W7), listed one by one.
+    "src/gateway/server/cleartext.rs",
+    "src/gateway/server/control_plane_store.rs",
+    "src/gateway/server/events_wiring.rs",
+    "src/gateway/server/identity_grants.rs",
+    "src/gateway/server/listener.rs",
+    "src/gateway/server/provenance_signer.rs",
+    "src/gateway/server/start_checks.rs",
+    "src/gateway/server/support.rs",
+    "src/gateway/server/task_runtime.rs",
+    "src/gateway/server/tools_changed.rs",
+    "src/gateway/server/warmstart.rs",
+    # MIK-8195 W1: the HTTP transport.
+    "src/transport/http/",
 )
 # Diffing against git's empty tree reads every line of <head> as added.
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
@@ -87,6 +118,10 @@ PREFIXES = (
     "src/personal_accounts/",
     "src/config/account_bindings.rs",
     "src/identity_propagation/",
+    # MIK-8195 W8 (lead ruling 2026-10-10): the stdio read judge. The rest of
+    # src/gateway/outbound/ joins under MIK-8321. Inventory and probe surface
+    # only: critical_path_coverage.py PATHS does not grade it as a path.
+    "src/gateway/outbound/stdio.rs",
 )
 
 FN = re.compile(r'^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?(?:extern\s+(?:"[^"]*"\s+)?)?fn\s+([A-Za-z_]\w*)')

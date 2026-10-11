@@ -264,6 +264,15 @@ impl MockInvoker {
 
 #[async_trait::async_trait]
 impl ToolInvoker for MockInvoker {
+    fn sealed_state_in(
+        &self,
+        _value: &Value,
+        _budget: &mut crate::protocol::continuation::ProbeBudget,
+    ) -> Result<bool, crate::protocol::continuation::ProbeRefusal> {
+        // A test double holds no keyring, so it sealed nothing.
+        Ok(false)
+    }
+
     async fn invoke(&self, _server: &str, tool: &str, _arguments: Value) -> crate::Result<Value> {
         self.responses
             .get(tool)

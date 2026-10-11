@@ -123,7 +123,19 @@ impl MetaMcp {
         caller: &super::MetaMcpCallerContext<'_>,
         session_id: Option<&str>,
     ) -> Option<Error> {
-        let scope = caller.scope();
+        self.withheld_surfaced_in(server, tool_name, caller.scope(), session_id)
+    }
+
+    /// [`Self::withheld_surfaced`] from the caller's [`InvokeScope`] alone, for
+    /// the route stage, which asks before the caller context exists
+    /// (MIK-8326, route-check-parity P3).
+    pub(super) fn withheld_surfaced_in(
+        &self,
+        server: &str,
+        tool_name: &str,
+        scope: InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> Option<Error> {
         // A direct-name call is a dispatch, not a listing: its grant decision
         // is recorded (D3-a); a failed note answers -32005, not -32601.
         let refusal = match self.may_invoke_before_grants(server, tool_name, scope, session_id) {
@@ -147,8 +159,8 @@ impl MetaMcp {
             },
         };
         crate::gateway::authz::audit_refusal(
-            caller.authorizer.transport(),
-            caller.authorizer.caller_name(),
+            scope.authorizer.transport(),
+            scope.authorizer.caller_name(),
             server,
             tool_name,
             &refusal.to_string(),

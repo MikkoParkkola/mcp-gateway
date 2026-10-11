@@ -1,0 +1,2 @@
+src/oauth/storage.rs	drop	1	TempFile::drop removes a temp file best-effort; it decides nothing.
+src/oauth/storage.rs	repair_lock_error	1	Builds the OAuth error for a failed repair-lock acquisition; it decides nothing.

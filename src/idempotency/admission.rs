@@ -133,6 +133,11 @@ enum Status {
         // None is fail-closed process-lifetime retention after clock overflow.
         // Metadata always reserves the maximum u64 width, including this case.
         expires: Option<u64>,
+        /// MIK-8176: the holds of the sealed questions the stored delivery
+        /// carries. It settles before the answer is handed off (an SSE body
+        /// dropped unread still leaves it), so it co-owns their slots; a
+        /// replay adopts them. In memory only, dropped with the entry.
+        holds: crate::gateway::sealed_hold::CarriedHolds,
     },
 }
 
@@ -265,6 +270,13 @@ impl ExecutionAdmission {
         self.state.lock().sealed
     }
 
+    /// Run retention as if every dated entry had expired, for tests whose
+    /// store reads the wall clock (MIK-8176 C1b).
+    #[cfg(test)]
+    pub(crate) fn reclaim_all_dated_for_test(&self) -> usize {
+        self.state.lock().reclaim(u64::MAX)
+    }
+
     /// Call only after current authorization, with a stable verified principal
     /// and sanitized operation/representation descriptors. No backend work occurs
     /// here. A Task lease is only a reservation, never a durable acknowledgement.
@@ -318,8 +330,17 @@ impl ExecutionAdmission {
                 Status::Published { .. } => return Err(Refusal::Mismatch),
                 Status::Active => Admission::InFlight,
                 Status::Completed {
-                    bytes: Some(bytes), ..
-                } => Admission::Replay(Arc::clone(bytes)),
+                    bytes: Some(bytes),
+                    holds,
+                    ..
+                } => {
+                    // MIK-8176: the replay joins the stored delivery's holds
+                    // to this request's scope (admit runs inside it), so a
+                    // delivered replay hands them off. The entry keeps its
+                    // own clones: a replay not delivered releases nothing.
+                    crate::gateway::sealed_hold::adopt(holds.clone());
+                    Admission::Replay(Arc::clone(bytes))
+                }
                 Status::Completed { bytes: None, .. } => Admission::Unavailable,
             });
         }
@@ -367,7 +388,12 @@ impl ExecutionAdmission {
         (self.clock)().map_or(0, |now| self.state.lock().reclaim(now))
     }
 
-    fn finish(&self, identity: &str, generation: u64, bytes: Option<Arc<[u8]>>) -> Settlement {
+    fn finish(
+        &self,
+        identity: &str,
+        generation: u64,
+        (bytes, holds): (Option<Arc<[u8]>>, crate::gateway::sealed_hold::CarriedHolds),
+    ) -> Settlement {
         // An unreadable clock settles the entry undated: it never expires.
         let expires = (self.clock)()
             .ok()
@@ -394,6 +420,12 @@ impl ExecutionAdmission {
         // Slot and metadata were reserved before dispatch. An over-budget or
         // uncertain result needs no extra reservation and can never redispatch.
         state.result_bytes += retained.as_ref().map_or(0, |bytes| bytes.len());
+        // A delivery not retained cannot be replayed, so it owns nothing.
+        let holds = if retained.is_some() {
+            holds
+        } else {
+            crate::gateway::sealed_hold::CarriedHolds::none()
+        };
         state
             .entries
             .get_mut(identity)
@@ -401,6 +433,7 @@ impl ExecutionAdmission {
             .status = Status::Completed {
             bytes: retained,
             expires,
+            holds,
         };
         outcome
     }
@@ -455,7 +488,12 @@ impl Lease {
     pub(crate) fn complete_secured(mut self, result: &Value) -> Settlement {
         let bytes = canonical_json(result).into_bytes();
         let bytes = (bytes.len() <= RESULT_LIMIT).then(|| Arc::from(bytes));
-        let outcome = self.service.finish(&self.identity, self.generation, bytes);
+        // Taken on the request's task, inside its scope, where the result's
+        // holds were registered (MIK-8176).
+        let holds = crate::gateway::sealed_hold::carried(result);
+        let outcome = self
+            .service
+            .finish(&self.identity, self.generation, (bytes, holds));
         self.settled = true;
         outcome
     }
@@ -465,7 +503,11 @@ impl Drop for Lease {
     fn drop(&mut self) {
         if !self.settled {
             if self.dispatched {
-                self.service.finish(&self.identity, self.generation, None);
+                self.service.finish(
+                    &self.identity,
+                    self.generation,
+                    (None, crate::gateway::sealed_hold::CarriedHolds::none()),
+                );
             } else {
                 self.service.abandon(&self.identity, self.generation);
             }

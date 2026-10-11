@@ -90,11 +90,11 @@ case "${PROBE}" in
 esac
 # /livez, not /health: /health fails whenever any backend is down, which is not
 # a reason to call the container unhealthy.
-if ! printf '%s' "${PROBE}" | grep -q '/livez'; then
+if ! grep -q '/livez' <<<"${PROBE}"; then
   echo "::error::${IMAGE}'s HEALTHCHECK does not probe /livez, so leg 1 proves nothing: ${PROBE}"
   exit 1
 fi
-if ! printf '%s' "${PROBE}" | grep -q '39400'; then
+if ! grep -q '39400' <<<"${PROBE}"; then
   echo "::error::${IMAGE}'s HEALTHCHECK does not probe the served port 39400: ${PROBE}"
   exit 1
 fi
@@ -162,7 +162,7 @@ for _ in $(seq 1 30); do
       -H 'Accept: application/json, text/event-stream' \
       -d "${REQUEST}" \
       "http://127.0.0.1:${HOST_PORT}/mcp" 2>/dev/null)" \
-     && printf '%s' "${BODY}" | grep -q '"jsonrpc"'; then
+     && grep -q '"jsonrpc"' <<<"${BODY}"; then
     ANSWER="${BODY}"
     break
   fi

@@ -9,6 +9,26 @@ use serde_json::json;
 
 // ── parse_json_path ─────────────────────────────────────────────────
 
+/// gpt MIK-8323 c1: a part that ends at its `[` panicked on a reversed slice,
+/// and playbook loading now parses every reference. It keeps its key and
+/// gains no index.
+#[test]
+fn parse_an_unclosed_bracket_does_not_panic() {
+    assert_eq!(
+        parse_json_path("a["),
+        vec![JsonPathSegment::Key("a".to_string())]
+    );
+    assert_eq!(
+        parse_json_path("x.["),
+        vec![JsonPathSegment::Key("x".to_string())]
+    );
+    // A multi-byte character ending the part: the old slice cut it in half.
+    assert_eq!(
+        parse_json_path("a[é"),
+        vec![JsonPathSegment::Key("a".to_string())]
+    );
+}
+
 #[test]
 fn parse_simple_key() {
     let path = parse_json_path("name");

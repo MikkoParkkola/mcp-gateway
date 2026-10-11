@@ -42,10 +42,14 @@ pub(super) fn guard_tenants(
     if let Some(rules) = rules {
         config.rules = serde_yaml::from_str(rules).expect("rules parse");
     }
+    // Both carry the keyring the gateway mints continuations with, as the
+    // gateway's own do (#2210, MIK-8276).
+    let keys = meta.continuation();
     let firewall = |config| {
-        Arc::new(crate::security::firewall::Firewall::from_config(
-            config, None,
-        ))
+        Arc::new(
+            crate::security::firewall::Firewall::from_config(config, None)
+                .with_continuations(Arc::clone(&keys)),
+        )
     };
     state.firewall = Some(firewall(config.clone()));
     meta.set_firewall(Some(firewall(config)));

@@ -128,9 +128,7 @@ pub(super) async fn meta_mcp_handler(
     // stream that polls it after this handler returns still has its scope.
     // MIK-8176: every answer is handed off where its bytes leave (the JSON
     // reply, or the stream's answer event), so unsent slots are given back.
-    let policy = crate::gateway::meta_mcp::sealed_hold::HoldPolicy::Release;
     let dispatch = crate::gateway::meta_mcp::sealed_hold::scoped(
-        policy,
         crate::gateway::meta_mcp::grant_audit::slot_http(
             logger.clone(),
             // COLLUDE.1: one relay-receipt collector spans dispatch and finalize.
@@ -652,8 +650,7 @@ async fn meta_mcp_dispatch(
     let router = state.firewall.as_deref();
     #[cfg(not(feature = "firewall"))]
     let router = None;
-    let mut response = (state.meta_mcp).finalize_routed(response, &delivery, router);
-    state.meta_mcp.release_unsent_hold(&mut response).await; // MIK-8131
+    let response = (state.meta_mcp).finalize_routed(response, &delivery, router);
     // Kept for the stored delivery (cloned only when an execution stores it).
     let finalized = execution.as_ref().map(|_| response.clone());
     // MIN.2: judged on the finalized answer; the verdict rides its delivery

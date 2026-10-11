@@ -20,6 +20,7 @@ mod flagged_tools;
 mod input_schema;
 pub(crate) mod log_once;
 mod meta_mcp_config;
+mod pattern_grammar;
 mod remote_provenance_posture;
 mod secret_file;
 mod secret_ref;

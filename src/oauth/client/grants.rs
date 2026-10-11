@@ -288,6 +288,21 @@ impl OAuthClient {
         }
     }
 
+    /// Test-only: the cached token lapses now, in memory and in storage, as
+    /// if its lifetime had passed (MIK-8269): a row that needs a lapsed token
+    /// asks for one instead of sleeping out a short-lived token.
+    #[cfg(test)]
+    pub(crate) async fn age_token_for_test(&self) {
+        let now = crate::clock::unix_secs().expect("the test clock reads after 1970");
+        let aged = {
+            let mut slot = self.current_token.write();
+            let Some(token) = slot.as_mut() else { return };
+            token.expires_at = Some(now);
+            token.clone()
+        };
+        self.save_issued(&aged).await.expect("the aged token saves");
+    }
+
     /// Save a token a login or a client-credentials grant issued, under the
     /// credential's refresh flight (MIK-8018 FU-A.1): never interleaved with
     /// an exchange's save or compare-and-clear of the same record.

@@ -91,8 +91,8 @@ mkdir -p pulled
 "$HELM" template t "pulled/mcp-gateway-$ver.tgz" \
   --set image.registry="$AIR" \
   --set image.repository="mcp-gateway-airgap" \
-  --set image.digest="$IMG_DIGEST" \
-  | tee rendered.yaml | grep -q '^kind: Deployment' \
+  --set image.digest="$IMG_DIGEST" > rendered.yaml \
+  && grep -q '^kind: Deployment' rendered.yaml \
   || { echo "FAIL: air-gapped chart did not render a Deployment" >&2; exit 1; }
 
 # EVERY image ref in the rendered manifest must resolve to the air-gapped

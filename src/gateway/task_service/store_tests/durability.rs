@@ -509,11 +509,16 @@ async fn store_03_a_poisoned_store_refuses_every_entry_point_not_only_reads() {
 
     // Readiness was poisoned because durability became uncertain. A store that
     // refuses reads while still accepting writes would be claiming to know
-    // something it just admitted it does not, so all three entry points refuse.
+    // something it just admitted it does not, so every entry point refuses,
+    // the held read (MIK-8176 D4) included.
     assert_eq!(
         store.get(OWNER, task.id()).unwrap_err(),
         StoreError::Unavailable
     );
+    assert!(matches!(
+        store.get_held(OWNER, task.id()),
+        Err(StoreError::Unavailable)
+    ));
     assert_eq!(
         store
             .create(PreparedTask::for_test(&self::task(), OTHER, 2))

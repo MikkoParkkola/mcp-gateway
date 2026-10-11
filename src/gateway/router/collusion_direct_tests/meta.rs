@@ -26,6 +26,11 @@ async fn meta_fixture_with(
     let st = Arc::get_mut(&mut fx.state).expect("state is unique");
     let ttl = Duration::from_secs(600);
     let mut meta = MetaMcp::with_features(Arc::clone(&st.backends), cache, None, None, ttl);
+    // The replacement gateway mints with the keyring the router's firewall
+    // exempts, as startup pairs them (#2210, MIK-8276).
+    if let Some(firewall) = &st.firewall {
+        meta.share_keyring_with_for_test(firewall);
+    }
     meta.set_firewall(st.firewall.clone());
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
     st.meta_mcp = Arc::new(configure(meta));

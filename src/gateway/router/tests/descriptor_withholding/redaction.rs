@@ -60,16 +60,19 @@ async fn t10_the_direct_route_judges_the_raw_descriptor() {
 }
 
 fn redacting_firewall() -> Arc<Firewall> {
-    Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_responses: true,
-            scan_requests: false,
-            credential_redaction: true,
-            ..FirewallConfig::default()
-        },
-        None,
-    ))
+    Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_responses: true,
+                scan_requests: false,
+                credential_redaction: true,
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .keyed_for_test(),
+    )
 }
 
 /// T10b: a tool pinned by the digest of its raw description is served on the
@@ -97,22 +100,25 @@ async fn t10b_a_pinned_tool_survives_redaction_on_the_direct_route() {
     // `id_rsa` is a blocking response finding, and a blocked list is refused
     // whole (#2349). An operator rule that downgrades listings to Warn keeps
     // the redacted list served, which is the case this cell is about.
-    let warn_lists = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_responses: true,
-            scan_requests: false,
-            credential_redaction: true,
-            rules: vec![crate::security::firewall::FirewallRule {
-                tool_match: "tools/list".to_string(),
-                action: crate::security::firewall::FirewallAction::Warn,
-                reason: None,
-                scan: Vec::new(),
-            }],
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+    let warn_lists = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_responses: true,
+                scan_requests: false,
+                credential_redaction: true,
+                rules: vec![crate::security::firewall::FirewallRule {
+                    tool_match: "tools/list".to_string(),
+                    action: crate::security::firewall::FirewallAction::Warn,
+                    reason: None,
+                    scan: Vec::new(),
+                }],
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .keyed_for_test(),
+    );
     let e = build(config, vec![tool(PINNED, TEXT)], Some(warn_lists)).await;
     let (_, listed) = post(&e.router, "/mcp/evil", None, "tools/list", json!({})).await;
     assert!(

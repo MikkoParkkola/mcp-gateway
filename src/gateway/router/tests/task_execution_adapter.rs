@@ -82,6 +82,8 @@ mod grant_audit_order;
 mod grant_decision_tasks;
 mod grant_decisions;
 mod grant_slot_release;
+pub(crate) mod submit_authz;
+mod submit_authz_audit;
 
 mod admission_identity;
 /// MIK-7570.ATTEST.1 part 3: surfaced-tool tasks carry their attestation token.
@@ -116,6 +118,7 @@ mod settlement;
 #[cfg(feature = "firewall")]
 mod settlement_record;
 mod signing_joint;
+mod slot_release_tasks;
 /// `MIK-7993.STORE.1`/`.2`: a task row records the members the gateway wrote.
 #[cfg(feature = "firewall")]
 mod stored_gateway_writes;

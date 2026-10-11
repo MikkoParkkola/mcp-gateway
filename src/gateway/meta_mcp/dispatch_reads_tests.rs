@@ -16,23 +16,27 @@ use crate::security::hash_argument;
 use crate::security::tenant_reads::with_read_scope;
 
 fn firewall() -> Arc<Firewall> {
-    Arc::new(Firewall::from_config(
-        FirewallConfig {
-            tenant_guard: TenantGuardConfig {
-                enabled: false,
-                arg_keys: vec!["customer_id".to_string()],
-                cross_tenant_reads: CrossTenantReads::Observe,
-                ..TenantGuardConfig::default()
+    Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                tenant_guard: TenantGuardConfig {
+                    enabled: false,
+                    arg_keys: vec!["customer_id".to_string()],
+                    cross_tenant_reads: CrossTenantReads::Observe,
+                    ..TenantGuardConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ))
+            None,
+        )
+        .keyed_for_test(),
+    )
 }
 
 fn meta(fw: &Arc<Firewall>, action_mode: bool) -> MetaMcp {
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
     meta.set_firewall(Some(Arc::clone(fw)));
+    meta.share_keyring_with_for_test(fw);
     if action_mode {
         meta.enable_response_inspection_action_mode();
     }
@@ -95,6 +99,7 @@ async fn inner_invocation_arguments_are_a_read() {
     let (registry, _calls) = counted_backend("alpha");
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&fw)));
+    meta.share_keyring_with_for_test(&fw);
     let args =
         json!({ "server": "alpha", "tool": "read", "arguments": { "customer_id": "cust-b" } });
     let caller = ctx(&AllowAll);

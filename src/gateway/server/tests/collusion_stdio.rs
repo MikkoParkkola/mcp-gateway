@@ -123,20 +123,24 @@ async fn stdio_operator_is_one_principal() {
         read: Arc::new(parking_lot::Mutex::new(PROSE.to_string())),
     }));
     assert!(registry.register(backend));
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                sources: vec!["alpha:read".to_string()],
-                ..CollusionConfig::default()
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources: vec!["alpha:read".to_string()],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+            None,
+        )
+        .keyed_for_test(),
+    );
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    meta.share_keyring_with_for_test(&firewall);
     let meta = Arc::new(meta);
 
     // An HTTP caller was delivered both texts from `alpha:read`.
@@ -185,25 +189,29 @@ fn judged_stdio(
         read: Arc::clone(&read),
     }));
     assert!(registry.register(backend));
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                sources: vec!["alpha:*".to_string()],
-                ..CollusionConfig::default()
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources: vec!["alpha:*".to_string()],
+                    ..CollusionConfig::default()
+                },
+                tenant_guard: TenantGuardConfig {
+                    arg_keys: vec!["customer_id".to_string()],
+                    cross_tenant_reads: CrossTenantReads::Block,
+                    ..TenantGuardConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            tenant_guard: TenantGuardConfig {
-                arg_keys: vec!["customer_id".to_string()],
-                cross_tenant_reads: CrossTenantReads::Block,
-                ..TenantGuardConfig::default()
-            },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+            None,
+        )
+        .keyed_for_test(),
+    );
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    meta.share_keyring_with_for_test(&firewall);
     if let Some(log) = audit {
         meta.enable_transparency_log(log);
     }
@@ -255,6 +263,7 @@ async fn staged_request(
         handshake_capabilities: crate::protocol::meta::Declared::NONE,
         tasks: None,
         modern: false,
+        sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
     };
     let ((answer, staged), hidden) = crate::gateway::outbound::read_scoped(
         reads.guard(),
@@ -348,7 +357,10 @@ async fn batch_read_delivers(
         &policy,
         &mtls,
         batch,
-        "stdio-7800",
+        (
+            "stdio-7800",
+            crate::gateway::server::stdio_single::InputSanitizing::Off,
+        ),
         &StdioTelemetry::default(),
         reads,
     )
@@ -411,7 +423,10 @@ async fn a_batch_item_sees_the_receipt_of_an_earlier_item() {
         &policy,
         &mtls,
         batch,
-        "stdio-7800",
+        (
+            "stdio-7800",
+            crate::gateway::server::stdio_single::InputSanitizing::Off,
+        ),
         &StdioTelemetry::default(),
         &reads,
     )
@@ -621,6 +636,7 @@ async fn stdio_gateway_built_refusal_is_sent_as_written() {
         handshake_capabilities: crate::protocol::meta::Declared::NONE,
         tasks: None,
         modern: false,
+        sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
     };
     let ((answer, staged), hidden) = crate::gateway::outbound::read_scoped(
         reads.guard(),

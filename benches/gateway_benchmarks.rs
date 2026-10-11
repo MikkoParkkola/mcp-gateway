@@ -709,7 +709,18 @@ fn bench_continuation(c: &mut Criterion) {
     runtime.block_on(async {
         for i in 0..4096_u64 {
             table
-                .hold("bench-backend", NOW + 3_600 + i, NOW)
+                .hold(
+                    "bench-backend",
+                    // A caller per hold: the bench fills the table, not one
+                    // caller's share (MIK-8293).
+                    &mcp_gateway::protocol::continuation::QuotaKey::new(
+                        mcp_gateway::protocol::continuation::QuotaSource::KeyName(&format!(
+                            "bench-{i}"
+                        )),
+                    ),
+                    NOW + 3_600 + i,
+                    NOW,
+                )
                 .await
                 .expect("capacity");
         }

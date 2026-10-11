@@ -166,6 +166,18 @@ impl ExclusiveFileLock {
         }
     }
 
+    /// Wait for the lock by polling [`Self::try_lease`] every `poll`, never by
+    /// blocking a thread: a dropped (cancelled or timed-out) caller leaves no
+    /// thread waiting behind it. The caller bounds the wait.
+    pub(crate) async fn lease(lock_path: &Path, poll: std::time::Duration) -> io::Result<Self> {
+        loop {
+            if let Some(lock) = Self::try_lease(lock_path)? {
+                return Ok(lock);
+            }
+            tokio::time::sleep(poll).await;
+        }
+    }
+
     /// Block until an exclusive lock on `lock_path` is acquired, creating the
     /// sidecar file (owner-only, `0600` on unix) if it does not exist yet.
     pub(crate) fn acquire(lock_path: &Path) -> io::Result<Self> {

@@ -136,6 +136,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "writability probe",
     ),
     (
+        "src/gateway/meta_mcp/sealed_hold_guards.rs",
+        "cfg(test) source scanner reading the crate's own src/gateway files (MIK-8176 A1); no secret",
+    ),
+    (
         "src/gateway/task_service/store_unix.rs",
         "task records: O_NOFOLLOW open, fstat mode 0600 checked (RECORD_MODE)",
     ),

@@ -33,6 +33,8 @@ mod admin_exposure;
 mod backend_lists;
 #[path = "tests/code_mode.rs"]
 mod code_mode;
+#[path = "tests/confirmation_binding.rs"]
+mod confirmation_binding;
 #[path = "tests/enforced_transform.rs"]
 mod enforced_transform;
 #[path = "tests/input_requests.rs"]
@@ -49,6 +51,8 @@ mod profiles;
 mod response_cache;
 #[path = "tests/search_dispatch.rs"]
 mod search_dispatch;
+#[path = "tests/slot_quota_confirmation.rs"]
+mod slot_quota_confirmation;
 #[path = "tests/surfaced_tools.rs"]
 mod surfaced_tools;
 

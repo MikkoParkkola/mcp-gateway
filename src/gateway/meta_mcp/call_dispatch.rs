@@ -224,6 +224,9 @@ impl MetaMcp {
         if let Err(error) = caller.retry.solicited_input_responses() {
             return error_response_preserving_status(id, &error);
         }
+        if let Err(error) = caller.retry.refuse_on_playbook_run(tool_name) {
+            return error_response_preserving_status(id, &error);
+        }
 
         // Admin gate for the meta-tools that change the gateway for every
         // session, enforced HERE at the dispatcher.
@@ -312,33 +315,44 @@ impl MetaMcp {
         );
         let backend = task_backend_name(self, tool_name, &arguments);
         let executor = Arc::clone(&intent.executor);
-        // #2450: a repeat is answered from the stored task, so the policy a
-        // sync replay passes runs first. A fresh task is checked by its worker.
-        let policy_arguments = arguments.clone();
+        // Every task passed the synchronous call's policy at admission
+        // (`admit_meta_sync`, MIK-8315); its worker checks again at dispatch.
+        // Only a `gateway_invoke` envelope's token is kept back from the move.
+        let invoke_attestation = (tool_name == "gateway_invoke")
+            .then(|| {
+                arguments
+                    .get("attestation")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .flatten();
         let call = crate::gateway::task_service::TaskCall {
             tool: tool_name.to_owned(),
             arguments,
         };
         match executor.begin(intent, task, backend, call).await {
-            Ok(BeginOutcome::Existing(stored)) => {
-                // The request's own policy, then the calls that produced the
-                // stored result (R3.2): both must hold before it goes out.
-                if let Err(error) = self.check_task_admission_policy(
-                    caller,
-                    tool_name,
-                    &policy_arguments,
-                    session_id,
-                ) {
-                    return error_response_preserving_status(id, &error);
-                }
+            Ok(BeginOutcome::Existing(held)) => {
+                // MIK-8176 N1: delivered into this request's scope first, so
+                // its holds are adopted before any decision; a refusal below
+                // only drops this request's clones, and the row keeps the slot.
+                let stored = held.deliver(super::sealed_hold::HoldSink::Scope);
+                // The calls that produced the stored result (R3.2) must hold
+                // before it goes out; the request's own policy ran at admission.
                 // The token rides where the current request's own check reads it.
                 let attestation = if tool_name == "gateway_invoke" {
-                    policy_arguments.get("attestation").and_then(Value::as_str)
+                    invoke_attestation.as_deref()
                 } else {
                     caller.retry.attestation.as_deref()
                 };
                 self.refuse_stored_delivery(&id, &stored, attestation, session_id, caller)
-                    .unwrap_or_else(|| BeginOutcome::Existing(stored).into_response(id))
+                    .unwrap_or_else(|| {
+                        // The holds already sit in this request's scope.
+                        let held = super::sealed_hold::Held::new(
+                            stored,
+                            super::sealed_hold::CarriedHolds::none(),
+                        );
+                        BeginOutcome::Existing(held).into_response(id)
+                    })
             }
             Ok(outcome) => outcome.into_response(id),
             Err(crate::gateway::task_service::ServiceError::AuditUnavailable) => {

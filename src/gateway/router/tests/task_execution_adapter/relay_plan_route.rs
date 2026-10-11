@@ -43,23 +43,26 @@ async fn plan_state_with(
     mock: &Arc<MockBackend>,
     auth: &AuthConfig,
 ) -> (Arc<AppState>, tempfile::TempDir) {
-    let router = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_responses: true,
-            scan_requests: false,
-            credential_redaction: true,
-            // Allowed, so the credential is redacted rather than the answer refused.
-            rules: vec![FirewallRule {
-                tool_match: "*".to_string(),
-                action: FirewallAction::Allow,
-                reason: None,
-                scan: Vec::new(),
-            }],
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+    let router = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_responses: true,
+                scan_requests: false,
+                credential_redaction: true,
+                // Allowed, so the credential is redacted rather than the answer refused.
+                rules: vec![FirewallRule {
+                    tool_match: "*".to_string(),
+                    action: FirewallAction::Allow,
+                    reason: None,
+                    scan: Vec::new(),
+                }],
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .keyed_for_test(),
+    );
     // Every k-gram kept: any 48-char run holds a fingerprint under any hash
     // key, so with one shared fingerprint a relay of the URL or the advice
     // is always refused if receipted (MIK-8083).
@@ -76,6 +79,7 @@ async fn plan_state_with(
             },
             None,
         )
+        .with_continuations(router.continuations_for_test().expect("keyed"))
         .keeping_every_kgram(),
     );
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
@@ -83,6 +87,7 @@ async fn plan_state_with(
         None,
         Some(router),
         |mut meta| {
+            meta.share_keyring_with_for_test(&relay);
             meta.set_firewall(Some(relay));
             meta
         },

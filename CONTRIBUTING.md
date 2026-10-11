@@ -409,6 +409,9 @@ We want your PR to merge fast. Here is what helps.
   ```
 
   To point an older item at a pending one, write `> Superseded in part by <Title>:`.
+  The marker's clauses, with examples that pass and fail, are in
+  `scripts/release/upgrading-startup-grammar.json`, which the fragment check and the
+  guide test both read; each one's `parse_marker` applies the rules.
   `python3 scripts/release/upgrading_fragments.py check` validates the fragments.
 - [ ] **PR description** answers: what problem this solves, the shape of the fix, anything you are unsure about.
 - [ ] **Prefer a config struct** over 5+ function arguments. Keeps future extensions clean.

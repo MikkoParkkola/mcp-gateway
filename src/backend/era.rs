@@ -35,8 +35,15 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 ///
 /// Every failure is [`ProbeOutcome::NoAnswer`] rather than an error, so a probe
 /// can never fail a start: the era is an optimisation, the connection is not.
+///
+/// Never interactive (MIK-8269): a token that lapsed before the probe would
+/// otherwise lead a login, open the browser, and end it `Cancelled` when this
+/// bound drops the request, failing the start behind it. Meeting a lapsed
+/// token, the probe reads as silence instead.
 async fn probe(transport: &Arc<dyn Transport>, timeout: Duration) -> ProbeOutcome {
-    match tokio::time::timeout(timeout, transport.request(DISCOVER_METHOD, None)).await {
+    let request =
+        crate::oauth::login_gate::non_interactive(transport.request(DISCOVER_METHOD, None));
+    match tokio::time::timeout(timeout, request).await {
         Ok(Ok(response)) => outcome_of(response),
         Ok(Err(_)) | Err(_) => ProbeOutcome::NoAnswer,
     }

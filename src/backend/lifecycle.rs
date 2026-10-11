@@ -115,9 +115,17 @@ impl Backend {
             #[cfg(test)]
             publish_gate: parking_lot::Mutex::new(None),
             #[cfg(test)]
+            restart_take_gate: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            probe_error_gate: parking_lot::Mutex::new(None),
+            #[cfg(test)]
             rebuilds_attempted: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
+            last_oauth_client: parking_lot::Mutex::new(None),
+            #[cfg(test)]
             between_install_and_write: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            between_listen_and_transport: parking_lot::Mutex::new(None),
             #[cfg(test)]
             era_at_publish: parking_lot::Mutex::new(Vec::new()),
             #[cfg(test)]
@@ -140,6 +148,15 @@ impl Backend {
     pub async fn ensure_started(&self) -> Result<()> {
         self.ensure_entry_started(&PoolKey::Shared).await?;
         Ok(())
+    }
+
+    /// Wait until no start of the shared slot is in flight; nothing is held
+    /// after (MIK-8269). For one-shot upkeep that a non-interactive scope
+    /// would otherwise refuse while a start holds the slot, often only to
+    /// reconnect with a stored token. Waiting never begins or joins a login:
+    /// the start's own login runs in its own task.
+    pub(crate) async fn start_settled(&self) {
+        drop(self.shared_entry().start_lock.lock().await);
     }
 
     /// Start the pooled entry for `key` if needed; return its live transport.
@@ -472,6 +489,10 @@ impl Backend {
                 if matches!(key, PoolKey::PerUser { .. }) {
                     transport.mark_single_tenant();
                 }
+                #[cfg(test)]
+                {
+                    *self.last_oauth_client.lock() = transport.oauth_client_for_test();
+                }
                 // RFC-0061 §2.4 startup: ask first, handshake only if the
                 // answer is not modern. Attached before anything reaches the
                 // wire, deliberately — the probe below is itself a request, and
@@ -606,7 +627,7 @@ impl Backend {
 /// Wait at the test gate held in `slot`, when one is set: signal `reached`,
 /// then wait for `release`.
 #[cfg(test)]
-async fn hold_at(slot: &parking_lot::Mutex<Option<Arc<super::MarkWindowGate>>>) {
+pub(super) async fn hold_at(slot: &parking_lot::Mutex<Option<Arc<super::MarkWindowGate>>>) {
     let gate = slot.lock().clone();
     if let Some(gate) = gate {
         gate.reached.notify_one();

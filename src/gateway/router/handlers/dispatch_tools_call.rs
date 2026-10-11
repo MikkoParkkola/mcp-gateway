@@ -15,12 +15,14 @@ use tracing::warn;
 use super::dispatch_intake::Intake;
 use super::tasks;
 use crate::gateway::meta_mcp::admission::SyncLease;
+use crate::gateway::meta_mcp::invoke::RouteRefusal;
 use crate::gateway::meta_mcp::signing::SigningInvocationContext;
-use crate::gateway::meta_mcp::{InvokeScope, MetaMcpCallerContext};
+use crate::gateway::meta_mcp::{
+    InvokeScope, MetaMcpCallerContext, error_response_preserving_status,
+};
 use crate::gateway::router::AppState;
 use crate::gateway::router::authorization::{
-    RouterAuthorizer, authorize_tool_target, backend_tool_targets_for_call, is_admin_meta_tool,
-    refusal_principal, require_admin_tool_access,
+    RouterAuthorizer, backend_tool_targets_for_call, is_admin_meta_tool, require_admin_tool_access,
 };
 use crate::gateway::router::helpers::{
     build_error_response, build_response, extract_tools_call_params_ref, merge_client_meta_ref,
@@ -162,48 +164,39 @@ pub(super) async fn tools_call(
         &backend_targets,
     );
     for target in &backend_targets {
-        // A surfaced name this caller could not invoke is answered by
-        // the meta layer exactly as an unknown name is (`-32601`), and
-        // audited there: a 403 here would confirm the backend (A3).
-        if state.meta_mcp.surfaced_tool_server(tool_name).is_some()
-            && state
-                .meta_mcp
-                .may_invoke(
-                    &target.server,
-                    &target.tool,
-                    invoke_scope,
-                    Some(session_id.as_str()),
-                )
-                .is_err()
-        {
-            continue;
-        }
-        if let Err(e) = authorize_tool_target(
-            state.as_ref(),
-            client.as_ref(),
-            oauth_agent_identity.as_ref(),
-            cert_identity.as_ref(),
-            target.as_target(),
+        // The one route-stage authorize /mcp and stdio share (P3). A surfaced
+        // name this caller may not invoke is answered as a name that matches
+        // no tool, through the tail exactly as the meta layer answers one, so
+        // neither the firewall, X14 nor admission sees it (MIK-8326, A3).
+        let checked = target.as_target();
+        match state.meta_mcp.authorize_route_target(
+            invoke_scope,
+            Some(session_id.as_str()),
+            tool_name,
+            (checked.server, checked.tool),
+            checked.arguments,
         ) {
-            // This gate returns without entering the meta layer, so the
-            // chokepoint's emitter never fires for a shape the router
-            // covers. Both gates call the one helper, or HTTP scope
-            // denials — the ones most worth seeing — go unrecorded.
-            crate::gateway::authz::audit_refusal(
-                crate::gateway::authz::Transport::Http,
-                refusal_principal(
-                    client.as_ref(),
-                    oauth_agent_identity.as_ref(),
-                    cert_identity.as_ref(),
-                )
-                .as_deref(),
-                &target.server,
-                &target.tool,
-                &e.message,
-            );
-            return Err(refused
-                .answer(state, target.as_target(), id, e.code, e.message, e.status)
-                .await);
+            Ok(()) => {}
+            Err(RouteRefusal::Withheld(absent)) => {
+                return Ok(error_response_preserving_status(id, &absent));
+            }
+            Err(RouteRefusal::Refused(crate::Error::Forbidden {
+                code,
+                status,
+                message,
+            })) => {
+                // Answered here, not in the meta layer, so the refusal keeps
+                // the route's own answer (its HTTP status included).
+                let status = StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN);
+                return Err(refused
+                    .answer(state, target.as_target(), id, code, message, status)
+                    .await);
+            }
+            // Any other refusal (an unwritable grant record) is answered as
+            // the meta layer answers it.
+            Err(RouteRefusal::Refused(other)) => {
+                return Ok(error_response_preserving_status(id, &other));
+            }
         }
 
         // Firewall: pre-invocation request scan
@@ -245,24 +238,7 @@ pub(super) async fn tools_call(
                     "Firewall: request warning"
                 );
             }
-            if !verdict.allowed {
-                // OWASP ASI10 (Rogue Agents): anomaly blocks use -32002;
-                // all other firewall blocks use -32600 (invalid request).
-                let (code, reason) = if verdict.is_asi10_block() {
-                    let desc = verdict.findings.first().map_or(
-                        "Anomaly detection triggered: unusual tool sequence blocked",
-                        |f| f.description.as_str(),
-                    );
-                    (-32002_i32, format!("Anomaly detection blocked: {desc}"))
-                } else {
-                    let desc = verdict
-                        .findings
-                        .first()
-                        .map_or("Security firewall blocked this request", |f| {
-                            f.description.as_str()
-                        });
-                    (-32600_i32, format!("Firewall blocked: {desc}"))
-                };
+            if let Some((code, reason)) = verdict.request_refusal() {
                 return Err(refused
                     .answer(state, target, id, code, reason, StatusCode::BAD_REQUEST)
                     .await);
@@ -289,62 +265,6 @@ pub(super) async fn tools_call(
     // beside the proven principal, never instead of it.
     let agent_declared = agent_identity.declared_agent_label();
 
-    // The modern destructive gate (X14). Every authorization, admin and
-    // firewall check above has already run, and nothing below has yet
-    // acted: a challenge mints no task, reserves no idempotency key and
-    // reaches no backend, and neither does a refusal.
-    //
-    // Awaited into its own binding before the match, so the borrow of
-    // `retry` ends with the statement and the `NotRequired` arm can hand
-    // the same fields straight back.
-    let confirmation = state
-        .meta_mcp
-        .confirm_destructive_task(&crate::gateway::meta_mcp::TaskConfirmationRequest {
-            id: id.clone(),
-            // The outer name the client called, never a wrapper's
-            // target, and the same `arguments` binding that reaches
-            // `task_intent_for_call` — that value is both the admission
-            // operation's `arguments` and its representation, so the
-            // grant must digest what admission will key on.
-            tool_name,
-            arguments: &arguments,
-            task: params.and_then(|p| p.get("task")),
-            retry: &retry,
-            verified_identity: verified_identity.as_ref(),
-            input_capabilities: declared_capabilities,
-            is_modern,
-            admission: state.task_executor.service.admission(),
-        })
-        .await;
-    let retry = match confirmation {
-        crate::gateway::meta_mcp::TaskConfirmation::NotRequired => retry,
-        // Confirmed: dispatch the original call, with the confirmation
-        // metadata removed.
-        crate::gateway::meta_mcp::TaskConfirmation::Granted(granted) => granted,
-        // The challenge, or the refusal of a grant that does not
-        // authorise this call. Answered here because there is nothing
-        // below to run.
-        crate::gateway::meta_mcp::TaskConfirmation::Answer(answer) => {
-            // Out through the tail, not around it. A challenge is a
-            // client-visible result like any other: it needs this
-            // revision's metadata shaped onto it *before* the response
-            // security finalizer runs, and it needs that finalizer —
-            // whose `PreserveInputRequired` policy is what leaves the
-            // challenge's own discriminator alone, and whose signing
-            // step is the only one entitled to sign what goes out.
-            // Serialization then follows the request's own era, so a
-            // legacy caller still gets its session header. The status
-            // is re-derived there from this same response, by the same
-            // `refusal_status` call, so a refusal keeps its code.
-            //
-            // Nothing has been admitted at this point — no lease, no
-            // task, no backend — so the tail's execution settlement has
-            // nothing to settle, which is the honest state for a call
-            // that was stopped at the gate.
-            return Ok(*answer);
-        }
-    };
-
     // Destructive-action confirmation is decided at the dispatcher,
     // for every transport. What this edge owns is the one fact the
     // dispatcher cannot see: which era the request was written
@@ -361,77 +281,13 @@ pub(super) async fn tools_call(
         crate::gateway::destructive_confirmation::ConfirmationPolicy::for_legacy()
     };
 
-    // Authorization is handed to the dispatch chokepoint rather than
-    // applied here, so the shapes an edge cannot see — a playbook
-    // step, whose targets are not in the request — face it too. The
-    // authorizer is the one derived above, before the method match.
-
-    // The background-task intent, or a refusal, or nothing at all.
-    //
-    // Built here — after the authorization loop, the firewall scan and
-    // the admin pre-check, and before the dispatch chokepoint that owns
-    // the destructive-confirmation gate — because a handle must not be
-    // minted for a call that is about to be refused. Only a request that
-    // actually carries a `task` member is offered to the builder: an
-    // ordinary `tools/call` must reach the synchronous path unchanged,
-    // and the builder's own refusals (no verified owner, no idempotency
-    // key) are conditions on asking for a task, not on calling a tool.
-    let task_intent = if params.is_some_and(|p| p.get("task").is_some()) {
-        match tasks::task_intent_for_call(
-            state,
-            id.clone(),
-            tasks::TaskIntentRequest {
-                tool_name,
-                arguments: &arguments,
-                is_modern,
-                retry: &retry,
-                verified_identity: verified_identity.as_ref(),
-                owner,
-                client: client.as_ref(),
-                oauth_agent_identity: oauth_agent_identity.as_ref(),
-                cert_identity: cert_identity.as_ref(),
-                api_key_name,
-                agent_id,
-                agent_declared,
-                grant_subject: grant_subject.clone(),
-                is_admin: client.as_ref().is_some_and(|c| c.admin),
-                input_capabilities: declared_capabilities,
-                session_id: Some(session_id.as_str()),
-                protocol_revision: protocol_revision_owned.as_deref(),
-                surface_request,
-            },
-        ) {
-            Ok(intent) => intent,
-            Err(refusal) => {
-                return Err(build_response(
-                    *refusal,
-                    session_id,
-                    StatusCode::BAD_REQUEST,
-                ));
-            }
-        }
-    } else {
-        None
-    };
-
-    // One request owns admission through dispatch and secured delivery.
-    // A route change may conflict on representation, never create a
-    // second owner for the same verified principal and explicit key.
-    // The A/B arm and the prefetch hints key on the caller (G4). Its
-    // reclaim deadline is renewed here, in every build, because those
-    // entries have no session end to reclaim them.
-    if let Some(ref lifecycle) = state.session_lifecycle
-        && !caller_key.is_empty()
-    {
-        lifecycle.track(
-            caller_key.clone(),
-            session_lifecycle::now_unix() + session_lifecycle::IDLE_TTL.as_secs(),
-        );
-    }
+    // The caller, built before the task gate so the gate binds its grant
+    // through this caller's own `principal_source` — the one binding every
+    // continuation reads (MIK-8137) — rather than a second spelling of
+    // who it is. Its task intent and final retry fields are filled in
+    // below, once the gate has decided.
     let mut caller = MetaMcpCallerContext {
-        // Built above, after every gate that can still refuse, and only
-        // carried here: the dispatch chokepoint is what hands it over.
-        task: task_intent,
+        task: None,
         execution: None,
         signing: None,
         is_modern,
@@ -482,6 +338,141 @@ pub(super) async fn tools_call(
             }
         },
     };
+
+    // The modern destructive gate (X14). Every authorization, admin and
+    // firewall check above has already run, and nothing below has yet
+    // acted: a challenge mints no task, reserves no idempotency key and
+    // reaches no backend, and neither does a refusal.
+    let confirmation = state
+        .meta_mcp
+        .confirm_destructive_task(&crate::gateway::meta_mcp::TaskConfirmationRequest {
+            id: id.clone(),
+            // The outer name the client called, never a wrapper's
+            // target, and the same `arguments` binding that reaches
+            // `task_intent_for_call` — that value is both the admission
+            // operation's `arguments` and its representation, so the
+            // grant must digest what admission will key on.
+            tool_name,
+            arguments: &arguments,
+            task: params.and_then(|p| p.get("task")),
+            retry: &retry,
+            verified_identity: verified_identity.as_ref(),
+            principal: crate::protocol::mrtr::source_fingerprint(caller.principal_source(None)),
+            quota: caller.quota_key(),
+            // The owner `task_intent_for_call` admits under below.
+            owner,
+            // A surfaced name this caller may not invoke is not classified
+            // (MIK-8326).
+            scope: invoke_scope,
+            session_id: Some(session_id.as_str()),
+            input_capabilities: declared_capabilities,
+            is_modern,
+            admission: state.task_executor.service.admission(),
+        })
+        .await;
+    let granted = match confirmation {
+        crate::gateway::meta_mcp::TaskConfirmation::NotRequired => None,
+        // Confirmed: dispatch the original call, with the confirmation
+        // metadata removed.
+        crate::gateway::meta_mcp::TaskConfirmation::Granted(granted) => Some(granted),
+        // The challenge, or the refusal of a grant that does not
+        // authorise this call. Answered here because there is nothing
+        // below to run.
+        crate::gateway::meta_mcp::TaskConfirmation::Answer(answer) => {
+            // Out through the tail, not around it. A challenge is a
+            // client-visible result like any other: it needs this
+            // revision's metadata shaped onto it *before* the response
+            // security finalizer runs, and it needs that finalizer —
+            // whose `PreserveInputRequired` policy is what leaves the
+            // challenge's own discriminator alone, and whose signing
+            // step is the only one entitled to sign what goes out.
+            // Serialization then follows the request's own era, so a
+            // legacy caller still gets its session header. The status
+            // is re-derived there from this same response, by the same
+            // `refusal_status` call, so a refusal keeps its code.
+            //
+            // Nothing has been admitted at this point — no lease, no
+            // task, no backend — so the tail's execution settlement has
+            // nothing to settle, which is the honest state for a call
+            // that was stopped at the gate.
+            return Ok(*answer);
+        }
+    };
+    // The fields the call goes on with: the grant's cleared copy when the
+    // gate confirmed it, else the request's own.
+    let retry = granted.as_ref().unwrap_or(&retry);
+    caller.retry = retry;
+
+    // Authorization is handed to the dispatch chokepoint rather than
+    // applied here, so the shapes an edge cannot see — a playbook
+    // step, whose targets are not in the request — face it too. The
+    // authorizer is the one derived above, before the method match.
+
+    // The background-task intent, or a refusal, or nothing at all.
+    //
+    // Built here — after the authorization loop, the firewall scan and
+    // the admin pre-check, and before the dispatch chokepoint that owns
+    // the destructive-confirmation gate — because a handle must not be
+    // minted for a call that is about to be refused. Only a request that
+    // actually carries a `task` member is offered to the builder: an
+    // ordinary `tools/call` must reach the synchronous path unchanged,
+    // and the builder's own refusals (no verified owner, no idempotency
+    // key) are conditions on asking for a task, not on calling a tool.
+    let task_intent = if params.is_some_and(|p| p.get("task").is_some()) {
+        match tasks::task_intent_for_call(
+            state,
+            id.clone(),
+            tasks::TaskIntentRequest {
+                tool_name,
+                arguments: &arguments,
+                is_modern,
+                retry,
+                verified_identity: verified_identity.as_ref(),
+                owner,
+                client: client.as_ref(),
+                oauth_agent_identity: oauth_agent_identity.as_ref(),
+                cert_identity: cert_identity.as_ref(),
+                api_key_name,
+                agent_id,
+                agent_declared,
+                grant_subject: grant_subject.clone(),
+                is_admin: client.as_ref().is_some_and(|c| c.admin),
+                input_capabilities: declared_capabilities,
+                session_id: Some(session_id.as_str()),
+                protocol_revision: protocol_revision_owned.as_deref(),
+                surface_request,
+            },
+        ) {
+            Ok(intent) => intent,
+            Err(refusal) => {
+                return Err(build_response(
+                    *refusal,
+                    session_id,
+                    StatusCode::BAD_REQUEST,
+                ));
+            }
+        }
+    } else {
+        None
+    };
+
+    // One request owns admission through dispatch and secured delivery.
+    // A route change may conflict on representation, never create a
+    // second owner for the same verified principal and explicit key.
+    // The A/B arm and the prefetch hints key on the caller (G4). Its
+    // reclaim deadline is renewed here, in every build, because those
+    // entries have no session end to reclaim them.
+    if let Some(ref lifecycle) = state.session_lifecycle
+        && !caller_key.is_empty()
+    {
+        lifecycle.track(
+            caller_key.clone(),
+            session_lifecycle::now_unix() + session_lifecycle::IDLE_TTL.as_secs(),
+        );
+    }
+    // Built above, after every gate that can still refuse, and only
+    // carried here: the dispatch chokepoint is what hands it over.
+    caller.task = task_intent;
     if let Some(context) = signing_context.as_mut()
         && let Err(error) = state.meta_mcp.prepare_signing_for_call(
             context,

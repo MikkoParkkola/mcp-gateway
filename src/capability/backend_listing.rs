@@ -92,6 +92,8 @@ impl CapabilityBackend {
         registry: Arc<BackendRegistry>,
         mut shutdown: tokio::sync::broadcast::Receiver<()>,
     ) {
+        #[cfg(test)]
+        LISTING_WATCHES.with(|started| started.set(started.get() + 1));
         let backend = Arc::clone(self);
         // The baseline an expiry is compared with: what is listed now.
         backend
@@ -122,6 +124,18 @@ impl CapabilityBackend {
             }
         });
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Listing watches started on this thread (MIK-8278 T3 wiring row).
+    static LISTING_WATCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Listing watches started on this thread so far.
+#[cfg(test)]
+pub(crate) fn listing_watches_started() -> usize {
+    LISTING_WATCHES.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]

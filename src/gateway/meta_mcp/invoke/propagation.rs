@@ -387,4 +387,67 @@ impl MetaMcp {
             AccountCredential::Prepared(prepared) => Ok(Some(prepared)),
         }
     }
+
+    /// The credentials a call to `server:tool` dispatches under, and the one
+    /// dispatch binding derived from them.
+    ///
+    /// One function, called by the dispatch itself and by a chain resume that
+    /// must open its handle under the binding the stopped step minted with
+    /// (MIK-8137): two derivations of "which binding is this call under" is
+    /// how a mint and its redemption stop agreeing.
+    ///
+    /// Resolved before any cache is consulted (MIK-6734 / ADR-007): the MCP
+    /// route's per-user propagation credential, fail-closed for a required
+    /// backend, then the capability route's account credential, which comes
+    /// from its own `auth.account` rather than the backend-keyed map. A refusal
+    /// returns here, before anything is dispatched or spent.
+    pub(super) async fn resolve_dispatch(
+        &self,
+        (server, tool): (&str, &str),
+        backend: Option<&crate::backend::Backend>,
+        caller_proof: CallerProof<'_>,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+    ) -> Result<ResolvedDispatch> {
+        let caller_credential =
+            if let Some(idp_cfg) = backend.and_then(|b| b.identity_propagation_config().cloned()) {
+                let resolved =
+                    self.resolve_caller_credential_as(server, backend, &idp_cfg, caller_proof);
+                self.with_connect_offer(resolved.await, verified_identity)
+                    .await?
+            } else {
+                Self::refuse_unbound_account_backend(server, backend)?;
+                CallerCredential::default()
+            };
+        self.refuse_shared_oauth_login(server, tool, &caller_credential, backend)?;
+        let resolving = self.resolve_capability_account_credential(server, tool, caller_proof);
+        let account_credential = self
+            .with_connect_offer(resolving.await, verified_identity)
+            .await?;
+        // ONE binding for both cache layers and for the transport's session
+        // partitioning. The MCP route's propagation binding when there is one,
+        // otherwise the account credential's — they are never both present,
+        // because one describes a backend's propagation config and the other a
+        // capability's account reference.
+        let binding = caller_credential.cache_binding.clone().or_else(|| {
+            account_credential
+                .as_ref()
+                .map(|prepared| prepared.cache_binding().to_owned())
+        });
+        Ok(ResolvedDispatch {
+            caller_credential,
+            account_credential,
+            binding,
+        })
+    }
+}
+
+/// What [`MetaMcp::resolve_dispatch`] resolved for one call.
+pub(super) struct ResolvedDispatch {
+    /// The MCP route's per-user propagation credential, or none.
+    pub(super) caller_credential: CallerCredential,
+    /// The capability route's account credential, or none.
+    pub(super) account_credential:
+        Option<Arc<crate::identity_propagation::PreparedAccountCredential>>,
+    /// The dispatch binding: whichever of the two names a per-caller binding.
+    pub(super) binding: Option<String>,
 }

@@ -69,20 +69,24 @@ async fn relay_audit_has_no_injected_secret() {
         "alpha".to_string(),
         vec![rule],
     )]));
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                sources: vec!["alpha:*".to_string()],
-                ..CollusionConfig::default()
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources: vec!["alpha:*".to_string()],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+            None,
+        )
+        .keyed_for_test(),
+    );
     let mut meta = MetaMcp::new(registry).with_secret_injector(injector);
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    meta.share_keyring_with_for_test(&firewall);
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
     firewall.record_delivery(RelayCaller::Keyed("alice"), "alpha", "send", &delivered);
 
@@ -123,20 +127,24 @@ async fn relay_check_skips_a_caller_value_the_injector_overwrites() {
         "alpha".to_string(),
         vec![rule],
     )]));
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                sources: vec!["alpha:*".to_string()],
-                ..CollusionConfig::default()
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources: vec!["alpha:*".to_string()],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+            None,
+        )
+        .keyed_for_test(),
+    );
     let mut meta = MetaMcp::new(registry).with_secret_injector(injector);
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    meta.share_keyring_with_for_test(&firewall);
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
     firewall.record_delivery(RelayCaller::Keyed("alice"), "alpha", "send", &delivered);
 
@@ -173,21 +181,25 @@ async fn meta_observe_reports_a_relay_and_sends_it() {
     backend.set_transport_for_test(Arc::new(Seen(Arc::clone(&seen))));
     assert!(registry.register(backend));
     let dir = tempfile::tempdir().expect("tempdir");
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
-            audit_log: Some(dir.path().join("audit.ndjson")),
-            collusion: CollusionConfig {
-                action: CollusionAction::Observe,
-                sources: vec!["alpha:*".to_string()],
-                ..CollusionConfig::default()
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                rules: serde_yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                audit_log: Some(dir.path().join("audit.ndjson")),
+                collusion: CollusionConfig {
+                    action: CollusionAction::Observe,
+                    sources: vec!["alpha:*".to_string()],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+            None,
+        )
+        .keyed_for_test(),
+    );
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    meta.share_keyring_with_for_test(&firewall);
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
     firewall.record_delivery(RelayCaller::Keyed("alice"), "alpha", "send", &delivered);
 
@@ -209,19 +221,23 @@ async fn meta_observe_reports_a_relay_and_sends_it() {
 /// (the grant slot) is dropped, and its receipts with it.
 #[tokio::test]
 async fn http_receipts_record_only_when_emit_http_lets_the_answer_out() {
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                sources: vec!["alpha:*".to_string()],
-                ..CollusionConfig::default()
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources: vec!["alpha:*".to_string()],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+            None,
+        )
+        .keyed_for_test(),
+    );
     let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    meta.share_keyring_with_for_test(&firewall);
     let meta = Arc::new(meta);
     let deliver = |delivers: bool| {
         let meta = Arc::clone(&meta);
@@ -277,19 +293,23 @@ const OTHER_PROSE: &str = "Minutes of the harbour committee: the dredging contra
 
 /// A meta with a Block-mode relay detector over `alpha:*`.
 fn relay_meta() -> (Arc<MetaMcp>, Arc<Firewall>) {
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                sources: vec!["alpha:*".to_string()],
-                ..CollusionConfig::default()
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources: vec!["alpha:*".to_string()],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+            None,
+        )
+        .keyed_for_test(),
+    );
     let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    meta.share_keyring_with_for_test(&firewall);
     (Arc::new(meta), firewall)
 }
 
@@ -555,18 +575,22 @@ async fn reading_a_failed_task_receipts_only_the_peer_error() {
 /// A Block-mode detector with NO `sources` rule: only the classification
 /// verdict carried by a result makes it sensitive.
 fn classified_only_meta() -> (Arc<MetaMcp>, Arc<Firewall>) {
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            collusion: CollusionConfig {
-                action: CollusionAction::Block,
-                ..CollusionConfig::default()
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
             },
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+            None,
+        )
+        .keyed_for_test(),
+    );
     let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    meta.share_keyring_with_for_test(&firewall);
     (Arc::new(meta), firewall)
 }
 

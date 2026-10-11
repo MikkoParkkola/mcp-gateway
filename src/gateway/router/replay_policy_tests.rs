@@ -171,10 +171,12 @@ async fn fixture_with(answer: Answer, passthrough: bool) -> Fixture {
             credential_redaction: true,
             ..crate::security::firewall::FirewallConfig::default()
         };
+        let keys = meta.continuation();
         let firewall = |c| {
-            Some(Arc::new(crate::security::firewall::Firewall::from_config(
-                c, None,
-            )))
+            Some(Arc::new(
+                crate::security::firewall::Firewall::from_config(c, None)
+                    .with_continuations(Arc::clone(&keys)),
+            ))
         };
         state_mut.firewall = firewall(config.clone());
         meta.set_firewall(firewall(config));

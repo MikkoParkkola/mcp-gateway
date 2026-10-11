@@ -136,7 +136,10 @@ pub fn parse_json_path(path: &str) -> JsonPath {
             if !key.is_empty() {
                 segments.push(JsonPathSegment::Key(key.to_string()));
             }
-            let idx_str = &part[idx_start + 1..part.len() - 1];
+            // `get`, not a slice: a part ending at its `[` (`"a["`, `"["`) or a
+            // multi-byte character before the last byte has no index and must
+            // not panic. Playbook loading parses every reference (MIK-8323).
+            let idx_str = part.get(idx_start + 1..part.len() - 1).unwrap_or_default();
             if let Ok(idx) = idx_str.parse::<usize>() {
                 segments.push(JsonPathSegment::ArrayIndex(idx));
             }

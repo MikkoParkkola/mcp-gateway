@@ -37,7 +37,7 @@ class Repo:
 
     def git(self, *args: str) -> str:
         return subprocess.run(
-            ["git", *args], cwd=self.root, check=True, capture_output=True, text=True
+            ["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", *args], cwd=self.root, check=True, capture_output=True, text=True
         ).stdout
 
     def write(self, path: str, text: str) -> None:

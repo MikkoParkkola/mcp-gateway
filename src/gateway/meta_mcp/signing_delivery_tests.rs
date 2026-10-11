@@ -497,21 +497,24 @@ fn install_firewall(
     action: crate::security::firewall::FirewallAction,
 ) -> Arc<crate::security::firewall::Firewall> {
     use crate::security::firewall::{Firewall, FirewallConfig, FirewallRule};
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled: true,
-            scan_requests: false,
-            scan_responses: true,
-            rules: vec![FirewallRule {
-                tool_match: "echo".into(),
-                action,
-                scan: vec![],
-                reason: None,
-            }],
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_requests: false,
+                scan_responses: true,
+                rules: vec![FirewallRule {
+                    tool_match: "echo".into(),
+                    action,
+                    scan: vec![],
+                    reason: None,
+                }],
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .with_continuations(meta.continuation()),
+    );
     meta.set_firewall(Some(Arc::clone(&firewall)));
     firewall
 }

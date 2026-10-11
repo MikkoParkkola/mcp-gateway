@@ -25,24 +25,31 @@ fn fixture(
     scan_responses: bool,
 ) -> (MetaMcp, Arc<Firewall>, TempDir) {
     let directory = tempfile::tempdir().unwrap();
-    let firewall = Arc::new(Firewall::from_config(
-        FirewallConfig {
-            enabled,
-            scan_responses,
-            scan_requests: false,
-            audit_log: Some(directory.path().join("firewall.ndjson")),
-            rules: vec![FirewallRule {
-                tool_match: "ask_user".into(),
-                action,
-                scan: vec![],
-                reason: None,
-            }],
-            ..FirewallConfig::default()
-        },
-        None,
-    ));
+    // With a keyring its gateway mints with, as the gateway pairs them
+    // (#2210, MIK-8276).
+    let keys = Arc::new(crate::protocol::continuation::ContinuationState::new());
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled,
+                scan_responses,
+                scan_requests: false,
+                audit_log: Some(directory.path().join("firewall.ndjson")),
+                rules: vec![FirewallRule {
+                    tool_match: "ask_user".into(),
+                    action,
+                    scan: vec![],
+                    reason: None,
+                }],
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .with_continuations(Arc::clone(&keys)),
+    );
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    meta.set_continuation_for_test(keys);
     (meta, firewall, directory)
 }
 

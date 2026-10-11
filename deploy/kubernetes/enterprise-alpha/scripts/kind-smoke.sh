@@ -19,7 +19,10 @@ cleanup() {
 command -v "$KIND" >/dev/null 2>&1
 command -v "$KUBECTL" >/dev/null 2>&1
 
-if ! "$KIND" get clusters | grep -qx "$CLUSTER"; then
+# Captured first: a failed query aborts here (set -e) rather than letting
+# partial output read as an existing cluster.
+clusters="$("$KIND" get clusters)"
+if ! grep -qx "$CLUSTER" <<<"$clusters"; then
   "$KIND" create cluster --name "$CLUSTER"
   trap cleanup EXIT
 fi

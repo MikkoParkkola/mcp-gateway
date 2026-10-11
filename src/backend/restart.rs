@@ -91,6 +91,8 @@ impl Backend {
         #[cfg(test)]
         self.rebuilds_attempted
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        #[cfg(test)]
+        super::lifecycle::hold_at(&self.restart_take_gate).await;
         // A non-interactive HTTP restart builds its replacement BEFORE it lets
         // go of the pooled transport (MIK-8012, MIK-8016): it cannot log in,
         // so a replacement whose credential lapsed cannot start, and taking

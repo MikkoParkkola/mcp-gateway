@@ -104,6 +104,7 @@ pub(super) fn backend_transport(
             calls: Arc::clone(calls),
             seen: Arc::clone(seen),
             answer,
+            kept: Arc::default(),
         })
     })
 }

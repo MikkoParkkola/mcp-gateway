@@ -180,6 +180,10 @@ impl NativeUpstreamTasks {
         let deadline = QUERY_DEADLINE.min(backend.request_timeout());
         let answer = tokio::time::timeout(
             deadline,
+            // The caller's own mode (MIK-8269): a dispatch's claim runs where
+            // its own `tools/call` will, and `query`/`cancel` run this under
+            // `non_interactive`. A non-interactive discovery is refused while a
+            // start holds the backend, which would silently disarm recovery.
             backend.request_with_headers("server/discover", None, &[], None),
         )
         .await;
@@ -210,57 +214,73 @@ impl UpstreamRecovery for NativeUpstreamTasks {
     }
 
     async fn query(&self, handle: &UpstreamHandle, deadline: Duration) -> UpstreamAnswer {
-        let Some(backend) = self.eligible(&handle.backend).await else {
-            return UpstreamAnswer::Unavailable;
-        };
-        let deadline = deadline.min(backend.request_timeout());
-        // The declaration is the transport's, and `tasks/get` is one of the two
-        // methods it will carry it on. One attempt, no retry loop, no other
-        // method, and nothing that writes upstream.
-        match tokio::time::timeout(
-            deadline,
-            backend.request_with_task_capability(
-                "tasks/get",
-                Some(json!({ "taskId": handle.handle })),
-                &[],
-                None,
-            ),
-        )
+        // Never interactive (MIK-8269), its discovery included: recovery is
+        // background upkeep under a bound, and a bound that fires mid-login
+        // would end a login this request opened.
+        crate::oauth::login_gate::non_interactive(async {
+            let Some(backend) = self.eligible(&handle.backend).await else {
+                return UpstreamAnswer::Unavailable;
+            };
+            let deadline = deadline.min(backend.request_timeout());
+            // The declaration is the transport's, and `tasks/get` is one of the two
+            // methods it will carry it on. One attempt, no retry loop, no other
+            // method, and nothing that writes upstream.
+            match tokio::time::timeout(
+                deadline,
+                backend.request_with_task_capability(
+                    "tasks/get",
+                    Some(json!({ "taskId": handle.handle })),
+                    &[],
+                    None,
+                ),
+            )
+            .await
+            {
+                Ok(Ok(response)) => read_query(response),
+                Ok(Err(error)) => {
+                    tracing::warn!(backend = %handle.backend, %error, "upstream tasks/get unavailable");
+                    UpstreamAnswer::Unavailable
+                }
+                Err(_) => {
+                    tracing::warn!(backend = %handle.backend, "upstream tasks/get timed out");
+                    UpstreamAnswer::Unavailable
+                }
+            }
+        })
         .await
-        {
-            Ok(Ok(response)) => read_query(response),
-            Ok(Err(error)) => {
-                tracing::warn!(backend = %handle.backend, %error, "upstream tasks/get unavailable");
-                UpstreamAnswer::Unavailable
-            }
-            Err(_) => {
-                tracing::warn!(backend = %handle.backend, "upstream tasks/get timed out");
-                UpstreamAnswer::Unavailable
-            }
-        }
     }
 
     async fn cancel(&self, handle: &UpstreamHandle, deadline: Duration) {
-        let Some(backend) = self.eligible(&handle.backend).await else {
-            tracing::warn!(backend = %handle.backend, "upstream tasks/cancel not sent: backend unclaimed");
-            return;
-        };
-        let deadline = deadline.min(backend.request_timeout());
-        // One attempt on the same trusted path `query` uses. The answer is
-        // ignored: the gateway task is already cancelled whatever the peer says.
-        let sent = tokio::time::timeout(
-            deadline,
-            backend.request_with_task_capability(
-                "tasks/cancel",
-                Some(json!({ "taskId": handle.handle })),
-                &[],
-                None,
-            ),
-        )
+        // Never interactive (MIK-8269), as `query`.
+        crate::oauth::login_gate::non_interactive(async {
+            // This is the row's one send, so a start in flight (a restarted
+            // gateway reconnecting) must not refuse it: wait for that start,
+            // within the deadline, before the non-interactive attempt.
+            if let Some(backend) = self.backends.get(&handle.backend) {
+                let _ = tokio::time::timeout(deadline, backend.start_settled()).await;
+            }
+            let Some(backend) = self.eligible(&handle.backend).await else {
+                tracing::warn!(backend = %handle.backend, "upstream tasks/cancel not sent: backend unclaimed");
+                return;
+            };
+            let deadline = deadline.min(backend.request_timeout());
+            // One attempt on the same trusted path `query` uses. The answer is
+            // ignored: the gateway task is already cancelled whatever the peer says.
+            let sent = tokio::time::timeout(
+                deadline,
+                backend.request_with_task_capability(
+                    "tasks/cancel",
+                    Some(json!({ "taskId": handle.handle })),
+                    &[],
+                    None,
+                ),
+            )
+            .await;
+            if !matches!(sent, Ok(Ok(_))) {
+                tracing::warn!(backend = %handle.backend, "upstream tasks/cancel not confirmed");
+            }
+        })
         .await;
-        if !matches!(sent, Ok(Ok(_))) {
-            tracing::warn!(backend = %handle.backend, "upstream tasks/cancel not confirmed");
-        }
     }
 }
 
@@ -573,6 +593,10 @@ mod error_policy_tests;
 #[cfg(test)]
 #[path = "upstream/provenance_tests.rs"]
 mod provenance_tests;
+
+#[cfg(test)]
+#[path = "upstream/login_scope_tests.rs"]
+mod login_scope_tests;
 
 #[cfg(test)]
 mod tests {

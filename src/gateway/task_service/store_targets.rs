@@ -91,6 +91,15 @@ impl TaskStore {
         author: ErrorAuthor,
         at: DateTime<Utc>,
     ) -> Result<CommittedTask, StoreError> {
+        // MIK-8176 D4: a completed result's sealed questions are owned by the
+        // row it is stored on. Taken here, on the worker's task, where their
+        // holds were registered; outside a scope (startup recovery) none.
+        let offered = match &event {
+            TaskTransition::Complete(result) => {
+                crate::gateway::meta_mcp::sealed_hold::carried(result)
+            }
+            _ => crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+        };
         let shared = Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
         tokio::task::spawn_blocking(move || {
@@ -99,7 +108,7 @@ impl TaskStore {
                 &id,
                 revision,
                 (event, targets, author, writes),
-                at,
+                (at, offered),
             )
         })
         .await
@@ -181,7 +190,7 @@ impl Shared {
             return Err(StoreError::Capacity);
         }
         self.commit(&record_name(task.id()), &bytes)?;
-        self.publish(task, record);
+        self.publish(task, record, super::HoldUpdate::Carry);
         Ok(())
     }
 
@@ -196,7 +205,10 @@ impl Shared {
             ErrorAuthor,
             WriteRecord,
         ),
-        at: DateTime<Utc>,
+        (at, offered): (
+            DateTime<Utc>,
+            crate::gateway::meta_mcp::sealed_hold::CarriedHolds,
+        ),
     ) -> Result<CommittedTask, StoreError> {
         let _order = self.order();
         let (task, record) = {
@@ -212,7 +224,17 @@ impl Shared {
         };
         Ok(
             match self.settle_durable(&task, &record, (event, targets, author, writes), at)? {
-                Some((task, record)) => self.publish(task, record),
+                Some((task, record)) => {
+                    // M1: kept only as far as what was committed carries them;
+                    // a bounded failure (no result) keeps none.
+                    let holds = task.result().map_or_else(
+                        crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none,
+                        |result| {
+                            crate::gateway::meta_mcp::sealed_hold::carried_from(&offered, result)
+                        },
+                    );
+                    self.publish(task, record, super::HoldUpdate::Replace(holds))
+                }
                 None => CommittedTask::of(task, &record),
             },
         )
@@ -571,7 +593,7 @@ impl Shared {
             return Err(StoreError::Capacity);
         }
         self.commit(&record_name(task.id()), &bytes)?;
-        self.publish(task, record);
+        self.publish(task, record, super::HoldUpdate::Drop);
         Ok(CancelClaim::Claimed(descriptor))
     }
 }

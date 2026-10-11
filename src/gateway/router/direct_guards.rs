@@ -98,16 +98,16 @@ impl DirectRouteGuards {
     /// the caller's failure arm.
     ///
     /// `seal` is the caller's verified identity and the params as sent: what
-    /// an interim answer's continuation is bound to (MIK-8078). `sealed`
-    /// receives the sealed envelope and its hold key; the delivery tail gives
-    /// the slot back unless the answer that leaves still carries it.
+    /// an interim answer's continuation is bound to (MIK-8078). Its slot is
+    /// held in the request's scope and released with it unless the answer
+    /// that carries it is handed off (MIK-8176).
     pub(crate) async fn after_dispatch(
         state: &AppState,
         ((call, challenge), (who, (sent, instance, declared))): (
             (&BackendCall<'_>, Option<&str>),
             Seal<'_>,
         ),
-        (client, sealed): (Option<&AuthenticatedClient>, &mut Option<(String, String)>),
+        client: Option<&AuthenticatedClient>,
         (admission, cancel_entry): (
             &Admission,
             Option<&crate::gateway::router::inflight_calls::Registered>,
@@ -144,7 +144,7 @@ impl DirectRouteGuards {
                 .seal_direct_interim(who, (call.server, Some(instance), sent, declared), result)
                 .await
             {
-                Ok(minted) => *sealed = minted,
+                Ok(_) => {}
                 // The meta route's serializer: a capability refusal keeps the
                 // `data` that names what to declare (MIK-8089). The upstream id
                 // is replaced by the caller's own on delivery, so an id-less

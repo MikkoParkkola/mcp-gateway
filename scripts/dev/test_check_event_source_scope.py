@@ -147,7 +147,7 @@ class EventSourceScope(unittest.TestCase):
         # The plumbing too: base...HEAD span, name-status and line parsing, exit code.
         with TemporaryDirectory() as root:
             def run(*args):
-                subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+                subprocess.run(["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", *args], cwd=root, check=True, capture_output=True)
 
             run("init", "-q", "-b", "base")
             events = Path(root, "src/events")
