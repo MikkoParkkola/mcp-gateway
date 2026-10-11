@@ -114,7 +114,7 @@ impl MetaMcp {
     /// Dispatch a backend tool the client named directly, returning the
     /// backend's own result envelope untouched.
     ///
-    /// `invoke_tool` already returns a complete MCP tools/call result
+    /// `invoke_tool_with_source` already returns a complete MCP tools/call result
     /// (`{content, structuredContent?, isError}`) with output-schema
     /// enforcement applied. A tool called by its own name is a first-class
     /// tool to the client, so that envelope is returned verbatim: re-wrapping
