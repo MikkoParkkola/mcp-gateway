@@ -53,7 +53,14 @@ impl ResolvedAuthConfig {
         }
 
         config.warn_keys_without_backends();
-        config.warn_expired_keys(chrono::Utc::now());
+        match crate::clock::utc_now() {
+            Ok(now) => config.warn_expired_keys(now),
+            // Advisory only: a clock that cannot date a key lists none.
+            // Admission itself is an access check and already fails closed.
+            Err(error) => {
+                warn!(target: AUTH_TARGET, %error, "host clock reads before 1970: expired API keys are not listed");
+            }
+        }
         let api_keys: Vec<ResolvedApiKey> = config
             .api_keys
             .iter()

@@ -42,6 +42,8 @@ pub(crate) mod input;
 #[cfg(test)]
 #[path = "store_lease_tests.rs"]
 mod lease_tests;
+#[path = "store_pending_cancel.rs"]
+pub(crate) mod pending_cancel;
 #[cfg(unix)]
 #[path = "store_unix.rs"]
 mod platform;
@@ -499,12 +501,7 @@ impl Shared {
         }
         // Room for the bounded failure this task may have to settle as, or a
         // too-large outcome would leave it working (MIK-7651).
-        if targets::fallback_bytes(
-            &task,
-            &record,
-            self.now().map_err(|_| StoreError::Unavailable)?,
-        )? > self.limits.record_bytes
-        {
+        if targets::fallback_bytes(&task, &record)? > self.limits.record_bytes {
             return Err(StoreError::Capacity);
         }
         self.commit(&record_name(task.id()), &bytes)?;

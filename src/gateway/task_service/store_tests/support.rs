@@ -309,6 +309,8 @@ pub(super) fn widest(mut fallback: Value) -> usize {
         updated.is_string(),
         "the record keeps its update instant: {fallback}"
     );
-    *updated = json!("2026-09-07T00:00:01.999999999Z");
+    // The instant production measures at (`fallback_bytes`): the widest one
+    // chrono encodes, in the record's own serde form (MIK-8202).
+    *updated = json!(chrono::DateTime::<chrono::Utc>::MAX_UTC);
     encoded_len(&fallback)
 }

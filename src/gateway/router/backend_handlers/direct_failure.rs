@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The direct route's answer to a dispatched failure, shared by both of
-//! `dispatch_in_scope`'s callers: the sanitized `tools/call` arm and the
+//! the direct send's callers (`direct_send`): the sanitized `tools/call` arm and the
 //! passthrough/other-method arm (A11 amendment, Direct).
 //!
 //! A11-c: a 401 on a managed credential forces at most one refresh first. A

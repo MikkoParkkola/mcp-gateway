@@ -81,6 +81,8 @@ pub struct TaskService {
     /// `None` once released: a re-read that finishes after shutdown cannot
     /// put a share back (seat-2 review).
     sealed: Arc<parking_lot::Mutex<Option<usize>>>,
+    /// The per-row send locks of upstream cancels (MIK-8347).
+    pub(crate) cancel_sends: super::execution::pending_cancel::CancelSends,
 }
 
 impl TaskService {
@@ -116,6 +118,7 @@ impl TaskService {
             store,
             admission,
             sealed: Arc::new(parking_lot::Mutex::new(Some(sealed))),
+            cancel_sends: super::execution::pending_cancel::CancelSends::default(),
         })
     }
 
@@ -240,6 +243,20 @@ impl TaskService {
             Ok(TaskAdmission::Owned(lease)) => {
                 let Some(slot) = reserve() else {
                     return CreateOutcome::Capacity;
+                };
+                // A NEW row is dated here, and only here: a replay (below)
+                // answers from the stored row and needs no clock. A clock
+                // before 1970 refuses the create before anything is written;
+                // the dropped lease releases the key (MIK-8202).
+                let dated;
+                let task = if task.is_undated() {
+                    let Ok(now) = self.store.now() else {
+                        return CreateOutcome::Unavailable;
+                    };
+                    dated = task.clone().dated_at(now);
+                    &dated
+                } else {
+                    task
                 };
                 let binding = lease.binding().clone();
                 let prepared = PreparedTask::admitted_with_targets(

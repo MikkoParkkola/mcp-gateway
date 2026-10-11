@@ -17,17 +17,26 @@ use serde_json::Value;
 
 /// `(server, tool)` pairs in dispatch order, without duplicates.
 #[derive(Default)]
-pub(crate) struct DispatchLog(Mutex<Vec<(String, String)>>);
+pub(crate) struct DispatchLog {
+    calls: Mutex<Vec<(String, String)>>,
+    /// The worker-only clock channel (MIK-8202 AC12, AC13).
+    worker: super::invoke::worker_clock::WorkerChannel,
+}
 
 impl DispatchLog {
     /// Everything logged so far. The log keeps its entries: a later round of
     /// the same task adds to it, and the store merges.
     pub(crate) fn snapshot(&self) -> Vec<(String, String)> {
-        self.0.lock().clone()
+        self.calls.lock().clone()
+    }
+
+    /// The clock channel the invoke funnel and this log's worker share.
+    pub(crate) fn worker(&self) -> &super::invoke::worker_clock::WorkerChannel {
+        &self.worker
     }
 
     fn note(&self, server: &str, tool: &str) {
-        let mut entries = self.0.lock();
+        let mut entries = self.calls.lock();
         if !entries.iter().any(|(s, t)| s == server && t == tool) {
             entries.push((server.to_owned(), tool.to_owned()));
         }
@@ -42,6 +51,12 @@ tokio::task_local! {
 /// Run `future` with `log` collecting every step it completes.
 pub(crate) async fn with_dispatch_log<F: Future>(log: Arc<DispatchLog>, future: F) -> F::Output {
     DISPATCH_LOG.scope(log, future).await
+}
+
+/// The worker channel of the dispatch being awaited, if a task worker awaits
+/// it: the request thread has none, and so never waits or withholds.
+pub(super) fn current_worker() -> Option<Arc<DispatchLog>> {
+    DISPATCH_LOG.try_with(Arc::clone).ok()
 }
 
 /// Note the step `args` (a `{server, tool, ..}` envelope) completed. A no-op

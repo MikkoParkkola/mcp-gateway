@@ -286,17 +286,18 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         };
         let at = (self.server, self.tool);
         let source = super::chokepoint::Source::Bridged;
-        let permit = match self
-            .meta
-            .chokepoint(self.caller, self.session_id, at, &sent, source)
-        {
-            Ok(permit) => permit,
-            Err(refused) => {
-                let message = refused.to_string();
-                *self.relay_refused.lock() = Some(refused);
-                return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted { message });
-            }
-        };
+        let permit =
+            match self
+                .meta
+                .chokepoint(self.caller.scope(), self.session_id, at, &sent, source)
+            {
+                Ok(permit) => permit,
+                Err(refused) => {
+                    let message = refused.to_string();
+                    *self.relay_refused.lock() = Some(refused);
+                    return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted { message });
+                }
+            };
         // #1962: armed for the dispatch, so a dropped exchange settles the key.
         arm(self.reservation, true);
         let dispatched = self

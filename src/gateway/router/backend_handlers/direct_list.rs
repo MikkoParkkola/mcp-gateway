@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 
 use super::super::AppState;
 use super::super::authorization::{ToolTarget, decide_tool_target};
-use super::dispatch_in_scope;
+use super::direct_send::{NonToolMethod, dispatch_non_call};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::oauth::AgentIdentity as OAuthAgentIdentity;
 use crate::mtls::CertIdentity;
@@ -70,13 +70,13 @@ pub(super) async fn drain(
                 map.insert("cursor".to_string(), cursor);
             }
         }
-        let mut page = dispatch_in_scope(
+        let list = NonToolMethod::new("tools/list").expect("tools/list is not tools/call");
+        let mut page = dispatch_non_call(
+            list,
             backend,
-            "tools/list",
             id,
             Some(page_params),
-            propagated_headers,
-            identity_key,
+            (propagated_headers, identity_key),
         )
         .await?;
         if page.error.is_some() {
