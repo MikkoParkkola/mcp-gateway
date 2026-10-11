@@ -1,0 +1,13 @@
+diff --git a/src/security/sanitize/protocol.rs b/src/security/sanitize/protocol.rs
+index f87d6d544..636993899 100644
+--- a/src/security/sanitize/protocol.rs
++++ b/src/security/sanitize/protocol.rs
+@@ -126,7 +126,7 @@ pub(super) fn sanitize_value(key: &str, value: &Value, route: ProtocolRoute) ->
+         && matches!(name, Some(Ok(name)) if META_PARSED.contains(&name.as_str()));
+     let slot = if meta { Slot::Meta } else { Slot::Tool };
+     sanitize_object(params, |key, member| {
+-        (key == "arguments").then(|| sanitize_slot(member, slot))
++        (false && key == "arguments").then(|| sanitize_slot(member, slot))
+     })
+ }
+ 

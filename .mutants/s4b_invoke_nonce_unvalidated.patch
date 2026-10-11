@@ -1,0 +1,13 @@
+diff --git a/src/security/sanitize/protocol.rs b/src/security/sanitize/protocol.rs
+index f87d6d544..46f51f8ea 100644
+--- a/src/security/sanitize/protocol.rs
++++ b/src/security/sanitize/protocol.rs
+@@ -56,7 +56,7 @@ pub(crate) fn validate_protocol_fields(
+         capabilities.map_or(Ok(()), validate_keys)?;
+     }
+     if route == ProtocolRoute::Meta
+-        && request.pointer("/params/name").and_then(Value::as_str) == Some("gateway_invoke")
++        && request.pointer("/params/name").and_then(Value::as_str) == Some("never-an-invoke")
+         && let Some(Value::String(nonce)) = request.pointer("/params/arguments/nonce")
+     {
+         validate_protocol_text(nonce)?;

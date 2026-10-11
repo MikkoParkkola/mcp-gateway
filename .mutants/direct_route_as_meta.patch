@@ -1,0 +1,11 @@
+diff --git a/src/gateway/router/backend_handlers/direct_caller.rs b/src/gateway/router/backend_handlers/direct_caller.rs
+index bd45a2ce0..ffa773697 100644
+--- a/src/gateway/router/backend_handlers/direct_caller.rs
++++ b/src/gateway/router/backend_handlers/direct_caller.rs
+@@ -505,5 +505,5 @@ fn sanitized(state: &AppState, name: &str, request: Value) -> Result<Value, Reje
+         crate::gateway::meta_mcp::visible::record_exempt_instances(&[instance]);
+         return Ok(request);
+     }
+-    sanitize_request(&request, ProtocolRoute::Direct).map_err(refused)
++    sanitize_request(&request, ProtocolRoute::Meta).map_err(refused)
+ }
