@@ -352,3 +352,42 @@ async fn l2_predictions_judge_each_backends_slot() {
         "L2: vault_hub:read is predicted from the wrong slot: {got:?}"
     );
 }
+
+/// alpha's count phrase and its `list_servers` answer.
+async fn counts_as_alpha(fx: &super::slot_verdict_fixture::PerUser) -> (String, serde_json::Value) {
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    let caller = super::identified_caller(&alpha);
+    let (total, _) = fx.meta.admitted_counts(caller.scope(), None);
+    let listed = fx
+        .meta
+        .list_servers(&caller, None)
+        .await
+        .expect("list_servers answers");
+    (total.phrase(), listed)
+}
+
+/// K1 (known-ness reads the viewed slot): alpha's own slot is warm and its
+/// count is exact. Whether the shared slot was ever listed changes nothing
+/// alpha is told: the same count phrase, and `tools_known` true. RED before
+/// the fix: known-ness reads the shared slot, so with it never listed the
+/// count is not exact and `tools_known` is false beside a nonzero count.
+#[tokio::test]
+async fn k1_known_ness_reads_the_callers_slot_not_the_shared_one() {
+    use super::slot_verdict_fixture::{SharedSlot, per_user_shared};
+    let listed = counts_as_alpha(&per_user_shared(CallerSlot::Valid, SharedSlot::Listed)).await;
+    let unlisted =
+        counts_as_alpha(&per_user_shared(CallerSlot::Valid, SharedSlot::NeverListed)).await;
+    assert!(
+        listed.1.to_string().contains("\"tools_known\":true"),
+        "premise: with both slots listed alpha's backend is known: {}",
+        listed.1
+    );
+    assert_eq!(
+        unlisted.0, listed.0,
+        "K1: the count phrase reads the shared slot"
+    );
+    assert_eq!(
+        unlisted.1, listed.1,
+        "K1: list_servers reads the shared slot's known-ness"
+    );
+}

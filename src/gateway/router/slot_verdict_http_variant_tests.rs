@@ -376,3 +376,125 @@ async fn f3_http_execute_step_flip_guard() {
         "F3-http: the reverse step is not answered -32601: {answer:?}"
     );
 }
+
+/// A modern `gateway_invoke` of [`TOOL`] on `/mcp` as alpha, keyed `key`;
+/// `task` adds the task envelope.
+async fn keyed_invoke_as_alpha(gw: &Gateway, key: &str, task: bool) -> (StatusCode, Value) {
+    let mut meta = super::tests::modern_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    let name = "gateway_invoke";
+    let mut params = json!({"name": name,
+        "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"q": "x"}}, "_meta": meta});
+    if task {
+        params["task"] = json!({});
+    }
+    let body = json!({"jsonrpc": "2.0", "id": 21, "method": "tools/call", "params": params});
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", name)
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(crate::key_server::oidc::VerifiedIdentity {
+            subject: "alpha".to_string(),
+            email: "alpha@example.invalid".to_string(),
+            name: None,
+            groups: vec![],
+            issuer: "https://issuer.example.invalid".to_string(),
+        });
+    let response = tower::ServiceExt::oneshot(gw.router.clone(), request)
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// R1 (keyed replay after withdrawal): alpha's keyed `gateway_invoke` of
+/// [`TOOL`] dispatches while alpha's catalogue offers it. alpha's catalogue
+/// then withholds it (invalid schema). The same call with the same key
+/// answers -32601, as a name alpha does not have, and is not answered with
+/// the stored result. RED before the fix: the stored result is replayed
+/// before alpha's catalogue is read.
+#[tokio::test]
+async fn r1_keyed_replay_after_the_callers_catalogue_withholds_answers_absent() {
+    use crate::gateway::meta_mcp::slot_verdict_fixture::{BINDING, invalid};
+    let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::No).await;
+    let first = keyed_invoke_as_alpha(&gw, "r1-replay", false).await;
+    assert_eq!(
+        gw.dispatched(),
+        1,
+        "premise: the first call dispatches: {first:?}"
+    );
+    let withheld: crate::protocol::Tool =
+        serde_json::from_value(json!({"name": TOOL, "inputSchema": invalid()})).expect("a tool");
+    gw.meta
+        .backends
+        .get(BACKEND)
+        .expect("the backend")
+        .store_per_user_tools_for_test(BINDING, vec![withheld]);
+    let replay = keyed_invoke_as_alpha(&gw, "r1-replay", false).await;
+    assert_eq!(
+        replay.1.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "R1: a withheld tool's keyed retry was answered: {replay:?}"
+    );
+    assert_eq!(gw.dispatched(), 1, "R1: the retry dispatched: {replay:?}");
+}
+
+/// R1b (explicit task of a withheld tool): alpha's keyed task
+/// `gateway_invoke` naming [`TOOL`], which alpha's catalogue withholds, makes
+/// no task and answers -32601. RED before the fix: the shared invocation
+/// policy admits the task before the caller's verdict is consulted.
+#[tokio::test]
+async fn r1b_explicit_task_of_a_withheld_tool_makes_no_task() {
+    let gw = gateway(CallerSlot::Invalid, CLOSED, Surfaced::No).await;
+    let answer = keyed_invoke_as_alpha(&gw, "r1b-task", true).await;
+    assert!(
+        answer.1.pointer("/result/taskId").is_none(),
+        "R1b: a task was made for a withheld tool: {answer:?}"
+    );
+    assert_eq!(
+        answer.1.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "R1b: {answer:?}"
+    );
+    assert_eq!(gw.dispatched(), 0, "R1b: dispatched: {answer:?}");
+}
+
+/// I2g (index write site: the direct route's catalogue check): alpha's slot
+/// is cold and its catalogue withholds [`TOOL`]. A direct-route call fills
+/// alpha's slot to judge it and answers -32601; after ONLY that, the index
+/// names alpha's slot, so no later listing shows alpha the shared entry.
+/// RED before the fix: the check fills the slot without indexing it.
+#[tokio::test]
+async fn i2g_index_written_by_the_direct_route_catalogue_check() {
+    use crate::gateway::meta_mcp::slot_verdict_fixture::{BINDING, indexed_binding_for};
+    let gw = gateway_cold(CallerSlot::Invalid, Surfaced::Yes).await;
+    let answer = post_as_alpha(&gw.router, &direct(), &tools_call(TOOL)).await;
+    assert_eq!(
+        answer.1.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "premise: the direct call answers as absent: {answer:?}"
+    );
+    assert_eq!(
+        gw.caller.lists(),
+        1,
+        "premise: alpha's slot was filled: {answer:?}"
+    );
+    assert_eq!(
+        indexed_binding_for(&gw.meta, "alpha").as_deref(),
+        Some(BINDING),
+        "I2g: the direct-route check wrote no index entry"
+    );
+}

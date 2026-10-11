@@ -379,3 +379,57 @@ async fn no_grant_operator_call_by_name_is_absent_and_invoke_offer_ignores_the_t
         "L9-managed: a no-grant call reached the backend"
     );
 }
+
+/// A keyed modern task `tools/call` of `name` as the sole operator, with the
+/// headers a 2026-07-28 client sends.
+async fn task_call(fx: &Fx, id: u64, name: &str) -> Value {
+    let mut meta = super::tests::modern_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(format!("h1-{name}"));
+    let body = json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+        "params": {"name": name, "arguments": {"folder": "inbox"}, "task": {}, "_meta": meta}});
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {OPERATOR_KEY}"))
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", name)
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+}
+
+/// H1 (L9-managed, task envelope; design R3.7): the sole operator of a
+/// managed-account backend with no current grant makes a keyed modern task
+/// call of the surfaced [`TOOL`] by name. It is answered exactly as the same
+/// call of a name the gateway does not know: no confirmation prompt, no
+/// task, nothing dispatched. RED before the fix: the caller verdict lets the
+/// call proceed unrecorded, so the task route makes a task first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn h1_no_grant_operator_surfaced_task_call_answers_as_unknown() {
+    let fx = fixture_with(&Binding::Unconnected).await;
+    let by_name = task_call(&fx, 1, TOOL).await;
+    let unknown = task_call(&fx, 1, "no_such_tool").await;
+    assert!(
+        by_name.pointer("/result/taskId").is_none(),
+        "H1: a task was made for a backend the operator has no view of: {by_name}"
+    );
+    assert_eq!(
+        by_name.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "H1: the surfaced name is not answered as absent: {by_name}"
+    );
+    assert_eq!(
+        by_name.to_string(),
+        unknown.to_string().replace("no_such_tool", TOOL),
+        "H1: {by_name} vs unknown {unknown}"
+    );
+    assert_eq!(
+        fx.gateway.tool_calls().len(),
+        0,
+        "H1: a no-grant call reached the backend"
+    );
+}

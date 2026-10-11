@@ -247,3 +247,32 @@ async fn i1_failed_fill_writes_no_index_entry() {
         "I1: a failed fill was indexed"
     );
 }
+
+/// I2f (index write site: an empty fill): alpha's own catalogue is a
+/// complete, successful list of no tools. After ONLY a `gateway_list_tools`
+/// fill of it, the index names alpha's slot: an empty catalogue is known, and
+/// alpha must not be left on the cold rule's shared view. RED before the
+/// fix: discovery turns an empty fill into "nothing fetched" and skips the
+/// index write.
+#[tokio::test]
+async fn i2f_index_written_by_an_empty_fill() {
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::Yes,
+    );
+    let asked = super::slot_verdict_fixture::serve_alpha_empty(&fx.meta);
+    warm_by_listing(&fx.meta).await;
+    assert_eq!(
+        asked.lists(),
+        1,
+        "premise: alpha's empty slot was not filled"
+    );
+    assert_eq!(
+        indexed_binding_for_alpha(&fx.meta).as_deref(),
+        Some(super::slot_verdict_fixture::BINDING),
+        "I2f: the empty fill wrote no index entry"
+    );
+}
