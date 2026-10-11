@@ -17,7 +17,8 @@ use super::tasks;
 use crate::gateway::meta_mcp::admission::SyncLease;
 use crate::gateway::meta_mcp::signing::SigningInvocationContext;
 use crate::gateway::meta_mcp::{
-    InvokeScope, MetaMcpCallerContext, error_response_preserving_status,
+    InvokeScope, MetaMcpCallerContext, STEP_NOT_PERMITTED, STEP_NOT_PERMITTED_CODE,
+    STEP_NOT_PERMITTED_STATUS, error_response_preserving_status,
 };
 use crate::gateway::router::AppState;
 use crate::gateway::router::authorization::{
@@ -149,7 +150,7 @@ pub(super) async fn tools_call(
         ));
     }
 
-    let backend_targets = backend_tool_targets_for_call(
+    let mut backend_targets = backend_tool_targets_for_call(
         &state.meta_mcp,
         tool_name,
         &arguments,
@@ -169,16 +170,39 @@ pub(super) async fn tools_call(
         tool_name,
         &backend_targets,
     );
-    for target in &backend_targets {
+    // A playbook's steps come from its definition, not the request. They join
+    // the targets after the response targets are fixed, so response handling
+    // is unchanged, and are authorized and scanned before any step runs
+    // (MIK-8362).
+    let request_targets = backend_targets.len();
+    backend_targets.extend(state.meta_mcp.playbook_step_targets(tool_name, &arguments));
+    // Authorize every target before scanning any, so a refused later target
+    // charges no earlier one's budget.
+    for (index, target) in backend_targets.iter().enumerate() {
         // The one route-stage authorize /mcp and stdio share (P3). A surfaced
         // name withheld from this caller is not a target (MIK-8340): the meta
         // layer answers it as a name that matches no tool.
         let checked = target.as_target();
-        match state.meta_mcp.authorize_route_target(
+        let routed = state.meta_mcp.authorize_route_target(
             invoke_scope,
             (checked.server, checked.tool),
             checked.arguments,
-        ) {
+        );
+        // A step's target is operator-defined: any refusal of it is neutral (A3).
+        if index >= request_targets && routed.is_err() {
+            return Err(refused
+                .answer(
+                    state,
+                    target.as_target(),
+                    id,
+                    STEP_NOT_PERMITTED_CODE,
+                    STEP_NOT_PERMITTED.to_string(),
+                    StatusCode::from_u16(STEP_NOT_PERMITTED_STATUS)
+                        .unwrap_or(StatusCode::FORBIDDEN),
+                )
+                .await);
+        }
+        match routed {
             Ok(()) => {}
             Err(crate::Error::Forbidden {
                 code,
@@ -198,9 +222,11 @@ pub(super) async fn tools_call(
                 return Ok(error_response_preserving_status(id, &other));
             }
         }
+    }
 
-        // Firewall: pre-invocation request scan
-        #[cfg(feature = "firewall")]
+    // Firewall: pre-invocation request scan
+    #[cfg(feature = "firewall")]
+    for (index, target) in backend_targets.iter().enumerate() {
         if let Some(ref fw) = state.firewall {
             let target = target.as_target();
             let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
@@ -236,6 +262,21 @@ pub(super) async fn tools_call(
                 );
             }
             if let Some((code, reason)) = verdict.request_refusal() {
+                // A content finding about a step names the definition: it
+                // answers as every other step refusal does (A3).
+                if index >= request_targets && verdict.refusal_words_content() {
+                    return Err(refused
+                        .answer(
+                            state,
+                            target,
+                            id,
+                            STEP_NOT_PERMITTED_CODE,
+                            STEP_NOT_PERMITTED.to_string(),
+                            StatusCode::from_u16(STEP_NOT_PERMITTED_STATUS)
+                                .unwrap_or(StatusCode::FORBIDDEN),
+                        )
+                        .await);
+                }
                 return Err(refused
                     .answer(state, target, id, code, reason, StatusCode::BAD_REQUEST)
                     .await);

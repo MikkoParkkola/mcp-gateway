@@ -189,7 +189,7 @@ fn run_playbook_params() -> Value {
     })
 }
 
-/// Control for X8: the refusal really does carry the internal HTTP-status key.
+/// Control for X8: the producer really does stamp the internal HTTP-status key.
 ///
 /// Not an acceptance criterion. Without it, X8's "the key is absent from the
 /// polled task" is satisfied by a filter that works AND by a fixture whose
@@ -197,91 +197,28 @@ fn run_playbook_params() -> Value {
 /// those apart. If this control fails, X8 below is measuring nothing and the
 /// producer — not the filter — is what needs fixing.
 ///
-/// This producer control uses a legacy unkeyed request, whose authorization
-/// occurs at the inner dispatch. Modern keyed orchestration preflights the
-/// plan and refuses earlier; X8 below continues to exercise the modern task.
-#[tokio::test]
-async fn fixture_control_a_synchronous_refusal_carries_the_internal_http_status_key() {
-    let mock = MockBackend::answering(Answer::ok());
-    let (state, _store) = state_with(&mock).await;
-    let forbidden = register_forbidden(&state);
-    state.meta_mcp.set_playbook_engine(forbidden_playbook());
-
-    let router = create_router(Arc::clone(&state));
-    let initialize = axum::http::Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("content-type", "application/json")
-        .header("authorization", "Bearer key-a")
-        .body(axum::body::Body::from(
-            json!({
-                "jsonrpc": "2.0", "id": 79, "method": "initialize",
-                "params": {
-                    "protocolVersion": "2025-11-25", "capabilities": {},
-                    "clientInfo": {"name": "LegacyProducerControl", "version": "1"}
-                }
-            })
-            .to_string(),
-        ))
-        .expect("legacy initialize request");
-    let initialized = router
-        .clone()
-        .oneshot(initialize)
-        .await
-        .expect("initialize response");
-    std::assert_eq!(initialized.status(), StatusCode::OK);
-    let session = initialized
-        .headers()
-        .get("mcp-session-id")
-        .expect("legacy initialize issues a session")
-        .clone();
-    let request = axum::http::Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("content-type", "application/json")
-        .header("authorization", "Bearer key-a")
-        .header("mcp-protocol-version", "2025-11-25")
-        .header("mcp-session-id", session)
-        .body(axum::body::Body::from(
-            json!({
-                "jsonrpc": "2.0", "id": 80, "method": "tools/call",
-                "params": run_playbook_params()
-            })
-            .to_string(),
-        ))
-        .expect("legacy unkeyed producer request");
-    let response = router.oneshot(request).await.expect("producer response");
-    let body: Value = serde_json::from_slice(
-        &to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("producer body"),
-    )
-    .expect("producer JSON");
-
-    assert!(
-        body.get("error").is_some(),
-        "the step's backend is outside this credential's scope, so the chokepoint \
-         refuses: {body}"
-    );
+/// The producer is exercised directly: a playbook step at a forbidden backend
+/// is now refused whole at the route stage (MIK-8362), answered neutrally and
+/// without the key, so no synchronous playbook call produces it any more. The
+/// refusal X8 strips is the worker's own, which this function builds.
+#[test]
+fn fixture_control_a_synchronous_refusal_carries_the_internal_http_status_key() {
+    let refusal = crate::Error::Forbidden {
+        code: -32003,
+        status: 403,
+        message: "Client 'principal-a' not authorized for backend 'vault'".to_string(),
+    };
+    let body = serde_json::to_value(crate::gateway::meta_mcp::error_response_preserving_status(
+        crate::protocol::RequestId::Number(80),
+        &refusal,
+    ))
+    .expect("the refusal serialises");
     assert!(
         body.pointer(&format!("/error/data/{HTTP_STATUS_DATA_KEY}"))
             .is_some(),
         "`error_response_preserving_status` stamps `{HTTP_STATUS_DATA_KEY}` onto a \
-         `Forbidden` refusal (`meta_mcp/mod.rs:184-186`). If this is absent, the \
-         fixture no longer produces the key X8 exists to strip, and X8 has become \
-         vacuous: {body}"
-    );
-    std::assert_eq!(
-        forbidden.calls(),
-        0,
-        "the step's backend is registered and answering, so the refusal is the \
-         chokepoint's and not a missing backend — and the step still reached it \
-         zero times: {body}"
-    );
-    std::assert_eq!(
-        mock.calls(),
-        0,
-        "and the step did not land on the reachable backend instead: {body}"
+         `Forbidden` refusal (`meta_mcp/mod.rs:184-186`). If this is absent, X8 has \
+         become vacuous: {body}"
     );
 }
 
