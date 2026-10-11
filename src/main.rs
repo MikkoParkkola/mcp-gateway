@@ -378,6 +378,11 @@ fn resolve_audit_log_config(
 ) -> mcp_gateway::Result<mcp_gateway::security::transparency_log::TransparencyLogConfig> {
     use mcp_gateway::security::transparency_log::TransparencyLogConfig;
     let c = Config::load(config_path)?;
+    // MIK-8365: a key that did not resolve is refused, never verified as
+    // empty (hash-only) or as the reference's public text.
+    if let Some(reason) = c.security.transparency_log.unresolved_secret() {
+        return Err(mcp_gateway::Error::ConfigValidation(reason.to_owned()));
+    }
     Ok(TransparencyLogConfig {
         key_id: c.security.transparency_log.key_id.clone(),
         shared_secret: c.security.transparency_log.shared_secret.clone(),
