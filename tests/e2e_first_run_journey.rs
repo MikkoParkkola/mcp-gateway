@@ -23,7 +23,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use journey::{
-    BACKEND, Gateway, MARKER, PEER, SEARCH_BOUND, Session, TOOL, Workspace, payload, show,
+    BACKEND, Gateway, MARKER, PEER, SEARCH_BOUND, Session, TOOL, Workspace, http_client, payload,
+    show,
 };
 use serde_json::{Value, json};
 
