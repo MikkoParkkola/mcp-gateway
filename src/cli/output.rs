@@ -280,6 +280,10 @@ mod tests {
         // 56 ASCII bytes then a 4-byte emoji (56..60): the 60-wide tool column cuts at 57.
         let desc = format!("{}🙂 tail", "a".repeat(56));
         assert_eq!(truncate_str(&desc, 60), format!("{}...", "a".repeat(56)));
+        // A cut already on a boundary after a multi-byte char does not back off.
+        assert_eq!(truncate_str("héllo world", 6), "hé...");
+        // UTF8.2: ASCII output is exactly today's.
+        assert_eq!(truncate_str("hello world", 8), "hello...");
     }
 
     #[test]
