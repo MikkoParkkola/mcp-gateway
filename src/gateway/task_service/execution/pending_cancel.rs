@@ -20,7 +20,7 @@ use std::time::Duration;
 use tokio::sync::OwnedMutexGuard;
 use tokio::task::JoinHandle;
 
-use super::{CancelDelivery, TaskExecutor, UpstreamHandle, UpstreamRecovery};
+use super::{TaskExecutor, UpstreamHandle, UpstreamRecovery};
 use crate::gateway::task_service::TaskService;
 use crate::gateway::task_service::record::UpstreamRecord;
 use crate::gateway::task_service::store::targets::CancelClaim;
