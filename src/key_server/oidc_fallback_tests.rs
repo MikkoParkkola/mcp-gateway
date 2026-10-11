@@ -383,7 +383,10 @@ fn a_lapsed_fallback_is_renewed_while_discovery_stays_down() {
             discovery_hits = hits(&fx).0;
         });
     });
-    assert_eq!(discovery_hits, 2, "discovery was not retried after the lapse");
+    assert_eq!(
+        discovery_hits, 2,
+        "discovery requests: want one before and one after the lapse, none once renewed"
+    );
     assert_eq!(count(&logs, "WARN", "OIDC discovery for"), 2, "{logs:?}");
 }
 
