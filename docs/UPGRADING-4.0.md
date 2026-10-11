@@ -3920,7 +3920,7 @@ pin.
 
 ## 145. The `plugin` command and the `marketplace` config block are removed
 
-**Startup:** no notice, a removed CLI surface (a leftover `marketplace` block is refused at load; `mcp-gateway upgrade` deletes it)
+**Startup:** no notice; refuses to start, only for a config that still has a `marketplace` block
 
 `mcp-gateway plugin search`, `install`, `uninstall` and `list` are gone. `install` downloaded a
 manifest and wrote it under `marketplace.plugin_dir`, but no gateway path ever loaded what it
