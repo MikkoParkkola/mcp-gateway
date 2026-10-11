@@ -427,7 +427,8 @@ async fn send_raw_modern(fx: &Fx, uri: &str, key: &str, body: &Value) -> Value {
 
 /// S4 (frozen S2/S2', test plan K4): the signed request's protocol fields are
 /// validated, never rewritten in place. A NUL or a control character in the
-/// `id`, the signing nonce or the chain nonce is refused, and the backend sees
+/// `id`, the signing nonce, the chain nonce or the idempotency key (seat
+/// finding: stripped, two keys could become one) is refused, and the backend sees
 /// nothing; a NUL is the sanitizer's -32600. RED where today the field passes
 /// unsanitized (the nonces leave the request before sanitization) or a control
 /// character is stripped silently (the `id`); the red run records which.
@@ -444,6 +445,8 @@ async fn s4_signed_protocol_fields_are_validated_not_rewritten() {
         ("nonce", "a\u{7}b"),
         ("chain", NUL),
         ("chain", "a\u{7}b"),
+        ("key", NUL),
+        ("key", "a\u{7}b"),
     ] {
         let fx = Box::pin(sanitizing(
             true,
@@ -458,6 +461,7 @@ async fn s4_signed_protocol_fields_are_validated_not_rewritten() {
         match field {
             "nonce" => meta[NONCE_META] = json!(bad),
             "chain" => meta[CHAIN_NONCE_META] = json!(bad),
+            "key" => meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(bad),
             _ => {}
         }
         let id = if field == "id" { json!(bad) } else { json!(1) };

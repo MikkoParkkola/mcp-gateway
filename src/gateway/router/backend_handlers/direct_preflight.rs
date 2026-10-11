@@ -27,8 +27,8 @@ pub(super) struct Preflight {
     pub(super) isolation_guarded: bool,
 }
 
-/// The chain nonce and the signing nonce come off the params before
-/// sanitization (ASI07). Hardened signs every `tools/call` here too
+/// The chain nonce and the signing nonce come off the params after the intake
+/// sanitize step validated them, never rewritten (MIK-8154 S2'; ASI07). Hardened signs every `tools/call` here too
 /// (GH1942.HARDEN.1 row 7); its nonce is checked as the meta route checks it.
 fn take_nonces(
     state: &AppState,

@@ -9,7 +9,8 @@ use serde_json::Value;
 use super::{sanitize_json_value, sanitize_string, validate_protocol_text};
 use crate::{Error, Result};
 
-/// Validate `id`, the `_meta` nonces and `gateway_invoke`'s argument nonce
+/// Validate `id`, the `_meta` nonces, the idempotency key and
+/// `gateway_invoke`'s argument nonce
 /// before anything takes them off the request (MIK-8154 S2'), whatever its
 /// backends: these fields are the gateway's. Signing capture removes the
 /// argument nonce before sanitizing, so it is checked here or nowhere.
@@ -22,7 +23,9 @@ pub(crate) fn validate_protocol_fields(request: &Value, nonces: &[&str]) -> Resu
         validate_protocol_text(id)?;
     }
     let meta = request.pointer("/params/_meta");
-    for field in nonces {
+    // The idempotency key too: stripped, two keys could become one.
+    let key = crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
+    for field in nonces.iter().chain(std::iter::once(&key)) {
         if let Some(Value::String(text)) = meta.and_then(|meta| meta.get(field)) {
             validate_protocol_text(text)?;
         }
@@ -36,7 +39,7 @@ pub(crate) fn validate_protocol_fields(request: &Value, nonces: &[&str]) -> Resu
 }
 
 /// [`sanitize_json_value`], also reaching into an `arguments` member that is a
-/// string holding a JSON object (the OpenAI style every route accepts and
+/// string holding a JSON object (a client style every route accepts and
 /// decodes after this step): it is decoded, sanitized as an object and
 /// re-encoded, so an escaped NUL in it is refused and an escaped control
 /// character stripped before the decode can produce it.

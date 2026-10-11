@@ -304,9 +304,10 @@ impl Gateway {
         crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
     ) {
         // One visibility judgement per request (MIK-8340), as on HTTP.
-        let dispatch = crate::gateway::meta_mcp::visible::with_visibility_memo(
+        // Boxed first, as on HTTP: the memo wraps a pointer, not a copy.
+        let dispatch = crate::gateway::meta_mcp::visible::with_visibility_memo(Box::pin(
             Self::dispatch_relay_scoped(meta_mcp, tool_policy, mtls_policy, request, client, sink),
-        );
+        ));
         if meta_mcp.relay_active() {
             return meta_mcp.collecting_staged(Box::pin(dispatch)).await;
         }

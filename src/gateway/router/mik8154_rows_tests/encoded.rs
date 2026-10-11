@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8154 S9 (implementation seat F1): tool arguments sent as a JSON string
-//! (OpenAI style) are decoded after the sanitize step, so the step reaches
+//! (a client style) are decoded after the sanitize step, so the step reaches
 //! into them: an escaped NUL is refused and an escaped control character
 //! stripped before the decode can produce it, on every route.
 
