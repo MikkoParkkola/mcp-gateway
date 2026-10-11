@@ -14,7 +14,7 @@ use super::direct_caller::{Envelope, Rejection};
 use super::direct_dispatch::{Admitted, Scope};
 use super::direct_preflight::Propagation;
 use crate::gateway::meta_mcp::invoke::egress::Egressed;
-use crate::protocol::JsonRpcResponse;
+use crate::protocol::{JsonRpcResponse, RequestId};
 
 /// MIK-8351 (MIK-8154 SAN.3): pass the dispatch chokepoint on the bytes this
 /// `tools/call` is about to send, its redeemed answers included, as every meta
@@ -62,7 +62,7 @@ pub(super) fn mint_permit(
 /// the nonce, the idempotency key (released now, not left to the unarmed
 /// drop), and the spend admission and continuation slot, which the caller
 /// drops with the refusal.
-pub(super) fn give_back_refused(state: &AppState, admitted: &mut Admitted<'_>) {
+fn give_back_refused(state: &AppState, admitted: &mut Admitted<'_>) {
     DirectRouteGuards::release_nonce(state, admitted.nonce.take());
     if let Some(mut reservation) = admitted.idem_reservation.take() {
         // Today the reservation is unarmed here (it is armed only in
@@ -71,6 +71,21 @@ pub(super) fn give_back_refused(state: &AppState, admitted: &mut Admitted<'_>) {
         // code arms it earlier, that stops holding and this release carries it.
         reservation.release();
     }
+}
+
+/// The answer to a send the chokepoint refused, on either arm: give back what
+/// the call took, then the refusal. The caller drops its spend admission.
+pub(super) fn refused_send(
+    state: &AppState,
+    admitted: &mut Admitted<'_>,
+    id: &RequestId,
+    e: &crate::Error,
+) -> Rejection {
+    give_back_refused(state, admitted);
+    build_http_response(
+        &Egressed::gateway_own(refusal(Some(id.clone()), e)),
+        StatusCode::OK,
+    )
 }
 
 /// One plain-arm send, not yet awaited.
@@ -99,13 +114,12 @@ pub(super) fn plain_send<'a>(
             Ok(permit) => Ok(Box::pin(super::direct_send::dispatch_tool_call(
                 permit, backend, id, params, headers,
             ))),
-            Err(e) => {
-                give_back_refused(scope.state, admitted);
-                Err(build_http_response(
-                    &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
-                    StatusCode::OK,
-                ))
-            }
+            // Fail-closed: on today's code the entry check already judged
+            // exactly what the chokepoint judges here (a first call to a
+            // passthrough backend; retries take the sanitized arm), so this
+            // refusal cannot happen yet. It stays so that if the two ever
+            // diverge, the refusal still gives back what the call took.
+            Err(e) => Err(refused_send(scope.state, admitted, id, &e)),
         };
     }
     let Some(other) = super::direct_send::NonToolMethod::new(method) else {
