@@ -70,7 +70,7 @@ pub(super) fn idempotency_outcome(
 /// Stage 7b: the lease a keyed `tools/call` holds through dispatch, or the
 /// stored answer it replays. A cache hit at 7a skips it; an unkeyed call is
 /// unprotected, as on `/mcp`. A refusal or a replay gives the 7a reservation
-/// back first: nothing dispatched under it.
+/// back: nothing dispatched under it.
 pub(super) fn execution_lease(
     scope: Scope<'_>,
     envelope: &Envelope,
@@ -118,16 +118,20 @@ pub(super) fn execution_lease(
         (scope.name, tool, envelope.params.as_ref()),
         scope.id,
     );
-    let answer = match admitted {
-        Ok(SyncAdmission::Unprotected) => return Ok((None, None)),
-        Ok(SyncAdmission::Owned(lease)) => return Ok((Some(lease), None)),
-        Ok(SyncAdmission::Replay(response, _)) => Ok((None, Some(response))),
+    match admitted {
+        Ok(SyncAdmission::Unprotected) => Ok((None, None)),
+        Ok(SyncAdmission::Owned(lease)) => Ok((Some(lease), None)),
+        // Released before the replay's delivery begins, not when it ends.
+        Ok(SyncAdmission::Replay(response, _)) => {
+            if let Some(GuardOutcome::Proceed(mut reservation)) = guarded.take() {
+                reservation.release();
+            }
+            Ok((None, Some(response)))
+        }
+        // The caller's `?` drops the undispatched 7a reservation, which
+        // releases it (`IdempotencyReservation`'s drop, OnDrop::Release).
         Err(e) => Err(refused(scope, &e)),
-    };
-    if let Some(GuardOutcome::Proceed(mut reservation)) = guarded.take() {
-        reservation.release();
     }
-    answer
 }
 
 /// Just before the backend can be reached: from here a drop is uncertain.

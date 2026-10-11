@@ -482,6 +482,9 @@ async fn l5_a_7b_refusal_drops_the_7a_reservation_and_spends_no_nonce() {
     cache.advance_for_test(PAST_THE_CACHE);
     for nonce in ["l5-n2", "l5-n3"] {
         let (_, refused) = signed_direct(&fx, "l5", "b", nonce).await;
+        // The second refusal, under the same key, is the store's again and
+        // never "Duplicate request in progress": the first refusal's 7a
+        // reservation was released when it was dropped.
         assert_eq!(message(&refused), MISMATCH, "l5 {nonce}: {refused}");
         assert_eq!(calls(&fx), 1, "l5 {nonce}: dispatched");
     }
