@@ -45,7 +45,17 @@ async fn gateway(
     enforcement: InputSchemaEnforcement,
     surfaced: Surfaced,
 ) -> Gateway {
-    let (backend, caller, shared) = per_user_backend(slot, &valid(), Warmth::Warm, enforcement);
+    gateway_with_shared(slot, &valid(), enforcement, surfaced).await
+}
+
+async fn gateway_with_shared(
+    slot: CallerSlot,
+    shared_schema: &Value,
+    enforcement: InputSchemaEnforcement,
+    surfaced: Surfaced,
+) -> Gateway {
+    let (backend, caller, shared) =
+        per_user_backend(slot, shared_schema, Warmth::Warm, enforcement);
     let (mut state, store) =
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
@@ -160,4 +170,35 @@ async fn c10b_direct_route_visibility_with_enforcement_off() {
             "C10b {slot:?}: {answer:?}"
         );
     }
+}
+
+/// F1 (the flip guard, design R5.4) over HTTP `/mcp`: the shared slot holds
+/// an INVALID schema for [`TOOL`] and alpha's own slot a valid one. The call
+/// reaches alpha's upstream exactly once. RED on base (measured): the route
+/// stage withholds it on the shared schema and the meta layer answers it as
+/// absent. (Its audit half, that route authorize and the firewall ran on the
+/// target, is asserted with the implementation, where the target exists.)
+#[tokio::test]
+async fn f1_http_invalid_shared_valid_caller_dispatches() {
+    let invalid = crate::gateway::meta_mcp::slot_verdict_fixture::invalid();
+    let gw = gateway_with_shared(CallerSlot::Valid, &invalid, CLOSED, Surfaced::Yes).await;
+    let answer = post_as_alpha(&gw.router, "/mcp", &tools_call(TOOL)).await;
+    assert_eq!(gw.caller.calls(), 1, "F1: alpha's valid tool not dispatched: {answer:?}");
+}
+
+/// C6b (guard, kills M13): on the direct route, an argument-key refusal for a
+/// tool alpha's catalogue offers keeps today's shape: a wrapped tool result
+/// with isError, never -32601. Green on base.
+#[tokio::test]
+async fn c6b_direct_route_argument_key_refusal_unchanged() {
+    let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
+    let body = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+        "params": {"name": TOOL, "arguments": {"q": "x", "invented": 1}}});
+    let answer = post_as_alpha(&gw.router, &direct(), &body).await;
+    assert_eq!(gw.dispatched(), 0, "premise: an undeclared key was dispatched: {answer:?}");
+    assert_eq!(
+        answer.1.pointer("/result/isError"),
+        Some(&json!(true)),
+        "C6b: the argument-key refusal changed shape: {answer:?}"
+    );
 }
