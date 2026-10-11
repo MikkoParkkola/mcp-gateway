@@ -1,0 +1,3 @@
+head_sha	d7503fbac06a98c0d079c902a1d9d2ac06235626
+# #3811 header take: capture must precede it
+m1-take-before-capture	linux	m1-take-before-capture.patch	--lib -- gateway::router::handlers::dispatch_intake::presented_tests

@@ -1,0 +1,22 @@
+diff --git a/src/gateway/router/handlers/dispatch_intake.rs b/src/gateway/router/handlers/dispatch_intake.rs
+index 88e5083b3..9cf8f2560 100644
+--- a/src/gateway/router/handlers/dispatch_intake.rs
++++ b/src/gateway/router/handlers/dispatch_intake.rs
+@@ -144,14 +144,14 @@ pub(super) async fn intake(
+         .cloned();
+     let verified_identity = http_request.extensions().get::<VerifiedIdentity>().cloned();
+     // MCP Events caps a subscription at the credential's own expiry.
++    let (mut parts, body) = http_request.into_parts();
++    let headers = std::mem::take(&mut parts.headers);
++    let http_request = axum::http::Request::from_parts(parts, body);
+     let presented = events::Presented::capture(&http_request);
+     // The headers are taken, not copied. `Presented::capture` above is the last
+     // reader of the request's own headers; below, the request is read only for
+     // its URI, its extensions and its body, and the body read takes its limit
+     // from the extensions (`DefaultBodyLimit`), not from a header.
+-    let (mut parts, body) = http_request.into_parts();
+-    let headers = std::mem::take(&mut parts.headers);
+-    let http_request = axum::http::Request::from_parts(parts, body);
+ 
+     // === OWASP ASI03: per-agent identity ===
+     //
