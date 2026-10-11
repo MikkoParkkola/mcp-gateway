@@ -1,0 +1,13 @@
+diff --git a/src/security/sanitize/protocol.rs b/src/security/sanitize/protocol.rs
+index 55b0ba56b..c64e2d209 100644
+--- a/src/security/sanitize/protocol.rs
++++ b/src/security/sanitize/protocol.rs
+@@ -179,7 +179,7 @@ fn sanitize_slot(value: &Value, slot: Slot) -> Result<Value> {
+             let holder = serde_json::json!({ "arguments": value });
+             let decoded = crate::gateway::parse_tool_arguments_cow(&holder)?;
+             match decoded.as_ref() {
+-                Value::Object(map) => sanitize_arguments(map, slot),
++                Value::Object(map) => sanitize_arguments(map, slot).map(|_| value.clone()),
+                 other => sanitize_json_value(other),
+             }
+         }

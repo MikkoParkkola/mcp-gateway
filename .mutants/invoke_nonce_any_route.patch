@@ -1,0 +1,13 @@
+diff --git a/src/security/sanitize/protocol.rs b/src/security/sanitize/protocol.rs
+index 55b0ba56b..d6a888eac 100644
+--- a/src/security/sanitize/protocol.rs
++++ b/src/security/sanitize/protocol.rs
+@@ -58,7 +58,7 @@ pub(crate) fn validate_protocol_fields(
+     // The argument nonce, read where the meta route reads it: the name as
+     // dispatch routes on it (sanitized), `arguments` decoded when a client
+     // sent them as a JSON string, so neither form launders a dirty nonce.
+-    if route == ProtocolRoute::Meta
++    if route == ProtocolRoute::Meta || true
+         && let Some(Value::String(name)) = request.pointer("/params/name")
+         && sanitize_string(name).is_ok_and(|name| name == "gateway_invoke")
+     {
