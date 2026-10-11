@@ -35,9 +35,7 @@ pub(crate) fn expiry_from_expires_in(now_secs: u64, expires_in: u64) -> Option<u
 pub(crate) fn secs<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
     let secs = u64::deserialize(deserializer)?;
     if secs > MAX_DURATION.as_secs() {
-        return Err(serde::de::Error::custom(too_long(&format!(
-            "{secs} seconds"
-        ))));
+        return Err(serde::de::Error::custom(too_long("this duration")));
     }
     Ok(secs)
 }
@@ -70,7 +68,7 @@ pub(crate) fn nonzero_secs<'de, D: Deserializer<'de>>(deserializer: D) -> Result
 pub(crate) fn millis<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
     let millis = u64::deserialize(deserializer)?;
     if Duration::from_millis(millis) > MAX_DURATION {
-        return Err(serde::de::Error::custom(too_long(&format!("{millis} ms"))));
+        return Err(serde::de::Error::custom(too_long("this duration")));
     }
     Ok(millis)
 }

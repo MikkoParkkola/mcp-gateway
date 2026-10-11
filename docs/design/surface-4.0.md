@@ -729,7 +729,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `security.transparency_log.rotation.max_segment_bytes` | KEEP | `64 * 1024 * 1024` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:35 |
 | `security.transparency_log.rotation.on_disk_full` | KEEP | `OnDiskFull::ExpireOldest` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:41 |
 | `security.transparency_log.rotation.retain_segments` | KEEP | `12` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:39 |
-| `security.transparency_log.shared_secret` | KEEP | `String::new()` | audit-log signing key the operator owns | - | src/config/features/security.rs:46 |
+| `security.transparency_log.shared_secret` | KEEP | `String::new()` | audit-log signing key the operator owns; `${VAR}`, `env:`, `file:` or a literal, 32 bytes or more and not all zero while the log is on (MIK-8365) | - | src/config/features/security.rs:46 |
 | `security.trust_configured_backends` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:630 |
 | `server` | KEEP | `type default` | where the gateway listens and how clients reach it | - | src/config/mod.rs:93 |
 | `server.allow_unauthenticated_network_bind` | KEEP | `false` | security opt-out or credential; must stay an explicit operator decision | - | src/config/server_config.rs:65 |

@@ -39,13 +39,17 @@ pub struct TransparencyLogConfig {
     pub path: String,
     /// Key identifier written into `key_id` for rotation tracking.
     pub key_id: String,
-    /// HMAC shared secret (resolved from env var at load time).
-    ///
+    /// HMAC secret: `${VAR}`, `env:NAME`, `file:PATH` or a literal, resolved
+    /// once at load; 32+ bytes, not all zero, while the log is on (MIK-8365).
     /// When empty, `sig` / `key_id` are omitted from each entry — the hash
     /// chain alone still provides tamper evidence.
     pub shared_secret: String,
     /// Segment size, retention and disk-full behaviour (D6).
     pub rotation: crate::security::audit_rotation_config::RotationConfig,
+    /// The key did not resolve while the log was off, so it is empty (MIK-8365).
+    /// A flag, not a `String`: `Config` sits in futures held across awaits.
+    #[serde(skip)]
+    unresolved_secret: bool,
 }
 
 // Manual `Debug` that redacts the HMAC shared secret (CWE-532, mirrors PR
@@ -58,6 +62,8 @@ impl std::fmt::Debug for TransparencyLogConfig {
             .field("path", &self.path)
             .field("key_id", &self.key_id)
             .field("rotation", &self.rotation)
+            // A field-named reason, never a value (MIK-8365).
+            .field("unresolved_secret", &self.unresolved_secret)
             .field(
                 "shared_secret",
                 &if self.shared_secret.is_empty() {
@@ -78,9 +84,13 @@ impl Default for TransparencyLogConfig {
             key_id: "default".to_string(),
             shared_secret: String::new(),
             rotation: crate::security::audit_rotation_config::RotationConfig::default(),
+            unresolved_secret: false,
         }
     }
 }
+
+#[path = "transparency_secret.rs"]
+mod transparency_secret;
 
 impl crate::config::Config {
     /// The runtime config the audit logger opens with, or `None` when the log
@@ -343,12 +353,10 @@ impl MessageSigningConfig {
                 reference.resolve(&format!("security.message_signing.{field}"), overlay)?
             }
         };
-        if resolved.len() < 32 || resolved.bytes().all(|byte| byte == 0) {
-            return Err(Self::signing_config_error(
-                field,
-                "must contain at least 32 bytes and must not be all zero",
-            ));
-        }
+        crate::security::message_signing::validate_key(
+            &format!("security.message_signing.{field}"),
+            &resolved,
+        )?;
         Ok(resolved)
     }
 

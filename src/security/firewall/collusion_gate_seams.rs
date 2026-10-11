@@ -32,11 +32,20 @@ impl Firewall {
         let capped = self.capped(digest);
         let digest = capped.as_ref().unwrap_or(digest);
         let now = self.relay.now();
-        detector.record_cut_fingerprints_at(
-            source,
-            caller.key(),
+        // `MIK-8066.BIG.3`: a step past the plan bound publishes its excuse
+        // sketch and offers its exact evidence to the record's sample.
+        let sample = digest.big.as_ref().and_then(|big| {
+            big.publish(now);
+            big.evidence()
+        });
+        detector.record_sampled_at(
+            (source, caller.key()),
             (digest.sensitive, flows),
-            (digest.fingerprints(detector), digest.cut_fps.clone()),
+            (
+                digest.fingerprints(detector),
+                digest.cut_fps.clone(),
+                sample,
+            ),
             now,
         );
         if let Some(seams) = seams {

@@ -201,3 +201,53 @@ fn check_backend_env_unknown_server_returns_empty() {
     let results = check_backend_env("totally-unknown-server-xyz", &backend);
     assert!(results.is_empty());
 }
+
+// ── MIK-8375: a config that will not load ─────────────────────────────────
+
+/// A 0600 config at `dir/gateway.yaml` whose port holds `sentinel`.
+fn unloadable_config(dir: &Path, sentinel: &str) -> PathBuf {
+    let path = dir.join("gateway.yaml");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        &path,
+        format!("server:\n  port: {sentinel}\n"),
+    )
+    .expect("write config");
+    path
+}
+
+/// CFGLEAK.2: doctor prints the load error, so it must not carry the value.
+#[test]
+fn doctor_does_not_print_the_value_a_config_refused() {
+    let sentinel = "cfgleak-sentinel-r9";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = unloadable_config(dir.path(), sentinel);
+    let (result, config) = check_config(Some(&path), false);
+    assert!(config.is_none());
+    assert_eq!(result.status, CheckStatus::Fail);
+    assert!(!result.detail.contains(sentinel), "{}", result.detail);
+    assert!(result.detail.contains("server.port"), "{}", result.detail);
+}
+
+/// The fix doctor suggests is a command that re-checks this same file: it
+/// is parsed by the CLI itself, and must reach `doctor` with the path.
+/// `validate` lints capability files and never loads the gateway config.
+#[test]
+fn doctor_suggests_a_command_that_rechecks_the_same_config() {
+    use clap::Parser as _;
+    let dir = tempfile::tempdir().expect("tempdir");
+    // A space and a quote in the path: the hint must still copy as one word.
+    let nested = dir.path().join("my config's dir");
+    std::fs::create_dir(&nested).expect("dir");
+    let path = unloadable_config(&nested, "x");
+    let (result, _) = check_config(Some(&path), false);
+    let fix = result.fix_command.expect("a fix is suggested");
+    let words = shlex::split(&fix).unwrap_or_else(|| panic!("`{fix}` does not tokenise"));
+    let cli = mcp_gateway::cli::Cli::try_parse_from(words)
+        .unwrap_or_else(|e| panic!("`{fix}` does not parse: {e}"));
+    match cli.command {
+        Some(mcp_gateway::cli::Command::Doctor { config, .. }) => {
+            assert_eq!(config.as_deref(), Some(path.as_path()), "{fix}");
+        }
+        other => panic!("`{fix}` runs {other:?}, not doctor"),
+    }
+}

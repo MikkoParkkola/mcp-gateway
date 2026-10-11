@@ -206,6 +206,7 @@ mod tests {
     /// The startup outcome a test observes: `Err` is a refusal to start,
     /// `Ok(true)` a gateway serving governance mutation, `Ok(false)` one
     /// serving read-only.
+    mod key_change_tests;
     mod lease_tests;
 
     fn start(config: &Config, config_path: &Path) -> Result<bool, String> {

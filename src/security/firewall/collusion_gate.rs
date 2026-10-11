@@ -4,7 +4,6 @@
 //! its load checks, and the egress check and delivery recording the direct
 //! route calls (design `2026-09-28-asi10-verbatim-relay.md` §13.1).
 
-use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -494,12 +493,12 @@ impl Firewall {
         server: &str,
         tool: &str,
         result: &Value,
-        plan: Option<&Cell<usize>>,
+        plan: Option<&PlanStaging>,
     ) -> Option<DeliveryDigest> {
         let Some(staged) = plan else {
             return self.delivery_digest(server, tool, result);
         };
-        let total = staged.get();
+        let total = staged.baseline();
         if total >= PLAN_STAGED_CAP {
             self.relay_detector()?;
             self.count_plan_drop_once(staged);
@@ -521,8 +520,8 @@ impl Firewall {
             self.count_cut(joins_cut && !cut);
             digest
         };
-        staged.set(total + digest.staged_len());
-        Some(digest)
+        staged.add_baseline(digest.staged_len());
+        Some(self.attach_big(digest, (server, tool), result, staged))
     }
 
     fn digest_with(
@@ -599,7 +598,7 @@ impl Firewall {
     pub(crate) fn delivered_for_plan<'v>(
         &self,
         answer: &'v Value,
-        staged: Option<&Cell<usize>>,
+        staged: Option<&PlanStaging>,
     ) -> Option<Delivered<'v>> {
         self.relay_detector()?;
         let (leaves, values) = delivery_parts(answer);
@@ -621,7 +620,7 @@ impl Firewall {
         &self,
         answer: &'v Value,
         fallback: &'v Value,
-        staged: Option<&Cell<usize>>,
+        staged: Option<&PlanStaging>,
     ) -> Option<Delivered<'v>> {
         self.relay_detector()?;
         let (leaves, values) = delivery_parts(answer);
@@ -632,10 +631,9 @@ impl Firewall {
 
     /// [`Self::count_plan_drop`] unless this delivery already counted one:
     /// `staged` then holds `usize::MAX`, past every bound (`MIK-8094`).
-    fn count_plan_drop_once(&self, staged: &Cell<usize>) {
-        if staged.get() != usize::MAX {
+    fn count_plan_drop_once(&self, staged: &PlanStaging) {
+        if staged.mark_dropped() {
             self.count_plan_drop();
-            staged.set(usize::MAX);
         }
     }
 
@@ -656,10 +654,16 @@ impl Firewall {
         delivered: &Delivered<'_>,
         step: Option<u32>,
     ) -> DeliveryDigest {
-        match self.relay_detector() {
-            Some(detector) => digest.retaining_for(detector, delivered, step),
-            None => digest,
+        let Some(detector) = self.relay_detector() else {
+            return digest;
+        };
+        let mut digest = digest.retaining_for(detector, delivered, step);
+        // `MIK-8066.BIG.3`: a step past the plan bound keeps its evidence and
+        // excuse to what the answer delivered.
+        if let Some(big) = digest.big.as_mut() {
+            big.keep_to(delivered.kgrams(detector));
         }
+        digest
     }
 
     /// `digest` with its deferred cap applied, a cut counted.
@@ -787,6 +791,9 @@ fn context_integrity_sensitive(result: &Value) -> bool {
 
 #[path = "collusion_gate_seams.rs"]
 mod seams;
+#[path = "collusion_staging.rs"]
+mod staging;
+pub(crate) use staging::PlanStaging;
 #[cfg(test)]
 #[path = "collusion_gate_tests.rs"]
 mod tests;

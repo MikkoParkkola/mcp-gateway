@@ -9,9 +9,9 @@ mod accounts;
 #[cfg(feature = "webui")]
 mod add_remove;
 mod api_key_rewrite;
+mod capability_dirs;
 mod backend_url_keys;
 mod cap;
-mod capability_dirs;
 pub(crate) mod color;
 #[cfg(feature = "config-export")]
 mod config_export;
@@ -73,10 +73,11 @@ use mcp_gateway::{
     mtls::{CaParams, CertGenerator, LeafCertParams},
 };
 
-/// The command that shows why the config at `path` does not load: doctor's
-/// own `--config`, never the global flag before the subcommand. One
-/// definition for every hint that names it (MIK-8375 defines the same; the
-/// two are reconciled when both land).
+/// The command that loads the gateway config at `path` and says why it will
+/// not load: doctor's own `--config`, which `main` hands to doctor (a global
+/// `--config` before the subcommand is not passed on). Every "this config does
+/// not load" message points here; `validate` lints capability files and never
+/// loads the gateway config (MIK-8375).
 pub(crate) fn check_config_command(path: &std::path::Path) -> String {
     // One shell word, so a path with a space or a quote still copies whole.
     let text = path.to_string_lossy();
