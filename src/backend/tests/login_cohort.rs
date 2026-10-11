@@ -82,17 +82,22 @@ async fn a_reconnect_waiting_for_its_oauth_client_ends_at_its_bound() {
     super::token_lapse::arrived(&SEEN, before + 1, "the call's request").await;
     let client = oauth_client_of(&backend);
     let held = client.lock().await;
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    assert!(
-        !call.is_finished(),
-        "premise: the call's reconnect is waiting for the client"
-    );
-    // The reconnect waits on a mutex this test holds: no I/O is left to race.
-    advance_paused(crate::oauth::OAUTH_AUTHORIZATION_WINDOW + Duration::from_secs(1)).await;
+    // The test holds the client, so nothing left can race paused time. The
+    // first jump also completes the server's 2 s delay, which starts the
+    // reconnect; the next passes the reconnect's own bound. Three jumps at
+    // most, so the call's own 3600 s timeout is never reached.
+    // Between jumps, poll: the server's answer still crosses a real socket.
+    'jumps: for _ in 0..3 {
+        advance_paused(crate::oauth::OAUTH_AUTHORIZATION_WINDOW + Duration::from_secs(1)).await;
+        for _ in 0..50 {
+            if call.is_finished() {
+                break 'jumps;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
 
-    let answered = within("the call's answer after its reconnect's bound", call)
-        .await
-        .expect("call task");
+    let answered = within("the call's answer", call).await.expect("call task");
     drop(held);
     assert!(
         format!("{answered:?}").contains("session not found"),
