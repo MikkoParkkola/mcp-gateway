@@ -25,28 +25,7 @@ use crate::gateway::streaming::create_sse_response;
 use crate::mtls::CertIdentity;
 use crate::protocol::JsonRpcResponse;
 
-/// The stateless path's answer to a protocol version this build cannot serve.
-///
-/// The client is told which revisions it *could* retry on rather than left to
-/// guess. Shared by the POST classifier and the `GET /mcp` era gate so the two
-/// cannot drift into giving one client two different answers.
-pub(super) fn unsupported_version_error(
-    id: Option<crate::protocol::RequestId>,
-    version: &str,
-    modern_enabled: bool,
-) -> JsonRpcResponse {
-    let supported: &[&str] = if modern_enabled {
-        crate::protocol::meta::MODERN_VERSIONS
-    } else {
-        &[]
-    };
-    JsonRpcResponse::error_with_data(
-        id,
-        crate::protocol::era::UNSUPPORTED_PROTOCOL_VERSION,
-        format!("unsupported protocol version '{version}'"),
-        serde_json::json!({ "supportedVersions": supported }),
-    )
-}
+pub(super) use crate::protocol::modern_refusal::unsupported_version_error;
 
 /// The refusal a `GET /mcp` earns from the era it declares, if any.
 ///
