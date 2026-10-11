@@ -435,10 +435,9 @@ impl CollusionDetector {
         0
     }
 
-    /// STUB (2b red): the streaming sampled k-gram hashes of `text` (D2).
+    /// The streaming sampled k-gram hashes of `text` (D2), collected.
     pub(crate) fn sampled_kgrams(&self, text: &str) -> Vec<u64> {
-        let _ = (self, text);
-        Vec::new()
+        self.sampled_kgram_stream(text.chars()).collect()
     }
 
     /// STUB (2b red): the sorted sampled view of `answer`, built without the

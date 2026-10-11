@@ -789,6 +789,8 @@ pub(super) mod big;
 mod seam_tests;
 #[path = "collusion_sketch.rs"]
 pub(super) mod sketch;
+#[path = "collusion_stream.rs"]
+mod stream;
 #[path = "collusion_thin.rs"]
 mod thin;
 pub(crate) use seam::{SeamFingerprint, SeamForms};
