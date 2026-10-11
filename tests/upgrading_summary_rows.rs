@@ -257,75 +257,82 @@ fn numbers_in(text: &str) -> BTreeSet<u32> {
 static GUIDE: std::sync::LazyLock<String> =
     std::sync::LazyLock::new(|| read_doc(&doc_source(std::env::var_os("UPGRADING_DOC"))));
 
-/// What a startup marker's clause says the item does at startup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Clause {
-    PrintsNotice,
-    NoNotice,
-    RefusesToStart,
-    FailsBackend,
-    FailsCapabilityFile,
+/// The startup marker's grammar, shared with `scripts/release/upgrading_fragments.py`
+/// through one file (MIK-8246): the marker prefix, the clauses, and the test
+/// vectors both suites run.
+#[derive(serde::Deserialize)]
+struct Grammar {
+    marker: String,
+    clauses: Vec<ClauseSpec>,
+    valid: Vec<String>,
+    invalid: Vec<InvalidVector>,
 }
 
-impl Clause {
-    /// The clause's words, and its place in a marker: notice first, then the
-    /// refusal, then a failed backend, then a failed capability file.
-    const ALL: [(Self, &'static str, u8); 5] = [
-        (Self::PrintsNotice, "prints a notice", 0),
-        (Self::NoNotice, "no notice", 0),
-        (Self::RefusesToStart, "refuses to start", 1),
-        (Self::FailsBackend, "fails a backend", 2),
-        (Self::FailsCapabilityFile, "fails a capability file", 3),
-    ];
+/// One clause: its words, its place in a marker (notice first, then the
+/// refusal, then a failed backend, then a failed capability file) and its role.
+#[derive(Debug, serde::Deserialize)]
+struct ClauseSpec {
+    words: String,
+    place: u8,
+    role: String,
+    #[serde(default)]
+    needs_notice_field: bool,
 }
 
-/// The marker every item section starts with: its startup behaviour.
-const MARKER: &str = "**Startup:** ";
+/// A marker text the grammar refuses, and the token of the rule that refuses it.
+#[derive(serde::Deserialize)]
+struct InvalidVector {
+    text: String,
+    reason: String,
+}
 
-/// Parse a marker's text (after `**Startup:** `) into its clauses.
+static GRAMMAR: std::sync::LazyLock<Grammar> = std::sync::LazyLock::new(|| {
+    serde_json::from_str(include_str!(
+        "../scripts/release/upgrading-startup-grammar.json"
+    ))
+    .expect("scripts/release/upgrading-startup-grammar.json is valid")
+});
+
+/// Parse a marker's text (after the grammar's marker prefix) into its clauses.
+/// An error starts with the reason token the grammar file names for the rule.
 ///
 /// Each item states its own startup behaviour in its own section, so adding an
 /// item touches only that section and its summary row. The intro used to list
 /// item numbers for each behaviour, and every change that added an item edited
 /// the same intro lines, so each merge conflicted with every open change.
-fn parse_marker(text: &str) -> Result<Vec<Clause>, String> {
+fn parse_marker(text: &str) -> Result<Vec<&'static ClauseSpec>, String> {
     let mut clauses = Vec::new();
     let mut last_place = None;
     for part in text.split("; ") {
-        let (clause, place, rest) = Clause::ALL
+        let (clause, rest) = GRAMMAR
+            .clauses
             .iter()
-            .find_map(|&(clause, words, place)| {
-                part.strip_prefix(words).map(|rest| (clause, place, rest))
-            })
-            .ok_or_else(|| format!("unrecognised clause {part:?}"))?;
+            .find_map(|c| part.strip_prefix(c.words.as_str()).map(|rest| (c, rest)))
+            .ok_or_else(|| format!("unknown_clause: unrecognised clause {part:?}"))?;
         match rest.strip_prefix(", ") {
             Some(detail) if detail.trim().is_empty() => {
-                return Err(format!("empty text after the comma in {part:?}"));
+                return Err(format!(
+                    "empty_detail: empty text after the comma in {part:?}"
+                ));
             }
             Some(_) => {}
             None if rest.is_empty() => {}
-            None => return Err(format!("text must follow a comma in {part:?}")),
+            None => {
+                return Err(format!(
+                    "detail_needs_comma: text must follow a comma in {part:?}"
+                ));
+            }
         }
         if part.contains(';') {
-            return Err(format!("free text may not contain ';': {part:?}"));
+            return Err(format!(
+                "semicolon_in_text: free text may not contain ';': {part:?}"
+            ));
         }
-        if last_place.is_some_and(|last| place <= last) {
-            return Err(format!("clause out of order or repeated: {part:?}"));
+        if last_place.is_some_and(|last| clause.place <= last) {
+            return Err(format!("order: clause out of order or repeated: {part:?}"));
         }
-        last_place = Some(place);
+        last_place = Some(clause.place);
         clauses.push(clause);
-    }
-    let effect = clauses.iter().any(|c| {
-        matches!(
-            c,
-            Clause::RefusesToStart | Clause::FailsBackend | Clause::FailsCapabilityFile
-        )
-    });
-    let notice = clauses
-        .iter()
-        .any(|c| matches!(c, Clause::PrintsNotice | Clause::NoNotice));
-    if !notice && !effect {
-        return Err(format!("no notice clause and no refusal in {text:?}"));
     }
     Ok(clauses)
 }
@@ -337,8 +344,12 @@ fn marker_of(doc: &str, n: u32) -> Result<&str, String> {
         .skip(1)
         .find(|l| !l.trim().is_empty())
         .unwrap_or("");
-    line.strip_prefix(MARKER)
-        .ok_or_else(|| format!("item {n} does not start with `{MARKER}`: {line:?}"))
+    line.strip_prefix(GRAMMAR.marker.as_str()).ok_or_else(|| {
+        format!(
+            "item {n} does not start with `{}`: {line:?}",
+            GRAMMAR.marker
+        )
+    })
 }
 
 #[test]
@@ -349,11 +360,11 @@ fn every_section_starts_with_a_valid_startup_marker() {
         let clauses = parse_marker(text).unwrap_or_else(|e| panic!("item {n}: {e}"));
         let body = section_body(&GUIDE, n);
         assert_eq!(
-            body.matches(MARKER).count(),
+            body.matches(GRAMMAR.marker.as_str()).count(),
             1,
             "item {n} has more than one startup marker"
         );
-        refusing += usize::from(clauses.contains(&Clause::RefusesToStart));
+        refusing += usize::from(clauses.iter().any(|c| c.role == "refusal"));
     }
     assert!(
         refusing > 0,
@@ -361,36 +372,49 @@ fn every_section_starts_with_a_valid_startup_marker() {
     );
 }
 
+/// The shared vectors: both parsers accept every `valid` text and refuse every
+/// `invalid` one for the rule its reason token names.
 #[test]
 fn marker_grammar() {
-    for ok in [
-        "prints a notice",
-        "no notice",
-        "no notice, a reason",
-        "refuses to start",
-        "prints a notice; refuses to start, only for a bad `MODE`",
-        "no notice, decided per backend; fails a backend, with one warning",
-        "no notice, decided per capability file; fails a capability file, with an error",
-    ] {
+    for ok in &GRAMMAR.valid {
         assert!(
             parse_marker(ok).is_ok(),
             "{ok:?} must parse: {:?}",
             parse_marker(ok)
         );
     }
-    for bad in [
-        "",
-        "prints notices",
-        "refuses to start; prints a notice",
-        "prints a notice; no notice",
-        "fails a backend; fails a backend",
-        "no notice,",
-        "no notice, ",
-        "no noticeX",
-        "no notice, a; b",
-    ] {
-        assert!(parse_marker(bad).is_err(), "{bad:?} must be refused");
+    for bad in &GRAMMAR.invalid {
+        let err = parse_marker(&bad.text).expect_err(&format!("{:?} must be refused", bad.text));
+        assert!(
+            err.starts_with(&format!("{}:", bad.reason)),
+            "{:?} must be refused for {}: {err}",
+            bad.text,
+            bad.reason
+        );
     }
+}
+
+#[test]
+fn grammar_table_is_well_formed() {
+    let words: BTreeSet<_> = GRAMMAR.clauses.iter().map(|c| c.words.as_str()).collect();
+    assert_eq!(words.len(), GRAMMAR.clauses.len(), "clause words repeat");
+    for c in &GRAMMAR.clauses {
+        assert!(
+            ["notice", "refusal", "failure"].contains(&c.role.as_str()),
+            "{:?} has role {:?}",
+            c.words,
+            c.role
+        );
+    }
+    let places: BTreeSet<_> = GRAMMAR.clauses.iter().map(|c| c.place).collect();
+    assert_eq!(places, BTreeSet::from([0, 1, 2, 3]));
+    let flagged = GRAMMAR.clauses.iter().filter(|c| c.needs_notice_field);
+    assert_eq!(
+        flagged.count(),
+        1,
+        "exactly one clause needs the notice field"
+    );
+    assert_eq!(GRAMMAR.marker, "**Startup:** ");
 }
 
 /// The intro names no item: behaviour lives in each item's own marker.

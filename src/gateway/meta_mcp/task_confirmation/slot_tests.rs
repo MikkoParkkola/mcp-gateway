@@ -250,6 +250,17 @@ async fn ask_as(
 ) -> TaskConfirmation {
     let arguments = json!({ "id": 1 });
     let task = json!({ "ttl": 60_000 });
+    // What the HTTP edge hands over for this caller: its binding through
+    // `principal_source`, as the edge derives it, and the task owner it
+    // routes to. No identity here means no key either: unbindable.
+    let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        verified_identity: who,
+        ..crate::gateway::meta_mcp::anonymous_caller()
+    };
+    let principal = crate::protocol::mrtr::source_fingerprint(caller.principal_source(None));
+    let owner = who
+        .map(VerifiedIdentity::stable_actor_id)
+        .unwrap_or_default();
     let outcome = fx
         .meta
         .confirm_destructive_task(&TaskConfirmationRequest {
@@ -259,6 +270,9 @@ async fn ask_as(
             task: Some(&task),
             retry,
             verified_identity: who,
+            principal,
+            quota: caller.quota_key(),
+            owner: &owner,
             input_capabilities: declared,
             is_modern: true,
             admission: &fx.admission,
@@ -499,6 +513,17 @@ async fn an_anonymous_caller_is_classified_from_the_shared_slot() {
     }
 }
 
+/// MIK-8137 R3 (BIND.2): a caller with neither an identity nor a key is still
+/// refused as unbindable once key-only callers can be bound: binding the key
+/// must not turn "no principal" into "everyone is one principal".
+#[tokio::test]
+async fn a_caller_with_no_identity_and_no_key_is_refused_as_unbindable() {
+    let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
+    let (code, message) = refusal(&ask_as(&fx, &fresh(), elicitation(), None).await);
+    assert_eq!(code, -32003, "{message}");
+    assert!(message.contains("cannot name"), "{message}");
+}
+
 fn refusal(outcome: &TaskConfirmation) -> (i32, String) {
     let TaskConfirmation::Answer(response) = outcome else {
         panic!("expected a refusal, got {outcome:?}");
@@ -639,35 +664,6 @@ async fn a_grant_already_spent_is_refused_and_a_fresh_one_is_granted_once() {
     assert_eq!(refusal(&ask(&fx, &retry, elicitation()).await).0, -32602);
 }
 
-/// Mutant: a caller with no verified identity is treated as having an
-/// already-admitted task, or replay recognition is dropped for everyone.
-#[test]
-fn an_unattributable_caller_is_never_an_admitted_replay() {
-    let admission = ExecutionAdmission::new(Arc::new(|| 1_000));
-    let (arguments, retry) = (json!({ "id": 1 }), fresh());
-    let alice = identity();
-    // The same operation, held under the verified owner's key.
-    let owned =
-        super::task_admission_request(alice.stable_actor_id(), KEY.to_owned(), TOOL, &arguments);
-    let _held = admission.admit_task(owned.borrow());
-    let request = |who| TaskConfirmationRequest {
-        id: RequestId::Number(7),
-        tool_name: TOOL,
-        arguments: &arguments,
-        task: None,
-        retry: &retry,
-        verified_identity: who,
-        input_capabilities: Declared::NONE,
-        is_modern: true,
-        admission: &admission,
-    };
-    assert!(
-        MetaMcp::already_admitted(&request(Some(&alice)), KEY),
-        "control: the verified owner's operation is recognised"
-    );
-    assert!(!MetaMcp::already_admitted(&request(None), KEY));
-}
-
 /// MIK-8202 (#3616 regression): a destructive call on a clock before 1970 is
 /// refused, never challenged: no confirmation is minted against a time the
 /// gateway cannot read. Control: the real clock challenges the same call.
@@ -791,3 +787,6 @@ async fn s3d_one_identity_has_one_cap_across_invoke_and_both_confirmations() {
          meta confirmation refused = {meta_refused}"
     );
 }
+
+mod key_quota;
+mod replay;

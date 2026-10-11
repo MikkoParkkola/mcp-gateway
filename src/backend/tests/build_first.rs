@@ -4,7 +4,7 @@
 //! backend never removes the pooled transport unless its replacement
 //! started. A failed replacement leaves the old transport pooled and serving.
 
-use super::login_window::{LAPSE, Upstream, approved_start, variant, within};
+use super::login_window::{Upstream, approved_start, variant, within};
 use super::*;
 
 /// The transport the shared slot holds now.
@@ -18,7 +18,7 @@ fn pooled(backend: &Backend) -> Option<Arc<dyn Transport>> {
 async fn a_failed_replacement_keeps_serving_the_old_transport() {
     let (backend, browser, _dir) = approved_start(Upstream::Plain, Duration::from_secs(5)).await;
     let old = pooled(&backend).expect("premise: the backend started");
-    sleep(LAPSE).await;
+    super::token_lapse::lapse(&backend).await;
 
     let error = within(
         "the probe's rebuild",

@@ -188,54 +188,25 @@ impl MetaMcp {
         // into the other (a non-`_full` caller could hit a cached full payload
         // and receive fields the projection was meant to drop). A `_full` call
         // is therefore always a fresh, uncached dispatch.
-        // Resolve the per-user propagation credential ONCE (MIK-6734 / ADR-007).
-        // Single identity gate: fail-closed here for a required backend, and the
-        // resolved `cache_binding` (user+audience) is mixed into every cache key
-        // so per-user results cache in ISOLATION rather than leaking across users
-        // (IDP.3/8) — reused verbatim at dispatch so there is no re-mint or drift.
+        // Resolve the per-user propagation credential ONCE (MIK-6734 / ADR-007),
+        // and the capability's account credential, before the outer response
+        // cache is consulted: a cache key built before the caller's credential
+        // is known cannot name the caller. Reused verbatim at dispatch so there
+        // is no re-mint or drift.
         let backend = self.backends.get(server);
         let target = (server, backend.as_ref().map(|backend| backend.instance()));
-        let caller_credential = if let Some(idp_cfg) = backend
-            .as_ref()
-            .and_then(|b| b.identity_propagation_config().cloned())
-        {
-            let resolved = self.resolve_caller_credential_as(
-                server,
+        let propagation::ResolvedDispatch {
+            caller_credential,
+            account_credential,
+            binding: dispatch_binding,
+        } = self
+            .resolve_dispatch(
+                (server, tool),
                 backend.as_deref(),
-                &idp_cfg,
                 caller_proof,
-            );
-            self.with_connect_offer(resolved.await, verified_identity)
-                .await?
-        } else {
-            Self::refuse_unbound_account_backend(server, backend.as_deref())?;
-            CallerCredential::default()
-        };
-
-        self.refuse_shared_oauth_login(server, tool, &caller_credential, backend.as_deref())?;
-        // THE CAPABILITY ROUTE'S ACCOUNT BOUNDARY, RESOLVED HERE — BEFORE THE
-        // OUTER RESPONSE CACHE IS CONSULTED.
-        //
-        // The MCP route resolves its credential above for the same reason: a
-        // cache key built before the caller's credential is known cannot name
-        // the caller. A REST capability's credential comes from its own
-        // `auth.account` (its PRIMARY auth), not the BACKEND-keyed map, and must
-        // resolve here, not in the executor, which runs after this lookup. It is
-        // rechecked at dispatch, never minted twice; a refusal returns now.
-        let resolving = self.resolve_capability_account_credential(server, tool, caller_proof);
-        let account_credential = self
-            .with_connect_offer(resolving.await, verified_identity)
+                verified_identity,
+            )
             .await?;
-        // ONE binding for both cache layers and for the transport's session
-        // partitioning. The MCP route's propagation binding when there is one,
-        // otherwise the account credential's — they are never both present,
-        // because one describes a backend's propagation config and the other a
-        // capability's account reference.
-        let dispatch_binding = caller_credential.cache_binding.clone().or_else(|| {
-            account_credential
-                .as_ref()
-                .map(|prepared| prepared.cache_binding().to_owned())
-        });
         // Who the response cache keys on, in one place and one namespace per
         // source (`support::caller_cache_principal`). The binding when identity
         // propagation is minting per-user credentials, then the verified OIDC
@@ -717,6 +688,34 @@ impl MetaMcp {
         } else {
             sealed
         })
+    }
+
+    /// Who a continuation minted by a call to `server:tool` is bound to, for
+    /// `caller`: `principal_source` over the call's dispatch binding, exactly
+    /// as the call's own mint derives it (MIK-8137). A chain resume reads this
+    /// for the step its handle is pending at, so the resume opens the handle
+    /// under the binding the step minted with rather than a second spelling.
+    ///
+    /// Resolving the binding mints the caller's propagated or account
+    /// credential, as the step's own dispatch does; a refusal returns here.
+    pub(in crate::gateway::meta_mcp) async fn step_fingerprint(
+        &self,
+        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+        (server, tool): (&str, &str),
+    ) -> Result<Option<String>> {
+        let backend = self.backends.get(server);
+        let proof = CallerProof::new(caller.verified_identity, caller.provenance());
+        let resolved = self
+            .resolve_dispatch(
+                (server, tool),
+                backend.as_deref(),
+                proof,
+                caller.verified_identity,
+            )
+            .await?;
+        Ok(crate::protocol::mrtr::source_fingerprint(
+            caller.principal_source(resolved.binding.as_deref()),
+        ))
     }
 }
 

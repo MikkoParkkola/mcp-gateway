@@ -450,38 +450,64 @@ async fn nonce_give_back_direct_row() {
     assert_eq!(calls, 1, "R3: only the first call reached the backend");
 }
 
-/// The part of X14's challenge prompt both its variants carry
+/// X14's challenge prompt both its variants carry
 /// (`meta_mcp/task_confirmation.rs` `confirmation_prompt`).
 const X14_PROMPT: &str = "It runs as a task once accepted";
 
 /// X14's refusal for a caller it cannot bind a confirmation to
-/// (`meta_mcp/task_confirmation.rs`). The fixture's `k-std` is a shared key with
-/// no verified identity, so this is the X14 outcome the design names for it.
+/// (`meta_mcp/task_confirmation.rs`): neither an identity nor a key.
 const X14_UNBINDABLE: &str =
     "this destructive call cannot be confirmed for a caller this gateway cannot name";
 
 /// `TaskConfirm`, R4a Applies: a task-augmented call of a destructive (or
-/// unclassified) surfaced tool is decided by X14 before any dispatch. For a
-/// caller with no verified identity that decision is X14's own refusal
-/// (-32003), and the backend is never called.
+/// unclassified) surfaced tool is decided by X14 before any dispatch. The
+/// fixture's `k-std` is a shared key with no verified identity, which X14
+/// binds by its key (MIK-8137): it is asked, its accepted answer is refused
+/// to another key without dispatching, and then admitted for `k-std`.
 #[tokio::test]
 async fn task_confirm_submit_row() {
     assert_eq!(
         expect(MethodKind::ToolsCall, Route::TaskSubmit, Stage::TaskConfirm),
         Expect::Applies
     );
-    let sent = router::task_submit_surfaced().await;
-    assert_eq!(sent.body["error"]["code"], -32003, "R4a: {}", sent.body);
+    let round = router::task_submit_surfaced().await;
+    let challenge = &round.challenge;
     assert_eq!(
-        sent.body["error"]["message"], X14_UNBINDABLE,
-        "R4a: not decided by X14: {}",
-        sent.body
+        challenge.pointer("/result/resultType"),
+        Some(&serde_json::json!("input_required")),
+        "R4a: X14 did not ask: {challenge}"
+    );
+    assert!(
+        challenge.to_string().contains(X14_PROMPT),
+        "R4a: not X14's question: {challenge}"
+    );
+    assert!(
+        round.other_key.pointer("/result/taskId").is_none(),
+        "R4a: another key redeemed k-std's answer: {}",
+        round.other_key
     );
     assert_eq!(
-        sent.backend_calls, 0,
-        "R4a: dispatched before X14: {}",
-        sent.body
+        round.after_other_key, 0,
+        "R4a: dispatched for another key: {}",
+        round.other_key
     );
+    assert!(
+        round.same_key.pointer("/result/taskId").is_some(),
+        "R4a: k-std's own answer was not admitted: {}",
+        round.same_key
+    );
+}
+
+/// `Authorize`, R4a Applies (MIK-8315): a task submit of a personal
+/// capability without a grant is refused at submit exactly as the sync call
+/// is, with the sync call's audit records, no task and no backend call.
+#[tokio::test]
+async fn r4a_authorize_refuses_at_submit_as_the_sync_call_does() {
+    assert_eq!(
+        expect(MethodKind::ToolsCall, Route::TaskSubmit, Stage::Authorize),
+        Expect::Applies
+    );
+    router::task_submit_ungranted().await;
 }
 
 /// `TaskConfirm`, R5 gap (MIK-8160): the same task-augmented call of a
