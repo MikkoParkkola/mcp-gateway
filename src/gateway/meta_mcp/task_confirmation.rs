@@ -168,18 +168,9 @@ impl MetaMcp {
     ///
     /// Called after every existing authorization, admin and firewall check and
     /// before task admission, so a refusal here has cost the caller nothing: no
-    /// task handle, no backend call, no reserved key.
-    #[cfg(test)]
-    pub(crate) async fn confirm_destructive_task(
-        &self,
-        request: &TaskConfirmationRequest<'_>,
-    ) -> TaskConfirmation {
-        self.confirm_destructive_task_with(request, None).await.0
-    }
-
-    /// [`Self::confirm_destructive_task`], carrying the call's refund witness
-    /// (MIK-8353): handed back on every arm that consumed nothing, dropped
-    /// where a grant is spent, and never handed back with `Granted`.
+    /// task handle, no backend call, no reserved key. Carries the call's refund
+    /// witness (MIK-8353): handed back on every arm that consumed nothing,
+    /// spent where a grant is spent, and never handed back with `Granted`.
     pub(crate) async fn confirm_destructive_task_with(
         &self,
         request: &TaskConfirmationRequest<'_>,
