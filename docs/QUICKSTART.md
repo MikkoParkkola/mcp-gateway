@@ -79,6 +79,13 @@ capabilities:
 `everything` is the MCP reference server; replace it with any server you already
 run. The capability directory may stay empty until step 3.
 
+The gateway refuses a config file other users can read, because it can hold
+credentials, so make it yours alone:
+
+```bash
+chmod 600 gateway.yaml
+```
+
 ### 3. Add Capabilities
 
 The `init --profile local` command creates these automatically. If you're writing config by hand, create a `capabilities/` directory and add capability YAML files (no API keys needed):

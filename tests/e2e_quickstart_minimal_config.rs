@@ -27,15 +27,31 @@ use serde_json::{Value, json};
 
 const OPEN: &str = "<!-- quickstart-minimal-config -->";
 const CLOSE: &str = "<!-- /quickstart-minimal-config -->";
+/// The step QUICKSTART gives after the block: the loader refuses a config
+/// other users can read.
+const OWNER_ONLY: &str = "chmod 600 gateway.yaml";
 /// A 3.x API key in plaintext, which `upgrade` rewrites to its digest.
 const PLAINTEXT: &str = "surf7-plaintext-key-0123456789";
 /// How long a `serve` expected to refuse its config may run.
 const REFUSE_BOUND: Duration = Duration::from_secs(60);
 
+fn quickstart() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/QUICKSTART.md");
+    std::fs::read_to_string(&path).expect("docs/QUICKSTART.md")
+}
+
+/// Write `yaml` as the project's `gateway.yaml`, then take the documented
+/// owner-only step.
+fn write_config(ws: &Workspace, yaml: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let config = ws.root.join("gateway.yaml");
+    std::fs::write(&config, yaml).expect("write the config");
+    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).expect("chmod 600");
+}
+
 /// The minimal config exactly as QUICKSTART shows it, fences stripped.
 fn documented_minimal_config() -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/QUICKSTART.md");
-    let page = std::fs::read_to_string(&path).expect("docs/QUICKSTART.md");
+    let page = quickstart();
     let start = page
         .find(OPEN)
         .unwrap_or_else(|| panic!("QUICKSTART marks no minimal config ({OPEN})"))
@@ -85,6 +101,13 @@ fn the_documented_minimal_config_fits_one_screen_and_names_one_backend() {
     let yaml = documented_minimal_config();
     let lines = yaml.lines().count();
     assert!(lines <= 15, "{lines} lines, more than 15:\n{yaml}");
+    // The step the loader needs before it reads a hand-written config.
+    let page = quickstart();
+    let after = &page[page.find(CLOSE).expect("the block is closed")..];
+    assert!(
+        after.contains(OWNER_ONLY),
+        "QUICKSTART no longer says `{OWNER_ONLY}`"
+    );
     let (name, _) = documented_backend(&yaml);
     assert!(!name.is_empty(), "{yaml}");
 }
@@ -94,7 +117,7 @@ fn the_documented_minimal_config_fits_one_screen_and_names_one_backend() {
 fn write_served_config(ws: &Workspace, yaml: &str) -> String {
     let peer = ws.root.join("peer.sh");
     std::fs::write(&peer, PEER).expect("write the peer");
-    std::fs::write(ws.root.join("gateway.yaml"), with_peer(yaml, &peer)).expect("write the config");
+    write_config(ws, &with_peer(yaml, &peer));
     documented_backend(yaml).0
 }
 
@@ -213,13 +236,11 @@ async fn refused_serve(ws: &Workspace) -> Output {
 /// the same tool call, authenticated by the same (now hashed) key.
 #[tokio::test]
 async fn a_three_x_config_is_refused_then_serves_after_upgrade() {
-    use std::os::unix::fs::PermissionsExt;
     let ws = Workspace::new();
     let backend = write_served_config(&ws, &documented_minimal_config());
     let config = ws.root.join("gateway.yaml");
     let current = std::fs::read_to_string(&config).expect("config");
-    std::fs::write(&config, three_x(&current)).expect("write the 3.x config");
-    std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).expect("0600");
+    write_config(&ws, &three_x(&current));
 
     // The migration message: every refusing key, and the command that fixes them.
     let refused = refused_serve(&ws).await;
@@ -333,7 +354,7 @@ async fn initialize_status(mcp: &str, bearer: Option<&str>) -> u16 {
 async fn the_documented_launcher_serves_a_tool_call() {
     let ws = Workspace::new();
     let yaml = documented_minimal_config();
-    std::fs::write(ws.root.join("gateway.yaml"), format!("{yaml}\n")).expect("write the config");
+    write_config(&ws, &format!("{yaml}\n"));
     let (backend, _) = documented_backend(&yaml);
     let gateway = Gateway::start(&ws).await;
     let mut session = Session::open(&format!("{}/mcp", gateway.url), None).await;
