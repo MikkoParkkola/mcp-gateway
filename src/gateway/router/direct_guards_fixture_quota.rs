@@ -110,3 +110,63 @@ pub(super) fn fixture_backend_config(name: &str, passthrough: bool) -> BackendCo
         ..BackendConfig::default()
     }
 }
+
+/// A propagation strategy that counts every credential it mints. Mints are
+/// never cached (`invoke/account_mint.rs`), so each propagated call mints once.
+#[derive(Default)]
+pub(crate) struct Minting(std::sync::atomic::AtomicUsize);
+
+impl Minting {
+    /// Credentials minted so far.
+    pub(crate) fn count(&self) -> usize {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::identity_propagation::IdentityPropagation for Minting {
+    async fn propagate(
+        &self,
+        identity: &crate::key_server::oidc::VerifiedIdentity,
+        backend: &crate::identity_propagation::BackendDescriptor,
+    ) -> Result<
+        crate::identity_propagation::PropagatedCredential,
+        crate::identity_propagation::PropagationError,
+    > {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let binding = format!("{}@{}", identity.subject, backend.audience);
+        Ok(crate::identity_propagation::PropagatedCredential {
+            headers: vec![("Authorization".to_string(), "Bearer minted".to_string())],
+            expires_at: i64::MAX,
+            cache_binding: binding,
+            subject_key: identity.subject.clone(),
+            audience: backend.audience.clone(),
+            scopes: Vec::new(),
+        })
+    }
+}
+
+/// The hardened, signed (nonce required) fixture whose backends require
+/// identity propagation, minting through a counting [`Minting`] strategy
+/// (MIK-8353 slice 3a). `build` arms the signed `MetaMcp` further, e.g. with a
+/// spend budget. Returns the fixture and the strategy, so a row reads mints.
+pub(crate) async fn fixture_propagating_signed(
+    answer: Answer,
+    firewalled: bool,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> (Fx, Arc<Minting>) {
+    let minting = Arc::new(Minting::default());
+    let strategy = Arc::clone(&minting);
+    super::HARDENED.with(|h| h.set(true));
+    super::PROPAGATING.with(|p| p.set(true));
+    let fx = super::fixture_inner(answer, firewalled, |meta| {
+        let mut meta = build(super::signing(meta, true));
+        meta.enable_transparency_log(leaked_transparency_log());
+        meta.set_identity_propagation(strategy);
+        meta
+    })
+    .await;
+    super::PROPAGATING.with(|p| p.set(false));
+    super::HARDENED.with(|h| h.set(false));
+    (fx, minting)
+}

@@ -1,0 +1,158 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-8353 slice 3a (NONCEFX.9): a signed `gateway_invoke` refused after a
+//! step that may have taken effect keeps its nonce spent. A refund needs the
+//! refund witness, and a credential mint or refresh, a backend `tools/list`
+//! or a consumed continuation drops it. Each KEEP row pairs with a REFUND
+//! control on the effect-free path (mcp_nonce_tests.rs n1a, n1b).
+
+use axum::http::StatusCode;
+use serde_json::{Value, json};
+
+use super::direct_continuation_tests::{answers, code, dispatched, state_of};
+use super::direct_guards_fixture::{Answer, Fx, fixture_propagating_signed};
+
+const SUBJECT: &str = "alice";
+
+/// Seed `SUBJECT`'s per-user slot on each backend with the scripted
+/// transport, so a propagated call dispatches to it (as
+/// slot_quota_direct_tests.rs does).
+fn seed_caller_slots(fx: &Fx) {
+    for backend in ["alpha", "alpha-pt"] {
+        let registered = fx.state.backends.get(backend).expect("fixture backend");
+        let shared = registered
+            .pooled_transport_for_test(&crate::backend::PoolKey::Shared)
+            .expect("the fixture's scripted transport");
+        registered.set_pooled_transport_for_test(
+            &crate::backend::PoolKey::PerUser {
+                binding: format!("{SUBJECT}@aud-{backend}"),
+            },
+            shared,
+        );
+    }
+}
+
+/// A signed `gateway_invoke read` on `/mcp` as `key` against `backend`, under
+/// `nonce`, carrying `SUBJECT`'s verified identity (so the backend's required
+/// propagation mints), from a modern client that declares form elicitation.
+async fn signed_call(
+    fx: &Fx,
+    (key, backend): (&str, &str),
+    nonce: &str,
+    extra: Value,
+) -> (StatusCode, Value) {
+    let mut params = json!({
+        "name": "gateway_invoke",
+        "arguments": {"server": backend, "tool": "read", "arguments": {}, "nonce": nonce},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}},
+        },
+    });
+    if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
+        params.extend(extra.clone());
+    }
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("authorization", format!("Bearer {key}"))
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "gateway_invoke")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params})
+                .to_string(),
+        ))
+        .expect("request");
+    request
+        .extensions_mut()
+        .insert(crate::key_server::oidc::VerifiedIdentity {
+            subject: SUBJECT.to_string(),
+            email: format!("{SUBJECT}@example.invalid"),
+            name: None,
+            groups: vec![],
+            issuer: "https://a.example.invalid".to_string(),
+        });
+    let response = tower::ServiceExt::oneshot(fx.router.clone(), request)
+        .await
+        .expect("response");
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    (status, serde_json::from_slice(&body).expect("json"))
+}
+
+fn refused_as_replay(body: &Value) -> bool {
+    body["error"]["message"]
+        .as_str()
+        .is_some_and(|m| m.to_lowercase().contains("replay"))
+}
+
+/// K-spend-mint: the refused call minted a credential, then the spend budget
+/// refused it. The mint dropped the witness, so the nonce stays spent: the
+/// same call re-sent is a replay. Red on base: it meets the budget again
+/// (n1b's refund, which ignores the mint).
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn a_spend_refusal_after_a_mint_keeps_the_nonce() {
+    use super::direct_continuation_tests::budget;
+    let (fx, minting) = fixture_propagating_signed(Answer::Ok, false, budget).await;
+    seed_caller_slots(&fx);
+    let who = ("k-budget", "alpha");
+    let (_, first) = signed_call(&fx, who, "n1", json!({})).await;
+    assert!(first.get("error").is_none(), "the paying call: {first}");
+    assert!(
+        minting.count() > 0,
+        "the identity extension reached propagation"
+    );
+
+    let before = minting.count();
+    let (_, refused) = signed_call(&fx, who, "n2", json!({})).await;
+    assert_eq!(code(&refused), Some(-32003), "the spend refusal: {refused}");
+    assert!(minting.count() > before, "the refused call itself minted");
+
+    let (_, again) = signed_call(&fx, who, "n2", json!({})).await;
+    assert!(
+        refused_as_replay(&again),
+        "the nonce was given back after a mint: {again}"
+    );
+    assert_eq!(dispatched(&fx), 1);
+}
+
+/// K-retry-mint: an honest warm-up call (schema held, the question asked),
+/// then a forged retry that mints before it fails at `redeem_retry` (keyring
+/// `open`, before any consume). `k-std` has no budget, so the spend check
+/// cannot refuse first. The mint dropped the witness: the honest retry under
+/// the same nonce is a replay. Red on base: it is served (n1a's refund).
+#[tokio::test]
+async fn a_refused_retry_after_a_mint_keeps_the_nonce() {
+    let (fx, minting) = fixture_propagating_signed(Answer::AskOnce, false, |meta| meta).await;
+    seed_caller_slots(&fx);
+    let who = ("k-std", "alpha");
+    let (_, asked) = signed_call(&fx, who, "n1", json!({})).await;
+    let state = state_of(&asked);
+    assert!(
+        minting.count() > 0,
+        "the identity extension reached propagation"
+    );
+
+    let before = minting.count();
+    let forged = json!({"requestState": "forged", "inputResponses": answers()});
+    let (_, refused) = signed_call(&fx, who, "n2", forged).await;
+    assert_eq!(
+        code(&refused),
+        Some(-32602),
+        "the redeem refusal: {refused}"
+    );
+    assert!(minting.count() > before, "the refused call itself minted");
+
+    let honest = json!({"requestState": state, "inputResponses": answers()});
+    let (_, again) = signed_call(&fx, who, "n2", honest).await;
+    assert!(
+        refused_as_replay(&again),
+        "the nonce was given back after a mint: {again}"
+    );
+    assert_eq!(dispatched(&fx), 1, "only the warm-up reached the backend");
+}
