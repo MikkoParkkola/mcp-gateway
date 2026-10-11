@@ -155,6 +155,64 @@ fn a_step_over_the_plan_bound_is_excused_and_evidence_for_what_it_delivered() {
     );
 }
 
+/// `MIK-8066` T6 (P3): a 900 KiB step staged whole, delivered inside an
+/// answer of 1.6 MiB. Today the over-bound answer drops every step receipt.
+/// After BIG.3 the answer is read as a bounded fingerprint view: the step's
+/// middle is evidence and its holder is excused.
+#[test]
+fn a_step_inside_an_answer_over_the_bound_is_excused_and_evidence() {
+    let fw = firewall();
+    let text = filler(51, 900 * 1024);
+    let relayed = run(&text, 300_000);
+    let step = json!({"content": [{"type": "text", "text": text}]});
+    let answer = json!({"whole": text, "pad": filler(52, 700 * 1024)});
+    assert!(
+        deliver_step(&fw, &step, 0, &answer),
+        "an answer over the bound dropped its step receipts"
+    );
+    assert!(
+        relays(&fw, "bob", relayed),
+        "the step's middle was never receipted"
+    );
+    deliver(&fw, "carol", relayed);
+    assert!(
+        !relays(&fw, "alice", relayed),
+        "the step's holder was refused"
+    );
+}
+
+/// `MIK-8066` T6, the join form (S3b): a step's labelled parts, each under
+/// the 48-char k-gram, delivered inside an over-bound answer. Alice
+/// forwarding the parts run together (the per-key-path join, MIK-8209) is
+/// excused against carol's whole copy of that join.
+#[test]
+fn a_rejoined_step_inside_an_answer_over_the_bound_is_excused() {
+    let fw = firewall();
+    let parts: Vec<String> = (0..10)
+        .map(|i| filler(60 + i, 40)[..40].to_owned())
+        .collect();
+    let items: Vec<Value> = parts
+        .iter()
+        .map(|p| json!({"kind": "chunk", "part": p}))
+        .collect();
+    let step = json!({ "items": items });
+    let answer = json!({"items": items, "pad": filler(70, 1_200 * 1024)});
+    let joined: String = parts.concat();
+    assert!(
+        deliver_step(&fw, &step, 0, &answer),
+        "an answer over the bound dropped its step receipts"
+    );
+    deliver(&fw, "carol", &joined);
+    assert!(
+        relays(&fw, "bob", &joined),
+        "control: bob without a copy is a relay"
+    );
+    assert!(
+        !relays(&fw, "alice", &joined),
+        "the re-joined parts were refused"
+    );
+}
+
 const SOURCE: &str = "alpha:read";
 
 /// A plan step of `chars` of `seed` filler, as one content item.
