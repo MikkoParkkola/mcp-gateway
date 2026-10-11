@@ -21,6 +21,8 @@ pub(crate) use delivered::Delivered;
 #[path = "collusion_key_path.rs"]
 mod key_path;
 pub(super) use key_path::{key_path_joins, key_path_run_indices, key_path_runs};
+#[path = "collusion_view.rs"]
+pub(super) mod view;
 #[path = "collusion_walk.rs"]
 mod walk;
 

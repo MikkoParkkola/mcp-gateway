@@ -35,13 +35,6 @@ pub(super) const STEP_EV_BUDGET: usize = 32_768;
 /// reserves from while its answer is judged; separate from the sketch
 /// store's `SKETCH_BYTES`, so window-long sketches never decide whether a
 /// millisecond judgement runs. Combined worst case 64 MiB. A constant.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "read by the answer view (PR 2b), which lands next"
-    )
-)]
 pub(crate) const VIEW_BYTES: usize = 32 * 1024 * 1024;
 
 /// The extra sketch room a step reserves at logical position `position`
@@ -405,34 +398,37 @@ impl CollusionDetector {
         }
     }
 
-    /// STUB (`MIK-8066` 2b red): the answer text cap P3 reads under. A no-op
-    /// until the view lands, so a row using it fails at its own assertion.
+    /// The answer text cap P3 reads under (`PLAN_ANSWER_TEXT`; tests lower it).
     pub(crate) fn set_answer_text_cap(&self, bytes: usize) {
-        let _ = (self, bytes);
+        self.views
+            .answer_text_cap
+            .store(bytes, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// STUB (2b red): the view's entry cap A.
+    /// The view's entry cap A.
     pub(crate) fn set_view_entry_cap(&self, entries: usize) {
-        let _ = (self, entries);
+        self.views
+            .entry_cap
+            .store(entries, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// STUB (2b red): `VIEW_BYTES` held by live views.
+    /// `VIEW_BYTES` held by live views.
     pub(crate) fn view_bytes(&self) -> usize {
-        let _ = self;
-        0
+        self.views.budget.used()
     }
 
-    /// STUB (2b red): plans whose answer took the unread path (D6).
+    /// Plans whose answer took the unread path (D6).
     pub(crate) fn unread_plans(&self) -> u64 {
-        let _ = self;
-        0
+        self.views
+            .unread_plans
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// STUB (2b red): the `VIEW_BYTES` charge `answer`'s view would take,
+    /// The `VIEW_BYTES` charge `answer`'s view would take,
     /// computed from the view's length, not from the budget counter.
     pub(crate) fn view_charge_of(&self, answer: &serde_json::Value) -> usize {
-        let _ = (self, answer);
-        0
+        super::super::collusion_digest::view::build(self, answer, None)
+            .map_or(0, |v| v.charge_bytes())
     }
 
     /// The streaming sampled k-gram hashes of `text` (D2), collected.
@@ -440,32 +436,38 @@ impl CollusionDetector {
         self.sampled_kgram_stream(text.chars()).collect()
     }
 
-    /// STUB (2b red): the sorted sampled view of `answer`, built without the
+    /// The sorted sampled view of `answer`, built without the
     /// over-bound gate (unit rows only).
     pub(crate) fn view_of(&self, answer: &serde_json::Value) -> Option<Vec<u64>> {
-        let _ = (self, answer);
-        None
+        super::super::collusion_digest::view::build(self, answer, None)
+            .ok()
+            .map(|v| v.entries().to_vec())
     }
 
     /// The view's entry cap A (`PLAN_ANSWER_FPS`), for rows outside this
     /// module.
     pub(crate) fn view_entry_cap(&self) -> usize {
-        let _ = self;
-        PLAN_ANSWER_FPS
+        self.views
+            .entry_cap
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// STUB (2b red): whether a view of `distinct` sampled hashes is admitted
+    /// Whether a view of `distinct` sampled hashes is admitted
     /// under the entry cap A.
     pub(crate) fn view_admits(&self, distinct: usize) -> bool {
-        let _ = (self, distinct);
-        false
+        distinct
+            <= self
+                .views
+                .entry_cap
+                .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// STUB (2b red): (reserved bytes, live buffer bytes) at every growth and
+    /// (reserved bytes, live buffer bytes) at every growth and
     /// at compaction while `answer`'s view is built.
     pub(crate) fn view_build_probe(&self, answer: &serde_json::Value) -> Vec<(usize, usize)> {
-        let _ = (self, answer);
-        Vec::new()
+        let mut probe = Vec::new();
+        let _ = super::super::collusion_digest::view::build(self, answer, Some(&mut probe));
+        probe
     }
 
     /// STUB (2b red): bytes charged for step evidence awaiting record (D9).
@@ -486,15 +488,16 @@ impl CollusionDetector {
         0
     }
 
-    /// STUB (2b red): `VIEW_BYTES` lowered for this detector.
+    /// `VIEW_BYTES` lowered for this detector.
     pub(crate) fn set_view_budget(&self, bytes: usize) {
-        let _ = (self, bytes);
+        self.views.set_budget_cap(bytes);
     }
 
-    /// STUB (2b red): views refused for lack of `VIEW_BYTES` (D6).
+    /// Views refused for lack of `VIEW_BYTES` (D6).
     pub(crate) fn view_budget_refusals(&self) -> u64 {
-        let _ = self;
-        0
+        self.views
+            .budget_refusals
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Reserve no headroom on this detector (the abandon path, made

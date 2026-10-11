@@ -238,6 +238,8 @@ pub(crate) struct CollusionDetector {
     source_truncated: AtomicU64,
     /// Pool records allowed across every fingerprint.
     pool_capacity: usize,
+    /// `MIK-8066` 2b: the answer views' budget, caps and counters (D8).
+    pub(crate) views: budget::ViewLimits,
 }
 
 /// A sketch position held while its sketch is built outside the lock; if
@@ -287,6 +289,7 @@ impl CollusionDetector {
             capped: AtomicU64::new(0),
             source_truncated: AtomicU64::new(0),
             pool_capacity: holders::EXTRA_RECORD_POOL,
+            views: budget::ViewLimits::new(),
         }
     }
 
@@ -784,6 +787,8 @@ pub(crate) use margin::egress_parts;
 pub(crate) use margin::egress_text;
 #[path = "collusion_big.rs"]
 pub(super) mod big;
+#[path = "collusion_budget.rs"]
+pub(super) mod budget;
 #[cfg(test)]
 #[path = "collusion_seam_tests.rs"]
 mod seam_tests;
