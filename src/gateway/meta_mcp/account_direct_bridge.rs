@@ -33,7 +33,7 @@ pub(crate) struct DirectAccountGateway {
     backends: Arc<BackendRegistry>,
     dispatches: Arc<Dispatches>,
     /// Kept alive: its store directory lives as long as the gateway.
-    _custody: Custody,
+    custody: Custody,
 }
 
 impl DirectAccountGateway {
@@ -48,6 +48,17 @@ impl DirectAccountGateway {
         mode: ServeMode,
         auth: crate::config::AuthConfig,
         binding: &Binding,
+    ) -> Self {
+        Self::new_with(mode, auth, binding, None)
+    }
+
+    /// [`Self::new_in`], with `BACKEND`'s argument-key enforcement set when
+    /// `enforcement` names one (MIK-8356 C10 runs the stdio twin at Off).
+    pub(crate) fn new_with(
+        mode: ServeMode,
+        auth: crate::config::AuthConfig,
+        binding: &Binding,
+        enforcement: Option<crate::config::InputSchemaEnforcement>,
     ) -> Self {
         let operator_grant = matches!(binding, Binding::Connected);
         let bind = match binding {
@@ -65,19 +76,23 @@ impl DirectAccountGateway {
             Vec::new()
         };
         let custody = custody_with(&seed);
-        let (meta, dispatches) = gateway_in(
+        let (meta, dispatches) = gateway_in_with(
             &[(BACKEND, bind)],
             &Descriptors::same(&[WORK]),
             &custody.installed(),
             &slots,
-            mode,
-            auth,
+            (mode, auth),
+            |config| {
+                if let Some(mode) = enforcement {
+                    config.input_schema_enforcement = mode;
+                }
+            },
         );
         Self {
             backends: Arc::clone(&meta.backends),
             meta: Some(meta),
             dispatches,
-            _custody: custody,
+            custody,
         }
     }
 
@@ -120,6 +135,18 @@ impl DirectAccountGateway {
     /// Answer the next non-`tools/list` request with `result`.
     pub(crate) fn answer_next(&self, result: serde_json::Value) {
         self.dispatches.script(&[Answer::Result(result)]);
+    }
+
+    /// Answer the next requests, `tools/list` included, with these HTTP
+    /// statuses (MIK-8356 C9: a cold slot's first list gets a 401).
+    pub(crate) fn answer_lists_with(&self, statuses: &[u16]) {
+        self.dispatches.script_lists();
+        self.dispatches.answer_with(statuses);
+    }
+
+    /// Forced refreshes custody ran: one per `after_upstream_401`.
+    pub(crate) fn refreshes(&self) -> usize {
+        self.custody.refreshes()
     }
 
     /// The per-user slot the sole operator's seeded grant selects.

@@ -198,6 +198,9 @@ mod session_fp_once_tests;
 /// MIK-7736: under standard, a gateway_invoke nonce is judged after policy.
 #[cfg(all(test, feature = "metrics"))]
 mod signing_nonce_order_tests;
+/// MIK-8356 C9: a managed caller's cold-slot 401 on `/mcp`.
+#[cfg(test)]
+mod slot_verdict_g2_managed_http_tests;
 /// MIK-8356: router entry rows for per-user calls judged by the caller's slot.
 #[cfg(test)]
 mod slot_verdict_http_tests;
