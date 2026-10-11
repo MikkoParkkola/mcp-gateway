@@ -1,0 +1,25 @@
+diff --git a/src/backend/caller_slots.rs b/src/backend/caller_slots.rs
+index d9a04c818..4ff7c3277 100644
+--- a/src/backend/caller_slots.rs
++++ b/src/backend/caller_slots.rs
+@@ -26,8 +26,10 @@ pub(crate) struct CallerSlot {
+ impl CallerSlot {
+     /// The binding, while its slot is still the live, unretired one.
+     fn live_binding(&self) -> Option<&str> {
+-        let entry = self.entry.upgrade()?;
+-        (!entry.retired.load(Ordering::SeqCst)).then_some(self.binding.as_str())
++        match self.entry.upgrade() {
++            None => Some(self.binding.as_str()),
++            Some(entry) => (!entry.retired.load(Ordering::SeqCst)).then_some(self.binding.as_str()),
++        }
+     }
+ }
+ 
+@@ -43,6 +45,7 @@ impl Backend {
+             binding: binding.to_string(),
+         };
+         let Some(entry) = self.pool.get(&key).map(|slot| Arc::clone(slot.value())) else {
++            self.caller_slots.insert(principal_id.to_string(), CallerSlot { binding: binding.to_string(), entry: std::sync::Weak::new() });
+             return;
+         };
+         if !entry.tools_cache.ever_populated() {

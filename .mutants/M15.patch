@@ -1,0 +1,29 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index 9821ed4b9..0486aad0f 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -218,7 +218,23 @@ impl MetaMcp {
+                 }
+                 return Ok(GuardedValue::sealed_by_guard(value));
+             }
+-            Some(carried) => (Some(carried.backend), carried.resolved),
++            Some(carried) => {
++                let copy = super::visible::Carried {
++                    backend: carried.backend.clone(),
++                    resolved: ResolvedDispatch {
++                        caller_credential: CallerCredential {
++                            headers: carried.resolved.caller_credential.headers.clone(),
++                            cache_binding: carried.resolved.caller_credential.cache_binding.clone(),
++                            managed: None,
++                        },
++                        account_credential: carried.resolved.account_credential.clone(),
++                        binding: carried.resolved.binding.clone(),
++                    },
++                    fill_error: None,
++                };
++                super::visible::carry_dispatch(server, tool, copy);
++                (Some(carried.backend), carried.resolved)
++            }
+             None => {
+                 let backend = self.backends.get(server);
+                 let resolved = self

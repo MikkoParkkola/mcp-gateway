@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/visible.rs b/src/gateway/meta_mcp/visible.rs
+index e6b388e0a..5c1a83e72 100644
+--- a/src/gateway/meta_mcp/visible.rs
++++ b/src/gateway/meta_mcp/visible.rs
+@@ -134,7 +134,7 @@ impl MetaMcp {
+         }
+         // The schema reason of a per-user backend is the caller's slot's
+         // alone (MIK-8356 R5.4): the shared slot's schema never filters it.
+-        if !self.keeps_per_user_catalogues(server) && self.surfaced_schema_withheld(server, tool) {
++        if false && self.surfaced_schema_withheld(server, tool) {
+             return Visibility::Withheld(Withholding::Schema);
+         }
+         self.invokable(server, tool, scope, session_id)

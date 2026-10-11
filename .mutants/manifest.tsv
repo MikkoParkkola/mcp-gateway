@@ -1,0 +1,15 @@
+head_sha	fa296d47cc64923660a0a73472becac4cf8c887d
+L3b-revert	linux	L3b-revert.patch	--lib -- l3b_spec_preview_judges_the_callers_slot
+M10-both	linux	M10-both.patch	--lib -- l7b_passthrough_fills_publish_no_index_entry
+M10-record	linux	M10-record.patch	--lib -- l7b_passthrough_fills_publish_no_index_entry
+M10-listing	linux	M10-listing.patch	--lib -- l7b_passthrough_fills_publish_no_index_entry
+M15	linux	M15.patch	--lib -- c11b_http_each_step_resolves_once
+M19	linux	M19.patch	--lib -- p1_p4_cold_http_withheld_task_call_gets_no_prompt_and_no_task
+M20	linux	M20.patch	--lib -- c14_http_descriptor_blocked_target_resolves_nothing
+G-C6c	linux	G-C6c.patch	--lib -- g3_c6c_shared_backend_lacked_keeps_text_a
+G-F4	linux	G-F4.patch	--lib -- g3_f4_shared_backend_route_filter_unchanged
+G-C9	linux	G-C9.patch	--lib -- c9_per_user_cold_caller_managed_401_recovers
+G-L6c	linux	G-L6c.patch	--lib -- l6c_cold_surfaced_list_keeps_the_shared_view
+G-I6	linux	G-I6.patch	--lib -- g3_i6_index_bounded_by_admission
+G-I7	linux	G-I7.patch	--lib -- g3_i7_index_read_has_no_side_effects
+G-L3bm	linux	G-L3bm.patch	--lib -- l3b_multi_user_keeps_the_isolated_backend_out_of_spec_preview

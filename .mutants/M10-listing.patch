@@ -1,0 +1,15 @@
+diff --git a/src/gateway/meta_mcp/listing_view.rs b/src/gateway/meta_mcp/listing_view.rs
+index cbfbd5011..a9f115967 100644
+--- a/src/gateway/meta_mcp/listing_view.rs
++++ b/src/gateway/meta_mcp/listing_view.rs
+@@ -51,9 +51,7 @@ impl MetaMcp {
+         let Some(idp) = backend.identity_propagation_config() else {
+             return ListingView::Shared;
+         };
+-        if matches!(idp.strategy, PropagationStrategyKind::Passthrough) {
+-            return ListingView::Cold;
+-        }
++        let _ = PropagationStrategyKind::Passthrough;
+         let Some(principal) = self.principal_for(backend, scope.caller) else {
+             return if idp.required {
+                 ListingView::Cold

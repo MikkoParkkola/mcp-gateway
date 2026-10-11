@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/invoke/caller_verdict.rs b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+index fabbbfe0f..b483dd4eb 100644
+--- a/src/gateway/meta_mcp/invoke/caller_verdict.rs
++++ b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+@@ -68,9 +68,6 @@ impl MetaMcp {
+         // Step 0 (R5.2): descriptor and policy first, with no fill and no
+         // resolution. A name they withhold is answered by the existing
+         // checks, which read the same judgement.
+-        if self.tool_visible_to(server, tool, caller.scope(), session_id) != Visibility::Visible {
+-            return Ok(CallerVerdict::Proceed);
+-        }
+         let proof = CallerProof::new(caller.verified_identity, caller.provenance());
+         let resolved = self
+             .resolve_dispatch(

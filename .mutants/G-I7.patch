@@ -1,0 +1,12 @@
+diff --git a/src/backend/caller_slots.rs b/src/backend/caller_slots.rs
+index d9a04c818..ddaae04ff 100644
+--- a/src/backend/caller_slots.rs
++++ b/src/backend/caller_slots.rs
+@@ -61,6 +61,7 @@ impl Backend {
+     /// this backend, if that slot is still live. No side effects: no mint, no
+     /// fill, no slot creation.
+     pub(crate) fn caller_slot_binding(&self, principal_id: &str) -> Option<String> {
++        let _ = self.pooled_entry(&PoolKey::PerUser { binding: principal_id.to_string() });
+         self.caller_slots
+             .get(principal_id)
+             .and_then(|slot| slot.live_binding().map(str::to_owned))

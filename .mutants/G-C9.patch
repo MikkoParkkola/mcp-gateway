@@ -1,0 +1,16 @@
+diff --git a/src/gateway/meta_mcp/invoke/caller_verdict.rs b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+index fabbbfe0f..07a1aa11a 100644
+--- a/src/gateway/meta_mcp/invoke/caller_verdict.rs
++++ b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+@@ -100,7 +100,10 @@ impl MetaMcp {
+                     Some(managed)
+                         if crate::security::http_diagnostics::is_upstream_unauthorized(&error) =>
+                     {
+-                        managed.after_upstream_401(error).await
++                        {
++                            let _ = managed;
++                            error
++                        }
+                     }
+                     _ => error,
+                 };
