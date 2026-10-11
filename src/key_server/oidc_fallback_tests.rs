@@ -352,6 +352,39 @@ fn one_fallback_is_fetched_and_logged_once() {
     assert_eq!(count(&logs, "WARN", "OIDC discovery for"), 1, "{logs:?}");
 }
 
+/// D12: discovery still down after the fallback lapses. The lapsed record is
+/// replaced in place: discovery is asked once more, the fallback is recorded
+/// and logged again, and the renewed record serves the next lookup without
+/// another discovery request.
+#[test]
+fn a_lapsed_fallback_is_renewed_while_discovery_stays_down() {
+    use crate::test_log_capture::{count, records};
+    let mut discovery_hits = 0;
+    let logs = records(|| {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        rt.block_on(async {
+            let fx = start().await;
+            set_discovery(&fx, 404, "{}");
+            let v = verifier_ttls(&fx, Duration::from_secs(3600), Duration::from_millis(200));
+            verify(&v, &mint(&fx, &fx.k_fb))
+                .await
+                .expect("the fallback key validates");
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            for _ in 0..2 {
+                verify(&v, &mint(&fx, &fx.k_fb))
+                    .await
+                    .expect("the fallback key still validates after renewal");
+            }
+            discovery_hits = hits(&fx).0;
+        });
+    });
+    assert_eq!(discovery_hits, 2, "discovery was not retried after the lapse");
+    assert_eq!(count(&logs, "WARN", "OIDC discovery for"), 2, "{logs:?}");
+}
+
 /// D10b: concurrent first lookups all validate and log the fallback once.
 #[test]
 fn concurrent_first_lookups_log_the_fallback_once() {
