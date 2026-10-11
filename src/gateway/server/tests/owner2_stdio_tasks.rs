@@ -79,7 +79,7 @@ pub(crate) async fn backend_listing(tools: Value) -> (String, Arc<AtomicUsize>) 
 /// A stdio task store over a production-built `MetaMcp`, under `policy`.
 pub(crate) struct Fixture {
     pub(super) tasks: Arc<StdioTasks>,
-    meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
+    pub(super) meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     policy: Arc<ToolPolicy>,
     mtls: Arc<crate::mtls::MtlsPolicy>,
     rounds: Arc<AtomicUsize>,
@@ -88,7 +88,7 @@ pub(crate) struct Fixture {
     _data: tempfile::TempDir,
 }
 
-async fn fixture(policy: Option<ToolPolicy>) -> Fixture {
+pub(super) async fn fixture(policy: Option<ToolPolicy>) -> Fixture {
     fixture_on(backend().await, policy).await
 }
 
@@ -356,7 +356,9 @@ async fn a_stdio_task_s_inner_call_is_cached_under_the_operator() {
     );
 }
 
-/// U5: a stdio task runs under the current tool policy.
+/// U5: a stdio task runs under the current tool policy. A denied tool is
+/// refused at submit exactly as its synchronous call is, with no task
+/// (MIK-8315); a neighbour still runs.
 #[tokio::test]
 async fn a_stdio_task_runs_under_the_current_tool_policy() {
     let denying = ToolPolicy::from_config(&ToolPolicyConfig {
@@ -364,8 +366,19 @@ async fn a_stdio_task_runs_under_the_current_tool_policy() {
         ..ToolPolicyConfig::default()
     });
     let fixture = Box::pin(fixture(Some(denying))).await;
-    // Settled terminal by its own worker: the authorizer refused it.
-    settle(&fixture, DENIED, "u5-denied").await;
+    let sync = dispatch(&fixture, modern_call(1, DENIED, "u5-denied-sync", false)).await;
+    let refused = dispatch(&fixture, modern_call(2, DENIED, "u5-denied", true)).await;
+    assert!(refused.pointer("/result/taskId").is_none(), "{refused}");
+    assert_eq!(
+        refused.pointer("/error/code"),
+        sync.pointer("/error/code"),
+        "{refused}"
+    );
+    assert_eq!(
+        refused.pointer("/error/message"),
+        sync.pointer("/error/message"),
+        "{refused}"
+    );
     assert_eq!(
         fixture.rounds.load(Ordering::SeqCst),
         0,

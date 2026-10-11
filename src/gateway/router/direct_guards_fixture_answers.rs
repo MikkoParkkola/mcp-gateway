@@ -6,8 +6,8 @@
 
 use serde_json::{Value, json};
 
-use super::Answer;
 use super::egress::error_answer;
+use super::{Answer, Fx};
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 /// The question an `Ask*` answer opens with.
@@ -96,7 +96,8 @@ pub(super) fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRp
         | Answer::AskAlways
         | Answer::AskEdited(_)
         | Answer::StateOnlyRounds(..)
-        | Answer::AskThenEcho => {
+        | Answer::AskThenEcho
+        | Answer::AskThenStore => {
             unreachable!("answered above")
         }
         Answer::Text(text) => Ok(JsonRpcResponse::success(
@@ -158,4 +159,63 @@ pub(super) fn listing(answer: Answer, params: Option<&Value>) -> Value {
         _ => {}
     }
     result
+}
+
+/// The first string in `value`, or in a JSON document a string carries (a
+/// playbook answer is JSON text in `content`), that opens under `fx`'s
+/// continuation keyring: the one "find the envelope" oracle the envelope rows
+/// share (MIK-8176 cache guards, MIK-8323).
+pub(crate) fn envelope_in(fx: &Fx, value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let continuation = fx.state.meta_mcp.continuation();
+            if continuation.keyring().open_now(text).is_ok() {
+                return Some(text.clone());
+            }
+            serde_json::from_str::<Value>(text)
+                .ok()
+                .filter(|inner| !inner.is_string())
+                .and_then(|inner| envelope_in(fx, &inner))
+        }
+        Value::Array(items) => items.iter().find_map(|item| envelope_in(fx, item)),
+        Value::Object(fields) => fields.values().find_map(|field| envelope_in(fx, field)),
+        _ => None,
+    }
+}
+
+/// The answers that read the call's own arguments: `AskThenStore` (a tiny
+/// store: `cmd` `"store <text>"` keeps `<text>`, anything else returns what was
+/// kept) and `AskThenEcho` (echoes the arguments). Both ask on call 0. `None`
+/// for every other answer.
+pub(super) fn recording_answer(
+    answer: Answer,
+    n: usize,
+    params: Option<&Value>,
+    kept: &std::sync::Mutex<String>,
+) -> Option<Value> {
+    let done =
+        |text: String| json!({"content": [{"type": "text", "text": text}], "isError": false});
+    match answer {
+        Answer::AskThenStore | Answer::AskThenEcho if n == 0 => Some(question(Answer::AskOnce)),
+        Answer::AskThenStore => {
+            let cmd = params
+                .and_then(|p| p.pointer("/arguments/cmd"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            Some(done(if let Some(text) = cmd.strip_prefix("store ") {
+                *kept.lock().unwrap() = text.to_owned();
+                "stored".to_owned()
+            } else {
+                kept.lock().unwrap().clone()
+            }))
+        }
+        Answer::AskThenEcho => Some(done(
+            params
+                .and_then(|p| p.get("arguments"))
+                .cloned()
+                .unwrap_or(Value::Null)
+                .to_string(),
+        )),
+        _ => None,
+    }
 }

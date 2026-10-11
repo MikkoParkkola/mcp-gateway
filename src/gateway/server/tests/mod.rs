@@ -41,6 +41,7 @@ mod collusion_stdio_plan;
 mod egress_matrix_stdio;
 mod r2_stdio_keys;
 mod stdio_cache_scope;
+mod stdio_list_changed;
 mod stdio_listing_scope;
 #[cfg(feature = "firewall")]
 mod stdio_response_firewall;
@@ -52,6 +53,8 @@ mod stdio_tenant_reads;
 mod stdio_hardened_signing;
 
 mod stdio_sole_operator;
+
+mod playbook_retry_stdio;
 
 mod stdio_catalogue_sole_operator;
 
@@ -80,6 +83,7 @@ mod mik7642_backend_cancel;
 mod owner2_stdio_tasks;
 #[cfg(feature = "firewall")]
 pub(super) mod route_matrix_stdio_tasks;
+mod submit_authz_stdio;
 // MIK-7839.CANCEL.3: a dropped run_stdio future stops its task workers.
 mod stdio_session_drop;
 // MIK-7757: a drain timeout cancels the running workers on both shutdown paths.

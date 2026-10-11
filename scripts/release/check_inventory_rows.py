@@ -85,6 +85,21 @@ SWEPT_AREAS = (
     "src/config/account_bindings.rs",
     "src/personal_accounts/config/",
     "src/personal_accounts/provider",
+    # MIK-8195 W2: gateway/server outside stdio, mod.rs and persistence.rs
+    # (those two are W7), listed one by one.
+    "src/gateway/server/cleartext.rs",
+    "src/gateway/server/control_plane_store.rs",
+    "src/gateway/server/events_wiring.rs",
+    "src/gateway/server/identity_grants.rs",
+    "src/gateway/server/listener.rs",
+    "src/gateway/server/provenance_signer.rs",
+    "src/gateway/server/start_checks.rs",
+    "src/gateway/server/support.rs",
+    "src/gateway/server/task_runtime.rs",
+    "src/gateway/server/tools_changed.rs",
+    "src/gateway/server/warmstart.rs",
+    # MIK-8195 W1: the HTTP transport.
+    "src/transport/http/",
 )
 # Diffing against git's empty tree reads every line of <head> as added.
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"

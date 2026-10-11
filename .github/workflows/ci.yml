@@ -1039,6 +1039,8 @@ jobs:
         run: python3 scripts/release/test_grep_no_test_hook.py
       - name: Test the tag/manifest publish gate
         run: python3 scripts/release/test_check_tag_manifest.py
+      - name: Run the -full image entrypoint against stub commands
+        run: python3 scripts/release/test_entrypoint_full.py
       - name: Test the burndown summary drift check
         run: python3 scripts/release/test_check_burndown_summary.py
       - name: Burndown summary and publish gate match the ledger checks (MIK-7730, MIK-7932)

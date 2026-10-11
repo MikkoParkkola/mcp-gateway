@@ -89,7 +89,6 @@ pub(crate) enum Ticket {
     Mik8154,
     Mik8159,
     Mik8160,
-    Mik8315,
 }
 
 /// What a (method, route, stage) row asserts.
@@ -192,10 +191,9 @@ fn the_table_answers_every_route_and_stage() {
         }
     }
     // Today's gaps: R1/R2/R5 nonce, R2 chain link, R3 rescan, sanitize and
-    // lease, R4a nonce give-back (D2) and authorize (D3), R5 route firewall,
-    // sanitize and X14.
+    // lease, R4a nonce give-back (D2), R5 route firewall, sanitize and X14.
     assert_eq!(
-        gaps, 12,
+        gaps, 11,
         "the gap count moved: update the table and this pin"
     );
 }
@@ -218,6 +216,7 @@ const DRIVEN: &[(Route, Stage)] = &[
     (Route::Direct, Stage::MrtrUndeclared),
     (Route::Stdio, Stage::MrtrUndeclared),
     (Route::TaskSubmit, Stage::TaskConfirm),
+    (Route::TaskSubmit, Stage::Authorize),
     (Route::Stdio, Stage::TaskConfirm),
     (Route::Invoke, Stage::Lease),
     (Route::Invoke, Stage::NonceGiveBack),
@@ -305,11 +304,6 @@ const UNDRIVEN: &[(Route, Stage, &str)] = &[
         Route::TaskSubmit,
         Stage::Sanitize,
         "needs a task-submit driver per stage; MIK-8314",
-    ),
-    (
-        Route::TaskSubmit,
-        Stage::Authorize,
-        "gap MIK-8315: driven red-first by MIK-8315 SUBMITAUTHZ.1",
     ),
     (
         Route::TaskSubmit,

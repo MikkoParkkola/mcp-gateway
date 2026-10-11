@@ -197,13 +197,27 @@ fn decide(
     announced: &parking_lot::Mutex<Announced>,
     nudge: ToolsNudge,
 ) -> Option<(String, Reach)> {
+    decide_on((&state.backends, &state.meta_mcp), announced, nudge)
+}
+
+/// [`decide`] over what it reads: the backend registry and the Meta-MCP. One
+/// decision for every transport, so a nudge decides the same on HTTP and on
+/// stdio (MIK-8278); only who is told differs.
+fn decide_on(
+    (backends, meta_mcp): (
+        &crate::backend::BackendRegistry,
+        &crate::gateway::meta_mcp::MetaMcp,
+    ),
+    announced: &parking_lot::Mutex<Announced>,
+    nudge: ToolsNudge,
+) -> Option<(String, Reach)> {
     let decided = match nudge {
         ToolsNudge::Backend {
             name,
             instance,
             kind,
         } => {
-            let backend = state.backends.get(&name);
+            let backend = backends.get(&name);
             // Cleared BEFORE any read of this backend, shared slot included: a
             // store or verdict from now on queues a fresh nudge, so none is
             // lost between this and the reads (`MIK-8208`).
@@ -249,10 +263,7 @@ fn decide(
             prefix,
         } => {
             // A replaced instance's late nudge: its successor's own follow.
-            state
-                .backends
-                .get(&name)
-                .filter(|b| b.instance() == instance)?;
+            backends.get(&name).filter(|b| b.instance() == instance)?;
             if !announced.lock().revoked(&name, instance, &prefix) {
                 return None;
             }
@@ -261,18 +272,18 @@ fn decide(
         ToolsNudge::Catalogue { name } => {
             // A capability reload also refreshes webhook event routes,
             // whether or not its tools changed.
-            state.meta_mcp.events_capabilities_reloaded(&name);
-            let visible = catalogue_fingerprint(state, &name);
+            meta_mcp.events_capabilities_reloaded(&name);
+            let visible = catalogue_fingerprint(meta_mcp, &name);
             if !announced.lock().catalogue(&name, visible) {
                 return None;
             }
             (name, Reach::Tools)
         }
         ToolsNudge::CatalogueScanned { name } => {
-            state.meta_mcp.events_capabilities_reloaded(&name);
+            meta_mcp.events_capabilities_reloaded(&name);
             // Always heard: tools a client listed during the scan were never
             // reported. Recorded, so later reports compare against it.
-            let visible = catalogue_fingerprint(state, &name);
+            let visible = catalogue_fingerprint(meta_mcp, &name);
             announced.lock().catalogues.insert(name.clone(), visible);
             (name, Reach::Tools)
         }
@@ -281,9 +292,8 @@ fn decide(
 }
 
 /// The fingerprint of the tools catalogue `name` shows now.
-fn catalogue_fingerprint(state: &AppState, name: &str) -> u64 {
-    state
-        .meta_mcp
+fn catalogue_fingerprint(meta_mcp: &crate::gateway::meta_mcp::MetaMcp, name: &str) -> u64 {
+    meta_mcp
         .capability_tools(name)
         .map_or_else(|| fingerprint(&[]), |tools| fingerprint(&tools))
 }
@@ -348,6 +358,8 @@ async fn drain_until<T, F, Fut>(
 }
 
 mod views;
+
+pub(super) mod stdio;
 
 #[cfg(test)]
 mod decision_tests;

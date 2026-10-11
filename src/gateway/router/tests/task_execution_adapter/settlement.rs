@@ -163,12 +163,17 @@ async fn x7_a_malformed_interim_round_is_abandoned_and_never_committed_as_a_resu
 /// `Error::Forbidden`, which is the one variant
 /// `error_response_preserving_status` stamps the HTTP-status key onto.
 fn forbidden_playbook() -> crate::playbook::PlaybookEngine {
+    playbook_at(FORBIDDEN_BACKEND)
+}
+
+/// The same one-step playbook with its step at `server`.
+fn playbook_at(server: &str) -> crate::playbook::PlaybookEngine {
     let definition: crate::playbook::PlaybookDefinition = serde_json::from_value(json!({
         "playbook": "1.0",
         "name": "reach-the-vault",
         "description": "one step, at a backend this credential may not reach",
         "steps": [
-            { "name": "step", "tool": TOOL, "server": FORBIDDEN_BACKEND, "arguments": {} }
+            { "name": "step", "tool": TOOL, "server": server, "arguments": {} }
         ]
     }))
     .expect("the fixture playbook must deserialise");
@@ -281,13 +286,26 @@ async fn fixture_control_a_synchronous_refusal_carries_the_internal_http_status_
 }
 
 /// X8 — a `failed` task keeps its error's `code` and `message` and loses the
-/// gateway's internal HTTP-status channel.
+/// gateway's internal HTTP-status channel. The playbook's step is at an
+/// allowed backend when the task is submitted (MIK-8315 refuses a forbidden
+/// one at submit) and is moved to the forbidden one inside the task's commit,
+/// so the worker's own dispatch is what refuses it.
 #[tokio::test]
 async fn x8_a_failed_task_keeps_code_and_message_and_drops_the_http_status_key() {
     let mock = MockBackend::answering(Answer::ok());
     let (state, _store) = state_with(&mock).await;
     let forbidden = register_forbidden(&state);
-    state.meta_mcp.set_playbook_engine(forbidden_playbook());
+    state.meta_mcp.set_playbook_engine(playbook_at(BACKEND));
+    let meta = Arc::clone(&state.meta_mcp);
+    let swapped = std::sync::atomic::AtomicBool::new(false);
+    state
+        .task_executor
+        .barrier_on_publication(Arc::new(move || {
+            if !swapped.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                meta.set_playbook_engine(forbidden_playbook());
+            }
+        }))
+        .await;
 
     let mut params = run_playbook_params();
     params["task"] = json!({});

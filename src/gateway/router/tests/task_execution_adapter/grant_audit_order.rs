@@ -202,7 +202,7 @@ async fn settle_quiet() {
 
 /// Signals each terminal commit, read where the worker commits it, so the
 /// row never reads the task through `tasks/get` (which adds a record).
-struct Terminal(tokio::sync::Notify);
+pub(super) struct Terminal(pub(super) tokio::sync::Notify);
 
 #[async_trait::async_trait]
 impl crate::gateway::task_service::CommitObserver for Terminal {
@@ -250,13 +250,29 @@ async fn notes_before_and_after_the_hand_off_are_each_written_once() {
 
 /// O5. An unsigned task's slot is empty at the hand-off: at the moment the
 /// worker spawns, no grant append has run and the armed hold has not fired.
-/// Guard: green on base.
+/// The capability is public, so no decision is noted at submit either. The
+/// personal-capability case, whose submit decision IS appended before the
+/// spawn since MIK-8315, is `submit_authz_audit` row 4e.
 #[tokio::test]
 async fn an_empty_slot_appends_nothing_before_the_spawn() {
     let row = armed(true, false, AuditFailurePolicy::BestEffort, |meta| meta).await;
+    row.state.meta_mcp.set_capabilities(
+        crate::gateway::meta_mcp::grant_audit_fixture::capability_backend_exposed(
+            row.endpoint.port,
+            super::grant_decisions::OWNER,
+            "public",
+        ),
+    );
     let (start, appends) = (spawns(), appends_for_test());
     let hold = hold_next_write_for_test();
-    let created = post(&row.state, "key-a", as_task(personal_invoke(1), "o5")).await;
+    // Bounded: an append before the spawn would meet the held write and block
+    // the submit, so a regression fails here instead of hanging the suite.
+    let created = tokio::time::timeout(
+        Duration::from_secs(10),
+        post(&row.state, "key-a", as_task(personal_invoke(1), "o5")),
+    )
+    .await
+    .expect("the submit blocked on a held write: an append ran before the spawn");
     task_id(&created);
     let edge = worker_spawns_for_test()
         .get(start)

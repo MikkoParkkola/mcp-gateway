@@ -47,7 +47,7 @@ const OWNED_ELSEWHERE: &[(&str, &str, &str, &str)] = &[
         "router/backend_handlers/direct_dispatch.rs",
         "admit",
         r"GuardOutcome::CachedResult\(",
-        "a CachedResult carries no question the cache was handed directly (final-only store; nested-question output is routed to execution admission). An envelope can reach a cached answer only after playbook interpolation hands it to a step backend, which can also return it uncached, so cache ownership would not close it: that is MIK-8323 (no sealed envelope to a backend). Pinned by the_idempotency_cache_keeps_no_question_it_was_handed_directly and an_echoed_envelope_in_the_cache_needs_its_own_arguments_to_replay",
+        "a CachedResult carries no question the cache was handed directly (final-only store; nested-question output is routed to execution admission). An envelope can reach a cached answer only after playbook interpolation hands it to a step backend, which can also return it uncached, so cache ownership would not close it; MIK-8323 closes it at interpolation (a step argument never carries a sealed envelope). Pinned by the_idempotency_cache_keeps_no_question_it_was_handed_directly, a_playbook_handing_a_request_state_to_a_step_is_refused and a_cached_answer_needs_its_own_arguments_to_replay",
     ),
     (
         "meta_mcp/invoke/pre_dispatch.rs",

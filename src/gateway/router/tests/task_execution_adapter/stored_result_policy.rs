@@ -284,12 +284,23 @@ async fn a_legacy_mixed_chain_and_tool_execute_row_is_refused() {
 
 /// A step refused before dispatch by a non-authorization gate (a withheld
 /// tool) is recorded too, so the failed plan is refused while it stays withheld.
+/// The tool is withheld inside the task's commit: since MIK-8315 a plan whose
+/// step is withheld at submit is refused at submit, before any task exists.
 #[tokio::test]
 async fn a_plan_step_refused_before_dispatch_is_recorded_and_reauthorized() {
     let mock = MockBackend::answering(Answer::ok());
     let (state, _store) = state_with(&mock).await;
     install_playbook(&state, TOOL);
-    withhold(&state, TOOL);
+    let held = Arc::clone(&state);
+    let withheld = std::sync::atomic::AtomicBool::new(false);
+    state
+        .task_executor
+        .barrier_on_publication(Arc::new(move || {
+            if !withheld.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                withhold(&held, TOOL);
+            }
+        }))
+        .await;
     let id = task_id(&post(&state, "key-a", playbook_call(10, "b-failed-step")).await);
     let recorded = wait_for_targets(&state, &id).await;
     let step = crate::gateway::task_service::Target {
