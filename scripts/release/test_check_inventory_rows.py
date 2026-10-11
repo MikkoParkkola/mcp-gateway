@@ -187,6 +187,16 @@ class CheckInventoryRows(unittest.TestCase):
         self.assertEqual(self.repo.missing(), ["helper"])
 
 
+class PathspecShape(unittest.TestCase):
+    """`--all` hands the prefixes to git as pathspecs, and a pathspec names
+    one path: a bare stem matched `task_confirmation/` and never scanned
+    `task_confirmation.rs` (MIK-8195). Every entry is a directory or a file."""
+
+    def test_every_prefix_is_a_directory_or_a_rust_file(self) -> None:
+        stems = [p for p in rows.PREFIXES if not p.endswith(("/", ".rs"))]
+        self.assertEqual(stems, [], "spell a module as both `x.rs` and `x/`")
+
+
 class CoverageGradeTrigger(unittest.TestCase):
     """The CI grade's pull_request paths name exactly the COV.3 prefixes
     (MIK-8217): a prefix missing there lets a PR on that path merge ungraded.
