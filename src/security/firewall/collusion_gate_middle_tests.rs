@@ -193,9 +193,11 @@ fn a_middle_sample_never_truncates_leaf_evidence() {
     );
 }
 
-/// `MIK-8066.CAP.2` M7 (C6): a plan step delivered whole in the answer is
-/// kept to it, then capped; bob relaying its middle is
-/// refused, alice (its holder) is not.
+/// `MIK-8066.CAP.2` M7 (C6), a guard: a plan step kept to its answer
+/// records the fingerprints the answer delivered as retained ones (at most
+/// `RECORD_CAP`, MIK-7992), so its middle was evidence before CAP.2 and
+/// stays so, with its holder excused. (The plan path CAP.2 changes is a step
+/// recorded without being kept: `a_deferred_digest_is_capped_where_it_is_recorded`.)
 #[test]
 fn the_middle_of_a_plan_step_cut_after_retention_is_evidence() {
     let fw = firewall();
