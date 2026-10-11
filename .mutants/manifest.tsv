@@ -1,0 +1,21 @@
+head_sha	5744ff0479e1ef71e232a89270cc2403817eacdb
+m01	linux	m01.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3_units::the_view_entry_cap_admits_a_and_refuses_a_plus_one --exact
+m02	linux	m02.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::views_are_admitted_while_the_view_budget_has_room --exact
+m03	linux	m03.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::a_view_returns_its_charge_when_it_drops --exact
+m04	linux	m04.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::a_big_step_inside_an_answer_over_the_bound_is_excused_and_evidence --exact
+m05	linux	m05.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3_units::the_view_equals_the_sampled_reference_at_both_rates --exact
+m06	linux	m06.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3_units::retention_through_the_view_keeps_what_the_full_set_keeps --exact
+m08	linux	m08.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::a_capped_step_without_attachments_keeps_only_its_delivered_head --exact
+m09	linux	m09.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::an_omitted_head_is_not_excused_and_a_delivered_middle_is --exact
+m10	linux	m10.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::an_answer_past_the_text_cap_fails_closed --exact
+m11	linux	m11.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::an_answer_past_the_text_cap_fails_closed --exact
+m12	linux	m12.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::unread_holders_never_make_text_common --exact
+m13	linux	m13.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::an_answer_past_the_text_cap_fails_closed --exact
+m14	linux	m14.patch	--lib --all-features -- gateway::meta_mcp::invoke::relay::delivered::p3_tests::a_key_delivered_as_a_value_gets_no_seam_on_an_over_bound_answer --exact
+m15	linux	m15.patch	--lib --all-features -- gateway::meta_mcp::invoke::relay::delivered::p3_tests::a_key_delivered_as_a_value_gets_no_seam_on_an_over_bound_answer --exact
+m16	linux	m16.patch	--lib --all-features -- gateway::meta_mcp::invoke::relay::delivered::p3_tests::a_forward_spanning_two_steps_gets_no_seam_on_an_over_bound_answer --exact
+m17	linux	m17.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3_units::leaf_hashes_are_charged_to_the_total_not_the_baseline --exact
+m17b	linux	m17b.patch	--lib --all-features -- security::firewall::collusion_gate::tests::big::a_step_whose_leaf_hashes_do_not_fit_keeps_none_and_is_marked_lost --exact
+m18	linux	m18.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3_units::answers_past_the_walk_caps_are_unread_without_walking --exact
+m19	linux	m19.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3_units::a_view_build_never_runs_past_its_reservation --exact
+m20	linux	m20.patch	--lib --all-features -- gateway::meta_mcp::invoke::relay::delivered::p3_tests::a_rewritten_answer_past_the_cap_keeps_its_receipt_and_fails_closed --exact

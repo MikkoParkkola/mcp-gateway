@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate_seams.rs b/src/security/firewall/collusion_gate_seams.rs
+index e642278b0..569dc54b5 100644
+--- a/src/security/firewall/collusion_gate_seams.rs
++++ b/src/security/firewall/collusion_gate_seams.rs
+@@ -105,7 +105,7 @@ impl Firewall {
+         recorded: Recorded<'_>,
+         now: std::time::Instant,
+     ) {
+-        detector.record_unread_at(source, held, recorded, now);
++        detector.record_sampled_at((source, caller.key()), held, recorded, now);
+         detector.mark_step_lost(source, caller.key());
+     }
+ 

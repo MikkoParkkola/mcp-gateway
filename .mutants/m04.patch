@@ -1,0 +1,12 @@
+diff --git a/src/security/firewall/collusion_view.rs b/src/security/firewall/collusion_view.rs
+index 277bb3c4e..7820eef1b 100644
+--- a/src/security/firewall/collusion_view.rs
++++ b/src/security/firewall/collusion_view.rs
+@@ -293,6 +293,7 @@ pub(crate) fn build_with(
+     if !entries.charge.resize(entries.refs + (cap + len) * 8) {
+         return Err(Unreadable::NoRoom);
+     }
++    entries.vec.reverse();
+     let boxed = std::mem::take(&mut entries.vec).into_boxed_slice();
+     // The walk charge stays: the answer's later walks (labels, seams) run
+     // while the view lives.
