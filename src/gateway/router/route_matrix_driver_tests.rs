@@ -16,7 +16,7 @@ use crate::gateway::meta_mcp::MetaMcp;
 
 #[path = "route_matrix_driver_step_tests.rs"]
 mod step;
-pub(crate) use step::{playbook_budgeted, playbook_minting};
+pub(crate) use step::{playbook_budgeted, playbook_exposed, playbook_minting, playbook_then_task};
 
 /// What one call through a route produced.
 pub(crate) struct Sent {

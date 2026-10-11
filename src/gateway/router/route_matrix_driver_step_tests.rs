@@ -19,6 +19,17 @@ pub(crate) async fn playbook_budgeted(
     budget: usize,
     (definition, runs): (Value, usize),
 ) -> (Vec<Value>, usize) {
+    playbook_exposed(audit, budget, (definition, runs), &[]).await
+}
+
+/// [`playbook_budgeted`] exposing only the meta-tools in `exposed`; an empty
+/// list exposes them all (`MetaMcp::with_exposed_meta_tools`).
+pub(crate) async fn playbook_exposed(
+    audit: &Path,
+    budget: usize,
+    (definition, runs): (Value, usize),
+    exposed: &[String],
+) -> (Vec<Value>, usize) {
     let definition = serde_json::from_value(definition).expect("the playbook deserialises");
     let fx = crate::gateway::router::direct_guards_fixture::fixture_firewalled_budget_built(
         Answer::Ok,
@@ -27,7 +38,7 @@ pub(crate) async fn playbook_budgeted(
             let mut engine = crate::playbook::PlaybookEngine::new();
             engine.register(definition);
             meta.set_playbook_engine(engine);
-            meta
+            meta.with_exposed_meta_tools(exposed)
         },
     )
     .await;
@@ -145,4 +156,70 @@ pub(crate) async fn playbook_minting(
         minted.push(minting.0.load(Ordering::SeqCst));
     }
     (answers, minted, fx.calls.load(Ordering::SeqCst))
+}
+
+/// MIK-8362 p5: one synchronous `gateway_run_playbook` of `definition` spends a
+/// call budget of `budget`, then a task-augmented call of the same playbook is
+/// made as a modern client that declares tasks. Returns the task call's answer.
+pub(crate) async fn playbook_then_task(audit: &Path, budget: usize, definition: Value) -> Value {
+    let definition = serde_json::from_value(definition).expect("the playbook deserialises");
+    let fx = crate::gateway::router::direct_guards_fixture::fixture_firewalled_budget_built(
+        Answer::Ok,
+        (audit.to_path_buf(), budget),
+        |meta| {
+            let mut engine = crate::playbook::PlaybookEngine::new();
+            engine.register(definition);
+            meta.set_playbook_engine(engine);
+            meta
+        },
+    )
+    .await;
+    let run = serde_json::json!({ "name": "gateway_run_playbook",
+        "arguments": { "name": "steps" } });
+    let (_, first) = crate::gateway::router::direct_guards_fixture::send(
+        &fx,
+        "/mcp",
+        "k-std",
+        "tools/call",
+        run,
+        None,
+    )
+    .await;
+    assert!(
+        first.get("error").is_none(),
+        "setup: the first run was refused: {first}"
+    );
+    let task = serde_json::json!({
+        "name": "gateway_run_playbook",
+        "arguments": { "name": "steps" },
+        "task": {},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities":
+                { "extensions": { "io.modelcontextprotocol/tasks": {} } },
+            "io.modelcontextprotocol/clientInfo": { "name": "StepFw", "version": "1" },
+            crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "stepfw-task-1"
+        }
+    });
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("authorization", "Bearer k-std")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "gateway_run_playbook")
+        .body(axum::body::Body::from(
+            serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": task })
+            .to_string(),
+        ))
+        .expect("the request builds");
+    let response = tower::ServiceExt::oneshot(fx.router.clone(), request)
+        .await
+        .expect("the router answers");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("a body");
+    serde_json::from_slice(&body).unwrap_or(Value::Null)
 }

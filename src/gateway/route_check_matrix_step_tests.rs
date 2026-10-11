@@ -389,3 +389,144 @@ async fn http_refused_playbook_mints_no_credential() {
     );
     assert_eq!(sends, 1, "{}", answers[1]);
 }
+
+/// A tenant guard of `limit` distinct tenants per window, reading the `tenant`
+/// argument.
+fn tenant_limit(limit: usize) -> impl FnOnce(&mut FirewallConfig) {
+    move |config| {
+        config.tenant_guard.enabled = true;
+        config.tenant_guard.max_tenants_per_window = limit;
+        config.tenant_guard.arg_keys = vec!["tenant".to_string()];
+    }
+}
+
+/// STEPFW.4: the tenant guard sees a step's literal tenant argument at the
+/// route. Two steps naming two tenants against a limit of one: the call is
+/// refused whole, by the guard, before either step runs. Red on the base: both
+/// steps run.
+#[tokio::test]
+async fn stdio_playbook_steps_spend_the_tenant_guard() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audit = dir.path().join("audit.jsonl");
+    let mut definition = playbook_of(&["read", "read"]);
+    definition["steps"][0]["arguments"] = json!({ "tenant": "t1" });
+    definition["steps"][1]["arguments"] = json!({ "tenant": "t2" });
+    let params = vec![json!({ "name": "gateway_run_playbook", "arguments": { "name": "steps" } })];
+    let (answers, sends) = stdio_params_counted(
+        &audit,
+        tenant_limit(1),
+        (Some(definition), ToolPolicyConfig::default(), params),
+    )
+    .await;
+    assert_eq!(answers[0]["error"]["code"], -32600, "{}", answers[0]);
+    assert!(
+        message(&answers[0]).to_lowercase().contains("tenant"),
+        "not refused by the tenant guard: {}",
+        answers[0]
+    );
+    assert_eq!(sends, 0, "a step ran before the refusal: {}", answers[0]);
+}
+
+/// PIN R2 (accepted residual, green on the base): the route sees a step's
+/// tenant argument as the template the definition holds, never the rendered
+/// value. One templated step, a limit of one tenant, two runs rendering two
+/// tenants: both pass, where two direct calls would not. The dispatch rescan
+/// is stateless and does not count tenants. If this row turns red the residual
+/// was closed and the PR text and changelog must say so.
+#[tokio::test]
+async fn stdio_playbook_tenant_guard_sees_templates_not_rendered_values() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audit = dir.path().join("audit.jsonl");
+    let mut definition = playbook_of(&["read"]);
+    definition["steps"][0]["arguments"] = json!({ "tenant": "$inputs.t" });
+    let run = |tenant: &str| {
+        json!({ "name": "gateway_run_playbook",
+            "arguments": { "name": "steps", "arguments": { "t": tenant } } })
+    };
+    let (answers, sends) = stdio_params_counted(
+        &audit,
+        tenant_limit(1),
+        (
+            Some(definition),
+            ToolPolicyConfig::default(),
+            vec![run("a"), run("b")],
+        ),
+    )
+    .await;
+    for answer in &answers {
+        assert!(answer.get("error").is_none(), "{answer}");
+    }
+    assert_eq!(sends, 2);
+}
+
+/// PIN p3 (guard row, green on the base): `gateway_run_playbook` hidden by the
+/// operator's meta-tool allow-list answers as a tool that does not exist, and
+/// the route expands no steps for it: nothing is charged to the budget. Red
+/// if the step expansion stops honouring the allow-list.
+#[tokio::test]
+async fn http_hidden_playbook_tool_expands_no_steps() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audit = dir.path().join("audit.jsonl");
+    let (answers, sends) = router::playbook_exposed(
+        &audit,
+        1,
+        (playbook_of(&["read"]), 2),
+        &["gateway_search_tools".to_string()],
+    )
+    .await;
+    for answer in &answers {
+        assert_eq!(answer["error"]["code"], -32601, "{answer}");
+        assert!(message(answer).contains("gateway_run_playbook"), "{answer}");
+    }
+    assert_eq!(sends, 0);
+    assert!(
+        audit_rows(&audit, "request").is_empty(),
+        "a hidden tool was charged: {:?}",
+        audit_rows(&audit, "request")
+    );
+}
+
+/// PIN p4 (guard row, green on the base): the response of a playbook call is
+/// still judged against the gateway tool, not the steps. The step targets join
+/// the route's list only after the response targets are fixed, so the response
+/// audit row names `gateway:gateway_run_playbook`.
+#[tokio::test]
+async fn http_playbook_response_targets_stay_the_gateway_tool() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audit = dir.path().join("audit.jsonl");
+    let (answers, _) = router::playbook_budgeted(&audit, 10, (playbook_of(&["read"]), 1)).await;
+    assert!(answers[0].get("error").is_none(), "{}", answers[0]);
+    let rows = audit_rows(&audit, "response");
+    let outer: Vec<_> = rows
+        .iter()
+        .filter(|row| row["tool"] == "gateway_run_playbook")
+        .collect();
+    assert!(!outer.is_empty(), "no response row for the call: {rows:?}");
+    for row in outer {
+        assert_eq!(
+            row["policy_targets"],
+            json!([{ "server": "gateway", "tool": "gateway_run_playbook" }]),
+            "{row}"
+        );
+    }
+}
+
+/// PIN p5: a task-augmented playbook call is judged at task creation. One call
+/// per window, spent by a synchronous run; the task-augmented run is refused by
+/// the budget and no task handle is issued. Red on the base: a task is created
+/// and the steps run on the worker, after the route.
+#[tokio::test]
+async fn http_task_run_playbook_is_refused_at_creation() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audit = dir.path().join("audit.jsonl");
+    let body = router::playbook_then_task(&audit, 1, playbook_of(&["read"])).await;
+    assert_eq!(body["error"]["code"], -32600, "{body}");
+    assert!(
+        message(&body).starts_with("Firewall blocked: Call budget exceeded:"),
+        "not refused by the budget: {body}"
+    );
+    assert!(
+        body.pointer("/result/taskId").is_none(),
+        "a task was created: {body}"
+    );
+}
