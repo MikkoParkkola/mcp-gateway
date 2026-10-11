@@ -36,10 +36,7 @@ impl Firewall {
                 receipt: UnreadReceipt { fps, cut },
                 step,
             } => {
-                let sample = match step {
-                    Some(UnreadStep { evidence }) => Some(evidence.fps()),
-                    None => None,
-                };
+                let sample = step.as_ref().map(|UnreadStep { evidence }| evidence.fps());
                 let recorded = (fps.clone(), cut.clone(), sample);
                 Self::record_unread(
                     detector,
