@@ -144,9 +144,10 @@ pub(super) async fn meta_mcp_handler(
                         // the dispatch: the scope rides this future, so a
                         // notification-first stream polling it after the
                         // handler returns still reads the same answers.
-                        crate::gateway::meta_mcp::visible::with_visibility_memo(meta_mcp_dispatch(
-                            state,
-                            http_request,
+                        // Boxed first: the memo then wraps a pointer, so no
+                        // frame polled through the dispatch holds a copy of it.
+                        crate::gateway::meta_mcp::visible::with_visibility_memo(Box::pin(
+                            meta_mcp_dispatch(state, http_request),
                         )),
                     )),
                 )
