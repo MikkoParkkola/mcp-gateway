@@ -537,11 +537,13 @@ def repo_errors(doc=None) -> list[str]:
 # ── Helm: rendered output, not a hand-kept mapping ───────────────────────────
 
 CHART = ROOT / "deploy/helm/mcp-gateway"
-FIXTURES = CHART / "ci"
+# Fixture files are named by auth mode; `bearer` is the chart's `credential`
+# mode (a filename ending in credential.json is reserved for secrets).
+FIXTURES = ROOT / "tests/fixtures/helm"
 # Gateway keys each fixture must render, so a branch its values should reach
 # cannot go dormant and pass by rendering nothing.
 HELM_EXPECT: dict[str, list[str]] = {
-    "credential": [
+    "bearer": [
         "auth.bearer_token",
         "server.cleartext_http",
         "server.metrics_token",

@@ -1,0 +1,23 @@
+{
+  "nameOverride": "gw",
+  "fullnameOverride": "surface-gw",
+  "replicaCount": 1,
+  "image": {"registry": "ghcr.io", "repository": "mikkoparkkola/mcp-gateway", "tag": "4.0.0", "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "pullPolicy": "Always"},
+  "imagePullSecrets": [{"name": "regcred"}],
+  "service": {"type": "ClusterIP", "port": 39401},
+  "resources": {"limits": {"memory": "512Mi"}},
+  "podSecurityContext": {"runAsUser": 1001, "runAsGroup": 1001, "fsGroup": 1001},
+  "stateVolume": {"sizeLimit": "1Gi"},
+  "audit": {"existingClaim": "audit-pvc", "sizeLimit": "2Gi", "rotation": {"maxSegmentBytes": 1048576, "retainSegments": 3, "onDiskFull": "refuse", "maxSegmentAgeSecs": 3600}},
+  "configVolume": {"defaultMode": 288},
+  "serviceAccount": {"create": true, "name": "surface-gw", "automountToken": true},
+  "rbac": {"create": true},
+  "networkPolicy": {"enabled": true},
+  "logging": {"format": "json", "level": "debug"},
+  "probes": {"enabled": true},
+  "metrics": {"existingSecret": "metrics", "secretKey": "token", "serviceMonitor": {"enabled": true, "interval": "15s"}},
+  "auth": {"mode": "credential", "existingSecret": "gw-token", "secretKey": "token"},
+  "server": {"cleartextHttp": "cluster_internal"},
+  "extraEnv": [{"name": "GITHUB_TOKEN", "value": "x"}],
+  "envFrom": [{"secretRef": {"name": "backend-secrets"}, "prefix": "BACKEND_"}]
+}
