@@ -38,5 +38,42 @@ pub(super) fn reservation_shape(n: usize, position: usize) -> super::sketch::Sha
 }
 
 #[cfg(test)]
+impl super::CollusionDetector {
+    /// The live and pending sketch positions of `principal` from `source`.
+    pub(crate) fn sketch_positions(&self, source: &str, principal: &str) -> Vec<usize> {
+        let pair = (self.digest(source), self.digest(principal));
+        self.state.lock().sketches.positions_of(pair)
+    }
+
+    /// Bytes of every live and pending sketch.
+    pub(crate) fn sketch_bytes_held(&self) -> usize {
+        self.state.lock().sketches.bytes_held()
+    }
+
+    /// Whether `principal`'s excuse from `source` is marked lost for room.
+    pub(crate) fn excuse_lost(&self, source: &str, principal: &str) -> bool {
+        let pair = (self.digest(source), self.digest(principal));
+        self.state
+            .lock()
+            .markers
+            .holds(pair, std::time::Instant::now())
+    }
+
+    /// Sketches abandoned because their selection passed n + H.
+    pub(crate) fn overfull_sketches(&self) -> u64 {
+        0
+    }
+
+    /// The last retention's (distinct selected, reserved n) for a pair.
+    pub(crate) fn last_selection(&self, _source: &str, _principal: &str) -> Option<(usize, usize)> {
+        None
+    }
+
+    /// Reserve no headroom on this detector (the abandon path, made
+    /// reachable).
+    pub(crate) fn zero_headroom(&self) {}
+}
+
+#[cfg(test)]
 #[path = "collusion_big_tests.rs"]
 mod tests;

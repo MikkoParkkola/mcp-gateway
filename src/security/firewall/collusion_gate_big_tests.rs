@@ -73,6 +73,7 @@ fn run(text: &str, at: usize) -> &str {
 /// the answer was over the bound and the receipt was dropped.
 fn deliver_step(fw: &Firewall, step: &Value, staged: usize, answer: &Value) -> bool {
     let staged = crate::security::firewall::PlanStaging::starting_at(staged);
+    staged.set_caller("alice");
     let Some(digest) = fw.receipt_digest("alpha", "read", step, Some(&staged)) else {
         return false;
     };
@@ -151,5 +152,314 @@ fn a_step_over_the_plan_bound_is_excused_and_evidence_for_what_it_delivered() {
     assert!(
         !relays(&fw, "alice", &relayed),
         "the P2 step's holder was refused"
+    );
+}
+
+const SOURCE: &str = "alpha:read";
+
+/// A plan step of `chars` of `seed` filler, as one content item.
+fn step_of(seed: u64, chars: usize) -> (String, Value) {
+    let text = filler(seed, chars);
+    let step = json!({"content": [{"type": "text", "text": text}]});
+    (text, step)
+}
+
+/// `MIK-8066` T13 (F1): four same-source P1 steps of one plan, all staged
+/// before any retention, reserve four distinct sketch positions for their
+/// caller at staging. Peeking at the free positions without reserving
+/// (mutant `f1_peek_without_reserve`) gives all four the same one.
+#[test]
+fn same_source_steps_of_one_plan_hold_distinct_positions() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    let staged =
+        crate::security::firewall::PlanStaging::starting_at(super::super::DELIVERED_SET_CAP);
+    staged.set_caller("alice");
+    for seed in 0..4 {
+        let (_, step) = step_of(200 + seed, 100 * 1024);
+        fw.receipt_digest("alpha", "read", &step, Some(&staged))
+            .expect("staged");
+    }
+    let mut positions = detector.sketch_positions(SOURCE, "alice");
+    positions.sort_unstable();
+    assert_eq!(
+        positions,
+        vec![0, 1, 2, 3],
+        "four distinct pending positions"
+    );
+}
+
+/// Alice's 64 KiB P1 step delivered whole inside 900 KiB of foreign text
+/// (the answer stays under the bound). Returns the step's text.
+fn deliver_step_beside_foreign_text(fw: &Firewall) -> String {
+    let (text, step) = step_of(301, 64 * 1024);
+    let answer = json!({"whole": text, "pad": filler(302, 900 * 1024)});
+    let bound = super::super::DELIVERED_SET_CAP;
+    assert!(
+        deliver_step(fw, &step, bound, &answer),
+        "premise: under the bound"
+    );
+    text
+}
+
+/// `MIK-8066` T22 (H rule): the foreign text's Bloom false positives push the
+/// step's selection past its own count n, and the headroom absorbs them: the
+/// sketch is kept and its holder excused. Abandoning at n (no headroom)
+/// would strip an honest holder.
+#[test]
+fn a_step_delivered_whole_beside_foreign_text_keeps_its_sketch() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    let text = deliver_step_beside_foreign_text(&fw);
+    let (selected, own) = detector
+        .last_selection(SOURCE, "alice")
+        .expect("a retention selection was recorded");
+    assert!(
+        selected > own,
+        "premise: false positives passed n ({selected} <= {own})"
+    );
+    assert_eq!(detector.overfull_sketches(), 0, "the sketch was abandoned");
+    assert!(
+        !detector.sketch_positions(SOURCE, "alice").is_empty(),
+        "no sketch kept"
+    );
+    let relayed = run(&text, 30_000);
+    deliver(&fw, "carol", relayed);
+    assert!(
+        relays(&fw, "bob", relayed),
+        "control: bob without a copy is a relay"
+    );
+    assert!(!relays(&fw, "alice", relayed), "the holder was refused");
+}
+
+/// `MIK-8066` T21: with no headroom the same selection passes n + H, so the
+/// sketch is abandoned, counted and marked: the holder's refusal names lost
+/// room, never a plain relay.
+#[test]
+fn an_overfull_selection_abandons_the_sketch() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    detector.zero_headroom();
+    let text = deliver_step_beside_foreign_text(&fw);
+    let (selected, own) = detector
+        .last_selection(SOURCE, "alice")
+        .expect("a retention selection was recorded");
+    assert!(
+        selected > own,
+        "premise: false positives passed n ({selected} <= {own})"
+    );
+    assert_eq!(
+        detector.overfull_sketches(),
+        1,
+        "the overfull sketch was not abandoned"
+    );
+    assert!(
+        detector.sketch_positions(SOURCE, "alice").is_empty(),
+        "an overfull sketch was kept"
+    );
+    assert!(
+        detector.excuse_lost(SOURCE, "alice"),
+        "the lost excuse was not marked"
+    );
+}
+
+/// The description of `who`'s relay refusal for `text`, if refused.
+fn refusal(fw: &Firewall, who: &str, text: &str) -> Option<String> {
+    let params = json!({"name": "send", "arguments": {"text": text}});
+    fw.check_relay(
+        RelayCaller::Keyed(who),
+        "beta",
+        "send",
+        &params,
+        ("direct:beta", who),
+    )
+    .findings
+    .into_iter()
+    .find(|f| f.scan_type == ScanType::CollusionRelay)
+    .map(|f| f.description)
+}
+
+/// A P2 step: 11 leaves of 100 KiB, over the bound on its own.
+fn oversized_step(seed: u64) -> Value {
+    let leaves: Vec<String> = (0..11)
+        .map(|i| filler(seed * 100 + i, 100 * 1024))
+        .collect();
+    json!({ "parts": leaves })
+}
+
+/// `MIK-8066` T12 (F3): two P2 steps whose attachments pass 1 MiB while
+/// their capped receipts stay small. A later 100 KiB step is staged whole,
+/// exactly as the release line stages it. Charging attachments to the
+/// counter that decides capping (mutant `f3_shared_counter`) would cap it.
+#[test]
+fn a_big_step_never_caps_a_later_small_step() {
+    let fw = firewall();
+    let staged = crate::security::firewall::PlanStaging::default();
+    staged.set_caller("alice");
+    for seed in [7, 8] {
+        fw.receipt_digest("alpha", "read", &oversized_step(seed), Some(&staged))
+            .expect("staged");
+    }
+    let bound = super::super::DELIVERED_SET_CAP;
+    assert!(
+        staged.baseline() < bound && staged.total() > bound,
+        "premise: attachments passed the bound, receipts did not ({} / {})",
+        staged.baseline(),
+        staged.total()
+    );
+    let (_, small) = step_of(9, 100 * 1024);
+    let digest = fw
+        .receipt_digest("alpha", "read", &small, Some(&staged))
+        .expect("staged");
+    assert!(
+        digest.is_deferred(),
+        "a later small step was capped at staging"
+    );
+}
+
+/// `MIK-8066` T20 (P1/P2): a step the answer leaves out feeds no sketch; its
+/// pending reservation is abandoned and the store's bytes return to what
+/// they were before staging.
+#[test]
+fn an_omitted_steps_reservation_is_released() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    let before = detector.sketch_bytes_held();
+    let (_, step) = step_of(401, 100 * 1024);
+    let answer = json!({"other": filler(402, 50 * 1024)});
+    let staged =
+        crate::security::firewall::PlanStaging::starting_at(super::super::DELIVERED_SET_CAP);
+    staged.set_caller("alice");
+    let digest = fw
+        .receipt_digest("alpha", "read", &step, Some(&staged))
+        .expect("staged");
+    assert_eq!(
+        detector.sketch_positions(SOURCE, "alice").len(),
+        1,
+        "premise: the step reserved a position at staging"
+    );
+    let delivered = fw
+        .delivered_for_plan(&answer, Some(&staged))
+        .expect("under the bound");
+    let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered, None));
+    fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &kept);
+    assert_eq!(
+        detector.sketch_bytes_held(),
+        before,
+        "the omitted step's reservation leaked"
+    );
+}
+
+/// `MIK-8066` T18 (F5): a step whose attachments find no room is skipped,
+/// counted and marked, so its holder's refusal names lost room, not a relay.
+#[test]
+fn a_step_whose_attachments_never_fit_marks_its_excuse_lost() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    detector.install_sketch_caps(64, 64);
+    let (text, step) = step_of(501, 100 * 1024);
+    let answer = json!({"whole": text});
+    let bound = super::super::DELIVERED_SET_CAP;
+    assert!(
+        deliver_step(&fw, &step, bound, &answer),
+        "premise: under the bound"
+    );
+    assert!(
+        detector.excuse_lost(SOURCE, "alice"),
+        "the skipped excuse was not marked"
+    );
+    let relayed = run(&text, 40_000);
+    deliver(&fw, "carol", relayed);
+    assert!(
+        relays(&fw, "bob", relayed),
+        "control: bob without a copy is a relay"
+    );
+    let why = refusal(&fw, "alice", relayed).expect("premise: alice is refused");
+    assert!(
+        why.contains("ran out of room"),
+        "the refusal did not name lost room: {why}"
+    );
+}
+
+/// `MIK-8066` T16 (F2): a 512 KiB P1 step stages its evidence thinned
+/// (m >= 2: about 131k sampled fingerprints against the 32,768 budget). The
+/// answer delivers it whole; alice relays a 60-char extract, picked under
+/// this run's key, mid-word at both ends, whose fingerprints no thinning at
+/// m >= 2 keeps, so it is outside the staged evidence. She is still excused,
+/// by the Bloom-selected sketch. Skipping the sketch when the evidence
+/// intersection is empty (mutant `f2_skip_on_empty_evidence`) refuses her.
+#[test]
+fn a_short_extract_of_a_big_step_the_sample_missed_is_still_excused() {
+    use crate::security::firewall::collusion::CollusionDetector;
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    let (text, step) = step_of(601, 512 * 1024);
+    let word = |i: usize| !text.as_bytes()[i].is_ascii_whitespace();
+    let window = (10_000..400_000)
+        .step_by(7)
+        .filter(|&at| word(at - 1) && word(at) && word(at + 59) && word(at + 60))
+        .map(|at| &text[at..at + 60])
+        .find(|w| {
+            let fps = detector.fingerprints(w);
+            fps.len() >= 2
+                && !fps
+                    .iter()
+                    .any(|&fp| CollusionDetector::thinning_keeps(fp, 2))
+        })
+        .expect("an extract no thinning at m >= 2 keeps")
+        .to_owned();
+    let answer = json!({"whole": text});
+    let bound = super::super::DELIVERED_SET_CAP;
+    assert!(
+        deliver_step(&fw, &step, bound, &answer),
+        "premise: under the bound"
+    );
+    deliver(&fw, "carol", &window);
+    assert!(
+        relays(&fw, "bob", &window),
+        "control: bob without a copy is a relay"
+    );
+    assert!(
+        !relays(&fw, "alice", &window),
+        "a delivered extract was refused"
+    );
+}
+
+/// `MIK-8066` T15 (F1 cost): oversized steps of one plan are admitted with
+/// attachments while the plan's total room and the sketch store allow; the
+/// first that does not fit is skipped and marked, and every admitted one
+/// holds a distinct pending position inside the per-pair cap.
+#[test]
+fn a_plan_admits_attachments_until_full_then_skips_and_marks() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    let staged = crate::security::firewall::PlanStaging::default();
+    staged.set_caller("alice");
+    let mut admitted = 0;
+    for seed in 20..40 {
+        let (base, total) = (staged.baseline(), staged.total());
+        fw.receipt_digest("alpha", "read", &oversized_step(seed), Some(&staged))
+            .expect("staged");
+        let attached = (staged.total() - total) > (staged.baseline() - base);
+        if !attached {
+            break;
+        }
+        admitted += 1;
+    }
+    assert!(admitted >= 1, "no oversized step was given attachments");
+    assert!(admitted < 20, "attachments were never refused room");
+    assert!(
+        detector.excuse_lost(SOURCE, "alice"),
+        "the skipped step was not marked"
+    );
+    let positions = detector.sketch_positions(SOURCE, "alice");
+    assert_eq!(
+        positions.len(),
+        admitted,
+        "one pending position per admitted step"
+    );
+    assert!(
+        detector.sketch_bytes_held() <= 8 * 1024 * 1024,
+        "pending sketches passed the pair cap"
     );
 }

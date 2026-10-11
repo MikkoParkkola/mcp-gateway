@@ -263,6 +263,12 @@ impl SketchStore {
         }
     }
 
+    /// Bytes of live and pending sketches (tests only, `MIK-8066.BIG.3`).
+    #[cfg(test)]
+    pub(super) fn bytes_held(&self) -> usize {
+        self.bytes
+    }
+
     /// Cap the store at the bytes it holds now, so the next sketch must
     /// evict (tests only, `MIK-8066.CAP.2`).
     #[cfg(test)]
