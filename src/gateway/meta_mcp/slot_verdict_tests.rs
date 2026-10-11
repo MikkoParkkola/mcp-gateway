@@ -886,3 +886,55 @@ async fn c5_chain_step_caller_slot_withholds() {
     }
     assert_eq!(answers[0], answers[1], "C5: withheld vs lacked differ");
 }
+
+/// C7b (guard, kills M14): a call on alpha's warm slot fetches no catalogue;
+/// a held answer needs no `tools/list`.
+#[tokio::test]
+async fn c7b_per_user_warm_verdict_fetches_nothing() {
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Warm,
+        CLOSED,
+        Surfaced::Yes,
+    );
+    let lists = fx.caller.lists() + fx.shared.lists();
+    let answer = call_as_alpha(&fx.meta, TOOL, json!({"q": "x"})).await;
+    assert_eq!(fx.caller.calls(), 1, "premise: not dispatched: {answer}");
+    assert_eq!(
+        fx.caller.lists() + fx.shared.lists(),
+        lists,
+        "C7b: a warm call listed"
+    );
+}
+
+/// C11b (guard, kills M15): two chain steps to the same backend resolve
+/// alpha's credential once each: a resolution carried to dispatch is used by
+/// one invocation, never reused by the next.
+#[tokio::test]
+async fn c11b_second_step_same_server_resolves_again() {
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Warm,
+        CLOSED,
+        Surfaced::No,
+    );
+    let step = format!("{}:{TOOL}", super::slot_verdict_fixture::BACKEND);
+    let before = fx.mints();
+    let answer = call_as_alpha(
+        &fx.meta,
+        "gateway_execute",
+        json!({"chain": [
+            {"tool": step, "arguments": {"q": "x"}},
+            {"tool": step, "arguments": {"q": "y"}}
+        ]}),
+    )
+    .await;
+    assert_eq!(
+        fx.caller.calls(),
+        2,
+        "premise: both steps not dispatched: {answer}"
+    );
+    assert_eq!(fx.mints(), before + 2, "C11b: resolutions for two steps");
+}
