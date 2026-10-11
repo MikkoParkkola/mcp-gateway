@@ -228,7 +228,7 @@ fn a_kept_plan_steps_short_relay_is_caught_by_its_retained_fingerprints() {
             "alpha",
             "read",
             &step,
-            Some(&crate::security::firewall::PlanStaging::new()),
+            Some(&crate::security::firewall::PlanStaging::default()),
         )
         .expect("relay detection is on");
     let answer = json!({"whole": text});

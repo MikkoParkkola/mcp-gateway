@@ -156,7 +156,7 @@ fn a_plan_step_cut_at_staging_excuses_nothing() {
 /// `answer`. Her step receipt is kept to it, capped, and recorded, as a
 /// plan's delivery does.
 fn deliver_plan_step(fw: &Firewall, answer: &serde_json::Value) {
-    let staged = crate::security::firewall::PlanStaging::new();
+    let staged = crate::security::firewall::PlanStaging::default();
     let step = json!({"content": [{"type": "text", "text": long_answer()}]});
     let digest = fw
         .receipt_digest("alpha", "read", &step, Some(&staged))

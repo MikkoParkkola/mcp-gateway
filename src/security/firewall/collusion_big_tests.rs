@@ -19,27 +19,29 @@ fn p_bound(i: usize) -> f64 {
     2.0 * (P0 / 2.0) * 2f64.powi(-i)
 }
 
-/// P(X > h) for X ~ Binomial(n, p), summed exactly in log space: the
-/// first term from ln C(n, h + 1), then the ratio of successive terms.
-fn binomial_tail_above(n: usize, p: f64, h: usize) -> f64 {
-    let k0 = h + 1;
-    let mut ln_c = 0.0;
-    for j in 0..k0 {
+/// P(X > `cap`) for X ~ Binomial(`trials`, `prob`), summed exactly in log
+/// space: the first term from ln C(trials, cap + 1), then the ratio of
+/// successive terms.
+fn binomial_tail_above(trials: usize, prob: f64, cap: usize) -> f64 {
+    let first = cap + 1;
+    let mut ln_choose = 0.0;
+    for step in 0..first {
         #[expect(clippy::cast_precision_loss, reason = "counts far below 2^52")]
-        let (a, b) = ((n - j) as f64, (j + 1) as f64);
-        ln_c += a.ln() - b.ln();
+        let (top, bottom) = ((trials - step) as f64, (step + 1) as f64);
+        ln_choose += top.ln() - bottom.ln();
     }
     #[expect(clippy::cast_precision_loss, reason = "counts far below 2^52")]
-    let mut ln_term = ln_c + k0 as f64 * p.ln() + (n - k0) as f64 * (-p).ln_1p();
+    let mut ln_term =
+        ln_choose + first as f64 * prob.ln() + (trials - first) as f64 * (-prob).ln_1p();
     let mut total = 0.0;
-    for k in k0..n {
+    for count in first..trials {
         let term = ln_term.exp();
         total += term;
-        if term < total * 1e-18 && k > k0 + 64 {
+        if term < total * 1e-18 && count > first + 64 {
             break;
         }
         #[expect(clippy::cast_precision_loss, reason = "counts far below 2^52")]
-        let ratio = ((n - k) as f64 / (k + 1) as f64) * (p / (1.0 - p));
+        let ratio = ((trials - count) as f64 / (count + 1) as f64) * (prob / (1.0 - prob));
         ln_term += ratio.ln();
     }
     total
@@ -49,7 +51,7 @@ fn binomial_tail_above(n: usize, p: f64, h: usize) -> f64 {
 /// keeps the chance that false positives from the largest admitted answer
 /// view overflow the reservation at or under 1e-12, at the conservative
 /// rate bound. The closed form is a Bernstein bound; this checks it against
-/// the exact binomial tail. H_0 = 4,130 (design handoff, checked twice).
+/// the exact binomial tail. `H_0` = 4,130 (design handoff, checked twice).
 #[test]
 fn headroom_keeps_the_abandon_tail_below_budget() {
     assert_eq!(headroom(0), 4_130, "the headroom at position 0");

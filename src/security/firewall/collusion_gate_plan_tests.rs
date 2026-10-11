@@ -56,7 +56,7 @@ fn a_deferred_digest_is_capped_where_it_is_recorded() {
             "alpha",
             "read",
             &step,
-            Some(&crate::security::firewall::PlanStaging::new()),
+            Some(&crate::security::firewall::PlanStaging::default()),
         )
         .expect("relay detection is on");
     assert_eq!(fw.relay_text_cuts(), 0, "premise: staged whole");

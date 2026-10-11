@@ -256,7 +256,7 @@ fn deliver_plan_step(fw: &Firewall, who: &str, tool: &str, step: &Value, answer:
             "alpha",
             tool,
             step,
-            Some(&crate::security::firewall::PlanStaging::new()),
+            Some(&crate::security::firewall::PlanStaging::default()),
         )
         .expect("relay detection is on");
     let delivered = fw.delivered_for_plan(answer, None).expect("bounded");

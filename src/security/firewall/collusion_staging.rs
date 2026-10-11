@@ -20,10 +20,6 @@ pub(crate) struct PlanStaging {
 }
 
 impl PlanStaging {
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
     /// A plan whose earlier steps already staged `baseline` bytes (tests only).
     #[cfg(test)]
     pub(crate) fn starting_at(baseline: usize) -> Self {
@@ -39,6 +35,10 @@ impl PlanStaging {
     }
 
     /// The caller the delivery stages for, if set.
+    #[expect(
+        dead_code,
+        reason = "read by the BIG.3 attachments (design r5.1 F1), which land next"
+    )]
     pub(crate) fn caller(&self) -> Option<String> {
         self.caller.borrow().clone()
     }
@@ -49,6 +49,10 @@ impl PlanStaging {
     }
 
     /// The receipts plus their fingerprint attachments.
+    #[expect(
+        dead_code,
+        reason = "read by the BIG.3 attachments (design r5.1 F3), which land next"
+    )]
     pub(crate) fn total(&self) -> usize {
         self.total.get()
     }

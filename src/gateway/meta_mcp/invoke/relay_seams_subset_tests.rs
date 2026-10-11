@@ -39,7 +39,7 @@ fn piece(k: usize) -> String {
 
 /// A plan step's staged receipt from `server` for key-a.
 fn step_receipt(fw: &Firewall, server: &str, value: &Value) -> Receipt {
-    let staged = crate::security::firewall::PlanStaging::new();
+    let staged = crate::security::firewall::PlanStaging::default();
     Receipt {
         key: "key-a".to_string(),
         keyed: true,
