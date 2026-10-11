@@ -98,13 +98,53 @@ fn merge_key_refused_under_a_backend() {
     );
 }
 
-/// #2360: a retired key never had an effect, so it loads (with a warning)
-/// instead of taking every backend down.
+/// MIK-8044.SURF.2 (T5): a key removed in 4.0 is a load error that names the
+/// key and the command that deletes it. It never had an effect, so the fix is
+/// always the deletion `mcp-gateway upgrade` makes.
+fn removed_key_refused(yaml: &str, path: &str) {
+    let message = refusal(yaml, &[path]);
+    assert!(
+        message.contains("mcp-gateway upgrade"),
+        "the refusal of `{path}` must name `mcp-gateway upgrade`; got: {message}"
+    );
+}
+
 #[test]
-fn retired_backend_circuit_breaker_loads() {
-    let (_dir, _path, result) =
-        load("backends:\n  x:\n    command: y\n    circuit_breaker:\n      enabled: false\n");
-    result.expect("a retired backend circuit_breaker must load");
+fn removed_backend_circuit_breaker_refused() {
+    removed_key_refused(
+        "backends:\n  x:\n    command: y\n    circuit_breaker:\n      enabled: false\n",
+        "backends.x.circuit_breaker",
+    );
+}
+
+#[test]
+fn removed_marketplace_block_refused() {
+    removed_key_refused(
+        "marketplace:\n  marketplace_url: https://plugins.invalid\n  plugin_dir: /tmp/p\n",
+        "marketplace",
+    );
+}
+
+#[test]
+fn removed_server_request_timeout_refused() {
+    removed_key_refused(
+        "server:\n  request_timeout: 30s\n",
+        "server.request_timeout",
+    );
+}
+
+/// `currency` only labelled values that are always USD. Its sibling keys stay
+/// valid, so the refusal names the one key.
+#[cfg(feature = "cost-governance")]
+#[test]
+fn removed_cost_governance_currency_refused() {
+    let message = refusal(
+        "cost_governance:\n  enabled: true\n  currency: USD\n",
+        &["cost_governance.currency"],
+    );
+    assert!(message.contains("mcp-gateway upgrade"), "{message}");
+    let (_dir, _path, result) = load("cost_governance:\n  enabled: true\n");
+    result.expect("cost_governance without currency loads");
 }
 
 /// A non-string key under a backend cannot be matched against the key list;
@@ -143,20 +183,49 @@ fn all_unrecognised_keys_reported_together() {
 }
 
 #[test]
-fn retired_idle_timeout_loads() {
-    let (_dir, _path, result) = load("backends:\n  x:\n    command: y\n    idle_timeout: 10m\n");
-    let config = result.expect("a retired idle_timeout must load");
-    assert!(config.backends.contains_key("x"));
+fn removed_idle_timeout_refused() {
+    removed_key_refused(
+        "backends:\n  x:\n    command: y\n    idle_timeout: 10m\n",
+        "backends.x.idle_timeout",
+    );
 }
 
-/// F15, #2360: the WebSocket listener stays removed; a config still naming its
-/// port loads and opens no listener, as `ws_port: null` (the old default) does.
+/// F15: the WebSocket listener stays removed; a config still naming its port,
+/// even as `null` (the old default), is refused naming the key.
 #[test]
-fn retired_server_ws_port_loads() {
+fn removed_server_ws_port_refused() {
     for yaml in ["server:\n  ws_port: 9000\n", "server:\n  ws_port: null\n"] {
-        let (_dir, _path, result) = load(yaml);
-        result.unwrap_or_else(|e| panic!("{yaml:?} must load: {e}"));
+        removed_key_refused(yaml, "server.ws_port");
     }
+}
+
+/// T12 (B1): a key the loader accepts twice must not switch off the backend
+/// key check. (a) also kills a strict-parse regression in that check; at base
+/// `idle_timeout` loads because it only warned.
+#[test]
+fn removed_backend_key_after_a_repeated_key_refused() {
+    removed_key_refused(
+        &format!("{REPEATED_KEY}backends:\n  x:\n    command: y\n    idle_timeout: 10m\n"),
+        "backends.x.idle_timeout",
+    );
+}
+
+#[test]
+fn misspelt_backend_key_after_a_repeated_key_refused() {
+    refusal(
+        &format!("{REPEATED_KEY}backends:\n  x:\n    command: y\n    timout: 5s\n"),
+        &["backends.x.timout"],
+    );
+}
+
+/// T13: the example at the repository root loads, so no removed key is left
+/// in the file a new operator copies first.
+#[test]
+fn root_gateway_example_loads() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("gateway.example.yaml");
+    let body = std::fs::read_to_string(path).expect("read gateway.example.yaml");
+    let (_dir, _path, result) = load(&body);
+    result.unwrap_or_else(|e| panic!("gateway.example.yaml must load: {e}"));
 }
 
 /// F15: the retirement names `server.ws_port` only; the same leaf under a
