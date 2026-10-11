@@ -1,0 +1,1 @@
+src/oauth/client/mod.rs	refresh_buffer	1	standard	d	refresh_buffer	Seconds before expiry an OAuth token is refreshed: the set value, else max(300 s, 10% of the token lifetime), else 300 s (MIK-8044). Decides refresh timing, never an authorization; pinned by an_unset_buffer_derives_from_the_token_lifetime.
