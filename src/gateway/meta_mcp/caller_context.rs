@@ -3,8 +3,8 @@
 //! The authenticated caller context a `tools/call` dispatch carries.
 
 use super::{
-    Authentication, Declared, GrantSubject, InvokeScope, LOCAL_OPERATOR_PREFIX,
-    LOCAL_OPERATOR_PRINCIPAL, admission, signing, support,
+    Authentication, Declared, GrantSubject, InvokeScope, LOCAL_OPERATOR_PRINCIPAL, admission,
+    signing, support,
 };
 
 /// Authenticated caller context for a `tools/call` dispatch.
@@ -147,9 +147,11 @@ impl<'a> MetaMcpCallerContext<'a> {
         if self.stdio_nonce.is_some() {
             return Some(LOCAL_OPERATOR_PRINCIPAL);
         }
-        self.credential_principal
-            .filter(|text| !text.is_empty() && !text.starts_with(LOCAL_OPERATOR_PREFIX))
-            .or_else(|| support::proven_subject_owner(self))
+        support::credential_or_subject_owner(
+            self.credential_principal,
+            self.grant_subject.as_ref(),
+            self.caller_key,
+        )
     }
 
     /// How this caller was established. The stdio transport's mark decides

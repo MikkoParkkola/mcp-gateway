@@ -103,6 +103,10 @@ pub(crate) struct DeliveryDigest {
     /// answer's single-receipt runs after capping (`add_seam_excuses`); never
     /// by staging, so a step's text the answer dropped carries none.
     pub(super) seam_excuses: Option<std::sync::Arc<[u64]>>,
+    /// A plan step past the plan bound: its fingerprint attachments, sketch
+    /// reservation and, once kept to the answer, its evidence and excuse
+    /// (`MIK-8066.BIG.3`, design r5.1).
+    pub(super) big: Option<Box<super::collusion::big::BigStep>>,
 }
 
 /// A delivery's key-path joins, each fingerprinted alone after the segment
@@ -236,6 +240,7 @@ impl DeliveryDigest {
             cut_fps: None,
             seam_excuses: None,
             joins: Joins::None,
+            big: None,
         };
         (digest, cut)
     }
@@ -305,6 +310,7 @@ impl DeliveryDigest {
             cut_fps: None,
             seam_excuses: None,
             joins: Joins::None,
+            big: None,
         };
         (digest, false)
     }
@@ -337,12 +343,13 @@ impl DeliveryDigest {
             cut_fps: None,
             seam_excuses: None,
             joins,
+            big: None,
         };
         Some((digest, cut || joins_cut || kept < self.retained.len()))
     }
 
-    /// Whether the cap is still to apply (tests only).
-    #[cfg(test)]
+    /// Whether the cap is still to apply: staged whole, not capped at
+    /// staging.
     pub(super) fn is_deferred(&self) -> bool {
         self.deferred
     }
@@ -533,6 +540,7 @@ impl DeliveryDigest {
             cut_fps: None,
             seam_excuses: None,
             joins: Joins::None,
+            big: self.big,
         };
         kept.with_original(detector, found, original, retained, &HashSet::new())
     }
@@ -631,6 +639,7 @@ impl DeliveryDigest {
             cut_fps: None,
             seam_excuses: None,
             joins: Joins::None,
+            big: None,
         };
         kept.with_original(detector, found, original, retained, &in_step)
     }

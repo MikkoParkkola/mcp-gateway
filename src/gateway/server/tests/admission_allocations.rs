@@ -53,7 +53,7 @@ fn bytes_for(meta: &MetaMcp) -> u64 {
         "arguments": {"case_reference": "042"}
     });
     let (result, measured) = measure(|| {
-        meta.admit_meta_sync(
+        meta.admit_meta_sync_for_test(
             crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
             &caller,
             "gateway_invoke",

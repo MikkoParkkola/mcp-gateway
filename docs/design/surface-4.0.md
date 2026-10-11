@@ -310,7 +310,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `auth.api_keys[].backends` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:87 |
 | `auth.api_keys[].denied_tools` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:95 |
 | `auth.api_keys[].expires_at` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:77 |
-| `auth.api_keys[].key` | REMOVE | — | legacy plaintext key, parsed only to be refused | already refused naming `key_sha256`; `upgrade` rewrites it via `hash-key` | src/config/features/api_key.rs:70 |
+| `auth.api_keys[].key` | REMOVE | — | legacy plaintext key, parsed only to be refused | refused at load naming `key_sha256`; `upgrade` replaces a literal key with its digest and names an `env:`/`file:`/`${}` value to fix by hand (tests/surf2_upgrade_removed_keys.rs) | src/config/features/api_key.rs:70 |
 | `auth.api_keys[].key_sha256` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:74 |
 | `auth.api_keys[].kind` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:101 |
 | `auth.api_keys[].name` | KEEP | — | who may call the gateway | - | src/config/features/api_key.rs:81 |
@@ -335,7 +335,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `backends.<name>.allow_flagged_tools` | KEEP | `std::collections::BTreeMap::new()` | per-backend security opt-out; stays explicit | - | src/config/backend_config.rs:70 |
 | `backends.<name>.chain_origins` | KEEP | `Vec::new()` | multi-user and provenance deployments (MULTI_USER.md) | - | src/config/backend_config.rs:104 |
 | `backends.<name>.chain_signer` | KEEP | `None` | multi-user and provenance deployments (MULTI_USER.md) | - | src/config/backend_config.rs:106 |
-| `backends.<name>.circuit_breaker` | REMOVE | — | retired in 4.0; never had an effect | already warns once; 4.0.0 makes it a load error and `upgrade` deletes it | src/config/strict_keys.rs:33 |
+| `backends.<name>.circuit_breaker` | REMOVE | — | retired in 4.0; never had an effect | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs) | src/config/strict_keys.rs:33 |
 | `backends.<name>.command` | KEEP | `see impl Default` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:220 |
 | `backends.<name>.cwd` | KEEP | `see impl Default` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:220 |
 | `backends.<name>.description` | KEEP | `String::new()` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:16 |
@@ -350,7 +350,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `backends.<name>.identity_propagation.strategy` | KEEP | — | multi-user and provenance deployments (MULTI_USER.md) | - | src/identity_propagation/mod.rs:233 |
 | `backends.<name>.identity_propagation.token_exchange_endpoint` | KEEP | — | multi-user and provenance deployments (MULTI_USER.md) | - | src/identity_propagation/mod.rs:246 |
 | `backends.<name>.identity_propagation.token_exchange_scope` | KEEP | — | multi-user and provenance deployments (MULTI_USER.md) | - | src/identity_propagation/mod.rs:249 |
-| `backends.<name>.idle_timeout` | REMOVE | — | retired in 4.0; never had an effect | already warns once; 4.0.0 makes it a load error and `upgrade` deletes it | src/config/strict_keys.rs:28 |
+| `backends.<name>.idle_timeout` | REMOVE | — | retired in 4.0; never had an effect | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs) | src/config/strict_keys.rs:28 |
 | `backends.<name>.input_schema_enforcement` | KEEP | `InputSchemaEnforcement::Closed` | per-backend security opt-out; stays explicit | - | src/config/backend_config.rs:72 |
 | `backends.<name>.max_frame_bytes` | INTERNAL | `None` | security or abuse bound; an operator who set it relies on it | hidden key: still read and validated, so enforcement is unchanged; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/backend_config.rs:40 |
 | `backends.<name>.oauth` | KEEP | `None` | how a user declares a backend and its credentials | - | src/config/backend_config.rs:51 |
@@ -422,7 +422,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `cost_governance.budgets.daily` | KEEP | `type default` | budgets and per-tool prices are operator inputs | - | src/cost_accounting/config.rs:75 |
 | `cost_governance.budgets.per_key` | KEEP | `type default` | budgets and per-tool prices are operator inputs | - | src/cost_accounting/config.rs:79 |
 | `cost_governance.budgets.per_tool` | KEEP | `type default` | budgets and per-tool prices are operator inputs | - | src/cost_accounting/config.rs:77 |
-| `cost_governance.currency` | REMOVE | `"USD".to_string()` | informational only; every value is stored as USD | rejected naming USD; `upgrade` deletes it | src/cost_accounting/config.rs:23 |
+| `cost_governance.currency` | REMOVE | — | informational only; every value is stored as USD | refused at load (`cost_governance.currency` was removed in 4.0); `upgrade` deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs) | src/config/strict_keys.rs:61 |
 | `cost_governance.default_cost` | KEEP | `0.0` | budgets and per-tool prices are operator inputs | - | src/cost_accounting/config.rs:33 |
 | `cost_governance.enabled` | KEEP | `false` | budgets and per-tool prices are operator inputs | - | src/cost_accounting/config.rs:21 |
 | `cost_governance.tool_costs` | KEEP | `HashMap::new()` | budgets and per-tool prices are operator inputs | - | src/cost_accounting/config.rs:30 |
@@ -532,7 +532,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `key_server.policies[].scopes.rate_limit` | KEEP | `type default` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:338 |
 | `key_server.policies[].scopes.tools` | KEEP | `type default` | transport and token identity for team deployments (MULTI_USER.md) | - | src/config/features/key_server.rs:335 |
 | `key_server.token_ttl_secs` | INTERNAL | `DEFAULT_TOKEN_TTL_SECS` | lifetime of issued keys; a security window (rule 1) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/key_server.rs:46 |
-| `marketplace` | REMOVE | — | retired in 4.0; never had an effect | already warns once; 4.0.0 makes it a load error and `upgrade` deletes it | src/config/strict_keys.rs:53 |
+| `marketplace` | REMOVE | — | retired in 4.0; never had an effect | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs) | src/config/strict_keys.rs:53 |
 | `meta_mcp` | KEEP | `type default` | section | - | src/config/mod.rs:97 |
 | `meta_mcp.cache_tools` | REMOVE | `true` | read by nothing (MIK-8064); setting it has no effect | retired: loads and warns once with the reason (as `server.ws_port`); `init` and the examples drop it; `upgrade` deletes the line in its single rewrite pass, or names the key to delete by hand when that would change anything else | src/config/strict_keys.rs |
 | `meta_mcp.cache_ttl` | INTERNAL | `Duration::from_secs(300)` | catalogue freshness; fixed 300 s (the `init` value) | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/meta_mcp_config.rs:43 |
@@ -729,7 +729,7 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `security.transparency_log.rotation.max_segment_bytes` | KEEP | `64 * 1024 * 1024` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:35 |
 | `security.transparency_log.rotation.on_disk_full` | KEEP | `OnDiskFull::ExpireOldest` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:41 |
 | `security.transparency_log.rotation.retain_segments` | KEEP | `12` | audit retention and disk-full policy (`on_disk_full: refuse`) are compliance choices | - | src/security/audit_rotation_config.rs:39 |
-| `security.transparency_log.shared_secret` | KEEP | `String::new()` | audit-log signing key the operator owns | - | src/config/features/security.rs:46 |
+| `security.transparency_log.shared_secret` | KEEP | `String::new()` | audit-log signing key the operator owns; `${VAR}`, `env:`, `file:` or a literal, 32 bytes or more and not all zero while the log is on (MIK-8365) | - | src/config/features/security.rs:46 |
 | `security.trust_configured_backends` | KEEP | `true` | security posture and tool policy (SECURITY_POSTURE.md) | - | src/config/features/security.rs:630 |
 | `server` | KEEP | `type default` | where the gateway listens and how clients reach it | - | src/config/mod.rs:93 |
 | `server.allow_unauthenticated_network_bind` | KEEP | `false` | security opt-out or credential; must stay an explicit operator decision | - | src/config/server_config.rs:65 |
@@ -743,9 +743,9 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `server.port` | KEEP | `39400` | where the gateway listens and how clients reach it | - | src/config/server_config.rs:34 |
 | `server.public_url` | KEEP | `None` | where the gateway listens and how clients reach it | - | src/config/server_config.rs:52 |
 | `server.replicas` | KEEP | `1` | declared, not observable from inside a pod | - | src/config/server_config.rs:83 |
-| `server.request_timeout` | REMOVE | — | retired in 4.0; never had an effect | already warns once; 4.0.0 makes it a load error and `upgrade` deletes it | src/config/strict_keys.rs:48 |
+| `server.request_timeout` | REMOVE | — | retired in 4.0; never had an effect | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs) | src/config/strict_keys.rs:48 |
 | `server.shutdown_timeout` | INTERNAL | `Duration::from_secs(30)` | safety limit with a fixed default; no user story needs it | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/server_config.rs:39 |
-| `server.ws_port` | REMOVE | — | retired in 4.0; never had an effect | already warns once; 4.0.0 makes it a load error and `upgrade` deletes it | src/config/strict_keys.rs:42 |
+| `server.ws_port` | REMOVE | — | retired in 4.0; never had an effect | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs) | src/config/strict_keys.rs:42 |
 | `streaming` | KEEP | `type default` | turn server-push streams off behind proxies that break SSE | - | src/config/mod.rs:99 |
 | `streaming.auto_subscribe` | KEEP | `Vec::new()` | operator picks backends to subscribe for notifications | - | src/config/features/streaming.rs:31 |
 | `streaming.buffer_size` | INTERNAL | `DEFAULT_BUFFER_SIZE` | stream plumbing with fixed defaults | hidden key: a set value is still read and validated, so nothing an operator set stops applying; left out of the reference, `init` and examples; `doctor` lists it when set | src/config/features/streaming.rs:25 |

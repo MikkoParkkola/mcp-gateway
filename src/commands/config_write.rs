@@ -11,7 +11,6 @@ pub use mcp_gateway::config_persistence::CommentLoss;
 use mcp_gateway::config_persistence::{edit_config, edit_config_text};
 
 use super::backend_url_keys::{UrlRewrite, rewrite_url_aliases};
-use super::retired_config_keys::Retired;
 
 /// `--force` rewrites a file whose comments cannot be kept; without it that
 /// write is refused and nothing is written.
@@ -67,6 +66,7 @@ pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<U
     // Refuses a FIFO or a device at once, before waiting for the lock.
     let text = super::regular_file::read_regular_text(path)
         .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+    refuse_unreadable(path, &text)?;
     if mode == RewriteMode::DryRun {
         return Ok(rewrite_of(&text));
     }
@@ -74,23 +74,59 @@ pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<U
     edit_config_text(path, |current| {
         let text =
             current.ok_or_else(|| format!("Failed to read {}: it was removed", path.display()))?;
+        // Again on the text read under the lock: a write since the first read
+        // may have made the file unreadable.
+        refuse_unreadable(path, text)?;
         let rewrite = rewrite_of(text);
-        let save =
-            !rewrite.changed.is_empty() || matches!(rewrite.retired, Retired::Removed { .. });
-        let saved = save.then(|| rewrite.text.clone());
+        // Saved exactly when some pass changed the text.
+        let saved = (rewrite.text != *text).then(|| rewrite.text.clone());
         done = Some(rewrite);
         Ok(saved)
     })?;
     Ok(done.expect("edit_config_text ran the edit"))
 }
 
-/// The URL alias rewrite of `text`, with the retired key dropped in the same
-/// pass, so the file is written once.
+/// Refuse a config that will not load because it cannot be read as a mapping
+/// of keys: saying "nothing changed" would let `upgrade` pass on it
+/// (MIK-8044). An empty or comments-only file reads as an empty mapping,
+/// loads as the defaults, and passes. The reason names a line and column, never the parser's own
+/// message, which can quote a value from the file (a secret, say).
+fn refuse_unreadable(path: &Path, text: &str) -> Result<(), String> {
+    if super::retired_config_keys::loose(text).is_some() {
+        return Ok(());
+    }
+    let why = match serde_yaml::from_str::<serde_yaml::Value>(text) {
+        Ok(doc) if doc.is_mapping() => "it has a key the gateway's loader cannot read".to_owned(),
+        Ok(_) => "its top level is not a mapping of keys".to_owned(),
+        Err(e) => e.location().map_or_else(
+            || "it is not valid YAML".to_owned(),
+            |at| {
+                format!(
+                    "it is not valid YAML at line {}, column {}",
+                    at.line(),
+                    at.column()
+                )
+            },
+        ),
+    };
+    Err(format!(
+        "{} could not be read as a config: {why}; nothing was upgraded.",
+        path.display()
+    ))
+}
+
+/// The URL alias rewrite of `text`, with the removed keys dropped and the
+/// plaintext API keys hashed in the same pass, so the file is written once.
 fn rewrite_of(text: &str) -> UrlRewrite {
     let mut rewrite = rewrite_url_aliases(text, None);
-    let (dropped, retired) = super::retired_config_keys::drop_cache_tools(&rewrite.text);
-    rewrite.retired = retired;
+    let (dropped, removed) = super::retired_config_keys::drop_removed_keys(&rewrite.text);
+    rewrite.removed = removed;
     if let Some(text) = dropped {
+        rewrite.text = text;
+    }
+    let (hashed, api_keys) = super::api_key_rewrite::hash_plaintext_api_keys(&rewrite.text);
+    rewrite.api_keys = api_keys;
+    if let Some(text) = hashed {
         rewrite.text = text;
     }
     rewrite

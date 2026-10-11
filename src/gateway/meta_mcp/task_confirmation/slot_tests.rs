@@ -288,23 +288,27 @@ async fn ask_caller(
     let principal = crate::protocol::mrtr::source_fingerprint(caller.principal_source(None));
     let outcome = fx
         .meta
-        .confirm_destructive_task(&TaskConfirmationRequest {
-            id: RequestId::Number(7),
-            tool_name: TOOL,
-            arguments: &arguments,
-            task: Some(&task),
-            retry,
-            verified_identity: caller.verified_identity,
-            principal,
-            quota: caller.quota_key(),
-            owner,
-            scope: open_scope(),
-            session_id: None,
-            input_capabilities: declared,
-            is_modern: true,
-            admission: &fx.admission,
-        })
-        .await;
+        .confirm_destructive_task_with(
+            &TaskConfirmationRequest {
+                id: RequestId::Number(7),
+                tool_name: TOOL,
+                arguments: &arguments,
+                task: Some(&task),
+                retry,
+                verified_identity: caller.verified_identity,
+                principal,
+                quota: caller.quota_key(),
+                owner,
+                scope: open_scope(),
+                session_id: None,
+                input_capabilities: declared,
+                is_modern: true,
+                admission: &fx.admission,
+            },
+            None,
+        )
+        .await
+        .0;
     assert_eq!(fx.mint.0.load(Ordering::SeqCst), 0, "the gate never mints");
     outcome
 }
@@ -795,3 +799,4 @@ mod mint_refusal;
 mod replay;
 /// The stdio principal rows (route-check-parity P3, MIK-8160, MIK-8326).
 mod stdio_binding;
+mod witness;

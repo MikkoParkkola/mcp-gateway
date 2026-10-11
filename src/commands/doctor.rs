@@ -369,7 +369,7 @@ fn check_config(path: Option<&Path>, _fix: bool) -> (CheckResult, Option<Config>
         Err(e) => (
             CheckResult::fail("Configuration", format!("{}: {e}", p.display()))
                 .with_category("config")
-                .with_manual_fix(format!("mcp-gateway validate {}", p.display())),
+                .with_manual_fix(super::check_config_command(p)),
             None,
         ),
     }

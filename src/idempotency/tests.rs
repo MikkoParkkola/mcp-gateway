@@ -7,6 +7,12 @@ use serde_json::json;
 use std::thread;
 
 impl IdempotencyCache {
+    /// Age every entry by `by` (MIK-8154 L6: a forced 7a miss while the
+    /// execution store, on its own clock, still holds the operation).
+    pub(crate) fn advance_for_test(&self, by: Duration) {
+        advance(self, by);
+    }
+
     /// Every completed value the cache retains (MIK-8176 cache guards). Here,
     /// in a child of the cache's module, it reads the private entries without
     /// growing `idempotency.rs` past its line ceiling.

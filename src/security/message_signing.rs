@@ -476,6 +476,18 @@ pub fn validate_secret(secret: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// The one weak-key rule for both HMAC keys, message signing's and the
+/// transparency log's (MIK-8365): at least [`MIN_SECRET_BYTES`] bytes, not all
+/// zero. The error names `field`, never the value or its length.
+pub(crate) fn validate_key(field: &str, key: &str) -> Result<()> {
+    if key.len() < MIN_SECRET_BYTES || key.bytes().all(|byte| byte == 0) {
+        return Err(Error::ConfigValidation(format!(
+            "{field} must contain at least {MIN_SECRET_BYTES} bytes and must not be all zero"
+        )));
+    }
+    Ok(())
+}
+
 // ── Private helpers ──────────────────────────────────────────────────────────
 
 fn compute_hmac_hex(secret: &[u8], message: &[u8]) -> String {
