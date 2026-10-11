@@ -464,9 +464,9 @@ mod c4_enable_tests;
 #[cfg(test)]
 mod c9_file_ref_tests;
 #[cfg(test)]
-mod empty_backends_reload_tests;
-#[cfg(test)]
 mod config_error_leak_tests;
+#[cfg(test)]
+mod empty_backends_reload_tests;
 #[cfg(test)]
 mod reload_pause;
 #[cfg(test)]

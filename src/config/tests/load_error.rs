@@ -20,9 +20,7 @@ fn load_errors(yaml: &str) -> [String; 2] {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = config_file(dir.path(), yaml);
     let tolerant = Config::load(Some(&path)).expect_err("the tolerant loader refuses");
-    let serving = Config::load_evaluated(Some(&path))
-        .err()
-        .expect("serve's loader refuses");
+    let serving = Config::load_evaluated(Some(&path)).expect_err("serve's loader refuses");
     [tolerant.to_string(), serving.to_string()]
 }
 
@@ -47,7 +45,7 @@ fn a_type_mismatch_names_the_key_and_type_not_the_value() {
 }
 
 /// CFGLEAK.2, tagged scalar (docsfix probe 2): YAML itself refuses the value,
-/// and serde_yaml's message quotes it.
+/// and `serde_yaml`'s message quotes it.
 #[test]
 fn a_tagged_scalar_names_the_key_and_place_not_the_value() {
     let sentinel = "cfgleak-sentinel-r2";
@@ -70,7 +68,7 @@ fn an_env_override_of_the_wrong_type_does_not_print_its_value() {
     let sentinel = "cfgleak-sentinel-r3";
     let dir = tempfile::tempdir().expect("tempdir");
     let env = dir.path().join("leak.env");
-    write_owner_only(&env, &format!("MCP_GATEWAY_SERVER__PORT={sentinel}\n")).expect("env file");
+    write_owner_only(&env, format!("MCP_GATEWAY_SERVER__PORT={sentinel}\n")).expect("env file");
     let path = config_file(
         dir.path(),
         &format!("env_files:\n  - '{}'\n", env.display()),
@@ -87,8 +85,7 @@ fn an_env_override_of_the_wrong_type_does_not_print_its_value() {
 fn a_write_path_load_does_not_print_the_value() {
     let sentinel = "cfgleak-sentinel-r5";
     let text = Config::from_file_text(&format!("server:\n  port: {sentinel}\n"))
-        .err()
-        .expect("refused")
+        .expect_err("refused")
         .to_string();
     assert_free_of(std::slice::from_ref(&text), sentinel);
 }
@@ -234,8 +231,8 @@ fn no_config_site_formats_a_raw_figment_error() {
                 stack.push(path);
                 continue;
             }
-            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if !name.ends_with(".rs") || name.contains("test") {
+            let shown = path.to_string_lossy();
+            if !shown.ends_with(".rs") || shown.contains("test") {
                 continue;
             }
             let text = std::fs::read_to_string(&path).expect("read source");
