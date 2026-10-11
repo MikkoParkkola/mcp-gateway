@@ -317,8 +317,19 @@ impl Gateway {
             request_shape.declared_log_level(),
         );
 
-        // Notifications have no id — send no response
+        // Notifications have no id — send no response. One exception
+        // (MIK-8368): a MODERN request that names a method the revision removed
+        // and carries an id is a request, and HTTP refuses it, so it is refused
+        // here too. Every other notification stays silent, whatever its id, era
+        // or revision.
         if method.starts_with("notifications/") {
+            if let (Some(id), crate::protocol::meta::RequestShape::Modern(_)) =
+                (id.as_ref(), &request_shape)
+                && let Some(removed) =
+                    crate::protocol::modern_refusal::removed_method_refusal(Some(id), &method)
+            {
+                return Err(Some(removed.to_value_lossy()));
+            }
             debug!(notification = %method, "stdio: notification (no response)");
             return Err(None);
         }
@@ -328,6 +339,21 @@ impl Gateway {
             let resp = JsonRpcResponse::error(None, -32600, "Missing id");
             return Err(Some(resp.to_value_lossy()));
         };
+
+        // A method the 2026-07-28 revision removed is refused before anything
+        // acts on it, as `/mcp` refuses it, by the same function (MIK-8368).
+        // The other body-only refusals `/mcp` runs (an unserved revision, an
+        // undeclared capability) stay HTTP-only here: a batch runs its items
+        // with `StdioClient::modern` off, so sharing them would refuse every
+        // modern call inside a batch.
+        if matches!(
+            request_shape,
+            crate::protocol::meta::RequestShape::Modern(_)
+        ) && let Some(removed) =
+            crate::protocol::modern_refusal::removed_method_refusal(Some(&id), &method)
+        {
+            return Err(Some(removed.to_value_lossy()));
+        }
 
         Ok((id, method, params, request_shape))
     }
