@@ -442,15 +442,20 @@ def extract_config() -> list[Entry]:
     w = ConfigWalker()
     root = w.index.resolve("Config", SRC / "config/mod.rs")
     w.walk_item(root, "", "", ("Config",))
-    # Retired keys still load (with a warning), so a user can still write them.
+    # Retired keys still load (with a warning) and removed keys are refused by
+    # name (MIK-8044); either way a user can still write them, so both are rows.
     sk = SRC / "config/strict_keys.rs"
     code, _ = scan(sk.read_text(encoding="utf-8"))
-    for block, prefix in (("RETIRED_BACKEND_KEYS", "backends.<name>."), ("RETIRED_KEYS", "")):
+    for block, prefix, note in (
+        ("REMOVED_BACKEND_KEYS", "backends.<name>.", "removed: refused at load"),
+        ("REMOVED_KEYS", "", "removed: refused at load"),
+        ("RETIRED_KEYS", "", "retired: loads with a warning"),
+    ):
         m = re.search(rf"const {block}\b[^=]*=\s*&\[", code)
         body = code[m.end() : code.index("];", m.end())]
         for t in re.finditer(r"\(\s*(&\[[^\]]*\]|\"[^\"]+\")", body):
             key = prefix + ".".join(re.findall(r'"([^"]+)"', t.group(1)))
-            w.out.setdefault(key, Entry(key, rel(sk), line_of(code, m.end() + t.start()), "retired: loads with a warning"))
+            w.out.setdefault(key, Entry(key, rel(sk), line_of(code, m.end() + t.start()), note))
     for e in annotation_rows(code, sk):
         w.out.setdefault(e.id, e)
     # Keys the loader resolves before any struct reads them: no field declares

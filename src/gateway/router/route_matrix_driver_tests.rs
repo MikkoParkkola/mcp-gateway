@@ -14,6 +14,12 @@ use serde_json::Value;
 use super::direct_guards_fixture::{Answer, post_direct, post_meta_invoke};
 use crate::gateway::meta_mcp::MetaMcp;
 
+#[path = "route_matrix_driver_step_tests.rs"]
+mod step;
+pub(crate) use step::{
+    playbook_as, playbook_budgeted, playbook_exposed, playbook_minting, playbook_then_task,
+};
+
 /// What one call through a route produced.
 pub(crate) struct Sent {
     /// The JSON-RPC body the client got.
@@ -169,7 +175,7 @@ pub(crate) async fn direct_chained() -> Sent {
 }
 
 /// `alpha`'s `read` surfaced under its own name on the Meta-MCP.
-fn surfacing(meta: MetaMcp) -> MetaMcp {
+pub(super) fn surfacing(meta: MetaMcp) -> MetaMcp {
     meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
         server: "alpha".to_string(),
         tool: "read".to_string(),
@@ -421,8 +427,8 @@ pub(crate) async fn direct_spend_then_resend() -> (Value, Value, Value, usize) {
 }
 
 /// A backend listing `read` as `destructiveHint: true` and counting its sends.
-struct Destructive {
-    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+pub(super) struct Destructive {
+    pub(super) calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[async_trait::async_trait]
@@ -527,7 +533,7 @@ pub(crate) enum Surfacing {
 }
 
 /// The modern era's header mirrors for a `tools/call read`.
-const TASK_SUBMIT_HEADERS: [(&str, &str); 3] = [
+pub(super) const TASK_SUBMIT_HEADERS: [(&str, &str); 3] = [
     ("mcp-protocol-version", "2026-07-28"),
     ("mcp-method", "tools/call"),
     ("mcp-name", "read"),

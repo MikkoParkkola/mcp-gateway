@@ -296,8 +296,14 @@ async fn dispatch(
                 // identical ones — waste that reads like a brute-force attempt
                 // in the audit log. Ordinary errors keep retrying: that
                 // distinction is the whole reason the refusal carries its own
-                // variant instead of arriving as an opaque error.
-                let refused = matches!(e, crate::Error::Forbidden { .. });
+                // variant instead of arriving as an opaque error. A firewall
+                // refusal is as final as a denial (MIK-8325): the gate's verdict
+                // on the same answer will not change, and a retry calls the
+                // backend again.
+                let refused = matches!(
+                    e,
+                    crate::Error::Forbidden { .. } | crate::Error::ResponseFirewallRefused
+                );
                 warn!(step = %step.name, error = %e, refused, "Step failed");
                 if refused {
                     return Err(e);

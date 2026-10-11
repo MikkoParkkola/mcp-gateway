@@ -366,25 +366,6 @@ fn run_runtime_command(cmd: mcp_gateway::cli::RuntimeCommand) -> ExitCode {
     }
 }
 
-/// Resolve the transparency-log signing config from the gateway config, so
-/// `audit verify` authenticates the per-entry HMAC when a secret is set
-/// (MIK-6700 HMAC.3). A config LOAD FAILURE is propagated as `Err` (fail
-/// closed) — never silently downgraded to an empty secret, which would let
-/// a stale-sig forgery pass with exit 0 when the config is missing or
-/// malformed. A successfully-loaded config with no secret legitimately
-/// verifies hash-only.
-fn resolve_audit_log_config(
-    config_path: Option<&std::path::Path>,
-) -> mcp_gateway::Result<mcp_gateway::security::transparency_log::TransparencyLogConfig> {
-    use mcp_gateway::security::transparency_log::TransparencyLogConfig;
-    let c = Config::load(config_path)?;
-    Ok(TransparencyLogConfig {
-        key_id: c.security.transparency_log.key_id.clone(),
-        shared_secret: c.security.transparency_log.shared_secret.clone(),
-        ..TransparencyLogConfig::default()
-    })
-}
-
 /// Resolve the audit log path: use the provided `--path` flag, or fall back to
 /// the default `~/.mcp-gateway/transparency/transparency.jsonl`.
 fn resolve_audit_log_path(path: Option<std::path::PathBuf>) -> std::path::PathBuf {
@@ -409,7 +390,7 @@ fn run_audit_verify(
     config_path: Option<&std::path::Path>,
 ) -> ExitCode {
     use mcp_gateway::security::transparency_log::{VerifyMode, verify_audit_log};
-    let resolve_log_config = resolve_audit_log_config;
+    let resolve_log_config = Config::audit_verify_config;
     let verify_mode = if archive {
         VerifyMode::Archive
     } else {

@@ -46,23 +46,27 @@ async fn confirm(
     };
     let owner = caller.owner_principal().unwrap_or_default();
     fx.meta
-        .confirm_destructive_task(&TaskConfirmationRequest {
-            id: RequestId::Number(7),
-            tool_name: TOOL,
-            arguments: &arguments,
-            task: Some(&task),
-            retry: &retry,
-            verified_identity: None,
-            principal: crate::protocol::mrtr::source_fingerprint(caller.principal_source(None)),
-            quota: caller.quota_key(),
-            owner,
-            scope: super::open_scope(),
-            session_id: None,
-            input_capabilities: elicitation(),
-            is_modern: true,
-            admission: &fx.admission,
-        })
+        .confirm_destructive_task_with(
+            &TaskConfirmationRequest {
+                id: RequestId::Number(7),
+                tool_name: TOOL,
+                arguments: &arguments,
+                task: Some(&task),
+                retry: &retry,
+                verified_identity: None,
+                principal: crate::protocol::mrtr::source_fingerprint(caller.principal_source(None)),
+                quota: caller.quota_key(),
+                owner,
+                scope: super::open_scope(),
+                session_id: None,
+                input_capabilities: elicitation(),
+                is_modern: true,
+                admission: &fx.admission,
+            },
+            None,
+        )
         .await
+        .0
 }
 
 /// Whether an invoke round was asked (a slot taken).

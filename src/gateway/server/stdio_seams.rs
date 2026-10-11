@@ -139,6 +139,24 @@ pub(crate) fn queue_full_wakes() -> usize {
     QUEUE_FULL.with(std::cell::Cell::get)
 }
 
+thread_local! {
+    static ANSWERS_SAW_FULL: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Called by a stdio request's task when its answer sees the writer queue at
+/// capacity 0 just before `reserve` (MIK-8359 t14 premise). It records what
+/// the answer saw, not that it then waited: room could free between the check
+/// and `reserve`. Unlike [`queue_full_wakes`], this moves with no tools change
+/// decided, so a test can wait on it before making the first change.
+pub(crate) fn answer_found_queue_full() {
+    ANSWERS_SAW_FULL.with(|q| q.set(q.get() + 1));
+}
+
+/// Answers on this thread that saw the writer queue full.
+pub(crate) fn answers_found_queue_full() -> usize {
+    ANSWERS_SAW_FULL.with(std::cell::Cell::get)
+}
+
 /// A pause armed for one sender, keyed by the address of its stop lock, so no
 /// other session's sender ever waits on it (MIK-8278 race row).
 type FinalSendPause = (

@@ -81,6 +81,6 @@ pub(super) async fn key_refusal(
             );
             Some(build_http_response(&Egressed::of(response), StatusCode::OK))
         }
-        Err(e) => Some(failed.clone().answer(None, e, &call).await),
+        Err(e) => Some(failed.clone().answer((None, None), e, &call).await),
     }
 }

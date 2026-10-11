@@ -51,25 +51,29 @@ async fn x14_does_not_classify(
     let admission = crate::idempotency::admission::ExecutionAdmission::new(Arc::new(|| 1_000));
     let (arguments, task) = (json!({}), json!({}));
     let outcome = meta
-        .confirm_destructive_task(&TaskConfirmationRequest {
-            id: crate::protocol::RequestId::Number(1),
-            tool_name: tool,
-            arguments: &arguments,
-            task: Some(&task),
-            retry: &retry,
-            verified_identity: None,
-            principal: Some("x14-premise".to_string()),
-            quota: None,
-            owner: "x14-premise",
-            scope,
-            session_id: None,
-            input_capabilities: crate::protocol::meta::Declared::from_handshake(Some(
-                &json!({ "elicitation": {} }),
-            )),
-            is_modern: true,
-            admission: &admission,
-        })
-        .await;
+        .confirm_destructive_task_with(
+            &TaskConfirmationRequest {
+                id: crate::protocol::RequestId::Number(1),
+                tool_name: tool,
+                arguments: &arguments,
+                task: Some(&task),
+                retry: &retry,
+                verified_identity: None,
+                principal: Some("x14-premise".to_string()),
+                quota: None,
+                owner: "x14-premise",
+                scope,
+                session_id: None,
+                input_capabilities: crate::protocol::meta::Declared::from_handshake(Some(
+                    &json!({ "elicitation": {} }),
+                )),
+                is_modern: true,
+                admission: &admission,
+            },
+            None,
+        )
+        .await
+        .0;
     assert!(
         matches!(outcome, TaskConfirmation::NotRequired),
         "premise: X14 classified the surfaced capability {tool}"

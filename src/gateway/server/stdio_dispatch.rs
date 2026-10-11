@@ -15,6 +15,7 @@ use super::{
     stdio_routing_keys_only, stdio_take_merged_client_meta, stdio_tasks,
 };
 use crate::gateway::authz::ToolPolicyAuthorizer;
+use crate::gateway::meta_mcp::refund_witness::RefundWitness;
 use crate::gateway::meta_mcp::{InvokeScope, MetaMcp, MetaMcpCallerContext};
 
 impl Gateway {
@@ -559,20 +560,27 @@ impl Gateway {
                 );
             }
             caller.signing = signing_context.as_ref();
+            // Nothing has acted yet (MIK-8353): the witness every later step
+            // must hand back for this call's nonce to be given back.
+            let witness = Some(RefundWitness::at_capture());
             // The route stage `/mcp` runs, in its order: authorize, request
             // firewall, X14 (route-check-parity P3). A refusal here took no
-            // key, lease or task, and gives back the nonce admitted above.
-            match Self::stdio_route_stage(
+            // key, lease or task, and gives back the nonce admitted above,
+            // unless X14 spent a grant first.
+            let (stage, witness) = Self::stdio_route_stage(
                 meta_mcp,
                 &id,
                 (&tool_name, arguments.as_ref(), task_member.as_ref()),
                 &caller,
                 client,
+                witness,
             )
-            .await
-            {
+            .await;
+            match stage {
                 RouteStage::Answer(answer) => {
-                    meta_mcp.release_unasked_nonce(&caller);
+                    if let Some(witness) = witness {
+                        meta_mcp.release_witnessed_nonce(&caller, witness);
+                    }
                     break 'tool_call answer;
                 }
                 RouteStage::Proceed(Some(fields)) => {
@@ -602,6 +610,7 @@ impl Gateway {
                 arguments.as_ref(),
                 Some(session_id),
                 &id,
+                witness,
             );
             execution = match admission {
                 Ok(super::super::meta_mcp::admission::SyncAdmission::Unprotected) => None,

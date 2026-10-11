@@ -13,6 +13,7 @@
 use serde_json::Value;
 
 use super::{Gateway, StdioClient};
+use crate::gateway::meta_mcp::refund_witness::RefundWitness;
 use crate::gateway::meta_mcp::{
     MetaMcp, MetaMcpCallerContext, TaskConfirmation, TaskConfirmationRequest,
     error_response_preserving_status,
@@ -31,23 +32,33 @@ pub(super) enum RouteStage {
 
 impl Gateway {
     /// Run the route stage for one stdio `tools/call` of `tool_name` with its
-    /// merged `arguments` and its `task` member, if any.
+    /// merged `arguments` and its `task` member, if any. `witness` comes back
+    /// on every outcome that acted on nothing (MIK-8353): the checks act on
+    /// nothing, and X14 hands it back unless it spent a grant.
     pub(super) async fn stdio_route_stage(
         meta_mcp: &MetaMcp,
         id: &RequestId,
         (tool_name, arguments, task): (&str, &Value, Option<&Value>),
         caller: &MetaMcpCallerContext<'_>,
         client: StdioClient<'_>,
-    ) -> RouteStage {
+        witness: Option<RefundWitness>,
+    ) -> (RouteStage, Option<RefundWitness>) {
         let session_id = client.session_id;
         let scope = caller.scope();
-        let targets = crate::gateway::router::backend_tool_targets_for_call(
+        let mut targets = crate::gateway::router::backend_tool_targets_for_call(
             meta_mcp,
             tool_name,
             arguments,
             crate::gateway::meta_mcp::visible::TargetView::Caller(scope, Some(session_id)),
         );
-        for target in &targets {
+        // A playbook's steps are known from its definition, not the request:
+        // appended after the request's own targets so they are authorized and
+        // scanned with them, before any step runs (MIK-8362).
+        let request_targets = targets.len();
+        targets.extend(meta_mcp.playbook_step_targets(tool_name, arguments));
+        // Authorize every target before scanning any, so a refused later
+        // target charges no earlier one's budget.
+        for (index, target) in targets.iter().enumerate() {
             let checked = target.as_target();
             // The one route-stage authorize `/mcp` also runs. A surfaced name
             // withheld from this caller is not a target (MIK-8340), so neither
@@ -57,25 +68,37 @@ impl Gateway {
                 (checked.server, checked.tool),
                 checked.arguments,
             ) {
-                return RouteStage::Answer(error_response_preserving_status(id.clone(), &error));
+                // A step's target is operator-defined: its refusal is neutral (A3).
+                let error = if index < request_targets {
+                    error
+                } else {
+                    crate::gateway::meta_mcp::step_not_permitted()
+                };
+                let answer = error_response_preserving_status(id.clone(), &error);
+                return (RouteStage::Answer(answer), witness);
             }
-            // The stateful controls key on the one client this process
-            // serves; an empty identity would refuse every call unscored.
-            #[cfg(feature = "firewall")]
-            if let Some((code, message)) = meta_mcp.route_request_scan(
+        }
+        // The stateful controls key on the one client this process serves; an
+        // empty identity would refuse every call unscored.
+        #[cfg(feature = "firewall")]
+        for (index, target) in targets.iter().enumerate() {
+            let checked = target.as_target();
+            let kind = if index < request_targets {
+                crate::gateway::meta_mcp::invoke::ScanTarget::Request
+            } else {
+                crate::gateway::meta_mcp::invoke::ScanTarget::Step
+            };
+            if let Some(refusal) = meta_mcp.route_request_scan(
                 session_id,
                 (checked.server, checked.tool, checked.arguments),
                 (
                     super::STDIO_CREDENTIAL_PRINCIPAL,
                     super::STDIO_CREDENTIAL_PRINCIPAL,
+                    kind,
                 ),
             ) {
-                let refusal = crate::Error::Forbidden {
-                    code,
-                    status: 400,
-                    message,
-                };
-                return RouteStage::Answer(error_response_preserving_status(id.clone(), &refusal));
+                let answer = error_response_preserving_status(id.clone(), &refusal);
+                return (RouteStage::Answer(answer), witness);
             }
         }
         // The caller verdict (MIK-8356 R5.1), after authorize and the
@@ -90,36 +113,46 @@ impl Gateway {
         // X14 decides a task-augmented call, so it needs the session's task
         // store; without one the call is synchronous and X14 has nothing to say.
         let Some(tasks) = client.tasks else {
-            return RouteStage::Proceed(None);
+            return (RouteStage::Proceed(None), witness);
         };
-        let confirmation = meta_mcp
-            .confirm_destructive_task(&TaskConfirmationRequest {
-                id: id.clone(),
-                tool_name,
-                arguments,
-                task,
-                retry: caller.retry,
-                verified_identity: None,
-                // The derivation continuations bind stdio by (`Stdio { nonce }`),
-                // so a grant and a continuation name one caller one way.
-                principal: crate::protocol::mrtr::source_fingerprint(caller.principal_source(None)),
-                // This process's one share of the continuation pool (MIK-8293).
-                quota: caller.quota_key(),
-                // The caller's own owner, the one `stdio_tasks::intent` admits
-                // under (the local operator for a stdio caller). A context wired
-                // to the wrong caller has none, so it fails closed: re-challenged.
-                owner: caller.owner_principal().unwrap_or_default(),
-                scope,
-                session_id: Some(session_id),
-                input_capabilities: caller.input_capabilities,
-                is_modern: caller.is_modern,
-                admission: tasks.service.admission(),
-            })
+        let (confirmation, witness) = meta_mcp
+            .confirm_destructive_task_with(
+                &TaskConfirmationRequest {
+                    id: id.clone(),
+                    tool_name,
+                    arguments,
+                    task,
+                    retry: caller.retry,
+                    verified_identity: None,
+                    // The derivation continuations bind stdio by (`Stdio { nonce }`),
+                    // so a grant and a continuation name one caller one way.
+                    principal: crate::protocol::mrtr::source_fingerprint(
+                        caller.principal_source(None),
+                    ),
+                    // This process's one share of the continuation pool (MIK-8293).
+                    quota: caller.quota_key(),
+                    // The caller's own owner, the one `stdio_tasks::intent` admits
+                    // under (the local operator for a stdio caller). A context wired
+                    // to the wrong caller has none, so it fails closed: re-challenged.
+                    owner: caller.owner_principal().unwrap_or_default(),
+                    scope,
+                    session_id: Some(session_id),
+                    input_capabilities: caller.input_capabilities,
+                    is_modern: caller.is_modern,
+                    admission: tasks.service.admission(),
+                },
+                witness,
+            )
             .await;
-        match confirmation {
+        let stage = match confirmation {
             TaskConfirmation::NotRequired => RouteStage::Proceed(None),
-            TaskConfirmation::Granted(granted) => RouteStage::Proceed(Some(granted)),
+            TaskConfirmation::Granted(granted) => {
+                // A granted confirmation was spent: veto every give-back.
+                caller.signing.inspect(|signing| signing.mark_spent());
+                RouteStage::Proceed(Some(granted))
+            }
             TaskConfirmation::Answer(answer) => RouteStage::Answer(*answer),
-        }
+        };
+        (stage, witness)
     }
 }
