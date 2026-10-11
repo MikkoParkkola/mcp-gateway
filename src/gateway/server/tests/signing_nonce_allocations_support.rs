@@ -79,7 +79,7 @@ pub(in crate::gateway::server) fn runtime() -> tokio::runtime::Runtime {
 
 // ── The real backend ─────────────────────────────────────────────────────────
 
-pub(super) struct EchoBackend {
+pub(in crate::gateway::server) struct EchoBackend {
     pub(super) url: String,
     received: Arc<Mutex<Vec<Value>>>,
     task: tokio::task::JoinHandle<()>,
@@ -149,7 +149,7 @@ impl EchoBackend {
 
     /// How many `tools/call` requests actually reached the backend. A refusal
     /// must not move this.
-    pub(super) fn tools_call_count(&self) -> usize {
+    pub(in crate::gateway::server) fn tools_call_count(&self) -> usize {
         self.received
             .lock()
             .expect("backend recorder")
@@ -258,7 +258,7 @@ pub(in crate::gateway::server) struct Fixture {
     pub(in crate::gateway::server) meta: Arc<MetaMcp>,
     pub(in crate::gateway::server) tool_policy: Arc<ToolPolicy>,
     pub(in crate::gateway::server) mtls_policy: Arc<MtlsPolicy>,
-    pub(super) backend: EchoBackend,
+    pub(in crate::gateway::server) backend: EchoBackend,
     /// The gateway's data directory, kept for the fixture's lifetime.
     _data_dir: tempfile::TempDir,
 }

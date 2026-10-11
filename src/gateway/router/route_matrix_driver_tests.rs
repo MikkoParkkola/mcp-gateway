@@ -633,8 +633,9 @@ pub(crate) async fn concurrent_same_key() -> (Value, usize) {
 /// `alpha/read`, a keyed surfaced-name call runs under `s1`; the key reused for
 /// other arguments is refused by execution admission (409) under `s2`; the
 /// honest call is re-sent under `s2` with its own key; then a third call under
-/// `s2`. Returns (the admission refusal, the re-send, the third send).
-pub(crate) async fn surfaced_admission_then_resend() -> (Value, Value, Value) {
+/// `s2`. Returns (the admission refusal, the re-send, the third send, the
+/// backend's `tools/call` count).
+pub(crate) async fn surfaced_admission_then_resend() -> (Value, Value, Value, usize) {
     use crate::gateway::meta_mcp::signing::NONCE_META;
     use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
     let fx =
@@ -675,5 +676,5 @@ pub(crate) async fn surfaced_admission_then_resend() -> (Value, Value, Value) {
     let refused = call("s-k1", "s2", serde_json::json!({ "cmd": "other" })).await;
     let resent = call("s-k2", "s2", serde_json::json!({ "cmd": "other" })).await;
     let third = call("s-k3", "s2", serde_json::json!({ "cmd": "other" })).await;
-    (refused, resent, third)
+    (refused, resent, third, fx.calls.load(Ordering::SeqCst))
 }

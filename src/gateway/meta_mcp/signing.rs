@@ -461,9 +461,11 @@ impl super::MetaMcp {
     /// Execution admission for a synchronous call, giving the signing nonce
     /// back when admission refuses it (MIK-8150 NONCE.1). Admission runs after
     /// the nonce is admitted and before anything acts, on /mcp and stdio alike,
-    /// so one site serves both. Nothing effectful can precede a refusal here: a
-    /// task call (the only kind X14 can consume a grant for) is `Unprotected`
-    /// at admission. A `Replay` keeps the nonce: it is a delivered call.
+    /// so one site serves both. A task call keeps its nonce on any refusal: on
+    /// stdio, X14 runs after nonce admission and may already have consumed the
+    /// task's grant, and a task's admission can still refuse after that (target
+    /// policy, plan check). A synchronous call has no effect before this point.
+    /// A `Replay` keeps the nonce: it is a delivered call.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn admit_meta_sync(
         &self,
@@ -476,7 +478,7 @@ impl super::MetaMcp {
     ) -> crate::Result<super::admission::SyncAdmission> {
         let admitted =
             self.admit_meta_sync_unrefunded(owner, caller, tool_name, arguments, session, id);
-        if admitted.is_err() {
+        if admitted.is_err() && caller.task.is_none() {
             self.release_unasked_nonce(caller);
         }
         admitted

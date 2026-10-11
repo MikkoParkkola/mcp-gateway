@@ -326,9 +326,10 @@ pub(crate) async fn stdio_twice(
 /// keyed signed `gateway_invoke` runs under `t1`; the key reused for other
 /// arguments is refused by execution admission (409) under `t2`; the honest
 /// call is re-sent under `t2` with its own key; then a third call under `t2`.
-/// Returns (the admission refusal, the re-send, the third send). Blocking: the
-/// fixture owns its runtime, as the stdio signing rows do.
-pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value) {
+/// Returns (the admission refusal, the re-send, the third send, the backend's
+/// `tools/call` count). Blocking: the fixture owns its runtime, as the stdio
+/// signing rows do.
+pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value, usize) {
     use super::signing_allocation_tests::signing_nonce_allocations_support::{
         BACKEND, Fixture, SESSION, TOOL, runtime,
     };
@@ -377,6 +378,6 @@ pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value) {
         let refused = call("t-k1", "stdio-adm-t2-0001", "other").await;
         let resent = call("t-k2", "stdio-adm-t2-0001", "other").await;
         let third = call("t-k3", "stdio-adm-t2-0001", "other").await;
-        (refused, resent, third)
+        (refused, resent, third, fixture.backend.tools_call_count())
     })
 }

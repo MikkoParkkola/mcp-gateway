@@ -543,14 +543,19 @@ async fn lease_row() {
 /// that nonce is served, once; a third send under it is a replay.
 #[tokio::test]
 async fn nonce_give_back_surfaced_row() {
-    let (refused, resent, third) = router::surfaced_admission_then_resend().await;
+    let (refused, resent, third, calls) = router::surfaced_admission_then_resend().await;
     assert_eq!(
         refused["error"]["code"], 409,
         "premise: admission's own refusal: {refused}"
     );
     assert!(
-        resent.get("error").is_none(),
+        resent.get("error").is_none() && resent["result"]["isError"] != true,
         "R2 kept the nonce: the re-send was refused: {resent}"
+    );
+    assert_eq!(
+        calls, 2,
+        "R2: the first call and the honest re-send each reach the backend once; \
+         the refusal and the replay never do"
     );
     assert!(
         message(&third).contains(REPLAY),
@@ -567,14 +572,19 @@ async fn nonce_give_back_surfaced_row() {
 /// nonce back: the honest re-send is served once, a third send is a replay.
 #[test]
 fn nonce_give_back_stdio_row() {
-    let (refused, resent, third) = stdio::stdio_admission_then_resend();
+    let (refused, resent, third, calls) = stdio::stdio_admission_then_resend();
     assert_eq!(
         refused["error"]["code"], 409,
         "premise: admission's own refusal: {refused}"
     );
     assert!(
-        resent.get("error").is_none(),
+        resent.get("error").is_none() && resent["result"]["isError"] != true,
         "R5 kept the nonce: the re-send was refused: {resent}"
+    );
+    assert_eq!(
+        calls, 2,
+        "R5: the first call and the honest re-send each reach the backend once; \
+         the refusal and the replay never do"
     );
     assert!(
         message(&third).contains(REPLAY),
