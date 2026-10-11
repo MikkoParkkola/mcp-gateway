@@ -382,10 +382,12 @@ pub(crate) use egress::{
     fixture_audited_built_on, fixture_audited_on, fixture_firewalled_built, fixture_firewalled_on,
     fixture_hardened_signed_firewalled, fixture_inspecting_on, meta_firewall,
 };
-pub(crate) use quota::{Minting, fixture_propagating, fixture_propagating_signed};
+#[cfg(feature = "firewall")]
+pub(crate) use quota::Minting;
 use quota::{fixture_backend_config, fixture_failsafe, leaked_transparency_log};
 #[cfg(feature = "firewall")]
 pub(crate) use quota::{fixture_firewalled_budget_built, fixture_propagating_budgeted};
+pub(crate) use quota::{fixture_propagating, fixture_propagating_signed};
 pub(crate) use requests::{
     initialize, post_direct, post_meta_invoke, post_meta_invoke_nonce, send, send_with_headers,
 };
