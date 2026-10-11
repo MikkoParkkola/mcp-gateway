@@ -427,6 +427,22 @@ pub(super) async fn tools_call(
     #[cfg(test)]
     crate::gateway::meta_mcp::visible::seams::route_stage_done();
     if invisible {
+        // A backend-wide refusal (kill switch) is answered as admission
+        // answers it for a missing name: the same 400.
+        if let Some(refusal) = backend_targets.iter().find_map(|target| {
+            state
+                .meta_mcp
+                .admit_backend_wide(&target.server, &target.tool)
+                .err()
+        }) {
+            return Err(build_error_response(
+                Some(id),
+                refusal.to_rpc_code(),
+                refusal.to_string(),
+                session_id,
+                StatusCode::BAD_REQUEST,
+            ));
+        }
         let session = Some(session_id.as_str());
         let answer = state
             .meta_mcp

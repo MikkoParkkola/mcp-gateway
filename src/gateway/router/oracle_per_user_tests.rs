@@ -275,8 +275,15 @@ async fn p3_parity_holds_across_the_caller_slot_lifecycle() {
         let minted = withheld.mints();
         let w = call(&withheld, Entry::Invoke, json!({"q": "x"})).await;
         let a = call(&absent, Entry::Invoke, json!({"q": "x"})).await;
-        if w != a {
+        // Eviction drops the fixture's scripted slot, so the missing name's
+        // refill fails: P4's stated outage residual. There the withheld name
+        // is held to its own answer, -32601.
+        let parity = step != "evicted";
+        if parity && w != a {
             cells.push(format!("P3 {step}: withheld {w:?} vs missing {a:?}"));
+        }
+        if !parity && w.1.pointer("/error/code") != Some(&json!(-32601)) {
+            cells.push(format!("P3 {step}: withheld answered {w:?}"));
         }
         if withheld.mints() != minted || withheld.dispatched() != 0 {
             cells.push(format!(

@@ -182,7 +182,10 @@ async fn o3_a_retained_result_is_not_replayed_for_an_invisible_name() {
             listed.push(super::oracle_parity_fixture::listed_tool(Reason::Schema, false));
         }
         backend.remember_listed_tools(None, false, &listed);
-        let second = twin.invoke_modern(TOOL, json!({}), &keyed).await;
+        let sent = twin.calls.load(Ordering::SeqCst);
+        let mut second = twin.invoke_modern(TOOL, json!({}), &keyed).await;
+        // Only this call's own sends: the first call dispatched by design.
+        second.calls -= sent;
         let unkeyed = twin.invoke_modern(TOOL, json!({}), &json!({})).await;
         if untraced(second.body.clone()) != untraced(unkeyed.body.clone()) {
             cells.push(format!(
