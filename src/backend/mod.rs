@@ -511,7 +511,7 @@ mod list_paging_tests;
 #[cfg(test)]
 mod pool_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 #[path = "resend_isolation_tests.rs"]

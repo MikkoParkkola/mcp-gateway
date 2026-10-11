@@ -25,11 +25,11 @@ mod era_probe;
 mod login_detach;
 mod login_join;
 mod login_probe;
-mod login_window;
+pub(crate) mod login_window;
 mod metric_label;
 mod per_identity_catalogue;
 mod race_rows;
-mod token_lapse;
+pub(crate) mod token_lapse;
 mod tool_cache;
 
 struct MockTransport {

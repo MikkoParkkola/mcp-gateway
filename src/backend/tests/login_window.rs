@@ -12,7 +12,7 @@ use super::*;
 use crate::backend::OAuthTestSeam;
 
 /// The person at the browser: every authorization URL a start handed over.
-pub(super) struct Browser {
+pub(crate) struct Browser {
     opened: StdMutex<Vec<String>>,
     signal: tokio::sync::Notify,
 }
@@ -25,12 +25,12 @@ impl Browser {
         })
     }
 
-    pub(super) fn opens(&self) -> usize {
+    pub(crate) fn opens(&self) -> usize {
         self.opened.lock().unwrap().len()
     }
 
     /// Wait until the browser has opened `n` times in all.
-    pub(super) async fn opened(&self, n: usize, what: &str) -> String {
+    pub(crate) async fn opened(&self, n: usize, what: &str) -> String {
         within(what, async {
             loop {
                 let notified = self.signal.notified();
@@ -45,7 +45,7 @@ impl Browser {
 }
 
 /// Bounds a wait, so a regression fails at its assertion instead of hanging.
-pub(super) async fn within<T>(what: &str, wait: impl std::future::Future<Output = T>) -> T {
+pub(crate) async fn within<T>(what: &str, wait: impl std::future::Future<Output = T>) -> T {
     tokio::time::timeout(Duration::from_secs(20), wait)
         .await
         .unwrap_or_else(|_| panic!("{what} did not happen within 20s"))
@@ -102,6 +102,35 @@ pub(super) fn login_backend(
     timeout: Duration,
     callback_port: Option<u16>,
 ) -> Arc<Backend> {
+    login_backend_with(
+        origin,
+        dir,
+        browser,
+        timeout,
+        callback_port,
+        Account::PerUser,
+    )
+}
+
+/// Whose credential a test backend's OAuth login is (MIK-8339): task recovery
+/// claims only a backend whose one credential is declared shared.
+#[derive(Clone, Copy)]
+pub(crate) enum Account {
+    /// `shared_account: false`, the default.
+    PerUser,
+    /// `shared_account: true`.
+    Shared,
+}
+
+/// [`login_backend`] with an explicit [`Account`].
+pub(super) fn login_backend_with(
+    origin: &str,
+    dir: &std::path::Path,
+    browser: &Arc<Browser>,
+    timeout: Duration,
+    callback_port: Option<u16>,
+    account: Account,
+) -> Arc<Backend> {
     let backend = Arc::new(Backend::new(
         "login-window",
         BackendConfig {
@@ -120,7 +149,7 @@ pub(super) fn login_backend(
                 callback_port,
                 callback_path: None,
                 token_refresh_buffer_secs: 300,
-                shared_account: false,
+                shared_account: matches!(account, Account::Shared),
             }),
             ..BackendConfig::default()
         },
@@ -179,6 +208,31 @@ pub(super) async fn approve(url: &str) {
         .send()
         .await
         .expect("the callback answers");
+}
+
+/// Play the person approving `url`, and report whether its callback was still
+/// listening. Unlike `login_window::approve`, a closed listener is an answer
+/// here, not a fixture failure: it is exactly how a login abandoned by its
+/// caller's deadline shows itself.
+pub(crate) async fn approve_if_listening(url: &str) -> bool {
+    let parsed = url::Url::parse(url).unwrap();
+    let query: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
+    let callback = url::Url::parse_with_params(
+        &query["redirect_uri"],
+        &[
+            ("code", "login-window-code"),
+            ("state", query["state"].as_str()),
+        ],
+    )
+    .unwrap();
+    reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .get(callback)
+        .send()
+        .await
+        .is_ok()
 }
 
 pub(super) fn variant(error: &Error) -> String {
@@ -514,7 +568,7 @@ async fn a_health_probe_never_begins_a_login() {
 
 /// How [`issuing_server`]'s MCP endpoint behaves after the handshake.
 #[derive(Clone, Copy)]
-pub(super) enum Upstream {
+pub(crate) enum Upstream {
     /// Lists no tools, at once.
     Plain,
     /// A first `tools/list` page after the delay, then one that never comes;
@@ -652,10 +706,19 @@ pub(super) async fn approved_start(
     upstream: Upstream,
     timeout: Duration,
 ) -> (Arc<Backend>, Arc<Browser>, tempfile::TempDir) {
+    approved_start_with(upstream, timeout, Account::PerUser).await
+}
+
+/// [`approved_start`] with an explicit [`Account`].
+pub(crate) async fn approved_start_with(
+    upstream: Upstream,
+    timeout: Duration,
+    account: Account,
+) -> (Arc<Backend>, Arc<Browser>, tempfile::TempDir) {
     let origin = issuing_server(3600, upstream).await;
     let dir = tempfile::tempdir().unwrap();
     let browser = Browser::new();
-    let backend = login_backend(&origin, dir.path(), &browser, timeout, None);
+    let backend = login_backend_with(&origin, dir.path(), &browser, timeout, None, account);
     let start = spawn_start(&backend);
     let url = browser.opened(1, "the start opening the browser").await;
     approve(&url).await;
@@ -667,7 +730,7 @@ pub(super) async fn approved_start(
 }
 
 /// Send a `tools/call` on `backend` in the background, as a client would.
-pub(super) fn spawn_call(
+pub(crate) fn spawn_call(
     backend: &Arc<Backend>,
 ) -> tokio::task::JoinHandle<Result<JsonRpcResponse>> {
     let backend = Arc::clone(backend);

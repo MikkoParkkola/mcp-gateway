@@ -6,33 +6,10 @@
 //! open, and the person who approves it after the deadline gets a token the
 //! next request uses, with no second browser.
 
-use super::login_window::{Upstream, approved_start, spawn_call, variant, within};
+use super::login_window::{
+    Upstream, approve_if_listening, approved_start, spawn_call, variant, within,
+};
 use super::*;
-
-/// Play the person approving `url`, and report whether its callback was still
-/// listening. Unlike `login_window::approve`, a closed listener is an answer
-/// here, not a fixture failure: it is exactly how a login abandoned by its
-/// caller's deadline shows itself.
-async fn approve_if_listening(url: &str) -> bool {
-    let parsed = url::Url::parse(url).unwrap();
-    let query: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
-    let callback = url::Url::parse_with_params(
-        &query["redirect_uri"],
-        &[
-            ("code", "login-window-code"),
-            ("state", query["state"].as_str()),
-        ],
-    )
-    .unwrap();
-    reqwest::Client::builder()
-        .no_proxy()
-        .build()
-        .unwrap()
-        .get(callback)
-        .send()
-        .await
-        .is_ok()
-}
 
 /// LOGINDL.2: a fill whose deadline fires during the request-time login it
 /// began leaves that login open. Approving it afterwards stores the token,
