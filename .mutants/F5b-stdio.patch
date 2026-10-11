@@ -1,0 +1,15 @@
+diff --git a/src/gateway/server/stdio_route_stage.rs b/src/gateway/server/stdio_route_stage.rs
+index 9b1e86d3d..1ce7c905c 100644
+--- a/src/gateway/server/stdio_route_stage.rs
++++ b/src/gateway/server/stdio_route_stage.rs
+@@ -78,6 +78,10 @@ impl Gateway {
+                 return (RouteStage::Answer(answer), witness);
+             }
+         }
++        for target in &targets {
++            let checked = target.as_target();
++            let _ = meta_mcp.caller_verdict((checked.server, checked.tool), caller, Some(session_id)).await;
++        }
+         // The stateful controls key on the one client this process serves; an
+         // empty identity would refuse every call unscored.
+         #[cfg(feature = "firewall")]

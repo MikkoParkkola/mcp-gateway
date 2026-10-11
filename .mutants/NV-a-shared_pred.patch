@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/listing_view.rs b/src/gateway/meta_mcp/listing_view.rs
+index 4c800f473..6d8cc52bf 100644
+--- a/src/gateway/meta_mcp/listing_view.rs
++++ b/src/gateway/meta_mcp/listing_view.rs
+@@ -60,7 +60,7 @@ impl MetaMcp {
+             return ListingView::Cold;
+         }
+         if self.lacks_principal_on_required(backend, scope.caller) {
+-            return ListingView::NoView;
++            return ListingView::Shared;
+         }
+         let Some(principal) = self.principal_for(backend, scope.caller) else {
+             return ListingView::Shared;

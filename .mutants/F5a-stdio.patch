@@ -1,0 +1,15 @@
+diff --git a/src/gateway/server/stdio_route_stage.rs b/src/gateway/server/stdio_route_stage.rs
+index 9b1e86d3d..e4b218253 100644
+--- a/src/gateway/server/stdio_route_stage.rs
++++ b/src/gateway/server/stdio_route_stage.rs
+@@ -56,6 +56,10 @@ impl Gateway {
+         // scanned with them, before any step runs (MIK-8362).
+         let request_targets = targets.len();
+         targets.extend(meta_mcp.playbook_step_targets(tool_name, arguments));
++        for target in &targets {
++            let checked = target.as_target();
++            let _ = meta_mcp.caller_verdict((checked.server, checked.tool), caller, Some(session_id)).await;
++        }
+         // Authorize every target before scanning any, so a refused later
+         // target charges no earlier one's budget.
+         for (index, target) in targets.iter().enumerate() {

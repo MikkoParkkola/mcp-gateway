@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/stdio_route_stage.rs b/src/gateway/server/stdio_route_stage.rs
+index 9b1e86d3d..091a7ec6d 100644
+--- a/src/gateway/server/stdio_route_stage.rs
++++ b/src/gateway/server/stdio_route_stage.rs
+@@ -107,7 +107,7 @@ impl Gateway {
+         for target in &targets {
+             let checked = target.as_target();
+             let _ = meta_mcp
+-                .caller_verdict((checked.server, checked.tool), caller, Some(session_id))
++                .caller_verdict((checked.server, ""), caller, Some(session_id))
+                 .await;
+         }
+         // X14 decides a task-augmented call, so it needs the session's task

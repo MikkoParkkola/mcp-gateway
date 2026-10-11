@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/pre_dispatch.rs b/src/gateway/meta_mcp/invoke/pre_dispatch.rs
+index 2c4ef934b..e311d7786 100644
+--- a/src/gateway/meta_mcp/invoke/pre_dispatch.rs
++++ b/src/gateway/meta_mcp/invoke/pre_dispatch.rs
+@@ -208,7 +208,7 @@ impl MetaMcp {
+         // failed fill is answered below exactly as F13's failed fill is, with
+         // no second fill.
+         let mut failed_fill = None;
+-        if let Some(backend) = backend.filter(|backend| backend.keeps_per_user_catalogues()) {
++        if let Some(backend) = backend.filter(|_| false) {
+             let absent = match crate::gateway::meta_mcp::visible::recorded_visibility(server, tool)
+             {
+                 Some(crate::gateway::meta_mcp::visible::Visibility::Visible) => false,

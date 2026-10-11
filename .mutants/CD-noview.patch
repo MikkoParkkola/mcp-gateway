@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/call_dispatch.rs b/src/gateway/meta_mcp/call_dispatch.rs
+index c24bfcbf8..292cbcaef 100644
+--- a/src/gateway/meta_mcp/call_dispatch.rs
++++ b/src/gateway/meta_mcp/call_dispatch.rs
+@@ -34,7 +34,7 @@ impl MetaMcp {
+                     Some(backend) => self.has_no_view_for(&backend, Self::proof_of(caller)).await,
+                     None => false,
+                 };
+-                if no_view {
++                if false && no_view {
+                     let reason = super::visible::Withholding::Lacked;
+                     self.record_withheld(server, tool_name, reason, caller, session_id)
+                         .await;

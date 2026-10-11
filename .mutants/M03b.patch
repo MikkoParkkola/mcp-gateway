@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/visible.rs b/src/gateway/meta_mcp/visible.rs
+index e6b388e0a..60ee1a334 100644
+--- a/src/gateway/meta_mcp/visible.rs
++++ b/src/gateway/meta_mcp/visible.rs
+@@ -359,7 +359,7 @@ pub(crate) fn with_carried<R>(
+ pub(crate) fn take_carried(server: &str, tool: &str) -> Option<Carried> {
+     let key = (server.to_owned(), tool.to_owned());
+     VISIBILITY_MEMO
+-        .try_with(|memo| memo.1.lock().remove(&key))
++        .try_with(|memo| { let _ = memo.1.lock().remove(&key); None::<Carried> })
+         .ok()
+         .flatten()
+ }

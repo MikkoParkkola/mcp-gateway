@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/discovery_fetch.rs b/src/gateway/meta_mcp/discovery_fetch.rs
+index 0928f0d5f..0c6daf27f 100644
+--- a/src/gateway/meta_mcp/discovery_fetch.rs
++++ b/src/gateway/meta_mcp/discovery_fetch.rs
+@@ -132,7 +132,6 @@ impl MetaMcp {
+             // after this entry. One decision, `has_no_view_for`; a caller with
+             // no principal at all is read synchronously by `listing_view`.
+             if self.has_no_view_for(&backend, caller).await {
+-                backend.record_no_view(&id);
+                 continue;
+             }
+             if backend.caller_has_no_view(&id) {

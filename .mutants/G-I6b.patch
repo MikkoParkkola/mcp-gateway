@@ -1,0 +1,25 @@
+diff --git a/src/backend/caller_slots.rs b/src/backend/caller_slots.rs
+index cdcbb0878..007b20411 100644
+--- a/src/backend/caller_slots.rs
++++ b/src/backend/caller_slots.rs
+@@ -36,8 +36,10 @@ impl CallerSlot {
+         let CallerSlot::Held { binding, entry } = self else {
+             return None;
+         };
+-        let entry = entry.upgrade()?;
+-        (!entry.retired.load(Ordering::SeqCst)).then_some(binding.as_str())
++        match entry.upgrade() {
++            None => Some(binding.as_str()),
++            Some(entry) => (!entry.retired.load(Ordering::SeqCst)).then_some(binding.as_str()),
++        }
+     }
+ }
+ 
+@@ -53,6 +55,7 @@ impl Backend {
+             binding: binding.to_string(),
+         };
+         let Some(entry) = self.pool.get(&key).map(|slot| Arc::clone(slot.value())) else {
++            self.caller_slots.insert(principal_id.to_string(), CallerSlot::Held { binding: binding.to_string(), entry: std::sync::Weak::new() });
+             return;
+         };
+         if !entry.tools_cache.ever_populated() {

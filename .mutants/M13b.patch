@@ -1,0 +1,16 @@
+diff --git a/src/gateway/router/backend_handlers/key_check.rs b/src/gateway/router/backend_handlers/key_check.rs
+index 57a6e1ee6..b2e842b5b 100644
+--- a/src/gateway/router/backend_handlers/key_check.rs
++++ b/src/gateway/router/backend_handlers/key_check.rs
+@@ -61,6 +61,11 @@ pub(super) async fn key_refusal(
+             Err(e) => return Some(failed.clone().answer((None, None), e, &call).await),
+         }
+     }
++    if true {
++        let response = error_response_preserving_status(id.clone(), &absent_name(tool));
++        return Some(build_http_response(&Egressed::gateway_own(response), StatusCode::OK));
++    }
++    #[allow(unreachable_code)]
+     let checked = backend.undeclared_key_refusal(identity_key, headers, tool, arguments);
+     match checked.await {
+         Ok(None) => None,
