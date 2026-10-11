@@ -13,6 +13,7 @@ use super::super::helpers::{build_http_error_response, build_http_response};
 use super::direct_caller::{Envelope, Rejection};
 use super::direct_dispatch::{Admitted, Scope};
 use super::direct_preflight::Propagation;
+use crate::gateway::meta_mcp::invoke::dispatch_guards::Admission;
 use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
@@ -74,14 +75,18 @@ fn give_back_refused(state: &AppState, admitted: &mut Admitted<'_>) {
 }
 
 /// The answer to a send the chokepoint refused, on either arm: give back what
-/// the call took, then the refusal. The caller drops its spend admission.
+/// the call took, drop the spend admission when the caller hands it over, then
+/// the refusal. The admission must be dropped before the response is built:
+/// concurrent budget checks count outstanding holds.
 pub(super) fn refused_send(
     state: &AppState,
-    admitted: &mut Admitted<'_>,
+    (admitted, admission): (&mut Admitted<'_>, Option<Admission>),
     id: &RequestId,
     e: &crate::Error,
 ) -> Rejection {
     give_back_refused(state, admitted);
+    // Not dispatched: the spend reservation is given back on drop.
+    drop(admission);
     build_http_response(
         &Egressed::gateway_own(refusal(Some(id.clone()), e)),
         StatusCode::OK,
@@ -119,7 +124,8 @@ pub(super) fn plain_send<'a>(
             // passthrough backend; retries take the sanitized arm), so this
             // refusal cannot happen yet. It stays so that if the two ever
             // diverge, the refusal still gives back what the call took.
-            Err(e) => Err(refused_send(scope.state, admitted, id, &e)),
+            // The caller (`forward_plain`) owns the admission and drops it after.
+            Err(e) => Err(refused_send(scope.state, (admitted, None), id, &e)),
         };
     }
     let Some(other) = super::direct_send::NonToolMethod::new(method) else {

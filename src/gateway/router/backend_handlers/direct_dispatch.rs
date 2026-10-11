@@ -334,10 +334,8 @@ async fn forward_sanitized(
     let permit = match super::direct_permit::mint_permit(scope, Some(&sanitized_params)) {
         Ok(permit) => permit,
         Err(e) => {
-            let refused = super::direct_permit::refused_send(state, &mut admitted, id, &e);
-            // Not dispatched: the spend reservation is given back on drop.
-            drop(admission);
-            return refused;
+            let answer = (&mut admitted, Some(admission));
+            return super::direct_permit::refused_send(state, answer, id, &e);
         }
     };
     // Forward the sanitized params to the backend
