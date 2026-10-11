@@ -743,3 +743,140 @@ async fn i2b_truncated_direct_route_listing_leaves_no_index_entry() {
         "I2b: a Truncated direct-route listing wrote an index entry"
     );
 }
+
+/// A `gateway_invoke` of [`TOOL`] on `BACKEND` over `/mcp` as alpha.
+fn invoke_call() -> Value {
+    let args = json!({"server": BACKEND, "tool": TOOL, "arguments": {"q": "x"}});
+    json!({"jsonrpc": "2.0", "id": 15, "method": "tools/call",
+        "params": {"name": "gateway_invoke", "arguments": args}})
+}
+
+/// C4 over HTTP (withheld, lacked): a `gateway_invoke` target on the per-user
+/// backend is judged by alpha's own slot at the entry, before any X14 prompt:
+/// a withheld or lacked tool answers -32601 (the same for both), is not
+/// dispatched and draws no confirmation challenge; alpha's valid tool
+/// dispatches (control). RED on base: the shared slot (valid) decides.
+#[tokio::test]
+async fn c4_http_gateway_invoke_target_judged_by_the_callers_slot() {
+    let control = gateway(CallerSlot::Valid, CLOSED, Surfaced::No).await;
+    let ok = post_as_alpha(&control.router, "/mcp", &invoke_call()).await;
+    assert_eq!(
+        control.caller.calls(),
+        1,
+        "premise: alpha's valid tool is not dispatched: {ok:?}"
+    );
+    let mut answers = Vec::new();
+    for slot in [CallerSlot::Invalid, CallerSlot::Lacks] {
+        let gw = gateway(slot, CLOSED, Surfaced::No).await;
+        let answer = post_as_alpha(&gw.router, "/mcp", &invoke_call()).await;
+        assert_eq!(
+            gw.dispatched(),
+            0,
+            "C4-http {slot:?}: dispatched; {answer:?}"
+        );
+        assert_eq!(
+            answer.1.pointer("/error/code"),
+            Some(&json!(-32601)),
+            "C4-http {slot:?}: {answer:?}"
+        );
+        assert!(
+            answer.1.pointer("/result/inputRequests").is_none(),
+            "C4-http {slot:?}: a confirmation prompt was issued: {answer:?}"
+        );
+        answers.push(answer);
+    }
+    assert_eq!(answers[0], answers[1], "C4-http: withheld vs lacked differ");
+}
+
+/// C7 over HTTP: alpha's slot is cold, its own schema valid and the shared one
+/// INVALID. The call fills alpha's slot exactly once, mints exactly once and
+/// dispatches exactly once. RED on base: the shared slot withholds the tool.
+#[tokio::test]
+async fn c7_http_cold_caller_first_call_dispatches_on_own_slot() {
+    let invalid = crate::gateway::meta_mcp::slot_verdict_fixture::invalid();
+    let gw = gateway_built(
+        (CallerSlot::Valid, &invalid, Warmth::Cold),
+        CLOSED,
+        Surfaced::Yes,
+        |_| {},
+        |_| {},
+    )
+    .await;
+    let (lists, calls) = (gw.caller.lists(), gw.caller.calls());
+    let mints = gw.mints.load(Ordering::SeqCst);
+    let answer = post_as_alpha(&gw.router, "/mcp", &tools_call(TOOL)).await;
+    assert_eq!(
+        gw.caller.calls(),
+        calls + 1,
+        "C7-http: not dispatched once: {answer:?}"
+    );
+    assert_eq!(
+        gw.caller.lists(),
+        lists + 1,
+        "C7-http: alpha's slot not filled once"
+    );
+    assert_eq!(
+        gw.mints.load(Ordering::SeqCst),
+        mints + 1,
+        "C7-http: resolutions for one cold call"
+    );
+}
+
+/// C7b over HTTP (guard, kills M14): a call on alpha's warm slot fetches no
+/// catalogue from either upstream; a held answer needs no `tools/list`.
+#[tokio::test]
+async fn c7b_http_warm_verdict_fetches_nothing() {
+    let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
+    let lists = gw.caller.lists() + gw.shared.lists();
+    let answer = post_as_alpha(&gw.router, "/mcp", &tools_call(TOOL)).await;
+    assert_eq!(gw.caller.calls(), 1, "premise: not dispatched: {answer:?}");
+    assert_eq!(
+        gw.caller.lists() + gw.shared.lists(),
+        lists,
+        "C7b-http: a warm call listed"
+    );
+}
+
+/// C11 over HTTP (guard, kills M03): a call of a SURFACED name meets the
+/// verdict at the route loop, again in `call_dispatch`, and the funnel; it
+/// still resolves alpha's credential exactly once.
+#[tokio::test]
+async fn c11_http_surfaced_name_resolves_once() {
+    let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
+    let mints = gw.mints.load(Ordering::SeqCst);
+    let answer = post_as_alpha(&gw.router, "/mcp", &tools_call(TOOL)).await;
+    assert_eq!(gw.caller.calls(), 1, "premise: not dispatched: {answer:?}");
+    assert_eq!(
+        gw.mints.load(Ordering::SeqCst),
+        mints + 1,
+        "C11-http: resolutions for one surfaced call: {answer:?}"
+    );
+}
+
+/// F3 over HTTP (the step flip guard): a `gateway_execute` step is judged by
+/// the caller's slot, not the shared one, in both directions. Shared Invalid
+/// with caller Valid dispatches; shared Valid with caller Invalid answers
+/// -32601 and does not. RED on base: the shared Invalid withholds the step.
+#[tokio::test]
+async fn f3_http_execute_step_flip_guard() {
+    let invalid = crate::gateway::meta_mcp::slot_verdict_fixture::invalid();
+    let gw = gateway_with_shared(CallerSlot::Valid, &invalid, CLOSED, Surfaced::No).await;
+    let answer = execute_as_alpha(&gw, &[TOOL]).await;
+    assert_eq!(
+        gw.dispatched(),
+        1,
+        "F3-http: a step valid in the caller's slot (invalid in the shared one) did not dispatch: {answer:?}"
+    );
+    let gw = gateway(CallerSlot::Invalid, CLOSED, Surfaced::No).await;
+    let answer = execute_as_alpha(&gw, &[TOOL]).await;
+    assert_eq!(
+        gw.dispatched(),
+        0,
+        "F3-http: a step invalid in the caller's slot (valid in the shared one) dispatched: {answer:?}"
+    );
+    assert_eq!(
+        answer.1.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "F3-http: the reverse step is not answered -32601: {answer:?}"
+    );
+}
