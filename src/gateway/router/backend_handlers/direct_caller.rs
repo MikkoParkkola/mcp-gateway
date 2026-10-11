@@ -243,7 +243,8 @@ pub(super) async fn read_envelope(
             &crate::gateway::PROTOCOL_NONCES,
         )
         .and_then(|()| {
-            if state.meta_mcp.backend_is_passthrough(name) {
+            if let Some(instance) = state.meta_mcp.passthrough_instance(name) {
+                crate::gateway::meta_mcp::visible::record_exempt_instances(&[instance]);
                 Ok(None)
             } else {
                 crate::security::sanitize::sanitize_request(&json_request).map(Some)

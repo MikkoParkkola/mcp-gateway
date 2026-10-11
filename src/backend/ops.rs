@@ -266,9 +266,9 @@ impl Backend {
     ) -> Result<JsonRpcResponse> {
         let start_time = std::time::Instant::now();
 
-        // Every `tools/call` funnels through here, public library callers
-        // included, so a withheld tool is refused at this one chokepoint as
-        // well as by the routes' own earlier checks (#1441).
+        // Every `tools/call` funnels through here, so a withheld tool (#1441)
+        // and a send by an instance other than the one an exempt call was
+        // judged on (MIK-8154 F2: a reload since intake) are refused here.
         if let Some(refusal) = self.blocked_call_refusal(method, params.as_ref(), identity_key) {
             return Err(crate::Error::Protocol(refusal));
         }
@@ -613,17 +613,16 @@ impl Backend {
         if method != "tools/call" {
             return None;
         }
-        params
-            .and_then(|p| p.get("name"))
-            .and_then(Value::as_str)
-            .and_then(|tool| self.blocked_tool_refusal(identity_key, tool))
+        crate::gateway::changed_instance(self).or_else(|| {
+            params
+                .and_then(|p| p.get("name"))
+                .and_then(Value::as_str)
+                .and_then(|tool| self.blocked_tool_refusal(identity_key, tool))
+        })
     }
 
-    /// Return `true` if this backend is configured for pass-through mode.
-    ///
-    /// When `true`, the direct `/mcp/{name}` endpoint skips tool policy
-    /// enforcement and input sanitization for `tools/call` requests.
-    /// This must only be enabled for fully-trusted internal backends.
+    /// Pass-through mode: exempt from input sanitization on every route, and
+    /// from tool policy on `/mcp/{name}`. Only for fully-trusted backends.
     #[must_use]
     pub fn passthrough(&self) -> bool {
         self.config.passthrough

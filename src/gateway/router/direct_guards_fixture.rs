@@ -674,3 +674,30 @@ async fn fixture_inner(
         _store: store,
     }
 }
+
+/// MIK-8154 F2 rows: a reload of `name` as config reload does it, the old
+/// instance removed and a new one registered with `passthrough`, sending
+/// through the fixture's counting transport. Returned as a hook to run at a
+/// seam.
+pub(crate) fn reload_for_test(
+    fx: &Fx,
+    name: &'static str,
+    passthrough: bool,
+) -> impl FnOnce() + use<> {
+    let (state, calls, seen) = (
+        Arc::clone(&fx.state),
+        Arc::clone(&fx.calls),
+        Arc::clone(&fx.seen),
+    );
+    move || {
+        let backend = Arc::new(Backend::new(
+            name,
+            fixture_backend_config(name, passthrough),
+            &fixture_failsafe(),
+            Duration::from_secs(60),
+        ));
+        backend.set_transport_for_test(backend_transport((&calls, &seen), Answer::Ok));
+        state.backends.remove(name);
+        assert!(state.backends.register(backend), "reload registration");
+    }
+}

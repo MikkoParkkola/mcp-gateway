@@ -383,7 +383,14 @@ pub(super) async fn backend_handler(
         ));
     }
 
-    direct_audit::audited_call(Arc::clone(&state), name, request).await
+    // The request's scope for what intake judges (MIK-8154 F2: the exempt
+    // instance the send compares), boxed so the scope wraps a pointer.
+    crate::gateway::meta_mcp::visible::with_visibility_memo(Box::pin(direct_audit::audited_call(
+        Arc::clone(&state),
+        name,
+        request,
+    )))
+    .await
 }
 
 /// The direct backend route, as an ordered sequence of stages. Each stage

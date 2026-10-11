@@ -239,12 +239,9 @@ async fn run_dispatched(
         .dispatch_log()
         .worker()
         .arm(&executor.service.store);
-    // MIK-8154 C2e: the run compares the playbook against the definition the
-    // submit's intake judged, as a synchronous run does.
-    let dispatch = crate::gateway::meta_mcp::visible::with_judged_playbook(
-        intent.owned.judged_playbook(),
-        dispatch,
-    );
+    // MIK-8154 C2e, F2: the run and its sends compare against what the
+    // submit's intake judged, as a synchronous call does.
+    let dispatch = crate::gateway::meta_mcp::visible::with_judged(intent.owned.judged(), dispatch);
     let mut dispatch = Box::pin(crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
         Arc::clone(intent.owned.dispatch_log()),
         dispatch,

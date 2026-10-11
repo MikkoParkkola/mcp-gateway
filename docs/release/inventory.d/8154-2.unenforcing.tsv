@@ -1,2 +1,2 @@
 src/gateway/router/backend_handlers/direct_idempotency.rs	lease_refused	1	Builds the HTTP refusal for a 7b refusal with the status /mcp gives it (409 or 400); decides nothing
-src/gateway/task_service/execution/context.rs	judged_playbook	1	Returns the playbook digest the creating request judged, for the worker to scope; decides nothing
+src/gateway/task_service/execution/context.rs	judged	1	Returns what the creating request judged (playbook digest, exempt instances), for the worker to scope; decides nothing

@@ -7,12 +7,17 @@
 use super::MetaMcp;
 
 impl MetaMcp {
-    /// Whether `server` is a registered backend with `passthrough: true`. A
-    /// name with no backend is not passthrough, so the request is sanitized.
-    pub(crate) fn backend_is_passthrough(&self, server: &str) -> bool {
+    /// The registered `passthrough: true` instance of `server`, if it is one.
+    /// The exemption is judged on this one instance and recorded with it
+    /// (MIK-8154 F2), so the send can refuse any other: no name means no
+    /// exemption, so the request is sanitized.
+    pub(crate) fn passthrough_instance(
+        &self,
+        server: &str,
+    ) -> Option<std::sync::Arc<crate::backend::Backend>> {
         self.backends
             .get(server)
-            .is_some_and(|backend| backend.passthrough())
+            .filter(|backend| backend.passthrough())
     }
 
     /// The servers playbook `name`'s steps run on, and the digest of the live

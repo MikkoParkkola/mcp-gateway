@@ -50,10 +50,19 @@ pub(crate) fn sanitize_exempt(
         let targets = backend_tool_targets_for_call(meta_mcp, name, arguments, view);
         targets.into_iter().map(|t| t.server).collect()
     };
-    !servers.is_empty()
-        && servers
-            .iter()
-            .all(|server| meta_mcp.backend_is_passthrough(server))
+    // Judged and recorded on the same instances (F2): a reload between two
+    // lookups could otherwise judge one instance and record another.
+    let instances: Option<Vec<_>> = servers
+        .iter()
+        .map(|server| meta_mcp.passthrough_instance(server))
+        .collect();
+    match instances {
+        Some(instances) if !instances.is_empty() => {
+            crate::gateway::meta_mcp::visible::record_exempt_instances(&instances);
+            true
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn backend_tool_targets_for_call<'a>(

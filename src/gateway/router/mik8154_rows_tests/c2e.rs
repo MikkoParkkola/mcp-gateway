@@ -172,3 +172,42 @@ async fn c2e3_a_task_with_no_judgement_runs_a_reloaded_playbook() {
     );
     assert_eq!(calls(&fx), 2, "c2e3': the reloaded steps did not both run");
 }
+
+/// The refusal a send by a reloaded backend instance meets (MIK-8154 F2).
+const BACKEND_CHANGED: &str = "The backend changed after this call was admitted; retry the call";
+
+/// F2 R1: a sync `gateway_invoke` judged exempt (its target `alpha-pt` is
+/// passthrough) whose backend is reloaded after intake, as non-passthrough,
+/// is refused at the send: the new instance is not the one judged, and the
+/// NUL intake let through reaches no backend.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn r1_a_sync_call_whose_backend_is_reloaded_is_refused() {
+    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
+    crate::gateway::meta_mcp::visible::seams::after_route_stage(
+        super::super::direct_guards_fixture::reload_for_test(&fx, "alpha-pt", false),
+    );
+    let args = json!({"cmd": NUL});
+    let (_, body) = post_meta_invoke(&fx, "k-std", "alpha-pt", "read", args, None, None).await;
+    assert!(message(&body).contains(BACKEND_CHANGED), "r1: {body}");
+    assert_eq!(calls(&fx), 0, "r1: the reloaded instance sent");
+}
+
+/// F2 R2: a task over the all-passthrough playbook whose backend is reloaded
+/// between submit and run, the definition unchanged (so C2e's digest still
+/// matches), settles with no step sent: each send meets an instance other
+/// than the one the submit judged.
+#[tokio::test]
+async fn r2_a_task_whose_backend_is_reloaded_sends_nothing() {
+    let fx = Box::pin(playbook_fixture(["alpha-pt", "alpha-pt"])).await;
+    crate::gateway::meta_mcp::visible::seams::before_task_dispatch(
+        super::super::direct_guards_fixture::reload_for_test(&fx, "alpha-pt", false),
+    );
+    let got = Box::pin(task_run_with_nul(&fx, "r2-k")).await;
+    assert_eq!(
+        calls(&fx),
+        0,
+        "r2: a step reached the reloaded instance: {got}"
+    );
+    assert!(!forwarded_nul(&fx), "r2: the NUL was forwarded");
+}
