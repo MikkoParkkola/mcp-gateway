@@ -160,15 +160,26 @@ pub(crate) async fn served_sanitizing() -> (Value, usize) {
 /// through to admission (`already_admitted` under the stdio owner) and it gets
 /// the task's handle, not a second challenge. Returns the four answers.
 pub(crate) async fn stdio_x14_signed_round() -> (Value, Value, Value, Value) {
-    use crate::gateway::meta_mcp::signing::NONCE_META;
     const NONCE: &str = "stdio-x14-round-0001";
+    let fixture = signed_x14_fixture().await;
+    let call = |id: u64, nonce: &str, extra: Value| x14_call(id, nonce, "x14-round", extra);
+    let challenge = dispatch(&fixture, call(1, NONCE, json!({}))).await;
+    let redeemed = dispatch(&fixture, call(2, NONCE, accept(&challenge))).await;
+    let replay = dispatch(&fixture, call(3, NONCE, json!({}))).await;
+    let retried = dispatch(&fixture, call(4, "stdio-x14-round-0002", json!({}))).await;
+    (challenge, redeemed, replay, retried)
+}
+
+/// The hardened, signed stdio fixture surfacing the destructive `echo`, so X14
+/// challenges a task-augmented call to it.
+async fn signed_x14_fixture() -> super::owner2_stdio_tasks::Fixture {
     let served = backend_listing(json!([{
         "name": TOOL,
         "inputSchema": {"type": "object"},
         "annotations": {"destructiveHint": true, "readOnlyHint": false}
     }]))
     .await;
-    let fixture = Box::pin(fixture_on_with(served, None, |config| {
+    Box::pin(fixture_on_with(served, None, |config| {
         config.server.modern_protocol = true;
         config.security.posture = crate::security::SecurityPosture::Hardened;
         config.security.hardened.private_backends = vec![BACKEND.to_string()];
@@ -183,41 +194,98 @@ pub(crate) async fn stdio_x14_signed_round() -> (Value, Value, Value, Value) {
             tool: TOOL.to_string(),
         }];
     }))
-    .await;
-    let call = |id: u64, nonce: &str, extra: Value| {
-        let mut params = json!({
-            "name": TOOL,
-            "arguments": {},
-            "task": {},
-            "_meta": {
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientCapabilities": {
-                    "elicitation": {"form": {}},
-                    "extensions": {"io.modelcontextprotocol/tasks": {}}
-                },
-                "io.mcp-gateway/idempotency-key": "x14-round",
-                NONCE_META: nonce,
+    .await
+}
+
+/// A task-augmented, keyed, signed `tools/call` of the surfaced `echo` under
+/// `nonce`, with `extra` merged into its params (an X14 answer).
+fn x14_call(id: u64, nonce: &str, key: &str, extra: Value) -> Value {
+    use crate::gateway::meta_mcp::signing::NONCE_META;
+    let mut params = json!({
+        "name": TOOL,
+        "arguments": {},
+        "task": {},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {
+                "elicitation": {"form": {}},
+                "extensions": {"io.modelcontextprotocol/tasks": {}}
             },
-        });
-        if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
-            params.extend(extra.clone());
-        }
-        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params})
-    };
-    let challenge = dispatch(&fixture, call(1, NONCE, json!({}))).await;
+            "io.mcp-gateway/idempotency-key": key,
+            NONCE_META: nonce,
+        },
+    });
+    if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
+        params.extend(extra.clone());
+    }
+    json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params})
+}
+
+/// The answer accepting `challenge`'s X14 question.
+fn accept(challenge: &Value) -> Value {
     let state = challenge["result"]["requestState"].clone();
     let key = challenge["result"]["inputRequests"]
         .as_object()
         .and_then(|requests| requests.keys().next().cloned())
         .unwrap_or_default();
-    let answer = json!({
+    json!({
         "requestState": state,
         "inputResponses": { key: { "action": "accept" } },
-    });
-    let redeemed = dispatch(&fixture, call(2, NONCE, answer)).await;
-    let replay = dispatch(&fixture, call(3, NONCE, json!({}))).await;
-    let retried = dispatch(&fixture, call(4, "stdio-x14-round-0002", json!({}))).await;
-    (challenge, redeemed, replay, retried)
+    })
+}
+
+/// What MIK-8353.E2E.1's round observed (see [`stdio_x14_consumed_then_refused`]).
+pub(crate) struct ConsumedThenRefused {
+    pub(crate) challenge: Value,
+    /// The redemption, refused by admission after X14 consumed its grant.
+    pub(crate) refused: Value,
+    /// The confirmation ledger's consumed count before and after the redemption.
+    pub(crate) ledger: (usize, usize),
+    /// The same nonce re-sent once the backend is revived.
+    pub(crate) resent: Value,
+    /// Backend `tools/call` count after the re-send.
+    pub(crate) calls_before_honest: usize,
+    /// A fresh nonce's full round (challenge, redemption) and its terminal task.
+    pub(crate) honest: Value,
+    pub(crate) calls_after_honest: usize,
+}
+
+/// MIK-8353.E2E.1 on hardened stdio. The backend is killed, so the route stage
+/// still asks X14 and the redemption consumes the grant, but execution
+/// admission's task branch (`check_target_policy` -> `admit_target`) refuses
+/// it. The backend is then revived; the same nonce is re-sent; and a fresh
+/// nonce runs the honest round end to end.
+pub(crate) async fn stdio_x14_consumed_then_refused() -> ConsumedThenRefused {
+    const NONCE: &str = "stdio-e2e1-nonce-0001";
+    const FRESH: &str = "stdio-e2e1-nonce-0002";
+    let fixture = signed_x14_fixture().await;
+    let ledger = fixture.meta.continuation();
+    fixture.meta.kill_switch().kill(BACKEND);
+    let challenge = dispatch(&fixture, x14_call(1, NONCE, "e2e1-a", json!({}))).await;
+    let before = ledger.ledger().len().await;
+    let refused = dispatch(&fixture, x14_call(2, NONCE, "e2e1-a", accept(&challenge))).await;
+    let after = ledger.ledger().len().await;
+    fixture.meta.kill_switch().revive(BACKEND);
+    let resent = dispatch(&fixture, x14_call(3, NONCE, "e2e1-b", json!({}))).await;
+    let calls_before_honest = fixture.rounds.load(Ordering::SeqCst);
+    let asked = dispatch(&fixture, x14_call(4, FRESH, "e2e1-c", json!({}))).await;
+    let created = dispatch(&fixture, x14_call(5, FRESH, "e2e1-c", accept(&asked))).await;
+    let honest = match created.pointer("/result/taskId").and_then(Value::as_str) {
+        Some(id) => {
+            let id = super::owner2_stdio_tasks::wait_terminal(&fixture, id.to_owned()).await;
+            json!({"taskId": id})
+        }
+        None => created,
+    };
+    ConsumedThenRefused {
+        challenge,
+        refused,
+        ledger: (before, after),
+        resent,
+        calls_before_honest,
+        honest,
+        calls_after_honest: fixture.rounds.load(Ordering::SeqCst),
+    }
 }
 
 /// An argument the request firewall blocks as shell injection, built so no

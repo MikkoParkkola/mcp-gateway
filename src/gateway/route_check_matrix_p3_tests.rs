@@ -331,6 +331,59 @@ async fn stdio_x14_round_spends_its_nonce_once() {
     );
 }
 
+/// MIK-8353.E2E.1 (and S1-d): on hardened stdio a task call spends a real X14
+/// grant, execution admission then refuses it (the backend is killed), and the
+/// nonce stays spent. Oracles: the confirmation ledger grew by exactly one
+/// across the redemption (the grant was consumed); the refusal is the kill
+/// switch's own; once the backend is revived the same nonce is refused as a
+/// nonce replay (an X14 re-challenge fails the row); nothing reached the
+/// backend until then; and a fresh nonce's honest round runs it exactly once.
+/// Green on base through MIK-8150's `caller.task.is_none()` guard; it must
+/// stay green when the refund rework replaces that guard. Mutants: mE2E (the
+/// guard removed and the stdio X14 pass returning its witness after the
+/// consume) and mE2E-consume (the consume skipped).
+#[tokio::test]
+async fn stdio_task_refused_after_its_grant_was_consumed_keeps_its_nonce() {
+    let seen = Box::pin(stdio::stdio_x14_consumed_then_refused()).await;
+    assert!(
+        seen.challenge.to_string().contains(X14_PROMPT),
+        "premise: no X14 challenge: {}",
+        seen.challenge
+    );
+    assert_eq!(
+        seen.ledger.1,
+        seen.ledger.0 + 1,
+        "premise: the redemption did not consume the grant: {}",
+        seen.refused
+    );
+    assert_eq!(seen.refused["error"]["code"], -32000, "{}", seen.refused);
+    assert!(
+        message(&seen.refused).contains("kill switch"),
+        "premise: admission's kill-switch refusal: {}",
+        seen.refused
+    );
+    assert_eq!(seen.resent["error"]["code"], -32001, "{}", seen.resent);
+    assert_eq!(
+        message(&seen.resent),
+        "Nonce replay detected",
+        "a nonce whose grant was consumed was given back: {}",
+        seen.resent
+    );
+    assert_eq!(
+        seen.calls_before_honest, 0,
+        "the backend ran before the honest round"
+    );
+    assert!(
+        seen.honest.get("taskId").is_some(),
+        "control: a fresh nonce's honest round did not create its task: {}",
+        seen.honest
+    );
+    assert_eq!(
+        seen.calls_after_honest, 1,
+        "control: the honest round did not run the backend exactly once"
+    );
+}
+
 /// MIK-8149.REQFW.1, task form (grok's row): a task-augmented stdio call whose
 /// argument the request firewall blocks is refused at the route stage, before
 /// any task exists: the firewall's own refusal, no `taskId`, no backend call.
