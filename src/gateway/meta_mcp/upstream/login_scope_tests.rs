@@ -184,3 +184,45 @@ async fn a_cancel_waits_for_an_oauth_backend_start_in_flight() {
         "the cancel ran where a login may begin: {seen:?}"
     );
 }
+
+/// MIK-8339 LOGINDL.14: a dispatch claim whose discovery leads a request-time
+/// login under the claim's own deadline (`QUERY_DEADLINE.min(request_timeout)`)
+/// leaves that login open. The claim gives up (`false`) when its deadline
+/// fires; approving afterwards still stores the token, and the next request
+/// uses it. Approval comes AFTER the claim gives up, deliberately: at base the
+/// deadline drops the login and its callback, which is the defect this row is
+/// red on (MIK-8339 test plan, LOGINDL.14 and V2.5''). Lives here, beside the
+/// adapter, so it drives the real `claims` rather than a replay of its request.
+#[tokio::test]
+async fn a_claims_deadline_leaves_its_request_time_login_open() {
+    use crate::backend::tests::login_window::{
+        Account, Upstream, approve_if_listening, approved_start_with, spawn_call, within,
+    };
+    let (backend, browser, _dir) =
+        approved_start_with(Upstream::Plain, Duration::from_secs(1), Account::Shared).await;
+    crate::backend::tests::token_lapse::lapse(&backend).await;
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(
+        registry.register(Arc::clone(&backend)),
+        "fixture registration"
+    );
+    let adapter = NativeUpstreamTasks::new(registry, &["login-window".to_string()]);
+    assert_eq!(browser.opens(), 1, "premise: only the start's login");
+
+    let claimed = within("the claim's own deadline", adapter.claims("login-window")).await;
+    assert!(!claimed, "premise: the claim gave up at its deadline");
+    let url = browser.opened(2, "the claim's request-time login").await;
+
+    assert!(
+        approve_if_listening(&url).await,
+        "the login the claim began was gone when the person approved it"
+    );
+    let call = within("the next request", spawn_call(&backend))
+        .await
+        .expect("call task");
+    assert!(
+        call.is_ok(),
+        "the approved login's token serves the next request: {call:?}"
+    );
+    assert_eq!(browser.opens(), 2, "the next request opened another login");
+}

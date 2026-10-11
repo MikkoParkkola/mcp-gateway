@@ -102,7 +102,7 @@ src/gateway/router/backend_handlers.rs	charged_binding	1	standard	borderline	cha
 src/gateway/router/backend_handlers/relay.rs	direct_control_identity	1	standard	borderline	direct_control_identity	Firewall per-caller key; falls back to a shared bucket.
 src/gateway/router/backend_handlers/relay.rs	direct_caller	1	standard	borderline	direct_caller	Per-caller key for every per-caller control on the direct route; falls back to the shared bucket
 src/gateway/router/backend_handlers.rs	direct_route_attestation_scope	1	standard	borderline	direct_route_attestation_scope	Sets the scope an attestation token must grant per method.
-src/gateway/router/backend_handlers.rs	dispatch_in_scope	1	standard	d	dispatch_in_scope	Refuses methods the peer's protocol era removed before they reach the wire.
+src/gateway/router/backend_handlers/direct_send.rs	send_in_scope	1	standard	d	send_in_scope	Refuses methods the peer's protocol era removed before they reach the wire.
 src/gateway/router/backend_handlers.rs	is_task_method	1	standard	borderline	is_task_method	Selects which methods get the task-owner refusal.
 src/gateway/router/backend_handlers.rs	passthrough_identity_key	1	standard	borderline	passthrough_identity_key	Session bucket key from the credential digest; a collision would mix callers.
 src/gateway/router/backend_handlers.rs	sign_and_record	1	critical	d	sign_and_record	Signs a direct delivery when a signing nonce was admitted, then stages it for relay detection
@@ -616,7 +616,6 @@ src/oauth/client/grants.rs	refresh_params	1	standard	borderline	OAuthClient::ref
 src/oauth/client/grants.rs	client_credentials_params	1	standard	borderline	OAuthClient::client_credentials_params	Builds the client_credentials form with scope and the resource indicator that audience-binds the token.
 src/oauth/client/grants.rs	exchange_code	1	critical	a	OAuthClient::exchange_code	Performs the authorization-code exchange and accepts its token response.
 src/oauth/client/grants.rs	with_login_gate	1	standard	borderline	OAuthClient::with_login_gate	Installs the backend's shared login gate; a missing gate skips LoginGate::begin's refusal after a stop or cancel.
-src/oauth/client/grants.rs	login_epoch	1	standard	borderline	OAuthClient::login_epoch	Supplies the cancel epoch a start passes as since to LoginGate::begin; a None skips the stale-epoch refusal.
 src/oauth/client/grants.rs	reload_registered_client_id	1	critical	d	OAuthClient::reload_registered_client_id	Provenance rule: replaces only a Registered client_id from the disk record and never overrides an operator-configured one (same call as purge_client_id_if_invalid).
 src/oauth/client/mod.rs	registration_body	1	standard	borderline	registration_body	Builds the DCR body that registers the redirect_uri, native application_type and auth method the authorization server binds codes to.
 src/oauth/client/mod.rs	new	1	standard	borderline	OAuthClient::new	Builds the client with the Configured destination policy, loopback client and Configured client_id provenance that purge relies on; a wrong default silently disables those checks.
@@ -637,7 +636,6 @@ src/oauth/login_gate.rs	epoch	1	standard	borderline	LoginGate::epoch	Supplies th
 src/oauth/login_gate.rs	begin	1	critical	a,d	LoginGate::begin	Decides whether a caller may lead, join or must not begin an interactive login: refuses after close or a cancel epoch the caller predates.
 src/oauth/login_gate.rs	cancel_and_join	1	standard	borderline	LoginGate::cancel_and_join	Bumps the epoch and cancels the login in flight; installs the condition LoginGate::begin refuses on.
 src/oauth/login_gate.rs	close	1	standard	borderline	LoginGate::close	Sets closed so LoginGate::begin refuses every later login once the backend stops.
-src/oauth/login_gate.rs	set_out	1	standard	borderline	set_out	Scopes the start's captured epoch that the login refusal in LoginGate::begin compares.
 src/oauth/login_gate.rs	set_out_epoch	1	standard	borderline	set_out_epoch	Reads the scoped epoch passed as since to LoginGate::begin; a None skips the stale-epoch refusal.
 src/oauth/login_gate.rs	non_interactive	1	standard	borderline	non_interactive	Installs the task-local scope interactive() reads, so the health probe never begins or joins a login.
 src/oauth/login_gate.rs	interactive	1	critical	a	interactive	Decides whether the current task may begin or wait on an interactive login; callers refuse with AuthorizationRequired otherwise.

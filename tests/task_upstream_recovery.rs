@@ -682,6 +682,16 @@ async fn a_cancelled_task_nobody_follows_cancels_its_upstream_job_once() {
     tokio::time::timeout(OBSERVE_BOUND, peer.peer.cancel_arrived())
         .await
         .expect("the upstream tasks/cancel arrives");
+    // The confirmation is written after the peer answers (MIK-8347), and
+    // shutdown never waits on a send: wait for it while the gateway runs.
+    tokio::time::timeout(OBSERVE_BOUND, async {
+        while durable_record(root.path(), &task_id)["upstreamCancelSent"] != serde_json::json!(true)
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the confirmed cancel is written durably");
     // A second cancel of the settled task must not send another.
     restarted
         .post(&client, &helper::tasks_cancel(952, &task_id))
@@ -703,5 +713,9 @@ async fn a_cancelled_task_nobody_follows_cancels_its_upstream_job_once() {
         serde_json::json!(true),
         "the one send is claimed durably: {record}"
     );
-    assert_eq!(record["version"], serde_json::json!(7), "{record}");
+    assert!(
+        record.get("upstreamCancelPending").is_none(),
+        "confirmation clears the pending cancel: {record}"
+    );
+    assert_eq!(record["version"], serde_json::json!(8), "{record}");
 }

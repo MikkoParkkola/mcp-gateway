@@ -90,6 +90,22 @@ class RootStart(unittest.TestCase):
                 self.assertNotIn("setpriv", log)
                 self.assertIn("EXTRA_APT_PACKAGES", run.stderr)
 
+    def test_hyphenated_debian_names_install_while_a_removal_is_refused(self):
+        # The removal guard matches a TRAILING hyphen only: a pattern widened
+        # to any hyphen would refuse real Debian names like these.
+        run, log = self.run_entrypoint(
+            EXTRA_APT_PACKAGES="libssl-dev python3-pip ca-certificates"
+        )
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn(
+            "apt-get install -y --no-install-recommends "
+            "libssl-dev python3-pip ca-certificates",
+            log,
+        )
+        run, log = self.run_entrypoint(EXTRA_APT_PACKAGES="pkg-")
+        self.assertNotEqual(run.returncode, 0, "accepted 'pkg-'")
+        self.assertNotIn("apt-get", log)
+
     def test_a_blank_package_list_installs_nothing(self):
         run, log = self.run_entrypoint(EXTRA_APT_PACKAGES="   ")
         self.assertEqual(run.returncode, 0, run.stderr)

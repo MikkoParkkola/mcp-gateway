@@ -220,23 +220,6 @@ impl MetaMcp {
         Ok(())
     }
 
-    /// `gateway_invoke` — invoke a tool on a backend with full tracing, caching,
-    /// idempotency, error-budget tracking, and predictive prefetch.
-    ///
-    /// `agent_id` identifies the calling agent for audit logging (OWASP ASI03).
-    // Takes the caller context whole rather than five loose parameters: the
-    // authorizer travels with the identity it authorizes, so no call site can
-    // pass one without the other.
-    pub(in crate::gateway::meta_mcp) async fn invoke_tool_in_slot(
-        &self,
-        args: &Value,
-        session_id: Option<&str>,
-        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-    ) -> Result<Value> {
-        let sourced = self.invoke_tool_sourced(args, session_id, caller).await;
-        sourced.map(|sourced| sourced.0)
-    }
-
     /// [`Self::invoke_tool`] plus the result's chain eligibility (A3) and its
     /// upstream chain outcome (inc3 D4).
     pub(in crate::gateway::meta_mcp) async fn invoke_tool_sourced(

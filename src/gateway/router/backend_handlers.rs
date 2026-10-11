@@ -340,60 +340,6 @@ use crate::identity_propagation::audit_subject;
 // route used to carry a hand copy of it).
 use crate::identity_propagation::audit_identity_propagation;
 
-/// Dispatch a direct-route request to a backend inside a notification scope.
-///
-/// The scope is the only reason this wrapper exists: without one,
-/// `mint_progress_token` returns `None` and `Backend::request*` hands the
-/// backend the caller's own `_meta.progressToken` (MIK-7272.SUB.2b / ADR-014
-/// section 2), which is precisely what the mint exists to prevent. This route
-/// has no client-facing stream, so the drained notifications are discarded --
-/// unscoped they were already dropped inside `publish`, so scoping changes
-/// nothing about delivery and buys the substitution.
-async fn dispatch_in_scope(
-    backend: &crate::backend::Backend,
-    method: &str,
-    id: &RequestId,
-    params: Option<Value>,
-    propagated_headers: &[(String, String)],
-    identity_key: Option<&str>,
-) -> crate::Result<JsonRpcResponse> {
-    // Collected and discarded unread: nothing reaches a client, so no screen.
-    let (response, _discarded) = crate::transport::notification_sink::collect(None, async {
-        if propagated_headers.is_empty() && identity_key.is_none() {
-            backend.request(method, params).await
-        } else {
-            backend
-                .request_with_headers(method, params, propagated_headers, identity_key)
-                .await
-        }
-    })
-    .await;
-    // `method` is client-chosen. The backend refuses whatever the dispatched
-    // slot's era removed, before the wire (MIK-7217 OUTBOUND.1, MIK-8186); the
-    // refusal is answered here with the caller's own id, since an `id: null`
-    // error cannot be correlated.
-    if let Err(error) = &response
-        && let Some(message) = crate::backend::removed_method_refusal_message(error)
-    {
-        return Ok(JsonRpcResponse::error(
-            Some(id.clone()),
-            crate::protocol::era::METHOD_NOT_FOUND_CODE,
-            message.to_string(),
-        ));
-    }
-    // MIK-7116.MIN.2: what the backend sent counts as read here, before a
-    // list drain, filter or normalisation drops fields. `tools/call` notes
-    // its result at its gates instead, once they pass.
-    if method != "tools/call"
-        && let Ok(JsonRpcResponse {
-            result: Some(raw), ..
-        }) = &response
-    {
-        crate::security::tenant_reads::note_read(raw);
-    }
-    response
-}
-
 /// Whether a direct-route request reaches task state.
 ///
 /// Every `tasks/*` method, in any letter case, because a backend that matches
@@ -679,7 +625,9 @@ mod direct_caller;
 mod direct_dispatch;
 mod direct_failure;
 mod direct_list;
+mod direct_permit;
 mod direct_preflight;
+mod direct_send;
 mod key_check;
 mod notification_key;
 pub(super) use costs::costs_handler;

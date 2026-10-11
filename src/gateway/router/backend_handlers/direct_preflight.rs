@@ -72,6 +72,37 @@ fn take_nonces(
     Ok((chain_nonce, signing_scope, signs, signing_nonce))
 }
 
+/// MIK-8226 SCAN.4: the meta route's one parse
+/// ([`crate::gateway::meta_mcp_helpers::parse_tool_arguments_cow`]) applied to
+/// a direct `tools/call`: a JSON string becomes its object and is forwarded as
+/// that object; anything that is not an object (or a string of one) is
+/// refused -32602 before anything is sent, as F7b refuses it on the meta
+/// route. Absent `arguments` are left as they are.
+fn parse_direct_arguments(envelope: &mut Envelope, id: &RequestId) -> Result<(), Rejection> {
+    let Some(params) = envelope.params.as_mut() else {
+        return Ok(());
+    };
+    if params.get("arguments").is_none() {
+        return Ok(());
+    }
+    let parsed = match crate::gateway::meta_mcp_helpers::parse_tool_arguments_cow(params) {
+        Ok(std::borrow::Cow::Borrowed(_)) => return Ok(()),
+        Ok(std::borrow::Cow::Owned(parsed)) => parsed,
+        Err(e) => {
+            return Err(build_http_error_response(
+                Some(id.clone()),
+                e.to_rpc_code(),
+                e.to_string(),
+                StatusCode::BAD_REQUEST,
+            ));
+        }
+    };
+    if let Some(map) = params.as_object_mut() {
+        map.insert("arguments".to_owned(), parsed);
+    }
+    Ok(())
+}
+
 /// MIK-7570.ATTEST.1: every method that reaches the backend is attested, on
 /// the same predicate as identity propagation, and BEFORE it: an unattested
 /// call must not mint a per-user credential or write a mint audit row. Also
@@ -140,6 +171,12 @@ pub(super) fn preflight(
         ));
     }
     let (chain_nonce, signing_scope, signs, signing_nonce) = take_nonces(state, envelope, id)?;
+    // MIK-8226 SCAN.4 (with MIK-8351): string-form arguments become the object
+    // the backend would parse, before any check reads them, so the entry scan,
+    // the chokepoint and the send judge one value, as on the meta route.
+    if envelope.method == "tools/call" {
+        parse_direct_arguments(envelope, id)?;
+    }
     // Then this dispatch's own challenge for a chained backend (ASI07 R7).
     let mut challenge = None;
     if let (Some(sent), "tools/call") = (envelope.params.as_mut(), envelope.method.as_str()) {

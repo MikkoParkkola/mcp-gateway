@@ -325,6 +325,34 @@ async fn tools_call_surfaced_tool_on_missing_backend_returns_error() {
     }
 }
 
+/// MIK-8159 N5 (guard): a surfaced call that fails keeps no chain source,
+/// read on the answer before finalisation. The finaliser skips JSON-RPC errors
+/// on its own, so only this field shows whether the named path set a source
+/// on a failure (mutant M2). Green before and after the fix.
+#[tokio::test]
+async fn a_failed_surfaced_call_carries_no_chain_source() {
+    let surfaced = vec![SurfacedToolConfig {
+        server: "nonexistent_server".to_string(),
+        tool: "pinned_tool".to_string(),
+    }];
+    let mm = MetaMcp::new(Arc::new(BackendRegistry::new())).with_surfaced_tools(surfaced);
+    let resp = Box::pin(mm.handle_tools_call(
+        RequestId::Number(1),
+        "pinned_tool",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
+    assert_eq!(
+        resp.chain_source,
+        crate::protocol::ChainSource::NotEligible,
+        "{:?}",
+        resp.error
+    );
+    assert!(resp.chain_upstream.is_none(), "{:?}", resp.error);
+}
+
 #[tokio::test]
 async fn tools_call_unknown_non_surfaced_tool_returns_32601() {
     // GIVEN: no surfaced tools, calling a completely unknown tool

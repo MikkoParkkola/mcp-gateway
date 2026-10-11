@@ -21,6 +21,7 @@ mod token_file;
 #[cfg(test)]
 mod upgrade_path_tests;
 
+pub(crate) use client::OAUTH_AUTHORIZATION_WINDOW;
 pub use client::{OAuthClient, OAuthClientConfig};
 pub use metadata::{AuthorizationServerMetadata, IssuerSource, ProtectedResourceMetadata};
 pub use storage::{TokenInfo, TokenStorage};

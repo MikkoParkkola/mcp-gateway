@@ -138,7 +138,7 @@ async fn a_refusing_gate_ends_the_caller_as_cancelled() {
 async fn a_joiner_of_a_failed_login_gets_its_outcome() {
     let dir = tempfile::tempdir().unwrap();
     let gate = Arc::new(LoginGate::default());
-    let Begin::Lead(lead) = gate.begin(None) else {
+    let Begin::Lead(lead) = gate.begin(None, None) else {
         panic!("no login in flight, so the test leads");
     };
     let client = client(dir.path(), "https://as.example", &[]).with_login_gate(gate);
@@ -160,7 +160,7 @@ async fn a_joiner_of_a_failed_login_gets_its_outcome() {
 async fn a_joiner_of_a_login_that_stored_no_token_gets_an_oauth_error() {
     let dir = tempfile::tempdir().unwrap();
     let gate = Arc::new(LoginGate::default());
-    let Begin::Lead(lead) = gate.begin(None) else {
+    let Begin::Lead(lead) = gate.begin(None, None) else {
         panic!("no login in flight, so the test leads");
     };
     let client = client(dir.path(), "https://as.example", &[]).with_login_gate(gate);
@@ -182,7 +182,7 @@ async fn a_joiner_of_a_login_that_stored_a_token_takes_it_up() {
     let dir = tempfile::tempdir().unwrap();
     let issuer = "https://as.example";
     let gate = Arc::new(LoginGate::default());
-    let Begin::Lead(lead) = gate.begin(None) else {
+    let Begin::Lead(lead) = gate.begin(None, None) else {
         panic!("no login in flight, so the test leads");
     };
     let client = client(dir.path(), issuer, &[]).with_login_gate(gate);

@@ -108,6 +108,7 @@ impl Backend {
             connected_unpinned: std::sync::atomic::AtomicBool::new(false),
             login_gate: Arc::default(),
             destination: std::sync::OnceLock::new(),
+            started: std::sync::OnceLock::new(),
             #[cfg(test)]
             mark_window_gate: parking_lot::Mutex::new(None),
             #[cfg(test)]
@@ -216,7 +217,7 @@ impl Backend {
             // MIK-7982 C2: a non-interactive caller (the health probe) never
             // queues behind a start in flight, which may be a login holding
             // this lock for minutes; it answers at once instead.
-            let _start_guard = if crate::oauth::login_gate::interactive() {
+            let start_guard = if crate::oauth::login_gate::interactive() {
                 entry.start_lock.lock().await
             } else {
                 entry
@@ -244,7 +245,12 @@ impl Backend {
 
             // Start transport for this slot, erased (see `StartFuture`).
             let start: StartFuture<'_> = Box::pin(self.start_entry(key, &entry));
-            let transport = crate::oauth::login_gate::set_out(set_out, start).await?;
+            // The start's login carries the cohort captured before it queued,
+            // so a failure recorded after the check above is still shared at
+            // `begin` (MIK-8339).
+            let transport =
+                crate::oauth::login_gate::set_out_with_cohort(set_out, Arc::clone(&cohort), start)
+                    .await?;
 
             // Reconcile: did the evictor remove this exact entry while we
             // were building its transport?
@@ -254,6 +260,13 @@ impl Backend {
                 // under this slot's `start_lock`; see `Backend::resolve_era`
                 // for the lock order that imposes.
                 self.resolve_era_after_start(&transport, &entry).await;
+                // Announced only after the slot is free, so a listener that
+                // acts on it (a pending upstream cancel, MIK-8347) is not
+                // refused by this very start.
+                drop(start_guard);
+                if matches!(key, PoolKey::Shared) {
+                    self.announce_started();
+                }
                 return Ok(transport);
             }
             // Lost the race: `reconcile_after_start` already closed the
