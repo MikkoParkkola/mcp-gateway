@@ -42,6 +42,7 @@ use crate::protocol::meta::Declared;
 use crate::protocol::mrtr::RetryFields;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
+use super::refund_witness::RefundWitness;
 use super::{InvokeScope, MetaMcp};
 
 mod helpers;
@@ -167,22 +168,25 @@ impl MetaMcp {
     ///
     /// Called after every existing authorization, admin and firewall check and
     /// before task admission, so a refusal here has cost the caller nothing: no
-    /// task handle, no backend call, no reserved key.
-    pub(crate) async fn confirm_destructive_task(
+    /// task handle, no backend call, no reserved key. Carries the call's refund
+    /// witness (MIK-8353): handed back on every arm that consumed nothing,
+    /// spent where a grant is spent, and never handed back with `Granted`.
+    pub(crate) async fn confirm_destructive_task_with(
         &self,
         request: &TaskConfirmationRequest<'_>,
-    ) -> TaskConfirmation {
+        witness: Option<RefundWitness>,
+    ) -> (TaskConfirmation, Option<RefundWitness>) {
         // Not task-augmented, not modern, not surfaced, or a surfaced tool the
         // dispatch slot knows to be harmless: this gate has nothing to say. The
         // legacy gate still governs the built-in meta-tools it always governed.
         let Some(task) = request.task else {
-            return TaskConfirmation::NotRequired;
+            return (TaskConfirmation::NotRequired, witness);
         };
         if !request.is_modern {
-            return TaskConfirmation::NotRequired;
+            return (TaskConfirmation::NotRequired, witness);
         }
         let (backend_id, unclassified) = match self.classify_surfaced(request) {
-            None => return TaskConfirmation::NotRequired,
+            None => return (TaskConfirmation::NotRequired, witness),
             Some(Classification::Destructive(server)) => (server, false),
             Some(Classification::Unclassified(server)) => (server, true),
             // A grant this gate issued is honoured even if the tool now reads
@@ -191,7 +195,7 @@ impl MetaMcp {
             // the wrong purpose downstream. Any other state is not ours.
             Some(Classification::Harmless(server)) => {
                 if !self.carries_confirmation_grant(request) {
-                    return TaskConfirmation::NotRequired;
+                    return (TaskConfirmation::NotRequired, witness);
                 }
                 (server, false)
             }
@@ -200,7 +204,7 @@ impl MetaMcp {
         // challenge here would ask a question whose answer could never be
         // admitted.
         let Some(key) = request.retry.idempotency_key.as_deref() else {
-            return TaskConfirmation::NotRequired;
+            return (TaskConfirmation::NotRequired, witness);
         };
 
         // The sealed binding and the caller the slot is charged to (MIK-8293):
@@ -209,11 +213,14 @@ impl MetaMcp {
         // route, so a confirmation shares the caller's one cap.
         let (Some(fingerprint), Some(quota)) = (request.principal.clone(), request.quota.clone())
         else {
-            return refuse(
-                request,
-                "unbindable_caller",
-                -32003,
-                "this destructive call cannot be confirmed for a caller this gateway cannot name",
+            return (
+                refuse(
+                    request,
+                    "unbindable_caller",
+                    -32003,
+                    "this destructive call cannot be confirmed for a caller this gateway cannot name",
+                ),
+                witness,
             );
         };
         let digest = operation_digest(request.tool_name, request.arguments, task, key);
@@ -240,27 +247,32 @@ impl MetaMcp {
             (None, None) => {
                 if Self::already_admitted(request, key) {
                     record("admitted_replay");
-                    return TaskConfirmation::Granted(cleared(request.retry));
+                    return (TaskConfirmation::Granted(cleared(request.retry)), None);
                 }
-                self.challenge(
-                    request,
-                    &backend_id,
-                    unclassified,
-                    (fingerprint, &quota),
-                    digest,
-                )
-                .await
+                let asked = self
+                    .challenge(
+                        request,
+                        &backend_id,
+                        unclassified,
+                        (fingerprint, &quota),
+                        digest,
+                    )
+                    .await;
+                (asked, witness)
             }
             // Answers with no grant. Not a fresh call — it claims to be
             // continuing one — and not a retry this gateway can place.
-            (None, Some(_)) => refuse(
-                request,
-                "no_grant",
-                -32602,
-                "this destructive call carries answers but no confirmation grant",
+            (None, Some(_)) => (
+                refuse(
+                    request,
+                    "no_grant",
+                    -32602,
+                    "this destructive call carries answers but no confirmation grant",
+                ),
+                witness,
             ),
             (Some(token), _) => {
-                self.redeem(request, token, &fingerprint, &digest, key)
+                self.redeem(request, token, &fingerprint, &digest, key, witness)
                     .await
             }
         }
@@ -464,7 +476,8 @@ impl MetaMcp {
         fingerprint: &str,
         digest: &str,
         key: &str,
-    ) -> TaskConfirmation {
+        witness: Option<RefundWitness>,
+    ) -> (TaskConfirmation, Option<RefundWitness>) {
         let opened =
             clock_now().and_then(|now| Ok((self.continuation.keyring().open(token, now)?, now)));
         let (payload, now) = match opened {
@@ -472,7 +485,7 @@ impl MetaMcp {
             Err(error) => {
                 let tool = request.tool_name;
                 warn!(tool, %error, "Confirmation grant refused");
-                return refuse_grant(request, "not_authentic");
+                return (refuse_grant(request, "not_authentic"), witness);
             }
         };
         // Domain before bindings: an envelope minted to continue a backend
@@ -485,7 +498,7 @@ impl MetaMcp {
                 tool = request.tool_name,
                 "Grant from another domain presented as a confirmation"
             );
-            return refuse_grant(request, "wrong_purpose");
+            return (refuse_grant(request, "wrong_purpose"), witness);
         }
         // Owner and operation together, in constant time, by the same method
         // the backend path uses.
@@ -494,7 +507,7 @@ impl MetaMcp {
                 tool = request.tool_name,
                 "Confirmation grant does not belong to this caller and call"
             );
-            return refuse_grant(request, "not_bound");
+            return (refuse_grant(request, "not_bound"), witness);
         }
         // The gateway's own key, derived from the sealed `jti`. A client that
         // did not receive the challenge cannot name it.
@@ -521,7 +534,7 @@ impl MetaMcp {
             // The gate working, not the caller misbehaving: kept out of the
             // client failure accounting the dispatcher does.
             response.confirmation_refusal = true;
-            return TaskConfirmation::Answer(Box::new(response));
+            return (TaskConfirmation::Answer(Box::new(response)), witness);
         }
 
         // The retry the caller already ran. Exact-bound and read-only: the same
@@ -540,7 +553,7 @@ impl MetaMcp {
         // carry a fresh key and run the operation twice.
         if Self::already_admitted(request, key) {
             record("committed_replay");
-            return TaskConfirmation::Granted(cleared(request.retry));
+            return (TaskConfirmation::Granted(cleared(request.retry)), None);
         }
 
         // MRTR.6, for this domain: the exchange this grant names must still be
@@ -557,7 +570,13 @@ impl MetaMcp {
                 tool = request.tool_name,
                 "Confirmation for an exchange this replica no longer holds"
             );
-            return refuse_grant(request, "hold_gone");
+            return (refuse_grant(request, "hold_gone"), witness);
+        }
+        // The spend acts: from here this call may never give its nonce back
+        // (MIK-8353), whatever it answers. Dropped before the await, so a
+        // cancelled consume keeps it spent too.
+        if let Some(witness) = witness {
+            witness.spend();
         }
         if !self
             .continuation
@@ -565,11 +584,14 @@ impl MetaMcp {
             .consume(&payload.jti, payload.expires_at, now)
             .await
         {
+            // The witness is already spent, so this refusal keeps the nonce
+            // spent even when the ledger was only full and nothing was
+            // consumed: a refund lost, fail closed (MIK-8353).
             warn!(
                 tool = request.tool_name,
                 "Confirmation grant already spent or ledger at capacity"
             );
-            return refuse_grant(request, "spent");
+            return (refuse_grant(request, "spent"), None);
         }
         self.continuation
             .in_flight()
@@ -577,7 +599,7 @@ impl MetaMcp {
             .await;
 
         record("granted");
-        TaskConfirmation::Granted(cleared(request.retry))
+        (TaskConfirmation::Granted(cleared(request.retry)), None)
     }
 
     /// Whether this exact operation already owns an admitted task under this
