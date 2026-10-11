@@ -103,8 +103,9 @@ thread_local! {
     static GIVEN_BACK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many nonces this thread has given back so far.
-#[cfg(test)]
+/// How many nonces this thread has given back so far. Read only by the
+/// firewall-gated route-check rows (STDIO-SETTLE).
+#[cfg(all(test, feature = "firewall"))]
 pub(crate) fn given_back_on_this_thread() -> usize {
     GIVEN_BACK.with(std::cell::Cell::get)
 }
