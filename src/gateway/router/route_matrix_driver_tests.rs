@@ -14,6 +14,12 @@ use serde_json::Value;
 use super::direct_guards_fixture::{Answer, post_direct, post_meta_invoke};
 use crate::gateway::meta_mcp::MetaMcp;
 
+#[path = "route_matrix_driver_step_tests.rs"]
+mod step;
+pub(crate) use step::{
+    playbook_as, playbook_budgeted, playbook_exposed, playbook_minting, playbook_then_task,
+};
+
 /// What one call through a route produced.
 pub(crate) struct Sent {
     /// The JSON-RPC body the client got.

@@ -52,7 +52,7 @@ impl Gateway {
             let mut sink = protocol_telemetry_sink
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            Self::parse_and_observe(&request, session_id, sink.as_mut())
+            Self::parse_and_observe(&request, (session_id, client.serving), sink.as_mut())
         };
         let (id, method, params, request_shape) = match parsed {
             Ok(parsed) => parsed,
@@ -121,7 +121,7 @@ impl Gateway {
                         client.tasks,
                         JsonRpcResponse::success_serialized(
                             id,
-                            meta_mcp.discover_document(client.modern),
+                            meta_mcp.discover_document(client.discover_lists_modern()),
                         ),
                     ),
                     "initialize" => stdio_tasks::advertised(
@@ -285,7 +285,7 @@ impl Gateway {
     /// carries an already-serialized error response.
     fn parse_and_observe<'r>(
         request: &'r serde_json::Value,
-        session_id: &str,
+        (session_id, serving): (&str, super::stdio_single::ModernServing),
         protocol_telemetry_sink: Option<
             &mut crate::protocol_revision_telemetry::DurableTelemetrySink,
         >,
@@ -338,8 +338,31 @@ impl Gateway {
             request_shape.declared_log_level(),
         );
 
-        // Notifications have no id — send no response
+        // The refusals `/mcp` runs from the body alone, in its order: a revision
+        // this build does not serve, then a method whose client capability was
+        // not declared, then a method the revision removed (MIK-8368, MIK-8380).
+        // The header checks are HTTP-only: stdio carries no headers.
+        let modern_serving = serving == super::stdio_single::ModernServing::Enabled;
+
+        // Notifications have no id — send no response. One exception: a MODERN
+        // request that names a method the revision removed and carries an id is
+        // a request, and HTTP refuses it, so it is refused here too (version
+        // first). Every other notification stays silent, whatever its id, era
+        // or revision. HTTP differs: it runs every check before its 202.
         if method.starts_with("notifications/") {
+            if let (Some(id), crate::protocol::meta::RequestShape::Modern(fields)) =
+                (id.as_ref(), &request_shape)
+                && let Some(removed) =
+                    crate::protocol::modern_refusal::removed_method_refusal(Some(id), &method)
+            {
+                let refusal = crate::protocol::modern_refusal::unsupported_modern_version(
+                    Some(id),
+                    fields,
+                    modern_serving,
+                )
+                .unwrap_or(removed);
+                return Err(Some(refusal.to_value_lossy()));
+            }
             debug!(notification = %method, "stdio: notification (no response)");
             return Err(None);
         }
@@ -349,6 +372,22 @@ impl Gateway {
             let resp = JsonRpcResponse::error(None, -32600, "Missing id");
             return Err(Some(resp.to_value_lossy()));
         };
+
+        // One function answers both transports. Legacy and malformed shapes are
+        // not judged here, as before.
+        if let crate::protocol::meta::RequestShape::Modern(fields) = &request_shape
+            && let Some(rpc) = crate::protocol::modern_refusal::unsupported_modern_version(
+                Some(&id),
+                fields,
+                modern_serving,
+            )
+            .or_else(|| {
+                crate::protocol::modern_refusal::modern_method_refusal(Some(&id), fields, &method)
+                    .map(|(rpc, _)| rpc)
+            })
+        {
+            return Err(Some(rpc.to_value_lossy()));
+        }
 
         Ok((id, method, params, request_shape))
     }

@@ -90,18 +90,20 @@ async fn f4_a_retry_whose_answers_break_the_firewall_is_refused_at_dispatch() {
 #[tokio::test]
 async fn f6_a_playbook_step_carrying_a_blocked_pattern_is_refused_at_dispatch() {
     use super::direct_guards_fixture::{fixture_firewalled_audited, send};
-    let playbook = format!(
-        "name: hostile\ndescription: one step the firewall blocks\non_error: continue\n\
+    let playbook = "name: hostile\ndescription: one step the firewall blocks\non_error: continue\n\
          steps:\n  - name: read\n    server: alpha\n    tool: read\n    arguments:\n      \
-         cmd: {BLOCKED:?}\n"
-    );
+         cmd: $inputs.cmd\n";
     let dir = tempfile::tempdir().expect("tempdir");
     let audit = dir.path().join("audit.jsonl");
     let fx = fixture_firewalled_audited(Answer::Ok, audit.clone()).await;
     let mut engine = crate::playbook::PlaybookEngine::new();
-    engine.register(serde_yaml::from_str(&playbook).expect("the playbook parses"));
+    engine.register(serde_yaml::from_str(playbook).expect("the playbook parses"));
     fx.state.meta_mcp.set_playbook_engine(engine);
-    let params = json!({"name": "gateway_run_playbook", "arguments": {"name": "hostile"}});
+    // The blocked text arrives through interpolation, so the route-stage scan of
+    // the step's template (MIK-8362) sees nothing; only the dispatch rescan of
+    // the rendered bytes can refuse it.
+    let params = json!({"name": "gateway_run_playbook",
+        "arguments": {"name": "hostile", "arguments": {"cmd": BLOCKED}}});
     let (_, ran) = send(&fx, "/mcp", "k-std", "tools/call", params, None).await;
     let report: Value = ran["result"]["content"][0]["text"]
         .as_str()

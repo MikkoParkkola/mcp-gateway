@@ -34,10 +34,15 @@ fn parse(text: &str) -> Result<Duration, String> {
     };
     let n = number
         .parse::<u64>()
-        .map_err(|e| format!("invalid duration {text:?}: {e}"))?;
+        // The text is not echoed: a value typed into the wrong field may be a
+        // secret (MIK-8375).
+        .map_err(|_| {
+            "invalid duration: expected a whole number and a unit (ms, s, m or h), such as 30s"
+                .to_owned()
+        })?;
     scale(n)
         .filter(|d| *d <= crate::duration_bound::MAX_DURATION)
-        .ok_or_else(|| crate::duration_bound::too_long(&format!("duration {text:?}")))
+        .ok_or_else(|| crate::duration_bound::too_long("the duration"))
 }
 
 /// Serialize `Duration` to a human-readable string (e.g., `"30s"`).

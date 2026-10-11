@@ -90,7 +90,7 @@ impl<'v> Delivered<'v> {
     /// answer alone: forms a delivery records, so a step whose copy the answer
     /// splits keeps its run-together fingerprints. The forms are built when
     /// first needed and only their hashes kept, so the bound is unchanged.
-    pub(super) fn kgrams(&self, detector: &CollusionDetector) -> &HashSet<u64> {
+    pub(crate) fn kgrams(&self, detector: &CollusionDetector) -> &HashSet<u64> {
         self.found.get_or_init(|| {
             let values = &self.all[..self.values_len.min(self.all.len())];
             let mut forms = vec![values.join("\n")];

@@ -77,13 +77,13 @@ refused with `isError: true`; relax it with `input_schema_enforcement: standard`
 refused). A missing `env:` variable does not stop startup. Scrape with a dedicated job or the \
 chart's ServiceMonitor, never a generic annotation-driven one.",
     "The inbound WebSocket listener, which only echoed frames, is removed: `server.ws_port` is \
-ignored with a warning and no listener opens. Clients connect via stdio or HTTP (`POST /mcp`).",
+refused at load (`mcp-gateway upgrade` deletes it) and no listener opens. Clients connect via stdio or HTTP (`POST /mcp`).",
     "More than one replica is refused while state lives in one process: `server.replicas` \
 (default 1) above 1 FAILS STARTUP with the modern protocol on, or with the key server or accounts \
 enabled. The Helm chart now defaults `replicaCount` to 1 and fails the render on the same rules. \
 Without the chart, set `server.replicas` to the processes you run: 1 is a declaration, not a detection.",
-    "`server.request_timeout`, never enforced, is removed and ignored with a warning; bound \
-calls with per-backend `timeout`. `server.max_body_size` is enforced on every route: an oversize \
+    "`server.request_timeout`, never enforced, is removed: refused at load, deleted by \
+`mcp-gateway upgrade`; bound calls with per-backend `timeout`. `server.max_body_size` is enforced on every route: an oversize \
 body on `/mcp` gets HTTP 413, JSON-RPC -32600 (was 400, -32700), and webhooks now accept up to it.",
     "With auth on, the audit log (`security.transparency_log`) is on unless you write \
 `enabled: false`, which FAILS the load, and a failed append refuses calls with 503 and \
