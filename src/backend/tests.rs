@@ -25,6 +25,7 @@ mod era_probe;
 mod login_detach;
 mod login_join;
 mod login_probe;
+pub(crate) mod login_server;
 pub(crate) mod login_window;
 mod metric_label;
 mod per_identity_catalogue;

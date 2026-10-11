@@ -456,3 +456,112 @@ async fn a_login_waiting_on_a_held_credential_lock_ends_at_its_bound() {
         cohort.outcome()
     );
 }
+
+/// The started backend's OAuth client, as a login holding it would be.
+fn oauth_client_of(backend: &Backend) -> Arc<tokio::sync::Mutex<crate::oauth::OAuthClient>> {
+    backend
+        .last_oauth_client
+        .lock()
+        .clone()
+        .expect("premise: a start built an OAuth client")
+}
+
+/// LOGINDL.10: a non-interactive caller (the health probe's kind) whose
+/// client mutex a login holds gets `AuthorizationRequired` at once, and never
+/// detaches a token step (MIK-7982 C2 kept).
+#[tokio::test]
+async fn a_non_interactive_caller_never_detaches_onto_a_held_client() {
+    let (backend, _browser, _dir) = approved_start(Upstream::Plain, Duration::from_secs(5)).await;
+    super::token_lapse::lapse(&backend).await;
+    let client = oauth_client_of(&backend);
+    let held = client.lock().await;
+    // Counted after setup: only this caller could move it.
+    let before = backend.login_gate.detached_for_test();
+
+    let outcome = within(
+        "the non-interactive request",
+        crate::oauth::login_gate::non_interactive(backend.request("tools/list", None)),
+    )
+    .await;
+    drop(held);
+
+    let error = outcome.expect_err("the client is held");
+    assert!(
+        variant(&error).starts_with("AuthorizationRequired"),
+        "a non-interactive caller answers at once: {error:?}"
+    );
+    assert_eq!(
+        backend.login_gate.detached_for_test(),
+        before,
+        "a non-interactive caller detached a token step"
+    );
+}
+
+/// LOGINDL.15: a detached token step still waiting for the client (before it
+/// leads or joins any login) observes a restart: its caller ends
+/// `AuthorizationCancelled` instead of waiting out its own bound.
+#[tokio::test]
+async fn a_restart_ends_a_detached_step_waiting_for_its_client() {
+    let (backend, _browser, _dir) = approved_start(Upstream::Plain, Duration::from_secs(30)).await;
+    super::token_lapse::lapse(&backend).await;
+    let client = oauth_client_of(&backend);
+    let held = client.lock().await;
+    let before = backend.login_gate.detached_for_test();
+
+    let call = spawn_call(&backend);
+    within("the call's token step to detach", async {
+        while backend.login_gate.detached_for_test() == before {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    let restart = {
+        let backend = Arc::clone(&backend);
+        tokio::spawn(async move { backend.force_restart().await })
+    };
+    let called = within("the call", call).await.expect("call task");
+    restart.abort();
+    drop(held);
+
+    let error = called.expect_err("the restart revoked the waiting step");
+    assert!(
+        variant(&error).starts_with("AuthorizationCancelled"),
+        "a revoked step waiting for its client ends Cancelled: {error:?}"
+    );
+}
+
+/// LOGINDL.17: a detached step whose own bound passes before it leads or
+/// joins a login, with no login of its cohort in flight and none recorded,
+/// is the backend's timeout, not `AuthorizationIncomplete` (reserved for a
+/// login that actually ran).
+#[tokio::test]
+async fn a_detached_steps_bound_with_no_login_is_a_backend_timeout() {
+    let (backend, _browser, _dir) =
+        approved_start(Upstream::Plain, Duration::from_secs(3600)).await;
+    super::token_lapse::lapse(&backend).await;
+    let client = oauth_client_of(&backend);
+    let held = client.lock().await;
+    let before = backend.login_gate.detached_for_test();
+
+    let call = spawn_call(&backend);
+    within("the call's token step to detach", async {
+        while backend.login_gate.detached_for_test() == before {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    // The step waits on a mutex this test holds: no I/O is left to race.
+    tokio::time::pause();
+    let called = tokio::time::timeout(Duration::from_secs(301), call).await;
+    tokio::time::resume();
+    drop(held);
+
+    let error = called
+        .expect("the step's own bound ends it")
+        .expect("call task")
+        .expect_err("no token while the client is held");
+    assert!(
+        matches!(error, Error::BackendTimeout(_)),
+        "a bound with no login in flight is the backend's timeout: {error:?}"
+    );
+}
