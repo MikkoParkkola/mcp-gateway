@@ -58,7 +58,9 @@ impl EventsHub {
     /// safety net that no row relies on.
     pub(super) async fn sweep_lifecycle(&self) {
         // Gone subscriptions take their rate and failure state along.
-        let held = self.store.live_subscription_ids(chrono::Utc::now());
+        let held = self
+            .store
+            .live_subscription_ids(crate::clock::utc_or_epoch());
         self.runtime.rates.retain(&held);
         self.runtime.failures.retain(&held);
         self.reconcile_stops().await;
@@ -75,7 +77,7 @@ impl EventsHub {
     /// worker's tick rather than the sweep (design r3 D4, L5); expiry
     /// settlement still buries their records and removes the rows.
     pub(super) async fn stop_expired_keys(&self) {
-        let now = chrono::Utc::now();
+        let now = crate::clock::utc_or_epoch();
         let (lapsed, removed) = {
             let mut seen = self.runtime.expiry_seen.lock();
             let removals = self.store.removals();

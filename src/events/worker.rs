@@ -70,7 +70,7 @@ impl EventsHub {
             // Removed: the record went with it and this settles nothing. Not
             // removed (a store error, or a refresh re-bound the row): the
             // record goes back to pending and the next attempt re-checks.
-            let next = Utc::now() + REFUSAL_RETRY;
+            let next = crate::clock::utc_or_epoch() + REFUSAL_RETRY;
             let retry = Settle::Retry {
                 next,
                 status: "access_revoked",
@@ -97,7 +97,7 @@ impl EventsHub {
             self.settle(services, &record, quiet_dead(reason)).await;
             return;
         }
-        if self.overdue(&record, Utc::now()) {
+        if self.overdue(&record, crate::clock::utc_or_epoch()) {
             if !self.recorded_or_retry(services, &ctx, "exhausted").await {
                 return;
             }
@@ -256,7 +256,7 @@ impl EventsHub {
         }
         // Past its bounds after the wait for the record: dead, unsent, and the
         // record just written says how that attempt ended.
-        if self.overdue(record, Utc::now()) {
+        if self.overdue(record, crate::clock::utc_or_epoch()) {
             services.audit_outcome(&ended("exhausted")).await;
             self.settle(services, record, quiet_dead(DeadReason::Exhausted))
                 .await;
@@ -393,7 +393,7 @@ impl EventsHub {
     /// refused its record: an audit outage, not a send (MIK-7944).
     async fn retry_unsent(&self, services: &Services, record: &OutboxRecord) {
         let retry = Settle::Unsent {
-            next: Utc::now() + REFUSAL_RETRY,
+            next: crate::clock::utc_or_epoch() + REFUSAL_RETRY,
             status: "audit_unavailable",
         };
         self.settle(services, record, retry).await;
@@ -414,7 +414,15 @@ impl EventsHub {
             _ => None,
         };
         let settled = self
-            .blocking(move |store| store.settle(&id, created_at, outcome, Utc::now(), policy))
+            .blocking(move |store| {
+                store.settle(
+                    &id,
+                    created_at,
+                    outcome,
+                    crate::clock::utc_or_epoch(),
+                    policy,
+                )
+            })
             .await;
         let (evicted, buried) = settled.map_or((Vec::new(), false), |s| (s.evicted, s.buried));
         #[cfg(test)]
@@ -493,7 +501,7 @@ impl EventsHub {
         answer: &Result<super::client::Answer, CallbackFailure>,
     ) -> (Settle, &'static str) {
         let policy = self.retry_policy();
-        let now = Utc::now();
+        let now = crate::clock::utc_or_epoch();
         let first = record.first_attempt_at.unwrap_or(now);
         judge(
             answer,
@@ -634,7 +642,7 @@ fn grant(record: &OutboxRecord) -> Option<&str> {
 /// Pending again at once, the attempt not counted: nothing was sent.
 fn unsent_now(status: &'static str) -> Settle {
     Settle::Unsent {
-        next: Utc::now(),
+        next: crate::clock::utc_or_epoch(),
         status,
     }
 }
@@ -642,14 +650,14 @@ fn unsent_now(status: &'static str) -> Settle {
 /// Held unsent after a refused send admission; retried later (MIK-7907).
 fn unsent_later(status: &'static str) -> Settle {
     Settle::Unsent {
-        next: Utc::now() + REFUSAL_RETRY,
+        next: crate::clock::utc_or_epoch() + REFUSAL_RETRY,
         status,
     }
 }
 
 fn refusal_retry(status: &'static str) -> Settle {
     Settle::Retry {
-        next: Utc::now() + REFUSAL_RETRY,
+        next: crate::clock::utc_or_epoch() + REFUSAL_RETRY,
         status,
     }
 }

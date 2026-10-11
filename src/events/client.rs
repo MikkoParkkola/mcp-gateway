@@ -169,7 +169,7 @@ impl CallbackClient {
         read: ReadBody,
     ) -> Result<Answer, (CallbackFailure, bool)> {
         self.check_literal(url).map_err(|failure| (failure, true))?;
-        let timestamp = chrono::Utc::now().timestamp().to_string();
+        let timestamp = crate::clock::utc_or_epoch().timestamp().to_string();
         let signature = sign(keys, webhook_id, &timestamp, &body);
         let mut response = self
             .http
@@ -188,7 +188,7 @@ impl CallbackClient {
             .headers()
             .get(reqwest::header::RETRY_AFTER)
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| retry_after(v, chrono::Utc::now()));
+            .and_then(|v| retry_after(v, crate::clock::utc_or_epoch()));
         let mut answer = Answer {
             status: status.as_u16(),
             retry_after,

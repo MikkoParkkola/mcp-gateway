@@ -171,7 +171,7 @@ impl EventsHub {
             &data,
             &services.provenance(&event.backend, &event.name),
         );
-        let now = Utc::now();
+        let now = crate::clock::utc_or_epoch();
         let record = OutboxRecord {
             v: 1,
             event_id: id,
@@ -253,7 +253,7 @@ impl EventsHub {
     /// cause that made it (design r3 G3). `false` when a subscription could not be removed.
     pub(crate) fn withdraw_rows(&self, judged: &[Subscription]) -> bool {
         let tail = super::tail_policy(&self.config);
-        let now = Utc::now();
+        let now = crate::clock::utc_or_epoch();
         #[cfg(test)]
         self.before_withdraw.pause_blocking();
         let mut all_removed = true;
@@ -427,9 +427,9 @@ impl EventsHub {
     /// that could not be written is logged and written by the next refresh.
     fn hold_unserved(&self, shapes: &std::collections::BTreeMap<String, super::reload::Shape>) {
         let judge = |sub: &Subscription| super::reload::judge(sub, shapes);
-        if let Err(error) = self
-            .store
-            .apply_holds(&judge, Utc::now(), self.hold_bound())
+        if let Err(error) =
+            self.store
+                .apply_holds(&judge, crate::clock::utc_or_epoch(), self.hold_bound())
         {
             tracing::warn!(%error, "events: a held subscription's stamp was not written; retried at the next refresh");
         }
@@ -457,7 +457,7 @@ impl EventsHub {
         let snapshot = refused.clone();
         let removed = self
             .blocking(move |store| {
-                store.remove_where(&snapshot.id, Utc::now(), tail, |row| {
+                store.remove_where(&snapshot.id, crate::clock::utc_or_epoch(), tail, |row| {
                     // A re-grant under the same id is not the row judged.
                     row.incarnation == snapshot.incarnation
                         && row.credential_principal == snapshot.credential_principal

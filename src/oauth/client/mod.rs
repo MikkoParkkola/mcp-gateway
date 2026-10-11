@@ -606,10 +606,7 @@ impl OAuthClient {
             return false;
         };
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = crate::clock::unix_secs().unwrap_or(0);
 
         let remaining = expires_at.saturating_sub(now);
 

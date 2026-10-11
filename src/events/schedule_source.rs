@@ -509,7 +509,7 @@ impl EventsHub {
         let ticker = Arc::downgrade(&source);
         tokio::spawn(async move {
             loop {
-                let now = Utc::now();
+                let now = crate::clock::utc_or_epoch();
                 let next = now
                     .duration_trunc(crate::duration_bound::delta!(minutes, 1))
                     .unwrap_or(now)
@@ -520,7 +520,10 @@ impl EventsHub {
                     return;
                 };
                 // Off the runtime: a minute with many due timers syncs a file each.
-                let joined = tokio::task::spawn_blocking(move || source.tick_at(Utc::now())).await;
+                let joined = tokio::task::spawn_blocking(move || {
+                    source.tick_at(crate::clock::utc_or_epoch());
+                })
+                .await;
                 if let Err(error) = joined {
                     tracing::warn!(%error, "events: schedule tick task failed");
                 }

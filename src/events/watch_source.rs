@@ -20,7 +20,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
-use chrono::Utc;
 use serde_json::{Map, Value, json};
 
 use super::fanout::SourceEvent;
@@ -748,7 +747,10 @@ impl Run {
         };
         let mut fields = Map::new();
         fields.insert("action".into(), "events.watch_backoff".into());
-        fields.insert("timestamp".into(), Utc::now().to_rfc3339().into());
+        fields.insert(
+            "timestamp".into(),
+            crate::clock::utc_or_epoch().to_rfc3339().into(),
+        );
         fields.insert("event_name".into(), self.name.clone().into());
         fields.insert("failures".into(), failures.into());
         let envelope = crate::security::audit::AuditEnvelope::gateway();

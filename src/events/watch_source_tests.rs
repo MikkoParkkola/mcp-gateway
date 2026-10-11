@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use super::super::fanout::SourceEvent;
 use super::super::{EventSource, EventsHub};
 use super::*;
+use chrono::Utc;
 
 /// A scripted gateway: its catalogue, who may invoke, and each poll's answer.
 #[derive(Default)]

@@ -75,7 +75,7 @@ impl Runtime {
             backends: std::sync::OnceLock::new(),
             reconciled: AtomicBool::new(false),
             expiry_seen: Mutex::new(ExpirySeen {
-                at: chrono::Utc::now(),
+                at: crate::clock::utc_or_epoch(),
                 next: None,
                 removals: 0,
                 generation: u64::MAX,

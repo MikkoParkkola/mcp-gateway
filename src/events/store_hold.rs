@@ -130,7 +130,9 @@ impl Store {
         let legacy: Vec<Subscription> = state
             .subs
             .values()
-            .filter(|s| s.name == name && s.watch_class.is_none() && s.live(Utc::now()))
+            .filter(|s| {
+                s.name == name && s.watch_class.is_none() && s.live(crate::clock::utc_or_epoch())
+            })
             .cloned()
             .collect();
         for mut row in legacy {

@@ -3,8 +3,6 @@
 //! MIK-8122: a watch that is not watchable now is held, never withdrawn.
 //! A row's recorded class governs its poller, hold and resume.
 
-use chrono::Utc;
-
 use serde_json::Value;
 
 use super::super::store::Store;
@@ -79,9 +77,10 @@ impl Run {
                 ..Judged::default()
             })
         };
-        if let Err(error) =
-            written.and_then(|()| hub.store.apply_holds(&judge, Utc::now(), hub.hold_bound()))
-        {
+        if let Err(error) = written.and_then(|()| {
+            hub.store
+                .apply_holds(&judge, crate::clock::utc_or_epoch(), hub.hold_bound())
+        }) {
             tracing::warn!(%error, "events: a watch hold stamp was not written; retried at the next poll");
         }
     }
@@ -164,7 +163,9 @@ impl WatchSource {
                 ..Judged::default()
             })
         };
-        if let Err(error) = store.apply_holds(&judge, Utc::now(), hub.hold_bound()) {
+        if let Err(error) =
+            store.apply_holds(&judge, crate::clock::utc_or_epoch(), hub.hold_bound())
+        {
             tracing::warn!(%error, "events: a watch hold stamp was not written; retried at the next replay");
         }
     }

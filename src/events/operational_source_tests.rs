@@ -12,6 +12,7 @@ use super::super::{EventSource, EventsHub, LiveCredentials, Services};
 use super::*;
 use crate::config::{ApiKeyConfig, ApiKeyKind, Config, api_key_digest_spec};
 use crate::config_reload::LiveConfig;
+use chrono::Utc;
 
 fn key(name: &str, secret: &str, admin: bool) -> ApiKeyConfig {
     ApiKeyConfig {

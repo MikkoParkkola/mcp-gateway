@@ -9,8 +9,6 @@ use serde_json::{Map, Value, json};
 
 use std::sync::Arc;
 
-use chrono::Utc;
-
 use super::fanout::SourceEvent;
 use super::types::{EventDescriptor, SourceKind, Visibility};
 use super::{EventSource, EventsHub};
@@ -88,7 +86,9 @@ impl EventsHub {
         if let Some(key) = &key {
             let (hub, at, seen_key) = (Arc::clone(self), route.clone(), key.clone());
             let first = tokio::task::spawn_blocking(move || {
-                hub.runtime.seen.first_sighting(&at, &seen_key, Utc::now())
+                hub.runtime
+                    .seen
+                    .first_sighting(&at, &seen_key, crate::clock::utc_or_epoch())
             })
             .await
             .unwrap_or(true);
@@ -103,7 +103,7 @@ impl EventsHub {
             name: format!("webhook.{route}.received"),
             backend: inbound.backend.to_owned(),
             upstream_id: format!("{route}:{upstream}"),
-            occurred_at: Utc::now(),
+            occurred_at: crate::clock::utc_or_epoch(),
             data: json!({ "event_type": inbound.event_type, "fields": inbound.fields }),
             scope: Visibility::Backend(inbound.backend.to_owned()),
             owner: None,

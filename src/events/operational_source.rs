@@ -15,7 +15,6 @@
 
 use std::sync::{Arc, Weak};
 
-use chrono::Utc;
 use serde_json::{Value, json};
 
 use super::fanout::SourceEvent;
@@ -89,7 +88,7 @@ impl OperationalSource {
             scope,
             owner: None,
             upstream_id: hex::encode(rand::random::<[u8; 16]>()),
-            occurred_at: Utc::now(),
+            occurred_at: crate::clock::utc_or_epoch(),
             data,
             lifecycle_key: None,
         });

@@ -31,11 +31,7 @@
 //! If no admin token is configured, the endpoints return `503 Service Unavailable`.
 
 use crate::gateway::routes;
-use std::{
-    net::IpAddr,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{net::IpAddr, sync::Arc};
 
 use axum::{
     Form, Json, Router,
@@ -254,10 +250,7 @@ async fn exchange_token(
     }
 
     // Issue token
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_secs();
+    let now = crate::clock::unix_secs().unwrap_or(0);
 
     let ttl = ks.config.token_ttl_secs;
     let token = TemporaryToken {
@@ -493,6 +486,7 @@ fn error_response(status: StatusCode, error: &str, message: &str) -> axum::respo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn empty_admin_token_never_authenticates() {

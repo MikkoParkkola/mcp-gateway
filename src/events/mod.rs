@@ -251,7 +251,7 @@ impl EventsHub {
         // which skips its pass on a clock before 1970 rather than delete what
         // it cannot date. The epoch dates nothing as ended, so nothing goes;
         // every lease check refuses on its own read of the clock (MIK-8202).
-        let now = crate::clock::utc_now().unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+        let now = crate::clock::utc_or_epoch();
         let store = store::Store::open(store_dir, now, tail_policy(config)).map_err(|e| {
             crate::Error::Config(format!("events store {}: {e}", store_dir.display()))
         })?;

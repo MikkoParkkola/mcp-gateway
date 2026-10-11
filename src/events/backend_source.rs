@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
@@ -383,7 +382,7 @@ impl EventsHub {
                 scope: Visibility::Backend(backend),
                 owner: None,
                 upstream_id: uuid::Uuid::new_v4().to_string(),
-                occurred_at: Utc::now(),
+                occurred_at: crate::clock::utc_or_epoch(),
                 data: json!({}),
                 lifecycle_key: None,
             });

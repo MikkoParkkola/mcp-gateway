@@ -176,7 +176,7 @@ impl EventsHub {
         granted_by: u64,
     ) {
         let name = format!("backend.{backend}.resource_updated");
-        let now = chrono::Utc::now();
+        let now = crate::clock::utc_or_epoch();
         let gone: Vec<_> = self
             .store
             .subscriptions()

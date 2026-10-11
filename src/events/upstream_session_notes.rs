@@ -6,7 +6,6 @@
 use std::sync::Weak;
 use std::time::Instant;
 
-use chrono::Utc;
 use serde_json::json;
 use tracing::warn;
 
@@ -153,7 +152,7 @@ impl State<'_> {
                 scope: Visibility::Backend(backend),
                 owner: None,
                 upstream_id: uuid::Uuid::new_v4().to_string(),
-                occurred_at: Utc::now(),
+                occurred_at: crate::clock::utc_or_epoch(),
                 data: uri.map_or_else(|| json!({}), |uri| json!({ "uri": uri })),
                 lifecycle_key: None,
             });

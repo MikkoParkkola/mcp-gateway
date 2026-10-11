@@ -7,7 +7,9 @@
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -141,10 +143,7 @@ impl TokenInfo {
         // that is already expired; the gateway's own callers refuse such an
         // answer before it gets here.
         let expires_at = expires_in.map(|secs| {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
+            let now = crate::clock::unix_secs().unwrap_or(0);
             crate::duration_bound::expiry_from_expires_in(now, secs).unwrap_or(now)
         });
 
@@ -164,10 +163,7 @@ impl TokenInfo {
     #[must_use]
     pub fn is_expired(&self) -> bool {
         if let Some(expires_at) = self.expires_at {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
+            let now = crate::clock::unix_secs().unwrap_or(0);
 
             // Consider expired 60 seconds before actual expiry
             now + 60 >= expires_at
@@ -181,10 +177,7 @@ impl TokenInfo {
     #[must_use]
     pub fn time_until_expiry(&self) -> Option<Duration> {
         self.expires_at.and_then(|expires_at| {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
+            let now = crate::clock::unix_secs().unwrap_or(0);
 
             if expires_at > now {
                 Some(Duration::from_secs(expires_at - now))

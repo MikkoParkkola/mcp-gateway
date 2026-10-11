@@ -12,7 +12,6 @@
 //! Events are emitted via `tracing::info!` using structured fields, keeping
 //! them queryable in any log aggregator (Loki, `CloudWatch`, Datadog, etc.).
 
-use chrono::Utc;
 use serde::Serialize;
 
 /// Decision for a tool invocation.
@@ -66,7 +65,7 @@ impl ToolInvocationAudit {
         scopes: Vec<String>,
     ) -> Self {
         Self {
-            timestamp: Utc::now().to_rfc3339(),
+            timestamp: crate::clock::utc_or_epoch().to_rfc3339(),
             agent_id: agent_id.into(),
             agent_name: agent_name.into(),
             backend: backend.into(),
@@ -87,7 +86,7 @@ impl ToolInvocationAudit {
         reason: impl Into<String>,
     ) -> Self {
         Self {
-            timestamp: Utc::now().to_rfc3339(),
+            timestamp: crate::clock::utc_or_epoch().to_rfc3339(),
             agent_id: agent_id.into(),
             agent_name: agent_name.into(),
             backend: backend.into(),

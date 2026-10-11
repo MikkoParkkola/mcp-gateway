@@ -75,6 +75,15 @@ pub(crate) fn unix_secs() -> Result<u64, ClockBeforeEpoch> {
     since_epoch().map(|d| d.as_secs())
 }
 
+/// Now, or the epoch on a clock that cannot be read: the value the raw reads
+/// it replaces gave, so a site moved onto it behaves exactly as before.
+/// MIK-8202 P3 seam only. Each caller is migrated to a class-correct
+/// handling of `utc_now()` in the same batch, and this function is deleted
+/// with the last of them; do not add a caller.
+pub(crate) fn utc_or_epoch() -> DateTime<Utc> {
+    utc_now().unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
+}
+
 /// Milliseconds since the Unix epoch.
 pub(crate) fn unix_millis() -> Result<u64, ClockBeforeEpoch> {
     since_epoch().map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
