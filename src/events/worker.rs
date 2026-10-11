@@ -101,6 +101,15 @@ impl EventsHub {
                 .await;
             return;
         }
+        // A source that could not judge: unsent and uncounted, retried
+        // later, until the bounds above bury the record (MIK-8202).
+        if verdict == Verdict::Unavailable {
+            self.settle_with(services, &record, |now| {
+                unsent_later(SOURCE_UNAVAILABLE, &record, now)
+            })
+            .await;
+            return;
+        }
         // Held, unsent and uncharged, until a source offers the type again
         // or the record runs past its bounds above (MIK-7976).
         if verdict == Verdict::Unoffered {
@@ -218,48 +227,8 @@ impl EventsHub {
         // that signs, so only sync steps sit between it and the send.
         #[cfg(test)]
         self.before_recheck.pause().await;
-        let admission = match self.source_verdict(sub).await {
-            // Access is read again after the verdict's own wait (MIK-7907):
-            // a grant lost meanwhile is refused like one lost before. It must
-            // not yield: a reload landing inside it would follow the verdict
-            // unseen. Its one await, `TokenStore::live_jti`, completes at
-            // once in the only store there is (`InMemoryTokenStore`); a store
-            // that waits needs the verdict read again after this check.
-            Verdict::Admits => services.admission(sub, grant(record)).await,
-            Verdict::Refuses => AccessVerdict::Refuses,
-            Verdict::Undated => AccessVerdict::Undated,
-            Verdict::Unavailable => {
-                services.audit_outcome(&ended(SOURCE_UNAVAILABLE)).await;
-                self.settle_with(services, record, |now| {
-                    unsent_later(SOURCE_UNAVAILABLE, record, now)
-                })
-                .await;
-                return;
-            }
-            Verdict::Unoffered => {
-                services.audit_outcome(&ended(HELD)).await;
-                self.settle_with(services, record, |now| refusal_retry(HELD, record, now))
-                    .await;
-                return;
-            }
-        };
-        match admission {
-            AccessVerdict::Admits => {}
-            // The refusal may be the clock's: kept, unsent (MIK-8202).
-            AccessVerdict::Undated => {
-                services.audit_outcome(&ended(CLOCK_UNREADABLE)).await;
-                self.settle(services, record, clock_unsent(record)).await;
-                return;
-            }
-            AccessVerdict::Refuses => {
-                services.audit_outcome(&ended("access_revoked")).await;
-                self.revoke(sub).await;
-                self.settle_with(services, record, |now| {
-                    refusal_retry("access_revoked", record, now)
-                })
-                .await;
-                return;
-            }
+        if self.settled_by_recheck(services, sub, record, &ended).await {
+            return;
         }
         // The wait for the record can span a rotation or an unsubscribe: the
         // row that signs is read after it, never before.
@@ -277,11 +246,23 @@ impl EventsHub {
         }
         #[cfg(test)]
         self.before_send.pause().await;
+        // One reading gates the charge and signs the send: a clock that
+        // cannot sign is found before anything is charged (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            services.audit_outcome(&ended(CLOCK_UNREADABLE)).await;
+            self.settle(services, record, clock_unsent(record)).await;
+            return;
+        };
         // MIK-7907 WINDOW.1: admitted under the reload gate (`admits_now`).
         if !services.live.admit(|| self.admits_now(&record.name)) {
             services.audit_outcome(&ended(HELD)).await;
-            self.settle_with(services, record, |now| unsent_later(HELD, record, now))
-                .await;
+            self.settle_at(
+                services,
+                record,
+                unsent_later(HELD, record, Ok(now)),
+                Ok(now),
+            )
+            .await;
             return;
         }
         // Charged once the attempt is on record, so a retry after an audit
@@ -298,7 +279,7 @@ impl EventsHub {
             return;
         }
         let answer = self
-            .send_event(url, &current, event_id, frame, sub.read_key.as_deref())
+            .send_event(url, &current, event_id, frame, sub.read_key.as_deref(), now)
             .await;
         self.settle_answer(services, ctx, answer, verdict, &ended)
             .await;
@@ -437,9 +418,11 @@ impl EventsHub {
         event_id: &str,
         frame: OutboundFrame,
         key: Option<&str>,
+        now: chrono::DateTime<chrono::Utc>,
     ) -> Result<super::client::Answer, CallbackFailure> {
-        // One reading picks the signing keys and dates the signature (MIK-8202).
-        let now = crate::clock::utc_now();
+        // The caller's reading picks the signing keys and dates the
+        // signature (MIK-8202).
+        let now = Ok(now);
         let current = super::client::decode_whsec(&sub.secret);
         let previous = sub
             .previous_secret_at(now)

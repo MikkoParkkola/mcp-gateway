@@ -118,8 +118,13 @@ pub(crate) trait WatchHost: Send + Sync {
     /// denial is trusted only when it has not moved since the read the
     /// decision started from (MIK-8037).
     fn catalogue_generation(&self) -> u64;
-    /// Whether `holder` may invoke `target` now (the `tools/list` predicate).
-    fn may_invoke(&self, holder: &Holder, target: &Target) -> bool;
+    /// Whether `holder` may invoke `target` at the caller's reading `now` (MIK-8202).
+    fn may_invoke(
+        &self,
+        holder: &Holder,
+        target: &Target,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> bool;
     /// Call `target` as `holder` with every control a `tools/call` gets, and
     /// return the firewall-approved application value, before per-call
     /// metadata is attached.
@@ -288,20 +293,6 @@ impl WatchSource {
             .into_iter()
             .find(|t| t.read_only && event_name(&t.capability) == name)
     }
-
-    /// The holder a stored row polls as, when its credential still passes:
-    /// an API key that is live and may invoke `target`.
-    fn holder(&self, row: &Subscription, target: &Target) -> Option<Holder> {
-        let api_key = row
-            .api_key
-            .clone()
-            .filter(|_| row.legacy_api_key_name.is_none())?;
-        let holder = Holder {
-            principal: row.principal.clone(),
-            api_key,
-        };
-        self.host.may_invoke(&holder, target).then_some(holder)
-    }
 }
 
 #[async_trait::async_trait]
@@ -394,8 +385,15 @@ impl EventSource for WatchSource {
         };
         // ponytail: scans the store per check; an index by principal is the
         // upgrade if many watch rows make fan-out measurable.
-        let rows = Self::rows(&hub, principal, name, arguments, crate::clock::utc_now());
-        if rows.iter().any(|row| self.holder(row, &target).is_none()) {
+        // Undated, never an empty row set the holder check passes (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            return Err(RpcError::clock_unreadable());
+        };
+        let rows = Self::rows(&hub, principal, name, arguments, now);
+        if rows
+            .iter()
+            .any(|row| self.holder(row, &target, now).is_none())
+        {
             // The key is judged against the capability's current definition,
             // which a mid-write read can change: skip, keep (MIK-8122). A
             // revoked credential is revoked at fan-out before this check.
@@ -404,18 +402,30 @@ impl EventSource for WatchSource {
         Ok(())
     }
 
-    fn matches(&self, principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
+    fn matches(
+        &self,
+        principal: &str,
+        arguments: &Value,
+        event: &SourceEvent,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         event
             .lifecycle_key
             .as_deref()
-            .is_some_and(|key| self.lifecycle_key(principal, &event.name, arguments) == key)
+            .is_some_and(|key| self.lifecycle_key(principal, &event.name, arguments, now) == key)
     }
 
     /// Shared across principals for a credential-free capability; per
     /// principal otherwise, so one principal's credential never answers for
     /// another's subscription.
-    fn lifecycle_key(&self, principal: &str, name: &str, arguments: &Value) -> String {
-        let class = self.class_for(principal, name, arguments);
+    fn lifecycle_key(
+        &self,
+        principal: &str,
+        name: &str,
+        arguments: &Value,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> String {
+        let class = self.class_for(principal, name, arguments, now);
         poll_key(
             (class == WatchClass::Keyed).then_some(principal),
             name,
@@ -687,7 +697,7 @@ impl Run {
                 denied.push(row);
                 continue;
             };
-            if !self.host.may_invoke(&holder, &target) {
+            if !self.host.may_invoke(&holder, &target, now) {
                 skipped = true;
             } else if chosen.is_none() {
                 chosen = Some(holder);

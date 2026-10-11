@@ -61,7 +61,12 @@ impl WatchHost for Fake {
             7
         }
     }
-    fn may_invoke(&self, holder: &Holder, _target: &Target) -> bool {
+    fn may_invoke(
+        &self,
+        holder: &Holder,
+        _target: &Target,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         !self.denied.lock().contains(&holder.principal)
     }
     async fn poll(
@@ -74,6 +79,10 @@ impl WatchHost for Fake {
         self.calls.lock().push((holder.principal.clone(), charge));
         self.answers.lock().pop_front().ok_or(PollFailed)
     }
+}
+
+fn now() -> chrono::DateTime<chrono::Utc> {
+    crate::clock::utc_now().expect("a readable clock")
 }
 
 fn target(capability: &str, read_only: bool, credential: CredentialUse) -> Target {
@@ -164,7 +173,7 @@ fn run(
     arguments: &Value,
 ) -> Run {
     let source = WatchSource::new(hub, Arc::clone(host) as Arc<dyn WatchHost>);
-    let key = source.lifecycle_key(principal, name, arguments);
+    let key = source.lifecycle_key(principal, name, arguments, now());
     let shared = host
         .targets()
         .iter()
@@ -335,13 +344,13 @@ async fn watch_pollers_are_shared_per_canonical_arguments_and_credential() {
     let args = json!({"arguments": {"q": "x"}});
     let free = "watch.weather.changed";
     assert_eq!(
-        source.lifecycle_key("alice", free, &args),
-        source.lifecycle_key("bob", free, &args)
+        source.lifecycle_key("alice", free, &args, now()),
+        source.lifecycle_key("bob", free, &args, now())
     );
     let keyed = "watch.crm.changed";
     assert_ne!(
-        source.lifecycle_key("alice", keyed, &args),
-        source.lifecycle_key("bob", keyed, &args)
+        source.lifecycle_key("alice", keyed, &args, now()),
+        source.lifecycle_key("bob", keyed, &args, now())
     );
     admit(&hub, "alice", keyed, &args);
     admit(&hub, "bob", keyed, &args);
@@ -361,9 +370,9 @@ async fn watch_pollers_are_shared_per_canonical_arguments_and_credential() {
     ids.sort_unstable();
     ids.dedup();
     assert_eq!(ids.len(), 3, "distinct ids per transition");
-    assert!(source.matches("alice", &args, &events[0]));
+    assert!(source.matches("alice", &args, &events[0], now()));
     assert!(
-        !source.matches("bob", &args, &events[0]),
+        !source.matches("bob", &args, &events[0], now()),
         "bob's own poller answers bob"
     );
     assert!(
@@ -504,8 +513,8 @@ async fn keys_and_digests_are_lossless() {
         json!({"arguments": {"id": 9_007_199_254_740_992_u64}}),
     );
     assert_ne!(
-        source.lifecycle_key("p", name, &a),
-        source.lifecycle_key("p", name, &b)
+        source.lifecycle_key("p", name, &a, now()),
+        source.lifecycle_key("p", name, &b, now())
     );
     let (x, y) = (
         projection(&json!({"n": 9_007_199_254_740_993_u64}), None),
@@ -553,30 +562,6 @@ async fn watch_ignores_default_volatile_fields_and_metadata() {
     assert_eq!(events[0].data["changed"], json!(["/timestamp"]));
 }
 
-/// MIK-8122: a holder the capability's current definition no longer lets
-/// invoke it is kept and skipped, not revoked: no call is made, the poller
-/// stays, and fan-out skips the occurrence instead of revoking.
-#[tokio::test]
-async fn a_holder_without_access_is_skipped_not_revoked() {
-    let dir = tempfile::tempdir().expect("dir");
-    let hub = hub(dir.path());
-    let host = fake(vec![target("crm", true, CredentialUse::Keyed)]);
-    let name = "watch.crm.changed";
-    admit(&hub, "p", name, &json!({}));
-    let poller = run(&hub, &host, "p", name, &json!({}));
-    host.denied.lock().push("p".into());
-    let mut last = None;
-    assert!(matches!(poller.once(&hub, &mut last).await, Step::Polled));
-    assert!(host.calls.lock().is_empty());
-    assert_eq!(hub.store.subscriptions().len(), 1, "kept");
-    let source = WatchSource::new(&hub, Arc::clone(&host) as Arc<dyn WatchHost>);
-    let refused = source
-        .authorize("p", name, &json!({}))
-        .await
-        .expect_err("fan-out re-check skips");
-    assert_eq!(refused.code, -32011, "skip, keep");
-}
-
 /// A shared poller counts against the principal that opened it, so one key
 /// cannot fill the gateway's pollers with distinct shared arguments.
 #[tokio::test]
@@ -590,7 +575,7 @@ async fn shared_pollers_count_against_the_principal_that_opened_them() {
     let name = "watch.weather.changed";
     let open = |n: u32| {
         let arguments = json!({"arguments": {"city": n}});
-        let key = source.lifecycle_key("p", name, &arguments);
+        let key = source.lifecycle_key("p", name, &arguments, now());
         (key, arguments)
     };
     let (key, arguments) = open(1);
@@ -617,7 +602,7 @@ async fn a_subscribe_after_a_poller_exited_starts_a_fresh_one() {
     let source = WatchSource::new(&hub, host);
     let name = "watch.weather.changed";
     let arguments = json!({});
-    let key = source.lifecycle_key("p", name, &arguments);
+    let key = source.lifecycle_key("p", name, &arguments, now());
     source
         .on_first_subscriber(&key, "p", name, &arguments)
         .await

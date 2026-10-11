@@ -347,8 +347,8 @@ async fn a_clock_that_fails_at_the_last_window_read_sends_and_buries_nothing() {
 }
 
 /// E3c: the clock reads through the last window check, then fails at the
-/// signer. Nothing is sent; the record keeps its retry date and its send
-/// count, and its subscription's failure window does not move.
+/// send. Nothing is sent or charged; the record keeps its retry date and its
+/// send count, and its subscription's failure window does not move.
 #[tokio::test]
 async fn a_signer_that_cannot_read_the_clock_sends_nothing_and_counts_nothing() {
     let dir = tempfile::tempdir().expect("dir");
@@ -356,10 +356,14 @@ async fn a_signer_that_cannot_read_the_clock_sends_nothing_and_counts_nothing() 
     // the failure window fails this row.
     let config = crate::config::EventsConfig {
         suspend_min_attempts: 1,
+        cost_per_delivery_usd: 0.01,
         ..private_callbacks()
     };
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
-    let services = logged_services(dir.path());
+    #[cfg_attr(not(feature = "cost-governance"), allow(unused_mut))]
+    let mut services = logged_services(dir.path());
+    #[cfg(feature = "cost-governance")]
+    let registry = super::budgeted(&mut services);
     offer(&hub, &[NAME]);
     let (port, accepted) = counting_callback().await;
     queued(&hub, port, "evt_e3c");
@@ -374,6 +378,11 @@ async fn a_signer_that_cannot_read_the_clock_sends_nothing_and_counts_nothing() 
     assert_kept_unsent(&hub, dir.path(), &before, "evt_e3c", posts);
     let row = hub.store.get("sub_worker").expect("row");
     assert!(row.active, "suspended for a send it never made");
+    #[cfg(feature = "cost-governance")]
+    assert!(
+        !registry.snapshot().contains_key(&format!("events:{NAME}")),
+        "charged for a send the clock refused"
+    );
 }
 
 /// A refusal judged on an unreadable clock may be the clock's (every
@@ -626,6 +635,7 @@ impl crate::events::EventSource for ClockBlind {
         _principal: &str,
         _arguments: &serde_json::Value,
         _event: &crate::events::fanout::SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         true
     }
@@ -764,4 +774,25 @@ async fn a_source_error_delivers_nothing_and_settles_unsent() {
             "retried at once"
         );
     }
+}
+
+/// A source error is no verdict, but it does not stop the bounds: a record
+/// past its retry window is buried `exhausted` even while its source errs,
+/// never kept pending for as long as the source fails (MIK-8202 A6).
+#[tokio::test]
+async fn a_source_error_does_not_keep_an_overdue_record() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
+    let services = logged_services(dir.path());
+    hub.register_source(Arc::new(ClockBlind {
+        admits: 0,
+        asked: std::sync::atomic::AtomicUsize::new(0),
+        then: crate::events::types::RpcError::internal,
+    }));
+    let (port, accepted) = counting_callback().await;
+    queued_overdue(&hub, port, "evt_so");
+    Box::pin(hub.attempt(&services, "evt_so")).await;
+    assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let dead = hub.store.dead_letter_by_id("evt_so").expect("not buried");
+    assert_eq!(dead.reason, "exhausted");
 }

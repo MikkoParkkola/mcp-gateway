@@ -162,10 +162,17 @@ pub(crate) trait EventSource: Send + Sync {
         principal: &str,
         arguments: &serde_json::Value,
         event: &fanout::SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
     ) -> bool;
     /// What the core refcounts upstream work on: by default the event name
     /// and canonical arguments, shared across principals.
-    fn lifecycle_key(&self, _principal: &str, name: &str, arguments: &serde_json::Value) -> String {
+    fn lifecycle_key(
+        &self,
+        _principal: &str,
+        name: &str,
+        arguments: &serde_json::Value,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> String {
         String::from_utf8(rpc::canonical(&serde_json::json!([name, arguments]))).unwrap_or_default()
     }
     /// The lifecycle key of a stored row this source owns even while it does

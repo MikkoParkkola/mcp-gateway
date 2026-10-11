@@ -106,6 +106,8 @@ pub(crate) enum Revived {
     AlreadyPending,
     /// The dead letter was swept, evicted or replayed meanwhile.
     Missing,
+    /// A clock before 1970 dated no lease: transient (MIK-8202).
+    Undated,
 }
 
 /// Whether `sub` may be attempted at `now`.
@@ -247,9 +249,10 @@ impl Store {
     ) -> std::io::Result<Revived> {
         let mut state = self.state.lock();
         // Read under the lock: an expiry that lands while this waits counts.
-        // A clock before 1970 dates no lease: nothing is revived (MIK-8202).
+        // A clock before 1970 dates no lease: nothing is revived, and the
+        // replay is refused as transient (MIK-8202).
         let Ok(now) = clock() else {
-            return Ok(Revived::NoSubscription);
+            return Ok(Revived::Undated);
         };
         let Some(stamp) = state
             .dead

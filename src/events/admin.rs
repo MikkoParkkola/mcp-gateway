@@ -207,7 +207,7 @@ impl EventsHub {
             Some(Revived::Full) => Err(ReplayRefusal::OutboxFull),
             Some(Revived::AlreadyPending) => Err(ReplayRefusal::AlreadyPending),
             Some(Revived::Missing) => Err(ReplayRefusal::NotFound),
-            None => Err(ReplayRefusal::Unavailable),
+            Some(Revived::Undated) | None => Err(ReplayRefusal::Unavailable),
         }
     }
 

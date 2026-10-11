@@ -131,10 +131,11 @@ impl Store {
         &self,
         name: &str,
         class: WatchClass,
+        now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
     ) -> std::io::Result<()> {
         // Nothing is back-filled on a clock that cannot be read (before
         // 1970): callers retry at the next poll or replay (MIK-8202).
-        let Ok(now) = crate::clock::utc_now() else {
+        let Ok(now) = now else {
             return Ok(());
         };
         let mut state = self.state.lock();

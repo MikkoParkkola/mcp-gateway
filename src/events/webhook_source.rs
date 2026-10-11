@@ -36,7 +36,13 @@ impl EventSource for WebhookSource {
 
     /// `event_type` matches by glob, every other argument by equality on
     /// the projected field of that name.
-    fn matches(&self, _principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
+    fn matches(
+        &self,
+        _principal: &str,
+        arguments: &Value,
+        event: &SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         let Some(arguments) = arguments.as_object() else {
             return false;
         };

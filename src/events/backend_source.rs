@@ -160,7 +160,13 @@ impl EventSource for BackendSource {
             .await
     }
 
-    fn matches(&self, _principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
+    fn matches(
+        &self,
+        _principal: &str,
+        arguments: &Value,
+        event: &SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         match parse_name(&event.name) {
             Some((_, Kind::ResourceUpdated)) => {
                 arguments.get("uri").is_some() && arguments.get("uri") == event.data.get("uri")

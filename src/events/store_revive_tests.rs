@@ -158,3 +158,23 @@ fn a_re_admitted_occurrence_under_a_held_id_is_coalesced() {
     assert_eq!(held.created_at, now, "and its stamp");
     assert_eq!(held.attempt, 1, "and its attempt count");
 }
+
+/// MIK-8202 A6: a clock that cannot be read at the revive commit dates no
+/// lease. That is a transient fault, never a subscription gone, and the dead
+/// letter stays.
+#[test]
+fn a_revive_the_clock_cannot_date_is_undated() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = crate::clock::utc_now().expect("a readable clock");
+    let store = open_with(dir.path(), now, &["s1"]);
+    store
+        .dead_letter(record("e1", "s1", now), DeadReason::Exhausted, now, ROOMY)
+        .expect("io");
+    let outcome = store
+        .revive("e1", now, record("e1", "s1", now), OUTBOX, || {
+            Err(crate::clock::ClockBeforeEpoch)
+        })
+        .expect("io");
+    assert_eq!(outcome, Revived::Undated);
+    assert_eq!(store.dead_summaries().len(), 1, "the dead letter stays");
+}

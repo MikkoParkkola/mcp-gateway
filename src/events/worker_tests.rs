@@ -572,6 +572,7 @@ impl crate::events::EventSource for Flipping {
         _principal: &str,
         _arguments: &serde_json::Value,
         _event: &crate::events::fanout::SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         true
     }
@@ -688,6 +689,7 @@ impl crate::events::EventSource for Offering {
         _principal: &str,
         _arguments: &serde_json::Value,
         _event: &crate::events::fanout::SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         true
     }

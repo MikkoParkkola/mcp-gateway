@@ -177,15 +177,30 @@ async fn a_settled_task_is_matched_by_its_carried_owner_after_expiry() {
     };
     let args = serde_json::json!({});
     assert!(
-        source.matches("alice", &args, &event(Some(owner.clone()))),
+        source.matches(
+            "alice",
+            &args,
+            &event(Some(owner.clone())),
+            crate::clock::utc_now().expect("clock")
+        ),
         "the owner hears a task whose row has expired"
     );
     assert!(
-        !source.matches("bob", &args, &event(Some(owner))),
+        !source.matches(
+            "bob",
+            &args,
+            &event(Some(owner)),
+            crate::clock::utc_now().expect("clock")
+        ),
         "another principal does not"
     );
     assert!(
-        !source.matches("alice", &args, &event(None)),
+        !source.matches(
+            "alice",
+            &args,
+            &event(None),
+            crate::clock::utc_now().expect("clock")
+        ),
         "without a carried owner the store is asked, and the row is gone"
     );
 }
@@ -284,7 +299,13 @@ impl EventSource for WebhooksOn {
     fn descriptors(&self) -> Vec<types::EventDescriptor> {
         Vec::new()
     }
-    fn matches(&self, _: &str, _: &serde_json::Value, _: &fanout::SourceEvent) -> bool {
+    fn matches(
+        &self,
+        _: &str,
+        _: &serde_json::Value,
+        _: &fanout::SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         false
     }
 }
@@ -367,10 +388,25 @@ fn a_resource_update_matches_only_its_uri() {
         "backend.x.resource_updated",
         serde_json::json!({"uri": "b"}),
     );
-    assert!(!source.matches("p", &serde_json::json!({"uri": "a"}), &updated));
-    assert!(source.matches("p", &serde_json::json!({"uri": "b"}), &updated));
+    assert!(!source.matches(
+        "p",
+        &serde_json::json!({"uri": "a"}),
+        &updated,
+        crate::clock::utc_now().expect("clock")
+    ));
+    assert!(source.matches(
+        "p",
+        &serde_json::json!({"uri": "b"}),
+        &updated,
+        crate::clock::utc_now().expect("clock")
+    ));
     let listed = event("backend.x.resources_changed", serde_json::json!({}));
-    assert!(source.matches("p", &serde_json::json!({}), &listed));
+    assert!(source.matches(
+        "p",
+        &serde_json::json!({}),
+        &listed,
+        crate::clock::utc_now().expect("clock")
+    ));
 }
 
 #[path = "reconcile_table_backend_tests.rs"]

@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use super::{
-    Clock, Ctx, OutboxRecord, SOURCE_UNAVAILABLE, Services, Settle, Verdict, clock_unsent,
-    refusal_retry, unsent_later,
+    AccessVerdict, Attempt, CLOCK_UNREADABLE, Clock, Ctx, HELD, OutboxRecord, SOURCE_UNAVAILABLE,
+    Services, Settle, Verdict, clock_unsent, grant, refusal_retry, unsent_later,
 };
 use crate::events::EventsHub;
 
@@ -16,8 +16,9 @@ impl EventsHub {
     /// recorded, the row revoked, and the record settled. Removed, the record
     /// went with it and this settles nothing. Not removed (a store error, a
     /// refresh re-bound the row, or a clock that failed at the revocation),
-    /// the record goes back to pending, unsent; the refused attempt counts
-    /// toward its bounds on a readable clock, and the next attempt re-checks.
+    /// the record goes back to pending, not sent; on a readable clock the
+    /// refused attempt counts toward its bounds, and the next attempt
+    /// re-checks.
     pub(super) async fn revoke_before_send(
         self: &Arc<Self>,
         services: &Services,
@@ -38,9 +39,9 @@ impl EventsHub {
         .await;
     }
 
-    /// Settle an attempt its source did not admit, before the attempt is on
-    /// record; `true` when settled. An admission or a type no source offers
-    /// goes on (MIK-8202).
+    /// Settle an attempt its source refused or could not date, before the
+    /// attempt is on record; `true` when settled. An admission, a type no
+    /// source offers and a source error go on to the bounds (MIK-8202).
     pub(super) async fn settled_by_source(
         self: &Arc<Self>,
         services: &Services,
@@ -50,17 +51,67 @@ impl EventsHub {
         verdict: Verdict,
     ) -> bool {
         match verdict {
-            Verdict::Admits | Verdict::Unoffered => return false,
+            Verdict::Admits | Verdict::Unoffered | Verdict::Unavailable => return false,
             Verdict::Refuses => self.revoke_before_send(services, ctx, sub, record).await,
             Verdict::Undated => self.settle(services, record, clock_unsent(record)).await,
+        }
+        true
+    }
+
+    /// The access re-check after the waits before the send (MIK-7907): the
+    /// source's verdict read again, then the caller's admission. `true` when
+    /// it settled the attempt.
+    pub(super) async fn settled_by_recheck<'a>(
+        self: &Arc<Self>,
+        services: &Services,
+        sub: &crate::events::records::Subscription,
+        record: &OutboxRecord,
+        ended: &(impl Fn(&'static str) -> Attempt<'a> + Sync),
+    ) -> bool {
+        let admission = match self.source_verdict(sub).await {
+            // Access is read again after the verdict's own wait (MIK-7907):
+            // a grant lost meanwhile is refused like one lost before. It must
+            // not yield: a reload landing inside it would follow the verdict
+            // unseen. Its one await, `TokenStore::live_jti`, completes at
+            // once in the only store there is (`InMemoryTokenStore`); a store
+            // that waits needs the verdict read again after this check.
+            Verdict::Admits => services.admission(sub, grant(record)).await,
+            Verdict::Refuses => AccessVerdict::Refuses,
+            Verdict::Undated => AccessVerdict::Undated,
             Verdict::Unavailable => {
+                services.audit_outcome(&ended(SOURCE_UNAVAILABLE)).await;
                 self.settle_with(services, record, |now| {
                     unsent_later(SOURCE_UNAVAILABLE, record, now)
                 })
                 .await;
+                return true;
+            }
+            Verdict::Unoffered => {
+                services.audit_outcome(&ended(HELD)).await;
+                self.settle_with(services, record, |now| refusal_retry(HELD, record, now))
+                    .await;
+                return true;
+            }
+        };
+        match admission {
+            AccessVerdict::Admits => {}
+            // The refusal may be the clock's: kept, unsent (MIK-8202).
+            AccessVerdict::Undated => {
+                services.audit_outcome(&ended(CLOCK_UNREADABLE)).await;
+                self.settle(services, record, clock_unsent(record)).await;
+                return true;
+            }
+            AccessVerdict::Refuses => {
+                services.audit_outcome(&ended("access_revoked")).await;
+                self.revoke(sub).await;
+                self.settle_with(services, record, |now| {
+                    refusal_retry("access_revoked", record, now)
+                })
+                .await;
+                return true;
             }
         }
-        true
+        false
     }
 
     /// Settle the claimed occurrence `record`; a later occurrence that has

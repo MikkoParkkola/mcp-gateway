@@ -432,7 +432,13 @@ impl EventSource for ScheduleSource {
         Ok(())
     }
 
-    fn matches(&self, _principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
+    fn matches(
+        &self,
+        _principal: &str,
+        arguments: &Value,
+        event: &SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         let Ok(Parts { key, .. }) = parts(arguments) else {
             return false;
         };
@@ -443,7 +449,13 @@ impl EventSource for ScheduleSource {
     }
 
     /// The timer key, so spellings of one timer share it.
-    fn lifecycle_key(&self, _principal: &str, name: &str, arguments: &Value) -> String {
+    fn lifecycle_key(
+        &self,
+        _principal: &str,
+        name: &str,
+        arguments: &Value,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> String {
         parts(arguments).map_or_else(
             |_| {
                 String::from_utf8(

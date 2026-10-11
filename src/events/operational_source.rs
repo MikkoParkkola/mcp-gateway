@@ -199,7 +199,13 @@ impl EventSource for OperationalSource {
 
     /// A budget event reaches the subscriptions to its scope, or to every
     /// scope; `authorize` decides who may hold either.
-    fn matches(&self, _principal: &str, arguments: &Value, event: &SourceEvent) -> bool {
+    fn matches(
+        &self,
+        _principal: &str,
+        arguments: &Value,
+        event: &SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         if !event.name.starts_with(BUDGET_PREFIX) {
             return true;
         }

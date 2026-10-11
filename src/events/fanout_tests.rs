@@ -344,10 +344,22 @@ impl super::super::EventSource for PerPrincipal {
             kind: SourceKind::RestWatch,
         }]
     }
-    fn matches(&self, _principal: &str, _arguments: &Value, _event: &SourceEvent) -> bool {
+    fn matches(
+        &self,
+        _principal: &str,
+        _arguments: &Value,
+        _event: &SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         true
     }
-    fn lifecycle_key(&self, principal: &str, name: &str, arguments: &Value) -> String {
+    fn lifecycle_key(
+        &self,
+        principal: &str,
+        name: &str,
+        arguments: &Value,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> String {
         json!([principal, name, arguments]).to_string()
     }
 }
@@ -408,7 +420,12 @@ async fn an_occurrence_with_a_lifecycle_key_reaches_only_its_holders() {
         data: json!({}),
         lifecycle_key,
     };
-    let alices = PerPrincipal.lifecycle_key("alice", name, &arguments);
+    let alices = PerPrincipal.lifecycle_key(
+        "alice",
+        name,
+        &arguments,
+        crate::clock::utc_now().expect("clock"),
+    );
     hub.fan_out(&services, &event("t1", Some(alices))).await;
     let outbox = |dir: &std::path::Path| -> Vec<String> {
         std::fs::read_dir(dir.join("outbox"))

@@ -32,7 +32,12 @@ fn received(events: &mut tokio::sync::mpsc::Receiver<SourceEvent>) -> Vec<Source
 
 /// Start the timer `arguments` names, as the core does for a first subscriber.
 async fn start(source: &ScheduleSource, arguments: &Value) -> String {
-    let key = source.lifecycle_key("p", NAME, arguments);
+    let key = source.lifecycle_key(
+        "p",
+        NAME,
+        arguments,
+        crate::clock::utc_now().expect("clock"),
+    );
     source
         .on_first_subscriber(&key, "p", NAME, arguments)
         .await
@@ -248,14 +253,25 @@ async fn a_tick_matches_only_its_own_timer() {
     start(&source, &mine).await;
     source.tick_at(at(9, 0, 0));
     let tick = received(&mut events).pop().expect("tick");
-    assert!(source.matches("p", &mine, &tick));
+    assert!(source.matches("p", &mine, &tick, crate::clock::utc_now().expect("clock")));
     assert!(source.matches(
         "q",
         &json!({"cron": "0  9 * * *", "timezone": "UTC", "label": "a"}),
-        &tick
+        &tick,
+        crate::clock::utc_now().expect("clock")
     ));
-    assert!(!source.matches("p", &json!({"cron": "0 9 * * *", "label": "b"}), &tick));
-    assert!(!source.matches("p", &json!({"cron": "0 10 * * *", "label": "a"}), &tick));
+    assert!(!source.matches(
+        "p",
+        &json!({"cron": "0 9 * * *", "label": "b"}),
+        &tick,
+        crate::clock::utc_now().expect("clock")
+    ));
+    assert!(!source.matches(
+        "p",
+        &json!({"cron": "0 10 * * *", "label": "a"}),
+        &tick,
+        crate::clock::utc_now().expect("clock")
+    ));
 }
 
 /// The global timer cap refuses a new timer; a held one is still admitted.
@@ -270,7 +286,7 @@ async fn the_timer_caps_hold() {
     let a = start(&source, &json!({"cron": "0 1 * * *"})).await;
     start(&source, &json!({"cron": "0 2 * * *"})).await;
     let third = json!({"cron": "0 3 * * *"});
-    let key = source.lifecycle_key("p", NAME, &third);
+    let key = source.lifecycle_key("p", NAME, &third, crate::clock::utc_now().expect("clock"));
     let error = source
         .on_first_subscriber(&key, "p", NAME, &third)
         .await
@@ -360,7 +376,7 @@ async fn a_restart_over_the_cap_keeps_the_earliest_timers() {
     for arguments in &rows[..2] {
         start(&source, arguments).await;
     }
-    let key = source.lifecycle_key("p", NAME, &rows[2]);
+    let key = source.lifecycle_key("p", NAME, &rows[2], crate::clock::utc_now().expect("clock"));
     let error = source
         .on_first_subscriber(&key, "p", NAME, &rows[2])
         .await
@@ -386,7 +402,7 @@ async fn a_replay_starts_a_timer_any_holder_may_keep() {
         admit(&hub, &format!("sub_p{n}"), "p", arguments);
     }
     admit(&hub, "sub_q", "q", &rows[2]);
-    let key = source.lifecycle_key("p", NAME, &rows[2]);
+    let key = source.lifecycle_key("p", NAME, &rows[2], crate::clock::utc_now().expect("clock"));
     source
         .on_first_subscriber(&key, "p", NAME, &rows[2])
         .await

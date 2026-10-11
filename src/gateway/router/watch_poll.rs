@@ -174,11 +174,22 @@ impl WatchHost for GatewayWatchHost {
             .map_or(0, |capabilities| capabilities.catalogue_generation())
     }
 
-    fn may_invoke(&self, holder: &Holder, target: &Target) -> bool {
+    fn may_invoke(
+        &self,
+        holder: &Holder,
+        target: &Target,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
         let Some(state) = self.state.upgrade() else {
             return false;
         };
-        let Some(client) = Self::client(&state, holder) else {
+        // The key's expiry on the caller's reading, never a second read
+        // (MIK-8202).
+        let Some(client) = state.auth_config.client_for_key_at(
+            &holder.api_key.name,
+            &holder.api_key.principal,
+            now,
+        ) else {
             return false;
         };
         let owned = OwnedRouterAuthorizer::capture(Some(&client), None, None);

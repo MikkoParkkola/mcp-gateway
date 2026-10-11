@@ -574,6 +574,7 @@ impl EventsHub {
                 &record.principal,
                 &record.name,
                 &record.arguments,
+                now,
             )
             .await?;
         let hub = Arc::clone(self);

@@ -138,10 +138,30 @@ async fn operational_events_are_operator_only_except_own_budget() {
         }
     }
     let budget = |scope: &str| event(BUDGET_THRESHOLD, json!({"scope": scope, "percent": 50}));
-    assert!(source.matches(&dev, &own, &budget("key:dev")));
-    assert!(!source.matches(&dev, &own, &budget("key:ops")));
-    assert!(!source.matches(&dev, &own, &budget("global")));
-    assert!(source.matches(&ops, &none, &budget("global")));
+    assert!(source.matches(
+        &dev,
+        &own,
+        &budget("key:dev"),
+        crate::clock::utc_now().expect("clock")
+    ));
+    assert!(!source.matches(
+        &dev,
+        &own,
+        &budget("key:ops"),
+        crate::clock::utc_now().expect("clock")
+    ));
+    assert!(!source.matches(
+        &dev,
+        &own,
+        &budget("global"),
+        crate::clock::utc_now().expect("clock")
+    ));
+    assert!(source.matches(
+        &ops,
+        &none,
+        &budget("global"),
+        crate::clock::utc_now().expect("clock")
+    ));
     live.set(config(keys(false)));
     for (name, args) in [
         (KILL_SWITCH_CHANGED, &none),
