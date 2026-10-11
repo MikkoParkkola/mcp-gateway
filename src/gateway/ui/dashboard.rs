@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
 use super::{
-    AppState, Arc, AuthenticatedClient, BackendHealth, CacheStats, CallStatus, DashboardRenderer,
-    DashboardState, Extension, HealthStatus, IntoResponse, RecentCall, SessionSummary, State,
-    StatsSnapshot, StatusCode, avg_latency_from_backends, compute_error_rate, is_admin,
+    AppState, Arc, AuthenticatedClient, BackendHealth, CacheStats, DashboardRenderer,
+    DashboardState, Extension, HealthStatus, IntoResponse, SessionSummary, State, StatsSnapshot,
+    StatusCode, ToolCallCount, avg_latency_from_backends, compute_error_rate, is_admin,
     uptime_secs,
 };
 
@@ -98,18 +98,15 @@ pub async fn dashboard_handler(
         total_misses: snap.invocations.saturating_sub(snap.cache_hits),
     };
 
-    // Recent calls come from the top-tools list (best available proxy without
-    // a dedicated ring-buffer for now).
-    let recent_calls: Vec<RecentCall> = snap
+    // Cumulative counts per tool. The stats count attempts and carry no
+    // outcome, so the table shows none (MIK-8370).
+    let tool_counts: Vec<ToolCallCount> = snap
         .top_tools
         .iter()
         .take(50)
-        .map(|t| RecentCall {
-            timestamp: String::new(), // no per-call timestamps in current stats
+        .map(|t| ToolCallCount {
             tool: t.tool.clone(),
             server: t.server.clone(),
-            latency_ms: None,
-            status: CallStatus::Success,
             count: t.count,
         })
         .collect();
@@ -117,7 +114,7 @@ pub async fn dashboard_handler(
     let ds = DashboardState {
         backends: backend_healths,
         session_summary,
-        recent_calls,
+        tool_counts,
         cache_stats,
         uptime_secs: uptime_secs(),
         version: env!("CARGO_PKG_VERSION"),
