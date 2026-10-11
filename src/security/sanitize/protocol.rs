@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use super::{sanitize_json_value, sanitize_string, validate_protocol_text};
 use crate::Result;
+use crate::gateway::meta_mcp::admission::EXECUTION_DIRECTIVES;
 use crate::gateway::{ArgsPolicy, args_policy};
 use crate::protocol::meta::KEY_CLIENT_CAPABILITIES;
 
@@ -45,33 +46,77 @@ pub(crate) fn validate_protocol_fields(
     // Protocol-position keys are refused when dirty, never stripped into
     // another field (an alias of `id`, `name` or the idempotency key): the
     // envelope's, `params`' own, and every key under `_meta`.
-    let own_keys = |value: Option<&Value>| match value {
-        Some(Value::Object(map)) => map.keys().try_for_each(|key| validate_protocol_text(key)),
-        _ => Ok(()),
-    };
-    own_keys(Some(request))?;
-    own_keys(request.get("params"))?;
+    own_keys(request)?;
+    request.get("params").map_or(Ok(()), own_keys)?;
     meta.map_or(Ok(()), validate_keys)?;
     let client_capabilities = meta.and_then(|meta| meta.get(KEY_CLIENT_CAPABILITIES));
     for capabilities in [request.pointer("/params/capabilities"), client_capabilities] {
         capabilities.map_or(Ok(()), validate_keys)?;
     }
-    // The argument nonce, read where the meta route reads it: the name as
-    // dispatch routes on it (sanitized), `arguments` decoded when a client
-    // sent them as a JSON string, so neither form launders a dirty nonce.
+    // A meta tool's arguments, read where the meta route reads them: the
+    // name as dispatch routes on it (sanitized) and on the META_TOOLS roster,
+    // `arguments` decoded when a client sent them as a JSON string, so
+    // neither form launders a dirty key or nonce.
     if route == ProtocolRoute::Meta
         && let Some(Value::String(name)) = request.pointer("/params/name")
-        && sanitize_string(name).is_ok_and(|name| name == "gateway_invoke")
+        && let Ok(name) = sanitize_string(name)
+        && args_policy(&name) != ArgsPolicy::BackendWhole
+        && let Some(arguments) = decoded(request.pointer("/params/arguments"))
     {
-        let arguments = match request.pointer("/params/arguments") {
-            Some(Value::String(raw)) => serde_json::from_str::<Value>(raw).ok(),
-            other => other.cloned(),
-        };
-        if let Some(Value::String(nonce)) = arguments.as_ref().and_then(|a| a.get("nonce")) {
-            validate_protocol_text(nonce)?;
-        }
+        meta_tool_arguments(&name, &arguments)?;
     }
     Ok(())
+}
+
+/// `value`'s own keys pass [`validate_protocol_text`]; a non-object passes.
+fn own_keys(value: &Value) -> Result<()> {
+    match value {
+        Value::Object(map) => map.keys().try_for_each(|key| validate_protocol_text(key)),
+        _ => Ok(()),
+    }
+}
+
+/// An `arguments` member as its reader takes it: an object as it is, a JSON
+/// string decoded; `None` when absent or undecodable (dispatch answers that).
+fn decoded(arguments: Option<&Value>) -> Option<Value> {
+    match arguments? {
+        Value::String(raw) => serde_json::from_str(raw).ok(),
+        other => Some(other.clone()),
+    }
+}
+
+/// The keys the gateway reads inside a meta tool's `arguments` (MIK-8378
+/// ENV.2), refused when dirty, never stripped into the key they clean to:
+/// the arguments' own keys and, for `gateway_execute`, each chain step's;
+/// for `gateway_invoke` the signing nonce, the own keys of `_meta` (trace
+/// context, prompt cache key) and, inside the tool's own `arguments`, a key
+/// that cleans to a gateway directive. Any other key there is the tool's
+/// business data and keeps today's stripping (S9c).
+fn meta_tool_arguments(name: &str, arguments: &Value) -> Result<()> {
+    own_keys(arguments)?;
+    match name {
+        "gateway_execute" => match arguments.get("chain") {
+            Some(Value::Array(chain)) => chain.iter().try_for_each(own_keys),
+            _ => Ok(()),
+        },
+        "gateway_invoke" => {
+            if let Some(Value::String(nonce)) = arguments.get("nonce") {
+                validate_protocol_text(nonce)?;
+            }
+            arguments.get("_meta").map_or(Ok(()), own_keys)?;
+            match decoded(arguments.get("arguments")) {
+                Some(Value::Object(tool)) => tool
+                    .keys()
+                    .filter(|key| {
+                        sanitize_string(key)
+                            .is_ok_and(|key| EXECUTION_DIRECTIVES.contains(&key.as_str()))
+                    })
+                    .try_for_each(|key| validate_protocol_text(key)),
+                _ => Ok(()),
+            }
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Which route a request came in on: on the meta routes (`/mcp`, stdio)
