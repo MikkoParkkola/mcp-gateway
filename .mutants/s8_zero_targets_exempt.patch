@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/authorization.rs b/src/gateway/router/authorization.rs
+index 523cdc8c4..4d25c123f 100644
+--- a/src/gateway/router/authorization.rs
++++ b/src/gateway/router/authorization.rs
+@@ -57,7 +57,7 @@ pub(crate) fn sanitize_exempt(
+         .map(|server| meta_mcp.passthrough_instance(server))
+         .collect();
+     match instances {
+-        Some(instances) if !instances.is_empty() => {
++        Some(instances) => {
+             crate::gateway::meta_mcp::visible::record_exempt_instances(&instances);
+             true
+         }

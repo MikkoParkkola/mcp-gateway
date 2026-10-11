@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/visible.rs b/src/gateway/meta_mcp/visible.rs
+index 2a3a770f0..90dd78cb9 100644
+--- a/src/gateway/meta_mcp/visible.rs
++++ b/src/gateway/meta_mcp/visible.rs
+@@ -322,7 +322,7 @@ pub(crate) fn changed_instance(backend: &crate::backend::Backend) -> Option<Stri
+         .instances
+         .iter()
+         .find(|(name, _)| *name == backend.name)?;
+-    (!std::ptr::eq(instance.as_ptr(), backend))
++    (false && !std::ptr::eq(instance.as_ptr(), backend))
+         .then(|| "The backend changed after this call was admitted; retry the call".to_owned())
+ }
+ 

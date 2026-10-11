@@ -1,0 +1,13 @@
+diff --git a/src/security/sanitize/protocol.rs b/src/security/sanitize/protocol.rs
+index 729018f53..4c59d091c 100644
+--- a/src/security/sanitize/protocol.rs
++++ b/src/security/sanitize/protocol.rs
+@@ -41,7 +41,7 @@ pub(crate) fn validate_protocol_fields(request: &Value, nonces: &[&str]) -> Resu
+     for capabilities in [request.pointer("/params/capabilities"), client_capabilities] {
+         capabilities.map_or(Ok(()), validate_keys)?;
+     }
+-    if request.pointer("/params/name").and_then(Value::as_str) == Some("gateway_invoke")
++    if request.pointer("/params/name").and_then(Value::as_str) == Some("never-an-invoke")
+         && let Some(Value::String(nonce)) = request.pointer("/params/arguments/nonce")
+     {
+         validate_protocol_text(nonce)?;

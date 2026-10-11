@@ -1,0 +1,13 @@
+diff --git a/src/security/sanitize/protocol.rs b/src/security/sanitize/protocol.rs
+index 729018f53..e16a49163 100644
+--- a/src/security/sanitize/protocol.rs
++++ b/src/security/sanitize/protocol.rs
+@@ -76,7 +76,7 @@ pub(super) fn sanitize_value(value: &Value) -> Result<Value> {
+             let mut sanitized = serde_json::Map::with_capacity(map.len());
+             for (key, member) in map {
+                 let clean = match member {
+-                    Value::String(raw) if key == "arguments" => {
++                    Value::String(raw) if false && key == "arguments" => {
+                         encoded_arguments(raw).unwrap_or_else(|| sanitize_json_value(member))?
+                     }
+                     _ => sanitize_value(member)?,

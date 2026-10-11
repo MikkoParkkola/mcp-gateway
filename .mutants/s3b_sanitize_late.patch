@@ -1,0 +1,28 @@
+diff --git a/src/gateway/router/backend_handlers.rs b/src/gateway/router/backend_handlers.rs
+index 974fd4754..9dc2e45a5 100644
+--- a/src/gateway/router/backend_handlers.rs
++++ b/src/gateway/router/backend_handlers.rs
+@@ -165,7 +165,9 @@ async fn apply_backend_tool_call_security(
+     // The request was sanitized as a whole at intake when the setting is on
+     // (MIK-8154 SAN.1, `direct_caller::read_envelope`); these are the params
+     // to forward.
+-    Ok(Some(params.clone()))
++    crate::security::sanitize::sanitize_json_value(params)
++        .map(Some)
++        .map_err(|e| backend_security_error(id, &e.to_string()))
+ }
+ 
+ /// What a direct-route call's token must grant (MIK-7570.ATTEST.1 part 3).
+diff --git a/src/gateway/router/backend_handlers/direct_caller.rs b/src/gateway/router/backend_handlers/direct_caller.rs
+index a47efbef2..a2ef0bb26 100644
+--- a/src/gateway/router/backend_handlers/direct_caller.rs
++++ b/src/gateway/router/backend_handlers/direct_caller.rs
+@@ -247,7 +247,7 @@ pub(super) async fn read_envelope(
+                 crate::gateway::meta_mcp::visible::record_exempt_instances(&[instance]);
+                 Ok(None)
+             } else {
+-                crate::security::sanitize::sanitize_request(&json_request).map(Some)
++                Ok(None)
+             }
+         });
+         match sanitized {

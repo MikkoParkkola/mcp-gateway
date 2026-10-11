@@ -1,0 +1,19 @@
+diff --git a/src/gateway/router/authorization.rs b/src/gateway/router/authorization.rs
+index 523cdc8c4..3319204b2 100644
+--- a/src/gateway/router/authorization.rs
++++ b/src/gateway/router/authorization.rs
+@@ -47,7 +47,13 @@ pub(crate) fn sanitize_exempt(
+         crate::gateway::meta_mcp::visible::record_judged_playbook(digest);
+         servers
+     } else {
+-        let targets = backend_tool_targets_for_call(meta_mcp, name, arguments, view);
++        let _ = view;
++        let targets = backend_tool_targets_for_call(
++            meta_mcp,
++            name,
++            arguments,
++            crate::gateway::meta_mcp::visible::TargetView::Dispatched,
++        );
+         targets.into_iter().map(|t| t.server).collect()
+     };
+     // Judged and recorded on the same instances (F2): a reload between two

@@ -1,0 +1,14 @@
+head_sha	278bf2ad651338f3f9b84e6bdd3e8002c2b100c1
+# MIK-8154 PR2 mutation proofs, final head (test plan M3; C2e (b'); F2; seat fixes).
+c2e_sync_skip	linux	c2e_sync_skip.patch	--lib -- mik8154_rows_tests::c2e
+worker_drops_judgement	linux	worker_drops_judgement.patch	--lib -- mik8154_rows_tests::c2e
+np_ignores_visibility	linux	np_ignores_visibility.patch	--lib -- mik8154_rows_tests::np withheld_parity_tests::np3
+cap1_7a_via_7b	linux	cap1_7a_via_7b.patch	--lib -- mik8154_rows_tests::cap1
+s3b_sanitize_late	linux	s3b_sanitize_late.patch	--lib -- mik8154_rows_tests::s3b
+passthrough_ignored	linux	passthrough_ignored.patch	--lib -- mik8154_rows_tests::p mik8154_rows_tests::c2 mik8154_rows_tests::np2 p3::p2_stdio
+s8_zero_targets_exempt	linux	s8_zero_targets_exempt.patch	--lib -- mik8154_rows_tests::s8
+s4_fields_unvalidated	linux	s4_fields_unvalidated.patch	--lib -- mik8154_rows_tests::s4_ mik8154_rows_tests::s2d mik8154_rows_tests::s10
+f2_send_skip	linux	f2_send_skip.patch	--lib -- mik8154_rows_tests::c2e::r
+s9_encoded_skip	linux	s9_encoded_skip.patch	--lib -- mik8154_rows_tests::encoded
+s4b_invoke_nonce_unvalidated	linux	s4b_invoke_nonce_unvalidated.patch	--lib -- signed_order::s4b
+key_unvalidated	linux	key_unvalidated.patch	--lib -- mik8154_rows_tests::s4_
