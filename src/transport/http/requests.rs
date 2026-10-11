@@ -188,28 +188,22 @@ impl HttpTransport {
                 Provenance::mark_dispatched();
                 return Ok(Some(token));
             }
-            let token = match &self.login_gate {
-                // Ungated (no backend gate): the token step runs inline, as
-                // before MIK-8339.
-                None => oauth_mutex.lock().await.get_token().await?,
-                Some(gate) => {
-                    // Captured here, synchronously, before anything queues: a
-                    // start's own set-out epoch wins, else the gate's now.
-                    let set_out = gate.set_out_now();
-                    // Mark a login wait only when a login is actually open:
-                    // this caller will queue behind it (MIK-7982 C3).
-                    if gate.in_flight() {
-                        Provenance::mark_waited();
-                    }
-                    detach_token_step(
-                        Arc::clone(oauth_mutex),
-                        Arc::clone(gate),
-                        set_out,
-                        sanitize_url_for_diagnostics(&self.base_url),
-                    )
-                    .await?
-                }
-            };
+            let gate = &self.login_gate;
+            // Captured here, synchronously, before anything queues: a start's
+            // own set-out epoch wins, else the gate's now.
+            let set_out = gate.set_out_now();
+            // Mark a login wait only when a login is actually open: this
+            // caller will queue behind it (MIK-7982 C3).
+            if gate.in_flight() {
+                Provenance::mark_waited();
+            }
+            let token = detach_token_step(
+                Arc::clone(oauth_mutex),
+                Arc::clone(gate),
+                set_out,
+                sanitize_url_for_diagnostics(&self.base_url),
+            )
+            .await?;
             // Past the request-time token step: a deadline from here is the
             // backend's, not a login's (MIK-7982 C3).
             Provenance::mark_dispatched();

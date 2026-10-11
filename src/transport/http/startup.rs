@@ -79,11 +79,12 @@ impl HttpTransport {
             // Captured here, before the task queues on anything (MIK-8339): a
             // start's own set-out epoch and cohort, else the gate's now. A
             // restart or stop after this point refuses this login.
-            let gate = self.login_gate.clone();
-            let set_out = gate.as_ref().map(|gate| gate.set_out_now());
-            let since = set_out.as_ref().map(|set_out| set_out.since);
-            let cohort = set_out.as_ref().map(|set_out| Arc::clone(&set_out.cohort));
-            let deadline = set_out.as_ref().map(|set_out| set_out.deadline);
+            let gate = Arc::clone(&self.login_gate);
+            let crate::oauth::login_gate::SetOut {
+                since,
+                cohort,
+                deadline,
+            } = gate.set_out_now();
             let refused_name = sanitize_url_for_diagnostics(&self.base_url);
             let oauth_task = tokio::spawn(async move {
                 let cancelled = || crate::Error::AuthorizationCancelled {
@@ -91,47 +92,38 @@ impl HttpTransport {
                 };
                 // A pre-login stage that outlived the start's deadline: the
                 // cohort's recorded failure if there is one.
-                let timed_out = |gate: &crate::oauth::login_gate::LoginGate| {
+                let timed_out = || {
                     let otherwise = crate::Error::BackendTimeout(refused_name.clone());
-                    match &cohort {
-                        Some(cohort) => gate.classify(cohort, &refused_name, otherwise),
-                        None => otherwise,
-                    }
+                    gate.classify(&cohort, &refused_name, otherwise)
                 };
                 // A non-interactive caller (the health probe) never waits on
                 // the client mutex a login holds for minutes (MIK-7982 C2).
                 // An interactive one waits under the start's revocation and
                 // the authorization window (MIK-8339).
-                let mut oauth = if !interactive {
-                    oauth_arc_for_task.try_lock().map_err(|_| {
-                        crate::Error::AuthorizationRequired {
-                            backend: refused_name.clone(),
-                        }
-                    })?
-                } else if let (Some(gate), Some(since), Some(deadline)) = (&gate, since, deadline) {
+                let mut oauth = if interactive {
                     tokio::select! {
                         biased;
                         () = gate.revoked_since(since) => return Err(cancelled()),
                         () = tokio::time::sleep_until(crate::oauth::login_gate::stage_end(
                             crate::oauth::OAUTH_AUTHORIZATION_WINDOW,
                             deadline,
-                        )) => return Err(timed_out(gate)),
+                        )) => return Err(timed_out()),
                         oauth = oauth_arc_for_task.lock() => oauth,
                     }
                 } else {
-                    oauth_arc_for_task.lock().await
+                    oauth_arc_for_task.try_lock().map_err(|_| {
+                        crate::Error::AuthorizationRequired {
+                            backend: refused_name.clone(),
+                        }
+                    })?
                 };
                 // Discovery, before any login: a restart or stop ends it, and
                 // so does the start's deadline.
-                if let (Some(gate), Some(since)) = (&gate, since) {
-                    tokio::select! {
-                        biased;
-                        () = gate.revoked_since(since) => return Err(cancelled()),
-                        () = crate::oauth::login_gate::past(deadline) => return Err(timed_out(gate)),
-                        initialized = oauth.initialize() => initialized?,
-                    }
-                } else {
-                    oauth.initialize().await?;
+                tokio::select! {
+                    biased;
+                    () = gate.revoked_since(since) => return Err(cancelled()),
+                    () = crate::oauth::login_gate::past(Some(deadline)) => return Err(timed_out()),
+                    initialized = oauth.initialize() => initialized?,
                 }
 
                 // If we don't have a valid token, trigger authorization flow
@@ -140,7 +132,12 @@ impl HttpTransport {
                     let url = sanitize_url_for_diagnostics(&base_url_for_task);
                     info!(target: HTTP_TARGET, url = %url, "OAuth required - initiating authorization flow");
                     oauth
-                        .authorize_shared_with(interactive, since, cohort.as_ref(), deadline)
+                        .authorize_shared_with(
+                            interactive,
+                            Some(since),
+                            Some(&cohort),
+                            Some(deadline),
+                        )
                         .await?;
                 }
 

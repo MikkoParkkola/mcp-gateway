@@ -318,8 +318,9 @@ pub struct HttpTransport {
     oauth_client: Option<Arc<TokioMutex<OAuthClient>>>,
     /// The OAuth client's login gate, cloned at construction so a request's
     /// token step reads its epoch and cohort without the client mutex
-    /// (MIK-8339).
-    login_gate: Option<Arc<crate::oauth::login_gate::LoginGate>>,
+    /// (MIK-8339). Every OAuth transport has one: a client that arrives
+    /// without a gate is given this one, so there is no ungated login path.
+    login_gate: Arc<crate::oauth::login_gate::LoginGate>,
     /// Background token-refresh task handle, set during `initialize()`.
     /// Stored in a lock so `initialize(&self)` can assign it after construction.
     refresh_task: RwLock<Option<JoinHandle<()>>>,
@@ -430,7 +431,14 @@ impl HttpTransport {
             require_secure_oauth_target(&base_origin)?;
         }
         let redirects_followed = Arc::new(AtomicU64::new(0));
-        let login_gate = oauth_client.as_ref().and_then(OAuthClient::login_gate);
+        let login_gate = oauth_client
+            .as_ref()
+            .and_then(OAuthClient::login_gate)
+            .unwrap_or_default();
+        let oauth_client = oauth_client.map(|client| match client.login_gate() {
+            Some(_) => client,
+            None => client.with_login_gate(Arc::clone(&login_gate)),
+        });
         let client = client::build(
             base_origin,
             timeout,

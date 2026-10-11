@@ -467,7 +467,9 @@ async fn a_login_waiting_on_a_held_credential_lock_ends_at_its_bound() {
 }
 
 /// The started backend's OAuth client, as a login holding it would be.
-fn oauth_client_of(backend: &Backend) -> Arc<tokio::sync::Mutex<crate::oauth::OAuthClient>> {
+pub(super) fn oauth_client_of(
+    backend: &Backend,
+) -> Arc<tokio::sync::Mutex<crate::oauth::OAuthClient>> {
     backend
         .last_oauth_client
         .lock()
@@ -577,7 +579,7 @@ async fn a_detached_steps_bound_with_no_login_is_a_backend_timeout() {
 
 /// Advance paused time by `by`, then resume real time. Used only while the
 /// task waits on something this test holds, so no network I/O can race it.
-async fn advance_paused(by: Duration) {
+pub(super) async fn advance_paused(by: Duration) {
     tokio::time::pause();
     tokio::time::advance(by).await;
     tokio::time::resume();

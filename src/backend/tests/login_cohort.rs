@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8339 LOGINDL.8: a start queued behind a login that then fails shares
-//! that failure, recorded on the cohort it captured before it queued, rather
-//! than discovering again and opening a login of its own.
+//! MIK-8339 start-path rows. LOGINDL.8: a start queued behind a login that
+//! then fails shares that failure, recorded on the cohort it captured before
+//! it queued, rather than discovering again and opening a login of its own.
+//! LOGINDL.24: a reconnect waiting for its OAuth client ends at its bound.
 
 use super::login_window::{
     Browser, approve, counted_authorization_server, login_backend, spawn_start, variant, within,
@@ -54,5 +55,47 @@ async fn a_start_queued_behind_a_failed_login_shares_its_outcome() {
         discovered.load(Ordering::SeqCst),
         1,
         "the queued start shared the outcome without discovering again"
+    );
+}
+
+/// LOGINDL.24: a transport re-connecting after its session expired, whose
+/// connect waits for the OAuth client another task holds (a login or a
+/// refresh), gives up at its own bound (`startup.rs`, the connect client-wait
+/// arm), so the caller gets its answer instead of waiting on the client
+/// however long it is held. A failed re-handshake returns the caller's own
+/// session-expired answer (`transport_impl.rs`), which is what the row reads.
+#[tokio::test]
+async fn a_reconnect_waiting_for_its_oauth_client_ends_at_its_bound() {
+    use super::login_detach::{advance_paused, oauth_client_of};
+    use super::login_window::{Upstream, approved_start, spawn_call};
+    static SEEN: AtomicUsize = AtomicUsize::new(0);
+    let (backend, _browser, _dir) = approved_start(
+        Upstream::SessionExpires(Duration::from_secs(2), &SEEN),
+        Duration::from_secs(3600),
+    )
+    .await;
+    let before = SEEN.load(Ordering::SeqCst);
+    let call = spawn_call(&backend);
+    // The call's request reached the server on a live token; its
+    // session-expired answer comes 2 s later. Meanwhile another task takes
+    // the client.
+    super::token_lapse::arrived(&SEEN, before + 1, "the call's request").await;
+    let client = oauth_client_of(&backend);
+    let held = client.lock().await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(
+        !call.is_finished(),
+        "premise: the call's reconnect is waiting for the client"
+    );
+    // The reconnect waits on a mutex this test holds: no I/O is left to race.
+    advance_paused(crate::oauth::OAUTH_AUTHORIZATION_WINDOW + Duration::from_secs(1)).await;
+
+    let answered = within("the call's answer after its reconnect's bound", call)
+        .await
+        .expect("call task");
+    drop(held);
+    assert!(
+        format!("{answered:?}").contains("session not found"),
+        "the caller got its own session-expired answer: {answered:?}"
     );
 }
