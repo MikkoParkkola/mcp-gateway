@@ -27,6 +27,12 @@ pub(super) mod view;
 #[path = "collusion_walk.rs"]
 mod walk;
 
+/// Reference-list walks built on this thread (tests only, `MIK-8066` D2).
+#[cfg(test)]
+pub(crate) fn walks_built() -> u64 {
+    walk::walks_built()
+}
+
 #[path = "collusion_runs.rs"]
 mod runs;
 use runs::own_span_delivered_runs;

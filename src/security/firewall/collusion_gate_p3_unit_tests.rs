@@ -170,6 +170,13 @@ fn answers_past_the_walk_caps_are_unread_without_walking() {
         deep = json!([deep]);
     }
     let long = json!({"whole": filler(1011, 5 * 1024 * 1024)});
+    // Control: a readable answer is walked, so the counter can move.
+    let before = detector.walk_refs_built();
+    let _ = fw.delivered_for_plan(&json!({"a": "readable"}), None);
+    assert!(
+        detector.walk_refs_built() > before,
+        "premise: a readable answer's walk was not counted"
+    );
     for (name, answer) in [
         ("nodes", Value::Object(many)),
         ("depth", deep),

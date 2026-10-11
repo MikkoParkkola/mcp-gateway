@@ -626,10 +626,13 @@ impl CollusionDetector {
         self.views.selection_refusals.load(Ordering::Relaxed)
     }
 
-    /// STUB (2b red): reference lists the answer walks built.
+    /// Reference lists the answer walks built on this thread (D2).
+    #[expect(
+        clippy::unused_self,
+        reason = "a detector accessor, as the rows read it"
+    )]
     pub(crate) fn walk_refs_built(&self) -> u64 {
-        let _ = self;
-        0
+        super::super::collusion_digest::walks_built()
     }
 
     /// `VIEW_BYTES` lowered for this detector.
