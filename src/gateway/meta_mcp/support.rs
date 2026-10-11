@@ -544,8 +544,11 @@ impl MetaMcpInvoker<'_, '_> {
     }
 }
 
-/// The one answer a refused playbook step gets (A3): a step's server and tool
-/// are operator-defined, so the reason never names them.
+/// The one answer a step gets when authorization refuses it or a content scan
+/// flags its arguments (A3): a step's server, tool and arguments are
+/// operator-defined, so the reason never names them. A budget, tenant or
+/// anomaly refusal keeps the firewall's wording instead: it carries counts and
+/// scores only, and the caller needs it to back off.
 pub(crate) const STEP_NOT_PERMITTED: &str = "step not permitted for this caller";
 /// Its JSON-RPC code and HTTP status.
 pub(crate) const STEP_NOT_PERMITTED_CODE: i32 = -32003;

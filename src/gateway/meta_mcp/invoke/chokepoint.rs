@@ -179,7 +179,8 @@ impl MetaMcp {
     ///
     /// A [`ScanTarget::Step`] is a playbook step the definition names, not the
     /// request: a content finding about it is answered with the neutral step
-    /// refusal, as every other refusal of a step is (A3).
+    /// refusal, as a step's authorization refusal is (A3). A stateful control's
+    /// refusal (budget, tenant, anomaly) keeps its count-only firewall wording.
     #[cfg(feature = "firewall")]
     pub(crate) fn route_request_scan(
         &self,
