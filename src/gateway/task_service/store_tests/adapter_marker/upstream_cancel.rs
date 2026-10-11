@@ -379,7 +379,7 @@ async fn a_legacy_row_at_the_byte_cap_takes_a_pending_claim() {
     assert_eq!(pending["handle"], json!("job-wide"), "{record}");
     assert!(pending.get("backend").is_none(), "{record}");
     assert_eq!(
-        record["targets"][pending["target"].as_u64().unwrap() as usize]["server"],
+        record["targets"][usize::try_from(pending["target"].as_u64().unwrap()).unwrap()]["server"],
         json!("b".repeat(128)),
         "{record}"
     );

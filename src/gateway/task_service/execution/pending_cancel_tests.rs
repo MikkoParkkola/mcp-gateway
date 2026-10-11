@@ -285,6 +285,7 @@ use CancelDelivery::{Failed, NotReady};
 use UpstreamCancelState::{Done, Pending};
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+const DAY_MS: u64 = 24 * 60 * 60 * 1_000;
 const HOUR: Duration = Duration::from_secs(60 * 60);
 
 /// T2. Red at base. A first send that fails stays pending, and the sweep's
@@ -292,7 +293,7 @@ const HOUR: Duration = Duration::from_secs(60 * 60);
 /// Mutant: "the sweep ignores Pending".
 #[tokio::test]
 async fn a_failed_first_send_is_retried_once_due_and_then_done() {
-    let f = fixture(Some(DAY.as_millis() as u64)).await;
+    let f = fixture(Some(DAY_MS)).await;
     let peer = ScriptedPeer::new([Failed]);
     assert!(f.executor.install_recovery(peer.clone()));
     f.owner_cancels().await;
@@ -311,7 +312,7 @@ async fn a_failed_first_send_is_retried_once_due_and_then_done() {
 /// Mutant: "no retry on the start signal".
 #[tokio::test]
 async fn a_not_ready_send_is_retried_when_its_backend_starts() {
-    let f = fixture(Some(DAY.as_millis() as u64)).await;
+    let f = fixture(Some(DAY_MS)).await;
     let peer = ScriptedPeer::new([NotReady]);
     assert!(f.executor.install_recovery(peer.clone()));
     f.owner_cancels().await;
@@ -326,7 +327,7 @@ async fn a_not_ready_send_is_retried_when_its_backend_starts() {
 /// sends nothing of its own. Mutant: "a flush ignores the row's send lock".
 #[tokio::test]
 async fn a_flush_during_an_in_flight_send_sends_nothing() {
-    let f = fixture(Some(DAY.as_millis() as u64)).await;
+    let f = fixture(Some(DAY_MS)).await;
     let peer = ScriptedPeer::new([]);
     assert!(f.executor.install_recovery(peer.clone()));
     let release = peer.hold_next();
@@ -347,7 +348,7 @@ async fn a_flush_during_an_in_flight_send_sends_nothing() {
 /// spawned send", which leaves the freshly claimed, already-due row unlocked.
 #[tokio::test]
 async fn a_flush_before_the_detached_send_is_polled_sends_nothing() {
-    let f = fixture(Some(DAY.as_millis() as u64)).await;
+    let f = fixture(Some(DAY_MS)).await;
     let peer = ScriptedPeer::new([]);
     assert!(f.executor.install_recovery(peer.clone()));
     f.owner_cancels().await;
@@ -363,7 +364,7 @@ async fn a_flush_before_the_detached_send_is_polled_sends_nothing() {
 /// Mutant: "the owner's cancel awaits its upstream send".
 #[tokio::test]
 async fn the_owners_cancel_returns_before_the_peer_answers() {
-    let f = fixture(Some(DAY.as_millis() as u64)).await;
+    let f = fixture(Some(DAY_MS)).await;
     let peer = ScriptedPeer::new([]);
     assert!(f.executor.install_recovery(peer.clone()));
     let release = peer.hold_next();
@@ -380,7 +381,7 @@ async fn the_owners_cancel_returns_before_the_peer_answers() {
 #[tokio::test]
 async fn a_repeated_owner_cancel_does_not_wait_on_the_send_in_flight() {
     use super::super::upstream::CancelSend;
-    let f = fixture(Some(DAY.as_millis() as u64)).await;
+    let f = fixture(Some(DAY_MS)).await;
     let peer = ScriptedPeer::new([]);
     assert!(f.executor.install_recovery(peer.clone()));
     let release = peer.hold_next();
@@ -404,7 +405,7 @@ async fn a_repeated_owner_cancel_does_not_wait_on_the_send_in_flight() {
 /// given up, and nothing is sent after. Mutant: "unbounded retry".
 #[tokio::test]
 async fn failed_sends_stop_at_the_attempt_bound() {
-    let f = fixture(Some((30 * DAY).as_millis() as u64)).await;
+    let f = fixture(Some(30 * DAY_MS)).await;
     let peer = ScriptedPeer::new(std::iter::repeat_n(Failed, 20));
     assert!(f.executor.install_recovery(peer.clone()));
     f.owner_cancels().await;
@@ -445,10 +446,10 @@ async fn a_never_ready_backend_is_given_up_by_age_under_unlimited_retention() {
 
 /// T9. Red at base. Not-ready attempts do not spend the bound: past more of
 /// them than `MAX_CANCEL_ATTEMPTS`, a ready backend still gets the cancel.
-/// Mutant: "NotReady counted as an attempt".
+/// Mutant: "`NotReady` counted as an attempt".
 #[tokio::test]
 async fn not_ready_attempts_do_not_spend_the_bound() {
-    let f = fixture(Some((30 * DAY).as_millis() as u64)).await;
+    let f = fixture(Some(30 * DAY_MS)).await;
     let waits = usize::from(MAX_CANCEL_ATTEMPTS) + 2;
     let peer = ScriptedPeer::new(std::iter::repeat_n(NotReady, waits));
     assert!(f.executor.install_recovery(peer.clone()));
@@ -479,7 +480,7 @@ async fn not_ready_attempts_do_not_spend_the_bound() {
 /// Mutant: "the sweep awaits its sends".
 #[tokio::test]
 async fn shutdown_is_not_held_by_a_hanging_retry() {
-    let f = fixture(Some(DAY.as_millis() as u64)).await;
+    let f = fixture(Some(DAY_MS)).await;
     let peer = ScriptedPeer::new([Failed]);
     assert!(f.executor.install_recovery(peer.clone()));
     f.owner_cancels().await;
@@ -504,7 +505,7 @@ async fn shutdown_is_not_held_by_a_hanging_retry() {
 /// gateway sends it once, then never again. Mutant: "Pending not persisted".
 #[tokio::test]
 async fn a_pending_cancel_survives_a_restart_and_is_sent_once() {
-    let f = fixture(Some(DAY.as_millis() as u64)).await;
+    let f = fixture(Some(DAY_MS)).await;
     let first = ScriptedPeer::new([Failed]);
     assert!(f.executor.install_recovery(first.clone()));
     f.owner_cancels().await;
@@ -586,7 +587,7 @@ enum Repeat {
 /// the worker goes on. Exactly one cancel reaches the peer.
 async fn owner_cancel_meets_a_paused_offer(repeat: Repeat, hook: Hook) {
     use super::super::upstream::CancelSend;
-    let f = fixture_with(Some(DAY.as_millis() as u64), Handle::Held).await;
+    let f = fixture_with(Some(DAY_MS), Handle::Held).await;
     let peer = ScriptedPeer::new([]);
     assert!(f.executor.install_recovery(peer.clone()));
     let offer = held_offer(&f);
@@ -656,11 +657,11 @@ async fn an_owner_winning_the_lock_before_the_workers_recheck_still_cancels() {
 
 /// T12b (r3.5). Red at base. A worker's offer that finished on a working row
 /// is kept, so the owner's later cancel still names the handle.
-/// Mutant: "a NotOurs offer is dropped".
+/// Mutant: "a `NotOurs` offer is dropped".
 #[tokio::test]
 async fn an_offer_made_before_the_owners_cancel_is_kept_for_it() {
     use super::super::upstream::CancelSend;
-    let f = fixture_with(Some(DAY.as_millis() as u64), Handle::Held).await;
+    let f = fixture_with(Some(DAY_MS), Handle::Held).await;
     let peer = ScriptedPeer::new([]);
     assert!(f.executor.install_recovery(peer.clone()));
     let offered = f

@@ -249,20 +249,19 @@ impl Sender {
     ) -> bool {
         let mut first = None;
         loop {
-            let (seen, claimed) = match done.take() {
-                Some(pass) => pass,
-                None => {
-                    let seen = row.generation.load(Ordering::SeqCst);
-                    let claimed = self.claim((&owner, &id), &mut held, offered.take()).await;
-                    #[cfg(test)]
-                    self.service.cancel_sends.hook(Hook::AfterClaim).await;
-                    if claimed {
-                        self.send((&owner, &id), Some(Due::Now)).await;
-                    } else if let Some(due) = due {
-                        self.send((&owner, &id), Some(due)).await;
-                    }
-                    (seen, claimed)
+            let (seen, claimed) = if let Some(pass) = done.take() {
+                pass
+            } else {
+                let seen = row.generation.load(Ordering::SeqCst);
+                let claimed = self.claim((&owner, &id), &mut held, offered.take()).await;
+                #[cfg(test)]
+                self.service.cancel_sends.hook(Hook::AfterClaim).await;
+                if claimed {
+                    self.send((&owner, &id), Some(Due::Now)).await;
+                } else if let Some(due) = due {
+                    self.send((&owner, &id), Some(due)).await;
                 }
+                (seen, claimed)
             };
             first.get_or_insert(claimed);
             drop(held);
