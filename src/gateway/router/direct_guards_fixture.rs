@@ -359,20 +359,6 @@ pub(crate) async fn fixture_firewalled_with(
     fx
 }
 
-/// [`fixture_firewalled_audited_built`] with a call budget of `calls` per window
-/// on both firewalls (MIK-8362: a playbook's steps spend what a direct call spends).
-#[cfg(feature = "firewall")]
-pub(crate) async fn fixture_firewalled_budget_built(
-    answer: Answer,
-    (audit, calls): (std::path::PathBuf, usize),
-    build: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> Fx {
-    BUDGET.with(|b| b.set(calls));
-    let fx = fixture_firewalled_audited_built(answer, audit, build).await;
-    BUDGET.with(|b| b.set(0));
-    fx
-}
-
 #[path = "direct_guards_fixture_answers.rs"]
 mod answers;
 #[path = "direct_guards_fixture_egress.rs"]
