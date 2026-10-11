@@ -721,3 +721,7 @@ mod tests {
         .await;
     }
 }
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "relay_delivered_p3_tests.rs"]
+mod p3_tests;

@@ -22,6 +22,8 @@ mod excuse;
 mod middle;
 #[path = "collusion_gate_p3_tests.rs"]
 mod p3;
+#[path = "collusion_gate_p3_unit_tests.rs"]
+mod p3_units;
 #[path = "collusion_gate_plan_tests.rs"]
 mod plan;
 

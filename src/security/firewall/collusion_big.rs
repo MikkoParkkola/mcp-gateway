@@ -31,6 +31,19 @@ pub(super) const PLAN_ANSWER_FPS: usize = 1 << 20;
 /// the per-delivery bound thins them again at record time.
 pub(super) const STEP_EV_BUDGET: usize = 32_768;
 
+/// `MIK-8066` D8: the transient budget every answer view (P3 and <= 1 MiB)
+/// reserves from while its answer is judged; separate from the sketch
+/// store's `SKETCH_BYTES`, so window-long sketches never decide whether a
+/// millisecond judgement runs. Combined worst case 64 MiB. A constant.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "read by the answer view (PR 2b), which lands next"
+    )
+)]
+pub(crate) const VIEW_BYTES: usize = 32 * 1024 * 1024;
+
 /// The extra sketch room a step reserves at logical position `position`
 /// for false positives its Bloom filter selects from the answer view.
 /// Bernstein's bound at a 1e-12 tail, for `PLAN_ANSWER_FPS` candidates each a
@@ -419,6 +432,52 @@ impl CollusionDetector {
     /// computed from the view's length, not from the budget counter.
     pub(crate) fn view_charge_of(&self, answer: &serde_json::Value) -> usize {
         let _ = (self, answer);
+        0
+    }
+
+    /// STUB (2b red): the streaming sampled k-gram hashes of `text` (D2).
+    pub(crate) fn sampled_kgrams(&self, text: &str) -> Vec<u64> {
+        let _ = (self, text);
+        Vec::new()
+    }
+
+    /// STUB (2b red): the sorted sampled view of `answer`, built without the
+    /// over-bound gate (unit rows only).
+    pub(crate) fn view_of(&self, answer: &serde_json::Value) -> Option<Vec<u64>> {
+        let _ = (self, answer);
+        None
+    }
+
+    /// The view's entry cap A (`PLAN_ANSWER_FPS`), for rows outside this
+    /// module.
+    pub(crate) fn view_entry_cap(&self) -> usize {
+        let _ = self;
+        PLAN_ANSWER_FPS
+    }
+
+    /// STUB (2b red): whether a view of `distinct` sampled hashes is admitted
+    /// under the entry cap A.
+    pub(crate) fn view_admits(&self, distinct: usize) -> bool {
+        let _ = (self, distinct);
+        false
+    }
+
+    /// STUB (2b red): (reserved bytes, live buffer bytes) at every growth and
+    /// at compaction while `answer`'s view is built.
+    pub(crate) fn view_build_probe(&self, answer: &serde_json::Value) -> Vec<(usize, usize)> {
+        let _ = (self, answer);
+        Vec::new()
+    }
+
+    /// STUB (2b red): selections refused for lack of `VIEW_BYTES`.
+    pub(crate) fn selection_budget_refusals(&self) -> u64 {
+        let _ = self;
+        0
+    }
+
+    /// STUB (2b red): reference lists the answer walks built.
+    pub(crate) fn walk_refs_built(&self) -> u64 {
+        let _ = self;
         0
     }
 
