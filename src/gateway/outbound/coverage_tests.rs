@@ -305,9 +305,9 @@ fn a_notification_is_not_charged_the_request_tenants() {
 }
 
 /// The refusal an audit failure leaves: `AuditUnavailable`, no result.
-fn assert_audit_refusal(frame: &OutboundFrame, id: Option<RequestId>) {
+fn assert_audit_refusal(frame: &OutboundFrame, id: Option<&RequestId>) {
     let refusal = frame.response().expect("an answer frame stays an answer");
-    assert_eq!(refusal.id, id);
+    assert_eq!(refusal.id.as_ref(), id);
     assert!(refusal.result.is_none(), "the refusal carries no result");
     let code = refusal.error.as_ref().expect("an error").code;
     assert_eq!(code, crate::Error::AuditUnavailable.to_rpc_code());
@@ -322,7 +322,7 @@ async fn a_failed_record_refuses_an_answer_keeping_its_id() {
     let fw = firewall(CrossTenantReads::Observe);
     let (_dir, log) = failing_log();
     let frame = recorded(read_a(&fw), Some(&log)).await;
-    assert_audit_refusal(&frame, Some(RequestId::Number(1)));
+    assert_audit_refusal(&frame, Some(&RequestId::Number(1)));
     assert!(
         !b_flagged(&fw),
         "the refused read still holds its reservation"
