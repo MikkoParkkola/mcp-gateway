@@ -220,3 +220,39 @@ pub(super) fn value_kind(value: &Value) -> &'static str {
         Value::Object(_) => "an object",
     }
 }
+
+#[cfg(test)]
+mod refusal_tests {
+    use super::*;
+
+    /// MIK-8195 W1 (`with_modern_meta`, critical d): params that cannot carry
+    /// `_meta` are refused before dispatch, naming the method.
+    #[test]
+    fn non_object_params_are_refused() {
+        let err = with_modern_meta("tools/call", Some(serde_json::json!(["a"])))
+            .expect_err("an array cannot carry _meta");
+        let Error::Protocol(message) = err else {
+            panic!("not a protocol refusal");
+        };
+        assert!(message.contains("`params` must be an object"), "{message}");
+        assert!(message.contains("tools/call"), "{message}");
+    }
+
+    /// MIK-8195 W1 (`with_modern_meta`, critical d): a caller's non-object
+    /// `_meta` is refused rather than overwritten or dropped.
+    #[test]
+    fn a_non_object_meta_is_refused() {
+        let err = with_modern_meta(
+            "tools/call",
+            Some(serde_json::json!({"name": "x", "_meta": "forged"})),
+        )
+        .expect_err("a string _meta is refused");
+        let Error::Protocol(message) = err else {
+            panic!("not a protocol refusal");
+        };
+        assert!(
+            message.contains("`params._meta` must be an object"),
+            "{message}"
+        );
+    }
+}

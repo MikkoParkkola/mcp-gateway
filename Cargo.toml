@@ -116,6 +116,7 @@ include = [
     "upgrading.d/*.md",
     "gateway.example.yaml",
     "scripts/release/nfr_upgrade_1_rehearsal.sh",
+    "scripts/release/upgrading-startup-grammar.json",
     "server.json",
 ]
 
