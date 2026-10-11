@@ -1,0 +1,13 @@
+diff --git a/src/security/sanitize/protocol.rs b/src/security/sanitize/protocol.rs
+index cedb9e4e9..7561a98cc 100644
+--- a/src/security/sanitize/protocol.rs
++++ b/src/security/sanitize/protocol.rs
+@@ -146,7 +146,7 @@ pub(super) fn sanitize_value(key: &str, value: &Value, route: ProtocolRoute) ->
+         .map_or(ArgsPolicy::BackendWhole, args_policy)
+     {
+         ArgsPolicy::MetaParsedInner => Some(Slot::Meta),
+-        ArgsPolicy::MetaOpaque => None,
++        ArgsPolicy::MetaOpaque => Some(Slot::Tool),
+         ArgsPolicy::BackendWhole => Some(Slot::Tool),
+     };
+     sanitize_object(params, |key, member| {

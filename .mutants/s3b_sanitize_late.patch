@@ -1,0 +1,27 @@
+diff --git a/src/gateway/router/backend_handlers.rs b/src/gateway/router/backend_handlers.rs
+index 974fd4754..9dc2e45a5 100644
+--- a/src/gateway/router/backend_handlers.rs
++++ b/src/gateway/router/backend_handlers.rs
+@@ -165,7 +165,9 @@ async fn apply_backend_tool_call_security(
+     // The request was sanitized as a whole at intake when the setting is on
+     // (MIK-8154 SAN.1, `direct_caller::read_envelope`); these are the params
+     // to forward.
+-    Ok(Some(params.clone()))
++    crate::security::sanitize::sanitize_json_value(params)
++        .map(Some)
++        .map_err(|e| backend_security_error(id, &e.to_string()))
+ }
+ 
+ /// What a direct-route call's token must grant (MIK-7570.ATTEST.1 part 3).
+diff --git a/src/gateway/router/backend_handlers/direct_caller.rs b/src/gateway/router/backend_handlers/direct_caller.rs
+index 7dfa115e0..550e1b512 100644
+--- a/src/gateway/router/backend_handlers/direct_caller.rs
++++ b/src/gateway/router/backend_handlers/direct_caller.rs
+@@ -508,5 +508,6 @@ fn sanitized(state: &AppState, name: &str, request: Value) -> Result<Value, Reje
+         return Ok(request);
+     }
+     let id = crate::protocol::mrtr::raw_request_id(&request);
+-    sanitize_request(&request, ProtocolRoute::Direct).map_err(|e| refused(id, e))
++    let _ = (sanitize_request, refused, id);
++    Ok(request)
+ }

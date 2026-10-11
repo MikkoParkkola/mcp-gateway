@@ -1,0 +1,13 @@
+diff --git a/src/security/sanitize/protocol.rs b/src/security/sanitize/protocol.rs
+index cedb9e4e9..ce5c89d82 100644
+--- a/src/security/sanitize/protocol.rs
++++ b/src/security/sanitize/protocol.rs
+@@ -150,7 +150,7 @@ pub(super) fn sanitize_value(key: &str, value: &Value, route: ProtocolRoute) ->
+         ArgsPolicy::BackendWhole => Some(Slot::Tool),
+     };
+     sanitize_object(params, |key, member| {
+-        slot.filter(|_| key == "arguments")
++        slot.filter(|_| false && key == "arguments")
+             .map(|slot| sanitize_slot(member, slot))
+     })
+ }

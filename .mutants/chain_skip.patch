@@ -1,0 +1,13 @@
+diff --git a/src/security/sanitize/protocol.rs b/src/security/sanitize/protocol.rs
+index cedb9e4e9..dc05e3ffa 100644
+--- a/src/security/sanitize/protocol.rs
++++ b/src/security/sanitize/protocol.rs
+@@ -209,7 +209,7 @@ fn sanitize_arguments(map: &serde_json::Map<String, Value>, slot: Slot) -> Resul
+         Slot::Tool | Slot::Inner => sanitize_json_value(&Value::Object(map.clone())),
+         Slot::Meta => sanitize_object(map, |key, member| match (key, member) {
+             ("arguments", _) => Some(sanitize_slot(member, Slot::Inner)),
+-            ("chain", Value::Array(steps)) => Some(sanitize_steps(steps)),
++            ("never-chain", Value::Array(steps)) => Some(sanitize_steps(steps)),
+             _ => None,
+         }),
+     }
