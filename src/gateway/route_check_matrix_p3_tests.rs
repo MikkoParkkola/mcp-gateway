@@ -431,9 +431,16 @@ async fn mcp_task_refused_after_its_grant_was_consumed_keeps_its_nonce() {
         "premise: the redemption did not consume the grant: {}",
         seen.refused
     );
-    // Here the re-send carries a new grant, which X14 consumes before the
-    // nonce check: exactly one more, never the first grant again.
-    assert_eq!(resent, redeemed + 1, "the re-send's new grant: {}", seen.resent);
+    // Design r4 amendment L1 (lead ruling): a confirmation authorises one
+    // attempt, not one success. The re-send carries a new grant, X14 consumes
+    // it before the nonce check refuses the replay, and it stays spent:
+    // exactly one more, and never the first grant again.
+    let a_refused_resend_spends_its_confirmation = redeemed + 1;
+    assert_eq!(
+        resent, a_refused_resend_spends_its_confirmation,
+        "a confirmation refused before dispatch was refunded or spent twice: {}",
+        seen.resent
+    );
     assert!(
         message(&seen.refused).contains("kill switch"),
         "premise: admission's kill-switch refusal: {}",
