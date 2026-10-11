@@ -189,8 +189,23 @@ async fn r1_a_sync_call_whose_backend_is_reloaded_is_refused() {
     );
     let args = json!({"cmd": NUL});
     let (_, body) = post_meta_invoke(&fx, "k-std", "alpha-pt", "read", args, None, None).await;
-    // `gateway_invoke` answers a backend refusal as an `isError` tool result.
-    assert!(body.to_string().contains(BACKEND_CHANGED), "r1: {body}");
+    // `gateway_invoke` answers a backend refusal as an `isError` tool result
+    // whose recovery hint must say to retry, never to fix the parameters.
+    let text = body
+        .pointer("/result/content/0/text")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let recovery = serde_json::from_str::<Value>(text).unwrap_or_default()["recovery"].clone();
+    assert_eq!(recovery["error_code"], "BACKEND_ERROR", "r1: {body}");
+    assert_eq!(recovery["retry"], true, "r1: {body}");
+    assert!(
+        recovery["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(BACKEND_CHANGED),
+        "r1: {body}"
+    );
+    assert!(!recovery.to_string().contains("input schema"), "r1: {body}");
     assert_eq!(calls(&fx), 0, "r1: the reloaded instance sent");
 }
 
@@ -243,7 +258,7 @@ async fn pb1_a_playbook_run_never_answers_input_required() {
     let body = Box::pin(run_with_nul(&fx)).await;
     let result = body.get("result").cloned().unwrap_or_default();
     assert!(
-        !crate::protocol::mrtr::claims_input_required(&result),
+        !crate::protocol::mrtr::InputRequired::claims_input_required(&result),
         "pb1: the run asked the client: {body}"
     );
 }
