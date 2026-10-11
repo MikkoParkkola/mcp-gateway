@@ -14,8 +14,6 @@ use serde_json::{Value, json};
 use crate::protocol::era::Era;
 use crate::protocol::{JsonRpcRequest, RequestId};
 
-/// The backend answers `slow` and `initialize` only after this.
-const SLOW: Duration = Duration::from_secs(4);
 /// How long a row watches for a cancel that must NOT arrive, or for a second
 /// one after the first. An absence has no event to wait for.
 const QUIET: Duration = Duration::from_millis(1500);
@@ -44,8 +42,10 @@ async fn backend() -> (String, Seen, Arrived) {
             let Some(id) = message.get("id").cloned() else {
                 return axum::http::StatusCode::ACCEPTED.into_response();
             };
+            // `slow` and `initialize` are never answered: a row that wants them
+            // dropped has nothing to race.
             if matches!(message["method"].as_str(), Some("slow" | "initialize")) {
-                tokio::time::sleep(SLOW).await;
+                std::future::pending::<()>().await;
             }
             axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": {}})).into_response()
         }
@@ -95,8 +95,8 @@ async fn backend_has(seen: &Seen, arrived: &Arrived, method: &str, wanted: usize
 
 /// Send `request` shaped for `era` on `transport` and end the exchange as
 /// `exchange` says. A dropped exchange is dropped the moment the backend has
-/// the request, however long that took: the backend answers `slow` and
-/// `initialize` only after [`SLOW`], so the drop always comes first.
+/// the request, however long that took: the backend never answers `slow` or
+/// `initialize`, so the drop always comes first.
 async fn run_exchange(
     transport: &super::HttpTransport,
     (seen, arrived): (&Seen, &Arrived),
@@ -112,8 +112,9 @@ async fn run_exchange(
         }
         Exchange::DroppedOnceReceived => {
             tokio::select! {
-                answer = send => panic!("answered before it was dropped: {answer:?}"),
+                biased;
                 () = backend_has(seen, arrived, &request.method, 1) => {}
+                answer = send => panic!("answered before it was dropped: {answer:?}"),
             }
         }
     }
@@ -257,8 +258,8 @@ async fn a_dropped_recovery_resend_is_cancelled_once_on_the_fresh_session() {
                     "error": {"code": -32015, "message": "Session not found"}});
                 return axum::Json(body).into_response();
             }
-            // timing: fixture
-            tokio::time::sleep(SLOW).await;
+            // The resend on the fresh session is never answered.
+            std::future::pending::<()>().await;
             axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": {"tools": []}})).into_response()
         }
     });
@@ -272,8 +273,9 @@ async fn a_dropped_recovery_resend_is_cancelled_once_on_the_fresh_session() {
     // call there, however long the recovery took.
     let call = transport.request("tools/list", None);
     tokio::select! {
-        answer = call => panic!("answered before it was dropped: {answer:?}"),
+        biased;
         () = backend_has(&seen, &arrived, "tools/list", 2) => {}
+        answer = call => panic!("answered before it was dropped: {answer:?}"),
     }
     backend_has(&seen, &arrived, "notifications/cancelled", 1).await;
     // timing: absence
@@ -322,13 +324,7 @@ async fn the_cancel_carries_the_callers_identity() {
     )
     .await;
     backend_has(&seen, &arrived, "notifications/cancelled", 1).await;
-    let cancels: Vec<_> = seen
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|(m, _)| m["method"] == "notifications/cancelled")
-        .cloned()
-        .collect();
+    let cancels = cancels_within_quiet(&seen).await;
     assert_eq!(cancels.len(), 1, "{cancels:?}");
     assert_eq!(
         cancels[0].1.as_deref(),
