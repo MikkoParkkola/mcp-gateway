@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8339: the login stages with no window of their own still end at a
 //! detached step's one deadline. Each row stalls one stage against a loopback
-//! authorization server and gives the step a deadline a few seconds out; the
-//! HTTP client here has no timeout, so a stage that ignores the deadline
-//! stalls until the row's own 10-second bound fails it.
+//! authorization server and gives the step a deadline a few seconds out. The
+//! OAuth client's own request timeout (30 seconds) is past each row's
+//! 10-second bound, so a stage that ignores the deadline fails the row.
 //!
 //! In production: dynamic client registration runs when no `client_id` is
 //! configured; a joiner is a per-user slot that shares its backend's gate.

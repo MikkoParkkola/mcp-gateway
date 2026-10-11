@@ -671,9 +671,11 @@ async fn three_stalled_stages_end_at_the_steps_one_deadline() {
     );
 }
 
-/// LOGINDL.23: a start's OAuth discovery stalled past the step's one
-/// deadline ends there as the backend's timeout (no login of its cohort ran),
-/// not at the discovery requests' own timeouts.
+/// LOGINDL.23: a start's OAuth discovery still waiting when the step's one
+/// deadline passes ends as the backend's timeout (no login of its cohort ran).
+/// In production each discovery request's own 30-second timeout ends it long
+/// before the deadline, so this arm is a backstop: the jump past the deadline
+/// makes both due, and the row proves the deadline arm wins with its error.
 #[tokio::test]
 async fn a_discovery_stalled_past_the_deadline_is_a_backend_timeout() {
     use crate::oauth::login_gate::DETACHED_DEADLINE;

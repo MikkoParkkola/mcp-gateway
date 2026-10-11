@@ -618,9 +618,10 @@ impl OAuthClient {
         self.authorize_until_by(cancel, listeners, None).await
     }
 
-    /// [`authorize_until`](Self::authorize_until) whose callback wait and
-    /// token save are also bounded by a detached step's one `deadline`
-    /// (MIK-8339): each ends at `min(its window, deadline)`.
+    /// [`authorize_until`](Self::authorize_until) bounded by a detached
+    /// step's one `deadline` (MIK-8339): the callback wait and token save end
+    /// at `min(their window, deadline)`; client registration and the code
+    /// exchange, which have no window of their own, end at the deadline.
     pub(crate) async fn authorize_until_by(
         &self,
         cancel: &tokio_util::sync::CancellationToken,
