@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index a45836d52..80d18e0c3 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -412,7 +412,7 @@ impl MetaMcp {
+             };
+         let witness = RefundWitness::carry(
+             witness,
+-            rw::retry_effect(outbound_retry.request_state.is_some()),
++            rw::retry_effect(false && outbound_retry.request_state.is_some()),
+         );
+ 
+         let egress = relay::Egress {

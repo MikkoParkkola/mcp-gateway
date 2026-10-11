@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index a45836d52..af8519f6f 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -318,7 +318,7 @@ impl MetaMcp {
+         {
+             return Ok(refusal);
+         }
+-        let witness = RefundWitness::carry(witness, rw::schema_effect(cached_before));
++        let witness = RefundWitness::carry(witness, rw::schema_effect(true || cached_before));
+ 
+         // Counted only for a call the cache would otherwise have served, so an
+         // `unresolved_principal` count always means a real bypass.

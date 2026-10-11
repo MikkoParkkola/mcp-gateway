@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index a45836d52..258e56886 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -221,7 +221,7 @@ impl MetaMcp {
+         let minted = caller_credential.cache_binding.is_some();
+         let witness = RefundWitness::carry(
+             witness,
+-            rw::dispatch_effect(minted, account_credential.is_some()),
++            rw::dispatch_effect(minted, false && account_credential.is_some()),
+         );
+         // Who the response cache keys on, in one place and one namespace per
+         // source (`support::caller_cache_principal`). The binding when identity

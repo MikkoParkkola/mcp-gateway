@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/signing.rs b/src/gateway/meta_mcp/signing.rs
+index 796983717..8aef59321 100644
+--- a/src/gateway/meta_mcp/signing.rs
++++ b/src/gateway/meta_mcp/signing.rs
+@@ -182,6 +182,7 @@ impl SigningInvocationContext {
+                 .lock()
+                 .unwrap_or_else(std::sync::PoisonError::into_inner)
+                 .is_some()
++                || true
+     }
+ 
+     /// Move protocol metadata out of the raw request. Invalid nonce values are

@@ -1,0 +1,9 @@
+head_sha	945a4dc557db2ac28a373648b40ec6bd52d3bcd2
+# MIK-8353 slice 3a (NONCEFX.9): the refund witness on the invoke path.
+mGate	linux	mGate.patch	--lib -- mcp_nonce refund_witness signing_unspent signed_budget_tests stdio_settles_a_refund_once
+mF-mint	linux	mF-mint.patch	--lib -- mcp_nonce refund_witness signing_unspent signed_budget_tests stdio_settles_a_refund_once
+mF-account	linux	mF-account.patch	--lib -- mcp_nonce refund_witness signing_unspent signed_budget_tests stdio_settles_a_refund_once
+mF-schema	linux	mF-schema.patch	--lib -- mcp_nonce refund_witness signing_unspent signed_budget_tests stdio_settles_a_refund_once
+mF-retry	linux	mF-retry.patch	--lib -- mcp_nonce refund_witness signing_unspent signed_budget_tests stdio_settles_a_refund_once
+mKeep	linux	mKeep.patch	--lib -- mcp_nonce refund_witness signing_unspent signed_budget_tests stdio_settles_a_refund_once
+mCarryDrop	linux	mCarryDrop.patch	--lib -- mcp_nonce refund_witness signing_unspent signed_budget_tests stdio_settles_a_refund_once
