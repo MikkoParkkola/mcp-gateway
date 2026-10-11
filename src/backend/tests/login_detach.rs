@@ -180,6 +180,7 @@ async fn a_detached_login_marks_its_callers_own_provenance_waited() {
         "premise: no login in flight, so the caller marks nothing before its token step"
     );
 
+    let cohort = backend.login_gate.cohort();
     let classified = Provenance::scope(&backend.login_gate, async {
         // The caller's deadline, as an event: its request is dropped the
         // moment the login it began opens the browser.
@@ -196,6 +197,12 @@ async fn a_detached_login_marks_its_callers_own_provenance_waited() {
             }
         })
         .await;
+        // Premise: no recorded end, so only the waited bit can classify.
+        assert!(
+            cohort.outcome().is_none(),
+            "premise: the cohort recorded an end: {:?}",
+            cohort.outcome()
+        );
         Provenance::expired(
             "login-window",
             Error::BackendTimeout("login-window".to_string()),

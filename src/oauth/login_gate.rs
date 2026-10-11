@@ -395,7 +395,7 @@ tokio::task_local! {
     static PROVENANCE: Arc<Provenance>;
     static FILL: Arc<AtomicBool>;
     static NON_INTERACTIVE: ();
-    static SET_OUT: u64;
+    static SET_OUT: (u64, Option<Arc<Cohort>>);
 }
 
 /// Run a shared metadata fill's `work` with its `mark`: a request the fill
@@ -412,13 +412,33 @@ pub(crate) async fn fill_scope<F: std::future::Future>(
 /// its login is refused if a restart or stop cancelled logins since, however
 /// late its detached OAuth task is first scheduled.
 pub(crate) async fn set_out<F: std::future::Future>(epoch: u64, work: F) -> F::Output {
-    SET_OUT.scope(epoch, work).await
+    SET_OUT.scope((epoch, None), work).await
+}
+
+/// [`set_out`] carrying the `cohort` the start captured before it queued
+/// (MIK-8339), so its login, however late, shares that cohort's recorded
+/// failure at `begin` instead of opening a second login.
+pub(crate) async fn set_out_with_cohort<F: std::future::Future>(
+    epoch: u64,
+    cohort: Arc<Cohort>,
+    work: F,
+) -> F::Output {
+    SET_OUT.scope((epoch, Some(cohort)), work).await
+}
+
+/// The cohort the current start captured (`None` outside a start, or a start
+/// that captured none). Read before any `tokio::spawn`.
+pub(crate) fn set_out_cohort() -> Option<Arc<Cohort>> {
+    SET_OUT
+        .try_with(|(_, cohort)| cohort.clone())
+        .ok()
+        .flatten()
 }
 
 /// The epoch the current start set out at (`None` outside a start). Read
 /// before any `tokio::spawn`, as [`interactive`] is.
 pub(crate) fn set_out_epoch() -> Option<u64> {
-    SET_OUT.try_with(|epoch| *epoch).ok()
+    SET_OUT.try_with(|(epoch, _)| *epoch).ok()
 }
 
 /// The caller's task-local scopes, captured synchronously in the caller so a
@@ -428,7 +448,7 @@ pub(crate) fn set_out_epoch() -> Option<u64> {
 pub(crate) struct Carried {
     provenance: Option<Arc<Provenance>>,
     fill: Option<Arc<AtomicBool>>,
-    set_out: Option<u64>,
+    set_out: Option<(u64, Option<Arc<Cohort>>)>,
 }
 
 /// Capture the current scopes; call it in the caller, never in the task.
@@ -436,7 +456,7 @@ pub(crate) fn carry_scopes() -> Carried {
     Carried {
         provenance: PROVENANCE.try_with(Arc::clone).ok(),
         fill: FILL.try_with(Arc::clone).ok(),
-        set_out: SET_OUT.try_with(|epoch| *epoch).ok(),
+        set_out: SET_OUT.try_with(Clone::clone).ok(),
     }
 }
 
@@ -450,7 +470,7 @@ impl Carried {
         } = self;
         let work = async move {
             match set_out {
-                Some(epoch) => SET_OUT.scope(epoch, work).await,
+                Some(set_out) => SET_OUT.scope(set_out, work).await,
                 None => work.await,
             }
         };
@@ -693,8 +713,11 @@ mod tests {
         let gate = Arc::new(LoginGate::default());
         let set_out = gate.epoch();
         gate.cancel_and_join().await;
-        assert!(matches!(gate.begin(Some(set_out)), Begin::Refused));
-        assert!(matches!(gate.begin(Some(gate.epoch())), Begin::Lead(_)));
+        assert!(matches!(gate.begin(Some(set_out), None), Begin::Refused));
+        assert!(matches!(
+            gate.begin(Some(gate.epoch()), None),
+            Begin::Lead(_)
+        ));
         gate.close().await;
         assert!(
             matches!(gate.begin(None, None), Begin::Refused),

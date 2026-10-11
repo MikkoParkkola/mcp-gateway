@@ -550,12 +550,6 @@ impl OAuthClient {
         self.login_gate.clone()
     }
 
-    /// The gate's cancel epoch, captured by a start before it discovers
-    /// anything (`None` when ungated).
-    pub(crate) fn login_epoch(&self) -> Option<u64> {
-        self.login_gate.as_ref().map(|gate| gate.epoch())
-    }
-
     /// Take up a live token another client of this backend stored, with the
     /// client id it registered (a refresh needs both). `None` if there is none.
     fn adopt_stored_login(&self) -> Option<String> {

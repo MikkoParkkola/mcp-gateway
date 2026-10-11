@@ -196,7 +196,7 @@ impl HttpTransport {
                     // Captured here, synchronously, before anything queues: a
                     // start's own set-out epoch wins, else the gate's now.
                     let since = login_gate::set_out_epoch().unwrap_or_else(|| gate.epoch());
-                    let cohort = gate.cohort();
+                    let cohort = login_gate::set_out_cohort().unwrap_or_else(|| gate.cohort());
                     // Mark a login wait only when a login is actually open:
                     // this caller will queue behind it (MIK-7982 C3).
                     if gate.in_flight() {
