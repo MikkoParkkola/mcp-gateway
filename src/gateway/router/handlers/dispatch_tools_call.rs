@@ -350,37 +350,42 @@ pub(super) async fn tools_call(
     let witness = Some(crate::gateway::meta_mcp::refund_witness::RefundWitness::at_capture());
     let (confirmation, witness) = state
         .meta_mcp
-        .confirm_destructive_task_with(&crate::gateway::meta_mcp::TaskConfirmationRequest {
-            id: id.clone(),
-            // The outer name the client called, never a wrapper's
-            // target, and the same `arguments` binding that reaches
-            // `task_intent_for_call` — that value is both the admission
-            // operation's `arguments` and its representation, so the
-            // grant must digest what admission will key on.
-            tool_name,
-            arguments: &arguments,
-            task: params.and_then(|p| p.get("task")),
-            retry: &retry,
-            verified_identity: verified_identity.as_ref(),
-            principal: crate::protocol::mrtr::source_fingerprint(caller.principal_source(None)),
-            quota: caller.quota_key(),
-            // The owner `task_intent_for_call` admits under below.
-            owner,
-            // A surfaced name this caller may not invoke is not classified
-            // (MIK-8326).
-            scope: invoke_scope,
-            session_id: Some(session_id.as_str()),
-            input_capabilities: declared_capabilities,
-            is_modern,
-            admission: state.task_executor.service.admission(),
-        }, witness)
+        .confirm_destructive_task_with(
+            &crate::gateway::meta_mcp::TaskConfirmationRequest {
+                id: id.clone(),
+                // The outer name the client called, never a wrapper's
+                // target, and the same `arguments` binding that reaches
+                // `task_intent_for_call` — that value is both the admission
+                // operation's `arguments` and its representation, so the
+                // grant must digest what admission will key on.
+                tool_name,
+                arguments: &arguments,
+                task: params.and_then(|p| p.get("task")),
+                retry: &retry,
+                verified_identity: verified_identity.as_ref(),
+                principal: crate::protocol::mrtr::source_fingerprint(caller.principal_source(None)),
+                quota: caller.quota_key(),
+                // The owner `task_intent_for_call` admits under below.
+                owner,
+                // A surfaced name this caller may not invoke is not classified
+                // (MIK-8326).
+                scope: invoke_scope,
+                session_id: Some(session_id.as_str()),
+                input_capabilities: declared_capabilities,
+                is_modern,
+                admission: state.task_executor.service.admission(),
+            },
+            witness,
+        )
         .await;
     let granted = match confirmation {
         crate::gateway::meta_mcp::TaskConfirmation::NotRequired => None,
         // Confirmed: dispatch the original call, with the confirmation
         // metadata removed. The grant was spent: veto every give-back.
         crate::gateway::meta_mcp::TaskConfirmation::Granted(granted) => {
-            signing_context.as_ref().inspect(|signing| signing.mark_spent());
+            signing_context
+                .as_ref()
+                .inspect(|signing| signing.mark_spent());
             Some(granted)
         }
         // The challenge, or the refusal of a grant that does not

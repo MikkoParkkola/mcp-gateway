@@ -92,27 +92,29 @@ impl Gateway {
         let (confirmation, witness) = meta_mcp
             .confirm_destructive_task_with(
                 &TaskConfirmationRequest {
-                id: id.clone(),
-                tool_name,
-                arguments,
-                task,
-                retry: caller.retry,
-                verified_identity: None,
-                // The derivation continuations bind stdio by (`Stdio { nonce }`),
-                // so a grant and a continuation name one caller one way.
-                principal: crate::protocol::mrtr::source_fingerprint(caller.principal_source(None)),
-                // This process's one share of the continuation pool (MIK-8293).
-                quota: caller.quota_key(),
-                // The caller's own owner, the one `stdio_tasks::intent` admits
-                // under (the local operator for a stdio caller). A context wired
-                // to the wrong caller has none, so it fails closed: re-challenged.
-                owner: caller.owner_principal().unwrap_or_default(),
-                scope,
-                session_id: Some(session_id),
-                input_capabilities: caller.input_capabilities,
-                is_modern: caller.is_modern,
-                admission: tasks.service.admission(),
-            },
+                    id: id.clone(),
+                    tool_name,
+                    arguments,
+                    task,
+                    retry: caller.retry,
+                    verified_identity: None,
+                    // The derivation continuations bind stdio by (`Stdio { nonce }`),
+                    // so a grant and a continuation name one caller one way.
+                    principal: crate::protocol::mrtr::source_fingerprint(
+                        caller.principal_source(None),
+                    ),
+                    // This process's one share of the continuation pool (MIK-8293).
+                    quota: caller.quota_key(),
+                    // The caller's own owner, the one `stdio_tasks::intent` admits
+                    // under (the local operator for a stdio caller). A context wired
+                    // to the wrong caller has none, so it fails closed: re-challenged.
+                    owner: caller.owner_principal().unwrap_or_default(),
+                    scope,
+                    session_id: Some(session_id),
+                    input_capabilities: caller.input_capabilities,
+                    is_modern: caller.is_modern,
+                    admission: tasks.service.admission(),
+                },
                 witness,
             )
             .await;

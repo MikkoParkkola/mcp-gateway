@@ -257,14 +257,15 @@ impl MetaMcp {
                     record("admitted_replay");
                     return (TaskConfirmation::Granted(cleared(request.retry)), None);
                 }
-                let asked = self.challenge(
-                    request,
-                    &backend_id,
-                    unclassified,
-                    (fingerprint, &quota),
-                    digest,
-                )
-                .await;
+                let asked = self
+                    .challenge(
+                        request,
+                        &backend_id,
+                        unclassified,
+                        (fingerprint, &quota),
+                        digest,
+                    )
+                    .await;
                 (asked, witness)
             }
             // Answers with no grant. Not a fresh call — it claims to be

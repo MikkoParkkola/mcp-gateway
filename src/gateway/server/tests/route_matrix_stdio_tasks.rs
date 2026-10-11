@@ -248,9 +248,14 @@ fn accept(challenge: &Value) -> Value {
 /// count once the re-send's task is terminal).
 pub(crate) async fn stdio_task_refused_without_a_grant() -> (Value, Value, Value, usize) {
     const NONCE: &str = "stdio-twin-nonce-0001";
-    let fixture = signed_fixture_listing(json!({"destructiveHint": false, "readOnlyHint": true})).await;
-    let backend = (fixture.meta.events_backend_registry().get(BACKEND)).expect("the backend is registered");
-    backend.get_tools().await.expect("the backend lists its tools");
+    let fixture =
+        signed_fixture_listing(json!({"destructiveHint": false, "readOnlyHint": true})).await;
+    let backend =
+        (fixture.meta.events_backend_registry().get(BACKEND)).expect("the backend is registered");
+    backend
+        .get_tools()
+        .await
+        .expect("the backend lists its tools");
     fixture.meta.kill_switch().kill(BACKEND);
     let refused = dispatch(&fixture, x14_call(1, NONCE, "twin-a", json!({}))).await;
     fixture.meta.kill_switch().revive(BACKEND);

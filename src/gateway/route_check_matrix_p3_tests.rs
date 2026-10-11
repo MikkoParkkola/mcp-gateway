@@ -9,8 +9,8 @@
 use super::Route;
 use super::rows::{BLOCKED, X14_PROMPT, audit_rows, blocked_call, message};
 use crate::gateway::router::route_matrix_driver_tests::{self as router, Surfacing};
-use crate::gateway::server::route_matrix_driver_tests as stdio;
 use crate::gateway::router::route_matrix_x14_nonce_tests as x14;
+use crate::gateway::server::route_matrix_driver_tests as stdio;
 
 /// MIK-8149.REQFW.1: on stdio a blocked argument is refused by the route-stage
 /// request firewall: a blocking `event=request` audit row, the code and
@@ -352,7 +352,10 @@ async fn stdio_task_refused_after_its_grant_was_consumed_keeps_its_nonce() {
         seen.challenge
     );
     let [unasked, asked, redeemed, resent] = seen.ledger;
-    assert_eq!(asked, unasked, "premise: the challenge itself moved the ledger");
+    assert_eq!(
+        asked, unasked,
+        "premise: the challenge itself moved the ledger"
+    );
     assert_eq!(
         redeemed,
         asked + 1,
@@ -424,7 +427,10 @@ async fn mcp_task_refused_after_its_grant_was_consumed_keeps_its_nonce() {
         seen.challenge
     );
     let [unasked, asked, redeemed, resent] = seen.ledger;
-    assert_eq!(asked, unasked, "premise: the challenge itself moved the ledger");
+    assert_eq!(
+        asked, unasked,
+        "premise: the challenge itself moved the ledger"
+    );
     assert_eq!(
         redeemed,
         asked + 1,
@@ -452,7 +458,10 @@ async fn mcp_task_refused_after_its_grant_was_consumed_keeps_its_nonce() {
         "a nonce whose grant was consumed was given back: {}",
         seen.resent
     );
-    assert_eq!(seen.calls_before_honest, 0, "the backend ran before the honest round");
+    assert_eq!(
+        seen.calls_before_honest, 0,
+        "the backend ran before the honest round"
+    );
     assert!(
         seen.honest.pointer("/result/taskId").is_some(),
         "control: the honest round did not create its task: {}",
@@ -531,9 +540,18 @@ async fn stdio_task_refused_without_a_grant_gives_its_nonce_back() {
 #[test]
 fn stdio_settles_a_refund_once_through_the_delivery_tail() {
     let [refused, resent, third] = stdio::stdio_refund_through_delivery();
-    assert!(!refused.delivers_result, "premise: the forged continuation was refused");
-    assert_eq!(refused.given_back, 1, "the refusal's nonce was not given back exactly once");
-    assert!(resent.delivers_result, "the honest re-send was refused: the nonce was kept");
+    assert!(
+        !refused.delivers_result,
+        "premise: the forged continuation was refused"
+    );
+    assert_eq!(
+        refused.given_back, 1,
+        "the refusal's nonce was not given back exactly once"
+    );
+    assert!(
+        resent.delivers_result,
+        "the honest re-send was refused: the nonce was kept"
+    );
     assert_eq!(resent.given_back, 0, "a delivered call gave its nonce back");
     assert!(!third.delivers_result, "the nonce was given back twice");
     assert_eq!(third.given_back, 0, "a replay refusal gave a nonce back");

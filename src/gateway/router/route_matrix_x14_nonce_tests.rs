@@ -150,8 +150,9 @@ pub(crate) async fn mcp_x14_consumed_then_refused() -> McpConsumedThenRefused {
 /// refusal, the re-send, the third send, the backend calls once the re-send's
 /// task had a chance to run).
 pub(crate) async fn mcp_task_refused_without_grant() -> (Value, Value, Value, usize) {
-    let fx = super::direct_guards_fixture::fixture_hardened_signed_built(Answer::Ok, true, surfacing)
-        .await;
+    let fx =
+        super::direct_guards_fixture::fixture_hardened_signed_built(Answer::Ok, true, surfacing)
+            .await;
     warm(&fx).await;
     let meta = &fx.state.meta_mcp;
     let none = serde_json::json!({});

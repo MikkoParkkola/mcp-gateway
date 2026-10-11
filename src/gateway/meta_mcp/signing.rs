@@ -525,7 +525,9 @@ impl super::MetaMcp {
         id: &crate::protocol::RequestId,
     ) -> crate::Result<super::admission::SyncAdmission> {
         let witness = Some(RefundWitness::at_capture());
-        Self::admit_meta_sync(self, owner, caller, tool_name, arguments, session, id, witness)
+        Self::admit_meta_sync(
+            self, owner, caller, tool_name, arguments, session, id, witness,
+        )
     }
 
     /// Give back the nonce of a call refused before anything acted, proven by
@@ -559,7 +561,11 @@ impl super::MetaMcp {
     }
 
     fn give_back_nonce(&self, context: &SigningInvocationContext, principal: &str) {
-        if context.refund.spent.load(std::sync::atomic::Ordering::SeqCst) {
+        if context
+            .refund
+            .spent
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             return;
         }
         if let (true, Ok(Some(nonce)), Some(stamp)) =
