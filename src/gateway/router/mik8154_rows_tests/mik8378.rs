@@ -68,12 +68,15 @@ async fn e2c_a_dirty_chain_step_key_is_refused() {
         fixture_built(Answer::Ok, |meta| meta.with_code_mode(true)),
     ))
     .await;
-    let params = json!({"name": "gateway_execute", "arguments": {"chain": [
-        {"too\u{7}l": "alpha:read", "arguments": {}}
-    ]}});
-    let (_, body) = send(&fx, "/mcp", "k-std", "tools/call", params, None).await;
-    assert!(refused_dirty(&body), "e2c: {body}");
-    assert_eq!(calls(&fx), 0, "e2c: dispatched");
+    for step in [
+        json!({"too\u{7}l": "alpha:read", "arguments": {}}),
+        json!({"tool": "alpha:read", "argu\u{7}ments": {}}),
+    ] {
+        let params = json!({"name": "gateway_execute", "arguments": {"chain": [step]}});
+        let (_, body) = send(&fx, "/mcp", "k-std", "tools/call", params, None).await;
+        assert!(refused_dirty(&body), "e2c {step}: {body}");
+        assert_eq!(calls(&fx), 0, "e2c {step}: dispatched");
+    }
 }
 
 /// MIK-8378 (lead ruling, sanitizer matches dispatch): `gateway_invoke`
@@ -105,8 +108,9 @@ async fn e2e_a_dirty_invoke_meta_key_is_refused() {
 /// ENV.2 position 3: a dirty key that cleans to a gateway directive inside
 /// the tool's own arguments is refused on the meta route, where the gateway
 /// reads `_full` and `_claim` (admission.rs `execution_arguments`). On the
-/// direct route the gateway does not read them: there a `_full` is the
-/// tool's parameter (see the E2d guard).
+/// direct route the gateway does not honour them (it reads them only to key
+/// admission, direct_route.rs:140): there a `_full` is the tool's parameter
+/// (see the E2d guard).
 #[tokio::test]
 async fn e2f_a_dirty_directive_in_tool_arguments_is_refused() {
     let mcp = plain().await;
@@ -122,6 +126,19 @@ async fn e2f_a_dirty_directive_in_tool_arguments_is_refused() {
     .await;
     assert!(refused_dirty(&via_mcp), "e2f /mcp: {via_mcp}");
     assert_eq!(calls(&mcp), 0, "e2f /mcp: dispatched");
+    let claim = plain().await;
+    let (_, via_claim) = post_meta_invoke(
+        &claim,
+        "k-std",
+        "alpha",
+        "read",
+        json!({"_cl\u{7}aim": {"text": "c"}}),
+        None,
+        None,
+    )
+    .await;
+    assert!(refused_dirty(&via_claim), "e2f _claim: {via_claim}");
+    assert_eq!(calls(&claim), 0, "e2f _claim: dispatched");
 }
 
 /// ENV.2 GUARD (S9c): any other dirty key in tool arguments is business

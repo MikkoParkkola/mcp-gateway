@@ -52,17 +52,22 @@ pub(crate) fn validate_protocol_fields(
     for capabilities in [request.pointer("/params/capabilities"), client_capabilities] {
         capabilities.map_or(Ok(()), validate_keys)?;
     }
-    // A meta tool's arguments, read where the meta route reads them: the
-    // name as dispatch routes on it (sanitized) and on the META_TOOLS roster,
-    // `arguments` decoded when a client sent them as a JSON string, so
-    // neither form launders a dirty key or nonce.
+    // A tool call's arguments, read where the meta route reads them: the
+    // name as dispatch routes on it (sanitized), `arguments` decoded when a
+    // client sent them as a JSON string, so neither form launders a dirty key
+    // or nonce. A name off the META_TOOLS roster is a surfaced backend tool,
+    // whose arguments `invoke_tool` reads directives from.
     if route == ProtocolRoute::Meta
         && let Some(Value::String(name)) = request.pointer("/params/name")
         && let Ok(name) = sanitize_string(name)
-        && args_policy(&name) != ArgsPolicy::BackendWhole
         && let Some(arguments) = decoded(request.pointer("/params/arguments"))
     {
-        meta_tool_arguments(&name, &arguments)?;
+        match args_policy(&name) {
+            ArgsPolicy::BackendWhole => directive_keys(Some(&*arguments))?,
+            ArgsPolicy::MetaOpaque | ArgsPolicy::MetaParsedInner | ArgsPolicy::MetaParsedChain => {
+                meta_tool_arguments(&name, &arguments)?;
+            }
+        }
     }
     Ok(())
 }
@@ -75,44 +80,59 @@ fn own_keys(value: &Value) -> Result<()> {
     }
 }
 
-/// An `arguments` member as its reader takes it: an object as it is, a JSON
-/// string decoded; `None` when absent or undecodable (dispatch answers that).
-fn decoded(arguments: Option<&Value>) -> Option<Value> {
+/// An `arguments` member as its reader takes it: an object as it is
+/// (borrowed), a JSON string decoded; `None` when absent or undecodable
+/// (dispatch answers that).
+fn decoded(arguments: Option<&Value>) -> Option<std::borrow::Cow<'_, Value>> {
     match arguments? {
-        Value::String(raw) => serde_json::from_str(raw).ok(),
-        other => Some(other.clone()),
+        Value::String(raw) => serde_json::from_str(raw).ok().map(std::borrow::Cow::Owned),
+        other => Some(std::borrow::Cow::Borrowed(other)),
+    }
+}
+
+/// A slot `invoke_tool` reads gateway directives from (`_full`, `_claim`;
+/// invoke.rs): a dirty key that cleans to one is refused, never stripped into
+/// it. Any other key there is the tool's business data and keeps today's
+/// stripping (S9c).
+fn directive_keys(slot: Option<&Value>) -> Result<()> {
+    match decoded(slot).as_deref() {
+        Some(Value::Object(tool)) => tool
+            .keys()
+            .filter(|key| {
+                sanitize_string(key).is_ok_and(|key| EXECUTION_DIRECTIVES.contains(&key.as_str()))
+            })
+            .try_for_each(|key| validate_protocol_text(key)),
+        _ => Ok(()),
     }
 }
 
 /// The keys the gateway reads inside a meta tool's `arguments` (MIK-8378
 /// ENV.2), refused when dirty, never stripped into the key they clean to:
 /// the arguments' own keys and, for `gateway_execute`, each chain step's;
-/// for `gateway_invoke` the signing nonce, the own keys of `_meta` (trace
-/// context, prompt cache key) and, inside the tool's own `arguments`, a key
-/// that cleans to a gateway directive. Any other key there is the tool's
+/// for `gateway_invoke` the signing nonce and the own keys of `_meta` (trace
+/// context, prompt cache key); and in every tool-arguments slot `invoke_tool`
+/// reads (`gateway_invoke`'s and `gateway_execute`'s inner `arguments`, each
+/// chain step's), a key that cleans to a gateway directive. Any other key there is the tool's
 /// business data and keeps today's stripping (S9c).
 fn meta_tool_arguments(name: &str, arguments: &Value) -> Result<()> {
     own_keys(arguments)?;
     match name {
-        "gateway_execute" => match arguments.get("chain") {
-            Some(Value::Array(chain)) => chain.iter().try_for_each(own_keys),
-            _ => Ok(()),
-        },
+        "gateway_execute" => {
+            directive_keys(arguments.get("arguments"))?;
+            match arguments.get("chain") {
+                Some(Value::Array(chain)) => chain.iter().try_for_each(|step| {
+                    own_keys(step)?;
+                    directive_keys(step.get("arguments"))
+                }),
+                _ => Ok(()),
+            }
+        }
         "gateway_invoke" => {
             if let Some(Value::String(nonce)) = arguments.get("nonce") {
                 validate_protocol_text(nonce)?;
             }
             arguments.get("_meta").map_or(Ok(()), own_keys)?;
-            match decoded(arguments.get("arguments")) {
-                Some(Value::Object(tool)) => tool
-                    .keys()
-                    .filter(|key| {
-                        sanitize_string(key)
-                            .is_ok_and(|key| EXECUTION_DIRECTIVES.contains(&key.as_str()))
-                    })
-                    .try_for_each(|key| validate_protocol_text(key)),
-                _ => Ok(()),
-            }
+            directive_keys(arguments.get("arguments"))
         }
         _ => Ok(()),
     }
@@ -156,8 +176,9 @@ enum Slot {
 /// the `arguments` slots the gateway decodes after this step when a client
 /// sends them as a JSON string (MIK-8154 F1): there they are decoded,
 /// sanitized and re-encoded, so an escaped NUL is refused before the decode
-/// can produce it. Keys are matched as sanitized, so a dirty `arguments` key
-/// is no way around it. No other string is decoded or re-encoded.
+/// can produce it. Keys are matched as sent: every key reaching a match was
+/// validated first, and a valid key sanitizes to itself (`sanitize_object`),
+/// so a dirty `arguments` key is refused before it could get around it. No other string is decoded or re-encoded.
 ///
 /// # Errors
 ///

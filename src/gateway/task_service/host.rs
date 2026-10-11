@@ -83,6 +83,21 @@ impl LiveHost {
         }
         let request = serde_json::json!({"jsonrpc": "2.0", "method": "tools/call",
             "params": {"name": call.tool, "arguments": call.arguments}});
+        let refused = |e: crate::Error| {
+            Box::new(JsonRpcResponse::error(
+                Some(RequestId::Number(0)),
+                e.to_rpc_code(),
+                e.to_string(),
+            ))
+        };
+        // Intake's full rule, in intake's order (MIK-8378): the keys the
+        // gateway reads are validated whenever sanitizing is on, an exempt
+        // call included, so a dirty one stored by a process with sanitizing
+        // off is refused here, never stripped or sent as stored. The
+        // exemption below spares only the values.
+        let route = crate::security::sanitize::ProtocolRoute::Meta;
+        crate::security::sanitize::validate_protocol_fields(&request, &[], route)
+            .map_err(refused)?;
         let view =
             crate::gateway::meta_mcp::visible::TargetView::Caller(caller.scope(), session_id);
         // A memo for the judgement alone: the round's dispatch judges live.
@@ -93,20 +108,9 @@ impl LiveHost {
                     crate::gateway::meta_mcp::visible::judged(),
                 ));
             }
-            // Intake's full rule (MIK-8378): the keys the gateway reads are
-            // validated first, so a dirty one stored by a process with
-            // sanitizing off is refused here, never stripped into another.
-            let route = crate::security::sanitize::ProtocolRoute::Meta;
-            crate::security::sanitize::validate_protocol_fields(&request, &[], route)
-                .and_then(|()| crate::security::sanitize::sanitize_request(&request, route))
+            crate::security::sanitize::sanitize_request(&request, route)
                 .map(|clean| (clean["params"]["arguments"].clone(), Judged::default()))
-                .map_err(|e| {
-                    Box::new(JsonRpcResponse::error(
-                        Some(RequestId::Number(0)),
-                        e.to_rpc_code(),
-                        e.to_string(),
-                    ))
-                })
+                .map_err(refused)
         })
         .await
     }
