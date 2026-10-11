@@ -120,7 +120,7 @@ pub(super) struct State {
 }
 
 impl State {
-    const WARM: Self = Self {
+    pub(super) const WARM: Self = Self {
         reason: Reason::Policy,
         list: List::Complete,
         mode: InputSchemaEnforcement::Closed,
