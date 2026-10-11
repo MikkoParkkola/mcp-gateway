@@ -194,7 +194,6 @@ const EXPECTED_BLOCKS: &[&str] = &[
     "cluster_domain",
     "bearer_token",
     "api_keys",
-    "dashboard_session",
     "security",
     "warm_start",
     "surfaced_tools",
