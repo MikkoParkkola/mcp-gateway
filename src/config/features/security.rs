@@ -62,6 +62,8 @@ impl std::fmt::Debug for TransparencyLogConfig {
             .field("path", &self.path)
             .field("key_id", &self.key_id)
             .field("rotation", &self.rotation)
+            // A field-named reason, never a value (MIK-8365).
+            .field("unresolved_secret", &self.unresolved_secret)
             .field(
                 "shared_secret",
                 &if self.shared_secret.is_empty() {
