@@ -196,6 +196,27 @@ class PathspecShape(unittest.TestCase):
         stems = [p for p in rows.PREFIXES if not p.endswith(("/", ".rs"))]
         self.assertEqual(stems, [], "spell a module as both `x.rs` and `x/`")
 
+    def test_every_file_the_grade_reads_is_scanned(self) -> None:
+        # The grade matches by prefix, git by pathspec: any spelling that
+        # parts them leaves a graded file the inventory check never reads.
+        root = HERE.parent.parent
+        grader_spec = importlib.util.spec_from_file_location(
+            "grader", HERE / "critical_path_coverage.py"
+        )
+        grader = importlib.util.module_from_spec(grader_spec)
+        grader_spec.loader.exec_module(grader)
+        prefixes = tuple(p for _, group, _ in grader.PATHS for p in group)
+
+        def tracked(*pathspecs: str) -> set[str]:
+            out = subprocess.run(
+                ["git", "ls-files", "--", *pathspecs],
+                cwd=root, check=True, capture_output=True, text=True,
+            ).stdout
+            return {line for line in out.splitlines() if line.endswith(".rs")}
+
+        graded = {f for f in tracked("src") if f.startswith(prefixes)}
+        self.assertEqual(sorted(graded - tracked(*rows.PREFIXES)), [])
+
 
 class CoverageGradeTrigger(unittest.TestCase):
     """The CI grade's pull_request paths name exactly the COV.3 prefixes
