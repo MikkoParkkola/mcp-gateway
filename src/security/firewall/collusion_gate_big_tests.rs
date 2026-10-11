@@ -175,11 +175,14 @@ fn same_source_steps_of_one_plan_hold_distinct_positions() {
     let staged =
         crate::security::firewall::PlanStaging::starting_at(super::super::DELIVERED_SET_CAP);
     staged.set_caller("alice");
-    for seed in 0..4 {
-        let (_, step) = step_of(200 + seed, 100 * 1024);
-        fw.receipt_digest("alpha", "read", &step, Some(&staged))
-            .expect("staged");
-    }
+    // Held: a dropped receipt abandons its reservation.
+    let _held: Vec<_> = (0..4)
+        .map(|seed| {
+            let (_, step) = step_of(200 + seed, 100 * 1024);
+            fw.receipt_digest("alpha", "read", &step, Some(&staged))
+                .expect("staged")
+        })
+        .collect();
     let mut positions = detector.sketch_positions(SOURCE, "alice");
     positions.sort_unstable();
     assert_eq!(
@@ -240,7 +243,7 @@ fn an_overfull_selection_abandons_the_sketch() {
     let fw = firewall();
     let detector = fw.collusion_detector().expect("relay detection on");
     detector.zero_headroom();
-    let text = deliver_step_beside_foreign_text(&fw);
+    deliver_step_beside_foreign_text(&fw);
     let (selected, own) = detector
         .last_selection(SOURCE, "alice")
         .expect("a retention selection was recorded");
@@ -317,37 +320,52 @@ fn a_big_step_never_caps_a_later_small_step() {
     );
 }
 
-/// `MIK-8066` T20 (P1/P2): a step the answer leaves out feeds no sketch; its
-/// pending reservation is abandoned and the store's bytes return to what
-/// they were before staging.
-#[test]
-fn an_omitted_steps_reservation_is_released() {
-    let fw = firewall();
+/// A P1 step staged for alice, its reservation held by the returned
+/// receipt; the store's bytes before staging.
+fn stage_p1(fw: &Firewall, seed: u64) -> (crate::security::firewall::DeliveryDigest, usize) {
     let detector = fw.collusion_detector().expect("relay detection on");
     let before = detector.sketch_bytes_held();
-    let (_, step) = step_of(401, 100 * 1024);
-    let answer = json!({"other": filler(402, 50 * 1024)});
     let staged =
         crate::security::firewall::PlanStaging::starting_at(super::super::DELIVERED_SET_CAP);
     staged.set_caller("alice");
     let digest = fw
-        .receipt_digest("alpha", "read", &step, Some(&staged))
+        .receipt_digest("alpha", "read", &step_of(seed, 100 * 1024).1, Some(&staged))
         .expect("staged");
-    assert_eq!(
-        detector.sketch_positions(SOURCE, "alice").len(),
-        1,
-        "premise: the step reserved a position at staging"
+    assert!(
+        detector.sketch_bytes_held() > before,
+        "premise: the step reserved room at staging"
     );
+    (digest, before)
+}
+
+/// `MIK-8066` T20a: a step dropped before retention (its plan went over a
+/// bound, or the delivery was dropped) abandons its pending reservation.
+#[test]
+fn a_dropped_steps_reservation_is_released() {
+    let fw = firewall();
+    let (digest, before) = stage_p1(&fw, 401);
+    drop(digest);
+    let held = fw.collusion_detector().expect("on").sketch_bytes_held();
+    assert_eq!(held, before, "a dropped step's reservation leaked");
+}
+
+/// `MIK-8066` T20b: a step kept to an answer that delivered nothing of it
+/// (an answer with no k-gram at all, so not even a chance Bloom match: with
+/// any foreign text, chance matches publish a small sketch inside the B3'
+/// budget) publishes nothing, and its reservation is abandoned.
+#[test]
+fn an_omitted_steps_reservation_is_released() {
+    let fw = firewall();
+    let (digest, before) = stage_p1(&fw, 402);
+    let answer = json!({"other": "ok"});
     let delivered = fw
-        .delivered_for_plan(&answer, Some(&staged))
+        .delivered_for_plan(&answer, None)
         .expect("under the bound");
     let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered, None));
     fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &kept);
-    assert_eq!(
-        detector.sketch_bytes_held(),
-        before,
-        "the omitted step's reservation leaked"
-    );
+    drop(kept);
+    let held = fw.collusion_detector().expect("on").sketch_bytes_held();
+    assert_eq!(held, before, "an omitted step's reservation leaked");
 }
 
 /// `MIK-8066` T18 (F5): a step whose attachments find no room is skipped,
@@ -436,10 +454,14 @@ fn a_plan_admits_attachments_until_full_then_skips_and_marks() {
     let staged = crate::security::firewall::PlanStaging::default();
     staged.set_caller("alice");
     let mut admitted = 0;
+    // Held: a dropped receipt abandons its reservation.
+    let mut held = Vec::new();
     for seed in 20..40 {
         let (base, total) = (staged.baseline(), staged.total());
-        fw.receipt_digest("alpha", "read", &oversized_step(seed), Some(&staged))
-            .expect("staged");
+        held.push(
+            fw.receipt_digest("alpha", "read", &oversized_step(seed), Some(&staged))
+                .expect("staged"),
+        );
         let attached = (staged.total() - total) > (staged.baseline() - base);
         if !attached {
             break;

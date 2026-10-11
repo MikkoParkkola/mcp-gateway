@@ -521,7 +521,7 @@ impl Firewall {
             digest
         };
         staged.add_baseline(digest.staged_len());
-        Some(digest)
+        Some(self.attach_big(digest, (server, tool), result, staged))
     }
 
     fn digest_with(
@@ -654,10 +654,16 @@ impl Firewall {
         delivered: &Delivered<'_>,
         step: Option<u32>,
     ) -> DeliveryDigest {
-        match self.relay_detector() {
-            Some(detector) => digest.retaining_for(detector, delivered, step),
-            None => digest,
+        let Some(detector) = self.relay_detector() else {
+            return digest;
+        };
+        let mut digest = digest.retaining_for(detector, delivered, step);
+        // `MIK-8066.BIG.3`: a step past the plan bound keeps its evidence and
+        // excuse to what the answer delivered.
+        if let Some(big) = digest.big.as_mut() {
+            big.keep_to(delivered.kgrams(detector));
         }
+        digest
     }
 
     /// `digest` with its deferred cap applied, a cut counted.

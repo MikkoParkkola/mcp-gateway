@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 
 /// The first sketch's sizing target (0.35%): a target, not a guarantee;
 /// the guarantee is the measured aggregate (design §14.3).
-const P0: f64 = 0.0035;
+pub(super) const P0: f64 = 0.0035;
 /// The smallest filter, in 64-bit words: a few fingerprints in a tiny table
 /// would collide far above the target.
 const MIN_WORDS: usize = 16;
@@ -210,6 +210,21 @@ pub(super) struct Reservation {
     pair: Pair,
     position: usize,
     pub(super) shape: Shape,
+    /// Bytes held beside the sketch while pending: a plan step's evidence
+    /// attachment (`MIK-8066.BIG.3`), released when the sketch publishes.
+    extra: usize,
+}
+
+impl Reservation {
+    /// The pair's sketch position it holds.
+    pub(super) fn position(&self) -> usize {
+        self.position
+    }
+
+    /// The (source, caller) pair it holds a position of.
+    pub(super) fn pair(&self) -> Pair {
+        self.pair
+    }
 }
 
 /// The live sketches by pair, with an oldest-first index for expiry and the
@@ -230,6 +245,16 @@ pub(super) struct SketchStore {
     pair_cap: usize,
     /// Deliveries whose sketch did not fit and were recorded without one.
     pub(super) refused: u64,
+    /// Plan-step sketches abandoned because their selection passed their
+    /// reserved room (`MIK-8066.BIG.3`, `sketch_overfull`).
+    pub(super) overfull: u64,
+    /// The last plan-step retention's (pair, distinct selected, own count)
+    /// (tests only).
+    #[cfg(test)]
+    pub(super) last_selection: Option<(Pair, usize, usize)>,
+    /// Reserve plan-step sketches with no headroom (tests only).
+    #[cfg(test)]
+    pub(super) zero_headroom: bool,
     /// Pairs whose sketch a cap refused or evicted since the last
     /// [`Self::take_lost`]: their excuse was dropped for room (`MIK-8201`).
     lost: Vec<Pair>,
@@ -246,6 +271,11 @@ impl Default for SketchStore {
             cap: SKETCH_BYTES,
             pair_cap: SKETCH_BYTES / 4,
             refused: 0,
+            overfull: 0,
+            #[cfg(test)]
+            last_selection: None,
+            #[cfg(test)]
+            zero_headroom: false,
             lost: Vec::new(),
         }
     }
@@ -282,21 +312,36 @@ impl SketchStore {
     /// fits. `None`, counted, when it cannot fit even then: the delivery is
     /// recorded without a sketch.
     pub(super) fn reserve(&mut self, pair: Pair, n: usize) -> Option<Reservation> {
+        self.reserve_sized(pair, |position| shape(n, position), 0, true)
+    }
+
+    /// [`Self::reserve`] with the shape chosen for the position found
+    /// (`MIK-8066.BIG.3`: a plan step's sketch, sized with its headroom).
+    pub(super) fn reserve_sized(
+        &mut self,
+        pair: Pair,
+        size: impl Fn(usize) -> Shape,
+        extra: usize,
+        evict_live: bool,
+    ) -> Option<Reservation> {
         let pair_cap = self.pair_cap;
         loop {
             let state = self.pair_state(pair);
             let position = state.lowest_free();
-            let shape = shape(n, position);
-            let bytes = shape.bytes();
+            let shape = size(position);
+            let bytes = shape.bytes() + extra;
             if state.bytes + bytes > pair_cap {
-                if self.pop_oldest_of(pair).is_none() {
+                // A plan step's reservation never displaces a live sketch: a
+                // refused step is skipped and marked, while an evicted sketch
+                // strips a holder (`MIK-8066.BIG.3`).
+                if !evict_live || self.pop_oldest_of(pair).is_none() {
                     break;
                 }
                 self.evicted_for_room(pair);
                 continue;
             }
             if self.bytes + bytes > self.cap {
-                let Some(gone) = self.pop_oldest() else {
+                let Some(gone) = evict_live.then(|| self.pop_oldest()).flatten() else {
                     break;
                 };
                 self.evicted_for_room(gone);
@@ -310,6 +355,7 @@ impl SketchStore {
                 pair,
                 position,
                 shape,
+                extra,
             });
         }
         self.refused += 1;
@@ -328,6 +374,13 @@ impl SketchStore {
     }
 
     /// The pairs that lost a sketch to a cap since the last call.
+    /// Mark `pair`'s excuse dropped for room, as a refused sketch is
+    /// (`MIK-8066.BIG.3`: a step whose attachments did not fit, or whose
+    /// sketch overflowed).
+    pub(super) fn mark_lost(&mut self, pair: Pair) {
+        self.lost.push(pair);
+    }
+
     pub(super) fn take_lost(&mut self) -> Vec<Pair> {
         std::mem::take(&mut self.lost)
     }
@@ -338,6 +391,9 @@ impl SketchStore {
         self.next += 1;
         let state = self.pair_state(reservation.pair);
         state.pending.retain(|p| *p != reservation.position);
+        state.bytes -= reservation.extra;
+        self.bytes -= reservation.extra;
+        let state = self.pair_state(reservation.pair);
         state.live.push(Live {
             seq,
             at,
@@ -349,7 +405,7 @@ impl SketchStore {
 
     /// Release a reservation whose sketch will never be built.
     pub(super) fn abandon(&mut self, reservation: &Reservation) {
-        let bytes = reservation.shape.bytes();
+        let bytes = reservation.shape.bytes() + reservation.extra;
         if let Some(state) = self.by_pair.get_mut(&reservation.pair) {
             state.pending.retain(|p| *p != reservation.position);
             state.bytes -= bytes;
@@ -371,6 +427,21 @@ impl SketchStore {
 
     /// The positions a pair's live sketches sit at (tests).
     #[cfg(test)]
+    /// The pair's live and pending positions (tests only, `MIK-8066.BIG.3`).
+    #[cfg(test)]
+    pub(super) fn positions_with_pending(&self, pair: Pair) -> Vec<usize> {
+        self.by_pair
+            .get(&pair)
+            .map(|s| {
+                s.live
+                    .iter()
+                    .map(|l| l.position)
+                    .chain(s.pending.iter().copied())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub(super) fn positions_of(&self, pair: Pair) -> Vec<usize> {
         self.by_pair
             .get(&pair)

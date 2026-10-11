@@ -264,6 +264,15 @@ fn key() -> &'static RandomState {
     KEY.get_or_init(RandomState::new)
 }
 
+/// What one record holds: the receipt's fingerprints; what the caller
+/// received (sketched as excuse, and its middle sampled as evidence); and
+/// exact evidence candidates sampled but never sketched (`MIK-8066.BIG.3`).
+type Recorded = (
+    Vec<u64>,
+    Option<std::sync::Arc<[u64]>>,
+    Option<std::sync::Arc<[u64]>>,
+);
+
 fn count(n: usize) -> u64 {
     u64::try_from(n).unwrap_or(u64::MAX)
 }
@@ -409,7 +418,7 @@ impl CollusionDetector {
             source,
             principal,
             (sensitive, Flows::Any(flows)),
-            (fps, None),
+            (fps, None, None),
             now,
         );
     }
@@ -430,7 +439,7 @@ impl CollusionDetector {
             source,
             principal,
             (sensitive, Flows::Any(flows)),
-            (fps, cut),
+            (fps, cut, None),
             now,
         );
     }
@@ -451,7 +460,13 @@ impl CollusionDetector {
         masks.sort_unstable();
         masks.dedup();
         let flows = Flows::Each(masks.into());
-        self.record_held_at(source, principal, (sensitive, flows), (fps, None), now);
+        self.record_held_at(
+            source,
+            principal,
+            (sensitive, flows),
+            (fps, None, None),
+            now,
+        );
     }
 
     fn record_held_at(
@@ -459,7 +474,7 @@ impl CollusionDetector {
         source: &str,
         principal: &str,
         (sensitive, flows): (bool, Flows),
-        (mut fps, cut): (Vec<u64>, Option<std::sync::Arc<[u64]>>),
+        (mut fps, cut, sample): Recorded,
         now: Instant,
     ) {
         if self.params.action == RelayAction::Off {
@@ -479,9 +494,11 @@ impl CollusionDetector {
         // `MIK-8066.CAP.2`: a thinned sample of the cut middle is evidence,
         // under the caller's own records (so it excuses the caller's copy
         // too), in the room the receipt left under the per-delivery bound.
-        if let Some(cut) = cut.as_deref() {
+        // `MIK-8066.BIG.3`: a plan step's exact evidence candidates, sampled
+        // the same way; never sketched, so a Bloom hit never becomes one.
+        for candidates in [cut.as_deref(), sample.as_deref()].into_iter().flatten() {
             let room = MAX_SOURCE_FINGERPRINTS.saturating_sub(fps.len());
-            let (_, middle) = thin::thinned_middle(cut, &fps, room);
+            let (_, middle) = thin::thinned_middle(candidates, &fps, room);
             fps.extend(middle);
         }
         sketched.sort_unstable();
@@ -766,7 +783,7 @@ pub(crate) use margin::egress_parts;
 #[cfg(test)]
 pub(crate) use margin::egress_text;
 #[path = "collusion_big.rs"]
-mod big;
+pub(super) mod big;
 #[cfg(test)]
 #[path = "collusion_seam_tests.rs"]
 mod seam_tests;

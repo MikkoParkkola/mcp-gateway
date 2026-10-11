@@ -35,10 +35,6 @@ impl PlanStaging {
     }
 
     /// The caller the delivery stages for, if set.
-    #[expect(
-        dead_code,
-        reason = "read by the BIG.3 attachments (design r5.1 F1), which land next"
-    )]
     pub(crate) fn caller(&self) -> Option<String> {
         self.caller.borrow().clone()
     }
@@ -49,10 +45,6 @@ impl PlanStaging {
     }
 
     /// The receipts plus their fingerprint attachments.
-    #[expect(
-        dead_code,
-        reason = "read by the BIG.3 attachments (design r5.1 F3), which land next"
-    )]
     pub(crate) fn total(&self) -> usize {
         self.total.get()
     }
@@ -63,11 +55,64 @@ impl PlanStaging {
         self.total.set(self.total.get().saturating_add(bytes));
     }
 
+    /// Charge `bytes` of fingerprint attachments: the total only, so an
+    /// attachment never changes how a later step is staged (F3).
+    pub(super) fn add_attachment(&self, bytes: usize) {
+        self.total.set(self.total.get().saturating_add(bytes));
+    }
+
     /// Marks the delivery's plan drop as counted (`MIK-8094`): past every bound.
     pub(super) fn mark_dropped(&self) -> bool {
         let first = self.baseline.get() != usize::MAX;
         self.baseline.set(usize::MAX);
         self.total.set(usize::MAX);
         first
+    }
+}
+
+impl super::Firewall {
+    /// `MIK-8066.BIG.3`: a plan step capped at staging (past the plan bound,
+    /// or over it) keeps fingerprint attachments in place of its text, while
+    /// the plan's total room and the sketch store allow. A step that finds no
+    /// room is skipped, counted and marked (F5): its holder's refusal names
+    /// lost room. A step staged whole keeps the release line's path.
+    pub(super) fn attach_big(
+        &self,
+        mut digest: super::DeliveryDigest,
+        (server, tool): (&str, &str),
+        result: &serde_json::Value,
+        staged: &PlanStaging,
+    ) -> super::DeliveryDigest {
+        if digest.is_deferred() {
+            return digest;
+        }
+        let (Some(detector), Some(caller)) = (
+            self.relay.detector.as_ref().filter(|_| self.config.enabled),
+            staged.caller(),
+        ) else {
+            return digest;
+        };
+        let source = format!("{server}:{tool}");
+        let (leaves, values) = super::delivery_parts(result);
+        let joins = super::key_path_joins(result);
+        let Some(fps) = self.fps_of_leaves(&leaves, values, &joins) else {
+            return digest;
+        };
+        let Some(big) =
+            super::super::collusion::big::BigStep::new(detector, (&source, &caller), &fps)
+        else {
+            return digest;
+        };
+        let bytes = big.bytes();
+        if staged.total().saturating_add(bytes) > super::PLAN_STAGED_CAP {
+            drop(big);
+            detector.mark_step_lost(&source, &caller);
+            telemetry_metrics::counter!(super::CAPACITY_METRIC, "bound" => "plan_step_fps_skipped")
+                .increment(1);
+            return digest;
+        }
+        staged.add_attachment(bytes);
+        digest.big = Some(Box::new(big));
+        digest
     }
 }
