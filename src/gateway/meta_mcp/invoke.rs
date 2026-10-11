@@ -774,9 +774,23 @@ impl MetaMcp {
                 caller.verified_identity,
             )
             .await?;
-        Ok(crate::protocol::mrtr::source_fingerprint(
+        let fingerprint = crate::protocol::mrtr::source_fingerprint(
             caller.principal_source(resolved.binding.as_deref()),
-        ))
+        );
+        // A resume runs no caller verdict (its step is known only at run
+        // time): this resolution is the step's, carried to its invocation so
+        // the resume resolves once (MIK-8356 C13).
+        if let Some(backend) = backend {
+            super::visible::carry_dispatch(
+                server,
+                super::visible::Carried {
+                    backend,
+                    resolved,
+                    fill_error: None,
+                },
+            );
+        }
+        Ok(fingerprint)
     }
 }
 
