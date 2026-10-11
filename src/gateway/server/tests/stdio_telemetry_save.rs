@@ -34,6 +34,17 @@ const PINGS: u64 = 20;
 /// A saver interval no row outlives, so the only saves a row sees are the
 /// ones it is about (MIK-8364).
 const NO_TICK: Duration = Duration::from_secs(3600);
+/// How long a stop may take with a dispatch hung: the drain deadline, the
+/// teardown deadline, and room for the scheduler. A literal for the timing
+/// lint; the assertion below keeps it above the deadlines it must cover.
+const HUNG_STOP_BOUND: Duration = Duration::from_secs(70);
+const _: () = assert!(
+    HUNG_STOP_BOUND.as_secs()
+        >= super::super::STDIO_DRAIN_TIMEOUT.as_secs()
+            + super::super::stdio_shutdown::STDIO_TEARDOWN_TIMEOUT.as_secs()
+            + 20,
+    "HUNG_STOP_BOUND must cover the drain and teardown deadlines with room to spare"
+);
 /// The revision the drain-window row's held request names on `_meta`: a
 /// measured label no other request-sending test uses, because the saved
 /// window holds the process-wide registry (see the module note).
@@ -318,4 +329,41 @@ async fn the_saver_persists_observed_requests_while_the_session_runs() {
     .await;
     assert!(saved > PINGS, "the saver wrote {saved} stdio requests");
     drop(session.client);
+}
+
+/// SHUTDOWN.1 (Option A condition): a dispatch that never completes cannot
+/// keep a stop from ending the session. The drain gives up at its deadline,
+/// the teardown is bounded, and the final save still lands.
+#[tokio::test]
+async fn a_stop_with_a_hung_dispatch_still_ends_and_saves() {
+    let mut trigger = None;
+    let mut session = Session::start(Some(&mut trigger)).await;
+    session.initialize().await;
+    // Armed and never released: this dispatch hangs for the rest of the row.
+    let (reached, _never) = session.hold.arm();
+    let reached = reached.notified();
+    session
+        .send(&json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}))
+        .await;
+    crate::test_pause::within("the ping reaching its dispatch hold", reached).await;
+    trigger
+        .take()
+        .expect("the trigger was taken")
+        .send(())
+        .expect("the gateway holds the trigger's receiver");
+    let Session {
+        task, data, _dir, ..
+    } = session;
+    timeout(HUNG_STOP_BOUND, task)
+        .await
+        .expect("a stop with a hung dispatch still ends the session")
+        .expect("no panic")
+        .expect("Ok");
+    let saved = load_durable_window(&data)
+        .expect("the window file reads")
+        .snapshot;
+    assert!(
+        stdio_requests(&saved) >= 1,
+        "the final save after a hung dispatch holds no stdio request: {saved:?}"
+    );
 }
