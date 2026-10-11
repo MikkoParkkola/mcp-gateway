@@ -73,7 +73,12 @@ impl MetaMcp {
         }
         let proof = CallerProof::new(caller.verified_identity, caller.provenance());
         let resolved = self
-            .resolve_dispatch((server, tool), Some(&backend), proof, caller.verified_identity)
+            .resolve_dispatch(
+                (server, tool),
+                Some(&backend),
+                proof,
+                caller.verified_identity,
+            )
             .await?;
         let judged = self
             .judge_caller_slot(
@@ -93,9 +98,7 @@ impl MetaMcp {
             Err(error) => {
                 let error = match resolved.caller_credential.managed.as_ref() {
                     Some(managed)
-                        if crate::security::http_diagnostics::is_upstream_unauthorized(
-                            &error,
-                        ) =>
+                        if crate::security::http_diagnostics::is_upstream_unauthorized(&error) =>
                     {
                         managed.after_upstream_401(error).await
                     }
@@ -145,10 +148,12 @@ impl MetaMcp {
             CatalogueVerdict::Unknown => (None, SlotJudgement::Unknown),
         };
         // First judgement wins: an answer recorded meanwhile stands.
-        Ok(match recorded.map(|judged| visible::record_visibility(server, tool, judged)) {
-            Some(Visibility::Visible) => SlotJudgement::Offered,
-            Some(Visibility::Withheld(_)) => SlotJudgement::Absent,
-            None => judgement,
-        })
+        Ok(
+            match recorded.map(|judged| visible::record_visibility(server, tool, judged)) {
+                Some(Visibility::Visible) => SlotJudgement::Offered,
+                Some(Visibility::Withheld(_)) => SlotJudgement::Absent,
+                None => judgement,
+            },
+        )
     }
 }

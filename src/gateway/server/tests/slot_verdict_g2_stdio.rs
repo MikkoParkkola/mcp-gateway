@@ -215,15 +215,16 @@ impl Stdio {
 /// serve A; the now-cold caller sees the shared view B (SLOTVIS.6).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tools_list_never_serves_a_rotated_grants_slot_stdio() {
-    let mut gateway = DirectAccountGateway::new_in(
-        ServeMode::Stdio,
-        AuthConfig::default(),
-        &Binding::Connected,
+    let mut gateway =
+        DirectAccountGateway::new_in(ServeMode::Stdio, AuthConfig::default(), &Binding::Connected);
+    let meta = Arc::new(
+        gateway
+            .take_meta()
+            .with_surfaced_tools(vec![SurfacedToolConfig {
+                server: BACKEND.to_string(),
+                tool: TOOL.to_string(),
+            }]),
     );
-    let meta = Arc::new(gateway.take_meta().with_surfaced_tools(vec![SurfacedToolConfig {
-        server: BACKEND.to_string(),
-        tool: TOOL.to_string(),
-    }]));
     let backend = gateway.backends().get(BACKEND).expect("the backend");
     backend.store_shared_tools_for_test(vec![tool(TOOL, &valid())]);
     let stdio = Stdio { gateway, meta };
@@ -236,7 +237,9 @@ async fn tools_list_never_serves_a_rotated_grants_slot_stdio() {
         .await;
     let old = DirectAccountGateway::operator_binding();
     assert!(
-        backend.populated_per_user_bindings_for_test().contains(&old),
+        backend
+            .populated_per_user_bindings_for_test()
+            .contains(&old),
         "premise: a real fill warmed the operator's slot: {filled}"
     );
     assert!(
@@ -245,7 +248,9 @@ async fn tools_list_never_serves_a_rotated_grants_slot_stdio() {
     );
     stdio.gateway.rotate_operator_grant().await;
     assert!(
-        backend.populated_per_user_bindings_for_test().contains(&old),
+        backend
+            .populated_per_user_bindings_for_test()
+            .contains(&old),
         "premise: rotation leaves the old slot warm, so this is the listing's check"
     );
     assert!(
@@ -257,15 +262,16 @@ async fn tools_list_never_serves_a_rotated_grants_slot_stdio() {
 /// The stdio gateway over the sole operator's managed backend, [`TOOL`]
 /// surfaced and the shared slot warm: the operator's slot is cold.
 fn operator_stdio() -> Stdio {
-    let mut gateway = DirectAccountGateway::new_in(
-        ServeMode::Stdio,
-        AuthConfig::default(),
-        &Binding::Connected,
+    let mut gateway =
+        DirectAccountGateway::new_in(ServeMode::Stdio, AuthConfig::default(), &Binding::Connected);
+    let meta = Arc::new(
+        gateway
+            .take_meta()
+            .with_surfaced_tools(vec![SurfacedToolConfig {
+                server: BACKEND.to_string(),
+                tool: TOOL.to_string(),
+            }]),
     );
-    let meta = Arc::new(gateway.take_meta().with_surfaced_tools(vec![SurfacedToolConfig {
-        server: BACKEND.to_string(),
-        tool: TOOL.to_string(),
-    }]));
     let backend = gateway.backends().get(BACKEND).expect("the backend");
     backend.store_shared_tools_for_test(vec![tool(TOOL, &valid())]);
     Stdio { gateway, meta }
@@ -309,7 +315,9 @@ async fn initialize_never_counts_a_rotated_grants_slot_stdio() {
     let old = DirectAccountGateway::operator_binding();
     let backend = stdio.gateway.backends().get(BACKEND).expect("the backend");
     assert!(
-        backend.populated_per_user_bindings_for_test().contains(&old),
+        backend
+            .populated_per_user_bindings_for_test()
+            .contains(&old),
         "premise: rotation leaves the old slot warm, so this is initialize's check"
     );
     assert_eq!(

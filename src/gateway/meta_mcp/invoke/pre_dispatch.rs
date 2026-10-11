@@ -224,7 +224,10 @@ impl MetaMcp {
                         &caller_credential.headers,
                         proof,
                     );
-                    matches!(judged.await, Ok(super::caller_verdict::SlotJudgement::Absent))
+                    matches!(
+                        judged.await,
+                        Ok(super::caller_verdict::SlotJudgement::Absent)
+                    )
                 }
             };
             if absent {

@@ -195,7 +195,9 @@ async fn tools_list_never_serves_a_rotated_grants_slot_http() {
     let old = DirectAccountGateway::operator_binding();
     let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
     assert!(
-        backend.populated_per_user_bindings_for_test().contains(&old),
+        backend
+            .populated_per_user_bindings_for_test()
+            .contains(&old),
         "premise: a real fill warmed the operator's slot: {filled}"
     );
     assert!(
@@ -204,7 +206,9 @@ async fn tools_list_never_serves_a_rotated_grants_slot_http() {
     );
     fx.gateway.rotate_operator_grant().await;
     assert!(
-        backend.populated_per_user_bindings_for_test().contains(&old),
+        backend
+            .populated_per_user_bindings_for_test()
+            .contains(&old),
         "premise: rotation leaves the old slot warm, so this is the listing's check"
     );
     assert!(
@@ -253,7 +257,9 @@ async fn initialize_never_counts_a_rotated_grants_slot_http() {
     let old = DirectAccountGateway::operator_binding();
     let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
     assert!(
-        backend.populated_per_user_bindings_for_test().contains(&old),
+        backend
+            .populated_per_user_bindings_for_test()
+            .contains(&old),
         "premise: rotation leaves the old slot warm, so this is initialize's check"
     );
     assert_eq!(

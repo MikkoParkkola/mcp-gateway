@@ -63,8 +63,8 @@ impl Backend {
     }
 }
 
-pub(crate) use era::removed_method_refusal_message;
 pub(crate) use catalogue_verdict::CatalogueVerdict;
+pub(crate) use era::removed_method_refusal_message;
 #[cfg(test)]
 pub(crate) use pool::PoolKey;
 #[cfg(not(test))]

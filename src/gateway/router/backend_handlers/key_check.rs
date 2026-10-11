@@ -11,8 +11,8 @@ use super::super::helpers::build_http_response;
 use super::BackendRejection;
 use super::direct_failure::DirectFailure;
 use crate::backend::CatalogueVerdict;
-use crate::gateway::meta_mcp::visible::absent_name;
 use crate::gateway::meta_mcp::response_security::error_response_preserving_status;
+use crate::gateway::meta_mcp::visible::absent_name;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 /// The caller's slot binding and the headers it propagates upstream; a cold
