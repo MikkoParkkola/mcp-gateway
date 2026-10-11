@@ -238,6 +238,61 @@ fn the_running_static_bearer_yields_a_fingerprint_and_a_full_digest() {
     assert_eq!(LiveCredentials::static_bearer(None), (None, None));
 }
 
+/// MIK-8202 A2: one clock reading judges a whole admission. A clock that
+/// reads, then fails, then reads again while one check runs admits a
+/// key-server token that is live at the reading: never `Refuses`, which would
+/// revoke the row. A clock that fails at the reading is `Undated`.
+#[tokio::test]
+async fn one_clock_reading_judges_a_key_server_token() {
+    use crate::security::audit::CredentialKind as Kind;
+    let ks = key_server(false);
+    let now = crate::clock::unix_secs().expect("a readable clock");
+    ks.store
+        .insert(crate::key_server::TemporaryToken {
+            jti: "j1".into(),
+            token: "mcpgw_t".into(),
+            identity: crate::key_server::oidc::VerifiedIdentity {
+                subject: "u".into(),
+                email: "u@corp.example".into(),
+                name: None,
+                groups: Vec::new(),
+                issuer: "https://idp".into(),
+            },
+            scopes: crate::key_server::store::TokenScopes {
+                backends: vec!["x".into()],
+                tools: Vec::new(),
+                rate_limit: 0,
+            },
+            iat: now,
+            exp: now + 600,
+            client_ip: None,
+        })
+        .await;
+    let live = with(LiveCredentials {
+        key_server: Some(Arc::clone(&ks)),
+        ..LiveCredentials::default()
+    });
+    let token = bound(
+        Kind::KeyServerToken,
+        Some(LiveBinding::KeyServerToken { jti: "j1".into() }),
+    );
+    {
+        let _clock = crate::clock::test_clock::queued(&[Some(now), None, Some(now)]);
+        assert_eq!(
+            live.admission(&token, Some("x")).await,
+            AccessVerdict::Admits,
+            "a clock that failed inside the check refused a live token"
+        );
+    }
+    {
+        let _clock = crate::clock::test_clock::queued(&[None, Some(now), Some(now)]);
+        assert_eq!(
+            live.admission(&token, Some("x")).await,
+            AccessVerdict::Undated
+        );
+    }
+}
+
 /// Design F9 (MIK-7769): key-server tokens live until revoked; delegated
 /// bearers while the live policy grants the backend; a bound kind
 /// without its binding is refused.
@@ -412,6 +467,44 @@ async fn a_dashboard_session_subscription_ends_at_logout() {
         !open.admits_subscription(&session, Some("x")).await,
         "logged out"
     );
+}
+
+/// MIK-8202 A2: one clock reading judges a dashboard session too. A clock
+/// that reads, then fails, then reads again while one check runs admits a
+/// session live at the reading, never `Refuses`; a clock that fails at the
+/// reading is `Undated`.
+#[tokio::test]
+async fn one_clock_reading_judges_a_dashboard_session() {
+    use crate::security::audit::CredentialKind as Kind;
+    let dashboard = Arc::new(crate::gateway::auth::DashboardBootstrap::new());
+    let handle = dashboard.issue_session();
+    let session = bound(
+        Kind::DashboardSession,
+        Some(LiveBinding::DashboardSession {
+            session_sha256: crate::hashing::sha256_hex(handle.as_bytes()),
+        }),
+    );
+    let open = with(LiveCredentials {
+        dashboard: Some(Arc::clone(&dashboard)),
+        ..LiveCredentials::default()
+    });
+    // A whole second past the issue, so the reading is not before it.
+    let now = crate::clock::unix_secs().expect("a readable clock") + 1;
+    {
+        let _clock = crate::clock::test_clock::queued(&[Some(now), None, Some(now)]);
+        assert_eq!(
+            open.admission(&session, Some("x")).await,
+            AccessVerdict::Admits,
+            "a clock that failed inside the check refused a live session"
+        );
+    }
+    {
+        let _clock = crate::clock::test_clock::queued(&[None, Some(now), Some(now)]);
+        assert_eq!(
+            open.admission(&session, Some("x")).await,
+            AccessVerdict::Undated
+        );
+    }
 }
 
 /// MIK-7903: an event charge settles its reservation with its spend, so a

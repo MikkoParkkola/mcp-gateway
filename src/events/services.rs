@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
 
 use super::records::{ApiKeyRef, LiveBinding, Subscription};
@@ -84,12 +85,19 @@ impl Services {
     /// an API key has no live scope to re-read, so its subscribe-time check
     /// stands.
     pub(crate) fn admits(&self, key: Option<&ApiKeyRef>, backend: &str) -> bool {
-        self.admits_grant(key, Some(backend))
+        self.admits_grant(key, Some(backend), crate::clock::utc_now())
     }
 
     /// As [`Self::admits`]; `None` asks only that the key be live, for
     /// owner-scoped events that need no backend grant.
-    fn admits_grant(&self, key: Option<&ApiKeyRef>, backend: Option<&str>) -> bool {
+    /// A key with an expiry is judged on `now`, and refused on a clock that
+    /// cannot be read (MIK-8202).
+    fn admits_grant(
+        &self,
+        key: Option<&ApiKeyRef>,
+        backend: Option<&str>,
+        now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
+    ) -> bool {
         let Some(key) = key else {
             return true;
         };
@@ -99,7 +107,7 @@ impl Services {
             .api_keys
             .iter()
             .find(|k| k.name == key.name)
-            .filter(|k| !k.is_expired_now())
+            .filter(|k| k.expires_at.is_none() || now.is_ok_and(|now| !k.is_expired_at(now)))
             .filter(|k| {
                 k.key_sha256
                     .as_deref()
@@ -122,19 +130,50 @@ impl Services {
         sub: &Subscription,
         backend: Option<&str>,
     ) -> bool {
+        self.admission(sub, backend).await == AccessVerdict::Admits
+    }
+
+    /// [`Self::admits_subscription`], telling a refusal the clock may have
+    /// caused apart from one that stands (MIK-8202). The clock is read once,
+    /// and every expiry the check judges (an API key, a delegated bearer's
+    /// age, a key-server token, a dashboard session) is judged on that one
+    /// reading: a clock that fails and recovers inside the check cannot turn
+    /// into a standing refusal. Nothing destructive (a revocation) may follow
+    /// [`AccessVerdict::Undated`].
+    pub(crate) async fn admission(
+        &self,
+        sub: &Subscription,
+        backend: Option<&str>,
+    ) -> AccessVerdict {
+        let Ok(now) = crate::clock::utc_now() else {
+            return AccessVerdict::Undated;
+        };
+        if self.admits_at(sub, backend, now).await {
+            AccessVerdict::Admits
+        } else {
+            AccessVerdict::Refuses
+        }
+    }
+
+    async fn admits_at(
+        &self,
+        sub: &Subscription,
+        backend: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> bool {
         use crate::security::audit::CredentialKind as Kind;
         match sub.credential_kind {
             None | Some(Kind::ApiKey) => {
                 sub.legacy_api_key_name.is_none()
                     && sub.api_key.is_some()
-                    && self.admits_grant(sub.api_key.as_ref(), backend)
+                    && self.admits_grant(sub.api_key.as_ref(), backend, Ok(now))
             }
             // No credential was presented: authentication is off.
             Some(Kind::None | Kind::LocalTransport) => true,
             Some(kind) => match &sub.binding {
                 // The binding must be the one this kind is re-checked by.
                 Some(binding) if binding.kind() == kind => {
-                    self.binding_live(binding, sub, backend).await
+                    self.binding_live(binding, sub, backend, now).await
                 }
                 _ => false,
             },
@@ -146,11 +185,16 @@ impl Services {
         binding: &LiveBinding,
         sub: &Subscription,
         backend: Option<&str>,
+        now: DateTime<Utc>,
     ) -> bool {
         let credentials = &self.credentials;
         match binding {
             LiveBinding::KeyServerToken { jti } => match &credentials.key_server {
-                Some(ks) => ks.store.live_jti(jti).await,
+                // Judged on the admission's one reading (MIK-8202).
+                Some(ks) => match u64::try_from(now.timestamp()) {
+                    Ok(now) => ks.store.live_jti(jti, now).await,
+                    Err(_) => false,
+                },
                 None => false,
             },
             LiveBinding::OidcBearer {
@@ -177,10 +221,10 @@ impl Services {
                     && crate::gateway::auth::live::provider_fingerprint(ks, issuer)
                         == *provider_sha256;
                 // The verifier requires `iat`, so a binding without one is
-                // refused rather than exempt; a clock that cannot be read
-                // (before 1970) leaves no bearer young (MIK-8202).
+                // refused rather than exempt. `now` is the check's one reading
+                // of a clock that could be read (MIK-8202).
                 let young = issued_at.is_some_and(|iat| {
-                    crate::clock::unix_secs().is_ok_and(|now| {
+                    u64::try_from(now.timestamp()).is_ok_and(|now| {
                         iat.saturating_add(ks.config.max_oidc_token_age_secs) > now
                     })
                 });
@@ -216,11 +260,13 @@ impl Services {
                     let limits = crate::gateway::auth::SessionLimits::from(
                         &self.live.get().auth.dashboard_session,
                     );
-                    dashboard.live_digest(
-                        session_sha256,
-                        crate::gateway::auth::Now::read(),
-                        &limits,
-                    )
+                    // The admission's one wall reading; the monotonic half
+                    // is not a wall clock and is read here (MIK-8202).
+                    let now = crate::gateway::auth::Now {
+                        mono: std::time::Instant::now(),
+                        wall: std::time::SystemTime::from(now),
+                    };
+                    dashboard.live_digest(session_sha256, now, &limits)
                 })
             }
         }
@@ -363,6 +409,17 @@ pub(crate) const SENDING: &str = "sending";
 
 /// One delivery attempt, as the attributed audit record states it: never
 /// the body, the secret or the callback path.
+/// What a subscription's access check concluded (MIK-8202).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AccessVerdict {
+    Admits,
+    /// Refused on a clock that could be read: the refusal stands.
+    Refuses,
+    /// Refused, but the clock could not be read: the refusal may be the
+    /// clock's, so the row is kept and nothing is sent.
+    Undated,
+}
+
 pub(crate) struct Attempt<'a> {
     pub subscription_id: &'a str,
     pub event_id: &'a str,

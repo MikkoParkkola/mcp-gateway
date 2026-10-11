@@ -158,10 +158,14 @@ pub(crate) mod test_clock {
 
     thread_local! {
         static FORCED: Cell<Option<Result<Duration, ClockBeforeEpoch>>> = const { Cell::new(None) };
+        static QUEUED: std::cell::RefCell<std::collections::VecDeque<Result<Duration, ClockBeforeEpoch>>> =
+            const { std::cell::RefCell::new(std::collections::VecDeque::new()) };
     }
 
     pub(super) fn forced() -> Option<Result<Duration, ClockBeforeEpoch>> {
-        FORCED.with(Cell::get)
+        QUEUED
+            .with(|queued| queued.borrow_mut().pop_front())
+            .or_else(|| FORCED.with(Cell::get))
     }
 
     /// Restores the real clock when dropped.
@@ -171,12 +175,27 @@ pub(crate) mod test_clock {
     impl Drop for Forced {
         fn drop(&mut self) {
             FORCED.with(|f| f.set(None));
+            QUEUED.with(|queued| queued.borrow_mut().clear());
         }
     }
 
     /// This thread's clock reads before 1970 until the guard drops.
     pub(crate) fn before_epoch() -> Forced {
         FORCED.with(|f| f.set(Some(Err(ClockBeforeEpoch))));
+        Forced(())
+    }
+
+    /// This thread's next clock reads, one each in order: `Some(secs)` reads
+    /// `secs` after the epoch, `None` before 1970. Once they are used up the
+    /// real clock reads again. A clock that fails and recovers inside one
+    /// check is laid out this way.
+    pub(crate) fn queued(reads: &[Option<u64>]) -> Forced {
+        QUEUED.with(|queued| {
+            *queued.borrow_mut() = reads
+                .iter()
+                .map(|read| read.map(Duration::from_secs).ok_or(ClockBeforeEpoch))
+                .collect();
+        });
         Forced(())
     }
 

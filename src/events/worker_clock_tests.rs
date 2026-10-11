@@ -419,3 +419,82 @@ async fn the_expiry_watermark_holds_on_an_unreadable_clock() {
         "the watermark moved on an unreadable clock"
     );
 }
+
+/// The live config with one API key `k` for `secret`, expiring at `expires_at`.
+fn keyed(secret: &str, expires_at: chrono::DateTime<Utc>) -> crate::config::Config {
+    let mut config = crate::config::Config::default();
+    config.auth.api_keys = vec![crate::config::ApiKeyConfig {
+        key: None,
+        key_sha256: Some(crate::config::api_key_digest_spec(secret.as_bytes())),
+        expires_at: Some(expires_at),
+        name: "k".to_owned(),
+        rate_limit: 0,
+        backends: vec!["*".to_owned()],
+        allowed_tools: None,
+        denied_tools: None,
+        admin: false,
+        kind: crate::config::ApiKeyKind::Shared,
+    }];
+    config
+}
+
+/// The same refusal end to end, on a subscription held by an expiring API
+/// key: a clock that fails after the claim reads the key as expired, and the
+/// row is kept, nothing sent. Recovery: on a readable clock the key, still
+/// valid, is admitted and the event is sent, the row kept; once the key has
+/// truly expired, the refusal stands and the row is revoked.
+#[tokio::test]
+async fn an_expiring_key_refused_by_an_unreadable_clock_keeps_its_subscription() {
+    const SECRET: &str = "clock-revoke-secret";
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
+    let services = logged_services(dir.path());
+    services.live.set(keyed(SECRET, now() + delta!(days, 7)));
+    offer(&hub, &[NAME]);
+    let (port, accepted) = counting_callback().await;
+    queued_with(&hub, port, "evt_k", NAME, |sub, _| {
+        sub.credential_kind = Some(crate::security::audit::CredentialKind::ApiKey);
+        sub.api_key = Some(crate::events::records::ApiKeyRef {
+            name: "k".to_owned(),
+            principal: crate::gateway::auth::principal_of(SECRET),
+        });
+    });
+    let posts = || accepted.load(std::sync::atomic::Ordering::SeqCst);
+
+    let clock = Box::pin(clock_fails_at(
+        &hub.after_claim,
+        hub.attempt(&services, "evt_k"),
+    ))
+    .await;
+    drop(clock);
+    assert!(
+        hub.store.get("sub_worker").is_some(),
+        "revoked on a refusal the clock caused"
+    );
+    let kept = stored(dir.path(), "evt_k");
+    assert_eq!(kept.state, OutboxState::Pending, "never left in flight");
+    assert_eq!(
+        kept.last_status.as_deref(),
+        Some("clock_unreadable"),
+        "judged a refusal that stands"
+    );
+    assert_eq!(posts(), 0, "sent on an unreadable clock");
+
+    // Readable, the key is still valid: admitted and sent, the row kept.
+    Box::pin(hub.attempt(&services, "evt_k")).await;
+    crate::test_pause::within("the post", async {
+        while posts() == 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert!(hub.store.get("sub_worker").is_some(), "a valid key kept");
+
+    // The key has truly expired: the refusal stands and the row goes.
+    services.live.set(keyed(SECRET, now() - delta!(minutes, 1)));
+    Box::pin(hub.attempt(&services, "evt_k")).await;
+    assert!(
+        hub.store.get("sub_worker").is_none(),
+        "a refusal that still stands was not revoked"
+    );
+}

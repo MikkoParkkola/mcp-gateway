@@ -659,9 +659,19 @@ impl Run {
         let mut denied = Vec::new();
         let mut skipped = false;
         for row in rows {
-            let passes = services
-                .admits_subscription(&row, Some(target.backend.as_str()))
-                .await;
+            let passes = match services
+                .admission(&row, Some(target.backend.as_str()))
+                .await
+            {
+                super::services::AccessVerdict::Admits => true,
+                super::services::AccessVerdict::Refuses => false,
+                // The refusal may be the clock's: kept, not called for, and
+                // judged again next poll; the poller is not retired (MIK-8202).
+                super::services::AccessVerdict::Undated => {
+                    skipped = true;
+                    continue;
+                }
+            };
             let api_key = row
                 .api_key
                 .clone()

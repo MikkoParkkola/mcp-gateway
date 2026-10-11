@@ -13,7 +13,7 @@ use chrono::Utc;
 use super::EventsHub;
 use super::client::ReadBody;
 use super::outbox::{DeadReason, OutboxRecord};
-use super::services::{Attempt, SENDING, Services};
+use super::services::{AccessVerdict, Attempt, SENDING, Services};
 use super::store::{Claim, Claimed, Settle};
 use super::types::CallbackFailure;
 use crate::gateway::outbound::{self, Admission, CallbackSend, OutboundFrame};
@@ -61,23 +61,32 @@ impl EventsHub {
                 .unwrap_or_default()
                 .to_owned(),
         };
-        if !services.admits_subscription(&sub, grant(&record)).await {
-            if !self
-                .recorded_or_retry(services, &ctx, "access_revoked")
-                .await
-            {
+        match services.admission(&sub, grant(&record)).await {
+            AccessVerdict::Admits => {}
+            // The refusal may be the clock's: nothing is revoked or sent, and
+            // the record keeps its date (MIK-8202).
+            AccessVerdict::Undated => {
+                self.settle(services, &record, clock_unsent(&record)).await;
                 return;
             }
-            self.revoke(&sub).await;
-            // Removed: the record went with it and this settles nothing. Not
-            // removed (a store error, or a refresh re-bound the row): the
-            // record goes back to pending and the next attempt re-checks.
-            let retry = Settle::Retry {
-                next: retry_after_refusal(&record),
-                status: "access_revoked",
-            };
-            self.settle(services, &record, retry).await;
-            return;
+            AccessVerdict::Refuses => {
+                if !self
+                    .recorded_or_retry(services, &ctx, "access_revoked")
+                    .await
+                {
+                    return;
+                }
+                self.revoke(&sub).await;
+                // Removed: the record went with it and this settles nothing. Not
+                // removed (a store error, or a refresh re-bound the row): the
+                // record goes back to pending and the next attempt re-checks.
+                let retry = Settle::Retry {
+                    next: retry_after_refusal(&record),
+                    status: "access_revoked",
+                };
+                self.settle(services, &record, retry).await;
+                return;
+            }
         }
         let verdict = self.source_verdict(&sub).await;
         if verdict == Verdict::Refuses {
@@ -219,31 +228,34 @@ impl EventsHub {
         // The same waits can span a reload that made the backend ineligible
         // (MIK-7894): the verdict is read again after them, before the row
         // that signs, so only sync steps sit between it and the send.
-        match self.source_verdict(sub).await {
+        let admission = match self.source_verdict(sub).await {
             // Access is read again after the verdict's own wait (MIK-7907):
             // a grant lost meanwhile is refused like one lost before. It must
             // not yield: a reload landing inside it would follow the verdict
             // unseen. Its one await, `TokenStore::live_jti`, completes at
             // once in the only store there is (`InMemoryTokenStore`); a store
             // that waits needs the verdict read again after this check.
-            Verdict::Admits if !services.admits_subscription(sub, grant(record)).await => {
-                services.audit_outcome(&ended("access_revoked")).await;
-                self.revoke(sub).await;
-                self.settle(services, record, refusal_retry("access_revoked", record))
-                    .await;
-                return;
-            }
-            Verdict::Admits => {}
-            Verdict::Refuses => {
-                services.audit_outcome(&ended("access_revoked")).await;
-                self.revoke(sub).await;
-                self.settle(services, record, refusal_retry("access_revoked", record))
-                    .await;
-                return;
-            }
+            Verdict::Admits => services.admission(sub, grant(record)).await,
+            Verdict::Refuses => AccessVerdict::Refuses,
             Verdict::Unoffered => {
                 services.audit_outcome(&ended(HELD)).await;
                 self.settle(services, record, refusal_retry(HELD, record))
+                    .await;
+                return;
+            }
+        };
+        match admission {
+            AccessVerdict::Admits => {}
+            // The refusal may be the clock's: kept, unsent (MIK-8202).
+            AccessVerdict::Undated => {
+                services.audit_outcome(&ended(CLOCK_UNREADABLE)).await;
+                self.settle(services, record, clock_unsent(record)).await;
+                return;
+            }
+            AccessVerdict::Refuses => {
+                services.audit_outcome(&ended("access_revoked")).await;
+                self.revoke(sub).await;
+                self.settle(services, record, refusal_retry("access_revoked", record))
                     .await;
                 return;
             }

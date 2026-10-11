@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use super::EventsHub;
 use super::outbox::{DeadReason, Enqueued, OutboxRecord, OutboxState};
 use super::records::Subscription;
-use super::services::{Scan, Services, Subject};
+use super::services::{AccessVerdict, Scan, Services, Subject};
 use super::types::{SourceKind, Visibility};
 
 /// The draft's SHOULD ceiling on a delivery body (design §6.5).
@@ -116,12 +116,18 @@ impl EventsHub {
                 .collect()
         };
         for sub in matching {
-            if !services
-                .admits_subscription(&sub, event.scope.grant_backend())
-                .await
-            {
-                self.revoke(&sub).await;
-                continue;
+            match services.admission(&sub, event.scope.grant_backend()).await {
+                AccessVerdict::Admits => {}
+                // The refusal may be the clock's: the row is kept and this
+                // occurrence, which cannot be dated, is dropped (MIK-8202).
+                AccessVerdict::Undated => {
+                    self.count_clock_drop();
+                    continue;
+                }
+                AccessVerdict::Refuses => {
+                    self.revoke(&sub).await;
+                    continue;
+                }
             }
             // An occurrence that carries its owner was authorized where it was
             // made: the record it describes may be gone (an expired task).

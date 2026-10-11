@@ -64,18 +64,12 @@ impl std::fmt::Debug for TemporaryToken {
 }
 
 impl TemporaryToken {
-    /// Returns `true` if the token has passed its expiry time.
+    /// Returns `true` if the token has passed its expiry time at `now`
+    /// (seconds since the Unix epoch). The caller reads the clock, once, and
+    /// refuses on one it cannot read (MIK-8202).
     #[must_use]
-    /// A clock it cannot read counts as expired (MIK-8202).
-    pub fn is_expired(&self) -> bool {
-        use crate::clock::{Validity, expired_by};
-        expired_by(|now| {
-            if now >= self.exp {
-                Validity::Expired
-            } else {
-                Validity::Live
-            }
-        }) == Validity::Expired
+    pub fn is_expired(&self, now: u64) -> bool {
+        now >= self.exp
     }
 
     /// Past its expiry on a clock that reads: what eviction, reaping and the
@@ -116,9 +110,12 @@ pub trait TokenStore: Send + Sync + 'static {
     /// Returns `true` if the token existed and was removed.
     async fn revoke_by_jti(&self, jti: &str) -> bool;
 
-    /// Whether the token with this JTI exists, unrevoked and unexpired: the
-    /// MCP Events delivery re-check (MIK-7769), which never holds the token.
-    async fn live_jti(&self, jti: &str) -> bool;
+    /// Whether the token with this JTI exists, unrevoked and unexpired at
+    /// `now` (seconds since the Unix epoch): the MCP Events delivery re-check
+    /// (MIK-7769), which never holds the token. Expiry is judged on the
+    /// supplied `now`, never on a fresh read of the clock: the caller judges
+    /// every credential of one check on one reading (MIK-8202).
+    async fn live_jti(&self, jti: &str, now: u64) -> bool;
 
     /// Revoke all tokens for one OIDC identity, `(issuer, subject)` (e.g., on
     /// offboarding). The same `sub` at another issuer is another identity.
@@ -195,7 +192,8 @@ impl TokenStore for InMemoryTokenStore {
         let token = entry.clone();
         drop(entry);
 
-        if token.is_expired() {
+        // A clock it cannot read counts as expired (MIK-8202).
+        if !crate::clock::unix_secs().is_ok_and(|now| !token.is_expired(now)) {
             // Lazy eviction: remove on access, once really past its expiry.
             if token.aged_out() {
                 self.by_bearer.remove(bearer);
@@ -208,13 +206,13 @@ impl TokenStore for InMemoryTokenStore {
         Some(token)
     }
 
-    async fn live_jti(&self, jti: &str) -> bool {
+    async fn live_jti(&self, jti: &str, now: u64) -> bool {
         let Some(bearer) = self.by_jti.get(jti).map(|b| b.value().clone()) else {
             return false;
         };
         self.by_bearer
             .get(&bearer)
-            .is_some_and(|token| !token.is_expired())
+            .is_some_and(|token| !token.is_expired(now))
     }
 
     async fn revoke_by_jti(&self, jti: &str) -> bool {
@@ -552,7 +550,7 @@ mod tests {
         };
 
         // THEN: is_expired returns true
-        assert!(token.is_expired());
+        assert!(token.is_expired(now));
     }
 
     #[test]
@@ -573,7 +571,7 @@ mod tests {
         };
 
         // THEN: is_expired returns false
-        assert!(!token.is_expired());
+        assert!(!token.is_expired(now));
     }
 
     /// MIK-8202: a clock that reads before 1970 refuses a bearer token the
