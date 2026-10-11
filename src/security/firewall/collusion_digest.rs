@@ -564,6 +564,18 @@ impl DeliveryDigest {
         kept
     }
 
+    /// Fingerprints an unread receipt holds until record (tests only, D6).
+    #[cfg(test)]
+    pub(crate) fn unread_receipt_len(&self) -> Option<usize> {
+        match &self.judged {
+            Judged::Unread {
+                receipt: UnreadReceipt { fps, cut },
+                step: _,
+            } => Some(fps.len() + cut.as_deref().map_or(0, <[u64]>::len)),
+            Judged::Pending | Judged::Staged(_) | Judged::Kept(_) => None,
+        }
+    }
+
     /// Whether this is a plan step past the bound, staged with attachments.
     pub(crate) fn is_staged_step(&self) -> bool {
         matches!(self.judged, Judged::Staged(_))

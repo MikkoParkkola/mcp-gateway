@@ -413,3 +413,45 @@ fn a_view_holds_its_walk_charge_while_it_lives() {
         "a finished view released its walk charge"
     );
 }
+
+/// `MIK-8066` 2b delta seat D1 (gpt): the key-path walk copies each string
+/// value's object path into its map key, so the walk reservation covers
+/// every value's depth, not only its node. One chain of 100 nested objects
+/// ends in an object of 5,000 string values: 5,000 distinct paths of depth
+/// over 100 each, at 16 B per level.
+#[test]
+fn copied_key_paths_are_reserved() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    let wide: serde_json::Map<String, Value> = (0..5_000)
+        .map(|i| (format!("k{i}"), json!(format!("v{i}"))))
+        .collect();
+    let mut deep = Value::Object(wide);
+    for level in 0..100 {
+        deep = json!({ format!("d{level}"): deep });
+    }
+    let answer = json!({ "list": [deep] });
+    let probe = detector.view_build_probe(&answer);
+    let &(reserved, _) = probe.first().expect("the build reserved");
+    assert!(
+        reserved >= 5_000 * 100 * 16,
+        "copied key paths were not reserved ({reserved} B)"
+    );
+}
+
+/// `MIK-8066` 2b delta seat D2 (gpt): U+0F73, U+0F75 and U+0F81 have
+/// combining class 0 but decompose into two non-starters (UAX #15), so the
+/// normalizer buffers runs of them as combining runs. 1,000 leaves of 40
+/// U+0F73 each are reserved as such.
+#[test]
+fn nonstarter_decompositions_are_reserved_as_combining_runs() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    let leaves: Vec<Value> = (0..1_000).map(|_| json!("\u{0F73}".repeat(40))).collect();
+    let probe = detector.view_build_probe(&Value::Array(leaves));
+    let &(reserved, _) = probe.first().expect("the build reserved");
+    assert!(
+        reserved >= 1_001 * 64 + 40_000 * 8,
+        "non-starter decompositions were not reserved ({reserved} B)"
+    );
+}

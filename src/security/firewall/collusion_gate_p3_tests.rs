@@ -521,3 +521,31 @@ fn unread_plans_of_many_callers_share_one_unread_holder() {
         "unread evidence was held per caller"
     );
 }
+
+/// `MIK-8066` 2b delta seat D3a (gpt): an unread receipt holds, from
+/// retention to record, only what its record keeps: its fingerprints to the
+/// per-delivery bound and its cut thinned into the room left (4,096 in all),
+/// never the whole staged step's fingerprints.
+#[test]
+fn an_unread_receipt_holds_only_what_its_record_keeps() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    detector.set_answer_text_cap(512 * 1024);
+    let (text, step) = step_of(1251, 900 * 1024);
+    let staged = PlanStaging::default();
+    staged.set_caller("alice");
+    let digest = fw
+        .receipt_digest("alpha", "read", &step, Some(&staged))
+        .expect("staged");
+    let answer = json!({"a": text, "pad": filler(1252, 900 * 1024)});
+    let delivered = fw
+        .delivered_for_plan(&answer, Some(&staged))
+        .expect("relay detection on");
+    assert!(delivered.is_unread(), "premise: the answer was unread");
+    let kept = fw.retain_delivered(digest, &delivered, None);
+    let held = kept.unread_receipt_len().expect("premise: judged unread");
+    assert!(
+        held <= 4 * 1_024,
+        "an unread receipt held {held} fingerprints until record"
+    );
+}
