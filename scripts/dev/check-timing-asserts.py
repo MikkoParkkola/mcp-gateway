@@ -530,20 +530,26 @@ def scan_timeouts(
 
 
 TOKIO_INSTANT_IMPORT = re.compile(r"use\s+tokio::time::(?:Instant\b|\{[^}]*\bInstant\b)")
+STD_INSTANT_IMPORT = re.compile(r"use\s+std::time::(?:Instant\b|\{[^}]*\bInstant\b)")
 
 
 def tokio_measured(side: str, lets: dict[str, str], code: str) -> bool:
     """Whether the time `side` measures was read from tokio's clock: its root
     `let` is `tokio::time::Instant::now()`, or a bare `Instant::now()` in a
-    file that imports tokio's `Instant`. Only that clock is virtual when
-    paused; a `std::time::Instant` keeps reading real time, so an assert on
-    it is judged on a paused clock too."""
+    file that imports tokio's `Instant` and no std one (an import in any
+    scope counts, so an ambiguous bare name is never exempted). Only that
+    clock is virtual when paused; a `std::time::Instant` keeps reading real
+    time, so an assert on it is judged on a paused clock too. An aliased
+    import (`use tokio::time::Instant as T`) is not followed: the assert is
+    judged, which refuses a valid row rather than passing a racing one."""
     seen: set[str] = set()
     expr = side
     while True:
         if "Instant::now()" in expr:
             return "tokio::time::Instant::now()" in expr or bool(
-                re.search(r"(?<![\w:])Instant::now\(\)", expr) and TOKIO_INSTANT_IMPORT.search(code)
+                re.search(r"(?<![\w:])Instant::now\(\)", expr)
+                and TOKIO_INSTANT_IMPORT.search(code)
+                and not STD_INSTANT_IMPORT.search(code)
             )
         root = re.match(r"\s*(\w+)", expr)
         if not root or root.group(1) not in lets or root.group(1) in seen:
@@ -915,31 +921,36 @@ def timeout_shapes(path, fn, code, span, touches, seconds, exempt) -> list[Findi
         value = seconds(expr, at)
         return value if value is not None and value < FLOOR_S else None
 
+    def changed(start: int, end: int, expr: str) -> bool:
+        """Any line from `start` to `end` changed, or the line binding `expr`."""
+        bound = def_line_in(code, expr, line_of)
+        return touches(line_of(start), line_of(end)) or (bound is not None and touches(bound, bound))
+
     for m in SETTER_CALL.finditer(code, body_open, body_end):
-        args, _ = call_args(code, m.end() - 1)
+        args, end = call_args(code, m.end() - 1)
         expr, line = split_top(args, (",",))[0][1].strip(), line_of(m.start())
-        if (value := short(expr, m.start())) is not None and touches(line, line) and not exempt(line, expr):
+        if (value := short(expr, m.start())) is not None and changed(m.start(), end, expr) and not exempt(line, expr):
             found.append(Finding(path, fn, f"{m.group(0)}{expr})", line, value, SETTER))
     for m in NAMED_CALL.finditer(code, body_open, body_end):
-        args, _ = call_args(code, m.end() - 1)
+        args, end = call_args(code, m.end() - 1)
         line = line_of(m.start())
         for _, arg in split_top(args, (",",)):
             expr = arg.strip()
             if DURATION.fullmatch(expr) and (value := short(expr, m.start())) is not None:
-                if touches(line, line) and not exempt(line, expr):
+                if changed(m.start(), end, expr) and not exempt(line, expr):
                     found.append(Finding(path, fn, f"{m.group(1)}(.., {expr})", line, value, SETTER))
                 break
     for m in TIMEOUT_FIELD.finditer(code, body_open, body_end):
         name, expr, line = m.group(1), m.group(2).strip(), line_of(m.start())
         unit = next((u for suffix, u in FIELD_UNITS.items() if name.endswith(suffix)), None)
         if unit is not None and NUMBER.match(expr):
-            value = float(expr.replace("_", "")) * unit
+            value = float(re.sub(r"_?(?:[uif]\d+|usize|isize)$", "", expr).replace("_", "")) * unit
             value = value if value < FLOOR_S else None
         elif DURATION.search(expr) or "::" in expr or expr.isupper():
             value = short(expr, m.start())
         else:
             value = None
-        if value is not None and touches(line, line) and not exempt(line, expr):
+        if value is not None and changed(m.start(), m.end(), expr) and not exempt(line, expr):
             found.append(Finding(path, fn, f"{name}: {expr}", line, value, FIELD))
     for m in TIMEOUT.finditer(code, body_open, body_end):
         args, end = call_args(code, m.end() - 1)
@@ -952,9 +963,11 @@ def timeout_shapes(path, fn, code, span, touches, seconds, exempt) -> list[Findi
         )
         if not (inline or later):
             continue
+        # The span runs from the call through the assert that consumes it.
+        consumed = end + 40 if inline else end + later.end()
         expr, line = split_top(args, (",",))[0][1].strip(), line_of(m.start())
         value = seconds(expr, m.start())
-        if (value is None or value < FLOOR_S) and touches(line, line) and not exempt(line, expr):
+        if (value is None or value < FLOOR_S) and changed(m.start(), consumed, expr) and not exempt(line, expr):
             found.append(Finding(path, fn, f"timeout({expr}, ..)", line, value, IS_OK))
     return found
 

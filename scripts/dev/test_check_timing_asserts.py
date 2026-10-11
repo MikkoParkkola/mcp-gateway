@@ -240,6 +240,19 @@ class Timeouts(unittest.TestCase):
                 f"#[tokio::test]\nasync fn t() {{\ntokio::time::pause();\nlet start = Instant::now();\n{bound}\n}}\n",
                 ["under 5 s"],
             ),
+            # A stated miss, on the safe side: an aliased tokio import is not
+            # followed, so the assert is judged (refused), never exempted.
+            "paused, aliased tokio import": (
+                "use tokio::time::Instant as T;\n"
+                f"#[tokio::test]\nasync fn t() {{\ntokio::time::pause();\nlet start = T::now();\n{bound}\n}}\n",
+                ["under 5 s"],
+            ),
+            # A file naming both clocks leaves a bare `Instant` ambiguous.
+            "paused, bare instant, std imported in the fn": (
+                "use tokio::time::Instant;\n"
+                f"#[tokio::test]\nasync fn t() {{\nuse std::time::Instant;\ntokio::time::pause();\nlet start = Instant::now();\n{bound}\n}}\n",
+                ["under 5 s"],
+            ),
         }
         for name, (text, rules) in cases.items():
             with self.subTest(name):
@@ -568,9 +581,6 @@ class Lexer(unittest.TestCase):
         self.assertEqual([f.line for f in found], [7])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class Members(unittest.TestCase):
     """MIK-8360.TABLE.1: each flaky-under-load member's ORIGINAL code, quoted
@@ -653,3 +663,35 @@ class Members(unittest.TestCase):
             'assert!(\n    contacted.is_ok(),\n    "the revived backend is contacted at once, not at the 30 s timer"\n);'
         )
         self.assertRefused(body, guard.IS_OK)
+
+
+class NamedShapeSpans(unittest.TestCase):
+    """MIK-8360 review: R3a, R3b and R1b judge the whole statement and the
+    window's binding, not only the call's opening line, and a typed literal
+    is read as a number."""
+
+    scan = NewCode.scan
+    assertRefused = NewCode.assertRefused
+    assertPasses = NewCode.assertPasses
+
+    def test_a_changed_argument_line_of_a_multiline_setter_is_judged(self):
+        body = "let c = Config::default()\n    .with_request_timeout(\n        Duration::from_millis(300),\n    );"
+        self.assertRefused(body, guard.SETTER, added={6})
+        self.assertPasses(body, added=())
+
+    def test_a_changed_binding_of_the_window_is_judged(self):
+        body = "let w = Duration::from_millis(300);\nlet c = Config::default().with_request_timeout(w);"
+        self.assertRefused(body, guard.SETTER, added={4})
+
+    def test_a_newly_added_is_ok_assert_is_judged(self):
+        body = "let r = timeout(Duration::from_millis(300), f()).await;\nassert!(r.is_ok());"
+        self.assertRefused(body, guard.IS_OK, added={5})
+        self.assertPasses(body, added=())
+
+    def test_a_typed_literal_field_is_a_number(self):
+        self.assertRefused("let c = C { timeout_ms: 300_u64 };", guard.FIELD, attrs="")
+        self.assertPasses("let c = C { timeout_ms: 30_000_u64 };", attrs="")
+
+
+if __name__ == "__main__":
+    unittest.main()
