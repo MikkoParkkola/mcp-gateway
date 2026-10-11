@@ -179,3 +179,34 @@ async fn r5_a_resume_refuses_a_dirty_meta_key_it_stored() {
     );
     assert_eq!(calls(&fx), 0, "r5: dispatched");
 }
+
+/// R6 (code seat, MIK-8378): re-admission validates before it judges the
+/// exemption, as intake does (dispatch_intake.rs:282 runs before the
+/// exemption at :381). A stored call that is still exempt (passthrough
+/// `alpha-pt`) with a dirty own key is refused, not sent as stored. Modelled
+/// as R5 is: stored by a process with `sanitize_input` off.
+#[tokio::test]
+async fn r6_a_resume_still_exempt_refuses_a_dirty_meta_key() {
+    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
+    let host = crate::gateway::task_service::host::LiveHost::Http(std::sync::Arc::clone(&fx.state));
+    let call = crate::gateway::task_service::TaskCall {
+        tool: "gateway_invoke".to_owned(),
+        arguments: json!({"server": "alpha-pt", "tool": "read", "arguments": {},
+            "_me\u{7}ta": {}}),
+    };
+    let caller = crate::gateway::meta_mcp::anonymous_caller();
+    let refused = match host.readmit(&call, &caller, None).await {
+        Ok((arguments, _)) => panic!("r6: re-admitted as {arguments}"),
+        Err(refused) => serde_json::to_value(&*refused).expect("a response serializes"),
+    };
+    assert_eq!(
+        refused.pointer("/error/code"),
+        Some(&json!(-32600)),
+        "r6: {refused}"
+    );
+    assert!(
+        refused.to_string().contains("control characters"),
+        "r6: not the key validation's refusal: {refused}"
+    );
+    assert_eq!(calls(&fx), 0, "r6: dispatched");
+}

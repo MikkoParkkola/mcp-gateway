@@ -136,6 +136,12 @@ async fn e2d_business_keys_keep_todays_stripping() {
         post_meta_invoke(&mcp, "k-std", "alpha", "read", business.clone(), None, None).await;
     assert!(via_mcp.get("error").is_none(), "e2d /mcp: {via_mcp}");
     assert_eq!(calls(&mcp), 1, "e2d /mcp: not dispatched: {via_mcp}");
+    let forwarded = mcp.seen.lock().expect("seen lock").last().cloned();
+    assert_eq!(
+        forwarded.as_ref().and_then(|p| p.get("arguments")),
+        Some(&json!({"cmd": "x"})),
+        "e2d /mcp: the business key is forwarded stripped, as today: {forwarded:?}"
+    );
     let direct = plain().await;
     let (_, via_direct) =
         post_direct(&direct, "alpha", "k-std", "read", business, None, None).await;
@@ -229,5 +235,44 @@ async fn e3_the_direct_route_refuses_a_malformed_chain_nonce_like_mcp() {
             "e3 {nonce}: direct {via_direct} vs /mcp {via_mcp}"
         );
         assert_eq!(calls(&direct), 0, "e3 {nonce}: direct dispatched");
+    }
+}
+
+/// ENV.2 position 3 at every meta-route slot `invoke_tool` reads directives
+/// from (code seat, MIK-8378): a dirty key that cleans to `_full` is refused
+/// in `gateway_execute`'s single-call `arguments`, in a chain step's
+/// `arguments`, and in a surfaced tool's own arguments on `/mcp`.
+#[tokio::test]
+async fn e2h_a_dirty_directive_in_every_invoked_slot_is_refused() {
+    let dirty = json!({"_fu\u{7}ll": true});
+    let cases = [
+        (
+            "execute single",
+            json!({"name": "gateway_execute",
+            "arguments": {"tool": "alpha:read", "arguments": dirty}}),
+        ),
+        (
+            "execute chain",
+            json!({"name": "gateway_execute",
+            "arguments": {"chain": [{"tool": "alpha:read", "arguments": dirty}]}}),
+        ),
+        ("surfaced", json!({"name": "read", "arguments": dirty})),
+    ];
+    for (case, params) in cases {
+        let fx = Box::pin(sanitizing(
+            true,
+            fixture_built(Answer::Ok, |meta| {
+                meta.with_code_mode(true).with_surfaced_tools(vec![
+                    crate::config::SurfacedToolConfig {
+                        server: "alpha".to_string(),
+                        tool: "read".to_string(),
+                    },
+                ])
+            }),
+        ))
+        .await;
+        let (_, body) = send(&fx, "/mcp", "k-std", "tools/call", params, None).await;
+        assert!(refused_dirty(&body), "e2h {case}: {body}");
+        assert_eq!(calls(&fx), 0, "e2h {case}: dispatched");
     }
 }
