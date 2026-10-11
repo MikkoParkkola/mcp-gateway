@@ -88,6 +88,31 @@ async fn s4d_a_dirty_protocol_key_is_refused_not_aliased() {
     }
 }
 
+/// S9f (lead: the wiring behind the unit row S9e): on `/mcp/{name}` a
+/// backend tool named `gateway_invoke` is the backend's, so its own field
+/// named `arguments`, a JSON string, reaches the backend byte for byte. The
+/// direct route passes its route to the sanitize step; passed as the meta
+/// route, the step would decode and re-encode that field.
+#[tokio::test]
+async fn s9f_direct_route_keeps_a_tools_arguments_field() {
+    let fx = Box::pin(sanitizing(
+        true,
+        fixture_built(Answer::WithNote, |meta| meta),
+    ))
+    .await;
+    let opaque = "{\"b\": 1,  \"a\": 2}";
+    let args = json!({"arguments": opaque});
+    let (_, body) = post_direct(&fx, "alpha", "k-std", "gateway_invoke", args, None, None).await;
+    assert_eq!(calls(&fx), 1, "s9f: not dispatched: {body}");
+    let seen = fx.seen.lock().expect("seen lock").last().cloned();
+    assert_eq!(
+        seen.as_ref()
+            .and_then(|p| p.pointer("/arguments/arguments")),
+        Some(&json!(opaque)),
+        "s9f: {seen:?}"
+    );
+}
+
 /// S4c (fixes seat gpt): on `/mcp/{name}` a backend tool named
 /// `gateway_invoke` is the backend's, so a control character in its own
 /// `arguments.nonce` is business data, never refused as the signing nonce.

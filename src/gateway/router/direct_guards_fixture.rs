@@ -25,7 +25,8 @@ use crate::transport::Transport;
 pub(crate) enum Answer {
     /// Ordinary success, `isError: false`.
     Ok,
-    /// Like `Ok`, its `tools/list` also naming a second tool, `note`.
+    /// Like `Ok`, its `tools/list` also naming a second tool, `note`, and an
+    /// open-schema backend tool named `gateway_invoke` (MIK-8154 S9f).
     WithNote,
     /// Success envelope, `isError: true` (a tool refusing a request).
     IsError,
