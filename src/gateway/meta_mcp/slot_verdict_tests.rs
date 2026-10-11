@@ -849,3 +849,40 @@ async fn l9_servers_keep_the_required_backend_hidden() {
         "L9-servers: {servers}"
     );
 }
+
+/// A one-step `gateway_execute` chain naming [`TOOL`] on `BACKEND`, as alpha.
+async fn chain_step_as_alpha(meta: &super::MetaMcp) -> Value {
+    let step = format!("{}:{TOOL}", super::slot_verdict_fixture::BACKEND);
+    call_as_alpha(
+        meta,
+        "gateway_execute",
+        json!({"chain": [{"tool": step, "arguments": {"q": "x"}}]}),
+    )
+    .await
+}
+
+/// C5 (withheld, lacked): a `gateway_execute` chain step naming a tool
+/// alpha's own catalogue withholds or lacks answers -32601, the same for
+/// both, and is not dispatched. RED on base: the withheld step dispatches on
+/// the shared slot's verdict, and `step_failure` rewrites a -32601 to -32603
+/// (`chain_exec.rs:250`).
+#[tokio::test]
+async fn c5_chain_step_caller_slot_withholds() {
+    let mut answers = Vec::new();
+    for slot in [CallerSlot::Invalid, CallerSlot::Lacks] {
+        let fx = per_user(slot, &valid(), Warmth::Warm, CLOSED, Surfaced::No);
+        let answer = chain_step_as_alpha(&fx.meta).await;
+        assert_eq!(
+            fx.caller.calls() + fx.shared.calls(),
+            0,
+            "C5 {slot:?}: dispatched; {answer}"
+        );
+        assert_eq!(
+            answer.pointer("/error/code"),
+            Some(&json!(-32601)),
+            "C5 {slot:?}: {answer}"
+        );
+        answers.push(answer);
+    }
+    assert_eq!(answers[0], answers[1], "C5: withheld vs lacked differ");
+}
