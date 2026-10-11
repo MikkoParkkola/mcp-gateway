@@ -171,6 +171,43 @@ impl MetaMcp {
         ))
     }
 
+    /// The one operator record for a direct-name call of a surfaced tool
+    /// withheld from this caller (MIK-8340 A3), written by the meta direct
+    /// route, which every entry reaches. Best-effort: a record that cannot be
+    /// written is logged, never answered, so the answer stays the absent
+    /// name's whatever the audit log does.
+    pub(super) async fn record_withheld(
+        &self,
+        server: &str,
+        tool_name: &str,
+        reason: super::visible::Withholding,
+        caller: &super::MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
+    ) {
+        match reason {
+            super::visible::Withholding::Refused => {
+                let refused = super::grant_audit::note_withheld_best_effort(server, || {
+                    self.withheld_surfaced(server, tool_name, caller, session_id)
+                })
+                .await;
+                // Outside a grant slot the note is refused and written on its
+                // own task; the call still answers as an absent name.
+                if matches!(refused, Some(Error::AuditUnavailable)) {
+                    tracing::warn!(server, "{}", super::grant_audit::WITHHELD_RECORD_FAILED);
+                }
+            }
+            super::visible::Withholding::Schema | super::visible::Withholding::Descriptor => {
+                tracing::warn!(
+                    server,
+                    tool = tool_name,
+                    ?reason,
+                    "Surfaced tool withheld from a call by its name; answered as a name that \
+                     matches no tool"
+                );
+            }
+        }
+    }
+
     /// Whether this caller may be shown the backend name `server`: its
     /// backend scope and the routing profile. A cold cache does not hide it.
     pub(crate) fn admits_backend(
@@ -208,7 +245,7 @@ impl MetaMcp {
                 truncated |= cut;
                 tools
                     .iter()
-                    .filter(|t| self.may_invoke(&b.name, &t.name, scope, session_id).is_ok())
+                    .filter(|t| self.shows_tool(&b.name, t, scope, session_id))
                     .count()
             })
             .sum();
@@ -231,7 +268,7 @@ impl MetaMcp {
                 .iter()
                 .filter(|name| {
                     cap.is_listed_in(name, &mut seen)
-                        && self.may_invoke(&cap.name, name, scope, session_id).is_ok()
+                        && self.shows_name(&cap.name, name, scope, session_id)
                 })
                 .count();
             total = total.plus(admitted);
@@ -250,8 +287,7 @@ impl MetaMcp {
     ) -> Vec<(String, String, Vec<String>)> {
         let mut seen = std::collections::HashMap::new();
         let mut allowed = |name: &str| {
-            cap.is_listed_in(name, &mut seen)
-                && self.may_invoke(&cap.name, name, scope, session_id).is_ok()
+            cap.is_listed_in(name, &mut seen) && self.shows_name(&cap.name, name, scope, session_id)
         };
         // Name, category and chain hints only (MIK-8014 PERF.8a): the guide
         // reads nothing else, so no definition is copied.
@@ -273,14 +309,13 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> bool {
         let on_backend = self.backends.all().into_iter().any(|b| {
-            b.get_cached_tool(name).is_some()
-                && self.may_invoke(&b.name, name, scope, session_id).is_ok()
+            b.get_cached_tool(name).is_some() && self.shows_name(&b.name, name, scope, session_id)
         });
         on_backend
             || self.get_capabilities().is_some_and(|cap| {
                 cap.has_capability(name)
                     && cap.is_listed(name)
-                    && self.may_invoke(&cap.name, name, scope, session_id).is_ok()
+                    && self.shows_name(&cap.name, name, scope, session_id)
             })
     }
 

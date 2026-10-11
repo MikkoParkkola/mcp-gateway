@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::super::{TaskExecutor, UpstreamAnswer, UpstreamHandle, UpstreamRecovery};
+use super::super::{
+    CancelDelivery, TaskExecutor, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+};
 use super::{RecoveredRead, RecoveryRefusal, UpstreamCapture};
 use crate::backend::BackendRegistry;
 use crate::gateway::authz::HTTP_STATUS_DATA_KEY;
@@ -50,7 +52,9 @@ struct StubPeer(Reply);
 #[async_trait::async_trait]
 impl UpstreamRecovery for StubPeer {
     /// This suite asserts nothing about upstream cancels (MIK-7642 PR.D rows do).
-    async fn cancel(&self, _handle: &UpstreamHandle, _deadline: Duration) {}
+    async fn cancel(&self, _handle: &UpstreamHandle, _deadline: Duration) -> CancelDelivery {
+        CancelDelivery::Confirmed
+    }
 
     async fn claims(&self, backend: &str) -> bool {
         backend == BACKEND

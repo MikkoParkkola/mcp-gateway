@@ -330,19 +330,26 @@ async fn forward_sanitized(
         drop(admission);
         return refused;
     }
+    // After redeem, on the exact bytes sent: the answers are in the params now.
+    let permit = match super::direct_permit::mint_permit(scope, Some(&sanitized_params)) {
+        Ok(permit) => permit,
+        Err(e) => {
+            let answer = (&mut admitted, Some(admission));
+            return super::direct_permit::refused_send(state, answer, id, &e);
+        }
+    };
     // Forward the sanitized params to the backend
     let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(super::dispatch_armed(
         admitted.idem_reservation.as_mut(),
         crate::gateway::router::inflight_calls::explicitly_cancellable(
             cancel_on,
-            super::dispatch_in_scope(
+            super::direct_send::dispatch_tool_call(
+                permit,
                 &route.backend,
-                &envelope.method,
                 id,
                 Some(sanitized_params),
-                &propagation.headers,
-                propagation.identity_key.as_deref(),
+                (&propagation.headers, propagation.identity_key.as_deref()),
             ),
         ),
     ))
@@ -440,14 +447,14 @@ async fn forward_plain(
     } else {
         Admission::default()
     };
-    let dispatch = super::dispatch_in_scope(
-        &route.backend,
-        method,
-        id,
-        envelope.params.clone(),
-        &propagation.headers,
-        propagation.identity_key.as_deref(),
-    );
+    let dispatch = match super::direct_permit::plain_send(scope, envelope, propagation, admitted) {
+        Ok(dispatch) => dispatch,
+        Err(refused) => {
+            // Not dispatched: the spend admission is given back on drop.
+            drop(admission);
+            return Err(refused);
+        }
+    };
     let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(super::dispatch_armed(
         admitted.idem_reservation.as_mut(),

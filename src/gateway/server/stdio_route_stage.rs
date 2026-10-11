@@ -13,10 +13,9 @@
 use serde_json::Value;
 
 use super::{Gateway, StdioClient};
-use crate::gateway::meta_mcp::invoke::RouteRefusal;
 use crate::gateway::meta_mcp::{
-    LOCAL_OPERATOR_PRINCIPAL, MetaMcp, MetaMcpCallerContext, TaskConfirmation,
-    TaskConfirmationRequest, error_response_preserving_status,
+    MetaMcp, MetaMcpCallerContext, TaskConfirmation, TaskConfirmationRequest,
+    error_response_preserving_status,
 };
 use crate::protocol::mrtr::RetryFields;
 use crate::protocol::{JsonRpcResponse, RequestId};
@@ -42,22 +41,22 @@ impl Gateway {
     ) -> RouteStage {
         let session_id = client.session_id;
         let scope = caller.scope();
-        let targets =
-            crate::gateway::router::backend_tool_targets_for_call(meta_mcp, tool_name, arguments);
+        let targets = crate::gateway::router::backend_tool_targets_for_call(
+            meta_mcp,
+            tool_name,
+            arguments,
+            crate::gateway::meta_mcp::visible::TargetView::Caller(scope, Some(session_id)),
+        );
         for target in &targets {
             let checked = target.as_target();
             // The one route-stage authorize `/mcp` also runs. A surfaced name
-            // this caller may not invoke answers as a name that matches no
-            // tool, so neither the firewall nor X14 can confirm it exists.
-            if let Err(RouteRefusal::Withheld(error) | RouteRefusal::Refused(error)) = meta_mcp
-                .authorize_route_target(
-                    scope,
-                    Some(session_id),
-                    tool_name,
-                    (checked.server, checked.tool),
-                    checked.arguments,
-                )
-            {
+            // withheld from this caller is not a target (MIK-8340), so neither
+            // the firewall nor X14 can confirm it exists.
+            if let Err(error) = meta_mcp.authorize_route_target(
+                scope,
+                (checked.server, checked.tool),
+                checked.arguments,
+            ) {
                 return RouteStage::Answer(error_response_preserving_status(id.clone(), &error));
             }
             // The stateful controls key on the one client this process
@@ -97,8 +96,10 @@ impl Gateway {
                 principal: crate::protocol::mrtr::source_fingerprint(caller.principal_source(None)),
                 // This process's one share of the continuation pool (MIK-8293).
                 quota: caller.quota_key(),
-                // The owner stdio admits its tasks under (`stdio_tasks::intent`).
-                owner: LOCAL_OPERATOR_PRINCIPAL,
+                // The caller's own owner, the one `stdio_tasks::intent` admits
+                // under (the local operator for a stdio caller). A context wired
+                // to the wrong caller has none, so it fails closed: re-challenged.
+                owner: caller.owner_principal().unwrap_or_default(),
                 scope,
                 session_id: Some(session_id),
                 input_capabilities: caller.input_capabilities,

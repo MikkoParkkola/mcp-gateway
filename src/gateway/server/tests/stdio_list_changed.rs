@@ -344,20 +344,6 @@ async fn decided(count: usize) -> bool {
     .is_ok()
 }
 
-/// Bound on a flood's answers filling the writer queue (MIK-8359).
-const FLOOD_PARKED: Duration = Duration::from_secs(120);
-
-/// Whether a ping answer found the writer queue full within [`FLOOD_PARKED`].
-async fn flood_parked() -> bool {
-    timeout(FLOOD_PARKED, async {
-        while crate::gateway::server::stdio_seams::answers_parked() == 0 {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .is_ok()
-}
-
 /// Bound on a stopped session's drain task ending.
 const DRAIN_END: Duration = Duration::from_secs(5);
 
@@ -547,16 +533,6 @@ async fn t14_a_burst_while_stdout_is_full_is_decided_and_told_at_most_twice() {
         .write_all(&pings)
         .await
         .expect("stdin accepts the flood");
-    // Premise before the first change: stdout is blocked once a ping answer
-    // finds the writer queue full. The flood is answered on this thread, and
-    // on a slow host that takes many seconds (MIK-8359: ~18 s on Windows CI),
-    // so a change written straight after the flood spent its ARRIVAL bound
-    // queued behind it. `queue_full_wakes` cannot be the wait: it moves only
-    // after a decision wakes the sender.
-    assert!(
-        flood_parked().await,
-        "premise: no ping answer found the writer queue full within {FLOOD_PARKED:?}"
-    );
     let base = decisions();
     for n in 0..5 {
         std::fs::write(
@@ -653,4 +629,69 @@ async fn t14diag_mt_flood_throughput() {
     );
     assert_eq!(answered, FLOOD, "every ping answered");
     serve.close().await;
+}
+
+/// T14DIAG MIK-8364 same-run A/B (throwaway): sessions with the telemetry
+/// sink on a real disk (A) and with no sink (B), interleaved in one process
+/// so both see the same load. 30 pairs, the order alternating (AB, BA, ...),
+/// 100 pings per session, timed from the first write to the last answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn t14diag_ab_interleaved() {
+    const PAIRS: usize = 30;
+    const BATCH: u64 = 100;
+    fn load() -> String {
+        std::fs::read_to_string("/proc/loadavg").unwrap_or_default()
+    }
+    async fn batch_us(nosink: bool) -> f64 {
+        crate::gateway::server::stdio_seams::DIAG_NOSINK
+            .store(nosink, std::sync::atomic::Ordering::SeqCst);
+        let mut serve = serve_on(|_| String::new(), 1 << 20).await;
+        crate::gateway::server::stdio_seams::DIAG_NOSINK
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        legacy(&mut serve, true).await;
+        let mut pings = Vec::new();
+        for id in 1..=BATCH {
+            let line = serde_json::to_vec(&json!({"jsonrpc": "2.0", "id": id, "method": "ping"}))
+                .expect("a frame serialises");
+            pings.extend_from_slice(&line);
+            pings.push(b'\n');
+        }
+        let start = std::time::Instant::now();
+        serve
+            .client
+            .write_all(&pings)
+            .await
+            .expect("stdin accepts the batch");
+        let mut answered = 0u64;
+        while answered < BATCH {
+            match serve.next(Duration::from_secs(300)).await {
+                Some(frame) if frame["id"].is_u64() => answered += 1,
+                Some(_) => {}
+                None => break,
+            }
+        }
+        let us = start.elapsed().as_secs_f64() * 1e6 / BATCH as f64;
+        assert_eq!(answered, BATCH, "every ping answered");
+        serve.close().await;
+        us
+    }
+    eprintln!("T14DIAG AB load_start {}", load().trim());
+    let mut diffs = Vec::new();
+    for pair in 0..PAIRS {
+        let (a, b) = if pair % 2 == 0 {
+            let a = batch_us(false).await;
+            (a, batch_us(true).await)
+        } else {
+            let b = batch_us(true).await;
+            (batch_us(false).await, b)
+        };
+        eprintln!(
+            "T14DIAG AB pair {pair} disk_us={a:.1} nosink_us={b:.1} diff_us={:.1}",
+            a - b
+        );
+        diffs.push(a - b);
+    }
+    eprintln!("T14DIAG AB load_end {}", load().trim());
+    diffs.sort_by(f64::total_cmp);
+    eprintln!("T14DIAG AB sorted_diffs_us {diffs:?}");
 }

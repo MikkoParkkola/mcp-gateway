@@ -9,7 +9,7 @@ use super::*;
 /// `tools/list` pages an [`Upstream::ListStallsCounted`] server received:
 /// first pages, and second pages (the ones that never answer).
 #[derive(Default)]
-pub(super) struct Pages {
+pub(crate) struct Pages {
     pub first: AtomicUsize,
     pub second: AtomicUsize,
 }
@@ -38,7 +38,7 @@ pub(super) async fn arrived(counter: &AtomicUsize, n: usize, what: &str) {
 /// its next request's token step needs a login (MIK-8269). Replaces sleeping
 /// out a token issued with a few seconds of use, which a slow runner can lose
 /// mid-start.
-pub(super) async fn lapse(backend: &Backend) {
+pub(crate) async fn lapse(backend: &Backend) {
     let client = backend
         .last_oauth_client
         .lock()

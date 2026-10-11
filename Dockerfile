@@ -114,6 +114,7 @@ RUN echo "apt cache bust: ${APT_CACHE_BUST}" \
     git \
     gnupg \
     openssh-client \
+    tini \
     && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o /tmp/nodesource.key \
     && test "$(gpg --show-keys --with-colons /tmp/nodesource.key | grep -c '^pub:')" = 1 \
     && gpg --show-keys --with-colons /tmp/nodesource.key \
@@ -174,7 +175,12 @@ COPY --chmod=0755 docker/entrypoint-full.sh /usr/local/bin/entrypoint-full.sh
 # variant restates it: the image's own invocation passes no arguments, and
 # without this the entrypoint execs a gateway with no config that starts and
 # then never exits instead of refusing the way the base stage does.
-ENTRYPOINT ["/usr/local/bin/entrypoint-full.sh"]
+#
+# tini is PID 1 and `-g` sends a stop to the entrypoint's whole process group.
+# A sourced `.envsh` step's foreground command is in that group, so a stop
+# reaches it instead of waiting for it to return; tini also reaps orphans and
+# exits with the entrypoint's (later the gateway's) status.
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/usr/local/bin/entrypoint-full.sh"]
 CMD ["--config", "/config.yaml"]
 
 # The variant's own start period: an EXTRA_APT_PACKAGES install runs before

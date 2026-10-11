@@ -476,6 +476,14 @@ impl CollusionDetector {
             sketched.extend_from_slice(&fps);
             fps.truncate(MAX_SOURCE_FINGERPRINTS);
         }
+        // `MIK-8066.CAP.2`: a thinned sample of the cut middle is evidence,
+        // under the caller's own records (so it excuses the caller's copy
+        // too), in the room the receipt left under the per-delivery bound.
+        if let Some(cut) = cut.as_deref() {
+            let room = MAX_SOURCE_FINGERPRINTS.saturating_sub(fps.len());
+            let (_, middle) = thin::thinned_middle(cut, &fps, room);
+            fps.extend(middle);
+        }
         sketched.sort_unstable();
         sketched.dedup();
         let pair = (self.digest(source), self.digest(principal));
@@ -762,6 +770,8 @@ pub(crate) use margin::egress_text;
 mod seam_tests;
 #[path = "collusion_sketch.rs"]
 pub(super) mod sketch;
+#[path = "collusion_thin.rs"]
+mod thin;
 pub(crate) use seam::{SeamFingerprint, SeamForms};
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ use super::StdioNonce;
 use super::stdio_route_stage::RouteStage;
 use super::stdio_single::InputSanitizing;
 use super::{
-    STDIO_CREDENTIAL_PRINCIPAL, StdioClient, StdioTelemetry, stdio_catalogue, stdio_delivery,
+    STDIO_CREDENTIAL_PRINCIPAL, StdioClient, stdio_catalogue, stdio_delivery,
     stdio_routing_keys_only, stdio_take_merged_client_meta, stdio_tasks,
 };
 use crate::gateway::authz::ToolPolicyAuthorizer;
@@ -28,7 +28,6 @@ impl Gateway {
         _mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         mut request: serde_json::Value,
         client: StdioClient<'_>,
-        protocol_telemetry_sink: &StdioTelemetry,
     ) -> Option<stdio_delivery::StdioAnswer> {
         // Borrowed views throughout: a refused request is never copied.
         // Ownership is taken once, after admission, where it executes.
@@ -42,28 +41,14 @@ impl Gateway {
             Err(response) => return Some(stdio_delivery::StdioAnswer::Built(response)),
         };
 
-        // Scoped so the guard is gone before the first await below: see
-        // [`StdioTelemetry`].
-        let parsed = {
-            #[cfg(test)]
-            let diag_wait = std::time::Instant::now();
-            let mut sink = protocol_telemetry_sink
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            #[cfg(test)]
-            super::stdio_seams::diag_acc("S2_lock_wait", super::stdio_seams::diag_us(diag_wait));
-            #[cfg(test)]
-            let diag_held = std::time::Instant::now();
-            let parsed = Self::parse_and_observe(&request, session_id, sink.as_mut());
-            #[cfg(test)]
-            super::stdio_seams::diag_acc("S2_lock_held", super::stdio_seams::diag_us(diag_held));
-            parsed
-        };
+        let parsed = Self::parse_and_observe(&request, session_id);
         let (id, method, params, request_shape) = match parsed {
             Ok(parsed) => parsed,
             Err(early) => return early.map(stdio_delivery::StdioAnswer::Built),
         };
 
+        let policy = ToolPolicyAuthorizer { tool_policy };
+        let scope = InvokeScope::stdio(&policy);
         let (external_tool, response_targets) = {
             // Response targets are derived here, before dispatch, so live backend
             // state cannot move an accepted call's provenance. The mapping is fed
@@ -81,6 +66,13 @@ impl Gateway {
                         meta_mcp,
                         tool,
                         &routing_keys,
+                        // The caller's view, as `/mcp` resolves it: a withheld
+                        // surfaced name is refused as absent, so its answer is
+                        // not attributed to that backend's tool (MIK-8340).
+                        super::super::meta_mcp::visible::TargetView::Caller(
+                            scope,
+                            Some(session_id),
+                        ),
                     ),
                 )
             } else {
@@ -92,8 +84,6 @@ impl Gateway {
             );
             (external_tool, response_targets)
         };
-        let policy = ToolPolicyAuthorizer { tool_policy };
-        let scope = InvokeScope::stdio(&policy);
         let (mut response, execution) = if method == "tools/call" {
             // D3-a: one grant-decision slot spans signing, admission and dispatch.
             super::super::meta_mcp::grant_audit::slot_rpc(
@@ -259,16 +249,15 @@ impl Gateway {
         Ok((signing_context, chain_nonce))
     }
 
-    /// Parse, classify and durably observe one inbound stdio request.
+    /// Parse, classify and observe one inbound stdio request. The observation
+    /// is in memory only; the session's saver persists it off the request
+    /// path (MIK-8364).
     ///
     /// `Err(None)` means no response is due (a notification); `Err(Some(_))`
     /// carries an already-serialized error response.
     fn parse_and_observe<'r>(
         request: &'r serde_json::Value,
         session_id: &str,
-        protocol_telemetry_sink: Option<
-            &mut crate::protocol_revision_telemetry::DurableTelemetrySink,
-        >,
     ) -> std::result::Result<
         (
             crate::protocol::RequestId,
@@ -302,13 +291,7 @@ impl Gateway {
             // keeps the pre-handshake record at `absent`/`none`.
             crate::protocol_revision_telemetry::session_negotiated_revision(Some(session_id)),
         );
-        Self::observe_stdio_inbound(
-            request,
-            params,
-            &method,
-            session_id,
-            protocol_telemetry_sink,
-        );
+        Self::observe_stdio_inbound(request, params, &method, session_id);
 
         // ADR-014 §4, the stdio half. Stdio classifies the same body HTTP does,
         // so it declares a level the same way and gets the same filter -- one

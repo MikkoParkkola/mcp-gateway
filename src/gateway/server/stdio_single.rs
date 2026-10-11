@@ -4,12 +4,10 @@
 
 use std::sync::Arc;
 
-use tracing::warn;
-
 use super::Gateway;
 #[cfg(test)]
 use super::{STDIO_CREDENTIAL_PRINCIPAL, StdioNonce};
-use super::{StdioTelemetry, stdio_delivery, stdio_tasks};
+use super::{stdio_delivery, stdio_tasks};
 use crate::Result;
 use crate::gateway::meta_mcp::MetaMcp;
 #[cfg(test)]
@@ -127,7 +125,7 @@ pub(super) fn stdio_take_merged_client_meta(request: &mut serde_json::Value) -> 
 /// NOT the production path. `dispatch_tools_call` builds its own context
 /// inline (via `build_stdio_caller_context`, `stdio_dispatch.rs`) and carries the negotiated `protocol_revision`,
 /// which this fixture hardcodes to `None`. An earlier doc comment here
-/// claimed the helper had been extracted from `dispatch_single_with_sink`;
+/// claimed the helper had been extracted from `dispatch_single_for_client`;
 /// it never was, and no production arm calls it. Assert production stdio
 /// behaviour against the dispatcher, not against this.
 #[cfg(test)]
@@ -223,7 +221,7 @@ impl Gateway {
         request: &serde_json::Value,
         session_id: &str,
     ) -> Option<serde_json::Value> {
-        Self::dispatch_single_with_sink(
+        Self::dispatch_single_for_client(
             meta_mcp,
             tool_policy,
             mtls_policy,
@@ -236,23 +234,21 @@ impl Gateway {
                 modern: false,
                 sanitize: InputSanitizing::Off,
             },
-            &StdioTelemetry::default(),
         )
         .await
     }
 
-    /// Dispatch one stdio request, durably recording its inbound observation
-    /// before any handler can await, fail, or terminate the process.
-    /// NFR.OBS.1's stdio half: record one inbound observation and flush it.
+    /// NFR.OBS.1's stdio half: record one inbound observation, per request,
+    /// in the in-memory registry. Persisting the window is the session saver's
+    /// job, off the request path (MIK-8364): a synchronous save here cost
+    /// ~7-18 ms per request on a real disk and serialised every request.
     ///
-    /// Its own function so the dispatcher below reads as dispatch; the two
-    /// calls are the same either way.
+    /// Its own function so the dispatcher below reads as dispatch.
     pub(super) fn observe_stdio_inbound(
         request: &serde_json::Value,
         params: Option<&serde_json::Value>,
         method: &str,
         session_id: &str,
-        sink: Option<&mut crate::protocol_revision_telemetry::DurableTelemetrySink>,
     ) {
         crate::protocol_revision_telemetry::observe_inbound_request(
             request,
@@ -262,39 +258,21 @@ impl Gateway {
             Some(session_id),
             crate::protocol_revision_telemetry::Transport::Stdio,
         );
-        #[cfg(test)]
-        let diag_s1 = std::time::Instant::now();
-        #[cfg(test)]
-        let diag_has_sink = sink.is_some();
-        let persisted =
-            sink.map(crate::protocol_revision_telemetry::DurableTelemetrySink::persist_global);
-        #[cfg(test)]
-        if diag_has_sink {
-            super::stdio_seams::diag_acc("S1_first_persist", super::stdio_seams::diag_us(diag_s1));
-        }
-        if let Some(Err(error)) = persisted {
-            warn!(
-                %error,
-                "failed to persist inbound stdio protocol-revision observation; measurement window is incomplete"
-            );
-        }
     }
 
     /// [`Self::dispatch_single_staged`] recording the receipts straight away,
     /// for a caller that judges no frame (a test).
     #[cfg(test)]
-    pub(super) async fn dispatch_single_with_sink(
+    pub(super) async fn dispatch_single_for_client(
         meta_mcp: &Arc<MetaMcp>,
         tool_policy: &Arc<crate::security::ToolPolicy>,
         mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         request: serde_json::Value,
         client: StdioClient<'_>,
-        sink: &StdioTelemetry,
     ) -> Option<serde_json::Value> {
         let session_id = client.session_id;
         let (answer, staged) =
-            Self::dispatch_single_staged(meta_mcp, tool_policy, mtls_policy, request, client, sink)
-                .await;
+            Self::dispatch_single_staged(meta_mcp, tool_policy, mtls_policy, request, client).await;
         // No frame is judged here: recorded and settled as built, and the
         // receipts follow the frame as `judge_and_commit` has them follow it.
         let Some(answer) = answer else {
@@ -320,13 +298,14 @@ impl Gateway {
         mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         request: serde_json::Value,
         client: StdioClient<'_>,
-        sink: &StdioTelemetry,
     ) -> (
         Option<stdio_delivery::StdioAnswer>,
         crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
     ) {
-        let dispatch =
-            Self::dispatch_relay_scoped(meta_mcp, tool_policy, mtls_policy, request, client, sink);
+        // One visibility judgement per request (MIK-8340), as on HTTP.
+        let dispatch = crate::gateway::meta_mcp::visible::with_visibility_memo(
+            Self::dispatch_relay_scoped(meta_mcp, tool_policy, mtls_policy, request, client),
+        );
         if meta_mcp.relay_active() {
             return meta_mcp.collecting_staged(Box::pin(dispatch)).await;
         }
@@ -345,14 +324,6 @@ impl Gateway {
         batch: serde_json::Value,
         session_id: &str,
     ) -> Vec<serde_json::Value> {
-        Self::dispatch_batch_with_sink(
-            meta_mcp,
-            tool_policy,
-            mtls_policy,
-            batch,
-            session_id,
-            &StdioTelemetry::default(),
-        )
-        .await
+        Self::dispatch_batch_for_client(meta_mcp, tool_policy, mtls_policy, batch, session_id).await
     }
 }

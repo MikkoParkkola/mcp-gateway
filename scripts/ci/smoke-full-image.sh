@@ -29,13 +29,14 @@ STARTUP_TIMEOUT=300
 WORKDIR="${RUNNER_TEMP:-/tmp}"
 ROOT_CASE="smoke-full-root-$$"
 STOP_CASE="smoke-full-stop-$$"
+ENVSH_CASE="smoke-full-envsh-$$"
 
 # Probe output lands here rather than in a command substitution: `fail` has to
 # report and exit from this shell, and inside a substitution it would only exit
 # the subshell, leaving the caller to report the same fault again with the
 # annotation for its own empty capture.
 ANSWER="${WORKDIR}/smoke-full-answer.$$"
-trap 'rm -f "${ANSWER}"; docker rm -f "${ROOT_CASE}" "${STOP_CASE}" > /dev/null 2>&1 || true' EXIT
+trap 'rm -f "${ANSWER}"; docker rm -f "${ROOT_CASE}" "${STOP_CASE}" "${ENVSH_CASE}" > /dev/null 2>&1 || true' EXIT
 
 # Make the image local before the first probe. On a runner that has not pulled
 # this digest, `docker run` writes its pull progress to stderr, and
@@ -80,6 +81,7 @@ probe() {
 # wait covers the install too.
 wait_for_gateway() {
   local name="$1"
+  local running
   for _ in $(seq 1 $((STARTUP_TIMEOUT / 2))); do
     # Captured and compared, never piped into `grep -q` (pipefail); a
     # container already gone reads as not running.
@@ -161,13 +163,21 @@ wait_for_gateway "${ROOT_CASE}"
 ROOT_LOG="$(docker logs "${ROOT_CASE}" 2>&1)"
 grep -q 'step: ran as uid 0' <<< "${ROOT_LOG}" \
   || fail "the startup step did not run as root"
-if ! UID_LINE="$(docker exec "${ROOT_CASE}" sh -c 'grep -m1 "^Uid:" /proc/1/status')"; then
+# PID 1 is tini (it runs as root under `--user root`), so the gateway is found
+# by name among its children rather than read from /proc/1/status.
+PID1="$(docker exec "${ROOT_CASE}" cat /proc/1/comm)" \
+  || fail "cannot read the name of PID 1"
+[ "${PID1}" = tini ] || fail "PID 1 is '${PID1}', not tini"
+if ! UID_LINE="$(docker exec "${ROOT_CASE}" sh -c \
+    'for d in /proc/[0-9]*; do [ "$(cat "$d/comm" 2>/dev/null)" = mcp-gateway ] && exec grep -m1 "^Uid:" "$d/status"; done; exit 1')"; then
   fail "cannot read the uid of the gateway process"
 fi
-case "${UID_LINE}" in
-  *1001*) ;;
-  *) fail "the gateway runs as '${UID_LINE}', not the image's user 1001" ;;
-esac
+# `Uid:` is followed by the real, effective, saved and filesystem uids;
+# compared as numbers, so 10010 or 21001 cannot pass as 1001.
+read -r _ REAL_UID EFFECTIVE_UID _ <<< "${UID_LINE}"
+if [ "${REAL_UID}" != 1001 ] || [ "${EFFECTIVE_UID}" != 1001 ]; then
+  fail "the gateway runs as '${UID_LINE}', not the image's user 1001"
+fi
 docker exec "${ROOT_CASE}" sh -c 'ip -V' > /dev/null \
   || fail "EXTRA_APT_PACKAGES=iproute2 left no ip(8) in the image"
 docker rm -f "${ROOT_CASE}" > /dev/null
@@ -229,4 +239,34 @@ STOP_EXIT="$(docker inspect -f '{{.State.ExitCode}}' "${STOP_CASE}")"
   || fail "the entrypoint was SIGKILLed during startup (exit 137)"
 docker rm -f "${STOP_CASE}" > /dev/null
 
-echo "${IMAGE} spawns npx and uvx backends, its caches are writable by the service user, and its root path installs, drops privileges, stops on a failing step or install, and stops promptly on TERM"
+# Root path, a stop while a SOURCED step runs: the step runs in the
+# entrypoint's own shell, whose trap waits for the step's foreground command.
+# tini -g sends the stop to that command too, so the entrypoint's trap ends
+# the container with its own 143 well inside the grace period. Without tini
+# the stop waits out all 30 s and ends in a SIGKILL (137).
+ENVSHDIR="${WORKDIR}/smoke-full-envsh-$$"
+mkdir -p "${ENVSHDIR}/steps"
+printf '#!/bin/sh\necho "step: sleeping" >&2\nsleep 120\n' > "${ENVSHDIR}/steps/10-slow.envsh"
+chmod 0755 "${ENVSHDIR}/steps/10-slow.envsh"
+docker run -d --name "${ENVSH_CASE}" --pull never --user root \
+  -v "${ENVSHDIR}/steps:/docker-entrypoint.d:ro" \
+  "${IMAGE}" --config /config.yaml > /dev/null
+# The step is known to be running before the stop, so a step that never ran
+# cannot pass as a prompt stop.
+for _ in $(seq 1 30); do
+  ENVSH_LOG="$(docker logs "${ENVSH_CASE}" 2>&1)"
+  grep -q 'step: sleeping' <<< "${ENVSH_LOG}" && break
+  sleep 1
+done
+grep -q 'step: sleeping' <<< "${ENVSH_LOG}" \
+  || fail "the sourced startup step never started: ${ENVSH_LOG}"
+STARTED="$(date +%s)"
+docker stop -t 30 "${ENVSH_CASE}" > /dev/null
+ELAPSED="$(( $(date +%s) - STARTED ))"
+ENVSH_EXIT="$(docker inspect -f '{{.State.ExitCode}}' "${ENVSH_CASE}")"
+if [ "${ELAPSED}" -ge 10 ] || [ "${ENVSH_EXIT}" != 143 ]; then
+  fail "a stop during a sourced startup step took ${ELAPSED}s and exited ${ENVSH_EXIT}; tini -g should end it with the entrypoint's 143 at once"
+fi
+docker rm -f "${ENVSH_CASE}" > /dev/null
+
+echo "${IMAGE} spawns npx and uvx backends, its caches are writable by the service user, and its root path installs, drops privileges, stops on a failing step or install, and stops promptly on TERM, a sourced step included"

@@ -221,6 +221,36 @@ pub(crate) async fn stdio_chained() -> Sent {
     .await
 }
 
+/// R5 by the surfaced name, with the same signer and nonce (MIK-8159.CHAIN.1):
+/// stdio `tools/call read` on a Meta-MCP that surfaces `alpha`'s `read`.
+pub(crate) async fn stdio_surfaced_chained() -> Sent {
+    use crate::gateway::chain_test_support::{NONCE_KEY, signer};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = Arc::new(Counting {
+        calls: Arc::clone(&calls),
+        answer: text_result("ok"),
+    });
+    let gateway_meta = stdio_meta(
+        |meta| {
+            // Surfacing is a consuming builder; the placeholder is dropped.
+            let built = std::mem::replace(meta, MetaMcp::new(Arc::new(BackendRegistry::new())));
+            *meta = built.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+                server: "alpha".to_string(),
+                tool: "read".to_string(),
+            }]);
+            meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest);
+        },
+        transport,
+    )
+    .await;
+    let params = json!({ "name": "read", "arguments": {}, "_meta": { NONCE_KEY: "matrix-nonce" } });
+    let body = stdio_send(&gateway_meta, params).await;
+    Sent {
+        body,
+        backend_calls: calls.load(Ordering::SeqCst),
+    }
+}
+
 /// A backend serving `read` whose first `tools/call` asks one form question
 /// (`k1`) and whose later ones answer `ok`, counting its sends.
 struct AsksOnce {
@@ -351,7 +381,7 @@ pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value, usize) {
                             IDEMPOTENCY_KEY_META: key,
                         }}
                 });
-                super::Gateway::dispatch_single_with_sink(
+                super::Gateway::dispatch_single_for_client(
                     &fixture.meta,
                     &fixture.tool_policy,
                     &fixture.mtls_policy,
@@ -364,7 +394,6 @@ pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value, usize) {
                         modern: false,
                         sanitize: super::stdio_single::InputSanitizing::Off,
                     },
-                    &super::StdioTelemetry::default(),
                 )
                 .await
                 .expect("a request carrying an id must produce a response")

@@ -58,6 +58,9 @@ mod playbook_retry_stdio;
 
 mod stdio_catalogue_sole_operator;
 
+// MIK-8364: stdio saves protocol telemetry off the request path.
+mod stdio_telemetry_save;
+
 #[cfg(feature = "cost-governance")]
 mod stdio_cost_persistence;
 
@@ -111,3 +114,6 @@ mod stdio_teardown_bound;
 
 // MIK-7684: the stdio reader never waits for stdout room.
 mod stdio_reader_unparked;
+/// MIK-8340: a withheld surfaced name answers on stdio as an absent one.
+#[cfg(feature = "firewall")]
+mod withheld_parity_stdio;
