@@ -131,9 +131,9 @@ jobs:
       # names no one can never be made (MIK-8286, identity-collapse).
       - name: Caller identities are built only through their checked constructors (MIK-8286)
         run: python3 scripts/release/check_identity_sources.py
-      # Every function in the swept areas has a row, whenever it was added
-      # (MIK-8195); the area list grows with each wave until it is removed.
-      - name: Every function in a swept COV.3 area has an inventory row (MIK-8195)
+      # Every function on the COV.3 paths has a row, whenever it was added
+      # (MIK-8195).
+      - name: Every function on the COV.3 paths has an inventory row (MIK-8195)
         run: python3 scripts/release/check_inventory_rows.py --all
       - name: Validate tracked public docs boundary
         run: scripts/dev/check-public-repo-hygiene.sh

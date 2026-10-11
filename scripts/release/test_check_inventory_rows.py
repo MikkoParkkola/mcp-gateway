@@ -175,10 +175,6 @@ class CheckInventoryRows(unittest.TestCase):
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn added() {}\n")
         self.repo.commit("add")
         rows.ROOT = self.repo.root
-        self.addCleanup(setattr, rows, "SWEPT_AREAS", rows.SWEPT_AREAS)
-        rows.SWEPT_AREAS = ("src/cli/",)
-        self.assertEqual(rows.missing_rows(rows.ALL, "HEAD"), [], "an unswept area is not enforced yet")
-        rows.SWEPT_AREAS = ("src/oauth/",)
         self.assertEqual(sorted(f[1] for f in rows.missing_rows(rows.ALL, "HEAD")), ["added", "existing"])
         self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\texisting\t1\tr\nsrc/oauth/mod.rs\tadded\t1\tr\n")
         self.repo.commit("rows")
@@ -189,6 +185,37 @@ class CheckInventoryRows(unittest.TestCase):
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn helper() {}\n")
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), ["helper"])
+
+
+class PathspecShape(unittest.TestCase):
+    """`--all` hands the prefixes to git as pathspecs, and a pathspec names
+    one path: a bare stem matched `task_confirmation/` and never scanned
+    `task_confirmation.rs` (MIK-8195). Every entry is a directory or a file."""
+
+    def test_every_prefix_is_a_directory_or_a_rust_file(self) -> None:
+        stems = [p for p in rows.PREFIXES if not p.endswith(("/", ".rs"))]
+        self.assertEqual(stems, [], "spell a module as both `x.rs` and `x/`")
+
+    def test_every_file_the_grade_reads_is_scanned(self) -> None:
+        # The grade matches by prefix, git by pathspec: any spelling that
+        # parts them leaves a graded file the inventory check never reads.
+        root = HERE.parent.parent
+        grader_spec = importlib.util.spec_from_file_location(
+            "grader", HERE / "critical_path_coverage.py"
+        )
+        grader = importlib.util.module_from_spec(grader_spec)
+        grader_spec.loader.exec_module(grader)
+        prefixes = tuple(p for _, group, _ in grader.PATHS for p in group)
+
+        def tracked(*pathspecs: str) -> set[str]:
+            out = subprocess.run(
+                ["git", "ls-files", "--", *pathspecs],
+                cwd=root, check=True, capture_output=True, text=True,
+            ).stdout
+            return {line for line in out.splitlines() if line.endswith(".rs")}
+
+        graded = {f for f in tracked("src") if f.startswith(prefixes)}
+        self.assertEqual(sorted(graded - tracked(*rows.PREFIXES)), [])
 
 
 class CoverageGradeTrigger(unittest.TestCase):
