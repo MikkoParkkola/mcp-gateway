@@ -536,6 +536,12 @@ fn fixture_auth() -> AuthConfig {
                 denied_tools: Some(vec!["read".to_string(), "gateway_invok".to_string()]),
                 ..key("k-deny")
             },
+            ApiKeyConfig {
+                // MIK-8361's absent twin: a policy like `k-deny`'s that does
+                // not name `read`, so only the catalogue decides.
+                denied_tools: Some(vec!["other".to_string()]),
+                ..key("k-deny-x")
+            },
         ],
         ..Default::default()
     };

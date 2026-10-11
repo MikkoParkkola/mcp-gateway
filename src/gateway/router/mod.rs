@@ -155,6 +155,8 @@ mod meta_fingerprint_tests;
 mod mik8154_lease_rows_tests;
 #[cfg(test)]
 mod mrtr9_lease_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod oracle_parity_tests;
 #[cfg(test)]
 mod playbook_envelope_tests;
 #[cfg(test)]
