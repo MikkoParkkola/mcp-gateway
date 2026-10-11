@@ -144,6 +144,8 @@ fn chain(id: i64, steps: usize) -> Value {
 /// S8 (stdio, through the real stdio dispatch): the enforced question is
 /// answered with the same -32600 refusal, with no continuation and one backend
 /// call. Red on the base: the stripped round crossed with its handle.
+// The stdio driver is built with the firewall feature only (server/mod.rs).
+#[cfg(feature = "firewall")]
 #[tokio::test]
 async fn s8_stdio_answers_an_enforced_question_with_the_refusal() {
     let sent = crate::gateway::server::route_matrix_driver_tests::stdio_answering_gated(
