@@ -528,39 +528,70 @@ async fn a_reap_step_past_its_deadline_gives_up() {
     gone(child).await;
 }
 
-/// MIK-7923 T1-burst: twenty trees handed to the reaper at once are each
-/// finished within `REAP_DEADLINE` of their own handover: one tree's grace
-/// delays no other.
+/// MIK-7923 T1-burst, by event (MIK-8360): one tree held in the real reaper
+/// loop delays no other. Nineteen trees handed over after it are each reaped
+/// while it is still held; released, it is reaped too. The product deadline
+/// is lifted to the hang bound and each wait is a hang guard only, so a
+/// loaded host can slow the row but not fail it.
 #[tokio::test]
-async fn twenty_handed_over_trees_each_finish_within_their_deadline() {
-    super::super::reaper::ensure_started().expect("reaper");
-    let mut handed = Vec::new();
-    for _ in 0..20 {
-        let mut cmd = tokio::process::Command::new("sh");
-        cmd.args(["-c", "exec sleep 60"]);
-        let tree = ChildTree::new(super::super::spawn_in_own_tree(cmd).expect("spawn"));
-        handed.push((
-            std::time::Instant::now(),
-            super::super::reaper::hand_over(tree),
-        ));
+async fn a_held_tree_delays_no_other_in_the_reaper_loop() {
+    use super::super::reaper::{Reaped, ensure_started, hand_over};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Releases the hold however the row ends, so a failure cannot leave a
+    /// held tree in the shared reaper.
+    struct Release(Arc<AtomicBool>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.store(false, Ordering::SeqCst);
+        }
     }
-    for (at, mut done) in handed {
+
+    const HANG_BOUND: Duration = Duration::from_secs(60);
+    let tree = |script: &str| {
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.args(["-c", script]);
+        let mut tree = ChildTree::new(super::super::spawn_in_own_tree(cmd).expect("spawn"));
+        tree.reap_deadline_for_test = Some(HANG_BOUND);
+        tree
+    };
+    ensure_started().expect("reaper");
+    let latch = Arc::new(AtomicBool::new(true));
+    let release = Release(Arc::clone(&latch));
+    // Exits at once: without the hold it would finish alongside the others.
+    let mut held = tree("exit 0");
+    held.hold_for_test = Some(Arc::clone(&latch));
+    let mut held = hand_over(held);
+    let others: Vec<_> = (0..19).map(|_| hand_over(tree("exec sleep 60"))).collect();
+    for mut done in others {
         tokio::time::timeout(
-            super::REAP_DEADLINE + Duration::from_millis(500),
-            done.wait_for(|state| matches!(state, super::super::reaper::Reaped::Done(_))),
+            HANG_BOUND,
+            done.wait_for(|state| matches!(state, Reaped::Done(_))),
         )
         .await
-        .expect("finished in time")
+        .expect("a tree waited behind the held one")
         .expect("reaper alive");
         assert!(
-            at.elapsed() < super::REAP_DEADLINE + Duration::from_millis(500),
-            "a tree waited behind the others"
-        );
-        assert!(
-            matches!(*done.borrow(), super::super::reaper::Reaped::Done(Some(_))),
+            matches!(*done.borrow(), Reaped::Done(Some(_))),
             "reaped, not abandoned"
         );
     }
+    assert!(
+        matches!(*held.borrow(), Reaped::Pending),
+        "the held tree finished while held: the hold is not what kept it"
+    );
+    drop(release);
+    tokio::time::timeout(
+        HANG_BOUND,
+        held.wait_for(|state| matches!(state, Reaped::Done(_))),
+    )
+    .await
+    .expect("the released tree is reaped")
+    .expect("reaper alive");
+    assert!(
+        matches!(*held.borrow(), Reaped::Done(Some(_))),
+        "the released tree is reaped, not abandoned"
+    );
 }
 
 /// MIK-7923 P5: a tree spawned by a start the retire overtook after its
