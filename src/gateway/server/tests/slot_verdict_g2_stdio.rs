@@ -121,11 +121,11 @@ impl Stdio {
     }
 }
 
-/// The twin rule at `enforcement`: the caller-Valid control dispatches (the
-/// fixture resolves the sole operator's slot), the unknown name answers
-/// -32601, then withheld and lacked each answer exactly as the unknown name
-/// and send nothing.
-async fn assert_twins(row: &str, enforcement: InputSchemaEnforcement) {
+/// The twin rule at `enforcement` for one caller `slot`: the caller-Valid
+/// control dispatches (the fixture resolves the sole operator's slot), a
+/// name nothing surfaces answers -32601, then `slot` answers exactly as that
+/// absent name and sends nothing.
+async fn assert_twin(row: &str, slot: Slot, enforcement: InputSchemaEnforcement) {
     let (control, sent) = Stdio::new(Slot::Valid, true, enforcement).call().await;
     assert_eq!(
         sent, 1,
@@ -135,28 +135,39 @@ async fn assert_twins(row: &str, enforcement: InputSchemaEnforcement) {
     assert_eq!(
         absent.pointer("/error/code"),
         Some(&json!(-32601)),
-        "{row} premise: an unknown name answers -32601: {absent}"
+        "{row} premise: an absent name answers -32601: {absent}"
     );
-    for slot in [Slot::Invalid, Slot::Lacks] {
-        let (answer, sent) = Stdio::new(slot, true, enforcement).call().await;
-        assert_eq!(sent, 0, "{row} {slot:?}: dispatched; answer {answer}");
-        assert_eq!(
-            answer, absent,
-            "{row} {slot:?}: {answer} vs unknown {absent}"
-        );
-    }
+    let (answer, sent) = Stdio::new(slot, true, enforcement).call().await;
+    assert_eq!(sent, 0, "{row} {slot:?}: dispatched; answer {answer}");
+    assert_eq!(
+        answer, absent,
+        "{row} {slot:?}: {answer} vs absent {absent}"
+    );
 }
 
-/// C3 (withheld, lacked): stdio `tools/call` by surfaced name. RED on base:
-/// the shared slot (valid) decides, so it dispatches.
+/// C3, withheld: stdio `tools/call` by surfaced name of a tool the sole
+/// operator's slot holds with an invalid schema. RED on base: the shared
+/// slot (valid) decides, so it dispatches.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn c3_stdio_per_user_caller_slot_withholds() {
-    assert_twins("C3", InputSchemaEnforcement::Closed).await;
+    assert_twin("C3", Slot::Invalid, InputSchemaEnforcement::Closed).await;
 }
 
-/// C10, stdio twin: the same at argument-key enforcement Off. RED on base,
-/// as C3.
+/// C3, lacked: the same where the slot's complete list lacks the tool.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn c3_stdio_per_user_caller_slot_lacks() {
+    assert_twin("C3", Slot::Lacks, InputSchemaEnforcement::Closed).await;
+}
+
+/// C10, stdio twin, withheld: C3 at argument-key enforcement Off. RED on
+/// base, as C3.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn c10_stdio_per_user_visibility_runs_with_enforcement_off() {
-    assert_twins("C10-stdio", InputSchemaEnforcement::Off).await;
+    assert_twin("C10-stdio", Slot::Invalid, InputSchemaEnforcement::Off).await;
+}
+
+/// C10, stdio twin, lacked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn c10_stdio_per_user_lacked_with_enforcement_off() {
+    assert_twin("C10-stdio", Slot::Lacks, InputSchemaEnforcement::Off).await;
 }
