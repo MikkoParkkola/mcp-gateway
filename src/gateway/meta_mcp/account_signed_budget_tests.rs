@@ -71,12 +71,17 @@ fn budget(meta: MetaMcp) -> MetaMcp {
 async fn a_spend_refusal_after_a_refresh_keeps_the_nonce() {
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, 0))]);
     let installed = custody.installed();
+    // The schema check off, so the refresh is the call's only effect: a
+    // first call on a cold slot would fill its tool list and spend the
+    // witness by itself (mF-account survived run 38177519271 that way).
+    super::gateway::SCHEMA_OFF.with(|off| off.set(true));
     let (mut meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,
         &slots(&[("alice", WORK)]),
     );
+    super::gateway::SCHEMA_OFF.with(|off| off.set(false));
     meta.enable_message_signing(
         MessageSigner::new(
             b"refresh-budget-key-0123456789abcdef".to_vec(),
@@ -128,6 +133,8 @@ async fn a_spend_refusal_after_a_refresh_keeps_the_nonce() {
         1,
         "the refused call refreshed the grant"
     );
+    let mail = meta.backends.get("mail").expect("fixture backend");
+    assert_eq!(mail.list_fills(), 0, "premise: the check filled nothing");
     assert!(dispatches.calls().is_empty(), "nothing reached the backend");
     assert!(
         !nonce_is_free(&meta),
