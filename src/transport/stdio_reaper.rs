@@ -209,11 +209,6 @@ pub(super) async fn wait_reaped(
 }
 
 impl super::StdioTransport {
-    /// How long a handed-over tree may take: [`REAP_DEADLINE`], or the
-    /// test-only slow-host bound (MIK-8360), the value each tree this
-    /// transport spawned also carries.
-    ///
-    /// [`REAP_DEADLINE`]: super::child_tree::REAP_DEADLINE
     /// The tree for a freshly spawned `child`, carrying this transport's
     /// test-only reap deadline (MIK-8360).
     #[cfg_attr(not(test), allow(clippy::unused_self))]
@@ -227,6 +222,11 @@ impl super::StdioTransport {
         tree
     }
 
+    /// How long a handed-over tree may take: [`REAP_DEADLINE`], or the
+    /// test-only slow-host bound (MIK-8360), the value each tree this
+    /// transport spawned also carries.
+    ///
+    /// [`REAP_DEADLINE`]: super::child_tree::REAP_DEADLINE
     #[cfg_attr(not(test), allow(clippy::unused_self))]
     fn reap_deadline(&self) -> Duration {
         #[cfg(test)]

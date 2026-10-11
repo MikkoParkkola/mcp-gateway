@@ -95,6 +95,10 @@ pub struct StdioTransport {
     /// rather than racing 1 s and 5 s windows on a loaded host (MIK-8360).
     #[cfg(test)]
     pub(super) slow_host_bound: parking_lot::Mutex<Option<std::time::Duration>>,
+    /// Test-only: replaces the drain window for the stderr reader alone
+    /// (MIK-8360); `None` keeps the real window.
+    #[cfg(test)]
+    pub(super) stderr_bound: parking_lot::Mutex<Option<std::time::Duration>>,
     /// Test-only: requests that waited out their timeout. An early exit must
     /// be noticed before the start's request times out; a row reads this
     /// instead of a stopwatch (MIK-8360).

@@ -257,7 +257,7 @@ impl StdioTransport {
         // not `Send`, and `matches!` drops the guard at once.
         if response.is_err()
             && matches!(
-                tokio::time::timeout(self.drain_window(), after_error.wait_for(|closed| *closed))
+                tokio::time::timeout(self.exit_window(), after_error.wait_for(|closed| *closed))
                     .await,
                 Ok(Ok(_))
             )
@@ -269,12 +269,26 @@ impl StdioTransport {
         response
     }
 
-    /// How long the start waits for the exit status and the last stderr
-    /// bytes: [`DRAIN`], or the test-only slow-host bound (MIK-8360).
+    /// How long the start waits for stdout to close after a failed write,
+    /// and for the leader's exit: [`DRAIN`], or the test-only slow-host bound
+    /// (MIK-8360).
     #[cfg_attr(not(test), allow(clippy::unused_self))]
-    fn drain_window(&self) -> std::time::Duration {
+    fn exit_window(&self) -> std::time::Duration {
         #[cfg(test)]
         if let Some(bound) = *self.slow_host_bound.lock() {
+            return bound;
+        }
+        DRAIN
+    }
+
+    /// How long the start waits for the stderr reader's last bytes:
+    /// [`DRAIN`], or the test-only stderr bound. Separate from
+    /// [`Self::exit_window`] so a row can keep this window real (a grandchild
+    /// holding the pipe) while the exit wait stays long (MIK-8360).
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    fn stderr_window(&self) -> std::time::Duration {
+        #[cfg(test)]
+        if let Some(bound) = *self.stderr_bound.lock() {
             return bound;
         }
         DRAIN
@@ -293,7 +307,7 @@ impl StdioTransport {
         // leaves it only for the reaper (MIK-7923).
         let had_tree = self.child.lock().tree.is_some();
         let status = if had_tree {
-            let exited = self.wait_exited_in_slot(self.drain_window()).await;
+            let exited = self.wait_exited_in_slot(self.exit_window()).await;
             let status = self.end_tree().await;
             exited.then_some(status).flatten()
         } else {
@@ -303,7 +317,7 @@ impl StdioTransport {
         self.failure.record_exit(status);
         let (reader, tail) = stderr_tail;
         let abort = reader.abort_handle();
-        if tokio::time::timeout(self.drain_window(), reader)
+        if tokio::time::timeout(self.stderr_window(), reader)
             .await
             .is_err()
         {
