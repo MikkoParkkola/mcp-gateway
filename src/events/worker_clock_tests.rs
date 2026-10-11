@@ -498,3 +498,63 @@ async fn an_expiring_key_refused_by_an_unreadable_clock_keeps_its_subscription()
         "a refusal that still stands was not revoked"
     );
 }
+
+/// The access re-check after the attempt is on record: the clock fails there
+/// (and stays failed through the revocation guard). The check is `Undated`:
+/// the attempt is closed `clock_unreadable`, the record kept unsent with its
+/// date, the row kept, and nothing sent.
+#[tokio::test]
+async fn an_undated_recheck_after_the_attempt_is_on_record_keeps_everything() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
+    let services = logged_services(dir.path());
+    offer(&hub, &[NAME]);
+    let (port, accepted) = counting_callback().await;
+    queued(&hub, port, "evt_rc");
+    let before = stored(dir.path(), "evt_rc");
+    let clock = Box::pin(clock_fails_at(
+        &hub.before_recheck,
+        hub.attempt(&services, "evt_rc"),
+    ))
+    .await;
+    drop(clock);
+    let posts = accepted.load(std::sync::atomic::Ordering::SeqCst);
+    assert_kept_unsent(&hub, dir.path(), &before, "evt_rc", posts);
+    assert!(hub.store.get("sub_worker").is_some(), "the row was revoked");
+    let rows = outcomes(dir.path(), "evt_rc");
+    assert_eq!(rows.len(), 1, "the attempt on record is closed: {rows:?}");
+    assert_eq!(rows[0]["status"], "clock_unreadable");
+}
+
+/// A dead-letter replay whose access check the clock cannot judge (the lease
+/// reads, then the clock fails at the check) is refused as unavailable, a
+/// transient fault, never as access revoked.
+#[tokio::test]
+async fn a_replay_the_clock_cannot_judge_is_unavailable_not_revoked() {
+    use crate::events::admin::ReplayRefusal;
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&private_callbacks(), dir.path()).expect("hub");
+    let services = Arc::new(logged_services(dir.path()));
+    assert!(hub.runtime.services.set(Arc::clone(&services)).is_ok());
+    offer(&hub, &[NAME]);
+    queued(&hub, 9, "evt_rp");
+    let record = stored(dir.path(), "evt_rp");
+    let gone = crate::events::store::Settle::Dead {
+        reason: crate::events::outbox::DeadReason::Gone,
+        status: None,
+    };
+    hub.settle(&services, &record, gone).await;
+    assert!(
+        hub.store.dead_letter_by_id("evt_rp").is_some(),
+        "premise: buried"
+    );
+    let actor = crate::events::governance::Actor {
+        who: crate::security::audit::AuditWho::gateway(),
+    };
+    let secs = crate::clock::unix_secs().expect("a readable clock");
+    let refused = {
+        let _clock = crate::clock::test_clock::queued(&[Some(secs), None]);
+        hub.replay_dead("evt_rp", &actor).await
+    };
+    assert_eq!(refused, Err(ReplayRefusal::Unavailable));
+}

@@ -131,8 +131,11 @@ impl EventsHub {
             .find(|s| s.id == dead.record.subscription_id && s.live(now))
             .ok_or(ReplayRefusal::SubscriptionGone)?;
         let grant = (!dead.record.owner_scoped).then_some(dead.record.backend.as_str());
-        if !services.admits_subscription(&sub, grant).await {
-            return Err(ReplayRefusal::AccessRevoked);
+        match services.admission(&sub, grant).await {
+            super::services::AccessVerdict::Admits => {}
+            super::services::AccessVerdict::Refuses => return Err(ReplayRefusal::AccessRevoked),
+            // No verdict on the access: the clock cannot be read (MIK-8202).
+            super::services::AccessVerdict::Undated => return Err(ReplayRefusal::Unavailable),
         }
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&dead.record.body_b64)

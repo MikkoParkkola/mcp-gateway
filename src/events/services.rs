@@ -124,17 +124,8 @@ impl Services {
     /// key is re-read from live config; any other credential must still be
     /// live where it was issued (design F9). A row stored before keys were
     /// bound to their secret, or a bound kind without its binding, is
-    /// refused.
-    pub(crate) async fn admits_subscription(
-        &self,
-        sub: &Subscription,
-        backend: Option<&str>,
-    ) -> bool {
-        self.admission(sub, backend).await == AccessVerdict::Admits
-    }
-
-    /// [`Self::admits_subscription`], telling a refusal the clock may have
-    /// caused apart from one that stands (MIK-8202). The clock is read once,
+    /// refused. A refusal the clock may have caused is told apart from one
+    /// that stands (MIK-8202). The clock is read once,
     /// and every expiry the check judges (an API key, a delegated bearer's
     /// age, a key-server token, a dashboard session) is judged on that one
     /// reading: a clock that fails and recovers inside the check cannot turn
@@ -145,6 +136,10 @@ impl Services {
         sub: &Subscription,
         backend: Option<&str>,
     ) -> AccessVerdict {
+        #[cfg(test)]
+        if let Some(verdict) = forced_verdict::forced() {
+            return verdict;
+        }
         let Ok(now) = crate::clock::utc_now() else {
             return AccessVerdict::Undated;
         };
@@ -418,6 +413,39 @@ pub(crate) enum AccessVerdict {
     /// Refused, but the clock could not be read: the refusal may be the
     /// clock's, so the row is kept and nothing is sent.
     Undated,
+}
+
+/// Test-only: this thread's access checks answer a fixed verdict, so a
+/// caller's handling of each [`AccessVerdict`] is tested on its own.
+#[cfg(test)]
+pub(crate) mod forced_verdict {
+    use std::cell::Cell;
+
+    use super::AccessVerdict;
+
+    thread_local! {
+        static FORCED: Cell<Option<AccessVerdict>> = const { Cell::new(None) };
+    }
+
+    pub(super) fn forced() -> Option<AccessVerdict> {
+        FORCED.with(Cell::get)
+    }
+
+    /// Restores the real check when dropped.
+    #[must_use]
+    pub(crate) struct Forced(());
+
+    impl Drop for Forced {
+        fn drop(&mut self) {
+            FORCED.with(|f| f.set(None));
+        }
+    }
+
+    /// Every access check on this thread answers `verdict` until the guard drops.
+    pub(crate) fn answer(verdict: AccessVerdict) -> Forced {
+        FORCED.with(|f| f.set(Some(verdict)));
+        Forced(())
+    }
 }
 
 pub(crate) struct Attempt<'a> {

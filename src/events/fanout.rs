@@ -89,6 +89,13 @@ impl EventsHub {
         let Some(source) = self.source(event.kind) else {
             return;
         };
+        // One reading judges every lease. A clock before 1970 reads none live:
+        // nothing is delivered on a lease it cannot date, and the occurrence
+        // is counted as a clock drop (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            self.count_clock_drop();
+            return;
+        };
         // Matched under the catalogue gate a route refresh holds while it
         // swaps the routes and judges the held set: no match against new
         // routes reaches a subscription they hold (MIK-8076). No I/O and no
@@ -98,9 +105,7 @@ impl EventsHub {
             self.store
                 .subscriptions()
                 .into_iter()
-                // A clock before 1970 reads no lease live: nothing is
-                // delivered on a lease it cannot date (MIK-8202).
-                .filter(|s| s.name == event.name && s.live_now())
+                .filter(|s| s.name == event.name && s.live(now))
                 .filter(|s| self.store.held(&s.id).is_none())
                 // A keyed occurrence belongs to its key's holders alone (MIK-7811).
                 .filter(|s| {

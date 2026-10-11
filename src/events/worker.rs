@@ -228,6 +228,8 @@ impl EventsHub {
         // The same waits can span a reload that made the backend ineligible
         // (MIK-7894): the verdict is read again after them, before the row
         // that signs, so only sync steps sit between it and the send.
+        #[cfg(test)]
+        self.before_recheck.pause().await;
         let admission = match self.source_verdict(sub).await {
             // Access is read again after the verdict's own wait (MIK-7907):
             // a grant lost meanwhile is refused like one lost before. It must

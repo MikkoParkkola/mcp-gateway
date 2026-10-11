@@ -553,12 +553,37 @@ async fn a_clock_before_the_epoch_delivers_nothing_on_a_live_lease() {
         "control: a live lease receives the event on the real clock"
     );
 
-    let _clock = crate::clock::test_clock::before_epoch();
-    hub.fan_out(&services, &event("t2")).await;
+    {
+        let _clock = crate::clock::test_clock::before_epoch();
+        hub.fan_out(&services, &event("t2")).await;
+    }
     assert_eq!(
         outbox(dir.path()),
         1,
         "an unreadable clock delivered an event on a lease it cannot date"
+    );
+
+    assert_eq!(
+        hub.runtime.clock_drops(),
+        1,
+        "the occurrence the clock could not date is counted"
+    );
+
+    // An access check that answers `Undated` (the refusal may be the
+    // clock's): the row is kept and the occurrence dropped and counted
+    // (MIK-8202).
+    {
+        let _undated = crate::events::services::forced_verdict::answer(
+            crate::events::services::AccessVerdict::Undated,
+        );
+        hub.fan_out(&services, &event("t3")).await;
+    }
+    assert_eq!(outbox(dir.path()), 1, "delivered on an undated check");
+    assert_eq!(hub.runtime.clock_drops(), 2, "the drop is counted");
+    assert_eq!(
+        hub.store.subscriptions().len(),
+        1,
+        "revoked on a refusal the clock may have caused"
     );
 }
 

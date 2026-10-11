@@ -526,6 +526,10 @@ impl EventsHub {
                         clock_unreadable = true,
                         "events: schedule tick skipped; the host clock reads before 1970"
                     );
+                    // Counted with the other occurrences a clock drops.
+                    if let Some(hub) = ticker.upgrade().and_then(|source| source.hub.upgrade()) {
+                        hub.count_clock_drop();
+                    }
                     continue;
                 };
                 let Some(source) = ticker.upgrade() else {

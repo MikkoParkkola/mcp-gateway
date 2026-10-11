@@ -150,12 +150,6 @@ impl ApiKeyConfig {
     pub(crate) fn is_expired_at(&self, now: DateTime<Utc>) -> bool {
         api_key_expired(self.expires_at, now)
     }
-
-    /// [`api_key_expired_now`] for this key.
-    #[must_use]
-    pub(crate) fn is_expired_now(&self) -> bool {
-        api_key_expired_now(self.expires_at)
-    }
 }
 
 /// The one expiry boundary, shared by the load-time warning and the request

@@ -104,7 +104,10 @@ async fn a_subscription_stored_with_a_bare_key_name_is_refused() {
     });
     let sub: Subscription = serde_json::from_value(stored).expect("loads");
     let live = services(vec![key("alice", "s1", None)]);
-    assert!(!live.admits_subscription(&sub, Some("x")).await);
+    assert_eq!(
+        live.admission(&sub, Some("x")).await,
+        AccessVerdict::Refuses
+    );
     let rewritten = serde_json::to_value(&sub).expect("serialises");
     assert!(
         rewritten.get("api_key_name").is_none(),
@@ -170,18 +173,20 @@ async fn a_static_bearer_subscription_needs_the_same_running_bearer() {
         bearer_principal: Some(crate::gateway::auth::principal_of("old")),
         ..LiveCredentials::default()
     });
-    assert!(same.admits_subscription(&sub, Some("x")).await);
+    assert_eq!(same.admission(&sub, Some("x")).await, AccessVerdict::Admits);
     let rotated = with(LiveCredentials {
         bearer_principal: Some(crate::gateway::auth::principal_of("new")),
         ..LiveCredentials::default()
     });
-    assert!(
-        !rotated.admits_subscription(&sub, Some("x")).await,
+    assert_eq!(
+        rotated.admission(&sub, Some("x")).await,
+        AccessVerdict::Refuses,
         "rotated bearer"
     );
     let mismatched = bound(Kind::KeyServerToken, Some(LiveBinding::StaticBearer));
-    assert!(
-        !same.admits_subscription(&mismatched, Some("x")).await,
+    assert_eq!(
+        same.admission(&mismatched, Some("x")).await,
+        AccessVerdict::Refuses,
         "a binding of another kind is refused"
     );
 }
@@ -206,23 +211,22 @@ async fn a_static_bearer_recheck_compares_the_full_digest() {
             ..LiveCredentials::default()
         })
     };
-    assert!(
-        live("old", "old")
-            .admits_subscription(&sub, Some("x"))
-            .await
+    assert_eq!(
+        live("old", "old").admission(&sub, Some("x")).await,
+        AccessVerdict::Admits
     );
-    assert!(
-        !live("other", "old")
-            .admits_subscription(&sub, Some("x"))
-            .await,
+    assert_eq!(
+        live("other", "old").admission(&sub, Some("x")).await,
+        AccessVerdict::Refuses,
         "same 12-hex fingerprint, different bearer"
     );
     let none = with(LiveCredentials {
         bearer_principal: Some(crate::gateway::auth::principal_of("old")),
         ..LiveCredentials::default()
     });
-    assert!(
-        !none.admits_subscription(&sub, Some("x")).await,
+    assert_eq!(
+        none.admission(&sub, Some("x")).await,
+        AccessVerdict::Refuses,
         "no running digest, no admission"
     );
 }
@@ -283,6 +287,10 @@ async fn one_clock_reading_judges_a_key_server_token() {
             AccessVerdict::Admits,
             "a clock that failed inside the check refused a live token"
         );
+        assert!(
+            crate::clock::utc_now().is_err(),
+            "the check read the clock more than once"
+        );
     }
     {
         let _clock = crate::clock::test_clock::queued(&[None, Some(now), Some(now)]);
@@ -331,21 +339,29 @@ async fn key_server_credentials_are_rechecked_where_they_were_issued() {
         Kind::KeyServerToken,
         Some(LiveBinding::KeyServerToken { jti: "j1".into() }),
     );
-    assert!(live.admits_subscription(&token, Some("x")).await);
+    assert_eq!(
+        live.admission(&token, Some("x")).await,
+        AccessVerdict::Admits
+    );
     ks.store.revoke_by_jti("j1").await;
-    assert!(
-        !live.admits_subscription(&token, Some("x")).await,
+    assert_eq!(
+        live.admission(&token, Some("x")).await,
+        AccessVerdict::Refuses,
         "revoked token"
     );
-    assert!(
-        !with(LiveCredentials::default())
-            .admits_subscription(&token, Some("x"))
+    assert_eq!(
+        with(LiveCredentials::default())
+            .admission(&token, Some("x"))
             .await,
+        AccessVerdict::Refuses,
         "no key server, nothing to vouch for the token"
     );
 
     let unbound = bound(Kind::KeyServerToken, None);
-    assert!(!live.admits_subscription(&unbound, Some("x")).await);
+    assert_eq!(
+        live.admission(&unbound, Some("x")).await,
+        AccessVerdict::Refuses
+    );
 }
 
 /// Design F9 (MIK-7769): a delegated bearer is re-checked against the
@@ -379,41 +395,44 @@ async fn a_delegated_bearer_is_rechecked_against_the_running_key_server() {
         })
     };
     let fresh = oidc(now);
-    assert!(
-        running(key_server(true))
-            .admits_subscription(&fresh, Some("x"))
-            .await
+    assert_eq!(
+        running(key_server(true)).admission(&fresh, Some("x")).await,
+        AccessVerdict::Admits
     );
-    assert!(
-        !running(key_server(true))
-            .admits_subscription(&fresh, Some("y"))
-            .await,
+    assert_eq!(
+        running(key_server(true)).admission(&fresh, Some("y")).await,
+        AccessVerdict::Refuses,
         "no grant"
     );
-    assert!(
-        !running(key_server(false))
-            .admits_subscription(&fresh, Some("x"))
+    assert_eq!(
+        running(key_server(false))
+            .admission(&fresh, Some("x"))
             .await,
+        AccessVerdict::Refuses,
         "delegated bearers switched off"
     );
-    assert!(
-        !running(key_server_with(true, "b", 3600))
-            .admits_subscription(&fresh, Some("x"))
+    assert_eq!(
+        running(key_server_with(true, "b", 3600))
+            .admission(&fresh, Some("x"))
             .await,
+        AccessVerdict::Refuses,
         "the provider now expects another audience"
     );
-    assert!(
-        !running(key_server_with(true, "a", 60))
-            .admits_subscription(&oidc(now - 600), Some("x"))
+    assert_eq!(
+        running(key_server_with(true, "a", 60))
+            .admission(&oidc(now - 600), Some("x"))
             .await,
+        AccessVerdict::Refuses,
         "older than the running max age"
     );
 }
 
-/// MIK-8202 E5: a delegated bearer is not young on a clock that cannot be
-/// read (before 1970), however fresh it was when bound.
+/// MIK-8202 E5: a delegated bearer is not judged young on a clock that
+/// cannot be read (before 1970), however fresh it was when bound: the check
+/// is `Undated`, never `Admits` (and never a standing `Refuses`, which would
+/// revoke).
 #[tokio::test]
-async fn a_delegated_bearer_is_refused_on_an_unreadable_clock() {
+async fn a_delegated_bearer_is_undated_on_an_unreadable_clock() {
     use crate::security::audit::CredentialKind as Kind;
     let ks = key_server(true);
     let now = crate::clock::unix_secs().expect("now");
@@ -432,14 +451,16 @@ async fn a_delegated_bearer_is_refused_on_an_unreadable_clock() {
         key_server: Some(ks),
         ..LiveCredentials::default()
     });
-    assert!(
-        running.admits_subscription(&fresh, Some("x")).await,
+    assert_eq!(
+        running.admission(&fresh, Some("x")).await,
+        AccessVerdict::Admits,
         "premise: admitted on a readable clock"
     );
     let _clock = crate::clock::test_clock::before_epoch();
-    assert!(
-        !running.admits_subscription(&fresh, Some("x")).await,
-        "a bearer judged young on an unreadable clock"
+    assert_eq!(
+        running.admission(&fresh, Some("x")).await,
+        AccessVerdict::Undated,
+        "a bearer judged on an unreadable clock"
     );
 }
 
@@ -460,11 +481,15 @@ async fn a_dashboard_session_subscription_ends_at_logout() {
         dashboard: Some(Arc::clone(&dashboard)),
         ..LiveCredentials::default()
     });
-    assert!(open.admits_subscription(&session, Some("x")).await);
+    assert_eq!(
+        open.admission(&session, Some("x")).await,
+        AccessVerdict::Admits
+    );
     let limits = crate::gateway::auth::SessionLimits::default();
     assert!(dashboard.revoke(&handle, crate::gateway::auth::Now::read(), &limits));
-    assert!(
-        !open.admits_subscription(&session, Some("x")).await,
+    assert_eq!(
+        open.admission(&session, Some("x")).await,
+        AccessVerdict::Refuses,
         "logged out"
     );
 }
@@ -496,6 +521,10 @@ async fn one_clock_reading_judges_a_dashboard_session() {
             open.admission(&session, Some("x")).await,
             AccessVerdict::Admits,
             "a clock that failed inside the check refused a live session"
+        );
+        assert!(
+            crate::clock::utc_now().is_err(),
+            "the check read the clock more than once"
         );
     }
     {

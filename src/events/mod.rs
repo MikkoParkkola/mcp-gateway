@@ -110,6 +110,10 @@ pub(crate) struct EventsHub {
     /// (MIK-8202 E3b).
     #[cfg(test)]
     before_window: crate::test_pause::Slot,
+    /// Test-only: one attempt pauses just before its access is checked again
+    /// after the attempt is on record (MIK-8202).
+    #[cfg(test)]
+    before_recheck: crate::test_pause::Slot,
     /// Test-only: one withdraw pauses between judging its rows and deleting
     /// them (reconcile table T07).
     #[cfg(test)]
@@ -297,6 +301,8 @@ impl EventsHub {
             after_claim: crate::test_pause::Slot::default(),
             #[cfg(test)]
             before_window: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            before_recheck: crate::test_pause::Slot::default(),
             #[cfg(test)]
             before_withdraw: crate::test_pause::Slot::default(),
         }))

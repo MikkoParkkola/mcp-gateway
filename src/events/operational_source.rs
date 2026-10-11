@@ -38,12 +38,18 @@ struct Standing {
 /// one unexpired API key whose digest derives it. `None` for anyone else, and
 /// whenever more than one of those credentials derives it: an ambiguous
 /// principal fails closed rather than taking whichever matched first
-/// (MIK-8062).
-fn standing(services: &Services, principal: &str) -> Option<Standing> {
+/// (MIK-8062). Every key's expiry is judged on the one reading `now`, so a
+/// clock that fails and recovers during the scan cannot expire a live key
+/// (MIK-8202).
+fn standing(
+    services: &Services,
+    principal: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<Standing> {
     let bearer = services.credentials.bearer_principal.as_deref() == Some(principal);
     let config = services.live.get();
     let mut keys = config.auth.api_keys.iter().filter(|k| {
-        !k.is_expired_now()
+        !k.is_expired_at(now)
             && k.key_sha256
                 .as_deref()
                 .and_then(crate::config::parse_api_key_digest)
@@ -70,10 +76,10 @@ pub(crate) struct OperationalSource {
 }
 
 impl OperationalSource {
-    fn standing(&self, principal: &str) -> Option<Standing> {
+    fn standing(&self, principal: &str, now: chrono::DateTime<chrono::Utc>) -> Option<Standing> {
         let hub = self.hub.upgrade()?;
         let services = hub.runtime.services.get()?;
-        standing(services, principal)
+        standing(services, principal, now)
     }
 
     /// Queue one occurrence; never blocks the producer.
@@ -167,7 +173,13 @@ impl EventSource for OperationalSource {
         name: &str,
         arguments: &Value,
     ) -> Result<(), RpcError> {
-        let Some(standing) = self.standing(principal) else {
+        // One reading judges every key. A clock that cannot be read (before
+        // 1970) is no verdict on the principal: an internal error, never the
+        // -32012 that ends the subscription (MIK-8202).
+        let Ok(now) = crate::clock::utc_now() else {
+            return Err(RpcError::internal());
+        };
+        let Some(standing) = self.standing(principal, now) else {
             return Err(RpcError::forbidden());
         };
         let own = |key: &str| {

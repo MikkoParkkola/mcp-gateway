@@ -587,9 +587,9 @@ impl Run {
     /// under, so the next subscribe starts a fresh poller instead of finding
     /// the key started with nothing polling. A holder that committed while
     /// this poll read the store joined the key: the poller goes on.
-    async fn retire(&self, hub: &EventsHub) -> Step {
+    async fn retire(&self, hub: &EventsHub, now: chrono::DateTime<chrono::Utc>) -> Step {
         let mut started = hub.lifecycle.lock().await;
-        if !self.holders(hub).is_empty() {
+        if !self.holders(hub, now).is_empty() {
             return Step::Polled;
         }
         started.remove(&(SourceKind::RestWatch, self.key.clone()));
@@ -651,7 +651,7 @@ impl Run {
         let Ok(now) = crate::clock::utc_now() else {
             return Step::Polled;
         };
-        let rows = self.holders(hub);
+        let rows = self.holders(hub, now);
         let Some(services) = hub.runtime.services.get().cloned() else {
             return Step::Failed;
         };
@@ -710,7 +710,7 @@ impl Run {
             return if skipped {
                 Step::Polled
             } else {
-                self.retire(hub).await
+                self.retire(hub, now).await
             };
         };
         let Ok(value) = self

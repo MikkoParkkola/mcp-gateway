@@ -794,3 +794,6 @@ mod hold;
 
 #[path = "reconcile_table_watch_tests.rs"]
 mod reconcile_table;
+
+#[path = "watch_source_clock_tests.rs"]
+mod clock_rows;

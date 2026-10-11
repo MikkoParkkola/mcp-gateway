@@ -28,15 +28,20 @@ impl WatchSource {
 }
 
 impl Run {
-    /// The live rows that hold this poller's key.
-    /// A clock before 1970 reads none live (MIK-8202).
-    pub(super) fn holders(&self, hub: &EventsHub) -> Vec<Subscription> {
+    /// The rows live at `now` that hold this poller's key. `now` is the
+    /// poll's one reading of the clock, so a clock that fails during the scan
+    /// cannot drop a live row and retire the poller (MIK-8202).
+    pub(super) fn holders(
+        &self,
+        hub: &EventsHub,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Vec<Subscription> {
         hub.store
             .subscriptions()
             .into_iter()
             // Its own class only: a poller never holds, resumes or polls
             // for a row admitted under another class (MIK-8122).
-            .filter(|s| s.live_now() && self.owns(s))
+            .filter(|s| s.live(now) && self.owns(s))
             .collect()
     }
 }
