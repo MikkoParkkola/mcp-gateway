@@ -10,6 +10,7 @@ use crate::gateway::test_helpers::write_owner_only;
 mod env_files;
 mod error_budget;
 mod idle_and_agents;
+mod load_error;
 mod loading;
 mod pattern_grammar;
 mod validate_config;

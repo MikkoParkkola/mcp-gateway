@@ -72,6 +72,19 @@ use mcp_gateway::{
     mtls::{CaParams, CertGenerator, LeafCertParams},
 };
 
+/// The command that loads the gateway config at `path` and says why it will
+/// not load: doctor's own `--config`, which `main` hands to doctor (a global
+/// `--config` before the subcommand is not passed on). Every "this config does
+/// not load" message points here; `validate` lints capability files and never
+/// loads the gateway config (MIK-8375).
+pub(crate) fn check_config_command(path: &std::path::Path) -> String {
+    // One shell word, so a path with a space or a quote still copies whole.
+    let text = path.to_string_lossy();
+    let arg =
+        shlex::try_quote(&text).map_or_else(|_| text.to_string(), std::borrow::Cow::into_owned);
+    format!("mcp-gateway doctor --config {arg}")
+}
+
 // ── init ─────────────────────────────────────────────────────────────────────
 
 /// Generate a starter gateway configuration file.

@@ -14,6 +14,8 @@ use crate::security::firewall::{
     Severity,
 };
 
+#[path = "collusion_gate_big_tests.rs"]
+mod big;
 #[path = "collusion_gate_excuse_tests.rs"]
 mod excuse;
 #[path = "collusion_gate_middle_tests.rs"]

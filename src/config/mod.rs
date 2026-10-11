@@ -16,6 +16,7 @@ mod backend_transport;
 mod config_file;
 mod env_overlay;
 mod features;
+pub(crate) mod load_error;
 pub(crate) use features::DEFAULT_TASK_TTL_MS;
 mod flagged_tools;
 mod input_schema;
@@ -537,7 +538,7 @@ impl Config {
     ) -> Result<Evaluated> {
         let spec: EnvFileConfig = Self::figment(path, &EnvOverlay::none())
             .extract()
-            .map_err(|e| Error::Config(e.to_string()))?;
+            .map_err(load_error::from_figment)?;
 
         let mut overlay = EnvOverlay::none();
         let mut paths = Vec::with_capacity(spec.env_files.len());
@@ -605,9 +606,7 @@ impl Config {
             // `env:`.
             Expansion::Literal => Self::yaml(path),
         };
-        let mut config: Self = figment
-            .extract()
-            .map_err(|e| Error::Config(e.to_string()))?;
+        let mut config: Self = figment.extract().map_err(load_error::from_figment)?;
         // Before any validation, so a misspelt key is reported rather than the
         // validation error its absence causes.
         strict_keys::refuse_unrecognised_keys(path, &figment)?;
@@ -636,8 +635,11 @@ impl Config {
         }
         let (mut secret_refs, mut files) = match expansion {
             Expansion::Resolve => {
-                let refs = config.expand_env_vars(&overlay)?;
+                let mut refs = config.expand_env_vars(&overlay)?;
                 posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
+                let auth_enabled = config.auth.enabled;
+                let log = &mut config.security.transparency_log;
+                log.resolve_secret(auth_enabled, &overlay, &mut refs)?;
                 config.security.message_signing =
                     config.security.message_signing.resolve_with_env(&overlay)?;
                 let chain = &mut config.security.signature_chain;

@@ -224,7 +224,12 @@ fn a_kept_plan_steps_short_relay_is_caught_by_its_retained_fingerprints() {
     let text = filler(17, 64 * 1024);
     let step = json!({"content": [{"type": "text", "text": text}]});
     let digest = fw
-        .receipt_digest("alpha", "read", &step, Some(&std::cell::Cell::new(0)))
+        .receipt_digest(
+            "alpha",
+            "read",
+            &step,
+            Some(&crate::security::firewall::PlanStaging::default()),
+        )
         .expect("relay detection is on");
     let answer = json!({"whole": text});
     let delivered = fw

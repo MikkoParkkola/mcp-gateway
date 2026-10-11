@@ -41,7 +41,7 @@ mod collusion;
 mod collusion_digest;
 mod collusion_gate;
 pub use collusion_gate::{AllowedFlow, CollusionAction, CollusionConfig};
-pub(crate) use collusion_gate::{DeliveryDigest, RelayCaller};
+pub(crate) use collusion_gate::{DeliveryDigest, PlanStaging, RelayCaller};
 mod config;
 pub use config::{FirewallAction, FirewallConfig, FirewallRule, ScanType};
 pub mod input_scanner;

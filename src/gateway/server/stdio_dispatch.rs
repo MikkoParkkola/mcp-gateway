@@ -301,13 +301,41 @@ impl Gateway {
             request_shape.declared_log_level(),
         );
 
-        // A notification gets no response. `parse_request_ref` already refused
-        // a request without an id (-32600 "Missing id"), so anything else
-        // reaching here carries one.
-        let Some(id) = id.filter(|_| !method.starts_with("notifications/")) else {
-            debug!(notification = %method, "stdio: notification (no response)");
-            return Err(None);
+        // Notifications have no id — send no response. One exception
+        // (MIK-8368): a MODERN request that names a method the revision removed
+        // and carries an id is a request, and HTTP refuses it, so it is refused
+        // here too. Every other notification stays silent, whatever its id, era
+        // or revision. `parse_request_ref` already refused a request without an
+        // id (-32600 "Missing id"), so only a notification takes the second arm.
+        let id = match id {
+            Some(id) if !method.starts_with("notifications/") => id,
+            id => {
+                if let (Some(id), crate::protocol::meta::RequestShape::Modern(_)) =
+                    (id.as_ref(), &request_shape)
+                    && let Some(removed) =
+                        crate::protocol::modern_refusal::removed_method_refusal(Some(id), &method)
+                {
+                    return Err(Some(removed.to_value_lossy()));
+                }
+                debug!(notification = %method, "stdio: notification (no response)");
+                return Err(None);
+            }
         };
+
+        // A method the 2026-07-28 revision removed is refused before anything
+        // acts on it, as `/mcp` refuses it, by the same function (MIK-8368).
+        // The other body-only refusals `/mcp` runs (an unserved revision, an
+        // undeclared capability) stay HTTP-only here: a batch runs its items
+        // with `StdioClient::modern` off, so sharing them would refuse every
+        // modern call inside a batch.
+        if matches!(
+            request_shape,
+            crate::protocol::meta::RequestShape::Modern(_)
+        ) && let Some(removed) =
+            crate::protocol::modern_refusal::removed_method_refusal(Some(&id), &method)
+        {
+            return Err(Some(removed.to_value_lossy()));
+        }
 
         Ok((id, method, params, request_shape))
     }
