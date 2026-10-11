@@ -280,3 +280,27 @@ async fn p1_p4_http_withheld_task_call_gets_no_prompt_and_no_task() {
         );
     }
 }
+
+/// F2 (design R5.4): on a per-user backend the route stage records no
+/// shared-slot verdict in the request's memo; the first verdict recorded is
+/// the caller's own, taken after the firewall. Probed at the hand-over from
+/// the route stage to the dispatch. RED on base (#3807's strict memo): the
+/// route stage records its shared-slot answer first.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn f2_route_stage_records_no_shared_verdict_for_per_user() {
+    use crate::gateway::meta_mcp::visible::seams;
+    let gw = gateway(CallerSlot::Invalid, CLOSED, Surfaced::Yes).await;
+    let seen = Arc::new(parking_lot::Mutex::new(None));
+    let probe = Arc::clone(&seen);
+    seams::after_route_stage(move || {
+        *probe.lock() = Some(seams::recorded(BACKEND, TOOL));
+    });
+    let answer = post_as_alpha(&gw.router, "/mcp", &tools_call(TOOL)).await;
+    let recorded = seen.lock().take();
+    assert_eq!(
+        recorded,
+        Some(None),
+        "F2: at the route stage the memo held {recorded:?} (Some(None) = probed, nothing recorded); answer {answer:?}"
+    );
+}
