@@ -3169,7 +3169,8 @@ class VariantStage(unittest.TestCase):
         stage = self.variant_stage()
         self.assertRegex(
             stage,
-            r"apt-get install[^\n]*\\\n(?:[^\n]*\\\n)*?\s*tini \\",
+            # Anywhere in the install command (it ends at the next `&&`).
+            r"apt-get install[^&]*\btini\b",
             "the variant does not install tini",
         )
         self.assertRegex(
