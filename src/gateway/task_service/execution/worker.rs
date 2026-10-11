@@ -210,6 +210,8 @@ async fn run_dispatched(
     // result rather than the synchronous wrapper: design §4 settles a task on
     // that result verbatim, `isError` included, and classifies an interim
     // `input_required` round from it before anything is committed.
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::task_dispatch_starts();
     let dispatch = state.meta_mcp().dispatch_below_gate_native_result(
         RequestId::Number(0),
         &call.tool,
@@ -237,6 +239,12 @@ async fn run_dispatched(
         .dispatch_log()
         .worker()
         .arm(&executor.service.store);
+    // MIK-8154 C2e: the run compares the playbook against the definition the
+    // submit's intake judged, as a synchronous run does.
+    let dispatch = crate::gateway::meta_mcp::visible::with_judged_playbook(
+        intent.owned.judged_playbook(),
+        dispatch,
+    );
     let mut dispatch = Box::pin(crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
         Arc::clone(intent.owned.dispatch_log()),
         dispatch,

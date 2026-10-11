@@ -64,6 +64,11 @@ pub(crate) struct OwnedCallerContext {
     /// The backend calls this context's dispatches completed (#2450): a plan's
     /// targets, persisted by the worker before it settles or parks the task.
     dispatch_log: std::sync::Arc<DispatchLog>,
+    /// The digest of the playbook definition the creating request's intake
+    /// judged its sanitize exemption on (MIK-8154 C2e), taken from that
+    /// request's memo when this context is built. In memory only: a restart
+    /// settles a task rather than running it again.
+    judged_playbook: Option<String>,
 }
 
 impl OwnedCallerContext {
@@ -110,6 +115,7 @@ impl OwnedCallerContext {
                 ..RetryFields::default()
             },
             dispatch_log: std::sync::Arc::default(),
+            judged_playbook: crate::gateway::meta_mcp::visible::judged_playbook(),
         }
     }
 
@@ -136,6 +142,11 @@ impl OwnedCallerContext {
 
     pub(crate) fn dispatch_log(&self) -> &std::sync::Arc<DispatchLog> {
         &self.dispatch_log
+    }
+
+    /// The playbook digest the creating request judged (MIK-8154 C2e).
+    pub(crate) fn judged_playbook(&self) -> Option<String> {
+        self.judged_playbook.clone()
     }
 
     pub(crate) fn host(&self) -> &TaskHost {

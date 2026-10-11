@@ -275,17 +275,31 @@ pub(crate) fn record_judged_playbook(digest: String) {
     let _ = VISIBILITY_MEMO.try_with(|memo| *memo.1.lock() = Some(digest));
 }
 
-/// The digest [`record_judged_playbook`] kept for this request, if any.
+/// The digest [`record_judged_playbook`] kept for this request, or the one a
+/// task worker carries from its submit ([`with_judged_playbook`]), if any.
 pub(crate) fn judged_playbook() -> Option<String> {
     VISIBILITY_MEMO
         .try_with(|memo| memo.1.lock().clone())
         .ok()
         .flatten()
+        .or_else(|| WORKER_JUDGED_PLAYBOOK.try_with(Clone::clone).ok().flatten())
+}
+
+/// Run a task's dispatch with the digest its submit judged (MIK-8154 C2e), so
+/// the run refuses a playbook reloaded between submit and run. Not a memo: a
+/// task's visibility is judged live, however long it runs.
+pub(crate) fn with_judged_playbook<F: std::future::Future>(
+    digest: Option<String>,
+    dispatch: F,
+) -> impl std::future::Future<Output = F::Output> {
+    WORKER_JUDGED_PLAYBOOK.scope(digest, dispatch)
 }
 
 tokio::task_local! {
     /// The open request's memo; see [`with_visibility_memo`].
     static VISIBILITY_MEMO: VisibilityMemo;
+    /// A task worker's judged playbook digest; see [`with_judged_playbook`].
+    static WORKER_JUDGED_PLAYBOOK: Option<String>;
 }
 
 /// Run `request` with one visibility memo for its whole lifetime (the HTTP
@@ -309,6 +323,20 @@ pub(crate) mod seams {
 
     thread_local! {
         static AFTER_ROUTE_STAGE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+        static BEFORE_TASK_DISPATCH: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Run `hook` once, the next time a task worker on this thread starts its
+    /// dispatch: between the submit's intake and the run (MIK-8154 C2e2).
+    pub(crate) fn before_task_dispatch(hook: impl FnOnce() + 'static) {
+        BEFORE_TASK_DISPATCH.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Called where a task worker starts its dispatch.
+    pub(crate) fn task_dispatch_starts() {
+        if let Some(hook) = BEFORE_TASK_DISPATCH.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
     }
 
     /// Run `hook` once, the next time a route stage on this thread finishes.
