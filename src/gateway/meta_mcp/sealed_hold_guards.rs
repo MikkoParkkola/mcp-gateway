@@ -37,6 +37,12 @@ const DECISION_ONLY: &[(&str, &str, &str, &str)] = &[
         r"\.result\(\)",
         "re-filters the offered holds against the committed result (MIK-8176 M1); the result is only matched, never serialized",
     ),
+    (
+        "router/backend_handlers/direct_idempotency.rs",
+        "execution_lease",
+        r"GuardOutcome::CachedResult\(",
+        "matches a 7a cache hit only to skip stage 7b (MIK-8154); the cached value is neither read nor delivered here, `deliver_replay` delivers it",
+    ),
 ];
 
 /// `(file under src/gateway, enclosing fn, the one projection shape excused,
@@ -44,8 +50,8 @@ const DECISION_ONLY: &[(&str, &str, &str, &str)] = &[
 /// elsewhere. Only the named shape is excused.
 const OWNED_ELSEWHERE: &[(&str, &str, &str, &str)] = &[
     (
-        "router/backend_handlers/direct_dispatch.rs",
-        "admit",
+        "router/backend_handlers/direct_idempotency.rs",
+        "deliver_replay",
         r"GuardOutcome::CachedResult\(",
         "a CachedResult carries no question the cache was handed directly (final-only store; nested-question output is routed to execution admission). An envelope can reach a cached answer only after playbook interpolation hands it to a step backend, which can also return it uncached, so cache ownership would not close it; MIK-8323 closes it at interpolation (a step argument never carries a sealed envelope). Pinned by the_idempotency_cache_keeps_no_question_it_was_handed_directly, a_playbook_handing_a_request_state_to_a_step_is_refused and a_cached_answer_needs_its_own_arguments_to_replay",
     ),
@@ -53,7 +59,7 @@ const OWNED_ELSEWHERE: &[(&str, &str, &str, &str)] = &[
         "meta_mcp/invoke/pre_dispatch.rs",
         "admit_idempotency_key",
         r"GuardOutcome::CachedResult\(",
-        "same as direct_dispatch.rs::admit: the cache keeps no question it is handed directly; the interpolation path is MIK-8323",
+        "same as direct_idempotency.rs::deliver_replay: the cache keeps no question it is handed directly; the interpolation path is MIK-8323",
     ),
     (
         "meta_mcp/admission.rs",
@@ -72,6 +78,12 @@ const OWNED_ELSEWHERE: &[(&str, &str, &str, &str)] = &[
         "dispatch_tools_call",
         r"SyncAdmission::Replay\(",
         "a SyncAdmission::Replay whose stored delivery's holds `ExecutionAdmission::admit` already adopted into this request's scope (MIK-8176); pinned by row C1-stdio",
+    ),
+    (
+        "router/backend_handlers/direct_idempotency.rs",
+        "execution_lease",
+        r"SyncAdmission::Replay\(",
+        "the direct route's 7b replay (MIK-8154): `ExecutionAdmission::admit` already adopted the stored delivery's holds into this request's scope, which the whole direct call runs inside (`sealed_hold::scoped`, direct_audit.rs `audited_call`); the same adopt site rows C1 and C1-stdio pin, not driven by a direct-route row",
     ),
 ];
 

@@ -195,12 +195,13 @@ fn the_table_answers_every_route_and_stage() {
             }
         }
     }
-    // Today's gaps: R1 nonce (relay), R3 sanitize and lease and R4a nonce
-    // give-back (D2). P3 closed R5 route firewall, sanitize and X14; MIK-8315
-    // closed authorize (D3); MIK-8150 closed R2 and R5 nonce give-back
-    // (admission); MIK-8351 closed R3 rescan; MIK-8159 closed R2's chain link.
+    // Today's gaps: R1 nonce (relay), R3 sanitize and R4a nonce give-back
+    // (D2). P3 closed R5 route firewall, sanitize and X14; MIK-8315 closed
+    // authorize (D3); MIK-8150 closed R2 and R5 nonce give-back (admission);
+    // MIK-8351 closed R3 rescan; MIK-8159 closed R2's chain link; MIK-8154
+    // closed R3 lease.
     assert_eq!(
-        gaps, 4,
+        gaps, 3,
         "the gap count moved: update the table and this pin"
     );
 }
@@ -226,6 +227,8 @@ const DRIVEN: &[(Route, Stage)] = &[
     (Route::TaskSubmit, Stage::Authorize),
     (Route::Stdio, Stage::TaskConfirm),
     (Route::Invoke, Stage::Lease),
+    // Driven by router::mik8154_lease_rows_tests (L2, L9: the store's mismatch).
+    (Route::Direct, Stage::Lease),
     (Route::Invoke, Stage::NonceGiveBack),
     (Route::Direct, Stage::NonceGiveBack),
     (Route::Surfaced, Stage::NonceGiveBack),
@@ -288,11 +291,6 @@ const UNDRIVEN: &[(Route, Stage, &str)] = &[
         Route::Surfaced,
         Stage::ResponseFirewall,
         "R1 drives the same egress; MIK-8314",
-    ),
-    (
-        Route::Direct,
-        Stage::Lease,
-        "gap MIK-8154: not observable while the direct route's idempotency guard answers a same-key duplicate first; driven red-first by MIK-8154's P2 fix",
     ),
     (
         Route::Direct,

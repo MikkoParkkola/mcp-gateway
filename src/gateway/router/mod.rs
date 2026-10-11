@@ -150,6 +150,9 @@ mod mcp_nonce_admission_tests;
 mod mcp_nonce_tests;
 #[cfg(test)]
 mod meta_fingerprint_tests;
+/// MIK-8154.LEASE.1 rows: the direct route takes the shared execution lease.
+#[cfg(test)]
+mod mik8154_lease_rows_tests;
 #[cfg(test)]
 mod mrtr9_lease_tests;
 #[cfg(test)]

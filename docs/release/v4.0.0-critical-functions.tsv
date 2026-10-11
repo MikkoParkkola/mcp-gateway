@@ -80,7 +80,7 @@ src/gateway/router/backend_handlers/direct_preflight.rs	a2a_round_binding	1	crit
 src/gateway/router/backend_handlers/direct_preflight.rs	audit_mint	1	critical	d	audit_mint	Fails closed when a minted credential has no durable audit record; audits refusals.
 src/gateway/router/backend_handlers/direct_dispatch.rs	admit	1	critical	d	admit	Admission order: dispatch controls, tool-call gate, idempotency guard, then the signing nonce.
 src/gateway/router/backend_handlers/direct_dispatch.rs	guard_and_sanitize	1	critical	d	guard_and_sanitize	Applies the tool-call security gate before the idempotency cache (#2445).
-src/gateway/router/backend_handlers/direct_dispatch.rs	idempotency_outcome	1	critical	d	idempotency_outcome	Re-enforces the idempotency guard on the direct route (MIK-7272.SUB.4).
+src/gateway/router/backend_handlers/direct_idempotency.rs	idempotency_outcome	1	critical	d	idempotency_outcome	Re-enforces the idempotency guard on the direct route (MIK-7272.SUB.4).
 src/gateway/router/backend_handlers/direct_dispatch.rs	admit_signing_nonce	1	critical	b,d	admit_signing_nonce	Admits the signing nonce after every refusal so a refused call consumes none (MIK-7698).
 src/gateway/router/backend_handlers/direct_dispatch.rs	dispatch	1	critical	d	dispatch	Terminal arm: forwards and answers; settles the reservation on failure.
 src/gateway/router/backend_handlers/direct_dispatch.rs	forward_sanitized	1	critical	d	forward_sanitized	Forwards the sanitized params through the spend and response gates and signs the answer.
