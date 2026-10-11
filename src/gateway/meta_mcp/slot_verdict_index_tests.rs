@@ -303,3 +303,48 @@ async fn i2f_index_written_by_an_empty_fill() {
         );
     }
 }
+
+/// I2h (index write site guard: a failed fill): alpha's upstream refuses
+/// `tools/list`, so a discovery fill of alpha's slot fails and the slot holds
+/// no list. The index must not name that slot: an index entry is a claim that
+/// alpha's listings can read alpha's own catalogue there. Guard for I2f's fix,
+/// which indexes after every fill that left a list, an empty one included.
+#[tokio::test]
+async fn i2h_a_failed_fill_writes_no_index_entry() {
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    for surface in [
+        Discovery::Search,
+        Discovery::CodeModeSearch,
+        Discovery::ListAllServers,
+    ] {
+        let fx = per_user(
+            CallerSlot::Valid,
+            &valid(),
+            Warmth::ColdFailing,
+            CLOSED,
+            Surfaced::Yes,
+        );
+        let caller = super::identified_caller(&alpha);
+        let found = match surface {
+            Discovery::Search => {
+                let args = json!({"query": "read"});
+                fx.meta.search_tools(&args, None, &caller).await
+            }
+            Discovery::CodeModeSearch => {
+                let args = json!({"query": "read"});
+                fx.meta.code_mode_search(&args, None, &caller).await
+            }
+            Discovery::ListAllServers => fx.meta.list_tools(&json!({}), None, &caller).await,
+        };
+        assert_eq!(
+            fx.caller.lists(),
+            1,
+            "premise {surface:?}: alpha's slot fill was not attempted: {found:?}"
+        );
+        assert_eq!(
+            indexed_binding_for_alpha(&fx.meta),
+            None,
+            "I2h {surface:?}: a failed fill wrote an index entry"
+        );
+    }
+}
