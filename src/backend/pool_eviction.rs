@@ -120,6 +120,12 @@ impl Backend {
         self.pool.get(key).is_some()
     }
 
+    /// How many slots the pool holds, of any key (MIK-8356 I7).
+    #[cfg(test)]
+    pub(crate) fn pool_len_for_test(&self) -> usize {
+        self.pool.len()
+    }
+
     /// Close an evicted transport off the caller's path (#2245), capped in
     /// count and counted when abandoned (#2300, `IdentitySlots::spawn_close`).
     /// `stop` drains the task with the replaced-transport cleanups.

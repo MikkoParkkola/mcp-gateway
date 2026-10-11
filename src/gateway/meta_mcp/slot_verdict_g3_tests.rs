@@ -150,6 +150,7 @@ async fn g3_i7_index_read_has_no_side_effects() {
     let backend = fx.meta.backends.get(BACKEND).expect("the backend");
     let (mints, lists) = (fx.mints(), fx.caller.lists() + fx.shared.lists());
     let populated = backend.populated_per_user_bindings_for_test();
+    let slots = backend.pool_len_for_test();
     assert!(
         !backend.pool_has_slot_for_test(&slot_of("beta")),
         "premise: beta already holds a slot"
@@ -176,6 +177,11 @@ async fn g3_i7_index_read_has_no_side_effects() {
         backend.populated_per_user_bindings_for_test(),
         populated,
         "I7: the read populated a slot"
+    );
+    assert_eq!(
+        backend.pool_len_for_test(),
+        slots,
+        "I7: the read opened a pool entry under some key"
     );
     assert!(
         backend.pool_has_slot_for_test(&PoolKey::PerUser {
