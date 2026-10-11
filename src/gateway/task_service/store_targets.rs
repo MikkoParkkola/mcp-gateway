@@ -449,13 +449,13 @@ pub(super) fn cancelled_bytes(
 /// and the input round: a write that grows a KEPT field must check this
 /// against the record budget. Today those are creation and a new input round;
 /// the loader checks every live row it reads.
-pub(super) fn fallback_bytes(
-    task: &Task,
-    record: &Record,
-    now: DateTime<Utc>,
-) -> Result<usize, StoreError> {
-    let at = now.max(task.last_updated_at());
-    let at = at.with_nanosecond(999_999_999).unwrap_or(at);
+///
+/// Measured at the widest timestamp chrono encodes (expanded year, nine
+/// fractional digits), the same at creation, at a new round and at load, so a
+/// row admitted near the cap always loads again. It is about width, not time,
+/// so it reads no clock (MIK-8202).
+pub(super) fn fallback_bytes(task: &Task, record: &Record) -> Result<usize, StoreError> {
+    let at = DateTime::<Utc>::MAX_UTC;
     let Some((_, mut fallback)) = settled(
         task,
         record,
@@ -595,5 +595,62 @@ impl Shared {
         self.commit(&record_name(task.id()), &bytes)?;
         self.publish(task, record, super::HoldUpdate::Drop);
         Ok(CancelClaim::Claimed(descriptor))
+    }
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::fallback_bytes;
+    use crate::gateway::task_service::record::PreparedTask;
+    use crate::protocol::tasks::{Task, TaskOptions, TaskTransition};
+
+    const OWNER: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+
+    /// A settled row never settles again, so it needs no room for a bounded
+    /// failure: its fallback size is 0 (MIK-8202, read at load). Mutant: the
+    /// settled row measured as if it could still fail.
+    #[test]
+    fn a_settled_row_needs_no_fallback_room() {
+        let at = chrono::DateTime::from_timestamp(1_790_000_000, 0).expect("a time");
+        let mut task = Task::create_at(
+            "tool",
+            at,
+            TaskOptions {
+                ttl_ms: Some(60_000),
+                poll_interval_ms: Some(1_000),
+            },
+        );
+        task.transition(
+            TaskTransition::Complete(serde_json::json!({ "content": [] })),
+            at,
+        )
+        .expect("a working task completes");
+        let record = PreparedTask::for_test(&task, OWNER, 1).record;
+        assert_eq!(fallback_bytes(&task, &record).expect("measured"), 0);
+    }
+
+    /// A live row already at the last revision cannot settle at all, so it
+    /// has no fallback to measure: the bounded failure's revision bump
+    /// overflows and the measure is the store's capacity refusal, never a
+    /// size. The only error the bounded failure's `settled` can return: a Fail
+    /// transition on a live task never refuses. Mutant: the overflow saturates
+    /// (a size is reported for a write that cannot happen).
+    #[test]
+    fn a_row_at_the_last_revision_has_no_fallback_to_measure() {
+        let at = chrono::DateTime::from_timestamp(1_790_000_000, 0).expect("a time");
+        let task = Task::create_at(
+            "tool",
+            at,
+            TaskOptions {
+                ttl_ms: Some(60_000),
+                poll_interval_ms: Some(1_000),
+            },
+        );
+        let mut record = PreparedTask::for_test(&task, OWNER, 1).record;
+        record.revision = u64::MAX;
+        assert!(matches!(
+            fallback_bytes(&task, &record),
+            Err(super::StoreError::Capacity)
+        ));
     }
 }

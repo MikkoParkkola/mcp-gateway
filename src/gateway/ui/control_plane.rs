@@ -4,7 +4,7 @@
 
 use super::super::auth::AuthenticatedClient;
 use super::super::router::AppState;
-use super::errors::auth_required;
+use super::errors::{auth_required, flat_error};
 use crate::control_plane::role_mapping::ControlPlaneBaseSource;
 use crate::control_plane::{ControlPlaneAction, ControlPlaneRbac};
 use crate::gateway::routes;
@@ -125,7 +125,17 @@ async fn control_plane_snapshot(
         identity.as_ref(),
         &state.live_config.get().control_plane.role_mapping,
     );
-    let (snapshot, store_read_degraded) = local_runtime_snapshot(&state, client.as_ref(), &actor);
+    // Grant status is judged against the time; on a clock before 1970 it
+    // cannot be, so the view is refused rather than guessed (MIK-8202).
+    let Ok(now) = crate::clock::utc_now() else {
+        return flat_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "host clock reads before 1970: grant status cannot be judged",
+        )
+        .into_response();
+    };
+    let (snapshot, store_read_degraded) =
+        local_runtime_snapshot(&state, client.as_ref(), &actor, now);
     let shadow_radar = local_shadow_radar(&state).await;
 
     let Some(view) = snapshot.read_only_view(&actor) else {
@@ -165,6 +175,10 @@ mod mutation_tests;
 #[cfg(test)]
 #[path = "control_plane_authority_tests.rs"]
 mod authority_tests;
+
+#[cfg(test)]
+#[path = "control_plane_preflight_tests.rs"]
+mod preflight_tests;
 
 /// B6 (MIK-7570.BREAKER.1): an open breaker reads `Down` and `Blocked`,
 /// through the real `Backend::status()`, never a hand-built status.

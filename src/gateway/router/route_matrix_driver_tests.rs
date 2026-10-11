@@ -602,6 +602,16 @@ pub(crate) async fn task_submit_ungranted() {
     super::tests::task_execution_adapter::submit_authz::matrix_ungranted_invoke_submit().await;
 }
 
+/// R4a `Authorize` before `TaskConfirm` (MIK-8331): a task call by a surfaced
+/// name from a caller without the grant, and from a non-admin for an admin
+/// capability, answers as the sync call with no X14 challenge, and X14 does
+/// not classify the surfaced capability for an admitted scope. Panics
+/// otherwise.
+pub(crate) async fn task_submit_authorized_before_x14() {
+    super::tests::task_execution_adapter::x14_authorize_order::matrix_authorize_precedes_x14()
+        .await;
+}
+
 /// A backend whose `tools/call` signals `entered`, then waits for `gate`
 /// before answering: a call held in flight while a second one arrives.
 struct Held {
