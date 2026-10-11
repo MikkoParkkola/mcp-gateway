@@ -12,9 +12,7 @@ use serde_json::{Value, json};
 
 use super::slot_verdict_http_tests::*;
 use crate::config::InputSchemaEnforcement;
-use crate::gateway::meta_mcp::slot_verdict_fixture::{
-    BACKEND, CallerSlot, Surfaced, TOOL, Warmth, valid,
-};
+use crate::gateway::meta_mcp::slot_verdict_fixture::{BACKEND, CallerSlot, Surfaced, TOOL, Warmth};
 
 /// P1 + P4 with alpha's slot cold (SLOTVIS.6; kills M19): the caller verdict
 /// fills alpha's slot as alpha before any reader runs, so a modern task call

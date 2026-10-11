@@ -288,7 +288,7 @@ async fn lists_tool(fx: &Fx, id: u64) -> bool {
 /// plain `tools/list` does not show the backend's surfaced tool, though the
 /// shared slot holds it. The cold rule's shared view is for a caller whose
 /// own slot is merely not loaded yet (control: the connected operator, cold,
-/// is shown it). RED before NoView: the shared entry is shown to both.
+/// is shown it). RED before `NoView`: the shared entry is shown to both.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tools_list_hides_the_surfaced_tool_from_an_operator_with_no_grant() {
     let connected = fixture().await;
