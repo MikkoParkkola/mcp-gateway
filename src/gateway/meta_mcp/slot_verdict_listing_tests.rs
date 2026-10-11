@@ -531,6 +531,57 @@ async fn l3b_spec_preview_judges_the_callers_slot() {
     }
 }
 
+/// L3b-multi (guard): on a multi-user gateway an isolated per-user backend is
+/// left out of the spec-preview filtered `tools/list` and `tools/resolve`
+/// for every caller (INV-2, `meta_route_isolation_refused`), whatever alpha's
+/// own slot holds. L3b reads the single-user gateway, where the caller's slot
+/// decides; this row pins the multi-user behaviour L3b no longer exercises.
+/// Green on base by construction; its mutant drops the isolation skip.
+#[cfg(feature = "spec-preview")]
+#[tokio::test]
+async fn l3b_multi_user_keeps_the_isolated_backend_out_of_spec_preview() {
+    use super::slot_verdict_fixture::TOOL;
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::No,
+    );
+    warm_by_listing(&fx.meta).await;
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    let caller = super::identified_caller(&alpha);
+    let scope = caller.scope();
+    let filtered = fx.meta.handle_tools_list_filtered(
+        crate::protocol::RequestId::Number(1),
+        TOOL,
+        None,
+        scope,
+    );
+    let filtered = serde_json::to_value(&filtered).expect("a response serialises");
+    let listed = filtered
+        .pointer("/result/tools")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|tools| tools.iter().any(|t| t["name"] == TOOL));
+    assert!(
+        !listed,
+        "L3b-multi: the isolated backend's tool is listed: {filtered}"
+    );
+    let resolved = fx
+        .meta
+        .handle_tools_resolve(
+            crate::protocol::RequestId::Number(2),
+            Some(&json!({"name": TOOL})),
+            None,
+            scope,
+        )
+        .await;
+    assert!(
+        resolved.error.is_some(),
+        "L3b-multi: the isolated backend's tool resolves: {resolved:?}"
+    );
+}
+
 /// L6c (SLOTVIS.6 third clause, control): a cold caller's surfaced list in
 /// plain `tools/list` keeps today's shared view. alpha's own catalogue would
 /// withhold the tool (invalid schema), but its slot is cold, so the shared
