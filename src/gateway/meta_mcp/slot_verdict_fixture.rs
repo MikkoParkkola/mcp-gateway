@@ -112,11 +112,17 @@ struct Upstream {
 
 #[async_trait::async_trait]
 impl crate::transport::Transport for Upstream {
-    async fn request(&self, method: &str, _params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
         if method == "tools/list" {
             self.asked.lists.fetch_add(1, Ordering::SeqCst);
             if self.fail_list {
-                return Err(crate::Error::Transport("upstream refused tools/list".into()));
+                return Err(crate::Error::Transport(
+                    "upstream refused tools/list".into(),
+                ));
             }
             return Ok(JsonRpcResponse::success(
                 RequestId::Number(1),
@@ -188,8 +194,7 @@ pub(crate) fn per_user(
     enforcement: InputSchemaEnforcement,
     surfaced: Surfaced,
 ) -> PerUser {
-    let (backend, caller_asked, shared_asked) =
-        per_user_backend(slot, shared, warmth, enforcement);
+    let (backend, caller_asked, shared_asked) = per_user_backend(slot, shared, warmth, enforcement);
     per_user_on(backend, caller_asked, shared_asked, surfaced)
 }
 

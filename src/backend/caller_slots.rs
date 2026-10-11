@@ -29,7 +29,9 @@ impl Backend {
         self.pool
             .iter()
             .filter_map(|entry| match entry.key() {
-                super::PoolKey::PerUser { binding } if entry.value().tools_cache.ever_populated() => {
+                super::PoolKey::PerUser { binding }
+                    if entry.value().tools_cache.ever_populated() =>
+                {
                     Some(binding.clone())
                 }
                 _ => None,

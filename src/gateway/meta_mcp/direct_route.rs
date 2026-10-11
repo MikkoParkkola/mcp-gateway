@@ -143,7 +143,10 @@ impl MetaMcp {
     /// Synchronous and side-effect free: no mint, no fill, no slot creation.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "MIK-8356: read by its rows until readers adopt it")
+        expect(
+            dead_code,
+            reason = "MIK-8356: read by its rows until readers adopt it"
+        )
     )]
     pub(crate) fn caller_slot_binding_for(
         &self,

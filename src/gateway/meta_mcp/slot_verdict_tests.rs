@@ -26,7 +26,13 @@ async fn by_name(slot: CallerSlot, enforcement: InputSchemaEnforcement) -> (Valu
 
 /// The canonical absent answer: the same call where nothing surfaces [`TOOL`].
 async fn unknown_name() -> Value {
-    let fx = per_user(CallerSlot::Lacks, &valid(), Warmth::Warm, CLOSED, Surfaced::No);
+    let fx = per_user(
+        CallerSlot::Lacks,
+        &valid(),
+        Warmth::Warm,
+        CLOSED,
+        Surfaced::No,
+    );
     call_as_alpha(&fx.meta, TOOL, json!({"q": "x"})).await
 }
 
@@ -65,15 +71,33 @@ async fn c2_per_user_lacked_is_not_text_a() {
 #[tokio::test]
 async fn c4_per_user_caller_slot_withholds_via_gateway_invoke() {
     let args = json!({"server": super::slot_verdict_fixture::BACKEND, "tool": TOOL, "arguments": {"q": "x"}});
-    let control = per_user(CallerSlot::Valid, &valid(), Warmth::Warm, CLOSED, Surfaced::No);
+    let control = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Warm,
+        CLOSED,
+        Surfaced::No,
+    );
     let _ = call_as_alpha(&control.meta, "gateway_invoke", args.clone()).await;
-    assert_eq!(control.caller.calls(), 1, "premise: alpha's valid tool is not dispatched");
+    assert_eq!(
+        control.caller.calls(),
+        1,
+        "premise: alpha's valid tool is not dispatched"
+    );
     let mut answers = Vec::new();
     for slot in [CallerSlot::Invalid, CallerSlot::Lacks] {
         let fx = per_user(slot, &valid(), Warmth::Warm, CLOSED, Surfaced::No);
         let answer = call_as_alpha(&fx.meta, "gateway_invoke", args.clone()).await;
-        assert_eq!(fx.caller.calls() + fx.shared.calls(), 0, "C4 {slot:?}: dispatched; {answer}");
-        assert_eq!(answer.pointer("/error/code"), Some(&json!(-32601)), "C4 {slot:?}: {answer}");
+        assert_eq!(
+            fx.caller.calls() + fx.shared.calls(),
+            0,
+            "C4 {slot:?}: dispatched; {answer}"
+        );
+        assert_eq!(
+            answer.pointer("/error/code"),
+            Some(&json!(-32601)),
+            "C4 {slot:?}: {answer}"
+        );
         answers.push(answer);
     }
     assert_eq!(answers[0], answers[1], "C4: withheld vs lacked differ");
@@ -84,11 +108,21 @@ async fn c4_per_user_caller_slot_withholds_via_gateway_invoke() {
 /// slot (invalid) withholds the tool.
 #[tokio::test]
 async fn c7_per_user_cold_caller_first_call_dispatches_on_own_slot() {
-    let fx = per_user(CallerSlot::Valid, &invalid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+    let fx = per_user(
+        CallerSlot::Valid,
+        &invalid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::Yes,
+    );
     let (lists, calls) = (fx.caller.lists(), fx.caller.calls());
     let answer = call_as_alpha(&fx.meta, TOOL, json!({"q": "x"})).await;
     assert_eq!(fx.caller.calls(), calls + 1, "C7: not dispatched: {answer}");
-    assert_eq!(fx.caller.lists(), lists + 1, "C7: alpha's slot not filled once");
+    assert_eq!(
+        fx.caller.lists(),
+        lists + 1,
+        "C7: alpha's slot not filled once"
+    );
 }
 
 /// C8 (guard, kills M12): alpha's slot is cold and its upstream refuses
@@ -98,10 +132,24 @@ async fn c7_per_user_cold_caller_first_call_dispatches_on_own_slot() {
 /// the guard keeps the new verdict from answering it -32601.
 #[tokio::test]
 async fn c8_per_user_cold_fill_failure_is_not_an_unknown_name() {
-    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::ColdFailing, CLOSED, Surfaced::Yes);
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::ColdFailing,
+        CLOSED,
+        Surfaced::Yes,
+    );
     let answer = call_as_alpha(&fx.meta, TOOL, json!({"q": "x"})).await;
-    assert_eq!(fx.caller.calls() + fx.shared.calls(), 0, "C8: dispatched: {answer}");
-    assert_ne!(answer.pointer("/error/code"), Some(&json!(-32601)), "C8: answered as unknown: {answer}");
+    assert_eq!(
+        fx.caller.calls() + fx.shared.calls(),
+        0,
+        "C8: dispatched: {answer}"
+    );
+    assert_ne!(
+        answer.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "C8: answered as unknown: {answer}"
+    );
 }
 
 /// C10: with argument-key enforcement Off, the caller-slot verdict still
@@ -118,7 +166,13 @@ async fn c10_per_user_visibility_runs_with_enforcement_off() {
 /// credential exactly once across the verdict and the dispatch.
 #[tokio::test]
 async fn c11_per_user_one_resolution_per_call() {
-    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Warm, CLOSED, Surfaced::Yes);
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Warm,
+        CLOSED,
+        Surfaced::Yes,
+    );
     let before = fx.mints();
     let answer = call_as_alpha(&fx.meta, TOOL, json!({"q": "x"})).await;
     assert_eq!(fx.caller.calls(), 1, "premise: not dispatched: {answer}");
@@ -132,7 +186,13 @@ async fn c11_per_user_one_resolution_per_call() {
 /// resolutions. Kills a `caller_verdict` that fills before judging policy.
 #[tokio::test]
 async fn c14_policy_withheld_invoke_target_fills_and_resolves_nothing() {
-    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, CLOSED, Surfaced::No);
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::No,
+    );
     let alpha = super::catalogue_per_caller_tests::identity("alpha");
     let deny = crate::gateway::authz::DenyOne { tool: TOOL };
     let caller = super::MetaMcpCallerContext {
@@ -150,10 +210,20 @@ async fn c14_policy_withheld_invoke_target_fills_and_resolves_nothing() {
     ))
     .await;
     let answer = serde_json::to_value(&response).expect("a response serialises");
-    assert!(answer.get("error").is_some() || answer.pointer("/result/isError") == Some(&json!(true)),
-        "premise: the policy-withheld target is not refused: {answer}");
-    assert_eq!(fx.caller.calls() + fx.shared.calls(), 0, "C14: dispatched: {answer}");
-    assert_eq!(fx.caller.lists() + fx.shared.lists(), lists, "C14: a slot was filled");
+    assert!(
+        answer.get("error").is_some() || answer.pointer("/result/isError") == Some(&json!(true)),
+        "premise: the policy-withheld target is not refused: {answer}"
+    );
+    assert_eq!(
+        fx.caller.calls() + fx.shared.calls(),
+        0,
+        "C14: dispatched: {answer}"
+    );
+    assert_eq!(
+        fx.caller.lists() + fx.shared.lists(),
+        lists,
+        "C14: a slot was filled"
+    );
     assert_eq!(fx.mints(), mints, "C14: a credential was resolved");
 }
 
@@ -213,9 +283,18 @@ async fn l1_disabled_list_judges_the_callers_slot() {
 /// own catalogue would offer. RED on base: the shared slot names it.
 #[tokio::test]
 async fn l6a_cold_caller_disabled_list_withholds() {
-    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::Yes,
+    );
     let listed = disabled_as_alpha(&fx.meta);
-    assert!(!names_tool(&listed), "L6a: a cold caller is named the tool: {listed}");
+    assert!(
+        !names_tool(&listed),
+        "L6a: a cold caller is named the tool: {listed}"
+    );
 }
 
 /// L3c (SLOTVIS.3, counts): with alpha's slot warm, the backend count alpha
@@ -234,7 +313,10 @@ async fn l3c_counts_use_the_callers_slot() {
             .admitted_counts(super::identified_caller(&alpha).scope(), None);
         totals.push(total.phrase());
     }
-    assert_eq!(totals[1], totals[2], "L3c: withheld vs lacked counts differ");
+    assert_eq!(
+        totals[1], totals[2],
+        "L3c: withheld vs lacked counts differ"
+    );
     assert_ne!(totals[0], totals[1], "L3c: the withheld tool is counted");
 }
 
@@ -294,13 +376,19 @@ async fn l3d_list_servers_counts_the_callers_slot() {
             .list_servers(&super::identified_caller(&alpha), None)
             .await
             .expect("list_servers answers");
-        let count = listed
-            .to_string()
-            .contains("\"tools_count\":1");
+        let count = listed.to_string().contains("\"tools_count\":1");
         counts.push((count, listed));
     }
-    assert!(!counts[0].0, "premise: alpha's valid catalogue counts 2: {}", counts[0].1);
-    assert!(counts[1].0, "L3d Invalid: the withheld tool is counted: {}", counts[1].1);
+    assert!(
+        !counts[0].0,
+        "premise: alpha's valid catalogue counts 2: {}",
+        counts[0].1
+    );
+    assert!(
+        counts[1].0,
+        "L3d Invalid: the withheld tool is counted: {}",
+        counts[1].1
+    );
     assert!(counts[2].0, "L3d Lacks: {}", counts[2].1);
 }
 
@@ -329,17 +417,31 @@ fn surfaced_entry_for_alpha(meta: &super::MetaMcp) -> Option<Value> {
 #[tokio::test]
 async fn l3a_surfaced_list_takes_the_callers_tool() {
     let shared = json!({"type": "object", "properties": {"z": {"type": "integer"}}});
-    let fx = per_user(CallerSlot::Valid, &shared, Warmth::Cold, CLOSED, Surfaced::Yes);
+    let fx = per_user(
+        CallerSlot::Valid,
+        &shared,
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::Yes,
+    );
     fx.meta.set_multi_user(false);
     warm_by_listing(&fx.meta).await;
     let listed =
         surfaced_entry_for_alpha(&fx.meta).expect("premise: alpha's valid tool is not listed");
-    assert_eq!(listed["inputSchema"], valid(), "L3a: not alpha's schema: {listed}");
+    assert_eq!(
+        listed["inputSchema"],
+        valid(),
+        "L3a: not alpha's schema: {listed}"
+    );
     for slot in [CallerSlot::Invalid, CallerSlot::Lacks] {
         let fx = per_user(slot, &shared, Warmth::Cold, CLOSED, Surfaced::Yes);
         fx.meta.set_multi_user(false);
         warm_by_listing(&fx.meta).await;
-        assert_eq!(surfaced_entry_for_alpha(&fx.meta), None, "L3a {slot:?}: listed");
+        assert_eq!(
+            surfaced_entry_for_alpha(&fx.meta),
+            None,
+            "L3a {slot:?}: listed"
+        );
     }
 }
 
@@ -352,7 +454,11 @@ async fn l3a_multi_user_keeps_the_isolated_surfaced_tool_out() {
     for slot in [CallerSlot::Valid, CallerSlot::Invalid] {
         let fx = per_user(slot, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
         warm_by_listing(&fx.meta).await;
-        assert_eq!(surfaced_entry_for_alpha(&fx.meta), None, "L3a-multi {slot:?}: listed");
+        assert_eq!(
+            surfaced_entry_for_alpha(&fx.meta),
+            None,
+            "L3a-multi {slot:?}: listed"
+        );
     }
 }
 
@@ -361,7 +467,13 @@ async fn l3a_multi_user_keeps_the_isolated_surfaced_tool_out() {
 /// backend's tools from alpha. RED on base: the shared slot names it.
 #[tokio::test]
 async fn l6b_evicted_caller_disabled_list_withholds() {
-    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::Yes,
+    );
     warm_by_listing(&fx.meta).await;
     let backend = fx
         .meta
@@ -373,7 +485,10 @@ async fn l6b_evicted_caller_disabled_list_withholds() {
         "premise: alpha's slot was not evicted"
     );
     let listed = disabled_as_alpha(&fx.meta);
-    assert!(!names_tool(&listed), "L6b: an evicted caller is named the tool: {listed}");
+    assert!(
+        !names_tool(&listed),
+        "L6b: an evicted caller is named the tool: {listed}"
+    );
 }
 
 /// The binding the caller-slot index holds for alpha on `BACKEND`.
@@ -392,8 +507,18 @@ fn indexed_binding_for_alpha(meta: &super::MetaMcp) -> Option<String> {
 /// Red-by-absence: nothing writes the index yet (the read API is a stub).
 #[tokio::test]
 async fn i2a_index_written_by_catalogue_fill() {
-    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
-    assert_eq!(indexed_binding_for_alpha(&fx.meta), None, "premise: indexed before any fill");
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::Yes,
+    );
+    assert_eq!(
+        indexed_binding_for_alpha(&fx.meta),
+        None,
+        "premise: indexed before any fill"
+    );
     warm_by_listing(&fx.meta).await;
     assert_eq!(fx.caller.lists(), 1, "premise: alpha's slot was not filled");
     assert_eq!(
@@ -407,9 +532,19 @@ async fn i2a_index_written_by_catalogue_fill() {
 /// (argument-key enforcement on), the index names alpha's slot. Red-by-absence.
 #[tokio::test]
 async fn i2c_index_written_by_f13_fill() {
-    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::Yes,
+    );
     let _ = call_as_alpha(&fx.meta, TOOL, json!({"q": "x"})).await;
-    assert_eq!(fx.caller.lists(), 1, "premise: the call did not fill alpha's slot");
+    assert_eq!(
+        fx.caller.lists(),
+        1,
+        "premise: the call did not fill alpha's slot"
+    );
     assert_eq!(
         indexed_binding_for_alpha(&fx.meta).as_deref(),
         Some(super::slot_verdict_fixture::BINDING),
@@ -424,7 +559,13 @@ async fn i2c_index_written_by_f13_fill() {
 #[tokio::test]
 async fn i2d_index_written_by_dispatch_fill() {
     let off = InputSchemaEnforcement::Off;
-    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, off, Surfaced::Yes);
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        off,
+        Surfaced::Yes,
+    );
     let _ = call_as_alpha(&fx.meta, TOOL, json!({"q": "x"})).await;
     assert_eq!(
         indexed_binding_for_alpha(&fx.meta).as_deref(),
@@ -452,7 +593,13 @@ fn indexed_binding_for(meta: &super::MetaMcp, subject: &str) -> Option<String> {
 /// the revocation alone would pass trivially. Red-by-absence.
 #[tokio::test]
 async fn i3b_index_entry_removed_on_grant_revocation() {
-    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::Yes,
+    );
     let _beta_upstream = super::slot_verdict_fixture::add_caller(&fx.meta, "beta", &valid());
     warm_by_listing(&fx.meta).await;
     let beta = super::catalogue_per_caller_tests::identity("beta");
@@ -479,8 +626,15 @@ async fn i3b_index_entry_removed_on_grant_revocation() {
         .backends
         .get(super::slot_verdict_fixture::BACKEND)
         .expect("the backend");
-    assert!(backend.evict_identity_slots("alpha@") >= 1, "premise: alpha's slot not evicted");
-    assert_eq!(indexed_binding_for(&fx.meta, "alpha"), None, "I3b: alpha still indexed");
+    assert!(
+        backend.evict_identity_slots("alpha@") >= 1,
+        "premise: alpha's slot not evicted"
+    );
+    assert_eq!(
+        indexed_binding_for(&fx.meta, "alpha"),
+        None,
+        "I3b: alpha still indexed"
+    );
     assert_eq!(
         indexed_binding_for(&fx.meta, "beta").as_deref(),
         Some("beta@ledger"),
@@ -515,7 +669,13 @@ fn assert_index_covers_populated_slots(meta: &super::MetaMcp, row: &str) {
 /// where nothing fills with enforcement Off.
 #[tokio::test]
 async fn i2e_index_covers_every_populated_slot() {
-    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::Yes,
+    );
     warm_by_listing(&fx.meta).await;
     let _beta_upstream = super::slot_verdict_fixture::add_caller(&fx.meta, "beta", &valid());
     let beta = super::catalogue_per_caller_tests::identity("beta");
@@ -540,7 +700,13 @@ async fn i2e_index_covers_every_populated_slot() {
     assert_index_covers_populated_slots(&fx.meta, "I2e (catalogue + F13)");
 
     let off = InputSchemaEnforcement::Off;
-    let gx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, off, Surfaced::Yes);
+    let gx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Cold,
+        off,
+        Surfaced::Yes,
+    );
     let _ = call_as_alpha(&gx.meta, TOOL, json!({"q": "x"})).await;
     assert_index_covers_populated_slots(&gx.meta, "I2e (dispatch-path fill)");
 }
@@ -573,12 +739,26 @@ async fn l5_withheld_answers_exactly_as_lacked() {
         let predicted = predictions_for_alpha(&fx.meta);
         answers.push((disabled, predicted));
     }
-    assert_eq!(answers[0].0, answers[1].0, "L5: disabled list, withheld vs lacked");
-    assert_eq!(answers[0].1, answers[1].1, "L5: predictions, withheld vs lacked");
+    assert_eq!(
+        answers[0].0, answers[1].0,
+        "L5: disabled list, withheld vs lacked"
+    );
+    assert_eq!(
+        answers[0].1, answers[1].1,
+        "L5: predictions, withheld vs lacked"
+    );
     // Equal is not enough: on base both answer from the shared slot and name
     // the tool alike. SLOTVIS.5 also says neither names it.
-    assert!(!names_tool(&answers[0].0), "L5: the disabled list names the tool: {}", answers[0].0);
-    assert!(!predicts_tool(&answers[0].1), "L5: the tool is predicted: {:?}", answers[0].1);
+    assert!(
+        !names_tool(&answers[0].0),
+        "L5: the disabled list names the tool: {}",
+        answers[0].0
+    );
+    assert!(
+        !predicts_tool(&answers[0].1),
+        "L5: the tool is predicted: {:?}",
+        answers[0].1
+    );
 }
 
 /// L10: two callers on one per-user backend: alpha's catalogue holds
@@ -587,7 +767,13 @@ async fn l5_withheld_answers_exactly_as_lacked() {
 /// answers for the other. RED on base: alpha is named (the shared slot).
 #[tokio::test]
 async fn l10_two_callers_judged_each_by_their_own_slot() {
-    let fx = per_user(CallerSlot::Invalid, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+    let fx = per_user(
+        CallerSlot::Invalid,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::Yes,
+    );
     let _beta_upstream = super::slot_verdict_fixture::add_caller(&fx.meta, "beta", &valid());
     warm_by_listing(&fx.meta).await;
     let beta = super::catalogue_per_caller_tests::identity("beta");
@@ -601,9 +787,15 @@ async fn l10_two_callers_judged_each_by_their_own_slot() {
         .expect("beta lists");
     let alpha = super::catalogue_per_caller_tests::identity("alpha");
     let for_beta = disabled_for(&fx.meta, &super::identified_caller(&beta));
-    assert!(names_tool(&for_beta), "premise: beta's valid tool is not named: {for_beta}");
+    assert!(
+        names_tool(&for_beta),
+        "premise: beta's valid tool is not named: {for_beta}"
+    );
     let for_alpha = disabled_for(&fx.meta, &super::identified_caller(&alpha));
-    assert!(!names_tool(&for_alpha), "L10: alpha is named a tool its slot withholds: {for_alpha}");
+    assert!(
+        !names_tool(&for_alpha),
+        "L10: alpha is named a tool its slot withholds: {for_alpha}"
+    );
 }
 
 /// L9 (case 1, kimi r2 F1): an anonymous caller has no view of a `required`
@@ -612,13 +804,25 @@ async fn l10_two_callers_judged_each_by_their_own_slot() {
 /// the shared slot (named; "2 tools").
 #[tokio::test]
 async fn l9_required_backend_anonymous_caller_sees_none() {
-    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Warm, CLOSED, Surfaced::Yes);
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Warm,
+        CLOSED,
+        Surfaced::Yes,
+    );
     let anonymous = super::anonymous_caller();
     let disabled = disabled_for(&fx.meta, &anonymous);
-    assert!(!names_tool(&disabled), "L9: anonymous is named the tool: {disabled}");
+    assert!(
+        !names_tool(&disabled),
+        "L9: anonymous is named the tool: {disabled}"
+    );
     let (total, _) = fx.meta.admitted_counts(anonymous.scope(), None);
     let counted = total.phrase();
-    assert!(!counted.starts_with('2'), "L9: anonymous is counted the tools: {counted}");
+    assert!(
+        !counted.starts_with('2'),
+        "L9: anonymous is counted the tools: {counted}"
+    );
 }
 
 /// L9-servers (guard): `list_servers` already hides a `required` per-user
@@ -627,7 +831,13 @@ async fn l9_required_backend_anonymous_caller_sees_none() {
 /// change from reopening it.
 #[tokio::test]
 async fn l9_servers_keep_the_required_backend_hidden() {
-    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Warm, CLOSED, Surfaced::Yes);
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Warm,
+        CLOSED,
+        Surfaced::Yes,
+    );
     let servers = fx
         .meta
         .list_servers(&super::anonymous_caller(), None)

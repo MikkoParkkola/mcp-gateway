@@ -187,9 +187,6 @@ mod meta_dispatch_edge_tests;
 mod probe_tests;
 #[cfg(test)]
 mod r2_identity_keys_tests;
-/// MIK-8356: router entry rows for per-user calls judged by the caller's slot.
-#[cfg(test)]
-mod slot_verdict_http_tests;
 #[cfg(test)]
 mod r2_input_keys_tests;
 #[cfg(test)]
@@ -201,6 +198,9 @@ mod session_fp_once_tests;
 /// MIK-7736: under standard, a gateway_invoke nonce is judged after policy.
 #[cfg(all(test, feature = "metrics"))]
 mod signing_nonce_order_tests;
+/// MIK-8356: router entry rows for per-user calls judged by the caller's slot.
+#[cfg(test)]
+mod slot_verdict_http_tests;
 /// E1: SSO admins through the role mapping (MIK-7570.ADMINSSO.1).
 #[cfg(test)]
 mod sso_admin_tests;

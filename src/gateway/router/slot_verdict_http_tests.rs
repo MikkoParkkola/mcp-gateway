@@ -99,7 +99,10 @@ async fn post_as_alpha(router: &axum::Router, uri: &str, body: &Value) -> (Statu
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 fn tools_call(name: &str) -> Value {
@@ -123,8 +126,15 @@ async fn c1_http_per_user_caller_slot_withholds_by_name() {
     for slot in [CallerSlot::Invalid, CallerSlot::Lacks] {
         let gw = gateway(slot, CLOSED, Surfaced::Yes).await;
         let answer = post_as_alpha(&gw.router, "/mcp", &tools_call(TOOL)).await;
-        assert_eq!(gw.dispatched(), 0, "C1-http {slot:?}: dispatched; {answer:?}");
-        assert_eq!(answer, absent, "C1-http {slot:?}: {answer:?} vs unknown {absent:?}");
+        assert_eq!(
+            gw.dispatched(),
+            0,
+            "C1-http {slot:?}: dispatched; {answer:?}"
+        );
+        assert_eq!(
+            answer, absent,
+            "C1-http {slot:?}: {answer:?} vs unknown {absent:?}"
+        );
     }
 }
 
@@ -183,7 +193,11 @@ async fn f1_http_invalid_shared_valid_caller_dispatches() {
     let invalid = crate::gateway::meta_mcp::slot_verdict_fixture::invalid();
     let gw = gateway_with_shared(CallerSlot::Valid, &invalid, CLOSED, Surfaced::Yes).await;
     let answer = post_as_alpha(&gw.router, "/mcp", &tools_call(TOOL)).await;
-    assert_eq!(gw.caller.calls(), 1, "F1: alpha's valid tool not dispatched: {answer:?}");
+    assert_eq!(
+        gw.caller.calls(),
+        1,
+        "F1: alpha's valid tool not dispatched: {answer:?}"
+    );
 }
 
 /// C6b (guard, kills M13): on the direct route, an argument-key refusal for a
@@ -195,10 +209,74 @@ async fn c6b_direct_route_argument_key_refusal_unchanged() {
     let body = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
         "params": {"name": TOOL, "arguments": {"q": "x", "invented": 1}}});
     let answer = post_as_alpha(&gw.router, &direct(), &body).await;
-    assert_eq!(gw.dispatched(), 0, "premise: an undeclared key was dispatched: {answer:?}");
+    assert_eq!(
+        gw.dispatched(),
+        0,
+        "premise: an undeclared key was dispatched: {answer:?}"
+    );
     assert_eq!(
         answer.1.pointer("/result/isError"),
         Some(&json!(true)),
         "C6b: the argument-key refusal changed shape: {answer:?}"
     );
+}
+
+/// A modern task `tools/call` of `name` on `/mcp` as alpha, with the headers
+/// a 2026-07-28 client sends.
+async fn task_call_as_alpha(router: &axum::Router, name: &str) -> (StatusCode, Value) {
+    let mut meta = super::tests::modern_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("slot-verdict-p4");
+    let body = json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
+        "params": {"name": name, "arguments": {"q": "x"}, "task": {}, "_meta": meta}});
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", name)
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    request.extensions_mut().insert(VerifiedIdentity {
+        subject: "alpha".to_string(),
+        email: "alpha@example.invalid".to_string(),
+        name: None,
+        groups: vec![],
+        issuer: "https://idp.example.invalid".to_string(),
+    });
+    let response = router.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// P1 + P4 over HTTP (withheld, lacked): a modern task call naming a surfaced
+/// tool alpha's own catalogue withholds or lacks gets no confirmation prompt
+/// and makes no task: it answers exactly as the same call where nothing
+/// surfaces the tool, and reaches no upstream. RED on base: the per-user
+/// confirmation gate or the task route acts on the shared slot's verdict.
+#[tokio::test]
+async fn p1_p4_http_withheld_task_call_gets_no_prompt_and_no_task() {
+    let unknown = gateway(CallerSlot::Lacks, CLOSED, Surfaced::No).await;
+    let absent = task_call_as_alpha(&unknown.router, TOOL).await;
+    assert!(
+        absent.1.pointer("/result/taskId").is_none(),
+        "premise: an unknown name made a task: {absent:?}"
+    );
+    for slot in [CallerSlot::Invalid, CallerSlot::Lacks] {
+        let gw = gateway(slot, CLOSED, Surfaced::Yes).await;
+        let answer = task_call_as_alpha(&gw.router, TOOL).await;
+        assert!(
+            answer.1.pointer("/result/taskId").is_none(),
+            "P4 {slot:?}: a task was made: {answer:?}"
+        );
+        assert_eq!(gw.dispatched(), 0, "P1/P4 {slot:?}: dispatched; {answer:?}");
+        assert_eq!(
+            answer, absent,
+            "P1/P4 {slot:?}: {answer:?} vs unknown {absent:?}"
+        );
+    }
 }
