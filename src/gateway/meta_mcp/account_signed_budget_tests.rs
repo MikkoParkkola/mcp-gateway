@@ -64,9 +64,12 @@ fn budget(meta: MetaMcp) -> MetaMcp {
 
 /// K-spend-refresh: alice's work grant is expired, so resolving the account
 /// credential refreshes it; the spend budget then refuses the call. Red on
-/// base: the refusal refunds the nonce though the refresh took effect. The
-/// context holds the witness as admission leaves it, so the row is red under
-/// mutant mF-account, not only at the stub.
+/// base: the refusal refunds the nonce though the refresh took effect. On an
+/// account-bound MCP backend the account credential reaches the call as its
+/// propagated credential (`cache_binding` set), so this row pins the
+/// `minted` arm (mF-mint); the capability route's twin,
+/// `account_rest_signed_budget_tests.rs`, pins the `account` arm. The context
+/// holds the witness as admission leaves it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_spend_refusal_after_a_refresh_keeps_the_nonce() {
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, 0))]);
