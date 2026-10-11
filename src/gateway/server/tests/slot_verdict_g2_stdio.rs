@@ -253,3 +253,68 @@ async fn tools_list_never_serves_a_rotated_grants_slot_stdio() {
         "tools/list served the rotated grant's stale slot (schema A), not the shared view B"
     );
 }
+
+/// The stdio gateway over the sole operator's managed backend, [`TOOL`]
+/// surfaced and the shared slot warm: the operator's slot is cold.
+fn operator_stdio() -> Stdio {
+    let mut gateway = DirectAccountGateway::new_in(
+        ServeMode::Stdio,
+        AuthConfig::default(),
+        &Binding::Connected,
+    );
+    let meta = Arc::new(gateway.take_meta().with_surfaced_tools(vec![SurfacedToolConfig {
+        server: BACKEND.to_string(),
+        tool: TOOL.to_string(),
+    }]));
+    let backend = gateway.backends().get(BACKEND).expect("the backend");
+    backend.store_shared_tools_for_test(vec![tool(TOOL, &valid())]);
+    Stdio { gateway, meta }
+}
+
+impl Stdio {
+    /// The first line of `initialize`'s greeting.
+    async fn greeting_count(&self, id: u64) -> String {
+        let params = json!({"protocolVersion": "2025-06-18", "capabilities": {},
+            "clientInfo": {"name": "mik-8356", "version": "1"}});
+        let answer = self.rpc(id, "initialize", params).await;
+        answer
+            .pointer("/result/instructions")
+            .and_then(Value::as_str)
+            .and_then(|text| text.lines().next())
+            .unwrap_or_else(|| panic!("premise: initialize carries a greeting: {answer}"))
+            .to_owned()
+    }
+}
+
+/// A rotated grant's slot never feeds `initialize`'s count (stdio twin of
+/// the HTTP row). After rotation the caller is cold, so its greeting is the
+/// one a never-filled caller gets (SLOTVIS.6). RED without the recheck.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn initialize_never_counts_a_rotated_grants_slot_stdio() {
+    let cold = operator_stdio().greeting_count(1).await;
+    let stdio = operator_stdio();
+    let filled = stdio
+        .rpc(
+            1,
+            "tools/call",
+            json!({"name": "gateway_list_tools", "arguments": {"server": BACKEND}}),
+        )
+        .await;
+    let warm = stdio.greeting_count(2).await;
+    assert_ne!(
+        warm, cold,
+        "premise: the warm slot's count differs from the cold rule's: {filled}"
+    );
+    stdio.gateway.rotate_operator_grant().await;
+    let old = DirectAccountGateway::operator_binding();
+    let backend = stdio.gateway.backends().get(BACKEND).expect("the backend");
+    assert!(
+        backend.populated_per_user_bindings_for_test().contains(&old),
+        "premise: rotation leaves the old slot warm, so this is initialize's check"
+    );
+    assert_eq!(
+        stdio.greeting_count(3).await,
+        cold,
+        "initialize counted the rotated grant's stale slot"
+    );
+}
