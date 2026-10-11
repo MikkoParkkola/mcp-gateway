@@ -15,4 +15,25 @@ impl Backend {
     pub(crate) fn caller_slot_binding(&self, _principal_id: &str) -> Option<String> {
         None
     }
+
+    /// Every binding the index currently points at (test plan I2e).
+    #[cfg(test)]
+    pub(crate) fn indexed_bindings_for_test(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// The bindings of per-user slots whose catalogue has ever been stored:
+    /// the census I2e holds the index against.
+    #[cfg(test)]
+    pub(crate) fn populated_per_user_bindings_for_test(&self) -> Vec<String> {
+        self.pool
+            .iter()
+            .filter_map(|entry| match entry.key() {
+                super::PoolKey::PerUser { binding } if entry.value().tools_cache.ever_populated() => {
+                    Some(binding.clone())
+                }
+                _ => None,
+            })
+            .collect()
+    }
 }

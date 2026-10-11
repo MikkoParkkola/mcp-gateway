@@ -487,3 +487,60 @@ async fn i3b_index_entry_removed_on_grant_revocation() {
         "I3b: beta's entry was removed with alpha's"
     );
 }
+
+/// The I2e invariant: every per-user slot whose catalogue has ever been
+/// stored is pointed at by the index. A fill site that stores without
+/// recording fails here. (After the implementation lands it runs at the end
+/// of every row; on the stub it would turn the guards red, so for now it is
+/// its own row.)
+fn assert_index_covers_populated_slots(meta: &super::MetaMcp, row: &str) {
+    let backend = meta
+        .backends
+        .get(super::slot_verdict_fixture::BACKEND)
+        .expect("the backend");
+    let populated = backend.populated_per_user_bindings_for_test();
+    let indexed = backend.indexed_bindings_for_test();
+    let missing: Vec<_> = populated.iter().filter(|b| !indexed.contains(b)).collect();
+    assert!(
+        missing.is_empty(),
+        "{row}: populated per-user slots with no index entry: {missing:?}"
+    );
+}
+
+/// I2e (asked by MIK-8350): every fill path a test drives leaves the index
+/// covering the slot it filled. One gateway drives the catalogue fill
+/// (alpha) and a cold call's F13 fill (beta); a second gateway drives the
+/// dispatch-path fill with enforcement Off (alpha again). Red-by-absence on
+/// the stub, from the first half; the second half holds vacuously on base,
+/// where nothing fills with enforcement Off.
+#[tokio::test]
+async fn i2e_index_covers_every_populated_slot() {
+    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+    warm_by_listing(&fx.meta).await;
+    let _beta_upstream = super::slot_verdict_fixture::add_caller(&fx.meta, "beta");
+    let beta = super::catalogue_per_caller_tests::identity("beta");
+    let _ = Box::pin(fx.meta.handle_tools_call(
+        crate::protocol::RequestId::Number(2),
+        TOOL,
+        json!({"q": "x"}),
+        None,
+        super::identified_caller(&beta),
+    ))
+    .await;
+    let backend = fx
+        .meta
+        .backends
+        .get(super::slot_verdict_fixture::BACKEND)
+        .expect("the backend");
+    assert!(
+        backend.populated_per_user_bindings_for_test().len() >= 2,
+        "premise: alpha's and beta's slots are not both populated: {:?}",
+        backend.populated_per_user_bindings_for_test()
+    );
+    assert_index_covers_populated_slots(&fx.meta, "I2e (catalogue + F13)");
+
+    let off = InputSchemaEnforcement::Off;
+    let gx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, off, Surfaced::Yes);
+    let _ = call_as_alpha(&gx.meta, TOOL, json!({"q": "x"})).await;
+    assert_index_covers_populated_slots(&gx.meta, "I2e (dispatch-path fill)");
+}
