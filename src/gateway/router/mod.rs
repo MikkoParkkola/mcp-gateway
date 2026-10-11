@@ -203,6 +203,8 @@ mod signing_nonce_order_tests;
 mod slot_verdict_g2_managed_http_tests;
 /// MIK-8356: router entry rows for per-user calls judged by the caller's slot.
 #[cfg(test)]
+mod slot_verdict_g3_http_tests;
+#[cfg(test)]
 mod slot_verdict_http_tests;
 /// E1: SSO admins through the role mapping (MIK-7570.ADMINSSO.1).
 #[cfg(test)]
