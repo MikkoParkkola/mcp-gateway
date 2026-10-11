@@ -131,19 +131,15 @@ impl Backend {
     /// never a truncated list beside a clear flag.
     #[must_use]
     pub(crate) fn cached_tools_snapshot_and_truncated(&self) -> (Arc<Vec<Tool>>, bool) {
-        self.snapshot_and_truncated_in(None)
+        self.cached_tools_snapshot_and_truncated_for(None)
     }
 
-    /// [`Self::cached_tools_snapshot_and_truncated`] for per-user slot
-    /// `binding` (MIK-8356: a listing reads the caller's own slot).
+    /// [`Self::cached_tools_snapshot_and_truncated`] for the slot `binding`
+    /// selects (MIK-8356: a listing reads the caller's own slot).
     pub(crate) fn cached_tools_snapshot_and_truncated_for(
         &self,
-        binding: &str,
+        binding: Option<&str>,
     ) -> (Arc<Vec<Tool>>, bool) {
-        self.snapshot_and_truncated_in(Some(binding))
-    }
-
-    fn snapshot_and_truncated_in(&self, binding: Option<&str>) -> (Arc<Vec<Tool>>, bool) {
         let slot = self.tools_slot(binding);
         let (tools, truncated) = slot.tools_cache.with_cached(|tools| {
             (

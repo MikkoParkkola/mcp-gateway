@@ -108,7 +108,7 @@ impl MetaMcp {
             ListingView::Shared => Some(backend.cached_tools_snapshot_and_truncated()),
             ListingView::Cold => None,
             ListingView::Caller(binding) => {
-                Some(backend.cached_tools_snapshot_and_truncated_for(&binding))
+                Some(backend.cached_tools_snapshot_and_truncated_for(Some(&binding)))
             }
         }
     }

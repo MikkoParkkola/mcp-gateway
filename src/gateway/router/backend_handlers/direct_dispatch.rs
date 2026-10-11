@@ -256,9 +256,7 @@ pub(super) async fn admit<'a>(
         cancel_on,
     };
     guard_and_sanitize(scope, envelope, propagation, &mut admitted).await?;
-    // After route authorize, the firewall and the caller's catalogue verdict
-    // (MIK-8356 fold F3): a tool this caller's catalogue withholds answers as
-    // absent before any guard can name it; before idempotency admission.
+    // After authorize, the firewall and the caller's catalogue (MIK-8356 F3).
     if envelope.method == "tools/call"
         && let Err(e) =
             DirectRouteGuards::run(&state.meta_mcp, &admitted.call, preflight.signing_scope)
@@ -434,8 +432,7 @@ async fn forward_plain(
             drain,
         )
         .await;
-        // A complete drain stored this caller's catalogue: index its slot
-        // (MIK-8356 R3.5). A drain that stored nothing records nothing.
+        // Index the slot a complete drain stored (MIK-8356 R3.5).
         state
             .meta_mcp
             .remember_caller_slot(&route.backend, caller.proof(), key);
