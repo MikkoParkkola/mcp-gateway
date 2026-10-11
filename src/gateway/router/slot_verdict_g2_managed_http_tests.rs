@@ -362,6 +362,12 @@ async fn no_grant_operator_call_by_name_is_absent_and_invoke_offer_ignores_the_t
         Some(&json!(-32601)),
         "premise: an explicit dispatch to the backend keeps its account answer: {offered}"
     );
+    // The connect journey stays: an explicit-backend dispatch tells the
+    // operator its account is not connected (MIK-6745 section 9.2, D and R).
+    assert!(
+        offered.to_string().contains("no connected account"),
+        "L9-managed invoke: the account-not-connected answer is gone: {offered}"
+    );
     assert_eq!(
         offered.pointer("/error/code"),
         offered_missing.pointer("/error/code"),
