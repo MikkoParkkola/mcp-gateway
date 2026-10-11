@@ -76,7 +76,7 @@ async fn list_as(meta: &super::MetaMcp, subject: &str) -> bool {
     .is_ok()
 }
 
-/// I6: the index is bounded by the pool's admission. 64 principals are
+/// I6 (guard): the index is bounded by the pool's admission. 64 principals are
 /// admitted and indexed; the 65th is refused a slot and gets no entry.
 #[tokio::test]
 async fn g3_i6_index_bounded_by_admission() {
@@ -119,7 +119,7 @@ async fn g3_i6_index_bounded_by_admission() {
     );
 }
 
-/// I7: reading the index is free of side effects. `caller_slot_binding_for` on
+/// I7 (guard): reading the index is free of side effects. `caller_slot_binding_for` on
 /// a principal with no slot opens no pool entry, mints nothing, fills nothing.
 #[tokio::test]
 async fn g3_i7_index_read_has_no_side_effects() {

@@ -308,7 +308,7 @@ async fn a_resume_mints_nothing_for_a_substituted_chain_or_a_refused_caller() {
 /// the step's credential once for the whole request, across the resume
 /// fingerprint and the step's invocation. The first request costs one.
 #[tokio::test]
-#[ignore = "red at 632de2100: a resume costs 3 mints, step_fingerprint resolves apart from the dispatch; needs a production change (MIK-8356 g3 report)"]
+#[ignore = "pending perflane fix: shared credential for resume fingerprint"]
 async fn g3_c13_resume_fingerprint_reuses_carried_dispatch() {
     use std::sync::atomic::Ordering;
 

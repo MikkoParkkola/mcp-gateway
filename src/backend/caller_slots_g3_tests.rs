@@ -209,3 +209,32 @@ async fn g3_i8_retired_fill_cannot_publish() {
         "I8: the replacement's own entry does not stand"
     );
 }
+
+/// Read-side guard: an index entry whose pooled entry is retired but still in
+/// the pool reads as absent. Eviction also forgets the entry, so only the read
+/// itself can answer for a retirement that has not been cleaned up yet.
+#[tokio::test]
+async fn g3_retired_entry_still_in_pool_reads_as_absent() {
+    let backend = per_user_backend("g3-retired-read");
+    fill_slot(&backend, "g3:b1").await;
+    backend.record_caller_slot(ALPHA, "g3:b1");
+    assert_eq!(
+        backend.caller_slot_binding(ALPHA).as_deref(),
+        Some("g3:b1"),
+        "premise: alpha is indexed at B1"
+    );
+
+    entry_of(&backend, "g3:b1")
+        .retired
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    assert_eq!(
+        backend.caller_slot_binding(ALPHA),
+        None,
+        "a retired slot still answered as alpha's live slot"
+    );
+    assert!(
+        backend.indexed_bindings_for_test().is_empty(),
+        "the index listed a retired slot as live"
+    );
+}

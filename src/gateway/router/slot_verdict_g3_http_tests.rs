@@ -198,7 +198,6 @@ async fn g3_f4_shared_backend_route_filter_unchanged() {
 /// caller-withheld slot and the call dispatches.
 #[cfg(feature = "firewall")]
 #[tokio::test]
-#[ignore = "red at 632de2100: response_targets is set before the verdict; needs a production change (MIK-8356 g3 report)"]
 async fn g3_p5_withheld_answer_touches_no_response_targets() {
     let unknown = gateway(CallerSlot::Lacks, &valid(), Warmth::Warm, Surfaced::No, |_| {}).await;
     let absent = post_as_alpha(&unknown.router, "/mcp", &tools_call(TOOL, &json!({"q": "x"}))).await;
