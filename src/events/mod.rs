@@ -103,6 +103,13 @@ pub(crate) struct EventsHub {
     /// Test-only: one attempt pauses just before its send admission.
     #[cfg(test)]
     before_send: crate::test_pause::Slot,
+    /// Test-only: one attempt pauses right after its claim (MIK-8202 E3).
+    #[cfg(test)]
+    after_claim: crate::test_pause::Slot,
+    /// Test-only: one attempt pauses just before its last retry-window read
+    /// (MIK-8202 E3b).
+    #[cfg(test)]
+    before_window: crate::test_pause::Slot,
     /// Test-only: one withdraw pauses between judging its rows and deleting
     /// them (reconcile table T07).
     #[cfg(test)]
@@ -221,6 +228,13 @@ impl std::fmt::Debug for EventsHub {
 }
 
 impl EventsHub {
+    /// Test-only: the queue of emitted occurrences, taken so a test outside
+    /// this module can read what was emitted (MIK-8202 E2-http).
+    #[cfg(test)]
+    pub(crate) fn take_intake(&self) -> tokio::sync::mpsc::Receiver<fanout::SourceEvent> {
+        self.runtime.intake.lock().take().expect("intake")
+    }
+
     /// Open the hub on `store_dir` (already `~`-expanded).
     ///
     /// # Errors
@@ -279,6 +293,10 @@ impl EventsHub {
             before_receipts: crate::test_pause::Slot::default(),
             #[cfg(test)]
             before_send: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            after_claim: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            before_window: crate::test_pause::Slot::default(),
             #[cfg(test)]
             before_withdraw: crate::test_pause::Slot::default(),
         }))

@@ -109,6 +109,12 @@ impl Runtime {
         );
     }
 
+    /// Occurrences dropped so far for a clock that could not date them.
+    #[cfg(test)]
+    pub(crate) fn clock_drops(&self) -> u64 {
+        self.clock_drops.load(Ordering::Relaxed)
+    }
+
     /// An inbound POST projected to no field.
     pub(crate) fn count_projection_failed(&self) {
         let total = self.projection_failed.fetch_add(1, Ordering::Relaxed) + 1;

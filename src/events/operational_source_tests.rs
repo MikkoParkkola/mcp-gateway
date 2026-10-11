@@ -205,6 +205,22 @@ async fn health_and_kill_switch_transitions_become_events() {
     );
 }
 
+/// MIK-8202 E2: an operational transition the clock cannot date (before
+/// 1970) is not emitted: it is counted as a clock drop.
+#[tokio::test]
+async fn an_undatable_operational_event_is_dropped_and_counted() {
+    let dir = tempfile::tempdir().expect("dir");
+    let (hub, _) = hub(dir.path(), Vec::new());
+    let kill = crate::kill_switch::KillSwitch::new();
+    hub.install_operational_source(&kill, &crate::backend::BackendRegistry::new());
+    {
+        let _clock = crate::clock::test_clock::before_epoch();
+        kill.kill("alpha");
+    }
+    assert!(drained(&hub).is_empty(), "emitted an occurrence dated 1969");
+    assert_eq!(hub.runtime.clock_drops(), 1, "the drop is counted");
+}
+
 /// The budget hook end to end: one spend that uses up `dev`'s budget is
 /// three threshold events and one exhaustion, all scoped to `key:dev`.
 #[cfg(feature = "cost-governance")]

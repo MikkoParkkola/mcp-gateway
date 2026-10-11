@@ -347,6 +347,39 @@ async fn a_delegated_bearer_is_rechecked_against_the_running_key_server() {
     );
 }
 
+/// MIK-8202 E5: a delegated bearer is not young on a clock that cannot be
+/// read (before 1970), however fresh it was when bound.
+#[tokio::test]
+async fn a_delegated_bearer_is_refused_on_an_unreadable_clock() {
+    use crate::security::audit::CredentialKind as Kind;
+    let ks = key_server(true);
+    let now = u64::try_from(chrono::Utc::now().timestamp()).expect("now");
+    let fresh = bound(
+        Kind::OidcBearer,
+        Some(LiveBinding::OidcBearer {
+            issuer: "https://idp".into(),
+            subject: "u".into(),
+            email: "u@corp.example".into(),
+            groups: Vec::new(),
+            issued_at: Some(now),
+            provider_sha256: crate::gateway::auth::live::provider_fingerprint(&ks, "https://idp"),
+        }),
+    );
+    let running = with(LiveCredentials {
+        key_server: Some(ks),
+        ..LiveCredentials::default()
+    });
+    assert!(
+        running.admits_subscription(&fresh, Some("x")).await,
+        "premise: admitted on a readable clock"
+    );
+    let _clock = crate::clock::test_clock::before_epoch();
+    assert!(
+        !running.admits_subscription(&fresh, Some("x")).await,
+        "a bearer judged young on an unreadable clock"
+    );
+}
+
 /// Design F9 (MIK-7769): a dashboard session's subscription stops once the
 /// session is logged out.
 #[tokio::test]

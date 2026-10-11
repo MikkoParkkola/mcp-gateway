@@ -177,6 +177,44 @@ async fn emission_waits_for_the_snapshot_to_list_the_uri() {
     assert!(intake.try_recv().is_ok(), "listed: one event");
 }
 
+/// MIK-8202 E2: a listed change the clock cannot date (before 1970) is not
+/// emitted: it is counted as a clock drop.
+#[tokio::test]
+async fn an_undatable_resource_change_is_dropped_and_counted() {
+    let dir = tempfile::tempdir().expect("dir");
+    let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir.path()).expect("hub");
+    let mut intake = hub.runtime.intake.lock().take().expect("intake");
+    let weak = Arc::downgrade(&hub);
+    let shared = shared();
+    shared
+        .need
+        .lock()
+        .add(&Interest::ResourceUpdated("file:///a".to_owned()))
+        .expect("room");
+    shared
+        .snapshot
+        .lock()
+        .read(["file:///a".to_owned()].into(), true);
+    let mut state = State::new(&shared, Era::Legacy);
+    state.note(
+        UpstreamNote::Notice {
+            kind: NoteKind::ResourceUpdated,
+            uri: Some("file:///a".to_owned()),
+        },
+        false,
+    );
+    tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
+    {
+        let _clock = crate::clock::test_clock::before_epoch();
+        state.flush(&weak);
+    }
+    assert!(
+        intake.try_recv().is_err(),
+        "emitted an occurrence dated 1969"
+    );
+    assert_eq!(hub.runtime.clock_drops(), 1, "the drop is counted");
+}
+
 /// MIK-7894: a backend the live config makes ineligible after its listener
 /// started delivers nothing more, and its task is stopped. Control: the same
 /// listener emits while the backend is still eligible.

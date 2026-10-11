@@ -789,3 +789,6 @@ mod recheck;
 
 #[path = "worker_owner_tests.rs"]
 mod owner;
+
+#[path = "worker_clock_tests.rs"]
+mod clock;

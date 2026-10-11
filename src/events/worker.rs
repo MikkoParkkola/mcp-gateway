@@ -48,6 +48,8 @@ impl EventsHub {
             record,
             subscription: sub,
         } = *claimed;
+        #[cfg(test)]
+        self.after_claim.pause().await;
         let url = url::Url::parse(&sub.url).ok();
         let ctx = Ctx {
             sub: &sub,
@@ -342,6 +344,8 @@ impl EventsHub {
         record: &OutboxRecord,
         ended: &(impl Fn(&'static str) -> Attempt<'a> + Sync),
     ) -> bool {
+        #[cfg(test)]
+        self.before_window.pause().await;
         let Ok(now) = crate::clock::utc_now() else {
             services.audit_outcome(&ended(CLOCK_UNREADABLE)).await;
             self.settle(services, record, clock_unsent(record)).await;

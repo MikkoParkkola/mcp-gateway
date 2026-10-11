@@ -125,3 +125,18 @@ fn claim_times_decode_as_the_decoder_read_them() {
     assert_eq!(JwtClaimTime::of(&claims, "neg"), JwtClaimTime::Malformed);
     assert_eq!(JwtClaimTime::of(&claims, "missing"), JwtClaimTime::Absent);
 }
+
+/// MIK-8202 E4: an audit row is stamped with the time on a readable clock,
+/// and kept undated (`null`, `clock_invalid: true`) on one before 1970.
+#[test]
+fn an_audit_row_is_kept_undated_on_an_unreadable_clock() {
+    let mut dated = serde_json::Map::new();
+    stamp_audit_row(&mut dated);
+    assert!(dated["timestamp"].is_string(), "{dated:?}");
+    assert!(!dated.contains_key("clock_invalid"), "{dated:?}");
+    let _clock = test_clock::before_epoch();
+    let mut undated = serde_json::Map::new();
+    stamp_audit_row(&mut undated);
+    assert_eq!(undated["timestamp"], serde_json::Value::Null);
+    assert_eq!(undated["clock_invalid"], true);
+}

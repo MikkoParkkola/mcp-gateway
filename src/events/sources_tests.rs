@@ -39,6 +39,23 @@ async fn a_burst_of_backend_changes_is_one_event() {
     assert!(events.try_recv().is_err());
 }
 
+/// MIK-8202 E2: a backend change the clock cannot date (before 1970) is not
+/// emitted: it is counted as a clock drop.
+#[tokio::test(start_paused = true)]
+async fn an_undatable_backend_change_is_dropped_and_counted() {
+    let (hub, _dir) = hub();
+    let mut events = drain(&hub);
+    hub.install_backend_source(Arc::new(|| vec!["x".to_owned()]));
+    let _clock = crate::clock::test_clock::before_epoch();
+    hub.backend_tools_changed("x");
+    tokio::time::sleep(QUIET * 2).await;
+    assert!(
+        events.try_recv().is_err(),
+        "emitted an occurrence dated 1969"
+    );
+    assert_eq!(hub.runtime.clock_drops(), 1, "the drop is counted");
+}
+
 /// T40, status filter: only a terminal status emits, and the payload names
 /// the task and status without any result.
 #[tokio::test]
