@@ -324,6 +324,20 @@ pub(crate) mod seams {
     thread_local! {
         static AFTER_ROUTE_STAGE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static BEFORE_TASK_DISPATCH: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+        static AFTER_INTAKE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Run `hook` once, the next time `/mcp` intake on this thread has made
+    /// its sanitize decision (MIK-8154 NP3).
+    pub(crate) fn after_intake(hook: impl FnOnce() + 'static) {
+        AFTER_INTAKE.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Called where `/mcp` intake has made its sanitize decision.
+    pub(crate) fn intake_judged() {
+        if let Some(hook) = AFTER_INTAKE.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
     }
 
     /// Run `hook` once, the next time a task worker on this thread starts its

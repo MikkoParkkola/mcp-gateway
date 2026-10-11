@@ -35,6 +35,7 @@ async fn send_raw(fx: &Fx, uri: &str, key: &str, body: &Value) -> Value {
 }
 
 mod c2e;
+mod signed_order;
 
 fn calls(fx: &Fx) -> usize {
     fx.calls.load(Ordering::SeqCst)

@@ -96,6 +96,12 @@ pub(crate) async fn stdio_sanitizing(on: bool) -> (Value, usize) {
 /// carrying a NUL. Returns the answer and the backend's `tools/call` count:
 /// the setting reaches stdio from the config, not from a test-built client.
 pub(crate) async fn served_sanitizing() -> (Value, usize) {
+    served_sanitizing_with(false).await
+}
+
+/// [`served_sanitizing`] with the backend's `passthrough` set to
+/// `passthrough` (MIK-8154 P2: exempt from sanitization on stdio too).
+pub(crate) async fn served_sanitizing_with(passthrough: bool) -> (Value, usize) {
     use std::time::Duration;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let (url, calls) = backend().await;
@@ -112,6 +118,7 @@ pub(crate) async fn served_sanitizing() -> (Value, usize) {
                 streamable_http: Some(true),
                 protocol_version: None,
             },
+            passthrough,
             ..crate::config::BackendConfig::default()
         },
     );

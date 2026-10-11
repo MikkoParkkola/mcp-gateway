@@ -172,6 +172,17 @@ async fn served_stdio_honours_sanitize_input_from_config() {
     assert_eq!(calls, 0, "the NUL reached the backend: {body}");
 }
 
+/// MIK-8154 P2 (option (a)): over the real stdio serve loop with sanitizing
+/// on, a `gateway_invoke` whose target backend is `passthrough` forwards the
+/// NUL: no refusal, and the backend runs. The sanitizer refuses a NUL rather
+/// than stripping it, so a run proves it was forwarded.
+#[tokio::test]
+async fn p2_stdio_passthrough_forwards_a_nul() {
+    let (body, calls) = Box::pin(stdio::served_sanitizing_with(true)).await;
+    assert!(body.get("error").is_none(), "p2: {body}");
+    assert_eq!(calls, 1, "p2: the backend did not run: {body}");
+}
+
 /// The one firewall refusal wording every route answers (P3): an ASI10 block
 /// is `-32002` "Anomaly detection blocked: ...", any other block `-32600`
 /// "Firewall blocked: ...", and an allowed verdict refuses nothing.
