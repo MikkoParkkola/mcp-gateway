@@ -150,3 +150,65 @@ async fn c9_per_user_cold_caller_managed_401_recovers() {
         "C9: a failed fill answered as an unknown name: {answer}"
     );
 }
+
+async fn rpc(fx: &Fx, id: u64, method: &str, params: Value) -> Value {
+    let body = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {OPERATOR_KEY}"))
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = fx.router.clone().oneshot(request).await.unwrap();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+}
+
+/// Whether the surfaced [`TOOL`] in `tools/list` carries the shared slot's
+/// schema B (a `folder` property) rather than the fill's schema A.
+async fn listed_schema_has_folder(fx: &Fx, id: u64) -> bool {
+    let answer = rpc(fx, id, "tools/list", json!({})).await;
+    let entry = answer
+        .pointer("/result/tools")
+        .and_then(Value::as_array)
+        .and_then(|tools| tools.iter().find(|t| t["name"] == TOOL))
+        .unwrap_or_else(|| panic!("premise: tools/list surfaces {TOOL}: {answer}"));
+    entry.pointer("/inputSchema/properties/folder").is_some()
+}
+
+/// A rotated grant's slot is never a listing view (HTTP). The operator's slot
+/// is warmed by a real `gateway_list_tools` fill (schema A, no properties);
+/// the shared slot holds schema B. After the grant rotates the old slot is
+/// still warm and indexed, but `tools/list` must not serve A: the now-cold
+/// caller sees the shared view B (SLOTVIS.6). RED without the recheck.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tools_list_never_serves_a_rotated_grants_slot_http() {
+    let fx = fixture().await;
+    let filled = rpc(
+        &fx,
+        1,
+        "tools/call",
+        json!({"name": "gateway_list_tools", "arguments": {"server": BACKEND}}),
+    )
+    .await;
+    let old = DirectAccountGateway::operator_binding();
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    assert!(
+        backend.populated_per_user_bindings_for_test().contains(&old),
+        "premise: a real fill warmed the operator's slot: {filled}"
+    );
+    assert!(
+        !listed_schema_has_folder(&fx, 2).await,
+        "premise: before rotation tools/list serves the caller's slot (schema A)"
+    );
+    fx.gateway.rotate_operator_grant().await;
+    assert!(
+        backend.populated_per_user_bindings_for_test().contains(&old),
+        "premise: rotation leaves the old slot warm, so this is the listing's check"
+    );
+    assert!(
+        listed_schema_has_folder(&fx, 3).await,
+        "tools/list served the rotated grant's stale slot (schema A), not the shared view B"
+    );
+}
