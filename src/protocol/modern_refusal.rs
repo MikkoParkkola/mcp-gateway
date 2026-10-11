@@ -30,8 +30,8 @@ pub enum ModernRefusal {
 /// The answer to a protocol version this build cannot serve.
 ///
 /// The client is told which revisions it could retry on rather than left to
-/// guess. Shared by the POST classifier, stdio and the `GET /mcp` era gate so
-/// they cannot give one client two different answers.
+/// guess. Shared by the POST classifier and the `GET /mcp` era gate so the two
+/// cannot give one client two different answers.
 #[must_use]
 pub fn unsupported_version_error(
     id: Option<RequestId>,

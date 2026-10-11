@@ -123,14 +123,15 @@ async fn legacy_and_other_notifications_keep_today_s_answers() {
             format!("Method not found: {method}")
         );
     }
-    let set_level = send(true, legacy_request(Some(3), "logging/setLevel"))
-        .await
-        .expect("setLevel answers");
-    assert_ne!(
-        set_level["error"]["message"],
-        removed_text("logging/setLevel"),
-        "{set_level}"
-    );
+    let set_level = send(
+        true,
+        json!({ "jsonrpc": "2.0", "id": 3, "method": "logging/setLevel",
+            "params": { "level": "info" } }),
+    )
+    .await
+    .expect("setLevel answers");
+    assert!(set_level.get("error").is_none(), "{set_level}");
+    assert!(set_level["result"].is_object(), "{set_level}");
     for (modern, request) in [
         (
             true,

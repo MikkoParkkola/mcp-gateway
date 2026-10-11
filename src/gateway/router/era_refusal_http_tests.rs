@@ -28,6 +28,7 @@ async fn http_refuses_every_removed_method_with_the_stdio_text() {
         "logging/setLevel",
         "resources/subscribe",
         "resources/unsubscribe",
+        "notifications/roots/list_changed",
     ] {
         let headers = [
             ("mcp-protocol-version", "2026-07-28"),
