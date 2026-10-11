@@ -68,9 +68,61 @@ impl AnswerView {
     }
 }
 
-/// The allocation-free preflight (D2): text plus a segment per leaf, nodes
-/// (every key and every value) and depth, each against its cap. Iterative,
-/// with a stack bounded by the depth cap, so deep input cannot overflow.
+/// One container being walked by [`preflight`]: its remaining children.
+enum Frame<'a> {
+    Array(std::slice::Iter<'a, Value>),
+    Object(serde_json::map::Iter<'a>),
+}
+
+/// The longest run of combining marks normalization can see (D2): within one
+/// string, or across strings joined in any order (the run-together forms),
+/// characters input sanitization strips neither counting nor breaking a run.
+#[derive(Default)]
+struct Combining {
+    /// The longest run inside one string.
+    inner: usize,
+    /// Every string's leading plus trailing run: a run across strings is at
+    /// most a sum of these.
+    edges: usize,
+}
+
+impl Combining {
+    fn add(
+        &mut self,
+        ccc: &icu_normalizer::properties::CanonicalCombiningClassMapBorrowed<'_>,
+        s: &str,
+    ) {
+        let kept = |c: &char| !crate::security::sanitize::is_unsafe_control(*c);
+        let mark = |c: char| ccc.get_u8(c) != 0;
+        let leading = s.chars().filter(kept).take_while(|&c| mark(c)).count();
+        let trailing = s
+            .chars()
+            .rev()
+            .filter(kept)
+            .take_while(|&c| mark(c))
+            .count();
+        let mut run = 0usize;
+        for c in s.chars().filter(kept) {
+            run = if mark(c) { run + 1 } else { 0 };
+            self.inner = self.inner.max(run);
+        }
+        self.edges = self.edges.saturating_add(leading + trailing);
+    }
+
+    /// Chars the normalizer may buffer at once: the longest run, doubled (a
+    /// mark can decompose into two), plus a starter's own decomposition.
+    fn bound(&self) -> usize {
+        self.inner
+            .max(self.edges)
+            .saturating_mul(2)
+            .saturating_add(4)
+    }
+}
+
+/// The preflight (D2): text plus a segment per leaf, nodes (every key and
+/// every value) and depth, each against its cap. Iterative over one frame
+/// per open container, so its stack is bounded by the depth cap whatever
+/// the answer's width, and deep input cannot overflow.
 pub(crate) fn preflight(
     detector: &CollusionDetector,
     answer: &Value,
@@ -78,44 +130,53 @@ pub(crate) fn preflight(
     let text_cap = detector.views.answer_text_cap.load(Ordering::Relaxed);
     let per_leaf = std::mem::size_of::<super::Segment>();
     let node_cap = text_cap / 16;
-    let (mut text, mut nodes, mut combining) = (0usize, 0usize, 0usize);
+    let (mut text, mut nodes) = (0usize, 0usize);
+    let mut combining = Combining::default();
     let ccc = icu_normalizer::properties::CanonicalCombiningClassMapBorrowed::new();
-    let mut runs = |s: &str| {
-        let mut run = 0usize;
-        for c in s.chars() {
-            run = if ccc.get_u8(c) == 0 { 0 } else { run + 1 };
-            combining = combining.max(run);
-        }
-    };
-    let mut stack: Vec<(&Value, usize)> = Vec::with_capacity(MAX_ANSWER_DEPTH + 1);
-    stack.push((answer, 0));
-    while let Some((value, depth)) = stack.pop() {
-        nodes += 1;
-        if depth > MAX_ANSWER_DEPTH || nodes > node_cap {
-            return Err(Unreadable::Shape);
-        }
-        match value {
-            Value::String(s) => {
-                text += s.len() + per_leaf;
-                runs(s);
+    let mut stack: Vec<Frame<'_>> = Vec::with_capacity(MAX_ANSWER_DEPTH + 1);
+    let mut next = Some(answer);
+    loop {
+        if let Some(value) = next.take() {
+            nodes += 1;
+            // A value's depth is the containers open above it.
+            if stack.len() > MAX_ANSWER_DEPTH || nodes > node_cap {
+                return Err(Unreadable::Shape);
             }
-            Value::Array(items) => stack.extend(items.iter().map(|v| (v, depth + 1))),
-            Value::Object(map) => {
-                for (k, v) in map {
+            match value {
+                Value::String(s) => {
+                    text += s.len() + per_leaf;
+                    combining.add(&ccc, s);
+                }
+                Value::Array(items) => stack.push(Frame::Array(items.iter())),
+                Value::Object(map) => stack.push(Frame::Object(map.iter())),
+                _ => {}
+            }
+            if text > text_cap {
+                return Err(Unreadable::Shape);
+            }
+        }
+        let Some(frame) = stack.last_mut() else {
+            break;
+        };
+        match frame {
+            Frame::Array(items) => next = items.next(),
+            Frame::Object(entries) => {
+                if let Some((k, v)) = entries.next() {
                     nodes += 1;
                     text += k.len() + per_leaf;
-                    runs(k);
-                    stack.push((v, depth + 1));
+                    combining.add(&ccc, k);
+                    next = Some(v);
                 }
             }
-            _ => {}
         }
-        if text > text_cap {
-            return Err(Unreadable::Shape);
+        if next.is_none() {
+            stack.pop();
         }
     }
-    drop(runs);
-    Ok(Measured { nodes, combining })
+    Ok(Measured {
+        nodes,
+        combining: combining.bound(),
+    })
 }
 
 /// The growing entry buffer, every capacity change reserved first.
