@@ -233,7 +233,8 @@ fn truncate_str(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}...", &s[..max.saturating_sub(3)])
+        // A byte cut inside a multi-byte character would panic: back off to its start.
+        format!("{}...", &s[..s.floor_char_boundary(max.saturating_sub(3))])
     }
 }
 
@@ -268,6 +269,17 @@ mod tests {
         // THEN: ends with "..." and total length <= max
         assert!(result.ends_with("..."));
         assert!(result.len() <= 8);
+    }
+
+    /// MIK-8366.UTF8.1: a cut point inside a multi-byte character falls back
+    /// to the previous char boundary instead of panicking.
+    #[test]
+    fn truncate_str_cut_inside_a_multibyte_char_backs_off_to_its_start() {
+        // 'é' occupies bytes 1..3; max 5 cuts at byte 2, inside it.
+        assert_eq!(truncate_str("héllo world", 5), "h...");
+        // 56 ASCII bytes then a 4-byte emoji (56..60): the 60-wide tool column cuts at 57.
+        let desc = format!("{}🙂 tail", "a".repeat(56));
+        assert_eq!(truncate_str(&desc, 60), format!("{}...", "a".repeat(56)));
     }
 
     #[test]
