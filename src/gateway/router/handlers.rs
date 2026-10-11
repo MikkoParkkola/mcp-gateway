@@ -390,14 +390,23 @@ async fn meta_mcp_dispatch(
                 .meta_mcp
                 .discover_document(state.live_config.running().server.modern_protocol),
         ),
-        "initialize" => state.meta_mcp.handle_initialize(
-            id,
-            params,
-            Some(session_id.as_str()),
-            header_profile.as_deref(),
-            era,
-            invoke_scope,
-        ),
+        "initialize" => {
+            // Its greeting counts tools per backend: the same managed-grant
+            // recheck as every listing, so a rotated grant's stale slot never
+            // contributes (MIK-8356 R4.2).
+            state
+                .meta_mcp
+                .revalidate_caller_slots(invoke_scope.caller)
+                .await;
+            state.meta_mcp.handle_initialize(
+                id,
+                params,
+                Some(session_id.as_str()),
+                header_profile.as_deref(),
+                era,
+                invoke_scope,
+            )
+        }
         "tools/list" => {
             // NFR.OBS.2. The inputs that decide this surface, and the
             // cacheScope the response will carry — recorded before the list is

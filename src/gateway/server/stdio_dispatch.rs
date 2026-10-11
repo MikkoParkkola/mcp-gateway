@@ -130,17 +130,21 @@ impl Gateway {
                             meta_mcp.discover_document(client.modern),
                         ),
                     ),
-                    "initialize" => stdio_tasks::advertised(
-                        client.tasks,
-                        meta_mcp.handle_initialize(
-                            id,
-                            params,
-                            Some(session_id),
-                            None,
-                            request_shape.era(),
-                            scope,
-                        ),
-                    ),
+                    "initialize" => {
+                        // The listings' managed-grant recheck (MIK-8356 R4.2).
+                        meta_mcp.revalidate_caller_slots(scope.caller).await;
+                        stdio_tasks::advertised(
+                            client.tasks,
+                            meta_mcp.handle_initialize(
+                                id,
+                                params,
+                                Some(session_id),
+                                None,
+                                request_shape.era(),
+                                scope,
+                            ),
+                        )
+                    }
                     m @ ("tasks/get" | "tasks/update" | "tasks/cancel") => {
                         let retry = crate::protocol::mrtr::RetryFields::from_params(params);
                         let caller = Self::build_stdio_caller_context(
