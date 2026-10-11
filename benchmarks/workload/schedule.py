@@ -25,6 +25,7 @@ Run: python3 benchmarks/workload/schedule.py SEED REP   -> the cells of REP
 from __future__ import annotations
 
 import hashlib
+import os
 import random
 import sys
 from pathlib import Path
@@ -34,6 +35,23 @@ GRADED_REPS = 18
 GRADED_SEED = 20261007
 GATED = "ABC"
 EXTRA_ROWS = ("ABCDE", "CDBEA", "DEABC")
+
+# Each cell's gateway port: the one list, read by run_workload.sh. Kept below
+# Linux's default ephemeral range (32768-60999). Inside it, any live outgoing
+# connection on the host can draw a cell's port, and that cell's gateway then
+# fails to bind: the graded run of 2026-10-11 voided at rep C9 that way, on
+# port 39422. `ports-clear` checks the live range at the start of every run.
+CELL_PORTS = {"A": 29420, "B": 29421, "C": 29422, "D": 29423, "E": 29424}
+EPHEMERAL_RANGE_FILE = Path("/proc/sys/net/ipv4/ip_local_port_range")
+
+
+def ephemeral_range(path: Path = EPHEMERAL_RANGE_FILE) -> tuple[int, int] | None:
+    """The host's ephemeral port range, or None when it cannot be read."""
+    try:
+        low, high = (int(value) for value in path.read_text().split())
+    except (OSError, ValueError):
+        return None
+    return low, high
 
 # Contract §9: a graded run runs on bench-host. The host is named by an
 # app-specific hash of its machine-id, never the raw id, which systemd treats
@@ -97,5 +115,20 @@ if __name__ == "__main__":
         # This host, or the id given: exit 0 only for bench-host.
         given = sys.argv[2] if len(sys.argv) > 2 else host_id()
         sys.exit(0 if given == BENCH_HOST_ID else 1)
+    if sys.argv[1:2] == ["cell-port"]:
+        print(CELL_PORTS[sys.argv[2]])
+        sys.exit(0)
+    if sys.argv[1:] == ["ports-clear"]:
+        # Exit 0: no cell port is ephemeral. 1: one is. 2: the range is unreadable.
+        range_file = Path(os.environ.get("WORKLOAD_PORT_RANGE_FILE", EPHEMERAL_RANGE_FILE))
+        span = ephemeral_range(range_file)
+        if span is None:
+            print(f"cannot read the ephemeral port range from {range_file}", file=sys.stderr)
+            sys.exit(2)
+        inside = sorted(p for p in CELL_PORTS.values() if span[0] <= p <= span[1])
+        if inside:
+            print(f"cell port(s) {inside} inside the ephemeral range {span[0]}-{span[1]}", file=sys.stderr)
+            sys.exit(1)
+        sys.exit(0)
     seed, rep = int(sys.argv[1]), int(sys.argv[2])
     print(" ".join(graded_orders(seed)[rep - 1]))

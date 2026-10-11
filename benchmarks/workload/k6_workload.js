@@ -10,7 +10,7 @@
  * byte-identical across every cell by construction.
  *
  * Required env:
- *   BASE_URL          gateway under test, e.g. http://127.0.0.1:39420
+ *   BASE_URL          gateway under test, e.g. http://127.0.0.1:29420
  *   BACKEND_NAME      registered backend name
  *   TOOL_NAME         pinned backend tool -- never discovered by ordering
  *   EXPECT_TEXT       exact substring the semantic assertion requires

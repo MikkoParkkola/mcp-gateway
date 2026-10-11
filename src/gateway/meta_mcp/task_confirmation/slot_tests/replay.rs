@@ -26,6 +26,8 @@ fn an_unattributable_caller_is_never_an_admitted_replay() {
         principal: Some("bound".to_string()),
         quota: Some(crate::protocol::continuation::QuotaKey::for_test("bound")),
         owner,
+        scope: super::open_scope(),
+        session_id: None,
         input_capabilities: Declared::NONE,
         is_modern: true,
         admission: &admission,

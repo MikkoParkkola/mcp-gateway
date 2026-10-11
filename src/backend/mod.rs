@@ -250,6 +250,14 @@ pub struct Backend {
     /// published (the publish order of MIK-7897 LIFE.3a).
     #[cfg(test)]
     pub(crate) publish_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
+    /// A test's pause point in `force_restart`, past its login and stopping
+    /// checks and before it builds or takes anything (MIK-8258 RACE.1).
+    #[cfg(test)]
+    pub(crate) restart_take_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
+    /// A test's pause point in `health_probe`, after its start failed and
+    /// before it decides whether to rebuild (MIK-8258 RACE.5).
+    #[cfg(test)]
+    pub(crate) probe_error_gate: parking_lot::Mutex<Option<Arc<MarkWindowGate>>>,
     /// How many forced restarts reached their rebuild: a test's observable
     /// for "the probe restarted", which a failed rebuild that keeps the old
     /// transport pooled cannot show through the slot (MIK-8012).

@@ -242,25 +242,49 @@ async fn ask(fx: &Fixture, retry: &RetryFields, declared: Declared) -> TaskConfi
     ask_as(fx, retry, declared, Some(&identity())).await
 }
 
+/// A caller that may invoke everything: these rows test the gate's binding,
+/// not visibility (MIK-8326 has its own rows).
+fn open_scope() -> crate::gateway::meta_mcp::InvokeScope<'static> {
+    crate::gateway::meta_mcp::InvokeScope {
+        authorizer: &crate::gateway::authz::AllowAll,
+        is_admin: true,
+        api_key_name: None,
+        agent_id: None,
+        grant_subject: None,
+    }
+}
+
 async fn ask_as(
     fx: &Fixture,
     retry: &RetryFields,
     declared: Declared,
     who: Option<&VerifiedIdentity>,
 ) -> TaskConfirmation {
-    let arguments = json!({ "id": 1 });
-    let task = json!({ "ttl": 60_000 });
-    // What the HTTP edge hands over for this caller: its binding through
-    // `principal_source`, as the edge derives it, and the task owner it
-    // routes to. No identity here means no key either: unbindable.
+    // What the HTTP edge hands over for this caller. No identity here means
+    // no key either: unbindable.
     let caller = crate::gateway::meta_mcp::MetaMcpCallerContext {
         verified_identity: who,
         ..crate::gateway::meta_mcp::anonymous_caller()
     };
-    let principal = crate::protocol::mrtr::source_fingerprint(caller.principal_source(None));
     let owner = who
         .map(VerifiedIdentity::stable_actor_id)
         .unwrap_or_default();
+    ask_caller(fx, retry, declared, &caller, &owner).await
+}
+
+/// [`ask_as`] for any caller X14 binds (a stdio process among them): its
+/// binding through `principal_source` and its quota, as the edge derives
+/// them, with `owner` the task owner it routes to.
+async fn ask_caller(
+    fx: &Fixture,
+    retry: &RetryFields,
+    declared: Declared,
+    caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+    owner: &str,
+) -> TaskConfirmation {
+    let arguments = json!({ "id": 1 });
+    let task = json!({ "ttl": 60_000 });
+    let principal = crate::protocol::mrtr::source_fingerprint(caller.principal_source(None));
     let outcome = fx
         .meta
         .confirm_destructive_task(&TaskConfirmationRequest {
@@ -269,10 +293,12 @@ async fn ask_as(
             arguments: &arguments,
             task: Some(&task),
             retry,
-            verified_identity: who,
+            verified_identity: caller.verified_identity,
             principal,
             quota: caller.quota_key(),
-            owner: &owner,
+            owner,
+            scope: open_scope(),
+            session_id: None,
             input_capabilities: declared,
             is_modern: true,
             admission: &fx.admission,
@@ -684,36 +710,6 @@ async fn a_destructive_call_on_a_clock_before_the_epoch_is_refused() {
     challenge(&ask(&fx, &fresh(), elicitation()).await);
 }
 
-/// S6b (MIK-8311 CSL.1): a task confirmation whose envelope mint fails gives
-/// its slot back. The keyring refuses every envelope, so the gate takes a
-/// slot, cannot seal the grant, and refuses; the slot must not stay held for
-/// the envelope's lifetime. Red on base: the slot count grows by one.
-/// Mutant m8: the release on the mint-failure path removed.
-#[tokio::test]
-async fn s6b_a_refused_confirmation_mint_gives_its_slot_back() {
-    let mut fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
-    fx.meta.set_continuation_for_test(
-        crate::protocol::continuation::ContinuationState::mint_refusing_for_test(),
-    );
-    let now = crate::protocol::continuation::now_unix_secs();
-    let before = fx.meta.continuation.in_flight().len(now).await;
-
-    let outcome = ask(&fx, &fresh(), elicitation()).await;
-    let TaskConfirmation::Answer(response) = &outcome else {
-        panic!("setup: the gate did not answer: {outcome:?}");
-    };
-    assert!(
-        response.error.is_some(),
-        "setup: a refused mint must refuse, got {response:?}"
-    );
-
-    let after = fx.meta.continuation.in_flight().len(now).await;
-    assert_eq!(
-        after, before,
-        "the refused confirmation kept its slot: {before} held before, {after} after"
-    );
-}
-
 /// S3d (SLOTQ.3, SLOTQ.5): one verified identity has one cap across a tool
 /// call and both confirmation gates. Alice's 64 `gateway_invoke` rounds hold
 /// her cap; a task confirmation and an in-band meta confirmation, on the same
@@ -789,4 +785,7 @@ async fn s3d_one_identity_has_one_cap_across_invoke_and_both_confirmations() {
 }
 
 mod key_quota;
+mod mint_refusal;
 mod replay;
+/// The stdio principal rows (route-check-parity P3, MIK-8160, MIK-8326).
+mod stdio_binding;
