@@ -20,7 +20,9 @@ All fields live under `backends.<name>.oauth`:
 | `callback_host` | string | `"localhost"` | Hostname the local callback server binds to.  Defaults to `"localhost"`, which dual-binds `127.0.0.1` **and** `[::1]` so the redirect works regardless of how the browser resolves `localhost`. Set to `"127.0.0.1"` to force IPv4-only. |
 | `callback_port` | integer | OS-assigned | Fixed port for the callback server.  **Required when the provider's app settings enforce an exact redirect URI** (Slack, Figma, Linear, …). |
 | `callback_path` | string | `"/oauth/callback"` | URL path of the callback endpoint.  Override when the provider requires a specific path. |
-| `token_refresh_buffer_secs` | integer | `300` | Seconds before token expiry at which the background task proactively refreshes. |
+
+The background task refreshes a token ahead of its expiry by 10 % of the token's
+lifetime, and never less than 300 seconds before it.
 
 ### Redirect URI construction
 
@@ -104,8 +106,7 @@ http://localhost:8085/slack/oauth/callback
 ```yaml
 backends:
   slack:
-    transport:
-      http_url: https://slack.com/api
+    url: https://slack.com/api
     oauth:
       client_id: "1234567890.9876543210"        # from api.slack.com/apps
       client_secret: "${SLACK_CLIENT_SECRET}"   # loaded from env / .env file
@@ -115,7 +116,6 @@ backends:
         - users:read
       callback_port: 8085                        # must match the Redirect URL above
       callback_path: /slack/oauth/callback       # must match the Redirect URL above
-      token_refresh_buffer_secs: 600
 ```
 
 **Why `callback_port` is required for Slack:** Slack validates the `redirect_uri`
@@ -139,8 +139,7 @@ http://localhost:8086/oauth/callback
 ```yaml
 backends:
   figma:
-    transport:
-      http_url: https://api.figma.com
+    url: https://api.figma.com
     oauth:
       client_id: "${FIGMA_CLIENT_ID}"
       client_secret: "${FIGMA_CLIENT_SECRET}"
