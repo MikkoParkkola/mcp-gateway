@@ -368,9 +368,9 @@ impl MetaMcp {
         Ok(target)
     }
 
-    /// Protect one outer logical meta invocation, including all its inner steps.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn admit_meta_sync(
+    /// Protect one outer logical meta invocation, including its inner steps.
+    #[allow(clippy::too_many_arguments)] // The nonce wrapper: `signing::admit_meta_sync`.
+    pub(crate) fn admit_meta_sync_unrefunded(
         &self,
         owner: super::AdmissionOwner<'_>,
         caller: &super::MetaMcpCallerContext<'_>,

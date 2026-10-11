@@ -76,12 +76,13 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
                 Direct => ExpectedGap(Ticket::Mik8154),
                 TaskSubmit | TaskWorker => NotApplicable(Na::DecidedAtSubmit),
             },
-            // An admit_meta_sync, relay or task-admission refusal keeps the
-            // nonce (MIK-8150 NONCE.1/.3/.6); the direct route gives it back
-            // (direct_dispatch.rs:313-316).
+            // An admission refusal gives the nonce back on /mcp and stdio
+            // (MIK-8150, `signing::admit_meta_sync`), as the direct route does
+            // (direct_dispatch.rs:313-316). A relay or task-submit refusal still
+            // keeps it until every effect marks the execution (MIK-8353).
             Stage::NonceGiveBack => match route {
-                Invoke | Surfaced | Stdio | TaskSubmit => ExpectedGap(Ticket::Mik8150),
-                Direct => Applies,
+                Invoke | TaskSubmit => ExpectedGap(Ticket::Mik8353),
+                Surfaced | Stdio | Direct => Applies,
                 TaskWorker => NotApplicable(Na::TransportHasNoNonce),
             },
             // A surfaced-name call drops the chain source (call_dispatch.rs:135-136).

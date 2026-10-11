@@ -628,3 +628,52 @@ pub(crate) async fn concurrent_same_key() -> (Value, usize) {
         .expect("the first call did not panic");
     (second, calls.load(Ordering::SeqCst))
 }
+
+/// R2, MIK-8150 NONCE.4: on the hardened, signed fixture surfacing
+/// `alpha/read`, a keyed surfaced-name call runs under `s1`; the key reused for
+/// other arguments is refused by execution admission (409) under `s2`; the
+/// honest call is re-sent under `s2` with its own key; then a third call under
+/// `s2`. Returns (the admission refusal, the re-send, the third send).
+pub(crate) async fn surfaced_admission_then_resend() -> (Value, Value, Value) {
+    use crate::gateway::meta_mcp::signing::NONCE_META;
+    use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
+    let fx =
+        super::direct_guards_fixture::fixture_hardened_signed_built(Answer::Ok, true, surfacing)
+            .await;
+    let call = |key: &'static str, nonce: &'static str, args: Value| {
+        let fx = &fx;
+        async move {
+            let params = serde_json::json!({ "name": "read", "arguments": args, "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {},
+                NONCE_META: nonce,
+                IDEMPOTENCY_KEY_META: key,
+            }});
+            let headers = [
+                ("mcp-protocol-version", "2026-07-28"),
+                ("mcp-method", "tools/call"),
+                ("mcp-name", "read"),
+            ];
+            super::direct_guards_fixture::send_with_headers(
+                fx,
+                "/mcp",
+                "k-std",
+                "tools/call",
+                params,
+                None,
+                &headers,
+            )
+            .await
+            .1
+        }
+    };
+    let first = call("s-k1", "s1", serde_json::json!({})).await;
+    assert!(
+        first.get("error").is_none(),
+        "premise: the first call ran: {first}"
+    );
+    let refused = call("s-k1", "s2", serde_json::json!({ "cmd": "other" })).await;
+    let resent = call("s-k2", "s2", serde_json::json!({ "cmd": "other" })).await;
+    let third = call("s-k3", "s2", serde_json::json!({ "cmd": "other" })).await;
+    (refused, resent, third)
+}

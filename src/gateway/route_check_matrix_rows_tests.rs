@@ -404,7 +404,7 @@ const PROSE: &str = "The orchard ledger for the north slope records seven rows o
     pears, the grafting dates for each rootstock, the hours the drip lines ran during the \
     dry weeks of August, and which crew pruned the older trees after the second frost.";
 
-/// `NonceGiveBack`, R1 gap (MIK-8150 NONCE.3): a relay refusal after nonce
+/// `NonceGiveBack`, R1 gap (MIK-8353, split from MIK-8150 NONCE.3): a relay refusal after nonce
 /// admission keeps the nonce, so the clean re-send under it is refused as a
 /// replay. The first refusal must be the relay check's own (-32002), so the
 /// row cannot pass on some other refusal.
@@ -412,7 +412,7 @@ const PROSE: &str = "The orchard ledger for the north slope records seven rows o
 async fn nonce_give_back_invoke_relay_gap_row() {
     assert_eq!(
         expect(MethodKind::ToolsCall, Route::Invoke, Stage::NonceGiveBack),
-        Expect::ExpectedGap(super::Ticket::Mik8150)
+        Expect::ExpectedGap(super::Ticket::Mik8353)
     );
     let (relayed, resent) = router::invoke_relay_then_resend(PROSE).await;
     assert_eq!(
@@ -422,7 +422,7 @@ async fn nonce_give_back_invoke_relay_gap_row() {
     assert_eq!(
         resent["error"]["message"], REPLAY,
         "the re-send was not refused as a replay, so the relay refusal now gives the \
-         nonce back; MIK-8150 NONCE.3 may have closed this gap, flip the row: {resent}"
+         nonce back; MIK-8353 may have closed this gap, flip the row: {resent}"
     );
 }
 
@@ -535,4 +535,53 @@ async fn lease_row() {
         "R1: the second call was not refused by the lease: {second}"
     );
     assert_eq!(calls, 1, "R1: the backend ran twice");
+}
+
+/// `NonceGiveBack`, R2 Applies (MIK-8150 NONCE.4): a surfaced-name call that
+/// execution admission refuses (409, the key reused for other arguments) after
+/// its nonce was admitted gives the nonce back. The honest call re-sent under
+/// that nonce is served, once; a third send under it is a replay.
+#[tokio::test]
+async fn nonce_give_back_surfaced_row() {
+    let (refused, resent, third) = router::surfaced_admission_then_resend().await;
+    assert_eq!(
+        refused["error"]["code"], 409,
+        "premise: admission's own refusal: {refused}"
+    );
+    assert!(
+        resent.get("error").is_none(),
+        "R2 kept the nonce: the re-send was refused: {resent}"
+    );
+    assert!(
+        message(&third).contains(REPLAY),
+        "the nonce was given back twice: {third}"
+    );
+    assert_eq!(
+        expect(MethodKind::ToolsCall, Route::Surfaced, Stage::NonceGiveBack),
+        Expect::Applies
+    );
+}
+
+/// `NonceGiveBack`, R5 Applies (MIK-8150 NONCE.5): over stdio, a call that
+/// execution admission refuses (409) after its nonce was admitted gives the
+/// nonce back: the honest re-send is served once, a third send is a replay.
+#[test]
+fn nonce_give_back_stdio_row() {
+    let (refused, resent, third) = stdio::stdio_admission_then_resend();
+    assert_eq!(
+        refused["error"]["code"], 409,
+        "premise: admission's own refusal: {refused}"
+    );
+    assert!(
+        resent.get("error").is_none(),
+        "R5 kept the nonce: the re-send was refused: {resent}"
+    );
+    assert!(
+        message(&third).contains(REPLAY),
+        "the nonce was given back twice: {third}"
+    );
+    assert_eq!(
+        expect(MethodKind::ToolsCall, Route::Stdio, Stage::NonceGiveBack),
+        Expect::Applies
+    );
 }
