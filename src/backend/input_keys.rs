@@ -40,6 +40,13 @@ fn unavailable(mode: InputSchemaEnforcement) -> Option<String> {
 }
 
 impl Backend {
+    /// The argument-key enforcement this backend was built with, so a row
+    /// can prove a fixture's mode survived compilation (MIK-8356 C10).
+    #[cfg(test)]
+    pub(crate) fn input_schema_enforcement_for_test(&self) -> InputSchemaEnforcement {
+        self.config.input_schema_enforcement
+    }
+
     /// Refusal text for a `tools/call` of a withheld tool (#1441), or whose
     /// arguments carry keys the tool's `inputSchema` does not declare, or
     /// `None` when the call may proceed.
