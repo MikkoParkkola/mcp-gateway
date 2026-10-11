@@ -30,3 +30,52 @@ impl RefundWitness {
         let Self(()) = self;
     }
 }
+
+/// What a may-effect step did outside the gateway (MIK-8353 slice 3a): a
+/// credential mint or provider refresh, a backend `tools/list`, a consumed
+/// continuation. Gateway-local reversible writes do not count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Effect {
+    /// Nothing outside the gateway acted.
+    None,
+    /// Something outside the gateway may have acted.
+    Took,
+}
+
+impl RefundWitness {
+    /// The one place a may-effect step decides the witness: it survives only
+    /// a step that reports [`Effect::None`].
+    // STUB (red-first): keeps the witness whatever the report.
+    pub(crate) fn carry(witness: Option<Self>, effect: Effect) -> Option<Self> {
+        let _ = effect;
+        witness
+    }
+}
+
+/// `resolve_dispatch`'s report: `minted` is a propagation mint (never cached),
+/// `account` an account credential resolved for the call.
+// STUB (red-first): reports no effect.
+pub(crate) fn dispatch_effect(minted: bool, account: bool) -> Effect {
+    let _ = (minted, account);
+    Effect::None
+}
+
+/// The undeclared-key check's report: `cached_before` is whether the binding's
+/// tools were cached before the check. A cold slot fetches, or waits on
+/// another request's fetch.
+// STUB (red-first): reports no effect.
+pub(crate) fn schema_effect(cached_before: bool) -> Effect {
+    let _ = cached_before;
+    Effect::None
+}
+
+/// `redeem_retry`'s report: `redeemed` is whether it consumed a continuation.
+// STUB (red-first): reports no effect.
+pub(crate) fn retry_effect(redeemed: bool) -> Effect {
+    let _ = redeemed;
+    Effect::None
+}
+
+#[cfg(test)]
+#[path = "refund_witness_tests.rs"]
+mod tests;

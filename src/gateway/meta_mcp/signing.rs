@@ -92,6 +92,10 @@ struct NonceRefund {
     /// Something this call did may have acted (MIK-8353): a veto, never a
     /// grant. A witness still decides; this only stops a give-back.
     spent: std::sync::atomic::AtomicBool,
+    /// The refund witness, kept from a successful admission until a may-effect
+    /// step takes it, and handed back by a refusal that still holds it
+    /// (MIK-8353 slice 3a). A give-back needs it.
+    witness: std::sync::Mutex<Option<super::refund_witness::RefundWitness>>,
 }
 
 // How many nonces this thread gave back (MIK-8353 STDIO-SETTLE): the release
@@ -145,7 +149,29 @@ impl SigningInvocationContext {
         (self.refund.wanted).store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// Keep `witness` for this call's settle (MIK-8353 slice 3a).
+    pub(crate) fn keep_witness(&self, witness: super::refund_witness::RefundWitness) {
+        let mut slot = self
+            .refund
+            .witness
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(old) = slot.replace(witness) {
+            old.spend();
+        }
+    }
+
+    /// Take the witness, for a may-effect step to carry by value.
+    pub(crate) fn take_witness(&self) -> Option<super::refund_witness::RefundWitness> {
+        self.refund
+            .witness
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
     /// A step asked for the nonce back and no step dispatched.
+    // STUB (red-first, MIK-8353 slice 3a): does not yet require the witness.
     fn refund_due(&self) -> bool {
         use std::sync::atomic::Ordering::SeqCst;
         self.refund.wanted.load(SeqCst) && !self.refund.dispatched.load(SeqCst)
