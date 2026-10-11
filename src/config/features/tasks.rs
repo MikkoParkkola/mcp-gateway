@@ -13,7 +13,7 @@ use crate::{Error, Result};
 pub const DEFAULT_MAX_WORKERS: usize = 16;
 
 /// Default retention: one day, matching `Task::create`.
-const DEFAULT_TTL_MS: u64 = 86_400_000;
+pub(crate) const DEFAULT_TTL_MS: u64 = 86_400_000;
 const DEFAULT_POLL_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_MAX_RECORDS: usize = 256;
 const DEFAULT_MAX_PER_PRINCIPAL: usize = 32;

@@ -232,6 +232,11 @@ async fn run_dispatched(
         }
     };
 
+    intent
+        .owned
+        .dispatch_log()
+        .worker()
+        .arm(&executor.service.store);
     let mut dispatch = Box::pin(crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
         Arc::clone(intent.owned.dispatch_log()),
         dispatch,

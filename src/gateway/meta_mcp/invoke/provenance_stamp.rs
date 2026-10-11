@@ -46,12 +46,26 @@ impl MetaMcp {
             // it so it cannot pass as a gateway receipt (MIK-6909).
             return strip_backend_provenance(value);
         };
+        // A receipt states when the gateway observed the call. On a clock
+        // before 1970 there is no honest time: no receipt is written, and a
+        // backend-supplied one is stripped, so provenance reads as absent.
+        let Ok(observed_at) = crate::clock::utc_now().map(|now| now.to_rfc3339()) else {
+            return strip_backend_provenance(value);
+        };
         let backend_ok = !value
             .get("isError")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let (stamped, signed_receipt) =
-            augment_with_provenance(value, signer, server, tool, api_key_name, cache, backend_ok);
+        let (stamped, signed_receipt) = augment_with_provenance(
+            value,
+            signer,
+            server,
+            tool,
+            api_key_name,
+            cache,
+            backend_ok,
+            observed_at,
+        );
         if let Some(sink) = &self.claim_capture
             && let Some(call_id) = signed_receipt.receipt.call_id.clone()
         {

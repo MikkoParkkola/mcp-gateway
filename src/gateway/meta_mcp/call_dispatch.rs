@@ -308,11 +308,7 @@ impl MetaMcp {
     ) -> JsonRpcResponse {
         use crate::gateway::task_service::execution::BeginOutcome;
 
-        let task = crate::gateway::task_service::Task::create_at(
-            tool_name,
-            chrono::Utc::now(),
-            intent.options,
-        );
+        let task = crate::gateway::task_service::Task::create_undated(tool_name, intent.options);
         let backend = task_backend_name(self, tool_name, &arguments);
         let executor = Arc::clone(&intent.executor);
         // Every task passed the synchronous call's policy at admission

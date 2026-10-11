@@ -39,7 +39,7 @@ async fn tracked(
 /// A sweep one idle TTL past the caller's last request, with a call held:
 /// the caller is not idle, its task is running.
 fn assert_survives_a_sweep(lifecycle: &SessionLifecycle, reclaimed: &Reclaimed) {
-    let swept = lifecycle.reap(now_unix() + IDLE_TTL.as_secs() + 1);
+    let swept = lifecycle.reap(now_unix().expect("clock after 1970") + IDLE_TTL.as_secs() + 1);
     std::assert_eq!(
         swept,
         0,
@@ -52,7 +52,7 @@ fn assert_survives_a_sweep(lifecycle: &SessionLifecycle, reclaimed: &Reclaimed) 
 /// deadline reclaims it, once, under the caller's own key.
 fn assert_reclaimed_once_after(lifecycle: &SessionLifecycle, reclaimed: &Reclaimed) {
     std::assert_eq!(
-        lifecycle.reap(now_unix() + 2 * IDLE_TTL.as_secs() + 2),
+        lifecycle.reap(now_unix().expect("clock after 1970") + 2 * IDLE_TTL.as_secs() + 2),
         1,
         "the key of a finished task is never reclaimed"
     );

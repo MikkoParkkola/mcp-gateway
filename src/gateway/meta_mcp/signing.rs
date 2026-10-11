@@ -609,10 +609,8 @@ impl super::MetaMcp {
             if self.require_nonce && nonce.is_none() {
                 return Err(crate::Error::json_rpc(-32603, "Signing nonce is required"));
             }
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|_| crate::Error::json_rpc(-32603, "Signing clock is invalid"))?
-                .as_secs();
+            let timestamp = crate::clock::unix_secs()
+                .map_err(|_| crate::Error::json_rpc(-32603, "Signing clock is invalid"))?;
             signer.sign_json_rpc_response_at(response, nonce, timestamp)?;
             // MIK-7939: the signature block is the gateway's, never a receipt's.
             if let Some(result) = response.result.as_ref() {

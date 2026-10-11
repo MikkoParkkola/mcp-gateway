@@ -6,8 +6,8 @@ index 1da85a81c..9375fd143 100644
      if let Recorded::Unrecorded(reason) = auditor.record(prepared) {
          return Err(reason.into());
      }
--    auditor.snapshot(&rows, chrono::Utc::now())?;
-+    let _ = auditor.snapshot(&rows, chrono::Utc::now());
+-    auditor.snapshot(&rows, snapshot_time()?)?;
++    let _ = auditor.snapshot(&rows, snapshot_time()?);
      drop(read.guard);
      Ok(rows)
  }

@@ -26,7 +26,6 @@ use crate::gateway::router::helpers::{
     build_error_response, build_response, extract_tools_call_params_ref, merge_client_meta_ref,
 };
 use crate::gateway::router::meta_refusal_audit::Refused;
-use crate::gateway::session_lifecycle;
 use crate::protocol::{JsonRpcResponse, RequestId};
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
@@ -224,10 +223,7 @@ pub(super) async fn tools_call(
             if let Some(ref lifecycle) = state.session_lifecycle
                 && !control_identity.is_empty()
             {
-                lifecycle.track(
-                    control_identity.clone(),
-                    session_lifecycle::now_unix() + session_lifecycle::IDLE_TTL.as_secs(),
-                );
+                lifecycle.renew(control_identity.clone());
             }
             let verdict = fw.check_request(
                 session_id,
@@ -485,10 +481,7 @@ pub(super) async fn tools_call(
     if let Some(ref lifecycle) = state.session_lifecycle
         && !caller_key.is_empty()
     {
-        lifecycle.track(
-            caller_key.clone(),
-            session_lifecycle::now_unix() + session_lifecycle::IDLE_TTL.as_secs(),
-        );
+        lifecycle.renew(caller_key.clone());
     }
     // Built above, after every gate that can still refuse, and only
     // carried here: the dispatch chokepoint is what hands it over.

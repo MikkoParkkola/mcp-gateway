@@ -61,3 +61,52 @@ fn no_log_builds_no_delivery_record() {
          and dropped (MIK-8014 PERF.9)"
     );
 }
+
+/// T5 (MIK-8202 RECORDER rule, P2 row 6): a delivery attempt on a clock before
+/// 1970 is a security event and is still written, undated: `timestamp` is
+/// null and `clock` says why; the hash chain fields stay intact. Mutants:
+/// the record dropped; the record stamped 1969.
+#[tokio::test]
+async fn t5_a_delivery_record_on_an_unreadable_clock_is_written_undated() {
+    use crate::security::{TransparencyLogConfig, TransparencyLogger};
+
+    // GIVEN: a gateway with a transparency log
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("transparency.ndjson");
+    let logger = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+        enabled: true,
+        path: path.to_str().expect("utf-8 path").into(),
+        ..TransparencyLogConfig::default()
+    }))
+    .expect("log opens");
+    let mut meta =
+        crate::gateway::meta_mcp::MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
+    meta.enable_transparency_log(Arc::new(logger));
+    let response = crate::protocol::JsonRpcResponse::success(
+        crate::protocol::RequestId::Number(1),
+        json!({"content": [{"type": "text", "text": "x"}]}),
+    );
+    // WHEN: recorded on a clock before 1970
+    let clock = crate::clock::test_clock::before_epoch();
+    let recorded = meta
+        .record_delivery_of(&response, &correlation(), None)
+        .await;
+    drop(clock);
+    // THEN
+    assert!(recorded, "the delivery is not withheld");
+    let text = std::fs::read_to_string(&path).expect("log file");
+    let attempt: serde_json::Value = text
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("json line"))
+        .find(|row| row["event"] == "response_delivery_attempt")
+        .expect("the attempt is recorded");
+    assert_eq!(
+        attempt.get("timestamp"),
+        Some(&serde_json::Value::Null),
+        "{attempt}"
+    );
+    assert_eq!(attempt["clock"], "before_epoch", "{attempt}");
+    for field in ["counter", "prev_entry_hash", "entry_hash", "response_hash"] {
+        assert!(!attempt[field].is_null(), "{field} missing: {attempt}");
+    }
+}

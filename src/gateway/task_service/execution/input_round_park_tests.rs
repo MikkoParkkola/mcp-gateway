@@ -161,7 +161,7 @@ async fn park(fx: &Fixture, ids: Ids<'_>, tool: &str, arguments: Value) {
         ids.id,
         ids.revision,
     )
-    .park(round(), &mut cancel_rx)
+    .park(round(), None, &mut cancel_rx)
     .await;
 }
 
@@ -452,4 +452,25 @@ fn a_late_round_whose_first_close_write_fails_is_closed_by_the_retry() {
     );
     assert_eq!(closed, Some(TaskStatus::Cancelled));
     assert!(at_level(&records, "WARN", "a late input round was not closed").is_empty());
+}
+
+impl TaskExecutor {
+    /// Test-only: the next record write fails at the store's `Write` stage,
+    /// as a full or failing disk would; later writes succeed.
+    pub(crate) async fn fail_next_record_write_for_test(&self) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use crate::gateway::task_service::store::CommitStage;
+
+        let armed = Arc::new(AtomicBool::new(true));
+        self.service
+            .store
+            .set_hook(Some(Arc::new(move |stage| {
+                if stage == CommitStage::Write && armed.swap(false, Ordering::SeqCst) {
+                    return Err(std::io::Error::other("injected record-write failure"));
+                }
+                Ok(())
+            })))
+            .await;
+    }
 }

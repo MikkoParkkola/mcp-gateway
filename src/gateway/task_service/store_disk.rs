@@ -370,7 +370,7 @@ fn load(dir: &Path, limits: StoreLimits) -> Result<Loaded, StoreError> {
             // A live row written before this check, or under a larger cap,
             // may have no room for the bounded failure it could settle as;
             // refused like a row over the cap (MIK-7651).
-            let needed = super::targets::fallback_bytes(&task, &record, chrono::Utc::now())?;
+            let needed = super::targets::fallback_bytes(&task, &record)?;
             if needed > limits.record_bytes {
                 tracing::warn!(
                     path = %shown_path,
@@ -472,7 +472,7 @@ pub(super) fn reread_record(
         (Some((record, task)), _) => {
             // As at load: a row with no room for the bounded failure it may
             // settle as would make the next startup refuse the store (MIK-7651).
-            let needed = super::targets::fallback_bytes(&task, &record, chrono::Utc::now());
+            let needed = super::targets::fallback_bytes(&task, &record);
             if !needed.is_ok_and(|needed| needed <= limits.record_bytes) {
                 tracing::error!(path = %shown_path, "repaired task record leaves no room for its bounded failure; raise max_record_bytes or remove the row; it stays sealed");
                 return Reread::Sealed;

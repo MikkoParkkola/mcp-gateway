@@ -649,3 +649,7 @@ async fn a_first_start_with_an_unreadable_journal_keeps_a_baseline() {
         s.records()
     );
 }
+
+#[cfg(test)]
+#[path = "identity_grants_clock_tests.rs"]
+mod clock;

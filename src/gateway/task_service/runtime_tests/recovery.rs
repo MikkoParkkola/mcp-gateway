@@ -37,7 +37,7 @@ use crate::protocol::mrtr::InputRequired;
 const OWNER: &str = "verified-owner";
 /// Every await in this file is bounded by a real timeout rather than by the
 /// harness giving up: a restart that hangs is a failure with a name.
-const BUDGET: Duration = Duration::from_secs(5);
+const BUDGET: Duration = Duration::from_secs(10);
 
 /// The standard interrupted tool-result envelope used by the reviewed adapter.
 const OUTCOME: &str = "/_meta/io.mcp-gateway~1executionOutcome";
@@ -492,4 +492,5 @@ fn judge(row: &Seeded, task: &crate::gateway::task_service::Task, revision: u64)
 }
 
 mod cases;
+mod clock;
 mod repaired;

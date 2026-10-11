@@ -428,67 +428,6 @@ impl TaskExecutor {
         self.service.store.set_hook(Some(hook)).await;
     }
 
-    /// Test-only: how many tasks are subscribed to the handoff release signal
-    /// right now, so a test can tell that an update has parked in its wait.
-    #[cfg(test)]
-    pub(crate) fn release_waiters_for_test(&self) -> usize {
-        self.handoffs.release_waiters()
-    }
-
-    /// Test-only: an update waits up to `wait` for the current owner instead
-    /// of the produce-seam second. Set once per executor.
-    #[cfg(test)]
-    pub(crate) fn stretch_produce_seam_wait_for_test(&self, wait: Duration) {
-        self.produce_seam_wait
-            .set(wait)
-            .expect("the produce-seam wait is set once");
-    }
-
-    /// Test-only: the recovery descriptor a dispatch made durable for `id`.
-    ///
-    /// The one seam through which a route-level regression can tell "the
-    /// candidate fitted and its descriptor was written" from "the candidate
-    /// fitted, the backend ran, and the row is unrecoverable" — two outcomes
-    /// that are identical at the wire. Kept here rather than in the suite so
-    /// that `mod store` stays private to this package.
-    #[cfg(test)]
-    pub(crate) fn durable_upstream_for_test(
-        &self,
-        id: &str,
-    ) -> Option<super::record::UpstreamRecord> {
-        self.service.store.upstream_for_test(id)
-    }
-
-    /// Test-only: commit `id`'s Cancel without signalling its worker, as a
-    /// cancel does in the instant between its commit and its signal (MIK-7642).
-    #[cfg(test)]
-    pub(crate) async fn commit_cancel_unsignalled_for_test(&self, id: &str) {
-        let owner = self
-            .service
-            .store
-            .owner_digest_for_test(id)
-            .expect("the task exists");
-        let revision = self
-            .service
-            .store
-            .get(&owner, id)
-            .expect("readable")
-            .revision;
-        self.transition_digest_write(
-            &owner,
-            id,
-            revision,
-            (
-                TaskTransition::Cancel,
-                None,
-                crate::gateway::gateway_writes::WriteRecord::default(),
-            ),
-            ErrorAuthor::Gateway,
-        )
-        .await
-        .expect("the cancel commits");
-    }
-
     /// Join every owner, then every worker permit, inside one timeout budget.
     ///
     /// Two phases and this order. Ownership is joined first because a handoff
@@ -676,12 +615,20 @@ impl TaskExecutor {
                 author,
                 writes,
             } => {
+                // Recovery is a recorder: it dates the row at the store's
+                // clock, and with none readable leaves the row for the next
+                // start (MIK-8202).
+                let Ok(now) = self.service.store.now() else {
+                    tracing::error!(task_id = %id, "host clock reads before 1970: task not settled");
+                    return Err(CommitFailure::Service(ServiceError::Unavailable));
+                };
                 self.transition_digest_write(
                     owner_digest,
                     id,
                     revision,
                     (event, None, writes),
                     author,
+                    Some(now),
                 )
                 .await?
             }
@@ -731,7 +678,7 @@ impl TaskExecutor {
             .service
             .owner(principal)
             .map_err(CommitFailure::Service)?;
-        self.transition_digest_write(owner.as_digest(), id, revision, outcome, author)
+        self.transition_digest_write(owner.as_digest(), id, revision, outcome, author, None)
             .await
     }
 
@@ -806,3 +753,6 @@ fn commit_to_service(error: CommitFailure) -> ServiceError {
 mod scope_tests;
 #[cfg(test)]
 mod spawn_tests;
+
+#[cfg(test)]
+mod test_hooks;

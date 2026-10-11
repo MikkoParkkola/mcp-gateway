@@ -83,4 +83,22 @@ mod tests {
         assert_eq!(unlabelled, None);
         assert_eq!(plan_step(Some(7), async { label() }).await, Some(7));
     }
+
+    /// T23 (MIK-8202 design v4): the composite scope sits on the step's call,
+    /// so a call nested anywhere inside it, unlabelled or under an inner step,
+    /// is still in a plan step; outside every step it is not. Mutant:
+    /// `in_plan_step` reads false.
+    #[tokio::test]
+    async fn t23_a_call_nested_in_a_plan_step_is_in_it() {
+        use super::super::in_plan_step;
+        assert!(!in_plan_step(), "outside every step");
+        let inside = plan_step(None, async {
+            let nested = plan_step(Some(5), async { in_plan_step() }).await;
+            let awaited = async { in_plan_step() }.await;
+            (in_plan_step(), nested, awaited)
+        })
+        .await;
+        assert_eq!(inside, (true, true, true));
+        assert!(!in_plan_step(), "the scope ends with the step");
+    }
 }

@@ -148,6 +148,9 @@ pub struct Task {
     tool: String,
     wire: TaskWire,
     issued_input_keys: BTreeSet<String>,
+    /// Built before its creation time was known; the store dates it when it
+    /// persists a NEW row (MIK-8202), so a replay never needs a clock.
+    undated: bool,
 }
 
 impl Task {
@@ -158,7 +161,7 @@ impl Task {
             tool,
             Utc::now(),
             TaskOptions {
-                ttl_ms: Some(86_400_000),
+                ttl_ms: Some(crate::config::DEFAULT_TASK_TTL_MS),
                 poll_interval_ms: Some(1_000),
             },
         )
@@ -182,7 +185,33 @@ impl Task {
                 input_requests: None,
             },
             issued_input_keys: BTreeSet::new(),
+            undated: false,
         }
+    }
+
+    /// A task whose creation time is stamped when a new row is persisted
+    /// ([`Self::dated_at`]); until then it carries the epoch as a placeholder
+    /// no one may read.
+    #[must_use]
+    pub fn create_undated(tool: &str, options: TaskOptions) -> Self {
+        let mut task = Self::create_at(tool, DateTime::<Utc>::default(), options);
+        task.undated = true;
+        task
+    }
+
+    /// Whether [`Self::create_undated`] built this task and no one has dated it.
+    #[must_use]
+    pub const fn is_undated(&self) -> bool {
+        self.undated
+    }
+
+    /// This task created at `at`.
+    #[must_use]
+    pub fn dated_at(mut self, at: DateTime<Utc>) -> Self {
+        self.wire.created_at = at;
+        self.wire.last_updated_at = at;
+        self.undated = false;
+        self
     }
 
     /// The handle a client polls with.
@@ -195,6 +224,12 @@ impl Task {
     #[must_use]
     pub fn tool(&self) -> &str {
         &self.tool
+    }
+
+    /// The record's retention in milliseconds; `None` is unlimited.
+    #[must_use]
+    pub(crate) const fn ttl_ms(&self) -> Option<u64> {
+        self.wire.ttl_ms
     }
 
     /// Where it has got to.
@@ -417,6 +452,7 @@ impl Task {
             tool: snapshot.tool,
             wire: snapshot.task,
             issued_input_keys: snapshot.issued_input_keys,
+            undated: false,
         })
     }
 }

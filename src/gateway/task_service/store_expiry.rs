@@ -295,17 +295,25 @@ impl Shared {
         let recovered = interrupted_of(&id, &task, &record).and_then(|live| recover(&live));
         let was_live = recovered.is_some();
         let written = match recovered {
-            Some(event) => self.settle_durable(
-                &task,
-                &record,
-                (
-                    event,
-                    None,
-                    ErrorAuthor::Gateway,
-                    crate::gateway::gateway_writes::WriteRecord::default(),
-                ),
-                Utc::now(),
-            ),
+            Some(event) => {
+                // A live row is dated at the store's clock. With none readable
+                // it stays sealed for the next sweep: never settled at 1969.
+                let Ok(now) = self.now() else {
+                    tracing::warn!(record = %name, "host clock reads before 1970: repaired task record stays sealed");
+                    return;
+                };
+                self.settle_durable(
+                    &task,
+                    &record,
+                    (
+                        event,
+                        None,
+                        ErrorAuthor::Gateway,
+                        crate::gateway::gateway_writes::WriteRecord::default(),
+                    ),
+                    now,
+                )
+            }
             None => super::serialize(&record).and_then(|bytes| {
                 if bytes.len() > self.limits.record_bytes {
                     return Err(StoreError::Capacity);

@@ -31,6 +31,7 @@ const _: () = {
     assert!(super::COMPLETED_TTL.as_secs() <= RETENTION_SECS);
 };
 
+#[cfg(test)]
 type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 /// Now, or a clock that reads before 1970 (MIK-8202).
 type FallibleClock = Arc<dyn Fn() -> Result<u64, crate::clock::ClockBeforeEpoch> + Send + Sync>;
@@ -237,6 +238,7 @@ impl Request<'_> {
 
 impl ExecutionAdmission {
     /// With a clock that always reads (a test's fixed clock).
+    #[cfg(test)]
     pub(crate) fn new(clock: Clock) -> Arc<Self> {
         Self::new_fallible(Arc::new(move || Ok(clock())))
     }

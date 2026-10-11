@@ -14,7 +14,6 @@ use axum::Json;
 use axum::extract::{Extension, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -170,6 +169,23 @@ pub(super) fn control_plane_store(state: &AppState) -> Result<&Arc<dyn ControlPl
     ))
 }
 
+/// The audit event both handlers build to authorize with. Neither applies a
+/// mutation or writes an audit event (they refuse after RBAC), so the id is
+/// fixed and reads no clock (MIK-8202).
+const PREFLIGHT_EVENT_ID: &str = "cpa-validation-only";
+
+// Test hook: the event ids the validation-only preflights built, newest last.
+#[cfg(test)]
+thread_local! {
+    pub(super) static PREFLIGHT_EVENT_IDS: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn note_preflight_event_id(id: &str) {
+    PREFLIGHT_EVENT_IDS.with(|ids| ids.borrow_mut().push(id.to_owned()));
+}
+
 pub(super) fn store_unavailable(reason: String) -> axum::response::Response {
     (
         StatusCode::SERVICE_UNAVAILABLE,
@@ -229,13 +245,15 @@ pub(super) fn resolve_decision_core(
     // RBAC's 403 rather than the 409 below.
     let event = ControlPlaneAuditEvent {
         grant_change: None,
-        event_id: format!("cpa-{}-{}", Utc::now().timestamp_millis(), req.target_id),
+        event_id: PREFLIGHT_EVENT_ID.to_string(),
         actor_id: actor.actor_id.clone(),
         action,
         target_id: req.target_id.clone(),
         reason: req.reason,
         rollback: req.rollback,
     };
+    #[cfg(test)]
+    note_preflight_event_id(&event.event_id);
     let mutation = ControlPlaneMutation {
         action,
         target_id: req.target_id.clone(),
@@ -313,13 +331,15 @@ pub(super) fn apply_mutation(
 
     let event = ControlPlaneAuditEvent {
         grant_change: None,
-        event_id: format!("cpa-{}-{target_id}", Utc::now().timestamp_millis()),
+        event_id: PREFLIGHT_EVENT_ID.to_string(),
         actor_id: actor.actor_id.clone(),
         action,
         target_id: target_id.clone(),
         reason,
         rollback,
     };
+    #[cfg(test)]
+    note_preflight_event_id(&event.event_id);
     let mutation = ControlPlaneMutation {
         action,
         target_id,
