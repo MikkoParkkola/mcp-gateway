@@ -1,23 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8339 LOGINDL.3: a warm-start attempt is a caller bounded by its
-//! backend's request timeout. When that bound fires during the request-time
-//! login the attempt began, only the attempt's wait ends: the login stays
-//! open, and the warm start's retry after approval uses it, with no second
-//! browser.
+//! MIK-8339 LOGINDL.3: a warm-start attempt is a caller bounded by its own
+//! ceiling (`effective_attempt_timeout`). When that ceiling fires during the
+//! request-time login the attempt began, only the attempt's wait ends: the
+//! login stays open, and the warm start's retry after approval uses it, with
+//! no second browser.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{WarmStartMode, WarmStartPolicy, warm_start_until_cached};
+use super::{WarmStartMode, WarmStartPolicy, effective_attempt_timeout, warm_start_until_cached};
 use crate::backend::BackendRegistry;
 use crate::backend::tests::login_server::Upstream;
-use crate::backend::tests::login_window::{approve, approved_start, within};
+use crate::backend::tests::login_window::{approve_if_listening, approved_start, within};
 use crate::backend::tests::token_lapse::lapse;
 
 /// Gaps short enough that the retries after approval finish in real time.
-/// The attempt ceiling is `max(floor, 20 x the 2 s request timeout)`, so the
-/// request timeout, not the ceiling, is the bound each attempt meets.
 fn quick_policy() -> WarmStartPolicy {
     WarmStartPolicy {
         fast_deadline: Duration::from_secs(180),
@@ -61,14 +59,29 @@ async fn a_warm_start_attempts_bound_leaves_its_request_time_login_open() {
     let url = browser
         .opened(2, "the warm start's request-time login")
         .await;
-    // Past the attempt's 2 s request bound, with the person still away.
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // Past the attempt's own ceiling, with the person still away. Paused
+    // time: the attempt waits on a login no I/O can advance, and the login's
+    // own window (300 s) is well past the ceiling.
+    let ceiling =
+        effective_attempt_timeout(quick_policy().attempt_timeout, backend.request_timeout());
+    assert!(
+        ceiling < crate::oauth::OAUTH_AUTHORIZATION_WINDOW,
+        "premise: the attempt ends before the login's own window"
+    );
+    tokio::time::pause();
+    tokio::time::advance(ceiling + Duration::from_secs(1)).await;
+    tokio::time::resume();
     assert!(
         !warm.is_finished(),
         "premise: no attempt cached tools before the approval"
     );
 
-    approve(&url).await;
+    // The timed-out attempt is dropped by now; give its teardown a moment.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        approve_if_listening(&url).await,
+        "the login the warm start's attempt began was gone when the person approved it"
+    );
     within("the warm start's retry after approval", warm)
         .await
         .expect("warm-start task");
