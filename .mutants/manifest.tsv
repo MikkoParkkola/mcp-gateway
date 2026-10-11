@@ -1,0 +1,3 @@
+head_sha	4793c4029f597d44b9a2dd1801e89e5eb004393f
+# MIK-8154 PR2: invoke_nonce_any_route again (batch 815427 VOID: || in a let chain).
+invoke_nonce_any_route	linux	invoke_nonce_any_route.patch	--lib -- mik8154_rows_tests::encoded::s4c
