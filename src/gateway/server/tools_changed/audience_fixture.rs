@@ -247,10 +247,16 @@ impl World {
     /// As [`Self::start`], with a real OIDC key server: one provider
     /// (`ISS_A`) whose policy grants every backend, and delegated bearers on.
     pub(super) async fn start_oidc() -> (Self, Harness) {
-        let extra = format!(
-            "delegated_bearer: true\npolicies:\n  - match: {{ issuer: \"{ISS_A}\" }}\n    \
+        Self::start_oidc_with(&format!(
+            "  - match: {{ issuer: \"{ISS_A}\" }}\n    \
              scopes: {{ backends: [\"*\"], tools: [\"*\"], rate_limit: 0 }}\n"
-        );
+        ))
+        .await
+    }
+
+    /// As [`Self::start_oidc`], with these key-server `policies` rules.
+    pub(super) async fn start_oidc_with(policies: &str) -> (Self, Harness) {
+        let extra = format!("delegated_bearer: true\npolicies:\n{policies}");
         let oidc = Harness::start(&config_yaml("[]", &extra)).await;
         (
             Self::start_on(Arc::clone(&oidc.ks), |meta| meta).await,

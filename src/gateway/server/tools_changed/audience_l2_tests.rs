@@ -207,3 +207,46 @@ async fn l2_grant_subject_one_key_two_asserted_users_differ_only_in_subject() {
     let told = [ears[0].told(&w).await, ears[1].told(&w).await];
     assert_eq!(told, [1, 0], "only alice sees alice_cal: RED on base");
 }
+
+/// L2-delegated (MIK-8350), RED (killer: a key on the delegated bearer's
+/// actor rather than its token): one user's two live ID tokens, presented as
+/// delegated bearers, carry different `groups`. The first-match policy gives
+/// the `full` group every tool and everyone else every tool but `read`. Both
+/// bearers name the same issuer and subject, so a principal keyed on the
+/// actor would merge them; only the `full` token may be told of a `read`
+/// change.
+#[tokio::test]
+async fn l2_delegated_two_id_tokens_of_one_user_differ_only_in_groups() {
+    use crate::key_server::oidc_test_harness::ISS_A;
+    let (w, h) = World::start_oidc_with(&format!(
+        "  - match: {{ issuer: \"{ISS_A}\", group: \"full\" }}\n    \
+         scopes: {{ backends: [\"*\"], tools: [\"*\"], rate_limit: 0 }}\n  \
+         - match: {{ issuer: \"{ISS_A}\" }}\n    \
+         scopes: {{ backends: [\"*\"], tools: [\"write\", \"scan\", \"fetch\"], rate_limit: 0 }}\n"
+    ))
+    .await;
+    let token = |groups: &[&str]| {
+        h.mint(
+            ISS_A,
+            "A",
+            &json!({ "email": "A@corp.example", "groups": groups }),
+        )
+    };
+    let (full, plain) = (token(&["full"]), token(&[]));
+    assert!(
+        w.served_names(&full).await.contains(&"read".to_string()),
+        "premise: the full-group token sees read"
+    );
+    assert!(
+        !w.served_names(&plain).await.contains(&"read".to_string()),
+        "premise: the other token does not"
+    );
+    let mut ears = [w.listen(&full).await, w.listen(&plain).await];
+    w.store_shared("alpha", alpha_with("r2"));
+    let told = [ears[0].told(&w).await, ears[1].told(&w).await];
+    assert_eq!(
+        told,
+        [1, 0],
+        "only the full-group token sees read: RED on base"
+    );
+}
