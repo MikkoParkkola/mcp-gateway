@@ -17,7 +17,7 @@ use super::collusion_gate::RECORD_CAP;
 
 #[path = "collusion_delivered.rs"]
 mod delivered;
-pub(crate) use delivered::Delivered;
+pub(crate) use delivered::{Delivered, Mode};
 #[path = "collusion_key_path.rs"]
 mod key_path;
 pub(super) use key_path::{key_path_joins, key_path_run_indices, key_path_runs};
@@ -496,6 +496,14 @@ impl DeliveryDigest {
         delivered: &Delivered<'_>,
         step: Option<u32>,
     ) -> Self {
+        // `MIK-8066` 2b D3: an over-bound answer is read through its view;
+        // an unread one is judged at record (D6, D9).
+        if let Some(view) = delivered.view() {
+            return self.retaining_view(detector, view);
+        }
+        if delivered.unread() {
+            return self;
+        }
         if self.deferred {
             return self.retaining_deferred(detector, delivered, step);
         }
@@ -545,6 +553,35 @@ impl DeliveryDigest {
             big: self.big,
         };
         kept.with_original(detector, found, original, retained, &HashSet::new())
+    }
+
+    /// `MIK-8066` 2b D3 + amendment A1: kept to an over-bound answer's view.
+    /// No text receipt and no joins survive (they need leaf order); what the
+    /// step holds that the view holds, exactly, becomes the cut, which the
+    /// record sketches as the excuse and samples as evidence. Never deferred,
+    /// so capping keeps the cut as it is.
+    fn retaining_view(self, detector: &CollusionDetector, view: &view::AnswerView) -> Self {
+        let mut cut: Vec<u64> = self
+            .segments
+            .iter()
+            .flat_map(|s| detector.sampled_kgram_stream(s.text.chars()))
+            .chain(self.join_fingerprints(detector))
+            .chain(self.retained.iter().copied())
+            .filter(|&h| view.contains(h))
+            .collect();
+        cut.sort_unstable();
+        cut.dedup();
+        Self {
+            segments: Vec::new(),
+            retained: Vec::new(),
+            sensitive: self.sensitive,
+            deferred: false,
+            seam_sources: None,
+            cut_fps: (!cut.is_empty()).then(|| cut.into()),
+            seam_excuses: None,
+            joins: Joins::None,
+            big: self.big,
+        }
     }
 
     /// [`Self::retaining`] for a digest whose cap is deferred (MIK-7992): its

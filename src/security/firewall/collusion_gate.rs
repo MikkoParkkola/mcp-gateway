@@ -25,6 +25,7 @@ use super::collusion_digest::{
     DELIVERED_SET_CAP, key_path_joins, key_path_run_indices, key_path_runs,
 };
 pub(crate) use super::collusion_digest::{Delivered, DeliveryDigest};
+use super::collusion_digest::{Mode, view};
 use super::{
     Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType, Severity,
 };
@@ -600,16 +601,46 @@ impl Firewall {
         answer: &'v Value,
         staged: Option<&PlanStaging>,
     ) -> Option<Delivered<'v>> {
-        self.relay_detector()?;
-        let (leaves, values) = delivery_parts(answer);
-        let delivered = Delivered::of_parts(leaves, values).map(|d| d.with_answer(answer));
-        if delivered.is_none() {
-            match staged {
-                Some(staged) => self.count_plan_drop_once(staged),
-                None => self.count_plan_drop(),
-            }
+        let _ = staged;
+        let delivered = self.read_answer(answer)?;
+        if let Some(why) = delivered.unread_reason() {
+            self.count_unread(why);
         }
-        delivered
+        Some(delivered)
+    }
+
+    /// `answer` read leaf by leaf under the 1 MiB bound, else as a bounded
+    /// view (`MIK-8066` 2b D1), else unread (D6). The allocation-free
+    /// preflight runs first, so no walk ever runs past its caps. Uncounted.
+    fn read_answer<'v>(&self, answer: &'v Value) -> Option<Delivered<'v>> {
+        let detector = self.relay_detector()?;
+        if let Err(why) = view::preflight(detector, answer) {
+            return Some(Delivered::of_mode(Mode::Unread(why)));
+        }
+        let (leaves, values) = delivery_parts(answer);
+        if let Some(delivered) = Delivered::of_parts(leaves, values) {
+            return Some(delivered.with_answer(answer));
+        }
+        Some(match view::build(detector, answer, None) {
+            Ok(view) => Delivered::of_mode(Mode::View(view)).with_answer(answer),
+            Err(why) => Delivered::of_mode(Mode::Unread(why)),
+        })
+    }
+
+    /// Count a plan whose answer could not be read (D6): for want of
+    /// `VIEW_BYTES` room, or past a cap.
+    fn count_unread(&self, why: view::Unreadable) {
+        let Some(detector) = self.relay_detector() else {
+            return;
+        };
+        let (counter, bound) = match why {
+            view::Unreadable::NoRoom => (&detector.views.budget_refusals, "plan_view_budget"),
+            view::Unreadable::Shape | view::Unreadable::EntryCap => {
+                (&detector.views.unread_plans, "plan_answer_unread")
+            }
+        };
+        counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        telemetry_metrics::counter!(CAPACITY_METRIC, "bound" => bound).increment(1);
     }
 
     /// What `answer` delivers, read as `delivered_for_plan` reads it; when it is
@@ -622,11 +653,19 @@ impl Firewall {
         fallback: &'v Value,
         staged: Option<&PlanStaging>,
     ) -> Option<Delivered<'v>> {
-        self.relay_detector()?;
-        let (leaves, values) = delivery_parts(answer);
-        Delivered::of_parts(leaves, values)
-            .map(|d| d.with_answer(answer))
-            .or_else(|| self.delivered_for_plan(fallback, staged))
+        let _ = staged;
+        let full = self.read_answer(answer)?;
+        let Some(why) = full.unread_reason() else {
+            return Some(full);
+        };
+        // `MIK-8066` 2b D7: the flat fallback only while the fuller reading
+        // cannot be read; counted only when neither can.
+        let flat = self.read_answer(fallback)?;
+        if flat.unread_reason().is_none() {
+            return Some(flat);
+        }
+        self.count_unread(why);
+        Some(full)
     }
 
     /// [`Self::count_plan_drop`] unless this delivery already counted one:
@@ -660,8 +699,11 @@ impl Firewall {
         let mut digest = digest.retaining_for(detector, delivered, step);
         // `MIK-8066.BIG.3`: a step past the plan bound keeps its evidence and
         // excuse to what the answer delivered.
-        if let Some(big) = digest.big.as_mut() {
-            big.keep_to(delivered.kgrams(detector));
+        // An unread answer is judged at record (D6, D9): no retention.
+        if let Some(big) = digest.big.as_mut()
+            && !delivered.unread()
+        {
+            big.keep_to(delivered.found(detector));
         }
         digest
     }

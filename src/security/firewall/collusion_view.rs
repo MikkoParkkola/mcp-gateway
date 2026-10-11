@@ -6,10 +6,6 @@
 //! the values run together, each key-path join), deduplicated and sorted,
 //! and nothing else: no leaf set, no text. Every byte it stores is reserved
 //! from `VIEW_BYTES` before it is allocated (D8).
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into delivered_for_plan by PR 2b stage 2")
-)]
 
 use std::sync::atomic::Ordering;
 
@@ -60,7 +56,7 @@ impl AnswerView {
 /// The allocation-free preflight (D2): text plus a segment per leaf, nodes
 /// (every key and every value) and depth, each against its cap. Iterative,
 /// with a stack bounded by the depth cap, so deep input cannot overflow.
-fn preflight(detector: &CollusionDetector, answer: &Value) -> Result<usize, Unreadable> {
+pub(crate) fn preflight(detector: &CollusionDetector, answer: &Value) -> Result<usize, Unreadable> {
     let text_cap = detector.views.answer_text_cap.load(Ordering::Relaxed);
     let per_leaf = std::mem::size_of::<super::Segment>();
     let node_cap = text_cap / 16;
@@ -194,4 +190,34 @@ pub(crate) fn build(
         entries: boxed,
         charge: entries.charge,
     })
+}
+
+/// What a retention reads the answer through: the leaf path's k-gram set, or
+/// a view (D1). Every lookup retention makes is a sampled fingerprint (D8).
+#[derive(Clone, Copy)]
+pub(crate) enum Found<'a> {
+    Set(&'a std::collections::HashSet<u64>),
+    View(&'a AnswerView),
+}
+
+impl Found<'_> {
+    pub(crate) fn contains(&self, hash: u64) -> bool {
+        match self {
+            Found::Set(set) => set.contains(&hash),
+            Found::View(view) => view.contains(hash),
+        }
+    }
+
+    /// Every entry; for a view, already sampled.
+    pub(crate) fn for_each(&self, mut f: impl FnMut(u64)) {
+        match self {
+            Found::Set(set) => set.iter().copied().for_each(&mut f),
+            Found::View(view) => view.entries().iter().copied().for_each(&mut f),
+        }
+    }
+
+    /// Whether every entry is already a sampled fingerprint.
+    pub(crate) fn presampled(&self) -> bool {
+        matches!(self, Found::View(_))
+    }
 }

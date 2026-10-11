@@ -172,7 +172,7 @@ impl BigStep {
     /// and marked: never overfilled. An empty one leaves nothing to publish.
     /// The selection itself is transient: what stays until record is the
     /// sketch, whose bytes the reservation charged.
-    pub(crate) fn keep_to(&mut self, found: &HashSet<u64>) {
+    pub(crate) fn keep_to(&mut self, found: super::super::collusion_digest::view::Found<'_>) {
         // Retention runs once: a second call finds no filter and keeps the
         // first call's evidence and excuse.
         let Some(step_all) = self.step_all.take() else {
@@ -183,14 +183,17 @@ impl BigStep {
             .step_ev
             .iter()
             .copied()
-            .filter(|fp| found.contains(fp))
+            .filter(|&fp| found.contains(fp))
             .collect();
         self.evidence = (!evidence.is_empty()).then(|| evidence.into());
-        let selection: Vec<u64> = found
-            .iter()
-            .copied()
-            .filter(|&h| detector.keeps(h) && step_all.holds(h))
-            .collect();
+        // A view's entries are already sampled: no `keeps` recheck (D8).
+        let presampled = found.presampled();
+        let mut selection: Vec<u64> = Vec::new();
+        found.for_each(|h| {
+            if (presampled || detector.keeps(h)) && step_all.holds(h) {
+                selection.push(h);
+            }
+        });
         drop(step_all);
         self.step_ev = Box::default();
         let room = self.reservation.n + self.reservation.headroom;
