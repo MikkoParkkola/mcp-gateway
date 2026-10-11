@@ -606,7 +606,7 @@ impl UpstreamListeners {
             #[cfg(test)]
             before_backoff: Arc::default(),
             #[cfg(test)]
-            waits: Default::default(),
+            waits: super::upstream_session::WaitProbe::default(),
             #[cfg(test)]
             ran_interactive: Mutex::default(),
         })
