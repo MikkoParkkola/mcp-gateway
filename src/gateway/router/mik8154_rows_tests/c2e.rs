@@ -189,7 +189,8 @@ async fn r1_a_sync_call_whose_backend_is_reloaded_is_refused() {
     );
     let args = json!({"cmd": NUL});
     let (_, body) = post_meta_invoke(&fx, "k-std", "alpha-pt", "read", args, None, None).await;
-    assert!(message(&body).contains(BACKEND_CHANGED), "r1: {body}");
+    // `gateway_invoke` answers a backend refusal as an `isError` tool result.
+    assert!(body.to_string().contains(BACKEND_CHANGED), "r1: {body}");
     assert_eq!(calls(&fx), 0, "r1: the reloaded instance sent");
 }
 
@@ -210,4 +211,52 @@ async fn r2_a_task_whose_backend_is_reloaded_sends_nothing() {
         "r2: a step reached the reloaded instance: {got}"
     );
     assert!(!forwarded_nul(&fx), "r2: the NUL was forwarded");
+}
+
+/// The all-passthrough playbook over a backend whose step asks a question
+/// (answers `input_required` once).
+async fn asking_playbook_fixture() -> Fx {
+    let definition = playbook_definition(["alpha-pt", "alpha-pt"]);
+    sanitizing(
+        true,
+        super::super::direct_guards_fixture::fixture_hardened_signed_built(
+            Answer::AskOnce,
+            true,
+            move |meta| {
+                let mut engine = crate::playbook::PlaybookEngine::new();
+                engine.register(definition);
+                meta.set_playbook_engine(engine);
+                meta
+            },
+        ),
+    )
+    .await
+}
+
+/// MIK-8341's invariant, pinned here because C2e relies on it (mrtr.rs:186-190,
+/// seat finding: a resumed task would run without the judged digest): a
+/// playbook never answers `input_required` at top level, even when a step's
+/// backend asks a question. Sync: the run's result is not a question.
+#[tokio::test]
+async fn pb1_a_playbook_run_never_answers_input_required() {
+    let fx = Box::pin(asking_playbook_fixture()).await;
+    let body = Box::pin(run_with_nul(&fx)).await;
+    let result = body.get("result").cloned().unwrap_or_default();
+    assert!(
+        !crate::protocol::mrtr::claims_input_required(&result),
+        "pb1: the run asked the client: {body}"
+    );
+}
+
+/// The same as a task: it settles without ever parking an input round, so no
+/// resume can re-run a playbook.
+#[tokio::test]
+async fn pb2_a_playbook_task_never_parks_an_input_round() {
+    let fx = Box::pin(asking_playbook_fixture()).await;
+    let got = Box::pin(task_run_with_nul(&fx, "pb2-k")).await;
+    assert_ne!(
+        got.pointer("/result/status"),
+        Some(&json!("input_required")),
+        "pb2: the task parked a round: {got}"
+    );
 }

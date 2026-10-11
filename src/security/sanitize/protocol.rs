@@ -7,10 +7,11 @@
 use serde_json::Value;
 
 use super::{sanitize_json_value, sanitize_string, validate_protocol_text};
+use crate::protocol::meta::KEY_CLIENT_CAPABILITIES;
 use crate::{Error, Result};
 
-/// Validate `id`, the `_meta` nonces, the idempotency key and
-/// `gateway_invoke`'s argument nonce
+/// Validate `id`, `method`, the capability keys, the `_meta` nonces, the
+/// idempotency key and `gateway_invoke`'s argument nonce
 /// before anything takes them off the request (MIK-8154 S2'), whatever its
 /// backends: these fields are the gateway's. Signing capture removes the
 /// argument nonce before sanitizing, so it is checked here or nowhere.
@@ -30,12 +31,34 @@ pub(crate) fn validate_protocol_fields(request: &Value, nonces: &[&str]) -> Resu
             validate_protocol_text(text)?;
         }
     }
+    // The method and the capability keys intake reads before the sanitize
+    // step (session and hardened checks, muse 6 ruling (b)): refused, never
+    // read dirty and later rewritten into something else.
+    if let Some(Value::String(method)) = request.get("method") {
+        validate_protocol_text(method)?;
+    }
+    let client_capabilities = meta.and_then(|meta| meta.get(KEY_CLIENT_CAPABILITIES));
+    for capabilities in [request.pointer("/params/capabilities"), client_capabilities] {
+        capabilities.map_or(Ok(()), validate_keys)?;
+    }
     if request.pointer("/params/name").and_then(Value::as_str) == Some("gateway_invoke")
         && let Some(Value::String(nonce)) = request.pointer("/params/arguments/nonce")
     {
         validate_protocol_text(nonce)?;
     }
     Ok(())
+}
+
+/// Every object key in `value`, at any depth, passes [`validate_protocol_text`].
+fn validate_keys(value: &Value) -> Result<()> {
+    match value {
+        Value::Object(map) => map.iter().try_for_each(|(key, member)| {
+            validate_protocol_text(key)?;
+            validate_keys(member)
+        }),
+        Value::Array(items) => items.iter().try_for_each(validate_keys),
+        _ => Ok(()),
+    }
 }
 
 /// [`sanitize_json_value`], also reaching into an `arguments` member that is a

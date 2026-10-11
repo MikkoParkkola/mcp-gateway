@@ -276,6 +276,23 @@ pub(super) async fn intake(
     // Get or create session for this client
     let existing_session_id = session_id_header(&headers).map(String::from);
 
+    // MIK-8154 S2': the protocol fields are validated before anything reads
+    // them (the session and hardened checks below; signing and the chain
+    // nonce take theirs off later), and never rewritten. No session yet.
+    if state.sanitize_input
+        && let Err(e) = crate::security::sanitize::validate_protocol_fields(
+            &request,
+            &crate::gateway::PROTOCOL_NONCES,
+        )
+    {
+        return Err(build_error_response(
+            None,
+            -32600,
+            e.to_string(),
+            "",
+            StatusCode::BAD_REQUEST,
+        ));
+    }
     // Not a stream reader, so no branch subscribes: a held subscription
     // fakes a deliverable prompt.
     let opened = if declares_modern_by_header {
@@ -333,22 +350,6 @@ pub(super) async fn intake(
     let raw_id = crate::protocol::mrtr::raw_request_id(&request);
     // A failed grant-decision write refuses under this id (MIK-7663.GH2409.3).
     crate::gateway::meta_mcp::grant_audit::note_answer_id(raw_id.as_ref());
-    // MIK-8154 S2': the protocol fields are validated before signing and the
-    // chain nonce take them off the request, and never rewritten.
-    if state.sanitize_input
-        && let Err(e) = crate::security::sanitize::validate_protocol_fields(
-            &request,
-            &crate::gateway::PROTOCOL_NONCES,
-        )
-    {
-        return Err(build_error_response(
-            None,
-            -32600,
-            e.to_string(),
-            &session_id,
-            StatusCode::BAD_REQUEST,
-        ));
-    }
     // Hardened signs every `tools/call` here, not only `gateway_invoke`
     // (GH1942.HARDEN.1 row 7).
     let mut signing_context = state.meta_mcp.signing_enabled().then(|| {

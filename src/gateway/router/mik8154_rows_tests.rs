@@ -17,6 +17,8 @@ use super::direct_guards_fixture::{
 
 const NUL: &str = "a\u{0}b";
 const NUL_REFUSED: &str = "Protocol error: Input contains null bytes which are not allowed";
+const CONTROL_REFUSED: &str =
+    "Input contains control characters which are not allowed in a protocol field";
 const BLOCKED_SPLIT: &str = "; rm\u{7} -rf / ";
 
 /// A whole JSON-RPC body posted to `uri` as `key` (the envelope rows need an
@@ -135,11 +137,12 @@ async fn s2c_direct_refuses_a_nul_in_params_meta() {
     assert_eq!(calls(&fx), 0, "s2c: dispatched");
 }
 
-/// S2d CONTROL: a removable control character in `method` is stripped, and
-/// the call dispatches as `tools/call`. Green on the tip (the probe showed the
-/// direct route does not route on `method`); it must stay so.
+/// S2d (lead ruling on seat finding muse 6, (b); was "stripped" in r1): a
+/// control character in `method` is refused with the protocol-field refusal,
+/// never stripped, on every route: the method is a protocol field intake reads
+/// before sanitizing. The backend does not run.
 #[tokio::test]
-async fn s2d_direct_strips_a_control_character_in_the_method() {
+async fn s2d_direct_refuses_a_control_character_in_the_method() {
     let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
     let body = send_raw(
         &fx,
@@ -148,8 +151,32 @@ async fn s2d_direct_strips_a_control_character_in_the_method() {
         &direct_call(&json!(1), "tools/\u{7}call"),
     )
     .await;
-    assert!(body.get("error").is_none(), "s2d: {body}");
-    assert_eq!(calls(&fx), 1, "s2d: not dispatched");
+    assert!(message(&body).contains(CONTROL_REFUSED), "s2d: {body}");
+    assert_eq!(calls(&fx), 0, "s2d: dispatched");
+}
+
+/// S10 (muse 6, (b)): on a hardened `/mcp`, `initial\x07ize` is refused before
+/// the session and hardened checks read it; it is never served as
+/// `initialize` (no result, no session opened).
+#[tokio::test]
+async fn s10_a_dirty_initialize_is_refused_not_served() {
+    let fx = Box::pin(sanitizing(
+        true,
+        super::direct_guards_fixture::fixture_hardened_signed(Answer::Ok, true),
+    ))
+    .await;
+    let body = send_raw(
+        &fx,
+        "/mcp",
+        "k-std",
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "initial\u{7}ize", "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {"elicitation": {}},
+            "clientInfo": {"name": "s10", "version": "1"}}}),
+    )
+    .await;
+    assert!(message(&body).contains(CONTROL_REFUSED), "s10: {body}");
+    assert!(body.get("result").is_none(), "s10: served: {body}");
 }
 
 /// S3: the direct route's request firewall judges the sanitized bytes: a
