@@ -735,10 +735,7 @@ fn a_configured_client_id_belongs_to_the_operator_and_survives() {
 // the fields exist (base proof).
 
 fn unix_now() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
+    crate::clock::unix_secs().expect("clock after the epoch")
 }
 
 /// C3: unset buffer, a one-hour token with 330 s left refreshes (10 % of 3600
