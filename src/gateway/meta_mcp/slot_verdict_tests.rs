@@ -303,3 +303,75 @@ async fn l3d_list_servers_counts_the_callers_slot() {
     assert!(counts[1].0, "L3d Invalid: the withheld tool is counted: {}", counts[1].1);
     assert!(counts[2].0, "L3d Lacks: {}", counts[2].1);
 }
+
+/// The surfaced [`TOOL`] entry in alpha's plain `tools/list`, if listed.
+fn surfaced_entry_for_alpha(meta: &super::MetaMcp) -> Option<Value> {
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    let response = meta.handle_tools_list_for_session(
+        crate::protocol::RequestId::Number(1),
+        None,
+        super::identified_caller(&alpha).scope(),
+    );
+    let body = serde_json::to_value(&response).expect("a response serialises");
+    body.pointer("/result/tools")?
+        .as_array()?
+        .iter()
+        .find(|t| t["name"] == TOOL)
+        .cloned()
+}
+
+/// L3a (SLOTVIS.3, surfaced list), on a single-user gateway: with alpha's
+/// slot warm, the surfaced [`TOOL`] in alpha's `tools/list` is alpha's own
+/// Tool. The shared slot holds a DIFFERENT valid schema, so the bytes tell
+/// which slot it came from. A tool alpha's catalogue withholds is not listed,
+/// exactly as one it lacks. RED on base (measured 2026-10-11): single-user
+/// `tools/list` lists the shared Tool (`resolve_surfaced_tool`).
+#[tokio::test]
+async fn l3a_surfaced_list_takes_the_callers_tool() {
+    let shared = json!({"type": "object", "properties": {"z": {"type": "integer"}}});
+    let mut fx = per_user(CallerSlot::Valid, &shared, Warmth::Cold, CLOSED, Surfaced::Yes);
+    fx.meta.set_multi_user(false);
+    warm_by_listing(&fx.meta).await;
+    let listed =
+        surfaced_entry_for_alpha(&fx.meta).expect("premise: alpha's valid tool is not listed");
+    assert_eq!(listed["inputSchema"], valid(), "L3a: not alpha's schema: {listed}");
+    for slot in [CallerSlot::Invalid, CallerSlot::Lacks] {
+        let mut fx = per_user(slot, &shared, Warmth::Cold, CLOSED, Surfaced::Yes);
+        fx.meta.set_multi_user(false);
+        warm_by_listing(&fx.meta).await;
+        assert_eq!(surfaced_entry_for_alpha(&fx.meta), None, "L3a {slot:?}: listed");
+    }
+}
+
+/// L3a-multi (guard): on a multi-user gateway an isolated per-user backend's
+/// surfaced tool is omitted from `tools/list` altogether (INV-2,
+/// `meta_route_isolation_refused`), whatever alpha's slot holds. Green on
+/// base; kills a change that lets the caller-slot path bypass INV-2.
+#[tokio::test]
+async fn l3a_multi_user_keeps_the_isolated_surfaced_tool_out() {
+    for slot in [CallerSlot::Valid, CallerSlot::Invalid] {
+        let fx = per_user(slot, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+        warm_by_listing(&fx.meta).await;
+        assert_eq!(surfaced_entry_for_alpha(&fx.meta), None, "L3a-multi {slot:?}: listed");
+    }
+}
+
+/// L6b (SLOTVIS.6 listing clause): alpha's slot was warm and has been
+/// evicted, so it is cold again and the disabled list withholds that
+/// backend's tools from alpha. RED on base: the shared slot names it.
+#[tokio::test]
+async fn l6b_evicted_caller_disabled_list_withholds() {
+    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+    warm_by_listing(&fx.meta).await;
+    let backend = fx
+        .meta
+        .backends
+        .get(super::slot_verdict_fixture::BACKEND)
+        .expect("the backend");
+    assert!(
+        backend.evict_idle_per_user_entries(std::time::Duration::ZERO) >= 1,
+        "premise: alpha's slot was not evicted"
+    );
+    let listed = disabled_as_alpha(&fx.meta);
+    assert!(!names_tool(&listed), "L6b: an evicted caller is named the tool: {listed}");
+}
