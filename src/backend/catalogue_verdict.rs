@@ -13,7 +13,8 @@ use crate::capability::validator::input_schema_is_structurally_valid;
 use crate::protocol::Tool;
 
 use super::Backend;
-use super::fill_check::Completeness;
+use super::fill_check::{Completeness, is_transport_failure};
+use crate::config::InputSchemaEnforcement;
 
 /// What `binding`'s catalogue says about a tool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +29,28 @@ pub(crate) enum CatalogueVerdict {
     /// the slot may not be fetched for this caller. The argument-key check
     /// decides, as before.
     Unknown,
+}
+
+/// A fill that failed, answered by F13's own table so the verdict refuses
+/// exactly what the argument-key check would: the slot's failsafe always;
+/// under `closed`, a backend that could not be reached or is waiting for a
+/// login. Anything else vouches for nothing ([`CatalogueVerdict::Unknown`]),
+/// and the argument-key check decides, as before.
+fn refused_fill(
+    mode: InputSchemaEnforcement,
+    error: crate::Error,
+) -> crate::Result<CatalogueVerdict> {
+    match error {
+        e @ (crate::Error::CircuitOpen { .. }
+        | crate::Error::RateLimited(_)
+        | crate::Error::IdentitySlotsExhausted { .. }) => Err(e),
+        e if mode == InputSchemaEnforcement::Closed
+            && (is_transport_failure(&e) || e.is_authorization_wait()) =>
+        {
+            Err(e)
+        }
+        _ => Ok(CatalogueVerdict::Unknown),
+    }
 }
 
 fn judged(tool: &Tool) -> CatalogueVerdict {
@@ -87,7 +110,7 @@ impl Backend {
                 Some(now) => now,
                 None => return Ok(cached.as_ref().map_or(CatalogueVerdict::Unknown, judged)),
             },
-            Err(e) => return Err(e),
+            Err(e) => return refused_fill(self.config.input_schema_enforcement, e),
         };
         let newer = matches!(completeness, Completeness::Unknown)
             .then(|| self.held_tools_for(binding))
