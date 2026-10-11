@@ -1,0 +1,14 @@
+diff --git a/src/events/store.rs b/src/events/store.rs
+index 2510263e0..ed1a8cdc2 100644
+--- a/src/events/store.rs
++++ b/src/events/store.rs
+@@ -658,6 +658,9 @@ impl Store {
+         tail: TailPolicy,
+         still: impl FnOnce(&Subscription) -> bool,
+     ) -> std::io::Result<bool> {
++        if now.is_err() {
++            return Ok(false);
++        }
+         let now = now.ok();
+         let mut state = self.state.lock();
+         if let Some(now) = now {

@@ -1,0 +1,17 @@
+diff --git a/src/oauth/client/grants.rs b/src/oauth/client/grants.rs
+index bc9b9fa70..09af5acb0 100644
+--- a/src/oauth/client/grants.rs
++++ b/src/oauth/client/grants.rs
+@@ -49,11 +49,7 @@ impl OAuthClient {
+             .ok_or_else(|| Error::OAuth("No client ID for client_credentials".to_string()))?;
+ 
+         let params = self.client_credentials_params(&client_id);
+-
+-        // One clock reading dates the token this request returns; a clock that
+-        // cannot be read (before 1970) refuses before anything is sent
+-        // (MIK-8202).
+-        let now = super::issuance_clock()?;
++        let now = super::issuance_clock().unwrap_or(0);
+ 
+         let response = self
+             .client_for(&auth_meta.token_endpoint)?

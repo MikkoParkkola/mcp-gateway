@@ -1,0 +1,13 @@
+diff --git a/src/events/store.rs b/src/events/store.rs
+index 2510263e0..338d488fd 100644
+--- a/src/events/store.rs
++++ b/src/events/store.rs
+@@ -277,7 +277,7 @@ impl Store {
+         now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
+         tail: TailPolicy,
+     ) -> std::io::Result<Self> {
+-        let now = now.ok();
++        let now = Some(now.unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH));
+         let subs_dir = root.join("subs");
+         let verified_dir = root.join("verified");
+         let outbox_dir = root.join("outbox");

@@ -1,0 +1,18 @@
+diff --git a/src/events/upstream_session_notes.rs b/src/events/upstream_session_notes.rs
+index 47c4ae792..150b9ef5b 100644
+--- a/src/events/upstream_session_notes.rs
++++ b/src/events/upstream_session_notes.rs
+@@ -137,12 +137,7 @@ impl State<'_> {
+         };
+         // One reading dates every note this flush emits. On a clock that cannot
+         // be read (before 1970) none is emitted and each is counted (MIK-8202).
+-        let Ok(occurred_at) = crate::clock::utc_now() else {
+-            for _ in &due {
+-                hub.count_clock_drop();
+-            }
+-            return false;
+-        };
++        let occurred_at = crate::clock::utc_now().unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+         for (kind, uri) in due {
+             if !self.shared.need.lock().emits(kind, uri.as_deref()) {
+                 continue;

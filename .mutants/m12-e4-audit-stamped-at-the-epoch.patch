@@ -1,0 +1,13 @@
+diff --git a/src/clock.rs b/src/clock.rs
+index 6d760e358..81fb5c579 100644
+--- a/src/clock.rs
++++ b/src/clock.rs
+@@ -96,7 +96,7 @@ pub(crate) fn stamp_audit_row(fields: &mut serde_json::Map<String, serde_json::V
+     if let Ok(now) = utc_now() {
+         fields.insert("timestamp".into(), now.to_rfc3339().into());
+     } else {
+-        fields.insert("timestamp".into(), serde_json::Value::Null);
++        fields.insert("timestamp".into(), chrono::DateTime::<chrono::Utc>::UNIX_EPOCH.to_rfc3339().into());
+         fields.insert("clock_invalid".into(), true.into());
+     }
+ }

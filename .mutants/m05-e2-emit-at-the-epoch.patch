@@ -1,0 +1,13 @@
+diff --git a/src/events/runtime.rs b/src/events/runtime.rs
+index 8ca05d969..0c15c998d 100644
+--- a/src/events/runtime.rs
++++ b/src/events/runtime.rs
+@@ -140,7 +140,7 @@ impl EventsHub {
+     ) {
+         match crate::clock::utc_now() {
+             Ok(occurred_at) => self.emit(build(occurred_at)),
+-            Err(_) => self.runtime.count_clock_drop(),
++            Err(_) => self.emit(build(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH)),
+         }
+     }
+ 

@@ -1,0 +1,17 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index 83223d4e9..052aa62ea 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -339,11 +339,7 @@ impl EventsHub {
+         #[cfg(test)]
+         self.before_window.pause().await;
+         // One reading judges the lease and the retry window (MIK-8202).
+-        let Ok(now) = crate::clock::utc_now() else {
+-            services.audit_outcome(&ended(CLOCK_UNREADABLE)).await;
+-            self.settle(services, record, clock_unsent(record)).await;
+-            return true;
+-        };
++        let now = crate::clock::utc_now().unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+         // An expired row kept for its burials still signs but is not sent
+         // to: unsent, and the next expiry pass settles it (MIK-8061).
+         if !current.live(now) {

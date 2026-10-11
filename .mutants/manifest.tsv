@@ -1,0 +1,17 @@
+head_sha	a8d42a7612ce7ba4c989481e861e623830f59f88
+m01-e1a-removal-refused	linux	m01-e1a-removal-refused.patch	--lib a_withdrawal_on_an_unreadable_clock
+m02-e1b-hold-pass-at-the-epoch	linux	m02-e1b-hold-pass-at-the-epoch.patch	--lib a_hold_pass_on_an_unreadable_clock
+m03-e1c-entombed-at-the-epoch	linux	m03-e1c-entombed-at-the-epoch.patch	--lib a_burial_on_an_unreadable_clock
+m04-e1d-open-at-the-epoch	linux	m04-e1d-open-at-the-epoch.patch	--lib a_store_opened_on_an_unreadable_clock
+m05-e2-emit-at-the-epoch	linux	m05-e2-emit-at-the-epoch.patch	--lib -- an_undatable_backend_change an_undatable_operational_event
+m05b-e2-session-notes-at-the-epoch	linux	m05b-e2-session-notes-at-the-epoch.patch	--lib an_undatable_resource_change
+m06-e2-http-webhook-at-the-epoch	linux	m06-e2-http-webhook-at-the-epoch.patch	--lib an_event_post_on_an_unreadable_clock
+m07-e3-window-judged-at-the-epoch	linux	m07-e3-window-judged-at-the-epoch.patch	--lib an_overdue_record_is_neither_sent_nor_buried
+m08-e3b-last-window-read-at-the-epoch	linux	m08-e3b-last-window-read-at-the-epoch.patch	--lib a_clock_that_fails_at_the_last_window_read
+m09-e3c-signer-at-the-epoch-redrawn	linux	m09-e3c-signer-at-the-epoch-redrawn.patch	--lib a_signer_that_cannot_read_the_clock
+m10-e5-watermark-at-the-epoch	linux	m10-e5-watermark-at-the-epoch.patch	--lib the_expiry_watermark_holds
+m11-e5-bearer-young-at-0-redrawn	linux	m11-e5-bearer-young-at-0-redrawn.patch	--lib a_delegated_bearer_is_undated_on_an_unreadable_clock
+m12-e4-audit-stamped-at-the-epoch	linux	m12-e4-audit-stamped-at-the-epoch.patch	--lib -- an_audit_row_is_kept_undated an_invocation_on_an_unreadable
+m13-o2-token-request-at-the-epoch	linux	m13-o2-token-request-at-the-epoch.patch	--lib an_unreadable_clock_sends_no_token_request
+m02b-e1b-lapsed-hold-resumed-at-the-epoch	linux	m02b-e1b-lapsed-hold-resumed-at-the-epoch.patch	--lib a_lapsed_hold_is_not_revived_on_an_unreadable_clock
+m14-revoke-on-an-unreadable-clock	linux	m14-revoke-on-an-unreadable-clock.patch	--lib a_revocation_on_an_unreadable_clock_keeps_the_row

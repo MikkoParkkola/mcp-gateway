@@ -1,0 +1,13 @@
+diff --git a/src/events/store_pending.rs b/src/events/store_pending.rs
+index d0d31f307..6e967cd8b 100644
+--- a/src/events/store_pending.rs
++++ b/src/events/store_pending.rs
+@@ -436,7 +436,7 @@ impl Store {
+         now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
+         policy: DeadPolicy,
+     ) -> std::io::Result<Settled> {
+-        let now = now.ok();
++        let now = Some(now.unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH));
+         let mut state = self.state.lock();
+         // Only the claimed occurrence: a later one under the same id, admitted
+         // after the claim was cancelled, is not settled by the old answer.

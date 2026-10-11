@@ -1,0 +1,13 @@
+diff --git a/src/events/webhook_source.rs b/src/events/webhook_source.rs
+index 8dda4552b..7e3dd3743 100644
+--- a/src/events/webhook_source.rs
++++ b/src/events/webhook_source.rs
+@@ -95,7 +95,7 @@ impl EventsHub {
+             );
+             return Ok(());
+         }
+-        let now = crate::clock::utc_now().inspect_err(|_| self.runtime.count_clock_drop())?;
++        let now = crate::clock::utc_now().unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+         let route = format!("{}.{}", inbound.capability, inbound.route);
+         let key = dedupe_key(&inbound);
+         if let Some(key) = &key {

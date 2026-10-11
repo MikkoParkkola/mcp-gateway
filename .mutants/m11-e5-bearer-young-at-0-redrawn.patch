@@ -1,0 +1,15 @@
+diff --git a/src/events/services.rs b/src/events/services.rs
+index 36e97cb22..af7264d56 100644
+--- a/src/events/services.rs
++++ b/src/events/services.rs
+@@ -140,9 +140,7 @@ impl Services {
+         if let Some(verdict) = forced_verdict::forced() {
+             return verdict;
+         }
+-        let Ok(now) = crate::clock::utc_now() else {
+-            return AccessVerdict::Undated;
+-        };
++        let now = crate::clock::utc_now().unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+         if self.admits_at(sub, backend, now).await {
+             AccessVerdict::Admits
+         } else {

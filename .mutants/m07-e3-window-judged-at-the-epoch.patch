@@ -1,0 +1,16 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index 83223d4e9..dc69d9fe1 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -89,10 +89,7 @@ impl EventsHub {
+         }
+         // The retry window is an access check: on a clock that cannot be read
+         // the record is neither sent nor buried (MIK-8202).
+-        let Ok(now) = crate::clock::utc_now() else {
+-            self.settle(services, &record, clock_unsent(&record)).await;
+-            return;
+-        };
++        let now = crate::clock::utc_now().unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+         if self.overdue(&record, now) {
+             if !self.recorded_or_retry(services, &ctx, "exhausted").await {
+                 return;

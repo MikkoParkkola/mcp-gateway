@@ -1,0 +1,13 @@
+diff --git a/src/events/store_hold.rs b/src/events/store_hold.rs
+index ff32aa197..8f4720671 100644
+--- a/src/events/store_hold.rs
++++ b/src/events/store_hold.rs
+@@ -61,7 +61,7 @@ impl Store {
+         now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
+         max_ttl: chrono::Duration,
+     ) -> std::io::Result<()> {
+-        let now = now.map_err(std::io::Error::other)?;
++        let now = now.unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+         let mut state = self.state.lock();
+         let mut verdicts = Vec::new();
+         let mut changed = Vec::new();

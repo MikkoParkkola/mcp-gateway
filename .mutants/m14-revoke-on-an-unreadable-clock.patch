@@ -1,0 +1,20 @@
+diff --git a/src/events/fanout.rs b/src/events/fanout.rs
+index 8cbb4ba28..afb1b9256 100644
+--- a/src/events/fanout.rs
++++ b/src/events/fanout.rs
+@@ -484,14 +484,7 @@ impl EventsHub {
+     /// is sent on such a clock; the next check on a readable one revokes a
+     /// refusal that still stands.
+     pub(super) async fn revoke(self: &Arc<Self>, refused: &Subscription) {
+-        let Ok(now) = crate::clock::utc_now() else {
+-            tracing::warn!(
+-                clock_unreadable = true,
+-                subscription = %refused.id,
+-                "events: refused subscription kept; the host clock reads before 1970"
+-            );
+-            return;
+-        };
++        let now = crate::clock::utc_now().unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH);
+         let tail = super::tail_policy(&self.config);
+         let snapshot = refused.clone();
+         let removed = self
