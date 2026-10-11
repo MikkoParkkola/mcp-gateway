@@ -603,10 +603,11 @@ async fn http_playbook_literal_blocked_template_is_refused_at_the_route() {
     );
 }
 
-/// STEPFW.1c over `/mcp`: a key that may not invoke the step's tool is refused
-/// the whole playbook with the neutral step answer, before the step runs. Red on
-/// the base: the dispatch recheck refused the step inside a run that still
-/// answered as a success.
+/// PIN (guard row, green on the base): over `/mcp`, a key that may not invoke
+/// the step's tool is refused the whole playbook with the neutral step answer,
+/// before the step runs. The base already failed an abort-mode playbook whole
+/// at the step's dispatch recheck; this row pins that the route's own refusal
+/// of a step target stays neutral too.
 #[tokio::test]
 async fn http_playbook_with_a_denied_step_is_refused_whole() {
     let dir = tempfile::tempdir().expect("tempdir");
