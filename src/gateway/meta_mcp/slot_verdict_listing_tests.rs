@@ -497,7 +497,8 @@ async fn l3b_spec_preview_judges_the_callers_slot() {
         let fx = per_user(slot, &valid(), Warmth::Cold, CLOSED, Surfaced::No);
         warm_by_listing(&fx.meta).await;
         let alpha = super::catalogue_per_caller_tests::identity("alpha");
-        let scope = super::identified_caller(&alpha).scope();
+        let caller = super::identified_caller(&alpha);
+        let scope = caller.scope();
         let filtered = fx.meta.handle_tools_list_filtered(
             crate::protocol::RequestId::Number(1),
             TOOL,
