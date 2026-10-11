@@ -187,6 +187,26 @@ def test_a3_folding_a_fragment_rewrites_its_citations() -> None:
     assert "see UPGRADING 3" in inv and "upgrading.d/9-1.md" not in inv, inv
 
 
+def test_a3b_fragment_numbers_follow_the_assemble_order() -> None:
+    import upgrading_fragments as uf
+
+    assert uf.fragment_numbers(175, ["8044-6.md", "3730.md", "8044-2.md"]) == {
+        "3730.md": 176,
+        "8044-2.md": 177,
+        "8044-6.md": 178,
+    }
+
+
+def test_a1_assemble_leaves_the_appendix_after_the_last_section() -> None:
+    import upgrading_fragments as uf
+
+    guide = su.write(GUIDE, block())
+    frag = "---\nchange: c\naction: a\n---\n## Third\n\n**Startup:** no notice\n\nbody\n"
+    out, _ = uf.assemble(guide, 2, {"9-1.md": frag})
+    assert out.rstrip().endswith(su.END), out[-300:]
+    assert out.split(su.START, 1)[1].split(su.END, 1)[0] == block()
+
+
 QS = """# Quickstart
 <!-- quickstart-minimal-config -->
 ```yaml
