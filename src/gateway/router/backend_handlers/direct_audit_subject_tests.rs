@@ -134,6 +134,7 @@ fn credentialed_caller() -> Caller {
         inbound_headers: axum::http::HeaderMap::new(),
         grant_subject: None,
         spend_key: String::new(),
+        agent_identity: None,
     }
 }
 

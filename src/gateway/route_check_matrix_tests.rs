@@ -191,12 +191,12 @@ fn the_table_answers_every_route_and_stage() {
             }
         }
     }
-    // Today's gaps: R1 nonce (relay), R3 rescan, sanitize and lease and R4a
-    // nonce give-back (D2). P3 closed R5 route firewall, sanitize and X14;
-    // MIK-8315 closed authorize (D3); MIK-8150 closed R2 and R5 nonce give-back
-    // (admission); MIK-8159 closed R2's chain link.
+    // Today's gaps: R1 nonce (relay), R3 sanitize and lease and R4a nonce
+    // give-back (D2). P3 closed R5 route firewall, sanitize and X14; MIK-8315
+    // closed authorize (D3); MIK-8150 closed R2 and R5 nonce give-back
+    // (admission); MIK-8351 closed R3 rescan; MIK-8159 closed R2's chain link.
     assert_eq!(
-        gaps, 5,
+        gaps, 4,
         "the gap count moved: update the table and this pin"
     );
 }
