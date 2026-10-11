@@ -436,12 +436,13 @@ pub(super) fn cancelled_bytes(
     };
     cancelled.revision = u64::MAX;
     let bytes = serialize(&cancelled)?.len();
-    // And once its cancel is claimed pending (MIK-8347), at its widest.
-    let Some(descriptor) = cancelled.upstream.clone() else {
-        return Ok(bytes);
-    };
-    super::pending_cancel::widest_pending_claim(task, &mut cancelled, &descriptor);
-    Ok(bytes.max(serialize(&cancelled)?.len()))
+    // And once its cancel is claimed pending (MIK-8347), at its widest. The
+    // preflight always measures a row carrying the descriptor.
+    let claimed = cancelled.upstream.clone().map_or(Ok(bytes), |descriptor| {
+        super::pending_cancel::widest_pending_claim(task, &mut cancelled, &descriptor);
+        serialize(&cancelled).map(|encoded| encoded.len())
+    })?;
+    Ok(bytes.max(claimed))
 }
 
 /// The encoded size of the bounded failure `record` would settle as, at its

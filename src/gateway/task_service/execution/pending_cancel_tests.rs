@@ -25,7 +25,7 @@ use crate::idempotency::admission::{ExecutionAdmission, Mode, Request};
 use crate::test_wait::{HANG_BOUND, wait_until};
 
 const OWNER: &str = "verified-owner";
-const BACKEND: &str = "peer";
+pub(super) const BACKEND: &str = "peer";
 const TOOL: &str = "slow_echo";
 const HANDLE: &str = "upstream-7";
 

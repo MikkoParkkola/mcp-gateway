@@ -414,3 +414,7 @@ impl TaskExecutor {
 #[cfg(test)]
 #[path = "pending_cancel_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pending_cancel_edge_tests.rs"]
+mod edge_tests;

@@ -10,7 +10,7 @@ use crate::gateway::task_service::execution::pending_cancel::{
     MAX_CANCEL_ATTEMPTS, MAX_CANCEL_PENDING_AGE, NOT_READY_RETRY, backoff_after,
 };
 use crate::gateway::task_service::record::{
-    PENDING_CANCEL_VERSION, PendingCancel, Record, UpstreamRecord,
+    PENDING_CANCEL_VERSION, PendingCancel, Record, Target, UpstreamRecord,
 };
 use crate::protocol::tasks::Task;
 
@@ -95,12 +95,16 @@ fn age_secs() -> i64 {
 
 fn send_of(record: &Record) -> Option<PendingSend> {
     let pending = record.upstream_cancel_pending.as_ref()?;
-    Some(PendingSend {
-        backend: pending.backend_in(&record.targets).map(str::to_owned),
+    Some(send_from(pending, &record.targets))
+}
+
+fn send_from(pending: &PendingCancel, targets: &[Target]) -> PendingSend {
+    PendingSend {
+        backend: pending.backend_in(targets).map(str::to_owned),
         handle: pending.handle.clone(),
         next_after: pending.next_after,
         claimed_at: pending.claimed_at,
-    })
+    }
 }
 
 impl TaskStore {
@@ -166,17 +170,13 @@ impl Shared {
                 return Err(StoreError::Unavailable);
             }
             let entry = owned(&state, owner, id)?;
-            if entry.record.upstream_cancel_pending.is_none() {
-                return Ok(false);
-            }
             (entry.task.clone(), entry.record.clone())
         };
-        let Some(send) = send_of(&record) else {
+        let Some(mut pending) = record.upstream_cancel_pending.take() else {
             return Ok(false);
         };
-        let Some(pending) = record.upstream_cancel_pending.as_mut() else {
-            return Ok(false);
-        };
+        // Read before the pending state leaves the row, for the give-up log.
+        let send = send_from(&pending, &record.targets);
         let mut outcome = match attempt {
             Some(CancelDelivery::Confirmed) => Some(None),
             Some(CancelDelivery::Failed) => {
@@ -196,8 +196,10 @@ impl Shared {
         if outcome.is_none() && send.aged(now) {
             outcome = Some(Some(GiveUp::Age));
         }
+        if outcome.is_none() {
+            record.upstream_cancel_pending = Some(pending);
+        }
         if let Some(given_up) = outcome {
-            record.upstream_cancel_pending = None;
             record.upstream_cancel_sent = true;
             if let Some(given_up) = given_up {
                 let backend = send.backend.as_deref().unwrap_or("");

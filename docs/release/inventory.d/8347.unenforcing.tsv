@@ -6,3 +6,4 @@ src/gateway/task_service/store_pending_cancel.rs	age_secs	1	Converts the age con
 src/gateway/task_service/store_pending_cancel.rs	send_of	1	Projects a record's pending cancel for a sender; the decisions are made by send and record_cancel_attempt_blocking.
 src/gateway/task_service/store_pending_cancel.rs	pending_cancel	1	A read of one row's pending cancel under the state lock; it decides nothing.
 src/gateway/task_service/store_pending_cancel.rs	record_cancel_attempt	1	Runs record_cancel_attempt_blocking on a blocking thread; that function makes every decision.
+src/gateway/task_service/store_pending_cancel.rs	send_from	1	Projects a pending cancel for a sender from the row's targets; the decisions are made by Sender::send and record_cancel_attempt_blocking.
