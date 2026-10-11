@@ -471,20 +471,29 @@ async fn t28b_a_park_waiting_past_its_bound_fails_the_task() {
 /// Once monotonic time is past the bound: the task's end, read from the store.
 /// Two events stop the wait, neither a count of time: the worker is gone (a
 /// task left working by a worker that returned), or it has retried ten times
-/// past the bound and still not ended the task.
+/// past the bound and still not ended the task. A worker that stays busy but
+/// stops reading the clock trips neither, so the whole wait is bounded too:
+/// that worker fails the row instead of hanging it (mutant C28b).
 async fn ended_past_the_bound(state: &Arc<AppState>, id: &str) -> TaskStatus {
     let past_bound = store(state).refused_reads_for_test();
-    loop {
-        let status = stored_status(state, id).expect("the task exists");
-        if !matches!(status, TaskStatus::Working | TaskStatus::InputRequired)
-            || state.task_executor.busy_workers_for_test() == 0
-        {
-            return status;
+    let ended = async {
+        loop {
+            let status = stored_status(state, id).expect("the task exists");
+            if !matches!(status, TaskStatus::Working | TaskStatus::InputRequired)
+                || state.task_executor.busy_workers_for_test() == 0
+            {
+                return status;
+            }
+            std::assert!(
+                store(state).refused_reads_for_test() < past_bound + 10,
+                "still {status:?} after ten retries past the bound"
+            );
+            tokio::time::sleep(CLOCK_RETRY).await;
         }
-        std::assert!(
-            store(state).refused_reads_for_test() < past_bound + 10,
-            "still {status:?} after ten retries past the bound"
-        );
-        tokio::time::sleep(CLOCK_RETRY).await;
-    }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(10), ended)
+        .await
+        .expect(
+            "the wait past the clock bound: the task neither ended nor lost its worker within 10 s",
+        )
 }
