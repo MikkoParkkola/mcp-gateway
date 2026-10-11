@@ -104,6 +104,10 @@ pub(super) enum List {
 
 /// One catalogue state for a pair.
 #[derive(Clone, Copy, Debug)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is one independent axis of the twins' setup"
+)]
 pub(super) struct State {
     pub(super) reason: Reason,
     pub(super) list: List,
@@ -151,8 +155,13 @@ struct Scripted {
 #[async_trait::async_trait]
 impl crate::transport::Transport for Scripted {
     async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
-        let body = match method {
-            "tools/list" => {
+        if method != "tools/list" {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let body = json!({"content": [{"type": "text", "text": "ok"}], "isError": false});
+            return Ok(JsonRpcResponse::success(RequestId::Number(1), body));
+        }
+        let body = {
+            {
                 self.lists.fetch_add(1, Ordering::SeqCst);
                 let cursor = params
                     .as_ref()
@@ -184,10 +193,6 @@ impl crate::transport::Transport for Scripted {
                         return Err(crate::Error::Transport("scripted list failure".into()));
                     }
                 }
-            }
-            _ => {
-                self.calls.fetch_add(1, Ordering::SeqCst);
-                json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
             }
         };
         Ok(JsonRpcResponse::success(RequestId::Number(1), body))

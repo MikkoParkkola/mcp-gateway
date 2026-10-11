@@ -306,11 +306,11 @@ fn normalised(body: &str, tool: &str) -> (String, usize) {
 }
 
 /// F5(a) (MIK-8361 lead ruling 2026-10-12, per-user class; guard, kills
-/// M18): a step route authorize refuses (run_command, on the default deny
-/// list) resolves no credential and sends nothing of its own. [note,
-/// run_command] is measured against [note] alone: the same mints and sends,
-/// so run_command's share is zero. The caller sees the status and body the
-/// twin [note, nosuch] gets (tool name factored out). Labelled residual
+/// M18): a step route authorize refuses (`run_command`, on the default deny
+/// list) resolves no credential and sends nothing of its own. `[note,
+/// run_command]` is measured against `[note]` alone: the same mints and sends,
+/// so `run_command`'s share is zero. The caller sees the status and body the
+/// twin `[note, nosuch]` gets (tool name factored out). Labelled residual
 /// (design A4): on this per-user backend the twin's caller-slot fill mints and
 /// lists where the withheld name does neither, which the caller cannot see.
 #[tokio::test]

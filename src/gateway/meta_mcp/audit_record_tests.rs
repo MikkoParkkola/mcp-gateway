@@ -281,7 +281,7 @@ async fn api_key_record_never_contains_secret() {
 /// D1-T6. A refused call writes one `denied` record with the refusal code.
 /// MIK-8361 (one record per call): the caller reads the missing name's
 /// answer, and the record is the one that answer's writer gives it, with the
-/// refusal's code (DenyAll's -32003) and that answer's response hash.
+/// refusal's code (`DenyAll`'s -32003) and that answer's response hash.
 #[tokio::test]
 async fn denied_call_writes_denied_record() {
     let dir = tempfile::tempdir().unwrap();

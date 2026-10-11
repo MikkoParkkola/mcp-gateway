@@ -458,9 +458,9 @@ fn normalised(body: &str, tool: &str) -> (String, usize) {
 /// F5(a), stdio (guard, kills M18; MIK-8361 lead ruling 2026-10-12, per-user
 /// class): a step route authorize refuses (`run_command`, on the default
 /// tool-policy deny list) resolves no credential and sends nothing of its
-/// own. [read, run_command] is measured against [read] alone: the same
-/// resolutions and sends, so run_command's share is zero. The caller sees
-/// the answer the twin [read, nosuch] gets (tool name factored out).
+/// own. `[read, run_command]` is measured against `[read]` alone: the same
+/// resolutions and sends, so `run_command`'s share is zero. The caller sees
+/// the answer the twin `[read, nosuch]` gets (tool name factored out).
 /// Labelled residual (design A4): on this per-user backend the twin's
 /// caller-slot fill resolves where the withheld name resolves nothing, a
 /// count the caller cannot see.

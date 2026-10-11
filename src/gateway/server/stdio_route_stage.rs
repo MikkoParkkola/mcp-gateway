@@ -62,38 +62,8 @@ impl Gateway {
         targets.extend(meta_mcp.playbook_step_targets(tool_name, arguments));
         // Authorize every target before scanning any, so a refused later
         // target charges no earlier one's budget.
-        for (index, target) in targets.iter().enumerate() {
-            let checked = target.as_target();
-            // The one route-stage authorize `/mcp` also runs. A surfaced name
-            // withheld from this caller is not a target (MIK-8340), so neither
-            // the firewall nor X14 can confirm it exists.
-            // A requested target the caller cannot see takes the missing
-            // name's path (MIK-8361); a step's target keeps the strict one.
-            let routed = if index < request_targets {
-                meta_mcp
-                    .authorize_requested_target(
-                        scope,
-                        (checked.server, checked.tool),
-                        checked.arguments,
-                    )
-                    .map(|_| ())
-            } else {
-                meta_mcp.authorize_route_target(
-                    scope,
-                    (checked.server, checked.tool),
-                    checked.arguments,
-                )
-            };
-            if let Err(error) = routed {
-                // A step's target is operator-defined: its refusal is neutral (A3).
-                let error = if index < request_targets {
-                    error
-                } else {
-                    crate::gateway::meta_mcp::step_not_permitted()
-                };
-                let answer = error_response_preserving_status(id.clone(), &error);
-                return (RouteStage::Answer(answer), witness);
-            }
+        if let Some(answer) = authorize_targets(meta_mcp, scope, (&targets, request_targets), id) {
+            return (RouteStage::Answer(answer), witness);
         }
         // The stateful controls key on the one client this process serves; an
         // empty identity would refuse every call unscored.
@@ -193,4 +163,34 @@ impl Gateway {
         };
         (stage, witness)
     }
+}
+
+/// The one route-stage authorize `/mcp` also runs, over every target: the
+/// answer of the first it refuses. A surfaced name withheld from this caller
+/// is not a target (MIK-8340), so neither the firewall nor X14 can confirm it
+/// exists. A requested target the caller cannot see takes the missing name's
+/// path (MIK-8361); a step's target keeps the strict authorize, and its
+/// refusal is neutral, as the step is operator-defined (A3).
+fn authorize_targets(
+    meta_mcp: &MetaMcp,
+    scope: crate::gateway::meta_mcp::InvokeScope<'_>,
+    (targets, request_targets): (&[crate::gateway::authz::CallTarget<'_>], usize),
+    id: &RequestId,
+) -> Option<JsonRpcResponse> {
+    targets.iter().enumerate().find_map(|(index, target)| {
+        let checked = target.as_target();
+        let (server_tool, arguments) = ((checked.server, checked.tool), checked.arguments);
+        let routed = if index < request_targets {
+            meta_mcp
+                .authorize_requested_target(scope, server_tool, arguments)
+                .map(|_| ())
+        } else {
+            meta_mcp
+                .authorize_route_target(scope, server_tool, arguments)
+                .map_err(|_| crate::gateway::meta_mcp::step_not_permitted())
+        };
+        routed
+            .err()
+            .map(|error| error_response_preserving_status(id.clone(), &error))
+    })
 }

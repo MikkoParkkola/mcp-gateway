@@ -118,7 +118,7 @@ async fn call(fx: &Fx, entry: Entry, args: Value) -> (StatusCode, Value) {
 
 /// ORACLE.2, admin rule and grant: the withheld capability answers exactly as
 /// the undefined one, clean or tripping. RED on base (403 admin refusal /
-/// -32004 grant refusal vs ToolNotFound).
+/// -32004 grant refusal vs `ToolNotFound`).
 #[tokio::test]
 async fn oracle2_capability_reasons_answer_as_the_undefined_name() {
     let cmd = [";", " rm", " -rf", " / "].concat();

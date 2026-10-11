@@ -163,6 +163,8 @@ impl Backend {
     /// Returns a type-erased future: the fill underneath is deep, and naming
     /// its type in every caller's state machine pushed the stdio dispatch
     /// task past the trait solver's recursion limit (E0275 on Windows/Kani).
+    /// Production goes through [`Self::catalogue_refusal`] (MIK-8361).
+    #[cfg(test)]
     pub(crate) fn undeclared_key_refusal<'a>(
         &'a self,
         identity_key: Option<&'a str>,
@@ -177,14 +179,15 @@ impl Backend {
         self.catalogue_refusal((identity_key, headers), tool, arguments, Lens::Catalogue)
     }
 
-    /// [`Self::undeclared_key_refusal`] through `lens`. Under
+    /// The F13 catalogue check (`undeclared_key_refusal`) through `lens`. Under
     /// [`Lens::Withheld`] (MIK-8361) a name the caller may not see gets
     /// exactly the answer a name its catalogue lacks gets, with the same fill,
     /// texts and errors, except that it is never forwarded (never `None`).
     ///
     /// # Errors
     ///
-    /// As [`Self::undeclared_key_refusal`].
+    /// As `undeclared_key_refusal`: the slot's `CircuitOpen` or
+    /// `RateLimited`, and under `closed` the fill's transport error.
     pub(crate) fn catalogue_refusal<'a>(
         &'a self,
         (identity_key, headers): (Option<&'a str>, &'a [(String, String)]),

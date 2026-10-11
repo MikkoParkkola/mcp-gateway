@@ -120,13 +120,10 @@ async fn guard_tool_call(
     (params, id, session_id): (Option<&Value>, &RequestId, Option<&str>),
     (backend, failed): (&crate::backend::Backend, &DirectFailure<'_>),
 ) -> Result<(), BackendRejection> {
-    let Some(params) = params else {
+    let named = params.and_then(|params| Some((params, params.get("name")?.as_str()?)));
+    let Some((params, tool_name)) = named.filter(|(_, tool)| !tool.is_empty()) else {
         return Err(unnamed_call(id));
     };
-    let tool_name = params.get("name").and_then(Value::as_str).unwrap_or("");
-    if tool_name.is_empty() {
-        return Err(unnamed_call(id));
-    }
 
     if let Err(e) = validate_tool_name(tool_name) {
         warn!(backend = %backend_name, tool = %tool_name, "Tool name rejected by validation");

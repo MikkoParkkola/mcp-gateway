@@ -58,8 +58,8 @@ async fn k1_concurrent_cold_calls_list_once() {
     let mut cells = Vec::new();
     for side in [Side::Withheld, Side::Absent] {
         let twin = twin(side, state).await;
-        let calls = (0..4).map(|_| twin.call(Entry::Invoke, json!({})));
-        let answers = futures::future::join_all(calls).await;
+        let racing = (0..4).map(|_| twin.call(Entry::Invoke, json!({})));
+        let answers = futures::future::join_all(racing).await;
         let lists = twin.lists.load(Ordering::SeqCst);
         if lists != 1 {
             cells.push(format!(

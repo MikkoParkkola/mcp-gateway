@@ -162,20 +162,9 @@ impl MetaMcp {
         Some(answer)
     }
 
-    /// Whether the routing profile in force for `session_id` excludes
-    /// `(server, tool)`: a reason a listing hides it (R6), for the direct
-    /// route, whose authorize does not read profiles.
-    pub(crate) fn profile_refuses(
-        &self,
-        server: &str,
-        tool: &str,
-        session_id: Option<&str>,
-    ) -> bool {
-        self.profile_refusal(server, tool, session_id).is_some()
-    }
-
     /// The session profile's refusal of `(server, tool)`, if it refuses it:
-    /// the error the meta path's own check gives it.
+    /// the error the meta path's own check gives it. A reason a listing hides
+    /// it (R6), read by the direct route, whose authorize ignores profiles.
     pub(crate) fn profile_refusal(
         &self,
         server: &str,
