@@ -199,7 +199,7 @@ async fn fixture_on(server: &str, config: BackendConfig, shared: Option<Hint>) -
         tool: TOOL.to_string(),
     }]);
     assert_eq!(
-        meta.surfaced_tool_server(TOOL),
+        meta.surfaced_server_unscoped(TOOL),
         Some(server),
         "premise: surfaced"
     );
@@ -287,23 +287,27 @@ async fn ask_caller(
     let principal = crate::protocol::mrtr::source_fingerprint(caller.principal_source(None));
     let outcome = fx
         .meta
-        .confirm_destructive_task(&TaskConfirmationRequest {
-            id: RequestId::Number(7),
-            tool_name: TOOL,
-            arguments: &arguments,
-            task: Some(&task),
-            retry,
-            verified_identity: caller.verified_identity,
-            principal,
-            quota: caller.quota_key(),
-            owner,
-            scope: open_scope(),
-            session_id: None,
-            input_capabilities: declared,
-            is_modern: true,
-            admission: &fx.admission,
-        })
-        .await;
+        .confirm_destructive_task_with(
+            &TaskConfirmationRequest {
+                id: RequestId::Number(7),
+                tool_name: TOOL,
+                arguments: &arguments,
+                task: Some(&task),
+                retry,
+                verified_identity: caller.verified_identity,
+                principal,
+                quota: caller.quota_key(),
+                owner,
+                scope: open_scope(),
+                session_id: None,
+                input_capabilities: declared,
+                is_modern: true,
+                admission: &fx.admission,
+            },
+            None,
+        )
+        .await
+        .0;
     assert_eq!(fx.mint.0.load(Ordering::SeqCst), 0, "the gate never mints");
     outcome
 }
@@ -547,8 +551,13 @@ async fn a_caller_with_no_identity_and_no_key_is_refused_as_unbindable() {
     let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
     let (code, message) = refusal(&ask_as(&fx, &fresh(), elicitation(), None).await);
     assert_eq!(code, -32003, "{message}");
-    assert!(message.contains("cannot name"), "{message}");
+    assert_eq!(message, X14_UNBINDABLE);
 }
+
+/// X14's whole refusal for a caller it cannot bind a confirmation to: the one
+/// witness of that `-32003` text (`task_confirmation.rs`).
+const X14_UNBINDABLE: &str =
+    "this destructive call cannot be confirmed for a caller this gateway cannot name";
 
 fn refusal(outcome: &TaskConfirmation) -> (i32, String) {
     let TaskConfirmation::Answer(response) = outcome else {
@@ -789,3 +798,4 @@ mod mint_refusal;
 mod replay;
 /// The stdio principal rows (route-check-parity P3, MIK-8160, MIK-8326).
 mod stdio_binding;
+mod witness;

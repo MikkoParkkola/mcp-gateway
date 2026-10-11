@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The direct route's answer to a dispatched failure, shared by both of
-//! `dispatch_in_scope`'s callers: the sanitized `tools/call` arm and the
+//! the direct send's callers (`direct_send`): the sanitized `tools/call` arm and the
 //! passthrough/other-method arm (A11 amendment, Direct).
 //!
 //! A11-c: a 401 on a managed credential forces at most one refresh first. A
@@ -44,7 +44,10 @@ impl DirectFailure<'_> {
     /// failure (ADR-012 consequence 1) whichever answer it gets.
     pub(super) async fn answer(
         self,
-        reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
+        settle: (
+            Option<&mut crate::idempotency::IdempotencyReservation>,
+            Option<crate::gateway::meta_mcp::admission::SyncLease>,
+        ),
         error: crate::Error,
         call: &crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall<'_>,
     ) -> (StatusCode, Json<Value>) {
@@ -89,7 +92,7 @@ impl DirectFailure<'_> {
         // is refused at mint, before the idempotency guard, and the guard's
         // principal is the managed binding, which changes with a reconnect or
         // a rotation (`support.rs` `caller_cache_principal`, A11 review).
-        settle_direct_failure(reservation, &error, &response);
+        settle_direct_failure(settle, &error, &response);
         // The account refusal re-reads the failure's text, so it answers only
         // a failure the screen left as it was.
         if screen == EgressOutcome::Refused {

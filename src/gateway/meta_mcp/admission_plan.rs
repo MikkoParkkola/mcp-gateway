@@ -13,6 +13,44 @@ use crate::{Error, Result};
 use super::super::{MetaMcp, MetaMcpCallerContext};
 
 impl MetaMcp {
+    /// The backend targets a `gateway_run_playbook` call will reach, one per
+    /// declared step, for the route stage to authorize and scan before any step
+    /// runs (MIK-8362). `server` and `tool` are literal in the definition; only
+    /// `arguments` are interpolated at run time, so the step's template
+    /// arguments stand in for them. Empty when the meta-tool is not exposed or
+    /// the name is unknown: the handler's own answer stays the answer, and the
+    /// route never confirms a playbook it would not run.
+    pub(crate) fn playbook_step_targets(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+    ) -> Vec<crate::gateway::authz::CallTarget<'static>> {
+        if tool_name != "gateway_run_playbook" || !self.meta_tool_exposure.is_exposed(tool_name) {
+            return Vec::new();
+        }
+        let Ok(name) = extract_required_str(arguments, "name") else {
+            return Vec::new();
+        };
+        let engine = self.playbook_engine.read();
+        let Some(definition) = engine.get(name) else {
+            return Vec::new();
+        };
+        definition
+            .steps
+            .iter()
+            .map(|step| crate::gateway::authz::CallTarget {
+                server: step.server.clone(),
+                tool: step.tool.clone(),
+                arguments: std::borrow::Cow::Owned(Value::Object(
+                    step.arguments
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect(),
+                )),
+            })
+            .collect()
+    }
+
     /// Legacy unkeyed orchestration retains its existing per-step checks. A
     /// keyed retry must pass current checks before exposing any retained data.
     pub(super) fn authorize_execution_plan(

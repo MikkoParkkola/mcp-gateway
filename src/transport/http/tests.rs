@@ -571,3 +571,39 @@ async fn drop_aborts_refresh_task_without_close() {
 
 #[path = "status_typing_tests.rs"]
 mod status_typing;
+
+/// MIK-8339: an OAuth transport always shares one login gate with its client.
+/// A gated client keeps its own gate; an ungated one is given the transport's.
+#[tokio::test]
+async fn an_oauth_transport_shares_one_gate_with_its_client() {
+    let url = "http://127.0.0.1:1/mcp";
+    let gate = Arc::new(crate::oauth::login_gate::LoginGate::default());
+    let gated = oauth_client_for(url).with_login_gate(Arc::clone(&gate));
+    let t = HttpTransport::new_with_oauth(
+        url,
+        HashMap::new(),
+        Duration::from_secs(5),
+        true,
+        Some(gated),
+        None,
+    )
+    .unwrap();
+    assert!(
+        Arc::ptr_eq(&t.login_gate, &gate),
+        "a gated client's gate is kept"
+    );
+
+    let t = transport_with_oauth(url).unwrap();
+    let client_gate = t
+        .oauth_client
+        .as_ref()
+        .expect("an OAuth transport")
+        .lock()
+        .await
+        .login_gate()
+        .expect("the ungated client was given a gate");
+    assert!(
+        Arc::ptr_eq(&t.login_gate, &client_gate),
+        "an ungated client is given the transport's own gate"
+    );
+}

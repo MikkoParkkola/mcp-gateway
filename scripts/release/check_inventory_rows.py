@@ -61,10 +61,10 @@ PREFIXES = (
     "src/personal_accounts/",
     "src/config/account_bindings.rs",
     "src/identity_propagation/",
-    # MIK-8195 W8 (lead ruling 2026-10-10): the stdio read judge. The rest of
-    # src/gateway/outbound/ joins under MIK-8321. Inventory and probe surface
-    # only: critical_path_coverage.py PATHS does not grade it as a path.
-    "src/gateway/outbound/stdio.rs",
+    # The outbound read judge and its delivery (MIK-8195 W8 took stdio.rs,
+    # MIK-8321 the rest). Inventory and probe surface only:
+    # critical_path_coverage.py PATHS does not grade it as a path.
+    "src/gateway/outbound/",
 )
 
 FN = re.compile(r'^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?:unsafe\s+)?(?:extern\s+(?:"[^"]*"\s+)?)?fn\s+([A-Za-z_]\w*)')

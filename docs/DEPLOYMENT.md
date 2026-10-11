@@ -140,7 +140,11 @@ Installing needs root, so the container runs as root and the entrypoint drops to
 the gateway user before exec'ing it; run as the image's own user the variable
 does nothing. The install is non-interactive and bounded at five minutes, and an
 update or install that fails, or that outlives the bound, stops the container
-instead of starting without the packages it was told to carry.
+instead of starting without the packages it was told to carry. The variable takes
+package names only, optionally pinned (`name=version`). A word that starts with `-`
+is an apt option and is refused, as is a word that ends in `-`: `apt-get install`
+reads `name-` as "remove name", so a list could otherwise uninstall a package and
+still start the container.
 
 That couples startup to the apt mirror and resolves versions at every start, so
 a restart can pick up a different build of a package. Name a version
@@ -182,10 +186,18 @@ is exec'd, so a variable it exports is part of the environment the gateway
 inherits, and one it only assigns is not. One exception: in a container started
 as root the gateway is exec'd with `HOME=/home/gateway`, so an exported `HOME`
 does not reach it. It is a startup step, not a configuration channel; the
-gateway's own settings belong in `-e` or the config file. Being sourced, it runs
-in the entrypoint's own shell, so a stop waits until it returns: keep it short,
-and put slow work in a `*.sh` step. A `*.sh` step that ignores `SIGTERM` is
-ended by Docker's own stop timeout (`--stop-timeout`, 10 s by default).
+gateway's own settings belong in `-e` or the config file.
+
+**Stopping during startup.** The `-full` image runs `tini -g` as PID 1 in front
+of the entrypoint, so `docker stop` sends `SIGTERM` to every process in the
+entrypoint's process group: the install, a `*.sh` step, and the command a sourced
+`.envsh` step is running. The container then stops at once with exit status 143.
+A step that ignores or traps `SIGTERM` and is still running when Docker's stop
+timeout (`--stop-timeout`, 10 s by default) runs out is ended with a `SIGKILL`
+(exit status 137).
+Once the gateway is running, tini passes the stop to it, and the gateway
+coordinates its backends' shutdown; each stdio backend runs in its own process
+group, so tini does not signal it directly. The default image is unchanged: the gateway itself is PID 1.
 
 The `-full` health check allows 60 s before an unanswered probe counts. An
 install that takes longer can still finish (it is bounded at 300 s), but the

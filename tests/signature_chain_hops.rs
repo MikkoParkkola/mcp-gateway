@@ -31,14 +31,20 @@ pub const D_ID: &str = "gw-d";
 /// The backend name the upstream is registered under on D.
 pub const UP: &str = "up";
 
-/// Which of D's two routes a row drives.
+/// Which of D's routes a row drives.
 #[derive(Clone, Copy, Debug)]
 pub enum Route {
     Invoke,
     Direct,
+    /// `/mcp`, the upstream tool called by the name D surfaces it under
+    /// (MIK-8159.CHAIN.1).
+    Surfaced,
 }
 
-pub const ROUTES: [Route; 2] = [Route::Invoke, Route::Direct];
+pub const ROUTES: [Route; 3] = [Route::Invoke, Route::Direct, Route::Surfaced];
+
+/// The `/mcp` routes: the meta-tool call and the surfaced name.
+pub const MCP_ROUTES: [Route; 2] = [Route::Invoke, Route::Surfaced];
 
 /// D's config: one backend at `upstream_url` under chain `mode`, trusting
 /// `gw-u` as origin and signer (and `gw-v` as a known key), with its own chain
@@ -48,6 +54,7 @@ pub fn d_config(upstream_url: &str, mode: &str, emit: &str) -> Value {
         "server": {"host": "127.0.0.1", "modern_protocol": true},
         "cache": {"enabled": false},
         "tasks": {"store_dir": "tasks"},
+        "meta_mcp": {"surfaced_tools": [{"server": UP, "tool": TOOL}]},
         "backends": {(UP): {"http_url": upstream_url, "streamable_http": true,
             "signature_chain": mode, "chain_origins": [U_ID], "chain_signer": U_ID}},
         "security": {
@@ -72,6 +79,11 @@ pub fn request(route: Route, id: &str, nonce: Option<&str>) -> (String, Value) {
         ),
         Route::Direct => (
             format!("/mcp/{UP}"),
+            json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": TOOL, "arguments": {}}}),
+        ),
+        Route::Surfaced => (
+            "/mcp".to_owned(),
             json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
             "params": {"name": TOOL, "arguments": {}}}),
         ),

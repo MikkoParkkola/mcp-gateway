@@ -28,7 +28,9 @@ use serde_json::{Value, json};
 
 use super::MetaMcp;
 use crate::backend::{Backend, BackendRegistry};
-use crate::gateway::task_service::{UpstreamAnswer, UpstreamHandle, UpstreamRecovery};
+use crate::gateway::task_service::{
+    CancelDelivery, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+};
 use crate::protocol::extensions::Extension;
 use crate::protocol::{JsonRpcError, JsonRpcResponse};
 
@@ -213,6 +215,10 @@ impl UpstreamRecovery for NativeUpstreamTasks {
         self.eligible(backend).await.is_some()
     }
 
+    fn started(&self) -> Option<tokio::sync::broadcast::Receiver<String>> {
+        Some(self.backends.subscribe_started())
+    }
+
     async fn query(&self, handle: &UpstreamHandle, deadline: Duration) -> UpstreamAnswer {
         // Never interactive (MIK-8269), its discovery included: recovery is
         // background upkeep under a bound, and a bound that fires mid-login
@@ -250,22 +256,36 @@ impl UpstreamRecovery for NativeUpstreamTasks {
         .await
     }
 
-    async fn cancel(&self, handle: &UpstreamHandle, deadline: Duration) {
+    async fn cancel(&self, handle: &UpstreamHandle, deadline: Duration) -> CancelDelivery {
         // Never interactive (MIK-8269), as `query`.
         crate::oauth::login_gate::non_interactive(async {
-            // This is the row's one send, so a start in flight (a restarted
-            // gateway reconnecting) must not refuse it: wait for that start,
-            // within the deadline, before the non-interactive attempt.
-            if let Some(backend) = self.backends.get(&handle.backend) {
-                let _ = tokio::time::timeout(deadline, backend.start_settled()).await;
+            // A start in flight (a restarted gateway reconnecting) is waited
+            // for within the deadline; one still holding the slot after it is
+            // a login or a slow peer, and the attempt is not counted
+            // (MIK-8347): the holder retries when that start succeeds.
+            if let Some(backend) = self.backends.get(&handle.backend)
+                && tokio::time::timeout(deadline, backend.start_settled())
+                    .await
+                    .is_err()
+            {
+                let name = handle.backend.as_str();
+                tracing::warn!(
+                    backend = name,
+                    "upstream tasks/cancel not sent yet: backend still starting"
+                );
+                return CancelDelivery::NotReady;
             }
             let Some(backend) = self.eligible(&handle.backend).await else {
-                tracing::warn!(backend = %handle.backend, "upstream tasks/cancel not sent: backend unclaimed");
-                return;
+                let name = handle.backend.as_str();
+                tracing::warn!(
+                    backend = name,
+                    "upstream tasks/cancel not sent yet: backend unclaimed"
+                );
+                return CancelDelivery::NotReady;
             };
             let deadline = deadline.min(backend.request_timeout());
-            // One attempt on the same trusted path `query` uses. The answer is
-            // ignored: the gateway task is already cancelled whatever the peer says.
+            // One attempt on the same trusted path `query` uses. Any answer,
+            // a JSON-RPC error included, means the peer received it.
             let sent = tokio::time::timeout(
                 deadline,
                 backend.request_with_task_capability(
@@ -276,11 +296,25 @@ impl UpstreamRecovery for NativeUpstreamTasks {
                 ),
             )
             .await;
-            if !matches!(sent, Ok(Ok(_))) {
-                tracing::warn!(backend = %handle.backend, "upstream tasks/cancel not confirmed");
+            let name = handle.backend.as_str();
+            match sent {
+                Ok(Ok(_)) => CancelDelivery::Confirmed,
+                // A login is needed first (an expired token on a connected
+                // backend): not sent, so not counted against the bound.
+                Ok(Err(error)) if error.is_authorization_wait() => {
+                    tracing::warn!(
+                        backend = name,
+                        "upstream tasks/cancel not sent yet: login required"
+                    );
+                    CancelDelivery::NotReady
+                }
+                _ => {
+                    tracing::warn!(backend = name, "upstream tasks/cancel not confirmed");
+                    CancelDelivery::Failed
+                }
             }
         })
-        .await;
+        .await
     }
 }
 
@@ -443,7 +477,7 @@ impl MetaMcp {
         }
         // A multi-step meta-tool is deliberately absent from this match.
         Some(DirectJob {
-            server: self.surfaced_tool_server(tool_name)?.to_owned(),
+            server: self.surfaced_tools_map.unscoped(tool_name)?.to_owned(),
             tool: tool_name.to_owned(),
             arguments: arguments.clone(),
         })
@@ -597,6 +631,10 @@ mod provenance_tests;
 #[cfg(test)]
 #[path = "upstream/login_scope_tests.rs"]
 mod login_scope_tests;
+
+#[cfg(test)]
+#[path = "upstream/cancel_delivery_tests.rs"]
+mod cancel_delivery_tests;
 
 #[cfg(test)]
 mod tests {

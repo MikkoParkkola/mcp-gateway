@@ -418,6 +418,52 @@ pub(crate) async fn flush_open_slot() -> Result<()> {
     write_owned(&logger, notes).await
 }
 
+/// The one warning a failed best-effort withheld record logs (MIK-8340 A5
+/// item 9); the upgrade note tells operators to alert on it.
+pub(super) const WITHHELD_RECORD_FAILED: &str = "The audit record of a withheld surfaced call could not be written; \
+     the call is answered as a name that matches no tool";
+
+/// The `FailClosed` exception of MIK-8340 A5 item 9, for the withheld surfaced
+/// call's own grant record ONLY: run `noting`, then write the decisions it
+/// noted into the open slot at once and on their own task. Their write never
+/// becomes the request's verdict (under `FailClosed` the slot's end-of-request
+/// write would answer -32005 and reveal the name exists); a failed write logs
+/// [`WITHHELD_RECORD_FAILED`] from the writing task itself, so a caller
+/// cancelled while it waits cannot drop the warning. Every note added before
+/// `noting` stays in the slot and fails closed as before. Outside a slot
+/// `noting` runs alone. Any other use is a new exception and needs its own
+/// design decision.
+pub(super) async fn note_withheld_best_effort<T>(server: &str, noting: impl FnOnce() -> T) -> T {
+    let before = GRANT_SLOT
+        .try_with(|slot| slot.notes.lock().expect("grant slot lock").len())
+        .ok();
+    let output = noting();
+    let taken = before.and_then(|before| {
+        GRANT_SLOT
+            .try_with(|slot| {
+                let mut held = slot.notes.lock().expect("grant slot lock");
+                let at = before.min(held.len());
+                (Arc::clone(&slot.logger), held.split_off(at))
+            })
+            .ok()
+    });
+    let Some((logger, notes)) = taken.filter(|(_, notes)| !notes.is_empty()) else {
+        return output;
+    };
+    let owned_server = server.to_owned();
+    // Owned by its own task, as `write_owned` is: a cancelled caller cannot
+    // drop records that were never submitted, nor the warning of their failure.
+    let writer = tokio::spawn(async move {
+        if let Err(error) = write_records(&logger, &notes).await {
+            tracing::warn!(server = %owned_server, %error, "{WITHHELD_RECORD_FAILED}");
+        }
+    });
+    if let Err(join) = writer.await {
+        tracing::warn!(server, error = %join, "{WITHHELD_RECORD_FAILED}");
+    }
+    output
+}
+
 /// Note `event` for `(server, tool)` into the open slot. Outside every slot
 /// the call is refused (-32005) and the record still written on a spawned
 /// task; under test that panics unless the cell opted in.
@@ -576,11 +622,25 @@ impl super::MetaMcp {
         session_id: Option<&str>,
         caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
+        let sourced = self.invoke_tool_with_source(args, session_id, caller).await;
+        sourced.map(|sourced| sourced.0)
+    }
+
+    /// [`Self::invoke_tool`] keeping the result's chain source and upstream
+    /// chain, for a reply that links it (MIK-8159: a backend tool called by
+    /// its own name).
+    pub(super) async fn invoke_tool_with_source(
+        &self,
+        args: &Value,
+        session_id: Option<&str>,
+        caller: &super::MetaMcpCallerContext<'_>,
+    ) -> Result<super::response_security::Sourced> {
         let logger = self.transparency_logger.as_ref();
         // Erased: the dispatch futures recurse (a chain step is an
         // invocation), and a concrete type here overflows auto-trait checks.
-        let future: Pin<Box<dyn Future<Output = Result<Value>> + Send + '_>> =
-            Box::pin(self.invoke_tool_in_slot(args, session_id, caller));
+        let future: Pin<
+            Box<dyn Future<Output = Result<super::response_security::Sourced>> + Send + '_>,
+        > = Box::pin(self.invoke_tool_sourced(args, session_id, caller));
         let outcome = slot_result(logger, future).await;
         // #2450: every step that got past the authorization chokepoint is a
         // target of the task's result, whatever it then did: an error, or an

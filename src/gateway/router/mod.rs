@@ -73,6 +73,8 @@ mod body_limit_tests;
 #[cfg(test)]
 mod callback_admin_denial_tests;
 #[cfg(test)]
+mod chokepoint_direct_tests;
+#[cfg(test)]
 mod chokepoint_tests;
 /// MIK-8202 P2: task creation on a clock before 1970.
 #[cfg(test)]
@@ -148,6 +150,9 @@ mod mcp_nonce_admission_tests;
 mod mcp_nonce_tests;
 #[cfg(test)]
 mod meta_fingerprint_tests;
+/// MIK-8154.LEASE.1 rows: the direct route takes the shared execution lease.
+#[cfg(test)]
+mod mik8154_lease_rows_tests;
 #[cfg(test)]
 mod mrtr9_lease_tests;
 #[cfg(test)]
@@ -159,10 +164,19 @@ mod playbook_key_tests;
 mod reload_status_tests;
 #[cfg(all(test, feature = "firewall"))]
 pub(super) mod route_matrix_driver_tests;
+#[cfg(all(test, feature = "firewall"))]
+pub(super) mod route_matrix_x14_nonce_tests;
 #[cfg(test)]
 mod slot_quota_direct_tests;
 #[cfg(test)]
 mod webhook_mount_tests;
+/// MIK-8340: a withheld surfaced name answers as an absent one.
+#[cfg(all(test, feature = "firewall"))]
+mod withheld_listing_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod withheld_parity_tests;
+#[cfg(all(test, feature = "firewall"))]
+pub(super) mod withheld_twin_tests;
 /// The meta route's post-judge delivery record, shared with stdio (MIK-7920).
 pub(in crate::gateway) use judged_answer::record_delivery as record_judged_delivery;
 /// MIK-8286 / MIK-8287: an identity that names nobody is refused.

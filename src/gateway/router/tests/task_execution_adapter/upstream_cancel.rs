@@ -18,7 +18,7 @@ use parking_lot::Mutex;
 use tokio::sync::oneshot;
 
 use crate::gateway::task_service::{
-    CommitObserver, CommitStage, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+    CancelDelivery, CommitObserver, CommitStage, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
 };
 
 const HANDLE: &str = "peer-job-1";
@@ -147,9 +147,10 @@ struct Recovery(Arc<Mutex<Vec<String>>>, Arc<tokio::sync::Notify>);
 
 #[async_trait::async_trait]
 impl UpstreamRecovery for Recovery {
-    async fn cancel(&self, handle: &UpstreamHandle, _deadline: Duration) {
+    async fn cancel(&self, handle: &UpstreamHandle, _deadline: Duration) -> CancelDelivery {
         self.0.lock().push(handle.handle.clone());
         self.1.notify_one();
+        CancelDelivery::Confirmed
     }
 
     async fn claims(&self, backend: &str) -> bool {

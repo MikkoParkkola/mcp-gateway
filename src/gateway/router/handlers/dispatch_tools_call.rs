@@ -15,10 +15,10 @@ use tracing::warn;
 use super::dispatch_intake::Intake;
 use super::tasks;
 use crate::gateway::meta_mcp::admission::SyncLease;
-use crate::gateway::meta_mcp::invoke::RouteRefusal;
 use crate::gateway::meta_mcp::signing::SigningInvocationContext;
 use crate::gateway::meta_mcp::{
-    InvokeScope, MetaMcpCallerContext, error_response_preserving_status,
+    InvokeScope, MetaMcpCallerContext, STEP_NOT_PERMITTED, STEP_NOT_PERMITTED_CODE,
+    STEP_NOT_PERMITTED_STATUS, error_response_preserving_status,
 };
 use crate::gateway::router::AppState;
 use crate::gateway::router::authorization::{
@@ -150,7 +150,15 @@ pub(super) async fn tools_call(
         ));
     }
 
-    let backend_targets = backend_tool_targets_for_call(&state.meta_mcp, tool_name, &arguments);
+    let mut backend_targets = backend_tool_targets_for_call(
+        &state.meta_mcp,
+        tool_name,
+        &arguments,
+        crate::gateway::meta_mcp::visible::TargetView::Caller(
+            invoke_scope,
+            Some(session_id.as_str()),
+        ),
+    );
     // Computed once (MIK-8014): the firewall's per-caller controls and the
     // caller context below key on the same caller.
     let caller_key = crate::gateway::router::identity::caller_key(
@@ -162,28 +170,45 @@ pub(super) async fn tools_call(
         tool_name,
         &backend_targets,
     );
-    for target in &backend_targets {
+    // A playbook's steps come from its definition, not the request. They join
+    // the targets after the response targets are fixed, so response handling
+    // is unchanged, and are authorized and scanned before any step runs
+    // (MIK-8362).
+    let request_targets = backend_targets.len();
+    backend_targets.extend(state.meta_mcp.playbook_step_targets(tool_name, &arguments));
+    // Authorize every target before scanning any, so a refused later target
+    // charges no earlier one's budget.
+    for (index, target) in backend_targets.iter().enumerate() {
         // The one route-stage authorize /mcp and stdio share (P3). A surfaced
-        // name this caller may not invoke is answered as a name that matches
-        // no tool, through the tail exactly as the meta layer answers one, so
-        // neither the firewall, X14 nor admission sees it (MIK-8326, A3).
+        // name withheld from this caller is not a target (MIK-8340): the meta
+        // layer answers it as a name that matches no tool.
         let checked = target.as_target();
-        match state.meta_mcp.authorize_route_target(
+        let routed = state.meta_mcp.authorize_route_target(
             invoke_scope,
-            Some(session_id.as_str()),
-            tool_name,
             (checked.server, checked.tool),
             checked.arguments,
-        ) {
+        );
+        // A step's target is operator-defined: any refusal of it is neutral (A3).
+        if index >= request_targets && routed.is_err() {
+            return Err(refused
+                .answer(
+                    state,
+                    target.as_target(),
+                    id,
+                    STEP_NOT_PERMITTED_CODE,
+                    STEP_NOT_PERMITTED.to_string(),
+                    StatusCode::from_u16(STEP_NOT_PERMITTED_STATUS)
+                        .unwrap_or(StatusCode::FORBIDDEN),
+                )
+                .await);
+        }
+        match routed {
             Ok(()) => {}
-            Err(RouteRefusal::Withheld(absent)) => {
-                return Ok(error_response_preserving_status(id, &absent));
-            }
-            Err(RouteRefusal::Refused(crate::Error::Forbidden {
+            Err(crate::Error::Forbidden {
                 code,
                 status,
                 message,
-            })) => {
+            }) => {
                 // Answered here, not in the meta layer, so the refusal keeps
                 // the route's own answer (its HTTP status included).
                 let status = StatusCode::from_u16(status).unwrap_or(StatusCode::FORBIDDEN);
@@ -193,13 +218,15 @@ pub(super) async fn tools_call(
             }
             // Any other refusal (an unwritable grant record) is answered as
             // the meta layer answers it.
-            Err(RouteRefusal::Refused(other)) => {
+            Err(other) => {
                 return Ok(error_response_preserving_status(id, &other));
             }
         }
+    }
 
-        // Firewall: pre-invocation request scan
-        #[cfg(feature = "firewall")]
+    // Firewall: pre-invocation request scan
+    #[cfg(feature = "firewall")]
+    for (index, target) in backend_targets.iter().enumerate() {
         if let Some(ref fw) = state.firewall {
             let target = target.as_target();
             let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());
@@ -235,12 +262,31 @@ pub(super) async fn tools_call(
                 );
             }
             if let Some((code, reason)) = verdict.request_refusal() {
+                // A content finding about a step names the definition: it
+                // answers as every other step refusal does (A3).
+                if index >= request_targets && verdict.refusal_words_content() {
+                    return Err(refused
+                        .answer(
+                            state,
+                            target,
+                            id,
+                            STEP_NOT_PERMITTED_CODE,
+                            STEP_NOT_PERMITTED.to_string(),
+                            StatusCode::from_u16(STEP_NOT_PERMITTED_STATUS)
+                                .unwrap_or(StatusCode::FORBIDDEN),
+                        )
+                        .await);
+                }
                 return Err(refused
                     .answer(state, target, id, code, reason, StatusCode::BAD_REQUEST)
                     .await);
             }
         }
     }
+    // The route stage is done; the window a catalogue change must not reach
+    // (MIK-8340, one judgement per request).
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::route_stage_done();
 
     let api_key_name = client.as_ref().map(|c| c.name.as_str());
     // Authorization reads the PROVEN principal. This value reaches
@@ -339,38 +385,50 @@ pub(super) async fn tools_call(
     // firewall check above has already run, and nothing below has yet
     // acted: a challenge mints no task, reserves no idempotency key and
     // reaches no backend, and neither does a refusal.
-    let confirmation = state
+    // Nothing has acted yet (MIK-8353, r4 H1): X14 hands the witness back
+    // only if it spent no grant, and admission gives the nonce back only
+    // with it.
+    let witness = Some(crate::gateway::meta_mcp::refund_witness::RefundWitness::at_capture());
+    let (confirmation, witness) = state
         .meta_mcp
-        .confirm_destructive_task(&crate::gateway::meta_mcp::TaskConfirmationRequest {
-            id: id.clone(),
-            // The outer name the client called, never a wrapper's
-            // target, and the same `arguments` binding that reaches
-            // `task_intent_for_call` — that value is both the admission
-            // operation's `arguments` and its representation, so the
-            // grant must digest what admission will key on.
-            tool_name,
-            arguments: &arguments,
-            task: params.and_then(|p| p.get("task")),
-            retry: &retry,
-            verified_identity: verified_identity.as_ref(),
-            principal: crate::protocol::mrtr::source_fingerprint(caller.principal_source(None)),
-            quota: caller.quota_key(),
-            // The owner `task_intent_for_call` admits under below.
-            owner,
-            // A surfaced name this caller may not invoke is not classified
-            // (MIK-8326).
-            scope: invoke_scope,
-            session_id: Some(session_id.as_str()),
-            input_capabilities: declared_capabilities,
-            is_modern,
-            admission: state.task_executor.service.admission(),
-        })
+        .confirm_destructive_task_with(
+            &crate::gateway::meta_mcp::TaskConfirmationRequest {
+                id: id.clone(),
+                // The outer name the client called, never a wrapper's
+                // target, and the same `arguments` binding that reaches
+                // `task_intent_for_call` — that value is both the admission
+                // operation's `arguments` and its representation, so the
+                // grant must digest what admission will key on.
+                tool_name,
+                arguments: &arguments,
+                task: params.and_then(|p| p.get("task")),
+                retry: &retry,
+                verified_identity: verified_identity.as_ref(),
+                principal: crate::protocol::mrtr::source_fingerprint(caller.principal_source(None)),
+                quota: caller.quota_key(),
+                // The owner `task_intent_for_call` admits under below.
+                owner,
+                // A surfaced name this caller may not invoke is not classified
+                // (MIK-8326).
+                scope: invoke_scope,
+                session_id: Some(session_id.as_str()),
+                input_capabilities: declared_capabilities,
+                is_modern,
+                admission: state.task_executor.service.admission(),
+            },
+            witness,
+        )
         .await;
     let granted = match confirmation {
         crate::gateway::meta_mcp::TaskConfirmation::NotRequired => None,
         // Confirmed: dispatch the original call, with the confirmation
-        // metadata removed.
-        crate::gateway::meta_mcp::TaskConfirmation::Granted(granted) => Some(granted),
+        // metadata removed. The grant was spent: veto every give-back.
+        crate::gateway::meta_mcp::TaskConfirmation::Granted(granted) => {
+            signing_context
+                .as_ref()
+                .inspect(|signing| signing.mark_spent());
+            Some(granted)
+        }
         // The challenge, or the refusal of a grant that does not
         // authorise this call. Answered here because there is nothing
         // below to run.
@@ -433,6 +491,7 @@ pub(super) async fn tools_call(
                 agent_declared,
                 grant_subject: grant_subject.clone(),
                 is_admin: client.as_ref().is_some_and(|c| c.admin),
+                scope: invoke_scope,
                 input_capabilities: declared_capabilities,
                 session_id: Some(session_id.as_str()),
                 protocol_revision: protocol_revision_owned.as_deref(),
@@ -491,6 +550,7 @@ pub(super) async fn tools_call(
         &arguments,
         Some(session_id),
         &id,
+        witness,
     );
     let (owned_execution, replay) = match admission {
         Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(lease)) => (Some(lease), None),

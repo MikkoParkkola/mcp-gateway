@@ -46,6 +46,36 @@ pub(crate) async fn fixture_audited_on(
     fx
 }
 
+/// [`fixture_audited_on`] with the replaced `MetaMcp` armed by `build` (the
+/// MIK-8340 withheld/absent twins: surfacing and caller vary, nothing else).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_audited_built_on(
+    transport: Arc<dyn Transport>,
+    audit: std::path::PathBuf,
+    build: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
+) -> Fx {
+    TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
+    AUDIT_LOG.with(|a| *a.borrow_mut() = Some(audit));
+    let fx = fixture_inner(Answer::Ok, true, build).await;
+    AUDIT_LOG.with(|a| *a.borrow_mut() = None);
+    TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
+/// [`super::fixture_hardened_signed_built`] with `transport` answering for both
+/// backends (the MIK-8340 twin's signed variant).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_hardened_signed_built_on(
+    transport: Arc<dyn Transport>,
+    require_nonce: bool,
+    build: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
+) -> Fx {
+    TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
+    let fx = super::fixture_hardened_signed_built(Answer::Ok, require_nonce, build).await;
+    TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
 /// `transport` behind no firewall, with response inspection in action mode:
 /// only the content inspection can withhold what it answers.
 // Its only consumer is the egress matrix, which is `firewall`-gated.
@@ -107,4 +137,24 @@ pub(super) fn backend_transport(
             kept: Arc::default(),
         })
     })
+}
+
+/// [`super::fixture_firewalled`] with `build` arming the `MetaMcp` (MIK-8351:
+/// a key budget on the firewalled fixture, for the give-back rows).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_built(
+    answer: Answer,
+    build: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
+) -> Fx {
+    fixture_inner(answer, true, build).await
+}
+
+/// [`super::fixture_hardened_signed`] with the production firewall too
+/// (MIK-8351: a signed direct retry the chokepoint refuses).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_hardened_signed_firewalled(answer: Answer) -> Fx {
+    super::HARDENED.with(|h| h.set(true));
+    let fx = fixture_inner(answer, true, |meta| super::signing(meta, true)).await;
+    super::HARDENED.with(|h| h.set(false));
+    fx
 }

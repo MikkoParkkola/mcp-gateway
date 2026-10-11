@@ -25,11 +25,11 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
                 Invoke | Surfaced | Direct | TaskSubmit | Stdio => Applies,
                 TaskWorker => NotApplicable(Na::DecidedAtSubmit),
             },
-            // Every meta send passes it (invoke.rs:428); the direct route never
-            // reaches it (MIK-8154.SAN.3); a task submit sends nothing.
+            // Every meta send passes it (invoke.rs:428); the direct route's
+            // tools/call takes its permit after redeem (MIK-8351, which took
+            // MIK-8154.SAN.3); a task submit sends nothing.
             Stage::ChokepointRescan => match route {
-                Invoke | Surfaced | TaskWorker | Stdio => Applies,
-                Direct => ExpectedGap(Ticket::Mik8154),
+                Invoke | Surfaced | TaskWorker | Stdio | Direct => Applies,
                 TaskSubmit => NotApplicable(Na::NoBackendSend),
             },
             // /mcp honours the flag (dispatch_intake.rs:355), and stdio at its
@@ -69,11 +69,11 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
                 Invoke | Surfaced | Direct | TaskSubmit | Stdio => Applies,
                 TaskWorker => NotApplicable(Na::DecidedAtSubmit),
             },
-            // admit_meta_sync only at dispatch_tools_call.rs:503 and
-            // stdio_dispatch.rs:522; tasks skip it (admission.rs:523).
+            // admit_meta_sync at dispatch_tools_call.rs and stdio_dispatch.rs;
+            // the direct route's 7b, `direct_route_admission`, at
+            // direct_idempotency.rs (MIK-8154.LEASE.1); tasks skip it.
             Stage::Lease => match route {
-                Invoke | Surfaced | Stdio => Applies,
-                Direct => ExpectedGap(Ticket::Mik8154),
+                Invoke | Surfaced | Stdio | Direct => Applies,
                 TaskSubmit | TaskWorker => NotApplicable(Na::DecidedAtSubmit),
             },
             // An admission refusal of a call without task intent gives the
@@ -86,10 +86,9 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
                 Surfaced | Stdio | Direct => Applies,
                 TaskWorker => NotApplicable(Na::TransportHasNoNonce),
             },
-            // A surfaced-name call drops the chain source (call_dispatch.rs:135-136).
+            // A surfaced-name call keeps its chain source (MIK-8159).
             Stage::ChainLink => match route {
-                Invoke | Direct | Stdio => Applies,
-                Surfaced => ExpectedGap(Ticket::Mik8159),
+                Invoke | Surfaced | Direct | Stdio => Applies,
                 TaskSubmit => NotApplicable(Na::NoBackendSend),
                 TaskWorker => NotApplicable(Na::TaskSettlementNotLinked),
             },

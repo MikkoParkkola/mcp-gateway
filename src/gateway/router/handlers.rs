@@ -46,11 +46,13 @@ pub(super) use health::health_handler;
 pub(super) use metrics_scrape::metrics_handler;
 pub(crate) use modern_response::shape_modern_response;
 pub(super) use owner::owner_of;
+// The direct route admits its execution lease under the same owner (MIK-8154).
 #[cfg(test)]
 use owner::session_owner;
 pub(super) use session_end::{mcp_delete_handler, sse_deprecated_handler};
 pub(super) use sse::mcp_sse_handler;
 use sse::unsupported_version_error;
+pub(super) use tasks::route_owners;
 
 /// The caller's `Mcp-Session-Id`, one rule for every session route: missing,
 /// non-UTF-8, empty and whitespace-only values are all "no session" (F9).
@@ -450,15 +452,19 @@ async fn meta_mcp_dispatch(
                 .unzip();
             let answer_id = id.clone();
             // Boxed: an inline future would enlarge this dispatcher's own state.
-            let call = Box::pin(dispatch_tools_call::tools_call(
-                &state,
-                &intake,
-                id,
-                &router_authorizer,
-                invoke_scope,
-                &mut signing_context,
-                &mut response_targets,
-                &mut execution,
+            // One visibility judgement per request (MIK-8340): the route stage
+            // and the dispatch read the same answer for a surfaced name.
+            let call = Box::pin(crate::gateway::meta_mcp::visible::with_visibility_memo(
+                dispatch_tools_call::tools_call(
+                    &state,
+                    &intake,
+                    id,
+                    &router_authorizer,
+                    invoke_scope,
+                    &mut signing_context,
+                    &mut response_targets,
+                    &mut execution,
+                ),
             ));
             let called = match cancel_on {
                 Some(cancel_on) => cancel_on.run(call).await,

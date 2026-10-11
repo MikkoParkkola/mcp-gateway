@@ -43,7 +43,7 @@ fn with_surfaced_tools_stores_valid_entries() {
     assert_eq!(mm.surfaced_tools.len(), 1);
     assert_eq!(mm.surfaced_tools[0].tool, "my_custom_tool");
     assert_eq!(
-        mm.surfaced_tools_map.get("my_custom_tool").unwrap(),
+        mm.surfaced_tools_map.unscoped("my_custom_tool").unwrap(),
         "backend_a"
     );
 }
@@ -66,7 +66,7 @@ fn with_surfaced_tools_drops_collision_with_meta_tool() {
     // THEN: only the non-colliding entry is kept
     assert_eq!(mm.surfaced_tools.len(), 1);
     assert_eq!(mm.surfaced_tools[0].tool, "my_real_tool");
-    assert!(!mm.surfaced_tools_map.contains_key("gateway_invoke"));
+    assert!(!mm.surfaced_tools_map.contains("gateway_invoke"));
 }
 
 #[test]
@@ -323,6 +323,34 @@ async fn tools_call_surfaced_tool_on_missing_backend_returns_error() {
             "Expected backend-not-found error in content, got: {content}"
         );
     }
+}
+
+/// MIK-8159 N5 (guard): a surfaced call that fails keeps no chain source,
+/// read on the answer before finalisation. The finaliser skips JSON-RPC errors
+/// on its own, so only this field shows whether the named path set a source
+/// on a failure (mutant M2). Green before and after the fix.
+#[tokio::test]
+async fn a_failed_surfaced_call_carries_no_chain_source() {
+    let surfaced = vec![SurfacedToolConfig {
+        server: "nonexistent_server".to_string(),
+        tool: "pinned_tool".to_string(),
+    }];
+    let mm = MetaMcp::new(Arc::new(BackendRegistry::new())).with_surfaced_tools(surfaced);
+    let resp = Box::pin(mm.handle_tools_call(
+        RequestId::Number(1),
+        "pinned_tool",
+        json!({}),
+        None,
+        allow_all_ctx(),
+    ))
+    .await;
+    assert_eq!(
+        resp.chain_source,
+        crate::protocol::ChainSource::NotEligible,
+        "{:?}",
+        resp.error
+    );
+    assert!(resp.chain_upstream.is_none(), "{:?}", resp.error);
 }
 
 #[tokio::test]

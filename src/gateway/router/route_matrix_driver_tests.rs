@@ -14,6 +14,12 @@ use serde_json::Value;
 use super::direct_guards_fixture::{Answer, post_direct, post_meta_invoke};
 use crate::gateway::meta_mcp::MetaMcp;
 
+#[path = "route_matrix_driver_step_tests.rs"]
+mod step;
+pub(crate) use step::{
+    playbook_as, playbook_budgeted, playbook_exposed, playbook_minting, playbook_then_task,
+};
+
 /// What one call through a route produced.
 pub(crate) struct Sent {
     /// The JSON-RPC body the client got.
@@ -169,7 +175,7 @@ pub(crate) async fn direct_chained() -> Sent {
 }
 
 /// `alpha`'s `read` surfaced under its own name on the Meta-MCP.
-fn surfacing(meta: MetaMcp) -> MetaMcp {
+pub(super) fn surfacing(meta: MetaMcp) -> MetaMcp {
     meta.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
         server: "alpha".to_string(),
         tool: "read".to_string(),
@@ -198,6 +204,31 @@ pub(crate) async fn surfaced_chained() -> Sent {
     let fx = super::direct_guards_fixture::fixture_built(Answer::Ok, |meta| {
         let mut meta = surfacing(meta);
         meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest);
+        meta
+    })
+    .await;
+    let body = call_surfaced(
+        &fx,
+        serde_json::json!({}),
+        Some(serde_json::json!({ NONCE_KEY: "matrix-nonce" })),
+    )
+    .await;
+    sent(&fx, body)
+}
+
+/// [`surfaced_chained`] whose backend answers `text` under the team-shared
+/// context-integrity baseline, which withholds an injected instruction.
+pub(crate) async fn surfaced_chained_gated(text: &'static str) -> Sent {
+    use crate::context_integrity::{
+        ContextIntegrityKernel, ContextIntegrityPolicy, ContextIntegrityPolicyPreset,
+    };
+    use crate::gateway::chain_test_support::{NONCE_KEY, signer};
+    let fx = super::direct_guards_fixture::fixture_built(Answer::Text(text), |meta| {
+        let mut meta = surfacing(meta);
+        meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest);
+        meta.set_context_integrity_kernel(ContextIntegrityKernel::new(
+            ContextIntegrityPolicy::from_preset(ContextIntegrityPolicyPreset::TeamShared),
+        ));
         meta
     })
     .await;
@@ -284,6 +315,37 @@ async fn retry_answering(audit: &Path, uri: &str, call: (&str, Value), answer: &
     sent(&fx, body)
 }
 
+/// R2's retry form (MIK-8159.CHAIN.1): the backend asks through
+/// `gateway_invoke`; the retry names `read` itself on `/mcp`, carrying a chain
+/// nonce, with a chain signer emitting on request.
+pub(crate) async fn retry_by_name_chained() -> Sent {
+    use crate::gateway::chain_test_support::{NONCE_KEY, signer};
+    let fx = super::direct_guards_fixture::fixture(Answer::AskOnce, |meta| {
+        meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest);
+    })
+    .await;
+    let invoke = serde_json::json!({ "server": "alpha", "tool": "read", "arguments": {} });
+    let asked = modern_call(
+        &fx,
+        "/mcp",
+        ("gateway_invoke", invoke),
+        &serde_json::json!({}),
+    )
+    .await;
+    let state = super::direct_continuation_tests::state_of(&asked);
+    let retry = serde_json::json!({
+        "requestState": state,
+        "inputResponses": {"k1": {"action": "accept", "content": {"account": "acct-1"}}},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}},
+            NONCE_KEY: "matrix-nonce"
+        },
+    });
+    let body = modern_call(&fx, "/mcp", ("read", serde_json::json!({})), &retry).await;
+    sent(&fx, body)
+}
+
 /// R1: a continuation retry on `gateway_invoke` whose answer is `answer`.
 pub(crate) async fn invoke_retry_answering(audit: &Path, answer: &str) -> Sent {
     let call = serde_json::json!({ "server": "alpha", "tool": "read", "arguments": {} });
@@ -365,8 +427,8 @@ pub(crate) async fn direct_spend_then_resend() -> (Value, Value, Value, usize) {
 }
 
 /// A backend listing `read` as `destructiveHint: true` and counting its sends.
-struct Destructive {
-    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+pub(super) struct Destructive {
+    pub(super) calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[async_trait::async_trait]
@@ -471,7 +533,7 @@ pub(crate) enum Surfacing {
 }
 
 /// The modern era's header mirrors for a `tools/call read`.
-const TASK_SUBMIT_HEADERS: [(&str, &str); 3] = [
+pub(super) const TASK_SUBMIT_HEADERS: [(&str, &str); 3] = [
     ("mcp-protocol-version", "2026-07-28"),
     ("mcp-method", "tools/call"),
     ("mcp-name", "read"),

@@ -48,6 +48,39 @@ pub(crate) async fn fixture_propagating(answer: Answer, arm: impl FnOnce(&mut Me
     fx
 }
 
+/// [`fixture_firewalled_audited_built`] with a call budget of `calls` per window
+/// on both firewalls (MIK-8362: a playbook's steps spend what a direct call spends).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_budget_built(
+    answer: Answer,
+    (audit, calls): (std::path::PathBuf, usize),
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    super::BUDGET.with(|b| b.set(calls));
+    let fx = super::fixture_firewalled_audited_built(answer, audit, build).await;
+    super::BUDGET.with(|b| b.set(0));
+    fx
+}
+
+/// [`fixture_propagating`] with the production firewalls and a call budget of
+/// `calls` per window, audit rows to `audit` (MIK-8362 STEPFW.3: a refusal at
+/// the route mints nothing).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_propagating_budgeted(
+    (audit, calls): (std::path::PathBuf, usize),
+    arm: impl FnOnce(&mut MetaMcp),
+) -> Fx {
+    super::PROPAGATING.with(|p| p.set(true));
+    let fx = super::fixture_firewalled_budget_built(Answer::Ok, (audit, calls), |mut meta| {
+        meta.enable_transparency_log(leaked_transparency_log());
+        arm(&mut meta);
+        meta
+    })
+    .await;
+    super::PROPAGATING.with(|p| p.set(false));
+    fx
+}
+
 /// One fixture backend's config: pass-through or not, and, for a propagating
 /// fixture, a required propagation to `aud-<name>` over an HTTP base URL.
 pub(super) fn fixture_backend_config(name: &str, passthrough: bool) -> BackendConfig {

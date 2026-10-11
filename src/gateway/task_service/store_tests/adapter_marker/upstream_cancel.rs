@@ -76,12 +76,19 @@ async fn one_sender_claims_a_cancelled_rows_upstream_cancel() {
         CancelClaim::Claimed(descriptor(&binding, "job-a"))
     );
     let record = record_json(&path, &id);
-    assert_eq!(record["upstreamCancelSent"], json!(true));
+    // Pending until a peer answers (MIK-8347): the handle stays, the call is
+    // named through the target the claim kept, and nothing failed yet.
+    let pending = &record["upstreamCancelPending"];
+    assert_eq!(pending["handle"], json!("job-a"), "{record}");
+    assert_eq!(pending["target"], json!(0), "{record}");
+    assert_eq!(pending["attempts"], json!(0), "{record}");
+    assert!(pending.get("backend").is_none(), "{record}");
+    assert!(record.get("upstreamCancelSent").is_none(), "{record}");
     assert!(
         record.get("upstream").is_none(),
         "the claim takes the descriptor off the row: {record}"
     );
-    assert_eq!(record["version"], json!(7));
+    assert_eq!(record["version"], json!(8));
     assert_eq!(record["revision"], json!(2), "the claim moves no revision");
     // Every later sender, with or without a handle, is told it was taken.
     for again in [None, Some(descriptor(&binding, "job-b"))] {
@@ -234,6 +241,195 @@ async fn a_row_admitted_at_the_tightest_budget_still_takes_the_cancel_claim() {
             .unwrap(),
         CancelClaim::Claimed(widest)
     );
+    // T8 (MIK-8347): the claim recorded a pending cancel, not a sent one.
+    assert!(
+        record_json(&path, &id)
+            .get("upstreamCancelPending")
+            .is_some(),
+        "the cancel is pending until a peer answers"
+    );
+    store.close().await.unwrap();
+}
+
+/// T8b (MIK-8347). Red at base. A current row whose recorded calls do not
+/// name the descriptor's backend (a composite plan) keeps a pending cancel by
+/// copying the backend: admitted at the tightest budget the preflight allows
+/// for the widest descriptor, that copy still fits.
+/// Mutant: "the preflight does not reserve the copied-backend Pending".
+#[tokio::test]
+async fn a_row_without_a_naming_target_copies_the_backend_and_still_fits() {
+    use crate::gateway::task_service::record::{Target, widest_handle_reservation};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let (row, binding) = admitted_with(&store, &services(), "cancel-copy", padding()).await;
+    let owner = binding.principal_digest().to_owned();
+    let id = row.id().to_owned();
+    store
+        .add_targets(
+            &owner,
+            &id,
+            1,
+            vec![Target {
+                server: "elsewhere".into(),
+                tool: "other".into(),
+            }],
+        )
+        .await
+        .unwrap();
+    store.close().await.unwrap();
+    let at_cap = |record_bytes| {
+        TaskStore::open(
+            &path,
+            StoreLimits {
+                record_bytes,
+                ..StoreLimits::default()
+            },
+        )
+    };
+    let admits = |store: &TaskStore| {
+        store
+            .admits_upstream_descriptor(&owner, &id, "orders", "create", &json!({"sku": "x"}))
+            .unwrap()
+    };
+    let (mut low, mut high) = (
+        fs::read(path.join(format!("{id}.json"))).unwrap().len(),
+        64 * 1024,
+    );
+    while low < high {
+        let mid = low.midpoint(high);
+        let store = at_cap(mid).await.expect("the row loads above its size");
+        let fits = admits(&store);
+        store.close().await.unwrap();
+        if fits { high = mid } else { low = mid + 1 }
+    }
+    let store = at_cap(low).await.unwrap();
+    let mut widest = descriptor(&binding, "x");
+    widest.handle = widest_handle_reservation();
+    store
+        .mark_upstream(&owner, &id, 1, widest.clone())
+        .await
+        .unwrap();
+    store
+        .transition(&owner, &id, 1, TaskTransition::Cancel, at(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .claim_upstream_cancel(&owner, &id, None)
+            .await
+            .unwrap(),
+        CancelClaim::Claimed(widest)
+    );
+    let record = record_json(&path, &id);
+    let pending = &record["upstreamCancelPending"];
+    assert_eq!(pending["backend"], json!("orders"), "{record}");
+    assert!(pending.get("target").is_none(), "{record}");
+    store.close().await.unwrap();
+}
+
+/// T8 (MIK-8347). Red at base. A legacy row written exactly at the byte cap,
+/// before the pending state existed and so without its reservation, naming a
+/// 128-byte backend, still takes the claim: the pending cancel names its
+/// backend through the target the claim keeps, never a second copy.
+/// Mutants: "Pending copies the backend", "Pending keeps the descriptor".
+#[tokio::test]
+async fn a_legacy_row_at_the_byte_cap_takes_a_pending_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let (row, binding) = admitted(&store, &services(), "cancel-legacy-cap").await;
+    let owner = binding.principal_digest().to_owned();
+    let id = row.id().to_owned();
+    let mut wide = descriptor(&binding, "job-wide");
+    wide.backend = "b".repeat(128);
+    store
+        .mark_upstream(&owner, &id, 1, wide.clone())
+        .await
+        .unwrap();
+    store
+        .transition(&owner, &id, 1, TaskTransition::Cancel, at(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        record_json(&path, &id)["version"],
+        json!(3),
+        "premise: legacy"
+    );
+    store.close().await.unwrap();
+    let size = fs::read(path.join(format!("{id}.json"))).unwrap().len();
+    let store = TaskStore::open(
+        &path,
+        StoreLimits {
+            record_bytes: size,
+            ..StoreLimits::default()
+        },
+    )
+    .await
+    .expect("the loader accepts a record exactly at the byte cap");
+    assert_eq!(
+        store
+            .claim_upstream_cancel(&owner, &id, None)
+            .await
+            .unwrap(),
+        CancelClaim::Claimed(wide)
+    );
+    let record = record_json(&path, &id);
+    let pending = &record["upstreamCancelPending"];
+    assert_eq!(pending["handle"], json!("job-wide"), "{record}");
+    assert!(pending.get("backend").is_none(), "{record}");
+    assert_eq!(
+        record["targets"][usize::try_from(pending["target"].as_u64().unwrap()).unwrap()]["server"],
+        json!("b".repeat(128)),
+        "{record}"
+    );
+    store.close().await.unwrap();
+}
+
+/// T6 (MIK-8347). Guard. A row a v7 gateway claimed (`upstreamCancelSent`,
+/// no descriptor) reads as done: claimed already, nothing to send.
+/// Mutant: "a legacy sent row read as pending".
+#[tokio::test]
+async fn a_legacy_sent_row_reads_as_done() {
+    use crate::gateway::task_service::store::targets::UpstreamCancelState;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tasks");
+    let store = open(&path).await;
+    let (row, binding) = admitted(&store, &services(), "cancel-legacy-sent").await;
+    let owner = binding.principal_digest().to_owned();
+    let id = row.id().to_owned();
+    store
+        .transition(&owner, &id, 1, TaskTransition::Cancel, at(1))
+        .await
+        .unwrap();
+    assert!(matches!(
+        store
+            .claim_upstream_cancel(&owner, &id, Some(descriptor(&binding, "job-v7")))
+            .await
+            .unwrap(),
+        CancelClaim::Claimed(_)
+    ));
+    store.close().await.unwrap();
+    // Rewrite it as a v7 gateway left it.
+    let file = path.join(format!("{id}.json"));
+    let mut record = record_json(&path, &id);
+    let fields = record.as_object_mut().unwrap();
+    fields.remove("upstreamCancelPending");
+    fields.insert("upstreamCancelSent".into(), json!(true));
+    fields.insert("version".into(), json!(7));
+    fs::write(&file, serde_json::to_vec(&record).unwrap()).unwrap();
+    let store = open(&path).await;
+    assert_eq!(
+        store.upstream_cancel_state(&owner, &id),
+        Some(UpstreamCancelState::Done)
+    );
+    assert_eq!(
+        store
+            .claim_upstream_cancel(&owner, &id, Some(descriptor(&binding, "job-v7")))
+            .await
+            .unwrap(),
+        CancelClaim::AlreadyClaimed
+    );
     store.close().await.unwrap();
 }
 
@@ -271,7 +467,7 @@ async fn a_claimed_legacy_row_keeps_its_call_as_a_target() {
         CancelClaim::Claimed(_)
     ));
     let record = record_json(&path, &id);
-    assert_eq!(record["version"], json!(7));
+    assert_eq!(record["version"], json!(8));
     assert!(record.get("upstream").is_none(), "{record}");
     assert_eq!(
         record["targets"],

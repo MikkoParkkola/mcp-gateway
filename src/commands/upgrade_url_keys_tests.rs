@@ -263,3 +263,21 @@ fn upgrade_removes_a_meta_mcp_block_that_held_only_cache_tools() {
         "{applied:?}"
     );
 }
+
+/// CWE-532: a rewrite that keeps a plaintext key in its text never prints it
+/// through `Debug`, which `assert_eq!` and log fields use.
+#[test]
+fn a_rewrite_debug_never_prints_the_config_text() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    let text = "auth:\n  api_keys:\n    - name: c1\n      key: |\n        surf2-debug-secret\n";
+    mcp_gateway::gateway::test_helpers::write_owner_only(&path, text).expect("write config");
+    let rewrite = rewrite_url_aliases_in(&path, RewriteMode::DryRun).expect("reads");
+    assert!(
+        rewrite.text.contains("surf2-debug-secret"),
+        "the key stays in the text"
+    );
+    let debug = format!("{rewrite:?}");
+    assert!(!debug.contains("surf2-debug-secret"), "{debug}");
+    assert!(debug.contains("bytes redacted"), "{debug}");
+}

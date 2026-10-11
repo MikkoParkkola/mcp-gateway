@@ -205,6 +205,25 @@ struct OverlayEnv<'a> {
     overlay: &'a EnvOverlay,
 }
 
+/// The `MCP_GATEWAY_*` names a CLI flag owns (clap `env = ...`). They are not
+/// config overrides: `MCP_GATEWAY_CAPABILITIES` names a directory for the tool
+/// subcommands, and read as the `capabilities` key it failed every config load
+/// (MIK-8367). A test walks `Cli::command()` and requires this list to equal
+/// its env names, so a new flag's variable cannot reach the overlay unlisted.
+pub(crate) const CLI_OWNED_ENV: &[&str] = &[
+    "MCP_GATEWAY_CA_CERT",
+    "MCP_GATEWAY_CAPABILITIES",
+    "MCP_GATEWAY_CLIENT_CERT",
+    "MCP_GATEWAY_CLIENT_KEY",
+    "MCP_GATEWAY_CONFIG",
+    "MCP_GATEWAY_CONFIG_DIR",
+    "MCP_GATEWAY_HOST",
+    "MCP_GATEWAY_LOG_FORMAT",
+    "MCP_GATEWAY_LOG_LEVEL",
+    "MCP_GATEWAY_PORT",
+    "MCP_GATEWAY_SKILLS_REGISTRY",
+];
+
 impl<'a> OverlayEnv<'a> {
     const PREFIX: &'static str = "MCP_GATEWAY_";
 
@@ -272,6 +291,11 @@ impl Provider for OverlayEnv<'_> {
     fn data(&self) -> figment::Result<Map<Profile, Dict>> {
         let mut dict = Dict::new();
         for (key, value) in self.merged_vars(std::env::vars_os()) {
+            // Whole names only: `MCP_GATEWAY_CAPABILITIES__NAME` is still a
+            // nested override of `capabilities.name`.
+            if CLI_OWNED_ENV.contains(&key.as_str()) {
+                continue;
+            }
             let Some(rest) = key.strip_prefix(Self::PREFIX) else {
                 continue;
             };
@@ -612,8 +636,11 @@ impl Config {
         }
         let (mut secret_refs, mut files) = match expansion {
             Expansion::Resolve => {
-                let refs = config.expand_env_vars(&overlay)?;
+                let mut refs = config.expand_env_vars(&overlay)?;
                 posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
+                let auth_enabled = config.auth.enabled;
+                let log = &mut config.security.transparency_log;
+                log.resolve_secret(auth_enabled, &overlay, &mut refs)?;
                 config.security.message_signing =
                     config.security.message_signing.resolve_with_env(&overlay)?;
                 let chain = &mut config.security.signature_chain;

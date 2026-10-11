@@ -213,6 +213,8 @@ pub(super) struct IntentRequest<'a> {
     pub(super) input_capabilities: crate::protocol::meta::Declared,
     pub(super) session_id: &'a str,
     pub(super) protocol_revision: Option<&'a str>,
+    /// What this caller may invoke (MIK-8340).
+    pub(super) scope: crate::gateway::meta_mcp::InvokeScope<'a>,
 }
 
 impl StdioTasks {
@@ -229,7 +231,11 @@ impl StdioTasks {
         if !req.is_modern
             || req.retry.request_state.is_some()
             || req.retry.input_responses.is_some()
-            || !crate::gateway::task_route::is_task_dispatchable(&self.host.meta_mcp, req.tool_name)
+            || !crate::gateway::task_route::is_task_dispatchable(
+                &self.host.meta_mcp,
+                req.tool_name,
+                (req.scope, Some(req.session_id)),
+            )
         {
             return Ok(None);
         }
@@ -423,5 +429,6 @@ pub(super) fn task_intent(
         input_capabilities: caller.input_capabilities,
         session_id,
         protocol_revision: caller.protocol_revision,
+        scope: caller.scope(),
     })
 }

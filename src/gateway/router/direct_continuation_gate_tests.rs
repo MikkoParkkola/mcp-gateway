@@ -14,9 +14,13 @@ use super::direct_continuation_tests::{
 use super::direct_guards_fixture::{Answer, fixture};
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 
-/// R22 (both routes): a question the context-integrity kernel withholds (a
-/// tool error in its place, carrying no continuation) gives its slot back.
-/// Mutant: the release limited to error responses (each route).
+/// R22 (both routes): a question the context-integrity kernel withholds gives
+/// its slot back. Since MIK-8325 the withheld question is refused outright with
+/// the gate's -32600 delivery refusal on every route, so it carries no
+/// continuation and its slot is released with the refusal. (MIK-8078's mutant
+/// "release limited to error responses" no longer separates here: the
+/// withheld answer is now an error itself. A gated question has no non-error
+/// form left on either route.)
 #[tokio::test]
 async fn r22_a_withheld_question_gives_its_slot_back() {
     use crate::context_integrity::{
@@ -31,17 +35,11 @@ async fn r22_a_withheld_question_gives_its_slot_back() {
     for backend in BACKENDS {
         let fx = fixture(Answer::AskWith(INJECTED), kernel).await;
         let (_, body) = call(&fx, backend, Some("alice"), json!({})).await;
-        assert!(
-            body.to_string().contains("withheld"),
-            "direct {backend}: {body}"
-        );
+        assert_eq!(body["error"]["code"], -32600, "direct {backend}: {body}");
         assert_eq!(held(&fx).await, 0, "direct {backend}: slot kept");
         let fx = fixture(Answer::AskWith(INJECTED), kernel).await;
         let body = meta_call(&fx, "k-std", backend, json!({})).await;
-        assert!(
-            body.to_string().contains("withheld"),
-            "meta {backend}: {body}"
-        );
+        assert_eq!(body["error"]["code"], -32600, "meta {backend}: {body}");
         assert_eq!(held(&fx).await, 0, "meta {backend}: slot kept");
     }
 }
