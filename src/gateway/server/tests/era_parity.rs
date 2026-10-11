@@ -3,7 +3,7 @@
 //! MIK-8368: stdio refuses, from the body alone, the methods MCP 2026-07-28
 //! removed, as `/mcp` does for a request that declares that revision. Wire
 //! strings are written out, never taken from the constants. The unserved-revision
-//! and undeclared-capability refusals stay HTTP-only (see the batch row).
+//! and undeclared-capability refusals are in `era_split.rs` (MIK-8380).
 
 use super::*;
 use serde_json::{Value, json};
@@ -167,30 +167,6 @@ async fn legacy_and_other_notifications_keep_today_s_answers() {
     ] {
         assert!(send(modern, request.clone()).await.is_none(), "{request}");
     }
-}
-
-/// A modern call inside a batch is still served, and a removed method inside a
-/// batch is still refused. Why stdio shares only the removed-method refusal: a
-/// batch runs its items with `StdioClient::modern` off, so sharing the
-/// unserved-revision refusal would refuse every modern call in a batch.
-#[tokio::test]
-async fn a_modern_batch_keeps_serving_and_still_refuses_removed_methods() {
-    let answers = Gateway::dispatch_batch_with_sink(
-        &test_meta_mcp(),
-        &test_tool_policy(),
-        &test_mtls_policy(),
-        json!([
-            modern_request(Some(1), "tools/list", "2026-07-28", json!({})),
-            modern_request(Some(2), "ping", "2026-07-28", json!({})),
-        ]),
-        "era-batch",
-        &super::super::StdioTelemetry::default(),
-    )
-    .await;
-    assert_eq!(answers.len(), 2, "{answers:?}");
-    assert!(answers[0].get("error").is_none(), "{}", answers[0]);
-    assert_eq!(answers[1]["error"]["code"], -32601, "{}", answers[1]);
-    assert_eq!(answers[1]["error"]["message"], removed_text("ping"));
 }
 
 /// A request that declares the revision and omits a required field is

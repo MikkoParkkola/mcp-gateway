@@ -166,7 +166,7 @@ impl Gateway {
             (
                 session_id,
                 super::stdio_single::InputSanitizing::Off,
-                super::stdio_single::ModernServing::Disabled,
+                super::stdio_single::ModernServing::Enabled,
             ),
             protocol_telemetry_sink,
             &reads,

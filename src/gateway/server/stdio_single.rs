@@ -275,7 +275,7 @@ impl Gateway {
                 channel: &crate::gateway::input_bridge::NoClientChannel,
                 handshake_capabilities: crate::protocol::meta::Declared::NONE,
                 tasks: None,
-                serving: ModernServing::Disabled,
+                serving: ModernServing::Enabled,
                 discover: DiscoverListing::Configured,
                 sanitize: InputSanitizing::Off,
             },
