@@ -331,10 +331,8 @@ impl Backend {
                                 LIST_FILL_COOLDOWN.as_secs()
                             )));
                         }
-                        admit_fill(&entry, &self.name, bound, family.cooldown)?;
-                        // Counted before the start or the request (MIK-8353 3a).
-                        self.list_fills
-                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let counted = (self.name.as_str(), &self.list_fills);
+                        admit_fill(&entry, counted, bound, family.cooldown)?;
                         let mut guard = family.cooldown.then(|| FillGuard::arm(Arc::clone(&entry)));
                         let drained = run_bounded(&entry, &self.name, bound, async {
                             // A cold fill on the dispatch path has sent no tools/call
