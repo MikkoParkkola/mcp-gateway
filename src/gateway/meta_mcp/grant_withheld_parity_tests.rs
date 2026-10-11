@@ -165,9 +165,10 @@ async fn row7b_another_decision_in_the_request_still_fails_closed() {
     );
 }
 
-/// MIK-8340 row 7c (gpt seat): a withheld call cancelled while its own
-/// grant record is being written still logs the documented warning when
-/// that write fails, because the writing task logs it, not the caller.
+/// MIK-8340 row 7c (gpt seat): a withheld call cancelled through
+/// `record_withheld` while its own grant record is being written still logs
+/// the documented warning when that write fails, because the writing task
+/// logs it, not the caller.
 #[test]
 fn row7c_a_cancelled_withheld_call_still_logs_its_failed_record() {
     use super::grant_audit::seams;
@@ -188,10 +189,15 @@ fn row7c_a_cancelled_withheld_call_still_logs_its_failed_record() {
                 let who = api_key("bob");
                 let caller = context(&who);
                 super::grant_audit::with_grant_slot(shared.transparency_logger.as_ref(), async {
-                    super::grant_audit::note_withheld_best_effort(CAPS, || {
-                        shared.withheld_surfaced(CAPS, PERSONAL, &caller, None)
-                    })
-                    .await
+                    shared
+                        .record_withheld(
+                            CAPS,
+                            PERSONAL,
+                            super::visible::Withholding::Refused,
+                            &caller,
+                            None,
+                        )
+                        .await;
                 })
                 .await
             });
@@ -208,7 +214,9 @@ fn row7c_a_cancelled_withheld_call_still_logs_its_failed_record() {
         });
     });
     assert!(
-        warnings.contains(super::grant_audit::WITHHELD_RECORD_FAILED),
+        // The literal, not the constant: the row also runs on the commit
+        // before the fix, where the constant does not exist.
+        warnings.contains("The audit record of a withheld surfaced call could not be written"),
         "row 7c: the cancelled call's failed record was not logged:\n{warnings}"
     );
 }
