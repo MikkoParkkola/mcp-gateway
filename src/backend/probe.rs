@@ -69,6 +69,8 @@ impl Backend {
         // which is no fault to rebuild and which the health loop skips.
         let started = crate::oauth::login_gate::non_interactive(self.ensure_started()).await;
         if let Err(e) = started {
+            #[cfg(test)]
+            super::lifecycle::hold_at(&self.probe_error_gate).await;
             if !e.is_authorization_wait() {
                 self.rebuild_from_probe().await;
             }
