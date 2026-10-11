@@ -238,6 +238,8 @@ impl RelayGate {
     }
 
     /// The receipt window's clock: wall time, or a test's frozen instant.
+    /// Only a test build reads `self` (the frozen field exists there only).
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
     pub(super) fn now(&self) -> Instant {
         #[cfg(test)]
         if let Some(frozen) = *self.frozen.lock() {
