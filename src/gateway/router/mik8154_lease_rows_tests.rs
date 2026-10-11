@@ -643,6 +643,18 @@ async fn l10_backend_arguments_named_like_gateway_controls_stay_distinct() {
             ran,
             "l10 {field}: the backend ran"
         );
+        // The other direction: the same request again replays, unrun.
+        let same = json!({"cmd": "x", field: "a"});
+        let (_, body) = post_direct(&fx, "alpha", "k-std", "read", same, Some(key), None).await;
+        assert!(
+            body.get("error").is_none(),
+            "l10 {field}: the same request: {body}"
+        );
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            ran,
+            "l10 {field}: the same request ran"
+        );
     }
 }
 
@@ -654,11 +666,23 @@ async fn l10_backend_arguments_named_like_gateway_controls_stay_distinct() {
 async fn l11_a_dispatched_failure_settles_the_lease_with_its_answer() {
     let (cache, arm) = held_cache();
     // A failed dispatch: the backend's refusal as an error, past dispatch.
+    // Both dispatch arms: the sanitized one, and the passthrough one.
     let fx = fixture_built(Answer::FailedWith("l11 backend refusal"), arm).await;
-    let first = keyed(&fx, Via::Direct, "l11").await;
-    assert!(first.get("error").is_some(), "premise: {first}");
-    cache.advance_for_test(PAST_THE_CACHE);
-    let retry = keyed(&fx, Via::Direct, "l11").await;
-    assert_eq!(retry.get("error"), first.get("error"), "l11: {retry}");
-    assert_eq!(calls(&fx), 1, "l11: the backend ran again");
+    for (server, key) in [("alpha", "l11"), ("alpha-pt", "l11-pt")] {
+        let before = calls(&fx);
+        let first = keyed_on(&fx, Via::Direct, server, key).await;
+        assert!(first.get("error").is_some(), "premise {server}: {first}");
+        cache.advance_for_test(PAST_THE_CACHE);
+        let retry = keyed_on(&fx, Via::Direct, server, key).await;
+        assert_eq!(
+            retry.get("error"),
+            first.get("error"),
+            "l11 {server}: {retry}"
+        );
+        assert_eq!(
+            calls(&fx),
+            before + 1,
+            "l11 {server}: the backend ran again"
+        );
+    }
 }
