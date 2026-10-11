@@ -125,6 +125,38 @@ async fn c11_per_user_one_resolution_per_call() {
     assert_eq!(fx.mints(), before + 1, "C11: resolutions for one call");
 }
 
+/// C14 (guard, lead ruling 2026-10-11; design R5.2 step 0): a policy-withheld
+/// `gateway_invoke` target on a per-user backend resolves no credential and
+/// fills no slot, even with alpha's slot cold. Its answer shape (-32601) is
+/// MIK-8361's gate; this row pins only MIK-8356's half: zero fills, zero
+/// resolutions. Kills a `caller_verdict` that fills before judging policy.
+#[tokio::test]
+async fn c14_policy_withheld_invoke_target_fills_and_resolves_nothing() {
+    let fx = per_user(CallerSlot::Valid, &valid(), Warmth::Cold, CLOSED, Surfaced::No);
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    let deny = crate::gateway::authz::DenyOne { tool: TOOL };
+    let caller = super::MetaMcpCallerContext {
+        authorizer: &deny,
+        ..super::identified_caller(&alpha)
+    };
+    let (lists, mints) = (fx.caller.lists() + fx.shared.lists(), fx.mints());
+    let args = json!({"server": super::slot_verdict_fixture::BACKEND, "tool": TOOL, "arguments": {"q": "x"}});
+    let response = Box::pin(fx.meta.handle_tools_call(
+        crate::protocol::RequestId::Number(1),
+        "gateway_invoke",
+        args,
+        None,
+        caller,
+    ))
+    .await;
+    let answer = serde_json::to_value(&response).expect("a response serialises");
+    assert!(answer.get("error").is_some() || answer.pointer("/result/isError") == Some(&json!(true)),
+        "premise: the policy-withheld target is not refused: {answer}");
+    assert_eq!(fx.caller.calls() + fx.shared.calls(), 0, "C14: dispatched: {answer}");
+    assert_eq!(fx.caller.lists() + fx.shared.lists(), lists, "C14: a slot was filled");
+    assert_eq!(fx.mints(), mints, "C14: a credential was resolved");
+}
+
 /// alpha lists `BACKEND` through `gateway_list_tools`: a real fill of alpha's
 /// own slot, the way a caller's slot becomes warm (and indexed).
 async fn warm_by_listing(meta: &super::MetaMcp) {
@@ -204,4 +236,70 @@ async fn l3c_counts_use_the_callers_slot() {
     }
     assert_eq!(totals[1], totals[2], "L3c: withheld vs lacked counts differ");
     assert_ne!(totals[0], totals[1], "L3c: the withheld tool is counted");
+}
+
+/// The next-tool predictions alpha is given after `ledger_hub:note`, once
+/// another session has taught the shared tracker that `read` follows it.
+fn predictions_for_alpha(meta: &super::MetaMcp) -> Vec<Value> {
+    let tracker = std::sync::Arc::new(crate::transition::TransitionTracker::new());
+    meta.set_transition_tracker(std::sync::Arc::clone(&tracker));
+    let (from, to) = ("ledger_hub:note", "ledger_hub:read");
+    for _ in 0..8 {
+        tracker.record_transition("teacher", from);
+        tracker.record_transition("teacher", to);
+    }
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    meta.record_and_predict(
+        None,
+        Some("alpha-session"),
+        from,
+        super::identified_caller(&alpha).scope(),
+    )
+}
+
+fn predicts_tool(predicted: &[Value]) -> bool {
+    predicted.iter().any(|p| p["tool"] == "ledger_hub:read")
+}
+
+/// L2 (SLOTVIS.2): with alpha's slot warm, a predicted tool alpha's own
+/// catalogue withholds or lacks is not predicted to alpha; alpha's valid one
+/// is. RED on base: predictions judge the shared slot.
+#[tokio::test]
+async fn l2_predictions_judge_the_callers_slot() {
+    for (slot, predicted) in [
+        (CallerSlot::Valid, true),
+        (CallerSlot::Invalid, false),
+        (CallerSlot::Lacks, false),
+    ] {
+        let fx = per_user(slot, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+        warm_by_listing(&fx.meta).await;
+        let got = predictions_for_alpha(&fx.meta);
+        assert_eq!(predicts_tool(&got), predicted, "L2 {slot:?}: {got:?}");
+    }
+}
+
+/// L3d (SLOTVIS.3, `list_servers`): with alpha's slot warm, the per-backend
+/// `tools_count` alpha is given leaves out a tool its catalogue withholds,
+/// exactly as one it lacks; alpha's valid tool is counted. RED on base:
+/// `list_servers` walks the shared snapshot (`surfaced.rs:234`).
+#[tokio::test]
+async fn l3d_list_servers_counts_the_callers_slot() {
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    let mut counts = Vec::new();
+    for slot in [CallerSlot::Valid, CallerSlot::Invalid, CallerSlot::Lacks] {
+        let fx = per_user(slot, &valid(), Warmth::Cold, CLOSED, Surfaced::Yes);
+        warm_by_listing(&fx.meta).await;
+        let listed = fx
+            .meta
+            .list_servers(&super::identified_caller(&alpha), None)
+            .await
+            .expect("list_servers answers");
+        let count = listed
+            .to_string()
+            .contains("\"tools_count\":1");
+        counts.push((count, listed));
+    }
+    assert!(!counts[0].0, "premise: alpha's valid catalogue counts 2: {}", counts[0].1);
+    assert!(counts[1].0, "L3d Invalid: the withheld tool is counted: {}", counts[1].1);
+    assert!(counts[2].0, "L3d Lacks: {}", counts[2].1);
 }
