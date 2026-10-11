@@ -1,0 +1,25 @@
+src/transport/http/mod.rs	is_session_expired_error	1	Classifies an error string as session expiry to trigger re-initialize; recovery routing only, no allow/deny.
+src/transport/http/mod.rs	status_invites_a_retry	1	Pure predicate on HTTP status choosing the retryable error carriage; decides nothing security-relevant.
+src/transport/http/mod.rs	is_session_expired_response	1	Matches JSON-RPC error codes/messages that signal session expiry; retry routing, no security decision.
+src/transport/http/mod.rs	new	1	Convenience constructor delegating to new_with_oauth with no OAuth client; checks are made in with_destination.
+src/transport/http/mod.rs	store_refresh_task	1	Swaps the refresh-task handle and aborts the old one; task lifecycle plumbing, decision made by the OAuth client.
+src/transport/http/mod.rs	attach_era	1	Sets the era cache once via OnceLock; dialect plumbing with no security decision.
+src/transport/http/mod.rs	outbound_era	1	Non-blocking read of the cached peer era; plain getter.
+src/transport/http/mod.rs	mark_single_tenant	1	Stores a hint flag that only enables a debug_assert; no production enforcement.
+src/transport/http/mod.rs	drop	1	Aborts the refresh task on drop to avoid leaking a task; cleanup, decides nothing.
+src/transport/http/requests.rs	next_id	1	Increments an atomic counter to produce a JSON-RPC request id; no decision.
+src/transport/http/startup.rs	initialize	1	Composes connect (OAuth/token decision) and handshake with no decision of its own.
+src/transport/http/startup.rs	handshake	1	Chooses legacy-SSE versus Streamable fallback on a 4xx; the version refusal and connected flag are set in legacy_handshake.
+src/transport/http/startup.rs	streamable	1	Plain getter of the detected transport flavour.
+src/transport/http/startup.rs	get_message_url	1	Plain getter falling back to base_url; the origin check is in resolve_message_url when the endpoint is stored.
+src/transport/http/listen.rs	listen	1	Plumbing: calls open_listen and maps the result; refusals are decided in open_listen, read_stream and frame.
+src/transport/http/listen.rs	detected_streamable	1	Getter forwarding streamable().
+src/transport/http/listen.rs	refused_as	1	Maps a refused HTTP status onto a Refused variant; the refusal itself was already decided by the peer response.
+src/transport/http/modern_meta.rs	value_kind	1	Names a JSON value kind for an error message; decides nothing.
+src/transport/http/sse_decoder.rs	next_line	1	Pure line-terminator framing over a byte slice; decides nothing, the size bound is applied in decode.
+src/transport/http/sse_decoder.rs	build_event	1	Parses one already-bounded block into an event; invalid UTF-8 is a format error, and the size refusal is made in decode before this runs.
+src/transport/http/sse_decoder.rs	push	1	Appends a chunk and delegates to decode, which makes the bound decision.
+src/transport/http/sse_decoder.rs	finish	1	Flushes the final block by delegating to decode, which makes the bound decision.
+src/transport/http/transport_impl.rs	notify	1	Delegates to notify_with_headers with no headers and the shared bucket; no decision of its own.
+src/transport/http/transport_impl.rs	is_connected	1	Plain getter of the connected flag; decides nothing.
+src/transport/http/startup.rs	join_failure	1	Maps the OAuth task's JoinError (a panic or cancellation) to the Error::OAuth that connect returns; it decides nothing, connect refuses whenever the task fails.
