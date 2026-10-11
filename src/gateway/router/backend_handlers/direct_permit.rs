@@ -65,6 +65,10 @@ pub(super) fn mint_permit(
 pub(super) fn give_back_refused(state: &AppState, admitted: &mut Admitted<'_>) {
     DirectRouteGuards::release_nonce(state, admitted.nonce.take());
     if let Some(mut reservation) = admitted.idem_reservation.take() {
+        // Today the reservation is unarmed here (it is armed only in
+        // `dispatch_armed`, after the permit), so its drop would release the
+        // key too and mutant m6b (no explicit release) is equivalent. If later
+        // code arms it earlier, that stops holding and this release carries it.
         reservation.release();
     }
 }
