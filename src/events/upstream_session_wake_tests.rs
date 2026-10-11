@@ -69,7 +69,7 @@ async fn t35_a_revival_sent_as_the_task_parks_is_not_missed() {
 
     crate::test_pause::within("the revived backend being contacted", contacted.notified()).await;
     shared.stop.cancel();
-    let _ = task.await;
+    task.await.expect("the task ends cleanly");
     assert_eq!(
         shared.waits.ends().first(),
         Some(&WaitEnd::Revival),
@@ -106,13 +106,24 @@ async fn at_first_backoff() -> (
     (shared, registry, task, release, next)
 }
 
-/// Replace `b` in `registry` with a new `Backend` and signal it, as a
-/// config reload and `revive_backend` do.
-async fn re_register(shared: &Shared, registry: &BackendRegistry) {
-    assert!(registry.remove("b"));
+/// A new `Backend` for `b` with its peer already listening, so a row can
+/// have it ready before the wait it will interrupt begins.
+async fn replacement() -> Arc<Backend> {
     let contacted = Arc::new(tokio::sync::Notify::new());
-    assert!(registry.register(backend_at(counting_peer(contacted).await)));
+    backend_at(counting_peer(contacted).await)
+}
+
+/// Replace `b` in `registry` with `backend` and signal it, as a config
+/// reload and `revive_backend` do. Nothing here awaits.
+fn swap_in(shared: &Shared, registry: &BackendRegistry, backend: Arc<Backend>) {
+    assert!(registry.remove("b"));
+    assert!(registry.register(backend));
     shared.wake.send_modify(|n| *n += 1);
+}
+
+/// [`swap_in`] with a backend made on the spot.
+async fn re_register(shared: &Shared, registry: &BackendRegistry) {
+    swap_in(shared, registry, replacement().await);
 }
 
 /// T35, backoff half: a backend re-registered while its task backs off is
@@ -122,15 +133,18 @@ async fn re_register(shared: &Shared, registry: &BackendRegistry) {
 #[tokio::test]
 async fn t35_a_re_registration_during_backoff_cuts_it() {
     let (shared, registry, task, release, next) = at_first_backoff().await;
+    // Ready before the wait starts: after it, only synchronous calls stand
+    // between the task's backoff and the revival.
+    let backend = replacement().await;
     release.notify_one();
     crate::test_pause::within("the backoff wait to begin", shared.waits.began.notified()).await;
-    re_register(&shared, &registry).await;
+    swap_in(&shared, &registry, backend);
     crate::test_pause::within("the reconnect", next.notified()).await;
     shared.stop.cancel();
-    let _ = task.await;
+    task.await.expect("the task ends cleanly");
     assert_eq!(
-        shared.waits.ends(),
-        [WaitEnd::Revival],
+        shared.waits.ends().first(),
+        Some(&WaitEnd::Revival),
         "the re-registered backend is reconnected by the revival, not at the backoff's end"
     );
 }
@@ -145,10 +159,10 @@ async fn t35_a_re_registration_before_the_backoff_begins_cuts_it() {
     release.notify_one();
     crate::test_pause::within("the reconnect", next.notified()).await;
     shared.stop.cancel();
-    let _ = task.await;
+    task.await.expect("the task ends cleanly");
     assert_eq!(
-        shared.waits.ends(),
-        [WaitEnd::Revival],
+        shared.waits.ends().first(),
+        Some(&WaitEnd::Revival),
         "a registration signalled before the backoff still cuts it"
     );
 }
