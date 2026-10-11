@@ -93,3 +93,82 @@ pub(crate) async fn after_commit() {
     pause.reached_notify.notify_waiters();
     pause.release.notified().await;
 }
+
+thread_local! {
+    static ANNOUNCER: RefCell<Option<std::sync::Weak<()>>> = const { RefCell::new(None) };
+}
+
+/// Called by the serve loop with its tools-changed drain's liveness token
+/// (MIK-8278).
+pub(crate) fn announcer_started(alive: std::sync::Weak<()>) {
+    ANNOUNCER.with(|a| *a.borrow_mut() = Some(alive));
+}
+
+/// The liveness token of the last session started on this thread.
+pub(crate) fn last_announcer() -> Option<std::sync::Weak<()>> {
+    ANNOUNCER.with(|a| a.borrow_mut().take())
+}
+
+thread_local! {
+    static DECISIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Called by a stdio session's drain for each change it decides to announce
+/// (MIK-8278 T14).
+pub(crate) fn decided() {
+    DECISIONS.with(|d| d.set(d.get() + 1));
+}
+
+/// Changes decided to announce on this thread so far.
+pub(crate) fn decisions() -> usize {
+    DECISIONS.with(std::cell::Cell::get)
+}
+
+thread_local! {
+    static QUEUE_FULL: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Called by a stdio session's sender when it wakes to a full writer queue
+/// and must park on `reserve` (MIK-8278 T14 premise).
+pub(crate) fn sender_found_queue_full() {
+    QUEUE_FULL.with(|q| q.set(q.get() + 1));
+}
+
+/// Times a sender on this thread woke to a full writer queue.
+pub(crate) fn queue_full_wakes() -> usize {
+    QUEUE_FULL.with(std::cell::Cell::get)
+}
+
+/// A pause armed for one sender, keyed by the address of its stop lock, so no
+/// other session's sender ever waits on it (MIK-8278 race row).
+type FinalSendPause = (
+    usize,
+    std::sync::mpsc::Sender<()>,
+    std::sync::mpsc::Receiver<()>,
+);
+
+static FINAL_SEND: std::sync::Mutex<Option<FinalSendPause>> = std::sync::Mutex::new(None);
+
+/// Arm a pause in the sender keyed `key`: it signals `reached` between its
+/// stop check and its enqueue, then waits for `release`.
+pub(crate) fn arm_final_send_pause(
+    key: usize,
+) -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+    let (reached_tx, reached_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    *FINAL_SEND.lock().expect("pause slot") = Some((key, reached_tx, release_rx));
+    (reached_rx, release_tx)
+}
+
+/// Called by a stdio sender between its stop check and its enqueue, holding
+/// its stop lock. Blocks only the sender the pause was armed for.
+pub(crate) fn final_send_pause(key: usize) {
+    let armed = FINAL_SEND
+        .lock()
+        .expect("pause slot")
+        .take_if(|(armed, _, _)| *armed == key);
+    if let Some((_, reached, release)) = armed {
+        let _ = reached.send(());
+        let _ = release.recv_timeout(std::time::Duration::from_secs(20));
+    }
+}
