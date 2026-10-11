@@ -78,6 +78,16 @@ impl MetaMcp {
             visible::record_visibility(server, tool, Visibility::Withheld(Withholding::Lacked));
             return Ok(CallerVerdict::Absent);
         }
+        // A managed account with no current grant: nothing to judge and
+        // nothing to resolve here. A dispatch naming the backend explicitly
+        // answers with that account's connect offer (MIK-6745 consent-journey
+        // design, section 9.2, predicate D), the same for every tool name; a
+        // call by surfaced name names no backend and answers as absent
+        // (`route_direct_backend_call`). Resolving here would create a consent
+        // journey for a call that may answer as absent.
+        if self.has_no_view_for(&backend, proof).await {
+            return Ok(CallerVerdict::Proceed);
+        }
         let resolved = self
             .resolve_dispatch(
                 (server, tool),
