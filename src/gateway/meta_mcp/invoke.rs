@@ -842,6 +842,9 @@ mod caller_cost_tests;
 mod f13_hint_scope_tests;
 
 #[cfg(test)]
+mod caller_verdict_label_tests;
+
+#[cfg(test)]
 mod session_fp_tests;
 
 #[cfg(test)]

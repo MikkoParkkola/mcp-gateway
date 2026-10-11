@@ -353,8 +353,10 @@ async fn l2_predictions_judge_each_backends_slot() {
     );
 }
 
-/// alpha's count phrase and its `list_servers` answer.
+/// alpha's count phrase and its `list_servers` answer, once alpha's warm
+/// slot is indexed by a real listing.
 async fn counts_as_alpha(fx: &super::slot_verdict_fixture::PerUser) -> (String, serde_json::Value) {
+    warm_by_listing(&fx.meta).await;
     let alpha = super::catalogue_per_caller_tests::identity("alpha");
     let caller = super::identified_caller(&alpha);
     let (total, _) = fx.meta.admitted_counts(caller.scope(), None);
