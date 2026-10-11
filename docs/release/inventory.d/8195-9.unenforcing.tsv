@@ -1,0 +1,1 @@
+src/gateway/meta_mcp/task_confirmation.rs	confirmation_prompt	1	Builds the confirmation question's wording, saying destructive only when classified so; the accept-or-refuse decision is made by the confirmation gate, not here.

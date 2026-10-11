@@ -54,7 +54,10 @@ PREFIXES = (
     "src/transport/command_split.rs",
     "src/gateway/input_bridge.rs",
     "src/gateway/task_service/",
-    "src/gateway/meta_mcp/task_confirmation",
+    # The module file and its directory, spelled apart: a git pathspec names
+    # one path, so the stem alone matched only the directory.
+    "src/gateway/meta_mcp/task_confirmation.rs",
+    "src/gateway/meta_mcp/task_confirmation/",
     "src/personal_accounts/",
     "src/config/account_bindings.rs",
     "src/identity_propagation/",
