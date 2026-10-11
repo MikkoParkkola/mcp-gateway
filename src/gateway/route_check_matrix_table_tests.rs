@@ -86,10 +86,9 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
                 Surfaced | Stdio | Direct => Applies,
                 TaskWorker => NotApplicable(Na::TransportHasNoNonce),
             },
-            // A surfaced-name call drops the chain source (call_dispatch.rs:135-136).
+            // A surfaced-name call keeps its chain source (MIK-8159).
             Stage::ChainLink => match route {
-                Invoke | Direct | Stdio => Applies,
-                Surfaced => ExpectedGap(Ticket::Mik8159),
+                Invoke | Surfaced | Direct | Stdio => Applies,
                 TaskSubmit => NotApplicable(Na::NoBackendSend),
                 TaskWorker => NotApplicable(Na::TaskSettlementNotLinked),
             },

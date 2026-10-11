@@ -114,7 +114,7 @@ impl MetaMcp {
     /// Dispatch a backend tool the client named directly, returning the
     /// backend's own result envelope untouched.
     ///
-    /// `invoke_tool` already returns a complete MCP tools/call result
+    /// `invoke_tool_with_source` already returns a complete MCP tools/call result
     /// (`{content, structuredContent?, isError}`) with output-schema
     /// enforcement applied. A tool called by its own name is a first-class
     /// tool to the client, so that envelope is returned verbatim: re-wrapping
@@ -132,10 +132,25 @@ impl MetaMcp {
     ) -> JsonRpcResponse {
         let invoke_args =
             admission::named_tool_envelope(server_name, tool_name, &arguments, caller);
-        match self.invoke_tool(&invoke_args, session_id, caller).await {
-            Ok(content) => JsonRpcResponse::success_serialized(id, content),
-            Err(e) => error_response_preserving_status(id, &e),
-        }
+        let mut chain = (ChainSource::NotEligible, None);
+        let result = self
+            .invoke_tool_with_source(&invoke_args, session_id, caller)
+            .await
+            .map(|(content, source, upstream)| {
+                chain = (source, upstream);
+                content
+            });
+        // Native: the envelope verbatim. The dispatch's chain source rides on
+        // a success only, as on `gateway_invoke` (A3 R5, MIK-8159).
+        let declared = caller.input_capabilities;
+        response_security::shape_meta_result(
+            id,
+            tool_name,
+            result,
+            ResultShape::Native,
+            declared,
+            chain,
+        )
     }
 
     /// Handle `tools/call` — dispatch to the appropriate handler.
