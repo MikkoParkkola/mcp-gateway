@@ -203,10 +203,15 @@ fn a_middle_sample_never_truncates_leaf_evidence() {
 /// picks, under this process's key, a 60-char window of the early middle
 /// that (1) has at least 2 fingerprints, all tracked after recording, and
 /// (2) has none the sample keeps at any rate of 2 or more. Bob relaying it
-/// is refused only through plan-path recording: drop the retained
-/// fingerprints (mutant a8) and the sample, at m = 8, keeps none of them.
-/// A window qualifies with about 8% probability and thousands are tried, so
-/// the pick always exists; it is asserted.
+/// is refused only through plan-path recording. Drop the retained
+/// fingerprints (mutant a8) and the row goes red at its premise: head and
+/// tail alone (about 1,500) never fill the bound. Were it past that, the
+/// sample at m = 8 would keep none of the window. Only windows in about the
+/// first 13 KiB are tracked (truncation keeps the head, the tail and the
+/// first retained fingerprints); there, about 1,400 windows are tried at
+/// about 8% each, so the pick always exists, and it is asserted. Residual:
+/// the pick is made from tracked fingerprints, so a partial loss of retained
+/// fingerprints that still fills the bound is not detected here.
 #[test]
 fn a_kept_plan_steps_short_relay_is_caught_by_its_retained_fingerprints() {
     let fw = firewall();
