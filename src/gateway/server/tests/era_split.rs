@@ -191,7 +191,7 @@ async fn served_batch(
         };
         for item in items {
             let id = item["id"].as_i64().expect("an integer id");
-            answers.insert(id, item);
+            assert!(answers.insert(id, item).is_none(), "id {id} answered twice");
         }
     }
     drop(stdin);
@@ -200,6 +200,14 @@ async fn served_batch(
         .expect("EOF returns")
         .expect("no panic")
         .expect("run_stdio_on returns Ok");
+    // One answer per request, and nothing after them: the loop above stops at
+    // `count`, so a stray extra frame is only seen by draining to EOF.
+    assert_eq!(answers.len(), count, "{answers:?}");
+    let extra = tokio::time::timeout(Duration::from_secs(20), lines.next_line())
+        .await
+        .expect("output closes")
+        .expect("read");
+    assert!(extra.is_none(), "unexpected extra frame: {extra:?}");
     answers
 }
 
@@ -266,4 +274,6 @@ async fn a_batched_discover_lists_the_legacy_set_only() {
     );
     let off = send(false, discover(3)).await.expect("answers");
     assert!(!versions(&off).iter().any(|v| v == "2026-07-28"), "{off}");
+    // The legacy set exactly: a batched discover loses no revision either.
+    assert_eq!(versions(&batched[&1]), versions(&off), "{}", batched[&1]);
 }
