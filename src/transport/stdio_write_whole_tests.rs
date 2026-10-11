@@ -18,13 +18,23 @@ use tokio_util::sync::CancellationToken;
 use super::{HANDED_OVER, finish_whole, write_whole};
 use crate::Error;
 
+/// How the scripted writer behaves until its gate opens.
+#[derive(Default, Clone, Copy)]
+enum Mode {
+    /// Every write and flush completes at once.
+    #[default]
+    Ready,
+    /// Accepts this many bytes, then pends until the gate opens.
+    AcceptBeforeGate(usize),
+    /// Accepts every byte; the flush pends until the gate opens.
+    FlushWaitsForGate,
+    /// Every write fails.
+    Fail,
+}
+
 #[derive(Default)]
 struct Script {
-    /// Bytes accepted before the gate opens; `None` accepts everything.
-    accept_before_gate: Option<usize>,
-    /// Flush pends until the gate opens.
-    flush_waits_for_gate: bool,
-    fail: bool,
+    mode: Mode,
     gate_open: bool,
     written: Vec<u8>,
     flushed: bool,
@@ -60,11 +70,13 @@ impl AsyncWrite for Scripted {
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
         let mut script = self.0.lock().unwrap();
-        if script.fail {
+        if matches!(script.mode, Mode::Fail) {
             return Poll::Ready(Err(io::Error::other("scripted write failure")));
         }
-        let room = match script.accept_before_gate {
-            Some(limit) if !script.gate_open => limit.saturating_sub(script.written.len()),
+        let room = match script.mode {
+            Mode::AcceptBeforeGate(limit) if !script.gate_open => {
+                limit.saturating_sub(script.written.len())
+            }
             _ => buf.len(),
         };
         if room == 0 {
@@ -78,7 +90,7 @@ impl AsyncWrite for Scripted {
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let mut script = self.0.lock().unwrap();
-        if script.flush_waits_for_gate && !script.gate_open {
+        if matches!(script.mode, Mode::FlushWaitsForGate) && !script.gate_open {
             script.waker = Some(cx.waker().clone());
             return Poll::Pending;
         }
@@ -146,7 +158,7 @@ async fn a_write_that_completes_at_once_takes_no_task_hop() {
 #[tokio::test]
 async fn a_write_pending_after_k_bytes_finishes_whole_after_its_caller_is_dropped() {
     let writer = Scripted::new(Script {
-        accept_before_gate: Some(5),
+        mode: Mode::AcceptBeforeGate(5),
         ..Script::default()
     });
     let before = handed_over();
@@ -179,7 +191,7 @@ async fn a_write_pending_after_k_bytes_finishes_whole_after_its_caller_is_droppe
 #[tokio::test]
 async fn a_write_pending_before_any_byte_finishes_whole_after_its_caller_is_dropped() {
     let writer = Scripted::new(Script {
-        accept_before_gate: Some(0),
+        mode: Mode::AcceptBeforeGate(0),
         ..Script::default()
     });
     let mut caller = Box::pin(finish_whole(write_of(&writer)));
@@ -202,7 +214,7 @@ async fn a_write_pending_before_any_byte_finishes_whole_after_its_caller_is_drop
 #[tokio::test]
 async fn a_flush_still_pending_finishes_after_its_caller_is_dropped() {
     let writer = Scripted::new(Script {
-        flush_waits_for_gate: true,
+        mode: Mode::FlushWaitsForGate,
         ..Script::default()
     });
     let mut caller = Box::pin(finish_whole(write_of(&writer)));
@@ -221,7 +233,7 @@ async fn a_flush_still_pending_finishes_after_its_caller_is_dropped() {
 #[tokio::test]
 async fn a_write_error_reaches_the_caller() {
     let writer = Scripted::new(Script {
-        fail: true,
+        mode: Mode::Fail,
         ..Script::default()
     });
     let outcome = finish_whole(write_of(&writer)).await;
