@@ -211,12 +211,14 @@ fn a_middle_sample_never_truncates_leaf_evidence() {
 /// - `capped()` dropping retained (mutant a8): the sample, at m = 8, keeps
 ///   none of the window, so bob is not refused, and the row fails at its own
 ///   assertion.
+///
 /// A window qualifies with about 8% probability and about 650 mid-word
 /// starts are tried.
 /// Residual: a partial loss of retained fingerprints that spares this window
 /// is not detected here.
 #[test]
 fn a_kept_plan_steps_short_relay_is_caught_by_its_retained_fingerprints() {
+    const PER_DELIVERY: usize = 4 * 1_024;
     let fw = firewall();
     let detector = fw.collusion_detector().expect("relay detection on");
     let text = filler(17, 64 * 1024);
@@ -235,7 +237,6 @@ fn a_kept_plan_steps_short_relay_is_caught_by_its_retained_fingerprints() {
     // fingerprints), then retained ones in text order up to the per-delivery
     // bound (`MAX_SOURCE_FINGERPRINTS`, 4,096): text up to about
     // half + 4 * (4,096 - RECORD_CAP / 4). Search three quarters of that.
-    const PER_DELIVERY: usize = 4 * 1_024;
     let cap = super::super::RECORD_CAP;
     let half = cap / 2;
     let cutoff = half + 3 * (PER_DELIVERY - cap / 4);

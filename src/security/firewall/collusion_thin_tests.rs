@@ -28,7 +28,7 @@ impl Draws {
         let mut out = std::collections::BTreeSet::new();
         while out.len() < count {
             let h = self.next();
-            if h % SAMPLE == 0 {
+            if h.is_multiple_of(SAMPLE) {
                 out.insert(h);
             }
         }

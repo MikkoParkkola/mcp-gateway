@@ -30,7 +30,7 @@ pub(super) fn mix(mut z: u64) -> u64 {
 /// predicate `thinned_middle` applies as trailing zeros (tests only).
 #[cfg(test)]
 pub(super) fn keep_thinned(fp: u64, m: u64) -> bool {
-    mix(fp) % m == 0
+    mix(fp).is_multiple_of(m)
 }
 
 /// The middle of a cut delivery thinned to fit `room`: `cut` minus `kept`,
@@ -87,11 +87,6 @@ impl CollusionDetector {
     pub(crate) fn live_sketches(&self, source: &str, principal: &str) -> usize {
         let pair = (self.digest(source), self.digest(principal));
         self.state.lock().sketches.positions_of(pair).len()
-    }
-
-    /// Whether `fp` is tracked as evidence now (tests only).
-    pub(crate) fn tracks(&self, fp: u64) -> bool {
-        self.state.lock().entries.contains_key(&fp)
     }
 
     /// Whether the middle sample keeps `fp` at one in `m` (tests only).
