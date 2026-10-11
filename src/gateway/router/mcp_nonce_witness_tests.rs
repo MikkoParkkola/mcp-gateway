@@ -156,3 +156,74 @@ async fn a_refused_retry_after_a_mint_keeps_the_nonce() {
     );
     assert_eq!(dispatched(&fx), 1, "only the warm-up reached the backend");
 }
+
+/// K-cold-schema: no mint; the refused call is the first on `alpha-pt`, so
+/// the undeclared-key check fetches `tools/list` from the backend before the
+/// spend budget refuses it. The per-key budget is shared across backends, the
+/// schema slot is per backend, so paying on `alpha` leaves `alpha-pt` cold.
+/// The fetch dropped the witness: the re-send is a replay. Red on base.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn a_spend_refusal_after_a_cold_schema_fetch_keeps_the_nonce() {
+    use super::direct_continuation_tests::budget;
+    use super::direct_guards_fixture::fixture_hardened_signed_built;
+    let fx = fixture_hardened_signed_built(Answer::Ok, true, budget).await;
+    let (_, first) = signed_call(&fx, ("k-budget", "alpha"), "n1", json!({})).await;
+    assert!(first.get("error").is_none(), "the paying call: {first}");
+    let cold = fx.state.backends.get("alpha-pt").expect("fixture backend");
+    assert!(
+        !cold.has_cached_tools(),
+        "alpha-pt must be cold before the refused call"
+    );
+
+    let who = ("k-budget", "alpha-pt");
+    let (_, refused) = signed_call(&fx, who, "n2", json!({})).await;
+    assert_eq!(code(&refused), Some(-32003), "the spend refusal: {refused}");
+    assert!(
+        cold.has_cached_tools(),
+        "the refused call fetched tools/list"
+    );
+
+    let (_, again) = signed_call(&fx, who, "n2", json!({})).await;
+    assert!(
+        refused_as_replay(&again),
+        "the nonce was given back after a fetch: {again}"
+    );
+    assert_eq!(dispatched(&fx), 1);
+}
+
+/// An answer the request firewall refuses: a shell command separator and a
+/// recursive delete, split here so the test source does not spell it.
+#[cfg(feature = "firewall")]
+fn blocked_answer() -> String {
+    format!("; {} -rf / ", "rm")
+}
+
+/// K-choke-consume: a valid retry whose answers the firewall blocks consumes
+/// its continuation in `redeem_retry`, then the chokepoint refuses it. The
+/// consume dropped the witness: a fresh call under that nonce is a replay.
+/// Red on base: it is served (the /mcp twin of f2d_giveback, which refunds).
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_chokepoint_refusal_after_a_consume_keeps_the_nonce() {
+    use super::direct_guards_fixture::fixture_hardened_signed_firewalled;
+    let fx = fixture_hardened_signed_firewalled(Answer::AskOnce).await;
+    let who = ("k-std", "alpha");
+    let (_, asked) = signed_call(&fx, who, "n1", json!({})).await;
+    let blocked = json!({"k1": {"action": "accept", "content": {"account": blocked_answer()}}});
+    let hostile = json!({"requestState": state_of(&asked), "inputResponses": blocked});
+    let (_, refused) = signed_call(&fx, who, "n2", hostile).await;
+    assert_eq!(
+        code(&refused),
+        Some(-32600),
+        "the chokepoint refusal: {refused}"
+    );
+    assert_eq!(dispatched(&fx), 1, "the hostile answer was not sent");
+
+    let (_, fresh) = signed_call(&fx, who, "n2", json!({})).await;
+    assert!(
+        refused_as_replay(&fresh),
+        "the nonce was given back after a consume: {fresh}"
+    );
+    assert_eq!(dispatched(&fx), 1);
+}
