@@ -36,6 +36,8 @@ pub mod handler;
 #[cfg(test)]
 mod identity_rules_tests;
 pub mod oidc;
+#[cfg(test)]
+pub(crate) mod oidc_test_harness;
 pub mod policy;
 pub mod store;
 
