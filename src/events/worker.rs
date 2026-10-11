@@ -295,13 +295,6 @@ impl EventsHub {
         ended: &(impl Fn(&'static str) -> Attempt<'a> + Sync),
     ) {
         let (sub, record) = (ctx.sub, ctx.record);
-        // The signer refused on a clock that cannot be read: nothing was sent,
-        // so nothing is counted and no failure window moves (MIK-8202).
-        if matches!(answer, Err(CallbackFailure::ClockUnreadable)) {
-            services.audit_outcome(&ended(CLOCK_UNREADABLE)).await;
-            self.settle(services, record, clock_unsent(record)).await;
-            return;
-        }
         // One reading judges the answer and dates its settlement (MIK-8202).
         let now = crate::clock::utc_now();
         let (outcome, status) = self.judge(record, &answer, now);
