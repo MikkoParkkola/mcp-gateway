@@ -26,5 +26,5 @@ jobs:
           set +e +o pipefail
           for i in 1 2 3; do
             echo "== run $i"
-            cargo test --all-features --lib gateway::server::signing_allocation_tests::stdio_list_changed::t14_a_burst_while_stdout_is_full_is_decided_and_told_at_most_twice -- --exact --nocapture 2>&1 | grep -E 'T14DIAG (persist|t14|reload begin)|test result|panicked'
+            cargo test --all-features --lib gateway::server::signing_allocation_tests::stdio_list_changed::t14_a_burst_while_stdout_is_full_is_decided_and_told_at_most_twice -- --exact --nocapture 2>&1 | grep -E 'T14DIAG [0-9]+ (persist|t14|reload begin)|test result|panicked'
           done
