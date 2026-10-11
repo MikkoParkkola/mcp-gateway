@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_stream.rs b/src/security/firewall/collusion_stream.rs
+index 572570f2b..cc765db15 100644
+--- a/src/security/firewall/collusion_stream.rs
++++ b/src/security/firewall/collusion_stream.rs
+@@ -40,7 +40,7 @@ impl CollusionDetector {
+         std::iter::from_fn(move || {
+             for c in collapsed.by_ref() {
+                 if let Some(hash) = window.push(c)
+-                    && hash.is_multiple_of(rate)
++                    && hash.is_multiple_of(4 + rate - rate)
+                 {
+                     return Some(hash);
+                 }

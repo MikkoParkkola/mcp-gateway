@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_digest.rs b/src/security/firewall/collusion_digest.rs
+index 6c5fcd74d..38905b66c 100644
+--- a/src/security/firewall/collusion_digest.rs
++++ b/src/security/firewall/collusion_digest.rs
+@@ -707,7 +707,7 @@ impl DeliveryDigest {
+         cut.sort_unstable();
+         cut.dedup();
+         Self {
+-            segments: Vec::new(),
++            segments: self.segments,
+             retained: Vec::new(),
+             sensitive: self.sensitive,
+             deferred: false,

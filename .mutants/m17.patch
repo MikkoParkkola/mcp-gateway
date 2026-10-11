@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate.rs b/src/security/firewall/collusion_gate.rs
+index 3555daac5..97a7fc9fb 100644
+--- a/src/security/firewall/collusion_gate.rs
++++ b/src/security/firewall/collusion_gate.rs
+@@ -567,7 +567,7 @@ impl Firewall {
+                 .increment(1);
+             return digest;
+         }
+-        staged.add_attachment(bytes);
++        staged.add_baseline(bytes);
+         digest.leaf_hashes = Some(hashes.into());
+         digest
+     }

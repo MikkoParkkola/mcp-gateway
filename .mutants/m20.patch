@@ -1,0 +1,12 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay_delivered.rs b/src/gateway/meta_mcp/invoke/relay_delivered.rs
+index bca0572e1..d565c0937 100644
+--- a/src/gateway/meta_mcp/invoke/relay_delivered.rs
++++ b/src/gateway/meta_mcp/invoke/relay_delivered.rs
+@@ -305,6 +305,7 @@ fn keep_to_rewritten(
+     let flat = Value::String(unescape(text));
+     let staged = super::RELAY_STAGED.try_with(|s| fw.delivered_preferring(&read, &flat, Some(s)));
+     match staged.unwrap_or_else(|_| fw.delivered_preferring(&read, &flat, None)) {
++        Some(delivered) if delivered.unread() => receipts.clear(),
+         Some(delivered) => {
+             let digest = std::mem::take(&mut one.digest);
+             one.digest = fw.retain_delivered(digest, &delivered, one.step);
