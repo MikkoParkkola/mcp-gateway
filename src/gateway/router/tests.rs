@@ -51,7 +51,9 @@ mod mcp_malformed_hardened;
 mod meta_firewall_verdict;
 mod meta_fixture;
 mod order2_fsm;
-mod task_execution_adapter;
+// pub(crate): the route-check matrix drives TaskSubmit x Authorize through
+// `submit_authz` (MIK-8315).
+pub(crate) mod task_execution_adapter;
 
 mod issue_555_listing_scope;
 /// C7: `/metrics` behind a dedicated scrape token (MIK 7570 METRICS.1).

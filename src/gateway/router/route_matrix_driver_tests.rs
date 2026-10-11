@@ -407,8 +407,13 @@ impl crate::transport::Transport for Destructive {
 
 /// R4a: a modern task-augmented `tools/call read` by its surfaced name on
 /// `/mcp`, declaring form elicitation, where `read` is listed
-/// `destructiveHint: true`, so X14 has a destructive call to decide.
-pub(crate) async fn task_submit_surfaced() -> Sent {
+/// `destructiveHint: true`, so X14 has a destructive call to decide. `k-std`
+/// carries no verified identity, so X14 binds it by its key (MIK-8137).
+///
+/// The whole round on one gateway: `k-std`'s call; its challenge, answered
+/// `accept` and presented by another key (`k-budget`); then by `k-std`. With
+/// the backend calls counted after each.
+pub(crate) async fn task_submit_surfaced() -> TaskConfirmRound {
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let transport = std::sync::Arc::new(Destructive {
         calls: std::sync::Arc::clone(&calls),
@@ -432,21 +437,58 @@ pub(crate) async fn task_submit_surfaced() -> Sent {
         ("mcp-method", "tools/call"),
         ("mcp-name", "read"),
     ];
-    let (_, body) = super::direct_guards_fixture::send_with_headers(
-        &fx,
-        "/mcp",
-        "k-std",
-        "tools/call",
-        params,
-        None,
-        &headers,
-    )
-    .await;
-    Sent {
-        body,
-        backend_calls: calls.load(Ordering::SeqCst),
-        seen: Vec::new(),
+    let send = |key: &'static str, params: serde_json::Value| {
+        super::direct_guards_fixture::send_with_headers(
+            &fx,
+            "/mcp",
+            key,
+            "tools/call",
+            params,
+            None,
+            &headers,
+        )
+    };
+    let (_, challenge) = send("k-std", params.clone()).await;
+    let mut accepted = params;
+    if let (Some(state), Some((issued, _))) = (
+        challenge.pointer("/result/requestState").cloned(),
+        challenge
+            .pointer("/result/inputRequests")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|requests| requests.iter().next()),
+    ) {
+        accepted["requestState"] = state;
+        accepted["inputResponses"] = serde_json::json!({ issued.clone(): {"action": "accept"} });
     }
+    let (_, other_key) = send("k-budget", accepted.clone()).await;
+    let after_other_key = calls.load(Ordering::SeqCst);
+    let (_, same_key) = send("k-std", accepted).await;
+    TaskConfirmRound {
+        challenge,
+        other_key,
+        after_other_key,
+        same_key,
+    }
+}
+
+/// [`task_submit_surfaced`]'s answers.
+pub(crate) struct TaskConfirmRound {
+    /// `k-std`'s first call: X14's question.
+    pub challenge: serde_json::Value,
+    /// The accepted answer presented by another key.
+    pub other_key: serde_json::Value,
+    /// Backend calls once that presentation was answered.
+    pub after_other_key: usize,
+    /// The accepted answer presented by `k-std`.
+    pub same_key: serde_json::Value,
+}
+
+/// R4a `Authorize` (MIK-8315): a modern task-augmented `gateway_invoke` of a
+/// personal capability the caller holds no grant for, on `/mcp`. Panics
+/// unless the submit answers the sync call's status, code and message,
+/// writes the sync call's audit records, creates no task and reaches nothing.
+pub(crate) async fn task_submit_ungranted() {
+    super::tests::task_execution_adapter::submit_authz::matrix_ungranted_invoke_submit().await;
 }
 
 /// A backend whose `tools/call` signals `entered`, then waits for `gate`

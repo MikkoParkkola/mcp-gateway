@@ -91,17 +91,9 @@ impl Flight {
 /// not blocked on: a cancelled caller leaves no thread waiting behind it.
 pub(super) async fn hold_across_processes(token_path: &Path) -> crate::Result<ExclusiveFileLock> {
     let lock_path = token_path.with_extension("refresh.lock");
-    loop {
-        match ExclusiveFileLock::try_lease(&lock_path) {
-            Ok(Some(lock)) => return Ok(lock),
-            Ok(None) => tokio::time::sleep(LOCK_POLL).await,
-            Err(e) => {
-                return Err(Error::OAuth(format!(
-                    "Could not take the refresh lock: {e}"
-                )));
-            }
-        }
-    }
+    ExclusiveFileLock::lease(&lock_path, LOCK_POLL)
+        .await
+        .map_err(|e| Error::OAuth(format!("Could not take the refresh lock: {e}")))
 }
 
 /// The most one exchange may take, answer body included. Above an owned

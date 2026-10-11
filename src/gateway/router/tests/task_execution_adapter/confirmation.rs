@@ -7,6 +7,7 @@ use super::support::*;
 mod backend_domain;
 mod fixture;
 mod hardened_signing;
+mod key_only;
 mod review_regressions;
 mod slot_release;
 use fixture::*;

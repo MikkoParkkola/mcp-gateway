@@ -80,6 +80,7 @@ mod mik7642_backend_cancel;
 mod owner2_stdio_tasks;
 #[cfg(feature = "firewall")]
 pub(super) mod route_matrix_stdio_tasks;
+mod submit_authz_stdio;
 // MIK-7839.CANCEL.3: a dropped run_stdio future stops its task workers.
 mod stdio_session_drop;
 // MIK-7757: a drain timeout cancels the running workers on both shutdown paths.
