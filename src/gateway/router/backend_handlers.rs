@@ -637,6 +637,7 @@ mod direct_caller;
 mod direct_dispatch;
 mod direct_failure;
 mod direct_list;
+mod direct_permit;
 mod direct_preflight;
 mod direct_send;
 mod key_check;
