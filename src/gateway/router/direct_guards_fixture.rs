@@ -374,9 +374,9 @@ pub(crate) use egress::{
     fixture_hardened_signed_firewalled, fixture_inspecting_on, meta_firewall,
 };
 pub(crate) use quota::fixture_propagating;
-#[cfg(feature = "firewall")]
-pub(crate) use quota::fixture_propagating_budgeted;
 use quota::{fixture_backend_config, fixture_failsafe, leaked_transparency_log};
+#[cfg(feature = "firewall")]
+pub(crate) use quota::{fixture_firewalled_budget_built, fixture_propagating_budgeted};
 
 pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
 
