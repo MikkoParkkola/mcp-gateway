@@ -131,6 +131,28 @@ fn chain(id: i64, steps: usize) -> Value {
     ))
 }
 
+/// S8 (stdio, through the real stdio dispatch): the enforced question is
+/// answered with the same -32600 refusal, with no continuation and one backend
+/// call. Red on the base: the stripped round crossed with its handle.
+#[tokio::test]
+async fn s8_stdio_answers_an_enforced_question_with_the_refusal() {
+    let sent = crate::gateway::server::route_matrix_driver_tests::stdio_answering_gated(
+        kernel(Strip),
+        injected_question(),
+    )
+    .await;
+    std::assert_eq!(sent.body["error"]["code"], -32600, "{}", sent.body);
+    std::assert!(
+        sent.body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(REFUSAL)),
+        "{}",
+        sent.body
+    );
+    std::assert!(!sent.body.to_string().contains(STATE_1), "{}", sent.body);
+    std::assert_eq!(sent.backend_calls, 1, "the backend is not resumed");
+}
+
 /// S6 (chain): a chain whose first step's question is enforced fails at that
 /// step; the second step's backend is never called.
 #[tokio::test]
@@ -190,11 +212,16 @@ async fn s7b_a_continuing_playbook_records_the_enforced_step_failed() {
     let (state, _dir) = gated_state(&mock, Strip).await;
     state.meta_mcp.set_playbook_engine(playbook("continue"));
     let read = post(&state, "key-a", run_playbook(1)).await;
-    let text = read.to_string();
     std::assert!(read.get("error").is_none(), "continue carries on: {read}");
-    std::assert!(text.contains("first"), "the failed step is named: {read}");
     std::assert_eq!(mock.calls(), 2, "the second step runs under continue");
-    std::assert!(!text.contains(STATE_1), "{read}");
+    let outcome: Value = read["result"]["content"][0]["text"]
+        .as_str()
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or_else(|| panic!("a playbook result: {read}"));
+    std::assert_eq!(outcome["steps_failed"], json!(["first"]), "{read}");
+    std::assert_eq!(outcome["steps_completed"], json!(["second"]), "{read}");
+    std::assert_eq!(outcome["step_errors"]["first"], REFUSAL, "{read}");
+    std::assert!(!read.to_string().contains(STATE_1), "{read}");
 }
 
 /// S7c (playbook, retry): the gate's refusal is final. A retried step is not

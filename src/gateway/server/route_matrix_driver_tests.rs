@@ -210,6 +210,20 @@ pub(crate) async fn stdio_asking() -> Sent {
     stdio_call(|_| {}, (json!({}), None), question).await
 }
 
+/// R5 whose backend answers `answer` under the context-integrity `kernel`
+/// (MIK-8325 S8: an enforced follow-up question over stdio).
+pub(crate) async fn stdio_answering_gated(
+    kernel: crate::context_integrity::ContextIntegrityKernel,
+    answer: Value,
+) -> Sent {
+    stdio_call(
+        |meta| meta.set_context_integrity_kernel(kernel),
+        (json!({}), None),
+        answer,
+    )
+    .await
+}
+
 /// R5 with a chain signer emitting on request, the call carrying a chain nonce.
 pub(crate) async fn stdio_chained() -> Sent {
     use crate::gateway::chain_test_support::{NONCE_KEY, signer};
