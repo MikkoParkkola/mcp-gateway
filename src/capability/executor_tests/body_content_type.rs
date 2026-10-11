@@ -297,27 +297,19 @@ async fn send_with_retry_records_transport_failures() {
 
 #[tokio::test]
 async fn send_with_retry_does_not_retry_timeouts_when_not_idempotent() {
-    // A server that always hangs past the client timeout. With retry_timeouts
-    // = false (non-idempotent), the timeout is NOT retried: exactly one
-    // connection attempt is made. Protects against duplicate side effects.
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
+    // A server that never answers, so every attempt times out. With
+    // retry_timeouts = false (non-idempotent), the timeout is NOT retried:
+    // exactly one connection attempt is made. Protects against duplicate side
+    // effects.
+    //
+    // Nothing accepts during the call: the kernel completes each handshake
+    // into the listen backlog on its own, and any retry happens inside
+    // `send_with_retry` before it returns. So once it has returned, every
+    // connection the client made is in the backlog, and draining it counts
+    // them exactly. Counting on an accept thread instead read 0 under load,
+    // before that thread ran (MIK-8354).
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().unwrap();
-    let counter = Arc::new(AtomicUsize::new(0));
-    let counter_srv = Arc::clone(&counter);
-    std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(stream) = stream else { continue };
-            counter_srv.fetch_add(1, Ordering::SeqCst);
-            // Hold the connection open and never respond.
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                drop(stream);
-            });
-        }
-    });
 
     let client = reqwest::Client::new();
     let url = format!("http://{addr}/");
@@ -328,9 +320,20 @@ async fn send_with_retry_does_not_retry_timeouts_when_not_idempotent() {
 
     let resp = send_with_retry(req, "test", false, &health).await;
     assert!(resp.is_err(), "the hung request should time out");
+
+    listener
+        .set_nonblocking(true)
+        .expect("a non-blocking drain of the backlog");
+    let mut attempts = 0;
+    loop {
+        match listener.accept() {
+            Ok(_) => attempts += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+            Err(e) => panic!("draining the backlog: {e}"),
+        }
+    }
     assert_eq!(
-        counter.load(Ordering::SeqCst),
-        1,
+        attempts, 1,
         "a non-idempotent timeout must NOT be retried (single attempt)"
     );
 }
