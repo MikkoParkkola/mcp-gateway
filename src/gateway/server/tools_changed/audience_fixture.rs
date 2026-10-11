@@ -200,22 +200,30 @@ auth:\n  required: false\n  type: none\n"
     )
 }
 
-/// The loopback peer a row's trusted proxy speaks from.
-pub(super) const PROXY_PEER: std::net::SocketAddr =
-    std::net::SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 9);
+/// The Open `WebUI` installation and header the adapter rows configure.
+pub(super) const ADAPTER_INSTALLATION: &str = "inst";
+const ADAPTER_HEADER: &str = "x-openwebui-assertion";
+const ADAPTER_SECRET: &str = "audience-adapter-signing-secret-0123456789";
 
-/// Mark `request` as sent by the trusted proxy at [`PROXY_PEER`], asserting
-/// `subject`; untouched without one.
-fn proxied(request: &mut axum::http::Request<Body>, subject: Option<&str>) {
-    if let Some(subject) = subject {
-        request.headers_mut().insert(
-            "x-gateway-identity-subject",
-            subject.parse().expect("a header value"),
-        );
+/// Attach `assertion` as the Open `WebUI` adapter's header; untouched without one.
+fn asserted(request: &mut axum::http::Request<Body>, assertion: Option<&str>) {
+    if let Some(assertion) = assertion {
         request
-            .extensions_mut()
-            .insert(axum::extract::ConnectInfo(PROXY_PEER));
+            .headers_mut()
+            .insert(ADAPTER_HEADER, assertion.parse().expect("a header value"));
     }
+}
+
+/// An adapter assertion for end user `sub`, signed as the installation signs.
+pub(super) fn adapter_assertion(sub: &str) -> String {
+    let now = crate::clock::unix_secs().expect("clock after 1970");
+    let claims = json!({ "iss": "open-webui", "sub": sub, "iat": now, "exp": now + 120 });
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::HS256),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(ADAPTER_SECRET.as_bytes()),
+    )
+    .expect("sign")
 }
 
 /// The gateway under test and the handles rows drive it with.
@@ -231,6 +239,8 @@ pub(super) struct World {
     _shutdown: tokio::sync::broadcast::Sender<()>,
     _store: tempfile::TempDir,
     _audit: tempfile::NamedTempFile,
+    /// The adapter's env file, kept alive for [`Self::start_adapter`].
+    _adapter: Option<tempfile::TempDir>,
 }
 
 impl World {
@@ -241,7 +251,36 @@ impl World {
     /// As [`Self::start`], with `configure` applied to the Meta-MCP last.
     pub(super) async fn start_with(configure: impl FnOnce(MetaMcp) -> MetaMcp) -> Self {
         let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
-        Self::start_on(key_server, configure).await
+        Self::start_on(key_server, None, configure).await
+    }
+
+    /// As [`Self::start_with`], with an Open `WebUI` adapter that k-std may
+    /// present ([`adapter_assertion`] mints its assertions).
+    pub(super) async fn start_adapter(configure: impl FnOnce(MetaMcp) -> MetaMcp) -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env = dir.path().join("adapter.env");
+        crate::gateway::test_helpers::write_owner_only(
+            &env,
+            format!(
+                "AUDIENCE_OWUI_HMAC={ADAPTER_SECRET}\n\
+                 AUDIENCE_OWUI_STORE=UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=\n"
+            ),
+        )
+        .expect("write env");
+        let config: crate::config::Config = serde_yaml::from_str(&format!(
+            "env_files: ['{}']\naccounts:\n  schema_version: accounts.v1\n  enabled: false\n  \
+             deployment: single_process\n  instance_id: audience\n  \
+             store_dir: /unused/audience-store\n  authority_dir: /unused/audience-authority\n  \
+             current_key_id: primary\n  keys:\n    primary: env:AUDIENCE_OWUI_STORE\n  \
+             adapters:\n    - kind: openwebui_signed_header\n      \
+             installation_id: {ADAPTER_INSTALLATION}\n      header: {ADAPTER_HEADER}\n      \
+             issuer: open-webui\n      hmac_secret_ref: env:AUDIENCE_OWUI_HMAC\n      \
+             allowed_api_key_names: [k-std]\n",
+            env.display().to_string().replace('\'', "''")
+        ))
+        .expect("adapter config parses");
+        let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
+        Self::start_on(key_server, Some((config, dir)), configure).await
     }
 
     /// As [`Self::start`], with a real OIDC key server: one provider
@@ -259,13 +298,14 @@ impl World {
         let extra = format!("delegated_bearer: true\npolicies:\n{policies}");
         let oidc = Harness::start(&config_yaml("[]", &extra)).await;
         (
-            Self::start_on(Arc::clone(&oidc.ks), |meta| meta).await,
+            Self::start_on(Arc::clone(&oidc.ks), None, |meta| meta).await,
             oidc,
         )
     }
 
     async fn start_on(
         key_server: Arc<KeyServer>,
+        live: Option<(crate::config::Config, tempfile::TempDir)>,
         configure: impl FnOnce(MetaMcp) -> MetaMcp,
     ) -> Self {
         let auth = AuthConfig {
@@ -319,6 +359,10 @@ impl World {
         .await;
         let (feed, nudges) = tokio::sync::mpsc::unbounded_channel();
         let st = Arc::get_mut(&mut state).expect("state is unique");
+        let adapter = live.map(|(config, dir)| {
+            st.live_config = Arc::new(crate::config_reload::LiveConfig::new(config));
+            dir
+        });
         st.backends.set_change_feed(feed.clone());
         for backend in [
             shared_backend("alpha"),
@@ -340,6 +384,7 @@ impl World {
             _shutdown: shutdown,
             _store: store,
             _audit: audit,
+            _adapter: adapter,
         };
         let all = vec![
             tool("read", "r"),
@@ -458,12 +503,12 @@ impl World {
             .await
     }
 
-    /// `POST /mcp` with `bearer`, in a session and from a trusted proxy
-    /// asserting a subject, each when given.
+    /// `POST /mcp` with `bearer`, in a session and
+    /// with an Open `WebUI` assertion, each when given.
     async fn post_as(
         &self,
         bearer: &str,
-        (session, subject): (Option<&str>, Option<&str>),
+        (session, assertion): (Option<&str>, Option<&str>),
         method: &str,
         params: Value,
     ) -> Value {
@@ -481,7 +526,7 @@ impl World {
                     .to_string(),
             ))
             .expect("a request");
-        proxied(&mut request, subject);
+        asserted(&mut request, assertion);
         let response = self.router.clone().oneshot(request).await.expect("served");
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -516,17 +561,17 @@ impl World {
         self.discovered_as(bearer, None, server).await
     }
 
-    /// As [`Self::discovered`], from a trusted proxy asserting `subject`.
+    /// As [`Self::discovered`], with an Open `WebUI` `assertion`.
     pub(super) async fn discovered_as(
         &self,
         bearer: &str,
-        subject: Option<&str>,
+        assertion: Option<&str>,
         server: &str,
     ) -> Vec<String> {
         let reply = self
             .post_as(
                 bearer,
-                (None, subject),
+                (None, assertion),
                 "tools/call",
                 json!({ "name": "gateway_list_tools", "arguments": { "server": server } }),
             )
@@ -624,8 +669,8 @@ impl World {
         self.listen_as(bearer, None).await
     }
 
-    /// As [`Self::listen`], from a trusted proxy asserting `subject`.
-    pub(super) async fn listen_as(&self, bearer: &str, subject: Option<&str>) -> Ear {
+    /// As [`Self::listen`], with an Open `WebUI` `assertion`.
+    pub(super) async fn listen_as(&self, bearer: &str, assertion: Option<&str>) -> Ear {
         let body = json!({
             "jsonrpc": "2.0", "id": "listen", "method": "subscriptions/listen",
             "params": {
@@ -647,7 +692,7 @@ impl World {
             .body(Body::from(body.to_string()))
             .expect("a request");
         let mut request = request;
-        proxied(&mut request, subject);
+        asserted(&mut request, assertion);
         let response = self.router.clone().oneshot(request).await.expect("served");
         assert!(
             response.status().is_success(),

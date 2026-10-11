@@ -135,32 +135,27 @@ async fn l2_promotion_two_sessions_of_one_key_differ_only_in_promotion() {
     assert_eq!(told, [0, 0], "read is hidden from both: RED on base");
 }
 
-/// The caller-identity config of the grant-subject row: a trusted proxy at
-/// the fixture's loopback peer, asserting subjects under `proxy`.
-fn proxy_identity() -> crate::security::caller_identity::CallerIdentityConfig {
-    crate::security::caller_identity::CallerIdentityConfig {
-        mode: crate::security::caller_identity::CallerIdentityMode::TrustedProxy,
-        trusted_proxies: vec![super::audience_fixture::PROXY_PEER.ip()],
-        authority: "proxy".to_string(),
-        ..Default::default()
-    }
+/// The grant authority of the adapter's end users.
+fn adapter_authority() -> String {
+    crate::gateway::openwebui_adapter::adapter_issuer(super::audience_fixture::ADAPTER_INSTALLATION)
 }
 
-/// A personal capability `alice_cal` owned by `proxy:alice`.
+/// A personal capability `alice_cal` owned by the adapter's end user `alice`.
 fn alice_cal(description: &str) -> String {
     format!(
         "fulcrum: \"1.0\"\nname: alice_cal\ndescription: {description}\n\
 schema:\n  input:\n    type: object\n    properties: {{}}\n\
-metadata:\n  exposure: personal\n  identity_owner:\n    authority: proxy\n    subject: alice\n\
+metadata:\n  exposure: personal\n  identity_owner:\n    authority: \"{}\"\n    subject: alice\n\
 providers:\n  primary:\n    service: rest\n    config:\n      base_url: https://example.invalid\n      path: /cal\n      method: GET\n\
-auth:\n  required: false\n  type: none\n"
+auth:\n  required: false\n  type: none\n",
+        adapter_authority()
     )
 }
 
-/// `proxy:alice`'s grant on `alice_cal`.
+/// The adapter user `alice`'s grant on `alice_cal`.
 fn alice_grant() -> crate::identity_grants::LocalIdentityGrantStore {
     use crate::identity_grants::{GrantAgent, GrantScope, GrantSubject, IdentityGrant};
-    let alice = GrantSubject::new("proxy", "alice", None);
+    let alice = GrantSubject::new(adapter_authority(), "alice", None);
     crate::identity_grants::LocalIdentityGrantStore::from_grants([IdentityGrant {
         grant_id: "g-alice".to_string(),
         subject: alice.clone(),
@@ -176,32 +171,33 @@ fn alice_grant() -> crate::identity_grants::LocalIdentityGrantStore {
     }])
 }
 
-/// L2-grant-subject (MIK-8350), RED (killer M7e): one API key behind a
-/// trusted proxy asserting two end users, so one principal and two grant
-/// subjects. Only alice may see her personal capability, so its change tells
-/// only alice's listener.
+/// L2-grant-subject (MIK-8350), RED (killer M7e): one API key presenting
+/// Open `WebUI` assertions for two end users, so one principal and two grant
+/// subjects (the adapter identity MIK-8350's D11 captures). Only alice may
+/// see her personal capability, so its change tells only alice's listener.
+/// The trusted-proxy and Cloudflare variants are MIK-8377's.
 #[tokio::test]
-async fn l2_grant_subject_one_key_two_asserted_users_differ_only_in_subject() {
-    let w = World::start_with(|meta| {
-        meta.with_caller_identity(proxy_identity())
-            .with_identity_grants(alice_grant())
-    })
-    .await;
+async fn l2_grant_subject_one_key_two_adapter_users_differ_only_in_subject() {
+    use super::audience_fixture::adapter_assertion;
+    let w = World::start_adapter(|meta| meta.with_identity_grants(alice_grant())).await;
     w.set_capability_yaml(&alice_cal("one"));
     w.settle().await;
-    let alice = w.discovered_as(STD, Some("alice"), "caps").await;
-    let bob = w.discovered_as(STD, Some("bob"), "caps").await;
-    assert!(
-        alice.contains(&"alice_cal".to_string()),
-        "premise: alice sees her capability: {alice:?}"
+    let (alice, bob) = (adapter_assertion("alice"), adapter_assertion("bob"));
+    let seen = (
+        w.discovered_as(STD, Some(&alice), "caps").await,
+        w.discovered_as(STD, Some(&bob), "caps").await,
     );
     assert!(
-        !bob.contains(&"alice_cal".to_string()),
-        "premise: bob does not: {bob:?}"
+        seen.0.contains(&"alice_cal".to_string()),
+        "premise: alice sees her capability: {seen:?}"
+    );
+    assert!(
+        !seen.1.contains(&"alice_cal".to_string()),
+        "premise: bob does not: {seen:?}"
     );
     let mut ears = [
-        w.listen_as(STD, Some("alice")).await,
-        w.listen_as(STD, Some("bob")).await,
+        w.listen_as(STD, Some(&alice)).await,
+        w.listen_as(STD, Some(&bob)).await,
     ];
     w.set_capability_yaml(&alice_cal("two"));
     let told = [ears[0].told(&w).await, ears[1].told(&w).await];
