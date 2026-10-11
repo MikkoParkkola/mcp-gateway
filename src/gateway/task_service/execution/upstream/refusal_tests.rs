@@ -12,7 +12,9 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::super::{TaskExecutor, UpstreamAnswer, UpstreamHandle, UpstreamRecovery};
+use super::super::{
+    CancelDelivery, TaskExecutor, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+};
 use super::{RecoveredRead, RecoveryRefusal, UpstreamCapture};
 use crate::gateway::meta_mcp::upstream::DirectJob;
 use crate::gateway::subscription_registry::{DEFAULT_MAX_LISTENERS, SubscriptionRegistry};
@@ -33,7 +35,9 @@ struct CountingPeer {
 #[async_trait::async_trait]
 impl UpstreamRecovery for CountingPeer {
     /// This suite asserts nothing about upstream cancels (MIK-7642 PR.D rows do).
-    async fn cancel(&self, _handle: &UpstreamHandle, _deadline: Duration) {}
+    async fn cancel(&self, _handle: &UpstreamHandle, _deadline: Duration) -> CancelDelivery {
+        CancelDelivery::Confirmed
+    }
 
     async fn claims(&self, backend: &str) -> bool {
         self.claims && backend == BACKEND
@@ -369,9 +373,10 @@ struct CancelRecorder(
 
 #[async_trait::async_trait]
 impl UpstreamRecovery for CancelRecorder {
-    async fn cancel(&self, handle: &UpstreamHandle, _deadline: Duration) {
+    async fn cancel(&self, handle: &UpstreamHandle, _deadline: Duration) -> CancelDelivery {
         self.0.lock().push(handle.handle.clone());
         self.1.notify_one();
+        CancelDelivery::Confirmed
     }
 
     async fn claims(&self, backend: &str) -> bool {

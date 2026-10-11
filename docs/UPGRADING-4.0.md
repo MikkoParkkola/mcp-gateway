@@ -3126,9 +3126,12 @@ as above, and a row that holds backend output without recoverable provenance, ev
 playbook or `gateway_execute` row included, is refused -32003 (item 120). Only beta task stores contain such rows.
 
 **Rollback:** a record that carries calls is written as version 5, and a failed upstream task
-whose error is the peer's own as version 6 (MIK-7887), and a cancelled task whose upstream
-task was sent a cancel as version 7 (MIK-7642); a version 4, 5, 6 or 7 row makes
-a beta (which reads versions 1 to 3) refuse to open the task store, so the gateway does not start.
+whose error is the peer's own as version 6 (MIK-7887), a cancelled task whose upstream
+task was sent a cancel as version 7 (MIK-7642), and a cancelled task whose upstream cancel is
+claimed from 4.0.0 on as version 8 (MIK-8347: an unconfirmed cancel is kept and retried); a
+version 4, 5, 6, 7 or 8 row makes a beta (which reads versions 1 to 3) refuse to open the task
+store, so the gateway does not start. A 4.0.0 pre-release that reads at most version 7 refuses a
+version 8 row the same way.
 4.0.0 does not keep those rows readable by the betas. The task store is the directory
 `tasks.store_dir` (default `~/.mcp-gateway/tasks`). Back it up before upgrading. Clearing it to
 start a beta is destructive: it abandons every task and every task idempotency key, it is not a
