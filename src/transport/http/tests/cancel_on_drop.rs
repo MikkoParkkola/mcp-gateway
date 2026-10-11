@@ -264,6 +264,7 @@ async fn a_dropped_recovery_resend_is_cancelled_once_on_the_fresh_session() {
                     "error": {"code": -32015, "message": "Session not found"}});
                 return axum::Json(body).into_response();
             }
+            // timing: fixture
             tokio::time::sleep(SLOW).await;
             axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": {"tools": []}})).into_response()
         }
