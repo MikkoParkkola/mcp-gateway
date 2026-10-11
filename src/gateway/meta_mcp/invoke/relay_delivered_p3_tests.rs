@@ -32,8 +32,18 @@ fn observing() -> Firewall {
 }
 
 /// A part under the 48-char k-gram, so only runs of parts carry k-grams.
+/// Aperiodic (letters from a seeded LCG), so a strict prefix of a part ends
+/// unlike the part itself: `p0[..40] + p2` is no substring of `p0 + p2`.
 fn piece(k: usize) -> String {
-    format!("piece{k}-").repeat(10).chars().take(47).collect()
+    let mut s = 0x8066_2b00_u64 ^ (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let mut out = format!("p{k}:");
+    while out.len() < 47 {
+        s = s
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        out.push(char::from(b'a' + u8::try_from((s >> 33) % 26).unwrap_or(0)));
+    }
+    out
 }
 
 /// Distinct padding that pushes an answer past the 1 MiB bound.
@@ -55,10 +65,16 @@ enum Staged {
 /// Key-a's plan of one step of labelled `parts` (step 0), kept by the
 /// production path to an over-bound answer that carries them, then recorded.
 fn keep_over_bound(fw: &Firewall, parts: &[String], staged: Staged) {
-    let items: Vec<Value> = parts
-        .iter()
-        .map(|p| json!({"part": p, "kind": "chunk"}))
-        .collect();
+    keep_over_bound_beside(fw, parts, &[], staged);
+}
+
+/// [`keep_over_bound`] with `outside` parts after the step's in the same
+/// answer array, produced by no step (unlabelled), so a run spans the step's
+/// parts and parts outside every step.
+fn keep_over_bound_beside(fw: &Firewall, parts: &[String], outside: &[String], staged: Staged) {
+    let item = |p: &String| json!({"part": p, "kind": "chunk"});
+    let items: Vec<Value> = parts.iter().map(item).collect();
+    let answer_items: Vec<Value> = parts.iter().chain(outside).map(item).collect();
     let step = json!({ "parts": items });
     let staging = match staged {
         Staged::Whole => PlanStaging::default(),
@@ -79,8 +95,11 @@ fn keep_over_bound(fw: &Firewall, parts: &[String], staged: Staged) {
         step: Some(0),
         kind: Kind::Delivered,
     }];
-    let answer = json!({ "parts": items, "pad": pad(1_200 * 1024) });
-    with_plan_members(vec![("/parts".to_string(), 0)], || {
+    let answer = json!({ "parts": answer_items, "pad": pad(1_200 * 1024) });
+    let members = (0..parts.len())
+        .map(|i| (format!("/parts/{i}"), 0))
+        .collect();
+    with_plan_members(members, || {
         keep_plan_receipts(fw, &mut receipts, &answer);
     });
     for r in &receipts {
@@ -150,12 +169,13 @@ fn a_substring_of_a_leaf_gets_no_seam_on_an_over_bound_answer() {
 
 /// `MIK-8066` T-seams-view, first half (guard, B4s): a forward joining a
 /// step's part to a part outside every step gets no excuse on an over-bound
-/// answer. (The two-receipt cross-step half lands with the implementation.)
+/// answer. The answer carries all four parts in one array; the step produced
+/// only the first two, so the run spans a step and text no step produced.
 #[test]
 fn a_forward_beyond_the_step_gets_no_seam_on_an_over_bound_answer() {
     let fw = observing();
     let parts: Vec<String> = (0..4).map(piece).collect();
-    keep_over_bound(&fw, &parts[..2], Staged::Whole);
+    keep_over_bound_beside(&fw, &parts[..2], &parts[2..], Staged::Whole);
     let spanning = format!("{}{}", parts[1], parts[3]);
     assert!(
         reported_after_carol(&fw, "key-a", &spanning),
