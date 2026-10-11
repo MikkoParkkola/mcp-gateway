@@ -6,8 +6,6 @@
 //! `keep_plan_receipts` (retention, seams, capping, subset seams). Test plan:
 //! handoff/mutretro-8066-2b-testplan.md (T10, T11, T-seams-view).
 
-use std::fmt::Write;
-
 use serde_json::{Value, json};
 
 use crate::security::firewall::{
@@ -39,14 +37,11 @@ fn piece(k: usize) -> String {
 }
 
 /// Distinct padding that pushes an answer past the 1 MiB bound.
+/// `chars` of a short repeating unit: past the plan bound by text, but with
+/// a handful of distinct k-grams, so the answer's view stays under the entry
+/// cap A even when every k-gram is kept (`keeping_every_kgram`).
 fn pad(chars: usize) -> String {
-    let mut out = String::with_capacity(chars + 16);
-    let mut i = 0u64;
-    while out.len() < chars {
-        let _ = write!(out, "pad{i:x} ");
-        i += 1;
-    }
-    out
+    "pad ".repeat(chars.div_ceil(4))
 }
 
 /// Where a step is staged: whole (a deferred step), or past the plan bound

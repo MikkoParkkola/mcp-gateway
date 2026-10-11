@@ -523,7 +523,7 @@ impl Firewall {
         };
         staged.add_baseline(digest.staged_len());
         let digest = self.attach_big(digest, (server, tool), result, staged);
-        Some(self.with_leaf_hashes(digest, result, staged))
+        Some(self.with_leaf_hashes(digest, (server, tool), result, staged))
     }
 
     /// `MIK-8066` D4: `leaf`'s keyed hash, for seam ownership; `None` with
@@ -532,18 +532,25 @@ impl Firewall {
         Some(self.relay_detector()?.leaf_hash(leaf))
     }
 
-    /// `MIK-8066` D4: a plan step's value leaves as sorted keyed hashes, 8 B
-    /// each, charged to the plan's total only (an attachment, F3), so the
-    /// capping switch stays 2a's.
+    /// `MIK-8066` D4 + A3: a plan step's value leaves as sorted keyed hashes,
+    /// 8 B each, charged to the plan's total only (an attachment, F3), so the
+    /// capping switch stays 2a's. Only a step staged whole or a staged
+    /// `BigStep` keeps them, and only while the total has room: a step
+    /// skipped for room keeps none and is marked lost, because no hashes
+    /// means no subset seam, which fails safe.
     fn with_leaf_hashes(
         &self,
         mut digest: DeliveryDigest,
+        (server, tool): (&str, &str),
         result: &Value,
         staged: &PlanStaging,
     ) -> DeliveryDigest {
         let Some(detector) = self.relay_detector() else {
             return digest;
         };
+        if !digest.is_deferred() && !digest.is_staged_step() {
+            return digest;
+        }
         let (leaves, values) = delivery_parts(result);
         let mut hashes: Vec<u64> = leaves[..values.min(leaves.len())]
             .iter()
@@ -551,7 +558,16 @@ impl Firewall {
             .collect();
         hashes.sort_unstable();
         hashes.dedup();
-        staged.add_attachment(hashes.len() * 8);
+        let bytes = hashes.len() * 8;
+        if staged.total().saturating_add(bytes) > PLAN_STAGED_CAP {
+            if let Some(caller) = staged.caller() {
+                detector.mark_step_lost(&format!("{server}:{tool}"), &caller);
+            }
+            telemetry_metrics::counter!(CAPACITY_METRIC, "bound" => "plan_leaf_hashes_skipped")
+                .increment(1);
+            return digest;
+        }
+        staged.add_attachment(bytes);
         digest.leaf_hashes = Some(hashes.into());
         digest
     }

@@ -551,6 +551,11 @@ impl DeliveryDigest {
         kept
     }
 
+    /// Whether this is a plan step past the bound, staged with attachments.
+    pub(crate) fn is_staged_step(&self) -> bool {
+        matches!(self.judged, Judged::Staged(_))
+    }
+
     /// Whether this receipt produced a value leaf whose keyed hash is `hash`
     /// (D4: exact; a strict substring hashes differently).
     pub(crate) fn holds_leaf_hash(&self, hash: u64) -> bool {
