@@ -31,10 +31,11 @@ pub(crate) enum ListingView {
     Cold,
     /// The binding of this caller's own warm slot.
     Caller(String),
-    /// A `required` per-user backend and a caller with no principal: no slot
-    /// can ever hold this caller's catalogue, so it lacks every tool there.
-    /// Never the cold rule's shared view (lead ruling 2026-10-11; design R3.7).
-    Lacks,
+    /// The caller has no view of this `required` per-user backend
+    /// (`MetaMcp::has_no_view_for`): no principal, or a managed account with
+    /// no current grant. It lacks every tool there, on every surface; never
+    /// the cold rule's shared view (lead ruling 2026-10-11; design R3.7).
+    NoView,
 }
 
 /// What a listing does with a per-user backend when this caller's view is
@@ -59,12 +60,16 @@ impl MetaMcp {
             return ListingView::Cold;
         }
         if self.lacks_principal_on_required(backend, scope.caller) {
-            return ListingView::Lacks;
+            return ListingView::NoView;
         }
         let Some(principal) = self.principal_for(backend, scope.caller) else {
             return ListingView::Shared;
         };
-        match backend.caller_slot_binding(&principal.stable_actor_id()) {
+        let id = principal.stable_actor_id();
+        if backend.caller_has_no_view(&id) {
+            return ListingView::NoView;
+        }
+        match backend.caller_slot_binding(&id) {
             Some(binding) => ListingView::Caller(binding),
             None => ListingView::Cold,
         }
@@ -73,8 +78,9 @@ impl MetaMcp {
     /// Whether `caller` has no principal on `backend`, a `required` per-user
     /// backend: such a caller can never hold a slot there, so it lacks every
     /// tool on it, on every listing and every call (lead ruling 2026-10-11;
-    /// design R3.7). The one predicate the listings, the caller verdict and
-    /// the dispatch funnel read. Passthrough is judged by its own rule.
+    /// design R3.7). The synchronous half of `has_no_view_for`, read by the
+    /// listings, the caller verdict and the dispatch funnel. Passthrough is
+    /// judged by its own rule.
     pub(crate) fn lacks_principal_on_required(
         &self,
         backend: &Backend,
@@ -106,7 +112,7 @@ impl MetaMcp {
                 ColdRule::Withhold => false,
                 ColdRule::SharedView => self.shows_shared_name(server, tool, scope, session_id),
             },
-            ListingView::Lacks => false,
+            ListingView::NoView => false,
             ListingView::Caller(binding) => backend
                 .with_cached_tool_for(Some(&binding), tool, |found| {
                     self.shows_tool(server, found, scope, session_id)
@@ -125,7 +131,7 @@ impl MetaMcp {
     ) -> Option<(Arc<Vec<Tool>>, bool)> {
         match self.listing_view(backend, scope) {
             ListingView::Shared => Some(backend.cached_tools_snapshot_and_truncated()),
-            ListingView::Cold | ListingView::Lacks => None,
+            ListingView::Cold | ListingView::NoView => None,
             ListingView::Caller(binding) => {
                 Some(backend.cached_tools_snapshot_and_truncated_for(Some(&binding)))
             }
@@ -143,7 +149,7 @@ impl MetaMcp {
         match self.listing_view(backend, scope) {
             ListingView::Caller(binding) => backend.get_cached_tool_for(Some(&binding), tool),
             ListingView::Shared | ListingView::Cold => backend.get_cached_tool(tool),
-            ListingView::Lacks => None,
+            ListingView::NoView => None,
         }
     }
 
@@ -165,7 +171,7 @@ impl MetaMcp {
                 };
                 match self.listing_view(&backend, scope) {
                     ListingView::Shared => Some((server, tool)),
-                    ListingView::Cold | ListingView::Lacks => None,
+                    ListingView::Cold | ListingView::NoView => None,
                     ListingView::Caller(binding) => backend
                         .get_cached_tool_for(Some(&binding), &tool.name)
                         .map(|own| (server, own)),

@@ -86,6 +86,9 @@ impl MetaMcp {
     /// either, and neither does one whose binding the isolation guard or the
     /// per-user slot rule would refuse (MIK-7690).
     pub(super) async fn has_no_view_for(&self, backend: &Backend, caller: CallerProof<'_>) -> bool {
+        if self.lacks_principal_on_required(backend, caller) {
+            return true;
+        }
         let required = backend
             .identity_propagation_config()
             .is_some_and(|cfg| cfg.required);
@@ -118,16 +121,29 @@ impl MetaMcp {
     /// grant's slot as cold, never as the caller's.
     pub(crate) async fn revalidate_caller_slots(&self, caller: CallerProof<'_>) {
         for backend in self.backends.all() {
+            if !backend.keeps_per_user_catalogues() {
+                continue;
+            }
+            let Some(principal) = self.principal_for(&backend, caller) else {
+                continue;
+            };
+            let id = principal.stable_actor_id();
+            // R3.7: a caller with no view lacks the backend on every listing
+            // after this entry. One decision, `has_no_view_for`; a caller with
+            // no principal at all is read synchronously by `listing_view`.
+            if self.has_no_view_for(&backend, caller).await {
+                backend.record_no_view(&id);
+                continue;
+            }
+            if backend.caller_has_no_view(&id) {
+                backend.forget_caller_principal(&id);
+            }
             let Some(vault) = self
                 .account_strategies
                 .managed_vault(backend.account_descriptor_id())
             else {
                 continue;
             };
-            let Some(principal) = self.principal_for(&backend, caller) else {
-                continue;
-            };
-            let id = principal.stable_actor_id();
             let Some(indexed) = backend.caller_slot_binding(&id) else {
                 continue;
             };
