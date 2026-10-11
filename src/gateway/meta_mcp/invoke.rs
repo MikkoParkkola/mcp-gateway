@@ -235,7 +235,7 @@ impl MetaMcp {
         // exactly what the `_full` stripping above says must not be possible.
         let idem_key = idempotency_key_for(
             caller.retry.idempotency_key.as_deref(),
-            &projection_key_suffix,
+            &super::support::step_scoped(&projection_key_suffix),
             &caller_principal,
             self.idempotency_cache.as_ref(),
             "meta",

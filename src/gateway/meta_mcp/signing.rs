@@ -404,6 +404,7 @@ impl super::MetaMcp {
     ) -> bool {
         !self.meta_tool_exposure.is_exposed(tool_name)
             || caller.retry.solicited_input_responses().is_err()
+            || caller.retry.refuse_on_playbook_run(tool_name).is_err()
             || !crate::gateway::router::CallerStanding::of_admin_flag(caller.is_admin)
                 .permits(tool_name)
     }

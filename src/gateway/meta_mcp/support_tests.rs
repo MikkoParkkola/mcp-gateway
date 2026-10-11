@@ -336,3 +336,45 @@ fn response_cache_key_separates_two_principals() {
     };
     assert_ne!(k("actor-1"), k("actor-2"));
 }
+
+/// MIK-8341 KEY (mutant m7): a step's key carries `|step:N` AFTER the
+/// length-prefixed client key, so a client key that spells the scope is a
+/// different key, and two steps of one run differ.
+#[tokio::test]
+async fn a_step_scoped_key_cannot_be_spelled_by_a_client_key() {
+    let cache = std::sync::Arc::new(crate::idempotency::IdempotencyCache::new());
+    let principal = caller("idp:V");
+    let step = |label| {
+        crate::playbook::in_step(label, async {
+            super::idempotency_key_for(
+                Some("K"),
+                &super::step_scoped(""),
+                &principal,
+                Some(&cache),
+                "meta",
+            )
+        })
+    };
+    let (zero, one) = (step(0).await, step(1).await);
+    let spelled = super::idempotency_key_for(
+        Some("K|step:0"),
+        &super::step_scoped(""),
+        &principal,
+        Some(&cache),
+        "meta",
+    );
+    let plain = super::idempotency_key_for(
+        Some("K"),
+        &super::step_scoped(""),
+        &principal,
+        Some(&cache),
+        "meta",
+    );
+    assert_ne!(zero, one, "two steps share an entry");
+    assert_ne!(zero, spelled, "a client key spelled a step's entry");
+    assert_ne!(zero, plain, "a step shares the client's own entry");
+    assert!(
+        zero.as_deref().is_some_and(|k| k.starts_with("1:K|step:0")),
+        "the scope is not after the length-prefixed key: {zero:?}"
+    );
+}
