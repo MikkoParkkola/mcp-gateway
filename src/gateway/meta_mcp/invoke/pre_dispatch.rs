@@ -205,8 +205,9 @@ impl MetaMcp {
         // MIK-8356: on a per-user backend the caller's own catalogue decides
         // first, whatever the argument-key mode, with this call's resolution
         // (no second mint). A name it withholds or lacks answers as absent; a
-        // failed fill falls through to the F13 check, which answers it as a
-        // failed dispatch.
+        // failed fill is answered below exactly as F13's failed fill is, with
+        // no second fill.
+        let mut failed_fill = None;
         if let Some(backend) = backend.filter(|backend| backend.keeps_per_user_catalogues()) {
             let absent = match crate::gateway::meta_mcp::visible::recorded_visibility(server, tool)
             {
@@ -224,28 +225,42 @@ impl MetaMcp {
                         &caller_credential.headers,
                         proof,
                     );
-                    matches!(
-                        judged.await,
-                        Ok(super::caller_verdict::SlotJudgement::Absent)
-                    )
+                    match judged.await {
+                        Ok(judged) => judged == super::caller_verdict::SlotJudgement::Absent,
+                        Err(e) => {
+                            failed_fill = Some(e);
+                            false
+                        }
+                    }
                 }
             };
             if absent {
                 if let Some(reservation) = idem_reservation.as_mut() {
                     reservation.release();
                 }
-                return Err(crate::gateway::meta_mcp::visible::absent_name(tool));
+                return Err(self.absent_on_slot(
+                    (server, backend),
+                    tool,
+                    dispatch_binding,
+                    (caller.scope(), session_id),
+                ));
             }
         }
-        let refusal = self.undeclared_key_refusal(
-            (server, backend),
-            tool,
-            arguments,
-            dispatch_binding,
-            &caller_credential.headers,
-            (caller.scope(), session_id),
-        );
-        let refusal = match refusal.await {
+        let refusal = match failed_fill {
+            Some(e) => Err(e),
+            None => {
+                self.undeclared_key_refusal(
+                    (server, backend),
+                    tool,
+                    arguments,
+                    dispatch_binding,
+                    &caller_credential.headers,
+                    (caller.scope(), session_id),
+                )
+                .await
+            }
+        };
+        let refusal = match refusal {
             Ok(refusal) => refusal,
             Err(e) => {
                 let managed = caller_credential.managed.as_ref();
