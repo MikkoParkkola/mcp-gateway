@@ -313,6 +313,16 @@ impl CollusionDetector {
         }
     }
 
+    /// `MIK-8066` D4: the keyed hash of a value leaf, exact: a strict
+    /// substring of a leaf hashes differently.
+    #[expect(
+        clippy::unused_self,
+        reason = "the key is per process; a method keeps callers from hashing with any other"
+    )]
+    pub(crate) fn leaf_hash(&self, leaf: &str) -> u64 {
+        key().hash_one((leaf, false))
+    }
+
     /// Keyed 64-bit digest of an id (source, principal), as findings carry it.
     #[expect(
         clippy::unused_self,

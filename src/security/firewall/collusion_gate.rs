@@ -522,7 +522,38 @@ impl Firewall {
             digest
         };
         staged.add_baseline(digest.staged_len());
-        Some(self.attach_big(digest, (server, tool), result, staged))
+        let digest = self.attach_big(digest, (server, tool), result, staged);
+        Some(self.with_leaf_hashes(digest, result, staged))
+    }
+
+    /// `MIK-8066` D4: `leaf`'s keyed hash, for seam ownership; `None` with
+    /// relay detection off.
+    pub(crate) fn leaf_hash(&self, leaf: &str) -> Option<u64> {
+        Some(self.relay_detector()?.leaf_hash(leaf))
+    }
+
+    /// `MIK-8066` D4: a plan step's value leaves as sorted keyed hashes, 8 B
+    /// each, charged to the plan's total only (an attachment, F3), so the
+    /// capping switch stays 2a's.
+    fn with_leaf_hashes(
+        &self,
+        mut digest: DeliveryDigest,
+        result: &Value,
+        staged: &PlanStaging,
+    ) -> DeliveryDigest {
+        let Some(detector) = self.relay_detector() else {
+            return digest;
+        };
+        let (leaves, values) = delivery_parts(result);
+        let mut hashes: Vec<u64> = leaves[..values.min(leaves.len())]
+            .iter()
+            .map(|leaf| detector.leaf_hash(leaf))
+            .collect();
+        hashes.sort_unstable();
+        hashes.dedup();
+        staged.add_attachment(hashes.len() * 8);
+        digest.leaf_hashes = Some(hashes.into());
+        digest
     }
 
     fn digest_with(

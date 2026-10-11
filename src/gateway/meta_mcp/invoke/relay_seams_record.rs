@@ -247,20 +247,27 @@ pub(in super::super) fn add_subset_seams(fw: &Firewall, receipts: &mut [Receipt]
         return;
     };
     let owner: HashMap<*const u8, u32> = {
-        let whole: Vec<(usize, u32, HashSet<&str>)> = receipts
+        let whole: Vec<(usize, u32, HashSet<&str>, &DeliveryDigest)> = receipts
             .iter()
             .enumerate()
             .filter(|(_, r)| r.in_plan)
-            .filter_map(|(i, r)| Some((i, r.step?, r.digest.whole_values().collect())))
+            .filter_map(|(i, r)| Some((i, r.step?, r.digest.whole_values().collect(), &r.digest)))
             .collect();
         parts
             .iter()
             .filter_map(|(text, label)| {
                 let label = (*label)?;
+                // `MIK-8066` D4: a view retention keeps no whole segments;
+                // its receipt keeps the piece whole when it produced a leaf
+                // with exactly this keyed hash.
+                let hash = fw.leaf_hash(text);
                 let mut holders = whole
                     .iter()
-                    .filter(|(_, step, w)| *step == label && w.contains(text))
-                    .map(|(i, _, _)| *i);
+                    .filter(|(_, step, w, digest)| {
+                        *step == label
+                            && (w.contains(text) || hash.is_some_and(|h| digest.holds_leaf_hash(h)))
+                    })
+                    .map(|(i, _, _, _)| *i);
                 let only = holders.next()?;
                 holders
                     .next()

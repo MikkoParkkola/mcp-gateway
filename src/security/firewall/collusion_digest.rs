@@ -111,6 +111,10 @@ pub(crate) struct DeliveryDigest {
     pub(super) judged: Judged,
     /// Set by the first record (A2): a second record is a counted no-op.
     pub(super) recorded: AtomicBool,
+    /// `MIK-8066` D4: a plan step's value leaves as sorted keyed hashes, set
+    /// at staging and kept only through a view retention, which keeps no
+    /// whole segments: what subset-forward seam ownership reads instead.
+    pub(super) leaf_hashes: Option<std::sync::Arc<[u64]>>,
 }
 
 /// A receipt's judgement by its plan's answer (`MIK-8066` D9, A2). Every
@@ -274,6 +278,7 @@ impl DeliveryDigest {
             joins: Joins::None,
             judged: Judged::default(),
             recorded: AtomicBool::default(),
+            leaf_hashes: None,
         };
         (digest, cut)
     }
@@ -345,6 +350,7 @@ impl DeliveryDigest {
             joins: Joins::None,
             judged: Judged::default(),
             recorded: AtomicBool::default(),
+            leaf_hashes: None,
         };
         (digest, false)
     }
@@ -379,6 +385,7 @@ impl DeliveryDigest {
             joins,
             judged: Judged::default(),
             recorded: AtomicBool::default(),
+            leaf_hashes: None,
         };
         Some((digest, cut || joins_cut || kept < self.retained.len()))
     }
@@ -532,9 +539,24 @@ impl DeliveryDigest {
         // The judgement is moved forward by the gate (D9), never by a
         // content transform: taken out here and put back as it was.
         let judged = std::mem::take(&mut self.judged);
+        // Leaf hashes stand in for whole segments only on a view (D4); the
+        // leaves path keeps 2a's whole-segment ownership unchanged.
+        let leaf_hashes = self
+            .leaf_hashes
+            .take()
+            .filter(|_| delivered.view().is_some());
         let mut kept = self.retaining_content(detector, delivered, step);
         kept.judged = judged;
+        kept.leaf_hashes = leaf_hashes;
         kept
+    }
+
+    /// Whether this receipt produced a value leaf whose keyed hash is `hash`
+    /// (D4: exact; a strict substring hashes differently).
+    pub(crate) fn holds_leaf_hash(&self, hash: u64) -> bool {
+        self.leaf_hashes
+            .as_deref()
+            .is_some_and(|hashes| hashes.binary_search(&hash).is_ok())
     }
 
     /// Unread (D6): the receipt's content goes; its evidence is `receipt`,
@@ -563,6 +585,7 @@ impl DeliveryDigest {
             joins: Joins::None,
             judged: Judged::Unread { receipt, step },
             recorded: AtomicBool::default(),
+            leaf_hashes: None,
         }
     }
 
@@ -639,6 +662,7 @@ impl DeliveryDigest {
             joins: Joins::None,
             judged: Judged::default(),
             recorded: AtomicBool::default(),
+            leaf_hashes: None,
         };
         kept.with_original(detector, found, original, retained, &HashSet::new())
     }
@@ -670,6 +694,7 @@ impl DeliveryDigest {
             joins: Joins::None,
             judged: Judged::default(),
             recorded: AtomicBool::default(),
+            leaf_hashes: None,
         }
     }
 
@@ -769,6 +794,7 @@ impl DeliveryDigest {
             joins: Joins::None,
             judged: Judged::default(),
             recorded: AtomicBool::default(),
+            leaf_hashes: None,
         };
         kept.with_original(detector, found, original, retained, &in_step)
     }

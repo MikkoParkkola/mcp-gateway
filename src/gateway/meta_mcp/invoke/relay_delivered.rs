@@ -253,6 +253,7 @@ fn keep_plan_receipts(
     // order: no cross-step seams, B4s) or not at all (D6: no walk past the
     // preflight, no seam pass). Subset seams on a view are D4's.
     let leaves = delivered.view().is_none() && !delivered.unread();
+    let read = !delivered.unread();
     // `MIK-8209` K7: each answer leaf's step, so a receipt matches its own
     // span first; the same walk as the seam pass.
     let labels = if delivered.unread() {
@@ -277,8 +278,9 @@ fn keep_plan_receipts(
     }
     // `MIK-8205` (S4): after capping, which rebuilds each digest without
     // seams, and against the capped receipts, so a piece the cap cut is no
-    // step's.
-    if leaves {
+    // step's. On a view, ownership is by exact leaf hash (`MIK-8066` D4);
+    // an unread answer gets no seam pass (D6).
+    if read {
         super::seams::add_subset_seams(fw, receipts, answer);
     }
 }
