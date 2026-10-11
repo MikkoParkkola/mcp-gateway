@@ -52,8 +52,8 @@ pub(super) fn spawn_in_own_tree(cmd: Command) -> Result<Box<dyn ChildWrapper>> {
 /// Write one frame (`message` and a newline) to stdin (MIK-8079).
 ///
 /// The caller takes stdin first, so a caller cancelled while waiting sends
-/// nothing. The write itself runs in a task the caller only awaits, so an
-/// admitted write is never cut off mid-frame by its caller being dropped.
+/// nothing. An admitted write is never cut off mid-frame by its caller being
+/// dropped: see [`finish_whole`].
 /// `close()` cancels `shutdown` after ending the tree: a write stuck on a reader
 /// outside the group is then dropped, giving up stdin and its buffer.
 pub(super) async fn write_frame(
@@ -77,23 +77,68 @@ pub(super) async fn write_frame(
     // From here the frame goes out whole even if the caller is dropped, so the
     // call is no longer pre-send (MIK-7979).
     began.store(true, std::sync::atomic::Ordering::Relaxed);
-    tokio::spawn(async move {
+    finish_whole(async move {
         let Some(stdin) = writer.as_mut() else {
             return Err(Error::TransportConnect("Not connected".to_string()));
         };
-        let write = async {
-            stdin.write_all(&frame).await?;
-            stdin.flush().await
-        };
-        tokio::select! {
-            written = write => written.map_err(|e| Error::Transport(e.to_string())),
-            () = shutdown.cancelled() => {
-                Err(Error::Transport("stdio transport closed mid-write".to_string()))
-            }
-        }
+        write_whole(stdin, &frame, &shutdown).await
     })
     .await
-    .map_err(|e| Error::Transport(e.to_string()))?
+}
+
+/// Write `frame` and flush it, or give up once `shutdown` is cancelled.
+async fn write_whole<W: tokio::io::AsyncWrite + Unpin + Send>(
+    stdin: &mut W,
+    frame: &[u8],
+    shutdown: &tokio_util::sync::CancellationToken,
+) -> Result<()> {
+    let write = async {
+        stdin.write_all(frame).await?;
+        stdin.flush().await
+    };
+    tokio::select! {
+        written = write => written.map_err(|e| Error::Transport(e.to_string())),
+        () = shutdown.cancelled() => {
+            Err(Error::Transport("stdio transport closed mid-write".to_string()))
+        }
+    }
+}
+
+/// Run an admitted write to its end even if the caller is dropped (MIK-8079).
+///
+/// The write is polled once in place: a frame that fits the pipe completes
+/// there with no task hop (MIK-7536, the hop cost a thread handoff per call).
+/// That is the common case on a Unix pipe with buffer room and task budget
+/// left; a write not ready on that poll (a full pipe, an exhausted budget, a
+/// blocking-backed stdin as on Windows) takes the task path, which is correct,
+/// only slower. Still pending, the SAME boxed future, progress kept, moves to
+/// its own task that the caller only awaits. There is no `.await` between that
+/// poll and the spawn, so a caller dropped at any await point cannot cut the
+/// frame: before the poll nothing is written; after it the task owns the write.
+/// What this does not promise, as before: shutdown, an I/O error or runtime
+/// teardown can still end a frame early. One difference from a spawn-only
+/// write: under `panic = "unwind"` (tests) a panic in the first poll unwinds
+/// the caller instead of arriving as a `JoinError`; release builds abort.
+async fn finish_whole<F>(write: F) -> Result<()>
+where
+    F: std::future::Future<Output = Result<()>> + Send + 'static,
+{
+    let mut write = Box::pin(write);
+    if let Some(done) = futures::FutureExt::now_or_never(write.as_mut()) {
+        return done;
+    }
+    #[cfg(test)]
+    HANDED_OVER.with(|n| n.set(n.get() + 1));
+    tokio::spawn(write)
+        .await
+        .map_err(|e| Error::Transport(e.to_string()))?
+}
+
+// Writes handed to their own task on this thread, for the rows that pin when
+// a write takes the task hop.
+#[cfg(test)]
+thread_local! {
+    static HANDED_OVER: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// `MIK-7642.PR.B`: a request dropped before its answer cancels the backend's
@@ -213,3 +258,7 @@ pub(super) async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>(
         .map(Some)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
+
+#[cfg(test)]
+#[path = "stdio_write_whole_tests.rs"]
+mod write_whole_tests;
