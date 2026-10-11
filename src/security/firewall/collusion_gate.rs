@@ -25,7 +25,7 @@ use super::collusion_digest::{
     DELIVERED_SET_CAP, key_path_joins, key_path_run_indices, key_path_runs,
 };
 pub(crate) use super::collusion_digest::{Delivered, DeliveryDigest};
-use super::collusion_digest::{Mode, view};
+use super::collusion_digest::{Mode, UnreadReceipt, view};
 use super::{
     Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType, Severity,
 };
@@ -701,16 +701,23 @@ impl Firewall {
         let Some(detector) = self.relay_detector() else {
             return digest;
         };
-        let mut digest = digest.retaining_for(detector, delivered, step);
+        let digest = digest.retaining_for(detector, delivered, step);
+        // `MIK-8066` D6/D9: the judgement moves forward once; a second
+        // retention (the rewritten route) leaves a judged receipt unchanged.
+        if delivered.unread() {
+            // What `record_kept` would record of the capped receipt.
+            return digest.into_unread(|d| {
+                let capped = self.capped(d);
+                let receipt = capped.as_ref().unwrap_or(d);
+                UnreadReceipt {
+                    fps: receipt.fingerprints(detector),
+                    cut: receipt.cut_fps.clone(),
+                }
+            });
+        }
         // `MIK-8066.BIG.3`: a step past the plan bound keeps its evidence and
         // excuse to what the answer delivered.
-        // An unread answer is judged at record (D6, D9): no retention.
-        if let Some(big) = digest.big.as_mut()
-            && !delivered.unread()
-        {
-            big.keep_to(delivered.found(detector));
-        }
-        digest
+        digest.judged_kept(delivered.found(detector))
     }
 
     /// `digest` with its deferred cap applied, a cut counted.
@@ -729,6 +736,19 @@ impl Firewall {
         let Some(detector) = self.relay_detector() else {
             return;
         };
+        // A2: by reference, a digest could be recorded twice; the first
+        // record sets the flag, a second adds no evidence and no charge.
+        let twice = digest.recorded.swap(true, Ordering::Relaxed);
+        if twice {
+            detector
+                .views
+                .double_records
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        debug_assert!(!twice, "a delivery digest was recorded twice");
+        if twice {
+            return;
+        }
         let source = format!("{server}:{tool}");
         // MIK-8113: a seam of several sources leaves only by a flow every
         // contributing source allows.

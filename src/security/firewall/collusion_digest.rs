@@ -11,6 +11,7 @@
 //! delivered leaf or across adjacent kept leaves.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::AtomicBool;
 
 use super::collusion::CollusionDetector;
 use super::collusion_gate::RECORD_CAP;
@@ -105,10 +106,39 @@ pub(crate) struct DeliveryDigest {
     /// answer's single-receipt runs after capping (`add_seam_excuses`); never
     /// by staging, so a step's text the answer dropped carries none.
     pub(super) seam_excuses: Option<std::sync::Arc<[u64]>>,
-    /// A plan step past the plan bound: its fingerprint attachments, sketch
-    /// reservation and, once kept to the answer, its evidence and excuse
-    /// (`MIK-8066.BIG.3`, design r5.1).
-    pub(super) big: Option<Box<super::collusion::big::BigStep>>,
+    /// How the plan's answer judged this receipt (`MIK-8066` D9): the one
+    /// channel a step's evidence reaches the record through.
+    pub(super) judged: Judged,
+    /// Set by the first record (A2): a second record is a counted no-op.
+    pub(super) recorded: AtomicBool,
+}
+
+/// A receipt's judgement by its plan's answer (`MIK-8066` D9, A2). Every
+/// state is matched exhaustively, with every field bound by name.
+#[derive(Default)]
+#[must_use]
+pub(crate) enum Judged {
+    /// Not judged: an ordinary delivery, or a plan receipt not yet retained.
+    /// A step still staged at record is recorded as unread (fail closed).
+    #[default]
+    Pending,
+    /// A plan step past the plan bound, staged (`MIK-8066.BIG.3`).
+    Staged(Box<super::collusion::big::BigStep>),
+    /// Kept to a read answer; the step's evidence and excuse, if a step.
+    Kept(Option<super::collusion::big::KeptStep>),
+    /// The answer could not be read (D6): the receipt's capped evidence and
+    /// the step's whole evidence, recorded under an unread holder.
+    Unread {
+        receipt: UnreadReceipt,
+        step: Option<super::collusion::big::UnreadStep>,
+    },
+}
+
+/// What an unread receipt records as evidence (D6): what `record_kept`
+/// would record of the capped receipt, computed once at retention.
+pub(crate) struct UnreadReceipt {
+    pub(crate) fps: Vec<u64>,
+    pub(crate) cut: Option<std::sync::Arc<[u64]>>,
 }
 
 /// A delivery's key-path joins, each fingerprinted alone after the segment
@@ -242,7 +272,8 @@ impl DeliveryDigest {
             cut_fps: None,
             seam_excuses: None,
             joins: Joins::None,
-            big: None,
+            judged: Judged::default(),
+            recorded: AtomicBool::default(),
         };
         (digest, cut)
     }
@@ -312,7 +343,8 @@ impl DeliveryDigest {
             cut_fps: None,
             seam_excuses: None,
             joins: Joins::None,
-            big: None,
+            judged: Judged::default(),
+            recorded: AtomicBool::default(),
         };
         (digest, false)
     }
@@ -345,7 +377,8 @@ impl DeliveryDigest {
             cut_fps: None,
             seam_excuses: None,
             joins,
-            big: None,
+            judged: Judged::default(),
+            recorded: AtomicBool::default(),
         };
         Some((digest, cut || joins_cut || kept < self.retained.len()))
     }
@@ -491,6 +524,60 @@ impl DeliveryDigest {
     /// step `step`, whose own span of the answer is matched first (`MIK-8209`
     /// K7).
     pub(super) fn retaining_for(
+        mut self,
+        detector: &CollusionDetector,
+        delivered: &Delivered<'_>,
+        step: Option<u32>,
+    ) -> Self {
+        // The judgement is moved forward by the gate (D9), never by a
+        // content transform: taken out here and put back as it was.
+        let judged = std::mem::take(&mut self.judged);
+        let mut kept = self.retaining_content(detector, delivered, step);
+        kept.judged = judged;
+        kept
+    }
+
+    /// Unread (D6): the receipt's content goes; its evidence is `receipt`,
+    /// a staged step's evidence its whole `step_ev`. Never deferred, so
+    /// capping leaves it as it is. Only a pending or staged receipt is
+    /// judged; a judged one is returned unchanged (a second retention).
+    pub(super) fn into_unread(mut self, receipt: impl FnOnce(&Self) -> UnreadReceipt) -> Self {
+        let staged = match std::mem::take(&mut self.judged) {
+            Judged::Pending => None,
+            Judged::Staged(big) => Some(big),
+            judged @ (Judged::Kept(_) | Judged::Unread { .. }) => {
+                self.judged = judged;
+                return self;
+            }
+        };
+        let receipt = receipt(&self);
+        let step = staged.map(|big| big.into_unread());
+        Self {
+            segments: Vec::new(),
+            retained: Vec::new(),
+            sensitive: self.sensitive,
+            deferred: false,
+            seam_sources: None,
+            cut_fps: None,
+            seam_excuses: None,
+            joins: Joins::None,
+            judged: Judged::Unread { receipt, step },
+            recorded: AtomicBool::default(),
+        }
+    }
+
+    /// Kept to a read answer (D9): a staged step keeps to `found`; a
+    /// pending receipt is marked kept; a judged one is unchanged.
+    pub(super) fn judged_kept(mut self, found: view::Found<'_>) -> Self {
+        self.judged = match std::mem::take(&mut self.judged) {
+            Judged::Pending => Judged::Kept(None),
+            Judged::Staged(big) => Judged::Kept(Some(big.keep_to(found))),
+            judged @ (Judged::Kept(_) | Judged::Unread { .. }) => judged,
+        };
+        self
+    }
+
+    fn retaining_content(
         self,
         detector: &CollusionDetector,
         delivered: &Delivered<'_>,
@@ -550,7 +637,8 @@ impl DeliveryDigest {
             cut_fps: None,
             seam_excuses: None,
             joins: Joins::None,
-            big: self.big,
+            judged: Judged::default(),
+            recorded: AtomicBool::default(),
         };
         kept.with_original(detector, found, original, retained, &HashSet::new())
     }
@@ -580,7 +668,8 @@ impl DeliveryDigest {
             cut_fps: (!cut.is_empty()).then(|| cut.into()),
             seam_excuses: None,
             joins: Joins::None,
-            big: self.big,
+            judged: Judged::default(),
+            recorded: AtomicBool::default(),
         }
     }
 
@@ -678,7 +767,8 @@ impl DeliveryDigest {
             cut_fps: None,
             seam_excuses: None,
             joins: Joins::None,
-            big: None,
+            judged: Judged::default(),
+            recorded: AtomicBool::default(),
         };
         kept.with_original(detector, found, original, retained, &in_step)
     }

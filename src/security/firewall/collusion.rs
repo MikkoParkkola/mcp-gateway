@@ -102,6 +102,18 @@ struct Holder {
     /// The `allowed_flows` entries this copy may leave through without being
     /// a relay.
     flows: Flows,
+    /// `MIK-8066` D6: an unread plan's evidence holder. Never a caller, so it
+    /// never counts toward `Common`.
+    unread: bool,
+}
+
+/// Who a record is held under: a presented caller's digest, or an unread
+/// plan's holder (D6), keyed under [`unread_key`] so no presented identity
+/// maps to it.
+#[derive(Clone, Copy)]
+struct HolderId {
+    key: u64,
+    unread: bool,
 }
 
 /// Which `allowed_flows` entries (one bit per entry) let a held copy leave
@@ -266,10 +278,18 @@ fn key() -> &'static RandomState {
     KEY.get_or_init(RandomState::new)
 }
 
+/// `MIK-8066` D6: a second, independent per-process key, used only by
+/// [`CollusionDetector::unread_holder`]. Every presented identity is digested
+/// under [`key`], so it reaches an unread holder only by a keyed collision.
+fn unread_key() -> &'static RandomState {
+    static KEY: OnceLock<RandomState> = OnceLock::new();
+    KEY.get_or_init(RandomState::new)
+}
+
 /// What one record holds: the receipt's fingerprints; what the caller
 /// received (sketched as excuse, and its middle sampled as evidence); and
 /// exact evidence candidates sampled but never sketched (`MIK-8066.BIG.3`).
-type Recorded = (
+pub(crate) type Recorded = (
     Vec<u64>,
     Option<std::sync::Arc<[u64]>>,
     Option<std::sync::Arc<[u64]>>,
@@ -476,6 +496,48 @@ impl CollusionDetector {
         &self,
         source: &str,
         principal: &str,
+        held: (bool, Flows),
+        recorded: Recorded,
+        now: Instant,
+    ) {
+        let id = HolderId {
+            key: self.digest(principal),
+            unread: false,
+        };
+        self.record_holder_at(source, id, held, recorded, now);
+    }
+
+    /// The holder an unread plan of `caller`'s records its evidence under (D6).
+    fn unread_holder(caller: &str) -> HolderId {
+        HolderId {
+            key: unread_key().hash_one(caller),
+            unread: true,
+        }
+    }
+
+    /// Record an unread plan receipt's evidence (D6) under `caller`'s unread
+    /// holder: its fingerprints, its cut's middle and a step's candidates
+    /// sampled as evidence, nothing sketched, so nothing excuses anyone.
+    pub(crate) fn record_unread_at(
+        &self,
+        (source, caller): (&str, &str),
+        (sensitive, flows): (bool, u64),
+        recorded: Recorded,
+        now: Instant,
+    ) {
+        self.record_holder_at(
+            source,
+            Self::unread_holder(caller),
+            (sensitive, Flows::Any(flows)),
+            recorded,
+            now,
+        );
+    }
+
+    fn record_holder_at(
+        &self,
+        source: &str,
+        id: HolderId,
         (sensitive, flows): (bool, Flows),
         (mut fps, cut, sample): Recorded,
         now: Instant,
@@ -504,9 +566,13 @@ impl CollusionDetector {
             let (_, middle) = thin::thinned_middle(candidates, &fps, room);
             fps.extend(middle);
         }
+        // An unread holder is never excused: it keeps no sketch (D6).
+        if id.unread {
+            sketched.clear();
+        }
         sketched.sort_unstable();
         sketched.dedup();
-        let pair = (self.digest(source), self.digest(principal));
+        let pair = (self.digest(source), id.key);
         let window = self.params.window;
         // `MIK-8200`: the position is reserved under the lock, the sketch
         // built outside it, then published with the receipt in one step.
@@ -530,10 +596,11 @@ impl CollusionDetector {
             .map(|r| std::sync::Arc::new(sketch::Sketch::build(&sketched, r.shape)));
         let holder = |at| Holder {
             source: self.digest(source),
-            principal: self.digest(principal),
+            principal: id.key,
             copies: Copies::one(at),
             sensitive: sensitive.then(|| Copies::one(at)),
             flows: flows.clone(),
+            unread: id.unread,
         };
         let mut state = self.state.lock();
         state.sweep(now, window);
@@ -544,7 +611,7 @@ impl CollusionDetector {
         for lost in state.sketches.take_lost() {
             state.markers.mark(lost, until);
         }
-        let me = self.digest(principal);
+        let me = id.key;
         for fp in fps {
             // Calls can reach the lock out of time order; an entry's age only
             // ever moves forward.

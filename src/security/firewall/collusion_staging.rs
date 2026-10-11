@@ -105,7 +105,7 @@ impl super::Firewall {
             return digest;
         };
         staged.add_attachment(big.bytes());
-        digest.big = Some(Box::new(big));
+        digest.judged = super::super::collusion_digest::Judged::Staged(Box::new(big));
         digest
     }
 }

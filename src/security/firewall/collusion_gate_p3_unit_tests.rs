@@ -307,3 +307,41 @@ fn auxiliary_reservations_are_charged_first() {
         "a 5,000-mark combining run was not reserved ({reserved} B)"
     );
 }
+
+/// `MIK-8066` A2: `record_digest` takes the digest by reference, so "recorded
+/// at most once" is a flag. A receipt past the per-delivery bound sketches
+/// its truncated rest at record, one sketch per record; a second record of
+/// the same digest adds no sketch (no evidence, no charge) and is counted.
+/// The second call runs under `catch_unwind`, so the row holds in debug
+/// builds (where it also asserts) and in release builds.
+#[test]
+fn a_second_record_of_one_digest_adds_nothing() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    let (_, step) = step_of(1051, 300 * 1024);
+    let digest = fw
+        .receipt_digest("alpha", "read", &step, None)
+        .expect("a receipt");
+    let caller = super::RelayCaller::Keyed("alice");
+    fw.record_digest(caller, "alpha", "read", &digest);
+    let once = detector.sketch_positions("alpha:read", "alice").len();
+    assert_eq!(once, 1, "premise: the first record sketched its rest");
+    let again = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        fw.record_digest(caller, "alpha", "read", &digest);
+    }));
+    assert_eq!(
+        again.is_err(),
+        cfg!(debug_assertions),
+        "a second record did not assert in a debug build"
+    );
+    assert_eq!(
+        detector.sketch_positions("alpha:read", "alice").len(),
+        once,
+        "a second record of one digest added a sketch"
+    );
+    assert_eq!(
+        detector.double_records(),
+        1,
+        "the second record was not counted"
+    );
+}

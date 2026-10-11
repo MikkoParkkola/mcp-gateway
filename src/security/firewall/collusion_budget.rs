@@ -101,6 +101,14 @@ pub(crate) struct ViewLimits {
     pub(crate) unread_plans: AtomicU64,
     /// Views refused for lack of `VIEW_BYTES` (D6).
     pub(crate) budget_refusals: AtomicU64,
+    /// Step selections refused for lack of `VIEW_BYTES` (D2): sketch
+    /// abandoned, evidence kept.
+    pub(crate) selection_refusals: AtomicU64,
+    /// Step evidence bytes split off their sketch reservations and not yet
+    /// released (D9): charged to the sketch store's total.
+    pub(crate) evidence_bytes: AtomicUsize,
+    /// Second records of one digest (A2): counted no-ops.
+    pub(crate) double_records: AtomicU64,
 }
 
 impl ViewLimits {
@@ -111,6 +119,9 @@ impl ViewLimits {
             entry_cap: AtomicUsize::new(PLAN_ANSWER_FPS),
             unread_plans: AtomicU64::new(0),
             budget_refusals: AtomicU64::new(0),
+            selection_refusals: AtomicU64::new(0),
+            evidence_bytes: AtomicUsize::new(0),
+            double_records: AtomicU64::new(0),
         }
     }
 
