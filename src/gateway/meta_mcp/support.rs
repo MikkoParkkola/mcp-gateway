@@ -1,15 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Standalone helpers and the `ToolInvoker` bridge for `MetaMcp`.
+//! Standalone helpers for `MetaMcp`.
 //!
 //! Contains idempotency key resolution, tag collection, Code Mode result
-//! conversion, the `MetaMcpInvoker` bridge, and response augmentation.
+//! conversion, and response augmentation. The playbook step invoker lives in
+//! `playbook_invoker.rs`.
 
 use serde_json::{Value, json};
 
-use crate::Result;
 use crate::idempotency::IdempotencyCache;
-use crate::playbook::ToolInvoker;
 
 use super::MetaMcp;
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
