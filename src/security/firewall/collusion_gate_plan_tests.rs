@@ -379,7 +379,7 @@ fn a_large_answer_keeps_its_receipts_under_the_unchanged_bound() {
 /// `MIK-8209` Q2, gpt's input: three steps each staged `{part: p, x: "x"}`;
 /// each step's span of the answer repeats `x` twenty times before `part`.
 /// Each step must keep its own `part` whole (the seam pass owns it only then).
-/// Red until MIK-8251; a chain reaches it through late redaction (route row
+/// MIK-8251 keeps each leaf only as often as staged; a chain reaches this through late redaction (route row
 /// `late_redaction_copies_keep_the_cross_step_join`).
 #[test]
 fn twenty_repeats_before_part_keep_each_steps_part_whole() {
@@ -566,6 +566,12 @@ fn a_run_breaks_at_a_leaf_the_step_did_not_stage_whole() {
     assert!(
         across.iter().all(|f| !fps.contains(f)),
         "a run joined across a leaf the step did not stage"
+    );
+    let joined = detector.fingerprints(&format!("{a}{c}"));
+    assert!(!joined.is_empty(), "premise: a+c holds k-grams");
+    assert!(
+        joined.iter().all(|f| !fps.contains(f)),
+        "a run joined a and c across the unstaged leaf"
     );
 }
 
