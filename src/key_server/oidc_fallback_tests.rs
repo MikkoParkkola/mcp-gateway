@@ -136,7 +136,9 @@ fn verifier(fx: &Fixture, extra: &str) -> OidcVerifier {
 
 fn mint(fx: &Fixture, pair: &GatewayKeyPair) -> String {
     let info = pair.key_info();
-    let now = chrono::Utc::now().timestamp();
+    let now = crate::clock::utc_now()
+        .expect("clock after the epoch")
+        .timestamp();
     let claims = json!({"iss": fx.issuer, "sub": "u1", "aud": AUD, "iat": now, "exp": now + 300});
     let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256);
     header.kid = Some(KID.to_owned());
