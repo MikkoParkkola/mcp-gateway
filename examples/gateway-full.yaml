@@ -179,7 +179,6 @@ capabilities:
 
 # cost_governance:
 #   enabled: false                  # Enable cost tracking and budget enforcement
-#   currency: "USD"                 # Currency label (informational)
 #   default_cost: 0.0              # Default cost per tool invocation
 #   budgets:
 #     daily: 10.0                  # Daily budget limit (null = unlimited)

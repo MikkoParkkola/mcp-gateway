@@ -1,73 +1,194 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `mcp-gateway upgrade` deletes `meta_mcp.cache_tools` (MIK-8064), a key
-//! nothing ever read, in the same single rewrite as the URL keys, keeping
-//! every other byte. A config the rewrite cannot prove safe keeps the key, and
-//! `upgrade` names it for the operator to delete by hand.
+//! `mcp-gateway upgrade` deletes the config keys 4.0 removed (MIK-8044) and
+//! `meta_mcp.cache_tools` (MIK-8064), in the same single rewrite as the URL
+//! keys, keeping every other byte. A key the rewrite cannot prove safe to
+//! delete stays, and `upgrade` names it for the operator to delete by hand.
 
-/// What `upgrade`'s rewrite did with `meta_mcp.cache_tools`.
+/// What `upgrade`'s rewrite did with one removed key.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Retired {
-    /// The file sets no `meta_mcp.cache_tools`.
+    /// The file does not set the key.
     #[default]
     Absent,
-    /// The key's line, 1-based, was removed, with the `meta_mcp:` line it
-    /// was alone under when that block would be left empty.
+    /// The key's lines were removed, starting at `line` (1-based), with the
+    /// section header at `block` when the section would be left empty.
     Removed { line: usize, block: Option<usize> },
     /// The file sets the key, but it could not go without changing anything
     /// else, so it stays for the operator to delete.
     Left,
 }
 
-/// `text` without `meta_mcp.cache_tools`, and what happened to it. A line
-/// is removed only when a strict parse shows that exactly the key went. When
-/// it is the only key, the bare `meta_mcp:` line goes too: an empty or absent
-/// block loads as the defaults (`Config` and `MetaMcpConfig` are
-/// `serde(default)`). A flow-style mapping, a value spread over several lines,
-/// or a `meta_mcp:` line carrying a comment leaves the text as it was.
-pub(crate) fn drop_cache_tools(text: &str) -> (Option<String>, Retired) {
-    let lines: Vec<&str> = text.split_inclusive('\n').collect();
-    let header = lines.iter().position(|l| {
-        l.strip_prefix("meta_mcp:")
-            .is_some_and(|rest| matches!(rest.trim_start().chars().next(), None | Some('#')))
-    });
-    let candidates: Vec<usize> = header
-        .map(|header| {
-            (header + 1..lines.len())
-                .take_while(|&i| {
-                    let line = lines[i].trim_end();
-                    line.is_empty() || line.starts_with([' ', '\t']) || line.starts_with('#')
-                })
-                .filter(|&i| lines[i].trim_start().starts_with("cache_tools:"))
-                .collect()
+/// Whether a key that stays still lets the config load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OnLoad {
+    /// The loader warns and goes on (`meta_mcp.cache_tools`).
+    Warns,
+    /// The loader refuses the file.
+    Refuses,
+}
+
+/// The keys `upgrade` deletes, by path; `*` is any backend name. The loader's
+/// own lists live in `config::strict_keys`; the per-key rows of
+/// `tests/surf2_upgrade_removed_keys.rs` and `tests/c1_unrecognised_config_keys.rs`
+/// hold the two equal.
+const REMOVED: &[(&[&str], OnLoad)] = &[
+    (&["meta_mcp", "cache_tools"], OnLoad::Warns),
+    (&["backends", "*", "idle_timeout"], OnLoad::Refuses),
+    (&["backends", "*", "circuit_breaker"], OnLoad::Refuses),
+    (&["marketplace"], OnLoad::Refuses),
+    (&["server", "request_timeout"], OnLoad::Refuses),
+    (&["server", "ws_port"], OnLoad::Refuses),
+    (&["cost_governance", "currency"], OnLoad::Refuses),
+];
+
+/// One removed key the file set, by dotted path, and what became of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Removal {
+    pub key: String,
+    pub outcome: Retired,
+    pub on_load: OnLoad,
+}
+
+impl Removal {
+    /// Whether the key stays and the loader refuses it.
+    pub(crate) fn blocks_load(&self) -> bool {
+        self.outcome == Retired::Left && self.on_load == OnLoad::Refuses
+    }
+}
+
+/// The document as the loader reads it: a repeated key is accepted, the last
+/// value winning. Presence is read here; an edit is proven with [`parse`].
+/// `None` when the file is not a mapping of keys; `upgrade` then stops
+/// before reading anything (`config_write::rewrite_url_aliases_in`).
+pub(crate) fn loose(text: &str) -> Option<serde_yaml::Value> {
+    serde_yaml::from_str::<figment::value::Dict>(text)
+        .ok()
+        .and_then(|dict| serde_yaml::to_value(dict).ok())
+}
+
+/// Every concrete path `pattern` names in `doc`, `*` expanded over the
+/// mapping keys at that place.
+fn concrete(doc: &serde_yaml::Value, pattern: &[&str]) -> Vec<Vec<String>> {
+    let Some((head, rest)) = pattern.split_first() else {
+        return vec![Vec::new()];
+    };
+    let Some(map) = doc.as_mapping() else {
+        return Vec::new();
+    };
+    let names: Vec<String> = if *head == "*" {
+        map.keys()
+            .filter_map(|k| k.as_str().map(str::to_owned))
+            .collect()
+    } else {
+        vec![(*head).to_owned()]
+    };
+    names
+        .into_iter()
+        .filter_map(|name| map.get(name.as_str()).map(|child| (name, child)))
+        .flat_map(|(name, child)| {
+            concrete(child, rest).into_iter().map(move |mut tail| {
+                tail.insert(0, name.clone());
+                tail
+            })
         })
-        .unwrap_or_default();
-    // Only a bare header may go: one with a comment would lose the comment.
-    let bare_header = header.filter(|&h| lines[h].trim_end() == "meta_mcp:");
-    // Presence is read as the loader reads it (a repeated key is accepted);
-    // an edit still needs the strict parse in `only_cache_tools_went`.
-    let sets_key = serde_yaml::from_str::<figment::value::Dict>(text).is_ok_and(|doc| {
-        doc.get("meta_mcp")
-            .is_some_and(|meta| meta.find_ref("cache_tools").is_some())
-    });
-    if !sets_key {
+        .collect()
+}
+
+/// `text` without every removed key, and what happened to each one set.
+pub(crate) fn drop_removed_keys(text: &str) -> (Option<String>, Vec<Removal>) {
+    let mut current = text.to_owned();
+    let mut report = Vec::new();
+    for (pattern, on_load) in REMOVED {
+        let paths = loose(&current)
+            .map(|doc| concrete(&doc, pattern))
+            .unwrap_or_default();
+        for path in paths {
+            let (after, outcome) = drop_key(&current, &path);
+            if let Some(after) = after {
+                current = after;
+            }
+            report.push(Removal {
+                key: path.join("."),
+                outcome,
+                on_load: *on_load,
+            });
+        }
+    }
+    ((current != text).then_some(current), report)
+}
+
+fn indent(line: &str) -> usize {
+    line.len() - line.trim_start_matches([' ', '\t']).len()
+}
+
+fn is_blank_or_comment(line: &str) -> bool {
+    let t = line.trim();
+    t.is_empty() || t.starts_with('#')
+}
+
+/// The lines of the key that starts at `at`: it and every deeper-indented
+/// line after it. Comment and blank lines inside the block go with it; those
+/// after its last value line stay, since they may belong to what follows.
+fn span(lines: &[&str], at: usize) -> std::ops::RangeInclusive<usize> {
+    let own = indent(lines[at]);
+    let mut last = at;
+    for (i, line) in lines.iter().enumerate().skip(at + 1) {
+        if is_blank_or_comment(line) {
+            continue;
+        }
+        if indent(line) <= own {
+            break;
+        }
+        last = i;
+    }
+    at..=last
+}
+
+/// `text` without the key at `path`, and what happened to it. Lines are
+/// removed only when a strict parse shows that exactly the key went, and the
+/// section it was alone in when that section would be left empty. A bare
+/// section header (no comment on it) is the only header that may go. Flow
+/// style, a repeated key, or a value the line rule cannot isolate leaves the
+/// text as it was.
+pub(crate) fn drop_key(text: &str, path: &[String]) -> (Option<String>, Retired) {
+    let Some((leaf, parents)) = path.split_last() else {
+        return (None, Retired::Absent);
+    };
+    let pattern: Vec<&str> = path.iter().map(String::as_str).collect();
+    if loose(text).is_none_or(|doc| !concrete(&doc, &pattern).contains(&path.to_vec())) {
         return (None, Retired::Absent);
     }
-    // A lookalike line inside a block scalar fails the parse check, so every
-    // candidate is tried in turn: alone, then with a bare header.
-    let removed = candidates.into_iter().find_map(|at| {
-        std::iter::once(None)
-            .chain(bare_header.map(Some))
-            .find_map(|block| {
-                let after: String = lines
-                    .iter()
-                    .enumerate()
-                    .filter(|&(i, _)| i != at && Some(i) != block)
-                    .map(|(_, line)| *line)
-                    .collect();
-                only_cache_tools_went(text, &after).then(|| (after, at + 1, block.map(|h| h + 1)))
-            })
-    });
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let key_line = format!("{leaf}:");
+    let header = parents.last().map(|p| format!("{p}:"));
+    // ponytail: every candidate costs a strict parse, quadratic in file lines;
+    // configs are hundreds of lines. Index the candidates if that changes.
+    let removed = (0..lines.len())
+        .filter(|&i| lines[i].trim_start().starts_with(&key_line))
+        .find_map(|at| {
+            let lines_out = span(&lines, at);
+            // The nearest shallower line above is the section header.
+            let bare_header = header.as_ref().and_then(|h| {
+                (0..at)
+                    .rev()
+                    .find(|&i| {
+                        !is_blank_or_comment(lines[i]) && indent(lines[i]) < indent(lines[at])
+                    })
+                    .filter(|&i| lines[i].trim() == h.as_str())
+            });
+            std::iter::once(None)
+                .chain(bare_header.map(Some))
+                .find_map(|block| {
+                    let after: String = lines
+                        .iter()
+                        .enumerate()
+                        .filter(|&(i, _)| !lines_out.contains(&i) && Some(i) != block)
+                        .map(|(_, line)| *line)
+                        .collect();
+                    only_key_went(text, &after, path).then(|| (after, at + 1, block.map(|h| h + 1)))
+                })
+        });
     match removed {
         Some((after, line, block)) => (Some(after), Retired::Removed { line, block }),
         None => (None, Retired::Left),
@@ -78,31 +199,49 @@ fn parse(text: &str) -> Option<serde_yaml::Value> {
     serde_yaml::from_str(text).ok()
 }
 
-/// Whether `after` parses to exactly `before` without
-/// `meta_mcp.cache_tools`, and without `meta_mcp` when nothing else was in it.
-fn only_cache_tools_went(before: &str, after: &str) -> bool {
-    use serde_yaml::Value;
+/// The mapping at `path` in `doc`; the root for an empty path.
+fn section<'a>(
+    doc: &'a mut serde_yaml::Value,
+    path: &[String],
+) -> Option<&'a mut serde_yaml::Mapping> {
+    path.iter()
+        .try_fold(doc, |node, name| {
+            node.as_mapping_mut()?.get_mut(name.as_str())
+        })?
+        .as_mapping_mut()
+}
+
+/// Whether `after` parses to exactly `before` without the key at `path`, and
+/// without its section when nothing else was in it.
+fn only_key_went(before: &str, after: &str, path: &[String]) -> bool {
     let (Some(mut expected), Some(actual)) = (parse(before), parse(after)) else {
         return false;
     };
-    let Some(root) = expected.as_mapping_mut() else {
+    let Some((leaf, parents)) = path.split_last() else {
         return false;
     };
-    let Some(meta) = root.get_mut("meta_mcp").and_then(Value::as_mapping_mut) else {
-        return false;
-    };
-    if meta.remove("cache_tools").is_none() {
+    if section(&mut expected, parents)
+        .and_then(|m| m.remove(leaf.as_str()))
+        .is_none()
+    {
         return false;
     }
-    if meta.is_empty() {
-        root.remove("meta_mcp");
+    if section(&mut expected, parents).is_some_and(|m| m.is_empty())
+        && let Some((name, grand)) = parents.split_last()
+        && let Some(map) = section(&mut expected, grand)
+    {
+        map.remove(name.as_str());
     }
     expected == actual
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Retired, drop_cache_tools};
+    use super::{Retired, drop_key, drop_removed_keys};
+
+    fn drop_cache_tools(text: &str) -> (Option<String>, Retired) {
+        drop_key(text, &["meta_mcp".to_owned(), "cache_tools".to_owned()])
+    }
 
     fn removed(text: &str) -> (String, usize) {
         match drop_cache_tools(text) {
@@ -166,5 +305,50 @@ mod tests {
         let (after, line) = removed(text);
         assert_eq!(after, "meta_mcp:\r\n  enabled: true\r\n");
         assert_eq!(line, 2);
+    }
+
+    /// T7b (B2): comment and blank lines after a removed key or block stay;
+    /// a comment inside a removed block goes with it.
+    #[test]
+    fn comments_after_a_removed_key_stay_and_inside_it_go() {
+        let text = "server:\n  ws_port: 1\n  # the port we serve\n  port: 2\n";
+        let (after, _) = drop_removed_keys(text);
+        assert_eq!(
+            after.as_deref(),
+            Some("server:\n  # the port we serve\n  port: 2\n")
+        );
+        let text = "marketplace:\n  # old\n  plugin_dir: /p\n\n# --- next ---\nbackends: {}\n";
+        let (after, _) = drop_removed_keys(text);
+        assert_eq!(after.as_deref(), Some("\n# --- next ---\nbackends: {}\n"));
+    }
+
+    /// T6c: every backend's copy goes, each named.
+    #[test]
+    fn every_backend_occurrence_is_removed_and_named() {
+        let text = "backends:\n  a:\n    command: y\n    idle_timeout: 1m\n  b:\n    command: z\n    idle_timeout: 2m\n";
+        let (after, report) = drop_removed_keys(text);
+        assert_eq!(
+            after.as_deref(),
+            Some("backends:\n  a:\n    command: y\n  b:\n    command: z\n")
+        );
+        let keys: Vec<&str> = report.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(keys, ["backends.a.idle_timeout", "backends.b.idle_timeout"]);
+        assert!(report.iter().all(|r| !r.blocks_load()));
+    }
+
+    /// A removed key that stays blocks the load; `cache_tools` does not.
+    #[test]
+    fn a_key_left_in_flow_style_blocks_the_load_unless_it_only_warns() {
+        let (after, report) = drop_removed_keys(
+            "server: {ws_port: 1, port: 2}\nmeta_mcp: {cache_tools: false, enabled: true}\n",
+        );
+        assert_eq!(after, None);
+        let blocking: Vec<&str> = report
+            .iter()
+            .filter(|r| r.blocks_load())
+            .map(|r| r.key.as_str())
+            .collect();
+        assert_eq!(blocking, ["server.ws_port"]);
+        assert_eq!(report.len(), 2);
     }
 }
