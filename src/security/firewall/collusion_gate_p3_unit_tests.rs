@@ -356,3 +356,26 @@ fn a_second_record_of_one_digest_adds_nothing() {
         "the second record was not counted"
     );
 }
+
+/// `MIK-8066` 2b seat H6 (gpt): the normalizer's combining buffer is sized
+/// for runs that form across leaves (the run-together form joins them), not
+/// only inside one string. 1,000 leaves that each start and end with 20
+/// combining marks can meet in runs far past any one string's 20; the
+/// build's first reservation covers the node charge plus every edge run.
+#[test]
+fn combining_runs_across_leaves_are_reserved() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    let marks = "\u{301}".repeat(20);
+    let leaves: Vec<Value> = (0..1_000)
+        .map(|i| json!(format!("{marks}x{i}{marks}")))
+        .collect();
+    let probe = detector.view_build_probe(&Value::Array(leaves));
+    let &(reserved, _) = probe.first().expect("the build reserved");
+    let nodes = 1_001;
+    let edge_marks = 1_000 * 40;
+    assert!(
+        reserved >= nodes * 64 + edge_marks * 8,
+        "combining runs across leaves were not reserved ({reserved} B)"
+    );
+}
