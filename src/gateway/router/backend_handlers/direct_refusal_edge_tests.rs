@@ -60,7 +60,11 @@ async fn call(params: Value) -> (StatusCode, Value, usize) {
         Duration::from_secs(60),
     ));
     backend.set_transport_for_test(Arc::new(Counting(Arc::clone(&reached))));
-    let (state, _store) = test_router_app_state_with_auth(&scoped_auth_config(false)).await;
+    let (mut state, _store) = test_router_app_state_with_auth(&scoped_auth_config(false)).await;
+    // The production default (MIK-8154 SAN.1: the direct route honours it).
+    Arc::get_mut(&mut state)
+        .expect("state is unique")
+        .sanitize_input = true;
     assert!(state.backends.register(backend));
     let request = Request::builder()
         .method("POST")

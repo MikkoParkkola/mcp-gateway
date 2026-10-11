@@ -383,7 +383,9 @@ async fn r12_a_budget_refusal_does_not_spend_the_continuation() {
 /// written back over the sanitized ones.
 #[tokio::test]
 async fn r13_the_backend_gets_the_sanitized_answers() {
-    let fx = fixture(Answer::AskOnce, |_| {}).await;
+    // MIK-8154 SAN.1: the direct route honours `security.sanitize_input`, so
+    // the row turns it on (it sanitized even when off before).
+    let fx = super::direct_guards_fixture::sanitizing(true, fixture(Answer::AskOnce, |_| {})).await;
     let (_, asked) = call(&fx, "alpha", Some("alice"), json!({})).await;
     let raw = json!({"k1": {"action": "accept", "content": {"account": "wo\u{7}rk"}}});
     let retry = json!({"requestState": state_of(&asked), "inputResponses": raw});
