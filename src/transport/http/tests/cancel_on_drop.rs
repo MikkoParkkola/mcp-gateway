@@ -129,14 +129,7 @@ async fn cancels_after(
 ) -> Vec<(Value, Option<String>)> {
     let transport = super::make_transport(url);
     super::set_default_session(&transport, "session-a");
-    run_exchange(
-        &transport,
-        (seen, arrived),
-        request,
-        None,
-        (era, exchange),
-    )
-    .await;
+    run_exchange(&transport, (seen, arrived), request, None, (era, exchange)).await;
     cancels_within_quiet(seen).await
 }
 
