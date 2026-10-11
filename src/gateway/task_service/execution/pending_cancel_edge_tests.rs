@@ -59,7 +59,8 @@ async fn a_pending_cancel_naming_no_backend_is_given_up_without_a_send() {
     f.service.shutdown().await.expect("the first gateway stops");
     damage_pending(&f);
     let service = open_service(f.dir.path()).await;
-    let later = service.store.now().expect("a clock after 1970") + chrono::Duration::hours(1);
+    let later = service.store.now().expect("a clock after 1970")
+        + chrono::Duration::try_hours(1).expect("one hour");
     service.store.set_clock_for_test(Some(later));
     let executor = executor_over(&service);
     let peer = ScriptedPeer::new([]);
