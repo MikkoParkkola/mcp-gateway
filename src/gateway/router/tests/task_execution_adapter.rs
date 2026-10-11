@@ -84,6 +84,7 @@ mod grant_decisions;
 mod grant_slot_release;
 pub(crate) mod submit_authz;
 mod submit_authz_audit;
+pub(crate) mod x14_authorize_order;
 
 mod admission_identity;
 /// MIK-7570.ATTEST.1 part 3: surfaced-tool tasks carry their attestation token.

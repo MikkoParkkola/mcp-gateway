@@ -511,6 +511,18 @@ async fn r4a_authorize_refuses_at_submit_as_the_sync_call_does() {
     router::task_submit_ungranted().await;
 }
 
+/// `Authorize` before `TaskConfirm`, R4a (MIK-8331): a caller the grant or the
+/// admin rule refuses gets the sync call's answer for a surfaced task call,
+/// never X14's challenge; the caller each admits is challenged.
+#[tokio::test]
+async fn r4a_authorize_precedes_the_x14_challenge() {
+    assert_eq!(
+        expect(MethodKind::ToolsCall, Route::TaskSubmit, Stage::Authorize),
+        Expect::Applies
+    );
+    router::task_submit_authorized_before_x14().await;
+}
+
 /// The execution lease's in-flight refusal (`meta_mcp/admission.rs`).
 const LEASE_IN_FLIGHT: &str = "Execution is already in progress";
 
