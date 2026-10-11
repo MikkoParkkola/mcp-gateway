@@ -7,6 +7,10 @@ use serde_json::{Value, json};
 
 type RoutingCase = (&'static str, Value, &'static [(&'static str, &'static str)]);
 
+/// Response targets of a call already dispatched, as stdio resolves them.
+const DISPATCHED: crate::gateway::meta_mcp::visible::TargetView<'static> =
+    crate::gateway::meta_mcp::visible::TargetView::Dispatched;
+
 #[tokio::test]
 async fn stdio_followup_routing_projection_preserves_backend_target_identity() {
     let meta_mcp = MetaMcp::new(std::sync::Arc::new(crate::backend::BackendRegistry::new()));
@@ -74,19 +78,10 @@ async fn stdio_followup_routing_projection_preserves_backend_target_identity() {
             .iter()
             .map(|(s, t)| ((*s).to_string(), (*t).to_string()))
             .collect();
-        let full = backend_tool_targets_for_call(
-            &meta_mcp,
-            tool_name,
-            arguments,
-            crate::gateway::meta_mcp::visible::TargetView::Dispatched,
-        );
+        let full = backend_tool_targets_for_call(&meta_mcp, tool_name, arguments, DISPATCHED);
         let projected_args = project(arguments);
-        let projected = backend_tool_targets_for_call(
-            &meta_mcp,
-            tool_name,
-            &projected_args,
-            crate::gateway::meta_mcp::visible::TargetView::Dispatched,
-        );
+        let projected =
+            backend_tool_targets_for_call(&meta_mcp, tool_name, &projected_args, DISPATCHED);
         let full_ids: Vec<(String, String)> = full
             .iter()
             .map(|t| (t.server.clone(), t.tool.clone()))

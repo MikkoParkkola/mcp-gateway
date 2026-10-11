@@ -546,7 +546,7 @@ async fn row8b_stdio_absent_name_refusal_refunds_the_signing_nonce() {
 }
 
 /// MIK-8160.X14.2 (control): a modern task call of a HARMLESS surfaced tool
-/// over stdio is admitted as before. X14 answers NotRequired: a `taskId`, no
+/// over stdio is admitted as before. X14 answers `NotRequired`: a `taskId`, no
 /// X14 challenge, and the task runs.
 #[tokio::test]
 async fn x14_2_a_harmless_surfaced_stdio_task_is_admitted() {
