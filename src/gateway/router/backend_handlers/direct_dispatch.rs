@@ -230,7 +230,24 @@ pub(super) async fn admit<'a>(
         super::direct_idempotency::execution_lease(scope, envelope, preflight, &mut guarded)?;
     admitted.lease = lease;
     admitted.nonce = admit_signing_nonce(scope, preflight)?;
-    // A 7a hit, else a 7b replay (whose 7a reservation is already given back).
+    deliver_replay(
+        scope,
+        (envelope, preflight),
+        &mut admitted,
+        (guarded, replay),
+    )?;
+    Ok(admitted)
+}
+
+/// A 7a hit, else a 7b replay (whose 7a reservation is already given back),
+/// answered here as an early return; otherwise the 7a reservation is kept.
+fn deliver_replay(
+    scope: Scope<'_>,
+    (envelope, preflight): (&Envelope, &Preflight),
+    admitted: &mut Admitted<'_>,
+    (guarded, replay): (Option<GuardOutcome>, Option<JsonRpcResponse>),
+) -> Result<(), Rejection> {
+    let (state, id, client) = (scope.state, scope.id, scope.caller.client.as_ref());
     let replay = match guarded {
         Some(GuardOutcome::CachedResult(cached)) => {
             Some(JsonRpcResponse::success(id.clone(), cached))
@@ -258,7 +275,7 @@ pub(super) async fn admit<'a>(
         let response = finish_tail(scope, envelope, preflight, auth, response);
         return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
     }
-    Ok(admitted)
+    Ok(())
 }
 
 /// The sanitized arm: the gate returned params, so those are what the backend
