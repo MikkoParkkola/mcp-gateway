@@ -240,6 +240,25 @@ async fn s5_mcp_and_direct_sanitize_alike() {
     }
 }
 
+/// S8b (critical coverage of `sanitize_exempt`): a call the exemption
+/// cannot map is sanitized, never waved through: a `tools/call` with no
+/// tool name, and `gateway_run_playbook` naming no known playbook, each with
+/// a NUL in its arguments, are refused by the sanitizer before dispatch
+/// answers the missing name or playbook.
+#[tokio::test]
+async fn s8b_an_unmappable_call_is_sanitized() {
+    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
+    for params in [
+        json!({"arguments": {"cmd": NUL}}),
+        json!({"name": "gateway_run_playbook", "arguments": {"name": "no-such-playbook", "inputs": {"cmd": NUL}}}),
+    ] {
+        let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params});
+        let answer = send_raw(&fx, "/mcp", "k-std", &body).await;
+        assert_eq!(message(&answer), NUL_REFUSED, "s8b {params}: {answer}");
+        assert_eq!(calls(&fx), 0, "s8b {params}: dispatched");
+    }
+}
+
 /// S8 CONTROL: a meta tool with no backend target is sanitized as today: a
 /// NUL is refused with the setting on and passes with it off.
 #[tokio::test]

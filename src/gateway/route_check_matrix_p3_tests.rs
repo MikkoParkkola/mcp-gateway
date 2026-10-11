@@ -6,6 +6,8 @@
 //! run red on the release line before the fix. MIK-8149.REQFW.2 (stdio
 //! sanitize) is driven by `rows::sanitize_rows`.
 
+use serde_json::{Value, json};
+
 use super::Route;
 use super::rows::{BLOCKED, X14_PROMPT, audit_rows, blocked_call, message};
 use crate::gateway::router::route_matrix_driver_tests::{self as router, Surfacing};
@@ -182,6 +184,31 @@ async fn p2_stdio_passthrough_forwards_a_nul() {
     let (body, calls) = Box::pin(stdio::served_sanitizing_with(true)).await;
     assert!(body.get("error").is_none(), "p2: {body}");
     assert_eq!(calls, 1, "p2: the backend did not run: {body}");
+}
+
+/// S2d on stdio (critical coverage of `prepare_signing`'s protocol-field
+/// refusal): a control character in `method` is refused before anything
+/// reads it, with no id (the envelope may be what is dirty), and nothing
+/// reaches the backend. Without the check the sanitize step would strip it
+/// into `tools/call` and dispatch.
+#[tokio::test]
+async fn s2d_stdio_refuses_a_control_character_in_the_method() {
+    let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/\u{7}call", "params": {
+        "name": "gateway_list_servers", "arguments": {}}});
+    let (body, calls) = Box::pin(stdio::served_sanitizing_call(false, call)).await;
+    assert_eq!(
+        body.pointer("/error/code"),
+        Some(&json!(-32600)),
+        "s2d stdio: {body}"
+    );
+    assert!(
+        body.pointer("/error/message")
+            .and_then(Value::as_str)
+            .is_some_and(|m| m.contains("control characters")),
+        "s2d stdio: {body}"
+    );
+    assert_eq!(body.get("id"), Some(&Value::Null), "s2d stdio: {body}");
+    assert_eq!(calls, 0, "s2d stdio: reached the backend");
 }
 
 /// The one firewall refusal wording every route answers (P3): an ASI10 block

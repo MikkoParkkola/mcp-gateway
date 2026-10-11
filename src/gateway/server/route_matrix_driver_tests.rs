@@ -17,8 +17,8 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::{
-    served_sanitizing, served_sanitizing_with, stdio_blocked_task, stdio_sanitizing,
-    stdio_task_read, stdio_task_refused_without_a_grant, stdio_task_surfaced,
+    served_sanitizing, served_sanitizing_call, served_sanitizing_with, stdio_blocked_task,
+    stdio_sanitizing, stdio_task_read, stdio_task_refused_without_a_grant, stdio_task_surfaced,
     stdio_x14_consumed_then_refused, stdio_x14_signed_round,
 };
 

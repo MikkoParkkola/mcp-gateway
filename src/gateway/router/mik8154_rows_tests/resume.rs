@@ -101,3 +101,49 @@ async fn r3_a_resume_re_judges_and_sends_nothing_unsanitized() {
         "r3: the reloaded instance received a send: {done}"
     );
 }
+
+/// R4 CONTROL (critical coverage of `LiveHost::readmit`'s exempt branch): the
+/// same parked passthrough task, with no reload: the resume re-judges, the
+/// call is still exempt, and the backend receives the NUL as submitted.
+#[tokio::test]
+async fn r4_a_resume_still_exempt_forwards_as_submitted() {
+    let fx = Box::pin(sanitizing(
+        true,
+        fixture_built(Answer::AskOnce, |meta| meta),
+    ))
+    .await;
+    let mut meta = modern_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("r4-k");
+    let submit = json!({
+        "name": "gateway_invoke",
+        "arguments": {"server": "alpha-pt", "tool": "read", "arguments": {"cmd": NUL}},
+        "task": {},
+        "_meta": meta,
+    });
+    let created = Box::pin(send(&fx, "tools/call", "gateway_invoke", submit)).await;
+    let id = created
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("r4: the submit was refused: {created}"))
+        .to_owned();
+    let parked = Box::pin(settled(&fx, &id, &["working"])).await;
+    assert_eq!(
+        parked.pointer("/result/status"),
+        Some(&json!("input_required")),
+        "r4 premise: the task did not park: {parked}"
+    );
+    let update = json!({
+        "taskId": id,
+        "inputResponses": {"k1": {"action": "accept", "content": {"account": "work"}}},
+        "_meta": modern_meta(),
+    });
+    let _ = Box::pin(send(&fx, "tasks/update", &id, update)).await;
+    let done = Box::pin(settled(&fx, &id, &["working", "input_required"])).await;
+    assert_eq!(
+        done.pointer("/result/status"),
+        Some(&json!("completed")),
+        "r4: the exempt resume did not complete: {done}"
+    );
+    assert_eq!(calls(&fx), 2, "r4: the resumed round was not sent: {done}");
+    assert!(forwarded_nul(&fx), "r4: the resumed round lost the NUL");
+}
