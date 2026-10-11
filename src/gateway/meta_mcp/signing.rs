@@ -459,9 +459,10 @@ impl super::MetaMcp {
     }
 
     /// Execution admission for a synchronous call, giving the signing nonce
-    /// back when admission refuses it (MIK-8150 NONCE.1). Admission runs after
-    /// the nonce is admitted and before anything acts, on /mcp and stdio alike,
-    /// so one site serves both. A task call keeps its nonce on any refusal: on
+    /// back when admission refuses a call without task intent (MIK-8150
+    /// NONCE.1). Admission runs after the nonce is admitted, on /mcp and stdio
+    /// alike, so one site serves both; for a synchronous call nothing has acted
+    /// yet. A task call keeps its nonce on any refusal: on
     /// stdio, X14 runs after nonce admission and may already have consumed the
     /// task's grant, and a task's admission can still refuse after that (target
     /// policy, plan check). A synchronous call has no effect before this point.

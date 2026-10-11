@@ -216,6 +216,7 @@ fn nonce_is_free(meta: &MetaMcp) -> bool {
         &ctx(&AllowAll),
     )
     .is_ok()
+        && later.admitted
 }
 
 /// MIK-7869.NONCE.1: the question could not be delivered, the call is refused,
