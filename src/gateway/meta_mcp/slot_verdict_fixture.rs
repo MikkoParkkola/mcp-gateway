@@ -207,20 +207,34 @@ pub(crate) fn per_user_backend(
     warmth: Warmth,
     enforcement: InputSchemaEnforcement,
 ) -> (Arc<Backend>, Arc<Asked>, Arc<Asked>) {
+    per_user_backend_with(slot, shared, warmth, enforcement, |_| {})
+}
+
+/// [`per_user_backend`] with `configure` applied to the backend's config
+/// (the P2 order guard needs a required signature chain).
+pub(crate) fn per_user_backend_with(
+    slot: CallerSlot,
+    shared: &Value,
+    warmth: Warmth,
+    enforcement: InputSchemaEnforcement,
+    configure: impl FnOnce(&mut BackendConfig),
+) -> (Arc<Backend>, Arc<Asked>, Arc<Asked>) {
+    let mut config = BackendConfig {
+        identity_propagation: Some(IdentityPropagationConfig {
+            strategy: PropagationStrategyKind::SignedAssertion,
+            audience: "ledger".to_string(),
+            required: true,
+            session_mode: SessionMode::PerUser,
+            token_exchange_endpoint: None,
+            token_exchange_scope: None,
+        }),
+        input_schema_enforcement: enforcement,
+        ..Default::default()
+    };
+    configure(&mut config);
     let backend = Arc::new(Backend::new(
         BACKEND,
-        BackendConfig {
-            identity_propagation: Some(IdentityPropagationConfig {
-                strategy: PropagationStrategyKind::SignedAssertion,
-                audience: "ledger".to_string(),
-                required: true,
-                session_mode: SessionMode::PerUser,
-                token_exchange_endpoint: None,
-                token_exchange_scope: None,
-            }),
-            input_schema_enforcement: enforcement,
-            ..Default::default()
-        },
+        config,
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));

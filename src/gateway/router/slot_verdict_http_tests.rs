@@ -19,7 +19,7 @@ use super::r2_identity_keys_tests::transparency_logger;
 use super::tests::direct_route_state_with_identity;
 use crate::config::InputSchemaEnforcement;
 use crate::gateway::meta_mcp::slot_verdict_fixture::{
-    Asked, BACKEND, CallerSlot, CountingMint, Surfaced, TOOL, Warmth, per_user_backend, valid,
+    Asked, BACKEND, CallerSlot, CountingMint, Surfaced, TOOL, Warmth, per_user_backend_with, valid,
 };
 use crate::key_server::oidc::VerifiedIdentity;
 
@@ -55,8 +55,21 @@ async fn gateway_with_shared(
     enforcement: InputSchemaEnforcement,
     surfaced: Surfaced,
 ) -> Gateway {
+    gateway_armed(slot, shared_schema, enforcement, surfaced, |_| {}, |_| {}).await
+}
+
+/// The router fixture with `configure` applied to the backend's config and
+/// `arm` to the Meta-MCP before it is mounted.
+async fn gateway_armed(
+    slot: CallerSlot,
+    shared_schema: &Value,
+    enforcement: InputSchemaEnforcement,
+    surfaced: Surfaced,
+    configure: impl FnOnce(&mut crate::config::BackendConfig),
+    arm: impl FnOnce(&mut crate::gateway::meta_mcp::MetaMcp),
+) -> Gateway {
     let (backend, caller, shared) =
-        per_user_backend(slot, shared_schema, Warmth::Warm, enforcement);
+        per_user_backend_with(slot, shared_schema, Warmth::Warm, enforcement, configure);
     let (mut state, store) =
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
@@ -70,6 +83,7 @@ async fn gateway_with_shared(
     meta.set_identity_propagation(Arc::new(CountingMint(Arc::new(AtomicUsize::new(0)))));
     meta.enable_transparency_log(transparency_logger(&audit[0]));
     meta.set_multi_user(true);
+    arm(&mut meta);
     let meta = Arc::new(meta);
     state_mut.meta_mcp = Arc::clone(&meta);
     state_mut.transparency_log = Some(transparency_logger(&audit[1]));
@@ -429,4 +443,42 @@ async fn p3_http_withheld_call_gets_no_admission_refusal() {
             "P3 {slot:?}: {answer:?} vs unknown {absent:?}"
         );
     }
+}
+
+/// P2-order (guard, lead ruling 2026-10-11): P2 has no row of its own on HTTP
+/// because, for a verified per-user caller, the X14 confirmation comes
+/// BEFORE `refuse_chained_task`. P1 (no prompt for a withheld name) plus
+/// MIK-8340 row 1 (a forged `requestState` answers as absent) then cover it.
+/// This pins that order: alpha's valid tool on a require-chain backend gets
+/// the X14 prompt, not the -32001 refusal. If the chain refusal ever moves
+/// ahead of X14, this fails, and P2 needs its own row. Green on base.
+#[tokio::test]
+async fn p2_order_x14_precedes_the_require_chain_refusal() {
+    let gw = gateway_armed(
+        CallerSlot::Valid,
+        &valid(),
+        CLOSED,
+        Surfaced::Yes,
+        |config| {
+            config.signature_chain = crate::config::ChainMode::Require;
+            config.chain_origins = vec!["gw-up".to_string()];
+            config.chain_signer = Some("gw-up".to_string());
+        },
+        |meta| {
+            meta.set_chain_signer(
+                crate::gateway::chain_test_support::signer(),
+                crate::config::ChainEmit::Always,
+            );
+        },
+    )
+    .await;
+    let answer = task_call_as_alpha(&gw.router, TOOL).await;
+    assert!(
+        answer.1.pointer("/result/inputRequests").is_some(),
+        "P2-order: no X14 prompt came first: {answer:?}"
+    );
+    assert!(
+        !answer.1.to_string().contains("signature chain"),
+        "P2-order: the require-chain refusal came before X14; P2 needs its own row: {answer:?}"
+    );
 }
