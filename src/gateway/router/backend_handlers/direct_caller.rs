@@ -39,6 +39,9 @@ pub(super) struct Caller {
     /// Owned here so a session-less call's `BackendCall` can borrow it for
     /// the whole route.
     pub(super) spend_key: String,
+    /// The agent identity `validate_agent` extracted, kept so the dispatch
+    /// chokepoint judges the proven agent the entry check saw (MIK-8351).
+    pub(super) agent_identity: Option<crate::security::AgentIdentity>,
 }
 
 impl Caller {
@@ -63,7 +66,7 @@ fn validate_agent(
     state: &AppState,
     request: &axum::http::Request<axum::body::Body>,
     caller: &Caller,
-) -> Result<(), Rejection> {
+) -> Result<crate::security::AgentIdentity, Rejection> {
     let agent_identity = crate::security::extract_agent_identity(
         &caller.inbound_headers,
         request.uri().query(),
@@ -76,7 +79,7 @@ fn validate_agent(
     match crate::security::validate_agent_identity(&agent_identity, &state.agent_identity_config) {
         Ok(audit) => {
             crate::security::log_agent_identity(&agent_identity, audit, None);
-            Ok(())
+            Ok(agent_identity)
         }
         Err(reason) => {
             crate::security::log_agent_identity(
@@ -134,8 +137,9 @@ pub(super) async fn resolve_caller(
         inbound_headers: request.headers().clone(),
         grant_subject: None,
         spend_key: String::new(),
+        agent_identity: None,
     };
-    validate_agent(state, &request, &caller)?;
+    caller.agent_identity = Some(validate_agent(state, &request, &caller)?);
 
     // The caller as the meta route resolves it, resolved before the body is
     // read, so a refused identity header reaches no passthrough, propagation

@@ -43,6 +43,8 @@ mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
 pub(crate) mod audit;
 mod chokepoint; // MIK-8137 b1: the dispatch chokepoint every send passes
+// MIK-8351: the direct route's tools/call send passes it too.
+pub(in crate::gateway) use chokepoint::{DirectPermit, Outbound};
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
 pub(crate) mod egress;
 mod nonce_settle; // MIK-8150: refund requests and dispatch marks of a signed execution
@@ -398,8 +400,14 @@ impl MetaMcp {
             answers,
         };
         let source = chokepoint::Source::of_call(answers);
-        let permit = (self.chokepoint(caller, session_id, (server, tool), &outbound, source))
-            .inspect_err(|_| nonce_settle::give_back_unsent(caller, &mut idem_reservation))?;
+        let permit = (self.chokepoint(
+            caller.scope(),
+            session_id,
+            (server, tool),
+            &outbound,
+            source,
+        ))
+        .inspect_err(|_| nonce_settle::give_back_unsent(caller, &mut idem_reservation))?;
         nonce_settle::mark_dispatched(caller);
         // Boxed: the dispatch future is the largest thing this frame ever
         // holds, and inlining it puts `invoke_tool_traced` over

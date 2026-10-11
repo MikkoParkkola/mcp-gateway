@@ -340,9 +340,8 @@ async fn chain_link_surfaced_gap_row() {
 /// `ChokepointRescan`, R1 and the R3 gap. A continuation retry whose answer
 /// carries a blocked pattern reaches bytes the route-layer scan never judged.
 /// R1 Applies: the dispatch rescan refuses it with a blocking `event=dispatch`
-/// row and the backend is asked only once (the question). R3 gap (MIK-8154
-/// SAN.3): the direct route never reaches the chokepoint, so no dispatch row
-/// is ever written.
+/// row and the backend is asked only once (the question). F2d (MIK-8351): the
+/// direct route now does the same, its row marked `source: direct`.
 #[tokio::test]
 async fn chokepoint_rescan_rows() {
     let row = |route| expect(MethodKind::ToolsCall, route, Stage::ChokepointRescan);
@@ -364,33 +363,25 @@ async fn chokepoint_rescan_rows() {
         sent.body
     );
 
-    assert_eq!(
-        row(Route::Direct),
-        Expect::ExpectedGap(super::Ticket::Mik8154)
-    );
+    // F2d (MIK-8351, which took MIK-8154 SAN.3): the direct route's redeemed
+    // retry passes the same chokepoint, so the hostile answer is refused with a
+    // `source: direct` dispatch row and only the question reached the backend.
+    assert_eq!(row(Route::Direct), Expect::Applies);
     let dir = tempfile::tempdir().expect("tempdir");
     let audit = dir.path().join("audit.jsonl");
     let sent = router::direct_retry_answering(&audit, BLOCKED).await;
     let dispatched = audit_rows(&audit, "dispatch");
     assert!(
-        dispatched.is_empty(),
-        "R3 wrote a dispatch row, so the direct route now passes the chokepoint; \
-         MIK-8154 SAN.3 may have closed this gap, flip the row to Applies: {dispatched:?}"
-    );
-    // The hostile answer really went out unscanned: the retry succeeded, the
-    // backend was asked twice, and the second send carried the blocked text.
-    assert!(
-        sent.body.get("error").is_none(),
-        "R3: the retry was refused, so this payload cannot show the missing \
-         chokepoint: {}",
+        dispatched
+            .iter()
+            .any(|row| row["action"] == "block" && row["source"] == "direct"),
+        "F2d: not refused by the dispatch rescan on the direct route: {dispatched:?}; {}",
         sent.body
     );
-    assert_eq!(sent.backend_calls, 2, "R3: {}", sent.body);
-    assert!(
-        sent.seen
-            .get(1)
-            .is_some_and(|params| params.to_string().contains(BLOCKED.trim())),
-        "R3: the second send did not carry the blocked answer: {:?}",
+    assert_eq!(sent.body["error"]["code"], -32600, "F2d: {}", sent.body);
+    assert_eq!(
+        sent.backend_calls, 1,
+        "F2d: the hostile answer was sent: {:?}",
         sent.seen
     );
 }
