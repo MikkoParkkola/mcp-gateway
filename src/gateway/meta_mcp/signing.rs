@@ -10,6 +10,7 @@
 
 use serde_json::Value;
 
+use super::refund_witness::RefundWitness;
 use crate::gateway::meta_mcp_helpers::extract_required_str;
 use crate::security::message_signing::{NONCE_REASON_INVALID, record_nonce_rejection};
 
@@ -88,6 +89,25 @@ pub(crate) struct SigningInvocationContext {
 struct NonceRefund {
     dispatched: std::sync::atomic::AtomicBool,
     wanted: std::sync::atomic::AtomicBool,
+    /// Something this call did may have acted (MIK-8353): a veto, never a
+    /// grant. A witness still decides; this only stops a give-back.
+    spent: std::sync::atomic::AtomicBool,
+}
+
+// How many nonces this thread gave back (MIK-8353 STDIO-SETTLE): the release
+// is idempotent, so a second give-back of one nonce leaves the same store
+// state and only a count can see it. Per thread: the rows run on a
+// current-thread runtime, so parallel tests never share it.
+#[cfg(test)]
+thread_local! {
+    static GIVEN_BACK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many nonces this thread has given back so far. Read only by the
+/// firewall-gated route-check rows (STDIO-SETTLE).
+#[cfg(all(test, feature = "firewall"))]
+pub(crate) fn given_back_on_this_thread() -> usize {
+    GIVEN_BACK.with(std::cell::Cell::get)
 }
 
 pub(crate) enum SigningDelivery<'a> {
@@ -111,6 +131,12 @@ impl SigningInvocationContext {
     /// Record that a backend dispatch ran under this signed execution.
     pub(crate) fn mark_dispatched(&self) {
         (self.refund.dispatched).store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Veto every give-back of this call's nonce: something it did may have
+    /// acted (MIK-8353; X14 consumed a grant).
+    pub(crate) fn mark_spent(&self) {
+        (self.refund.spent).store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Ask for the nonce back: this step was refused before its backend (its
@@ -458,15 +484,14 @@ impl super::MetaMcp {
         self.prepare_signing_invocation(context, arguments, session, caller)
     }
 
-    /// Execution admission for a synchronous call, giving the signing nonce
-    /// back when admission refuses a call without task intent (MIK-8150
-    /// NONCE.1). Admission runs after the nonce is admitted, on /mcp and stdio
-    /// alike, so one site serves both; for a synchronous call nothing has acted
-    /// yet. A task call keeps its nonce on any refusal: on
-    /// stdio, X14 runs after nonce admission and may already have consumed the
-    /// task's grant, and a task's admission can still refuse after that (target
-    /// policy, plan check). A synchronous call has no effect before this point.
-    /// A `Replay` keeps the nonce: it is a delivered call.
+    /// Execution admission, giving the signing nonce back when admission
+    /// refuses a call that still holds its [`RefundWitness`] (MIK-8150
+    /// NONCE.1; MIK-8353 r4 amendment L2). Admission runs after the nonce is
+    /// admitted, on /mcp and stdio alike, so one site serves both. The witness
+    /// is gone once anything may have acted: X14 drops it where it consumes a
+    /// task's grant, so a task refused after its confirmation keeps the nonce
+    /// spent, and one refused with nothing consumed gets it back. A `Replay`
+    /// keeps the nonce: it is a delivered call.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn admit_meta_sync(
         &self,
@@ -476,13 +501,45 @@ impl super::MetaMcp {
         arguments: &Value,
         session: Option<&str>,
         id: &crate::protocol::RequestId,
+        witness: Option<RefundWitness>,
     ) -> crate::Result<super::admission::SyncAdmission> {
         let admitted =
             self.admit_meta_sync_unrefunded(owner, caller, tool_name, arguments, session, id);
-        if admitted.is_err() && caller.task.is_none() {
-            self.release_unasked_nonce(caller);
+        if admitted.is_err()
+            && let Some(witness) = witness
+        {
+            self.release_witnessed_nonce(caller, witness);
         }
         admitted
+    }
+
+    /// [`Self::admit_meta_sync`] for a test that drives admission directly,
+    /// with nothing having acted before it.
+    #[cfg(test)]
+    pub(crate) fn admit_meta_sync_for_test(
+        &self,
+        owner: super::AdmissionOwner<'_>,
+        caller: &super::MetaMcpCallerContext<'_>,
+        tool_name: &str,
+        arguments: &Value,
+        session: Option<&str>,
+        id: &crate::protocol::RequestId,
+    ) -> crate::Result<super::admission::SyncAdmission> {
+        let witness = Some(RefundWitness::at_capture());
+        Self::admit_meta_sync(
+            self, owner, caller, tool_name, arguments, session, id, witness,
+        )
+    }
+
+    /// Give back the nonce of a call refused before anything acted, proven by
+    /// `witness` (MIK-8353): the route stage's answer, an admission refusal.
+    pub(crate) fn release_witnessed_nonce(
+        &self,
+        caller: &super::MetaMcpCallerContext<'_>,
+        witness: RefundWitness,
+    ) {
+        witness.spend();
+        self.release_unasked_nonce(caller);
     }
 
     /// Give back the nonce of a call refused before anything could dispatch:
@@ -505,9 +562,18 @@ impl super::MetaMcp {
     }
 
     fn give_back_nonce(&self, context: &SigningInvocationContext, principal: &str) {
+        if context
+            .refund
+            .spent
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return;
+        }
         if let (true, Ok(Some(nonce)), Some(stamp)) =
             (context.admitted, context.nonce_value(), context.nonce_stamp)
         {
+            #[cfg(test)]
+            GIVEN_BACK.with(|count| count.set(count.get() + 1));
             self.release_signing_nonce(nonce, principal, stamp);
         }
     }

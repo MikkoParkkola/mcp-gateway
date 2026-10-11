@@ -30,7 +30,7 @@ fn pre_dispatch_failure_frees_the_key_for_a_retry() {
     let response = JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string());
 
     // WHEN the failure is settled.
-    settle_direct_failure(Some(&mut reservation), &error, &response);
+    settle_direct_failure((Some(&mut reservation), None), &error, &response);
 
     // THEN the key is admissible again. Asserted while the reservation is
     // still alive on purpose: `Drop` releases an unsettled reservation too,
@@ -56,7 +56,7 @@ fn a_rate_limit_refusal_frees_the_key_for_a_retry() {
     let error = Error::RateLimited("backend".into());
     let response = JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string());
 
-    settle_direct_failure(Some(&mut reservation), &error, &response);
+    settle_direct_failure((Some(&mut reservation), None), &error, &response);
 
     // Asserted while the reservation is alive, for the reason given above.
     assert!(
@@ -79,7 +79,7 @@ fn a_slot_refusal_frees_the_key_for_a_retry() {
     };
     let response = JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string());
 
-    settle_direct_failure(Some(&mut reservation), &error, &response);
+    settle_direct_failure((Some(&mut reservation), None), &error, &response);
 
     assert!(
         matches!(
@@ -99,7 +99,7 @@ fn dispatched_failure_is_cached_as_terminal() {
     let response = JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string());
 
     // WHEN the failure is settled.
-    settle_direct_failure(Some(&mut reservation), &error, &response);
+    settle_direct_failure((Some(&mut reservation), None), &error, &response);
 
     // THEN a retry replays the error instead of re-running the side effect.
     assert!(
@@ -197,7 +197,7 @@ async fn a_stopped_backends_refusal_frees_the_key_for_a_retry() {
     let cache = Arc::new(IdempotencyCache::new());
     let mut reservation = reserve(&cache);
     let response = JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string());
-    settle_direct_failure(Some(&mut reservation), &error, &response);
+    settle_direct_failure((Some(&mut reservation), None), &error, &response);
     assert!(
         matches!(
             enforce(&cache, "key", "fingerprint"),

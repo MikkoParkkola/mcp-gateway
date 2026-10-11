@@ -131,6 +131,19 @@ impl SyncLease {
     }
 }
 
+// MIK-8154 L0: the operation the last keyed admission on this thread keyed,
+// so a row can compare what two routes admit for one target.
+#[cfg(test)]
+thread_local! {
+    static LAST_OPERATION: std::cell::RefCell<Option<Value>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Take the operation the last keyed admission on this thread built (L0).
+#[cfg(test)]
+pub(crate) fn take_last_operation() -> Option<Value> {
+    LAST_OPERATION.with(|last| last.borrow_mut().take())
+}
+
 pub(crate) enum SyncAdmission {
     Unprotected,
     Owned(SyncLease),
@@ -153,7 +166,7 @@ pub(crate) fn execution_arguments(arguments: &mut Value) -> bool {
 
 /// [`execution_arguments`] on a possibly borrowed value: it is copied only
 /// when there is a control key to strip (MIK-8014).
-fn execution_arguments_cow(arguments: &mut std::borrow::Cow<'_, Value>) -> bool {
+pub(super) fn execution_arguments_cow(arguments: &mut std::borrow::Cow<'_, Value>) -> bool {
     if arguments.get("_full").is_some() || arguments.get("_claim").is_some() {
         return execution_arguments(arguments.to_mut());
     }
@@ -262,6 +275,8 @@ impl MetaMcp {
             })
             .ok_or_else(|| Error::json_rpc(-32003, "A verified execution principal is required"))?;
         let operation = operation();
+        #[cfg(test)]
+        LAST_OPERATION.with(|last| *last.borrow_mut() = Some(operation.clone()));
         let representation = representation();
         let request = Request {
             principal: &principal,
