@@ -43,9 +43,11 @@ pub(super) async fn load_configured_identity_grants(
         Ok(grants) => Ok(Some((path, grants))),
         Err(e) if config.fail_on_error => Err(Error::Config(e)),
         Err(e) => {
+            // Bound outside the macro, so its head carries plain locals.
+            let shown = path.display();
             warn!(
                 error = %e,
-                path = %path.display(),
+                path = %shown,
                 "Failed to load local identity grants; personal capabilities without matching grants will fail closed"
             );
             Ok(None)

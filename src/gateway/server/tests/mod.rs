@@ -41,6 +41,7 @@ mod collusion_stdio_plan;
 mod egress_matrix_stdio;
 mod r2_stdio_keys;
 mod stdio_cache_scope;
+mod stdio_list_changed;
 mod stdio_listing_scope;
 #[cfg(feature = "firewall")]
 mod stdio_response_firewall;

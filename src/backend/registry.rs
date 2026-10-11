@@ -130,7 +130,8 @@ pub struct BackendRegistry {
     /// Backends by name
     backends: DashMap<String, Arc<Backend>>,
     /// Where a changed backend name goes so listeners hear `tools/list_changed`
-    /// (F24). Unset outside the HTTP server, which is the only mode that delivers it.
+    /// (F24). Set by the HTTP server, and by a stdio session (MIK-8278); unset
+    /// in a registry no server runs.
     change_feed: std::sync::OnceLock<super::tools_nudge::NudgeFeed>,
     /// Whether shutdown has begun. Set once by [`BackendRegistry::stop_all`] and
     /// never cleared.
@@ -392,7 +393,8 @@ impl BackendRegistry {
     }
 
     /// Route every change to the tools discovery shows to one consumer (F24).
-    /// Set once, by the HTTP server; backends already held are attached too, so
+    /// Set once, by the HTTP server or the stdio session; backends already held
+    /// are attached too, so
     /// a list they store from now on is seen.
     pub(crate) fn set_change_feed(&self, feed: super::tools_nudge::NudgeFeed) {
         if self.change_feed.set(feed).is_err() {

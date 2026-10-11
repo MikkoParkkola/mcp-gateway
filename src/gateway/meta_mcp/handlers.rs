@@ -72,7 +72,7 @@ impl MetaMcp {
         // the drift this guards against stays guarded.
         let capabilities = crate::gateway::meta_mcp_helpers::build_server_capabilities(
             crate::gateway::meta_mcp_helpers::discovery_extensions(),
-            self.change_feed(),
+            self.change_feed().for_discover(),
         );
 
         let capabilities = self.capabilities_with_events(capabilities);
