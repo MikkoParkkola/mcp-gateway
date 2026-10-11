@@ -163,3 +163,26 @@ async fn an_unapproved_detached_login_ends_at_its_own_window() {
         cohort.outcome()
     );
 }
+
+/// LOGINDL.12: closing a backend never logs in. Stopping a backend whose
+/// token has lapsed still sends its session `DELETE`, and its header build
+/// opens no browser: a close uses or refreshes a credential, never a login.
+#[tokio::test]
+async fn a_stop_sends_its_session_delete_without_a_login() {
+    static DELETES: AtomicUsize = AtomicUsize::new(0);
+    let (backend, browser, _dir) =
+        approved_start(Upstream::SessionHeld(&DELETES), Duration::from_secs(1)).await;
+    super::token_lapse::lapse(&backend).await;
+    assert_eq!(browser.opens(), 1, "premise: only the start's login");
+    assert_eq!(DELETES.load(Ordering::SeqCst), 0, "premise: no close yet");
+
+    let stopped = tokio::time::timeout(Duration::from_secs(20), backend.stop()).await;
+
+    assert_eq!(browser.opens(), 1, "the stop's header build opened a login");
+    assert!(stopped.is_ok(), "the stop did not return");
+    assert_eq!(
+        DELETES.load(Ordering::SeqCst),
+        1,
+        "premise: the stop reached its session DELETE (its header build ran)"
+    );
+}

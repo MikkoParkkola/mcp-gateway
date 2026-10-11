@@ -523,6 +523,9 @@ pub(super) enum Upstream {
     /// Hands out a session at the handshake, and answers every later request,
     /// counted as it arrives, after the delay with "session not found".
     SessionExpires(Duration, &'static AtomicUsize),
+    /// Hands out a session at the handshake, answers as `Plain` after it,
+    /// and counts each session `DELETE` a close sends (MIK-8339).
+    SessionHeld(&'static AtomicUsize),
 }
 
 /// An authorization server that issues a token good for `expires_in` seconds
@@ -544,7 +547,7 @@ async fn issuing_server(expires_in: u64, upstream: Upstream) -> String {
         };
         let mut headers = HeaderMap::new();
         let body = match (upstream, request["method"].as_str()) {
-            (Upstream::SessionExpires(..), Some("initialize")) => {
+            (Upstream::SessionExpires(..) | Upstream::SessionHeld(_), Some("initialize")) => {
                 headers.insert("mcp-session-id", "login-window-session".parse().unwrap());
                 json!({"jsonrpc": "2.0", "id": id, "result": {
                     "protocolVersion": "2025-06-18",
@@ -599,7 +602,15 @@ async fn issuing_server(expires_in: u64, upstream: Upstream) -> String {
                 }))
             }),
         )
-        .route("/mcp", post(mcp));
+        .route(
+            "/mcp",
+            post(mcp).delete(move || async move {
+                if let Upstream::SessionHeld(deletes) = upstream {
+                    deletes.fetch_add(1, Ordering::SeqCst);
+                }
+                StatusCode::OK
+            }),
+        );
     tokio::spawn(async move { axum::serve(listener, app).await });
     origin
 }
