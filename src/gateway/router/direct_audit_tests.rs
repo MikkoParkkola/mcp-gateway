@@ -23,6 +23,7 @@ use crate::security::audit::AuditFailurePolicy;
 use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
+mod anon_key;
 mod delivery;
 mod delivery_who;
 mod lost_round;
