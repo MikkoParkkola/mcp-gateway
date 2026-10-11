@@ -36,6 +36,17 @@ async fn start_backend_with(
     selects: &str,
     before_answer: &str,
 ) -> (tempfile::TempDir, Arc<StdioTransport>, Result<()>) {
+    start_backend_listing(accepts, accepts, selects, before_answer).await
+}
+
+/// [`start_backend_with`], whose rejection lists `lists` as the supported
+/// revisions while it still accepts only `accepts`.
+async fn start_backend_listing(
+    lists: &str,
+    accepts: &str,
+    selects: &str,
+    before_answer: &str,
+) -> (tempfile::TempDir, Arc<StdioTransport>, Result<()>) {
     let workspace = tempfile::tempdir().expect("workspace");
     let script = r#"while IFS= read -r request; do
     id=$(printf '%s' "$request" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
@@ -45,11 +56,12 @@ async fn start_backend_with(
             printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"SELECTS","capabilities":{}}}\n' "$id"
             ;;
         *'"method":"initialize"'*)
-            printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"Unsupported protocol version. Supported versions: ACCEPTS"}}\n' "$id"
+            printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"Unsupported protocol version. Supported versions: LISTS"}}\n' "$id"
             ;;
     esac
 done
 "#
+    .replace("LISTS", lists)
     .replace("ACCEPTS", accepts)
     .replace("SELECTS", selects)
     .replace("BEFORE", before_answer);
@@ -121,6 +133,133 @@ async fn a_selection_that_is_not_a_version_is_refused_without_being_repeated() {
     let error = outcome.expect_err("a selection that is not a version must not be adopted");
     assert!(matches!(error, Error::Protocol(_)), "{error:?}");
     assert!(!error.to_string().contains(NOT_A_VERSION), "{error}");
+}
+
+/// Every tracing callsite enabled, so the handshake's log lines evaluate the
+/// diagnostic command they name (MIK-8195 W7).
+fn verbose() -> tracing::subscriber::DefaultGuard {
+    crate::test_log_capture::keep_interest_open();
+    tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_test_writer()
+            .finish(),
+    )
+}
+
+/// MIK-8195 W7: a rejection that lists no revision this gateway speaks ends
+/// the start; nothing is retried and nothing is adopted.
+#[tokio::test]
+async fn a_rejection_listing_no_spoken_revision_ends_the_start() {
+    let _log = verbose();
+    let (_workspace, transport, outcome) = start_backend(UNSUPPORTED, UNSUPPORTED).await;
+    let adopted = transport.protocol_version.read().clone();
+    let _ = transport.close().await;
+
+    let error = outcome.expect_err("no compatible revision means no session");
+    assert!(matches!(error, Error::Protocol(_)), "{error:?}");
+    assert!(
+        error.to_string().contains("no compatible version"),
+        "{error}"
+    );
+    assert_eq!(adopted, None, "a failed negotiation adopts nothing");
+}
+
+/// MIK-8195 W7: a backend that lists a revision this gateway speaks, then
+/// rejects the retry proposing it, ends the start on the retry's error.
+#[tokio::test]
+async fn a_rejected_negotiated_retry_ends_the_start() {
+    let _log = verbose();
+    let listed = not_our_proposal("2025-06-18");
+    let (_workspace, transport, outcome) =
+        start_backend_listing(listed, UNSUPPORTED, UNSUPPORTED, "").await;
+    let adopted = transport.protocol_version.read().clone();
+    let _ = transport.close().await;
+
+    let error = outcome.expect_err("a retry the backend still rejects is no session");
+    assert!(matches!(error, Error::Protocol(_)), "{error:?}");
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("even with negotiated version {listed}")),
+        "{error}"
+    );
+    assert_eq!(adopted, None, "a rejected retry adopts nothing");
+}
+
+/// MIK-8195 W7: the agreed revision is logged and adopted on a negotiated
+/// retry the backend accepts.
+#[tokio::test]
+async fn an_accepted_negotiated_retry_is_logged_and_adopted() {
+    let _log = verbose();
+    let selected = not_our_proposal("2025-06-18");
+    let (_workspace, transport, outcome) = start_backend(selected, selected).await;
+    outcome.expect("an accepted retry starts the backend");
+    let adopted = transport.protocol_version.read().clone();
+    let _ = transport.close().await;
+    assert_eq!(adopted.as_deref(), Some(selected));
+}
+
+/// MIK-8195 W7: a backend whose `initialize` fails for a reason other than
+/// the protocol version ends the start, and the error names only its code:
+/// the backend's own text may quote back a credential the gateway sent.
+#[test]
+fn a_non_version_initialize_error_ends_the_start_by_code_only() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let script = r#"while IFS= read -r request; do
+    id=$(printf '%s' "$request" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+    case "$request" in
+        *'"method":"initialize"'*)
+            printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32099,"message":"denied: QUOTED"}}\n' "$id"
+            ;;
+    esac
+done
+"#
+    .replace("QUOTED", NOT_A_VERSION);
+    std::fs::write(workspace.path().join("server.sh"), script).expect("write server");
+
+    let mut ended = None;
+    let records = crate::test_log_capture::records(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(async {
+                let transport = StdioTransport::new(
+                    "sh server.sh",
+                    HashMap::new(),
+                    Some(workspace.path().to_string_lossy().into_owned()),
+                    std::time::Duration::from_secs(10),
+                    None,
+                );
+                let outcome = transport.start().await;
+                let adopted = transport.protocol_version.read().clone();
+                let _ = transport.close().await;
+                ended = Some((outcome, adopted));
+            });
+    });
+    let (outcome, adopted) = ended.expect("the start ran");
+
+    let error = outcome.expect_err("a failed initialize is no session");
+    assert!(matches!(error, Error::Protocol(_)), "{error:?}");
+    assert!(
+        error.to_string().contains("backend error code -32099"),
+        "{error}"
+    );
+    assert!(!error.to_string().contains(NOT_A_VERSION), "{error}");
+    assert_eq!(adopted, None, "a failed initialize adopts nothing");
+
+    // Logs reach more readers than the caller: the backend's text must not
+    // reach a record either.
+    assert!(
+        !records.is_empty(),
+        "the capture must see the transport's records"
+    );
+    let leaked: Vec<_> = records
+        .iter()
+        .filter(|r| r.to_string().contains("sk-live"))
+        .collect();
+    assert!(leaked.is_empty(), "{leaked:#?}");
 }
 
 /// Neither a diagnostic nor the log may repeat what the backend sent: a

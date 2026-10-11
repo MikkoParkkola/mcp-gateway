@@ -325,9 +325,12 @@ impl StdioTransport {
             .read()
             .clone()
             .unwrap_or_else(|| PROTOCOL_VERSION.to_string());
+        // Computed once, outside the log macros, so each macro head carries
+        // only plain locals.
+        let command = self.diagnostic_command();
 
         debug!(
-            command = %self.diagnostic_command(),
+            command = %command,
             version = %version,
             "Sending MCP initialize"
         );
@@ -340,8 +343,7 @@ impl StdioTransport {
             // text and may quote back a credential the gateway passed it.
             if !is_version_mismatch_error(&error.message) {
                 return Err(Error::Protocol(format!(
-                    "Initialize failed for '{}': backend error code {}",
-                    self.diagnostic_command(),
+                    "Initialize failed for '{command}': backend error code {}",
                     error.code
                 )));
             }
@@ -350,14 +352,13 @@ impl StdioTransport {
                 .and_then(negotiate_best_version)
             else {
                 return Err(Error::Protocol(format!(
-                    "Protocol version negotiation failed for '{}': server rejected {version}, \
+                    "Protocol version negotiation failed for '{command}': server rejected {version}, \
                      no compatible version found (backend error code {})",
-                    self.diagnostic_command(),
                     error.code
                 )));
             };
             warn!(
-                command = %self.diagnostic_command(),
+                command = %command,
                 rejected = %version,
                 negotiated = %negotiated,
                 "Retrying initialize with negotiated protocol version"
@@ -365,9 +366,8 @@ impl StdioTransport {
             response = self.init_request(initialize_params(negotiated)).await?;
             if let Some(ref error) = response.error {
                 return Err(Error::Protocol(format!(
-                    "Initialize failed for '{}' even with negotiated version {negotiated}: \
+                    "Initialize failed for '{command}' even with negotiated version {negotiated}: \
                      backend error code {}",
-                    self.diagnostic_command(),
                     error.code
                 )));
             }
@@ -381,7 +381,7 @@ impl StdioTransport {
         let selected = checked_selection(response.result.as_ref(), Selectable::LegacyOrModern)?
             .unwrap_or(proposed);
         info!(
-            command = %self.diagnostic_command(),
+            command = %command,
             requested = %proposed,
             negotiated = %selected,
             "Protocol version agreed"
