@@ -548,6 +548,11 @@ impl CollusionDetector {
         self.views.budget.used()
     }
 
+    /// View cuts refused for lack of `VIEW_BYTES` (A5).
+    pub(crate) fn view_cut_refusals(&self) -> u64 {
+        self.views.cut_refusals.load(Ordering::Relaxed)
+    }
+
     /// Second records of one digest, each a no-op (A2).
     pub(crate) fn double_records(&self) -> u64 {
         self.views.double_records.load(Ordering::Relaxed)

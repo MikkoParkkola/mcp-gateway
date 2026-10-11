@@ -549,3 +549,59 @@ fn an_unread_receipt_holds_only_what_its_record_keeps() {
         "an unread receipt held {held} fingerprints until record"
     );
 }
+
+/// `MIK-8066` A5: a view cut is charged to `VIEW_BYTES` from retention to
+/// record. Four 200 KiB steps read through one view, with room for the view
+/// and about two cuts: some cut is held (charged), at least one is refused
+/// (counted), the held charge never passes the budget, and the refused
+/// step's excuse is marked lost at record (fail closed).
+#[test]
+fn view_cuts_past_the_budget_are_refused_and_marked_lost() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    let plan: Vec<(String, Value)> = (0..4u64).map(|i| step_of(1301 + i, 200 * 1024)).collect();
+    let answer = json!({
+        "a": plan[0].0, "b": plan[1].0, "c": plan[2].0, "d": plan[3].0,
+        "pad": filler(1310, 400 * 1024),
+    });
+    let staged = PlanStaging::default();
+    staged.set_caller("alice");
+    let digests: Vec<_> = plan
+        .iter()
+        .map(|(_, step)| {
+            fw.receipt_digest("alpha", "read", step, Some(&staged))
+                .expect("staged")
+        })
+        .collect();
+    let delivered = fw
+        .delivered_for_plan(&answer, Some(&staged))
+        .expect("relay detection on");
+    assert!(
+        delivered.is_view(),
+        "premise: the answer was read as a view"
+    );
+    let view_only = detector.view_bytes();
+    let cap = view_only + 1024 * 1024;
+    detector.set_view_budget(cap);
+    let kept: Vec<_> = digests
+        .into_iter()
+        .map(|digest| fw.retain_delivered(digest, &delivered, None))
+        .collect();
+    assert!(detector.view_bytes() > view_only, "no view cut was charged");
+    assert!(
+        detector.view_bytes() <= cap,
+        "the cut charges passed the budget"
+    );
+    assert!(
+        detector.view_cut_refusals() >= 1,
+        "no view cut was refused past the budget"
+    );
+    drop(delivered);
+    for digest in &kept {
+        fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", digest);
+    }
+    assert!(
+        detector.excuse_lost(SOURCE, "alice"),
+        "a refused view cut did not mark the excuse lost"
+    );
+}

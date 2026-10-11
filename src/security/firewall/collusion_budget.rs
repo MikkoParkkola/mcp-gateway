@@ -109,6 +109,8 @@ pub(crate) struct ViewLimits {
     pub(crate) evidence_bytes: AtomicUsize,
     /// Second records of one digest (A2): counted no-ops.
     pub(crate) double_records: AtomicU64,
+    /// View cuts refused for lack of `VIEW_BYTES` (A5): thinned, excuse lost.
+    pub(crate) cut_refusals: AtomicU64,
 }
 
 impl ViewLimits {
@@ -122,6 +124,7 @@ impl ViewLimits {
             selection_refusals: AtomicU64::new(0),
             evidence_bytes: AtomicUsize::new(0),
             double_records: AtomicU64::new(0),
+            cut_refusals: AtomicU64::new(0),
         }
     }
 
