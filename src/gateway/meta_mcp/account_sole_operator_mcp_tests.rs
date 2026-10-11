@@ -21,6 +21,12 @@ use crate::gateway::server::account_bindings::ServeMode;
 const BACKEND: &str = "work-mail";
 const NOT_CONNECTED: &str = "no connected account";
 const NO_IDENTITY: &str = "no verified end-user identity";
+/// The answer to a caller with no principal on a `required` per-user
+/// backend: it lacks every tool there, so its call answers as an unknown
+/// name, before any resolution (MIK-8356, lead ruling 2026-10-11; design
+/// R3.7). It replaces the identity refusal for that caller, which named the
+/// backend.
+const ABSENT: &str = "-32601";
 
 fn api_key(name: &str, secret: &[u8]) -> ApiKeyConfig {
     ApiKeyConfig {
@@ -117,7 +123,7 @@ async fn multi_key_http_caller_without_identity_is_still_refused() {
     )
     .await;
     assert!(
-        error.contains(NO_IDENTITY) && !error.contains(NOT_CONNECTED),
+        error.contains(ABSENT) && !error.contains(NOT_CONNECTED),
         "a multi-key gateway must refuse before any mint: {error}"
     );
     assert_eq!(dispatched, 0);
@@ -128,7 +134,7 @@ async fn multi_key_http_caller_without_identity_is_still_refused() {
 async fn anonymous_caller_on_a_sole_operator_deployment_is_refused() {
     let (error, dispatched) = refusal(ServeMode::Stdio, auth(false, Vec::new(), false), None).await;
     assert!(
-        error.contains(NO_IDENTITY) && !error.contains(NOT_CONNECTED),
+        error.contains(ABSENT) && !error.contains(NOT_CONNECTED),
         "an unauthenticated caller must never be the sole operator: {error}"
     );
     assert_eq!(dispatched, 0);
@@ -153,7 +159,7 @@ async fn operator_without_identity_is_refused_on_a_non_account_backend() {
         .expect_err("a propagation backend must refuse a caller with no identity")
         .to_string();
     assert!(
-        error.contains(NO_IDENTITY) && !error.contains(NOT_CONNECTED),
+        error.contains(ABSENT) && !error.contains(NOT_CONNECTED),
         "{error}"
     );
     assert_eq!(dispatches.count(), 0);

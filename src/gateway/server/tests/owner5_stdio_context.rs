@@ -160,10 +160,11 @@ async fn stdio_refuses_an_account_dependent_call_and_serves_a_local_mutation() {
     )
     .await
     .expect("an identified stdio call returns a response");
+    // A stdio caller has no principal on this `required` backend, so it lacks
+    // the tool: refused as an absent name, before any resolution (MIK-8356,
+    // lead ruling 2026-10-11).
     assert!(
-        refused
-            .to_string()
-            .contains("no verified end-user identity"),
+        refused.to_string().contains("-32601"),
         "the identity-requiring backend must refuse a stdio caller: {refused}"
     );
     assert_eq!(
