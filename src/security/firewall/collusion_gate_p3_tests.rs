@@ -426,3 +426,67 @@ fn a_step_evidence_charge_survives_an_abandoned_sketch_until_recorded() {
         "recorded evidence kept its charge"
     );
 }
+
+/// A deferred step of 40 short leaves (32 chars each, under the k-gram), kept
+/// to an over-bound answer that delivers them, retained `times` times
+/// through the view, then recorded for alice. Returns the run bob relays:
+/// 30 of the leaves run together, text only the leaves' joined forms hold.
+fn short_leaf_step_kept_through_a_view(fw: &Firewall, times: usize) -> String {
+    let leaves: Vec<String> = (0..40u64).map(|i| filler(1100 + i, 32)).collect();
+    let step = json!({ "parts": leaves });
+    let staged = PlanStaging::default();
+    staged.set_caller("alice");
+    let digest = fw
+        .receipt_digest("alpha", "read", &step, Some(&staged))
+        .expect("staged");
+    let answer = json!({ "parts": leaves, "pad": filler(1150, 1_200 * 1024) });
+    let delivered = fw
+        .delivered_for_plan(&answer, Some(&staged))
+        .expect("relay detection on");
+    assert!(
+        delivered.is_view(),
+        "premise: the answer was read as a view"
+    );
+    let mut kept = digest;
+    for _ in 0..times {
+        kept = fw.retain_delivered(kept, &delivered, None);
+    }
+    let kept = fw.cap_kept(kept);
+    fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &kept);
+    leaves[5..35].concat()
+}
+
+/// `MIK-8066` 2b seat C1 (gpt): view retention keeps every form the leaves
+/// path fingerprints, so a step of leaves shorter than a k-gram is still
+/// evidence for its run-together text: bob is refused, alice excused.
+#[test]
+fn a_short_leaf_step_kept_through_a_view_is_evidence_for_its_joined_text() {
+    let fw = firewall();
+    let run = short_leaf_step_kept_through_a_view(&fw, 1);
+    // Before anyone else holds the text, only alice's record can make bob's
+    // relay of it one.
+    assert!(
+        relays(&fw, "bob", &run),
+        "a short-leaf step's joined text was no evidence on a view"
+    );
+    deliver(&fw, "carol", &run);
+    assert!(!relays(&fw, "alice", &run), "the step's holder was refused");
+}
+
+/// `MIK-8066` 2b seat C2 (gpt, muse): the rewritten route retains a receipt
+/// twice. A second view retention keeps the first one's cut, so the
+/// evidence and the excuse survive: bob refused, alice excused.
+#[test]
+fn a_second_view_retention_keeps_the_first_ones_cut() {
+    let fw = firewall();
+    let run = short_leaf_step_kept_through_a_view(&fw, 2);
+    assert!(
+        relays(&fw, "bob", &run),
+        "a second view retention erased the evidence"
+    );
+    deliver(&fw, "carol", &run);
+    assert!(
+        !relays(&fw, "alice", &run),
+        "a second view retention erased the excuse"
+    );
+}
