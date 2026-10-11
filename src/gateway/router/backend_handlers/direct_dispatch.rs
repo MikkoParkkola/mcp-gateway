@@ -23,6 +23,7 @@ use super::{BackendAuthContext, sign_and_record};
 use crate::gateway::meta_mcp::invoke::dispatch_guards::{Admission, BackendCall};
 use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
+use crate::idempotency::GuardOutcome;
 use crate::protocol::meta::Era;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
@@ -45,6 +46,8 @@ pub(super) struct Admitted<'a> {
     pub(super) auth: BackendAuthContext<'a>,
     pub(super) sanitized: Option<Value>,
     pub(super) idem_reservation: Option<crate::idempotency::IdempotencyReservation>,
+    /// Stage 7b's execution lease (`direct_idempotency`), held through dispatch.
+    pub(super) lease: Option<crate::gateway::meta_mcp::admission::SyncLease>,
     /// The signing nonce this call registered, if it registered one.
     pub(super) nonce: Option<AdmittedNonce>,
     /// MIK-7642 PR.C: this call's explicit-cancel registration, held for the
@@ -216,34 +219,42 @@ pub(super) async fn admit<'a>(
         auth,
         sanitized: None,
         idem_reservation: None,
+        lease: None,
         nonce: None,
         cancel_entry,
         cancel_on,
     };
     guard_and_sanitize(scope, envelope, propagation, &mut admitted).await?;
-    let guarded = idempotency_outcome(scope, envelope, preflight, propagation)?;
+    let mut guarded = idempotency_outcome(scope, envelope, preflight, propagation)?;
+    let (lease, replay) =
+        super::direct_idempotency::execution_lease(scope, envelope, preflight, &mut guarded)?;
+    admitted.lease = lease;
     admitted.nonce = admit_signing_nonce(scope, preflight)?;
-    match guarded {
-        Some(crate::idempotency::GuardOutcome::CachedResult(cached)) => {
-            crate::gateway::meta_mcp::invoke::audit::note_cached();
-            // A replay is a delivery too: it renews this caller's own copy,
-            // shaped for this request's era (MIK-8022).
-            let mut response = JsonRpcResponse::success(id.clone(), cached);
-            replay_scan(state, (&admitted.call, envelope), client, &mut response);
-            let auth = (admitted.auth, admitted.call.tool);
-            let response = finish_tail(scope, envelope, preflight, auth, response);
-            return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
+    // A 7a hit, else a 7b replay (whose 7a reservation is already given back).
+    let replay = match guarded {
+        Some(GuardOutcome::CachedResult(cached)) => {
+            Some(JsonRpcResponse::success(id.clone(), cached))
         }
-        Some(crate::idempotency::GuardOutcome::CachedError(error)) => {
+        Some(GuardOutcome::CachedError(error)) => {
             crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
             let mut response = super::cached_error_response(Some(id.clone()), &error);
             replay_scan(state, (&admitted.call, envelope), client, &mut response);
             return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
         }
-        Some(crate::idempotency::GuardOutcome::Proceed(reservation)) => {
+        Some(GuardOutcome::Proceed(reservation)) => {
             admitted.idem_reservation = Some(reservation);
+            replay
         }
-        None => {}
+        None => replay,
+    };
+    if let Some(mut response) = replay {
+        crate::gateway::meta_mcp::invoke::audit::note_cached();
+        // A replay is a delivery too: it renews this caller's own copy,
+        // shaped for this request's era (MIK-8022).
+        replay_scan(state, (&admitted.call, envelope), client, &mut response);
+        let auth = (admitted.auth, admitted.call.tool);
+        let response = finish_tail(scope, envelope, preflight, auth, response);
+        return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
     }
     Ok(admitted)
 }
@@ -296,6 +307,7 @@ async fn forward_sanitized(
         }
     };
     // Forward the sanitized params to the backend
+    super::direct_idempotency::mark(admitted.lease.as_ref());
     let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(super::dispatch_armed(
         admitted.idem_reservation.as_mut(),
@@ -412,6 +424,7 @@ async fn forward_plain(
             return Err(refused);
         }
     };
+    super::direct_idempotency::mark(admitted.lease.as_ref());
     let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(super::dispatch_armed(
         admitted.idem_reservation.as_mut(),
@@ -518,6 +531,10 @@ async fn finish_response(
     // Settled before shaping: the cache holds no era-specific member, so a
     // replay is shaped for its own request's era (MIK-8022).
     super::settle_direct_idempotency(admitted.idem_reservation.as_mut(), &response);
+    // 7b on the same answer, unshaped and unsigned, as 7a stores it.
+    if let Some(lease) = admitted.lease.take() {
+        lease.complete_delivery(&response, None);
+    }
     if method == "tools/list"
         && envelope.era != Era::Modern
         && let Some(result) = response.result.as_mut().and_then(Value::as_object_mut)
@@ -629,6 +646,7 @@ fn park_if_interim(
         .and_then(|response| response.result.as_ref())
         .is_some_and(crate::protocol::mrtr::InputRequired::claims_input_required);
     if asked {
+        super::direct_idempotency::withdraw(admitted.lease.as_ref());
         admitted.idem_reservation.take()
     } else {
         None
@@ -645,7 +663,10 @@ fn settle_parked(
     admitted: &mut Admitted<'_>,
 ) {
     match (parked, guarded) {
-        (Some(reservation), Err(_)) => admitted.idem_reservation = Some(reservation),
+        (Some(reservation), Err(_)) => {
+            super::direct_idempotency::mark(admitted.lease.as_ref());
+            admitted.idem_reservation = Some(reservation);
+        }
         (Some(mut reservation), Ok(_)) => reservation.release(),
         (None, _) => {}
     }
@@ -697,6 +718,7 @@ async fn answer_failure(mut admitted: Admitted<'_>, e: crate::Error, method: &st
     // Nothing reached the backend, so the nonce is given back (MIK-7698).
     if e.is_pre_dispatch() {
         give_back_nonce(admitted.failed.state, &mut admitted);
+        super::direct_idempotency::withdraw(admitted.lease.as_ref());
     }
     // MIK-7642 PR.C: the caller's own cancel is its choice, not a failure: no
     // breaker strike, and answered 200 as on `/mcp`. The key still settles as

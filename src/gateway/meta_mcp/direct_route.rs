@@ -88,6 +88,63 @@ impl MetaMcp {
         crate::idempotency::enforce(cache, &key, &format!("{base}{discriminator}")).map(Some)
     }
 
+    /// Stage 7b on the direct route (MIK-8154.LEASE.1, gap 11): the shared
+    /// execution lease `/mcp`, stdio and tasks take, so one key covers one
+    /// backend operation whichever route sends it.
+    ///
+    /// The owner is spelled as `admit_meta_sync` spells it (MIK-8193): the
+    /// routed task owner, else the caller's credential or proven subject. The
+    /// operation is the one `gateway_invoke` of the same target admits under,
+    /// built from the same parse of `arguments`, so the two routes collide in
+    /// the store instead of each admitting the operation once. The
+    /// representation names the direct route: a stored result replays only to
+    /// a request that would have produced it, and a cross-route reuse of the
+    /// key is the store's mismatch refusal.
+    ///
+    /// # Errors
+    ///
+    /// The store's refusals (in flight, mismatch, sealed, unavailable) and a
+    /// malformed retry, each before anything dispatched.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn direct_route_admission(
+        &self,
+        owner: super::AdmissionOwner<'_>,
+        (credential_principal, grant_subject, caller_key): (
+            Option<&str>,
+            Option<&crate::identity_grants::GrantSubject>,
+            Option<&str>,
+        ),
+        is_modern: bool,
+        verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+        retry: &crate::protocol::mrtr::RetryFields,
+        (server, tool, params): (&str, &str, Option<&Value>),
+        id: &crate::protocol::RequestId,
+    ) -> Result<super::admission::SyncAdmission> {
+        let owner_principal = owner.principal().or_else(|| {
+            support::credential_or_subject_owner(credential_principal, grant_subject, caller_key)
+        });
+        let empty = Value::Object(serde_json::Map::new());
+        let params = params.unwrap_or(&empty);
+        // The direct route forwards `arguments` as sent and never refused a
+        // malformed one; it keeps that, keyed by the value as sent.
+        let mut arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments_cow(params)
+            .unwrap_or_else(|_| {
+                std::borrow::Cow::Borrowed(params.get("arguments").unwrap_or(&empty))
+            });
+        let full = super::admission::execution_arguments_cow(&mut arguments);
+        self.admit_sync(
+            is_modern,
+            verified_identity,
+            owner_principal,
+            retry,
+            server,
+            tool,
+            &arguments,
+            || serde_json::json!({"route": "direct", "server": server, "tool": tool, "full": full}),
+            id,
+        )
+    }
+
     /// #1962: arm a direct-route reservation for its backend dispatch, so a
     /// caller that disconnects mid-call does not free the key.
     pub(crate) fn arm_direct_dispatch(

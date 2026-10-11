@@ -66,10 +66,12 @@ fn sources() -> Vec<(String, String)> {
 
 /// ADM-SWEEP (`MIK-8193`): every production admission of a call goes through
 /// one owner spelling. The synchronous lease is entered only through
-/// `admit_meta_sync`, each call site naming its `AdmissionOwner` (HTTP: the
-/// routed task owner; stdio: the reserved local owner), and an execution
-/// admission request is built only at the two reviewed sites. A new path
-/// fails here until it is reviewed into the lists.
+/// `admit_meta_sync` and the direct route's `direct_route_admission`
+/// (MIK-8154), each call site naming its `AdmissionOwner` (HTTP and the direct
+/// route: the routed task owner; stdio: the reserved local owner);
+/// `admit_sync` is called only from those two; and an execution admission
+/// request is built only at the reviewed sites. A new path fails here until it
+/// is reviewed into the lists.
 #[test]
 fn adm_sweep_every_admission_uses_one_owner_spelling() {
     let expected_sync: BTreeMap<&str, &str> = [
@@ -81,6 +83,10 @@ fn adm_sweep_every_admission_uses_one_owner_spelling() {
             "gateway/server/stdio_dispatch.rs",
             "AdmissionOwner::local_operator()",
         ),
+        (
+            "gateway/router/backend_handlers/direct_idempotency.rs",
+            "AdmissionOwner::routed(&admission_owner)",
+        ),
     ]
     .into_iter()
     .collect();
@@ -91,21 +97,28 @@ fn adm_sweep_every_admission_uses_one_owner_spelling() {
     ]
     .into_iter()
     .collect();
+    let expected_admit_sync: BTreeSet<&str> = [
+        "gateway/meta_mcp/admission.rs",
+        "gateway/meta_mcp/direct_route.rs",
+    ]
+    .into_iter()
+    .collect();
     let mut sync_sites = BTreeMap::new();
     let mut mode_sites = BTreeSet::new();
+    let mut admit_sync_sites = BTreeSet::new();
     for (rel, text) in sources() {
-        for (at, _) in text.match_indices(".admit_meta_sync(") {
-            let owner = text[at..]
-                .split(',')
-                .next()
-                .map(|first| {
-                    first
-                        .trim_start_matches(".admit_meta_sync(")
-                        .trim()
-                        .to_owned()
-                })
-                .unwrap_or_default();
-            sync_sites.insert(rel.clone(), owner);
+        for entry in [".admit_meta_sync(", ".direct_route_admission("] {
+            for (at, _) in text.match_indices(entry) {
+                let owner = text[at..]
+                    .split(',')
+                    .next()
+                    .map(|first| first.trim_start_matches(entry).trim().to_owned())
+                    .unwrap_or_default();
+                sync_sites.insert(rel.clone(), owner);
+            }
+        }
+        if text.contains(".admit_sync(") {
+            admit_sync_sites.insert(rel.clone());
         }
         if text.contains("mode: Mode::Sync") || text.contains("mode: Mode::Task") {
             mode_sites.insert(rel.clone());
@@ -126,6 +139,11 @@ fn adm_sweep_every_admission_uses_one_owner_spelling() {
     assert_eq!(
         sync_files, expected_files,
         "admit_meta_sync call sites changed"
+    );
+    let admit_sync: BTreeSet<&str> = admit_sync_sites.iter().map(String::as_str).collect();
+    assert_eq!(
+        admit_sync, expected_admit_sync,
+        "admit_sync called outside the two owner-spelling entry points"
     );
     let modes: BTreeSet<&str> = mode_sites.iter().map(String::as_str).collect();
     assert_eq!(

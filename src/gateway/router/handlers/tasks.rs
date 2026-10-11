@@ -126,7 +126,7 @@ pub(super) fn route_task_owner(
 /// anonymous owner, which is no principal (a keyed sync call stays refused).
 /// The synchronous lease admits under it, so one key cannot admit one
 /// operation once per spelling (MIK-8193).
-pub(super) fn route_owners(
+pub(in crate::gateway::router) fn route_owners(
     state: &AppState,
     verified_identity: Option<&VerifiedIdentity>,
     agent: Option<&OAuthAgentIdentity>,

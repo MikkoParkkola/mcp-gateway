@@ -69,11 +69,11 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
                 Invoke | Surfaced | Direct | TaskSubmit | Stdio => Applies,
                 TaskWorker => NotApplicable(Na::DecidedAtSubmit),
             },
-            // admit_meta_sync only at dispatch_tools_call.rs:503 and
-            // stdio_dispatch.rs:522; tasks skip it (admission.rs:523).
+            // admit_meta_sync at dispatch_tools_call.rs and stdio_dispatch.rs;
+            // the direct route's 7b, `direct_route_admission`, at
+            // direct_idempotency.rs (MIK-8154.LEASE.1); tasks skip it.
             Stage::Lease => match route {
-                Invoke | Surfaced | Stdio => Applies,
-                Direct => ExpectedGap(Ticket::Mik8154),
+                Invoke | Surfaced | Stdio | Direct => Applies,
                 TaskSubmit | TaskWorker => NotApplicable(Na::DecidedAtSubmit),
             },
             // An admission refusal of a call without task intent gives the

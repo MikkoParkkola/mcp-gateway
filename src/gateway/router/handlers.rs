@@ -46,11 +46,13 @@ pub(super) use health::health_handler;
 pub(super) use metrics_scrape::metrics_handler;
 pub(crate) use modern_response::shape_modern_response;
 pub(super) use owner::owner_of;
+// The direct route admits its execution lease under the same owner (MIK-8154).
 #[cfg(test)]
 use owner::session_owner;
 pub(super) use session_end::{mcp_delete_handler, sse_deprecated_handler};
 pub(super) use sse::mcp_sse_handler;
 use sse::unsupported_version_error;
+pub(super) use tasks::route_owners;
 
 /// The caller's `Mcp-Session-Id`, one rule for every session route: missing,
 /// non-UTF-8, empty and whitespace-only values are all "no session" (F9).

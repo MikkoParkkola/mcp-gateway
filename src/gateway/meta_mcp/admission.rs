@@ -153,7 +153,7 @@ pub(crate) fn execution_arguments(arguments: &mut Value) -> bool {
 
 /// [`execution_arguments`] on a possibly borrowed value: it is copied only
 /// when there is a control key to strip (MIK-8014).
-fn execution_arguments_cow(arguments: &mut std::borrow::Cow<'_, Value>) -> bool {
+pub(super) fn execution_arguments_cow(arguments: &mut std::borrow::Cow<'_, Value>) -> bool {
     if arguments.get("_full").is_some() || arguments.get("_claim").is_some() {
         return execution_arguments(arguments.to_mut());
     }
