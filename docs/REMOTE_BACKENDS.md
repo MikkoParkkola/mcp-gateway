@@ -219,6 +219,12 @@ lists the backend's tools once, as that caller, before judging the call (see
 | `standard` | JSON Schema's default: only `additionalProperties: false` closes a level. |
 | `off` | No check. |
 
+On a backend with identity propagation (each caller has its own catalogue), the mode governs only
+the argument keys. Whatever its value, a tool the caller's own catalogue withholds (an invalid
+`inputSchema`, a poisoned description) or does not list answers JSON-RPC `-32601`, exactly as a
+name the gateway does not know, and nothing is sent. The shared catalogue is never consulted for
+it. See [`upgrading.d/8356.md`](../upgrading.d/8356.md).
+
 ## Tools with a poisoned description
 
 Every tool a backend lists is checked with the tool-poisoning rule (AX-010). A tool that fails it
