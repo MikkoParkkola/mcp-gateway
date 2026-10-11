@@ -42,6 +42,16 @@ impl Presented {
         }
     }
 
+    /// The captured session and bearer digests, for the row that pins the
+    /// capture happening before `intake` takes the headers off the request.
+    #[cfg(test)]
+    pub(super) fn digests_for_test(&self) -> (Option<&str>, Option<&str>) {
+        (
+            self.session_sha256.as_deref(),
+            self.bearer_sha256.as_deref(),
+        )
+    }
+
     /// The static bearer's binding: its full digest. With no bearer header to
     /// hash there is no binding, and a bound kind without its binding is
     /// refused at the re-check (fail closed), never kept on the 12-hex
