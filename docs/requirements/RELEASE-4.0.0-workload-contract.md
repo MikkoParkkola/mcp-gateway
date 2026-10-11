@@ -56,17 +56,26 @@ Legacy real-backend cells, interleaved, the only comparison that gates:
 
 | Cell | Ref | Port | Protocol path |
 |---|---|---|---|
-| A | `v3.5.0` | 39420 | legacy |
-| B | `v3.5.1` | 39421 | legacy |
-| C | `HEAD` (4.0.0) | 39422 | legacy |
+| A | `v3.5.0` | 29420 | legacy |
+| B | `v3.5.1` | 29421 | legacy |
+| C | `HEAD` (4.0.0) | 29422 | legacy |
 
 4.0.0-only cells, measured and reported, never compared (no counterpart arm
 exists):
 
 | Cell | Ref | Port | Protocol path |
 |---|---|---|---|
-| D | `HEAD` | 39423 | modern |
-| E | `HEAD` | 39424 | mixed-era |
+| D | `HEAD` | 29423 | modern |
+| E | `HEAD` | 29424 | mixed-era |
+
+Amended 2026-10-11. The cell ports moved from 39420-39424 to 29420-29424,
+below Linux's default ephemeral range (32768-60999). Inside that range, any
+live outgoing connection on the host can draw a cell's port, so that cell's
+gateway cannot bind: the graded run of 2026-10-11 voided at rep C9 on port
+39422 that way. A port is where a gateway listens on loopback; no measured
+quantity, cell, ref, schedule or pass rule changes. `schedule.CELL_PORTS` is
+the one list, and the runner refuses a run before any rep when a cell port
+falls inside the host's ephemeral range.
 
 Plus the separately labelled no-backend control from NFR.PERF.1.
 
