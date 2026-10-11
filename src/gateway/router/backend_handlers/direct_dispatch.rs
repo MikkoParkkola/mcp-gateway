@@ -464,7 +464,7 @@ type PlainSend<'a> = std::pin::Pin<
 /// is not served (-32601). A refusal gives back what the call took.
 fn plain_send<'a>(
     scope: Scope<'a>,
-    envelope: &Envelope,
+    envelope: &'a Envelope,
     propagation: &'a Propagation,
     admitted: &mut Admitted<'_>,
 ) -> Result<PlainSend<'a>, Rejection> {
