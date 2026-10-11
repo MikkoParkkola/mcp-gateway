@@ -296,12 +296,25 @@ impl UpstreamRecovery for NativeUpstreamTasks {
                 ),
             )
             .await;
-            if matches!(sent, Ok(Ok(_))) {
-                CancelDelivery::Confirmed
-            } else {
-                let name = handle.backend.as_str();
-                tracing::warn!(backend = name, "upstream tasks/cancel not confirmed");
-                CancelDelivery::Failed
+            let name = handle.backend.as_str();
+            match sent {
+                Ok(Ok(_)) => CancelDelivery::Confirmed,
+                // A login is needed first (an expired token on a connected
+                // backend): not sent, so not counted against the bound.
+                Ok(Err(
+                    crate::Error::AuthorizationRequired { .. }
+                    | crate::Error::AuthorizationPending { .. },
+                )) => {
+                    tracing::warn!(
+                        backend = name,
+                        "upstream tasks/cancel not sent yet: login required"
+                    );
+                    CancelDelivery::NotReady
+                }
+                _ => {
+                    tracing::warn!(backend = name, "upstream tasks/cancel not confirmed");
+                    CancelDelivery::Failed
+                }
             }
         })
         .await

@@ -174,11 +174,15 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
     let mut outcome = round_failure.map_or(Ok(()), Err);
     // Rows whose upstream cancel is still unconfirmed: deleting one ends its
     // retries, which an operator must hear (MIK-8347).
-    let pending: std::collections::HashSet<String> = service
+    let pending: std::collections::HashMap<String, (String, String)> = service
         .store
         .pending_cancels(None, i64::MAX)
         .into_iter()
-        .map(|(_, id)| id)
+        .filter_map(|(owner, id)| {
+            let send = service.store.pending_cancel(&owner, &id)?;
+            let backend = send.backend.unwrap_or_default();
+            Some((id, (backend, send.handle)))
+        })
         .collect();
     for (id, revision) in candidates {
         match service
@@ -188,9 +192,12 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
         {
             Ok(()) => {
                 service.cancel_sends.release_row(&id);
-                if pending.contains(&id) {
+                if let Some((backend, handle)) = pending.get(&id) {
+                    let (backend, handle) = (backend.as_str(), handle.as_str());
                     tracing::error!(
                         task_id = %id,
+                        backend,
+                        handle,
                         reason = "expired",
                         "upstream tasks/cancel given up; the upstream job may still be running"
                     );
