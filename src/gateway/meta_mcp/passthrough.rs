@@ -15,6 +15,14 @@ impl MetaMcp {
         &self,
         server: &str,
     ) -> Option<std::sync::Arc<crate::backend::Backend>> {
+        // A name the capability provider answers runs there, outside any
+        // backend instance and its send check, so it is never exempt.
+        if self
+            .get_capabilities()
+            .is_some_and(|caps| caps.name == server)
+        {
+            return None;
+        }
         self.backends
             .get(server)
             .filter(|backend| backend.passthrough())

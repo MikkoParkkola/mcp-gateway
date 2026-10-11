@@ -317,13 +317,20 @@ pub(crate) fn judged_playbook() -> Option<String> {
 /// one intake judged the call exempt on (MIK-8154 F2); `None` when the call
 /// was not judged exempt on this backend's name, or on this very instance.
 pub(crate) fn changed_instance(backend: &crate::backend::Backend) -> Option<String> {
-    let judged = judged();
-    let (_, instance) = judged
-        .instances
-        .iter()
-        .find(|(name, _)| *name == backend.name)?;
-    (!std::ptr::eq(instance.as_ptr(), backend))
-        .then(|| "The backend changed after this call was admitted; retry the call".to_owned())
+    // Looked up in place: this runs on every send.
+    let differs = |judged: &Judged| {
+        judged
+            .instances
+            .iter()
+            .find(|(name, _)| *name == backend.name)
+            .map(|(_, instance)| !std::ptr::eq(instance.as_ptr(), backend))
+    };
+    let request = VISIBILITY_MEMO.try_with(|memo| differs(&memo.1.lock()));
+    let differs = request
+        .ok()
+        .flatten()
+        .or_else(|| WORKER_JUDGED.try_with(differs).ok().flatten())?;
+    differs.then(|| "The backend changed after this call was admitted; retry the call".to_owned())
 }
 
 /// Run a task's dispatch with what its submit judged (MIK-8154 C2e, F2), so
@@ -370,6 +377,7 @@ pub(crate) mod seams {
 
     /// Run `hook` once, the next time `/mcp` intake on this thread has made
     /// its sanitize decision (MIK-8154 NP3).
+    #[cfg(feature = "firewall")]
     pub(crate) fn after_intake(hook: impl FnOnce() + 'static) {
         AFTER_INTAKE.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     }
@@ -383,6 +391,7 @@ pub(crate) mod seams {
 
     /// Run `hook` once, the next time a task worker on this thread starts its
     /// dispatch: between the submit's intake and the run (MIK-8154 C2e2).
+    #[cfg(feature = "firewall")]
     pub(crate) fn before_task_dispatch(hook: impl FnOnce() + 'static) {
         BEFORE_TASK_DISPATCH.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     }

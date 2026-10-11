@@ -283,6 +283,7 @@ pub(super) async fn intake(
         && let Err(e) = crate::security::sanitize::validate_protocol_fields(
             &request,
             &crate::gateway::PROTOCOL_NONCES,
+            crate::security::sanitize::ProtocolRoute::Meta,
         )
     {
         return Err(build_error_response(

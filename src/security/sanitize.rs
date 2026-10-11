@@ -224,7 +224,7 @@ pub(crate) fn validate_protocol_text(text: &str) -> Result<()> {
 }
 
 mod protocol;
-pub(crate) use protocol::validate_protocol_fields;
+pub(crate) use protocol::{ProtocolRoute, validate_protocol_fields};
 
 /// The one sanitize step (MIK-8154 SAN.1): the whole request, `id` kept as is
 /// (validated); a request whose every target is `passthrough` skips it.
@@ -241,12 +241,13 @@ pub(crate) fn sanitize_request(request: &Value) -> Result<Value> {
     }
     let mut sanitized = serde_json::Map::with_capacity(map.len());
     for (key, value) in map {
+        let clean_key = sanitize_string(key)?;
         let clean = if key == "id" {
             value.clone()
         } else {
-            protocol::sanitize_value(value)?
+            protocol::sanitize_value(&clean_key, value)?
         };
-        sanitized.insert(sanitize_string(key)?, clean);
+        sanitized.insert(clean_key, clean);
     }
     Ok(Value::Object(sanitized))
 }

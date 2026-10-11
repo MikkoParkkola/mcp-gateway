@@ -240,6 +240,7 @@ impl Gateway {
             crate::security::sanitize::validate_protocol_fields(
                 request,
                 &crate::gateway::PROTOCOL_NONCES,
+                crate::security::sanitize::ProtocolRoute::Meta,
             )
             .map_err(|error| {
                 JsonRpcResponse::error(None, -32600, error.to_string()).to_value_lossy()

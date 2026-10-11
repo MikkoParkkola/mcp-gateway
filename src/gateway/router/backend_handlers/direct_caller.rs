@@ -241,6 +241,7 @@ pub(super) async fn read_envelope(
         let sanitized = crate::security::sanitize::validate_protocol_fields(
             &json_request,
             &crate::gateway::PROTOCOL_NONCES,
+            crate::security::sanitize::ProtocolRoute::Direct,
         )
         .and_then(|()| {
             if let Some(instance) = state.meta_mcp.passthrough_instance(name) {

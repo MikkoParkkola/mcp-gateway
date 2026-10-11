@@ -266,9 +266,9 @@ impl Backend {
     ) -> Result<JsonRpcResponse> {
         let start_time = std::time::Instant::now();
 
-        // Every `tools/call` funnels through here, so a withheld tool (#1441)
-        // and a send by an instance other than the one an exempt call was judged
-        // on (MIK-8154 F2: a reload; nothing sent, so "unavailable") stop here.
+        // Every send funnels through here, so a withheld tool (#1441) and any
+        // send by an instance other than the one an exempt call was judged on
+        // (MIK-8154 F2: a reload; nothing sent, so "unavailable") stop here.
         if let Some(refusal) = self.blocked_call_refusal(method, params.as_ref(), identity_key) {
             return Err(refusal);
         }
@@ -610,16 +610,15 @@ impl Backend {
         params: Option<&Value>,
         identity_key: Option<&str>,
     ) -> Option<crate::Error> {
+        if let Some(reloaded) = crate::gateway::changed_instance(self) {
+            return Some(crate::Error::BackendUnavailable(reloaded));
+        }
         if method != "tools/call" {
             return None;
         }
-        crate::gateway::changed_instance(self)
-            .map(crate::Error::BackendUnavailable)
-            .or_else(|| {
-                let tool = params.and_then(|p| p.get("name")).and_then(Value::as_str)?;
-                self.blocked_tool_refusal(identity_key, tool)
-                    .map(crate::Error::Protocol)
-            })
+        let tool = params.and_then(|p| p.get("name")).and_then(Value::as_str)?;
+        self.blocked_tool_refusal(identity_key, tool)
+            .map(crate::Error::Protocol)
     }
 
     /// Pass-through mode: exempt from input sanitization on every route, and
