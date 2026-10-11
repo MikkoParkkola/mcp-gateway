@@ -118,8 +118,20 @@ async fn s9f_direct_route_keeps_a_tools_arguments_field() {
 /// `arguments.nonce` is business data, never refused as the signing nonce.
 #[tokio::test]
 async fn s4c_a_direct_tool_named_gateway_invoke_keeps_its_nonce_field() {
-    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
+    let fx = Box::pin(sanitizing(
+        true,
+        fixture_built(Answer::WithNote, |meta| meta),
+    ))
+    .await;
     let args = json!({"nonce": "a\u{7}b"});
     let (_, body) = post_direct(&fx, "alpha", "k-std", "gateway_invoke", args, None, None).await;
     assert!(!message(&body).contains(CONTROL_REFUSED), "s4c: {body}");
+    // Dispatched, its business field sanitized as any other value.
+    assert_eq!(calls(&fx), 1, "s4c: not dispatched: {body}");
+    let seen = fx.seen.lock().expect("seen lock").last().cloned();
+    assert_eq!(
+        seen.as_ref().and_then(|p| p.pointer("/arguments/nonce")),
+        Some(&json!("ab")),
+        "s4c: {seen:?}"
+    );
 }

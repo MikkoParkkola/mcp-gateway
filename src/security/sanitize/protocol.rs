@@ -55,11 +55,20 @@ pub(crate) fn validate_protocol_fields(
     for capabilities in [request.pointer("/params/capabilities"), client_capabilities] {
         capabilities.map_or(Ok(()), validate_keys)?;
     }
+    // The argument nonce, read where the meta route reads it: the name as
+    // dispatch routes on it (sanitized), `arguments` decoded when a client
+    // sent them as a JSON string, so neither form launders a dirty nonce.
     if route == ProtocolRoute::Meta
-        && request.pointer("/params/name").and_then(Value::as_str) == Some("gateway_invoke")
-        && let Some(Value::String(nonce)) = request.pointer("/params/arguments/nonce")
+        && let Some(Value::String(name)) = request.pointer("/params/name")
+        && sanitize_string(name).is_ok_and(|name| name == "gateway_invoke")
     {
-        validate_protocol_text(nonce)?;
+        let arguments = match request.pointer("/params/arguments") {
+            Some(Value::String(raw)) => serde_json::from_str::<Value>(raw).ok(),
+            other => other.cloned(),
+        };
+        if let Some(Value::String(nonce)) = arguments.as_ref().and_then(|a| a.get("nonce")) {
+            validate_protocol_text(nonce)?;
+        }
     }
     Ok(())
 }
@@ -165,21 +174,22 @@ fn sanitize_slot(value: &Value, slot: Slot) -> Result<Value> {
     }
 }
 
-/// A call's arguments: its inner `arguments` and each chain step's
-/// `arguments` are slots too; an inner slot holds a tool's own arguments,
+/// A meta call's arguments: its inner `arguments` and each `chain` step's
+/// `arguments` (`gateway_execute`, dispatched through the invoke funnel,
+/// which decodes them) are slots too; an inner slot holds a tool's own arguments,
 /// sanitized as plain values.
 fn sanitize_arguments(map: &serde_json::Map<String, Value>, slot: Slot) -> Result<Value> {
     match slot {
         Slot::Tool | Slot::Inner => sanitize_json_value(&Value::Object(map.clone())),
         Slot::Meta => sanitize_object(map, |key, member| match (key, member) {
             ("arguments", _) => Some(sanitize_slot(member, Slot::Inner)),
-            ("steps", Value::Array(steps)) => Some(sanitize_steps(steps)),
+            ("chain", Value::Array(steps)) => Some(sanitize_steps(steps)),
             _ => None,
         }),
     }
 }
 
-/// A chain's steps, each step's `arguments` an inner slot.
+/// A `chain`'s steps, each step's `arguments` an inner slot.
 fn sanitize_steps(steps: &[Value]) -> Result<Value> {
     steps
         .iter()
@@ -226,5 +236,37 @@ mod tests {
         assert_ne!(inner, opaque, "the meta slot was not re-encoded");
         let decoded: serde_json::Value = serde_json::from_str(inner).expect("JSON");
         assert_eq!(decoded, json!({"b": 1, "a": 2}));
+    }
+
+    /// Round-3 seats (both): `gateway_execute`'s `chain` step arguments are a
+    /// slot: an encoded NUL there is refused on the meta route.
+    #[test]
+    fn s9g_an_encoded_nul_in_a_chain_step_is_refused() {
+        let step =
+            json!({"tool": "alpha:read", "arguments": json!({"cmd": "a\u{0}b"}).to_string()});
+        let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "gateway_execute", "arguments": {"chain": [step]}}});
+        assert!(sanitize_request(&request, ProtocolRoute::Meta).is_err());
+    }
+
+    /// Round-3 seat muse 2 and 4: `gateway_invoke`'s argument nonce is
+    /// refused when dirty whether `arguments` is an object or a JSON string,
+    /// and whether or not the tool name carries a strippable character.
+    #[test]
+    fn s4e_the_invoke_nonce_is_checked_in_every_form() {
+        use super::validate_protocol_fields;
+        let nonce_args = json!({"server": "alpha", "tool": "read", "nonce": "a\u{7}b"});
+        for (name, arguments) in [
+            ("gateway_invoke", nonce_args.clone()),
+            ("gateway_invoke", json!(nonce_args.to_string())),
+            ("gateway_invoke\u{7}", nonce_args.clone()),
+        ] {
+            let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": name, "arguments": arguments}});
+            assert!(
+                validate_protocol_fields(&request, &[], ProtocolRoute::Meta).is_err(),
+                "{request}"
+            );
+        }
     }
 }

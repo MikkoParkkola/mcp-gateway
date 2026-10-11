@@ -84,10 +84,12 @@ async fn r3_a_resume_re_judges_and_sends_nothing_unsanitized() {
     });
     let _ = Box::pin(send(&fx, "tasks/update", &id, update)).await;
     let done = Box::pin(settled(&fx, &id, &["working", "input_required"])).await;
-    assert_ne!(
+    // Failed, by the re-admission's refusal: not completed, and not parked
+    // again or cancelled by some other path.
+    assert_eq!(
         done.pointer("/result/status"),
-        Some(&json!("completed")),
-        "r3: the resumed call ran: {done}"
+        Some(&json!("failed")),
+        "r3: the resume was not refused: {done}"
     );
     assert_eq!(
         calls(&fx),
