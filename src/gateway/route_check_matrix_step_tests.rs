@@ -225,11 +225,10 @@ async fn stdio_playbook_retry_is_charged_once() {
     definition["on_error"] = json!("retry");
     definition["max_retries"] = json!(3);
     let (answers, sends) = stdio_playbook_flaky(&audit, budget(2), (definition, 3)).await;
-    for run in 0..2 {
+    for (run, answer) in answers.iter().take(2).enumerate() {
         assert!(
-            answers[run].get("error").is_none(),
-            "run {run} was refused: {}",
-            answers[run]
+            answer.get("error").is_none(),
+            "run {run} was refused: {answer}"
         );
     }
     assert_eq!(answers[2]["error"]["code"], -32600, "{}", answers[2]);

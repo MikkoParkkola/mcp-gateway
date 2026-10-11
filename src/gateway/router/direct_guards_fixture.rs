@@ -624,7 +624,6 @@ async fn fixture_inner(
                 enabled: BUDGET.with(std::cell::Cell::get) > 0,
                 max_calls_per_window: BUDGET.with(std::cell::Cell::get),
                 window_secs: 3_600,
-                ..crate::security::firewall::budget_guard::BudgetGuardConfig::default()
             },
             anomaly_detection: anomaly,
             anomaly_threshold: 0.7,
