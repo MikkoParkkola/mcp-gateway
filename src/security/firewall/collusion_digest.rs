@@ -10,7 +10,7 @@
 //! and the original runs' fingerprints stay where their k-gram is in a
 //! delivered leaf or across adjacent kept leaves.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::collusion::CollusionDetector;
 use super::collusion_gate::RECORD_CAP;
@@ -23,6 +23,10 @@ mod key_path;
 pub(super) use key_path::{key_path_joins, key_path_run_indices, key_path_runs};
 #[path = "collusion_walk.rs"]
 mod walk;
+
+#[path = "collusion_runs.rs"]
+mod runs;
+use runs::own_span_delivered_runs;
 #[cfg(test)]
 pub(super) use walk::delivery_leaves;
 pub(super) use walk::delivery_parts;
@@ -566,6 +570,12 @@ impl DeliveryDigest {
         // cannot spend it; the cap and the equality check are unchanged.
         let n = delivered.all.len();
         let own = |i: usize| step.is_some() && delivered.label(i) == step;
+        // `MIK-8251`: each leaf is kept as text at most as often as the step
+        // staged it, so a repeat can never crowd out another staged leaf.
+        let mut left: HashMap<(&str, bool), usize> = HashMap::new();
+        for s in self.segments.iter().filter(|s| s.whole) {
+            *left.entry((s.text.as_str(), s.key)).or_default() += 1;
+        }
         let mut keep = vec![false; n];
         for i in (0..n)
             .filter(|&i| own(i))
@@ -573,8 +583,12 @@ impl DeliveryDigest {
         {
             let (leaf, key) = (delivered.all[i], i >= delivered.values_len);
             let cost = leaf.len() + per_leaf;
-            if whole.contains(&(leaf, key)) && cost <= room {
+            let Some(count) = left.get_mut(&(leaf, key)).filter(|c| **c > 0) else {
+                continue;
+            };
+            if cost <= room {
                 room -= cost;
+                *count -= 1;
                 keep[i] = true;
             }
         }
@@ -598,13 +612,14 @@ impl DeliveryDigest {
             self.join_fingerprints(detector),
         );
         let found = delivered.kgrams(detector);
-        let retained = self
+        let mut retained: Vec<u64> = self
             .segments
             .iter()
             .filter(|s| !delivered.holds(s))
             .flat_map(|s| detector.fingerprints(&s.text))
             .filter(|fp| found.contains(fp))
             .collect();
+        retained.extend(own_span_delivered_runs(detector, delivered, step, &whole));
         let mut in_step = self.step_runs_kgrams(detector, delivered);
         in_step.extend(self.step_join_kgrams(detector, delivered));
         let kept = Self {
