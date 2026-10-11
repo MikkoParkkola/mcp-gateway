@@ -220,12 +220,14 @@ async fn a_detached_login_marks_its_callers_own_provenance_waited() {
 /// on, and whose own request then stalls, timed out on the backend, not on
 /// the login: `mark_dispatched` runs on the joined success too. Green at base
 /// (the inline token step marks it); after the change it fails if the joined
-/// path skips the mark.
+/// path skips the mark. The FIRST page stalls: a later request would take the
+/// live-token fast path and mark the caller dispatched on its own, hiding a
+/// joined path that skipped the mark.
 #[tokio::test]
 async fn a_fill_served_by_its_approved_login_then_stalled_is_a_backend_timeout() {
     static PAGES: super::token_lapse::Pages = super::token_lapse::Pages::new();
     let (backend, browser, _dir) = approved_start(
-        Upstream::ListStallsCounted(Duration::ZERO, &PAGES),
+        Upstream::ListStallsCounted(Duration::from_secs(3600), &PAGES),
         Duration::from_secs(10),
     )
     .await;
@@ -246,10 +248,10 @@ async fn a_fill_served_by_its_approved_login_then_stalled_is_a_backend_timeout()
     let error = within("the fill's own deadline", fill)
         .await
         .expect("fill task")
-        .expect_err("the second page never comes");
+        .expect_err("the first page never comes");
     assert!(
         !variant(&error).starts_with("AuthorizationPending"),
-        "a fill that sent its pages timed out on the backend, not the login: {error:?}"
+        "a fill that sent its first page timed out on the backend, not the login: {error:?}"
     );
 }
 
