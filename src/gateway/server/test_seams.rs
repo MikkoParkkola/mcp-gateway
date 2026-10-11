@@ -27,6 +27,10 @@ pub(super) struct TestSeams {
     stdio_meta_mcp: std::sync::Mutex<
         Option<oneshot::Sender<std::sync::Arc<crate::gateway::meta_mcp::MetaMcp>>>,
     >,
+    /// The stdio telemetry saver's interval (MIK-8364); `None` is the
+    /// production one. A row sets it long, so no tick lands mid-row.
+    #[cfg(test)]
+    telemetry_save_every: Option<std::time::Duration>,
 }
 
 impl TestSeams {
@@ -42,6 +46,16 @@ impl TestSeams {
             // A test that stopped waiting has dropped its receiver; nothing to do.
             sender.send(bound.port()).ok();
         }
+    }
+
+    /// The stdio telemetry saver's interval a test set, if any (MIK-8364).
+    #[cfg(test)]
+    #[expect(
+        dead_code,
+        reason = "read by the MIK-8364 telemetry saver, added with the fix"
+    )]
+    pub(super) fn telemetry_save_every(&self) -> Option<std::time::Duration> {
+        self.telemetry_save_every
     }
 
     /// The test's shutdown trigger, taken once by `run`.
@@ -100,6 +114,14 @@ pub(super) async fn shutdown_signal_or_trigger(
 }
 
 impl super::Gateway {
+    /// Run the stdio telemetry saver every `every` instead of the production
+    /// interval (MIK-8364).
+    #[cfg(test)]
+    pub(super) fn with_telemetry_save_interval(mut self, every: std::time::Duration) -> Self {
+        self.test_seams.telemetry_save_every = Some(every);
+        self
+    }
+
     /// The port `run` binds, for a test that configured `server.port: 0`, so
     /// no port is picked and dropped before the gateway binds it (MIK-7984).
     pub(super) fn bound_port_for_test(&mut self) -> oneshot::Receiver<u16> {
