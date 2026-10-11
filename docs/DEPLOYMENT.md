@@ -193,7 +193,8 @@ of the entrypoint, so `docker stop` sends `SIGTERM` to every process in the
 entrypoint's process group: the install, a `*.sh` step, and the command a sourced
 `.envsh` step is running. The container then stops at once with exit status 143.
 A step that ignores or traps `SIGTERM` and is still running when Docker's stop
-timeout (`--stop-timeout`, 10 s by default) runs out is ended with a `SIGKILL`.
+timeout (`--stop-timeout`, 10 s by default) runs out is ended with a `SIGKILL`
+(exit status 137).
 Once the gateway is running, tini passes the stop to it, and the gateway
 coordinates its backends' shutdown; each stdio backend runs in its own process
 group, so tini does not signal it directly. The default image is unchanged: the gateway itself is PID 1.

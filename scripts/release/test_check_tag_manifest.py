@@ -263,6 +263,9 @@ COSIGN_ANY = re.compile(r"cosign\s+\w")
 # The one command that makes a name resolvable. Every tag the release exposes
 # is created by it, so the ordering assertions anchor on it rather than on the
 # tag strings, which also appear in `inspect` calls and log lines.
+# One `apt-get install` command naming tini (MIK-8352): the command runs on
+# through escaped newlines and ends at `&&` or at a newline that is not.
+TINI_INSTALLED = r"apt-get install(?:[^&\n\\]|\\.|\\\n)*?\btini\b"
 IMAGETOOLS_CREATE = re.compile(r"docker\s+buildx\s+imagetools\s+create(?![-\w])")
 # The gate, however it is spelled. Shared by the assertion that it runs at all
 # and by the one that protects the steps running it, so a step cannot be
@@ -3169,8 +3172,7 @@ class VariantStage(unittest.TestCase):
         stage = self.variant_stage()
         self.assertRegex(
             stage,
-            # Anywhere in the install command (it ends at the next `&&`).
-            r"apt-get install[^&]*\btini\b",
+            TINI_INSTALLED,
             "the variant does not install tini",
         )
         self.assertRegex(
@@ -3185,6 +3187,25 @@ class VariantStage(unittest.TestCase):
             r'(?m)^ENTRYPOINT \["mcp-gateway"\]$',
             "the default image's PID 1 is no longer the gateway",
         )
+
+    def test_the_tini_pin_reads_only_the_install_command(self):
+        # The command ends at `&&` or at a newline that is not escaped: a
+        # `tini` after it (the ENTRYPOINT, a comment) installs nothing.
+        installs = (
+            "RUN apt-get install -y \\\n    curl \\\n    tini \\\n    && rm -rf x\n",
+            "RUN apt-get install -y curl tini\n",
+        )
+        for stage in installs:
+            with self.subTest(stage=stage):
+                self.assertRegex(stage, TINI_INSTALLED)
+        installs_nothing = (
+            "RUN apt-get install -y curl\n"
+            'ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/x"]\n',
+            "RUN apt-get install -y curl \\\n    && echo tini\n",
+        )
+        for stage in installs_nothing:
+            with self.subTest(stage=stage):
+                self.assertNotRegex(stage, TINI_INSTALLED)
 
     def test_the_variant_keeps_the_default_invocation(self):
         # An ENTRYPOINT declared in the stage resets the CMD the base stage set.
