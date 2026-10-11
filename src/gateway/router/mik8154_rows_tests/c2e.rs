@@ -135,3 +135,40 @@ async fn c2e5_a_task_with_no_reload_runs() {
         "c2e5: the NUL did not reach the backend"
     );
 }
+
+/// C2e3' (lead ruling (b')): with sanitizing off at submit, intake judges no
+/// exemption and records no digest, so a task whose playbook is reloaded
+/// before its run runs the reloaded definition: no judgement, no comparison.
+/// (C2e3, a persisted record with no digest, is unreachable: a restart
+/// settles a task rather than running it, task_service recovery.rs.)
+#[tokio::test]
+async fn c2e3_a_task_with_no_judgement_runs_a_reloaded_playbook() {
+    let definition = playbook_definition(["alpha-pt", "alpha-pt"]);
+    let fx = sanitizing(
+        false,
+        super::super::direct_guards_fixture::fixture_hardened_signed_built(
+            Answer::Ok,
+            true,
+            move |meta| {
+                let mut engine = crate::playbook::PlaybookEngine::new();
+                engine.register(definition);
+                meta.set_playbook_engine(engine);
+                meta
+            },
+        ),
+    )
+    .await;
+    let meta = std::sync::Arc::clone(&fx.state.meta_mcp);
+    crate::gateway::meta_mcp::visible::seams::before_task_dispatch(move || {
+        let mut engine = crate::playbook::PlaybookEngine::new();
+        engine.register(playbook_definition(["alpha-pt", "alpha"]));
+        meta.set_playbook_engine(engine);
+    });
+    let got = task_run_with_nul(&fx, "c2e3-k").await;
+    assert_eq!(
+        got.pointer("/result/status"),
+        Some(&json!("completed")),
+        "c2e3': {got}"
+    );
+    assert_eq!(calls(&fx), 2, "c2e3': the reloaded steps did not both run");
+}
