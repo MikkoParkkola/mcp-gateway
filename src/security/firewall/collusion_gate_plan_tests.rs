@@ -348,9 +348,9 @@ fn duplicates_in_a_steps_own_span_never_grow_its_receipt() {
     assert!(kept.staged_len() <= before, "retention grew the receipt");
 }
 
-/// `MIK-8251` DUP.1 (red, out of this PR): a step repeating a short leaf
-/// within its own span still keeps its later long piece whole, so the seam
-/// pass can own it. Today the extra copies spend the room first.
+/// `MIK-8251` DUP.1: a step repeating a short leaf within its own span still
+/// keeps its later long piece whole, so the seam pass can own it. Before the
+/// count cap the extra copies spent the room first.
 #[test]
 fn a_repeated_leaf_in_a_steps_own_span_keeps_its_later_piece_whole() {
     let detector = CollusionDetector::new(RelayParams::default());
