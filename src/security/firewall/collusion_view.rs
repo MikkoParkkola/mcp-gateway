@@ -6,6 +6,10 @@
 //! the values run together, each key-path join), deduplicated and sorted,
 //! and nothing else: no leaf set, no text. Every byte it stores is reserved
 //! from `VIEW_BYTES` before it is allocated (D8).
+#![cfg_attr(
+    not(test),
+    expect(dead_code, reason = "wired into delivered_for_plan by PR 2b stage 2")
+)]
 
 use std::sync::atomic::Ordering;
 
