@@ -199,7 +199,9 @@ impl MetaMcp {
                     tracing::warn!(server, "{}", super::grant_audit::WITHHELD_RECORD_FAILED);
                 }
             }
-            super::visible::Withholding::Schema | super::visible::Withholding::Descriptor => {
+            super::visible::Withholding::Schema
+            | super::visible::Withholding::Descriptor
+            | super::visible::Withholding::Lacked => {
                 tracing::warn!(
                     server,
                     tool = tool_name,

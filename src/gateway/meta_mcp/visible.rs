@@ -23,6 +23,9 @@ pub(crate) enum Withholding {
     Schema,
     /// Its description failed the tool-poisoning check.
     Descriptor,
+    /// The caller's own complete catalogue on a per-user backend does not
+    /// list it (MIK-8356).
+    Lacked,
 }
 
 /// Whether a caller may be shown a tool.
@@ -273,10 +276,28 @@ impl MetaMcp {
 /// One visibility judgement per request (MIK-8340, perflane MIK-8356 R3.1):
 /// the first answer [`MetaMcp::tool_visible_to`] gives for a `(server, tool)`
 /// within a request, kept for the rest of that request.
+///
+/// It also carries the caller verdict's credential resolution to the
+/// dispatch (MIK-8356 R5.2): one resolution per call, on the same backend
+/// instance the verdict judged.
 #[derive(Default)]
 pub(crate) struct VisibilityMemo(
     parking_lot::Mutex<std::collections::HashMap<(String, String), Visibility>>,
+    parking_lot::Mutex<std::collections::HashMap<String, Carried>>,
 );
+
+/// A caller verdict's resolution, waiting for the first invocation on its
+/// server in the same request.
+pub(crate) struct Carried {
+    /// The backend instance the verdict judged; the dispatch uses it, never
+    /// a second lookup by name (a reload in between keeps the old instance).
+    pub(crate) backend: std::sync::Arc<crate::backend::Backend>,
+    /// The credential the verdict resolved.
+    pub(crate) resolved: super::invoke::ResolvedDispatch,
+    /// The verdict's fill failed with this error (after any managed-401
+    /// recovery): the dispatch answers it as a failed dispatch, unfilled.
+    pub(crate) fill_error: Option<crate::Error>,
+}
 
 impl VisibilityMemo {
     fn recorded(&self, server: &str, tool: &str) -> Option<Visibility> {
@@ -311,6 +332,30 @@ pub(crate) fn record_visibility(server: &str, tool: &str, judged: Visibility) ->
         .unwrap_or(judged)
 }
 
+/// Hand `carried` to the next invocation on `server` in the open request.
+/// Outside a request scope it is dropped, and the dispatch resolves itself.
+pub(crate) fn carry_dispatch(server: &str, carried: Carried) {
+    let _ = VISIBILITY_MEMO.try_with(|memo| memo.1.lock().insert(server.to_owned(), carried));
+}
+
+/// Take the resolution carried for `server`, consuming it: a later
+/// invocation on the same server resolves again.
+pub(crate) fn take_carried(server: &str) -> Option<Carried> {
+    VISIBILITY_MEMO
+        .try_with(|memo| memo.1.lock().remove(server))
+        .ok()
+        .flatten()
+}
+
+/// The answer already recorded for `(server, tool)` in the open request, if
+/// any.
+pub(crate) fn recorded_visibility(server: &str, tool: &str) -> Option<Visibility> {
+    VISIBILITY_MEMO
+        .try_with(|memo| memo.recorded(server, tool))
+        .ok()
+        .flatten()
+}
+
 /// Run `request` with one visibility memo for its whole lifetime (the HTTP
 /// `tools/call` handler and each stdio request). A request already inside
 /// one keeps it, so nested entry points share the outer request's memo.
@@ -321,6 +366,12 @@ pub(crate) async fn with_visibility_memo<F: std::future::Future>(request: F) -> 
     VISIBILITY_MEMO
         .scope(VisibilityMemo::default(), request)
         .await
+}
+
+/// The answer to a name that matches no tool (-32601). A tool withheld from
+/// this caller answers with exactly this, so the two cannot be told apart.
+pub(crate) fn absent_name(tool_name: &str) -> crate::Error {
+    crate::Error::json_rpc(-32601, format!("Unknown tool: {tool_name}"))
 }
 
 /// Test-only hook between the route stage and the dispatch, for the row that

@@ -26,6 +26,7 @@ const CACHE_LIST_DRAIN_BUDGET: Duration = Duration::from_secs(120);
 mod annotations;
 mod cached_metadata;
 mod caller_slots;
+mod catalogue_verdict;
 mod descriptor_gate;
 mod era;
 mod fill_check;
@@ -63,6 +64,7 @@ impl Backend {
 }
 
 pub(crate) use era::removed_method_refusal_message;
+pub(crate) use catalogue_verdict::CatalogueVerdict;
 #[cfg(test)]
 pub(crate) use pool::PoolKey;
 #[cfg(not(test))]

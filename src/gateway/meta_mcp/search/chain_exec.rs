@@ -267,6 +267,9 @@ fn step_failure(idx: usize, tool_ref: &str, error: Error) -> Error {
             message: format!("Chain step {idx} ({tool_ref}) refused: {message}"),
             data,
         },
+        // A step naming a tool this caller cannot see answers exactly as an
+        // absent name, unchanged (MIK-8356 fold F5).
+        e @ Error::JsonRpc { code: -32601, .. } => e,
         e => Error::json_rpc(-32603, format!("Chain step {idx} ({tool_ref}) failed: {e}")),
     }
 }

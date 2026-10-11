@@ -10,6 +10,9 @@ use serde_json::{Value, json};
 use super::super::helpers::build_http_response;
 use super::BackendRejection;
 use super::direct_failure::DirectFailure;
+use crate::backend::CatalogueVerdict;
+use crate::gateway::meta_mcp::visible::absent_name;
+use crate::gateway::meta_mcp::response_security::error_response_preserving_status;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 /// The caller's slot binding and the headers it propagates upstream; a cold
@@ -42,6 +45,22 @@ pub(super) async fn key_refusal(
         trace_id: tool,
         caller_key: None,
     };
+    // MIK-8356: on a per-user backend, a tool this caller's own catalogue
+    // withholds or lacks answers as an absent name (-32601), whatever the
+    // argument-key mode; the argument keys are judged only after.
+    if backend.keeps_per_user_catalogues() {
+        match backend.catalogue_verdict(identity_key, headers, tool).await {
+            Ok(CatalogueVerdict::Withholds | CatalogueVerdict::Lacks) => {
+                let response = error_response_preserving_status(id.clone(), &absent_name(tool));
+                return Some(build_http_response(
+                    &Egressed::gateway_own(response),
+                    StatusCode::OK,
+                ));
+            }
+            Ok(CatalogueVerdict::Offers | CatalogueVerdict::Unknown) => {}
+            Err(e) => return Some(failed.clone().answer(None, e, &call).await),
+        }
+    }
     let checked = backend.undeclared_key_refusal(identity_key, headers, tool, arguments);
     match checked.await {
         Ok(None) => None,

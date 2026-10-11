@@ -224,14 +224,6 @@ pub(super) async fn admit<'a>(
         trace_id: "",
         caller_key,
     };
-    if envelope.method == "tools/call"
-        && let Err(e) = DirectRouteGuards::run(&state.meta_mcp, &call, preflight.signing_scope)
-    {
-        return Err(build_http_response(
-            &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
-            StatusCode::OK,
-        ));
-    }
     let auth = BackendAuthContext {
         client,
         oauth_agent_identity: caller.oauth_agent_identity.as_ref(),
@@ -264,6 +256,18 @@ pub(super) async fn admit<'a>(
         cancel_on,
     };
     guard_and_sanitize(scope, envelope, propagation, &mut admitted).await?;
+    // After route authorize, the firewall and the caller's catalogue verdict
+    // (MIK-8356 fold F3): a tool this caller's catalogue withholds answers as
+    // absent before any guard can name it; before idempotency admission.
+    if envelope.method == "tools/call"
+        && let Err(e) =
+            DirectRouteGuards::run(&state.meta_mcp, &admitted.call, preflight.signing_scope)
+    {
+        return Err(build_http_response(
+            &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
+            StatusCode::OK,
+        ));
+    }
     let guarded = idempotency_outcome(scope, envelope, preflight, propagation)?;
     admitted.nonce = admit_signing_nonce(scope, preflight)?;
     match guarded {
@@ -425,13 +429,17 @@ async fn forward_plain(
             key,
             name,
         );
-        return Ok(
-            crate::gateway::router::inflight_calls::explicitly_cancellable(
-                admitted.cancel_on.take(),
-                drain,
-            )
-            .await,
-        );
+        let drained = crate::gateway::router::inflight_calls::explicitly_cancellable(
+            admitted.cancel_on.take(),
+            drain,
+        )
+        .await;
+        // A complete drain stored this caller's catalogue: index its slot
+        // (MIK-8356 R3.5). A drain that stored nothing records nothing.
+        state
+            .meta_mcp
+            .remember_caller_slot(&route.backend, caller.proof(), key);
+        return Ok(drained);
     }
     let admission = if method == "tools/call" {
         match DirectRouteGuards::before_dispatch(&state.meta_mcp, &admitted.call) {

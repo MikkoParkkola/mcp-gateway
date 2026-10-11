@@ -202,6 +202,38 @@ impl MetaMcp {
         // F13: a cold slot is listed first, as this caller; the slot's
         // failsafe refusing that list answers as a refused dispatch does.
         let checked_at = std::time::Instant::now();
+        // MIK-8356: on a per-user backend the caller's own catalogue decides
+        // first, whatever the argument-key mode, with this call's resolution
+        // (no second mint). A name it withholds or lacks answers as absent; a
+        // failed fill falls through to the F13 check, which answers it as a
+        // failed dispatch.
+        if let Some(backend) = backend.filter(|backend| backend.keeps_per_user_catalogues()) {
+            let absent = match crate::gateway::meta_mcp::visible::recorded_visibility(server, tool)
+            {
+                Some(crate::gateway::meta_mcp::visible::Visibility::Visible) => false,
+                Some(crate::gateway::meta_mcp::visible::Visibility::Withheld(_)) => true,
+                None => {
+                    let proof = crate::identity_propagation::CallerProof::new(
+                        verified_identity,
+                        caller.provenance(),
+                    );
+                    let judged = self.judge_caller_slot(
+                        (server, tool),
+                        backend,
+                        dispatch_binding,
+                        &caller_credential.headers,
+                        proof,
+                    );
+                    matches!(judged.await, Ok(super::caller_verdict::SlotJudgement::Absent))
+                }
+            };
+            if absent {
+                if let Some(reservation) = idem_reservation.as_mut() {
+                    reservation.release();
+                }
+                return Err(crate::gateway::meta_mcp::visible::absent_name(tool));
+            }
+        }
         let refusal = self.undeclared_key_refusal(
             (server, backend),
             tool,

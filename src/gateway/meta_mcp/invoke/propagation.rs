@@ -442,7 +442,7 @@ impl MetaMcp {
 }
 
 /// What [`MetaMcp::resolve_dispatch`] resolved for one call.
-pub(super) struct ResolvedDispatch {
+pub(crate) struct ResolvedDispatch {
     /// The MCP route's per-user propagation credential, or none.
     pub(super) caller_credential: CallerCredential,
     /// The capability route's account credential, or none.

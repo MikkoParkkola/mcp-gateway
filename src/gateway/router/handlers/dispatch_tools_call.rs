@@ -340,6 +340,24 @@ pub(super) async fn tools_call(
         },
     };
 
+    // The caller verdict (MIK-8356 R5.1): after route authorize and the
+    // firewall, before X14, the task gate and admission. On a per-user
+    // backend it records the caller's own answer in the request's memo, so
+    // every reader below sees it and a name the caller's catalogue withholds
+    // or lacks answers as absent; its resolution is carried to dispatch.
+    for target in &backend_targets {
+        let target = target.as_target();
+        // A refusal or a failed fill is answered by the dispatch, as before.
+        let _ = state
+            .meta_mcp
+            .caller_verdict(
+                (target.server, target.tool),
+                &caller,
+                Some(session_id.as_str()),
+            )
+            .await;
+    }
+
     // The modern destructive gate (X14). Every authorization, admin and
     // firewall check above has already run, and nothing below has yet
     // acted: a challenge mints no task, reserves no idempotency key and

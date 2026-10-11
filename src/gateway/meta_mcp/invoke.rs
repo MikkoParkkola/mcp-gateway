@@ -80,7 +80,10 @@ mod policy;
 mod post_dispatch;
 mod pre_dispatch;
 mod projection;
+mod caller_verdict;
+pub(crate) use caller_verdict::CallerVerdict;
 mod propagation;
+pub(crate) use propagation::ResolvedDispatch;
 pub(crate) mod worker_clock; // MIK-8202 AC12/AC13: the task worker's clock channel
 use bridge_dispatch::{BridgeDispatcher, run_input_bridge, undeclared_input_request};
 pub(super) use bridge_dispatch::{
@@ -196,20 +199,43 @@ impl MetaMcp {
         // cache is consulted: a cache key built before the caller's credential
         // is known cannot name the caller. Reused verbatim at dispatch so there
         // is no re-mint or drift.
-        let backend = self.backends.get(server);
+        // A caller verdict taken earlier in this request carries its backend
+        // instance and resolution here (MIK-8356 R5.2): one resolution per
+        // call, consumed by this invocation only.
+        let (backend, resolved) = match super::visible::take_carried(server) {
+            // The verdict's fill failed: answered as a failed dispatch is,
+            // with nothing filled or sent again (F13, A11-c).
+            Some(super::visible::Carried {
+                fill_error: Some(error),
+                ..
+            }) => {
+                let checked = (std::time::Instant::now(), surface);
+                let value = self.account_refused_fill(server, tool, &error, checked);
+                if crate::personal_accounts::refusal::marked(&error).is_some() {
+                    return self.with_connect_offer(Err(error), verified_identity).await;
+                }
+                return Ok(GuardedValue::sealed_by_guard(value));
+            }
+            Some(carried) => (Some(carried.backend), carried.resolved),
+            None => {
+                let backend = self.backends.get(server);
+                let resolved = self
+                    .resolve_dispatch(
+                        (server, tool),
+                        backend.as_deref(),
+                        caller_proof,
+                        verified_identity,
+                    )
+                    .await?;
+                (backend, resolved)
+            }
+        };
         let target = (server, backend.as_ref().map(|backend| backend.instance()));
         let propagation::ResolvedDispatch {
             caller_credential,
             account_credential,
             binding: dispatch_binding,
-        } = self
-            .resolve_dispatch(
-                (server, tool),
-                backend.as_deref(),
-                caller_proof,
-                verified_identity,
-            )
-            .await?;
+        } = resolved;
         // Who the response cache keys on, in one place and one namespace per
         // source (`support::caller_cache_principal`). The binding when identity
         // propagation is minting per-user credentials, then the verified OIDC
