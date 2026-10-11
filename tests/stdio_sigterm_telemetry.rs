@@ -101,10 +101,10 @@ async fn sigterm_ends_stdio_gracefully_and_saves_every_observed_request() {
     )
     .expect("the window file reads")
     .snapshot;
-    let stdio = saved.by_transport.get("stdio").copied().unwrap_or(0);
+    let saved_stdio = saved.by_transport.get("stdio").copied().unwrap_or(0);
     assert!(
-        stdio > PINGS,
-        "the window saved after SIGTERM holds {stdio} stdio requests; {} were observed: {saved:?}",
+        saved_stdio > PINGS,
+        "the window saved after SIGTERM holds {saved_stdio} stdio requests; {} were observed: {saved:?}",
         PINGS + 2
     );
 }

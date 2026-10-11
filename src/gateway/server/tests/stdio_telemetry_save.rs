@@ -317,9 +317,8 @@ async fn the_saver_persists_observed_requests_while_the_session_runs() {
     let data = session.data.clone();
     let saved = crate::test_pause::within("the saver writing the observed requests", async {
         loop {
-            let saved = load_durable_window(&data)
-                .map(|window| stdio_requests(&window.snapshot))
-                .unwrap_or(0);
+            let saved =
+                load_durable_window(&data).map_or(0, |window| stdio_requests(&window.snapshot));
             if saved > PINGS {
                 return saved;
             }
