@@ -66,6 +66,23 @@ pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<U
     // Refuses a FIFO or a device at once, before waiting for the lock.
     let text = super::regular_file::read_regular_text(path)
         .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+    // A file no parse can read will not load either; saying "nothing changed"
+    // would let `upgrade` pass on it (MIK-8044).
+    let why = match super::retired_config_keys::loose(&text) {
+        Some(doc) if doc.is_mapping() || doc.is_null() => None,
+        Some(_) => Some(": its top level is not a mapping of keys".to_owned()),
+        None => Some(
+            serde_yaml::from_str::<serde_yaml::Value>(&text)
+                .err()
+                .map_or_else(String::new, |e| format!(": {e}")),
+        ),
+    };
+    if let Some(why) = why {
+        return Err(format!(
+            "{} could not be read as YAML{why}; nothing was upgraded.",
+            path.display()
+        ));
+    }
     if mode == RewriteMode::DryRun {
         return Ok(rewrite_of(&text));
     }

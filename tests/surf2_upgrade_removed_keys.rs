@@ -476,3 +476,15 @@ fn upgrade_removes_a_key_beside_a_numeric_key() {
         "x-notes:\n  5: five\nserver:\n  port: 39400\n"
     );
 }
+
+/// The same for a file whose top level is not a mapping of keys.
+#[test]
+fn upgrade_exits_1_on_a_file_that_is_not_a_mapping() {
+    let yaml = "- server\n";
+    let s = setup(yaml, current());
+    let out = upgrade(&s, &[]);
+    let printed = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{printed}");
+    assert!(printed.contains("not a mapping"), "{printed}");
+    assert_eq!(read(&s.config), yaml);
+}

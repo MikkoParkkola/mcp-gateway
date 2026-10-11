@@ -59,10 +59,14 @@ impl Removal {
 
 /// The document as the loader reads it: a repeated key is accepted, the last
 /// value winning. Presence is read here; an edit is proven with [`parse`].
+/// A file that map cannot hold (a number as a key) is read strictly instead,
+/// so no key is reported absent while the parse that found it failed.
+/// `None` only when neither parse can read the file.
 pub(crate) fn loose(text: &str) -> Option<serde_yaml::Value> {
     serde_yaml::from_str::<figment::value::Dict>(text)
         .ok()
         .and_then(|dict| serde_yaml::to_value(dict).ok())
+        .or_else(|| parse(text))
 }
 
 /// Every concrete path `pattern` names in `doc`, `*` expanded over the
