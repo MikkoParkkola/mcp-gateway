@@ -29,6 +29,7 @@ const INVOKE_TARGET: &str = module_path!();
 // The per-dispatch credential and its redacting `Debug`, kept out of this file's size baseline.
 mod caller_credential;
 mod gate;
+mod step_fingerprint;
 use caller_credential::{CallerCredential, HeldCredential};
 
 mod guarded;
@@ -146,7 +147,8 @@ impl MetaMcp {
 
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
-        // MIK-8361: a name this caller cannot see answers as a missing one.
+        // MIK-8361: a name this caller cannot see is answered as missing,
+        // before the policy, signing, idempotency, credential or dispatch.
         if let Some(answer) = self.withheld_gate((server, tool), caller, session_id).await {
             return answer;
         }
@@ -756,58 +758,6 @@ impl MetaMcp {
         } else {
             sealed
         })
-    }
-
-    /// Who a continuation minted by a call to `server:tool` is bound to, for
-    /// `caller`: `principal_source` over the call's dispatch binding, exactly
-    /// as the call's own mint derives it (MIK-8137). A chain resume reads this
-    /// for the step its handle is pending at, so the resume opens the handle
-    /// under the binding the step minted with rather than a second spelling.
-    ///
-    /// Resolving the binding mints the caller's propagated or account
-    /// credential, as the step's own dispatch does; a refusal returns here.
-    pub(in crate::gateway::meta_mcp) async fn step_fingerprint(
-        &self,
-        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-        (server, tool): (&str, &str),
-    ) -> Result<Option<String>> {
-        // A resolution the caller verdict carried for this step is the one
-        // its dispatch will use: derive from it, with no second mint (fold F6).
-        if let Some(binding) =
-            super::visible::with_carried(server, tool, |carried| carried.resolved.binding.clone())
-        {
-            return Ok(crate::protocol::mrtr::source_fingerprint(
-                caller.principal_source(binding.as_deref()),
-            ));
-        }
-        let backend = self.backends.get(server);
-        let proof = CallerProof::new(caller.verified_identity, caller.provenance());
-        let resolved = self
-            .resolve_dispatch(
-                (server, tool),
-                backend.as_deref(),
-                proof,
-                caller.verified_identity,
-            )
-            .await?;
-        let fingerprint = crate::protocol::mrtr::source_fingerprint(
-            caller.principal_source(resolved.binding.as_deref()),
-        );
-        // A resume runs no caller verdict (its step is known only at run
-        // time): this resolution is the step's, carried to its invocation so
-        // the resume resolves once (MIK-8356 C13).
-        if let Some(backend) = backend {
-            super::visible::carry_dispatch(
-                server,
-                tool,
-                super::visible::Carried {
-                    backend,
-                    resolved,
-                    fill_error: None,
-                },
-            );
-        }
-        Ok(fingerprint)
     }
 }
 
