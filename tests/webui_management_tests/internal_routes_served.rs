@@ -1,0 +1,199 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-8044.SURF.8: where an admin is served on the INTERNAL routes whose
+//! admin cell in the parent table is not served, and that a non-admin stays
+//! refused, changing nothing, once that state exists.
+
+use super::*;
+
+const MUTATION: &str = "tests/webui_management_tests/backend_mutation.rs";
+const EVENTS_ADMIN: &str = "tests/mik_7630_events_admin.rs";
+const EVENTS_RECONCILE: &str = "tests/mik_7630_events_reconcile.rs";
+const CP_AUTHORITY: &str = "tests/e2min_control_plane_authority.rs";
+const CP_WRITES: &[Citation] = &[(
+    CP_AUTHORITY,
+    "admin_grant_and_policy_writes_are_refused_and_point_at_config",
+)];
+
+/// MIK-8044.SURF.8: where the admin's SERVED answer is pinned for every row
+/// whose admin cell above is not served (this fixture lacks the state those
+/// handlers need). Each cited test asserts the served status and its effect;
+/// the assertions are listed in handoff/mik-8044-surf4b-design.md r3.
+/// (test file, test fn) that pins a served answer.
+type Citation = (&'static str, &'static str);
+
+const SERVED_BY: &[(&str, Method, &[Citation])] = &[
+    (
+        "/ui/api/reload",
+        Method::POST,
+        &[(
+            MUTATION,
+            "test_reload_endpoint_returns_structured_outcome_for_profile_change",
+        )],
+    ),
+    (
+        "/ui/api/backends",
+        Method::POST,
+        &[(
+            MUTATION,
+            "test_add_backend_persists_and_duplicate_returns_409",
+        )],
+    ),
+    (
+        "/ui/api/backends/{name}",
+        Method::PATCH,
+        &[(MUTATION, "test_patch_backend_updates_description")],
+    ),
+    (
+        "/ui/api/backends/{name}",
+        Method::DELETE,
+        &[(MUTATION, "test_add_remove_backend_lifecycle")],
+    ),
+    (
+        "/ui/api/events/dead-letters",
+        Method::GET,
+        &[(EVENTS_ADMIN, "dead_letters_replay_through_admin_route_only")],
+    ),
+    (
+        "/ui/api/events/dead-letters/replay",
+        Method::POST,
+        &[(
+            EVENTS_ADMIN,
+            "bulk_replay_replays_only_the_named_subscription",
+        )],
+    ),
+    (
+        "/ui/api/events/dead-letters/{id}/replay",
+        Method::POST,
+        &[(EVENTS_ADMIN, "dead_letters_replay_through_admin_route_only")],
+    ),
+    (
+        "/ui/api/events/held",
+        Method::GET,
+        &[(
+            EVENTS_RECONCILE,
+            "a_held_subscription_is_listed_with_its_queued_record",
+        )],
+    ),
+    ("/ui/api/control-plane/grants", Method::POST, CP_WRITES),
+    ("/ui/api/control-plane/policies", Method::POST, CP_WRITES),
+    ("/ui/api/control-plane/decisions", Method::POST, CP_WRITES),
+];
+
+/// Whether `status` is a served admin answer: success, or `/sse`'s 410, which
+/// is its deliberate pointer to `POST /mcp`.
+fn is_served(status: u16) -> bool {
+    matches!(status, 200..=299 | 410)
+}
+
+/// Every row whose admin cell is not served names where the served answer is
+/// pinned, and nothing else does; every cited test exists. A name pins the
+/// mention only: the design records what each cited test asserts, and a seat
+/// confirmed it at source (MIK-8044.SURF.8 r3).
+#[test]
+fn every_unserved_admin_cell_names_the_test_that_serves_it() {
+    // The admin's answer on the richest fixture the row has: the configured
+    // column where there is one. The control plane's configured 409 is its
+    // served refusal, pinned with its reason code by the cited test.
+    let unserved: BTreeSet<(String, String)> = ROWS
+        .iter()
+        .filter(|r| !is_served(r.configured.map_or(r.base[3], |c| c[2])))
+        .map(|r| (r.path.to_owned(), r.method.to_string()))
+        .collect();
+    let cited: BTreeSet<(String, String)> = SERVED_BY
+        .iter()
+        .map(|(path, method, _)| ((*path).to_owned(), method.to_string()))
+        .collect();
+    assert_eq!(
+        unserved, cited,
+        "rows without a served citation, or citations without a row"
+    );
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for (path, method, tests) in SERVED_BY {
+        assert!(!tests.is_empty(), "{method} {path} cites nothing");
+        for (file, name) in *tests {
+            let text = std::fs::read_to_string(root.join(file))
+                .unwrap_or_else(|e| panic!("{method} {path}: cannot read {file}: {e}"));
+            assert!(
+                text.contains(&format!("fn {name}(")),
+                "{method} {path}: {file} has no `fn {name}`"
+            );
+        }
+    }
+}
+
+/// MIK-8044.SURF.8 R12: with the state the admin is served from in place (a
+/// config path and a reload context), a non-admin is still refused, and the
+/// refusal changes nothing. The statuses are the INTERNAL contract above
+/// (anonymous with auth on 401, Auditor 403).
+#[tokio::test]
+async fn a_non_admin_is_refused_with_the_served_state_present_and_changes_nothing() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config_path = tmp.path().join("gateway.yaml");
+    let initial = Config::default();
+    write_owner_only(&config_path, serde_yaml::to_string(&initial).unwrap()).unwrap();
+    let (mut state, live, _store) =
+        make_app_state_with_reload(initial.clone(), None, config_path.clone()).await;
+    Arc::get_mut(&mut state)
+        .expect("test AppState should be uniquely owned")
+        .auth_config = Arc::new(ResolvedAuthConfig::from_config(&auth_on()));
+    register_http_backend(&state, "docs");
+    let gw = Gateway {
+        router: create_router(Arc::clone(&state)),
+        caps: TempDir::new().expect("capability dir"),
+        _store: TempDir::new().expect("store dir"),
+    };
+
+    // An unapplied change waits on disk: a reload that ran would publish the
+    // profile and register `staged`.
+    let mut staged = initial.clone();
+    staged.default_routing_profile = "staged-profile".to_string();
+    staged.backends.insert(
+        "staged".to_string(),
+        serde_json::from_value(json!({"http_url": "http://127.0.0.1:9/staged"}))
+            .expect("staged backend"),
+    );
+    write_owner_only(&config_path, serde_yaml::to_string(&staged).unwrap()).unwrap();
+    let on_disk = std::fs::read(&config_path).expect("read config");
+    let profile_before = live.get().default_routing_profile.clone();
+
+    let writes: [(Method, &str, Payload); 4] = [
+        (Method::POST, "/ui/api/reload", Payload::None),
+        (Method::POST, "/ui/api/backends", Payload::Json(ADD_BACKEND)),
+        (
+            Method::PATCH,
+            "/ui/api/backends/docs",
+            Payload::Json(UPDATE_BACKEND),
+        ),
+        (Method::DELETE, "/ui/api/backends/docs", Payload::None),
+    ];
+    for (method, uri, payload) in &writes {
+        for (caller, want) in [(Caller::AnonOn, 401), (Caller::Auditor, 403)] {
+            let (status, _, body) = send(&gw, request(method, uri, caller, *payload)).await;
+            let text = String::from_utf8_lossy(&body);
+            assert_eq!(
+                status.as_u16(),
+                want,
+                "{method} {uri} as {caller:?}: {text}"
+            );
+            assert_eq!(
+                std::fs::read(&config_path).expect("read config"),
+                on_disk,
+                "{method} {uri} as {caller:?} changed the config file"
+            );
+            assert_eq!(
+                live.get().default_routing_profile,
+                profile_before,
+                "{method} {uri} as {caller:?} published a reload"
+            );
+            assert!(
+                state.backends.get("staged").is_none() && state.backends.get("probe").is_none(),
+                "{method} {uri} as {caller:?} registered a backend"
+            );
+            assert!(
+                state.backends.get("docs").is_some(),
+                "{method} {uri} as {caller:?} removed a backend"
+            );
+        }
+    }
+}
