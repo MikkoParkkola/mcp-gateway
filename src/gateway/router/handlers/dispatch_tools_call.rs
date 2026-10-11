@@ -357,6 +357,12 @@ pub(super) async fn tools_call(
             )
             .await;
     }
+    // A name the verdict withheld answers -32601 under the target an absent
+    // name gets, never its backend's (MIK-8356).
+    *response_targets = crate::gateway::meta_mcp::response_security::without_withheld(
+        tool_name,
+        std::mem::take(response_targets),
+    );
 
     // The modern destructive gate (X14). Every authorization, admin and
     // firewall check above has already run, and nothing below has yet

@@ -186,6 +186,12 @@ impl Gateway {
             super::super::meta_mcp::invoke::relay::GatewayStamps::Legacy
         };
         let chain_source = response.chain_source;
+        // The caller verdicts are taken now: a withheld name is attributed
+        // as an absent one (MIK-8356).
+        let response_targets = super::super::meta_mcp::response_security::without_withheld(
+            &external_tool,
+            response_targets,
+        );
         let response = meta_mcp.finalize_content(
             response,
             &super::super::meta_mcp::response_security::ResponseDeliveryContext {
