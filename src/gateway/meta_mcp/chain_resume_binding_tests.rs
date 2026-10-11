@@ -305,10 +305,12 @@ async fn a_resume_mints_nothing_for_a_substituted_chain_or_a_refused_caller() {
 }
 
 /// C13 (MIK-8356 g3): resuming a chain that stopped to ask a question resolves
-/// the step's credential once for the whole request, across the resume
-/// fingerprint and the step's invocation. The first request costs one.
+/// each step it runs once, across the resume fingerprint and the step's
+/// invocation. The chain is `[srv:ask, srv:after]`: the first request runs
+/// `ask` and costs one; the resume runs `ask` again and then `after`, so it
+/// costs two (one per step, C11b). Before the carry it cost three: the
+/// fingerprint and `ask`'s invocation each resolved.
 #[tokio::test]
-#[ignore = "pending perflane fix: shared credential for resume fingerprint"]
 async fn g3_c13_resume_fingerprint_reuses_carried_dispatch() {
     use std::sync::atomic::Ordering;
 
@@ -329,8 +331,13 @@ async fn g3_c13_resume_fingerprint_reuses_carried_dispatch() {
     assert!(resumed.get("error").is_none(), "premise: {resumed}");
     resumed_the_pending_step(&stub, &resumed);
     assert_eq!(
+        stub.ran(),
+        vec!["ask", "ask", "after"],
+        "premise: the resume runs the pending step and the one after it"
+    );
+    assert_eq!(
         mints.load(Ordering::SeqCst),
-        baseline + 1,
+        baseline + 2,
         "C13: the resume resolved the credential separately for the fingerprint and the invocation"
     );
 }
