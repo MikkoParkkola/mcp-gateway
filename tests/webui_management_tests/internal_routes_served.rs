@@ -155,6 +155,27 @@ async fn writable() -> (
     (state, live, gw, config_path, tmp)
 }
 
+/// Stage an unapplied change on disk: a defined routing profile made the
+/// default, and a new backend `staged`. A reload that ran would publish the
+/// profile and register `staged`.
+fn stage(config_path: &std::path::Path) {
+    let mut staged = Config::load(Some(config_path)).expect("the fixture config loads");
+    staged.routing_profiles.insert(
+        "staged-profile".to_string(),
+        mcp_gateway::routing_profile::RoutingProfileConfig {
+            description: "staged".to_string(),
+            ..mcp_gateway::routing_profile::RoutingProfileConfig::default()
+        },
+    );
+    staged.default_routing_profile = "staged-profile".to_string();
+    staged.backends.insert(
+        "staged".to_string(),
+        serde_json::from_value(json!({"http_url": "http://127.0.0.1:9/staged"}))
+            .expect("staged backend"),
+    );
+    write_owner_only(config_path, serde_yaml::to_string(&staged).unwrap()).unwrap();
+}
+
 const WRITES: [(Method, &str, Payload); 4] = [
     (Method::POST, "/ui/api/reload", Payload::None),
     (Method::POST, "/ui/api/backends", Payload::Json(ADD_BACKEND)),
@@ -175,16 +196,7 @@ async fn a_non_admin_is_refused_with_the_served_state_present_and_changes_nothin
     let (state, live, gw, config_path, _tmp) = writable().await;
     let docs_before = state.backends.get("docs").expect("docs is registered");
 
-    // An unapplied change waits on disk: a reload that ran would publish the
-    // profile and register `staged`.
-    let mut staged = Config::load(Some(&config_path)).expect("the fixture config loads");
-    staged.default_routing_profile = "staged-profile".to_string();
-    staged.backends.insert(
-        "staged".to_string(),
-        serde_json::from_value(json!({"http_url": "http://127.0.0.1:9/staged"}))
-            .expect("staged backend"),
-    );
-    write_owner_only(&config_path, serde_yaml::to_string(&staged).unwrap()).unwrap();
+    stage(&config_path);
     let on_disk = std::fs::read(&config_path).expect("read config");
     let profile_before = live.get().default_routing_profile.clone();
 
@@ -226,7 +238,7 @@ async fn a_non_admin_is_refused_with_the_served_state_present_and_changes_nothin
 /// of `docs` do change the config file, so the bytes R12 compares can move.
 #[tokio::test]
 async fn an_admin_write_on_the_r12_posture_changes_the_config_file() {
-    let (_state, _live, gw, config_path, _tmp) = writable().await;
+    let (state, _live, gw, config_path, _tmp) = writable().await;
     let before = std::fs::read(&config_path).expect("read config");
     let (status, _, body) = send(
         &gw,
@@ -256,5 +268,35 @@ async fn an_admin_write_on_the_r12_posture_changes_the_config_file() {
     assert!(
         !deleted.contains("docs"),
         "an admin DELETE left docs: {deleted}"
+    );
+    assert!(
+        state.backends.get("docs").is_none(),
+        "an admin DELETE left docs registered"
+    );
+}
+
+/// Positive control for R12's reload invariants: on the same posture, with
+/// the same staged change, an admin's reload publishes the profile to the
+/// returned `LiveConfig` and registers `staged`, so the live and registry
+/// checks R12 makes can move.
+#[tokio::test]
+async fn an_admin_reload_on_the_r12_posture_publishes_the_staged_change() {
+    let (state, live, gw, config_path, _tmp) = writable().await;
+    stage(&config_path);
+    let (status, _, body) = send(
+        &gw,
+        request(
+            &Method::POST,
+            "/ui/api/reload",
+            Caller::Admin,
+            Payload::None,
+        ),
+    )
+    .await;
+    assert_eq!(status.as_u16(), 200, "{}", String::from_utf8_lossy(&body));
+    assert_eq!(live.get().default_routing_profile, "staged-profile");
+    assert!(
+        state.backends.get("staged").is_some(),
+        "an admin reload did not register the staged backend"
     );
 }
