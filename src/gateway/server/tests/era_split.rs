@@ -136,6 +136,17 @@ async fn stdio_notifications_judge_the_version_only_when_removed() {
     .expect("answers");
     assert_eq!(served["error"]["code"], -32601, "{served}");
     assert_eq!(served["error"]["message"], removed_text(removed));
+    // Modern serving off: the version refusal comes first, with the request's
+    // id and an empty retry list (the arm MIK-8364's match routes it through).
+    let disabled = send(
+        false,
+        modern_request(Some(5), removed, "2026-07-28", json!({})),
+    )
+    .await
+    .expect("answers");
+    assert_eq!(disabled["error"]["code"], -32022, "{disabled}");
+    assert_eq!(disabled["id"], 5, "{disabled}");
+    assert_eq!(disabled["error"]["data"]["supportedVersions"], json!([]));
     for request in [
         modern_request(Some(3), "notifications/initialized", UNSERVED, json!({})),
         modern_request(None, "notifications/initialized", UNSERVED, json!({})),
