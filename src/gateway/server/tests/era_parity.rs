@@ -3,7 +3,7 @@
 //! MIK-8368: stdio refuses, from the body alone, the methods MCP 2026-07-28
 //! removed, as `/mcp` does for a request that declares that revision. Wire
 //! strings are written out, never taken from the constants. The unserved-revision
-//! and undeclared-capability refusals stay HTTP-only (see the batch row).
+//! and undeclared-capability refusals are in `era_split.rs` (MIK-8380).
 
 use super::*;
 use serde_json::{Value, json};
@@ -17,7 +17,7 @@ const REMOVED: [&str; 4] = [
 
 /// One stdio request through the real dispatch, as a client with
 /// `server.modern_protocol` = `modern`.
-async fn send(modern: bool, request: Value) -> Option<Value> {
+pub(super) async fn send(modern: bool, request: Value) -> Option<Value> {
     Gateway::dispatch_single_for_client(
         &test_meta_mcp(),
         &test_tool_policy(),
@@ -28,7 +28,8 @@ async fn send(modern: bool, request: Value) -> Option<Value> {
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: crate::protocol::meta::Declared::NONE,
             tasks: None,
-            modern,
+            serving: super::super::stdio_single::ModernServing::from_setting(modern),
+            discover: super::super::stdio_single::DiscoverListing::Configured,
             sanitize: super::super::stdio_single::InputSanitizing::Off,
         },
     )
@@ -36,7 +37,12 @@ async fn send(modern: bool, request: Value) -> Option<Value> {
 }
 
 /// A request written against `version` with the `caps` the client declares.
-fn modern_request(id: Option<i64>, method: &str, version: &str, caps: impl Into<Value>) -> Value {
+pub(super) fn modern_request(
+    id: Option<i64>,
+    method: &str,
+    version: &str,
+    caps: impl Into<Value>,
+) -> Value {
     let caps: Value = caps.into();
     let mut request = json!({
         "jsonrpc": "2.0",
@@ -53,7 +59,7 @@ fn modern_request(id: Option<i64>, method: &str, version: &str, caps: impl Into<
     request
 }
 
-fn legacy_request(id: Option<i64>, method: &str) -> Value {
+pub(super) fn legacy_request(id: Option<i64>, method: &str) -> Value {
     let mut request = json!({ "jsonrpc": "2.0", "method": method, "params": {} });
     if let Some(id) = id {
         request["id"] = json!(id);
@@ -61,7 +67,7 @@ fn legacy_request(id: Option<i64>, method: &str) -> Value {
     request
 }
 
-fn removed_text(method: &str) -> String {
+pub(super) fn removed_text(method: &str) -> String {
     format!("method '{method}' was removed in MCP 2026-07-28")
 }
 
@@ -160,29 +166,6 @@ async fn legacy_and_other_notifications_keep_today_s_answers() {
     ] {
         assert!(send(modern, request.clone()).await.is_none(), "{request}");
     }
-}
-
-/// A modern call inside a batch is still served, and a removed method inside a
-/// batch is still refused. Why stdio shares only the removed-method refusal: a
-/// batch runs its items with `StdioClient::modern` off, so sharing the
-/// unserved-revision refusal would refuse every modern call in a batch.
-#[tokio::test]
-async fn a_modern_batch_keeps_serving_and_still_refuses_removed_methods() {
-    let answers = Gateway::dispatch_batch_for_client(
-        &test_meta_mcp(),
-        &test_tool_policy(),
-        &test_mtls_policy(),
-        json!([
-            modern_request(Some(1), "tools/list", "2026-07-28", json!({})),
-            modern_request(Some(2), "ping", "2026-07-28", json!({})),
-        ]),
-        "era-batch",
-    )
-    .await;
-    assert_eq!(answers.len(), 2, "{answers:?}");
-    assert!(answers[0].get("error").is_none(), "{}", answers[0]);
-    assert_eq!(answers[1]["error"]["code"], -32601, "{}", answers[1]);
-    assert_eq!(answers[1]["error"]["message"], removed_text("ping"));
 }
 
 /// A request that declares the revision and omits a required field is

@@ -21,7 +21,7 @@ use crate::gateway::meta_mcp::{InvokeScope, MetaMcp, MetaMcpCallerContext};
 impl Gateway {
     #[expect(
         clippy::too_many_lines,
-        reason = "one dispatch path; the telemetry-guard scope is part of it"
+        reason = "one dispatch path: signing, parse, routing and tools/call staging in order"
     )]
     pub(super) async fn dispatch_relay_scoped(
         meta_mcp: &Arc<MetaMcp>,
@@ -42,7 +42,7 @@ impl Gateway {
             Err(response) => return Some(stdio_delivery::StdioAnswer::Built(response)),
         };
 
-        let parsed = Self::parse_and_observe(&request, session_id);
+        let parsed = Self::parse_and_observe(&request, (session_id, client.serving));
         let (id, method, params, request_shape) = match parsed {
             Ok(parsed) => parsed,
             Err(early) => return early.map(stdio_delivery::StdioAnswer::Built),
@@ -112,7 +112,7 @@ impl Gateway {
                         client.tasks,
                         JsonRpcResponse::success_serialized(
                             id,
-                            meta_mcp.discover_document(client.modern),
+                            meta_mcp.discover_document(client.discover_lists_modern()),
                         ),
                     ),
                     "initialize" => stdio_tasks::advertised(
@@ -258,7 +258,7 @@ impl Gateway {
     /// carries an already-serialized error response.
     fn parse_and_observe<'r>(
         request: &'r serde_json::Value,
-        session_id: &str,
+        (session_id, serving): (&str, super::stdio_single::ModernServing),
     ) -> std::result::Result<
         (
             crate::protocol::RequestId,
@@ -301,41 +301,55 @@ impl Gateway {
             request_shape.declared_log_level(),
         );
 
-        // Notifications have no id — send no response. One exception
-        // (MIK-8368): a MODERN request that names a method the revision removed
-        // and carries an id is a request, and HTTP refuses it, so it is refused
-        // here too. Every other notification stays silent, whatever its id, era
-        // or revision. `parse_request_ref` already refused a request without an
-        // id (-32600 "Missing id"), and both use `is_notification_method`, so only
-        // a notification takes the second arm.
+        // The refusals `/mcp` runs from the body alone, in its order: a revision
+        // this build does not serve, then a method whose client capability was
+        // not declared, then a method the revision removed (MIK-8368, MIK-8380).
+        // The header checks are HTTP-only: stdio carries no headers.
+        let modern_serving = serving == super::stdio_single::ModernServing::Enabled;
+
+        // Notifications have no id — send no response. One exception: a MODERN
+        // request that names a method the revision removed and carries an id is
+        // a request, and HTTP refuses it, so it is refused here too (version
+        // first). Every other notification stays silent, whatever its id, era
+        // or revision. HTTP differs: it runs every check before its 202.
+        // `parse_request_ref` already refused a request without an id (-32600
+        // "Missing id"), and both use `is_notification_method`, so only a
+        // notification takes the second arm (MIK-8364).
         let id = match id {
             Some(id) if !is_notification_method(&method) => id,
             id => {
-                if let (Some(id), crate::protocol::meta::RequestShape::Modern(_)) =
+                if let (Some(id), crate::protocol::meta::RequestShape::Modern(fields)) =
                     (id.as_ref(), &request_shape)
                     && let Some(removed) =
                         crate::protocol::modern_refusal::removed_method_refusal(Some(id), &method)
                 {
-                    return Err(Some(removed.to_value_lossy()));
+                    let refusal = crate::protocol::modern_refusal::unsupported_modern_version(
+                        Some(id),
+                        fields,
+                        modern_serving,
+                    )
+                    .unwrap_or(removed);
+                    return Err(Some(refusal.to_value_lossy()));
                 }
                 debug!(notification = %method, "stdio: notification (no response)");
                 return Err(None);
             }
         };
 
-        // A method the 2026-07-28 revision removed is refused before anything
-        // acts on it, as `/mcp` refuses it, by the same function (MIK-8368).
-        // The other body-only refusals `/mcp` runs (an unserved revision, an
-        // undeclared capability) stay HTTP-only here: a batch runs its items
-        // with `StdioClient::modern` off, so sharing them would refuse every
-        // modern call inside a batch.
-        if matches!(
-            request_shape,
-            crate::protocol::meta::RequestShape::Modern(_)
-        ) && let Some(removed) =
-            crate::protocol::modern_refusal::removed_method_refusal(Some(&id), &method)
+        // One function answers both transports. Legacy and malformed shapes are
+        // not judged here, as before.
+        if let crate::protocol::meta::RequestShape::Modern(fields) = &request_shape
+            && let Some(rpc) = crate::protocol::modern_refusal::unsupported_modern_version(
+                Some(&id),
+                fields,
+                modern_serving,
+            )
+            .or_else(|| {
+                crate::protocol::modern_refusal::modern_method_refusal(Some(&id), fields, &method)
+                    .map(|(rpc, _)| rpc)
+            })
         {
-            return Err(Some(removed.to_value_lossy()));
+            return Err(Some(rpc.to_value_lossy()));
         }
 
         Ok((id, method, params, request_shape))

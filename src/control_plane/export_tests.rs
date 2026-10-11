@@ -223,14 +223,19 @@ fn exporter_with_secret_rejects_stale_sig_forgery() {
         .join("\n");
     std::fs::write(&log_path, format!("{rewritten}\n")).unwrap();
 
-    // Without a secret the exporter forwards (hash chain is intact).
+    // Without a secret the exporter refuses the signed log rather than pass
+    // the forgery on its intact hash chain (MIK-8374; it forwarded before).
     let mut plain = LogExporter::open(
         ExportSource::Governance,
         log_path.clone(),
         dir.path().join("cursor-plain.json"),
     )
     .unwrap();
-    assert!(plain.poll(&CollectingSink::new()).is_ok());
+    let err = plain.poll(&CollectingSink::new()).unwrap_err();
+    assert!(
+        matches!(&err, ExportError::VerificationFailed(m) if m.contains("no signing key")),
+        "expected the missing-key refusal, got {err:?}"
+    );
 
     // With the secret it halts on the stale-sig entry (own cursor, so it
     // rescans from genesis rather than resuming past the forged entry).

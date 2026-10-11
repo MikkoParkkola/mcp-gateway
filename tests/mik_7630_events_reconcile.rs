@@ -23,7 +23,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use delivery::{DEADLINE, delivery_config, events_at_least, fire, records, subscribe, wait_until};
-use gateway::{ALICE, Gateway};
+use gateway::{ADMIN, ALICE, Gateway};
 use receiver::{EventReply, Receiver, whsec};
 use serde_json::json;
 
@@ -83,6 +83,38 @@ async fn a_route_removed_while_down_holds_its_subscription() {
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(subs_on_disk(&root), 1, "held, not withdrawn");
     assert_eq!(rx.events().len(), posts, "nothing is sent for it");
+}
+
+/// MIK-8044.SURF.8: the admin's held listing, served through the route with a
+/// subscription really held: its type left with its route, and its failed
+/// delivery is still queued. The listing names the type, the count and the
+/// queued record (src/events/admin.rs), which only the unit tests saw before.
+#[tokio::test]
+async fn a_held_subscription_is_listed_with_its_queued_record() {
+    let (_dir, _rx, gw, _posts) = restart_after(|gw| {
+        std::fs::remove_file(gw.root().join("caps/github.yaml")).expect("remove the route");
+    })
+    .await;
+    let deadline = tokio::time::Instant::now() + DEADLINE;
+    // A poll: it exits on the listing showing the entry, and asserts after.
+    let (status, last) = loop {
+        let (status, body) = gw.admin(Some(ADMIN), "GET", "/ui/api/events/held").await;
+        let one = status == 200 && body["held"].as_array().is_some_and(|h| h.len() == 1);
+        if one || tokio::time::Instant::now() >= deadline {
+            break (status, body);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(status, 200, "admin held listing answered {status}: {last}");
+    assert_eq!(
+        last["held"].as_array().map(Vec::len),
+        Some(1),
+        "no single held entry appeared: {last}"
+    );
+    let held = &last["held"][0];
+    assert_eq!(held["type"], gateway::EVENT, "{last}");
+    assert_eq!(held["count"], 1, "{last}");
+    assert_eq!(held["pendingRecords"], 1, "{last}");
 }
 
 /// AC1 as amended by MIK-8057: events on with webhooks off offers no webhook

@@ -318,6 +318,7 @@ mod tests {
     mod boot;
     mod build_meta_wiring;
     mod era_parity;
+    mod era_split;
     mod startup_strategy;
     mod stdio_dispatch;
 
