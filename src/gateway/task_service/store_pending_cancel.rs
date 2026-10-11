@@ -16,10 +16,9 @@ use crate::protocol::tasks::Task;
 
 /// Put `descriptor`'s cancel on `record` as pending, claimed at `now`.
 ///
-/// The one shape both the claim and the dispatch preflight's reservation
-/// use, so what is reserved is what is written. The descriptor leaves the
-/// row; a legacy row keeps its call as a target first, and the pending
-/// cancel names its backend through that target where one does.
+/// The descriptor leaves the row; a legacy row keeps its call as a target
+/// first, and the pending cancel names its backend through that target where
+/// one does.
 pub(super) fn record_pending_claim(
     task: &Task,
     record: &mut Record,
@@ -43,15 +42,6 @@ pub(super) fn record_pending_claim(
         claimed_at: now,
     });
     record.version = record.version.max(PENDING_CANCEL_VERSION);
-}
-
-/// The widest encoding of [`record_pending_claim`]'s result: counters and
-/// instants at their longest decimal spellings.
-pub(super) fn widest_pending_claim(task: &Task, record: &mut Record, descriptor: &UpstreamRecord) {
-    record_pending_claim(task, record, descriptor, i64::MIN);
-    if let Some(pending) = record.upstream_cancel_pending.as_mut() {
-        pending.attempts = u8::MAX;
-    }
 }
 
 /// Why a pending cancel was given up.
