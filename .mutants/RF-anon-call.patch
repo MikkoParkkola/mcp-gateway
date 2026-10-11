@@ -1,0 +1,28 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index a8190005e..7a43ac5b4 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -225,7 +225,7 @@ impl MetaMcp {
+                 // answered before any resolution (lead ruling 2026-10-11).
+                 if backend
+                     .as_deref()
+-                    .is_some_and(|b| self.lacks_principal_on_required(b, caller_proof))
++                    .is_some_and(|b| false && self.lacks_principal_on_required(b, caller_proof))
+                 {
+                     return Err(super::visible::absent_name(tool));
+                 }
+diff --git a/src/gateway/meta_mcp/invoke/caller_verdict.rs b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+index cd27f5e5c..9a394f8f2 100644
+--- a/src/gateway/meta_mcp/invoke/caller_verdict.rs
++++ b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+@@ -101,10 +101,6 @@ impl MetaMcp {
+         let proof = CallerProof::new(caller.verified_identity, caller.provenance());
+         // No principal on a required backend: no slot can hold this caller's
+         // catalogue, so it lacks the tool, answered before any resolution.
+-        if self.lacks_principal_on_required(&backend, proof) {
+-            visible::record_visibility(server, tool, Visibility::Withheld(Withholding::Lacked));
+-            return Ok(CallerVerdict::Absent);
+-        }
+         // A managed account with no current grant has no view (R3.7). Nothing
+         // is resolved here: resolving would create a consent journey. The
+         // marker makes every later listing withhold the backend at once. A call

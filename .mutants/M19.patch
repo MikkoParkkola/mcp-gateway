@@ -1,0 +1,23 @@
+diff --git a/src/gateway/meta_mcp/invoke/caller_verdict.rs b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+index cd27f5e5c..496cf909a 100644
+--- a/src/gateway/meta_mcp/invoke/caller_verdict.rs
++++ b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+@@ -136,6 +136,18 @@ impl MetaMcp {
+                 caller.verified_identity,
+             )
+             .await?;
++        if !backend.has_cached_tools_for(resolved.binding.as_deref()) {
++            visible::carry_dispatch(
++                server,
++                tool,
++                visible::Carried {
++                    backend,
++                    resolved,
++                    fill_error: None,
++                },
++            );
++            return Ok(CallerVerdict::Proceed);
++        }
+         let judged = self
+             .judge_caller_slot(
+                 (server, tool),

@@ -1,0 +1,14 @@
+diff --git a/src/backend/caller_slots.rs b/src/backend/caller_slots.rs
+index d155d13d4..3cd3f9458 100644
+--- a/src/backend/caller_slots.rs
++++ b/src/backend/caller_slots.rs
+@@ -55,9 +55,6 @@ impl Backend {
+         let Some(entry) = self.pool.get(&key).map(|slot| Arc::clone(slot.value())) else {
+             return;
+         };
+-        if !entry.tools_cache.ever_populated() {
+-            return;
+-        }
+         self.caller_slots.insert(
+             principal_id.to_string(),
+             CallerSlot::Held {

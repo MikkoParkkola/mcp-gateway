@@ -1,0 +1,15 @@
+diff --git a/src/gateway/meta_mcp/listing_view.rs b/src/gateway/meta_mcp/listing_view.rs
+index cc57d567e..2363b96bd 100644
+--- a/src/gateway/meta_mcp/listing_view.rs
++++ b/src/gateway/meta_mcp/listing_view.rs
+@@ -70,8 +70,8 @@ impl MetaMcp {
+             return ListingView::NoView;
+         }
+         match backend.caller_slot_binding(&id) {
+-            Some(binding) => ListingView::Caller(binding),
+-            None => ListingView::Cold,
++            Some(_) => ListingView::Shared,
++            None => ListingView::Shared,
+         }
+     }
+ 

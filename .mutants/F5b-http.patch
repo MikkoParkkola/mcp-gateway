@@ -1,0 +1,15 @@
+diff --git a/src/gateway/router/handlers/dispatch_tools_call.rs b/src/gateway/router/handlers/dispatch_tools_call.rs
+index b196feea0..6aee40a8d 100644
+--- a/src/gateway/router/handlers/dispatch_tools_call.rs
++++ b/src/gateway/router/handlers/dispatch_tools_call.rs
+@@ -224,6 +224,10 @@ pub(super) async fn tools_call(
+         }
+     }
+ 
++    for target in &backend_targets {
++        let target = target.as_target();
++        let _ = state.meta_mcp.resolve_propagation_credential(target.server, verified_identity.as_ref()).await;
++    }
+     // Firewall: pre-invocation request scan
+     #[cfg(feature = "firewall")]
+     for (index, target) in backend_targets.iter().enumerate() {

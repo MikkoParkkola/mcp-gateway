@@ -1,0 +1,40 @@
+diff --git a/src/gateway/meta_mcp/invoke/caller_verdict.rs b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+index cd27f5e5c..6c6f0b594 100644
+--- a/src/gateway/meta_mcp/invoke/caller_verdict.rs
++++ b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+@@ -98,6 +98,9 @@ impl MetaMcp {
+         if self.tool_visible_to(server, tool, caller.scope(), session_id) != Visibility::Visible {
+             return Ok(CallerVerdict::Proceed);
+         }
++        if backend.input_schema_enforcement_for_test() == crate::config::InputSchemaEnforcement::Off {
++            return Ok(CallerVerdict::Proceed);
++        }
+         let proof = CallerProof::new(caller.verified_identity, caller.provenance());
+         // No principal on a required backend: no slot can hold this caller's
+         // catalogue, so it lacks the tool, answered before any resolution.
+diff --git a/src/gateway/meta_mcp/invoke/pre_dispatch.rs b/src/gateway/meta_mcp/invoke/pre_dispatch.rs
+index 2c4ef934b..55fc539fd 100644
+--- a/src/gateway/meta_mcp/invoke/pre_dispatch.rs
++++ b/src/gateway/meta_mcp/invoke/pre_dispatch.rs
+@@ -208,7 +208,7 @@ impl MetaMcp {
+         // failed fill is answered below exactly as F13's failed fill is, with
+         // no second fill.
+         let mut failed_fill = None;
+-        if let Some(backend) = backend.filter(|backend| backend.keeps_per_user_catalogues()) {
++        if let Some(backend) = backend.filter(|backend| backend.keeps_per_user_catalogues() && !(backend.input_schema_enforcement_for_test() == crate::config::InputSchemaEnforcement::Off)) {
+             let absent = match crate::gateway::meta_mcp::visible::recorded_visibility(server, tool)
+             {
+                 Some(crate::gateway::meta_mcp::visible::Visibility::Visible) => false,
+diff --git a/src/gateway/router/backend_handlers/key_check.rs b/src/gateway/router/backend_handlers/key_check.rs
+index 68067aa13..5390b66ed 100644
+--- a/src/gateway/router/backend_handlers/key_check.rs
++++ b/src/gateway/router/backend_handlers/key_check.rs
+@@ -48,7 +48,7 @@ pub(super) async fn key_refusal(
+     // MIK-8356: on a per-user backend, a tool this caller's own catalogue
+     // withholds or lacks answers as an absent name (-32601), whatever the
+     // argument-key mode; the argument keys are judged only after.
+-    if backend.keeps_per_user_catalogues() {
++    if backend.keeps_per_user_catalogues() && !(backend.input_schema_enforcement_for_test() == crate::config::InputSchemaEnforcement::Off) {
+         let verdict = backend.catalogue_verdict(identity_key, headers, tool).await;
+         // The check may have filled the caller's slot: index it once filled
+         // (MIK-8356), whatever the verdict.

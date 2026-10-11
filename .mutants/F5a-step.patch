@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/invoke.rs b/src/gateway/meta_mcp/invoke.rs
+index a8190005e..c30f60900 100644
+--- a/src/gateway/meta_mcp/invoke.rs
++++ b/src/gateway/meta_mcp/invoke.rs
+@@ -146,6 +146,9 @@ impl MetaMcp {
+         let server = extract_required_str(args, "server")?;
+         let tool = extract_required_str(args, "tool")?;
+ 
++        let _ = self
++            .resolve_dispatch((server, tool), self.backends.get(server).as_deref(), caller_proof, verified_identity)
++            .await;
+         self.check_or_stamp(args, session_id, caller, (server, tool))?;
+ 
+         let mut arguments = parse_tool_arguments(args)?;

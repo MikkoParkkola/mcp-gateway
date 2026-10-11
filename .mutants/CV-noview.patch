@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/caller_verdict.rs b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+index cd27f5e5c..28e197261 100644
+--- a/src/gateway/meta_mcp/invoke/caller_verdict.rs
++++ b/src/gateway/meta_mcp/invoke/caller_verdict.rs
+@@ -112,7 +112,7 @@ impl MetaMcp {
+         // reader after this answers as absent; a dispatch naming the backend
+         // proceeds to that account's connect offer, the same for every tool
+         // name (MIK-6745 section 9.2, predicate D).
+-        if self.has_no_view_for(&backend, proof).await {
++        if false && self.has_no_view_for(&backend, proof).await {
+             if let Some(principal) = self.principal_for(&backend, proof) {
+                 backend.record_no_view(&principal.stable_actor_id());
+             }

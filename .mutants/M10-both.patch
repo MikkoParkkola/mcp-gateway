@@ -1,0 +1,34 @@
+diff --git a/src/gateway/meta_mcp/direct_route.rs b/src/gateway/meta_mcp/direct_route.rs
+index 878f70be0..4741f6f94 100644
+--- a/src/gateway/meta_mcp/direct_route.rs
++++ b/src/gateway/meta_mcp/direct_route.rs
+@@ -226,14 +226,6 @@ impl MetaMcp {
+         let Some(binding) = binding else {
+             return;
+         };
+-        if backend.identity_propagation_config().is_some_and(|idp| {
+-            matches!(
+-                idp.strategy,
+-                crate::identity_propagation::PropagationStrategyKind::Passthrough
+-            )
+-        }) {
+-            return;
+-        }
+         if let Some(principal) = self.principal_for(backend, caller) {
+             backend.record_caller_slot(&principal.stable_actor_id(), binding);
+         }
+diff --git a/src/gateway/meta_mcp/listing_view.rs b/src/gateway/meta_mcp/listing_view.rs
+index cc57d567e..fa38006fc 100644
+--- a/src/gateway/meta_mcp/listing_view.rs
++++ b/src/gateway/meta_mcp/listing_view.rs
+@@ -56,9 +56,7 @@ impl MetaMcp {
+         let Some(idp) = backend.identity_propagation_config() else {
+             return ListingView::Shared;
+         };
+-        if matches!(idp.strategy, PropagationStrategyKind::Passthrough) {
+-            return ListingView::Cold;
+-        }
++        let _ = PropagationStrategyKind::Passthrough;
+         if self.lacks_principal_on_required(backend, scope.caller) {
+             return ListingView::NoView;
+         }

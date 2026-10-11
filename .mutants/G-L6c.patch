@@ -1,0 +1,14 @@
+diff --git a/src/gateway/meta_mcp/listing_view.rs b/src/gateway/meta_mcp/listing_view.rs
+index cc57d567e..b46bcd8b0 100644
+--- a/src/gateway/meta_mcp/listing_view.rs
++++ b/src/gateway/meta_mcp/listing_view.rs
+@@ -159,7 +159,8 @@ impl MetaMcp {
+     ) -> Option<Tool> {
+         match self.listing_view(backend, scope) {
+             ListingView::Caller(binding) => backend.get_cached_tool_for(Some(&binding), tool),
+-            ListingView::Shared | ListingView::Cold => backend.get_cached_tool(tool),
++            ListingView::Shared => backend.get_cached_tool(tool),
++            ListingView::Cold => None,
+             ListingView::NoView => None,
+         }
+     }

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/stdio_route_stage.rs b/src/gateway/server/stdio_route_stage.rs
+index b18da2d0a..58fc42bcc 100644
+--- a/src/gateway/server/stdio_route_stage.rs
++++ b/src/gateway/server/stdio_route_stage.rs
+@@ -108,7 +108,7 @@ impl Gateway {
+             let checked = target.as_target();
+             let _ = meta_mcp
+                 .caller_verdict(
+-                    (checked.server, checked.tool),
++                    (checked.server, ""),
+                     caller,
+                     Some(session_id),
+                     crate::gateway::meta_mcp::invoke::TargetNaming::of(
