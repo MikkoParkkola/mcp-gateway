@@ -123,10 +123,7 @@ impl Combining {
 /// every value) and depth, each against its cap. Iterative over one frame
 /// per open container, so its stack is bounded by the depth cap whatever
 /// the answer's width, and deep input cannot overflow.
-pub(crate) fn preflight(
-    detector: &CollusionDetector,
-    answer: &Value,
-) -> Result<Measured, Unreadable> {
+fn preflight(detector: &CollusionDetector, answer: &Value) -> Result<Measured, Unreadable> {
     let text_cap = detector.views.answer_text_cap.load(Ordering::Relaxed);
     let per_leaf = std::mem::size_of::<super::Segment>();
     let node_cap = text_cap / 16;
@@ -224,6 +221,18 @@ pub(crate) fn build(
     answer: &Value,
     probe: Option<&mut Vec<(usize, usize)>>,
 ) -> Result<AnswerView, Unreadable> {
+    let walk = reserve_walk(detector, answer)?;
+    build_with(detector, answer, walk, probe)
+}
+
+/// The preflight, then the walks' charge (D2/D8): the reference lists every
+/// walk of `answer` builds (the gate's leaf reading, the view's forms, the
+/// label walk and the seam pass) and the normalizer's combining buffer,
+/// reserved from `VIEW_BYTES` before any walk allocates.
+pub(crate) fn reserve_walk(
+    detector: &CollusionDetector,
+    answer: &Value,
+) -> Result<WalkCharge, Unreadable> {
     let measured = preflight(detector, answer)?;
     let refs = measured.nodes * REF_BYTES_PER_NODE + measured.combining * COMBINING_BYTES_PER_CHAR;
     let charge = detector
@@ -231,6 +240,24 @@ pub(crate) fn build(
         .budget
         .reserve(refs)
         .ok_or(Unreadable::NoRoom)?;
+    Ok(WalkCharge { charge, refs })
+}
+
+/// The walks' reservation, carried into the view, which holds it for as
+/// long as the answer is judged (retention, labels, seams).
+pub(crate) struct WalkCharge {
+    charge: ViewCharge,
+    refs: usize,
+}
+
+/// [`build`] within an already reserved walk charge.
+pub(crate) fn build_with(
+    detector: &CollusionDetector,
+    answer: &Value,
+    walk: WalkCharge,
+    probe: Option<&mut Vec<(usize, usize)>>,
+) -> Result<AnswerView, Unreadable> {
+    let WalkCharge { charge, refs } = walk;
     let mut entries = Entries {
         vec: Vec::new(),
         charge,
@@ -277,9 +304,11 @@ pub(crate) fn build(
         return Err(Unreadable::NoRoom);
     }
     let boxed = std::mem::take(&mut entries.vec).into_boxed_slice();
-    entries.refs = 0;
-    let _ = entries.charge.resize(boxed.len() * 8);
-    entries.note(boxed.len() * 8);
+    // The walk charge stays: the answer's later walks (labels, seams) run
+    // while the view lives.
+    let held = entries.refs + boxed.len() * 8;
+    let _ = entries.charge.resize(held);
+    entries.note(held);
     Ok(AnswerView {
         entries: boxed,
         charge: entries.charge,

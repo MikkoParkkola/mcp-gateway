@@ -140,15 +140,15 @@ impl Drop for EvidenceCharge {
 /// A judged step's exact evidence candidates, with their charge (D9).
 #[must_use]
 pub(crate) struct StepEvidence {
-    fps: Arc<[u64]>,
+    fps: Box<[u64]>,
     /// Held for its `Drop`: evidence never outlives its charge.
     _charge: EvidenceCharge,
 }
 
 impl StepEvidence {
     /// The candidates, offered to the record's sample.
-    pub(crate) fn fps(&self) -> Arc<[u64]> {
-        Arc::clone(&self.fps)
+    pub(crate) fn fps(&self) -> &[u64] {
+        &self.fps
     }
 }
 
@@ -253,8 +253,8 @@ impl BigStep {
 
     /// A copy of the staged evidence candidates, for the one record arm
     /// that meets a step never judged (D9: recorded as unread, fail closed).
-    pub(crate) fn staged_evidence(&self) -> Arc<[u64]> {
-        Arc::from(&*self.step_ev)
+    pub(crate) fn staged_evidence(&self) -> &[u64] {
+        &self.step_ev
     }
 
     /// Bytes the attachments hold, charged to the plan's total.
@@ -282,14 +282,11 @@ impl BigStep {
         } = self;
         let detector = Arc::clone(&reservation.detector);
         let charge = reservation.split_evidence();
-        let kept: Vec<u64> = step_ev
-            .iter()
-            .copied()
-            .filter(|&fp| found.contains(fp))
-            .collect();
-        drop(step_ev);
+        // Filtered in place: the evidence never needs a second buffer.
+        let mut kept = step_ev.into_vec();
+        kept.retain(|&fp| found.contains(fp));
         let evidence = (!kept.is_empty()).then(|| StepEvidence {
-            fps: kept.into(),
+            fps: kept.into_boxed_slice(),
             _charge: charge,
         });
         let room = reservation.n + reservation.headroom;
@@ -362,7 +359,7 @@ impl BigStep {
         drop(reservation);
         UnreadStep {
             evidence: StepEvidence {
-                fps: step_ev.into(),
+                fps: step_ev,
                 _charge: charge,
             },
         }
@@ -395,7 +392,7 @@ impl CollusionDetector {
         &self,
         (source, principal): (&str, &str),
         (sensitive, flows): (bool, u64),
-        (fps, cut, sample): super::Recorded,
+        (fps, cut, sample): super::Recorded<'_>,
         now: Instant,
     ) {
         self.record_held_at(
@@ -460,7 +457,7 @@ impl CollusionDetector {
 
     /// Mark `caller`'s excuse from `source` lost for room: a step whose
     /// attachments did not fit the plan (F5).
-    pub(crate) fn mark_step_lost(&self, source: &str, caller: &str) {
+    pub(in super::super) fn mark_step_lost(&self, source: &str, caller: &str) {
         let pair = (self.digest(source), self.digest(caller));
         let until = Instant::now() + self.params.window;
         let mut state = self.state.lock();

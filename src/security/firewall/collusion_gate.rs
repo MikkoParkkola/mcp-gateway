@@ -661,19 +661,21 @@ impl Firewall {
     /// preflight runs first, so no walk ever runs past its caps. Uncounted.
     fn read_answer<'v>(&self, answer: &'v Value) -> Option<Delivered<'v>> {
         let detector = self.relay_detector()?;
-        if let Err(why) = view::preflight(detector, answer) {
-            return Some(Delivered::of_mode(Mode::Unread(why)));
-        }
+        // The walks' charge is reserved before the first walk allocates (D8).
+        let walk = match view::reserve_walk(detector, answer) {
+            Ok(walk) => walk,
+            Err(why) => return Some(Delivered::of_mode(Mode::Unread(why))),
+        };
         let (leaves, values) = delivery_parts(answer);
         if let Some(delivered) = Delivered::of_parts(leaves, values) {
             // D8: retention reads even a leaf reading through its sampled,
             // charged view; no room means unread.
-            return Some(match view::build(detector, answer, None) {
+            return Some(match view::build_with(detector, answer, walk, None) {
                 Ok(view) => delivered.with_answer(answer).with_found_view(view),
                 Err(why) => Delivered::of_mode(Mode::Unread(why)),
             });
         }
-        Some(match view::build(detector, answer, None) {
+        Some(match view::build_with(detector, answer, walk, None) {
             Ok(view) => Delivered::of_mode(Mode::View(view)).with_answer(answer),
             Err(why) => Delivered::of_mode(Mode::Unread(why)),
         })

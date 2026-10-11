@@ -9,7 +9,7 @@ use std::collections::HashSet;
 
 use serde_json::{Value, json};
 
-use super::big::{filler, firewall, step_of};
+use super::big::{SOURCE, deliver, filler, firewall, refusal, relays, step_of};
 use crate::security::firewall::PlanStaging;
 use crate::security::firewall::collusion::big::VIEW_BYTES;
 use crate::security::firewall::collusion::{CollusionDetector, RelayParams};
@@ -225,6 +225,21 @@ fn a_selection_without_view_room_abandons_its_sketch_and_keeps_evidence() {
         detector.selection_budget_refusals(),
         1,
         "a selection without view room was not refused and counted"
+    );
+    let middle = &text[40_000..44_000];
+    assert!(
+        relays(&fw, "bob", middle),
+        "the step's evidence was not offered after the refused selection"
+    );
+    assert!(
+        detector.sketch_positions(SOURCE, "alice").is_empty(),
+        "a refused selection kept or published its sketch"
+    );
+    deliver(&fw, "carol", middle);
+    let why = refusal(&fw, "alice", middle).expect("the refused selection's holder was excused");
+    assert!(
+        why.contains("ran out of room"),
+        "the refused selection's holder was not refused for lost room: {why}"
     );
 }
 

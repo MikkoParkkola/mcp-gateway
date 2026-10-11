@@ -288,12 +288,9 @@ fn unread_key() -> &'static RandomState {
 
 /// What one record holds: the receipt's fingerprints; what the caller
 /// received (sketched as excuse, and its middle sampled as evidence); and
-/// exact evidence candidates sampled but never sketched (`MIK-8066.BIG.3`).
-pub(crate) type Recorded = (
-    Vec<u64>,
-    Option<std::sync::Arc<[u64]>>,
-    Option<std::sync::Arc<[u64]>>,
-);
+/// exact evidence candidates sampled but never sketched (`MIK-8066.BIG.3`),
+/// borrowed: recording reads them synchronously and copies none (D9).
+pub(super) type Recorded<'a> = (Vec<u64>, Option<std::sync::Arc<[u64]>>, Option<&'a [u64]>);
 
 fn count(n: usize) -> u64 {
     u64::try_from(n).unwrap_or(u64::MAX)
@@ -507,7 +504,7 @@ impl CollusionDetector {
         source: &str,
         principal: &str,
         held: (bool, Flows),
-        recorded: Recorded,
+        recorded: Recorded<'_>,
         now: Instant,
     ) {
         let id = HolderId {
@@ -517,10 +514,13 @@ impl CollusionDetector {
         self.record_holder_at(source, id, held, recorded, now);
     }
 
-    /// The holder an unread plan of `caller`'s records its evidence under (D6).
-    fn unread_holder(caller: &str) -> HolderId {
+    /// The one holder every unread plan records its evidence under (D6, A4):
+    /// shared by every caller, so unread evidence adds at most one holder per
+    /// fingerprint whatever the caller count. Each caller is marked lost on
+    /// its own; the holder is another principal to every caller.
+    fn unread_holder() -> HolderId {
         HolderId {
-            key: unread_key().hash_one(caller),
+            key: unread_key().hash_one(""),
             unread: true,
         }
     }
@@ -530,14 +530,14 @@ impl CollusionDetector {
     /// sampled as evidence, nothing sketched, so nothing excuses anyone.
     pub(crate) fn record_unread_at(
         &self,
-        (source, caller): (&str, &str),
+        source: &str,
         (sensitive, flows): (bool, u64),
-        recorded: Recorded,
+        recorded: Recorded<'_>,
         now: Instant,
     ) {
         self.record_holder_at(
             source,
-            Self::unread_holder(caller),
+            Self::unread_holder(),
             (sensitive, Flows::Any(flows)),
             recorded,
             now,
@@ -549,7 +549,7 @@ impl CollusionDetector {
         source: &str,
         id: HolderId,
         (sensitive, flows): (bool, Flows),
-        (mut fps, cut, sample): Recorded,
+        (mut fps, cut, sample): Recorded<'_>,
         now: Instant,
     ) {
         if self.params.action == RelayAction::Off {
@@ -571,7 +571,7 @@ impl CollusionDetector {
         // too), in the room the receipt left under the per-delivery bound.
         // `MIK-8066.BIG.3`: a plan step's exact evidence candidates, sampled
         // the same way; never sketched, so a Bloom hit never becomes one.
-        for candidates in [cut.as_deref(), sample.as_deref()].into_iter().flatten() {
+        for candidates in [cut.as_deref(), sample].into_iter().flatten() {
             let room = MAX_SOURCE_FINGERPRINTS.saturating_sub(fps.len());
             let (_, middle) = thin::thinned_middle(candidates, &fps, room);
             fps.extend(middle);
@@ -824,6 +824,27 @@ impl CollusionDetector {
     #[cfg(test)]
     fn is_tracked(&self, fp: u64) -> bool {
         self.state.lock().entries.contains_key(&fp)
+    }
+
+    /// Distinct unread holders recorded for `fp` (`MIK-8066` A4).
+    pub(crate) fn unread_holders_of(&self, fp: u64) -> usize {
+        let state = self.state.lock();
+        let Some(Entry {
+            holders: Holders::Tracked(tracked),
+            ..
+        }) = state.entries.get(&fp)
+        else {
+            return 0;
+        };
+        let mut keys: Vec<u64> = tracked
+            .records
+            .iter()
+            .filter(|h| h.unread)
+            .map(|h| h.principal)
+            .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        keys.len()
     }
 
     pub(crate) fn tracked_fingerprints(&self) -> usize {

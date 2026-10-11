@@ -490,3 +490,34 @@ fn a_second_view_retention_keeps_the_first_ones_cut() {
         "a second view retention erased the excuse"
     );
 }
+
+/// `MIK-8066` A4: every caller's unread evidence is held by one shared
+/// unread principal, so five callers' unread plans of one text add one
+/// unread holder to its fingerprints, not five. Each caller is still marked
+/// lost on its own.
+#[test]
+fn unread_plans_of_many_callers_share_one_unread_holder() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    detector.set_answer_text_cap(512 * 1024);
+    let (text, step) = step_of(1201, 300 * 1024);
+    let answer = json!({"a": text, "pad": filler(1202, 900 * 1024)});
+    let callers: Vec<String> = (0..5).map(|i| format!("caller{i}")).collect();
+    for caller in &callers {
+        let _ = deliver_plan_for(&fw, caller, std::slice::from_ref(&step), &answer);
+        assert!(
+            detector.excuse_lost(SOURCE, caller),
+            "premise: {caller}'s unread plan did not mark it lost"
+        );
+    }
+    let fp = detector
+        .fingerprints(&text)
+        .into_iter()
+        .find(|&fp| detector.tracks(fp))
+        .expect("premise: the unread evidence was recorded");
+    assert_eq!(
+        detector.unread_holders_of(fp),
+        1,
+        "unread evidence was held per caller"
+    );
+}

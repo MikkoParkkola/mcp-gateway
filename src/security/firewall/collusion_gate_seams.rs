@@ -102,10 +102,10 @@ impl Firewall {
         detector: &CollusionDetector,
         (source, caller): (&str, RelayCaller<'_>),
         held: (bool, u64),
-        recorded: Recorded,
+        recorded: Recorded<'_>,
         now: std::time::Instant,
     ) {
-        detector.record_unread_at((source, caller.key()), held, recorded, now);
+        detector.record_unread_at(source, held, recorded, now);
         detector.mark_step_lost(source, caller.key());
     }
 
