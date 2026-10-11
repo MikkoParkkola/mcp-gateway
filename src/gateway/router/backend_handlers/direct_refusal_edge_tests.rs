@@ -103,7 +103,9 @@ async fn a_malformed_tool_name_is_refused_before_authorization() {
 async fn an_argument_the_sanitizer_rejects_never_reaches_the_backend() {
     let (status, body, reached) =
         call(json!({"name": "allowed_tool", "arguments": {"q": "a\u{0}b"}})).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    // MIK-8154 SAN.1: refused at intake as `/mcp` refuses it, with HTTP 400
+    // (was 403 when the direct route sanitized only after authorization).
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], -32600, "{body}");
     assert_eq!(reached, 0, "{body}");
 }

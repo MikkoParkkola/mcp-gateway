@@ -614,7 +614,13 @@ pub struct SecurityConfig {
     /// Settings read only under `posture: hardened`. Restart-only.
     #[serde(default)]
     pub hardened: crate::security::posture::HardenedConfig,
-    /// Enable input sanitization (null byte rejection, control char stripping, NFC).
+    /// On by default: sanitize the whole request (method, params, `_meta`) at
+    /// intake, before signing, authorization and the firewall, on `/mcp`,
+    /// `/mcp/{name}`, stdio and task submits. A NUL is refused (-32600); a
+    /// control character is stripped. The `id` and the signing and chain nonces
+    /// are validated, never rewritten. A `passthrough: true` backend is exempt
+    /// from sanitization only, on every route, when it is every call target.
+    /// Off: no route sanitizes.
     pub sanitize_input: bool,
     /// Enable SSRF protection for outbound URLs.
     pub ssrf_protection: bool,

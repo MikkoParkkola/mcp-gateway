@@ -336,7 +336,10 @@ pub(super) async fn intake(
     // MIK-8154 S2': the protocol fields are validated before signing and the
     // chain nonce take them off the request, and never rewritten.
     if state.sanitize_input
-        && let Err(e) = crate::security::sanitize::validate_protocol_fields(&request)
+        && let Err(e) = crate::security::sanitize::validate_protocol_fields(
+            &request,
+            &crate::gateway::PROTOCOL_NONCES,
+        )
     {
         return Err(build_error_response(
             None,

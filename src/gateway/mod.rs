@@ -11,6 +11,13 @@ mod differential;
 mod http_error;
 pub mod input_bridge;
 mod meta_mcp;
+
+/// The nonce fields every entry route validates before taking them off a
+/// request (MIK-8154 S2'): the signing nonce and the chain nonce.
+pub(crate) const PROTOCOL_NONCES: [&str; 2] = [
+    meta_mcp::signing::NONCE_META,
+    crate::protocol::mrtr::CHAIN_NONCE_META,
+];
 /// Where the CLI runner notes a child it started for the call's invocation
 /// record (MIK-7926.FIX.2), without `meta_mcp` becoming crate-visible.
 pub(crate) use meta_mcp::invoke::audit::note_process;

@@ -84,7 +84,6 @@ pub(crate) enum Na {
 /// The ticket that closes an expected gap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Ticket {
-    Mik8154,
     Mik8353,
 }
 
@@ -191,13 +190,12 @@ fn the_table_answers_every_route_and_stage() {
             }
         }
     }
-    // Today's gaps: R1 nonce (relay), R3 sanitize and R4a nonce give-back
-    // (D2). P3 closed R5 route firewall, sanitize and X14; MIK-8315 closed
+    // Today's gaps: R1 nonce (relay) and R4a nonce give-back (D2). P3 closed R5 route firewall, sanitize and X14; MIK-8315 closed
     // authorize (D3); MIK-8150 closed R2 and R5 nonce give-back (admission);
     // MIK-8351 closed R3 rescan; MIK-8159 closed R2's chain link; MIK-8154
-    // closed R3 lease.
+    // closed R3 lease and R3 sanitize.
     assert_eq!(
-        gaps, 3,
+        gaps, 2,
         "the gap count moved: update the table and this pin"
     );
 }

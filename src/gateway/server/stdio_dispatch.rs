@@ -236,7 +236,11 @@ impl Gateway {
         };
         // MIK-8154 S2': the protocol fields, before anything takes them off.
         if sanitize == InputSanitizing::On {
-            crate::security::sanitize::validate_protocol_fields(request).map_err(|error| {
+            crate::security::sanitize::validate_protocol_fields(
+                request,
+                &crate::gateway::PROTOCOL_NONCES,
+            )
+            .map_err(|error| {
                 JsonRpcResponse::error(None, -32600, error.to_string()).to_value_lossy()
             })?;
         }

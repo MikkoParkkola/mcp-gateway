@@ -229,15 +229,12 @@ pub(crate) fn validate_protocol_text(text: &str) -> Result<()> {
 /// # Errors
 ///
 /// `Error::Protocol` for the first field that fails [`validate_protocol_text`].
-pub(crate) fn validate_protocol_fields(request: &Value) -> Result<()> {
+pub(crate) fn validate_protocol_fields(request: &Value, nonces: &[&str]) -> Result<()> {
     if let Some(Value::String(id)) = request.get("id") {
         validate_protocol_text(id)?;
     }
     let meta = request.pointer("/params/_meta");
-    for field in [
-        crate::gateway::meta_mcp::signing::NONCE_META,
-        crate::protocol::mrtr::CHAIN_NONCE_META,
-    ] {
+    for field in nonces {
         if let Some(Value::String(text)) = meta.and_then(|meta| meta.get(field)) {
             validate_protocol_text(text)?;
         }

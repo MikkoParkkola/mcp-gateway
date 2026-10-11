@@ -238,14 +238,17 @@ pub(super) async fn read_envelope(
     // (S2'), then the whole request sanitized unless the backend this route
     // names is `passthrough` (option (a)).
     if state.sanitize_input {
-        let sanitized = crate::security::sanitize::validate_protocol_fields(&json_request)
-            .and_then(|()| {
-                if state.meta_mcp.backend_is_passthrough(name) {
-                    Ok(None)
-                } else {
-                    crate::security::sanitize::sanitize_request(&json_request).map(Some)
-                }
-            });
+        let sanitized = crate::security::sanitize::validate_protocol_fields(
+            &json_request,
+            &crate::gateway::PROTOCOL_NONCES,
+        )
+        .and_then(|()| {
+            if state.meta_mcp.backend_is_passthrough(name) {
+                Ok(None)
+            } else {
+                crate::security::sanitize::sanitize_request(&json_request).map(Some)
+            }
+        });
         match sanitized {
             Ok(Some(clean)) => json_request = clean,
             Ok(None) => {}

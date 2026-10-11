@@ -36,6 +36,20 @@ fn refused(scope: Scope<'_>, e: &crate::Error) -> Rejection {
     build_http_error_response(Some(scope.id.clone()), code, e.to_string(), status)
 }
 
+/// A 7b refusal, answered with the HTTP status `/mcp` gives the same refusal
+/// (dispatch_tools_call.rs): 409 for 409, otherwise 400 (MIK-8154 ANON.1,
+/// design r3.2). Its own function: 7a's refusals keep [`refused`], so a 7a
+/// cache-at-capacity 503 stays 503 (row CAP1).
+fn lease_refused(scope: Scope<'_>, e: &crate::Error) -> Rejection {
+    let code = e.to_rpc_code();
+    let status = if code == 409 {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::BAD_REQUEST
+    };
+    build_http_error_response(Some(scope.id.clone()), code, e.to_string(), status)
+}
+
 /// Stage 7a. A broken stream forces re-issue with a NEW request id, so without
 /// this the duplicate side effect lands twice on the one route that never
 /// reaches `invoke_tool_traced`.
@@ -134,7 +148,7 @@ pub(super) fn execution_lease(
         }
         // The caller's `?` drops the undispatched 7a reservation, which
         // releases it (`IdempotencyReservation`'s drop, OnDrop::Release).
-        Err(e) => Err(refused(scope, &e)),
+        Err(e) => Err(lease_refused(scope, &e)),
     }
 }
 

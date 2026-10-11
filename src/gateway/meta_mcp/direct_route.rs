@@ -123,13 +123,6 @@ impl MetaMcp {
         let owner_principal = owner.principal().or_else(|| {
             support::credential_or_subject_owner(credential_principal, grant_subject, caller_key)
         });
-        // A caller with no execution principal (no identity, credential or
-        // proven subject) cannot own a lease: `/mcp` refuses its keyed calls
-        // outright, so it can collide with no other route here. The direct
-        // route keeps guarding it with 7a alone, as before the lease.
-        if verified_identity.is_none() && owner_principal.is_none() {
-            return Ok(super::admission::SyncAdmission::Unprotected);
-        }
         let empty = Value::Object(serde_json::Map::new());
         let params = params.unwrap_or(&empty);
         // The direct route forwards `arguments` as sent and never refused a

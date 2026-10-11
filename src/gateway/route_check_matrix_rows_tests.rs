@@ -154,19 +154,18 @@ async fn sanitize_rows() {
         off.body
     );
 
-    assert_eq!(
-        row(Route::Direct),
-        Expect::ExpectedGap(super::Ticket::Mik8154)
+    // MIK-8154 SAN.1: the direct route honours the setting as /mcp does.
+    assert_eq!(row(Route::Direct), Expect::Applies);
+    let direct_on = router::direct_sanitizing(true, with_nul()).await;
+    assert!(
+        !nul_reached(&direct_on.seen) && direct_on.body.to_string().contains(NUL_REFUSED),
+        "R3 on: not refused by the sanitizer: {}",
+        direct_on.body
     );
     let direct_off = router::direct_sanitizing(false, with_nul()).await;
     assert!(
-        !nul_reached(&direct_off.seen),
-        "R3 off: the NUL reached the backend, so the direct route now honours the \
-         setting; MIK-8154 may have closed this gap, flip the row to Applies"
-    );
-    assert!(
-        direct_off.body.to_string().contains(NUL_REFUSED),
-        "R3 off: stopped, but not by the sanitizer: {}",
+        nul_reached(&direct_off.seen),
+        "R3 off: the control failed: {}",
         direct_off.body
     );
 
