@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 /// it changed, the backends it could not edit, and the backends it left on
 /// their alias because the value is not an address of that key's scheme
 /// (renaming would switch transport, or leave a `url` that does not load).
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Default, PartialEq, Eq)]
 pub(crate) struct UrlRewrite {
     pub text: String,
     pub changed: Vec<usize>,
@@ -24,6 +24,26 @@ pub(crate) struct UrlRewrite {
     pub removed: Vec<super::retired_config_keys::Removal>,
     /// What the same rewrite did with each plaintext API key (MIK-8044).
     pub api_keys: Vec<super::api_key_rewrite::KeyRewrite>,
+}
+
+/// `text` is the whole config file, which can hold a plaintext API key (one
+/// `upgrade` had to leave, or before hashing), so `Debug` prints its length
+/// only (CWE-532). The other fields hold line numbers, backend and entry
+/// names, and outcomes, never key material.
+impl std::fmt::Debug for UrlRewrite {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UrlRewrite")
+            .field(
+                "text",
+                &format_args!("<{} bytes redacted>", self.text.len()),
+            )
+            .field("changed", &self.changed)
+            .field("skipped", &self.skipped)
+            .field("kept", &self.kept)
+            .field("removed", &self.removed)
+            .field("api_keys", &self.api_keys)
+            .finish()
+    }
 }
 
 impl UrlRewrite {
