@@ -78,7 +78,7 @@ impl MetaMcp {
         }
 
         self.surfaced_tools = validated;
-        self.surfaced_tools_map = super::visible::SurfacedMap::new(map);
+        self.surfaced_tools_map = map;
         self
     }
 }
@@ -88,6 +88,11 @@ impl MetaMcp {
 // ============================================================================
 
 impl MetaMcp {
+    /// Return the backend server name for a statically surfaced tool.
+    pub(crate) fn surfaced_tool_server(&self, tool_name: &str) -> Option<&str> {
+        self.surfaced_tools_map.get(tool_name).map(String::as_str)
+    }
+
     /// Whether a surfaced MCP-backend tool is withheld for a structurally
     /// invalid input schema.
     ///
@@ -131,9 +136,11 @@ impl MetaMcp {
             return None;
         }
 
-        // List = invoke (A3), one predicate for every listing (MIK-8340): a
-        // tool withheld from this caller is not shown.
-        if !self.shows_name(&surfaced.server, &surfaced.tool, scope, session_id) {
+        // List = invoke (A3): a tool this caller could not call is not shown.
+        if self
+            .may_invoke(&surfaced.server, &surfaced.tool, scope, session_id)
+            .is_err()
+        {
             return None;
         }
 
@@ -233,7 +240,7 @@ impl MetaMcp {
                 self.refresh_shared_behind_read(&b);
                 b.get_cached_tools_snapshot()
                     .iter()
-                    .filter(|t| self.shows_tool(&b.name, t, scope, session_id))
+                    .filter(|t| self.may_invoke(&b.name, &t.name, scope, session_id).is_ok())
                     .count()
             };
             let status = b.status();
@@ -262,7 +269,10 @@ impl MetaMcp {
             let admitted = cap
                 .get_tools()
                 .iter()
-                .filter(|t| self.shows_tool(&cap.name, t, scope, session_id))
+                .filter(|t| {
+                    self.may_invoke(&cap.name, &t.name, scope, session_id)
+                        .is_ok()
+                })
                 .count();
             let status = cap.status();
             let killed = self.kill_switch.is_killed(&status.name);

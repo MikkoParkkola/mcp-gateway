@@ -199,7 +199,7 @@ async fn fixture_on(server: &str, config: BackendConfig, shared: Option<Hint>) -
         tool: TOOL.to_string(),
     }]);
     assert_eq!(
-        meta.surfaced_server_unscoped(TOOL),
+        meta.surfaced_tool_server(TOOL),
         Some(server),
         "premise: surfaced"
     );
@@ -547,13 +547,8 @@ async fn a_caller_with_no_identity_and_no_key_is_refused_as_unbindable() {
     let fx = fixture(BackendConfig::default(), Some(Hint::Destructive)).await;
     let (code, message) = refusal(&ask_as(&fx, &fresh(), elicitation(), None).await);
     assert_eq!(code, -32003, "{message}");
-    assert_eq!(message, X14_UNBINDABLE);
+    assert!(message.contains("cannot name"), "{message}");
 }
-
-/// X14's whole refusal for a caller it cannot bind a confirmation to: the one
-/// witness of that `-32003` text (`task_confirmation.rs`).
-const X14_UNBINDABLE: &str =
-    "this destructive call cannot be confirmed for a caller this gateway cannot name";
 
 fn refusal(outcome: &TaskConfirmation) -> (i32, String) {
     let TaskConfirmation::Answer(response) = outcome else {

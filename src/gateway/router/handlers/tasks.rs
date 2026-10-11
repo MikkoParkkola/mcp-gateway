@@ -203,9 +203,6 @@ pub(super) struct TaskIntentRequest<'a> {
     pub grant_subject: Option<crate::identity_grants::GrantSubject>,
     /// Whether the caller holds admin rights on this gateway.
     pub is_admin: bool,
-    /// What this caller may invoke: a surfaced name withheld from it makes no
-    /// task (MIK-8340).
-    pub scope: crate::gateway::meta_mcp::InvokeScope<'a>,
     /// Capabilities the client declared on initialize.
     pub input_capabilities: Declared,
     /// Session the call arrived on; an empty one is treated as absent.
@@ -228,7 +225,7 @@ pub(super) fn task_intent_for_call(
     if req.retry.request_state.is_some() || req.retry.input_responses.is_some() {
         return Ok(None);
     }
-    if !is_task_dispatchable(&state.meta_mcp, req.tool_name, (req.scope, req.session_id)) {
+    if !is_task_dispatchable(&state.meta_mcp, req.tool_name) {
         return Ok(None);
     }
     // A gateway that HAS identities must not create a task for a caller that

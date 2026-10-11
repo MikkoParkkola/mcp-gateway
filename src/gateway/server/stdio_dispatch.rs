@@ -55,8 +55,6 @@ impl Gateway {
             Err(early) => return early.map(stdio_delivery::StdioAnswer::Built),
         };
 
-        let policy = ToolPolicyAuthorizer { tool_policy };
-        let scope = InvokeScope::stdio(&policy);
         let (external_tool, response_targets) = {
             // Response targets are derived here, before dispatch, so live backend
             // state cannot move an accepted call's provenance. The mapping is fed
@@ -74,13 +72,6 @@ impl Gateway {
                         meta_mcp,
                         tool,
                         &routing_keys,
-                        // The caller's view, as `/mcp` resolves it: a withheld
-                        // surfaced name is refused as absent, so its answer is
-                        // not attributed to that backend's tool (MIK-8340).
-                        super::super::meta_mcp::visible::TargetView::Caller(
-                            scope,
-                            Some(session_id),
-                        ),
                     ),
                 )
             } else {
@@ -92,6 +83,8 @@ impl Gateway {
             );
             (external_tool, response_targets)
         };
+        let policy = ToolPolicyAuthorizer { tool_policy };
+        let scope = InvokeScope::stdio(&policy);
         let (mut response, execution) = if method == "tools/call" {
             // D3-a: one grant-decision slot spans signing, admission and dispatch.
             super::super::meta_mcp::grant_audit::slot_rpc(

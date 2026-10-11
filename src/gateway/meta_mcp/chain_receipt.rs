@@ -270,15 +270,10 @@ impl super::super::MetaMcp {
         &self,
         tool_name: &str,
         arguments: &Value,
-        (scope, session_id): (crate::gateway::meta_mcp::InvokeScope<'_>, Option<&str>),
     ) -> crate::Result<()> {
-        // A surfaced name withheld from this caller names no backend here: a
-        // require-chain refusal would confirm the tool exists (MIK-8340).
         let server = match tool_name {
             "gateway_invoke" => arguments.get("server").and_then(Value::as_str),
-            _ => self
-                .surfaced_for(tool_name, scope, session_id)
-                .visible_server(),
+            _ => self.surfaced_tools_map.get(tool_name).map(String::as_str),
         };
         match server.map(|server| self.chain_mode_of(server)) {
             Some(ChainMode::Require) => Err(crate::Error::json_rpc(

@@ -20,16 +20,8 @@ pub(crate) fn backend_tool_targets_for_call<'a>(
     meta_mcp: &MetaMcp,
     tool_name: &str,
     arguments: &'a Value,
-    view: crate::gateway::meta_mcp::visible::TargetView<'_>,
 ) -> Vec<CallTarget<'a>> {
-    use crate::gateway::meta_mcp::visible::TargetView;
-    let surfaced = match view {
-        TargetView::Caller(scope, session_id) => meta_mcp
-            .surfaced_for(tool_name, scope, session_id)
-            .visible_server(),
-        TargetView::Dispatched => meta_mcp.surfaced_server_unscoped(tool_name),
-    };
-    if let Some(server) = surfaced {
+    if let Some(server) = meta_mcp.surfaced_tool_server(tool_name) {
         return vec![CallTarget {
             server: server.to_string(),
             tool: tool_name.to_string(),

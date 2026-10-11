@@ -335,10 +335,7 @@ impl MetaMcp {
                 crate::gateway::meta_mcp_helpers::parse_tool_arguments_cow(arguments)?,
             ))
         } else {
-            // A name withheld from this caller has no target here: it takes
-            // the absent-name path (MIK-8340).
-            self.surfaced_for(tool_name, caller.scope(), session)
-                .visible_server()
+            self.surfaced_tool_server(tool_name)
                 .map(|server| (server, tool_name, std::borrow::Cow::Borrowed(arguments)))
         };
         if let Some((server, tool, operation_arguments)) = &target {
@@ -360,6 +357,11 @@ impl MetaMcp {
                     synthesized = named_tool_envelope(server, tool, operation_arguments, caller);
                     &synthesized
                 };
+                if tool_name != "gateway_invoke"
+                    && let Some(absent) = self.withheld_surfaced(server, tool, caller, session)
+                {
+                    return Err(absent);
+                }
                 self.check_invocation_policy(envelope, session, caller)?;
             }
         }

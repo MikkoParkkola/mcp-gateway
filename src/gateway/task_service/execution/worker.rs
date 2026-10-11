@@ -548,7 +548,6 @@ pub(super) fn inspect_settled(
         state.meta_mcp(),
         &call.tool,
         &call.arguments,
-        crate::gateway::meta_mcp::visible::TargetView::Dispatched,
     );
     let targets =
         crate::gateway::meta_mcp::response_security::meta_response_targets(&call.tool, &backend);

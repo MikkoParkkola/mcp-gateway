@@ -704,7 +704,7 @@ impl MetaMcp {
         };
         let envelope = if tool_name == "gateway_invoke" {
             arguments.clone()
-        } else if let Some(server) = self.surfaced_tools_map.unscoped(tool_name) {
+        } else if let Some(server) = self.surfaced_tool_server(tool_name) {
             super::super::admission::named_tool_envelope(server, tool_name, arguments, caller)
         } else {
             return replay;

@@ -36,13 +36,6 @@ fn request<'a>(
         agent_declared: None,
         grant_subject: None,
         is_admin: false,
-        scope: crate::gateway::meta_mcp::InvokeScope {
-            authorizer: &crate::gateway::authz::AllowAll,
-            is_admin: false,
-            api_key_name: None,
-            agent_id: None,
-            grant_subject: None,
-        },
         input_capabilities: Declared::default(),
         session_id: None,
         protocol_revision: None,

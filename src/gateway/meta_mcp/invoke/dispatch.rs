@@ -434,9 +434,7 @@ impl MetaMcp {
             // When we have cached names and the tool wasn't in them, enrich
             // the error with Levenshtein-based suggestions.
             let message = if !cached_names.is_empty() && !tool_is_cached {
-                let tools = backend.get_cached_tools_snapshot_for(identity_key);
-                let candidates =
-                    self.miss_hint_pool((&cached_names, &tools), server, (scope, session_id));
+                let candidates = self.miss_hint_pool(&cached_names, server, (scope, session_id));
                 miss_with_hint(server, tool, &candidates, &error.message)
             } else {
                 error.message

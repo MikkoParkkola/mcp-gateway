@@ -43,7 +43,7 @@ fn with_surfaced_tools_stores_valid_entries() {
     assert_eq!(mm.surfaced_tools.len(), 1);
     assert_eq!(mm.surfaced_tools[0].tool, "my_custom_tool");
     assert_eq!(
-        mm.surfaced_tools_map.unscoped("my_custom_tool").unwrap(),
+        mm.surfaced_tools_map.get("my_custom_tool").unwrap(),
         "backend_a"
     );
 }
@@ -66,7 +66,7 @@ fn with_surfaced_tools_drops_collision_with_meta_tool() {
     // THEN: only the non-colliding entry is kept
     assert_eq!(mm.surfaced_tools.len(), 1);
     assert_eq!(mm.surfaced_tools[0].tool, "my_real_tool");
-    assert!(!mm.surfaced_tools_map.contains("gateway_invoke"));
+    assert!(!mm.surfaced_tools_map.contains_key("gateway_invoke"));
 }
 
 #[test]

@@ -542,8 +542,5 @@ async fn meta_grant_decision_failure_leaves_no_receipt() {
     assert_meta_refused(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
 }
 
-/// MIK-8340 row 7 over HTTP.
-#[path = "meta/withheld.rs"]
-mod withheld;
 #[path = "meta/writes.rs"]
 mod writes;
