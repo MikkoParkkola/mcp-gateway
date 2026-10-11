@@ -417,7 +417,8 @@ async fn marker_05_the_loader_accepts_supported_versions_and_fails_closed_on_oth
             // is the first unsupported.
             _ => {
                 let mut seed = record.clone();
-                seed["version"] = json!(9);
+                seed["version"] =
+                    json!(crate::gateway::task_service::record::MAX_LOADABLE_VERSION + 1);
                 reseed(&path, task.id(), &seed);
             }
         }
