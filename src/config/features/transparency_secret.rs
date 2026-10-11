@@ -11,14 +11,18 @@ use crate::config::secret_ref::{self, SecretRef};
 use crate::{Error, Result};
 
 const FIELD: &str = "security.transparency_log.shared_secret";
+/// The refusal while the key is unresolved. The detailed reason (which
+/// variable or file) is logged once, at load.
+const UNRESOLVED: &str = "security.transparency_log.shared_secret did not resolve (an unset or \
+                          empty variable, or an unreadable file; the load warning names it)";
 
 impl TransparencyLogConfig {
     /// Why the key did not resolve while the log was off (MIK-8365): a
     /// field-named reason, never a value. Every reader that verifies with the
     /// key (`audit verify`, SIEM export) refuses while it is set, since the key
     /// is then empty and would verify a signed log hash-only.
-    pub(crate) fn unresolved_secret(&self) -> Option<&str> {
-        self.unresolved_secret.as_deref()
+    pub(crate) fn unresolved_secret(&self) -> Option<&'static str> {
+        self.unresolved_secret.then_some(UNRESOLVED)
     }
 
     /// Resolve `shared_secret` as written: `${VAR}` templates, `env:NAME`,
@@ -74,7 +78,7 @@ impl TransparencyLogConfig {
                      verify` refuses until the key resolves"
                 );
                 self.shared_secret.clear();
-                self.unresolved_secret = Some(reason);
+                self.unresolved_secret = true;
                 Ok(())
             }
         }

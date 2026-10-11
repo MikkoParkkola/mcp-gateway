@@ -46,10 +46,10 @@ pub struct TransparencyLogConfig {
     pub shared_secret: String,
     /// Segment size, retention and disk-full behaviour (D6).
     pub rotation: crate::security::audit_rotation_config::RotationConfig,
-    /// Why `shared_secret` did not resolve while the log was off (MIK-8365):
-    /// a field-named reason, never a value. The key is then empty.
+    /// The key did not resolve while the log was off, so it is empty (MIK-8365).
+    /// A flag, not a `String`: `Config` sits in futures held across awaits.
     #[serde(skip)]
-    unresolved_secret: Option<String>,
+    unresolved_secret: bool,
 }
 
 // Manual `Debug` that redacts the HMAC shared secret (CWE-532, mirrors PR
@@ -84,7 +84,7 @@ impl Default for TransparencyLogConfig {
             key_id: "default".to_string(),
             shared_secret: String::new(),
             rotation: crate::security::audit_rotation_config::RotationConfig::default(),
-            unresolved_secret: None,
+            unresolved_secret: false,
         }
     }
 }
