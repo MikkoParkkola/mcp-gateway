@@ -163,14 +163,21 @@ impl TryFrom<serde_json::Value> for KnownAgent {
     /// A bare string would otherwise fail as serde's generic "expected struct",
     /// which does not say what to write instead.
     fn try_from(value: serde_json::Value) -> Result<Self, Self::Error> {
-        if let serde_json::Value::String(id) = &value {
-            return Err(format!(
-                "known_agents entry {id:?} must declare its proof source: write \
-                 {{source: mtls, id: {id:?}}} or {{source: jwt, id: {id:?}}}"
-            ));
+        // The entry is not echoed: a value typed into the wrong place may be a
+        // secret, and this message reaches stderr and the reload log (MIK-8375).
+        if matches!(value, serde_json::Value::String(_)) {
+            return Err(
+                "a known_agents entry is a bare string; it must declare its proof \
+                 source: write {source: mtls, id: <id>} or {source: jwt, id: <id>}"
+                    .to_owned(),
+            );
         }
-        let QualifiedKnownAgent { source, id } =
-            serde_json::from_value(value).map_err(|e| format!("known_agents entry: {e}"))?;
+        let QualifiedKnownAgent { source, id } = serde_json::from_value(value).map_err(|e| {
+            format!(
+                "known_agents entry: {}",
+                crate::config::load_error::redact_message(&e.to_string())
+            )
+        })?;
         Ok(Self { source, id })
     }
 }

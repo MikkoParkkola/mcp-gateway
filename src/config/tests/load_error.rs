@@ -74,9 +74,16 @@ fn an_env_override_of_the_wrong_type_does_not_print_its_value() {
         &format!("env_files:\n  - '{}'\n", env.display()),
     );
 
-    let text = Config::load(Some(&path)).expect_err("refused").to_string();
-    assert_free_of(std::slice::from_ref(&text), sentinel);
-    assert!(text.contains("server.port"), "{text}");
+    let texts = [
+        Config::load(Some(&path)).expect_err("refused").to_string(),
+        Config::load_evaluated(Some(&path))
+            .expect_err("refused")
+            .to_string(),
+    ];
+    assert_free_of(&texts, sentinel);
+    for text in &texts {
+        assert!(text.contains("server.port"), "{text}");
+    }
 }
 
 /// CFGLEAK.2, the write path: a comment-keeping write proves its edited text
@@ -88,6 +95,21 @@ fn a_write_path_load_does_not_print_the_value() {
         .expect_err("refused")
         .to_string();
     assert_free_of(std::slice::from_ref(&text), sentinel);
+    assert!(text.contains("server.port"), "{text}");
+}
+
+/// CFGLEAK.2, a deserializer of the gateway's own: a bare `known_agents`
+/// entry was quoted three times in its refusal.
+#[test]
+fn a_bare_known_agent_does_not_print_the_entry() {
+    let sentinel = "cfgleak-sentinel-r15";
+    let texts = load_errors(&format!(
+        "security:\n  agent_identity:\n    known_agents: [{sentinel}]\n"
+    ));
+    assert_free_of(&texts, sentinel);
+    for text in &texts {
+        assert!(text.contains("known_agents"), "{text}");
+    }
 }
 
 /// CFGLEAK.3: a YAML syntax error has no value to hide and keeps its place.
@@ -160,6 +182,13 @@ fn every_error_in_a_chain_is_redacted() {
     let text = from_figment(structured.chain(message)).to_string();
     assert_free_of(std::slice::from_ref(&text), sentinel);
     assert_eq!(
+        text.lines()
+            .filter(|line| line.contains("expected an integer"))
+            .count(),
+        2,
+        "both errors in the chain must still be reported: {text}"
+    );
+    assert_eq!(
         redact_message(&format!(
             "x: invalid value: string \"x, expected {sentinel}\", expected an integer at line 1 column 4"
         )),
@@ -208,6 +237,16 @@ fn message_edges_drop_the_value() {
         (
             format!("invalid type: {s}, expected a string"),
             "invalid type: a value, expected a string".to_owned(),
+        ),
+        (
+            format!("invalid type: {s}'x, expected a string"),
+            "invalid type: a value, expected a string".to_owned(),
+        ),
+        (
+            format!(
+                "x: invalid value: string \"{s} invalid type: q, expected r\", expected an integer at line 1 column 4"
+            ),
+            "x: invalid value: string, expected an integer at line 1 column 4".to_owned(),
         ),
         (
             "found unexpected end of stream at line 4 column 1".to_owned(),

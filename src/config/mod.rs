@@ -16,7 +16,7 @@ mod backend_transport;
 mod config_file;
 mod env_overlay;
 mod features;
-mod load_error;
+pub(crate) mod load_error;
 pub(crate) use features::DEFAULT_TASK_TTL_MS;
 mod flagged_tools;
 mod input_schema;

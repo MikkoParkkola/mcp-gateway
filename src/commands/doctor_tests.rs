@@ -235,10 +235,14 @@ fn doctor_does_not_print_the_value_a_config_refused() {
 fn doctor_suggests_a_command_that_rechecks_the_same_config() {
     use clap::Parser as _;
     let dir = tempfile::tempdir().expect("tempdir");
-    let path = unloadable_config(dir.path(), "x");
+    // A space and a quote in the path: the hint must still copy as one word.
+    let nested = dir.path().join("my config's dir");
+    std::fs::create_dir(&nested).expect("dir");
+    let path = unloadable_config(&nested, "x");
     let (result, _) = check_config(Some(&path), false);
     let fix = result.fix_command.expect("a fix is suggested");
-    let cli = mcp_gateway::cli::Cli::try_parse_from(fix.split_whitespace())
+    let words = shlex::split(&fix).unwrap_or_else(|| panic!("`{fix}` does not tokenise"));
+    let cli = mcp_gateway::cli::Cli::try_parse_from(words)
         .unwrap_or_else(|e| panic!("`{fix}` does not parse: {e}"));
     match cli.command {
         Some(mcp_gateway::cli::Command::Doctor { config, .. }) => {

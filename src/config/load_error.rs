@@ -15,6 +15,9 @@ use figment::error::{Actual, Kind, OneOf};
 /// What serde puts between a quoted value and the type it wanted.
 const EXPECTED: &str = ", expected ";
 
+/// serde's marker before a variant name it did not recognise.
+const VARIANT: &str = "unknown variant `";
+
 /// The error every config extract reports: each error in figment's chain with
 /// its value removed, its key path and source kept.
 pub(crate) fn from_figment(error: figment::Error) -> crate::Error {
@@ -73,38 +76,50 @@ fn kind_of(actual: &Actual) -> Actual {
 /// libyaml's syntax problems are fixed strings, and the gateway's own refusals
 /// name keys, never values.
 pub(crate) fn redact_message(message: &str) -> String {
-    for marker in ["invalid type: ", "invalid value: "] {
-        if let Some(start) = message.find(marker) {
-            let from = start + marker.len();
-            let tail = &message[from..];
-            return match tail.rfind(EXPECTED) {
-                Some(cut) => format!(
-                    "{}{}{}",
-                    &message[..from],
-                    kind_word(&tail[..cut]),
-                    &tail[cut..]
-                ),
-                None => format!("{}a value{}", &message[..from], location(tail)),
-            };
-        }
-    }
-    let marker = "unknown variant `";
-    if let Some(start) = message.find(marker) {
-        let tail = &message[start + marker.len()..];
+    // The EARLIEST marker is serde's own: a later one can only sit inside the
+    // value, so choosing by marker kind first would cut at text the value
+    // supplied and keep the value before it.
+    let earliest = ["invalid type: ", "invalid value: ", VARIANT]
+        .into_iter()
+        .filter_map(|marker| message.find(marker).map(|at| (at, marker)))
+        .min_by_key(|(at, _)| *at);
+    let Some((start, marker)) = earliest else {
+        return message.to_owned();
+    };
+    let from = start + marker.len();
+    let tail = &message[from..];
+    if marker == VARIANT {
         let rest = tail
             .rfind(EXPECTED)
             .map_or_else(|| location(tail), |cut| &tail[cut..]);
-        return format!("{}unknown variant{rest}", &message[..start]);
+        return format!(
+            "{}{}{rest}",
+            &message[..start],
+            VARIANT.trim_end_matches(" `")
+        );
     }
-    message.to_owned()
+    match tail.rfind(EXPECTED) {
+        Some(cut) => format!(
+            "{}{}{}",
+            &message[..from],
+            kind_word(&tail[..cut]),
+            &tail[cut..]
+        ),
+        None => format!("{}a value{}", &message[..from], location(tail)),
+    }
 }
 
 /// serde's description of a value, cut before the value: `string "x"` is
-/// `string`. serde's data-free descriptions (`sequence`, `map`) are kept as
-/// they are; any other description with no quoted part is serde's `Other`,
-/// which is verbatim input, so it becomes `a value`.
+/// `string`. Only serde's own type words are kept; anything else is
+/// verbatim input (serde's `Other`), so it becomes `a value`.
 fn kind_word(unexpected: &str) -> &str {
-    const DATA_FREE: [&str; 11] = [
+    const SERDE_WORDS: [&str; 16] = [
+        "boolean",
+        "integer",
+        "floating point",
+        "character",
+        "string",
+        "byte array",
         "unit value",
         "Option value",
         "newtype struct",
@@ -115,15 +130,15 @@ fn kind_word(unexpected: &str) -> &str {
         "newtype variant",
         "tuple variant",
         "struct variant",
-        "byte array",
     ];
-    if DATA_FREE.contains(&unexpected) {
-        return unexpected;
-    }
-    match unexpected.find(['"', '`', '[', '\'']) {
-        Some(at) if !unexpected[..at].trim().is_empty() => unexpected[..at].trim_end(),
-        _ => "a value",
-    }
+    let word = unexpected
+        .find(['"', '`', '[', '\''])
+        .map_or(unexpected, |at| &unexpected[..at])
+        .trim();
+    SERDE_WORDS
+        .into_iter()
+        .find(|known| *known == word)
+        .unwrap_or("a value")
 }
 
 /// `serde_yaml`'s trailing ` at line L column C`, kept only when it is exactly
