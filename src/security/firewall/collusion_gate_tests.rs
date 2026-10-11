@@ -660,21 +660,25 @@ fn an_unkeyed_block_increments_the_relay_metric() {
     );
 }
 
-/// MIK-7934.PLANRCPT.2: a plan whose answer is over the bound its receipts
-/// are kept against is counted where an operator can read it.
+/// MIK-7934.PLANRCPT.2, migrated by `MIK-8066` 2b: an over-bound answer is
+/// now read as a view, so the operator-visible count is of plans whose answer
+/// could NOT be read (D6, `bound="plan_answer_unread"`).
 #[cfg(feature = "metrics")]
 #[test]
-fn a_dropped_plan_receipt_increments_the_metric() {
-    let series = "mcp_gateway_collusion_plan_receipts_dropped_total";
+fn an_unread_plan_increments_the_metric() {
+    let series = "mcp_gateway_collusion_capacity_total{bound=\"plan_answer_unread\"}";
     let (fw, _dir) = observing(|_| {});
+    fw.collusion_detector()
+        .expect("relay detection on")
+        .set_answer_text_cap(512 * 1024);
     let before = rendered_count(series);
     let text = "x".repeat(super::super::collusion_digest::DELIVERED_SET_CAP + 1);
     let answer = json!({"content": [{"type": "text", "text": text}]});
+    let _ = fw.delivered_for_plan(&answer, None);
     assert!(
-        fw.delivered_for_plan(&answer, None).is_none(),
-        "premise: over the bound"
+        rendered_count(series) > before,
+        "an unread plan was not counted"
     );
-    assert!(rendered_count(series) > before, "dropped plan: not counted");
 }
 
 /// The observed-relay warnings `check` logs, as parsed records.

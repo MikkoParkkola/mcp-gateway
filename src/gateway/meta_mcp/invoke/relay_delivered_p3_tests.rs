@@ -167,3 +167,156 @@ fn a_forward_beyond_the_step_gets_no_seam_on_an_over_bound_answer() {
         "a forward spanning two steps was excused on an over-bound answer"
     );
 }
+
+/// Key-a's plan of several steps, each `(answer member, items)` labelled by
+/// its index and staged whole, kept by the production path to one
+/// over-bound answer carrying every member, then recorded.
+fn keep_steps_over_bound(fw: &Firewall, steps: &[(&str, Vec<Value>)]) {
+    let mut receipts = Vec::new();
+    let mut members = Vec::new();
+    let mut answer = serde_json::Map::new();
+    for (label, (member, items)) in (0u32..).zip(steps) {
+        let staging = PlanStaging::default();
+        staging.set_caller("key-a");
+        let step = json!({ *member: items });
+        let digest = fw
+            .receipt_digest("alpha", "read", &step, Some(&staging))
+            .expect("staged");
+        receipts.push(Receipt {
+            key: "key-a".to_string(),
+            keyed: true,
+            server: "alpha".to_string(),
+            tool: "read".to_string(),
+            digest,
+            in_plan: true,
+            pending_retain: true,
+            step: Some(label),
+            kind: Kind::Delivered,
+        });
+        members.push((format!("/{member}"), label));
+        answer.insert((*member).to_string(), Value::Array(items.clone()));
+    }
+    answer.insert("pad".to_string(), Value::String(pad(1_200 * 1024)));
+    let answer = Value::Object(answer);
+    with_plan_members(members, || keep_plan_receipts(fw, &mut receipts, &answer));
+    for r in &receipts {
+        fw.record_digest(RelayCaller::Keyed("key-a"), &r.server, &r.tool, &r.digest);
+    }
+}
+
+fn chunks(parts: &[String]) -> Vec<Value> {
+    parts
+        .iter()
+        .map(|p| json!({"part": p, "kind": "chunk"}))
+        .collect()
+}
+
+/// `MIK-8066` T-seams-view, second half (guard, B4s): two steps, each with
+/// its own receipt and label; a forward spanning step 0's last part and
+/// step 1's first part gets no cross-step excuse on an over-bound answer.
+/// Red proof: the mutant "cross-step seams formed on a view", KILLED.
+#[test]
+fn a_forward_spanning_two_steps_gets_no_seam_on_an_over_bound_answer() {
+    let fw = observing();
+    let parts: Vec<String> = (0..4).map(piece).collect();
+    keep_steps_over_bound(
+        &fw,
+        &[
+            ("first", chunks(&parts[..2])),
+            ("second", chunks(&parts[2..])),
+        ],
+    );
+    let spanning = format!("{}{}", parts[1], parts[2]);
+    assert!(
+        reported_after_carol(&fw, "key-a", &spanning),
+        "a forward spanning two steps was excused on an over-bound answer"
+    );
+}
+
+/// `MIK-8066` T11k (guard, D4): a step holds a string as a KEY; the answer
+/// delivers it as a VALUE. Leaf hashes include `is_key`, so the piece is not
+/// the step's, and a forward through it gets no seam. Red proof: the mutant
+/// "`is_key` ignored in leaf hashes", KILLED.
+#[test]
+fn a_key_delivered_as_a_value_gets_no_seam_on_an_over_bound_answer() {
+    let fw = observing();
+    let parts: Vec<String> = (0..3).map(piece).collect();
+    // The step carries part 0 as a key, the answer carries it as a value.
+    let staged_items = vec![
+        json!({ parts[0].clone(): "v", "kind": "chunk" }),
+        json!({"part": parts[2], "kind": "chunk"}),
+    ];
+    let staging = PlanStaging::default();
+    staging.set_caller("key-a");
+    let digest = fw
+        .receipt_digest(
+            "alpha",
+            "read",
+            &json!({ "parts": staged_items }),
+            Some(&staging),
+        )
+        .expect("staged");
+    let mut receipts = vec![Receipt {
+        key: "key-a".to_string(),
+        keyed: true,
+        server: "alpha".to_string(),
+        tool: "read".to_string(),
+        digest,
+        in_plan: true,
+        pending_retain: true,
+        step: Some(0),
+        kind: Kind::Delivered,
+    }];
+    let answer =
+        json!({ "parts": chunks(&[parts[0].clone(), parts[2].clone()]), "pad": pad(1_200 * 1024) });
+    with_plan_members(vec![("/parts".to_string(), 0)], || {
+        keep_plan_receipts(&fw, &mut receipts, &answer);
+    });
+    for r in &receipts {
+        fw.record_digest(RelayCaller::Keyed("key-a"), &r.server, &r.tool, &r.digest);
+    }
+    let joined = format!("{}{}", parts[0], parts[2]);
+    assert!(
+        reported_after_carol(&fw, "key-a", &joined),
+        "a forward through a key delivered as a value was excused"
+    );
+}
+
+/// `MIK-8066` T-rewritten (D7): a rewritten wrapper past the answer text cap
+/// keeps its staged receipt (no clear) and fails closed: the receipt is
+/// evidence under the unread holder, so a stranger's relay is refused.
+#[test]
+fn a_rewritten_answer_past_the_cap_keeps_its_receipt_and_fails_closed() {
+    let fw = observing();
+    fw.collusion_detector()
+        .expect("relay detection on")
+        .set_answer_text_cap(512 * 1024);
+    // Over the 1 MiB bound, so today's path clears the receipt (fail-open);
+    // past the 512 KiB cap, so 2b takes the unread path and keeps it.
+    // A pretty-printed wrapper (the rewritten route's input) whose one
+    // string literal is over the bound, so both readings are too big today.
+    let text =
+        serde_json::to_string_pretty(&json!({ "text": pad(1_200 * 1024) })).expect("serializes");
+    let staging = PlanStaging::default();
+    staging.set_caller("key-a");
+    let digest = fw
+        .receipt_digest("alpha", "read", &json!({ "text": text }), Some(&staging))
+        .expect("staged");
+    let mut receipts = vec![Receipt {
+        key: "key-a".to_string(),
+        keyed: true,
+        server: "alpha".to_string(),
+        tool: "read".to_string(),
+        digest,
+        in_plan: false,
+        pending_retain: false,
+        step: None,
+        kind: Kind::Delivered,
+    }];
+    super::keep_to_rewritten(&fw, &mut receipts, &text);
+    assert_eq!(
+        receipts.len(),
+        1,
+        "a rewritten answer past the cap cleared its receipt (fail-open)"
+    );
+}

@@ -374,3 +374,46 @@ fn a_view_returns_its_charge_when_it_drops() {
         "an omitted plan's view leaked its charge"
     );
 }
+
+/// `MIK-8066` `evidence_charge_survives_abandon` (D9): a P1 step whose sketch
+/// is abandoned (no headroom, so its selection overflows) keeps its
+/// evidence's charge through a second retention until it is recorded, after
+/// which the charge is zero.
+#[test]
+fn a_step_evidence_charge_survives_an_abandoned_sketch_until_recorded() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    detector.zero_headroom();
+    let (text, step) = step_of(1041, 100 * 1024);
+    let mut steps = to_the_bound(104);
+    steps.push(step);
+    let answer = json!({"whole": text, "pad": filler(1042, 900 * 1024)});
+    let staged = PlanStaging::default();
+    staged.set_caller("alice");
+    let digests: Vec<_> = steps
+        .iter()
+        .filter_map(|s| fw.receipt_digest("alpha", "read", s, Some(&staged)))
+        .collect();
+    let delivered = fw.delivered_for_plan(&answer, Some(&staged));
+    let mut kept = Vec::new();
+    if let Some(delivered) = &delivered {
+        for digest in digests {
+            // Retained twice, as the rewritten route can.
+            let once = fw.retain_delivered(digest, delivered, None);
+            kept.push(fw.retain_delivered(once, delivered, None));
+        }
+    }
+    assert!(
+        detector.evidence_charge_bytes() > 0,
+        "an abandoned sketch's step evidence lost its charge before record"
+    );
+    for digest in kept {
+        let capped = fw.cap_kept(digest);
+        fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &capped);
+    }
+    assert_eq!(
+        detector.evidence_charge_bytes(),
+        0,
+        "recorded evidence kept its charge"
+    );
+}

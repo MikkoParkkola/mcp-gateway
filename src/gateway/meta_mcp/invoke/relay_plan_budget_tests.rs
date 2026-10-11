@@ -63,9 +63,15 @@ async fn a_plan_past_its_staging_bound_drops_and_counts_receipts() {
 #[tokio::test]
 async fn a_plan_over_both_bounds_is_counted_once() {
     let (meta, firewall) = relay_meta();
+    // `MIK-8066` 2b: a 2 MiB answer is now read as a view; the text cap
+    // makes it unread, so it is still past both bounds.
+    firewall
+        .collusion_detector()
+        .expect("relay detection on")
+        .set_answer_text_cap(1024 * 1024);
     let empties = serde_json::json!({ "content": vec![""; 10_000] });
     let answer = text_result(&"x".repeat(2 * 1024 * 1024));
-    let ((), staged) = meta
+    let ((), _staged) = meta
         .collecting_staged(async {
             for _ in 0..30 {
                 plan_step(None, async {
@@ -81,9 +87,13 @@ async fn a_plan_over_both_bounds_is_counted_once() {
             );
         })
         .await;
-    assert!(
-        staged.receipts.iter().all(|r| !r.in_plan),
-        "premise: the answer bound dropped the plan's receipts"
-    );
     assert_eq!(firewall.relay_plan_drops(), 1, "one plan, counted once");
+    assert_eq!(
+        firewall
+            .collusion_detector()
+            .expect("relay detection on")
+            .unread_plans(),
+        1,
+        "the unread answer was not counted once"
+    );
 }

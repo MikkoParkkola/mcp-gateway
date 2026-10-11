@@ -469,6 +469,12 @@ impl CollusionDetector {
         Vec::new()
     }
 
+    /// STUB (2b red): bytes charged for step evidence awaiting record (D9).
+    pub(crate) fn evidence_charge_bytes(&self) -> usize {
+        let _ = self;
+        0
+    }
+
     /// STUB (2b red): selections refused for lack of `VIEW_BYTES`.
     pub(crate) fn selection_budget_refusals(&self) -> u64 {
         let _ = self;
