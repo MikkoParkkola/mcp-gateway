@@ -18,9 +18,6 @@ pub(crate) const PROTOCOL_NONCES: [&str; 2] = [
     meta_mcp::signing::NONCE_META,
     crate::protocol::mrtr::CHAIN_NONCE_META,
 ];
-/// Every meta-tool name: the sanitize step leaves these tools' own
-/// `arguments` undecoded, as dispatch does (MIK-8154).
-pub(crate) use meta_mcp::META_TOOL_NAMES;
 /// Where the CLI runner notes a child it started for the call's invocation
 /// record (MIK-7926.FIX.2), without `meta_mcp` becoming crate-visible.
 pub(crate) use meta_mcp::invoke::audit::note_process;
@@ -38,6 +35,8 @@ pub(crate) use meta_mcp::sealed_hold;
 /// The send point's check that an exempt call is sent by the backend instance
 /// intake judged it on (MIK-8154 F2), for `backend::ops`.
 pub(crate) use meta_mcp::visible::changed_instance;
+/// How a tool call's own `arguments` are read, resolved once (MIK-8154).
+pub(crate) use meta_mcp::{ArgsPolicy, args_policy};
 /// The notes scope and the gateway, for the CLI process audit rows
 /// (MIK-7926.FIX.2), which run a real child in `capability::executor`.
 #[cfg(test)]

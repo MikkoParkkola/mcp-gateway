@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use super::{sanitize_json_value, sanitize_string, validate_protocol_text};
 use crate::Result;
+use crate::gateway::{ArgsPolicy, args_policy};
 use crate::protocol::meta::KEY_CLIENT_CAPABILITIES;
 
 /// Validate `id`, `method`, the capability keys, the `_meta` nonces, the
@@ -106,13 +107,6 @@ enum Slot {
     Inner,
 }
 
-/// The meta tools whose arguments hold `arguments` the gateway decodes. Their
-/// names always resolve to the gateway's own handler: surfacing refuses a
-/// backend tool under any meta-tool name (`MetaMcp::with_surfaced_tools`,
-/// pinned by `with_surfaced_tools_drops_all_known_meta_tool_names`), so a
-/// name here is never a backend's tool on a meta route.
-const META_PARSED: [&str; 3] = ["gateway_invoke", "gateway_run_playbook", "gateway_execute"];
-
 /// [`sanitize_json_value`] for one top-level request member, reaching into
 /// the `arguments` slots the gateway decodes after this step when a client
 /// sends them as a JSON string (MIK-8154 F1): there they are decoded,
@@ -143,10 +137,17 @@ pub(super) fn sanitize_value(key: &str, value: &Value, route: ProtocolRoute) -> 
         (ProtocolRoute::Meta, Some(Ok(name))) => Some(name),
         _ => None,
     };
-    let slot = match name.as_deref() {
-        Some(name) if META_PARSED.contains(&name) => Some(Slot::Meta),
-        Some(name) if crate::gateway::META_TOOL_NAMES.contains(&name) => None,
-        _ => Some(Slot::Tool),
+    // The decode decision, made once per policy (`ArgsPolicy`). A meta name
+    // always resolves to the gateway's own handler: surfacing refuses a
+    // backend tool under one (`MetaMcp::with_surfaced_tools`, pinned by
+    // `with_surfaced_tools_drops_all_known_meta_tool_names`).
+    let slot = match name
+        .as_deref()
+        .map_or(ArgsPolicy::BackendWhole, args_policy)
+    {
+        ArgsPolicy::MetaParsedInner => Some(Slot::Meta),
+        ArgsPolicy::MetaOpaque => None,
+        ArgsPolicy::BackendWhole => Some(Slot::Tool),
     };
     sanitize_object(params, |key, member| {
         slot.filter(|_| key == "arguments")
@@ -336,11 +337,15 @@ mod tests {
         }
     }
 
-    /// The parsing meta tools are meta tools: one roster, `META_TOOL_NAMES`.
+    /// The parsing meta tools decode inside; the other meta tools are read
+    /// as they are; a name off the roster is a backend tool's.
     #[test]
-    fn meta_parsed_is_part_of_the_meta_roster() {
-        for name in super::META_PARSED {
-            assert!(crate::gateway::META_TOOL_NAMES.contains(&name), "{name}");
+    fn args_policy_resolves_each_kind_of_tool() {
+        use super::{ArgsPolicy, args_policy};
+        for name in ["gateway_execute", "gateway_invoke", "gateway_run_playbook"] {
+            assert_eq!(args_policy(name), ArgsPolicy::MetaParsedInner, "{name}");
         }
+        assert_eq!(args_policy("gateway_list_servers"), ArgsPolicy::MetaOpaque);
+        assert_eq!(args_policy("github_search"), ArgsPolicy::BackendWhole);
     }
 }

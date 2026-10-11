@@ -594,13 +594,29 @@ fn meta_tool_names_are_the_dispatch_arms() {
         .flat_map(|pattern| pattern.split('"').skip(1).step_by(2))
         .filter(|literal| literal.starts_with("gateway_"))
         .collect();
-    let listed: std::collections::BTreeSet<&str> = super::super::surfaced::META_TOOL_NAMES
+    let listed: std::collections::BTreeSet<&str> = super::super::surfaced::META_TOOLS
         .iter()
-        .copied()
+        .map(|(name, _)| *name)
         .collect();
-    assert_eq!(arms, listed, "the dispatch arms and META_TOOL_NAMES differ");
+    assert_eq!(arms, listed, "the dispatch arms and META_TOOLS differ");
     assert!(
         arms.contains("gateway_invoke"),
         "the meta match was not read: {arms:?}"
+    );
+}
+
+/// Exactly three meta tools decode an inner `arguments` (MIK-8154): a new
+/// meta tool takes its policy in `META_TOOLS`, and a parsing one shows here.
+#[test]
+fn exactly_the_three_parsing_meta_tools_decode_inside() {
+    use super::super::surfaced::{ArgsPolicy, META_TOOLS};
+    let parsed: Vec<&str> = META_TOOLS
+        .iter()
+        .filter(|(_, policy)| *policy == ArgsPolicy::MetaParsedInner)
+        .map(|(name, _)| *name)
+        .collect();
+    assert_eq!(
+        parsed,
+        ["gateway_execute", "gateway_invoke", "gateway_run_playbook"]
     );
 }
