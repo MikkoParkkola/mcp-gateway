@@ -223,6 +223,17 @@ impl LogExporter {
                 "tampered entry: recomputed {recomputed} != stored {stored_hash}"
             )));
         }
+        // A signed entry with no key to check it is refused, as `audit verify`
+        // refuses the log: the hash chain alone cannot catch a re-chained
+        // forgery (MIK-8374). The rule is `audit verify`'s own.
+        if self.signing_secret.is_none()
+            && crate::security::transparency_log::is_signed_entry(entry)
+        {
+            return Err(ExportError::VerificationFailed(format!(
+                "entry {stored_hash} is signed but no signing key is configured; refusing \
+                 hash-only export"
+            )));
+        }
         // Per-entry HMAC when a secret is configured (MIK-6700 HMAC.3).
         if let Some(secret) = self.signing_secret.as_deref()
             && let Err(msg) = crate::security::transparency_log::verify_entry_sig(

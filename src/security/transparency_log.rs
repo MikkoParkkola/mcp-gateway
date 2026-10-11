@@ -107,6 +107,7 @@ mod attributed;
 pub use anchor::verify_audit_log;
 #[cfg(test)]
 pub(crate) use verify::verify_segments;
+pub(crate) use verify::is_signed_entry;
 pub use verify::{
     VerifyMode, VerifyResult, log_contains_signed_entry, show_session_entries, verify_log,
     verify_log_signed,

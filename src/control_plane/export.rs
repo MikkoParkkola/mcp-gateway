@@ -19,7 +19,8 @@
 //!   a signing secret is configured (`with_signing_secret`, wired at runtime by
 //!   MIK-6703), each entry's per-entry HMAC is also authenticated, so a
 //!   self-consistent re-chained forgery is rejected too (MIK-6700). Without a
-//!   secret it degrades to hash-only. A re-anchor is surfaced
+//!   secret an unsigned log is checked hash-only, and a signed entry halts
+//!   export, as `audit verify` refuses it (MIK-8374). A re-anchor is surfaced
 //!   (`PollOutcome::reanchored`) so it can be alerted on.
 //! - **Follows the gateway's own rotation (D6).** The cursor anchors on the last
 //!   forwarded `entry_hash` and names its segment; each poll streams from that
@@ -154,7 +155,8 @@ pub struct LogExporter {
     cursor: ExportCursor,
     max_batch: usize,
     /// HMAC secret for per-entry `sig` verification. `None` (or empty) verifies
-    /// the hash chain only; `Some(non-empty)` also authenticates each entry's
+    /// the hash chain only and refuses any signed entry (MIK-8374);
+    /// `Some(non-empty)` also authenticates each entry's
     /// HMAC so a re-chain forgery is caught on the export path too (MIK-6700
     /// HMAC.3). Runtime wiring of the secret is MIK-6703.
     signing_secret: Option<String>,
@@ -198,8 +200,9 @@ impl LogExporter {
     }
 
     /// Configure the HMAC secret used to authenticate each entry's `sig` during
-    /// the scan. An empty secret is treated as unset (hash-chain-only), matching
-    /// [`verify_log`](crate::security::transparency_log::verify_log).
+    /// the scan. An empty secret is treated as unset: unsigned entries are
+    /// checked hash-only and a signed entry halts the scan, as `audit verify`
+    /// refuses a signed log it holds no key for (MIK-8374).
     #[must_use]
     pub fn with_signing_secret(mut self, secret: impl Into<String>) -> Self {
         let secret = secret.into();

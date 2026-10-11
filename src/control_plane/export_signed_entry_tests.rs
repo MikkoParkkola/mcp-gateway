@@ -120,9 +120,89 @@ fn verify_and_export_agree_on_a_mixed_log() {
     assert!(
         matches!(
             keyless_exporter(dir.path(), &log).poll(&sink),
-            Err(ExportError::VerificationFailed(_))
+            Err(ExportError::VerificationFailed(m)) if m.contains("no signing key")
         ),
-        "export must refuse the log verify refuses"
+        "export must refuse the log verify refuses, for the missing key"
     );
     assert!(sink.delivered().is_empty());
+}
+
+/// Halt, restore the key, resume: the halted poll moved nothing, so the keyed
+/// exporter on the same cursor forwards every entry exactly once.
+#[test]
+fn restoring_the_key_resumes_without_loss_or_duplicates() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("inv.jsonl");
+    write_log(&log, SECRET);
+
+    let halted = CollectingSink::new();
+    assert!(keyless_exporter(dir.path(), &log).poll(&halted).is_err());
+    assert!(halted.delivered().is_empty());
+
+    let sink = CollectingSink::new();
+    let mut keyed = LogExporter::open(
+        ExportSource::Invocation,
+        log.clone(),
+        dir.path().join("cursor.json"),
+    )
+    .expect("reopen on the same cursor")
+    .with_signing_secret(SECRET);
+    assert_eq!(keyed.poll(&sink).expect("exports").forwarded, 4);
+    let counters: Vec<u64> = sink.delivered().iter().map(|e| e.counter).collect();
+    assert_eq!(counters, [1, 2, 3, 4], "every entry once, in order");
+    assert_eq!(
+        keyed.poll(&sink).expect("caught up").forwarded,
+        0,
+        "nothing again"
+    );
+}
+
+/// A batch that ends inside the unsigned prefix forwards that verified
+/// prefix; the poll that reaches the first signed entry halts there.
+#[test]
+fn a_small_batch_forwards_the_unsigned_prefix_then_halts_at_the_signed_entry() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("inv.jsonl");
+    write_log(&log, SECRET);
+    let content = std::fs::read_to_string(&log).expect("read");
+    let mut lines: Vec<serde_json::Value> = content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("json"))
+        .collect();
+    for entry in lines.iter_mut().take(2) {
+        let map = entry.as_object_mut().expect("object");
+        map.remove("sig");
+        map.remove("key_id");
+    }
+    let rewritten: String = lines.iter().map(|e| format!("{e}\n")).collect();
+    std::fs::write(&log, rewritten).expect("write");
+
+    let sink = CollectingSink::new();
+    let mut exp = keyless_exporter(dir.path(), &log).with_max_batch(2);
+    assert_eq!(exp.poll(&sink).expect("the unsigned prefix").forwarded, 2);
+    assert!(
+        matches!(exp.poll(&sink), Err(ExportError::VerificationFailed(m)) if m.contains("no signing key")),
+        "the next poll halts at the first signed entry"
+    );
+    assert_eq!(sink.delivered().len(), 2, "nothing past the prefix");
+}
+
+/// The shared rule is presence of `sig`: a null, empty or garbled value is
+/// still a signed entry, so it cannot downgrade a log to hash-only.
+#[test]
+fn any_sig_field_marks_an_entry_signed() {
+    use crate::security::transparency_log::is_signed_entry;
+    for sig in [
+        serde_json::json!(null),
+        serde_json::json!(""),
+        serde_json::json!(42),
+        serde_json::json!("not-hex"),
+    ] {
+        assert!(
+            is_signed_entry(&serde_json::json!({"counter": 1, "sig": sig})),
+            "{sig}"
+        );
+    }
+    assert!(!is_signed_entry(&serde_json::json!({"counter": 1})));
 }
