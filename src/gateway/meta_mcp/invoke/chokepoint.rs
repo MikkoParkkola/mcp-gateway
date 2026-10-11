@@ -23,7 +23,7 @@
 use serde_json::Value;
 
 use crate::gateway::authz::{Emit, ToolTarget};
-use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
+use crate::gateway::meta_mcp::{InvokeScope, MetaMcp, MetaMcpCallerContext};
 use crate::{Error, Result};
 
 #[cfg(test)]
@@ -78,6 +78,17 @@ pub(super) struct Outbound<'a> {
     pub(super) answers: Option<&'a Value>,
 }
 
+/// Why [`MetaMcp::authorize_route_target`] stopped a call. The two are
+/// answered differently, so they are told apart by type, never by code.
+#[derive(Debug)]
+pub(crate) enum RouteRefusal {
+    /// A surfaced name this caller may not invoke: answer it exactly as a
+    /// name that matches no tool (`-32601`), through the normal response path.
+    Withheld(Error),
+    /// The authorization refusal, answered as the route answers one.
+    Refused(Error),
+}
+
 impl MetaMcp {
     /// Pass or refuse one send. See the module documentation.
     pub(super) fn chokepoint(
@@ -94,7 +105,12 @@ impl MetaMcp {
             outbound.arguments.is_object(),
             "the chokepoint judges dispatched objects"
         );
-        self.recheck_target(caller, (server, tool), outbound.arguments)?;
+        self.recheck_target(
+            caller.scope(),
+            (server, tool),
+            outbound.arguments,
+            Emit::Silent,
+        )?;
         #[cfg(feature = "firewall")]
         self.rescan_outbound(caller, session_id, (server, tool), outbound, source)?;
         #[cfg(not(feature = "firewall"))]
@@ -102,17 +118,82 @@ impl MetaMcp {
         Ok(Permit(()))
     }
 
-    /// Target authorization, identity grants and the admin-capability rule,
-    /// against the policy in force now. Silent on allow; a refusal writes the
-    /// rows a route-layer refusal writes. Never skipped for a call signing
-    /// prepared: a grant revoked since then is refused here (F5).
-    fn recheck_target(
+    /// The single route-stage authorize that `/mcp` and stdio both run, before
+    /// the request firewall, X14 and admission (route-check-parity P3).
+    ///
+    /// A surfaced tool called by its own name that this caller may not invoke
+    /// ends here as the name that matches no tool (`-32601`), so no later stage
+    /// can confirm it exists (MIK-8326). Every target is then authorized as the
+    /// dispatch chokepoint will re-check it, with the route's allow record.
+    ///
+    /// # Errors
+    /// [`RouteRefusal::Withheld`] for the withheld name,
+    /// [`RouteRefusal::Refused`] for an authorization refusal.
+    pub(crate) fn authorize_route_target(
         &self,
-        caller: &MetaMcpCallerContext<'_>,
+        scope: InvokeScope<'_>,
+        session_id: Option<&str>,
+        tool_name: &str,
         (server, tool): (&str, &str),
         arguments: &Value,
+    ) -> std::result::Result<(), RouteRefusal> {
+        if self.surfaced_tool_server(tool_name) == Some(server)
+            && tool == tool_name
+            && let Some(absent) = self.withheld_surfaced_in(server, tool, scope, session_id)
+        {
+            return Err(RouteRefusal::Withheld(absent));
+        }
+        self.recheck_target(scope, (server, tool), arguments, Emit::Audit)
+            .map_err(RouteRefusal::Refused)
+    }
+
+    /// The route-stage request scan on this Meta-MCP's own firewall, for the
+    /// transport that has no firewall of its own (stdio; route-check-parity
+    /// P3, MIK-8149.REQFW.1): the content scan and the stateful controls
+    /// (anomaly, tenant guard, budget) `check_request` runs once per logical
+    /// call, with its request audit row. `None` passes; `Some` is the shared
+    /// refusal every route answers. The dispatch rescan stays stateless.
+    #[cfg(feature = "firewall")]
+    pub(crate) fn route_request_scan(
+        &self,
+        session_id: &str,
+        (server, tool, arguments): (&str, &str, &Value),
+        (caller, control_identity): (&str, &str),
+    ) -> Option<(i32, String)> {
+        let firewall = self.firewall.as_deref()?;
+        let verdict = firewall.check_request(
+            session_id,
+            server,
+            tool,
+            arguments,
+            caller,
+            control_identity,
+        );
+        if verdict.action == crate::security::firewall::FirewallAction::Warn {
+            tracing::warn!(
+                server,
+                tool,
+                findings = verdict.findings.len(),
+                "Firewall: request warning"
+            );
+        }
+        verdict.request_refusal()
+    }
+
+    /// Target authorization, identity grants and the admin-capability rule,
+    /// against the policy in force now. `on_allow` says whether an allow writes
+    /// its record: the route stage writes it, the dispatch recheck is silent
+    /// (the route already wrote it). A refusal writes the rows a route-layer
+    /// refusal writes. Never skipped for a call signing prepared: a grant
+    /// revoked since then is refused here (F5).
+    fn recheck_target(
+        &self,
+        scope: InvokeScope<'_>,
+        (server, tool): (&str, &str),
+        arguments: &Value,
+        on_allow: Emit,
     ) -> Result<()> {
-        let authorizer = caller.authorizer;
+        let authorizer = scope.authorizer;
         let target = ToolTarget {
             server,
             tool,
@@ -126,7 +207,9 @@ impl MetaMcp {
                 message: e.message,
             })
         } else {
-            self.admin_capability_rule(server, tool, caller.is_admin)
+            // Allowed: the record, when this stage owns it, then the admin rule.
+            let _allowed = decision.emit(on_allow);
+            self.admin_capability_rule(server, tool, scope.is_admin)
         };
         if let Err(e) = refusal {
             let (transport, name) = (authorizer.transport(), authorizer.caller_name());
@@ -134,11 +217,11 @@ impl MetaMcp {
             return Err(e);
         }
         if self
-            .identity_grant_rule(server, tool, caller.scope(), Emit::Silent)
+            .identity_grant_rule(server, tool, scope, Emit::Silent)
             .is_err()
         {
             // Re-run to write the refusal's own record, as the route would.
-            return self.identity_grant_rule(server, tool, caller.scope(), Emit::Audit);
+            return self.identity_grant_rule(server, tool, scope, Emit::Audit);
         }
         Ok(())
     }
@@ -200,16 +283,18 @@ impl MetaMcp {
             );
             return Ok(());
         }
-        let desc = verdict
-            .findings
-            .first()
-            .map_or("Security firewall blocked this request", |f| {
-                f.description.as_str()
-            });
+        // The stateless rescan has no anomaly findings, so this is the
+        // `-32600` arm of the one shared wording.
+        let (code, message) = verdict.request_refusal().unwrap_or_else(|| {
+            (
+                -32600,
+                "Firewall blocked: Security firewall blocked this request".to_owned(),
+            )
+        });
         Err(Error::Forbidden {
-            code: -32600,
+            code,
             status: 400,
-            message: format!("Firewall blocked: {desc}"),
+            message,
         })
     }
 }

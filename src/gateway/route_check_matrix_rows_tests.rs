@@ -10,12 +10,12 @@ use crate::gateway::router::route_matrix_driver_tests as router;
 use crate::gateway::server::route_matrix_driver_tests as stdio;
 
 /// A shell-injection argument the request firewall blocks (a High finding).
-const BLOCKED: &str = "; rm -rf / ";
+pub(super) const BLOCKED: &str = "; rm -rf / ";
 
 /// The firewall audit rows of `event` in `path`. Panics on an unreadable
 /// file or a malformed line, so a gap row can never pass because the audit
 /// log was not collected.
-fn audit_rows(path: &std::path::Path, event: &str) -> Vec<Value> {
+pub(super) fn audit_rows(path: &std::path::Path, event: &str) -> Vec<Value> {
     let text = std::fs::read_to_string(path)
         .unwrap_or_else(|e| panic!("audit log {} unreadable: {e}", path.display()));
     text.lines()
@@ -28,7 +28,7 @@ fn audit_rows(path: &std::path::Path, event: &str) -> Vec<Value> {
 }
 
 /// One blocked call on `route`, firewalled on every layer.
-async fn blocked_call(route: Route, audit: &std::path::Path) -> (Value, usize) {
+pub(super) async fn blocked_call(route: Route, audit: &std::path::Path) -> (Value, usize) {
     let args = json!({ "cmd": BLOCKED });
     match route {
         Route::Invoke => {
@@ -86,28 +86,35 @@ async fn route_firewall_rows() {
     }
 }
 
-/// `ChokepointRescan`, stdio: with no route-layer scan, the blocked argument
-/// reaches the dispatch-time rescan, which writes a blocking `event=dispatch`
-/// row and stops the send.
+/// `ChokepointRescan`, stdio: the route stage passes a clean first call, and
+/// the continuation retry's answer carries the blocked pattern, which only the
+/// dispatch-time rescan judges. It writes a blocking `event=dispatch` row and
+/// refuses the send; the backend is asked once (the question).
 #[tokio::test]
 async fn chokepoint_rescan_stdio_row() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let audit = dir.path().join("audit.jsonl");
-    let (body, backend_calls) = blocked_call(Route::Stdio, &audit).await;
     assert_eq!(
         expect(MethodKind::ToolsCall, Route::Stdio, Stage::ChokepointRescan),
         Expect::Applies
     );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let audit = dir.path().join("audit.jsonl");
+    let sent = stdio::stdio_retry_answering(&audit, BLOCKED).await;
     let dispatched = audit_rows(&audit, "dispatch");
     assert!(
         dispatched.iter().any(|row| row["action"] == "block"),
-        "no blocking dispatch row: {dispatched:?}; {body}"
+        "R5: not refused by the dispatch rescan: {dispatched:?}; {}",
+        sent.body
     );
-    assert_eq!(backend_calls, 0, "reached its backend: {body}");
+    assert_eq!(sent.body["error"]["code"], -32600, "R5: {}", sent.body);
+    assert_eq!(
+        sent.backend_calls, 1,
+        "R5: the hostile answer was sent: {}",
+        sent.body
+    );
 }
 
 /// The sanitizer's refusal of a NUL byte (`security/sanitize.rs`).
-const NUL_REFUSED: &str = "Input contains null bytes which are not allowed";
+pub(super) const NUL_REFUSED: &str = "Input contains null bytes which are not allowed";
 
 /// An argument holding a NUL byte, which sanitization refuses.
 fn with_nul() -> Value {
@@ -163,34 +170,33 @@ async fn sanitize_rows() {
         direct_off.body
     );
 
-    assert_eq!(
-        row(Route::Stdio),
-        Expect::ExpectedGap(super::Ticket::Mik8149)
+    assert_eq!(row(Route::Stdio), Expect::Applies);
+    // Built from config by the production Gateway. ON: the sanitizer refuses
+    // the NUL at intake, before the backend. OFF (the control): it arrives
+    // unchanged, as the echoing backend shows.
+    let (on, on_calls) = stdio::stdio_sanitizing(true).await;
+    assert!(
+        message(&on).contains(NUL_REFUSED),
+        "R5 sanitize_input=true: not refused by the sanitizer: {on}"
     );
-    // Built from config by the production Gateway, with the setting ON: stdio
-    // still passes the NUL (the gap). The OFF run is the control.
-    for on in [true, false] {
-        let (body, calls) = stdio::stdio_sanitizing(on).await;
-        assert!(
-            !body.to_string().contains(NUL_REFUSED),
-            "R5 sanitize_input={on}: stdio now refuses the NUL; MIK-8149 may have \
-             closed this gap, flip the row to Applies: {body}"
-        );
-        assert_eq!(
-            calls, 1,
-            "R5 sanitize_input={on}: the call did not reach the backend: {body}"
-        );
-        // The backend echoes `cmd`; `gateway_invoke` wraps its result as text.
-        // The NUL arrived unchanged, not stripped.
-        let inner: serde_json::Value = body["result"]["content"][0]["text"]
-            .as_str()
-            .and_then(|text| serde_json::from_str(text).ok())
-            .unwrap_or_default();
-        assert_eq!(
-            inner["content"][0]["text"], "a\u{0}b",
-            "R5 sanitize_input={on}: the backend did not get the NUL as sent: {body}"
-        );
-    }
+    assert_eq!(
+        on_calls, 0,
+        "R5 sanitize_input=true: reached the backend: {on}"
+    );
+    let (off, off_calls) = stdio::stdio_sanitizing(false).await;
+    assert_eq!(
+        off_calls, 1,
+        "R5 sanitize_input=false: no backend call: {off}"
+    );
+    // The backend echoes `cmd`; `gateway_invoke` wraps its result as text.
+    let inner: serde_json::Value = off["result"]["content"][0]["text"]
+        .as_str()
+        .and_then(|text| serde_json::from_str(text).ok())
+        .unwrap_or_default();
+    assert_eq!(
+        inner["content"][0]["text"], "a\u{0}b",
+        "R5 sanitize_input=false: the backend did not get the NUL as sent: {off}"
+    );
 }
 
 /// A backend answer carrying a credential the response firewall blocks. Built
@@ -452,12 +458,7 @@ async fn nonce_give_back_direct_row() {
 
 /// X14's challenge prompt both its variants carry
 /// (`meta_mcp/task_confirmation.rs` `confirmation_prompt`).
-const X14_PROMPT: &str = "It runs as a task once accepted";
-
-/// X14's refusal for a caller it cannot bind a confirmation to
-/// (`meta_mcp/task_confirmation.rs`): neither an identity nor a key.
-const X14_UNBINDABLE: &str =
-    "this destructive call cannot be confirmed for a caller this gateway cannot name";
+pub(super) const X14_PROMPT: &str = "It runs as a task once accepted";
 
 /// `TaskConfirm`, R4a Applies: a task-augmented call of a destructive (or
 /// unclassified) surfaced tool is decided by X14 before any dispatch. The
@@ -510,33 +511,11 @@ async fn r4a_authorize_refuses_at_submit_as_the_sync_call_does() {
     router::task_submit_ungranted().await;
 }
 
-/// `TaskConfirm`, R5 gap (MIK-8160): the same task-augmented call of a
-/// destructive surfaced tool over stdio is admitted as a task with no X14
-/// decision at all: neither X14's challenge nor its refusal.
-#[tokio::test]
-async fn task_confirm_stdio_gap_row() {
-    assert_eq!(
-        expect(MethodKind::ToolsCall, Route::Stdio, Stage::TaskConfirm),
-        Expect::ExpectedGap(super::Ticket::Mik8160)
-    );
-    let (body, _calls) = Box::pin(stdio::stdio_task_surfaced()).await;
-    let text = body.to_string();
-    assert!(
-        !text.contains(X14_PROMPT) && !text.contains(X14_UNBINDABLE),
-        "stdio now gets an X14 decision; MIK-8160 may have closed this gap, flip the \
-         row to Applies: {body}"
-    );
-    assert!(
-        body.pointer("/result/taskId").is_some(),
-        "premise: stdio admitted the call as a task: {body}"
-    );
-}
-
 /// The execution lease's in-flight refusal (`meta_mcp/admission.rs`).
 const LEASE_IN_FLIGHT: &str = "Execution is already in progress";
 
 /// A JSON-RPC answer's error message, or "" when it has none.
-fn message(body: &Value) -> &str {
+pub(super) fn message(body: &Value) -> &str {
     body["error"]["message"].as_str().unwrap_or_default()
 }
 

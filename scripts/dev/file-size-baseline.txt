@@ -2,14 +2,5 @@
 # The gate ratchets: a listed file may shrink, never grow, and nothing new
 # may cross, except a move: a new row with `# moved-from <path>` above it,
 # naming a row that shrank or left. Delete a row once the file drops under.
-# 10 files, 1382 lines of excess.
-1138 tests/mik_7214_header_9_acs.rs
-1131 tests/mik_7212_mrtr7_stdio_acs.rs
-975 tests/mik_7272_sub4_adr012_acs.rs
-927 src/main_tests.rs
-908 src/gateway/meta_mcp_helpers_tests.rs
-904 tests/nfr_obs_3_era_observability.rs
-874 src/personal_accounts/provider/provider_tests.rs
-849 tests/mik_7214_acs.rs
-840 src/personal_accounts/worker_tests.rs
-836 src/gateway/meta_mcp_helpers_chain_tests.rs
+# 0 files, 0 lines of excess.
+

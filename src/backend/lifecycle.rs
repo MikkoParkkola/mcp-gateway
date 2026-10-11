@@ -115,6 +115,10 @@ impl Backend {
             #[cfg(test)]
             publish_gate: parking_lot::Mutex::new(None),
             #[cfg(test)]
+            restart_take_gate: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            probe_error_gate: parking_lot::Mutex::new(None),
+            #[cfg(test)]
             rebuilds_attempted: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             last_oauth_client: parking_lot::Mutex::new(None),
@@ -623,7 +627,7 @@ impl Backend {
 /// Wait at the test gate held in `slot`, when one is set: signal `reached`,
 /// then wait for `release`.
 #[cfg(test)]
-async fn hold_at(slot: &parking_lot::Mutex<Option<Arc<super::MarkWindowGate>>>) {
+pub(super) async fn hold_at(slot: &parking_lot::Mutex<Option<Arc<super::MarkWindowGate>>>) {
     let gate = slot.lock().clone();
     if let Some(gate) = gate {
         gate.reached.notify_one();
