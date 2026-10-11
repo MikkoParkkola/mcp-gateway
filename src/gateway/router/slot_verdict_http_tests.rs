@@ -368,3 +368,32 @@ async fn i2b_index_written_by_direct_route_listing() {
         "I2b: the direct-route listing wrote no index entry"
     );
 }
+
+/// C4b (gpt tp1 F3, restated kimi tp2 F1): over HTTP, a `gateway_execute`
+/// chain with two static targets on the per-user backend, the first one
+/// alpha's catalogue offers (`note`) and the second one it withholds
+/// ([`TOOL`], invalid in alpha's slot). The second target answers -32601 and
+/// is never dispatched; the first dispatching is expected. RED on base: both
+/// dispatch on the shared slot's verdict.
+#[tokio::test]
+async fn c4b_execute_multi_target_withheld_second_target() {
+    let gw = gateway(CallerSlot::Invalid, CLOSED, Surfaced::No).await;
+    let first = format!("{BACKEND}:note");
+    let second = format!("{BACKEND}:{TOOL}");
+    let body = json!({"jsonrpc": "2.0", "id": 11, "method": "tools/call",
+    "params": {"name": "gateway_execute", "arguments": {"chain": [
+        {"tool": first, "arguments": {"q": "x"}},
+        {"tool": second, "arguments": {"q": "y"}}
+    ]}}});
+    let answer = post_as_alpha(&gw.router, "/mcp", &body).await;
+    assert_eq!(
+        gw.dispatched(),
+        1,
+        "C4b: the withheld second target dispatched (or the first did not): {answer:?}"
+    );
+    assert_eq!(
+        answer.1.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "C4b: the withheld second target did not answer -32601: {answer:?}"
+    );
+}
