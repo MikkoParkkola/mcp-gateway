@@ -41,7 +41,7 @@ pub(super) async fn guard_before_credential(
         scope.state,
         scope.name,
         auth,
-        (envelope.params.as_ref(), scope.id),
+        (envelope.params.as_ref(), scope.id, scope.route.session_id),
         (&scope.route.backend, &failed),
     )
     .await?;

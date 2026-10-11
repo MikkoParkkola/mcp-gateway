@@ -116,7 +116,7 @@ async fn guard_tool_call(
     state: &AppState,
     backend_name: &str,
     auth: BackendAuthContext<'_>,
-    (params, id): (Option<&Value>, &RequestId),
+    (params, id, session_id): (Option<&Value>, &RequestId, Option<&str>),
     (backend, failed): (&crate::backend::Backend, &DirectFailure<'_>),
 ) -> Result<(), BackendRejection> {
     let Some(params) = params else {
@@ -145,7 +145,10 @@ async fn guard_tool_call(
         auth.cert_identity,
         target,
     )
-    .is_err();
+    .is_err()
+        || state
+            .meta_mcp
+            .profile_refuses(backend_name, tool_name, session_id);
     if withheld {
         warn!(backend = %backend_name, tool = %tool_name, "Tool withheld by authorization; answered as absent");
     }
@@ -188,6 +191,17 @@ async fn guard_tool_call(
         }
     }
 
+    // Backend-wide refusals (kill switch, a disabled capability) say nothing
+    // about the name: answered alike for every name, before any fill (K2).
+    if let Err(e) = state.meta_mcp.admit_backend_wide(backend_name, tool_name) {
+        return Err(super::helpers::build_http_response(
+            &crate::gateway::meta_mcp::invoke::egress::Egressed::gateway_own(refusal(
+                Some(id.clone()),
+                &e,
+            )),
+            StatusCode::OK,
+        ));
+    }
     if !withheld {
         return Ok(());
     }

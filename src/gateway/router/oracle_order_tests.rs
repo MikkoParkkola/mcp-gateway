@@ -174,9 +174,14 @@ async fn o3_a_retained_result_is_not_replayed_for_an_invisible_name() {
         let first = twin.invoke_modern(TOOL, json!({}), &keyed).await;
         assert_eq!(first.calls, 1, "premise ({side:?}): first call: {}", first.body);
         twin.drifted.store(true, Ordering::SeqCst);
+        // The slot the check reads is replaced by the drifted list, as a
+        // direct listing stores it (`invalidate` alone leaves it fresh).
         let backend = twin.fx.state.backends.get(SERVER).expect("alpha");
-        backend.invalidate_tools_cache();
-        backend.get_tools_shared().await.expect("refill");
+        let mut listed = vec![json!({"name": SIBLING, "inputSchema": {"type": "object"}})];
+        if side == Side::Withheld {
+            listed.push(super::oracle_parity_fixture::listed_tool(Reason::Schema, false));
+        }
+        backend.remember_listed_tools(None, false, &listed);
         let second = twin.invoke_modern(TOOL, json!({}), &keyed).await;
         let unkeyed = twin.invoke_modern(TOOL, json!({}), &json!({})).await;
         if untraced(second.body.clone()) != untraced(unkeyed.body.clone()) {

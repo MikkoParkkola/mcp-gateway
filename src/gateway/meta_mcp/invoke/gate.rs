@@ -93,16 +93,21 @@ impl MetaMcp {
         let Some(backend) = self.backends.get(server) else {
             return false;
         };
-        if self.admit_backend_wide(server, tool).is_err() {
-            return false;
-        }
         let refused = self.may_invoke(server, tool, caller.scope(), session_id).is_err();
         let reason = if refused {
+            // Whatever the backend-wide checks say: the gate answers them
+            // for this name as for a missing one.
             Withholding::Refused
-        } else if backend.keeps_per_user_catalogues() {
+        } else if backend.keeps_per_user_catalogues()
+            || self.admit_backend_wide(server, tool).is_err()
+        {
             return false;
         } else {
             match self.shared_verdict(&backend, tool, backend.gate_headers()).await {
+                // Under `off` a lacked name is forwarded: not the gate's.
+                Shared::Withheld(Withholding::Lacked) if !backend.checks_membership() => {
+                    return false;
+                }
                 Shared::Withheld(reason) => reason,
                 Shared::Offered | Shared::Unproven => return false,
             }
@@ -132,6 +137,13 @@ impl MetaMcp {
         // for a name that matches no tool (MIK-8340 A4).
         caller.signing.inspect(|signing| signing.want_refund());
         Some(answer)
+    }
+
+    /// Whether the routing profile in force for `session_id` excludes
+    /// `(server, tool)`: a reason a listing hides it (R6), for the direct
+    /// route, whose authorize does not read profiles.
+    pub(crate) fn profile_refuses(&self, server: &str, tool: &str, session_id: Option<&str>) -> bool {
+        self.active_profile(session_id).check(server, tool).is_err()
     }
 
     /// The dispatch-time backstop (design r2 item 4): a refusal the policy
@@ -201,8 +213,10 @@ impl MetaMcp {
             _ if refused => Some(Withholding::Refused),
             _ => match self.shared_verdict(&backend, tool, headers).await {
                 Shared::Offered => return None,
+                // A name the list lacks is judged by F13's own table below,
+                // which knows the mode (`off` forwards it).
+                Shared::Withheld(Withholding::Lacked) | Shared::Unproven => None,
                 Shared::Withheld(reason) => Some(reason),
-                Shared::Unproven => None,
             },
         };
         let lens = match judged {

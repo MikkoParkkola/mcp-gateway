@@ -76,10 +76,15 @@ fn absent_from(
 }
 
 impl Backend {
-    /// Whether calls to this backend carry the caller's own credential
-    /// (identity propagation), so the argument-key check never lists its
-    /// shared slot for them (A3). The MIK-8361 gate, which runs before any
-    /// credential is resolved, judges such a backend as that check would.
+    /// Whether the argument-key check reads catalogue membership at all
+    /// (any mode but `off`). Under `off` a name the list lacks is forwarded
+    /// (MIK-8361 stated residual), so the gate never answers it.
+    pub(crate) fn checks_membership(&self) -> bool {
+        self.config.input_schema_enforcement != InputSchemaEnforcement::Off
+    }
+
+    /// Whether calls to this backend carry the caller's own credential; see
+    /// [`Self::gate_headers`].
     pub(crate) fn propagates_caller_identity(&self) -> bool {
         self.config.identity_propagation.is_some()
     }
