@@ -146,8 +146,7 @@ impl MetaMcp {
 
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
-        // MIK-8361: a name this caller cannot see is answered as missing,
-        // before the policy, signing, idempotency, credential or dispatch.
+        // MIK-8361: a name this caller cannot see answers as a missing one.
         if let Some(answer) = self.withheld_gate((server, tool), caller, session_id).await {
             return answer;
         }
