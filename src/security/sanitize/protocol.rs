@@ -201,20 +201,24 @@ pub(super) fn sanitize_value(key: &str, value: &Value, route: ProtocolRoute) -> 
     })
 }
 
-/// `map` sanitized member by member, keys first; `special` handles a member
-/// itself when it returns `Some`.
+/// `map` sanitized member by member; `special` handles a member itself when
+/// it returns `Some`. Every key here was validated first: each admission
+/// point runs [`validate_protocol_fields`] before [`super::sanitize_request`]
+/// (intake, stdio, the direct route, a task's re-admission), and a key that
+/// passes validation sanitizes to itself (`sanitize_string` strips only what
+/// validation refuses, and its NFC step is the identity). So a key is matched
+/// and kept as sent (MIK-8378).
 fn sanitize_object(
     map: &serde_json::Map<String, Value>,
     special: impl Fn(&str, &Value) -> Option<Result<Value>>,
 ) -> Result<Value> {
     let mut sanitized = serde_json::Map::with_capacity(map.len());
     for (key, member) in map {
-        let key = sanitize_string(key)?;
-        let clean = match special(&key, member) {
+        let clean = match special(key, member) {
             Some(handled) => handled?,
             None => sanitize_json_value(member)?,
         };
-        sanitized.insert(key, clean);
+        sanitized.insert(key.clone(), clean);
     }
     Ok(Value::Object(sanitized))
 }

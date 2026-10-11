@@ -93,18 +93,20 @@ impl LiveHost {
                     crate::gateway::meta_mcp::visible::judged(),
                 ));
             }
-            crate::security::sanitize::sanitize_request(
-                &request,
-                crate::security::sanitize::ProtocolRoute::Meta,
-            )
-            .map(|clean| (clean["params"]["arguments"].clone(), Judged::default()))
-            .map_err(|e| {
-                Box::new(JsonRpcResponse::error(
-                    Some(RequestId::Number(0)),
-                    e.to_rpc_code(),
-                    e.to_string(),
-                ))
-            })
+            // Intake's full rule (MIK-8378): the keys the gateway reads are
+            // validated first, so a dirty one stored by a process with
+            // sanitizing off is refused here, never stripped into another.
+            let route = crate::security::sanitize::ProtocolRoute::Meta;
+            crate::security::sanitize::validate_protocol_fields(&request, &[], route)
+                .and_then(|()| crate::security::sanitize::sanitize_request(&request, route))
+                .map(|clean| (clean["params"]["arguments"].clone(), Judged::default()))
+                .map_err(|e| {
+                    Box::new(JsonRpcResponse::error(
+                        Some(RequestId::Number(0)),
+                        e.to_rpc_code(),
+                        e.to_string(),
+                    ))
+                })
         })
         .await
     }

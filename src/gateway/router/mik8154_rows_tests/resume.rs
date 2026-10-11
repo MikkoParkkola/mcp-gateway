@@ -149,9 +149,12 @@ async fn r4_a_resume_still_exempt_forwards_as_submitted() {
 }
 
 /// R5 (MIK-8378, lead ruling (a)): a resume applies intake's full rule. A
-/// stored `gateway_invoke` call whose own argument key is dirty (admitted by
-/// a process with sanitizing off, resumed by one restarted with it on) is
-/// refused by key validation on re-admission, never stripped into `server`.
+/// stored `gateway_invoke` call whose own argument key is dirty is refused by
+/// key validation on re-admission, never stripped into `server`. The row
+/// models a task stored by a process with `sanitize_input` off and resumed by
+/// one restarted with it on: in one process the call is unreachable, because
+/// intake validates whenever `sanitize_input` is on, exempt calls included
+/// (dispatch_intake.rs:282), and `sanitize_input` is fixed for the process.
 #[tokio::test]
 async fn r5_a_resume_refuses_a_dirty_meta_key_it_stored() {
     let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
