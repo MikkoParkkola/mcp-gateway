@@ -68,14 +68,16 @@ exists):
 | D | `HEAD` | 29423 | modern |
 | E | `HEAD` | 29424 | mixed-era |
 
-Amended 2026-10-11. The cell ports moved from 39420-39424 to 29420-29424,
-below Linux's default ephemeral range (32768-60999). Inside that range, any
-live outgoing connection on the host can draw a cell's port, so that cell's
-gateway cannot bind: the graded run of 2026-10-11 voided at rep C9 on port
-39422 that way. A port is where a gateway listens on loopback; no measured
-quantity, cell, ref, schedule or pass rule changes. `schedule.CELL_PORTS` is
-the one list, and the runner refuses a run before any rep when a cell port
-falls inside the host's ephemeral range.
+Amended 2026-10-11 (operational only). The cell ports moved from 39420-39424
+to 29420-29424, below Linux's default ephemeral range (32768-60999). Observed:
+the graded run of 2026-10-11 voided at rep C9 because cell C's gateway could
+not bind port 39422 ("Address already in use"), on a host whose ephemeral
+range covered every cell port. Inferred cause: a live outgoing connection had
+drawn 39422 as its source port. A port is where a gateway listens on
+loopback; no measured quantity, cell, ref, schedule or pass rule changes.
+`schedule.CELL_PORTS` is the one list, and the runner refuses a run before any
+rep when a cell port falls inside the host's ephemeral range. The §11
+artefacts are pinned at freeze, so the freeze pins take this version.
 
 Plus the separately labelled no-backend control from NFR.PERF.1.
 

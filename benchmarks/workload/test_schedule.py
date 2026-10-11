@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -279,6 +280,10 @@ def ports_rows() -> None:
     stale = [p for p in ("39420", "39421", "39422", "39423", "39424") if p in script]
     check("run_workload.sh names no port of its own (schedule.CELL_PORTS is the one list)",
           not stale, str(stale))
+    contract = (here.parent.parent / "docs/requirements/RELEASE-4.0.0-workload-contract.md").read_text()
+    tabled = {m[0]: int(m[1]) for m in re.findall(r"^\| ([A-E]) \| `[^`]+`[^|]*\| (\d+) \|", contract, re.M)}
+    check("the contract's cell tables carry exactly schedule.CELL_PORTS", tabled == ports,
+          f"contract {tabled} vs {ports}")
 
     def ports_clear(range_text: str | None) -> subprocess.CompletedProcess:
         with tempfile.TemporaryDirectory() as tmp:
@@ -309,8 +314,32 @@ def ports_rows() -> None:
                                  env=env, capture_output=True, text=True, check=False, timeout=60)
         check("run_workload.sh measure refuses at second 0 when a cell port is ephemeral",
               measure.returncode == 3 and "ephemeral" in measure.stderr
-              and not (Path(tmp) / "run" / "pins.json").exists(),
+              and not (Path(tmp) / "run" / "pins.json").exists()
+              and not (Path(tmp) / "run" / "config").exists(),
               f"rc={measure.returncode} {measure.stderr[-300:]}")
+
+    # An unreadable range: a graded run voids at once; a diagnostic run warns
+    # and goes on (here it then stops on the missing arm, past the check).
+    # `smoke` reaches the check with no bench-host or arm-provenance refusal first.
+    with tempfile.TemporaryDirectory() as tmp:
+        base = {**os.environ, "WORKLOAD_PORT_RANGE_FILE": str(Path(tmp) / "absent"),
+                "K6_IMAGE_DIGEST": "sha256:" + "0" * 64, "ARMS_DIR": str(Path(tmp) / "arms")}
+        graded = subprocess.run(
+            ["bash", str(here / "run_workload.sh"), "smoke", str(Path(tmp) / "g")],
+            env={**base, "WORKLOAD_GRADED": "1", "WORKLOAD_REPS": "18", "WORKLOAD_SEED": "20261007"},
+            capture_output=True, text=True, check=False, timeout=60)
+        check("a graded run voids at second 0 when the ephemeral range is unreadable",
+              graded.returncode == 3 and "cannot read the ephemeral port range" in graded.stderr
+              and "outside the ephemeral port range" in graded.stderr
+              and not (Path(tmp) / "g" / "config").exists(),
+              f"rc={graded.returncode} {graded.stderr[-300:]}")
+        diagnostic = subprocess.run(
+            ["bash", str(here / "run_workload.sh"), "smoke", str(Path(tmp) / "d")],
+            env=base, capture_output=True, text=True, check=False, timeout=60)
+        check("a diagnostic run warns on an unreadable range and continues past the check",
+              "warning: no readable ephemeral port range" in diagnostic.stderr
+              and "outside the ephemeral port range" not in diagnostic.stderr,
+              f"rc={diagnostic.returncode} {diagnostic.stderr[-300:]}")
 
 
 if __name__ == "__main__":
