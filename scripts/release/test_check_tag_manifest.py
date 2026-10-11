@@ -3162,6 +3162,29 @@ class VariantStage(unittest.TestCase):
             "non-root each call them once",
         )
 
+    def test_tini_is_pid_1_of_the_variant_only(self):
+        # MIK-8352 TINI.1: tini -g in front of the entrypoint, so a stop reaches
+        # a sourced step's foreground command. The default image keeps the
+        # gateway itself as PID 1.
+        stage = self.variant_stage()
+        self.assertRegex(
+            stage,
+            r"apt-get install[^\n]*\\\n(?:[^\n]*\\\n)*?\s*tini \\",
+            "the variant does not install tini",
+        )
+        self.assertRegex(
+            stage,
+            r'(?m)^ENTRYPOINT \["/usr/bin/tini", "-g", "--", '
+            r'"/usr/local/bin/entrypoint-full\.sh"\]$',
+            "the variant's PID 1 is not tini -g in front of its entrypoint",
+        )
+        base = self.body[: self.body.index("FROM runtime AS runtime-full")]
+        self.assertRegex(
+            base,
+            r'(?m)^ENTRYPOINT \["mcp-gateway"\]$',
+            "the default image's PID 1 is no longer the gateway",
+        )
+
     def test_the_variant_keeps_the_default_invocation(self):
         # An ENTRYPOINT declared in the stage resets the CMD the base stage set.
         # The variant's own invocation carries no arguments, so a variant
@@ -3398,10 +3421,23 @@ class VariantGateCoverage(unittest.TestCase):
             r"docker stop -t \d+",
             "the variant gate never stops the image while startup is running",
         )
+        # PID 1 is tini, so the gateway's uid is read from the process named
+        # mcp-gateway, and PID 1 is checked to be tini (MIK-8352).
         self.assertRegex(
             self.body,
-            r"proc/1/status",
+            r'= mcp-gateway \] && exec grep -m1 "\^Uid:"',
             "the variant gate never checks which user the gateway runs as",
+        )
+        self.assertRegex(
+            self.body,
+            r'cat /proc/1/comm',
+            "the variant gate never checks that tini is PID 1",
+        )
+        # A stop during a sourced step: the case tini -g exists for.
+        self.assertRegex(
+            self.body,
+            r"(?s)10-slow\.envsh.*?docker stop -t \d+.*?!= 143",
+            "the variant gate never stops the image during a sourced step",
         )
 
 
