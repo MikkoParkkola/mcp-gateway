@@ -824,6 +824,10 @@ pub(crate) mod slot_verdict_fixture;
 #[cfg(test)]
 mod slot_verdict_tests;
 #[cfg(test)]
+mod slot_verdict_listing_tests;
+#[cfg(test)]
+mod slot_verdict_index_tests;
+#[cfg(test)]
 mod task_notify_tests;
 /// MIK-8340 row 10: a listing follows the caller's own catalogue.
 #[cfg(test)]

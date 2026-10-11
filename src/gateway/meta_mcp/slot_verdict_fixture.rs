@@ -343,3 +343,107 @@ pub(crate) fn indexed_binding_for(meta: &MetaMcp, subject: &str) -> Option<Strin
     let caller = identified_caller(&who);
     meta.caller_slot_binding_for(&backend, MetaMcp::proof_of(&caller))
 }
+
+// Shared by the MIK-8356 row files (call path, listings, index).
+
+/// alpha lists `BACKEND` through `gateway_list_tools`: a real fill of alpha's
+/// own slot, the way a caller's slot becomes warm (and indexed).
+pub(crate) async fn warm_by_listing(meta: &MetaMcp) {
+    let alpha = identity("alpha");
+    meta.list_tools(
+        &json!({"server": BACKEND}),
+        None,
+        &identified_caller(&alpha),
+    )
+    .await
+    .expect("gateway_list_tools answers");
+}
+
+/// The disabled-capability list as alpha sees it, with [`TOOL`] disabled.
+pub(crate) fn disabled_as_alpha(meta: &MetaMcp) -> Value {
+    let cfg = meta.capability_budget_config.read().clone();
+    for _ in 0..=cfg.window_size.max(cfg.min_samples) {
+        meta.kill_switch
+            .record_capability_failure(BACKEND, TOOL, &cfg);
+    }
+    let alpha = identity("alpha");
+    meta.list_disabled_capabilities(identified_caller(&alpha).scope(), None)
+        .expect("the disabled list answers")
+}
+
+pub(crate) fn names_tool(listed: &Value) -> bool {
+    listed["disabled_capabilities"]
+        .as_array()
+        .is_some_and(|all| all.iter().any(|e| e["capability"] == TOOL))
+}
+
+/// The next-tool predictions alpha is given after `ledger_hub:note`, once
+/// another session has taught the shared tracker that `read` follows it.
+pub(crate) fn predictions_for_alpha(meta: &MetaMcp) -> Vec<Value> {
+    let tracker = std::sync::Arc::new(crate::transition::TransitionTracker::new());
+    meta.set_transition_tracker(std::sync::Arc::clone(&tracker));
+    let (from, to) = ("ledger_hub:note", "ledger_hub:read");
+    for _ in 0..8 {
+        tracker.record_transition("teacher", from);
+        tracker.record_transition("teacher", to);
+    }
+    let alpha = identity("alpha");
+    meta.record_and_predict(
+        None,
+        Some("alpha-session"),
+        from,
+        identified_caller(&alpha).scope(),
+    )
+}
+
+pub(crate) fn predicts_tool(predicted: &[Value]) -> bool {
+    predicted.iter().any(|p| p["tool"] == "ledger_hub:read")
+}
+
+/// The surfaced [`TOOL`] entry in alpha's plain `tools/list`, if listed.
+pub(crate) fn surfaced_entry_for_alpha(meta: &MetaMcp) -> Option<Value> {
+    let alpha = identity("alpha");
+    let response = meta.handle_tools_list_for_session(
+        crate::protocol::RequestId::Number(1),
+        None,
+        identified_caller(&alpha).scope(),
+    );
+    let body = serde_json::to_value(&response).expect("a response serialises");
+    body.pointer("/result/tools")?
+        .as_array()?
+        .iter()
+        .find(|t| t["name"] == TOOL)
+        .cloned()
+}
+
+/// The binding the caller-slot index holds for alpha on `BACKEND`.
+pub(crate) fn indexed_binding_for_alpha(meta: &MetaMcp) -> Option<String> {
+    indexed_binding_for(meta, "alpha")
+}
+
+/// The I2e invariant: every per-user slot whose catalogue has ever been
+/// stored is pointed at by the index. A fill site that stores without
+/// recording fails here. (After the implementation lands it runs at the end
+/// of every row; on the stub it would turn the guards red, so for now it is
+/// its own row.)
+pub(crate) fn assert_index_covers_populated_slots(meta: &MetaMcp, row: &str) {
+    let backend = meta.backends.get(BACKEND).expect("the backend");
+    let populated = backend.populated_per_user_bindings_for_test();
+    let indexed = backend.indexed_bindings_for_test();
+    let missing: Vec<_> = populated.iter().filter(|b| !indexed.contains(b)).collect();
+    assert!(
+        missing.is_empty(),
+        "{row}: populated per-user slots with no index entry: {missing:?}"
+    );
+}
+
+/// [`TOOL`] disabled, then the disabled list as `caller` sees it.
+pub(crate) fn disabled_for(meta: &MetaMcp, caller: &super::MetaMcpCallerContext<'_>) -> Value {
+    let cfg = meta.capability_budget_config.read().clone();
+    for _ in 0..=cfg.window_size.max(cfg.min_samples) {
+        meta.kill_switch
+            .record_capability_failure(BACKEND, TOOL, &cfg);
+    }
+    meta.list_disabled_capabilities(caller.scope(), None)
+        .expect("the disabled list answers")
+}
