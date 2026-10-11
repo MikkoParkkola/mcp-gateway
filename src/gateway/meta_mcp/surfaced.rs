@@ -233,13 +233,18 @@ impl MetaMcp {
                 continue;
             }
             let hidden = self.has_no_view_for(&b, proof).await;
+            // A per-user backend whose slot is cold for this caller has no
+            // count it could vouch for: unenumerated, as a hidden one is.
+            let mut cold = false;
             let admitted = if hidden {
                 0
             } else {
                 // Filled behind this read, as discovery does (MIK-7962);
                 // `tools_known` reports the cold slot meanwhile.
                 self.refresh_shared_behind_read(&b);
-                self.listing_snapshot(&b, scope).map_or(0, |(tools, _)| {
+                let view = self.listing_snapshot(&b, scope);
+                cold = view.is_none();
+                view.map_or(0, |(tools, _)| {
                     tools
                         .iter()
                         .filter(|t| self.shows_tool(&b.name, t, scope, session_id))
@@ -254,7 +259,7 @@ impl MetaMcp {
                 "transport": status.transport,
                 "tools_count": admitted,
                 // Consult this before reading tools_count == 0 as "empty".
-                "tools_known": status.tools_known && !hidden,
+                "tools_known": status.tools_known && !hidden && !cold,
                 "circuit_breaker": status.circuit_state,
                 "status": if killed { "disabled" } else { "active" }
             });

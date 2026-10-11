@@ -33,8 +33,11 @@ impl CallerSlot {
 
 impl Backend {
     /// Record that `principal_id`'s own catalogue is the one stored in per-user
-    /// slot `binding`. A slot that is gone, retired or never filled is not
-    /// recorded, so a refused admission or a failed fill leaves no entry.
+    /// slot `binding`. A slot that is gone or never filled is not recorded, so
+    /// a refused admission or a failed fill leaves no entry. A slot retired
+    /// after the lookup may still be recorded: every read re-checks
+    /// `retired` ([`CallerSlot::live_binding`]), so such an entry reads as
+    /// absent, and its only effect is to withhold until the next fill.
     pub(crate) fn record_caller_slot(&self, principal_id: &str, binding: &str) {
         let key = PoolKey::PerUser {
             binding: binding.to_string(),
@@ -42,7 +45,7 @@ impl Backend {
         let Some(entry) = self.pool.get(&key).map(|slot| Arc::clone(slot.value())) else {
             return;
         };
-        if entry.retired.load(Ordering::SeqCst) || !entry.tools_cache.ever_populated() {
+        if !entry.tools_cache.ever_populated() {
             return;
         }
         self.caller_slots.insert(
