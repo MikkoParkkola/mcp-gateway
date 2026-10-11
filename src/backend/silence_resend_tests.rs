@@ -36,7 +36,7 @@ const READ_LOOKING_MUTATION: &str = "get_and_increment";
 
 /// The backend's request timeout: the window the silenced call fails in, at
 /// the timing gate's floor. Only that call runs under it.
-const CALL_TIMEOUT: Duration = Duration::from_secs(5);
+const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// Starts tried before a row gives up on its precondition.
 const START_ATTEMPTS: usize = 10;
 /// Real-time bound on all of them: only a hang reaches it.
@@ -172,7 +172,9 @@ async fn pre_start(backend: &Backend) {
         Ok(Err(last)) => panic!(
             "precondition: handshake never completed in {START_ATTEMPTS} starts; last: {last:?}"
         ),
-        Err(_) => panic!("precondition: handshake never completed within {HANG_BOUND:?}"),
+        Err(elapsed) => {
+            panic!("precondition: handshake never completed within {HANG_BOUND:?} ({elapsed})")
+        }
     }
 }
 

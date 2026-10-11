@@ -22,6 +22,8 @@ use crate::gateway::Gateway;
 const FLOOD: usize = super::super::STDOUT_QUEUE_DEPTH + 200;
 /// Bound on each wait for a frame in the reading control.
 const ARRIVAL: Duration = Duration::from_secs(10);
+/// tokio's timer tick: a deadline fires at the first tick at or after it.
+const TIMER_RESOLUTION: Duration = Duration::from_millis(1);
 /// Real-time bound on a whole paused-clock row: only a true hang reaches it.
 const HANG_BOUND: Duration = Duration::from_secs(300);
 
@@ -115,8 +117,11 @@ async fn eof_returns_while_stdout_is_unread(mut served: Served) {
         .await
         .expect("the serve task does not panic")
         .expect("run_stdio_on returns Ok");
-    let contract =
-        super::super::STDIO_DRAIN_TIMEOUT + super::super::stdio_shutdown::STDIO_TEARDOWN_TIMEOUT;
+    // Plus the timer's resolution: tokio rounds each deadline up to its next
+    // millisecond tick, so the two deadlines can each land 1 ms late.
+    let contract = super::super::STDIO_DRAIN_TIMEOUT
+        + super::super::stdio_shutdown::STDIO_TEARDOWN_TIMEOUT
+        + TIMER_RESOLUTION * 2;
     let took = eof.elapsed();
     assert!(
         took <= contract,
