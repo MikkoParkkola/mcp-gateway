@@ -203,10 +203,11 @@ async fn an_undatable_resource_change_is_dropped_and_counted() {
         },
         false,
     );
-    tokio::time::sleep(WINDOW + Duration::from_millis(100)).await;
+    // Flushed as of a moment past the window: the note is due, no wait.
+    let due = std::time::Instant::now() + WINDOW + Duration::from_millis(100);
     {
         let _clock = crate::clock::test_clock::before_epoch();
-        state.flush(&weak);
+        state.flush_at(&weak, due);
     }
     assert!(
         intake.try_recv().is_err(),

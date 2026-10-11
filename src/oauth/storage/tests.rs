@@ -765,10 +765,7 @@ async fn a_polled_save_heals_a_corrupt_final_when_the_lock_is_free() {
 /// used. Mutant: an unreadable clock answers Live.
 #[test]
 fn an_unreadable_clock_reads_every_token_as_expired() {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+    let now = crate::clock::unix_secs().expect("now");
     let token = |expires_at| TokenInfo {
         expires_at: Some(expires_at),
         ..TokenInfo::from_response("tok".to_string(), None, None, None, None)

@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8202: the clock module's own rows.
 
-use serde_json::json;
-
 use super::test_clock;
 use super::*;
 
@@ -11,7 +9,6 @@ use super::*;
 fn a_clock_before_the_epoch_is_an_error_in_every_form() {
     let _clock = test_clock::before_epoch();
     assert_eq!(unix_secs(), Err(ClockBeforeEpoch));
-    assert_eq!(unix_millis(), Err(ClockBeforeEpoch));
     assert_eq!(utc_now(), Err(ClockBeforeEpoch));
 }
 
@@ -114,16 +111,6 @@ fn the_jwt_window_on_an_unreadable_clock_is_expired() {
         jwt_window(at(u64::MAX - 1), JwtClaimTime::Absent, 0),
         Validity::Expired
     );
-}
-
-#[test]
-fn claim_times_decode_as_the_decoder_read_them() {
-    let claims = json!({"exp": 1_700_000_000, "nbf": 1_699_999_999.75, "bad": "soon", "neg": -5});
-    assert_eq!(JwtClaimTime::of(&claims, "exp"), at(1_700_000_000));
-    assert_eq!(JwtClaimTime::of(&claims, "nbf"), at(1_699_999_999));
-    assert_eq!(JwtClaimTime::of(&claims, "bad"), JwtClaimTime::Malformed);
-    assert_eq!(JwtClaimTime::of(&claims, "neg"), JwtClaimTime::Malformed);
-    assert_eq!(JwtClaimTime::of(&claims, "missing"), JwtClaimTime::Absent);
 }
 
 /// MIK-8202 E4: an audit row is stamped with the time on a readable clock,

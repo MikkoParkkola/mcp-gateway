@@ -70,6 +70,26 @@ pub(in crate::events::store) fn load(
 }
 
 impl Store {
+    /// Apply retention and the dead-letter caps now.
+    pub(crate) fn sweep_dead(
+        &self,
+        now: DateTime<Utc>,
+        policy: DeadPolicy,
+    ) -> std::io::Result<Vec<Evicted>> {
+        let mut state = self.state.lock();
+        let mut evicted = Vec::new();
+        match self.evict_dead(&mut state, now, policy, &mut evicted) {
+            Ok(()) => Ok(evicted),
+            // What was evicted before the failure is gone: its receipts are
+            // returned, and the next sweep retries the rest.
+            Err(error) if !evicted.is_empty() => {
+                tracing::warn!(%error, "events store: eviction stopped early");
+                Ok(evicted)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// One tick's expiry settlement: this batch's burials, with the
     /// dead-letter caps applied after them as
     /// every burial applies them (a failed eviction is retried by the next

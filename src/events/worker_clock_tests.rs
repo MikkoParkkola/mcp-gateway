@@ -6,7 +6,6 @@
 //! the test's own (a current-thread runtime runs the attempt there too).
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::Utc;
 
@@ -17,6 +16,11 @@ use crate::events::EventsHub;
 use crate::events::outbox::{OutboxRecord, OutboxState};
 
 const NAME: &str = "webhook.c.r.received";
+
+/// The real time, through the one clock reader (outside any forced clock).
+fn now() -> chrono::DateTime<Utc> {
+    crate::clock::utc_now().expect("a readable clock")
+}
 
 fn private_callbacks() -> crate::config::EventsConfig {
     crate::config::EventsConfig {
@@ -79,7 +83,7 @@ async fn a_withdrawal_on_an_unreadable_clock_removes_without_stamping_the_tail()
         hub.store.is_verified(
             &row.principal,
             &row.url,
-            Utc::now(),
+            now(),
             crate::events::tail_policy(&config)
         ),
         "the tail was stamped as ended in 1970"
@@ -95,7 +99,7 @@ async fn a_store_opened_on_an_unreadable_clock_keeps_its_dates() {
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
     queued(&hub, 9, "evt_d");
     assert!(matches!(
-        hub.store.claim("evt_d", Utc::now()).expect("io"),
+        hub.store.claim("evt_d", now()).expect("io"),
         crate::events::store::Claim::Ready(_)
     ));
     let before = stored(dir.path(), "evt_d");
@@ -152,7 +156,7 @@ async fn a_hold_pass_on_an_unreadable_clock_changes_nothing() {
         .get("sub_worker")
         .and_then(|r| r.held_until)
         .expect("held");
-    assert!(held_until > Utc::now(), "a real bound");
+    assert!(held_until > now(), "a real bound");
 }
 
 /// E1c: a burial on an unreadable clock is deferred: the record stays
@@ -190,7 +194,7 @@ async fn a_burial_on_an_unreadable_clock_waits_for_a_readable_one() {
     hub.attempt(&services, "evt_c").await;
     let dead = hub.store.dead_letter_by_id("evt_c").expect("buried");
     assert!(
-        dead.dead_at > Utc::now() - delta!(minutes, 5),
+        dead.dead_at > now() - delta!(minutes, 5),
         "dated 1969: {}",
         dead.dead_at
     );
@@ -201,7 +205,7 @@ async fn a_burial_on_an_unreadable_clock_waits_for_a_readable_one() {
 fn queued_overdue(hub: &EventsHub, port: u16, event_id: &str) {
     queued_with(hub, port, event_id, NAME, |_, record| {
         record.attempt = 1;
-        record.first_attempt_at = Some(Utc::now() - delta!(days, 30));
+        record.first_attempt_at = Some(now() - delta!(days, 30));
     });
 }
 
@@ -251,7 +255,6 @@ async fn an_overdue_record_is_neither_sent_nor_buried_when_the_clock_fails_after
     ))
     .await;
     drop(clock);
-    tokio::time::sleep(Duration::from_millis(300)).await;
     let posts = accepted.load(std::sync::atomic::Ordering::SeqCst);
     assert_kept_unsent(&hub, dir.path(), &before, "evt_e3", posts);
 }
@@ -284,7 +287,6 @@ async fn a_clock_that_fails_at_the_last_window_read_sends_and_buries_nothing() {
     ))
     .await;
     drop(clock);
-    tokio::time::sleep(Duration::from_millis(300)).await;
     let posts = accepted.load(std::sync::atomic::Ordering::SeqCst);
     assert_kept_unsent(&hub, dir.path(), &before, "evt_e3b", posts);
     let rows = outcomes(dir.path(), "evt_e3b");
@@ -317,7 +319,6 @@ async fn a_signer_that_cannot_read_the_clock_sends_nothing_and_counts_nothing() 
     ))
     .await;
     drop(clock);
-    tokio::time::sleep(Duration::from_millis(300)).await;
     let posts = accepted.load(std::sync::atomic::Ordering::SeqCst);
     assert_kept_unsent(&hub, dir.path(), &before, "evt_e3c", posts);
     let row = hub.store.get("sub_worker").expect("row");

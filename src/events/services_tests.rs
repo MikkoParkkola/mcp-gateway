@@ -47,7 +47,11 @@ fn presented(name: &str, secret: &str) -> ApiKeyRef {
 
 #[test]
 fn the_receipt_is_signed_only_when_stamping_is_on() {
-    let bare = services(Vec::new()).provenance("hooks", "webhook.c.r.received", chrono::Utc::now());
+    let bare = services(Vec::new()).provenance(
+        "hooks",
+        "webhook.c.r.received",
+        crate::clock::utc_now().expect("clock"),
+    );
     assert_eq!(bare["receipt"]["subject_kind"], "event");
     assert!(bare.get("signature").is_none());
     let signer = crate::attestation::BnautAttestationSigner::new(b"k".to_vec(), "id")
@@ -56,7 +60,11 @@ fn the_receipt_is_signed_only_when_stamping_is_on() {
         provenance: Some(Arc::new(signer)),
         ..services(Vec::new())
     }
-    .provenance("hooks", "webhook.c.r.received", chrono::Utc::now());
+    .provenance(
+        "hooks",
+        "webhook.c.r.received",
+        crate::clock::utc_now().expect("clock"),
+    );
     assert_eq!(stamped["receipt"]["backend_id"], "hooks");
     assert!(stamped["signature"].as_str().is_some_and(|s| !s.is_empty()));
 }
@@ -353,7 +361,7 @@ async fn a_delegated_bearer_is_rechecked_against_the_running_key_server() {
 async fn a_delegated_bearer_is_refused_on_an_unreadable_clock() {
     use crate::security::audit::CredentialKind as Kind;
     let ks = key_server(true);
-    let now = u64::try_from(chrono::Utc::now().timestamp()).expect("now");
+    let now = crate::clock::unix_secs().expect("now");
     let fresh = bound(
         Kind::OidcBearer,
         Some(LiveBinding::OidcBearer {

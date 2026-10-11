@@ -21,10 +21,6 @@
     clippy::disallowed_methods,
     reason = "the one place the wall clock is read"
 )]
-#![cfg_attr(
-    not(test),
-    allow(dead_code, reason = "MIK-8202: call sites migrate later in this PR")
-)]
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -73,11 +69,6 @@ fn since_epoch() -> Result<Duration, ClockBeforeEpoch> {
 /// Seconds since the Unix epoch.
 pub(crate) fn unix_secs() -> Result<u64, ClockBeforeEpoch> {
     since_epoch().map(|d| d.as_secs())
-}
-
-/// Milliseconds since the Unix epoch.
-pub(crate) fn unix_millis() -> Result<u64, ClockBeforeEpoch> {
-    since_epoch().map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// Now as a `SystemTime`, for a site that compares against stored
@@ -155,34 +146,6 @@ pub(crate) enum JwtClaimTime {
     Malformed,
     /// Seconds since the epoch.
     At(u64),
-}
-
-impl JwtClaimTime {
-    /// The claim `name` of decoded `claims`.
-    pub(crate) fn of(claims: &serde_json::Value, name: &str) -> Self {
-        match claims.get(name) {
-            None | Some(serde_json::Value::Null) => Self::Absent,
-            // Whole seconds, or a fractional number the decoder also
-            // accepted: its whole part.
-            Some(value) => value
-                .as_u64()
-                .or_else(|| {
-                    value
-                        .as_f64()
-                        .filter(|secs| secs.is_finite() && *secs >= 0.0)
-                        .map(|secs| {
-                            #[allow(
-                                clippy::cast_possible_truncation,
-                                clippy::cast_sign_loss,
-                                reason = "finite and non-negative; a value past u64::MAX saturates, which reads as far future"
-                            )]
-                            let whole = secs.trunc() as u64;
-                            whole
-                        })
-                })
-                .map_or(Self::Malformed, Self::At),
-        }
-    }
 }
 
 /// A test's own clock, for this thread: before the epoch, or a fixed time.

@@ -123,7 +123,6 @@ src/runtime/provider_tests.rs	2
 src/scheduler/tests.rs	5
 src/security/firewall/audit.rs	2
 src/security/message_signing.rs	3
-src/security/transparency_log_attributed.rs	1
 src/security/transparency_log_degraded.rs	2
 src/security/transparency_log_rotation.rs	2
 src/security/transparency_log_rotation_tests.rs	1

@@ -420,11 +420,8 @@ impl Store {
     /// on the wire stays cancelled: nothing is written back for it. A
     /// settlement the disk refused leaves the record pending, due after
     /// [`SETTLE_RETRY`], never stranded in flight.
-    ///
-    /// On a clock that cannot be read (before 1970, MIK-8202) nothing is
-    /// dated: a delivery is removed without stamping `last_delivery_at`, a
-    /// retry keeps the caller's date, and a burial is deferred: the record
-    /// stays pending with `dead_as`, and the next readable attempt buries it.
+    /// On a clock that cannot be read (MIK-8202) nothing is dated; a burial
+    /// waits, pending with `dead_as`, for the next readable attempt.
     pub(crate) fn settle(
         &self,
         event_id: &str,
@@ -469,10 +466,8 @@ impl Store {
                 });
             } else if let Some(left) = state.outbox.get_mut(event_id) {
                 left.state = OutboxState::Pending;
-                // Undated, the record keeps its own date rather than 1969.
-                if let Some(now) = now {
-                    left.next_attempt_at = now + SETTLE_RETRY;
-                }
+                // Undated, the record keeps its own date, never 1969.
+                left.next_attempt_at = now.map_or(left.next_attempt_at, |n| n + SETTLE_RETRY);
                 match outcome {
                     Settle::Dead { reason, .. } => left.dead_as = Some(reason),
                     // Still not a send: the refusal counts even if its write failed.
@@ -585,26 +580,6 @@ impl Store {
     ) -> std::io::Result<Settled> {
         let mut state = self.state.lock();
         self.bury(&mut state, record, reason, now, policy)
-    }
-
-    /// Apply retention and the dead-letter caps now.
-    pub(crate) fn sweep_dead(
-        &self,
-        now: DateTime<Utc>,
-        policy: DeadPolicy,
-    ) -> std::io::Result<Vec<Evicted>> {
-        let mut state = self.state.lock();
-        let mut evicted = Vec::new();
-        match self.evict_dead(&mut state, now, policy, &mut evicted) {
-            Ok(()) => Ok(evicted),
-            // What was evicted before the failure is gone: its receipts are
-            // returned, and the next sweep retries the rest.
-            Err(error) if !evicted.is_empty() => {
-                tracing::warn!(%error, "events store: eviction stopped early");
-                Ok(evicted)
-            }
-            Err(error) => Err(error),
-        }
     }
 
     /// Suspend subscription `id` after sustained failure; its records stay
