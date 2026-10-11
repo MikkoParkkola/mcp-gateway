@@ -636,8 +636,11 @@ impl Config {
         }
         let (mut secret_refs, mut files) = match expansion {
             Expansion::Resolve => {
-                let refs = config.expand_env_vars(&overlay)?;
+                let mut refs = config.expand_env_vars(&overlay)?;
                 posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
+                let auth_enabled = config.auth.enabled;
+                let log = &mut config.security.transparency_log;
+                log.resolve_secret(auth_enabled, &overlay, &mut refs)?;
                 config.security.message_signing =
                     config.security.message_signing.resolve_with_env(&overlay)?;
                 let chain = &mut config.security.signature_chain;
