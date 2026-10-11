@@ -192,6 +192,36 @@ async fn scan4_a_clean_string_form_retry_is_sent_as_its_object() {
     }
 }
 
+/// SCAN.4-schema: string-form `arguments` naming a parameter the tool does not
+/// declare are refused before the backend exactly like the object form (same
+/// answer, nothing sent). Red on base: the string skipped schema validation.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn scan4_string_form_arguments_are_schema_validated_like_the_object() {
+    use super::direct_guards_fixture::fixture_firewalled;
+    let object = json!({"q": "x"});
+    let stringly = json!(serde_json::to_string(&object).expect("serializes"));
+    for backend in BACKENDS {
+        let mut answers = Vec::new();
+        for form in [&object, &stringly] {
+            let fx = fixture_firewalled(Answer::Ok).await;
+            let (_, body) = direct(&fx, ("k-std", backend), form.clone(), json!({})).await;
+            assert_eq!(dispatched(&fx), 0, "{backend} {form}: sent: {body}");
+            answers.push(body);
+        }
+        assert_eq!(
+            answers[0]["result"]["isError"],
+            json!(true),
+            "{backend}: {}",
+            answers[0]
+        );
+        assert_eq!(
+            answers[0], answers[1],
+            "{backend}: the string form was validated unlike the object"
+        );
+    }
+}
+
 /// F7b-direct: string-form `arguments` parsing to a non-object (an array, a
 /// number) are refused -32602 before anything is sent, as on the meta route.
 #[tokio::test]
