@@ -216,6 +216,7 @@ fn nonce_is_free(meta: &MetaMcp) -> bool {
         &ctx(&AllowAll),
     )
     .is_ok()
+        && later.admitted
 }
 
 /// MIK-7869.NONCE.1: the question could not be delivered, the call is refused,
@@ -331,5 +332,112 @@ async fn a_delivered_question_left_unanswered_keeps_the_nonce_spent() {
     assert!(
         !delivered_then_unanswered(false).await,
         "a timed-out, delivered question gave the nonce back"
+    );
+}
+
+/// Signs `gateway_run_playbook` of an unknown playbook under `elicit-nonce`,
+/// keyed, with or without a task intent, and has execution admission refuse it
+/// (the plan check). Returns whether the nonce is free afterwards.
+async fn admission_refusal_frees_nonce(task: bool) -> bool {
+    use crate::gateway::subscription_registry::{DEFAULT_MAX_LISTENERS, SubscriptionRegistry};
+    use crate::gateway::task_service::{StoreLimits, TaskExecutor, TaskIntent, TaskService};
+    use crate::idempotency::admission::ExecutionAdmission;
+    use std::sync::Arc;
+    const TOOL: &str = "gateway_run_playbook";
+    const OWNER: &str = "unspent-owner";
+    const KEY: &str = "unspent-key";
+    let meta = meta();
+    let dir = tempfile::tempdir().expect("a task store root");
+    let service = Arc::new(
+        TaskService::open(
+            &dir.path().join("tasks"),
+            StoreLimits::default(),
+            ExecutionAdmission::new(Arc::new(|| 1_000)),
+        )
+        .await
+        .expect("the task store opens"),
+    );
+    let refused = json!({"name": "absent-plan"});
+    let intent = task.then(|| TaskIntent {
+        executor: TaskExecutor::new(
+            Arc::clone(&service),
+            Arc::new(SubscriptionRegistry::new(
+                DEFAULT_MAX_LISTENERS,
+                crate::gateway::test_helpers::auth_state(&crate::config::AuthConfig::default()),
+            )),
+            1,
+        ),
+        owned: crate::gateway::task_service::execution::OwnedCallerContext::new(
+            crate::gateway::task_service::host::TaskHost::Http(std::sync::Weak::new()),
+            crate::gateway::router::OwnedRouterAuthorizer::capture(None, None, None),
+            None,
+            None,
+            None,
+            None,
+            None,
+            OWNER.to_owned(),
+            crate::gateway::meta_mcp::Authentication::Anonymous,
+            crate::security::audit::CredentialKind::None,
+            false,
+            crate::protocol::meta::Declared::NONE,
+            None,
+            None,
+            None,
+        ),
+        request: crate::gateway::meta_mcp::task_admission_request(
+            OWNER.to_owned(),
+            KEY.to_owned(),
+            TOOL,
+            &refused,
+        ),
+        options: crate::protocol::tasks::TaskOptions {
+            ttl_ms: Some(86_400_000),
+            poll_interval_ms: Some(1_000),
+        },
+    });
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some(KEY.to_owned()),
+        ..crate::protocol::mrtr::RetryFields::default()
+    };
+    let (mut signing, arguments) = captured(TOOL, &refused, "elicit-nonce");
+    let mut caller = ctx(&AllowAll);
+    caller.retry = &retry;
+    caller.task = intent;
+    meta.prepare_signing_for_call(&mut signing, TOOL, &arguments, None, &caller)
+        .expect("signing admits the call; admission is the one to refuse it");
+    assert!(signing.admitted, "premise: the nonce was admitted");
+    caller.signing = Some(&signing);
+    let admitted = meta.admit_meta_sync(
+        crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
+        &caller,
+        TOOL,
+        &arguments,
+        None,
+        &crate::protocol::RequestId::Number(7),
+    );
+    assert!(admitted.is_err(), "premise: admission refused the call");
+    nonce_is_free(&meta)
+}
+
+/// MIK-8150 (code review, gpt and grok): on stdio a task call's X14 grant is
+/// consumed after its nonce is admitted and before execution admission, and a
+/// task call's admission can still refuse (target policy, plan check). Nothing
+/// proves that call effect-free, so its refusal keeps the nonce spent.
+/// Mutant: the task guard in `admit_meta_sync` removed.
+#[tokio::test]
+async fn a_task_call_refused_by_admission_keeps_its_nonce() {
+    assert!(
+        !admission_refusal_frees_nonce(true).await,
+        "a task call's admission refusal gave its nonce back"
+    );
+}
+
+/// Control: the same refusal of a synchronous call gives the nonce back
+/// (MIK-8150 NONCE.1), so the task row's oracle tells the two apart.
+#[tokio::test]
+async fn a_sync_call_refused_by_admission_gives_its_nonce_back() {
+    assert!(
+        admission_refusal_frees_nonce(false).await,
+        "a synchronous call's admission refusal kept its nonce"
     );
 }

@@ -25,9 +25,9 @@ use crate::config::{BackendConfig, Config, TransportConfig};
 
 /// 45 bytes — above the 32-byte minimum `validate_secret` enforces.
 const SIGNING_SECRET: &str = "a-signing-secret-that-is-at-least-32-bytes!!!!";
-pub(super) const BACKEND: &str = "nonce_backend";
-pub(super) const TOOL: &str = "echo";
-pub(super) const SESSION: &str = "stdio-session";
+pub(in crate::gateway::server) const BACKEND: &str = "nonce_backend";
+pub(in crate::gateway::server) const TOOL: &str = "echo";
+pub(in crate::gateway::server) const SESSION: &str = "stdio-session";
 
 /// Set in the re-executed child. Its presence is what tells a test body it is
 /// the one that must actually measure.
@@ -70,7 +70,7 @@ pub(super) fn isolate(test_path: &str) -> bool {
 }
 
 /// One thread, so the meter's thread-local totals cover the whole dispatch.
-pub(super) fn runtime() -> tokio::runtime::Runtime {
+pub(in crate::gateway::server) fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -79,7 +79,7 @@ pub(super) fn runtime() -> tokio::runtime::Runtime {
 
 // ── The real backend ─────────────────────────────────────────────────────────
 
-pub(super) struct EchoBackend {
+pub(in crate::gateway::server) struct EchoBackend {
     pub(super) url: String,
     received: Arc<Mutex<Vec<Value>>>,
     task: tokio::task::JoinHandle<()>,
@@ -149,7 +149,7 @@ impl EchoBackend {
 
     /// How many `tools/call` requests actually reached the backend. A refusal
     /// must not move this.
-    pub(super) fn tools_call_count(&self) -> usize {
+    pub(in crate::gateway::server) fn tools_call_count(&self) -> usize {
         self.received
             .lock()
             .expect("backend recorder")
@@ -254,11 +254,11 @@ fn signing_config_base(backend_url: &str, require_nonce: bool) -> Config {
 /// record is published, none expires, and no test advances a clock. The
 /// signing replay window, the nonce store and the expiry configuration in
 /// `signing_config` are untouched, and nothing waits on wall-clock time.
-pub(super) struct Fixture {
-    pub(super) meta: Arc<MetaMcp>,
-    pub(super) tool_policy: Arc<ToolPolicy>,
-    pub(super) mtls_policy: Arc<MtlsPolicy>,
-    pub(super) backend: EchoBackend,
+pub(in crate::gateway::server) struct Fixture {
+    pub(in crate::gateway::server) meta: Arc<MetaMcp>,
+    pub(in crate::gateway::server) tool_policy: Arc<ToolPolicy>,
+    pub(in crate::gateway::server) mtls_policy: Arc<MtlsPolicy>,
+    pub(in crate::gateway::server) backend: EchoBackend,
     /// The gateway's data directory, kept for the fixture's lifetime.
     _data_dir: tempfile::TempDir,
 }
@@ -271,7 +271,7 @@ impl Fixture {
     /// The same stack under `security.posture: hardened` (MIK-7886): the
     /// production builder derives the signing scope from the posture, so this
     /// is what `serve --stdio` holds when the operator sets it.
-    pub(super) async fn start_hardened() -> Self {
+    pub(in crate::gateway::server) async fn start_hardened() -> Self {
         Self::start_with(
             |url, require_nonce| {
                 let mut config = signing_config_base(url, require_nonce);
