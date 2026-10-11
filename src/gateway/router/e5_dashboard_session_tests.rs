@@ -692,17 +692,17 @@ async fn expired_session_refusal_is_counted() {
 #[tokio::test]
 async fn dashboard_claims_no_outcome_for_counted_calls() {
     let (mut state, _dir) = fixture().await;
-    let stats = Arc::new(crate::stats::UsageStats::new());
+    let tracker = Arc::new(crate::stats::UsageStats::new());
     // Two attempts at a tool that failed both times: the tracker records
     // them the same way it records a success.
-    stats.record_invocation("srv-8370", "always_fails");
-    stats.record_invocation("srv-8370", "always_fails");
+    tracker.record_invocation("srv-8370", "always_fails");
+    tracker.record_invocation("srv-8370", "always_fails");
     {
         let st = Arc::get_mut(&mut state).expect("state is unique");
         st.meta_mcp = Arc::new(crate::gateway::meta_mcp::MetaMcp::with_features(
             Arc::clone(&st.backends),
             None,
-            Some(stats),
+            Some(tracker),
             None,
             Duration::from_secs(60),
         ));
