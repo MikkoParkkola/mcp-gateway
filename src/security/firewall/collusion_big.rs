@@ -140,7 +140,9 @@ impl Drop for EvidenceCharge {
 /// A judged step's exact evidence candidates, with their charge (D9).
 #[must_use]
 pub(crate) struct StepEvidence {
-    fps: Box<[u64]>,
+    /// Kept as filtered, never shrunk: a shrink may reallocate outside the
+    /// charge.
+    fps: Vec<u64>,
     /// Held for its `Drop`: evidence never outlives its charge.
     _charge: EvidenceCharge,
 }
@@ -286,7 +288,7 @@ impl BigStep {
         let mut kept = step_ev.into_vec();
         kept.retain(|&fp| found.contains(fp));
         let evidence = (!kept.is_empty()).then(|| StepEvidence {
-            fps: kept.into_boxed_slice(),
+            fps: kept,
             _charge: charge,
         });
         let room = reservation.n + reservation.headroom;
@@ -359,7 +361,7 @@ impl BigStep {
         drop(reservation);
         UnreadStep {
             evidence: StepEvidence {
-                fps: step_ev,
+                fps: step_ev.into_vec(),
                 _charge: charge,
             },
         }

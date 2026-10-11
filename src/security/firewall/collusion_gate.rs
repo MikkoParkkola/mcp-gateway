@@ -758,9 +758,13 @@ impl Firewall {
             return digest.into_unread(|d| {
                 let capped = self.capped(d);
                 let receipt = capped.as_ref().unwrap_or(d);
+                let (fps, middle) = CollusionDetector::unread_evidence(
+                    receipt.fingerprints(detector),
+                    receipt.cut_fps.as_deref().unwrap_or_default(),
+                );
                 UnreadReceipt {
-                    fps: receipt.fingerprints(detector),
-                    cut: receipt.cut_fps.clone(),
+                    fps,
+                    cut: (!middle.is_empty()).then(|| middle.into()),
                 }
             });
         }

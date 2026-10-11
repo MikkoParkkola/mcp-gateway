@@ -707,15 +707,24 @@ impl DeliveryDigest {
         // and run together), so a step of leaves shorter than a k-gram still
         // has its joined text; and a cut an earlier view retention kept (the
         // rewritten route retains twice), so a second view never erases it.
-        let forms: Vec<String> = self.runs().iter().flat_map(|run| run_forms(run)).collect();
-        let mut cut: Vec<u64> = forms
-            .iter()
-            .flat_map(|form| detector.sampled_kgram_stream(form.chars()))
-            .chain(self.join_fingerprints(detector))
-            .chain(self.retained.iter().copied())
-            .chain(self.cut_fps.iter().flat_map(|kept| kept.iter().copied()))
-            .filter(|&h| view.contains(h))
-            .collect();
+        // One run's forms at a time, hashed as they stream.
+        let mut cut: Vec<u64> = Vec::new();
+        for run in self.runs() {
+            for form in run_forms(&run) {
+                cut.extend(
+                    detector
+                        .sampled_kgram_stream(form.chars())
+                        .filter(|&h| view.contains(h)),
+                );
+            }
+        }
+        cut.extend(
+            self.join_fingerprints(detector)
+                .into_iter()
+                .chain(self.retained.iter().copied())
+                .chain(self.cut_fps.iter().flat_map(|kept| kept.iter().copied()))
+                .filter(|&h| view.contains(h)),
+        );
         cut.sort_unstable();
         cut.dedup();
         Self {

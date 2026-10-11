@@ -19,16 +19,29 @@ use super::walk::delivery_parts;
 /// Bytes reserved per answer node for the walks' reference lists.
 const REF_BYTES_PER_NODE: usize = 64;
 
+/// Bytes reserved per level of a string value's object path: the key-path
+/// walk copies the path into its map key, one `&str` (16 B) per level.
+const PATH_REF_BYTES: usize = 16;
+
+/// Bytes reserved per string value for its key-path map entry: the key and
+/// value `Vec` headers and the map's node share.
+const PATH_ENTRY_BYTES: usize = 64;
+
 /// Bytes reserved per char of the longest combining run: the NFC iterator
 /// buffers one combining sequence (a char and its class) at a time.
 const COMBINING_BYTES_PER_CHAR: usize = 8;
 
 /// What the preflight measured of an answer it admits.
-pub(crate) struct Measured {
+struct Measured {
     /// Every key and every value.
-    pub(crate) nodes: usize,
+    nodes: usize,
     /// The longest run of chars with a nonzero canonical combining class.
-    pub(crate) combining: usize,
+    combining: usize,
+    /// Every string value's depth, summed: the key-path walk copies each
+    /// value's object path (one `&str` per level) into its map key.
+    path_refs: usize,
+    /// String values: one key-path map entry each, at most.
+    strings: usize,
 }
 
 /// Why an answer could not be read as a view (D6).
@@ -74,6 +87,12 @@ enum Frame<'a> {
     Object(serde_json::map::Iter<'a>),
 }
 
+/// Characters of canonical combining class 0 that decompose into two
+/// non-starters (UAX #15, "non-starter decompositions"; the fourth, U+0344,
+/// has class 230 and is counted by its class). Normalization buffers them as
+/// marks, so a combining run counts them.
+const NONSTARTER_DECOMPOSITIONS: [char; 3] = ['\u{0F73}', '\u{0F75}', '\u{0F81}'];
+
 /// The longest run of combining marks normalization can see (D2): within one
 /// string, or across strings joined in any order (the run-together forms),
 /// characters input sanitization strips neither counting nor breaking a run.
@@ -93,7 +112,7 @@ impl Combining {
         s: &str,
     ) {
         let kept = |c: &char| !crate::security::sanitize::is_unsafe_control(*c);
-        let mark = |c: char| ccc.get_u8(c) != 0;
+        let mark = |c: char| ccc.get_u8(c) != 0 || NONSTARTER_DECOMPOSITIONS.contains(&c);
         let leading = s.chars().filter(kept).take_while(|&c| mark(c)).count();
         let trailing = s
             .chars()
@@ -127,7 +146,7 @@ fn preflight(detector: &CollusionDetector, answer: &Value) -> Result<Measured, U
     let text_cap = detector.views.answer_text_cap.load(Ordering::Relaxed);
     let per_leaf = std::mem::size_of::<super::Segment>();
     let node_cap = text_cap / 16;
-    let (mut text, mut nodes) = (0usize, 0usize);
+    let (mut text, mut nodes, mut path_refs, mut strings) = (0usize, 0usize, 0usize, 0usize);
     let mut combining = Combining::default();
     let ccc = icu_normalizer::properties::CanonicalCombiningClassMapBorrowed::new();
     let mut stack: Vec<Frame<'_>> = Vec::with_capacity(MAX_ANSWER_DEPTH + 1);
@@ -143,6 +162,8 @@ fn preflight(detector: &CollusionDetector, answer: &Value) -> Result<Measured, U
                 Value::String(s) => {
                     text += s.len() + per_leaf;
                     combining.add(&ccc, s);
+                    path_refs += stack.len();
+                    strings += 1;
                 }
                 Value::Array(items) => stack.push(Frame::Array(items.iter())),
                 Value::Object(map) => stack.push(Frame::Object(map.iter())),
@@ -173,6 +194,8 @@ fn preflight(detector: &CollusionDetector, answer: &Value) -> Result<Measured, U
     Ok(Measured {
         nodes,
         combining: combining.bound(),
+        path_refs,
+        strings,
     })
 }
 
@@ -222,7 +245,10 @@ pub(crate) fn reserve_walk(
     answer: &Value,
 ) -> Result<WalkCharge, Unreadable> {
     let measured = preflight(detector, answer)?;
-    let refs = measured.nodes * REF_BYTES_PER_NODE + measured.combining * COMBINING_BYTES_PER_CHAR;
+    let refs = measured.nodes * REF_BYTES_PER_NODE
+        + measured.combining * COMBINING_BYTES_PER_CHAR
+        + measured.path_refs * PATH_REF_BYTES
+        + measured.strings * PATH_ENTRY_BYTES;
     let charge = detector
         .views
         .budget

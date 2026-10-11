@@ -525,8 +525,19 @@ impl CollusionDetector {
         }
     }
 
-    /// Record an unread plan receipt's evidence (D6) under `caller`'s unread
-    /// holder: its fingerprints, its cut's middle and a step's candidates
+    /// An unread receipt's evidence as its record will keep it (D6), computed
+    /// once at retention so nothing larger is held until record: `fps` to the
+    /// per-delivery bound, and `cut` thinned into the room left. An unread
+    /// holder keeps no sketch, so the rest of the cut is never needed.
+    pub(crate) fn unread_evidence(mut fps: Vec<u64>, cut: &[u64]) -> (Vec<u64>, Vec<u64>) {
+        fps.truncate(MAX_SOURCE_FINGERPRINTS);
+        let room = MAX_SOURCE_FINGERPRINTS.saturating_sub(fps.len());
+        let (_, middle) = thin::thinned_middle(cut, &fps, room);
+        (fps, middle)
+    }
+
+    /// Record an unread plan receipt's evidence (D6) under the shared unread
+    /// holder (A4): its fingerprints, its cut's middle and a step's candidates
     /// sampled as evidence, nothing sketched, so nothing excuses anyone.
     pub(crate) fn record_unread_at(
         &self,
@@ -827,6 +838,7 @@ impl CollusionDetector {
     }
 
     /// Distinct unread holders recorded for `fp` (`MIK-8066` A4).
+    #[cfg(test)]
     pub(crate) fn unread_holders_of(&self, fp: u64) -> usize {
         let state = self.state.lock();
         let Some(Entry {
