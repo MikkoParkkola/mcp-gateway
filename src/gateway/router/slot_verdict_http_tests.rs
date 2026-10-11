@@ -397,3 +397,36 @@ async fn c4b_execute_multi_target_withheld_second_target() {
         "C4b: the withheld second target did not answer -32601: {answer:?}"
     );
 }
+
+/// P3 over HTTP (withheld, lacked): a plain call (no task, so no X14 gate)
+/// reaches admission, whose target policy runs S1 (`admit_target`, here an
+/// armed capability-disable refusal that names the tool). A tool alpha's
+/// own catalogue withholds or lacks answers exactly as the same call where
+/// nothing surfaces it; alpha's valid tool gets the admission refusal
+/// (control). RED on base: admission targets it on the shared slot's verdict.
+#[tokio::test]
+async fn p3_http_withheld_call_gets_no_admission_refusal() {
+    let control = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
+    disable_tool(&control.meta);
+    let refused = post_as_alpha(&control.router, "/mcp", &tools_call(TOOL)).await;
+    assert!(
+        refused.1.to_string().contains("temporarily disabled"),
+        "premise: the armed admission refusal does not reach alpha's valid tool: {refused:?}"
+    );
+    let unknown = gateway(CallerSlot::Lacks, CLOSED, Surfaced::No).await;
+    disable_tool(&unknown.meta);
+    let absent = post_as_alpha(&unknown.router, "/mcp", &tools_call(TOOL)).await;
+    for slot in [CallerSlot::Invalid, CallerSlot::Lacks] {
+        let gw = gateway(slot, CLOSED, Surfaced::Yes).await;
+        disable_tool(&gw.meta);
+        let answer = post_as_alpha(&gw.router, "/mcp", &tools_call(TOOL)).await;
+        assert!(
+            !answer.1.to_string().contains("temporarily disabled"),
+            "P3 {slot:?}: the admission refusal reached alpha: {answer:?}"
+        );
+        assert_eq!(
+            answer, absent,
+            "P3 {slot:?}: {answer:?} vs unknown {absent:?}"
+        );
+    }
+}
