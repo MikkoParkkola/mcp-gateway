@@ -104,8 +104,10 @@ pub(crate) struct BigStep {
     step_ev: Box<[u64]>,
     /// Dropped at retention, before the final sketch is built: between
     /// staging and record only the reserved bytes are held. Retention itself
-    /// briefly holds one step's selection (8 bytes per selected fingerprint)
-    /// while it builds the sketch: a transient peak, freed before it returns.
+    /// briefly holds one step's selection while it builds the sketch: 8 bytes
+    /// per selected fingerprint, up to about twice that as the `Vec` grows
+    /// (sizing it exactly would need a second probe pass over the answer).
+    /// Uncharged, and freed before retention returns.
     step_all: Option<Sketch>,
     /// Exact evidence candidates: `step_ev` entries the answer delivered.
     evidence: Option<Arc<[u64]>>,
