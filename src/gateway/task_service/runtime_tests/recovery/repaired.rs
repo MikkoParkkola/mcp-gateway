@@ -259,10 +259,24 @@ async fn t14b_a_repaired_live_row_stays_sealed_while_the_store_clock_is_unreadab
     let sweep = executor
         .start_expiry(Duration::from_millis(50))
         .expect("sweep");
-    let refused = restored.store.refused_reads_for_test();
     repair(&originals);
-    // Two sweep passes past the repair, each refused a read of the clock:
-    // an event, not a window. Either pass would have settled the rows.
+    // First the repair is seen: the terminal row needs no clock and is served,
+    // leaving the two live rows sealed. Then two more sweep passes, each
+    // refused a read of the clock: events, not a window. Either pass would
+    // have settled the live rows. Counted from after the repair was seen, so
+    // a pass that began before the files were restored cannot stand in for
+    // one that read them (seen on Windows, where the writes outlast a 50 ms
+    // pass).
+    let _ = crate::test_wait::wait_until(BUDGET, || {
+        let seen = restored.skipped_records().sealed <= 2;
+        std::future::ready(if seen {
+            Break(())
+        } else {
+            Continue(String::from("the terminal row served after the repair"))
+        })
+    })
+    .await;
+    let refused = restored.store.refused_reads_for_test();
     let _ = crate::test_wait::wait_until(BUDGET, || {
         let passes = restored.store.refused_reads_for_test() >= refused + 2;
         std::future::ready(if passes {
