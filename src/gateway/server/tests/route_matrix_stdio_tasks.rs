@@ -221,8 +221,8 @@ fn x14_call(id: u64, nonce: &str, key: &str, extra: Value) -> Value {
             NONCE_META: nonce,
         },
     });
-    if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
-        params.extend(extra.clone());
+    if let (Some(params), Value::Object(extra)) = (params.as_object_mut(), extra) {
+        params.extend(extra);
     }
     json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params})
 }
