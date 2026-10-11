@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate_seams.rs b/src/security/firewall/collusion_gate_seams.rs
+index e642278b0..f861af1a6 100644
+--- a/src/security/firewall/collusion_gate_seams.rs
++++ b/src/security/firewall/collusion_gate_seams.rs
+@@ -70,7 +70,7 @@ impl Firewall {
+                 if let Some(excuse) = excuse {
+                     excuse.publish(now);
+                 }
+-                evidence.as_ref().map(StepEvidence::fps)
++                evidence.as_ref().and(None::<&StepEvidence>).map(StepEvidence::fps)
+             }
+             Judged::Kept(None) | Judged::Pending => None,
+         };

@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_view.rs b/src/security/firewall/collusion_view.rs
+index 277bb3c4e..09faa6b22 100644
+--- a/src/security/firewall/collusion_view.rs
++++ b/src/security/firewall/collusion_view.rs
+@@ -113,7 +113,7 @@ impl Combining {
+     /// mark can decompose into two), plus a starter's own decomposition.
+     fn bound(&self) -> usize {
+         self.inner
+-            .max(self.edges)
++            .max(self.edges - self.edges)
+             .saturating_mul(2)
+             .saturating_add(4)
+     }

@@ -1,0 +1,20 @@
+head_sha	5744ff0479e1ef71e232a89270cc2403817eacdb
+m21	linux	m21.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::an_answer_past_the_text_cap_fails_closed --exact
+m22	linux	m22.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::an_answer_past_the_text_cap_fails_closed --exact
+m23	linux	m23.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::an_answer_past_the_text_cap_fails_closed --exact
+m24	linux	m24.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::a_big_step_inside_an_answer_over_the_bound_is_excused_and_evidence --exact
+m25	linux	m25.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::a_big_step_inside_an_answer_over_the_bound_is_excused_and_evidence --exact
+m26	linux	m26.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3_units::a_selection_without_view_room_abandons_its_sketch_and_keeps_evidence --exact
+m27	linux	m27.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::an_answer_past_the_text_cap_fails_closed --exact
+m29	linux	m29.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3_units::answers_past_the_walk_caps_are_unread_without_walking --exact
+m16b	linux	m16b.patch	--lib --all-features -- gateway::meta_mcp::invoke::relay::delivered::p3_tests::an_unread_answer_gets_no_label_walk_or_seam_pass --exact
+m28	linux	m28.patch	--lib --all-features -- gateway::meta_mcp::invoke::relay::delivered::p3_tests::an_unread_answer_gets_no_label_walk_or_seam_pass --exact
+mT11	linux	mT11.patch	--lib --all-features -- gateway::meta_mcp::invoke::relay::delivered::p3_tests::a_substring_of_a_leaf_gets_no_seam_on_an_over_bound_answer --exact
+mTSV	linux	mTSV.patch	--lib --all-features -- gateway::meta_mcp::invoke::relay::delivered::p3_tests::a_forward_beyond_the_step_gets_no_seam_on_an_over_bound_answer --exact
+mT10u	linux	mT10u.patch	--lib --all-features -- gateway::meta_mcp::invoke::relay::delivered::p3_tests::a_subset_forward_of_an_over_bound_answer_is_excused_by_leaf_hashes --exact
+mC1	linux	mC1.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::a_short_leaf_step_kept_through_a_view_is_evidence_for_its_joined_text --exact
+mC2	linux	mC2.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::a_second_view_retention_keeps_the_first_ones_cut --exact
+mH6	linux	mH6.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3_units::combining_runs_across_leaves_are_reserved --exact
+mH4	linux	mH4.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3_units::a_view_holds_its_walk_charge_while_it_lives --exact
+mA4	linux	mA4.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3::unread_plans_of_many_callers_share_one_unread_holder --exact
+mA2	linux	mA2.patch	--lib --all-features -- security::firewall::collusion_gate::tests::p3_units::a_second_record_of_one_digest_adds_nothing --exact

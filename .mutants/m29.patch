@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_view.rs b/src/security/firewall/collusion_view.rs
+index 277bb3c4e..fa0dc7684 100644
+--- a/src/security/firewall/collusion_view.rs
++++ b/src/security/firewall/collusion_view.rs
+@@ -134,7 +134,7 @@ fn preflight(detector: &CollusionDetector, answer: &Value) -> Result<Measured, U
+     let mut next = Some(answer);
+     loop {
+         if let Some(value) = next.take() {
+-            nodes += 1;
++            nodes += usize::from(value.is_string());
+             // A value's depth is the containers open above it.
+             if stack.len() > MAX_ANSWER_DEPTH || nodes > node_cap {
+                 return Err(Unreadable::Shape);

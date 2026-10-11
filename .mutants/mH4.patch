@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_view.rs b/src/security/firewall/collusion_view.rs
+index 277bb3c4e..e742d6f00 100644
+--- a/src/security/firewall/collusion_view.rs
++++ b/src/security/firewall/collusion_view.rs
+@@ -296,7 +296,7 @@ pub(crate) fn build_with(
+     let boxed = std::mem::take(&mut entries.vec).into_boxed_slice();
+     // The walk charge stays: the answer's later walks (labels, seams) run
+     // while the view lives.
+-    let held = entries.refs + boxed.len() * 8;
++    let held = boxed.len() * 8;
+     let _ = entries.charge.resize(held);
+     entries.note(held);
+     Ok(AnswerView {
