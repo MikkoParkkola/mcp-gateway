@@ -33,6 +33,13 @@ pub(crate) fn walks_built() -> u64 {
     walk::walks_built()
 }
 
+/// Count one reference-list walk made outside the firewall (the relay's
+/// label walk), on this thread's walk count (tests only, `MIK-8066` D6).
+#[cfg(test)]
+pub(crate) fn note_walk_for_test() {
+    walk::note_walk();
+}
+
 #[path = "collusion_runs.rs"]
 mod runs;
 use runs::own_span_delivered_runs;

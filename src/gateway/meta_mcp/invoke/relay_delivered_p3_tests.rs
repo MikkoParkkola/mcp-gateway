@@ -335,3 +335,55 @@ fn a_rewritten_answer_past_the_cap_keeps_its_receipt_and_fails_closed() {
         "a rewritten answer past the cap cleared its receipt (fail-open)"
     );
 }
+
+/// `MIK-8066` D6: an unread answer gets no label walk and no seam pass. With
+/// the answer text cap lowered, key-a's over-bound answer is unread; keeping
+/// its receipts walks nothing. Control: the same plan with the cap restored
+/// is read, and keeping it walks the answer.
+#[test]
+fn an_unread_answer_gets_no_label_walk_or_seam_pass() {
+    let walks_while_kept = |cap: Option<usize>| {
+        let fw = observing();
+        if let Some(cap) = cap {
+            fw.collusion_detector()
+                .expect("relay detection on")
+                .set_answer_text_cap(cap);
+        }
+        let parts: Vec<String> = (0..3).map(piece).collect();
+        let items: Vec<Value> = parts
+            .iter()
+            .map(|p| json!({"part": p, "kind": "chunk"}))
+            .collect();
+        let staging = PlanStaging::default();
+        staging.set_caller("key-a");
+        let digest = fw
+            .receipt_digest("alpha", "read", &json!({ "parts": items }), Some(&staging))
+            .expect("staged");
+        let mut receipts = vec![Receipt {
+            key: "key-a".to_string(),
+            keyed: true,
+            server: "alpha".to_string(),
+            tool: "read".to_string(),
+            digest,
+            in_plan: true,
+            pending_retain: true,
+            step: Some(0),
+            kind: Kind::Delivered,
+        }];
+        let answer = json!({ "parts": items, "pad": pad(1_200 * 1024) });
+        let before = crate::security::firewall::walks_built();
+        with_plan_members(vec![("/parts".to_string(), 0)], || {
+            keep_plan_receipts(&fw, &mut receipts, &answer);
+        });
+        crate::security::firewall::walks_built() - before
+    };
+    assert!(
+        walks_while_kept(None) > 0,
+        "premise: keeping a read answer walked nothing"
+    );
+    assert_eq!(
+        walks_while_kept(Some(512 * 1024)),
+        0,
+        "an unread answer was walked (label walk or seam pass)"
+    );
+}

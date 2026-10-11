@@ -174,6 +174,8 @@ fn composite(
 /// parent's note inherited by the strings under it. `None` outside a plan.
 /// One walk serves the seam pass and retention's labels (`MIK-8209` K7).
 pub(in super::super) fn answer_parts(answer: &Value) -> Option<Vec<(&str, Option<u32>)>> {
+    #[cfg(test)]
+    crate::security::firewall::note_walk_for_test();
     let members = PLAN_MEMBERS
         .try_with(|m| m.borrow().clone())
         .unwrap_or_default();

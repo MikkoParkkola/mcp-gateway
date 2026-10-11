@@ -156,15 +156,15 @@ fn a_view_build_never_runs_past_its_reservation() {
 }
 
 /// Crafted answers past each preflight cap take the unread path without the
-/// walks building a single reference list: too many nodes (short keys), too
-/// deep, and too much text.
+/// walks building a single reference list: too many nodes (an array of
+/// numbers, so no text cap can decide it), too deep, and too much text.
 #[test]
 fn answers_past_the_walk_caps_are_unread_without_walking() {
     let fw = firewall();
     let detector = fw.collusion_detector().expect("relay detection on");
-    let many: serde_json::Map<String, Value> = (0..300_000)
-        .map(|i| (format!("k{i}"), Value::Null))
-        .collect();
+    // Numbers carry no text, so only the node cap can refuse this answer
+    // (object keys would pass the text cap first).
+    let many: Vec<Value> = (0..300_000).map(|i| json!(i)).collect();
     let mut deep = json!("leaf");
     for _ in 0..200 {
         deep = json!([deep]);
@@ -178,7 +178,7 @@ fn answers_past_the_walk_caps_are_unread_without_walking() {
         "premise: a readable answer's walk was not counted"
     );
     for (name, answer) in [
-        ("nodes", Value::Object(many)),
+        ("nodes", Value::Array(many)),
         ("depth", deep),
         ("text", long),
     ] {

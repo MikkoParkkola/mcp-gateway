@@ -38,10 +38,6 @@ pub(in super::super) fn delivery_leaves(value: &Value) -> Vec<&str> {
     delivery_parts(value).0
 }
 
-/// The string leaves of `value` a delivery walk reads, in walk order: every
-/// string, leaving out a top-level `_context_integrity`, then each object key
-/// of at least `K` chars; and how many of them, from the front, are values
-/// (the rest are keys).
 #[cfg(test)]
 thread_local! {
     /// Reference lists the answer walks built on this thread (`MIK-8066`
@@ -62,9 +58,11 @@ pub(super) fn walks_built() -> u64 {
     WALKS.with(std::cell::Cell::get)
 }
 
+/// The string leaves of `value` a delivery walk reads, in walk order: every
+/// string, leaving out a top-level `_context_integrity`, then each object key
+/// of at least `K` chars; and how many of them, from the front, are values
+/// (the rest are keys).
 pub(in super::super) fn delivery_parts(value: &Value) -> (Vec<&str>, usize) {
-    #[cfg(test)]
-    note_walk();
     fn visit<'v>(value: &'v Value, leaves: &mut Vec<&'v str>, keys: &mut Vec<&'v str>) {
         match value {
             Value::String(s) => leaves.push(s),
@@ -76,6 +74,8 @@ pub(in super::super) fn delivery_parts(value: &Value) -> (Vec<&str>, usize) {
             _ => {}
         }
     }
+    #[cfg(test)]
+    note_walk();
     let (mut leaves, mut keys) = (Vec::new(), Vec::new());
     match value {
         Value::Object(map) => map
