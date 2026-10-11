@@ -8,6 +8,7 @@ mod input_round;
 mod observe;
 #[cfg(debug_assertions)]
 pub(crate) mod pause_hook;
+pub(crate) mod pending_cancel;
 mod recovery;
 #[cfg(test)]
 pub(crate) mod resume_seams;
@@ -28,8 +29,8 @@ pub(crate) use context::{OwnedAdmissionRequest, OwnedCallerContext};
 pub(crate) use expiry::ExpirySweep;
 pub(crate) use input_round::InputOutcome;
 pub(crate) use observe::{
-    CancelOutcome, CommitObserver, CommitStage, DrainOutcome, UpstreamAnswer, UpstreamHandle,
-    UpstreamRecovery,
+    CancelDelivery, CancelOutcome, CommitObserver, CommitStage, DrainOutcome, UpstreamAnswer,
+    UpstreamHandle, UpstreamRecovery,
 };
 use observe::{Handoff, HandoffRegistry};
 pub(in crate::gateway::task_service) use recovery::recovery_event;
@@ -265,8 +266,8 @@ impl TaskExecutor {
     ///
     /// Returns whether this call installed it. With none installed every path
     /// below is skipped and recovery behaviour is byte-identical to I3's.
-    pub(crate) fn install_recovery(&self, adapter: Arc<dyn UpstreamRecovery>) -> bool {
-        self.recovery.set(adapter).is_ok()
+    pub(crate) fn install_recovery(self: &Arc<Self>, adapter: Arc<dyn UpstreamRecovery>) -> bool {
+        self.adopt_recovery(adapter)
     }
 
     #[cfg(any(test, debug_assertions))]

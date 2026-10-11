@@ -412,11 +412,13 @@ async fn marker_05_the_loader_accepts_supported_versions_and_fails_closed_on_oth
             }
             // One past the highest supported version: v4 carries the input
             // round (MIK-7311.LIFECYCLE.1), v5 the task targets (#2450), v6
-            // the error's author (MIK-7887) and v7 the upstream cancel claim
-            // (MIK-7642), so v8 is the first unsupported.
+            // the error's author (MIK-7887), v7 the upstream cancel claim
+            // (MIK-7642) and v8 the pending upstream cancel (MIK-8347), so v9
+            // is the first unsupported.
             _ => {
                 let mut seed = record.clone();
-                seed["version"] = json!(8);
+                seed["version"] =
+                    json!(crate::gateway::task_service::record::MAX_LOADABLE_VERSION + 1);
                 reseed(&path, task.id(), &seed);
             }
         }

@@ -45,8 +45,13 @@ pub(super) const ERROR_AUTHOR_VERSION: u32 = 6;
 /// other row keeps its version and its bytes.
 pub(super) const UPSTREAM_CANCEL_VERSION: u32 = 7;
 
+/// The record version that introduced [`Record::upstream_cancel_pending`]
+/// (MIK-8347). Written on every row whose upstream cancel is claimed from
+/// then on; a row claimed by a v7 gateway keeps its version and its bytes.
+pub(super) const PENDING_CANCEL_VERSION: u32 = UPSTREAM_CANCEL_VERSION + 1;
+
 /// The highest record version the loader accepts: the newest field's version.
-pub(super) const MAX_LOADABLE_VERSION: u32 = UPSTREAM_CANCEL_VERSION;
+pub(super) const MAX_LOADABLE_VERSION: u32 = PENDING_CANCEL_VERSION;
 
 /// One backend call a task's result was produced by: names only, never
 /// arguments. No current invocation policy reads `ToolTarget.arguments`; a
@@ -141,6 +146,45 @@ pub(crate) struct UpstreamRecord {
     pub(crate) operation_digest: String,
 }
 
+/// A claimed upstream `tasks/cancel` the peer has not yet confirmed
+/// (MIK-8347, design r3.5).
+///
+/// It names its backend through the row's own targets where one names it,
+/// and copies the name only where none does, so a legacy row raised to carry
+/// its call as a target never holds the name twice. Exactly one of `target`
+/// and `backend` is set; a row where neither resolves is given up.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct PendingCancel {
+    /// The peer's task identifier to cancel.
+    pub(crate) handle: String,
+    /// Index into [`Record::targets`] of the call naming the backend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) target: Option<u8>,
+    /// The backend, when no target names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) backend: Option<String>,
+    /// Sends that reached a ready backend and were not confirmed.
+    pub(crate) attempts: u8,
+    /// Unix seconds before which no retry is due.
+    pub(crate) next_after: i64,
+    /// Unix seconds of the claim; the age cap counts from here.
+    pub(crate) claimed_at: i64,
+}
+
+impl PendingCancel {
+    /// The backend this cancel goes to, read through `targets` when indexed.
+    pub(crate) fn backend_in<'t>(&'t self, targets: &'t [Target]) -> Option<&'t str> {
+        match (self.target, &self.backend) {
+            (Some(index), None) => targets
+                .get(usize::from(index))
+                .map(|target| target.server.as_str()),
+            (None, Some(backend)) => Some(backend.as_str()),
+            _ => None,
+        }
+    }
+}
+
 impl UpstreamRecord {
     /// Whether this descriptor still belongs to the record holding it.
     pub(super) fn consistent_with(&self, admission: &AdmissionRecord) -> bool {
@@ -212,6 +256,11 @@ pub(super) struct Record {
     /// Absent when false, so every other row serializes as before.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(super) upstream_cancel_sent: bool,
+    /// The claimed upstream cancel while it is unconfirmed (MIK-8347). Never
+    /// set together with `upstream_cancel_sent`: the write that confirms or
+    /// gives it up clears it. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) upstream_cancel_pending: Option<PendingCancel>,
     pub(super) admission: AdmissionRecord,
     pub(super) backend: String,
     pub(super) revision: u64,
@@ -279,6 +328,7 @@ impl PreparedTask {
                 output_free: false,
                 error_author: None,
                 upstream_cancel_sent: false,
+                upstream_cancel_pending: None,
                 admission: AdmissionRecord {
                     identity_digest: binding.identity().to_owned(),
                     principal_digest: binding.principal_digest().to_owned(),
@@ -319,6 +369,7 @@ impl PreparedTask {
                 output_free: false,
                 error_author: None,
                 upstream_cancel_sent: false,
+                upstream_cancel_pending: None,
                 admission: AdmissionRecord {
                     identity_digest: format!("{identity:064x}"),
                     principal_digest: owner.to_owned(),

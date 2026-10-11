@@ -12,7 +12,7 @@ use super::{Shared, StoreError, TaskStore, owned, record_name, serialize};
 use crate::gateway::gateway_writes::WriteRecord;
 use crate::gateway::task_service::record::{
     CommittedTask, ERROR_AUTHOR_VERSION, ErrorAuthor, MAX_UPSTREAM_HANDLE_BYTES, Record,
-    TARGET_VERSION, Target, UPSTREAM_CANCEL_VERSION, UpstreamRecord,
+    TARGET_VERSION, Target, UpstreamRecord,
 };
 use crate::protocol::JsonRpcError;
 use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
@@ -435,7 +435,14 @@ pub(super) fn cancelled_bytes(
         return Ok(0);
     };
     cancelled.revision = u64::MAX;
-    Ok(serialize(&cancelled)?.len())
+    let bytes = serialize(&cancelled)?.len();
+    // And once its cancel is claimed pending (MIK-8347), at its widest. The
+    // preflight always measures a row carrying the descriptor.
+    let claimed = cancelled.upstream.clone().map_or(Ok(bytes), |descriptor| {
+        super::pending_cancel::widest_pending_claim(task, &mut cancelled, &descriptor);
+        serialize(&cancelled).map(|encoded| encoded.len())
+    })?;
+    Ok(bytes.max(claimed))
 }
 
 /// The encoded size of the bounded failure `record` would settle as, at its
@@ -480,7 +487,7 @@ pub(super) fn fallback_bytes(task: &Task, record: &Record) -> Result<usize, Stor
 /// current version no longer consults, so raising it bare would read as
 /// "dispatched nothing" and skip the delivery check. `false` when a legacy row
 /// has no call to keep: its authorship is then not recorded (fail closed).
-fn keep_provenance(task: &crate::protocol::tasks::Task, record: &mut Record) -> bool {
+pub(super) fn keep_provenance(task: &crate::protocol::tasks::Task, record: &mut Record) -> bool {
     if record.version >= TARGET_VERSION {
         return true;
     }
@@ -498,7 +505,8 @@ fn keep_provenance(task: &crate::protocol::tasks::Task, record: &mut Record) -> 
 // Every sender — the cancel transition, the worker's dispatch-phase cancel
 // arm, and the worker's offer after a refused capture — asks here, and sends only on
 // [`CancelClaim::Claimed`]. The claim is one compare on
-// `Record::upstream_cancel_sent` under the store's ordering lock, so exactly
+// the row's cancel state (sent, or pending since MIK-8347) under the store's
+// ordering lock, so exactly
 // one sender wins per row whatever order they arrive in.
 
 /// What one claim on a row's upstream cancel decided.
@@ -512,6 +520,9 @@ pub(crate) enum CancelClaim {
     /// claimed, so a sender that learns the handle later can still win.
     NotOurs,
 }
+
+#[cfg(test)]
+pub(crate) use super::pending_cancel::UpstreamCancelState;
 
 impl TaskStore {
     /// Claim the single upstream `tasks/cancel` of a cancelled row.
@@ -560,7 +571,7 @@ impl Shared {
             if entry.task.status() != TaskStatus::Cancelled {
                 return Ok(CancelClaim::NotOurs);
             }
-            if entry.record.upstream_cancel_sent {
+            if entry.record.upstream_cancel_sent || entry.record.upstream_cancel_pending.is_some() {
                 return Ok(CancelClaim::AlreadyClaimed);
             }
             (entry.task.clone(), entry.record.clone())
@@ -583,11 +594,8 @@ impl Shared {
         // provenance as targets before the descriptor leaves (the row is raised
         // past the version that reads targets). The winning descriptor, offered
         // or durable, is the one read.
-        record.upstream = Some(descriptor.clone());
-        let _ = keep_provenance(&task, &mut record);
-        record.upstream = None;
-        record.upstream_cancel_sent = true;
-        record.version = record.version.max(UPSTREAM_CANCEL_VERSION);
+        let now = self.now().map_err(|_| StoreError::Unavailable)?.timestamp();
+        super::pending_cancel::record_pending_claim(&task, &mut record, &descriptor, now);
         let bytes = serialize(&record)?;
         if bytes.len() > self.limits.record_bytes {
             return Err(StoreError::Capacity);

@@ -14,7 +14,9 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use crate::gateway::task_service::{UpstreamAnswer, UpstreamHandle, UpstreamRecovery};
+use crate::gateway::task_service::{
+    CancelDelivery, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+};
 use crate::security::TransparencyLogger;
 use crate::security::audit::AuditFailurePolicy;
 use crate::security::firewall::tenant_guard::TenantGuardConfig;
@@ -167,7 +169,9 @@ impl Recovery {
 #[async_trait::async_trait]
 impl UpstreamRecovery for Recovery {
     /// This suite asserts nothing about upstream cancels (MIK-7642 PR.D rows do).
-    async fn cancel(&self, _handle: &UpstreamHandle, _deadline: Duration) {}
+    async fn cancel(&self, _handle: &UpstreamHandle, _deadline: Duration) -> CancelDelivery {
+        CancelDelivery::Confirmed
+    }
 
     async fn claims(&self, backend: &str) -> bool {
         backend == BACKEND
