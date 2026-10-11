@@ -302,3 +302,74 @@ async fn tools_list_hides_the_surfaced_tool_from_an_operator_with_no_grant() {
         "L9-managed: an operator with no grant is shown the surfaced tool"
     );
 }
+
+/// `gateway_invoke` of `tool` on [`BACKEND`] as the sole operator.
+async fn invoke_named(fx: &Fx, id: u64, tool: &str) -> Value {
+    rpc(
+        fx,
+        id,
+        "tools/call",
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": BACKEND, "tool": tool, "arguments": {"folder": "inbox"}}}),
+    )
+    .await
+}
+
+/// L9-managed call (lead ruling 2026-10-11; design R3.7; MIK-6745 consent
+/// journey section 9.2): the sole operator of a managed-account backend with
+/// no current grant has no view of it.
+/// - By surfaced name, which names no backend, the call answers -32601,
+///   exactly as an unknown name: no connect offer, nothing dispatched.
+/// - Through `gateway_invoke` naming the backend, the account's connect
+///   offer is the answer (predicate D), and it is the same for the surfaced
+///   tool and for a name the backend does not have: the offer tells the
+///   operator about its own account, never about the tool.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn no_grant_operator_call_by_name_is_absent_and_invoke_offer_ignores_the_tool() {
+    let fx = fixture_with(&Binding::Unconnected).await;
+    let by_name = rpc(
+        &fx,
+        1,
+        "tools/call",
+        json!({"name": TOOL, "arguments": {"folder": "inbox"}}),
+    )
+    .await;
+    let unknown = rpc(
+        &fx,
+        2,
+        "tools/call",
+        json!({"name": "no_such_tool", "arguments": {"folder": "inbox"}}),
+    )
+    .await;
+    assert_eq!(
+        by_name.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "L9-managed call: the surfaced name is not answered as absent: {by_name}"
+    );
+    assert_eq!(
+        by_name.pointer("/error/code"),
+        unknown.pointer("/error/code"),
+        "L9-managed call: {by_name} vs unknown {unknown}"
+    );
+    assert!(
+        !by_name.to_string().to_lowercase().contains("connect"),
+        "L9-managed call: a call by surfaced name carried a connect offer: {by_name}"
+    );
+    let offered = invoke_named(&fx, 3, TOOL).await;
+    let offered_missing = invoke_named(&fx, 4, "no_such_tool").await;
+    assert_ne!(
+        offered.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "premise: an explicit dispatch to the backend keeps its account answer: {offered}"
+    );
+    assert_eq!(
+        offered.pointer("/error/code"),
+        offered_missing.pointer("/error/code"),
+        "L9-managed invoke: the account answer differs by tool: {offered} vs {offered_missing}"
+    );
+    assert_eq!(
+        fx.gateway.tool_calls().len(),
+        0,
+        "L9-managed: a no-grant call reached the backend"
+    );
+}
