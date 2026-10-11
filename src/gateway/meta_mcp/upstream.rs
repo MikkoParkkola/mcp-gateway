@@ -301,10 +301,7 @@ impl UpstreamRecovery for NativeUpstreamTasks {
                 Ok(Ok(_)) => CancelDelivery::Confirmed,
                 // A login is needed first (an expired token on a connected
                 // backend): not sent, so not counted against the bound.
-                Ok(Err(
-                    crate::Error::AuthorizationRequired { .. }
-                    | crate::Error::AuthorizationPending { .. },
-                )) => {
+                Ok(Err(error)) if error.is_authorization_wait() => {
                     tracing::warn!(
                         backend = name,
                         "upstream tasks/cancel not sent yet: login required"

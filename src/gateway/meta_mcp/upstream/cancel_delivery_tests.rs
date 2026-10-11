@@ -21,6 +21,7 @@ enum Answer {
     RpcError,
     TransportError,
     LoginRequired,
+    LoginPending,
     Hang,
 }
 
@@ -57,6 +58,9 @@ impl crate::transport::Transport for Peer {
             }
             Answer::TransportError => Err(crate::Error::BackendUnavailable("peer".to_owned())),
             Answer::LoginRequired => Err(crate::Error::AuthorizationRequired {
+                backend: "peer".to_owned(),
+            }),
+            Answer::LoginPending => Err(crate::Error::AuthorizationPending {
                 backend: "peer".to_owned(),
             }),
             Answer::Hang => std::future::pending().await,
@@ -134,6 +138,10 @@ async fn a_peer_answer_confirms_and_no_answer_fails() {
     // Mutant: "a login refusal is a failed send".
     assert_eq!(
         delivery(Answer::LoginRequired).await,
+        CancelDelivery::NotReady
+    );
+    assert_eq!(
+        delivery(Answer::LoginPending).await,
         CancelDelivery::NotReady
     );
 }
