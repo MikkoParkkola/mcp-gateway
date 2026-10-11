@@ -204,17 +204,21 @@ async fn interim_replies_from_chained_backends() {
 /// at raw receipt; nothing is polled.
 #[tokio::test]
 async fn require_refuses_an_unsolicited_task_handle() {
-    for route in MCP_ROUTES {
-        let upstream = FakeUpstream::start(Mode::TaskHandle).await;
-        let d = HttpGateway::start(d_config(&upstream.url, "require", "on_request")).await;
-        assert_refused(&call(&d, route, Some("n-k3")).await, "interim");
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        assert_eq!(
-            upstream.calls().len(),
-            1,
-            "{route:?}: nothing polled or retried"
-        );
-    }
+    let upstream = FakeUpstream::start(Mode::TaskHandle).await;
+    let d = HttpGateway::start(d_config(&upstream.url, "require", "on_request")).await;
+    assert_refused(&call(&d, Route::Invoke, Some("n-k3")).await, "interim");
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert_eq!(upstream.calls().len(), 1, "nothing polled or retried");
+}
+
+/// K3 by the surfaced name (MIK-8159.CHAIN.2): the same raw-receipt refusal,
+/// answered after one upstream call and before any poll or retry.
+#[tokio::test]
+async fn require_refuses_an_unsolicited_task_handle_by_name() {
+    let upstream = FakeUpstream::start(Mode::TaskHandle).await;
+    let d = HttpGateway::start(d_config(&upstream.url, "require", "on_request")).await;
+    assert_refused(&call(&d, Route::Surfaced, Some("n-k3s")).await, "interim");
+    assert_eq!(upstream.calls().len(), 1, "refused on the first answer");
 }
 
 /// Z1: a chained backend bypasses the response cache: both calls reach the
