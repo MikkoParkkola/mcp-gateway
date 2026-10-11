@@ -379,3 +379,71 @@ fn upgrade_keeps_the_comment_after_a_removed_key() {
         "server:\n  # the port we serve\n  port: 39400\n",
     );
 }
+
+/// A mixed 3.x config: two literal keys and removable keys are fixed in one
+/// write, the reference is named, the exit is 1, and a rerun changes nothing.
+#[test]
+fn a_mixed_config_keeps_its_fixes_and_names_what_is_left() {
+    let yaml = format!(
+        "{}server:\n  ws_port: 9000\n  port: 39400\nmarketplace:\n  plugin_dir: /tmp/p\n",
+        api_keys(&format!(
+            "    - name: c1\n      key: \"{PLAINTEXT}\"\n      backends: [\"*\"]\n    - name: c2\n      key: \"second-{PLAINTEXT}\"\n      backends: [\"*\"]\n    - name: c3\n      key: env:SURF2_K\n      backends: [\"*\"]\n"
+        ))
+    );
+    let s = setup(&yaml, current());
+    let out = upgrade(&s, &[]);
+    let printed = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{printed}");
+    assert!(
+        printed.contains("c3") && printed.contains("hash-key"),
+        "{printed}"
+    );
+    let after = read(&s.config);
+    let expected = format!(
+        "{}server:\n  port: 39400\n",
+        api_keys(&format!(
+            "    - name: c1\n      key_sha256: \"{}\"\n      backends: [\"*\"]\n    - name: c2\n      key_sha256: \"{}\"\n      backends: [\"*\"]\n    - name: c3\n      key: env:SURF2_K\n      backends: [\"*\"]\n",
+            api_key_digest_spec(PLAINTEXT.as_bytes()),
+            api_key_digest_spec(format!("second-{PLAINTEXT}").as_bytes()),
+        ))
+    );
+    assert_eq!(after, expected);
+    let again = upgrade(&s, &[]);
+    assert_eq!(again.status.code(), Some(1), "{}", text(&again));
+    assert_eq!(read(&s.config), expected, "a rerun changes nothing");
+}
+
+/// T2, T3c: a referent that exists and holds the key is still never read.
+#[test]
+fn upgrade_never_reads_an_existing_referent() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let secret = dir.path().join("key.txt");
+    std::fs::write(&secret, PLAINTEXT).expect("secret file");
+    let digest = api_key_digest_spec(PLAINTEXT.as_bytes());
+    for value in [
+        "env:SURF2_PRESENT".to_owned(),
+        format!("file:{}", secret.display()),
+    ] {
+        let yaml = api_keys(&format!(
+            "    - name: c1\n      key: {value}\n      backends: [\"*\"]\n"
+        ));
+        let s = setup(&yaml, current());
+        let out = gateway_bin::command(s.dir.path(), gateway_bin::Inherit::Environment)
+            .env("SURF2_PRESENT", PLAINTEXT)
+            .env("SURF2_DIGEST", &digest)
+            .arg("--config")
+            .arg(&s.config)
+            .arg("upgrade")
+            .arg("--data-dir")
+            .arg(s.dir.path())
+            .output()
+            .expect("the upgrade command runs");
+        let printed = text(&out);
+        assert_eq!(out.status.code(), Some(1), "{value}: {printed}");
+        assert_eq!(read(&s.config), yaml, "{value}");
+        assert!(
+            !printed.contains(PLAINTEXT) && !printed.contains(&digest),
+            "{printed}"
+        );
+    }
+}
