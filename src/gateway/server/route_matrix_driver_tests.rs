@@ -656,7 +656,6 @@ pub(crate) fn stdio_refund_through_delivery() -> [Delivered; 3] {
                             modern: false,
                             sanitize: super::stdio_single::InputSanitizing::Off,
                         },
-                        &super::StdioTelemetry::default(),
                     )),
                 )
                 .await;
