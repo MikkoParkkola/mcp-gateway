@@ -13,6 +13,7 @@
 use serde_json::Value;
 
 use super::{Gateway, StdioClient};
+use crate::gateway::meta_mcp::refund_witness::RefundWitness;
 use crate::gateway::meta_mcp::{
     MetaMcp, MetaMcpCallerContext, TaskConfirmation, TaskConfirmationRequest,
     error_response_preserving_status,
@@ -31,14 +32,17 @@ pub(super) enum RouteStage {
 
 impl Gateway {
     /// Run the route stage for one stdio `tools/call` of `tool_name` with its
-    /// merged `arguments` and its `task` member, if any.
+    /// merged `arguments` and its `task` member, if any. `witness` comes back
+    /// on every outcome that acted on nothing (MIK-8353): the checks act on
+    /// nothing, and X14 hands it back unless it spent a grant.
     pub(super) async fn stdio_route_stage(
         meta_mcp: &MetaMcp,
         id: &RequestId,
         (tool_name, arguments, task): (&str, &Value, Option<&Value>),
         caller: &MetaMcpCallerContext<'_>,
         client: StdioClient<'_>,
-    ) -> RouteStage {
+        witness: Option<RefundWitness>,
+    ) -> (RouteStage, Option<RefundWitness>) {
         let session_id = client.session_id;
         let scope = caller.scope();
         let targets = crate::gateway::router::backend_tool_targets_for_call(
@@ -57,7 +61,8 @@ impl Gateway {
                 (checked.server, checked.tool),
                 checked.arguments,
             ) {
-                return RouteStage::Answer(error_response_preserving_status(id.clone(), &error));
+                let answer = error_response_preserving_status(id.clone(), &error);
+                return (RouteStage::Answer(answer), witness);
             }
             // The stateful controls key on the one client this process
             // serves; an empty identity would refuse every call unscored.
@@ -75,16 +80,18 @@ impl Gateway {
                     status: 400,
                     message,
                 };
-                return RouteStage::Answer(error_response_preserving_status(id.clone(), &refusal));
+                let answer = error_response_preserving_status(id.clone(), &refusal);
+                return (RouteStage::Answer(answer), witness);
             }
         }
         // X14 decides a task-augmented call, so it needs the session's task
         // store; without one the call is synchronous and X14 has nothing to say.
         let Some(tasks) = client.tasks else {
-            return RouteStage::Proceed(None);
+            return (RouteStage::Proceed(None), witness);
         };
-        let confirmation = meta_mcp
-            .confirm_destructive_task(&TaskConfirmationRequest {
+        let (confirmation, witness) = meta_mcp
+            .confirm_destructive_task_with(
+                &TaskConfirmationRequest {
                 id: id.clone(),
                 tool_name,
                 arguments,
@@ -105,12 +112,19 @@ impl Gateway {
                 input_capabilities: caller.input_capabilities,
                 is_modern: caller.is_modern,
                 admission: tasks.service.admission(),
-            })
+            },
+                witness,
+            )
             .await;
-        match confirmation {
+        let stage = match confirmation {
             TaskConfirmation::NotRequired => RouteStage::Proceed(None),
-            TaskConfirmation::Granted(granted) => RouteStage::Proceed(Some(granted)),
+            TaskConfirmation::Granted(granted) => {
+                // A granted confirmation was spent: veto every give-back.
+                caller.signing.inspect(|signing| signing.mark_spent());
+                RouteStage::Proceed(Some(granted))
+            }
             TaskConfirmation::Answer(answer) => RouteStage::Answer(*answer),
-        }
+        };
+        (stage, witness)
     }
 }

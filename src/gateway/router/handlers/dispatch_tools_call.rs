@@ -344,9 +344,13 @@ pub(super) async fn tools_call(
     // firewall check above has already run, and nothing below has yet
     // acted: a challenge mints no task, reserves no idempotency key and
     // reaches no backend, and neither does a refusal.
-    let confirmation = state
+    // Nothing has acted yet (MIK-8353, r4 H1): X14 hands the witness back
+    // only if it spent no grant, and admission gives the nonce back only
+    // with it.
+    let witness = Some(crate::gateway::meta_mcp::refund_witness::RefundWitness::at_capture());
+    let (confirmation, witness) = state
         .meta_mcp
-        .confirm_destructive_task(&crate::gateway::meta_mcp::TaskConfirmationRequest {
+        .confirm_destructive_task_with(&crate::gateway::meta_mcp::TaskConfirmationRequest {
             id: id.clone(),
             // The outer name the client called, never a wrapper's
             // target, and the same `arguments` binding that reaches
@@ -369,13 +373,16 @@ pub(super) async fn tools_call(
             input_capabilities: declared_capabilities,
             is_modern,
             admission: state.task_executor.service.admission(),
-        })
+        }, witness)
         .await;
     let granted = match confirmation {
         crate::gateway::meta_mcp::TaskConfirmation::NotRequired => None,
         // Confirmed: dispatch the original call, with the confirmation
-        // metadata removed.
-        crate::gateway::meta_mcp::TaskConfirmation::Granted(granted) => Some(granted),
+        // metadata removed. The grant was spent: veto every give-back.
+        crate::gateway::meta_mcp::TaskConfirmation::Granted(granted) => {
+            signing_context.as_ref().inspect(|signing| signing.mark_spent());
+            Some(granted)
+        }
         // The challenge, or the refusal of a grant that does not
         // authorise this call. Answered here because there is nothing
         // below to run.
@@ -497,6 +504,7 @@ pub(super) async fn tools_call(
         &arguments,
         Some(session_id),
         &id,
+        witness,
     );
     let (owned_execution, replay) = match admission {
         Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(lease)) => (Some(lease), None),

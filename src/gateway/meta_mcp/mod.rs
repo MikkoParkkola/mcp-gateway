@@ -105,6 +105,7 @@ pub(crate) use response_security::error_response_preserving_status;
 mod response_security_tests;
 pub(crate) mod sealed_hold;
 mod search;
+pub(crate) mod refund_witness;
 pub(crate) mod signing;
 #[cfg(test)]
 mod slot_quota_release_tests;
