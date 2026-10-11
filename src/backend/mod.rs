@@ -324,6 +324,14 @@ impl Backend {
         let _ = self.started.set(feed);
     }
 
+    /// Tell the registry this backend's shared start succeeded. No listener
+    /// is not an error.
+    pub(super) fn announce_started(&self) {
+        if let Some(feed) = self.started.get() {
+            let _ = feed.send(self.name.clone());
+        }
+    }
+
     /// Set by [`BackendRegistry`]; the first stamp wins.
     pub(crate) fn stamp_destination(&self, policy: crate::security::ssrf::DestinationPolicy) {
         let _ = self.destination.set(policy);

@@ -50,6 +50,8 @@ mod platform;
 mod platform;
 #[path = "store_targets.rs"]
 pub(crate) mod targets;
+#[path = "store_pending_cancel.rs"]
+pub(crate) mod pending_cancel;
 #[cfg(test)]
 use crate::protocol::tasks::TaskTransition;
 use crate::protocol::tasks::{Task, TaskStatus};

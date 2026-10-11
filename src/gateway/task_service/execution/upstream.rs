@@ -25,7 +25,6 @@ use crate::gateway::meta_mcp::invoke::audit::{DispatchNotes, with_dispatch_scope
 use crate::gateway::task_service::ErrorAuthor;
 use crate::gateway::task_service::record::UpstreamRecord;
 use crate::gateway::task_service::store::StoreError;
-use crate::gateway::task_service::store::targets::CancelClaim;
 use crate::protocol::JsonRpcError;
 use crate::protocol::tasks::{TaskStatus, TaskTransition};
 
@@ -170,10 +169,12 @@ impl TaskExecutor {
     ///
     /// Every sender comes through here: the cancel transition with no offer
     /// (the row's own descriptor, if any), and the worker with the handle it
-    /// holds. The claim is one durable compare, so exactly one of them sends.
-    /// `Detach` spawns the send so an owner's `tasks/cancel` answer does not
-    /// wait on the peer; `Inline` awaits it on a worker that owns its own task.
-    /// Returns whether this caller claimed.
+    /// holds. The claim is one durable compare, so exactly one of them claims;
+    /// an unconfirmed send stays pending and is retried (MIK-8347, see
+    /// `pending_cancel`). `Detach` never waits on the row's send lock or the
+    /// peer, so an owner's `tasks/cancel` answer does not; `Inline` awaits
+    /// both on a worker that owns its own task. Returns whether this caller
+    /// claimed.
     pub(crate) async fn cancel_upstream_once(
         &self,
         owner_digest: &str,
@@ -181,36 +182,8 @@ impl TaskExecutor {
         offered: Option<UpstreamRecord>,
         send: CancelSend,
     ) -> bool {
-        let Some(adapter) = self.recovery().cloned() else {
-            return false;
-        };
-        let claimed = match self
-            .service
-            .store
-            .claim_upstream_cancel(owner_digest, id, offered)
+        self.claim_and_send((owner_digest, id), offered, send == CancelSend::Detach)
             .await
-        {
-            Ok(CancelClaim::Claimed(descriptor)) => descriptor,
-            Ok(CancelClaim::AlreadyClaimed | CancelClaim::NotOurs) => return false,
-            Err(error) => {
-                tracing::warn!(task_id = %id, ?error, "upstream cancel claim not written; nothing sent");
-                return false;
-            }
-        };
-        let handle = UpstreamHandle {
-            backend: claimed.backend,
-            handle: claimed.handle,
-        };
-        let deadline = crate::gateway::meta_mcp::upstream::QUERY_DEADLINE;
-        match send {
-            CancelSend::Inline => {
-                adapter.cancel(&handle, deadline).await;
-            }
-            CancelSend::Detach => {
-                tokio::spawn(async move { adapter.cancel(&handle, deadline).await });
-            }
-        }
-        true
     }
 
     /// A worker's offer of the handle it holds for `job`, bound to the row's

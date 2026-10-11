@@ -213,7 +213,7 @@ impl Backend {
             // MIK-7982 C2: a non-interactive caller (the health probe) never
             // queues behind a start in flight, which may be a login holding
             // this lock for minutes; it answers at once instead.
-            let _start_guard = if crate::oauth::login_gate::interactive() {
+            let start_guard = if crate::oauth::login_gate::interactive() {
                 entry.start_lock.lock().await
             } else {
                 entry
@@ -251,6 +251,13 @@ impl Backend {
                 // under this slot's `start_lock`; see `Backend::resolve_era`
                 // for the lock order that imposes.
                 self.resolve_era_after_start(&transport, &entry).await;
+                // Announced only after the slot is free, so a listener that
+                // acts on it (a pending upstream cancel, MIK-8347) is not
+                // refused by this very start.
+                drop(start_guard);
+                if matches!(key, PoolKey::Shared) {
+                    self.announce_started();
+                }
                 return Ok(transport);
             }
             // Lost the race: `reconcile_after_start` already closed the

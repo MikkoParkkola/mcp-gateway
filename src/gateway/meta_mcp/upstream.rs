@@ -259,19 +259,27 @@ impl UpstreamRecovery for NativeUpstreamTasks {
     async fn cancel(&self, handle: &UpstreamHandle, deadline: Duration) -> CancelDelivery {
         // Never interactive (MIK-8269), as `query`.
         crate::oauth::login_gate::non_interactive(async {
-            // This is the row's one send, so a start in flight (a restarted
-            // gateway reconnecting) must not refuse it: wait for that start,
-            // within the deadline, before the non-interactive attempt.
-            if let Some(backend) = self.backends.get(&handle.backend) {
-                let _ = tokio::time::timeout(deadline, backend.start_settled()).await;
+            // A start in flight (a restarted gateway reconnecting) is waited
+            // for within the deadline; one still holding the slot after it is
+            // a login or a slow peer, and the attempt is not counted
+            // (MIK-8347): the holder retries when that start succeeds.
+            if let Some(backend) = self.backends.get(&handle.backend)
+                && tokio::time::timeout(deadline, backend.start_settled())
+                    .await
+                    .is_err()
+            {
+                let name = handle.backend.as_str();
+                tracing::warn!(backend = name, "upstream tasks/cancel not sent yet: backend still starting");
+                return CancelDelivery::NotReady;
             }
             let Some(backend) = self.eligible(&handle.backend).await else {
-                tracing::warn!(backend = %handle.backend, "upstream tasks/cancel not sent: backend unclaimed");
-                return;
+                let name = handle.backend.as_str();
+                tracing::warn!(backend = name, "upstream tasks/cancel not sent yet: backend unclaimed");
+                return CancelDelivery::NotReady;
             };
             let deadline = deadline.min(backend.request_timeout());
-            // One attempt on the same trusted path `query` uses. The answer is
-            // ignored: the gateway task is already cancelled whatever the peer says.
+            // One attempt on the same trusted path `query` uses. Any answer,
+            // a JSON-RPC error included, means the peer received it.
             let sent = tokio::time::timeout(
                 deadline,
                 backend.request_with_task_capability(
@@ -282,12 +290,15 @@ impl UpstreamRecovery for NativeUpstreamTasks {
                 ),
             )
             .await;
-            if !matches!(sent, Ok(Ok(_))) {
-                tracing::warn!(backend = %handle.backend, "upstream tasks/cancel not confirmed");
+            if matches!(sent, Ok(Ok(_))) {
+                CancelDelivery::Confirmed
+            } else {
+                let name = handle.backend.as_str();
+                tracing::warn!(backend = name, "upstream tasks/cancel not confirmed");
+                CancelDelivery::Failed
             }
         })
-        .await;
-        CancelDelivery::Confirmed
+        .await
     }
 }
 

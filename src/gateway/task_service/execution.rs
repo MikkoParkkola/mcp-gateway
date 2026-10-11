@@ -266,8 +266,8 @@ impl TaskExecutor {
     ///
     /// Returns whether this call installed it. With none installed every path
     /// below is skipped and recovery behaviour is byte-identical to I3's.
-    pub(crate) fn install_recovery(&self, adapter: Arc<dyn UpstreamRecovery>) -> bool {
-        self.recovery.set(adapter).is_ok()
+    pub(crate) fn install_recovery(self: &Arc<Self>, adapter: Arc<dyn UpstreamRecovery>) -> bool {
+        self.adopt_recovery(adapter)
     }
 
     #[cfg(any(test, debug_assertions))]

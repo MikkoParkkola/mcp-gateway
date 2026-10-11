@@ -172,13 +172,31 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
         }
     }
     let mut outcome = round_failure.map_or(Ok(()), Err);
+    // Rows whose upstream cancel is still unconfirmed: deleting one ends its
+    // retries, which an operator must hear (MIK-8347).
+    let pending: std::collections::HashSet<String> = service
+        .store
+        .pending_cancels(None, i64::MAX)
+        .into_iter()
+        .map(|(_, id)| id)
+        .collect();
     for (id, revision) in candidates {
         match service
             .store
             .expire(&id, revision, service.admission_arc())
             .await
         {
-            Ok(()) => tracing::debug!(task_id = %id, "expired task record deleted"),
+            Ok(()) => {
+                service.cancel_sends.release_row(&id);
+                if pending.contains(&id) {
+                    tracing::error!(
+                        task_id = %id,
+                        reason = "expired",
+                        "upstream tasks/cancel given up; the upstream job may still be running"
+                    );
+                }
+                tracing::debug!(task_id = %id, "expired task record deleted");
+            }
             // Terminal is absorbing, so a candidate cannot legitimately be
             // running by the time it is deleted; if one is, it is not expiry's
             // to end and the row simply stays.
@@ -191,5 +209,8 @@ async fn sweep(executor: &Arc<TaskExecutor>) -> Result<(), ServiceError> {
             }
         }
     }
+    // Due upstream cancels are retried detached (MIK-8347): the sweep never
+    // awaits a peer, so a stop is never held by one.
+    drop(executor.flush_pending_cancels(None));
     outcome
 }
