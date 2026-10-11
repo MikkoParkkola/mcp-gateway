@@ -596,3 +596,6 @@ mod tests;
 #[cfg(test)]
 #[path = "export_clock_tests.rs"]
 mod clock_tests;
+#[cfg(test)]
+#[path = "export_signed_entry_tests.rs"]
+mod signed_entry_tests;

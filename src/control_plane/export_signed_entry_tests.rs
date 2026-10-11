@@ -1,0 +1,128 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-8374: SIEM export and `audit verify` agree on a signed log. With no
+//! signing key configured, `audit verify` refuses a log that holds a signed
+//! entry (MIK-6700); export used to pass the same log on hash-only, so a
+//! re-chained forgery reached the SIEM.
+
+use super::*;
+use crate::security::TransparencyLogger;
+use crate::security::transparency_log::{TransparencyLogConfig, log_contains_signed_entry};
+use std::sync::Arc;
+
+const SECRET: &str = "a-test-secret-that-is-at-least-32-bytes!!";
+
+fn open_log(path: &Path, secret: &str) -> Arc<TransparencyLogger> {
+    Arc::new(
+        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: path.to_string_lossy().into_owned(),
+            key_id: "test-key".to_string(),
+            shared_secret: secret.to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("open log"),
+    )
+}
+
+/// Three invocations written under `secret` ("" for an unsigned log).
+fn write_log(path: &Path, secret: &str) {
+    let log = open_log(path, secret);
+    for i in 0..3 {
+        log.log_invocation("s", "c", "srv", "t", &format!("r{i}"), "p")
+            .expect("append");
+    }
+}
+
+/// An exporter configured with no signing key: `with_signing_secret("")`
+/// is how the gateway wires an empty `shared_secret`.
+fn keyless_exporter(dir: &Path, log: &Path) -> LogExporter {
+    LogExporter::open(
+        ExportSource::Invocation,
+        log.to_path_buf(),
+        dir.join("cursor.json"),
+    )
+    .expect("open exporter")
+    .with_signing_secret("")
+}
+
+/// MIK-8374.EXPORTSIG.1/.3: a signed log exported with no key halts, naming
+/// the missing key, and forwards nothing. Red on base: every entry forwarded.
+#[test]
+fn a_signed_log_without_a_key_is_not_exported_hash_only() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("inv.jsonl");
+    write_log(&log, SECRET);
+    assert!(
+        log_contains_signed_entry(&log).expect("scan"),
+        "the log is signed"
+    );
+
+    let sink = CollectingSink::new();
+    let mut exp = keyless_exporter(dir.path(), &log);
+    match exp.poll(&sink) {
+        Err(ExportError::VerificationFailed(msg)) => {
+            assert!(
+                msg.contains("no signing key"),
+                "not the missing-key refusal: {msg}"
+            );
+        }
+        other => panic!("a signed log passed export hash-only: {other:?}"),
+    }
+    assert!(sink.delivered().is_empty(), "nothing forwarded");
+    assert_eq!(exp.cursor().last_entry_hash, "genesis");
+}
+
+/// MIK-8374.EXPORTSIG.2 (green pin): an unsigned log with no key still
+/// exports hash-only, unchanged.
+#[test]
+fn an_unsigned_log_without_a_key_still_exports() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("inv.jsonl");
+    write_log(&log, "");
+    assert!(!log_contains_signed_entry(&log).expect("scan"));
+
+    let sink = CollectingSink::new();
+    let out = keyless_exporter(dir.path(), &log)
+        .poll(&sink)
+        .expect("exports");
+    // The genesis open record, then the three invocations.
+    assert_eq!(out.forwarded, 4);
+}
+
+/// MIK-8374.EXPORTSIG.4: `audit verify`'s rule and the exporter's agree on a
+/// mixed log, an unsigned prefix and then signed entries. `sig` and `key_id`
+/// are outside the entry hash, so stripping them leaves the chain intact.
+#[test]
+fn verify_and_export_agree_on_a_mixed_log() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("inv.jsonl");
+    write_log(&log, SECRET);
+    let content = std::fs::read_to_string(&log).expect("read");
+    let mut lines: Vec<serde_json::Value> = content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("json"))
+        .collect();
+    for entry in lines.iter_mut().take(2) {
+        let map = entry.as_object_mut().expect("object");
+        map.remove("sig");
+        map.remove("key_id");
+    }
+    let rewritten: String = lines.iter().map(|e| format!("{e}\n")).collect();
+    std::fs::write(&log, rewritten).expect("write");
+
+    assert!(
+        log_contains_signed_entry(&log).expect("scan"),
+        "verify sees a signed entry"
+    );
+    let sink = CollectingSink::new();
+    assert!(
+        matches!(
+            keyless_exporter(dir.path(), &log).poll(&sink),
+            Err(ExportError::VerificationFailed(_))
+        ),
+        "export must refuse the log verify refuses"
+    );
+    assert!(sink.delivered().is_empty());
+}
