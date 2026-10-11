@@ -167,3 +167,18 @@ RUN mkdir -p /home/gateway/.cache/uv /home/gateway/.npm && \
     chown -R gateway:gateway /home/gateway/.cache /home/gateway/.npm
 
 USER gateway
+
+COPY --chmod=0755 docker/entrypoint-full.sh /usr/local/bin/entrypoint-full.sh
+
+# Declaring an ENTRYPOINT here resets the CMD inherited from `runtime`, so the
+# variant restates it: the image's own invocation passes no arguments, and
+# without this the entrypoint execs a gateway with no config that starts and
+# then never exits instead of refusing the way the base stage does.
+ENTRYPOINT ["/usr/local/bin/entrypoint-full.sh"]
+CMD ["--config", "/config.yaml"]
+
+# The variant's own start period: an EXTRA_APT_PACKAGES install runs before
+# the gateway starts, so it gets up to a minute before an unanswered probe
+# counts. The default image keeps the 5s inherited from `runtime`.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD wget --spider -q http://127.0.0.1:39400/livez || exit 1

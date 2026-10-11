@@ -412,3 +412,131 @@ steps:
         "the step must actually have been skipped, not merely absent: {value}"
     );
 }
+
+/// MIK-8341 INV (mutant m6): a playbook step never inherits the run's retry
+/// fields. `gateway_run_playbook` refuses them at the dispatcher (D3), so this
+/// drives `run_playbook` directly with a caller carrying a `requestState` and
+/// an `inputResponses`: a step that inherited either would be dispatched as a
+/// continuation retry and refused; a step with its own empty retry runs.
+/// Red on base: the step inherits the outer caller's retry fields.
+#[tokio::test]
+async fn mik_8341_a_step_never_inherits_the_runs_retry_fields() {
+    for (field, retry) in [
+        (
+            "requestState",
+            crate::protocol::mrtr::RetryFields {
+                request_state: Some("not-a-continuation-of-ours".into()),
+                ..Default::default()
+            },
+        ),
+        (
+            "inputResponses",
+            crate::protocol::mrtr::RetryFields {
+                input_responses: Some(json!({"k1": {"action": "accept"}})),
+                ..Default::default()
+            },
+        ),
+    ] {
+        let (registry, calls) = counted_backend("alpha");
+        let meta = MetaMcp::new(registry);
+        let allowed = ctx(&AllowAll);
+        let result = run_playbook_yaml(
+            &meta,
+            r"
+name: inherits
+description: one plain step
+on_error: abort
+steps:
+  - name: read
+    server: alpha
+    tool: read
+",
+            &allowed.with_retry(&retry),
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "{field}: the step inherited the run's retry field: {result:?}"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "{field}: the step did not run"
+        );
+    }
+}
+
+/// MIK-8341 D3 site (b) (mutant m9): synchronous admission refuses a playbook
+/// run carrying retry fields BEFORE it reserves anything. HTTP and stdio admit
+/// before the dispatcher's own check, so without this a refused retry could
+/// reserve a round or meet a capacity error first. Red on base: admitted.
+#[test]
+fn mik_8341_admission_refuses_a_playbook_retry_before_reserving() {
+    let (registry, _calls) = counted_backend("alpha");
+    let meta = MetaMcp::new(registry);
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    engine.register(
+        serde_yaml::from_str(
+            "name: any\ndescription: d\nsteps:\n  - {name: read, server: alpha, tool: read}\n",
+        )
+        .expect("playbook fixture must parse"),
+    );
+    meta.set_playbook_engine(engine);
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("pk-admit".into()),
+        input_responses: Some(json!({})),
+        ..Default::default()
+    };
+    // The refused call has NO execution owner, so a refusal placed after
+    // `admit_operation` would surface as its -32003 instead (grok c2).
+    let allowed = ctx(&AllowAll);
+    let caller = allowed.with_retry(&retry);
+    let admitted = meta.admit_meta_sync(
+        crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
+        &caller,
+        "gateway_run_playbook",
+        &json!({"name": "any"}),
+        None,
+        &crate::protocol::RequestId::Number(1),
+    );
+    match admitted {
+        Err(crate::Error::JsonRpc { code, message, .. }) => {
+            assert_eq!(code, -32602, "{message}");
+            assert!(message.contains("no continuation to resume"), "{message}");
+        }
+        Err(other) => panic!("admission refused for another reason: {other}"),
+        Ok(_) => panic!("admission admitted the playbook retry before refusing it"),
+    }
+    assert_eq!(
+        meta.execution_admission().snapshot().entries,
+        0,
+        "the refused retry reserved a round"
+    );
+    // grok c1: nothing was reserved. The honest call under the same key is
+    // admitted as the key's first owner, not met as a round in flight.
+    let honest = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("pk-admit".into()),
+        ..Default::default()
+    };
+    let mut owned = ctx(&AllowAll);
+    owned.credential_principal = Some("cred:mik-8341");
+    let caller = owned.with_retry(&honest);
+    let admitted = meta.admit_meta_sync(
+        crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
+        &caller,
+        "gateway_run_playbook",
+        &json!({"name": "any"}),
+        None,
+        &crate::protocol::RequestId::Number(2),
+    );
+    match admitted {
+        Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(_)) => {}
+        Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected) => {
+            panic!("setup: the honest call is unprotected")
+        }
+        Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Replay(..)) => {
+            panic!("the refused retry left a stored round")
+        }
+        Err(error) => panic!("the refused retry left the key reserved: {error}"),
+    }
+}

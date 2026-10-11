@@ -62,27 +62,13 @@ impl Gateway {
             &meta_mcp,
         )
         .await?;
-        // Give stdio the same explicit reload context as HTTP.
+        // MIK-8278: this session announces tool-list changes to an
+        // initialize-era client, so it may say so; the feed is installed
+        // before warm-start and the capability load, so their nudges count.
+        meta_mcp.set_change_feed(crate::gateway::ChangeFeed::StdioLegacy);
+        let (nudges, nudge_rx) = tokio::sync::mpsc::unbounded_channel();
+        self.backends.set_change_feed(nudges);
         let warmer = WarmerGuard::new(&self.backends, WarmStartMode::Stdio, None);
-        if let Some(path) = self.reload_path() {
-            let live_config = Arc::new(
-                LiveConfig::new(self.config.clone())
-                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
-            );
-            let reload_ctx = Arc::new(
-                ReloadContext::new(
-                    path.clone(),
-                    Arc::clone(&live_config),
-                    Arc::clone(&self.backends),
-                    self.config.failsafe.clone(),
-                    self.config.meta_mcp.cache_ttl,
-                )?
-                .with_env(Arc::clone(&self.env))
-                .with_identity_grant_sink_opt(grant_sink.clone())
-                .with_on_registered(warmer.hook()),
-            );
-            meta_mcp.set_reload_context(reload_ctx);
-        }
         let protocol_telemetry_sink = Arc::new(StdioTelemetry::new(
             match crate::protocol_revision_telemetry::DurableTelemetrySink::open(&data_dir) {
                 Ok(sink) => Some(sink),
@@ -170,6 +156,30 @@ impl Gateway {
             meta_mcp.set_playbook_engine(engine);
         }
 
+        // Give stdio the same explicit reload context as HTTP, built once the
+        // capability backend is installed, so a reload refreshes and announces
+        // the catalogue the session serves (MIK-8278).
+        if let Some(path) = self.reload_path() {
+            let live_config = Arc::new(
+                LiveConfig::new(self.config.clone())
+                    .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+            );
+            let reload_ctx = Arc::new(
+                ReloadContext::new(
+                    path.clone(),
+                    Arc::clone(&live_config),
+                    Arc::clone(&self.backends),
+                    self.config.failsafe.clone(),
+                    self.config.meta_mcp.cache_ttl,
+                )?
+                .with_env(Arc::clone(&self.env))
+                .with_identity_grant_sink_opt(grant_sink.clone())
+                .with_capabilities(meta_mcp.get_capabilities())
+                .with_on_registered(warmer.hook()),
+            );
+            meta_mcp.set_reload_context(reload_ctx);
+        }
+
         // Warm-start backends (same as HTTP mode). Held for the rest of the
         // function: dropping the guard aborts the retry tasks, so cancelling
         // `run_stdio` anywhere cancels them too, not only the EOF path below.
@@ -215,6 +225,30 @@ impl Gateway {
         // memory growth.
         let (writer, queue) = self.stdout_queue(&meta_mcp);
         let mut writer_task = tokio::spawn(Self::run_stdout_writer(output, queue));
+
+        // MIK-8278: decide this session's tool-list changes and tell its
+        // client, and watch the capability catalogue as HTTP does. The
+        // watchers stop with the announcer, so they end on every exit path.
+        let announcer = super::tools_changed::stdio::StdioAnnouncer::start(
+            (Arc::clone(&self.backends), Arc::clone(&meta_mcp)),
+            nudge_rx,
+            writer.clone(),
+        );
+        let _capability_watcher = meta_mcp.get_capabilities().and_then(|cap_backend| {
+            cap_backend.spawn_listing_watch(Arc::clone(&self.backends), announcer.shutdown());
+            crate::capability::CapabilityWatcher::start(
+                cap_backend,
+                announcer.shutdown(),
+                Some(self.backends.catalogue_hook()),
+            )
+            .inspect_err(|error| warn!(%error, "stdio: capability hot-reload disabled"))
+            .ok()
+        });
+        #[cfg(test)]
+        super::stdio_seams::announcer_started(announcer.drain_alive());
+        // Whether this session began with `initialize`: only such a client
+        // is told of changes (a modern one was told `listChanged: false`).
+        let mut legacy_handshake = false;
 
         // Use a fixed session ID for stdio sessions (single client, long-lived)
         let session_id = STDIO_SESSION_ID;
@@ -339,6 +373,21 @@ impl Gateway {
                 continue;
             }
 
+            // Marked, then dispatched as before: announcing starts here.
+            // Alone or inside a batch: a legacy client may send it either way.
+            let is_initialized = |frame: &serde_json::Value| {
+                frame.get("method").and_then(serde_json::Value::as_str)
+                    == Some("notifications/initialized")
+            };
+            if legacy_handshake
+                && (is_initialized(&request)
+                    || request
+                        .as_array()
+                        .is_some_and(|frames| frames.iter().any(is_initialized)))
+            {
+                announcer.initialized();
+            }
+
             // A batch is spawned like a single request (MIK-7684): dispatched
             // inline, it parked the reader on a full stdout. Its answer may now
             // follow frames for later lines; singles are already unordered
@@ -418,6 +467,7 @@ impl Gateway {
             let spawned =
                 request.get("method").and_then(serde_json::Value::as_str) != Some("initialize");
             if !spawned {
+                legacy_handshake = true;
                 handshake_capabilities = crate::protocol::meta::Declared::from_handshake(
                     request.pointer("/params/capabilities"),
                 );
@@ -573,6 +623,9 @@ impl Gateway {
             }
         }
 
+        // The read loop is over: the session is ending, so nothing more is
+        // announced, though accepted requests still drain (MIK-8278).
+        announcer.stop();
         // `writer.is_closed()` as well as the flag: stdout can die during the
         // wait for a line that never comes, and the loop then leaves by the EOF
         // arm. Reporting that as an ordinary EOF would hand the operator the
@@ -621,6 +674,9 @@ impl Gateway {
         }
         // Every sender gone, then the writer joined: the task drains its queue
         // and returns, which is what flushes the responses the drain produced.
+        // The announcer holds a sender too: stopped when the read loop ended,
+        // dropped before the join so the queue can close.
+        drop(announcer);
         drop(writer);
         drop(channel);
         match tokio::time::timeout_at(deadline, &mut writer_task).await {
