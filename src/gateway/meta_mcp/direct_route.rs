@@ -165,6 +165,30 @@ impl MetaMcp {
         }
     }
 
+    /// Seed `caller`'s own slot on `server` as a real fill leaves it: the
+    /// catalogue stored in per-user slot `binding`, and the caller-slot index
+    /// pointing at it (MIK-8356). A row whose premise is "this caller's
+    /// catalogue holds X" uses this, never a bare store the index cannot see.
+    #[cfg(test)]
+    pub(crate) fn seed_caller_catalogue_for_test(
+        &self,
+        server: &str,
+        caller: crate::identity_propagation::CallerProof<'_>,
+        binding: &str,
+        tools: Vec<crate::protocol::Tool>,
+    ) {
+        let backend = self.backends.get(server).expect("the backend");
+        backend.store_per_user_tools_for_test(binding, tools);
+        self.remember_caller_slot(&backend, caller, Some(binding));
+        assert!(
+            backend
+                .indexed_bindings_for_test()
+                .iter()
+                .any(|b| b == binding),
+            "seed: the index does not point {server}'s caller at {binding}"
+        );
+    }
+
     /// The binding of the slot holding `caller`'s own catalogue on `backend`,
     /// if warm (MIK-8356 design R3.5; the read API agreed with MIK-8350).
     /// Synchronous and side-effect free: no mint, no fill, no slot creation.

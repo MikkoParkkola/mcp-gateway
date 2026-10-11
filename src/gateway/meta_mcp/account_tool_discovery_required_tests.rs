@@ -222,6 +222,9 @@ async fn list_servers_counts_a_required_backend_only_for_a_caller_with_a_view() 
     assert_eq!(anonymous["tools_count"], 0, "anonymous: {anonymous}");
     assert_eq!(anonymous["tools_known"], false, "anonymous: {anonymous}");
 
+    // The operator's view is its own catalogue (MIK-8356), as its own fill
+    // leaves it; the shared slot is no caller's view of a per-user backend.
+    seed_operator_slot(&meta, seeded.to_vec());
     let operator = row(meta
         .list_servers(&caller_as(None, Some("operator")), None)
         .await
@@ -289,6 +292,7 @@ async fn operator_row(stored: crate::personal_accounts::GrantRecord) -> (Value, 
         !seeded.is_empty(),
         "premise: the shared snapshot holds the tool"
     );
+    seed_operator_slot(&meta, seeded.to_vec());
     let listing = meta
         .list_servers(&caller_as(None, Some("operator")), None)
         .await
@@ -298,6 +302,14 @@ async fn operator_row(stored: crate::personal_accounts::GrantRecord) -> (Value, 
         .and_then(|servers| servers.iter().find(|s| s["name"] == REQUIRED).cloned())
         .expect("the required backend is still named");
     (row, custody)
+}
+
+/// The sole operator's own catalogue on [`REQUIRED`], as its own fill
+/// leaves it: stored in its grant's slot and indexed (MIK-8356).
+fn seed_operator_slot(meta: &MetaMcp, tools: Vec<crate::protocol::Tool>) {
+    let operator = caller_as(None, Some("operator"));
+    let binding = expected_identity_key_for(&operator_key(), SEEDED_REVISION);
+    meta.seed_caller_catalogue_for_test(REQUIRED, MetaMcp::proof_of(&operator), &binding, tools);
 }
 
 /// MIK-7877: listing reads a grant without refreshing it. An expired grant is
