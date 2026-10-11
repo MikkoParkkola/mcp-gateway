@@ -35,6 +35,12 @@ pub(super) fn spawn_export_task(
     if !config.auth.enabled {
         warn!("SIEM export configured but auth is off; the governance log may be absent");
     }
+    // MIK-8365: the key is empty because it did not resolve, so export would
+    // pass a signed log's entries on hash-only. The gateway still starts.
+    if let Some(reason) = config.security.transparency_log.unresolved_secret() {
+        warn!("SIEM export disabled: {reason}");
+        return None;
+    }
 
     let inv_path = expand_home_path(&config.security.transparency_log.path);
     let gov_path = control_plane_base.path.join("audit.jsonl");
@@ -300,3 +306,7 @@ pub(super) fn spawn_idle_reaper(
         }
     })
 }
+
+#[cfg(all(test, unix))]
+#[path = "background_export_secret_tests.rs"]
+mod export_secret_tests;

@@ -13,6 +13,14 @@ use crate::{Error, Result};
 const FIELD: &str = "security.transparency_log.shared_secret";
 
 impl TransparencyLogConfig {
+    /// Why the key did not resolve while the log was off (MIK-8365): a
+    /// field-named reason, never a value. Every reader that verifies with the
+    /// key (`audit verify`, SIEM export) refuses while it is set, since the key
+    /// is then empty and would verify a signed log hash-only.
+    pub(crate) fn unresolved_secret(&self) -> Option<&str> {
+        self.unresolved_secret.as_deref()
+    }
+
     /// Resolve `shared_secret` as written: `${VAR}` templates, `env:NAME`,
     /// `file:PATH`, or a literal. One read: the first failure is the answer,
     /// and the resolved bytes are the key even when they look like a reference.
@@ -97,8 +105,8 @@ impl crate::config::Config {
     ) -> Result<crate::security::transparency_log::TransparencyLogConfig> {
         let config = Self::load(path)?;
         let log = &config.security.transparency_log;
-        if let Some(reason) = &log.unresolved_secret {
-            return Err(Error::ConfigValidation(reason.clone()));
+        if let Some(reason) = log.unresolved_secret() {
+            return Err(Error::ConfigValidation(reason.to_owned()));
         }
         Ok(crate::security::transparency_log::TransparencyLogConfig {
             key_id: log.key_id.clone(),
