@@ -765,6 +765,8 @@ mod seam;
 pub(crate) use margin::egress_parts;
 #[cfg(test)]
 pub(crate) use margin::egress_text;
+#[path = "collusion_big.rs"]
+mod big;
 #[cfg(test)]
 #[path = "collusion_seam_tests.rs"]
 mod seam_tests;
