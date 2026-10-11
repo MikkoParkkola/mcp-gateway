@@ -24,6 +24,8 @@ pub(crate) struct McpConsumedThenRefused {
     pub(crate) calls_before_honest: usize,
     /// A fresh nonce's redemption, and the backend calls once its task ran.
     pub(crate) honest: Value,
+    /// The honest task's terminal status, from `tasks/get`.
+    pub(crate) honest_status: String,
     pub(crate) calls_after_honest: usize,
 }
 
@@ -87,6 +89,43 @@ async fn warm(fx: &super::direct_guards_fixture::Fx) {
     backend.get_tools().await.expect("alpha lists its tools");
 }
 
+/// Polls `tasks/get` for `id` as `k-std` (up to 10 s) until the task is
+/// terminal, and returns its status (empty if it never was).
+async fn terminal_status(fx: &super::direct_guards_fixture::Fx, id: &str) -> String {
+    const TERMINAL: [&str; 3] = ["completed", "failed", "cancelled"];
+    let headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tasks/get"),
+    ];
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let params = serde_json::json!({ "taskId": id, "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {
+                "extensions": {"io.modelcontextprotocol/tasks": {}}
+            },
+        }});
+        let (_, got) = super::direct_guards_fixture::send_with_headers(
+            fx,
+            "/mcp",
+            "k-std",
+            "tasks/get",
+            params,
+            None,
+            &headers,
+        )
+        .await;
+        let status = got.pointer("/result/status").and_then(Value::as_str);
+        if let Some(status) = status.filter(|status| TERMINAL.contains(status)) {
+            return status.to_owned();
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return String::new();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
 /// Waits (up to 10 s) until the backend has seen more than `seen` calls.
 async fn backend_calls_past(calls: &std::sync::atomic::AtomicUsize, seen: usize) -> usize {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -135,6 +174,10 @@ pub(crate) async fn mcp_x14_consumed_then_refused() -> McpConsumedThenRefused {
     let asked = send_task(&fx, signed_task_read("h1-n2", "h1-c", &none)).await;
     let honest = send_task(&fx, signed_task_read("h1-n2", "h1-c", &accepting(&asked))).await;
     let calls_after_honest = backend_calls_past(&calls, calls_before_honest).await;
+    let honest_status = match honest.pointer("/result/taskId").and_then(Value::as_str) {
+        Some(id) => terminal_status(&fx, id).await,
+        None => String::new(),
+    };
     McpConsumedThenRefused {
         challenge,
         refused,
@@ -142,6 +185,7 @@ pub(crate) async fn mcp_x14_consumed_then_refused() -> McpConsumedThenRefused {
         resent,
         calls_before_honest,
         honest,
+        honest_status,
         calls_after_honest,
     }
 }
@@ -151,9 +195,9 @@ pub(crate) async fn mcp_x14_consumed_then_refused() -> McpConsumedThenRefused {
 /// so X14 classifies it harmless and has nothing to ask. With
 /// `alpha` killed, the signed task call is refused by admission; the backend is
 /// revived and the same nonce re-sent, then sent a third time. Returns (the
-/// refusal, the re-send, the third send, the backend calls once the re-send's
-/// task had a chance to run).
-pub(crate) async fn mcp_task_refused_without_grant() -> (Value, Value, Value, usize) {
+/// refusal, the re-send, the re-send's terminal task status, the third send,
+/// the backend calls once the re-send's task had a chance to run).
+pub(crate) async fn mcp_task_refused_without_grant() -> (Value, Value, String, Value, usize) {
     let fx =
         super::direct_guards_fixture::fixture_hardened_signed_built(Answer::Ok, true, surfacing)
             .await;
@@ -165,6 +209,10 @@ pub(crate) async fn mcp_task_refused_without_grant() -> (Value, Value, Value, us
     meta.kill_switch().revive("alpha");
     let resent = send_task(&fx, signed_task_read("h1c-n1", "h1c-b", &none)).await;
     let calls = backend_calls_past(&fx.calls, 0).await;
+    let status = match resent.pointer("/result/taskId").and_then(Value::as_str) {
+        Some(id) => terminal_status(&fx, id).await,
+        None => String::new(),
+    };
     let third = send_task(&fx, signed_task_read("h1c-n1", "h1c-c", &none)).await;
-    (refused, resent, third, calls)
+    (refused, resent, status, third, calls)
 }

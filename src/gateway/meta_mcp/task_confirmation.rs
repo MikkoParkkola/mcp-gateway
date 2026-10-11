@@ -584,6 +584,9 @@ impl MetaMcp {
             .consume(&payload.jti, payload.expires_at, now)
             .await
         {
+            // The witness is already spent, so this refusal keeps the nonce
+            // spent even when the ledger was only full and nothing was
+            // consumed: a refund lost, fail closed (MIK-8353).
             warn!(
                 tool = request.tool_name,
                 "Confirmation grant already spent or ledger at capacity"

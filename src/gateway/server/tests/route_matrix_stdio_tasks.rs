@@ -240,13 +240,23 @@ fn accept(challenge: &Value) -> Value {
     })
 }
 
+/// Waits until task `id` is terminal and returns its status, as the local
+/// operator reads it.
+async fn terminal_status(fixture: &super::owner2_stdio_tasks::Fixture, id: &str) -> String {
+    let id = super::owner2_stdio_tasks::wait_terminal(fixture, id.to_owned()).await;
+    let task = (fixture.tasks.service)
+        .get(crate::gateway::meta_mcp::LOCAL_OPERATOR_PRINCIPAL, &id)
+        .expect("the local operator owns its task");
+    format!("{:?}", task.task.status())
+}
+
 /// MIK-8353 STDIO-TWIN (pairs with E2E.1): a signed task call of a surfaced
 /// tool listed harmless, on a warm catalogue so X14 has nothing to ask. With
 /// the backend killed, execution admission refuses it with nothing consumed;
 /// the backend is revived, and the same nonce re-sent, then sent a third time.
-/// Returns (the refusal, the re-send, the third send, the backend `tools/call`
-/// count once the re-send's task is terminal).
-pub(crate) async fn stdio_task_refused_without_a_grant() -> (Value, Value, Value, usize) {
+/// Returns (the refusal, the re-send, the re-send's terminal task status, the
+/// third send, the backend `tools/call` count once that task is terminal).
+pub(crate) async fn stdio_task_refused_without_a_grant() -> (Value, Value, String, Value, usize) {
     const NONCE: &str = "stdio-twin-nonce-0001";
     let fixture =
         signed_fixture_listing(json!({"destructiveHint": false, "readOnlyHint": true})).await;
@@ -260,12 +270,13 @@ pub(crate) async fn stdio_task_refused_without_a_grant() -> (Value, Value, Value
     let refused = dispatch(&fixture, x14_call(1, NONCE, "twin-a", json!({}))).await;
     fixture.meta.kill_switch().revive(BACKEND);
     let resent = dispatch(&fixture, x14_call(2, NONCE, "twin-b", json!({}))).await;
-    if let Some(id) = resent.pointer("/result/taskId").and_then(Value::as_str) {
-        super::owner2_stdio_tasks::wait_terminal(&fixture, id.to_owned()).await;
-    }
+    let status = match resent.pointer("/result/taskId").and_then(Value::as_str) {
+        Some(id) => terminal_status(&fixture, id).await,
+        None => String::new(),
+    };
     let calls = fixture.rounds.load(Ordering::SeqCst);
     let third = dispatch(&fixture, x14_call(3, NONCE, "twin-c", json!({}))).await;
-    (refused, resent, third, calls)
+    (refused, resent, status, third, calls)
 }
 
 /// What MIK-8353.E2E.1's round observed (see [`stdio_x14_consumed_then_refused`]).
@@ -308,10 +319,7 @@ pub(crate) async fn stdio_x14_consumed_then_refused() -> ConsumedThenRefused {
     let asked = dispatch(&fixture, x14_call(4, FRESH, "e2e1-c", json!({}))).await;
     let created = dispatch(&fixture, x14_call(5, FRESH, "e2e1-c", accept(&asked))).await;
     let honest = match created.pointer("/result/taskId").and_then(Value::as_str) {
-        Some(id) => {
-            let id = super::owner2_stdio_tasks::wait_terminal(&fixture, id.to_owned()).await;
-            json!({"taskId": id})
-        }
+        Some(id) => json!({"taskId": id, "status": terminal_status(&fixture, id).await}),
         None => created,
     };
     ConsumedThenRefused {

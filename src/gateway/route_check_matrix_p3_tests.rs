@@ -380,9 +380,9 @@ async fn stdio_task_refused_after_its_grant_was_consumed_keeps_its_nonce() {
         seen.calls_before_honest, 0,
         "the backend ran before the honest round"
     );
-    assert!(
-        seen.honest.get("taskId").is_some(),
-        "control: a fresh nonce's honest round did not create its task: {}",
+    assert_eq!(
+        seen.honest["status"], "Completed",
+        "control: a fresh nonce's honest round did not complete: {}",
         seen.honest
     );
     assert_eq!(
@@ -462,9 +462,9 @@ async fn mcp_task_refused_after_its_grant_was_consumed_keeps_its_nonce() {
         seen.calls_before_honest, 0,
         "the backend ran before the honest round"
     );
-    assert!(
-        seen.honest.pointer("/result/taskId").is_some(),
-        "control: the honest round did not create its task: {}",
+    assert_eq!(
+        seen.honest_status, "completed",
+        "control: the honest round did not complete: {}",
         seen.honest
     );
     assert_eq!(
@@ -480,7 +480,12 @@ async fn mcp_task_refused_after_its_grant_was_consumed_keeps_its_nonce() {
 /// spent. Kills: the refund site removed.
 #[tokio::test]
 async fn mcp_task_refused_without_a_grant_gives_its_nonce_back() {
-    let (refused, resent, third, calls) = Box::pin(x14::mcp_task_refused_without_grant()).await;
+    let (refused, resent, status, third, calls) =
+        Box::pin(x14::mcp_task_refused_without_grant()).await;
+    assert_eq!(
+        status, "completed",
+        "the re-sent task did not complete: {resent}"
+    );
     assert!(
         !refused.to_string().contains(X14_PROMPT),
         "premise: X14 asked, so a grant path was taken: {refused}"
@@ -509,8 +514,12 @@ async fn mcp_task_refused_without_a_grant_gives_its_nonce_back() {
 /// Mutants: mNoMint-stdio (no stdio witness) and mGuard (the guard kept).
 #[tokio::test]
 async fn stdio_task_refused_without_a_grant_gives_its_nonce_back() {
-    let (refused, resent, third, calls) =
+    let (refused, resent, status, third, calls) =
         Box::pin(stdio::stdio_task_refused_without_a_grant()).await;
+    assert_eq!(
+        status, "Completed",
+        "the re-sent task did not complete: {resent}"
+    );
     assert!(
         !refused.to_string().contains(X14_PROMPT),
         "premise: X14 asked, so a grant path was taken: {refused}"
