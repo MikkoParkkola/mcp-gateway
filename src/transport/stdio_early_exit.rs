@@ -257,7 +257,8 @@ impl StdioTransport {
         // not `Send`, and `matches!` drops the guard at once.
         if response.is_err()
             && matches!(
-                tokio::time::timeout(DRAIN, after_error.wait_for(|closed| *closed)).await,
+                tokio::time::timeout(self.drain_window(), after_error.wait_for(|closed| *closed))
+                    .await,
                 Ok(Ok(_))
             )
         {
@@ -266,6 +267,17 @@ impl StdioTransport {
                 .store(true, std::sync::atomic::Ordering::SeqCst);
         }
         response
+    }
+
+    /// How long the start waits for the exit status and the last stderr
+    /// bytes: [`DRAIN`], or the test-only slow-host bound (MIK-8360).
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    fn drain_window(&self) -> std::time::Duration {
+        #[cfg(test)]
+        if let Some(bound) = *self.slow_host_bound.lock() {
+            return bound;
+        }
+        DRAIN
     }
 
     /// Turn an early exit into its report: the exit status, class and needle,
@@ -281,7 +293,7 @@ impl StdioTransport {
         // leaves it only for the reaper (MIK-7923).
         let had_tree = self.child.lock().tree.is_some();
         let status = if had_tree {
-            let exited = self.wait_exited_in_slot(DRAIN).await;
+            let exited = self.wait_exited_in_slot(self.drain_window()).await;
             let status = self.end_tree().await;
             exited.then_some(status).flatten()
         } else {
@@ -291,7 +303,10 @@ impl StdioTransport {
         self.failure.record_exit(status);
         let (reader, tail) = stderr_tail;
         let abort = reader.abort_handle();
-        if tokio::time::timeout(DRAIN, reader).await.is_err() {
+        if tokio::time::timeout(self.drain_window(), reader)
+            .await
+            .is_err()
+        {
             // Something still holds the pipe; keep what was read so far.
             abort.abort();
         }
