@@ -220,23 +220,6 @@ impl MetaMcp {
         Ok(())
     }
 
-    /// `gateway_invoke` — invoke a tool on a backend with full tracing, caching,
-    /// idempotency, error-budget tracking, and predictive prefetch.
-    ///
-    /// `agent_id` identifies the calling agent for audit logging (OWASP ASI03).
-    // Takes the caller context whole rather than five loose parameters: the
-    // authorizer travels with the identity it authorizes, so no call site can
-    // pass one without the other.
-    pub(in crate::gateway::meta_mcp) async fn invoke_tool_in_slot(
-        &self,
-        args: &Value,
-        session_id: Option<&str>,
-        caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
-    ) -> Result<Value> {
-        let sourced = self.invoke_tool_sourced(args, session_id, caller).await;
-        sourced.map(|sourced| sourced.0)
-    }
-
     /// [`Self::invoke_tool`] plus the result's chain eligibility (A3) and its
     /// upstream chain outcome (inc3 D4).
     pub(in crate::gateway::meta_mcp) async fn invoke_tool_sourced(
@@ -349,9 +332,18 @@ impl MetaMcp {
             );
         }
 
+        // A follow-up question the content gate enforces on ends the call
+        // (MIK-8325): the gates judged the backend's question unsafe to show,
+        // so it is refused, never resumed and never answered with a handle to
+        // an exchange the caller cannot see. Strip, Summarize, Quarantine and
+        // Deny alike; a round the gate let through is unchanged.
+        let round = crate::protocol::mrtr::InputRequired::claims_input_required(&result);
         let delivered = self.apply_context_integrity(server, tool, api_key_name, trace_id, result);
         // MIN.2: past every gate, so this dispatch's raw reading counts.
         crate::security::tenant_reads::note_attribution(raw_read);
+        if round && delivered.1 == super::super::response_security::GateEffect::Enforced {
+            return Err(Error::ResponseFirewallRefused);
+        }
         Ok(delivered)
     }
 

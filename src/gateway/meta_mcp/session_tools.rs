@@ -39,10 +39,7 @@ impl MetaMcp {
         let visible_tools = self.get_capabilities().map_or(0, |cap| {
             cap.get_tools_for_state(new_state)
                 .iter()
-                .filter(|t| {
-                    self.may_invoke(&cap.name, &t.name, scope, session_id)
-                        .is_ok()
-                })
+                .filter(|t| self.shows_tool(&cap.name, t, scope, session_id))
                 .count()
         });
 

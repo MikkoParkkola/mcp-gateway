@@ -111,3 +111,6 @@ mod stdio_teardown_bound;
 
 // MIK-7684: the stdio reader never waits for stdout room.
 mod stdio_reader_unparked;
+/// MIK-8340: a withheld surfaced name answers on stdio as an absent one.
+#[cfg(feature = "firewall")]
+mod withheld_parity_stdio;

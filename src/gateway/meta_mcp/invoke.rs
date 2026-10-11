@@ -44,6 +44,8 @@ mod undeclared_gate;
 pub(crate) mod audit;
 mod chokepoint; // MIK-8137 b1: the dispatch chokepoint every send passes
 // MIK-8351: the direct route's tools/call send passes it too.
+#[cfg(feature = "firewall")]
+pub(crate) use chokepoint::ScanTarget;
 pub(in crate::gateway) use chokepoint::{DirectPermit, Outbound};
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
 pub(crate) mod egress;
@@ -59,9 +61,6 @@ mod withheld_evidence;
 mod account_mint;
 
 use super::support::{augment_with_predictions, augment_with_trace, idempotency_key_for};
-pub(crate) use chokepoint::RouteRefusal;
-#[cfg(feature = "firewall")]
-pub(crate) use chokepoint::ScanTarget;
 pub(crate) use side_effect_markers::{LostRoundRoute, settle_lost_round};
 use side_effect_markers::{uncertain_side_effect, withheld_side_effect};
 pub(crate) mod gateway_writes;
