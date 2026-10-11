@@ -226,9 +226,30 @@ impl MetaMcp {
         self.visible_tool(server, tool, scope, session_id) == Visibility::Visible
     }
 
-    /// Whether a name-only walk (suggestion pools, counts over names) shows the
-    /// tool named `tool`: [`Self::tool_visible_to`] as a filter.
+    /// Whether a name-only listing (the disabled list, predictions, counts over
+    /// names, spec-preview names) shows the tool named `tool` to this caller.
+    /// On a per-user backend it is judged by the caller's own catalogue slot,
+    /// and withheld while that slot is cold (MIK-8356); elsewhere as
+    /// [`Self::shows_shared_name`].
     pub(crate) fn shows_name(
+        &self,
+        server: &str,
+        tool: &str,
+        scope: InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> bool {
+        self.listing_names(
+            server,
+            tool,
+            scope,
+            session_id,
+            super::listing_view::ColdRule::Withhold,
+        )
+    }
+
+    /// The shared-catalogue judgement of the tool named `tool`:
+    /// [`Self::tool_visible_to`] as a filter.
+    pub(crate) fn shows_shared_name(
         &self,
         server: &str,
         tool: &str,

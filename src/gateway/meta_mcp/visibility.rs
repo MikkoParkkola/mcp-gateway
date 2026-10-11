@@ -236,15 +236,28 @@ impl MetaMcp {
             .into_iter()
             .filter(|b| self.admits_backend(&b.name, scope, session_id))
             .collect();
-        let known = backends.iter().filter(|b| b.cached_tools_known()).count();
+        // MIK-8356: a per-user backend is counted from this caller's own slot,
+        // and is not known while that slot is cold.
+        let views: Vec<_> = backends
+            .iter()
+            .map(|b| self.listing_snapshot(b, scope))
+            .collect();
+        let known = backends
+            .iter()
+            .zip(&views)
+            .filter(|(b, view)| view.is_some() && b.cached_tools_known())
+            .count();
         // A truncated drain is still "known" (enumerated), but its count is a
         // lower bound, never exact (MIK 7570 PAGING.1 design D). List and flag
         // are read under one guard so a fill landing between cannot tear them.
         let mut truncated = false;
         let admitted: usize = backends
             .iter()
-            .map(|b| {
-                let (tools, cut) = b.cached_tools_snapshot_and_truncated();
+            .zip(views)
+            .map(|(b, view)| {
+                let Some((tools, cut)) = view else {
+                    return 0;
+                };
                 truncated |= cut;
                 tools
                     .iter()
@@ -312,7 +325,8 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> bool {
         let on_backend = self.backends.all().into_iter().any(|b| {
-            b.get_cached_tool(name).is_some() && self.shows_name(&b.name, name, scope, session_id)
+            self.listing_tool(&b, name, scope).is_some()
+                && self.shows_name(&b.name, name, scope, session_id)
         });
         on_backend
             || self.get_capabilities().is_some_and(|cap| {

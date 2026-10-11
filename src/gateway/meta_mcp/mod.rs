@@ -822,17 +822,18 @@ mod policy_epoch_tests;
 #[cfg(test)]
 pub(crate) mod slot_verdict_fixture;
 #[cfg(test)]
-mod slot_verdict_tests;
+mod slot_verdict_index_tests;
 #[cfg(test)]
 mod slot_verdict_listing_tests;
 #[cfg(test)]
-mod slot_verdict_index_tests;
+mod slot_verdict_tests;
 #[cfg(test)]
 mod task_notify_tests;
 /// MIK-8340 row 10: a listing follows the caller's own catalogue.
 #[cfg(test)]
 mod withheld_catalogue_tests;
 
+mod listing_view;
 mod session_end;
 
 #[cfg(test)]

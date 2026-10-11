@@ -133,7 +133,15 @@ impl MetaMcp {
 
         // List = invoke (A3), one predicate for every listing (MIK-8340): a
         // tool withheld from this caller is not shown.
-        if !self.shows_name(&surfaced.server, &surfaced.tool, scope, session_id) {
+        // MIK-8356: judged by the caller's own slot on a per-user backend; a
+        // cold caller keeps today's shared view (SLOTVIS.6's stated residual).
+        if !self.listing_names(
+            &surfaced.server,
+            &surfaced.tool,
+            scope,
+            session_id,
+            super::listing_view::ColdRule::SharedView,
+        ) {
             return None;
         }
 
@@ -149,7 +157,7 @@ impl MetaMcp {
                 );
                 return None;
             }
-            let tool = backend.get_cached_tool(&surfaced.tool);
+            let tool = self.listing_tool(&backend, &surfaced.tool, scope);
             if tool.is_none() {
                 debug!(
                     server = %surfaced.server,
@@ -231,10 +239,12 @@ impl MetaMcp {
                 // Filled behind this read, as discovery does (MIK-7962);
                 // `tools_known` reports the cold slot meanwhile.
                 self.refresh_shared_behind_read(&b);
-                b.get_cached_tools_snapshot()
-                    .iter()
-                    .filter(|t| self.shows_tool(&b.name, t, scope, session_id))
-                    .count()
+                self.listing_snapshot(&b, scope).map_or(0, |(tools, _)| {
+                    tools
+                        .iter()
+                        .filter(|t| self.shows_tool(&b.name, t, scope, session_id))
+                        .count()
+                })
             };
             let status = b.status();
             let killed = self.kill_switch.is_killed(&status.name);

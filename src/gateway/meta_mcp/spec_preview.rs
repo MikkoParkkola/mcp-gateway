@@ -103,10 +103,20 @@ impl MetaMcp {
             // A cold or stale slot is filled behind this read, never by it, as
             // discovery does (MIK-7962); this read serves what is cached.
             self.refresh_shared_behind_read(&backend);
-            if !backend.has_cached_tools() {
-                continue;
-            }
-            let cache_guard = backend.get_cached_tools_snapshot();
+            // MIK-8356: the caller's own slot on a per-user backend; a cold one
+            // lists nothing. A shared backend is read as before.
+            let cache_guard = match self.listing_view(&backend, scope) {
+                super::listing_view::ListingView::Shared => {
+                    if !backend.has_cached_tools() {
+                        continue;
+                    }
+                    backend.get_cached_tools_snapshot()
+                }
+                super::listing_view::ListingView::Cold => continue,
+                super::listing_view::ListingView::Caller(binding) => {
+                    backend.get_cached_tools_snapshot_for(Some(&binding))
+                }
+            };
             for tool in cache_guard.iter() {
                 let mut t = tool.clone();
                 if !profile.tool_allowed(&t.name)
@@ -210,7 +220,14 @@ impl MetaMcp {
             if self.meta_route_isolation_refused(&backend) {
                 continue;
             }
-            if let Some(tool) = backend.get_cached_tool(name)
+            let found = match self.listing_view(&backend, scope) {
+                super::listing_view::ListingView::Cold => None,
+                super::listing_view::ListingView::Shared
+                | super::listing_view::ListingView::Caller(_) => {
+                    self.listing_tool(&backend, name, scope)
+                }
+            };
+            if let Some(tool) = found
                 && self.shows_tool(&backend.name, &tool, scope, session_id)
             {
                 return Some(tool);
