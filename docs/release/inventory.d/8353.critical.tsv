@@ -1,0 +1,1 @@
+src/gateway/meta_mcp/task_confirmation.rs	confirm_destructive_task_with	1	critical	a	MetaMcp::confirm_destructive_task_with	The destructive-task gate (X14) carrying a signed call's refund witness: hands it back on every arm that consumed nothing and drops it before it spends a grant, so no refusal after a spent confirmation gives the nonce back (MIK-8353).
