@@ -395,3 +395,64 @@ async fn a_stop_ends_a_login_stalled_in_its_code_exchange() {
         "the stalled login ends Cancelled: {error:?}"
     );
 }
+
+/// LOGINDL.18b: a login whose token save waits on the credential's
+/// cross-process lock (another gateway process holds it) ends at its own
+/// bound, recorded on the cohort as `AuthorizationIncomplete`. The code
+/// exchange before it is bounded by the OAuth client's own 30 s timeout
+/// (oauth/client/destination.rs:86), so the save-lock wait is the one place
+/// the Lead stage's bound acts. Red at base: that wait is unbounded.
+#[tokio::test]
+async fn a_login_waiting_on_a_held_credential_lock_ends_at_its_bound() {
+    let (backend, browser, _dir) = approved_start(Upstream::Plain, Duration::from_secs(30)).await;
+    super::token_lapse::lapse(&backend).await;
+    let client = backend
+        .last_oauth_client
+        .lock()
+        .clone()
+        .expect("premise: a start built an OAuth client");
+    let lock_path = client.lock().await.credential_lock_path_for_test();
+    let held = crate::fs_lock::ExclusiveFileLock::acquire(&lock_path)
+        .expect("another process holds the credential lock");
+    // Counted after the test's own hold: only the login's attempts move it.
+    let held_attempts = crate::fs_lock::lock_attempts(&lock_path);
+    let cohort = backend.login_gate.cohort();
+
+    let _call = spawn_call(&backend);
+    let url = browser.opened(2, "the call's request-time login").await;
+    assert!(
+        approve_if_listening(&url).await,
+        "premise: the login was listening"
+    );
+    within("the save to wait on the held lock", async {
+        while crate::fs_lock::lock_attempts(&lock_path) == held_attempts {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+
+    // The exchange is done and the save polls a file lock: no I/O is left
+    // to race, so the bound can pass on paused time.
+    tokio::time::pause();
+    let ended = tokio::time::timeout(Duration::from_secs(301), async {
+        while backend.login_gate.in_flight() {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    })
+    .await;
+    tokio::time::resume();
+    drop(held);
+
+    assert!(
+        ended.is_ok(),
+        "the save-lock wait outlived the login's bound"
+    );
+    assert!(
+        matches!(
+            cohort.outcome(),
+            Some(crate::oauth::login_gate::LoginOutcome::Incomplete { .. })
+        ),
+        "the bound's end is recorded on the cohort as Incomplete: {:?}",
+        cohort.outcome()
+    );
+}
