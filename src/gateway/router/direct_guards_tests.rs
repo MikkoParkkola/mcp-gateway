@@ -275,48 +275,6 @@ fn profiles() -> crate::routing_profile::ProfileRegistry {
     crate::routing_profile::ProfileRegistry::from_config(&configs, "open")
 }
 
-/// T4 (DIRECT.3). The caller's session profile applies on the per-backend
-/// route; a call with no session, or an empty one, gets the default profile.
-#[tokio::test]
-async fn t4_the_session_profile_applies_on_the_direct_route() {
-    for backend in BACKENDS {
-        let fx = fixture_built(Answer::Ok, |meta| meta.with_profile_registry(profiles())).await;
-        // A session the caller owns: a presented id is honoured only then (#2468).
-        let owner = crate::gateway::session_id::SessionOwner::Credential(
-            crate::gateway::auth::principal_of("k-std"),
-        );
-        let (session, _rx) = fx.state.multiplexer.get_or_create_session_for(None, &owner);
-        fx.state
-            .meta_mcp
-            .session_profiles()
-            .set_profile(&session, "no-alpha-read");
-        let (_, body) = post_direct(
-            &fx,
-            backend,
-            "k-std",
-            "read",
-            json!({}),
-            None,
-            Some(&session),
-        )
-        .await;
-        assert!(
-            body.get("error").is_some(),
-            "{backend}: refused by profile: {body}"
-        );
-        assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "{backend}");
-        for session in [None, Some("")] {
-            let (_, body) =
-                post_direct(&fx, backend, "k-std", "read", json!({}), None, session).await;
-            assert!(
-                body.get("result").is_some(),
-                "{backend} {session:?}: {body}"
-            );
-        }
-        assert_eq!(fx.calls.load(Ordering::SeqCst), 2, "{backend}");
-    }
-}
-
 const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
 const SIGNING_REFUSAL: &str = "message signing is enabled; use gateway_invoke";
 
@@ -780,3 +738,5 @@ async fn admission_policy_refuses_a_killed_backend_or_disabled_capability() {
         assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "{control}");
     }
 }
+
+mod oracle;

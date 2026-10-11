@@ -72,6 +72,39 @@ pub(super) fn assert_refused(body: &Value, expect: &str) {
     );
 }
 
+/// MIK-8361: a new call naming a withheld `tool` answers as a name the
+/// backend does not list (a tool error carrying text A), creates no task and
+/// is never answered from a stored result.
+pub(super) fn assert_absent(body: &Value, tool: &str) {
+    let text = body
+        .pointer("/result/content/0/text")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        body.get("error").is_none()
+            && body.pointer("/result/isError") == Some(&json!(true))
+            && text.contains(&crate::backend::text_absent(tool))
+            && body.pointer("/result/taskId").is_none(),
+        "expected the absent-name answer for `{tool}` and no task, got {body}"
+    );
+}
+
+/// MIK-8361: a code-mode chain whose step names a withheld `tool` fails as
+/// when the step names a tool the backend does not list (-32603), no result.
+fn assert_absent_step(body: &Value, tool: &str) {
+    let message = body
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        body.pointer("/error/code") == Some(&json!(-32603))
+            && message.contains(&format!("Chain step 0 ({BACKEND}:{tool}) failed: "))
+            && message.contains(&crate::backend::text_absent(tool))
+            && body.get("result").is_none(),
+        "expected the chain to fail on the absent name `{tool}`, got {body}"
+    );
+}
+
 pub(super) fn strip_targets(state: &Arc<AppState>, id: &str) {
     state.task_executor.service.store.strip_targets_for_test(id);
 }
@@ -164,7 +197,7 @@ async fn a_repeat_of_a_finished_invoke_task_is_refused_when_its_stored_target_is
         task_invoke(4, "b-repeat", json!({ "q": 1 })),
     )
     .await;
-    assert_refused(&repeat, "withheld");
+    assert_absent(&repeat, TOOL);
     assert_ne!(repeat.pointer("/result/taskId"), Some(&json!(id)));
 }
 
@@ -257,7 +290,7 @@ async fn a_finished_code_mode_task_is_refused_on_get_and_on_repeat_once_its_tool
     withhold(&state, TOOL);
     assert_refused(&get_task(&state, "key-a", &id).await, "withheld");
     let repeat = post(&state, "key-a", code_mode_call(7, "b-code")).await;
-    assert_refused(&repeat, "withheld");
+    assert_absent_step(&repeat, TOOL);
     std::assert_eq!(mock.calls(), 1, "no second dispatch: {:?}", mock.seen());
 }
 

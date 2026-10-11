@@ -420,9 +420,16 @@ async fn mik_7332_discovery_1_disclosure_tiers_agree_with_invocation() {
             &ctx(&AllowAll),
         )
         .await;
+    // MIK-8361: refused as a name the backend does not list, not by reason.
+    let gamma_text = gamma_call
+        .as_ref()
+        .ok()
+        .and_then(|answer| answer.pointer("/content/0/text"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     assert!(
-        gamma_call.is_err(),
-        "a profile-denied tool must refuse gateway_execute: {gamma_call:?}"
+        gamma_text.contains(&crate::backend::text_absent("gamma_tool")),
+        "a profile-denied tool must refuse gateway_execute as an absent name: {gamma_call:?}"
     );
 
     let alpha_call = meta
@@ -432,8 +439,12 @@ async fn mik_7332_discovery_1_disclosure_tiers_agree_with_invocation() {
             &ctx(&AllowAll),
         )
         .await;
+    // MIK-8361: a refusal is now an `Ok` tool error too, so "ran" is an
+    // answer that is not one.
     assert!(
-        alpha_call.is_ok(),
+        alpha_call
+            .as_ref()
+            .is_ok_and(|answer| answer["isError"] != Value::Bool(true)),
         "the tool visible at L0 must actually run: {alpha_call:?}"
     );
 }

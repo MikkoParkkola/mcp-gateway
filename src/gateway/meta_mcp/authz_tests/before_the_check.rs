@@ -58,10 +58,13 @@ async fn authz_12_refused_caller_is_not_served_a_cached_result() {
     let refused = meta
         .invoke_tool(&invoke_args("alpha", "read"), None, &ctx(&DenyAll))
         .await;
-    let refusal = refused.expect_err("a refused caller must not be served the cached payload");
+    // MIK-8361: the refusal answers as the absent name, never the cached
+    // payload (`ok`) and never by its reason.
+    let answer = refused.expect("a refused target answers as an absent name");
+    assert_absent_answer(&answer, "read");
     assert!(
-        matches!(refusal, crate::Error::Forbidden { .. }),
-        "and must be refused AS a denial, not fail for some other reason: {refusal:?}"
+        !answer.to_string().contains("\"ok\""),
+        "a refused caller must not be served the cached payload: {answer}"
     );
     assert_eq!(
         calls.load(Ordering::SeqCst),

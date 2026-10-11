@@ -109,8 +109,9 @@ providers:
     let text = result
         .expect_err("a mismatched identity must not receive a result")
         .to_string();
-    assert!(text.contains("Identity grant denied"), "{text}");
-    assert!(text.contains("OwnerMismatch"), "{text}");
+    // MIK-8361: refused as an undefined capability; the grant reason
+    // (`OwnerMismatch`) is the audit log's, never the caller's.
+    assert_eq!(text, "Tool not found: 'calendar_read'", "{text}");
 }
 
 #[tokio::test]

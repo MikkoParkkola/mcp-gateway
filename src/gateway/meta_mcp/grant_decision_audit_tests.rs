@@ -148,7 +148,14 @@ async fn grant_denial_writes_decision_record() {
     );
 
     let answer = call(&meta, &api_key("alice"), "gateway_invoke", invoke_args()).await;
-    assert_eq!(error_code(&answer), Some(-32004), "{answer}");
+    // MIK-8361: the client reads an undefined capability (-32001); the
+    // decision record below still carries the denial and its reason.
+    assert_eq!(error_code(&answer), Some(-32001), "{answer}");
+    assert_eq!(
+        answer.pointer("/error/message").and_then(Value::as_str),
+        Some(format!("Tool not found: '{PERSONAL}'").as_str()),
+        "{answer}"
+    );
 
     let invocation = only(invocations(&dir), "invocation record");
     let record = only(decisions(&dir), "decision record");
@@ -349,7 +356,11 @@ async fn no_logger_changes_nothing() {
         .invoke_tool(&invoke_args(), Some("d3a-session"), &context(&who))
         .await
         .expect_err("an ungranted call is refused");
-    assert_eq!(refusal.to_rpc_code(), -32004, "{refusal}");
+    // MIK-8361: as an undefined capability, not by the grant rule.
+    assert!(
+        matches!(&refusal, crate::Error::ToolNotFound(tool) if tool == PERSONAL),
+        "{refusal}"
+    );
 
     assert_eq!(
         super::grant_audit::grant_bookkeeping_for_test(),

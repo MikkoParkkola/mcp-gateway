@@ -37,13 +37,13 @@ async fn a_repeat_after_the_tool_is_withheld_is_refused_not_answered_from_the_ta
 
     withhold(&state);
     let repeat = post(&state, "key-a", call(2451)).await;
-    let text = repeat.to_string();
+    // MIK-8361: refused as a name the backend does not list, never answered
+    // with the stored task (no task handle, no stored result).
+    super::stored_result_policy::assert_absent(&repeat, TOOL);
     assert!(
-        text.contains("withheld")
-            && repeat.get("error").is_some()
-            && repeat.get("result").is_none(),
-        "a repeat after the tool was withheld must be refused, not answered \
-         with the stored task: {repeat}"
+        !repeat.to_string().contains(&id),
+        "a repeat after the tool was withheld must not be answered with the \
+         stored task: {repeat}"
     );
     std::assert_eq!(
         mock.calls(),

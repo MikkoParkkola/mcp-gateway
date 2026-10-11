@@ -578,6 +578,28 @@ impl super::MetaMcp {
         }
     }
 
+    /// Whether a `gateway_invoke` target on a registered backend is one the
+    /// gate answers as absent: refused by the caller's invocation rules, or
+    /// withheld by its descriptor or schema. An unregistered backend is not
+    /// (MIK-8387).
+    fn withheld_invoke_target(
+        &self,
+        arguments: &Value,
+        session: Option<&str>,
+        caller: &super::MetaMcpCallerContext<'_>,
+    ) -> bool {
+        let (Ok(server), Ok(tool)) = (
+            extract_required_str(arguments, "server"),
+            extract_required_str(arguments, "tool"),
+        ) else {
+            return false;
+        };
+        self.backends.get(server).is_some_and(|backend| {
+            self.may_invoke(server, tool, caller.scope(), session).is_err()
+                || backend.blocked_tool_refusal(None, tool).is_some()
+        })
+    }
+
     /// Complete policy and nonce checks once, before outer execution admission
     /// can parse arguments or return a retained result.
     pub(crate) fn prepare_signing_invocation(
@@ -590,7 +612,13 @@ impl super::MetaMcp {
         if context.origin == Origin::Unsigned || !self.signing_enabled() {
             return Ok(());
         }
-        if context.origin == Origin::GatewayInvoke {
+        // MIK-8361 amendment A1: a target the caller cannot see is judged here
+        // as a missing name is, so neither its reason nor the order of its
+        // nonce refusal tells the two apart. The route stage answers it
+        // absent; admission re-runs the policy before any replay.
+        if context.origin == Origin::GatewayInvoke
+            && !self.withheld_invoke_target(arguments, session, caller)
+        {
             self.check_invocation_policy(arguments, session, caller)?;
         }
         // A raw nonce that never became a string is refused here, before the

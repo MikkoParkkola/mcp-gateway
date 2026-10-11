@@ -615,5 +615,6 @@ async fn a_denied_agent_is_not_served_the_cached_body() {
         !text.contains(&body),
         "an agent the grant refuses was handed the cached answer: {text}"
     );
-    assert!(text.contains("Identity grant denied"), "{text}");
+    // MIK-8361: refused as an undefined capability, not by the grant rule.
+    assert_eq!(text, "Tool not found: 'calendar_read'", "{text}");
 }

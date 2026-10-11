@@ -39,6 +39,21 @@ use crate::transport::Transport;
 mod fixture;
 pub(in crate::gateway::meta_mcp) use fixture::{counted_backend, ctx, invoke_args};
 
+/// MIK-8361: a denied target answers exactly as a name the backend does not
+/// list: a tool result with `isError` and text A naming `tool`, never the
+/// refusal's reason. Panics with the answer when it is anything else.
+fn assert_absent_answer(answer: &Value, tool: &str) {
+    let text = answer
+        .pointer("/content/0/text")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        answer.get("isError") == Some(&Value::Bool(true))
+            && text.contains(&crate::backend::text_absent(tool)),
+        "expected the absent-name answer for `{tool}`: {answer}"
+    );
+}
+
 /// Outer envelope a client sends: `tools/call` / `gateway_invoke` with the
 /// nonce on `params.arguments`, the same shape `handlers.rs` captures.
 fn captured_external_gateway_invoke(

@@ -23,6 +23,16 @@ struct Seen {
     calls: usize,
 }
 
+/// MIK-8361: a target the caller may not see answers as a name the backend
+/// does not list: a tool error carrying text A for `tool`, no `error`.
+fn answered_absent(body: &Value, tool: &str) -> bool {
+    body.get("error").is_none()
+        && body["result"]["isError"] == true
+        && body["result"]["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains(&crate::backend::text_absent(tool)))
+}
+
 fn seen(fx: &Fx, body: &Value) -> Seen {
     Seen {
         refused: body["error"]["code"].as_i64(),
@@ -125,7 +135,12 @@ async fn armed_row(control: &str, route: Route) -> Seen {
                 .session_profiles()
                 .set_profile(&session, "no-read");
             let body = call(&fx, route, Some(&session)).await;
-            seen(&fx, &body)
+            // MIK-8361: the profile's refusal is the absent name's answer
+            // (code 0 here, as a refusal with no wire code).
+            Seen {
+                refused: answered_absent(&body, "read").then_some(0),
+                calls: fx.calls.load(Ordering::SeqCst),
+            }
         }
         "error_budget" => {
             use crate::kill_switch::budget::{CapabilityErrorBudgetConfig, ErrorBudgetConfig};
@@ -274,8 +289,9 @@ async fn t8_already_shared_admission_refusals_hold_on_both_routes() {
         for direct in [false, true] {
             let fx = fixture(Answer::Ok, |_| {}).await;
             let body = shared_call(&fx, direct, key, tool, json!({})).await;
+            // MIK-8361: a refusal is an `error`, or the absent name's answer.
             assert!(
-                body.get("error").is_some(),
+                body.get("error").is_some() || answered_absent(&body, tool),
                 "{control} direct={direct}: {body}"
             );
             assert_eq!(

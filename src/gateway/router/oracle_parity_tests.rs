@@ -5,7 +5,6 @@
 //! rows S1-S6. The twins are `oracle_parity_fixture`'s; each panics
 //! "premise" when its setup does not hold.
 
-use serde_json::json;
 
 use super::oracle_parity_fixture::{
     Answered, Args, Entry, List, Reason, STATE_ENTRIES, Side, State, TOOL, Twin, assert_cells,

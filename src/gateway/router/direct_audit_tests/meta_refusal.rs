@@ -14,6 +14,22 @@ fn meta_invoke(server: &str, tool: &str, args: &Value) -> (String, Value) {
     (body.to_string(), arguments)
 }
 
+/// MIK-8361: a target the caller may not see answers on `/mcp` exactly as a
+/// name the backend does not list: 200, a tool error carrying text A, no
+/// JSON-RPC `error`. The record keeps the real reason.
+fn assert_absent_answer(status: StatusCode, answer: &Value, tool: &str) {
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert!(answer.get("error").is_none(), "{answer}");
+    assert_eq!(answer["result"]["isError"], true, "{answer}");
+    let text = answer["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        text.contains(&crate::backend::text_absent(tool)),
+        "{answer}"
+    );
+}
+
 fn hash_of(value: &Value) -> String {
     format!("sha256:{}", crate::hashing::canonical_json_sha256(value))
 }
@@ -43,8 +59,7 @@ async fn meta_precheck_scope_refusal_is_denied_record() {
     .await;
     let (body, arguments) = meta_invoke("beta", "t", &json!({"q": 1}));
     let (status, answer) = post_to(&fx, "/mcp", &body, &Caller::Key).await;
-    assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
-    assert_eq!(answer["error"]["code"], -32003, "{answer}");
+    assert_absent_answer(status, &answer, "t");
 
     let entry = only_invocation(&fx);
     assert_eq!(entry["route"], "meta", "{entry}");
@@ -128,7 +143,7 @@ async fn meta_refusal_record_correlates_by_trace_id_then_session() {
         }
         let body = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": params});
         let (status, answer) = post_to(&fx, "/mcp", &body.to_string(), &Caller::Key).await;
-        assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
+        assert_absent_answer(status, &answer, "t");
         let entry = only_invocation(&fx);
         assert_eq!(entry["correlation_source"], source, "{entry}");
         if traceparent.is_some() {

@@ -389,30 +389,25 @@ async fn a_stdio_task_runs_under_the_current_tool_policy() {
     let fixture = Box::pin(fixture(Some(denying))).await;
     let sync = dispatch(&fixture, modern_call(1, DENIED, "u5-denied-sync", false)).await;
     let refused = dispatch(&fixture, modern_call(2, DENIED, "u5-denied", true)).await;
-    assert_eq!(refused["error"]["code"], -32600, "{refused}");
-    assert_eq!(
-        refused["error"]["message"],
-        format!(
-            "Protocol error: Tool '{DENIED}' on server '{BACKEND}' is blocked by security policy"
-        ),
-        "not refused by the tool policy at submit: {refused}"
-    );
-    assert_eq!(
-        refused["error"]["data"]["gateway_http_status"], 403,
-        "{refused}"
+    // MIK-8361: refused at submit as a name the backend does not list, not
+    // by the policy, exactly as its synchronous call is, and no task.
+    let text = refused
+        .pointer("/result/content/0/text")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        refused.get("error").is_none()
+            && refused["result"]["isError"] == true
+            && text.contains(&crate::backend::text_absent(DENIED)),
+        "not refused as an absent name at submit: {refused}"
     );
     assert!(
         refused.pointer("/result/taskId").is_none(),
         "a task was made for a denied tool: {refused}"
     );
     assert_eq!(
-        refused.pointer("/error/code"),
-        sync.pointer("/error/code"),
-        "{refused}"
-    );
-    assert_eq!(
-        refused.pointer("/error/message"),
-        sync.pointer("/error/message"),
+        refused.pointer("/result/content"),
+        sync.pointer("/result/content"),
         "{refused}"
     );
     assert_eq!(

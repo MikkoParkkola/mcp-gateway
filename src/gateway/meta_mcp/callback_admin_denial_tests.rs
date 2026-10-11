@@ -53,8 +53,9 @@ fn records(dir: &tempfile::TempDir) -> Vec<Value> {
         .collect()
 }
 
-/// CB-T1 (CBERR.1). The refusal is `Forbidden` in the admin-denial shape
-/// (-32600, 403) that admin-only tools already use; an admin is not refused.
+/// CB-T1 (CBERR.1). The non-admin is refused; MIK-8361: as a capability the
+/// backend does not define (`ToolNotFound`), never by the admin rule's
+/// reason. An admin is not refused.
 #[tokio::test]
 async fn non_admin_callback_registration_is_refused_as_forbidden() {
     let dir = tempfile::tempdir().unwrap();
@@ -66,16 +67,10 @@ async fn non_admin_callback_registration_is_refused_as_forbidden() {
         .invoke_tool(&args(), None, &caller)
         .await
         .expect_err("a non-admin caller must not register a callback");
-    let crate::Error::Forbidden {
-        code,
-        status,
-        ref message,
-    } = err
-    else {
-        panic!("expected Error::Forbidden, got {err:?}");
-    };
-    assert_eq!((code, status), (-32600, 403), "{message}");
-    assert!(message.contains("admin credential"), "{message}");
+    assert!(
+        matches!(&err, crate::Error::ToolNotFound(tool) if tool == "register_webhook"),
+        "expected the undefined-capability answer, got {err:?}"
+    );
 
     // Control: the guard is what differs. An admin passes it and fails later,
     // at the network, with something that is not a refusal.
@@ -85,7 +80,10 @@ async fn non_admin_callback_registration_is_refused_as_forbidden() {
     };
     let outcome = meta.invoke_tool(&args(), None, &admin).await;
     assert!(
-        !matches!(outcome, Err(crate::Error::Forbidden { .. })),
+        !matches!(
+            outcome,
+            Err(crate::Error::Forbidden { .. } | crate::Error::ToolNotFound(_))
+        ),
         "an admin must not be refused: {outcome:?}"
     );
 }
