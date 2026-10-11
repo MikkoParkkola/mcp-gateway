@@ -392,6 +392,47 @@ impl CollusionDetector {
         }
     }
 
+    /// STUB (`MIK-8066` 2b red): the answer text cap P3 reads under. A no-op
+    /// until the view lands, so a row using it fails at its own assertion.
+    pub(crate) fn set_answer_text_cap(&self, bytes: usize) {
+        let _ = (self, bytes);
+    }
+
+    /// STUB (2b red): the view's entry cap A.
+    pub(crate) fn set_view_entry_cap(&self, entries: usize) {
+        let _ = (self, entries);
+    }
+
+    /// STUB (2b red): `VIEW_BYTES` held by live views.
+    pub(crate) fn view_bytes(&self) -> usize {
+        let _ = self;
+        0
+    }
+
+    /// STUB (2b red): plans whose answer took the unread path (D6).
+    pub(crate) fn unread_plans(&self) -> u64 {
+        let _ = self;
+        0
+    }
+
+    /// STUB (2b red): the `VIEW_BYTES` charge `answer`'s view would take,
+    /// computed from the view's length, not from the budget counter.
+    pub(crate) fn view_charge_of(&self, answer: &serde_json::Value) -> usize {
+        let _ = (self, answer);
+        0
+    }
+
+    /// STUB (2b red): `VIEW_BYTES` lowered for this detector.
+    pub(crate) fn set_view_budget(&self, bytes: usize) {
+        let _ = (self, bytes);
+    }
+
+    /// STUB (2b red): views refused for lack of `VIEW_BYTES` (D6).
+    pub(crate) fn view_budget_refusals(&self) -> u64 {
+        let _ = self;
+        0
+    }
+
     /// Reserve no headroom on this detector (the abandon path, made
     /// reachable).
     pub(crate) fn zero_headroom(&self) {

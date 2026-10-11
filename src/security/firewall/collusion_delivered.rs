@@ -107,3 +107,19 @@ impl<'v> Delivered<'v> {
         })
     }
 }
+
+#[cfg(test)]
+impl Delivered<'_> {
+    /// STUB (`MIK-8066` 2b red): whether this answer was read as a bounded
+    /// view (D1). Today every answer is read leaf by leaf.
+    pub(crate) fn is_view(&self) -> bool {
+        let _ = self;
+        false
+    }
+
+    /// STUB (2b red): whether this answer took the unread path (D6).
+    pub(crate) fn is_unread(&self) -> bool {
+        let _ = self;
+        false
+    }
+}

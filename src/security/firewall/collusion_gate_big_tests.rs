@@ -19,7 +19,7 @@ use super::{CollusionAction, CollusionConfig, RelayCaller};
 use crate::security::firewall::{Firewall, FirewallConfig, ScanType};
 
 /// Relay detection on, observing, with production sampling.
-fn firewall() -> Firewall {
+pub(super) fn firewall() -> Firewall {
     let config = FirewallConfig {
         collusion: CollusionConfig {
             action: CollusionAction::Observe,
@@ -32,7 +32,7 @@ fn firewall() -> Firewall {
 }
 
 /// Distinct filler prose of about `chars` characters.
-fn filler(seed: u64, chars: usize) -> String {
+pub(super) fn filler(seed: u64, chars: usize) -> String {
     let mut out = String::new();
     let mut i = seed;
     while out.len() < chars {
@@ -44,12 +44,12 @@ fn filler(seed: u64, chars: usize) -> String {
     out
 }
 
-fn deliver(fw: &Firewall, who: &str, text: &str) {
+pub(super) fn deliver(fw: &Firewall, who: &str, text: &str) {
     let result = json!({"content": [{"type": "text", "text": text}]});
     fw.record_delivery(RelayCaller::Keyed(who), "alpha", "read", &result);
 }
 
-fn relays(fw: &Firewall, who: &str, text: &str) -> bool {
+pub(super) fn relays(fw: &Firewall, who: &str, text: &str) -> bool {
     let params = json!({"name": "send", "arguments": {"text": text}});
     fw.check_relay(
         RelayCaller::Keyed(who),
@@ -64,7 +64,7 @@ fn relays(fw: &Firewall, who: &str, text: &str) -> bool {
 }
 
 /// 2,000 chars of `text` from `at`.
-fn run(text: &str, at: usize) -> &str {
+pub(super) fn run(text: &str, at: usize) -> &str {
     &text[at..at + 2_000]
 }
 
@@ -213,10 +213,10 @@ fn a_rejoined_step_inside_an_answer_over_the_bound_is_excused() {
     );
 }
 
-const SOURCE: &str = "alpha:read";
+pub(super) const SOURCE: &str = "alpha:read";
 
 /// A plan step of `chars` of `seed` filler, as one content item.
-fn step_of(seed: u64, chars: usize) -> (String, Value) {
+pub(super) fn step_of(seed: u64, chars: usize) -> (String, Value) {
     let text = filler(seed, chars);
     let step = json!({"content": [{"type": "text", "text": text}]});
     (text, step)
@@ -406,7 +406,7 @@ fn an_overfull_selection_abandons_the_sketch() {
 }
 
 /// The description of `who`'s relay refusal for `text`, if refused.
-fn refusal(fw: &Firewall, who: &str, text: &str) -> Option<String> {
+pub(super) fn refusal(fw: &Firewall, who: &str, text: &str) -> Option<String> {
     let params = json!({"name": "send", "arguments": {"text": text}});
     fw.check_relay(
         RelayCaller::Keyed(who),

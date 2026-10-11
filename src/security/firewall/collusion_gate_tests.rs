@@ -20,6 +20,8 @@ mod big;
 mod excuse;
 #[path = "collusion_gate_middle_tests.rs"]
 mod middle;
+#[path = "collusion_gate_p3_tests.rs"]
+mod p3;
 #[path = "collusion_gate_plan_tests.rs"]
 mod plan;
 
