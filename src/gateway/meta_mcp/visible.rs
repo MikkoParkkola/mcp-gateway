@@ -69,7 +69,13 @@ impl MetaMcp {
         if self.descriptor_blocked(server, &tool.name) {
             return Visibility::Withheld(Withholding::Descriptor);
         }
-        if !input_schema_is_structurally_valid(&tool.input_schema) {
+        // The schema reason is a backend's: a capability is validated when it
+        // loads, and a webhook-only one carries a null schema by design, so
+        // only a tool from a registry backend is judged here, as
+        // `surfaced_schema_withheld` judges it.
+        if self.backends.get(server).is_some()
+            && !input_schema_is_structurally_valid(&tool.input_schema)
+        {
             return Visibility::Withheld(Withholding::Schema);
         }
         self.invokable(server, &tool.name, scope, session_id)
