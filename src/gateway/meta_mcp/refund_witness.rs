@@ -23,4 +23,8 @@ impl RefundWitness {
     pub(crate) fn at_capture() -> Self {
         Self(())
     }
+
+    /// Use the witness up: at a refund site that gives the nonce back, or
+    /// where something is about to act and the nonce must stay spent.
+    pub(crate) fn spend(self) {}
 }

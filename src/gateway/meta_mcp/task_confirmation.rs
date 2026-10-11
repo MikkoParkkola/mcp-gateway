@@ -169,6 +169,7 @@ impl MetaMcp {
     /// Called after every existing authorization, admin and firewall check and
     /// before task admission, so a refusal here has cost the caller nothing: no
     /// task handle, no backend call, no reserved key.
+    #[cfg(test)]
     pub(crate) async fn confirm_destructive_task(
         &self,
         request: &TaskConfirmationRequest<'_>,
@@ -583,7 +584,9 @@ impl MetaMcp {
         // The spend acts: from here this call may never give its nonce back
         // (MIK-8353), whatever it answers. Dropped before the await, so a
         // cancelled consume keeps it spent too.
-        drop(witness);
+        if let Some(witness) = witness {
+            witness.spend();
+        }
         if !self
             .continuation
             .ledger()

@@ -108,7 +108,11 @@ pub(crate) async fn mcp_x14_consumed_then_refused() -> McpConsumedThenRefused {
     });
     let fx = super::direct_guards_fixture::with_transport(
         transport,
-        super::direct_guards_fixture::fixture_hardened_signed_built(Answer::Ok, true, surfacing),
+        Box::pin(super::direct_guards_fixture::fixture_hardened_signed_built(
+            Answer::Ok,
+            true,
+            surfacing,
+        )),
     )
     .await;
     warm(&fx).await;

@@ -318,13 +318,14 @@ pub(crate) async fn fixture_built_on(
     transport: Arc<dyn Transport>,
     build: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Fx {
-    with_transport(transport, fixture_inner(Answer::Ok, false, build)).await
+    with_transport(transport, Box::pin(fixture_inner(Answer::Ok, false, build))).await
 }
 
-/// Builds `fixture` (any of this module's fixtures) over `transport`.
+/// Builds `fixture` (any of this module's fixtures) over `transport`. Boxed,
+/// so the caller's future holds a pointer, not the fixture's whole state.
 pub(crate) async fn with_transport(
     transport: Arc<dyn Transport>,
-    fixture: impl std::future::Future<Output = Fx>,
+    fixture: std::pin::Pin<Box<impl std::future::Future<Output = Fx>>>,
 ) -> Fx {
     TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
     let fx = fixture.await;

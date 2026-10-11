@@ -537,7 +537,7 @@ impl super::MetaMcp {
         caller: &super::MetaMcpCallerContext<'_>,
         witness: RefundWitness,
     ) {
-        drop(witness);
+        witness.spend();
         self.release_unasked_nonce(caller);
     }
 
