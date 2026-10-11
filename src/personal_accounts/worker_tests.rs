@@ -578,5 +578,98 @@ fn refresh_runs_its_pre_and_post_provider_store_phases_off_the_caller_thread() {
     });
 }
 
+#[test]
+fn one_held_provider_does_not_block_a_different_account() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), grant()), (&bob(), grant())]);
+
+    multi_thread(async {
+        let fx = start(tmp.path(), 4);
+        let (alice_entered, alice_release) = fx.provider.hold(&alice());
+
+        let held = {
+            let handle = Arc::clone(&fx.handle);
+            tokio::spawn(async move { handle.refresh_if_expired(&alice()).await })
+        };
+        tokio::time::timeout(DEADLOCK, alice_entered)
+            .await
+            .expect("alice provider entered within the deadlock bound")
+            .expect("entry signal");
+
+        let bob_lease = refuse_scaffold(
+            tokio::time::timeout(DEADLOCK, fx.handle.refresh_if_expired(&bob()))
+                .await
+                .expect("bob must not wait behind alice's held provider"),
+            "independent account refresh",
+        )
+        .expect("a different account completes while one provider is held");
+        assert_eq!(bob_lease.account, bob());
+        assert_eq!(fx.provider.call_count(&alice()), 1);
+
+        alice_release
+            .send(())
+            .expect("alice provider still waiting");
+        refuse_scaffold(held.await.expect("alice task"), "held alice refresh")
+            .expect("alice completes once released");
+    });
+}
+
+/// Two concurrent refreshes for ONE account share one provider round trip.
+///
+/// Overlap is proven, not assumed: the first is inside its provider call, and
+/// the second has been polled to Pending. Only then is the one-call assertion
+/// meaningful.
+#[test]
+fn single_flight_survives_the_handle_for_one_account() {
+    let _serial = worker_test_lock();
+    let tmp = tempfile::TempDir::new().expect("root");
+    seed(tmp.path(), &[(&alice(), grant())]);
+
+    multi_thread(async {
+        let fx = start(tmp.path(), 4);
+        let (alice_entered, alice_release) = fx.provider.hold(&alice());
+
+        let first = {
+            let handle = Arc::clone(&fx.handle);
+            tokio::spawn(async move { handle.refresh_if_expired(&alice()).await })
+        };
+        tokio::time::timeout(DEADLOCK, alice_entered)
+            .await
+            .expect("the first refresh entered the provider")
+            .expect("entry signal");
+
+        let (second_fut, second_pending) = first_pending({
+            let handle = Arc::clone(&fx.handle);
+            async move { handle.refresh_if_expired(&alice()).await }
+        });
+        let second = tokio::spawn(second_fut);
+        // The waiter is genuinely parked inside the service, not merely spawned.
+        tokio::time::timeout(DEADLOCK, second_pending)
+            .await
+            .expect("the second refresh was polled to Pending")
+            .expect("pending signal");
+
+        assert_eq!(
+            fx.provider.call_count(&alice()),
+            1,
+            "two overlapping refreshes for one account must share one round trip"
+        );
+
+        alice_release
+            .send(())
+            .expect("the held provider is still waiting");
+        let a = refuse_scaffold(first.await.expect("first"), "first refresh").expect("first lease");
+        let b =
+            refuse_scaffold(second.await.expect("second"), "second refresh").expect("second lease");
+        assert_eq!(a, b, "both waiters receive the same rotated lease");
+        assert_eq!(
+            fx.provider.call_count(&alice()),
+            1,
+            "the wrapper must not add a second single-flight, nor defeat the existing one"
+        );
+    });
+}
+
 #[path = "worker_tests/concurrency_tests.rs"]
 mod concurrency_tests;
