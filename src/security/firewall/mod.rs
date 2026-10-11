@@ -809,5 +809,6 @@ mod refusal_words_tests;
 #[path = "tenant_audit_tests.rs"]
 mod tenant_audit_tests;
 
+#[cfg(test)]
 #[path = "firewall_tests.rs"]
 mod tests;
