@@ -56,7 +56,15 @@ impl Gateway {
         };
 
         let policy = ToolPolicyAuthorizer { tool_policy };
-        let scope = InvokeScope::stdio(&policy);
+        let scope = InvokeScope::stdio(
+            &policy,
+            crate::identity_propagation::CallerProof::new(
+                None,
+                crate::identity_propagation::CallerProvenance::local_transport(
+                    StdioNonce::process(),
+                ),
+            ),
+        );
         let (external_tool, response_targets) = {
             // Response targets are derived here, before dispatch, so live backend
             // state cannot move an accepted call's provenance. The mapping is fed

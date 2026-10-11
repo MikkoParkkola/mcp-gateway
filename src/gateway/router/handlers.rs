@@ -239,6 +239,12 @@ async fn meta_mcp_dispatch(
         api_key_name: client.as_ref().map(|c| c.name.as_str()),
         agent_id: agent_identity.proven_agent_id(),
         grant_subject: grant_subject.as_ref(),
+        caller: crate::identity_propagation::CallerProof::new(
+            verified_identity.as_ref(),
+            crate::identity_propagation::CallerProvenance::classify(
+                client.as_ref().map(|client| client.principal.as_str()),
+            ),
+        ),
     };
     // Every shared backend's one level, set over the gateway's own credential:
     // an operator action. Checked before dispatch so a case variant of the

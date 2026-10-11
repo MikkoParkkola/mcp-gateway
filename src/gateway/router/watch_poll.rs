@@ -189,6 +189,12 @@ impl WatchHost for GatewayWatchHost {
             api_key_name: Some(&client.name),
             agent_id: None,
             grant_subject: None,
+            caller: crate::identity_propagation::CallerProof::new(
+                None,
+                crate::identity_propagation::CallerProvenance::classify(Some(
+                    client.principal.as_str(),
+                )),
+            ),
         };
         state
             .meta_mcp

@@ -183,6 +183,7 @@ pub(super) fn intent(tasks: &StdioTasks, tool: &str, retry: &RetryFields) -> Tas
                 api_key_name: None,
                 agent_id: None,
                 grant_subject: None,
+                caller: crate::identity_propagation::CallerProof::Anonymous,
             },
         })
         .expect("a keyed modern call is accepted")

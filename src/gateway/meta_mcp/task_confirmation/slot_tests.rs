@@ -251,6 +251,7 @@ fn open_scope() -> crate::gateway::meta_mcp::InvokeScope<'static> {
         api_key_name: None,
         agent_id: None,
         grant_subject: None,
+        caller: crate::identity_propagation::CallerProof::Anonymous,
     }
 }
 

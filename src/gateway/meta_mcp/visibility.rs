@@ -44,6 +44,9 @@ pub struct InvokeScope<'a> {
     pub agent_id: Option<crate::security::ProvenAgentId<'a>>,
     /// Verified caller subject for identity-grant evaluation.
     pub grant_subject: Option<&'a GrantSubject>,
+    /// What the caller proved, read only to find its own catalogue slot on a
+    /// per-user backend (MIK-8356). Never an authorization input.
+    pub(crate) caller: crate::identity_propagation::CallerProof<'a>,
 }
 
 impl MetaMcp {
@@ -499,6 +502,7 @@ impl InvokeScope<'static> {
             api_key_name: None,
             agent_id: None,
             grant_subject: None,
+            caller: crate::identity_propagation::CallerProof::Anonymous,
         }
     }
 }
@@ -538,6 +542,7 @@ impl InvokeScope<'static> {
             api_key_name: None,
             agent_id: None,
             grant_subject: None,
+            caller: crate::identity_propagation::CallerProof::Anonymous,
         }
     }
 }
@@ -547,13 +552,20 @@ impl<'a> InvokeScope<'a> {
     /// this process, so it holds the operator's standing; its tools are
     /// judged by the stdio authorizer (the global tool policy), as its calls
     /// are, and identity grants see no subject, which also matches invoke.
-    pub(crate) fn stdio(authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>) -> Self {
+    pub(crate) fn stdio(
+        authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>,
+        caller: crate::identity_propagation::CallerProof<'a>,
+    ) -> Self {
         Self {
             authorizer,
             is_admin: true,
             api_key_name: None,
             agent_id: None,
             grant_subject: None,
+            // The process's one operator spawned it, so its own catalogue slot on
+            // a per-user backend is the sole operator's (MIK-8356). Proven by
+            // the caller, which holds the stdio nonce.
+            caller,
         }
     }
 }

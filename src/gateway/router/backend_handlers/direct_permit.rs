@@ -42,6 +42,7 @@ pub(super) fn mint_permit(
             .as_ref()
             .and_then(crate::security::AgentIdentity::proven_agent_id),
         grant_subject: caller.grant_subject.as_ref(),
+        caller: caller.proof(),
     };
     let empty = Value::Object(serde_json::Map::new());
     let arguments = params.and_then(|p| p.get("arguments")).unwrap_or(&empty);

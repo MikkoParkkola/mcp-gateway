@@ -385,6 +385,7 @@ async fn a_filtered_tools_list_never_fills_a_backend_the_caller_may_not_see() {
         api_key_name: None,
         agent_id: None,
         grant_subject: None,
+        caller: crate::identity_propagation::CallerProof::Anonymous,
     };
     let _ = meta.handle_tools_list_filtered(
         crate::protocol::RequestId::Number(1),
