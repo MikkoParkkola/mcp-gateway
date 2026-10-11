@@ -424,7 +424,15 @@ async fn a_failed_pending_record_refuses_an_idless_http_answer_with_a_null_id() 
     );
     assert!(refused.headers().get("mcp-session-id").is_none());
     let body = body_json(refused).await;
-    assert_eq!(body["id"], Value::Null);
+    assert_eq!(
+        body.get("id"),
+        Some(&Value::Null),
+        "a refusal names a null id: {body}"
+    );
+    assert!(
+        body.get("result").is_none(),
+        "a refusal carries no result: {body}"
+    );
     assert_eq!(
         body["error"]["code"],
         json!(crate::Error::AuditUnavailable.to_rpc_code())
