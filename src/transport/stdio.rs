@@ -740,7 +740,8 @@ mod child_tree;
 mod reaper;
 #[path = "stdio_tree.rs"]
 mod tree;
-#[cfg(test)]
+// Only the unix frame tests build a tree by hand (MIK-8360).
+#[cfg(all(test, unix))]
 use child_tree::ChildTree;
 pub use tree::{CEILING_MAX_FRAME_BYTES, DEFAULT_MAX_FRAME_BYTES, MIN_MAX_FRAME_BYTES};
 use tree::{read_frame, spawn_in_own_tree};
