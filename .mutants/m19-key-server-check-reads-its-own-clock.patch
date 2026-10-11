@@ -1,0 +1,13 @@
+diff --git a/src/key_server/store.rs b/src/key_server/store.rs
+index faa4689c7..56a2a4079 100644
+--- a/src/key_server/store.rs
++++ b/src/key_server/store.rs
+@@ -212,7 +212,7 @@ impl TokenStore for InMemoryTokenStore {
+         };
+         self.by_bearer
+             .get(&bearer)
+-            .is_some_and(|token| !token.is_expired(now))
++            .is_some_and(|token| crate::clock::unix_secs().is_ok_and(|now| !token.is_expired(now)))
+     }
+ 
+     async fn revoke_by_jti(&self, jti: &str) -> bool {

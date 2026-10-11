@@ -1,0 +1,16 @@
+diff --git a/src/oauth/client/refresh_flight.rs b/src/oauth/client/refresh_flight.rs
+index 2af207795..bc61f2cad 100644
+--- a/src/oauth/client/refresh_flight.rs
++++ b/src/oauth/client/refresh_flight.rs
+@@ -334,10 +334,7 @@ impl Exchange {
+         // One clock reading dates the refreshed token. On a clock that cannot
+         // be read nothing is sent: `NotSent` keeps the stored refresh token and
+         // clears the in-flight marker (MIK-8202).
+-        let now = match super::issuance_clock() {
+-            Ok(now) => now,
+-            Err(error) => return Outcome::NotSent(error),
+-        };
++        let now = super::issuance_clock().unwrap_or(0);
+         let response = match self
+             .http
+             .post(&self.endpoint)

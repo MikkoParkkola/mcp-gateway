@@ -1,0 +1,13 @@
+diff --git a/src/events/fanout.rs b/src/events/fanout.rs
+index 8cbb4ba28..884b24d0d 100644
+--- a/src/events/fanout.rs
++++ b/src/events/fanout.rs
+@@ -126,7 +126,7 @@ impl EventsHub {
+                 // The refusal may be the clock's: the row is kept and this
+                 // occurrence, which cannot be dated, is dropped (MIK-8202).
+                 AccessVerdict::Undated => {
+-                    self.count_clock_drop();
++                    self.revoke(&sub).await;
+                     continue;
+                 }
+                 AccessVerdict::Refuses => {

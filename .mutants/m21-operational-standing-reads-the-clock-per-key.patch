@@ -1,0 +1,13 @@
+diff --git a/src/events/operational_source.rs b/src/events/operational_source.rs
+index aea6abfa8..1bad8a368 100644
+--- a/src/events/operational_source.rs
++++ b/src/events/operational_source.rs
+@@ -49,7 +49,7 @@ fn standing(
+     let bearer = services.credentials.bearer_principal.as_deref() == Some(principal);
+     let config = services.live.get();
+     let mut keys = config.auth.api_keys.iter().filter(|k| {
+-        !k.is_expired_at(now)
++        !crate::config::api_key_expired_now(k.expires_at)
+             && k.key_sha256
+                 .as_deref()
+                 .and_then(crate::config::parse_api_key_digest)

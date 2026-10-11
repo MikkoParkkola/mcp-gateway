@@ -1,0 +1,16 @@
+diff --git a/src/events/services.rs b/src/events/services.rs
+index 36e97cb22..03ed7c074 100644
+--- a/src/events/services.rs
++++ b/src/events/services.rs
+@@ -257,10 +257,7 @@ impl Services {
+                     );
+                     // The admission's one wall reading; the monotonic half
+                     // is not a wall clock and is read here (MIK-8202).
+-                    let now = crate::gateway::auth::Now {
+-                        mono: std::time::Instant::now(),
+-                        wall: std::time::SystemTime::from(now),
+-                    };
++                    let now = crate::gateway::auth::Now::read();
+                     dashboard.live_digest(session_sha256, now, &limits)
+                 })
+             }

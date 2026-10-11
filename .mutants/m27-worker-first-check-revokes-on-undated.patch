@@ -1,0 +1,14 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index 83223d4e9..1b1840561 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -66,7 +66,8 @@ impl EventsHub {
+             // The refusal may be the clock's: nothing is revoked or sent, and
+             // the record keeps its date (MIK-8202).
+             AccessVerdict::Undated => {
+-                self.settle(services, &record, clock_unsent(&record)).await;
++                self.revoke(&sub).await;
++                self.settle(services, &record, refusal_retry("access_revoked", &record)).await;
+                 return;
+             }
+             AccessVerdict::Refuses => {

@@ -1,0 +1,16 @@
+diff --git a/src/events/watch_source.rs b/src/events/watch_source.rs
+index 92af81a55..d4ca85186 100644
+--- a/src/events/watch_source.rs
++++ b/src/events/watch_source.rs
+@@ -677,10 +677,7 @@ impl Run {
+                 super::services::AccessVerdict::Refuses => false,
+                 // The refusal may be the clock's: kept, not called for, and
+                 // judged again next poll; the poller is not retired (MIK-8202).
+-                super::services::AccessVerdict::Undated => {
+-                    skipped = true;
+-                    continue;
+-                }
++                super::services::AccessVerdict::Undated => false,
+             };
+             let api_key = row
+                 .api_key

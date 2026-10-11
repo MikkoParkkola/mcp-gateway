@@ -1,0 +1,13 @@
+diff --git a/src/events/operational_source.rs b/src/events/operational_source.rs
+index aea6abfa8..134430829 100644
+--- a/src/events/operational_source.rs
++++ b/src/events/operational_source.rs
+@@ -177,7 +177,7 @@ impl EventSource for OperationalSource {
+         // 1970) is no verdict on the principal: an internal error, never the
+         // -32012 that ends the subscription (MIK-8202).
+         let Ok(now) = crate::clock::utc_now() else {
+-            return Err(RpcError::clock_unreadable());
++            return Err(RpcError::forbidden());
+         };
+         let Some(standing) = self.standing(principal, now) else {
+             return Err(RpcError::forbidden());

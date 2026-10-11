@@ -1,0 +1,13 @@
+diff --git a/src/oauth/client/refresh_flight.rs b/src/oauth/client/refresh_flight.rs
+index 2af207795..383a2e1ce 100644
+--- a/src/oauth/client/refresh_flight.rs
++++ b/src/oauth/client/refresh_flight.rs
+@@ -336,7 +336,7 @@ impl Exchange {
+         // clears the in-flight marker (MIK-8202).
+         let now = match super::issuance_clock() {
+             Ok(now) => now,
+-            Err(error) => return Outcome::NotSent(error),
++            Err(error) => return Outcome::Uncertain(error),
+         };
+         let response = match self
+             .http

@@ -1,0 +1,13 @@
+diff --git a/src/events/admin.rs b/src/events/admin.rs
+index 8002abb1d..19f44c56e 100644
+--- a/src/events/admin.rs
++++ b/src/events/admin.rs
+@@ -136,7 +136,7 @@ impl EventsHub {
+             super::services::AccessVerdict::Admits => {}
+             super::services::AccessVerdict::Refuses => return Err(ReplayRefusal::AccessRevoked),
+             // No verdict on the access: the clock cannot be read (MIK-8202).
+-            super::services::AccessVerdict::Undated => return Err(ReplayRefusal::Unavailable),
++            super::services::AccessVerdict::Undated => return Err(ReplayRefusal::AccessRevoked),
+         }
+         let bytes = base64::engine::general_purpose::STANDARD
+             .decode(&dead.record.body_b64)

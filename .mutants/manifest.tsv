@@ -1,0 +1,17 @@
+head_sha	a8d42a7612ce7ba4c989481e861e623830f59f88
+m15-refresh-refusal-spends-the-token	linux	m15-refresh-refusal-spends-the-token.patch	--lib a_refresh_on_an_unreadable_clock_sends_nothing
+m15b-refresh-sent-at-0	linux	m15b-refresh-sent-at-0.patch	--lib a_refresh_on_an_unreadable_clock_sends_nothing
+m16-code-exchange-sent-at-0	linux	m16-code-exchange-sent-at-0.patch	--lib an_unreadable_clock_sends_no_code_exchange
+m17-e3c-refusal-counted-as-a-failure	linux	m17-e3c-refusal-counted-as-a-failure.patch	--lib a_signer_that_cannot_read_the_clock
+m18-undated-read-as-refuses	linux	m18-undated-read-as-refuses.patch	--lib -- an_expiring_key_refused_by_an_unreadable_clock one_clock_reading_judges_a_key_server_token one_clock_reading_judges_a_dashboard_session
+m19-key-server-check-reads-its-own-clock	linux	m19-key-server-check-reads-its-own-clock.patch	--lib one_clock_reading_judges_a_key_server_token
+m14b-revoke-guard-removed-a2-tree	linux	m14b-revoke-guard-removed-a2-tree.patch	--lib a_revocation_on_an_unreadable_clock_keeps_the_row
+m20-dashboard-check-reads-its-own-clock	linux	m20-dashboard-check-reads-its-own-clock.patch	--lib one_clock_reading_judges_a_dashboard_session
+m21-operational-standing-reads-the-clock-per-key	linux	m21-operational-standing-reads-the-clock-per-key.patch	--lib standing_is_judged_on_one_clock_reading
+m21b-operational-refuses-32012-on-an-unreadable-clock-redraw	linux	m21b-operational-refuses-32012-on-an-unreadable-clock-redraw.patch	--lib standing_is_judged_on_one_clock_reading
+m22-fan-out-revokes-on-undated	linux	m22-fan-out-revokes-on-undated.patch	--lib a_clock_before_the_epoch_delivers_nothing_on_a_live_lease
+m23-watch-reads-undated-as-refused	linux	m23-watch-reads-undated-as-refused.patch	--lib a_watch_row_undated_by_the_clock_is_kept_and_not_called
+m24-worker-re-check-revokes-on-undated-redrawn	linux	m24-worker-re-check-revokes-on-undated-redrawn.patch	--lib an_undated_recheck_after_the_attempt_is_on_record
+m27-worker-first-check-revokes-on-undated	linux	m27-worker-first-check-revokes-on-undated.patch	--lib an_expiring_key_refused_by_an_unreadable_clock
+m25-replay-reads-undated-as-revoked	linux	m25-replay-reads-undated-as-revoked.patch	--lib a_replay_the_clock_cannot_judge
+m28-fan-out-skips-an-undatable-occurrence-uncounted	linux	m28-fan-out-skips-an-undatable-occurrence-uncounted.patch	--lib a_clock_before_the_epoch_delivers_nothing_on_a_live_lease

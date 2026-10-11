@@ -1,0 +1,15 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index 83223d4e9..4a41299c8 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -298,6 +298,10 @@ impl EventsHub {
+         // The signer refused on a clock that cannot be read: nothing was sent,
+         // so nothing is counted and no failure window moves (MIK-8202).
+         if matches!(answer, Err(CallbackFailure::ClockUnreadable)) {
++            if self.runtime.failures.record(&sub.id, false, Instant::now()) {
++                let id = sub.id.clone();
++                self.blocking(move |store| store.suspend(&id)).await;
++            }
+             services.audit_outcome(&ended(CLOCK_UNREADABLE)).await;
+             self.settle(services, record, clock_unsent(record)).await;
+             return;

@@ -1,0 +1,12 @@
+diff --git a/src/events/fanout.rs b/src/events/fanout.rs
+index 8cbb4ba28..b76960338 100644
+--- a/src/events/fanout.rs
++++ b/src/events/fanout.rs
+@@ -93,7 +93,6 @@ impl EventsHub {
+         // nothing is delivered on a lease it cannot date, and the occurrence
+         // is counted as a clock drop (MIK-8202).
+         let Ok(now) = crate::clock::utc_now() else {
+-            self.count_clock_drop();
+             return;
+         };
+         // Matched under the catalogue gate a route refresh holds while it
