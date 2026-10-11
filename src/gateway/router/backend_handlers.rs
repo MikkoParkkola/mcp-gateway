@@ -624,6 +624,7 @@ mod direct_audit;
 mod direct_caller;
 mod direct_dispatch;
 mod direct_failure;
+mod direct_idempotency;
 mod direct_list;
 mod direct_permit;
 mod direct_preflight;
