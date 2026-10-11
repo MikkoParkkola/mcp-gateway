@@ -130,6 +130,7 @@ pub(crate) struct DeliveryDigest {
     pub(super) leaf_hashes: Option<std::sync::Arc<[u64]>>,
     /// `MIK-8066` A5: a view cut's `VIEW_BYTES` charge, held from retention
     /// until this digest is recorded and dropped.
+    #[expect(dead_code, reason = "held for its Drop: releases the cut's charge")]
     cut_charge: Option<super::collusion::budget::ViewCharge>,
     /// A5: a view cut was refused its charge; its record marks the caller's
     /// excuse lost.
@@ -746,21 +747,21 @@ impl DeliveryDigest {
         // A5: the cut is charged from here to record, reserved while any
         // earlier charge is still held. Without room it is thinned to what
         // its record keeps and the excuse is marked lost (fail closed).
-        let (cut, cut_charge, refused) = match detector.views.budget.reserve(cut.len() * 8) {
-            Some(charge) => (cut, Some(charge), false),
-            None => {
-                detector
-                    .views
-                    .cut_refusals
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                telemetry_metrics::counter!(
-                    super::collusion::CAPACITY_METRIC,
-                    "bound" => "plan_view_cut_budget"
-                )
-                .increment(1);
-                let (_, thinned) = CollusionDetector::thinned_for_record(Vec::new(), &cut);
-                (thinned, None, true)
-            }
+        let cut_charge = detector.views.budget.reserve(cut.len() * 8);
+        let refused = cut_charge.is_none();
+        let cut = if refused {
+            detector
+                .views
+                .cut_refusals
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            telemetry_metrics::counter!(
+                super::collusion::CAPACITY_METRIC,
+                "bound" => "plan_view_cut_budget"
+            )
+            .increment(1);
+            CollusionDetector::thinned_for_record(Vec::new(), &cut).1
+        } else {
+            cut
         };
         let cut_lost = self.cut_lost || refused;
         Self {
