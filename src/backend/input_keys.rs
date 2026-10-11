@@ -83,6 +83,27 @@ impl Backend {
         self.config.input_schema_enforcement != InputSchemaEnforcement::Off
     }
 
+    /// What `binding`'s slot already holds about `tool`, with no fetch: the
+    /// MIK-8361 gate's view under `off`, where no call lists the catalogue.
+    /// A name the slot does not hold is `Unknown` (`off` forwards it).
+    pub(crate) fn held_verdict(
+        &self,
+        binding: Option<&str>,
+        tool: &str,
+    ) -> super::CatalogueVerdict {
+        use crate::capability::validator::input_schema_is_structurally_valid;
+        if self.blocked_tool_refusal(binding, tool).is_some() {
+            return super::CatalogueVerdict::Withholds;
+        }
+        match self.get_cached_tool_for(binding, tool) {
+            Some(held) if input_schema_is_structurally_valid(&held.input_schema) => {
+                super::CatalogueVerdict::Offers
+            }
+            Some(_) => super::CatalogueVerdict::Withholds,
+            None => super::CatalogueVerdict::Unknown,
+        }
+    }
+
     /// Whether calls to this backend carry the caller's own credential; see
     /// [`Self::gate_headers`].
     pub(crate) fn propagates_caller_identity(&self) -> bool {

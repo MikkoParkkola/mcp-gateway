@@ -39,7 +39,13 @@ impl MetaMcp {
         tool: &str,
         headers: &[(String, String)],
     ) -> Shared {
-        match backend.catalogue_verdict(None, headers, tool).await {
+        // Under `off` no call lists the catalogue: judged from what is held.
+        let verdict = if backend.checks_membership() {
+            backend.catalogue_verdict(None, headers, tool).await
+        } else {
+            Ok(backend.held_verdict(None, tool))
+        };
+        match verdict {
             Ok(CatalogueVerdict::Offers) => Shared::Offered,
             Ok(CatalogueVerdict::Withholds) if backend.is_blocked_tool(tool) => {
                 Shared::Withheld(Withholding::Descriptor)

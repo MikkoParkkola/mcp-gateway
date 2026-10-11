@@ -72,10 +72,18 @@ pub(super) async fn key_refusal(
     // caller's credential, which is not resolved for it.
     let (slot, lens) = match lens {
         Lens::Withheld => ((None, backend.gate_headers()), Lens::Withheld),
-        Lens::Catalogue => match backend.catalogue_verdict(identity_key, headers, tool).await {
-            Ok(CatalogueVerdict::Withholds) => ((identity_key, headers), Lens::Withheld),
-            _ => ((identity_key, headers), Lens::Catalogue),
-        },
+        Lens::Catalogue => {
+            // Under `off` no call lists the catalogue: judged from what is held.
+            let verdict = if backend.checks_membership() {
+                backend.catalogue_verdict(identity_key, headers, tool).await
+            } else {
+                Ok(backend.held_verdict(identity_key, tool))
+            };
+            match verdict {
+                Ok(CatalogueVerdict::Withholds) => ((identity_key, headers), Lens::Withheld),
+                _ => ((identity_key, headers), Lens::Catalogue),
+            }
+        }
     };
     let checked = backend.catalogue_refusal(slot, tool, arguments, lens);
     match checked.await {
