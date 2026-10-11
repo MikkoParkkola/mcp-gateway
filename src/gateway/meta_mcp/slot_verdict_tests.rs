@@ -315,3 +315,82 @@ async fn c11b_second_step_same_server_resolves_again() {
     );
     assert_eq!(fx.mints(), before + 2, "C11b: resolutions for two steps");
 }
+
+/// L9-call (lead ruling 2026-10-11, design R3.7): an anonymous caller on a
+/// `required` per-user backend has no principal, so no slot can hold its
+/// catalogue: it lacks every tool there. A call by surfaced name and through
+/// `gateway_invoke` answers as a name the gateway does not know (-32601),
+/// with no credential resolved, no slot filled and nothing dispatched. RED
+/// before the ruling's fix: the call fails credential resolution with a
+/// refusal that names the backend.
+#[tokio::test]
+async fn l9_call_anonymous_on_required_backend_answers_as_absent() {
+    let backend = super::slot_verdict_fixture::BACKEND;
+    let invoke = json!({"server": backend, "tool": TOOL, "arguments": {"q": "x"}});
+    for (name, args) in [(TOOL, json!({"q": "x"})), ("gateway_invoke", invoke)] {
+        let fx = per_user(
+            CallerSlot::Valid,
+            &valid(),
+            Warmth::Warm,
+            CLOSED,
+            Surfaced::Yes,
+        );
+        let (mints, lists) = (fx.mints(), fx.caller.lists() + fx.shared.lists());
+        let answer = anonymous_call(&fx.meta, name, args).await;
+        assert_eq!(
+            answer.pointer("/error/code"),
+            Some(&json!(-32601)),
+            "L9-call {name}: not answered as absent: {answer}"
+        );
+        assert_eq!(
+            fx.caller.calls() + fx.shared.calls(),
+            0,
+            "L9-call {name}: dispatched"
+        );
+        assert_eq!(
+            fx.mints(),
+            mints,
+            "L9-call {name}: a credential was resolved"
+        );
+        assert_eq!(
+            fx.caller.lists() + fx.shared.lists(),
+            lists,
+            "L9-call {name}: a slot was filled"
+        );
+    }
+    // By surfaced name, byte-identical to the same call where nothing
+    // surfaces the tool.
+    let twin = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Warm,
+        CLOSED,
+        Surfaced::No,
+    );
+    let absent = anonymous_call(&twin.meta, TOOL, json!({"q": "x"})).await;
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Warm,
+        CLOSED,
+        Surfaced::Yes,
+    );
+    let answer = anonymous_call(&fx.meta, TOOL, json!({"q": "x"})).await;
+    assert_eq!(
+        answer, absent,
+        "L9-call by name: {answer} vs absent {absent}"
+    );
+}
+
+/// `name` called by an anonymous caller.
+async fn anonymous_call(meta: &super::MetaMcp, name: &str, arguments: Value) -> Value {
+    let response = Box::pin(meta.handle_tools_call(
+        crate::protocol::RequestId::Number(1),
+        name,
+        arguments,
+        None,
+        super::anonymous_caller(),
+    ))
+    .await;
+    serde_json::to_value(&response).expect("a response serialises")
+}
