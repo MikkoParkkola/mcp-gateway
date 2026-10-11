@@ -498,3 +498,46 @@ async fn first_run_journey_init_add_serve_search_invoke() {
     assert_ne!(result["isError"], true, "{answer}");
     assert_ne!(answer["result"]["isError"], true, "{answer}");
 }
+
+/// MIK-8044.SURF.2 P2f(e), a guard: the config `init` writes keeps its auth
+/// posture. Tools stay open to a tokenless client on loopback, the dashboard
+/// API needs the generated token, and the solo OAuth principal is granted.
+#[tokio::test]
+async fn init_keeps_its_auth_posture() {
+    let ws = Workspace::new();
+    configure(&ws);
+    let config = mcp_gateway::config::Config::load(Some(&ws.root.join("gateway.yaml")))
+        .expect("the init config loads");
+    assert!(
+        config.auth.grants_single_user_principal(false),
+        "init must keep single_user on"
+    );
+
+    let gateway = Gateway::start(&ws).await;
+    let mut anon = Session::open(&format!("{}/mcp", gateway.url), None).await;
+    let tools = anon.tool_names().await;
+    assert!(
+        tools.iter().any(|t| t == "gateway_invoke"),
+        "a tokenless loopback client lists the tools: {tools:?}"
+    );
+
+    let status = format!("{}/ui/api/status", gateway.url);
+    let http = http_client();
+    let without = http.get(&status).send().await.expect("the gateway answers");
+    assert_eq!(
+        without.status(),
+        reqwest::StatusCode::UNAUTHORIZED,
+        "the dashboard API answered without the token"
+    );
+    let with = http
+        .get(&status)
+        .bearer_auth(admin_token(&ws))
+        .send()
+        .await
+        .expect("the gateway answers");
+    assert_eq!(
+        with.status(),
+        reqwest::StatusCode::OK,
+        "the dashboard API refused the token init generated"
+    );
+}
