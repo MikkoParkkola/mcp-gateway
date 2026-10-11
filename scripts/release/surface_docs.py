@@ -169,6 +169,7 @@ def flow_paths(text: str) -> list[Seg]:
     def mapping(prefix: Seg) -> None:
         nonlocal i
         while i < len(text):
+            start = i
             ws()
             if i >= len(text) or text[i] == "}":
                 i += 1
@@ -182,10 +183,13 @@ def flow_paths(text: str) -> list[Seg]:
             ws()
             if i < len(text) and text[i] == ",":
                 i += 1
+            if i == start:
+                i += 1  # malformed flow: skip the character rather than loop
 
     def sequence(prefix: Seg) -> None:
         nonlocal i
         while i < len(text):
+            start = i
             ws()
             if i >= len(text) or text[i] == "]":
                 i += 1
@@ -194,6 +198,8 @@ def flow_paths(text: str) -> list[Seg]:
             ws()
             if i < len(text) and text[i] == ",":
                 i += 1
+            if i == start:
+                i += 1  # malformed flow: skip the character rather than loop
 
     value(())
     return paths

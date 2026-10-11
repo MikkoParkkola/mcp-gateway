@@ -148,6 +148,11 @@ def test_w14_the_flow_parser_respects_quotes() -> None:
     assert len(errs) == 1 and "cache.default_ttl" in errs[0], errs
 
 
+def test_w18_malformed_flow_terminates() -> None:
+    for bad in ("{a: ]}", "[a, }", "{a: {b: [}", "{: x}", "[[[", "{{{"):
+        sd.flow_paths(bad)  # returns; a parser that stops advancing hangs here
+
+
 def test_w16_a_commented_child_keeps_its_parent() -> None:
     errs = yaml_errs("# cache:\n#   default_ttl: 60s\n")
     assert len(errs) == 1 and "cache.default_ttl" in errs[0], errs
