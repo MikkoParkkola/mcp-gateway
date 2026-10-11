@@ -342,8 +342,8 @@ async fn stdio_missing_playbook_keeps_its_own_answer() {
 /// charges. The denied step charges nothing of its own; the earlier, visible
 /// step is the caller's own call. Counted against the twin [read, nosuch]
 /// under a policy that denies nothing: the same sends, and the next direct
-/// call meets the same budget. The twin's chain sends exactly its first step,
-/// so the equality cannot pass with neither chain running.
+/// call meets the same budget. The twin sends its first step and the next
+/// direct call (2), so the equality cannot pass with neither chain running.
 #[tokio::test]
 async fn stdio_chain_with_a_denied_last_target_charges_no_earlier_target() {
     async fn run(deny: &[&str], chain: &[&str]) -> (Vec<serde_json::Value>, usize) {
@@ -354,7 +354,9 @@ async fn stdio_chain_with_a_denied_last_target_charges_no_earlier_target() {
             ..ToolPolicyConfig::default()
         };
         let params = vec![chain_of(chain), invoke_read()];
-        stdio_params_counted(&audit, budget(1), (None, policy, params)).await
+        // Room for both chain targets the route counts and the next direct
+        // call: a denied step charged beyond a missing one would refuse it.
+        stdio_params_counted(&audit, budget(3), (None, policy, params)).await
     }
     let (hidden, sends) = run(&["write"], &["read", "write"]).await;
     let (missing, twin_sends) = run(&[], &["read", "nosuch"]).await;
@@ -370,7 +372,8 @@ async fn stdio_chain_with_a_denied_last_target_charges_no_earlier_target() {
     let (named, twin_named) = (hidden_text.matches("write").count(), missing_text.matches("nosuch").count());
     assert!(
         named >= 1 && named == twin_named,
-        "premise: each answer names its own step, as often ({named} vs {twin_named})"
+        "premise: each answer names its own step, as often ({named} vs {twin_named}): \
+         {hidden_text} / {missing_text}"
     );
     assert_eq!(
         hidden_text.replace("write", "<tool>"),
@@ -378,8 +381,13 @@ async fn stdio_chain_with_a_denied_last_target_charges_no_earlier_target() {
         "the denied step's answer differs from a missing step's"
     );
     assert_eq!(
-        twin_sends, 1,
-        "premise: the twin's chain sends exactly its first step: {missing:?}"
+        twin_sends, 2,
+        "premise: the twin sends its chain's first step and the next direct call: {missing:?}"
+    );
+    assert!(
+        missing[1].get("error").is_none(),
+        "premise: the twin's next direct call is within the budget: {}",
+        missing[1]
     );
     assert_eq!(
         sends, twin_sends,

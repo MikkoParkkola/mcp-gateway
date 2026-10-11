@@ -196,6 +196,10 @@ impl MetaMcp {
             // Even an unwritable record answers so: the call dispatches
             // nothing (D3-a narrowed, lead ruling 2026-10-11).
             Some(cap) if cap.name == server => Err(Error::ToolNotFound(tool.to_string())),
+            // No gate answers a backend that is not registered: its refusal
+            // stays the strict one, recorded fail-closed (MIK-8387 owns its
+            // parity).
+            _ if self.backends.get(server).is_none() => Err(refusal),
             _ => {
                 // Recorded before every later reader (MIK-8356's caller
                 // verdict included), so a policy-refused target resolves no

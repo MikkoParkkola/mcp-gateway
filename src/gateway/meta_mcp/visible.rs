@@ -284,6 +284,9 @@ impl MetaMcp {
 pub(crate) struct VisibilityMemo(
     parking_lot::Mutex<std::collections::HashMap<(String, String), Visibility>>,
     parking_lot::Mutex<std::collections::HashMap<(String, String), Carried>>,
+    // MIK-8361: the code the route stage refused a requested target with,
+    // for the one record the call's answer writes.
+    parking_lot::Mutex<std::collections::HashMap<(String, String), i32>>,
 );
 
 /// A caller verdict's resolution, waiting for the first invocation on its
@@ -360,6 +363,25 @@ pub(crate) fn take_carried(server: &str, tool: &str) -> Option<Carried> {
     let key = (server.to_owned(), tool.to_owned());
     VISIBILITY_MEMO
         .try_with(|memo| memo.1.lock().remove(&key))
+        .ok()
+        .flatten()
+}
+
+/// MIK-8361: keep the code the route stage refused `(server, tool)` with, so
+/// the answer's own record names it (one record per call). Outside a
+/// request scope it is dropped.
+pub(crate) fn note_denial_code(server: &str, tool: &str, code: i32) {
+    let key = (server.to_owned(), tool.to_owned());
+    let _ = VISIBILITY_MEMO.try_with(|memo| {
+        memo.2.lock().entry(key).or_insert(code);
+    });
+}
+
+/// The code [`note_denial_code`] kept for `(server, tool)`, if any.
+pub(crate) fn denial_code(server: &str, tool: &str) -> Option<i32> {
+    let key = (server.to_owned(), tool.to_owned());
+    VISIBILITY_MEMO
+        .try_with(|memo| memo.2.lock().get(&key).copied())
         .ok()
         .flatten()
 }

@@ -305,16 +305,17 @@ fn normalised(body: &str, tool: &str) -> (String, usize) {
     (body.replace(tool, "<tool>"), body.matches(tool).count())
 }
 
-/// F5(a) (MIK-8361 ruling 1, E1): a step route authorize refuses resolves no
-/// credential and asks the backend nothing beyond what a missing step does.
-/// The chain [note, run_command] (run_command on the default deny list) is
-/// counted against the twin [note, nosuch] (a name the catalogue lacks): the
-/// same resolutions, requests and sends. The twin resolves exactly once (note's
-/// own credential), so the equality cannot pass with both resolving nothing or
-/// both resolving extra; run_command's own share is zero. Guard: kills M18.
+/// F5(a) (MIK-8361 lead ruling 2026-10-12, per-user class; guard, kills
+/// M18): a step route authorize refuses (run_command, on the default deny
+/// list) resolves no credential and sends nothing of its own. [note,
+/// run_command] is measured against [note] alone: the same mints and sends,
+/// so run_command's share is zero. The caller sees the status and body the
+/// twin [note, nosuch] gets (tool name factored out). Labelled residual
+/// (design A4): on this per-user backend the twin's caller-slot fill mints and
+/// lists where the withheld name does neither, which the caller cannot see.
 #[tokio::test]
 async fn g3_f5a_route_authorize_refusal_resolves_nothing() {
-    async fn chain(second: &str) -> ((StatusCode, Value), usize, usize, usize) {
+    async fn chain(second: Option<&str>) -> ((StatusCode, Value), usize, usize) {
         let gw = gateway(
             CallerSlot::Valid,
             &valid(),
@@ -323,25 +324,27 @@ async fn g3_f5a_route_authorize_refusal_resolves_nothing() {
             |_| {},
         )
         .await;
+        let mut steps = vec![json!({"tool": format!("{BACKEND}:note"), "arguments": {"q": "x"}})];
+        if let Some(second) = second {
+            steps.push(json!({"tool": format!("{BACKEND}:{second}"), "arguments": {}}));
+        }
         let body = json!({"jsonrpc": "2.0", "id": 11, "method": "tools/call",
-        "params": {"name": "gateway_execute", "arguments": {"chain": [
-            {"tool": format!("{BACKEND}:note"), "arguments": {"q": "x"}},
-            {"tool": format!("{BACKEND}:{second}"), "arguments": {}}
-        ]}}});
+        "params": {"name": "gateway_execute", "arguments": {"chain": steps}}});
         let answer = post_as_alpha(&gw.router, "/mcp", &body).await;
-        (answer, gw.mints(), gw.requests(), gw.dispatched())
+        (answer, gw.mints(), gw.dispatched())
     }
-    let (hidden, mints, requests, sent) = chain("run_command").await;
-    let (missing, twin_mints, twin_requests, twin_sent) = chain("nosuch").await;
-    assert_eq!(
-        twin_mints, 1,
-        "premise: the twin resolves exactly once, for note: {missing:?}"
+    let (hidden, mints, sent) = chain(Some("run_command")).await;
+    let (missing, _, _) = chain(Some("nosuch")).await;
+    let (alone, alone_mints, alone_sent) = chain(None).await;
+    assert!(
+        alone_mints >= 1 && alone_sent >= 1,
+        "premise: the visible step alone mints and sends: {alone:?}"
     );
     let (hidden_body, named) = normalised(&hidden.1.to_string(), "run_command");
     let (missing_body, twin_named) = normalised(&missing.1.to_string(), "nosuch");
-    assert!(
-        named >= 1 && named == twin_named,
-        "premise: each answer names its own step, as often ({named} vs {twin_named}): {hidden:?} / {missing:?}"
+    assert_eq!(
+        named, twin_named,
+        "premise: each answer names its own step as often: {hidden:?} / {missing:?}"
     );
     assert_eq!(
         (hidden.0, hidden_body),
@@ -349,13 +352,9 @@ async fn g3_f5a_route_authorize_refusal_resolves_nothing() {
         "F5(a): the hidden step's answer differs from a missing step's"
     );
     assert_eq!(
-        mints, twin_mints,
-        "F5(a): run_command resolved a credential: {hidden:?}"
-    );
-    assert_eq!(
-        (requests, sent),
-        (twin_requests, twin_sent),
-        "F5(a): run_command asked the backend beyond a missing step: {hidden:?}"
+        (mints, sent),
+        (alone_mints, alone_sent),
+        "F5(a): run_command minted or sent beyond the visible step: {hidden:?}"
     );
 }
 

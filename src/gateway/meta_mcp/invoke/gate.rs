@@ -16,7 +16,7 @@ use super::{GuardedValue, MetaMcp};
 use crate::backend::{Backend, CatalogueVerdict, Lens};
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
 use crate::gateway::meta_mcp::visible::{
-    Visibility, Withholding, absent_name, record_visibility, recorded_visibility,
+    Visibility, Withholding, absent_name, note_denial_code, record_visibility, recorded_visibility,
 };
 use crate::{Error, Result};
 
@@ -154,7 +154,21 @@ impl MetaMcp {
     /// `(server, tool)`: a reason a listing hides it (R6), for the direct
     /// route, whose authorize does not read profiles.
     pub(crate) fn profile_refuses(&self, server: &str, tool: &str, session_id: Option<&str>) -> bool {
-        self.active_profile(session_id).check(server, tool).is_err()
+        self.profile_refusal(server, tool, session_id).is_some()
+    }
+
+    /// The session profile's refusal of `(server, tool)`, if it refuses it:
+    /// the error the meta path's own check gives it.
+    pub(crate) fn profile_refusal(
+        &self,
+        server: &str,
+        tool: &str,
+        session_id: Option<&str>,
+    ) -> Option<Error> {
+        self.active_profile(session_id)
+            .check(server, tool)
+            .err()
+            .map(Error::Protocol)
     }
 
     /// The dispatch-time backstop (design r2 item 4): a refusal the policy
@@ -188,7 +202,13 @@ impl MetaMcp {
     ) -> Option<Result<GuardedValue>> {
         let scope = caller.scope();
         // Policy, profile, admin rule, grants: known without a catalogue.
-        let refused = self.may_invoke(server, tool, scope, session_id).is_err();
+        let refusal = self.may_invoke(server, tool, scope, session_id).err();
+        let refused = refusal.is_some();
+        if let Some(refusal) = &refusal {
+            // The call's one record names it (MIK-8361); a code the route
+            // stage kept first stands.
+            note_denial_code(server, tool, refusal.to_rpc_code());
+        }
         if let Some(cap) = self.get_capabilities()
             && server == cap.name
         {
@@ -275,4 +295,30 @@ impl MetaMcp {
             Err(refusal) => Some(Err(refusal)),
         }
     }
+}
+
+/// D4's meta denial count for `result`, and MIK-8361's one record per call:
+/// the answer to a requested target the route stage or the gate refused is
+/// counted once and recorded `denied` with the refusal's own code (the
+/// returned outcome), whatever it reads as to the caller (the missing name's
+/// answer). The log is the operator's, so the real reason there tells the
+/// caller nothing. `None` for every other call, classed by its result.
+pub(super) fn count_meta_denial(
+    args: &Value,
+    result: &Result<Value>,
+) -> Option<crate::security::audit::AuditOutcome> {
+    use crate::security::security_metrics::{DenialRoute, denied, meta_denial, meta_refused};
+    let code = args
+        .get("server")
+        .and_then(Value::as_str)
+        .zip(args.get("tool").and_then(Value::as_str))
+        .and_then(|(server, tool)| crate::gateway::meta_mcp::visible::denial_code(server, tool));
+    if let Some(code) = code {
+        meta_refused(code);
+        return Some(crate::security::audit::AuditOutcome::Denied(code));
+    }
+    if let Some(reason) = meta_denial(result) {
+        denied(DenialRoute::Meta, reason);
+    }
+    None
 }

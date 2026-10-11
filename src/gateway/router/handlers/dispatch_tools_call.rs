@@ -198,7 +198,18 @@ pub(super) async fn tools_call(
                         crate::Error::Forbidden { code, .. } => *code,
                         other => other.to_rpc_code(),
                     };
-                    refused.note_withheld(state, checked, code).await;
+                    // One record per call: an invoked target's answer writes
+                    // it, as a missing target's does; a surfaced name's
+                    // missing twin writes none, so the route records it.
+                    if state.meta_mcp.exposes_meta_tool(tool_name) {
+                        crate::gateway::meta_mcp::visible::note_denial_code(
+                            checked.server,
+                            checked.tool,
+                            code,
+                        );
+                    } else {
+                        refused.note_withheld(state, checked, code).await;
+                    }
                     Ok(())
                 }
                 Ok(None) => Ok(()),

@@ -175,11 +175,8 @@ async fn grant_denial_writes_decision_record() {
         "{record}"
     );
     assert_eq!(record["who"]["authority"], json!("api_key"), "{record}");
-    // Control for the empty-flush row below: a slot holding a note flushes.
-    assert!(
-        super::grant_audit::grant_bookkeeping_for_test().flushes_spawned >= 1,
-        "a slot holding a decision note spawns its flush"
-    );
+    // MIK-8361: this call is withheld, so its note is written best-effort on
+    // its own task, not by a slot flush; the flush control is T2's.
 }
 
 /// T2. A matching grant is one `ok` record naming the grant.
@@ -203,6 +200,11 @@ async fn grant_match_writes_allow_record() {
     assert_eq!(record["grant_id"], json!("g1"), "{record}");
     assert_eq!(trace_of(&record), trace_of(&invocation), "{record}");
     assert!(trace_of(&record).is_some(), "{record}");
+    // Control for the empty-flush row below: a slot holding a note flushes.
+    assert!(
+        super::grant_audit::grant_bookkeeping_for_test().flushes_spawned >= 1,
+        "a slot holding a decision note spawns its flush"
+    );
 }
 
 /// T3 (control). Public and shared capabilities are not grant decisions.

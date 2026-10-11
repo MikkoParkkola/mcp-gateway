@@ -138,18 +138,25 @@ async fn guard_tool_call(
         tool: tool_name,
         arguments,
     };
-    let withheld = authorize_tool_target(
+    let withheld_code = authorize_tool_target(
         state,
         auth.client,
         auth.oauth_agent_identity,
         auth.cert_identity,
         target,
     )
-    .is_err()
-        || state
+    .err()
+    .map(|refusal| refusal.code)
+    .or_else(|| {
+        state
             .meta_mcp
-            .profile_refuses(backend_name, tool_name, session_id);
-    if withheld {
+            .profile_refusal(backend_name, tool_name, session_id)
+            .map(|refusal| refusal.to_rpc_code())
+    });
+    let withheld = withheld_code.is_some();
+    if let Some(code) = withheld_code {
+        // The call's one record names it (MIK-8361).
+        crate::gateway::meta_mcp::visible::note_denial_code(backend_name, tool_name, code);
         warn!(backend = %backend_name, tool = %tool_name, "Tool withheld by authorization; answered as absent");
     }
 

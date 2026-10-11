@@ -234,7 +234,10 @@ impl MetaMcp {
         }
         let trace_id = trace::generate();
         let trace_id_clone = trace_id.clone();
-        trace::with_trace_id(trace_id, async move {
+        // An in-process call has no request memo of its own: one per call, so
+        // a refusal's code reaches its one record (MIK-8361). A request's
+        // memo, when there is one, is kept.
+        let traced = trace::with_trace_id(trace_id, async move {
             // Boxed: the traced future is large, and every caller of
             // `invoke_tool` would otherwise carry it inline (clippy::large_futures).
             let traced =
@@ -261,8 +264,8 @@ impl MetaMcp {
                 self.note_delivered_reading(args, reading, responded);
             }
             audited.map(|value| (value, source, upstream))
-        })
-        .await
+        });
+        crate::gateway::meta_mcp::visible::with_visibility_memo(traced).await
     }
 
     /// The post-dispatch response gates a backend result must pass before any

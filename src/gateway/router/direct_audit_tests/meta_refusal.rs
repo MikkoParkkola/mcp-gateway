@@ -69,7 +69,8 @@ async fn meta_precheck_scope_refusal_is_denied_record() {
     assert_eq!(entry["tool"], "t");
     assert_eq!(entry["who"]["credential_kind"], "api_key", "{entry}");
     assert_eq!(entry["request_hash"], hash_of(&arguments).as_str());
-    assert!(entry.get("response_hash").is_none(), "{entry}");
+    // MIK-8361: written as a missing name's record is, hash included.
+    assert!(entry.get("response_hash").is_some(), "{entry}");
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0);
 }
 
