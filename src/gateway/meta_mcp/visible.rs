@@ -99,16 +99,24 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> Visibility {
         let judge = || self.judge_name(server, tool, scope, session_id);
-        match VISIBILITY_MEMO.try_with(|memo| memo.recorded(server, tool)) {
+        let recorded = VISIBILITY_MEMO.try_with(|memo| memo.recorded(server, tool));
+        match recorded {
             Ok(Some(recorded)) => recorded,
-            Ok(None) => {
-                let judged = judge();
-                VISIBILITY_MEMO
-                    .try_with(|memo| memo.record(server, tool, judged))
-                    .unwrap_or(judged)
-            }
+            // A per-user backend's shared-slot verdict is never memoised
+            // (MIK-8356 R5.4): the caller verdict records the first one.
+            Ok(None) if self.keeps_per_user_catalogues(server) => judge(),
+            Ok(None) => record_visibility(server, tool, judge()),
             Err(_) => judge(),
         }
+    }
+
+    /// Whether `server` keeps one catalogue per caller: its tools are judged
+    /// by the caller's own slot, never the shared one (MIK-8356). The one
+    /// predicate both the route filter and the caller verdict read.
+    pub(crate) fn keeps_per_user_catalogues(&self, server: &str) -> bool {
+        self.backends
+            .get(server)
+            .is_some_and(|backend| backend.keeps_per_user_catalogues())
     }
 
     fn judge_name(
@@ -121,7 +129,9 @@ impl MetaMcp {
         if self.descriptor_blocked(server, tool) {
             return Visibility::Withheld(Withholding::Descriptor);
         }
-        if self.surfaced_schema_withheld(server, tool) {
+        // The schema reason of a per-user backend is the caller's slot's
+        // alone (MIK-8356 R5.4): the shared slot's schema never filters it.
+        if !self.keeps_per_user_catalogues(server) && self.surfaced_schema_withheld(server, tool) {
             return Visibility::Withheld(Withholding::Schema);
         }
         self.invokable(server, tool, scope, session_id)
@@ -290,6 +300,15 @@ impl VisibilityMemo {
 tokio::task_local! {
     /// The open request's memo; see [`with_visibility_memo`].
     static VISIBILITY_MEMO: VisibilityMemo;
+}
+
+/// Record `judged` for `(server, tool)` in the open request's memo unless an
+/// answer is already recorded; returns the recorded answer (first judgement
+/// wins). Outside a request scope nothing is kept and `judged` is returned.
+pub(crate) fn record_visibility(server: &str, tool: &str, judged: Visibility) -> Visibility {
+    VISIBILITY_MEMO
+        .try_with(|memo| memo.record(server, tool, judged))
+        .unwrap_or(judged)
 }
 
 /// Run `request` with one visibility memo for its whole lifetime (the HTTP

@@ -256,6 +256,13 @@ impl Backend {
             .map(|c| c.session_mode)
     }
 
+    /// Whether this backend keeps one catalogue per caller: with identity
+    /// propagation configured, a caller that resolves a binding gets its own
+    /// slot (MIK-8356). The predicate visibility judgements key on.
+    pub(crate) fn keeps_per_user_catalogues(&self) -> bool {
+        self.session_mode().is_some()
+    }
+
     /// Derive the pool slot for a request carrying `identity_key`.
     ///
     /// A backend configured for identity propagation gets a private slot for
