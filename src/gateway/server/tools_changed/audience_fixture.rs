@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Fixture of the MIK-8350 list_changed audience rows: one in-process HTTP
+//! Fixture of the MIK-8350 `list_changed` audience rows: one in-process HTTP
 //! gateway with the real tools-changed drain, two API keys (`k-std`, and
 //! `k-deny` denied `read` and `fetch`), temporary-token principals, a shared
 //! backend `alpha` (surfaces `read`/`write`, offers `scan`/`fetch`), a

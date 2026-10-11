@@ -255,7 +255,7 @@ async fn d_order_2_a_non_bearer_authorization_beside_a_live_cookie_is_dead() {
     );
 }
 
-/// M-B5' (MIK-8350), RED (killer M8): a list_changed delivery does not move
+/// M-B5' (MIK-8350), RED (killer M8): a `list_changed` delivery does not move
 /// the shared event counter, so ids show no gap.
 #[tokio::test]
 async fn m_b5_list_changed_does_not_consume_the_shared_event_counter() {
@@ -319,7 +319,7 @@ async fn m_rekey_a_resumed_session_is_judged_against_its_new_credential() {
 }
 
 /// M-B10 (MIK-8350), RED (killer M28): a listen attach is followed by exactly
-/// one constant list_changed frame after the acknowledgement, whatever the
+/// one constant `list_changed` frame after the acknowledgement, whatever the
 /// data. Base sends none (checked: the stream yields the ack, then waits).
 #[tokio::test]
 async fn m_b10_a_listen_attach_gets_one_constant_list_changed() {
@@ -409,7 +409,7 @@ async fn l3_a_warmed_listen_listener_is_silent_for_another_principals_slot() {
 /// L2 (MIK-8350), RED partial (killer M7): listeners under three different
 /// credentials (a policy-limited key, an unlimited key, a key-server
 /// principal) on one nudge: only the credentials that see `read` are told.
-/// Pairs for the other InvokeScope fields (admin, agent id, grant subject,
+/// Pairs for the other `InvokeScope` fields (admin, agent id, grant subject,
 /// session profile, promotion) need fixtures that do not compile on base.
 #[tokio::test]
 async fn l2_one_nudge_tells_only_the_credentials_that_see_the_change() {

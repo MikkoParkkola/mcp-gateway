@@ -464,7 +464,7 @@ pub(super) async fn test_router_app_state_with_auth_and_key_server(
 }
 
 /// MIK-8350: the authenticated fixture with a key server and a configured
-/// Meta-MCP, for the list_changed audience rows under `gateway::server`.
+/// Meta-MCP, for the `list_changed` audience rows under `gateway::server`.
 pub(crate) async fn audience_state(
     auth: &AuthConfig,
     key_server: Option<Arc<crate::key_server::KeyServer>>,
