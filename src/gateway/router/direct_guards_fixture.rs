@@ -359,6 +359,20 @@ pub(crate) async fn fixture_firewalled_with(
     fx
 }
 
+/// [`fixture_firewalled_audited_built`] with a call budget of `calls` per window
+/// on both firewalls (MIK-8362: a playbook's steps spend what a direct call spends).
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_budget_built(
+    answer: Answer,
+    (audit, calls): (std::path::PathBuf, usize),
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    BUDGET.with(|b| b.set(calls));
+    let fx = fixture_firewalled_audited_built(answer, audit, build).await;
+    BUDGET.with(|b| b.set(0));
+    fx
+}
+
 #[path = "direct_guards_fixture_answers.rs"]
 mod answers;
 #[path = "direct_guards_fixture_egress.rs"]
@@ -374,6 +388,8 @@ pub(crate) use egress::{
     fixture_hardened_signed_firewalled, fixture_inspecting_on, meta_firewall,
 };
 pub(crate) use quota::fixture_propagating;
+#[cfg(feature = "firewall")]
+pub(crate) use quota::fixture_propagating_budgeted;
 use quota::{fixture_backend_config, fixture_failsafe, leaked_transparency_log};
 
 pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
@@ -494,6 +510,8 @@ thread_local! {
         const { std::cell::Cell::new(None) };
     static CLIENT_BREAKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static ANOMALY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Calls per window the call budget allows; 0 leaves the budget off (MIK-8362).
+    static BUDGET: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static RELAY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static META_FIREWALL: std::cell::RefCell<Option<Arc<crate::security::firewall::Firewall>>> =
         const { std::cell::RefCell::new(None) };
@@ -616,6 +634,12 @@ async fn fixture_inner(
             credential_redaction: true,
             rules,
             audit_log: AUDIT_LOG.with(|a| a.borrow().clone()),
+            budget: crate::security::firewall::budget_guard::BudgetGuardConfig {
+                enabled: BUDGET.with(std::cell::Cell::get) > 0,
+                max_calls_per_window: BUDGET.with(std::cell::Cell::get),
+                window_secs: 3_600,
+                ..crate::security::firewall::budget_guard::BudgetGuardConfig::default()
+            },
             anomaly_detection: anomaly,
             anomaly_threshold: 0.7,
             anomaly_block_threshold: anomaly.then_some(0.9),

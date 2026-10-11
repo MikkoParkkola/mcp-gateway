@@ -18,7 +18,7 @@ use crate::gateway::meta_mcp::admission::SyncLease;
 use crate::gateway::meta_mcp::invoke::RouteRefusal;
 use crate::gateway::meta_mcp::signing::SigningInvocationContext;
 use crate::gateway::meta_mcp::{
-    InvokeScope, MetaMcpCallerContext, error_response_preserving_status,
+    InvokeScope, MetaMcpCallerContext, STEP_NOT_PERMITTED, error_response_preserving_status,
 };
 use crate::gateway::router::AppState;
 use crate::gateway::router::authorization::{
@@ -150,7 +150,7 @@ pub(super) async fn tools_call(
         ));
     }
 
-    let backend_targets = backend_tool_targets_for_call(&state.meta_mcp, tool_name, &arguments);
+    let mut backend_targets = backend_tool_targets_for_call(&state.meta_mcp, tool_name, &arguments);
     // Computed once (MIK-8014): the firewall's per-caller controls and the
     // caller context below key on the same caller.
     let caller_key = crate::gateway::router::identity::caller_key(
@@ -162,19 +162,41 @@ pub(super) async fn tools_call(
         tool_name,
         &backend_targets,
     );
-    for target in &backend_targets {
+    // A playbook's steps come from its definition, not the request. They join
+    // the targets after the response targets are fixed, so response handling
+    // is unchanged, and are authorized and scanned before any step runs
+    // (MIK-8362).
+    let request_targets = backend_targets.len();
+    backend_targets.extend(state.meta_mcp.playbook_step_targets(tool_name, &arguments));
+    // Authorize every target before scanning any, so a refused later target
+    // charges no earlier one's budget.
+    for (index, target) in backend_targets.iter().enumerate() {
         // The one route-stage authorize /mcp and stdio share (P3). A surfaced
         // name this caller may not invoke is answered as a name that matches
         // no tool, through the tail exactly as the meta layer answers one, so
         // neither the firewall, X14 nor admission sees it (MIK-8326, A3).
         let checked = target.as_target();
-        match state.meta_mcp.authorize_route_target(
+        let routed = state.meta_mcp.authorize_route_target(
             invoke_scope,
             Some(session_id.as_str()),
             tool_name,
             (checked.server, checked.tool),
             checked.arguments,
-        ) {
+        );
+        // A step's target is operator-defined: any refusal of it is neutral (A3).
+        if index >= request_targets && routed.is_err() {
+            return Err(refused
+                .answer(
+                    state,
+                    target.as_target(),
+                    id,
+                    -32003,
+                    STEP_NOT_PERMITTED.to_string(),
+                    StatusCode::FORBIDDEN,
+                )
+                .await);
+        }
+        match routed {
             Ok(()) => {}
             Err(RouteRefusal::Withheld(absent)) => {
                 return Ok(error_response_preserving_status(id, &absent));
@@ -197,9 +219,11 @@ pub(super) async fn tools_call(
                 return Ok(error_response_preserving_status(id, &other));
             }
         }
+    }
 
-        // Firewall: pre-invocation request scan
-        #[cfg(feature = "firewall")]
+    // Firewall: pre-invocation request scan
+    #[cfg(feature = "firewall")]
+    for target in &backend_targets {
         if let Some(ref fw) = state.firewall {
             let target = target.as_target();
             let caller_name = client.as_ref().map_or("anonymous", |c| c.name.as_str());

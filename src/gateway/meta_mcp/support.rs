@@ -544,6 +544,18 @@ impl MetaMcpInvoker<'_, '_> {
     }
 }
 
+/// The one answer a refused playbook step gets (A3): a step's server and tool
+/// are operator-defined, so the reason never names them.
+pub(crate) const STEP_NOT_PERMITTED: &str = "step not permitted for this caller";
+
+pub(crate) fn step_not_permitted() -> crate::Error {
+    crate::Error::Forbidden {
+        code: -32003,
+        status: 403,
+        message: STEP_NOT_PERMITTED.to_string(),
+    }
+}
+
 #[async_trait::async_trait]
 impl ToolInvoker for MetaMcpInvoker<'_, '_> {
     async fn invoke(&self, server: &str, tool: &str, arguments: Value) -> Result<Value> {
@@ -580,11 +592,7 @@ impl ToolInvoker for MetaMcpInvoker<'_, '_> {
                         .meta
                         .refused_beyond_authorizer(server, tool, self.caller.scope()) =>
             {
-                Err(crate::Error::Forbidden {
-                    code: -32003,
-                    status: 403,
-                    message: "step not permitted for this caller".to_string(),
-                })
+                Err(step_not_permitted())
             }
             other => other,
         };

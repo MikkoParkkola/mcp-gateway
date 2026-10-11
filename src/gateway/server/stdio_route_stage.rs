@@ -42,9 +42,16 @@ impl Gateway {
     ) -> RouteStage {
         let session_id = client.session_id;
         let scope = caller.scope();
-        let targets =
+        let mut targets =
             crate::gateway::router::backend_tool_targets_for_call(meta_mcp, tool_name, arguments);
-        for target in &targets {
+        // A playbook's steps are known from its definition, not the request:
+        // appended after the request's own targets so they are authorized and
+        // scanned with them, before any step runs (MIK-8362).
+        let request_targets = targets.len();
+        targets.extend(meta_mcp.playbook_step_targets(tool_name, arguments));
+        // Authorize every target before scanning any, so a refused later
+        // target charges no earlier one's budget.
+        for (index, target) in targets.iter().enumerate() {
             let checked = target.as_target();
             // The one route-stage authorize `/mcp` also runs. A surfaced name
             // this caller may not invoke answers as a name that matches no
@@ -58,11 +65,20 @@ impl Gateway {
                     checked.arguments,
                 )
             {
+                // A step's target is operator-defined: its refusal is neutral (A3).
+                let error = if index < request_targets {
+                    error
+                } else {
+                    crate::gateway::meta_mcp::step_not_permitted()
+                };
                 return RouteStage::Answer(error_response_preserving_status(id.clone(), &error));
             }
-            // The stateful controls key on the one client this process
-            // serves; an empty identity would refuse every call unscored.
-            #[cfg(feature = "firewall")]
+        }
+        // The stateful controls key on the one client this process serves; an
+        // empty identity would refuse every call unscored.
+        #[cfg(feature = "firewall")]
+        for target in &targets {
+            let checked = target.as_target();
             if let Some((code, message)) = meta_mcp.route_request_scan(
                 session_id,
                 (checked.server, checked.tool, checked.arguments),
