@@ -89,12 +89,9 @@ impl Backend {
         if self.blocked_tool_refusal(binding, tool).is_some() {
             return Ok(CatalogueVerdict::Withholds);
         }
+        // A fresh slot, or a stale one inside its refresh cooldown, is served
+        // by the fill without a fetch (`get_cached_list_for`).
         let cached = self.get_cached_tool_for(binding, tool);
-        if let Some(cached) = &cached
-            && (self.has_cached_tools_for(binding) || self.stale_refresh_cooling(binding))
-        {
-            return Ok(judged(cached));
-        }
         // A3: a shared slot is never fetched for a caller that sent its own
         // credential (the fill runs under the gateway's login).
         if !self.fetch_carries_caller_identity(binding) && !headers.is_empty() {

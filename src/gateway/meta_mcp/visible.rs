@@ -283,7 +283,7 @@ impl MetaMcp {
 #[derive(Default)]
 pub(crate) struct VisibilityMemo(
     parking_lot::Mutex<std::collections::HashMap<(String, String), Visibility>>,
-    parking_lot::Mutex<std::collections::HashMap<String, Carried>>,
+    parking_lot::Mutex<std::collections::HashMap<(String, String), Carried>>,
 );
 
 /// A caller verdict's resolution, waiting for the first invocation on its
@@ -334,25 +334,32 @@ pub(crate) fn record_visibility(server: &str, tool: &str, judged: Visibility) ->
 
 /// Hand `carried` to the next invocation on `server` in the open request.
 /// Outside a request scope it is dropped, and the dispatch resolves itself.
-pub(crate) fn carry_dispatch(server: &str, carried: Carried) {
-    let _ = VISIBILITY_MEMO.try_with(|memo| memo.1.lock().insert(server.to_owned(), carried));
+pub(crate) fn carry_dispatch(server: &str, tool: &str, carried: Carried) {
+    let key = (server.to_owned(), tool.to_owned());
+    let _ = VISIBILITY_MEMO.try_with(|memo| memo.1.lock().insert(key, carried));
 }
 
 /// Read the resolution carried for `server` without consuming it: the step
 /// resume fingerprint derives from the same resolution its dispatch will
 /// use (MIK-8356 fold F6).
-pub(crate) fn with_carried<R>(server: &str, read: impl FnOnce(&Carried) -> R) -> Option<R> {
+pub(crate) fn with_carried<R>(
+    server: &str,
+    tool: &str,
+    read: impl FnOnce(&Carried) -> R,
+) -> Option<R> {
+    let key = (server.to_owned(), tool.to_owned());
     VISIBILITY_MEMO
-        .try_with(|memo| memo.1.lock().get(server).map(read))
+        .try_with(|memo| memo.1.lock().get(&key).map(read))
         .ok()
         .flatten()
 }
 
 /// Take the resolution carried for `server`, consuming it: a later
 /// invocation on the same server resolves again.
-pub(crate) fn take_carried(server: &str) -> Option<Carried> {
+pub(crate) fn take_carried(server: &str, tool: &str) -> Option<Carried> {
+    let key = (server.to_owned(), tool.to_owned());
     VISIBILITY_MEMO
-        .try_with(|memo| memo.1.lock().remove(server))
+        .try_with(|memo| memo.1.lock().remove(&key))
         .ok()
         .flatten()
 }

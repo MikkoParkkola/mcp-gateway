@@ -202,7 +202,7 @@ impl MetaMcp {
         // A caller verdict taken earlier in this request carries its backend
         // instance and resolution here (MIK-8356 R5.2): one resolution per
         // call, consumed by this invocation only.
-        let (backend, resolved) = match super::visible::take_carried(server) {
+        let (backend, resolved) = match super::visible::take_carried(server, tool) {
             // The verdict's fill failed: answered as a failed dispatch is,
             // with nothing filled or sent again (F13, A11-c).
             Some(super::visible::Carried {
@@ -758,7 +758,7 @@ impl MetaMcp {
         // A resolution the caller verdict carried for this step is the one
         // its dispatch will use: derive from it, with no second mint (fold F6).
         if let Some(binding) =
-            super::visible::with_carried(server, |carried| carried.resolved.binding.clone())
+            super::visible::with_carried(server, tool, |carried| carried.resolved.binding.clone())
         {
             return Ok(crate::protocol::mrtr::source_fingerprint(
                 caller.principal_source(binding.as_deref()),
@@ -783,6 +783,7 @@ impl MetaMcp {
         if let Some(backend) = backend {
             super::visible::carry_dispatch(
                 server,
+                tool,
                 super::visible::Carried {
                     backend,
                     resolved,

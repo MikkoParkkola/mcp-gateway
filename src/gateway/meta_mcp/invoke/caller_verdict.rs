@@ -109,6 +109,7 @@ impl MetaMcp {
         };
         visible::carry_dispatch(
             server,
+            tool,
             visible::Carried {
                 backend,
                 resolved,
