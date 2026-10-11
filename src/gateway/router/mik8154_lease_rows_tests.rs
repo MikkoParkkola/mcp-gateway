@@ -247,3 +247,251 @@ async fn l9_direct_call_meets_an_in_flight_task_of_the_same_target() {
     assert_eq!(message(&answer), MISMATCH, "l9: {answer}");
     assert_eq!(count.load(Ordering::SeqCst), 1, "l9: the backend ran twice");
 }
+
+/// L0: the direct route admits the operation `gateway_invoke` admits for the
+/// same target and arguments, byte for byte, so the two collide in the one
+/// store. RED: the tip's direct route admits nothing.
+#[tokio::test]
+async fn l0_the_direct_route_admits_the_operation_invoke_admits() {
+    let fx = fixture_built(Answer::Ok, |meta| meta).await;
+    let take = crate::gateway::meta_mcp::admission::take_last_operation;
+    take();
+    let args = json!({"cmd": "x"});
+    post_direct(
+        &fx,
+        "alpha",
+        "k-std",
+        "read",
+        args.clone(),
+        Some("l0-d"),
+        None,
+    )
+    .await;
+    let direct = take();
+    post_meta_invoke(&fx, "k-std", "alpha", "read", args, Some("l0-i"), None).await;
+    let invoke = take();
+    assert!(
+        direct.is_some(),
+        "l0: the direct call admitted no operation"
+    );
+    assert_eq!(direct, invoke, "l0: the routes admit different operations");
+}
+
+/// L7a CONTROL (kills "withdraw replaced by settle"): a direct call under K
+/// whose backend stops to ask did not act, so its lease releases and a
+/// `gateway_invoke` of the same target under K proceeds.
+#[tokio::test]
+async fn l7a_an_interim_answer_withdraws_the_lease() {
+    let fx = fixture_built(Answer::AskOnce, |meta| meta).await;
+    // A modern call declaring form elicitation, so the question is delivered.
+    let key = json!({"_meta": {crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "l7a"}});
+    let (_, asked) = super::direct_continuation_tests::call(&fx, "alpha", None, key).await;
+    assert!(
+        asked.pointer("/result/requestState").is_some(),
+        "premise: the backend's question was not delivered: {asked}"
+    );
+    let after = keyed(&fx, Via::Invoke, "l7a").await;
+    assert_ne!(message(&after), MISMATCH, "l7a: {after}");
+}
+
+/// L7b CONTROL (kills "withdraw replaced by settle"): a failure raised before
+/// dispatch withdraws the lease likewise.
+#[tokio::test]
+async fn l7b_a_pre_dispatch_failure_withdraws_the_lease() {
+    // `Unreachable` is a connect failure: nothing left the gateway. (A
+    // `Transport` failure may have, so it settles as uncertain instead.)
+    let fx = fixture_built(Answer::Unreachable, |meta| meta).await;
+    let failed = keyed(&fx, Via::Direct, "l7b").await;
+    assert!(failed.get("error").is_some(), "premise: {failed}");
+    let after = keyed(&fx, Via::Invoke, "l7b").await;
+    assert_ne!(message(&after), MISMATCH, "l7b: {after}");
+}
+
+/// L7c: a direct call that dispatched settles its lease, so a
+/// `gateway_invoke` of the same target under K meets the store's mismatch
+/// and the backend does not run again. RED: on the tip the store holds
+/// nothing and the invoke is answered from the shared cache.
+#[tokio::test]
+async fn l7c_a_dispatched_call_settles_the_lease() {
+    let fx = fixture_built(Answer::Ok, |meta| meta).await;
+    let first = keyed(&fx, Via::Direct, "l7c").await;
+    assert!(first.get("error").is_none(), "premise: {first}");
+    let after = keyed(&fx, Via::Invoke, "l7c").await;
+    assert_eq!(message(&after), MISMATCH, "l7c: {after}");
+    assert_eq!(calls(&fx), 1, "l7c: the backend ran again");
+}
+
+/// L8: a direct call dropped after it reached the backend leaves its lease
+/// settled as uncertain, never released: a `gateway_invoke` under K meets
+/// the store, and the backend runs once. RED: on the tip the cache answers.
+#[tokio::test]
+async fn l8_a_call_cancelled_after_dispatch_settles() {
+    let (entered, gate) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    let count = Arc::new(AtomicUsize::new(0));
+    let held = Held {
+        entered: Arc::clone(&entered),
+        gate: Arc::clone(&gate),
+        calls: Arc::clone(&count),
+    };
+    let fx = Arc::new(fixture_built_on(Arc::new(held), |meta| meta).await);
+    let shared = Arc::clone(&fx);
+    let call = tokio::spawn(async move { keyed(&shared, Via::Direct, "l8").await });
+    tokio::time::timeout(std::time::Duration::from_secs(30), entered.notified())
+        .await
+        .expect("the direct call reached the held backend");
+    call.abort();
+    let _ = call.await;
+    let after = tokio::select! {
+        after = keyed(&fx, Via::Invoke, "l8") => after,
+        () = entered.notified() => panic!("l8: the invoke reached the backend again"),
+    };
+    gate.notify_waiters();
+    assert_eq!(message(&after), MISMATCH, "l8: {after}");
+    assert_eq!(count.load(Ordering::SeqCst), 1, "l8: the backend ran twice");
+}
+
+/// A signed fixture whose idempotency cache the row holds, so it can age the
+/// cache (a forced 7a miss) while the execution store keeps its entries.
+async fn signed_with_cache() -> (Fx, Arc<crate::idempotency::IdempotencyCache>) {
+    let cache = Arc::new(crate::idempotency::IdempotencyCache::new());
+    let installed = Arc::clone(&cache);
+    let fx = super::direct_guards_fixture::fixture_hardened_signed_built(
+        Answer::Ok,
+        true,
+        move |mut meta| {
+            meta.enable_idempotency(installed, std::time::Duration::from_secs(300));
+            meta
+        },
+    )
+    .await;
+    (fx, cache)
+}
+
+/// A modern, signed, keyed direct `tools/call read` (the hardened posture
+/// serves the direct route no legacy `tools/call`).
+async fn signed_direct(fx: &Fx, key: &str, cmd: &str, nonce: &str) -> (u16, Value) {
+    use crate::protocol::meta::{KEY_CLIENT_CAPABILITIES, KEY_PROTOCOL_VERSION, MODERN_VERSIONS};
+    let params = json!({
+        "name": "read",
+        "arguments": {"cmd": cmd},
+        "_meta": {
+            KEY_PROTOCOL_VERSION: MODERN_VERSIONS[0],
+            KEY_CLIENT_CAPABILITIES: {},
+            crate::gateway::meta_mcp::signing::NONCE_META: nonce,
+            crate::protocol::mrtr::IDEMPOTENCY_KEY_META: key,
+        }
+    });
+    let (status, body) = super::direct_guards_fixture::send_with_headers(
+        fx,
+        "/mcp/alpha",
+        "k-std",
+        "tools/call",
+        params,
+        None,
+        &[
+            ("mcp-protocol-version", MODERN_VERSIONS[0]),
+            ("mcp-method", "tools/call"),
+            ("mcp-name", "read"),
+        ],
+    )
+    .await;
+    (status.as_u16(), body)
+}
+
+/// Past the cache's 24-hour completed lifetime: a forced 7a miss.
+const PAST_THE_CACHE: std::time::Duration = std::time::Duration::from_secs(25 * 60 * 60);
+
+/// The MAC the gateway's v2 signer gives `delivered` (its `result` without
+/// `_signature`, its id) under the fixture's key, `nonce` and the timestamp
+/// the delivered block names: what a verifier recomputes.
+fn expected_sig(delivered: &Value, nonce: &str) -> Value {
+    let block = &delivered["result"]["_signature"];
+    assert_eq!(block["version"], 2, "a v2 signature block: {delivered}");
+    let ts = block["ts"].as_u64().expect("a signing timestamp");
+    let id = delivered["id"].as_i64().expect("a numeric request id");
+    let mut response = crate::protocol::JsonRpcResponse::success(
+        crate::protocol::RequestId::Number(id),
+        delivered["result"].clone(),
+    );
+    crate::security::message_signing::MessageSigner::new(
+        super::direct_guards_fixture::SIGNING_KEY
+            .as_bytes()
+            .to_vec(),
+        None,
+        block["key_id"].as_str().expect("a key id").to_owned(),
+    )
+    .sign_json_rpc_response_at(&mut response, Some(nonce), ts)
+    .expect("the delivered result signs");
+    response.result.expect("a result")["_signature"]["sig"].clone()
+}
+
+/// L5 (test plan H1): a 7b refusal gives the 7a reservation back and spends
+/// no signing nonce. Under K a settled call, then (7a aged out) the same key
+/// for different arguments: refused by the store, twice, never as a
+/// duplicate in flight; then the refused call's nonce, on a new key,
+/// dispatches. RED: on the tip the store is not consulted and the reused key
+/// dispatches.
+#[tokio::test]
+async fn l5_a_7b_refusal_drops_the_7a_reservation_and_spends_no_nonce() {
+    let (fx, cache) = signed_with_cache().await;
+    let (status, first) = signed_direct(&fx, "l5", "a", "l5-n1").await;
+    assert_eq!(status, 200, "premise: {first}");
+    cache.advance_for_test(PAST_THE_CACHE);
+    for nonce in ["l5-n2", "l5-n3"] {
+        let (_, refused) = signed_direct(&fx, "l5", "b", nonce).await;
+        assert_eq!(message(&refused), MISMATCH, "l5 {nonce}: {refused}");
+        assert_eq!(calls(&fx), 1, "l5 {nonce}: dispatched");
+    }
+    let (status, fresh) = signed_direct(&fx, "l5-new", "b", "l5-n2").await;
+    assert_eq!(
+        status, 200,
+        "l5: the refused call's nonce was spent: {fresh}"
+    );
+    assert_eq!(calls(&fx), 2, "l5: the fresh key did not dispatch");
+}
+
+/// L6 (test plan M2, G2): a forced 7a miss with a 7b hit replays through the
+/// direct route's own delivery. A fresh nonce: no new backend run, signed
+/// for this request's nonce, not the stored one's. The stored call's nonce
+/// again: refused as a replay, no run. Then the key again: 7a was released
+/// before delivery, so no duplicate-in-flight refusal. RED: on the tip the
+/// aged-out key dispatches again.
+#[tokio::test]
+async fn l6_a_forced_7a_miss_with_a_7b_hit_replays_through_direct_delivery() {
+    let (fx, cache) = signed_with_cache().await;
+    let (status, first) = signed_direct(&fx, "l6", "a", "l6-n1").await;
+    assert_eq!(status, 200, "premise: {first}");
+    // The verifier itself: a fresh delivery verifies under its own nonce.
+    assert_eq!(
+        first["result"]["_signature"]["sig"],
+        expected_sig(&first, "l6-n1"),
+        "premise: the recomputed MAC does not match a fresh delivery"
+    );
+    cache.advance_for_test(PAST_THE_CACHE);
+    let (status, replay) = signed_direct(&fx, "l6", "a", "l6-n2").await;
+    assert_eq!(status, 200, "l6 fresh: {replay}");
+    assert_eq!(calls(&fx), 1, "l6 fresh: the backend ran again");
+    let signature = &replay["result"]["_signature"];
+    assert_eq!(signature["nonce"], "l6-n2", "l6 fresh: {replay}");
+    assert_eq!(
+        signature["sig"],
+        expected_sig(&replay, "l6-n2"),
+        "l6 fresh: the replay does not verify under the gateway key and this nonce"
+    );
+    assert_ne!(
+        signature["sig"],
+        expected_sig(&replay, "l6-n1"),
+        "l6 fresh: the replay also verifies under the stored call's nonce"
+    );
+    let (status, reused) = signed_direct(&fx, "l6", "a", "l6-n1").await;
+    assert_eq!(status, 400, "l6 reused nonce: {reused}");
+    assert!(reused.get("result").is_none(), "l6 reused nonce: {reused}");
+    assert_eq!(calls(&fx), 1, "l6 reused nonce: dispatched");
+    let (status, again) = signed_direct(&fx, "l6", "a", "l6-n3").await;
+    assert_eq!(status, 200, "l6 again: {again}");
+    assert!(!message(&again).contains(DUPLICATE), "l6 again: {again}");
+    assert_eq!(calls(&fx), 1, "l6 again: dispatched");
+}
