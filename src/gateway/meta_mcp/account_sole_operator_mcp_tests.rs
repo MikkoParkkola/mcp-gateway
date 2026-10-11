@@ -142,9 +142,12 @@ async fn anonymous_caller_on_a_sole_operator_deployment_is_refused() {
 
 /// Only a managed account consults the sole-operator assertion: a backend
 /// minting through another strategy still needs a verified identity, even for
-/// the operator.
+/// the operator. The backend is a `required` per-user one (identity
+/// propagation gives each caller its own slot whatever its `session_mode`),
+/// so a caller with no principal lacks its tools and is refused as an absent
+/// name (MIK-8356, lead ruling 2026-10-11).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn operator_without_identity_is_refused_on_a_non_account_backend() {
+async fn operator_without_identity_is_refused_on_a_propagation_backend() {
     let custody = custody_with(&[]);
     let (meta, dispatches) = gateway_in(
         &[(BACKEND, Bind::Propagation(external_cfg()))],
