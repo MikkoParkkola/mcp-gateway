@@ -575,3 +575,40 @@ async fn r1_direct_keyed_replay_after_the_callers_catalogue_withholds_answers_ab
         "R1-direct: the retry dispatched: {replay:?}"
     );
 }
+
+/// `gateway_invoke` of `tool` on [`BACKEND`] over `/mcp` as alpha.
+fn invoke_body(tool: &str) -> Value {
+    json!({"jsonrpc": "2.0", "id": 23, "method": "tools/call",
+        "params": {"name": "gateway_invoke",
+            "arguments": {"server": BACKEND, "tool": tool, "arguments": {"q": "x"}}}})
+}
+
+/// S1 (status parity, `gateway_invoke`): a tool alpha's catalogue withholds
+/// and one it lacks answer alike, HTTP status included, and both answer as a
+/// name the backend has nowhere (normalised for the name). No status or body
+/// difference tells withheld from lacked from unknown.
+#[tokio::test]
+async fn s1_http_invoke_withheld_lacked_and_unknown_answer_alike() {
+    let unknown_gw = gateway(CallerSlot::Lacks, CLOSED, Surfaced::No).await;
+    let unknown = post_as_alpha(&unknown_gw.router, "/mcp", &invoke_body("nosuch")).await;
+    assert_eq!(
+        unknown.1.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "premise: an unknown name answers -32601: {unknown:?}"
+    );
+    let unknown_text = unknown.1.to_string().replace("nosuch", TOOL);
+    for slot in [CallerSlot::Invalid, CallerSlot::Lacks] {
+        let gw = gateway(slot, CLOSED, Surfaced::No).await;
+        let answer = post_as_alpha(&gw.router, "/mcp", &invoke_body(TOOL)).await;
+        assert_eq!(gw.dispatched(), 0, "S1 {slot:?}: dispatched: {answer:?}");
+        assert_eq!(
+            answer.0, unknown.0,
+            "S1 {slot:?}: status differs: {answer:?} vs {unknown:?}"
+        );
+        assert_eq!(
+            answer.1.to_string(),
+            unknown_text,
+            "S1 {slot:?}: body differs from an unknown name's"
+        );
+    }
+}
