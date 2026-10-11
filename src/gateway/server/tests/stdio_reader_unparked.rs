@@ -131,32 +131,16 @@ async fn eof_returns_while_stdout_is_unread(mut served: Served) {
     drop(served.stdout);
 }
 
-/// Run `row` on its own current-thread runtime on a spawned thread, failing
-/// if it has not finished within [`HANG_BOUND`] of real time. The row pauses
-/// its runtime's clock; this watchdog runs outside it, so a hang still fails
-/// the test (the stuck thread is leaked, not joined).
+/// [`crate::test_wait::watched_row`] under [`HANG_BOUND`].
 fn watched<F>(row: impl FnOnce() -> F + Send + 'static)
 where
     F: std::future::Future<Output = ()>,
 {
-    let (done, finished) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("a runtime")
-            .block_on(row());
-        let _ = done.send(());
-    });
-    match finished.recv_timeout(HANG_BOUND) {
-        Ok(()) => {}
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            panic!("run_stdio_on never returned after EOF: the reader is parked")
-        }
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            panic!("the row panicked; its message is above")
-        }
-    }
+    crate::test_wait::watched_row(
+        HANG_BOUND,
+        "run_stdio_on never returned after EOF: the reader is parked",
+        row,
+    );
 }
 
 /// T1. Parse errors past a full queue do not park the reader.

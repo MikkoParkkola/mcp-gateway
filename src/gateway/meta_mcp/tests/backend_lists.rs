@@ -401,32 +401,16 @@ fn wired(name: &str, wire: ListWire, timeout: Duration) -> Arc<crate::backend::B
 /// Real-time bound on a whole paused-clock row: only a true hang reaches it.
 const ROW_HANG_BOUND: Duration = Duration::from_secs(300);
 
-/// Run `row` on its own current-thread runtime, which the row pauses, on a
-/// spawned thread, failing if it has not finished within [`ROW_HANG_BOUND`]
-/// of real time. The watchdog runs outside the paused runtime, so a hang
-/// still fails the test (the stuck thread is leaked, not joined).
+/// [`crate::test_wait::watched_row`] under [`ROW_HANG_BOUND`].
 fn paused<F>(row: impl FnOnce() -> F + Send + 'static)
 where
     F: std::future::Future<Output = ()>,
 {
-    let (done, finished) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("a runtime")
-            .block_on(row());
-        let _ = done.send(());
-    });
-    match finished.recv_timeout(ROW_HANG_BOUND) {
-        Ok(()) => {}
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-            panic!("the list never answered: a fetch waited without a bound")
-        }
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-            panic!("the row panicked; its message is above")
-        }
-    }
+    crate::test_wait::watched_row(
+        ROW_HANG_BOUND,
+        "the list never answered: a fetch waited without a bound",
+        row,
+    );
 }
 
 /// Fast + two hung backends (MIK-8360): the fast backend's prompts return
