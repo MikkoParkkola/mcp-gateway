@@ -23,7 +23,6 @@ use super::{BackendAuthContext, sign_and_record};
 use crate::gateway::meta_mcp::invoke::dispatch_guards::{Admission, BackendCall};
 use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
-use crate::idempotency::GuardOutcome;
 use crate::protocol::meta::Era;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
@@ -230,52 +229,13 @@ pub(super) async fn admit<'a>(
         super::direct_idempotency::execution_lease(scope, envelope, preflight, &mut guarded)?;
     admitted.lease = lease;
     admitted.nonce = admit_signing_nonce(scope, preflight)?;
-    deliver_replay(
+    super::direct_idempotency::deliver_replay(
         scope,
         (envelope, preflight),
         &mut admitted,
         (guarded, replay),
     )?;
     Ok(admitted)
-}
-
-/// A 7a hit, else a 7b replay (whose 7a reservation is already given back),
-/// answered here as an early return; otherwise the 7a reservation is kept.
-fn deliver_replay(
-    scope: Scope<'_>,
-    (envelope, preflight): (&Envelope, &Preflight),
-    admitted: &mut Admitted<'_>,
-    (guarded, replay): (Option<GuardOutcome>, Option<JsonRpcResponse>),
-) -> Result<(), Rejection> {
-    let (state, id, client) = (scope.state, scope.id, scope.caller.client.as_ref());
-    let replay = match guarded {
-        Some(GuardOutcome::CachedResult(cached)) => {
-            Some(JsonRpcResponse::success(id.clone(), cached))
-        }
-        Some(GuardOutcome::CachedError(error)) => {
-            crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
-            let mut response = super::cached_error_response(Some(id.clone()), &error);
-            replay_scan(state, (&admitted.call, envelope), client, &mut response);
-            return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
-        }
-        Some(GuardOutcome::Proceed(reservation)) => {
-            admitted.idem_reservation = Some(reservation);
-            replay
-        }
-        None => replay,
-    };
-    if let Some(mut response) = replay {
-        #[cfg(test)]
-        super::direct_idempotency::seams::note_replay(admitted.idem_reservation.is_some());
-        crate::gateway::meta_mcp::invoke::audit::note_cached();
-        // A replay is a delivery too: it renews this caller's own copy,
-        // shaped for this request's era (MIK-8022).
-        replay_scan(state, (&admitted.call, envelope), client, &mut response);
-        let auth = (admitted.auth, admitted.call.tool);
-        let response = finish_tail(scope, envelope, preflight, auth, response);
-        return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
-    }
-    Ok(())
 }
 
 /// The sanitized arm: the gate returned params, so those are what the backend
@@ -580,7 +540,7 @@ async fn finish_response(
 ///
 /// MIK-8025/MIK-8011 (secE) wrap this tail and the fresh steps in a
 /// `gateway_writes` scope.
-fn finish_tail(
+pub(super) fn finish_tail(
     scope: Scope<'_>,
     envelope: &Envelope,
     preflight: &Preflight,
@@ -698,7 +658,7 @@ fn settle_parked(
 /// A replay is scanned like a fresh answer: the idempotency cache is shared
 /// across routes, and the meta route settles before its delivery scan, so an
 /// entry's provenance proves nothing (design round 2).
-fn replay_scan(
+pub(super) fn replay_scan(
     state: &AppState,
     (call, envelope): (&BackendCall<'_>, &Envelope),
     client: Option<&crate::gateway::auth::AuthenticatedClient>,
@@ -753,17 +713,23 @@ async fn answer_failure(mut admitted: Admitted<'_>, e: crate::Error, method: &st
             crate::gateway::router::inflight_calls::CLIENT_CANCELLED_CODE,
             crate::gateway::router::inflight_calls::CLIENT_CANCELLED_MESSAGE,
         );
-        super::settle_direct_failure(admitted.idem_reservation.as_mut(), &e, &response);
+        let settle = (admitted.idem_reservation.as_mut(), admitted.lease.take());
+        super::settle_direct_failure(settle, &e, &response);
         return build_http_response(&Egressed::gateway_own(response), StatusCode::OK);
     }
     let Admitted {
         failed,
         call,
         mut idem_reservation,
+        lease,
         ..
     } = admitted;
     failed
-        .answer(idem_reservation.as_mut(), e, &screen_target(&call, method))
+        .answer(
+            (idem_reservation.as_mut(), lease),
+            e,
+            &screen_target(&call, method),
+        )
         .await
 }
 

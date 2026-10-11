@@ -75,14 +75,19 @@ enum Via {
 }
 
 async fn keyed(fx: &Fx, via: Via, key: &str) -> Value {
+    keyed_on(fx, via, "alpha", key).await
+}
+
+/// [`keyed`] on `server` (`alpha-pt` is the passthrough backend).
+async fn keyed_on(fx: &Fx, via: Via, server: &str, key: &str) -> Value {
     match via {
         Via::Invoke => {
-            post_meta_invoke(fx, "k-std", "alpha", "read", json!({}), Some(key), None)
+            post_meta_invoke(fx, "k-std", server, "read", json!({}), Some(key), None)
                 .await
                 .1
         }
         Via::Direct => {
-            post_direct(fx, "alpha", "k-std", "read", json!({}), Some(key), None)
+            post_direct(fx, server, "k-std", "read", json!({}), Some(key), None)
                 .await
                 .1
         }
@@ -331,7 +336,11 @@ async fn l7a_an_interim_answer_withdraws_the_lease() {
         "premise: the backend's question was not delivered: {asked}"
     );
     let after = keyed(&fx, Via::Invoke, "l7a").await;
-    assert_ne!(message(&after), MISMATCH, "l7a: {after}");
+    assert!(
+        after.get("error").is_none(),
+        "l7a: the invoke did not run: {after}"
+    );
+    assert_eq!(calls(&fx), 2, "l7a: the invoke did not reach the backend");
 }
 
 /// L7b CONTROL (kills "withdraw replaced by settle"): a failure raised before
@@ -344,6 +353,10 @@ async fn l7b_a_pre_dispatch_failure_withdraws_the_lease() {
     let failed = keyed(&fx, Via::Direct, "l7b").await;
     assert!(failed.get("error").is_some(), "premise: {failed}");
     let after = keyed(&fx, Via::Invoke, "l7b").await;
+    // Admitted and sent as a never-used key is: the same answer a fresh
+    // key gets, which is the unreachable backend's, never the store's.
+    let fresh = keyed(&fx, Via::Invoke, "l7b-fresh").await;
+    assert_eq!(message(&after), message(&fresh), "l7b: {after}");
     assert_ne!(message(&after), MISMATCH, "l7b: {after}");
 }
 
@@ -353,12 +366,15 @@ async fn l7b_a_pre_dispatch_failure_withdraws_the_lease() {
 /// nothing and the invoke is answered from the shared cache.
 #[tokio::test]
 async fn l7c_a_dispatched_call_settles_the_lease() {
-    let fx = fixture_built(Answer::Ok, |meta| meta).await;
-    let first = keyed(&fx, Via::Direct, "l7c").await;
-    assert!(first.get("error").is_none(), "premise: {first}");
-    let after = keyed(&fx, Via::Invoke, "l7c").await;
-    assert_eq!(message(&after), MISMATCH, "l7c: {after}");
-    assert_eq!(calls(&fx), 1, "l7c: the backend ran again");
+    // Both dispatch arms: the sanitized one, and the passthrough one.
+    for server in ["alpha", "alpha-pt"] {
+        let fx = fixture_built(Answer::Ok, |meta| meta).await;
+        let first = keyed_on(&fx, Via::Direct, server, "l7c").await;
+        assert!(first.get("error").is_none(), "premise {server}: {first}");
+        let after = keyed_on(&fx, Via::Invoke, server, "l7c").await;
+        assert_eq!(message(&after), MISMATCH, "l7c {server}: {after}");
+        assert_eq!(calls(&fx), 1, "l7c {server}: the backend ran again");
+    }
 }
 
 /// L8: a direct call dropped after it reached the backend leaves its lease

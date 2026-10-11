@@ -534,10 +534,16 @@ fn settle_direct_idempotency(
 /// lost round stores the uncertainty notice under the first caller's code
 /// (MIK-7979), the same sentence the meta route stores.
 fn settle_direct_failure(
-    mut reservation: Option<&mut crate::idempotency::IdempotencyReservation>,
+    (mut reservation, lease): (
+        Option<&mut crate::idempotency::IdempotencyReservation>,
+        Option<crate::gateway::meta_mcp::admission::SyncLease>,
+    ),
     error: &crate::Error,
     response: &JsonRpcResponse,
 ) {
+    // The lease (7b) follows 7a: a pre-dispatch failure was withdrawn and
+    // releases on drop; a lost round stays uncertain, as 7a's notice does;
+    // otherwise it settles on the answer 7a stores.
     if error.is_pre_dispatch() {
         if let Some(reservation) = reservation {
             reservation.release();
@@ -555,6 +561,9 @@ fn settle_direct_failure(
         }
     }
     settle_direct_idempotency(reservation, response);
+    if let Some(lease) = lease {
+        lease.complete_delivery(response, None);
+    }
 }
 
 /// Rebuild the JSON-RPC error response stored under an idempotency key.

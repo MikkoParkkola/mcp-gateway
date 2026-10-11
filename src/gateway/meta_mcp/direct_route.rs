@@ -131,7 +131,14 @@ impl MetaMcp {
             .unwrap_or_else(|_| {
                 std::borrow::Cow::Borrowed(params.get("arguments").unwrap_or(&empty))
             });
-        let full = super::admission::execution_arguments_cow(&mut arguments);
+        // The operation is spelled as `gateway_invoke` spells it, so the two
+        // routes collide. That spelling drops `_claim` and `_full` (gateway
+        // controls there) and parses string arguments; here those are the
+        // backend's own bytes. So the representation binds the arguments as
+        // sent: two direct requests that differ only there never replay each
+        // other.
+        super::admission::execution_arguments_cow(&mut arguments);
+        let sent = params.get("arguments").unwrap_or(&Value::Null);
         self.admit_sync(
             is_modern,
             verified_identity,
@@ -140,7 +147,10 @@ impl MetaMcp {
             server,
             tool,
             &arguments,
-            || serde_json::json!({"route": "direct", "server": server, "tool": tool, "full": full}),
+            || {
+                serde_json::json!({"route": "direct", "server": server, "tool": tool,
+                    "arguments": crate::hashing::canonical_json_sha256(sent)})
+            },
             id,
         )
     }

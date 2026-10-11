@@ -16,11 +16,12 @@
 use axum::http::StatusCode;
 use serde_json::Value;
 
-use super::super::helpers::build_http_error_response;
+use super::super::helpers::{build_http_error_response, build_http_response};
 use super::direct_caller::{Envelope, Rejection};
-use super::direct_dispatch::Scope;
+use super::direct_dispatch::{Admitted, Scope};
 use super::direct_preflight::{Preflight, Propagation};
 use crate::gateway::meta_mcp::admission::{SyncAdmission, SyncLease};
+use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use crate::idempotency::GuardOutcome;
 use crate::protocol::JsonRpcResponse;
 use crate::protocol::meta::Era;
@@ -122,6 +123,9 @@ pub(super) fn execution_lease(
         Ok(SyncAdmission::Unprotected) => Ok((None, None)),
         Ok(SyncAdmission::Owned(lease)) => Ok((Some(lease), None)),
         // Released before the replay's delivery begins, not when it ends.
+        // The second element is the replayed execution's record facts, which
+        // `/mcp` writes into its invocation record. The direct route records a
+        // replay as it records a cache hit (`note_cached`), so it sets them aside.
         Ok(SyncAdmission::Replay(response, _)) => {
             if let Some(GuardOutcome::Proceed(mut reservation)) = guarded.take() {
                 reservation.release();
@@ -132,6 +136,56 @@ pub(super) fn execution_lease(
         // releases it (`IdempotencyReservation`'s drop, OnDrop::Release).
         Err(e) => Err(refused(scope, &e)),
     }
+}
+
+/// A 7a hit, else a 7b replay (whose 7a reservation is already given back),
+/// answered here as an early return; otherwise the 7a reservation is kept.
+pub(super) fn deliver_replay(
+    scope: Scope<'_>,
+    (envelope, preflight): (&Envelope, &Preflight),
+    admitted: &mut Admitted<'_>,
+    (guarded, replay): (Option<GuardOutcome>, Option<JsonRpcResponse>),
+) -> Result<(), Rejection> {
+    let (state, id, client) = (scope.state, scope.id, scope.caller.client.as_ref());
+    let replay = match guarded {
+        Some(GuardOutcome::CachedResult(cached)) => {
+            Some(JsonRpcResponse::success(id.clone(), cached))
+        }
+        Some(GuardOutcome::CachedError(error)) => {
+            crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
+            let mut response = super::cached_error_response(Some(id.clone()), &error);
+            super::direct_dispatch::replay_scan(
+                state,
+                (&admitted.call, envelope),
+                client,
+                &mut response,
+            );
+            return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
+        }
+        Some(GuardOutcome::Proceed(reservation)) => {
+            admitted.idem_reservation = Some(reservation);
+            replay
+        }
+        None => replay,
+    };
+    if let Some(mut response) = replay {
+        #[cfg(test)]
+        seams::note_replay(admitted.idem_reservation.is_some());
+        crate::gateway::meta_mcp::invoke::audit::note_cached();
+        // A replay is a delivery too: it renews this caller's own copy,
+        // shaped for this request's era (MIK-8022).
+        super::direct_dispatch::replay_scan(
+            state,
+            (&admitted.call, envelope),
+            client,
+            &mut response,
+        );
+        let auth = (admitted.auth, admitted.call.tool);
+        let response =
+            super::direct_dispatch::finish_tail(scope, envelope, preflight, auth, response);
+        return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
+    }
+    Ok(())
 }
 
 /// Just before the backend can be reached: from here a drop is uncertain.
