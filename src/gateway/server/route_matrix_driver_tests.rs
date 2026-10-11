@@ -210,6 +210,28 @@ pub(crate) async fn stdio_asking() -> Sent {
     stdio_call(|_| {}, (json!({}), None), question).await
 }
 
+/// R5 whose backend answers `answer` under the context-integrity `kernel`
+/// (MIK-8325 S8: an enforced follow-up question over stdio).
+pub(crate) async fn stdio_answering_gated(
+    kernel: crate::context_integrity::ContextIntegrityKernel,
+    answer: Value,
+) -> Sent {
+    stdio_call(
+        |meta| meta.set_context_integrity_kernel(kernel),
+        // A modern client that declares form elicitation, so the question
+        // clears the capability gate (MRTR.9) and reaches the content gate.
+        (
+            json!({}),
+            Some(json!({
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}}
+            })),
+        ),
+        answer,
+    )
+    .await
+}
+
 /// R5 with a chain signer emitting on request, the call carrying a chain nonce.
 pub(crate) async fn stdio_chained() -> Sent {
     use crate::gateway::chain_test_support::{NONCE_KEY, signer};
