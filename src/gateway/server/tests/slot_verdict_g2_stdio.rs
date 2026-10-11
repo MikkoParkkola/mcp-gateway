@@ -496,8 +496,7 @@ async fn f5a_stdio_route_authorize_refusal_resolves_nothing() {
         "F5(a) stdio: the hidden step's answer differs from a missing step's"
     );
     assert_eq!(
-        releases - twin_releases,
-        0,
+        releases, twin_releases,
         "F5(a) stdio: run_command resolved a credential: {hidden}"
     );
     assert_eq!(

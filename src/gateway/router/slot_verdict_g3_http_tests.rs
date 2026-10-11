@@ -349,8 +349,7 @@ async fn g3_f5a_route_authorize_refusal_resolves_nothing() {
         "F5(a): the hidden step's answer differs from a missing step's"
     );
     assert_eq!(
-        mints - twin_mints,
-        0,
+        mints, twin_mints,
         "F5(a): run_command resolved a credential: {hidden:?}"
     );
     assert_eq!(

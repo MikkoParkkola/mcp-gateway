@@ -358,6 +358,25 @@ async fn stdio_chain_with_a_denied_last_target_charges_no_earlier_target() {
     }
     let (hidden, sends) = run(&["write"], &["read", "write"]).await;
     let (missing, twin_sends) = run(&[], &["read", "nosuch"]).await;
+    // Each chain fails at its last step, and the two answers are one with
+    // the step's tool name factored out (MIK-8361, lead ruling on F5(a)).
+    assert!(
+        hidden[0].get("error").is_some() && missing[0].get("error").is_some(),
+        "premise: each chain fails at its last step: {} / {}",
+        hidden[0],
+        missing[0]
+    );
+    let (hidden_text, missing_text) = (hidden[0].to_string(), missing[0].to_string());
+    let (named, twin_named) = (hidden_text.matches("write").count(), missing_text.matches("nosuch").count());
+    assert!(
+        named >= 1 && named == twin_named,
+        "premise: each answer names its own step, as often ({named} vs {twin_named})"
+    );
+    assert_eq!(
+        hidden_text.replace("write", "<tool>"),
+        missing_text.replace("nosuch", "<tool>"),
+        "the denied step's answer differs from a missing step's"
+    );
     assert_eq!(
         twin_sends, 1,
         "premise: the twin's chain sends exactly its first step: {missing:?}"
