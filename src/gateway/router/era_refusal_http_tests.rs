@@ -9,7 +9,8 @@ use serde_json::json;
 
 use super::direct_guards_fixture::{Answer, fixture, send_with_headers};
 
-fn modern_params(caps: serde_json::Value) -> serde_json::Value {
+fn modern_params(caps: impl Into<serde_json::Value>) -> serde_json::Value {
+    let caps: serde_json::Value = caps.into();
     json!({ "_meta": {
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
         "io.modelcontextprotocol/clientCapabilities": caps,

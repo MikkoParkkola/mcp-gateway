@@ -37,7 +37,8 @@ async fn send(modern: bool, request: Value) -> Option<Value> {
 }
 
 /// A request written against `version` with the `caps` the client declares.
-fn modern_request(id: Option<i64>, method: &str, version: &str, caps: Value) -> Value {
+fn modern_request(id: Option<i64>, method: &str, version: &str, caps: impl Into<Value>) -> Value {
+    let caps: Value = caps.into();
     let mut request = json!({
         "jsonrpc": "2.0",
         "method": method,

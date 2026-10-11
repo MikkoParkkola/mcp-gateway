@@ -23,7 +23,6 @@ use crate::gateway::router::helpers::{
 };
 use crate::gateway::streaming::create_sse_response;
 use crate::mtls::CertIdentity;
-use crate::protocol::JsonRpcResponse;
 
 pub(super) use crate::protocol::modern_refusal::unsupported_version_error;
 
