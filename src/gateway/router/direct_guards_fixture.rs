@@ -292,6 +292,15 @@ pub(crate) async fn fixture_sanitizing(answer: Answer, on: bool) -> Fx {
     fx
 }
 
+/// Any fixture builder, run with `security.sanitize_input` = `on` (MIK-8154
+/// rows: the firewalled and code-mode fixtures under sanitization).
+pub(crate) async fn sanitizing<F: std::future::Future<Output = Fx>>(on: bool, build: F) -> Fx {
+    SANITIZE.with(|s| s.set(on));
+    let fx = build.await;
+    SANITIZE.with(|s| s.set(false));
+    fx
+}
+
 /// [`fixture`], for arming that needs the owned builder methods
 /// (`with_profile_registry`, `with_cost_governance`).
 pub(crate) async fn fixture_built(answer: Answer, build: impl FnOnce(MetaMcp) -> MetaMcp) -> Fx {
