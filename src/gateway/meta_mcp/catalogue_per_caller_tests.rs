@@ -615,9 +615,11 @@ async fn a_per_user_slot_past_its_ttl_is_refetched_not_served_stale() {
 /// is asymmetric on purpose: something else always refreshes it, so a stale
 /// read costs one interval and no caller waits.
 ///
-/// The upstream holds the next fetch from right after the fill: the cold
-/// read's own queued refresh parks there and cannot rewarm the slot, so the
-/// second read is on the stale path. That read must
+/// The upstream holds the next fetch from right after the fill, whichever
+/// that is: the cold read's queued refresh if it has not fetched yet, else
+/// the refresh the second read spawns. Single-flight makes any later fetch
+/// wait on the held one, so nothing rewarms the slot and the second read is
+/// on the stale path. That read must
 /// return while the fetch is held: a synchronous refetch would wait on it
 /// (single-flight joins the held fetch) and fail the bounded wait. A count
 /// read after the read cannot say this; the cold read's refresh may already
@@ -649,9 +651,10 @@ async fn a_shared_slot_past_its_ttl_still_serves_without_a_synchronous_refetch()
     .await
     .expect("second read");
     release.notify_one();
-    assert!(
-        !second.is_empty(),
-        "the shared path stopped serving its cached snapshot: {second:?}"
+    assert_eq!(
+        second.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+        vec![ChangingCatalogue::FIRST],
+        "the shared path must serve its cached snapshot, not a refetched one"
     );
 }
 

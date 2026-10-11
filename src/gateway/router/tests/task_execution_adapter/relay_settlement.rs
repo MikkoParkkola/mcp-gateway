@@ -254,12 +254,24 @@ async fn failed_task_records_nothing() {
 #[tokio::test]
 async fn task_get_renews_the_receipt() {
     let mock = MockBackend::answering(Answer::Sequence(vec![text(PROSE), text("ok")]));
-    let (state, _store, firewall) = relay_state_with_firewall(&mock, 1).await;
+    let window_secs = 1;
+    let (state, _store, firewall) = relay_state_with_firewall(&mock, window_secs).await;
     let (task, settled) = run_task_id(&state, 1, "relay-r3").await;
     assert_eq!(status_of(&settled), "completed", "base: {settled}");
+    // Terminal visibility precedes worker cleanup: the settlement's receipt
+    // may still be committing. Join the worker first, so the receipt exists
+    // before the clock freezes; a receipt committed after would be fresh.
+    let joined = state
+        .task_executor
+        .drain(std::time::Duration::from_secs(10))
+        .await;
+    assert!(
+        joined.is_clean(),
+        "the settling worker must finish: {joined:?}"
+    );
     // The settlement's receipt lapses on this firewall's frozen clock, not by
     // sleeping: wall time under load cannot lapse the renewal (MIK-8354).
-    firewall.advance_collusion_clock_for_test(std::time::Duration::from_secs(2));
+    firewall.advance_collusion_clock_for_test(std::time::Duration::from_secs(window_secs + 1));
     let answer = relay(&state, 2).await;
     assert!(
         answer.get("error").is_none(),

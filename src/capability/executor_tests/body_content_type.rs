@@ -319,7 +319,17 @@ async fn send_with_retry_does_not_retry_timeouts_when_not_idempotent() {
         .timeout(std::time::Duration::from_millis(120));
 
     let resp = send_with_retry(req, "test", false, &health).await;
+    // The call was made and failed: `send_with_retry` records exactly one
+    // failure, on its final error path, so a skipped send leaves 0. With the
+    // listener live, the only failure left is the request timeout (inferred:
+    // the error text does not name it). A retried call also records once at
+    // the end, so the backlog below, not this count, says whether it retried.
     assert!(resp.is_err(), "the hung request should time out");
+    assert_eq!(
+        health.metrics().failure_count,
+        1,
+        "the call must have been attempted and failed once"
+    );
 
     listener
         .set_nonblocking(true)
@@ -328,13 +338,27 @@ async fn send_with_retry_does_not_retry_timeouts_when_not_idempotent() {
     loop {
         match listener.accept() {
             Ok(_) => attempts += 1,
+            // A queued connection the client already closed (it timed out)
+            // can surface as aborted or reset on macOS and Windows: still an
+            // attempt that reached the server.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::ConnectionAborted | std::io::ErrorKind::ConnectionReset
+                ) =>
+            {
+                attempts += 1;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
             Err(e) => panic!("draining the backlog: {e}"),
         }
     }
-    assert_eq!(
-        attempts, 1,
-        "a non-idempotent timeout must NOT be retried (single attempt)"
+    // At most one: zero when the timeout fired before the connect under load,
+    // which is still no retry. A retry is a second attempt (mutant m3: 3).
+    assert!(
+        attempts <= 1,
+        "a non-idempotent timeout must NOT be retried, but {attempts} attempts reached the server"
     );
 }
 
