@@ -121,3 +121,46 @@ fn row7_failed_grant_record_on_a_withheld_name_answers_as_absent() {
         "row 7: the withheld call reached the endpoint"
     );
 }
+
+/// MIK-8340 row 7b (A5.1): the best-effort write covers the withheld call's
+/// own decision only. In one grant slot (one request), a decision noted
+/// before the withheld record, whose request-end write fails under
+/// `FailClosed`, still answers -32005; the withheld record was written at
+/// once. Catches a `note_best_effort` that takes every note in the slot.
+#[tokio::test]
+async fn row7b_another_decision_in_the_request_still_fails_closed() {
+    let endpoint = Endpoint::start(false).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (meta, log) = denied_gateway(&endpoint, &dir);
+    let meta = surfaced(meta);
+    let who = api_key("bob");
+    let caller = context(&who);
+    let (own_written, verdict, _) =
+        super::grant_audit::with_grant_slot(meta.transparency_logger.as_ref(), async {
+            // Another decision in the same request, noted first.
+            let other = meta.identity_grant_rule(
+                CAPS,
+                PERSONAL,
+                caller.scope(),
+                crate::gateway::authz::Emit::Audit,
+            );
+            assert!(other.is_err(), "premise: bob holds no grant");
+            let (_, own) = super::grant_audit::note_best_effort(|| {
+                meta.withheld_surfaced(CAPS, PERSONAL, &caller, None)
+            })
+            .await;
+            // Fail the request-end write, which holds only the other one.
+            log.fail_next_append_of_kind_for_test(DECISION_KIND);
+            own.is_ok()
+        })
+        .await;
+    assert!(
+        own_written,
+        "row 7b: the withheld record was not written at once"
+    );
+    assert_eq!(decisions(&dir).len(), 1, "row 7b: records written at once");
+    assert!(
+        matches!(verdict, Err(crate::Error::AuditUnavailable)),
+        "row 7b: the other decision's failed write no longer fails closed: {verdict:?}"
+    );
+}
