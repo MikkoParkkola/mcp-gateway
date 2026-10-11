@@ -137,6 +137,8 @@ mod hardened_identity_tests;
 mod identity_parity_tests;
 mod judged_answer;
 #[cfg(test)]
+mod mcp_nonce_admission_tests;
+#[cfg(test)]
 mod mcp_nonce_tests;
 #[cfg(test)]
 mod meta_fingerprint_tests;
@@ -144,6 +146,8 @@ mod meta_fingerprint_tests;
 mod mrtr9_lease_tests;
 #[cfg(test)]
 mod playbook_envelope_tests;
+#[cfg(test)]
+mod playbook_key_tests;
 /// MIK-8058: a failed reload's status says whose fault it is.
 #[cfg(all(test, feature = "webui"))]
 mod reload_status_tests;

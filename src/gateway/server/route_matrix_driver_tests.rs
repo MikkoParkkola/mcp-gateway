@@ -17,7 +17,8 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::{
-    stdio_sanitizing, stdio_task_surfaced,
+    served_sanitizing, stdio_blocked_task, stdio_sanitizing, stdio_task_read, stdio_task_surfaced,
+    stdio_x14_signed_round,
 };
 
 /// A backend serving one tool, `read`, counting the `tools/call` sends.
@@ -62,35 +63,12 @@ pub(crate) struct Sent {
     pub(crate) backend_calls: usize,
 }
 
-/// R5: stdio `tools/call gateway_invoke alpha read` with `args`, its params
-/// carrying `meta` as `_meta` when given, on a Meta-MCP that `arm` prepares
-/// (a firewall, a chain signer) as the stdio server would. The backend
-/// answers `answer`.
-async fn stdio_call(
+/// A stdio Meta-MCP serving `alpha` over `transport`, prepared by `arm` (a
+/// firewall, a chain signer) as the stdio server would.
+async fn stdio_meta(
     arm: impl FnOnce(&mut MetaMcp),
-    call: (Value, Option<Value>),
-    answer: Value,
-) -> Sent {
-    stdio_call_on(Entry::Invoke, arm, call, answer).await
-}
-
-/// How a stdio row names the backend tool.
-#[derive(Clone, Copy)]
-enum Entry {
-    /// `gateway_invoke` naming `alpha` and `read`.
-    Invoke,
-    /// `read` by the name the gateway surfaces it under (MIK-8159).
-    Surfaced,
-}
-
-/// [`stdio_call`] through `entry`.
-async fn stdio_call_on(
-    entry: Entry,
-    arm: impl FnOnce(&mut MetaMcp),
-    (args, meta): (Value, Option<Value>),
-    answer: Value,
-) -> Sent {
-    let calls = Arc::new(AtomicUsize::new(0));
+    transport: Arc<dyn crate::transport::Transport>,
+) -> Arc<MetaMcp> {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "alpha",
@@ -98,43 +76,54 @@ async fn stdio_call_on(
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
-    backend.set_transport_for_test(Arc::new(Counting {
-        calls: Arc::clone(&calls),
-        answer,
-    }) as Arc<dyn crate::transport::Transport>);
+    backend.set_transport_for_test(transport);
     backend
         .get_tools_shared()
         .await
         .expect("warm the tool cache");
     assert!(registry.register(backend));
-    let mut gateway_meta = match entry {
-        Entry::Invoke => MetaMcp::new(registry),
-        Entry::Surfaced => {
-            MetaMcp::new(registry).with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
-                server: "alpha".to_string(),
-                tool: "read".to_string(),
-            }])
-        }
-    };
+    let mut gateway_meta = MetaMcp::new(registry);
     arm(&mut gateway_meta);
-    let gateway_meta = Arc::new(gateway_meta);
+    Arc::new(gateway_meta)
+}
+
+/// One stdio `tools/call` with `params` through the real stdio dispatch.
+async fn stdio_send(gateway_meta: &Arc<MetaMcp>, params: Value) -> Value {
     let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
-    let mut params = match entry {
-        Entry::Invoke => json!({ "name": "gateway_invoke",
-            "arguments": { "server": "alpha", "tool": "read", "arguments": args } }),
-        Entry::Surfaced => json!({ "name": "read", "arguments": args }),
-    };
+    let request = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params });
+    super::Gateway::dispatch_single(gateway_meta, &policy, &mtls, &request, "stdio-matrix")
+        .await
+        .expect("a request is answered")
+}
+
+/// The params of `gateway_invoke alpha read` with `args`.
+fn invoke_read(args: &Value) -> Value {
+    json!({ "name": "gateway_invoke",
+        "arguments": { "server": "alpha", "tool": "read", "arguments": args } })
+}
+
+/// R5: stdio `tools/call gateway_invoke alpha read` with `args`, its params
+/// carrying `meta` as `_meta` when given, on a Meta-MCP that `arm` prepares.
+/// The backend answers `answer`.
+async fn stdio_call(
+    arm: impl FnOnce(&mut MetaMcp),
+    (args, meta): (Value, Option<Value>),
+    answer: Value,
+) -> Sent {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = Arc::new(Counting {
+        calls: Arc::clone(&calls),
+        answer,
+    });
+    let gateway_meta = stdio_meta(arm, transport).await;
+    let mut params = invoke_read(&args);
     if let Some(meta) = meta {
         params["_meta"] = meta;
     }
-    let request = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params });
-    let body =
-        super::Gateway::dispatch_single(&gateway_meta, &policy, &mtls, &request, "stdio-matrix")
-            .await
-            .expect("a request is answered");
+    let body = stdio_send(&gateway_meta, params).await;
     Sent {
         body,
         backend_calls: calls.load(Ordering::SeqCst),
@@ -153,30 +142,53 @@ pub(crate) async fn stdio_firewalled_answering(
     args: Value,
     answer: &'static str,
 ) -> Sent {
+    let firewall = audited_firewall(audit);
+    stdio_call(arm_firewall(firewall), (args, None), text_result(answer)).await
+}
+
+/// The production firewall (request and response scanning) writing audit
+/// rows to `audit`.
+fn audited_firewall(audit: &Path) -> Arc<crate::security::firewall::Firewall> {
+    audited_firewall_with(audit, |_| {})
+}
+
+/// [`audited_firewall`] with `tune` applied to its config.
+fn audited_firewall_with(
+    audit: &Path,
+    tune: impl FnOnce(&mut crate::security::firewall::FirewallConfig),
+) -> Arc<crate::security::firewall::Firewall> {
     use crate::security::firewall::{Firewall, FirewallConfig};
-    let firewall = Arc::new(
-        Firewall::from_config(
-            FirewallConfig {
-                enabled: true,
-                scan_requests: true,
-                scan_responses: true,
-                credential_redaction: true,
-                audit_log: Some(audit.to_path_buf()),
-                ..FirewallConfig::default()
-            },
-            None,
-        )
-        .keyed_for_test(),
-    );
-    stdio_call(
-        |meta| {
-            meta.share_keyring_with_for_test(&firewall);
-            meta.set_firewall(Some(firewall));
-        },
-        (args, None),
-        text_result(answer),
-    )
-    .await
+    let mut config = FirewallConfig {
+        enabled: true,
+        scan_requests: true,
+        scan_responses: true,
+        credential_redaction: true,
+        audit_log: Some(audit.to_path_buf()),
+        ..FirewallConfig::default()
+    };
+    tune(&mut config);
+    // The detector exists only with a transition tracker, as in production.
+    let tracker = config
+        .anomaly_detection
+        .then(|| Arc::new(crate::transition::TransitionTracker::new()));
+    Arc::new(Firewall::from_config(config, tracker).keyed_for_test())
+}
+
+/// Arm a Meta-MCP with `firewall` the way the gateway does: it adopts the
+/// firewall's keyring, then installs it (#2210, MIK-8276).
+fn arm_firewall(firewall: Arc<crate::security::firewall::Firewall>) -> impl FnOnce(&mut MetaMcp) {
+    move |meta| {
+        meta.share_keyring_with_for_test(&firewall);
+        meta.set_firewall(Some(firewall));
+    }
+}
+
+/// R5: a clean `gateway_invoke read` over stdio with anomaly detection on.
+/// The route-stage scan keys the detector on the one stdio caller; with no
+/// identity it would refuse every call unscored (P3).
+pub(crate) async fn stdio_anomaly_clean(audit: &Path) -> Sent {
+    let firewall = audited_firewall_with(audit, |config| config.anomaly_detection = true);
+    stdio_call(arm_firewall(firewall), (json!({}), None), text_result("ok")).await
 }
 
 /// A plain text tool result.
@@ -209,14 +221,193 @@ pub(crate) async fn stdio_chained() -> Sent {
     .await
 }
 
-/// R5 by the surfaced name, with the same signer and nonce (MIK-8159.CHAIN.1).
+/// R5 by the surfaced name, with the same signer and nonce (MIK-8159.CHAIN.1):
+/// stdio `tools/call read` on a Meta-MCP that surfaces `alpha`'s `read`.
 pub(crate) async fn stdio_surfaced_chained() -> Sent {
     use crate::gateway::chain_test_support::{NONCE_KEY, signer};
-    stdio_call_on(
-        Entry::Surfaced,
-        |meta| meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest),
-        (json!({}), Some(json!({ NONCE_KEY: "matrix-nonce" }))),
-        text_result("ok"),
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transport = Arc::new(Counting {
+        calls: Arc::clone(&calls),
+        answer: text_result("ok"),
+    });
+    let gateway_meta = stdio_meta(
+        |meta| {
+            // Surfacing is a consuming builder; the placeholder is dropped.
+            let built = std::mem::replace(meta, MetaMcp::new(Arc::new(BackendRegistry::new())));
+            *meta = built.with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+                server: "alpha".to_string(),
+                tool: "read".to_string(),
+            }]);
+            meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest);
+        },
+        transport,
     )
-    .await
+    .await;
+    let params = json!({ "name": "read", "arguments": {}, "_meta": { NONCE_KEY: "matrix-nonce" } });
+    let body = stdio_send(&gateway_meta, params).await;
+    Sent {
+        body,
+        backend_calls: calls.load(Ordering::SeqCst),
+    }
+}
+
+/// A backend serving `read` whose first `tools/call` asks one form question
+/// (`k1`) and whose later ones answer `ok`, counting its sends.
+struct AsksOnce {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for AsksOnce {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
+        let body = if method == "tools/list" {
+            json!({ "tools": [{ "name": "read", "inputSchema": { "type": "object" } }] })
+        } else if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            json!({
+                "resultType": "input_required",
+                "inputRequests": { "k1": {
+                    "method": "elicitation/create",
+                    "params": { "message": "Which account?", "requestedSchema": { "type": "object" } }
+                }},
+                "requestState": "backend-state-1"
+            })
+        } else {
+            text_result("ok")
+        };
+        Ok(JsonRpcResponse::success(RequestId::Number(1), body))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// R5: a modern `gateway_invoke read` over stdio whose backend asks one
+/// question; the continuation retry answers it with `answer`. Firewalled as
+/// [`stdio_firewalled`], writing audit rows to `audit`. Returns the retry's
+/// outcome and the backend's sends.
+pub(crate) async fn stdio_retry_answering(audit: &Path, answer: &str) -> Sent {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let firewall = audited_firewall(audit);
+    let gateway_meta = stdio_meta(
+        arm_firewall(firewall),
+        Arc::new(AsksOnce {
+            calls: Arc::clone(&calls),
+        }),
+    )
+    .await;
+    let mut params = invoke_read(&json!({}));
+    params["_meta"] = json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": { "elicitation": { "form": {} } }
+    });
+    let asked = stdio_send(&gateway_meta, params.clone()).await;
+    let state = asked["result"]["requestState"]
+        .as_str()
+        .unwrap_or_else(|| panic!("an interim answer with a state: {asked}"))
+        .to_owned();
+    params["requestState"] = json!(state);
+    params["inputResponses"] =
+        json!({ "k1": { "action": "accept", "content": { "account": answer } } });
+    let body = stdio_send(&gateway_meta, params).await;
+    Sent {
+        body,
+        backend_calls: calls.load(Ordering::SeqCst),
+    }
+}
+
+/// R5: two `gateway_invoke read` calls, with `args.0` then `args.1`, over one
+/// stdio Meta-MCP whose firewall config `tune` adjusts (P3 A10: the call
+/// budget and the tenant guard the route-stage scan now keys on the stdio
+/// caller). Returns both answers and the backend's sends.
+pub(crate) async fn stdio_twice(
+    audit: &Path,
+    tune: impl FnOnce(&mut crate::security::firewall::FirewallConfig),
+    args: (Value, Value),
+) -> (Value, Value, usize) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let firewall = audited_firewall_with(audit, tune);
+    let gateway_meta = stdio_meta(
+        arm_firewall(firewall),
+        Arc::new(Counting {
+            calls: Arc::clone(&calls),
+            answer: text_result("ok"),
+        }),
+    )
+    .await;
+    let first = stdio_send(&gateway_meta, invoke_read(&args.0)).await;
+    let second = stdio_send(&gateway_meta, invoke_read(&args.1)).await;
+    (first, second, calls.load(Ordering::SeqCst))
+}
+
+/// R5, MIK-8150 NONCE.5: on the production-built hardened stdio gateway, a
+/// keyed signed `gateway_invoke` runs under `t1`; the key reused for other
+/// arguments is refused by execution admission (409) under `t2`; the honest
+/// call is re-sent under `t2` with its own key; then a third call under `t2`.
+/// Returns (the admission refusal, the re-send, the third send, the backend's
+/// `tools/call` count). Blocking: the fixture owns its runtime, as the stdio
+/// signing rows do.
+pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value, usize) {
+    use super::signing_allocation_tests::signing_nonce_allocations_support::{
+        BACKEND, Fixture, SESSION, TOOL, runtime,
+    };
+    use crate::gateway::meta_mcp::signing::NONCE_META;
+    use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
+    runtime().block_on(async {
+        let fixture = Fixture::start_hardened().await;
+        let call = |key: &'static str, nonce: &'static str, cmd: &'static str| {
+            let fixture = &fixture;
+            async move {
+                let request = serde_json::json!({
+                    "jsonrpc": "2.0", "id": nonce, "method": "tools/call",
+                    "params": {"name": "gateway_invoke",
+                        "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"cmd": cmd}},
+                        "_meta": {
+                            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                            "io.modelcontextprotocol/clientCapabilities": {},
+                            NONCE_META: nonce,
+                            IDEMPOTENCY_KEY_META: key,
+                        }}
+                });
+                super::Gateway::dispatch_single_with_sink(
+                    &fixture.meta,
+                    &fixture.tool_policy,
+                    &fixture.mtls_policy,
+                    request,
+                    super::StdioClient {
+                        session_id: SESSION,
+                        channel: &crate::gateway::input_bridge::NoClientChannel,
+                        handshake_capabilities: crate::protocol::meta::Declared::NONE,
+                        tasks: None,
+                        modern: false,
+                        sanitize: super::stdio_single::InputSanitizing::Off,
+                    },
+                    &super::StdioTelemetry::default(),
+                )
+                .await
+                .expect("a request carrying an id must produce a response")
+            }
+        };
+        let first = call("t-k1", "stdio-adm-t1-0001", "one").await;
+        assert!(
+            first.get("error").is_none(),
+            "premise: the first call ran: {first}"
+        );
+        let refused = call("t-k1", "stdio-adm-t2-0001", "other").await;
+        let resent = call("t-k2", "stdio-adm-t2-0001", "other").await;
+        let third = call("t-k3", "stdio-adm-t2-0001", "other").await;
+        (refused, resent, third, fixture.backend.tools_call_count())
+    })
 }

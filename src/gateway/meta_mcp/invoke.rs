@@ -57,6 +57,7 @@ mod withheld_evidence;
 mod account_mint;
 
 use super::support::{augment_with_predictions, augment_with_trace, idempotency_key_for};
+pub(crate) use chokepoint::RouteRefusal;
 pub(crate) use side_effect_markers::{LostRoundRoute, settle_lost_round};
 use side_effect_markers::{uncertain_side_effect, withheld_side_effect};
 pub(crate) mod gateway_writes;
@@ -234,7 +235,7 @@ impl MetaMcp {
         // exactly what the `_full` stripping above says must not be possible.
         let idem_key = idempotency_key_for(
             caller.retry.idempotency_key.as_deref(),
-            &projection_key_suffix,
+            &super::support::step_scoped(&projection_key_suffix),
             &caller_principal,
             self.idempotency_cache.as_ref(),
             "meta",

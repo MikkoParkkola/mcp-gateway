@@ -56,6 +56,8 @@ async fn confirm(
             principal: crate::protocol::mrtr::source_fingerprint(caller.principal_source(None)),
             quota: caller.quota_key(),
             owner,
+            scope: super::open_scope(),
+            session_id: None,
             input_capabilities: elicitation(),
             is_modern: true,
             admission: &fx.admission,

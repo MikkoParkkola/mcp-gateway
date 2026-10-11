@@ -41,53 +41,6 @@ ROOT = Path(__file__).resolve().parents[2]
 INVENTORY = "docs/release/v4.0.0-critical-functions.tsv"
 UNENFORCING = "docs/release/v4.0.0-unenforcing-functions.tsv"
 ALL = "--all"
-# MIK-8195: the areas whose every function is classified. `--all` enforces only
-# these while the waves land, and the last wave deletes this list.
-SWEPT_AREAS = (
-    "src/oauth/login_gate.rs",
-    "src/oauth/client/",
-    "src/personal_accounts/journey/",
-    "src/gateway/task_service/",
-    "src/gateway/router/",
-    # MIK-8195 W5 + W6 (personal_accounts). Not the whole directory yet:
-    # config/ and provider* still hold unrowed functions.
-    "src/personal_accounts/identity.rs",
-    "src/personal_accounts/migration_precondition.rs",
-    "src/personal_accounts/migration_source.rs",
-    "src/personal_accounts/mod.rs",
-    "src/personal_accounts/refusal.rs",
-    "src/personal_accounts/storage.rs",
-    "src/personal_accounts/storage_windows.rs",
-    "src/personal_accounts/vault.rs",
-    "src/personal_accounts/worker_callback.rs",
-    "src/personal_accounts/commit.rs",
-    "src/personal_accounts/config.rs",
-    "src/personal_accounts/migration.rs",
-    "src/personal_accounts/migration_revision.rs",
-    "src/personal_accounts/offline_migration.rs",
-    "src/personal_accounts/revoke.rs",
-    "src/personal_accounts/service.rs",
-    "src/personal_accounts/worker.rs",
-    "src/personal_accounts/worker_journeys.rs",
-    # MIK-8195 W4: oauth (non-client) and the stdio server modules.
-    "src/oauth/callback.rs",
-    "src/oauth/metadata.rs",
-    "src/oauth/storage.rs",
-    "src/oauth/token_file.rs",
-    "src/gateway/server/stdio",
-    # MIK-8195 W8: the stdio read judge.
-    "src/gateway/outbound/stdio.rs",
-    # MIK-8195 W3: identity propagation, the input bridge and the rest of
-    # personal_accounts (config/ and provider).
-    "src/identity_propagation/",
-    "src/gateway/input_bridge.rs",
-    "src/gateway/meta_mcp/task_confirmation",
-    "src/config/account_bindings.rs",
-    "src/personal_accounts/config/",
-    "src/personal_accounts/provider",
-    # MIK-8195 W1: the HTTP transport.
-    "src/transport/http/",
-)
 # Diffing against git's empty tree reads every line of <head> as added.
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
@@ -101,7 +54,10 @@ PREFIXES = (
     "src/transport/command_split.rs",
     "src/gateway/input_bridge.rs",
     "src/gateway/task_service/",
-    "src/gateway/meta_mcp/task_confirmation",
+    # The module file and its directory, spelled apart: a git pathspec names
+    # one path, so the stem alone matched only the directory.
+    "src/gateway/meta_mcp/task_confirmation.rs",
+    "src/gateway/meta_mcp/task_confirmation/",
     "src/personal_accounts/",
     "src/config/account_bindings.rs",
     "src/identity_propagation/",
@@ -305,8 +261,7 @@ def missing_rows(base: str, head: str) -> list[tuple[str, str, int, int]]:
     in `head`: (file, fn, line, occurrence)."""
     head = git("rev-parse", head).strip()
     known = rows(head, INVENTORY) | rows(head, UNENFORCING)
-    found = [f for f in added_functions(base, head) if (f[0], f[1], f[3]) not in known]
-    return [f for f in found if base != ALL or f[0].startswith(SWEPT_AREAS)]
+    return [f for f in added_functions(base, head) if (f[0], f[1], f[3]) not in known]
 
 
 def main(argv: list[str]) -> int:
@@ -335,7 +290,7 @@ def main(argv: list[str]) -> int:
             "docs/release/inventory.d/<pr>.unenforcing.tsv (it does not, with a reason)."
         )
         return 1
-    scope = "in the swept COV.3 areas" if argv[1] == ALL else "added on the COV.3 paths"
+    scope = "on the COV.3 paths" if argv[1] == ALL else "added on the COV.3 paths"
     print(f"every function {scope} has a row")
     return 0
 

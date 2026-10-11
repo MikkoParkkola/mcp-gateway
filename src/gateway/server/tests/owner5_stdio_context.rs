@@ -45,6 +45,7 @@ fn real_stdio_context_carries_principal_and_no_personal_identity() {
             handshake_capabilities: crate::protocol::meta::Declared::NONE,
             tasks: None,
             modern: false,
+            sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
     );
 

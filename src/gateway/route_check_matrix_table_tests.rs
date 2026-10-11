@@ -13,12 +13,17 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
     use Route::{Direct, Invoke, Stdio, Surfaced, TaskSubmit, TaskWorker};
     match method {
         MethodKind::ToolsCall => match stage {
-            // The stateful check_request (dispatch_tools_call.rs:232,
-            // backend_handlers.rs:120); absent on stdio (stdio_dispatch.rs:394-559).
+            // The stateful check_request (dispatch_tools_call.rs,
+            // backend_handlers.rs:120; stdio's route stage,
+            // stdio_route_stage.rs, P3). Stated parity limit (lead ruling,
+            // P3): stdio admits the signing nonce before its route stage, so a
+            // bad nonce stays cheap to refuse (MIK-7377.SIGNING.5 row 40), and
+            // gives it back when the route stage refuses. A call with both a
+            // bad nonce and a blocked argument therefore answers the nonce
+            // error on stdio and the firewall error on /mcp.
             Stage::RouteFirewall => match route {
-                Invoke | Surfaced | Direct | TaskSubmit => Applies,
+                Invoke | Surfaced | Direct | TaskSubmit | Stdio => Applies,
                 TaskWorker => NotApplicable(Na::DecidedAtSubmit),
-                Stdio => ExpectedGap(Ticket::Mik8149),
             },
             // Every meta send passes it (invoke.rs:428); the direct route never
             // reaches it (MIK-8154.SAN.3); a task submit sends nothing.
@@ -27,14 +32,14 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
                 Direct => ExpectedGap(Ticket::Mik8154),
                 TaskSubmit => NotApplicable(Na::NoBackendSend),
             },
-            // /mcp honours the flag (dispatch_intake.rs:355); the direct route
-            // sanitizes whatever it says (backend_handlers.rs:171-175); stdio
-            // never sanitizes.
+            // /mcp honours the flag (dispatch_intake.rs:355), and stdio at its
+            // intake in the same order (stdio_dispatch.rs `prepare_signing`,
+            // P3); the direct route sanitizes whatever it says
+            // (backend_handlers.rs:171-175).
             Stage::Sanitize => match route {
-                Invoke | Surfaced | TaskSubmit => Applies,
+                Invoke | Surfaced | TaskSubmit | Stdio => Applies,
                 Direct => ExpectedGap(Ticket::Mik8154),
                 TaskWorker => NotApplicable(Na::DecidedAtSubmit),
-                Stdio => ExpectedGap(Ticket::Mik8149),
             },
             // Grants and the admin rule fire only for the capability provider
             // (server == capabilities.name, meta_mcp/visibility.rs).
@@ -56,9 +61,8 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
             Stage::TaskConfirm => match route {
                 Invoke | Direct => NotApplicable(Na::NotSurfacedName),
                 Surfaced => NotApplicable(Na::NoTaskMember),
-                TaskSubmit => Applies,
+                TaskSubmit | Stdio => Applies,
                 TaskWorker => NotApplicable(Na::DecidedAtSubmit),
-                Stdio => ExpectedGap(Ticket::Mik8160),
             },
             // The store's replay (invoke.rs:291, direct_dispatch.rs:111).
             Stage::Idempotency => match route {
@@ -72,12 +76,14 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
                 Direct => ExpectedGap(Ticket::Mik8154),
                 TaskSubmit | TaskWorker => NotApplicable(Na::DecidedAtSubmit),
             },
-            // An admit_meta_sync, relay or task-admission refusal keeps the
-            // nonce (MIK-8150 NONCE.1/.3/.6); the direct route gives it back
-            // (direct_dispatch.rs:313-316).
+            // An admission refusal of a call without task intent gives the
+            // nonce back on /mcp and stdio (MIK-8150, `signing::admit_meta_sync`),
+            // as the direct route does (direct_dispatch.rs:313-316). A relay
+            // refusal and any task call's refusal still keep it until every
+            // effect marks the execution (MIK-8353).
             Stage::NonceGiveBack => match route {
-                Invoke | Surfaced | Stdio | TaskSubmit => ExpectedGap(Ticket::Mik8150),
-                Direct => Applies,
+                Invoke | TaskSubmit => ExpectedGap(Ticket::Mik8353),
+                Surfaced | Stdio | Direct => Applies,
                 TaskWorker => NotApplicable(Na::TransportHasNoNonce),
             },
             // A surfaced-name call keeps its chain source (MIK-8159).

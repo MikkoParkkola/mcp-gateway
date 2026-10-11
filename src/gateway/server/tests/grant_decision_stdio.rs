@@ -53,6 +53,7 @@ async fn stdio_admission_refusal_writes_one_record() {
             handshake_capabilities: crate::protocol::meta::Declared::NONE,
             tasks: None,
             modern: false,
+            sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
         &super::super::StdioTelemetry::default(),
     )
