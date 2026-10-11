@@ -30,14 +30,12 @@ auth:
 #      /.well-known/jwks.json (src/gateway/router/mod.rs).
 key_server:
   enabled: true
-  token_ttl_secs: 300               # short-lived for the demo
   oidc:
     - issuer: "https://accounts.google.com"
       audiences: ["${GATEWAY_OIDC_CLIENT_ID}"]
       allowed_domains: ["example.com"]
     - issuer: "mcp-gateway"
       jwks_uri: "http://127.0.0.1:39400/.well-known/jwks.json"
-      auto_discover: false
       audiences: []
       allowed_domains: []
   policies:
@@ -68,7 +66,7 @@ backends:
   mail-svc:
     # Replace with your real backend transport; the propagation wiring below
     # is independent of stdio vs http.
-    http_url: "http://127.0.0.1:8081/mcp"
+    url: "http://127.0.0.1:8081/mcp"
     description: "Example backend requiring a per-user, policy-scoped token"
     identity_propagation:
       strategy: token_exchange

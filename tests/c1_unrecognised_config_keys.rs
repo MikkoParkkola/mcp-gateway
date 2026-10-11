@@ -367,7 +367,8 @@ fn env_root_keys_and_shipped_examples_load() {
     let mut failures = Vec::new();
     let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
     let names = shipped_examples(&examples);
-    assert!(names.len() >= 8, "examples/ sweep found only {names:?}");
+    // 7 since 4.0 deleted circuit-breaker.yaml, which showed only hidden keys.
+    assert!(names.len() >= 7, "examples/ sweep found only {names:?}");
     for name in &names {
         // Through a 0600 copy: a git checkout is 0644, which CONFIG.2 refuses.
         let body = std::fs::read_to_string(examples.join(name)).expect("read example");
