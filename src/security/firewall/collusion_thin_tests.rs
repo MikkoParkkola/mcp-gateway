@@ -65,6 +65,13 @@ fn brute_select(middle: &[u64], room: usize) -> (u64, usize) {
 fn a_middle_sample_never_exceeds_its_room() {
     assert_eq!(thinned_middle(&[8, 24], &[], 1), (16, vec![]));
     assert_eq!(thinned_middle(&[0, 304], &[], 1), (256, vec![0]));
+    // mix(0xCE25_6BA9_4D67_D15A) = 2^63: only 0 survives past it, so the
+    // search ends at k = 64 and the reported rate saturates at 2^63.
+    assert_eq!(mix(0xCE25_6BA9_4D67_D15A), 1 << 63, "premise");
+    assert_eq!(
+        thinned_middle(&[0, 0xCE25_6BA9_4D67_D15A], &[], 1),
+        (1 << 63, vec![0])
+    );
     assert!(
         keep_thinned(8, 2) && keep_thinned(24, 2),
         "premise: m = 2 keeps both"

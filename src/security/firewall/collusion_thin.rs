@@ -14,6 +14,7 @@
 
 use std::collections::HashSet;
 
+#[cfg(test)]
 use super::CollusionDetector;
 
 /// The splitmix64 finalizer: spreads a fingerprint's bits so the thinning
@@ -25,7 +26,9 @@ pub(super) fn mix(mut z: u64) -> u64 {
     z ^ (z >> 31)
 }
 
-/// Whether `fp` survives thinning at one in `m` (a power of two).
+/// Whether `fp` survives thinning at one in `m` (a power of two): the
+/// predicate `thinned_middle` applies as trailing zeros (tests only).
+#[cfg(test)]
 pub(super) fn keep_thinned(fp: u64, m: u64) -> bool {
     mix(fp) % m == 0
 }

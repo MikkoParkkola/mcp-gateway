@@ -263,11 +263,6 @@ impl SketchStore {
         }
     }
 
-    /// Hold the lowest free position of `pair` for a sketch of `n`
-    /// fingerprints, evicting live sketches (the pair's own for its
-    /// backstop, any pair's for the global cap, oldest first) until it
-    /// fits. `None`, counted, when it cannot fit even then: the delivery is
-    /// recorded without a sketch.
     /// Cap the store at the bytes it holds now, so the next sketch must
     /// evict (tests only, `MIK-8066.CAP.2`).
     #[cfg(test)]
@@ -275,6 +270,11 @@ impl SketchStore {
         self.cap = self.bytes;
     }
 
+    /// Hold the lowest free position of `pair` for a sketch of `n`
+    /// fingerprints, evicting live sketches (the pair's own for its
+    /// backstop, any pair's for the global cap, oldest first) until it
+    /// fits. `None`, counted, when it cannot fit even then: the delivery is
+    /// recorded without a sketch.
     pub(super) fn reserve(&mut self, pair: Pair, n: usize) -> Option<Reservation> {
         let pair_cap = self.pair_cap;
         loop {
