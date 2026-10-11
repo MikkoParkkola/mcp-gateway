@@ -113,6 +113,115 @@ fn mcp_withheld_surfaced_task_answers_as_a_missing_name() {
     assert_eq!(withheld.backend_calls, 0, "{}", withheld.body);
 }
 
+/// MIK-8326.X14.1 and X14.4 on `/mcp`, with the production firewall on: a
+/// withheld surfaced task call leaves the audit log a missing name leaves,
+/// and is refused before the request firewall (no `request` row), X14 and
+/// admission (no idempotency key stored, no task committed).
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn mcp_withheld_surfaced_task_leaves_what_a_missing_name_leaves() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let withheld = Box::pin(router::task_submit_traced(
+        "k-deny",
+        Surfacing::On,
+        &dir.path().join("withheld.jsonl"),
+    ))
+    .await;
+    let missing = Box::pin(router::task_submit_traced(
+        "k-std",
+        Surfacing::Off,
+        &dir.path().join("missing.jsonl"),
+    ))
+    .await;
+    assert_eq!(
+        missing.body["error"]["code"], -32601,
+        "premise: {}",
+        missing.body
+    );
+    assert_eq!(
+        withheld.body["error"], missing.body["error"],
+        "{}",
+        withheld.body
+    );
+    assert_eq!(withheld.status, missing.status, "HTTP status differs");
+    assert_eq!(withheld.events, missing.events, "audit rows differ");
+    assert!(
+        !withheld.events.iter().any(|event| event == "request"),
+        "the request firewall ran: {:?}",
+        withheld.events
+    );
+    assert!(
+        !withheld.body.to_string().contains(X14_PROMPT),
+        "{}",
+        withheld.body
+    );
+    assert_eq!(
+        (
+            withheld.backend_calls,
+            withheld.stored_keys,
+            withheld.committed
+        ),
+        (0, 0, 0),
+        "dispatched, keyed or admitted: {}",
+        withheld.body
+    );
+}
+
+/// MIK-8326.X14.2 and X14.4 on stdio, with the production firewall on: the
+/// sibling of the `/mcp` row above.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn stdio_withheld_surfaced_task_leaves_what_a_missing_name_leaves() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let denying = crate::security::ToolPolicy::from_config(&crate::security::ToolPolicyConfig {
+        deny: vec!["echo".to_string()],
+        ..crate::security::ToolPolicyConfig::default()
+    });
+    let withheld = Box::pin(stdio::stdio_task_traced(
+        Some(denying),
+        Surfacing::On,
+        &dir.path().join("withheld.jsonl"),
+    ))
+    .await;
+    let missing = Box::pin(stdio::stdio_task_traced(
+        None,
+        Surfacing::Off,
+        &dir.path().join("missing.jsonl"),
+    ))
+    .await;
+    assert_eq!(
+        missing.body["error"]["code"], -32601,
+        "premise: {}",
+        missing.body
+    );
+    assert_eq!(
+        withheld.body["error"], missing.body["error"],
+        "{}",
+        withheld.body
+    );
+    assert_eq!(withheld.events, missing.events, "audit rows differ");
+    assert!(
+        !withheld.events.iter().any(|event| event == "request"),
+        "the request firewall ran: {:?}",
+        withheld.events
+    );
+    assert!(
+        !withheld.body.to_string().contains(X14_PROMPT),
+        "{}",
+        withheld.body
+    );
+    assert_eq!(
+        (
+            withheld.backend_calls,
+            withheld.stored_keys,
+            withheld.committed
+        ),
+        (0, 0, 0),
+        "dispatched, keyed or admitted: {}",
+        withheld.body
+    );
+}
+
 /// [`stdio::stdio_task_read`] on a current-thread runtime, with the warnings
 /// it logged on this thread.
 fn stdio_logged(

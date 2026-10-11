@@ -21,6 +21,8 @@ pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::{
     stdio_task_refused_without_a_grant, stdio_task_surfaced, stdio_x14_consumed_then_refused,
     stdio_x14_signed_round,
 };
+#[cfg(feature = "firewall")]
+pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::stdio_task_traced;
 
 /// A backend serving two tools, `read` and `write`, counting the `tools/call`
 /// sends. `write` is advertised so a policy denial of it is the policy's doing,

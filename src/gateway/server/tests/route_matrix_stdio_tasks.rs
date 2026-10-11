@@ -31,6 +31,36 @@ pub(crate) async fn stdio_task_read(
     policy: Option<crate::security::ToolPolicy>,
     surfacing: Surfacing,
 ) -> (Value, usize) {
+    let trace = Box::pin(stdio_task_run(policy, surfacing, None)).await;
+    (trace.body, trace.backend_calls)
+}
+
+/// What a stdio task submit left behind (MIK-8326): the answer, the backend's
+/// call count, the firewall audit log's event names, the tasks committed and
+/// the idempotency responses stored.
+pub(crate) struct StdioTrace {
+    pub(crate) body: Value,
+    pub(crate) backend_calls: usize,
+    pub(crate) events: Vec<String>,
+    pub(crate) committed: usize,
+    pub(crate) stored_keys: usize,
+}
+
+/// [`stdio_task_read`] with the production firewall on, writing to `audit`.
+#[cfg(feature = "firewall")]
+pub(crate) async fn stdio_task_traced(
+    policy: Option<crate::security::ToolPolicy>,
+    surfacing: Surfacing,
+    audit: &std::path::Path,
+) -> StdioTrace {
+    Box::pin(stdio_task_run(policy, surfacing, Some(audit))).await
+}
+
+async fn stdio_task_run(
+    policy: Option<crate::security::ToolPolicy>,
+    surfacing: Surfacing,
+    audit: Option<&std::path::Path>,
+) -> StdioTrace {
     let served = backend_listing(json!([{
         "name": TOOL,
         "inputSchema": {"type": "object"},
@@ -39,6 +69,12 @@ pub(crate) async fn stdio_task_read(
     .await;
     let calls = std::sync::Arc::clone(&served.1);
     let fixture = Box::pin(fixture_on_with(served, policy, |config| {
+        if let Some(audit) = audit {
+            let firewall = &mut config.security.firewall;
+            firewall.enabled = true;
+            firewall.scan_requests = true;
+            firewall.audit_log = Some(audit.to_path_buf());
+        }
         if matches!(surfacing, Surfacing::On) {
             config.meta_mcp.surfaced_tools = vec![SurfacedToolConfig {
                 server: BACKEND.to_string(),
@@ -65,7 +101,16 @@ pub(crate) async fn stdio_task_read(
         },
     });
     let body = dispatch(&fixture, request).await;
-    (body, calls.load(Ordering::SeqCst))
+    StdioTrace {
+        body,
+        backend_calls: calls.load(Ordering::SeqCst),
+        events: audit.map_or_else(
+            Vec::new,
+            crate::gateway::router::route_matrix_driver_tests::audit_events,
+        ),
+        committed: fixture.tasks.service.store.committed_count_for_test(),
+        stored_keys: fixture.meta.idempotency_completed_for_test().len(),
+    }
 }
 
 /// R5: `tools/call gateway_invoke` of the fixture's `echo` over stdio with a

@@ -558,7 +558,12 @@ async fn task_submit_fixture(
             super::direct_guards_fixture::fixture_built_on(transport, |meta| meta).await
         }
     };
-    let params = serde_json::json!({
+    (fx, calls, task_submit_params())
+}
+
+/// The R4a task-augmented call's params.
+fn task_submit_params() -> serde_json::Value {
+    serde_json::json!({
         "name": "read",
         "arguments": {},
         "task": {},
@@ -570,8 +575,7 @@ async fn task_submit_fixture(
             },
             crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "x14-submit"
         }
-    });
-    (fx, calls, params)
+    })
 }
 
 /// One R4a call sent with the API key `key`, on a fixture that surfaces
@@ -749,4 +753,84 @@ pub(crate) async fn surfaced_admission_then_resend() -> (Value, Value, Value, us
     let resent = call("s-k2", "s2", serde_json::json!({ "cmd": "other" })).await;
     let third = call("s-k3", "s2", serde_json::json!({ "cmd": "other" })).await;
     (refused, resent, third, fx.calls.load(Ordering::SeqCst))
+}
+
+/// What a refused submit left behind (MIK-8326): the answer and HTTP status,
+/// the backend's call count, the firewall audit log's event names, the tasks
+/// committed and the idempotency responses stored.
+pub(crate) struct Trace {
+    pub(crate) status: axum::http::StatusCode,
+    pub(crate) body: Value,
+    pub(crate) backend_calls: usize,
+    pub(crate) events: Vec<String>,
+    pub(crate) committed: usize,
+    pub(crate) stored_keys: usize,
+}
+
+/// The event names in a firewall audit log; none when nothing was written.
+pub(crate) fn audit_events(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(line)
+                .unwrap_or_else(|e| panic!("malformed audit row {line:?}: {e}"))["event"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect()
+}
+
+/// [`task_submit_read_as`] on the same fixture with the production firewall
+/// on both layers writing to `audit`, returning everything the submit left.
+#[cfg(feature = "firewall")]
+pub(crate) async fn task_submit_traced(
+    key: &str,
+    surfacing_mode: Surfacing,
+    audit: &Path,
+) -> Trace {
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let transport = std::sync::Arc::new(Destructive {
+        calls: std::sync::Arc::clone(&calls),
+    });
+    let build: fn(MetaMcp) -> MetaMcp = match surfacing_mode {
+        Surfacing::On => surfacing,
+        Surfacing::Off => |meta| meta,
+    };
+    let fx = super::direct_guards_fixture::with_transport(
+        transport,
+        Box::pin(
+            super::direct_guards_fixture::fixture_firewalled_audited_built(
+                Answer::Ok,
+                audit.to_path_buf(),
+                build,
+            ),
+        ),
+    )
+    .await;
+    let params = task_submit_params();
+    let (status, body) = super::direct_guards_fixture::send_with_headers(
+        &fx,
+        "/mcp",
+        key,
+        "tools/call",
+        params,
+        None,
+        &TASK_SUBMIT_HEADERS,
+    )
+    .await;
+    Trace {
+        status,
+        body,
+        backend_calls: calls.load(Ordering::SeqCst),
+        events: audit_events(audit),
+        committed: fx
+            .state
+            .task_executor
+            .service
+            .store
+            .committed_count_for_test(),
+        stored_keys: fx.state.meta_mcp.idempotency_completed_for_test().len(),
+    }
 }
