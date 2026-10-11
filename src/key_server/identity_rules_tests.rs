@@ -617,7 +617,7 @@ async fn an_empty_subject_is_nameless_before_any_domain_refusal() {
 /// token is issued with `iat = 0` and stored. Mutant: issue at `now = 0`.
 #[tokio::test]
 async fn an_unreadable_clock_issues_no_token() {
-    use crate::key_server::store::{TokenScopes, TokenStore as _};
+    use crate::key_server::store::TokenScopes;
     let h = Harness::start(&config_yaml("[]", "")).await;
     let identity = VerifiedIdentity {
         subject: "sub".to_string(),

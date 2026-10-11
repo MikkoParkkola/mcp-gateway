@@ -50,6 +50,11 @@ impl OAuthClient {
 
         let params = self.client_credentials_params(&client_id);
 
+        // One clock reading dates the token this request returns; a clock that
+        // cannot be read (before 1970) refuses before anything is sent
+        // (MIK-8202).
+        let now = super::issuance_clock()?;
+
         let response = self
             .client_for(&auth_meta.token_endpoint)?
             .post(&auth_meta.token_endpoint)
@@ -80,12 +85,13 @@ impl OAuthClient {
         })?;
 
         super::refuse_oversized_expires_in(&auth_meta.token_endpoint, token_response.expires_in)?;
-        let token = TokenInfo::from_response(
+        let token = TokenInfo::from_response_at(
             token_response.access_token,
             token_response.token_type,
             token_response.refresh_token,
             token_response.expires_in,
             token_response.scope,
+            now,
         );
 
         self.save_issued(&token).await?;
@@ -198,6 +204,11 @@ impl OAuthClient {
 
         let params = self.token_exchange_params(code, redirect_uri, &client_id, code_verifier);
 
+        // One clock reading dates the token this request returns; a clock that
+        // cannot be read (before 1970) refuses before anything is sent
+        // (MIK-8202).
+        let now = super::issuance_clock()?;
+
         let response = self
             .client_for(&auth_meta.token_endpoint)?
             .post(&auth_meta.token_endpoint)
@@ -238,12 +249,13 @@ impl OAuthClient {
         );
 
         super::refuse_oversized_expires_in(&auth_meta.token_endpoint, token_response.expires_in)?;
-        Ok(TokenInfo::from_response(
+        Ok(TokenInfo::from_response_at(
             token_response.access_token,
             token_response.token_type,
             token_response.refresh_token,
             token_response.expires_in,
             token_response.scope,
+            now,
         ))
     }
 

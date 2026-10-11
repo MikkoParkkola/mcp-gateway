@@ -484,3 +484,45 @@ fn restoring_a_client_id_without_a_discovered_issuer_is_a_no_op() {
     assert!(client.client_id.read().is_none());
     assert!(client.client_id_source.read().is_none());
 }
+
+/// MIK-8202 P3 O2 (issuer of an expiry): on a clock before 1970 a token
+/// request is refused before anything is sent. The endpoint is not called,
+/// nothing is cached, and no token is dated from the epoch. Red on the seam:
+/// the request goes out and the token is dated from 0. Mutant: read the clock
+/// after the send.
+#[tokio::test]
+async fn an_unreadable_clock_sends_no_token_request() {
+    use axum::{Router, routing::post};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let issuer = format!("http://{}", listener.local_addr().unwrap());
+    let seen = Arc::clone(&calls);
+    let app = Router::new().route(
+        "/token",
+        post(move || {
+            seen.fetch_add(1, Ordering::SeqCst);
+            async {
+                (
+                    [("content-type", "application/json")],
+                    r#"{"access_token":"t","token_type":"Bearer","expires_in":3600}"#,
+                )
+            }
+        }),
+    );
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let dir = tempfile::tempdir().unwrap();
+    let client = client(dir.path(), &issuer, &["client_credentials"]);
+
+    let refused = {
+        let _clock = crate::clock::test_clock::before_epoch();
+        client.try_client_credentials().await
+    };
+
+    let Err(Error::OAuth(message)) = refused else {
+        panic!("a refusal: {refused:?}");
+    };
+    assert!(message.contains("before 1970"), "{message}");
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "nothing was sent");
+    assert!(!client.has_valid_token(), "no token was cached");
+}

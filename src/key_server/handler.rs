@@ -260,8 +260,17 @@ pub(super) async fn issue(
     scopes: TokenScopes,
     client_ip: Option<IpAddr>,
 ) -> axum::response::Response {
-    // Issue token
-    let now = crate::clock::unix_secs().unwrap_or(0);
+    // An issuer refuses on a clock that cannot be read (before 1970): a token
+    // dated from the epoch would be refused on any readable clock, and
+    // nothing is stored (MIK-8202).
+    let Ok(now) = crate::clock::unix_secs() else {
+        warn!("key server: the host clock reads before 1970; no token issued");
+        return error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "temporarily_unavailable",
+            "the host clock reads before 1970; retry once it is set",
+        );
+    };
 
     let ttl = ks.config.token_ttl_secs;
     let token = TemporaryToken {
