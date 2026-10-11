@@ -192,6 +192,31 @@ struct State {
     closed: bool,
 }
 
+/// The one bound on a detached token step, from the moment it set out
+/// (design v2.3: `set_out + 2 x OAUTH_AUTHORIZATION_WINDOW`). Every stage is
+/// bounded by `min(its own bound, this deadline)`, so stalls cannot add up.
+pub(crate) const DETACHED_DEADLINE: std::time::Duration =
+    std::time::Duration::from_secs(2 * crate::oauth::OAUTH_AUTHORIZATION_WINDOW.as_secs());
+
+/// A stage's end: its own `bound` from now, or the step's `deadline`,
+/// whichever comes first (MIK-8339).
+pub(crate) fn stage_end(
+    bound: std::time::Duration,
+    deadline: tokio::time::Instant,
+) -> tokio::time::Instant {
+    (tokio::time::Instant::now() + bound).min(deadline)
+}
+
+/// What [`LoginGate::set_out_now`] captures.
+pub(crate) struct SetOut {
+    /// The cancel epoch the step set out at.
+    pub(crate) since: u64,
+    /// The cohort it belongs to.
+    pub(crate) cohort: Arc<Cohort>,
+    /// Its one deadline.
+    pub(crate) deadline: tokio::time::Instant,
+}
+
 /// A backend's one login at a time. See the module docs.
 #[derive(Debug)]
 pub(crate) struct LoginGate {
@@ -350,6 +375,18 @@ impl LoginGate {
         self.detached.load(Ordering::SeqCst)
     }
 
+    /// What a detached token step captures before it queues (MIK-8339): the
+    /// current start's set-out epoch and cohort, else the gate's now, and the
+    /// one deadline every stage of that step is bounded by. One helper for
+    /// the request path and `connect`, so the two cannot drift.
+    pub(crate) fn set_out_now(&self) -> SetOut {
+        SetOut {
+            since: set_out_epoch().unwrap_or_else(|| self.epoch()),
+            cohort: set_out_cohort().unwrap_or_else(|| self.cohort()),
+            deadline: tokio::time::Instant::now() + DETACHED_DEADLINE,
+        }
+    }
+
     /// Resolve when a restart or stop has revoked work that set out at
     /// `since`: the backend closed, or the cancel epoch moved (MIK-8339).
     /// Lock-free: it reads the published `(epoch, closed)`.
@@ -408,16 +445,12 @@ pub(crate) async fn fill_scope<F: std::future::Future>(
     FILL.scope(mark, work).await
 }
 
-/// Run the start `work` as one that set out at the gate's cancel `epoch`:
-/// its login is refused if a restart or stop cancelled logins since, however
-/// late its detached OAuth task is first scheduled.
-pub(crate) async fn set_out<F: std::future::Future>(epoch: u64, work: F) -> F::Output {
-    SET_OUT.scope((epoch, None), work).await
-}
-
-/// [`set_out`] carrying the `cohort` the start captured before it queued
-/// (MIK-8339), so its login, however late, shares that cohort's recorded
-/// failure at `begin` instead of opening a second login.
+/// Run the start `work` as one that set out at the gate's cancel `epoch`
+/// with the `cohort` it captured before it queued: its login is refused if a
+/// restart or stop cancelled logins since, however late its detached OAuth
+/// task is first scheduled, and shares that cohort's recorded failure at
+/// `begin` instead of opening a second login (MIK-8339). One entry point,
+/// so no start can omit its cohort.
 pub(crate) async fn set_out_with_cohort<F: std::future::Future>(
     epoch: u64,
     cohort: Arc<Cohort>,

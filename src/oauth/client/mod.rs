@@ -530,6 +530,7 @@ impl OAuthClient {
         interactive: bool,
         since: u64,
         cohort: &std::sync::Arc<super::login_gate::Cohort>,
+        deadline: tokio::time::Instant,
     ) -> Result<String> {
         if let Some(access) = self.live_token() {
             return Ok(access);
@@ -547,7 +548,10 @@ impl OAuthClient {
                 Some(gate) => tokio::select! {
                     biased;
                     () = gate.revoked_since(since) => return Err(cancelled()),
-                    () = tokio::time::sleep(grants::OAUTH_AUTHORIZATION_WINDOW) => {
+                    () = tokio::time::sleep_until(super::login_gate::stage_end(
+                        grants::OAUTH_AUTHORIZATION_WINDOW,
+                        deadline,
+                    )) => {
                         return Err(gate.classify(
                             cohort,
                             &self.backend_name,
@@ -573,7 +577,7 @@ impl OAuthClient {
                 Err(_) => {}
             }
         }
-        self.authorize_shared_with(interactive, Some(since), Some(cohort))
+        self.authorize_shared_with(interactive, Some(since), Some(cohort), Some(deadline))
             .await
     }
 

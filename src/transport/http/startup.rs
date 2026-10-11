@@ -80,10 +80,10 @@ impl HttpTransport {
             // start's own set-out epoch and cohort, else the gate's now. A
             // restart or stop after this point refuses this login.
             let gate = self.login_gate.clone();
-            let since = crate::oauth::login_gate::set_out_epoch()
-                .or_else(|| gate.as_ref().map(|gate| gate.epoch()));
-            let cohort = crate::oauth::login_gate::set_out_cohort()
-                .or_else(|| gate.as_ref().map(|gate| gate.cohort()));
+            let set_out = gate.as_ref().map(|gate| gate.set_out_now());
+            let since = set_out.as_ref().map(|set_out| set_out.since);
+            let cohort = set_out.as_ref().map(|set_out| Arc::clone(&set_out.cohort));
+            let deadline = set_out.as_ref().map(|set_out| set_out.deadline);
             let refused_name = sanitize_url_for_diagnostics(&self.base_url);
             let oauth_task = tokio::spawn(async move {
                 let cancelled = || crate::Error::AuthorizationCancelled {
@@ -99,11 +99,14 @@ impl HttpTransport {
                             backend: refused_name.clone(),
                         }
                     })?
-                } else if let (Some(gate), Some(since)) = (&gate, since) {
+                } else if let (Some(gate), Some(since), Some(deadline)) = (&gate, since, deadline) {
                     tokio::select! {
                         biased;
                         () = gate.revoked_since(since) => return Err(cancelled()),
-                        () = tokio::time::sleep(crate::oauth::OAUTH_AUTHORIZATION_WINDOW) => {
+                        () = tokio::time::sleep_until(crate::oauth::login_gate::stage_end(
+                            crate::oauth::OAUTH_AUTHORIZATION_WINDOW,
+                            deadline,
+                        )) => {
                             let otherwise = crate::Error::BackendTimeout(refused_name.clone());
                             return Err(match &cohort {
                                 Some(cohort) => gate.classify(cohort, &refused_name, otherwise),
@@ -132,7 +135,7 @@ impl HttpTransport {
                     let url = sanitize_url_for_diagnostics(&base_url_for_task);
                     info!(target: HTTP_TARGET, url = %url, "OAuth required - initiating authorization flow");
                     oauth
-                        .authorize_shared_with(interactive, since, cohort.as_ref())
+                        .authorize_shared_with(interactive, since, cohort.as_ref(), deadline)
                         .await?;
                 }
 

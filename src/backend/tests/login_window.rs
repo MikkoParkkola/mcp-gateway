@@ -487,8 +487,9 @@ async fn a_start_cancelled_before_its_login_task_runs_opens_no_login() {
     let entry = backend.shared_entry();
     let started = within(
         "the cancelled start ending",
-        crate::oauth::login_gate::set_out(
+        crate::oauth::login_gate::set_out_with_cohort(
             set_out,
+            backend.login_gate.cohort(),
             backend.start_entry(&crate::backend::pool::PoolKey::Shared, &entry),
         ),
     )

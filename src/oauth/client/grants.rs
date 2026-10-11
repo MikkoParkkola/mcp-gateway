@@ -338,6 +338,7 @@ impl OAuthClient {
         &self,
         token: &TokenInfo,
         cancel: &tokio_util::sync::CancellationToken,
+        deadline: Option<tokio::time::Instant>,
     ) -> Result<()> {
         let key = self.credential_key()?;
         let token_path = self.storage.token_path(&key, &self.resource_url);
@@ -354,7 +355,10 @@ impl OAuthClient {
                     backend: self.backend_name().to_string(),
                 });
             }
-            () = tokio::time::sleep(OAUTH_AUTHORIZATION_WINDOW) => {
+            () = tokio::time::sleep_until(match deadline {
+                Some(deadline) => crate::oauth::login_gate::stage_end(OAUTH_AUTHORIZATION_WINDOW, deadline),
+                None => tokio::time::Instant::now() + OAUTH_AUTHORIZATION_WINDOW,
+            }) => {
                 return Err(Error::AuthorizationIncomplete {
                     backend: self.backend_name().to_string(),
                     window_secs: OAUTH_AUTHORIZATION_WINDOW.as_secs(),
@@ -490,7 +494,8 @@ impl OAuthClient {
         interactive: bool,
         since: Option<u64>,
     ) -> Result<String> {
-        self.authorize_shared_with(interactive, since, None).await
+        self.authorize_shared_with(interactive, since, None, None)
+            .await
     }
 
     /// [`authorize_shared`](Self::authorize_shared) for a caller that
@@ -502,6 +507,7 @@ impl OAuthClient {
         interactive: bool,
         since: Option<u64>,
         cohort: Option<&std::sync::Arc<crate::oauth::login_gate::Cohort>>,
+        deadline: Option<tokio::time::Instant>,
     ) -> Result<String> {
         use crate::oauth::login_gate::Begin;
         if !interactive {
@@ -528,7 +534,9 @@ impl OAuthClient {
                     return Ok(access);
                 }
                 let listeners = lead.take_listeners_guard();
-                let result = self.authorize_until(lead.cancel_token(), listeners).await;
+                let result = self
+                    .authorize_until_by(lead.cancel_token(), listeners, deadline)
+                    .await;
                 lead.end(result.as_ref().err());
                 result
             }
@@ -589,6 +597,18 @@ impl OAuthClient {
         &self,
         cancel: &tokio_util::sync::CancellationToken,
         listeners: Option<tokio_util::sync::DropGuard>,
+    ) -> Result<String> {
+        self.authorize_until_by(cancel, listeners, None).await
+    }
+
+    /// [`authorize_until`](Self::authorize_until) whose callback wait and
+    /// token save are also bounded by a detached step's one `deadline`
+    /// (MIK-8339): each ends at `min(its window, deadline)`.
+    pub(crate) async fn authorize_until_by(
+        &self,
+        cancel: &tokio_util::sync::CancellationToken,
+        listeners: Option<tokio_util::sync::DropGuard>,
+        deadline: Option<tokio::time::Instant>,
     ) -> Result<String> {
         let auth_meta = self
             .auth_metadata
@@ -665,7 +685,13 @@ impl OAuthClient {
 
         // Wait for callback
         let (actual_callback_url, callback_result) = callback_server
-            .wait_within(OAUTH_AUTHORIZATION_WINDOW, cancel)
+            .wait_within(
+                deadline.map_or(OAUTH_AUTHORIZATION_WINDOW, |deadline| {
+                    OAUTH_AUTHORIZATION_WINDOW
+                        .min(deadline.saturating_duration_since(tokio::time::Instant::now()))
+                }),
+                cancel,
+            )
             .await
             .map_err(|unanswered| {
                 let backend = self.backend_name().to_string();
@@ -698,7 +724,7 @@ impl OAuthClient {
         };
 
         // Store and cache the token, under the same cancel and the window.
-        self.save_issued_until(&token, cancel).await?;
+        self.save_issued_until(&token, cancel, deadline).await?;
         *self.current_token.write() = Some(token.clone());
 
         Ok(token.access_token)

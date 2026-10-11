@@ -572,3 +572,92 @@ async fn a_detached_steps_bound_with_no_login_is_a_backend_timeout() {
         "a bound with no login in flight is the backend's timeout: {error:?}"
     );
 }
+
+/// Advance paused time by `by`, then resume real time. Used only while the
+/// task waits on something this test holds, so no network I/O can race it.
+async fn advance_paused(by: Duration) {
+    tokio::time::pause();
+    tokio::time::advance(by).await;
+    tokio::time::resume();
+}
+
+/// LOGINDL.19: one shared deadline. Three stages each stall for most of a
+/// window (the client the test holds, the callback the person is slow to
+/// approve, then the credential lock the test holds), and the step ends at
+/// its one deadline (`set_out + DETACHED_DEADLINE`), before the per-stage
+/// bounds would have added up. The expected end is derived from the same
+/// constant the code uses, never typed by hand.
+#[tokio::test]
+async fn three_stalled_stages_end_at_the_steps_one_deadline() {
+    use crate::oauth::OAUTH_AUTHORIZATION_WINDOW as WINDOW;
+    use crate::oauth::login_gate::DETACHED_DEADLINE;
+    let (backend, browser, _dir) = approved_start(Upstream::Plain, Duration::from_secs(3600)).await;
+    super::token_lapse::lapse(&backend).await;
+    let client = oauth_client_of(&backend);
+    let held = client.lock().await;
+    // Read now: during the login the task holds the client.
+    let lock_path = held.credential_lock_path_for_test();
+    let cohort = backend.login_gate.cohort();
+    let before = backend.login_gate.detached_for_test();
+    let stall = WINDOW * 4 / 5;
+
+    let started = tokio::time::Instant::now();
+    let _call = spawn_call(&backend);
+    within("the call's token step to detach", async {
+        while backend.login_gate.detached_for_test() == before {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    // Stage 1: the client this test holds.
+    advance_paused(stall).await;
+    drop(held);
+
+    // Stage 2: the person is slow to approve.
+    let url = browser.opened(2, "the call's request-time login").await;
+    advance_paused(stall).await;
+
+    // Stage 3: the credential lock another process holds.
+    let lock = crate::fs_lock::ExclusiveFileLock::acquire(&lock_path)
+        .expect("another process holds the credential lock");
+    let held_attempts = crate::fs_lock::lock_attempts(&lock_path);
+    assert!(
+        approve_if_listening(&url).await,
+        "premise: the login was listening"
+    );
+    within("the save to wait on the held lock", async {
+        while crate::fs_lock::lock_attempts(&lock_path) == held_attempts {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+
+    let one_deadline = started + DETACHED_DEADLINE;
+    let per_stage_end = tokio::time::Instant::now() + WINDOW;
+    assert!(
+        per_stage_end > one_deadline + Duration::from_secs(10),
+        "premise: per-stage bounds would end after the one deadline"
+    );
+    // Just past the one deadline, and still before the per-stage end.
+    advance_paused(
+        (one_deadline + Duration::from_secs(5))
+            .saturating_duration_since(tokio::time::Instant::now()),
+    )
+    .await;
+    within("the step to settle", async {
+        while backend.login_gate.in_flight() {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    drop(lock);
+
+    assert!(
+        matches!(
+            cohort.outcome(),
+            Some(crate::oauth::login_gate::LoginOutcome::Incomplete { .. })
+        ),
+        "the step's one deadline ended the save stage: {:?}",
+        cohort.outcome()
+    );
+}

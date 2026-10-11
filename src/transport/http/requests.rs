@@ -195,8 +195,7 @@ impl HttpTransport {
                 Some(gate) => {
                     // Captured here, synchronously, before anything queues: a
                     // start's own set-out epoch wins, else the gate's now.
-                    let since = login_gate::set_out_epoch().unwrap_or_else(|| gate.epoch());
-                    let cohort = login_gate::set_out_cohort().unwrap_or_else(|| gate.cohort());
+                    let set_out = gate.set_out_now();
                     // Mark a login wait only when a login is actually open:
                     // this caller will queue behind it (MIK-7982 C3).
                     if gate.in_flight() {
@@ -205,8 +204,7 @@ impl HttpTransport {
                     detach_token_step(
                         Arc::clone(oauth_mutex),
                         Arc::clone(gate),
-                        since,
-                        cohort,
+                        set_out,
                         sanitize_url_for_diagnostics(&self.base_url),
                     )
                     .await?
@@ -516,10 +514,14 @@ impl HttpTransport {
 async fn detach_token_step(
     oauth: Arc<TokioMutex<OAuthClient>>,
     gate: Arc<crate::oauth::login_gate::LoginGate>,
-    since: u64,
-    cohort: Arc<crate::oauth::login_gate::Cohort>,
+    set_out: crate::oauth::login_gate::SetOut,
     backend: String,
 ) -> Result<String> {
+    let crate::oauth::login_gate::SetOut {
+        since,
+        cohort,
+        deadline,
+    } = set_out;
     #[cfg(test)]
     gate.note_detached();
     let carried = crate::oauth::login_gate::carry_scopes();
@@ -529,12 +531,15 @@ async fn detach_token_step(
             () = gate.revoked_since(since) => {
                 return Err(Error::AuthorizationCancelled { backend });
             }
-            () = tokio::time::sleep(crate::oauth::OAUTH_AUTHORIZATION_WINDOW) => {
+            () = tokio::time::sleep_until(crate::oauth::login_gate::stage_end(
+                crate::oauth::OAUTH_AUTHORIZATION_WINDOW,
+                deadline,
+            )) => {
                 return Err(gate.classify(&cohort, &backend, Error::BackendTimeout(backend.clone())));
             }
             client = oauth.lock_owned() => client,
         };
-        client.get_token_detached(true, since, &cohort).await
+        client.get_token_detached(true, since, &cohort, deadline).await
     }));
     task.await
         .map_err(|e| Error::OAuth(format!("the detached token step failed: {e}")))?
