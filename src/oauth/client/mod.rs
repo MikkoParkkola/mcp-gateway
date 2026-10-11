@@ -507,6 +507,80 @@ impl OAuthClient {
         Ok(token)
     }
 
+    /// The cached access token, if it is unexpired: one read of the cell, so
+    /// no expiry can land between the check and the copy (MIK-8339).
+    pub(crate) fn live_token(&self) -> Option<String> {
+        self.current_token
+            .read()
+            .as_ref()
+            .filter(|token| !token.is_expired())
+            .map(|token| token.access_token.clone())
+    }
+
+    /// The token step a detached request-time task runs (MIK-8339), for a
+    /// caller that captured `since` (its cancel epoch) and `cohort` before
+    /// it queued. Before a login is led or joined, the refresh observes a
+    /// restart or stop (`AuthorizationCancelled`) and ends at
+    /// [`grants::OAUTH_AUTHORIZATION_WINDOW`] through
+    /// [`LoginGate::classify`](super::login_gate::LoginGate::classify),
+    /// never falling into a login after its bound. A refresh that succeeds
+    /// after a revocation is not handed back.
+    pub(crate) async fn get_token_detached(
+        &self,
+        interactive: bool,
+        since: u64,
+        cohort: &std::sync::Arc<super::login_gate::Cohort>,
+        deadline: tokio::time::Instant,
+    ) -> Result<String> {
+        if let Some(access) = self.live_token() {
+            return Ok(access);
+        }
+        let cancelled = || Error::AuthorizationCancelled {
+            backend: self.backend_name.clone(),
+        };
+        let has_refresh_token = self
+            .current_token
+            .read()
+            .as_ref()
+            .is_some_and(|t| t.refresh_token.is_some());
+        if has_refresh_token {
+            let refreshed = match &self.login_gate {
+                Some(gate) => tokio::select! {
+                    biased;
+                    () = gate.revoked_since(since) => return Err(cancelled()),
+                    () = tokio::time::sleep_until(super::login_gate::stage_end(
+                        grants::OAUTH_AUTHORIZATION_WINDOW,
+                        deadline,
+                    )) => {
+                        return Err(gate.classify(
+                            cohort,
+                            &self.backend_name,
+                            Error::BackendTimeout(self.backend_name.clone()),
+                        ));
+                    }
+                    refreshed = self.refresh_token() => refreshed,
+                },
+                None => self.refresh_token().await,
+            };
+            match refreshed {
+                Ok(token) => {
+                    if self
+                        .login_gate
+                        .as_ref()
+                        .is_some_and(|gate| gate.is_revoked(since))
+                    {
+                        return Err(cancelled());
+                    }
+                    return Ok(token);
+                }
+                Err(e) if is_ssrf_refusal(&e) => return Err(e),
+                Err(_) => {}
+            }
+        }
+        self.authorize_shared_with(interactive, Some(since), Some(cohort), Some(deadline))
+            .await
+    }
+
     /// Return the backend name (used by the background refresh task for logging).
     #[must_use]
     pub fn backend_name(&self) -> &str {
@@ -595,6 +669,8 @@ fn generate_client_id() -> String {
 #[cfg(test)]
 mod authorize_tests;
 mod browser;
+#[cfg(test)]
+mod deadline_tests;
 pub(crate) mod destination;
 mod discovery;
 #[cfg(test)]
@@ -618,6 +694,7 @@ impl OAuthClient {
 use url::Url;
 
 mod grants;
+pub(crate) use grants::OAUTH_AUTHORIZATION_WINDOW;
 #[cfg(test)]
 mod grants_tests;
 mod refresh_flight;

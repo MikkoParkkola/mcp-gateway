@@ -244,7 +244,12 @@ impl Backend {
 
             // Start transport for this slot, erased (see `StartFuture`).
             let start: StartFuture<'_> = Box::pin(self.start_entry(key, &entry));
-            let transport = crate::oauth::login_gate::set_out(set_out, start).await?;
+            // The start's login carries the cohort captured before it queued,
+            // so a failure recorded after the check above is still shared at
+            // `begin` (MIK-8339).
+            let transport =
+                crate::oauth::login_gate::set_out_with_cohort(set_out, Arc::clone(&cohort), start)
+                    .await?;
 
             // Reconcile: did the evictor remove this exact entry while we
             // were building its transport?

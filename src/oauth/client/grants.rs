@@ -291,6 +291,19 @@ impl OAuthClient {
     /// Test-only: the cached token lapses now, in memory and in storage, as
     /// if its lifetime had passed (MIK-8269): a row that needs a lapsed token
     /// asks for one instead of sleeping out a short-lived token.
+    /// Test-only: the cross-process lock `save_issued` takes before it
+    /// stores a login's token (`hold_across_processes`), so a row can hold it
+    /// as another gateway process would (MIK-8339 LOGINDL.18b).
+    #[cfg(test)]
+    pub(crate) fn credential_lock_path_for_test(&self) -> std::path::PathBuf {
+        let key = self
+            .credential_key()
+            .expect("a test client has a credential key");
+        self.storage
+            .token_path(&key, &self.resource_url)
+            .with_extension("refresh.lock")
+    }
+
     #[cfg(test)]
     pub(crate) async fn age_token_for_test(&self) {
         let now = crate::clock::unix_secs().expect("the test clock reads after 1970");
@@ -312,6 +325,54 @@ impl OAuthClient {
         let flight = super::refresh_flight::Flight::of(&token_path);
         let _guard = flight.lock.lock().await;
         let _across = super::refresh_flight::hold_across_processes(&token_path).await?;
+        self.store_issued_locked(&key, token)
+    }
+
+    /// [`save_issued`](Self::save_issued) for a login's Lead stage
+    /// (MIK-8339): the waits for the credential's in-process flight and its
+    /// cross-process lock observe the Lead's `cancel` (a restart or stop:
+    /// `AuthorizationCancelled`) and end at [`OAUTH_AUTHORIZATION_WINDOW`]
+    /// (`AuthorizationIncomplete`), cancel first. Once both locks are held the
+    /// write runs to completion: a cancel never leaves half a credential.
+    async fn save_issued_until(
+        &self,
+        token: &TokenInfo,
+        cancel: &tokio_util::sync::CancellationToken,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<()> {
+        let key = self.credential_key()?;
+        let token_path = self.storage.token_path(&key, &self.resource_url);
+        let flight = super::refresh_flight::Flight::of(&token_path);
+        let held = async {
+            let guard = flight.lock.lock().await;
+            let across = super::refresh_flight::hold_across_processes(&token_path).await?;
+            Ok::<_, Error>((guard, across))
+        };
+        let (_guard, _across) = tokio::select! {
+            biased;
+            () = cancel.cancelled() => {
+                return Err(Error::AuthorizationCancelled {
+                    backend: self.backend_name().to_string(),
+                });
+            }
+            () = tokio::time::sleep_until(match deadline {
+                Some(deadline) => crate::oauth::login_gate::stage_end(OAUTH_AUTHORIZATION_WINDOW, deadline),
+                None => tokio::time::Instant::now() + OAUTH_AUTHORIZATION_WINDOW,
+            }) => {
+                return Err(Error::AuthorizationIncomplete {
+                    backend: self.backend_name().to_string(),
+                    window_secs: OAUTH_AUTHORIZATION_WINDOW.as_secs(),
+                });
+            }
+            held = held => held?,
+        };
+        self.store_issued_locked(&key, token)
+    }
+
+    /// Store a login's `token` with the credential's locks held, and repair a
+    /// damaged refresh-state sidecar (MIK-8091).
+    fn store_issued_locked(&self, key: &str, token: &TokenInfo) -> Result<()> {
+        let key = key.to_string();
         self.storage.save(&key, &self.resource_url, token)?;
         // A token a login issues was never marked in flight, so a damaged
         // sidecar's lost marker cannot name it (MIK-8091). Rewrite the sidecar
@@ -433,6 +494,21 @@ impl OAuthClient {
         interactive: bool,
         since: Option<u64>,
     ) -> Result<String> {
+        self.authorize_shared_with(interactive, since, None, None)
+            .await
+    }
+
+    /// [`authorize_shared`](Self::authorize_shared) for a caller that
+    /// captured its `cohort` before it queued (MIK-8339): a failure already
+    /// recorded on that cohort is shared, under the gate lock, instead of
+    /// opening a second login.
+    pub(crate) async fn authorize_shared_with(
+        &self,
+        interactive: bool,
+        since: Option<u64>,
+        cohort: Option<&std::sync::Arc<crate::oauth::login_gate::Cohort>>,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<String> {
         use crate::oauth::login_gate::Begin;
         if !interactive {
             return Err(Error::AuthorizationRequired {
@@ -445,10 +521,11 @@ impl OAuthClient {
         // A bounded caller's deadline must read this wait as a login's, even
         // once a dropped lead has released the gate (MIK-7982 C3).
         crate::oauth::login_gate::Provenance::mark_waited();
-        match gate.begin(since) {
+        match gate.begin(since, cohort) {
             Begin::Refused => Err(Error::AuthorizationCancelled {
                 backend: self.backend_name().to_string(),
             }),
+            Begin::Ended(outcome) => Err(outcome.to_error(self.backend_name())),
             Begin::Lead(mut lead) => {
                 // A login that ended while this client was being built may
                 // already have stored a token: use it, open no second login.
@@ -457,12 +534,23 @@ impl OAuthClient {
                     return Ok(access);
                 }
                 let listeners = lead.take_listeners_guard();
-                let result = self.authorize_until(lead.cancel_token(), listeners).await;
+                let result = self
+                    .authorize_until_by(lead.cancel_token(), listeners, deadline)
+                    .await;
                 lead.end(result.as_ref().err());
                 result
             }
             Begin::Join(attempt) => {
-                if let Some(outcome) = attempt.finished().await {
+                // The joiner's own deadline ends its wait; the lead's login
+                // runs on for whoever else waits on it.
+                let finished = tokio::select! {
+                    biased;
+                    finished = attempt.finished() => finished,
+                    () = crate::oauth::login_gate::past(deadline) => {
+                        return Err(self.incomplete());
+                    }
+                };
+                if let Some(outcome) = finished {
                     return Err(outcome.to_error(self.backend_name()));
                 }
                 self.adopt_stored_login().ok_or_else(|| {
@@ -472,10 +560,19 @@ impl OAuthClient {
         }
     }
 
-    /// The gate's cancel epoch, captured by a start before it discovers
-    /// anything (`None` when ungated).
-    pub(crate) fn login_epoch(&self) -> Option<u64> {
-        self.login_gate.as_ref().map(|gate| gate.epoch())
+    /// A login stage that outlived its window or its step's deadline.
+    fn incomplete(&self) -> Error {
+        Error::AuthorizationIncomplete {
+            backend: self.backend_name().to_string(),
+            window_secs: OAUTH_AUTHORIZATION_WINDOW.as_secs(),
+        }
+    }
+
+    /// This client's login gate, if it has one: the transport clones it at
+    /// construction so a caller can read the gate without the client mutex
+    /// (MIK-8339).
+    pub(crate) fn login_gate(&self) -> Option<std::sync::Arc<crate::oauth::login_gate::LoginGate>> {
+        self.login_gate.clone()
     }
 
     /// Take up a live token another client of this backend stored, with the
@@ -518,6 +615,19 @@ impl OAuthClient {
         cancel: &tokio_util::sync::CancellationToken,
         listeners: Option<tokio_util::sync::DropGuard>,
     ) -> Result<String> {
+        self.authorize_until_by(cancel, listeners, None).await
+    }
+
+    /// [`authorize_until`](Self::authorize_until) bounded by a detached
+    /// step's one `deadline` (MIK-8339): the callback wait and token save end
+    /// at `min(their window, deadline)`; client registration and the code
+    /// exchange, which have no window of their own, end at the deadline.
+    pub(crate) async fn authorize_until_by(
+        &self,
+        cancel: &tokio_util::sync::CancellationToken,
+        listeners: Option<tokio_util::sync::DropGuard>,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<String> {
         let auth_meta = self
             .auth_metadata
             .as_ref()
@@ -552,6 +662,7 @@ impl OAuthClient {
         let registered = tokio::select! {
             biased;
             () = cancel.cancelled() => Err(cancelled()),
+            () = crate::oauth::login_gate::past(deadline) => Err(self.incomplete()),
             registered = self.ensure_client_id_with_redirect(&callback_url) => registered,
         };
         // A cancel that lands as registration completes still wins.
@@ -593,7 +704,13 @@ impl OAuthClient {
 
         // Wait for callback
         let (actual_callback_url, callback_result) = callback_server
-            .wait_within(OAUTH_AUTHORIZATION_WINDOW, cancel)
+            .wait_within(
+                deadline.map_or(OAUTH_AUTHORIZATION_WINDOW, |deadline| {
+                    crate::oauth::login_gate::stage_end(OAUTH_AUTHORIZATION_WINDOW, deadline)
+                        .saturating_duration_since(tokio::time::Instant::now())
+                }),
+                cancel,
+            )
             .await
             .map_err(|unanswered| {
                 let backend = self.backend_name().to_string();
@@ -616,13 +733,19 @@ impl OAuthClient {
             Error::OAuth(mismatch)
         })?;
 
-        // Exchange code for token
-        let token = self
-            .exchange_code(&callback_result.code, &actual_callback_url, &code_verifier)
-            .await?;
+        // Exchange code for token. Cancel first (MIK-8339): a restart or stop
+        // ends a login stalled here. The exchange itself is bounded by the
+        // OAuth client's own request timeout (destination.rs), and by a
+        // detached step's deadline.
+        let token = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(cancelled()),
+            () = crate::oauth::login_gate::past(deadline) => return Err(self.incomplete()),
+            token = self.exchange_code(&callback_result.code, &actual_callback_url, &code_verifier) => token?,
+        };
 
-        // Store and cache the token
-        self.save_issued(&token).await?;
+        // Store and cache the token, under the same cancel and the window.
+        self.save_issued_until(&token, cancel, deadline).await?;
         *self.current_token.write() = Some(token.clone());
 
         Ok(token.access_token)

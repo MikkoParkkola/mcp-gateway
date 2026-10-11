@@ -1,0 +1,3 @@
+src/oauth/client/grants.rs	login_gate	1	OAuthClient::login_gate returns a clone of the client's gate handle for the transport; plain accessor, decides nothing.
+src/oauth/login_gate.rs	default	1	LoginGate::default builds an empty gate with an unrevoked watch; a constructor, decides nothing.
+src/oauth/client/grants.rs	incomplete	1	OAuthClient::incomplete builds the AuthorizationIncomplete error for a stage past its bound; a constructor, decides nothing.
