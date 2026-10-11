@@ -106,7 +106,11 @@ enum Slot {
     Inner,
 }
 
-/// The meta tools whose arguments hold `arguments` the gateway decodes.
+/// The meta tools whose arguments hold `arguments` the gateway decodes. Their
+/// names always resolve to the gateway's own handler: surfacing refuses a
+/// backend tool under any meta-tool name (`MetaMcp::with_surfaced_tools`,
+/// pinned by `with_surfaced_tools_drops_all_known_meta_tool_names`), so a
+/// name here is never a backend's tool on a meta route.
 const META_PARSED: [&str; 3] = ["gateway_invoke", "gateway_run_playbook", "gateway_execute"];
 
 /// [`sanitize_json_value`] for one top-level request member, reaching into

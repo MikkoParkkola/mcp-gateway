@@ -135,3 +135,25 @@ async fn s4c_a_direct_tool_named_gateway_invoke_keeps_its_nonce_field() {
         "s4c: {seen:?}"
     );
 }
+
+/// S9h (lead: the wiring behind the unit row S9g): a `gateway_execute` chain
+/// step on `/mcp`, its `arguments` a JSON string holding a NUL, to the
+/// non-passthrough backend: the sanitize step reaches the step's arguments
+/// through the real chain field, so the NUL is refused at intake and the
+/// backend never receives it. The chain path decodes the string later (the
+/// invoke funnel), so a step the step missed would send the NUL.
+#[tokio::test]
+async fn s9h_an_encoded_nul_in_a_chain_step_never_reaches_a_backend() {
+    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
+    let step = json!({"tool": "alpha:read", "arguments": encoded(&json!({"cmd": NUL}))});
+    let chain = json!({"name": "gateway_execute", "arguments": {"chain": [step]}});
+    let (_, body) =
+        super::super::direct_guards_fixture::send(&fx, "/mcp", "k-std", "tools/call", chain, None)
+            .await;
+    assert_eq!(
+        calls(&fx),
+        0,
+        "s9h: the chain step reached the backend: {body}"
+    );
+    assert_eq!(message(&body), NUL_REFUSED, "s9h: {body}");
+}
