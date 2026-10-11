@@ -674,12 +674,13 @@ def helm_errors(helm: str = "helm") -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     import argparse
+    import os
     import sys
 
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--helm", action="store_true", help="render the chart per auth mode and check the renders")
     args = ap.parse_args(argv)
-    errors = helm_errors() if args.helm else repo_errors()
+    errors = helm_errors(os.environ.get("HELM") or "helm") if args.helm else repo_errors()
     for line in errors:
         print(line, file=sys.stderr)
     if errors:
