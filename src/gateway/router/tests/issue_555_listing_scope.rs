@@ -371,7 +371,8 @@ pub(super) async fn listed(router: &axum::Router, key: Option<&str>) -> Vec<Stri
 /// Whether a call answer is a refusal of the kind list = invoke is about: an
 /// authorization refusal or an unknown-tool answer. A failure after the gate
 /// admitted the call (an upstream or executor error) is not one. MIK-8361: a
-/// withheld target answers as a name the backend does not list (text A).
+/// withheld target answers as a name the backend does not list (text A), and
+/// a withheld capability as one that is not defined (`Tool not found`).
 pub(super) fn refused(body: &Value) -> bool {
     let code = body["error"]["code"].as_i64();
     let text = body.to_string();
@@ -380,6 +381,7 @@ pub(super) fn refused(body: &Value) -> bool {
         || text.contains("Identity grant denied")
         || text.contains("Unknown tool")
         || text.contains("the backend does not list a tool named")
+        || text.contains("Tool not found")
         || text.contains("blocked by")
         || text.contains("not in the allowlist")
 }

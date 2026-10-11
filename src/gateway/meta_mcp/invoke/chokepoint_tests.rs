@@ -64,8 +64,10 @@ async fn f5_a_grant_revoked_before_the_send_is_refused_at_dispatch() {
         "control: the backend was reached"
     );
 
+    // MIK-8361: the withheld gate decides first, so the grant holds for the
+    // gate's and admission's decisions and is revoked before the send.
     let revoked = RevokedAfter {
-        allowed: 1,
+        allowed: 2,
         decided: AtomicUsize::new(0),
     };
     let refused = meta
@@ -82,7 +84,7 @@ async fn f5_a_grant_revoked_before_the_send_is_refused_at_dispatch() {
     );
     assert_eq!(
         revoked.decided.load(Ordering::SeqCst),
-        2,
-        "decided at admission and again at dispatch"
+        3,
+        "decided at the gate, at admission and again at dispatch"
     );
 }

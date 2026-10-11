@@ -77,10 +77,12 @@ async fn authz_12_refused_caller_is_not_served_a_cached_result() {
 ///
 /// Replay admission is `prepare_signing_invocation` (`signing.rs:169`), which
 /// registers the nonce only after policy, and only for a captured external
-/// `gateway_invoke`. `invoke_tool` with `caller.signing = None` never reaches
-/// the store, so a third call would succeed and this case would pass for the
-/// wrong reason. Each step captures from a raw envelope the way the adapters
-/// do.
+/// `gateway_invoke`. MIK-8361: a target the policy withholds is judged there
+/// as a missing name, so its nonce is registered and given back when the
+/// call settles, as a missing name's is. `invoke_tool` with `caller.signing =
+/// None` never reaches the store, so a third call would succeed and this case
+/// would pass for the wrong reason. Each step captures from a raw envelope the
+/// way the adapters do.
 #[tokio::test]
 async fn authz_20_refused_call_consumes_no_nonce() {
     const NONCE: &str = "nonce-used-once";
@@ -97,10 +99,23 @@ async fn authz_20_refused_call_consumes_no_nonce() {
         false,
     );
 
+    // MIK-8361 amendment A1: a denied target's nonce is judged as a missing
+    // name's is, so it is admitted; the gate answers the call as a missing
+    // name and asks for the nonce back, and the call's settlement returns it.
     let (mut denied_signing, denied_args) = captured_external_gateway_invoke(NONCE);
-    let refused =
-        meta.prepare_signing_invocation(&mut denied_signing, &denied_args, None, &ctx(&DenyAll));
-    assert!(refused.is_err(), "the call must be refused");
+    meta.prepare_signing_invocation(&mut denied_signing, &denied_args, None, &ctx(&DenyAll))
+        .expect("a denied target's nonce is judged as a missing name's");
+    let mut denied_caller = ctx(&DenyAll);
+    denied_caller.signing = Some(&denied_signing);
+    let refused = meta.invoke_tool(&denied_args, None, &denied_caller).await;
+    assert!(
+        refused.as_ref().is_ok_and(|answer| answer["isError"] == json!(true)),
+        "the call must be refused, as a missing name: {refused:?}"
+    );
+    meta.settle_nonce_refund(
+        &denied_signing,
+        crate::gateway::meta_mcp::signing::nonce_principal(&denied_caller),
+    );
 
     // The same nonce must still be usable: the refusal happened before it was
     // registered. A new capture is a new request carrying that nonce, which
