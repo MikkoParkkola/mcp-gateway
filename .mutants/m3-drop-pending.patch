@@ -1,0 +1,16 @@
+diff --git a/src/transport/stdio_tree.rs b/src/transport/stdio_tree.rs
+index 720ee1503..9b96695e8 100644
+--- a/src/transport/stdio_tree.rs
++++ b/src/transport/stdio_tree.rs
+@@ -124,9 +124,8 @@ where
+     }
+     #[cfg(test)]
+     HANDED_OVER.with(|n| n.set(n.get() + 1));
+-    tokio::spawn(write)
+-        .await
+-        .map_err(|e| Error::Transport(e.to_string()))?
++    drop(write);
++    Ok(())
+ }
+ 
+ // Writes handed to their own task on this thread, for the rows that pin when

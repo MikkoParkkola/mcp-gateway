@@ -1,0 +1,6 @@
+head_sha	772868de1c0612cfd8fb72c10e8a5d9a9889a991
+# MIK-7536 stdio write in place (#3796)
+m1-inline	linux	m1-inline.patch	--lib -- transport::stdio::tree::write_whole_tests transport::stdio::frame_tests::a_dropped_request_leaves_no_partial_frame_for_the_next_caller
+m2-always-spawn	linux	m2-always-spawn.patch	--lib -- transport::stdio::tree::write_whole_tests
+m3-drop-pending	linux	m3-drop-pending.patch	--lib -- transport::stdio::tree::write_whole_tests transport::stdio::frame_tests::a_dropped_request_leaves_no_partial_frame_for_the_next_caller
+m4-no-flush	linux	m4-no-flush.patch	--lib -- transport::stdio::tree::write_whole_tests

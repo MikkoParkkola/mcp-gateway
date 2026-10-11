@@ -1,0 +1,13 @@
+diff --git a/src/transport/stdio_tree.rs b/src/transport/stdio_tree.rs
+index 720ee1503..f96dd3f28 100644
+--- a/src/transport/stdio_tree.rs
++++ b/src/transport/stdio_tree.rs
+@@ -94,7 +94,7 @@ async fn write_whole<W: tokio::io::AsyncWrite + Unpin>(
+ ) -> Result<()> {
+     let write = async {
+         stdin.write_all(frame).await?;
+-        stdin.flush().await
++        std::io::Result::Ok(())
+     };
+     tokio::select! {
+         written = write => written.map_err(|e| Error::Transport(e.to_string())),

@@ -1,0 +1,16 @@
+diff --git a/src/transport/stdio_tree.rs b/src/transport/stdio_tree.rs
+index 720ee1503..358594c70 100644
+--- a/src/transport/stdio_tree.rs
++++ b/src/transport/stdio_tree.rs
+@@ -118,10 +118,7 @@ async fn finish_whole<F>(write: F) -> Result<()>
+ where
+     F: std::future::Future<Output = Result<()>> + Send + 'static,
+ {
+-    let mut write = Box::pin(write);
+-    if let Some(done) = futures::FutureExt::now_or_never(write.as_mut()) {
+-        return done;
+-    }
++    let write = Box::pin(write);
+     #[cfg(test)]
+     HANDED_OVER.with(|n| n.set(n.get() + 1));
+     tokio::spawn(write)
