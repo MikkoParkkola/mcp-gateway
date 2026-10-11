@@ -1,0 +1,3 @@
+head_sha	a8d42a7612ce7ba4c989481e861e623830f59f88
+m17-e3c-refusal-counted-as-a-failure-redrawn	linux	m17-e3c-refusal-counted-as-a-failure-redrawn.patch	--lib a_signer_that_cannot_read_the_clock
+m27-worker-first-check-revokes-on-undated-redrawn	linux	m27-worker-first-check-revokes-on-undated-redrawn.patch	--lib an_expiring_key_refused_by_an_unreadable_clock

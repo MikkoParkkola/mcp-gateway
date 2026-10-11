@@ -1,0 +1,15 @@
+diff --git a/src/events/worker.rs b/src/events/worker.rs
+index 83223d4e9..17700f866 100644
+--- a/src/events/worker.rs
++++ b/src/events/worker.rs
+@@ -249,6 +249,10 @@ impl EventsHub {
+         // One reading gates the charge and signs the send: a clock that
+         // cannot sign is found before anything is charged (MIK-8202).
+         let Ok(now) = crate::clock::utc_now() else {
++            if self.runtime.failures.record(&sub.id, false, Instant::now()) {
++                let id = sub.id.clone();
++                self.blocking(move |store| store.suspend(&id)).await;
++            }
+             services.audit_outcome(&ended(CLOCK_UNREADABLE)).await;
+             self.settle(services, record, clock_unsent(record)).await;
+             return;
