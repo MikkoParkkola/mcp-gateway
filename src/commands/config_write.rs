@@ -88,14 +88,11 @@ pub(crate) fn rewrite_url_aliases_in(path: &Path, mode: RewriteMode) -> Result<U
 
 /// Refuse a config that will not load because it cannot be read as a mapping
 /// of keys: saying "nothing changed" would let `upgrade` pass on it
-/// (MIK-8044). A file of only comments and blank lines loads as the defaults
-/// and passes. The reason names a line and column, never the parser's own
+/// (MIK-8044). An empty or comments-only file reads as an empty mapping,
+/// loads as the defaults, and passes. The reason names a line and column, never the parser's own
 /// message, which can quote a value from the file (a secret, say).
 fn refuse_unreadable(path: &Path, text: &str) -> Result<(), String> {
-    let blank = text
-        .lines()
-        .all(|line| line.trim().is_empty() || line.trim_start().starts_with('#'));
-    if blank || super::retired_config_keys::loose(text).is_some() {
+    if super::retired_config_keys::loose(text).is_some() {
         return Ok(());
     }
     let why = match serde_yaml::from_str::<serde_yaml::Value>(text) {

@@ -528,3 +528,18 @@ fn upgrade_exits_1_on_a_null_document() {
     assert_eq!(out.status.code(), Some(1), "{}", text(&out));
     assert_eq!(read(&s.config), yaml);
 }
+
+/// gpt delta 2: only a file the loader's parse reads passes; an empty file
+/// does, and a file the parse cannot read is refused however blank it looks.
+#[test]
+fn upgrade_passes_an_empty_file_and_refuses_unreadable_blanks() {
+    let s = setup("", current());
+    let out = upgrade(&s, &[]);
+    assert!(out.status.success(), "{}", text(&out));
+    for yaml in ["\u{a0}\n", "# note \u{0}\n"] {
+        let s = setup(yaml, current());
+        let out = upgrade(&s, &[]);
+        assert_eq!(out.status.code(), Some(1), "{yaml:?}: {}", text(&out));
+        assert_eq!(read(&s.config), yaml);
+    }
+}
