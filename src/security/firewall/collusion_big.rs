@@ -270,7 +270,13 @@ impl CollusionDetector {
         let room = |position: usize| if zero { 0 } else { headroom(position) };
         let reservation = state.sketches.reserve_sized(
             pair,
-            |position| shape(n + room(position), position + 1),
+            |position| {
+                if zero {
+                    shape(n, position + 1)
+                } else {
+                    reservation_shape(n, position)
+                }
+            },
             extra,
             false,
         );
