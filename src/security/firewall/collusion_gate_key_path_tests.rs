@@ -252,7 +252,12 @@ fn joins_never_push_leaf_evidence_out() {
 /// capped and recorded for `who` from `alpha:{tool}`.
 fn deliver_plan_step(fw: &Firewall, who: &str, tool: &str, step: &Value, answer: &Value) {
     let staged = fw
-        .receipt_digest("alpha", tool, step, Some(&std::cell::Cell::new(0)))
+        .receipt_digest(
+            "alpha",
+            tool,
+            step,
+            Some(&crate::security::firewall::PlanStaging::new()),
+        )
         .expect("relay detection is on");
     let delivered = fw.delivered_for_plan(answer, None).expect("bounded");
     let kept = fw.cap_kept(fw.retain_delivered(staged, &delivered, None));

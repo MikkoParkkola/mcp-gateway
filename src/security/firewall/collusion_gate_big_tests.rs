@@ -11,7 +11,6 @@
 //! chars of distinct k-grams (n = 1,953), so even at m = 16 a miss needs
 //! fewer than 2 of 1,953 to survive (about 1e-12).
 
-use std::cell::Cell;
 use std::fmt::Write;
 
 use serde_json::{Value, json};
@@ -73,7 +72,7 @@ fn run(text: &str, at: usize) -> &str {
 /// kept to `answer` and recorded, as a plan's delivery does. `false` when
 /// the answer was over the bound and the receipt was dropped.
 fn deliver_step(fw: &Firewall, step: &Value, staged: usize, answer: &Value) -> bool {
-    let staged = Cell::new(staged);
+    let staged = crate::security::firewall::PlanStaging::starting_at(staged);
     let Some(digest) = fw.receipt_digest("alpha", "read", step, Some(&staged)) else {
         return false;
     };
