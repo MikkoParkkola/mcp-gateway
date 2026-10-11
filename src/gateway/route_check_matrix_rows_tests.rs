@@ -513,7 +513,8 @@ async fn r4a_authorize_refuses_at_submit_as_the_sync_call_does() {
 
 /// `Authorize` before `TaskConfirm`, R4a (MIK-8331): a caller the grant or the
 /// admin rule refuses gets the sync call's answer for a surfaced task call,
-/// never X14's challenge; the caller each admits is challenged.
+/// never X14's challenge. X14 never classifies a surfaced capability, which
+/// each row asserts as its premise with a scope the policy admits.
 #[tokio::test]
 async fn r4a_authorize_precedes_the_x14_challenge() {
     assert_eq!(
