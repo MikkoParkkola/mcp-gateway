@@ -17,8 +17,9 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
 pub(crate) use super::signing_allocation_tests::route_matrix_stdio_tasks::{
-    served_sanitizing, stdio_blocked_task, stdio_sanitizing, stdio_task_read, stdio_task_surfaced,
-    stdio_x14_consumed_then_refused, stdio_x14_signed_round,
+    served_sanitizing, stdio_blocked_task, stdio_sanitizing, stdio_task_read,
+    stdio_task_refused_without_a_grant, stdio_task_surfaced, stdio_x14_consumed_then_refused,
+    stdio_x14_signed_round,
 };
 
 /// A backend serving one tool, `read`, counting the `tools/call` sends.
@@ -409,5 +410,85 @@ pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value, usize) {
         let resent = call("t-k2", "stdio-adm-t2-0001", "other").await;
         let third = call("t-k3", "stdio-adm-t2-0001", "other").await;
         (refused, resent, third, fixture.backend.tools_call_count())
+    })
+}
+
+/// One stdio answer's delivery: whether the frame delivers a result, and how
+/// many nonces were given back across its dispatch and its delivery tail.
+pub(crate) struct Delivered {
+    pub(crate) delivers_result: bool,
+    pub(crate) given_back: usize,
+}
+
+/// MIK-8353 STDIO-SETTLE: on the production-built hardened stdio gateway, a
+/// signed `gateway_invoke` carrying a forged continuation (refused before its
+/// backend, so the call settles a refund), then the honest call re-sent under
+/// that nonce, then a third send under it. Each goes through the staged
+/// dispatch and `judge_and_commit`, the delivery tail stdio's loop runs, so a
+/// give-back in either place is counted. Blocking: the fixture owns its
+/// current-thread runtime, which the give-back count is kept on.
+pub(crate) fn stdio_refund_through_delivery() -> [Delivered; 3] {
+    use super::signing_allocation_tests::signing_nonce_allocations_support::{
+        BACKEND, Fixture, SESSION, TOOL, runtime,
+    };
+    use crate::gateway::meta_mcp::signing::{NONCE_META, given_back_on_this_thread};
+    const NONCE: &str = "stdio-settle-nonce-0001";
+    runtime().block_on(async {
+        let fixture = Fixture::start_hardened().await;
+        let send = |extra: Value| {
+            let fixture = &fixture;
+            async move {
+                let mut params = serde_json::json!({"name": "gateway_invoke",
+                    "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {}},
+                    "_meta": {NONCE_META: NONCE}});
+                if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
+                    params.extend(extra.clone());
+                }
+                let request = serde_json::json!({
+                    "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params});
+                let before = given_back_on_this_thread();
+                let reads = fixture.meta.stdio_reads();
+                let ((answer, staged), hidden) = crate::gateway::outbound::read_scoped(
+                    reads.guard(),
+                    Box::pin(super::Gateway::dispatch_single_staged(
+                        &fixture.meta,
+                        &fixture.tool_policy,
+                        &fixture.mtls_policy,
+                        request.clone(),
+                        super::StdioClient {
+                            session_id: SESSION,
+                            channel: &crate::gateway::input_bridge::NoClientChannel,
+                            handshake_capabilities: crate::protocol::meta::Declared::NONE,
+                            tasks: None,
+                            modern: false,
+                            sanitize: super::stdio_single::InputSanitizing::Off,
+                        },
+                        &super::StdioTelemetry::default(),
+                    )),
+                )
+                .await;
+                let answer = answer.expect("a request carrying an id is answered");
+                let frame = super::Gateway::judge_and_commit(
+                    &fixture.meta,
+                    &reads,
+                    SESSION,
+                    (answer, request.get("params"), hidden.as_ref()),
+                    staged,
+                )
+                .await;
+                Delivered {
+                    delivers_result: frame.delivers_result(),
+                    given_back: given_back_on_this_thread() - before,
+                }
+            }
+        };
+        let forged = serde_json::json!({
+            "requestState": "forged",
+            "inputResponses": {"q": {"action": "accept"}},
+        });
+        let refused = send(forged).await;
+        let resent = send(serde_json::json!({})).await;
+        let third = send(serde_json::json!({})).await;
+        [refused, resent, third]
     })
 }

@@ -92,11 +92,21 @@ struct NonceRefund {
     /// Something this call did may have acted (MIK-8353): a veto, never a
     /// grant. A witness still decides; this only stops a give-back.
     spent: std::sync::atomic::AtomicBool,
-    /// How many times this call's nonce was given back (MIK-8353
-    /// STDIO-SETTLE): the release is idempotent, so a second give-back would
-    /// leave the same nonce state and only a count can see it.
-    #[cfg(test)]
-    given_back: std::sync::atomic::AtomicUsize,
+}
+
+// How many nonces this thread gave back (MIK-8353 STDIO-SETTLE): the release
+// is idempotent, so a second give-back of one nonce leaves the same store
+// state and only a count can see it. Per thread: the rows run on a
+// current-thread runtime, so parallel tests never share it.
+#[cfg(test)]
+thread_local! {
+    static GIVEN_BACK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many nonces this thread has given back so far.
+#[cfg(test)]
+pub(crate) fn given_back_on_this_thread() -> usize {
+    GIVEN_BACK.with(std::cell::Cell::get)
 }
 
 pub(crate) enum SigningDelivery<'a> {
@@ -126,12 +136,6 @@ impl SigningInvocationContext {
     /// acted (MIK-8353; X14 consumed a grant).
     pub(crate) fn mark_spent(&self) {
         (self.refund.spent).store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-
-    /// How many times this call's nonce was given back.
-    #[cfg(test)]
-    pub(crate) fn given_back(&self) -> usize {
-        self.refund.given_back.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Ask for the nonce back: this step was refused before its backend (its
@@ -562,10 +566,7 @@ impl super::MetaMcp {
             (context.admitted, context.nonce_value(), context.nonce_stamp)
         {
             #[cfg(test)]
-            context
-                .refund
-                .given_back
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            GIVEN_BACK.with(|count| count.set(count.get() + 1));
             self.release_signing_nonce(nonce, principal, stamp);
         }
     }

@@ -173,10 +173,16 @@ pub(crate) async fn stdio_x14_signed_round() -> (Value, Value, Value, Value) {
 /// The hardened, signed stdio fixture surfacing the destructive `echo`, so X14
 /// challenges a task-augmented call to it.
 async fn signed_x14_fixture() -> super::owner2_stdio_tasks::Fixture {
+    signed_fixture_listing(json!({"destructiveHint": true, "readOnlyHint": false})).await
+}
+
+/// The hardened, signed stdio fixture surfacing `echo` listed with
+/// `annotations`.
+async fn signed_fixture_listing(annotations: Value) -> super::owner2_stdio_tasks::Fixture {
     let served = backend_listing(json!([{
         "name": TOOL,
         "inputSchema": {"type": "object"},
-        "annotations": {"destructiveHint": true, "readOnlyHint": false}
+        "annotations": annotations
     }]))
     .await;
     Box::pin(fixture_on_with(served, None, |config| {
@@ -232,6 +238,29 @@ fn accept(challenge: &Value) -> Value {
         "requestState": state,
         "inputResponses": { key: { "action": "accept" } },
     })
+}
+
+/// MIK-8353 STDIO-TWIN (pairs with E2E.1): a signed task call of a surfaced
+/// tool listed harmless, on a warm catalogue so X14 has nothing to ask. With
+/// the backend killed, execution admission refuses it with nothing consumed;
+/// the backend is revived, and the same nonce re-sent, then sent a third time.
+/// Returns (the refusal, the re-send, the third send, the backend `tools/call`
+/// count once the re-send's task is terminal).
+pub(crate) async fn stdio_task_refused_without_a_grant() -> (Value, Value, Value, usize) {
+    const NONCE: &str = "stdio-twin-nonce-0001";
+    let fixture = signed_fixture_listing(json!({"destructiveHint": false, "readOnlyHint": true})).await;
+    let backend = fixture.meta.backends().get(BACKEND).expect("the backend is registered");
+    backend.get_tools().await.expect("the backend lists its tools");
+    fixture.meta.kill_switch().kill(BACKEND);
+    let refused = dispatch(&fixture, x14_call(1, NONCE, "twin-a", json!({}))).await;
+    fixture.meta.kill_switch().revive(BACKEND);
+    let resent = dispatch(&fixture, x14_call(2, NONCE, "twin-b", json!({}))).await;
+    if let Some(id) = resent.pointer("/result/taskId").and_then(Value::as_str) {
+        super::owner2_stdio_tasks::wait_terminal(&fixture, id.to_owned()).await;
+    }
+    let calls = fixture.rounds.load(Ordering::SeqCst);
+    let third = dispatch(&fixture, x14_call(3, NONCE, "twin-c", json!({}))).await;
+    (refused, resent, third, calls)
 }
 
 /// What MIK-8353.E2E.1's round observed (see [`stdio_x14_consumed_then_refused`]).

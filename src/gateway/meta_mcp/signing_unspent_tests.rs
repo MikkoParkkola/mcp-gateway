@@ -337,9 +337,13 @@ async fn a_delivered_question_left_unanswered_keeps_the_nonce_spent() {
 
 /// Signs `gateway_run_playbook` of an unknown playbook under `elicit-nonce`,
 /// keyed, with or without a task intent, and has execution admission refuse it
-/// (the plan check) holding `witness`. Returns whether the nonce is free
-/// afterwards.
-async fn admission_refusal_frees_nonce(task: bool, witness: Option<RefundWitness>) -> bool {
+/// (the plan check) holding `witness`, with the spent veto set per `veto`.
+/// Returns whether the nonce is free afterwards.
+async fn admission_refusal_frees_nonce(
+    task: bool,
+    witness: Option<RefundWitness>,
+    veto: Veto,
+) -> bool {
     use crate::gateway::subscription_registry::{DEFAULT_MAX_LISTENERS, SubscriptionRegistry};
     use crate::gateway::task_service::{StoreLimits, TaskExecutor, TaskIntent, TaskService};
     use crate::idempotency::admission::ExecutionAdmission;
@@ -407,6 +411,9 @@ async fn admission_refusal_frees_nonce(task: bool, witness: Option<RefundWitness
     meta.prepare_signing_for_call(&mut signing, TOOL, &arguments, None, &caller)
         .expect("signing admits the call; admission is the one to refuse it");
     assert!(signing.admitted, "premise: the nonce was admitted");
+    if matches!(veto, Veto::Marked) {
+        signing.mark_spent();
+    }
     caller.signing = Some(&signing);
     let admitted = meta.admit_meta_sync(
         crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
@@ -427,7 +434,7 @@ async fn admission_refusal_frees_nonce(task: bool, witness: Option<RefundWitness
 #[tokio::test]
 async fn a_task_call_refused_without_its_witness_keeps_its_nonce() {
     assert!(
-        !admission_refusal_frees_nonce(true, None).await,
+        !admission_refusal_frees_nonce(true, None, Veto::Clear).await,
         "a refusal with no witness gave the nonce back"
     );
 }
@@ -438,7 +445,7 @@ async fn a_task_call_refused_without_its_witness_keeps_its_nonce() {
 async fn a_task_call_refused_with_its_witness_gives_its_nonce_back() {
     let witness = Some(RefundWitness::at_capture());
     assert!(
-        admission_refusal_frees_nonce(true, witness).await,
+        admission_refusal_frees_nonce(true, witness, Veto::Clear).await,
         "a task call refused with nothing spent kept its nonce"
     );
 }
@@ -449,7 +456,25 @@ async fn a_task_call_refused_with_its_witness_gives_its_nonce_back() {
 async fn a_sync_call_refused_by_admission_gives_its_nonce_back() {
     let witness = Some(RefundWitness::at_capture());
     assert!(
-        admission_refusal_frees_nonce(false, witness).await,
+        admission_refusal_frees_nonce(false, witness, Veto::Clear).await,
         "a synchronous call's admission refusal kept its nonce"
+    );
+}
+
+/// Whether a test marks the call spent before admission refuses it.
+enum Veto {
+    Clear,
+    Marked,
+}
+
+/// MIK-8353 VETO-1: a call marked spent gives nothing back, even holding its
+/// witness: the veto only ever stops a refund. Mutant mVeto: the veto check in
+/// `give_back_nonce` removed.
+#[tokio::test]
+async fn a_spent_mark_vetoes_a_witnessed_refund() {
+    let witness = Some(RefundWitness::at_capture());
+    assert!(
+        !admission_refusal_frees_nonce(false, witness, Veto::Marked).await,
+        "a call marked spent gave its nonce back"
     );
 }

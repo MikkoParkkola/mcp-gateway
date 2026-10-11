@@ -491,3 +491,50 @@ async fn mcp_task_refused_without_a_grant_gives_its_nonce_back() {
         "the nonce was given back twice: {third}"
     );
 }
+
+/// MIK-8353 STDIO-TWIN (NONCEFX.7, pairs with E2E.1): on hardened stdio a signed
+/// task call that X14 has nothing to ask (a harmless tool, warm catalogue),
+/// refused by execution admission with nothing consumed, gets its nonce back:
+/// once revived, the same nonce is accepted once (its task runs the backend
+/// once) and a third send is a replay. Red on base (MIK-8150's task guard).
+/// Mutants: mNoMint-stdio (no stdio witness) and mGuard (the guard kept).
+#[tokio::test]
+async fn stdio_task_refused_without_a_grant_gives_its_nonce_back() {
+    let (refused, resent, third, calls) =
+        Box::pin(stdio::stdio_task_refused_without_a_grant()).await;
+    assert!(
+        !refused.to_string().contains(X14_PROMPT),
+        "premise: X14 asked, so a grant path was taken: {refused}"
+    );
+    assert!(
+        message(&refused).contains("kill switch"),
+        "premise: admission's kill-switch refusal: {refused}"
+    );
+    assert!(
+        resent.pointer("/result/taskId").is_some(),
+        "the refused task call kept its nonce: {resent}"
+    );
+    assert_eq!(calls, 1, "the re-sent task did not run the backend once");
+    assert_eq!(
+        message(&third),
+        "Nonce replay detected",
+        "the nonce was given back twice: {third}"
+    );
+}
+
+/// MIK-8353 STDIO-SETTLE (r4: stdio settles in exactly one place): through
+/// the staged dispatch and `judge_and_commit`, a signed call refused before its
+/// backend gives its nonce back exactly once; the honest re-send under it is
+/// delivered and gives nothing back; a third send is a replay and gives
+/// nothing back. Mutants: mSettle-0 (the settle's give-back removed) and
+/// mSettle-2 (a second give-back added in the delivery tail).
+#[test]
+fn stdio_settles_a_refund_once_through_the_delivery_tail() {
+    let [refused, resent, third] = stdio::stdio_refund_through_delivery();
+    assert!(!refused.delivers_result, "premise: the forged continuation was refused");
+    assert_eq!(refused.given_back, 1, "the refusal's nonce was not given back exactly once");
+    assert!(resent.delivers_result, "the honest re-send was refused: the nonce was kept");
+    assert_eq!(resent.given_back, 0, "a delivered call gave its nonce back");
+    assert!(!third.delivers_result, "the nonce was given back twice");
+    assert_eq!(third.given_back, 0, "a replay refusal gave a nonce back");
+}

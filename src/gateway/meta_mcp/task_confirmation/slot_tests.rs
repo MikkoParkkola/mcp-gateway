@@ -794,3 +794,4 @@ mod mint_refusal;
 mod replay;
 /// The stdio principal rows (route-check-parity P3, MIK-8160, MIK-8326).
 mod stdio_binding;
+mod witness;
