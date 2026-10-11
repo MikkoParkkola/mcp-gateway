@@ -103,12 +103,16 @@ fn kernel_view(pid: Pid) -> Option<bool> {
     }
 }
 
+/// Real-time bound on an event wait no row is about: only a hang reaches it
+/// (MIK-8360).
+const HANG_BOUND: Duration = Duration::from_secs(60);
+
 async fn poll_until(what: &str, mut done: impl FnMut() -> bool) {
-    let deadline = tokio::time::Instant::now() + ROW_LIMIT;
+    let hung_at = tokio::time::Instant::now() + HANG_BOUND;
     while !done() {
         assert!(
-            tokio::time::Instant::now() < deadline,
-            "{what} within {ROW_LIMIT:?}"
+            tokio::time::Instant::now() < hung_at,
+            "{what} within {HANG_BOUND:?}"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -547,7 +551,6 @@ async fn a_held_tree_delays_no_other_in_the_reaper_loop() {
         }
     }
 
-    const HANG_BOUND: Duration = Duration::from_secs(60);
     let tree = |script: &str| {
         let mut cmd = tokio::process::Command::new("sh");
         cmd.args(["-c", script]);
@@ -633,12 +636,18 @@ async fn a_dropped_transport_hands_its_tree_to_the_reaper() {
 /// because the pre-reap signal repeats until the group settles. The test
 /// drives `reap_step` by hand and puts the late member into the group
 /// between two steps with `process_group`, so no race decides the row.
+///
+/// The reap deadline is not this row's subject, and it runs on the real
+/// clock from the first step, across the wait for the leader to exit: a
+/// loaded host that took longer than it gave the second step up as
+/// abandoned. It is lifted to the hang bound here (MIK-8360).
 #[tokio::test]
 async fn a_member_joining_after_the_first_pre_reap_signal_is_still_ended() {
     use std::os::unix::process::CommandExt as _;
     let (_w, t) = started("while IFS= read -r l; do :; done", None).await;
     let pgid = leader(&t).await;
     let mut tree = t.child.lock().tree.take().expect("a started tree");
+    tree.reap_deadline_for_test = Some(HANG_BOUND);
     let t0 = std::time::Instant::now();
     assert!(
         matches!(tree.reap_step(t0), Reap::Pending),
@@ -680,14 +689,14 @@ async fn a_member_joining_after_the_first_pre_reap_signal_is_still_ended() {
 /// The late member is our own child here, so the test reaps it itself:
 /// gone means it was killed (a zombie the test then collects).
 async fn gone_or_zombie(mut child: std::process::Child) {
-    let deadline = std::time::Instant::now() + ROW_LIMIT;
+    let hung_at = std::time::Instant::now() + HANG_BOUND;
     loop {
         if let Some(status) = child.try_wait().expect("try_wait") {
             assert!(!status.success(), "the late member was killed, not done");
             return;
         }
         assert!(
-            std::time::Instant::now() < deadline,
+            std::time::Instant::now() < hung_at,
             "the late member outlived the settle"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
