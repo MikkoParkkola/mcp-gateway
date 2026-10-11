@@ -152,7 +152,7 @@ async fn scan4_string_form_direct_arguments_are_judged_as_their_object() {
 #[tokio::test]
 async fn scan4_a_clean_string_form_call_reaches_the_backend_as_its_object() {
     use super::direct_guards_fixture::fixture_firewalled;
-    let object = json!({"q": "x"});
+    let object = json!({"cmd": "x"});
     let stringly = json!(serde_json::to_string(&object).expect("serializes"));
     for backend in BACKENDS {
         let fx = fixture_firewalled(Answer::Ok).await;
@@ -174,7 +174,7 @@ async fn scan4_a_clean_string_form_call_reaches_the_backend_as_its_object() {
 #[tokio::test]
 async fn scan4_a_clean_string_form_retry_is_sent_as_its_object() {
     use super::direct_guards_fixture::fixture_firewalled;
-    let object = json!({"q": "x"});
+    let object = json!({"cmd": "x"});
     let stringly = json!(serde_json::to_string(&object).expect("serializes"));
     for backend in BACKENDS {
         let who = ("k-std", backend);
