@@ -284,6 +284,37 @@ async fn retry_answering(audit: &Path, uri: &str, call: (&str, Value), answer: &
     sent(&fx, body)
 }
 
+/// R2's retry form (MIK-8159.CHAIN.1): the backend asks through
+/// `gateway_invoke`; the retry names `read` itself on `/mcp`, carrying a chain
+/// nonce, with a chain signer emitting on request.
+pub(crate) async fn retry_by_name_chained() -> Sent {
+    use crate::gateway::chain_test_support::{NONCE_KEY, signer};
+    let fx = super::direct_guards_fixture::fixture(Answer::AskOnce, |meta| {
+        meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest);
+    })
+    .await;
+    let invoke = serde_json::json!({ "server": "alpha", "tool": "read", "arguments": {} });
+    let asked = modern_call(
+        &fx,
+        "/mcp",
+        ("gateway_invoke", invoke),
+        &serde_json::json!({}),
+    )
+    .await;
+    let state = super::direct_continuation_tests::state_of(&asked);
+    let retry = serde_json::json!({
+        "requestState": state,
+        "inputResponses": {"k1": {"action": "accept", "content": {"account": "acct-1"}}},
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}},
+            NONCE_KEY: "matrix-nonce"
+        },
+    });
+    let body = modern_call(&fx, "/mcp", ("read", serde_json::json!({})), &retry).await;
+    sent(&fx, body)
+}
+
 /// R1: a continuation retry on `gateway_invoke` whose answer is `answer`.
 pub(crate) async fn invoke_retry_answering(audit: &Path, answer: &str) -> Sent {
     let call = serde_json::json!({ "server": "alpha", "tool": "read", "arguments": {} });

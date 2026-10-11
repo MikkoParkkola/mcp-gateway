@@ -286,7 +286,7 @@ async fn mrtr_undeclared_rows() {
 #[tokio::test]
 async fn chain_link_rows() {
     use crate::gateway::chain_test_support::chain_of;
-    for route in [Route::Invoke, Route::Direct, Route::Stdio] {
+    for route in [Route::Invoke, Route::Surfaced, Route::Direct, Route::Stdio] {
         assert_eq!(
             expect(MethodKind::ToolsCall, route, Stage::ChainLink),
             Expect::Applies,
@@ -294,6 +294,8 @@ async fn chain_link_rows() {
         );
         let body = match route {
             Route::Invoke => router::invoke_chained().await.body,
+            // MIK-8159.CHAIN.3: the surfaced name keeps its chain source.
+            Route::Surfaced => router::surfaced_chained().await.body,
             Route::Direct => router::direct_chained().await.body,
             Route::Stdio => stdio::stdio_chained().await.body,
             other => unreachable!("not driven here: {other:?}"),
@@ -306,28 +308,44 @@ async fn chain_link_rows() {
     }
 }
 
-/// `ChainLink`, R2 gap (MIK-8159): the same signed request by surfaced name
-/// succeeds and reaches its backend, but the answer carries no origin link,
-/// because the surfaced reply drops the chain source.
+/// `ChainLink` on the other two forms that name a backend tool directly
+/// (MIK-8159.CHAIN.1): the surfaced name over stdio, and a continuation retry
+/// naming the backend tool on `/mcp`. Both reach the backend and carry the
+/// gateway's origin link, as `gateway_invoke` does.
 #[tokio::test]
-async fn chain_link_surfaced_gap_row() {
+async fn chain_link_by_name_rows() {
     use crate::gateway::chain_test_support::chain_of;
-    assert_eq!(
-        expect(MethodKind::ToolsCall, Route::Surfaced, Stage::ChainLink),
-        Expect::ExpectedGap(super::Ticket::Mik8159)
+    let stdio = stdio::stdio_surfaced_chained().await;
+    assert!(
+        stdio.body.get("error").is_none(),
+        "stdio: refused: {}",
+        stdio.body
     );
-    let sent = router::surfaced_chained().await;
-    assert!(sent.body.get("error").is_none(), "refused: {}", sent.body);
     assert_eq!(
-        sent.backend_calls, 1,
-        "premise: the call ran: {}",
-        sent.body
+        stdio.backend_calls, 1,
+        "stdio: premise: the call ran: {}",
+        stdio.body
     );
     assert!(
-        chain_of(&sent.body["result"]).is_none(),
-        "R2 now carries an origin link; MIK-8159 may have closed this gap, flip \
-         the row to Applies: {}",
-        sent.body
+        chain_of(&stdio.body["result"]).is_some(),
+        "stdio: no origin link on the answer: {}",
+        stdio.body
+    );
+    let retry = router::retry_by_name_chained().await;
+    assert!(
+        retry.body.get("error").is_none(),
+        "retry: refused: {}",
+        retry.body
+    );
+    assert_eq!(
+        retry.backend_calls, 2,
+        "retry: premise: asked, then answered: {}",
+        retry.body
+    );
+    assert!(
+        chain_of(&retry.body["result"]).is_some(),
+        "retry: no origin link on the answer: {}",
+        retry.body
     );
 }
 

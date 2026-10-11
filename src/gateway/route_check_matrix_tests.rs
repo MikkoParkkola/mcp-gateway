@@ -87,7 +87,6 @@ pub(crate) enum Ticket {
     Mik8149,
     Mik8150,
     Mik8154,
-    Mik8159,
     Mik8160,
 }
 

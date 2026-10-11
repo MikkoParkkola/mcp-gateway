@@ -68,6 +68,25 @@ pub(crate) struct Sent {
 /// answers `answer`.
 async fn stdio_call(
     arm: impl FnOnce(&mut MetaMcp),
+    call: (Value, Option<Value>),
+    answer: Value,
+) -> Sent {
+    stdio_call_on(Entry::Invoke, arm, call, answer).await
+}
+
+/// How a stdio row names the backend tool.
+#[derive(Clone, Copy)]
+enum Entry {
+    /// `gateway_invoke` naming `alpha` and `read`.
+    Invoke,
+    /// `read` by the name the gateway surfaces it under (MIK-8159).
+    Surfaced,
+}
+
+/// [`stdio_call`] through `entry`.
+async fn stdio_call_on(
+    entry: Entry,
+    arm: impl FnOnce(&mut MetaMcp),
     (args, meta): (Value, Option<Value>),
     answer: Value,
 ) -> Sent {
@@ -88,15 +107,26 @@ async fn stdio_call(
         .await
         .expect("warm the tool cache");
     assert!(registry.register(backend));
-    let mut gateway_meta = MetaMcp::new(registry);
+    let mut gateway_meta = match entry {
+        Entry::Invoke => MetaMcp::new(registry),
+        Entry::Surfaced => {
+            MetaMcp::new(registry).with_surfaced_tools(vec![crate::config::SurfacedToolConfig {
+                server: "alpha".to_string(),
+                tool: "read".to_string(),
+            }])
+        }
+    };
     arm(&mut gateway_meta);
     let gateway_meta = Arc::new(gateway_meta);
     let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
-    let mut params = json!({ "name": "gateway_invoke",
-        "arguments": { "server": "alpha", "tool": "read", "arguments": args } });
+    let mut params = match entry {
+        Entry::Invoke => json!({ "name": "gateway_invoke",
+            "arguments": { "server": "alpha", "tool": "read", "arguments": args } }),
+        Entry::Surfaced => json!({ "name": "read", "arguments": args }),
+    };
     if let Some(meta) = meta {
         params["_meta"] = meta;
     }
@@ -172,6 +202,18 @@ pub(crate) async fn stdio_asking() -> Sent {
 pub(crate) async fn stdio_chained() -> Sent {
     use crate::gateway::chain_test_support::{NONCE_KEY, signer};
     stdio_call(
+        |meta| meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest),
+        (json!({}), Some(json!({ NONCE_KEY: "matrix-nonce" }))),
+        text_result("ok"),
+    )
+    .await
+}
+
+/// R5 by the surfaced name, with the same signer and nonce (MIK-8159.CHAIN.1).
+pub(crate) async fn stdio_surfaced_chained() -> Sent {
+    use crate::gateway::chain_test_support::{NONCE_KEY, signer};
+    stdio_call_on(
+        Entry::Surfaced,
         |meta| meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest),
         (json!({}), Some(json!({ NONCE_KEY: "matrix-nonce" }))),
         text_result("ok"),
