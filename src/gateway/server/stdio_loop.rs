@@ -555,9 +555,13 @@ impl Gateway {
                 let answers = request_id.clone();
                 #[cfg(test)]
                 let gate = initialize_gate.clone().filter(|_| !spawned);
+                #[cfg(test)]
+                let hold = Arc::clone(&self.test_seams.stdio_dispatch_hold);
                 // MIK-8176: this request's slots are owned by its task, from
                 // dispatch through the writer queue.
                 Box::pin(crate::gateway::meta_mcp::sealed_hold::scoped(async move {
+                    #[cfg(test)]
+                    hold.pause().await;
                     let ((response, staged), hidden) = Self::dispatch_streaming_notifications(
                         Box::pin(Self::dispatch_single_staged(
                             &meta_mcp,
@@ -682,6 +686,8 @@ impl Gateway {
         // await after them ends by `shutdown_deadline` (MIK-7685).
         let deadline = tokio::time::Instant::now() + STDIO_DRAIN_TIMEOUT;
         let shutdown_deadline = deadline + stdio_shutdown::STDIO_TEARDOWN_TIMEOUT;
+        #[cfg(test)]
+        self.test_seams.stdio_drain_started.notify_one();
         if tokio::time::timeout_at(deadline, async {
             while let Some(joined) = dispatches.join_next().await {
                 if let Err(e) = joined

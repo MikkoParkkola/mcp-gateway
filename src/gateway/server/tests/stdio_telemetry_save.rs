@@ -18,7 +18,9 @@ use tokio::time::timeout;
 
 use crate::config::Config;
 use crate::gateway::Gateway;
-use crate::protocol_revision_telemetry::{durable_window_path, load_durable_window, write_seam};
+use crate::protocol_revision_telemetry::{
+    Snapshot, durable_window_path, load_durable_window, write_seam,
+};
 
 /// Bound on every wait for a frame or a session end that must happen.
 const ARRIVAL: Duration = Duration::from_secs(30);
@@ -27,12 +29,18 @@ const PINGS: u64 = 20;
 /// A saver interval no row outlives, so the only saves a row sees are the
 /// ones it is about (MIK-8364).
 const NO_TICK: Duration = Duration::from_secs(3600);
+/// The revision the drain-window row's held request names on `_meta`.
+const HELD_REVISION: &str = "2025-11-25";
 
 struct Session {
     client: DuplexStream,
     lines: Lines<BufReader<DuplexStream>>,
     task: JoinHandle<crate::Result<()>>,
     data: std::path::PathBuf,
+    /// The pause at the start of this session's dispatches, and the notice
+    /// that its drain has begun.
+    hold: std::sync::Arc<crate::test_pause::Slot>,
+    drain_started: std::sync::Arc<tokio::sync::Notify>,
     _dir: tempfile::TempDir,
 }
 
@@ -40,6 +48,13 @@ impl Session {
     /// A stdio session whose saver never ticks during the row, and, when
     /// `trigger` is given, a stop the test can start as a signal would.
     async fn start(trigger: Option<&mut Option<tokio::sync::oneshot::Sender<()>>>) -> Self {
+        Self::start_saving_every(trigger, NO_TICK).await
+    }
+
+    async fn start_saving_every(
+        trigger: Option<&mut Option<tokio::sync::oneshot::Sender<()>>>,
+        every: Duration,
+    ) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("gateway.yaml");
         // A temp task store: a test must never open the operator's real one.
@@ -59,10 +74,11 @@ impl Session {
             .await
             .expect("gateway boots")
             .with_data_dir(data.clone())
-            .with_telemetry_save_interval(NO_TICK);
+            .with_telemetry_save_interval(every);
         if let Some(slot) = trigger {
             *slot = Some(gateway.shutdown_trigger_for_test());
         }
+        let (hold, drain_started) = gateway.stdio_drain_seams_for_test();
         let (client, input) = tokio::io::duplex(1 << 20);
         let (output, stdout) = tokio::io::duplex(1 << 20);
         let task = tokio::spawn(async move { gateway.run_stdio_on(input, output, None).await });
@@ -71,6 +87,8 @@ impl Session {
             lines: BufReader::new(stdout).lines(),
             task,
             data,
+            hold,
+            drain_started,
             _dir: dir,
         }
     }
@@ -125,13 +143,14 @@ impl Session {
 
     /// Close stdin, then wait for the session to end. Returns what the saved
     /// window holds; the tempdir lives until it is read.
-    async fn close(self) -> u64 {
+    async fn close(self) -> Snapshot {
         let Self {
             client,
             lines,
             task,
             data,
             _dir,
+            ..
         } = self;
         drop(client);
         drop(lines);
@@ -140,38 +159,35 @@ impl Session {
 
     /// Wait for the session to end with stdin still open, so only a stop
     /// other than EOF can end it. Returns what the saved window holds.
-    async fn wait_end(self) -> u64 {
+    async fn wait_end(self) -> Snapshot {
         let Self {
             client,
             lines,
             task,
             data,
             _dir,
+            ..
         } = self;
         let saved = Self::end(task, &data).await;
         drop((client, lines));
         saved
     }
 
-    async fn end(task: JoinHandle<crate::Result<()>>, data: &std::path::Path) -> u64 {
+    async fn end(task: JoinHandle<crate::Result<()>>, data: &std::path::Path) -> Snapshot {
         timeout(ARRIVAL, task)
             .await
             .expect("the session ends")
             .expect("no panic")
             .expect("Ok");
-        saved_stdio_requests(data)
+        load_durable_window(data)
+            .expect("the window file reads")
+            .snapshot
     }
 }
 
-/// Requests the saved window under `data` holds for the stdio transport.
-fn saved_stdio_requests(data: &std::path::Path) -> u64 {
-    load_durable_window(data)
-        .expect("the window file reads")
-        .snapshot
-        .by_transport
-        .get("stdio")
-        .copied()
-        .unwrap_or(0)
+/// Requests the saved window holds for the stdio transport.
+fn stdio_requests(saved: &Snapshot) -> u64 {
+    saved.by_transport.get("stdio").copied().unwrap_or(0)
 }
 
 /// ASYNC.1: answering requests writes no telemetry window. Every request
@@ -198,7 +214,7 @@ async fn stdin_eof_saves_every_observed_request() {
     let mut session = Session::start(None).await;
     session.handshake().await;
     session.pings().await;
-    let saved = session.close().await;
+    let saved = stdio_requests(&session.close().await);
     assert!(
         saved > PINGS,
         "the window saved at EOF holds {saved} stdio requests; at least {} were observed",
@@ -221,10 +237,71 @@ async fn a_signal_stop_ends_stdio_and_saves_every_observed_request() {
         .expect("the trigger was taken")
         .send(())
         .expect("the gateway holds the trigger's receiver");
-    let saved = session.wait_end().await;
+    let saved = stdio_requests(&session.wait_end().await);
     assert!(
         saved > PINGS,
         "the window saved after a signal stop holds {saved} stdio requests; at least {} were observed",
         PINGS + 1
     );
+}
+
+/// SHUTDOWN.1 (drain window, review round 3): a request read before the stop
+/// but not yet dispatched is observed during the drain, so the final save
+/// must come after the drain. Held at the start of its dispatch, it is
+/// released only once the drain has begun.
+#[tokio::test]
+async fn a_request_observed_during_the_drain_is_in_the_final_save() {
+    let mut trigger = None;
+    let mut session = Session::start(Some(&mut trigger)).await;
+    session.handshake().await;
+    let (reached, release) = session.hold.arm();
+    let reached = reached.notified();
+    // Its own revision on `_meta`, so the final save can be checked for
+    // exactly this request: the handshake negotiated 2025-06-18.
+    session
+        .send(
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {
+            "_meta": {"io.modelcontextprotocol/protocolVersion": HELD_REVISION}}}),
+        )
+        .await;
+    crate::test_pause::within("the ping reaching its dispatch hold", reached).await;
+    let drain_started = std::sync::Arc::clone(&session.drain_started);
+    let drained = drain_started.notified();
+    trigger
+        .take()
+        .expect("the trigger was taken")
+        .send(())
+        .expect("the gateway holds the trigger's receiver");
+    crate::test_pause::within("the drain starting after the stop", drained).await;
+    release.notify_one();
+    let saved = session.wait_end().await;
+    assert_eq!(
+        saved.by_revision.get(HELD_REVISION).copied().unwrap_or(0),
+        1,
+        "the request observed during the drain is missing from the final save: {saved:?}"
+    );
+}
+
+/// The saver persists while the session runs: with a short interval, the
+/// observed requests reach the window file with no stop at all.
+#[tokio::test]
+async fn the_saver_persists_observed_requests_while_the_session_runs() {
+    let mut session = Session::start_saving_every(None, Duration::from_millis(50)).await;
+    session.handshake().await;
+    session.pings().await;
+    let data = session.data.clone();
+    let saved = crate::test_pause::within("the saver writing the observed requests", async {
+        loop {
+            let saved = load_durable_window(&data)
+                .map(|window| stdio_requests(&window.snapshot))
+                .unwrap_or(0);
+            if saved > PINGS {
+                return saved;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    assert!(saved > PINGS, "the saver wrote {saved} stdio requests");
+    drop(session.client);
 }

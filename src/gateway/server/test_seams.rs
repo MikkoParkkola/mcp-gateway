@@ -32,6 +32,15 @@ pub(super) struct TestSeams {
     /// production one. A row sets it long, so no tick lands mid-row.
     #[cfg(test)]
     telemetry_save_every: Option<std::time::Duration>,
+    /// A pause at the start of this gateway's stdio dispatches, before the
+    /// request is observed (MIK-8364 drain-window row). Per gateway, so no
+    /// other session in the test binary stops on it.
+    #[cfg(test)]
+    pub(super) stdio_dispatch_hold: std::sync::Arc<crate::test_pause::Slot>,
+    /// Notified when this gateway's stdio read loop has stopped and the
+    /// drain begins (MIK-8364 drain-window row).
+    #[cfg(test)]
+    pub(super) stdio_drain_started: std::sync::Arc<tokio::sync::Notify>,
 }
 
 impl TestSeams {
@@ -114,6 +123,21 @@ pub(super) async fn shutdown_signal_or_trigger(
 }
 
 impl super::Gateway {
+    /// The pause at the start of this gateway's stdio dispatches, and the
+    /// notice that its drain has begun (MIK-8364).
+    #[cfg(test)]
+    pub(super) fn stdio_drain_seams_for_test(
+        &self,
+    ) -> (
+        std::sync::Arc<crate::test_pause::Slot>,
+        std::sync::Arc<tokio::sync::Notify>,
+    ) {
+        (
+            std::sync::Arc::clone(&self.test_seams.stdio_dispatch_hold),
+            std::sync::Arc::clone(&self.test_seams.stdio_drain_started),
+        )
+    }
+
     /// Run the stdio telemetry saver every `every` instead of the production
     /// interval (MIK-8364).
     #[cfg(test)]
