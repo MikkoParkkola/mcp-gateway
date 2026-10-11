@@ -318,25 +318,26 @@ async fn chain_link_by_name_rows() {
     use crate::security::signature_chain::content_digest;
     let stdio = stdio::stdio_surfaced_chained().await;
     let retry = router::retry_by_name_chained().await;
-    for (form, sent, calls) in [("stdio", &stdio, 1), ("retry", &retry, 2)] {
-        assert!(
-            sent.body.get("error").is_none(),
-            "{form}: refused: {}",
-            sent.body
-        );
+    // The two drivers each have their own `Sent`, so the rows read the body
+    // and the backend's call count, with the count each form expects.
+    let forms = [
+        ("stdio", &stdio.body, stdio.backend_calls, 1),
+        ("retry", &retry.body, retry.backend_calls, 2),
+    ];
+    for (form, body, called, calls) in forms {
+        assert!(body.get("error").is_none(), "{form}: refused: {body}");
         assert_eq!(
-            sent.backend_calls, calls,
-            "{form}: premise: the backend answered: {}",
-            sent.body
+            called, calls,
+            "{form}: premise: the backend answered: {body}"
         );
-        let result = &sent.body["result"];
+        let result = &body["result"];
         let chain = chain_of(result)
-            .unwrap_or_else(|| panic!("{form}: no origin link on the answer: {}", sent.body));
+            .unwrap_or_else(|| panic!("{form}: no origin link on the answer: {body}"));
         // The link verifies: this gateway's signature, over the delivered
         // content's digest, bound to the caller's nonce.
         let digest = content_digest(result).expect("a hashable result");
         verify_self(chain, &digest, "matrix-nonce")
-            .unwrap_or_else(|e| panic!("{form}: the link does not verify ({e:?}): {}", sent.body));
+            .unwrap_or_else(|e| panic!("{form}: the link does not verify ({e:?}): {body}"));
     }
 }
 
