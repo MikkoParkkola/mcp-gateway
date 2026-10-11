@@ -190,6 +190,8 @@ struct Fixture {
     sends: Arc<AtomicUsize>,
     catalogue: Arc<AtomicUsize>,
     catalogue_params: Arc<Mutex<Vec<Value>>>,
+    /// The receipt window, for [`Fixture::lapse_window`].
+    window: Duration,
     _store: tempfile::TempDir,
 }
 
@@ -319,11 +321,24 @@ async fn fixture(setup: Setup) -> Fixture {
         sends,
         catalogue,
         catalogue_params,
+        window: Duration::from_secs(setup.window_secs),
         _store: store,
     }
 }
 
 impl Fixture {
+    /// Let every receipt recorded so far lapse, without sleeping: freeze this
+    /// fixture's firewall clock one window plus a second ahead. Later receipts
+    /// and checks read the same frozen clock, so wall time spent under load
+    /// cannot lapse them (MIK-8354).
+    fn lapse_window(&self) {
+        self.state
+            .firewall
+            .as_ref()
+            .expect("the fixture installs a firewall")
+            .advance_collusion_clock_for_test(self.window + Duration::from_secs(1));
+    }
+
     fn catalogue(&self) -> usize {
         self.catalogue.load(Ordering::SeqCst)
     }
@@ -571,7 +586,7 @@ async fn a_cached_replay_renews_the_callers_copy() {
     let keyed = call("read", &json!({}), Some("key-a6"), None);
     let (_, first) = fx.call(Some("b"), &keyed).await;
     assert!(first.contains("orchard"), "{first}");
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    fx.lapse_window();
     fx.read(Some("a")).await;
     assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
     let reads = fx.reads();
