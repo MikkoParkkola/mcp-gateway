@@ -187,10 +187,10 @@ fn a_bloom_hit_on_foreign_text_is_never_evidence() {
     let delivered: HashSet<u64> = big.step_ev[..10].iter().copied().collect();
     big.keep_to(&delivered.union(&foreign).copied().collect());
     assert!(
-        big.selection
+        big.excuse
             .as_ref()
-            .is_some_and(|sel| sel.iter().any(|h| foreign.contains(h))),
-        "premise: the chance hits reached the excuse selection"
+            .is_some_and(|sketch| foreign.iter().any(|&h| sketch.holds(h))),
+        "premise: the chance hits reached the excuse sketch"
     );
     let evidence: HashSet<u64> = big
         .evidence()

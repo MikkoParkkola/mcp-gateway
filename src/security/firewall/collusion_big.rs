@@ -98,14 +98,17 @@ impl Drop for StepReservation {
 /// answer, the fingerprints the answer delivered from it.
 pub(crate) struct BigStep {
     reservation: StepReservation,
-    step_ev: Vec<u64>,
-    /// Dropped at retention, so publishing builds the final sketch with no
-    /// second filter alive: only the reserved bytes are ever held.
+    /// Exact-size, so the bytes charged are the bytes held (a thinned
+    /// `Vec` keeps its pre-thinning capacity).
+    step_ev: Box<[u64]>,
+    /// Dropped at retention, before the final sketch is built: only the
+    /// reserved bytes are ever held.
     step_all: Option<Sketch>,
     /// Exact evidence candidates: `step_ev` entries the answer delivered.
     evidence: Option<Arc<[u64]>>,
-    /// The excuse sketch's contents: answer fingerprints `step_all` holds.
-    selection: Option<Vec<u64>>,
+    /// The excuse sketch, built at retention in the reserved shape from the
+    /// answer fingerprints `step_all` holds; published at record.
+    excuse: Option<Arc<Sketch>>,
 }
 
 impl BigStep {
@@ -127,9 +130,9 @@ impl BigStep {
         let shape = reservation.shape()?;
         Some(Self {
             step_all: Some(Sketch::build(&fps, shape)),
-            step_ev,
+            step_ev: step_ev.into_boxed_slice(),
             evidence: None,
-            selection: None,
+            excuse: None,
             reservation,
         })
     }
@@ -146,6 +149,8 @@ impl BigStep {
     /// its excuse is the sampled answer hashes `step_all` holds. A selection
     /// past the reserved room (n + headroom) abandons the sketch, counted
     /// and marked: never overfilled. An empty one leaves nothing to publish.
+    /// The selection itself is transient: what stays until record is the
+    /// sketch, whose bytes the reservation charged.
     pub(crate) fn keep_to(&mut self, found: &HashSet<u64>) {
         let detector = Arc::clone(&self.reservation.detector);
         let evidence: Vec<u64> = self
@@ -164,7 +169,7 @@ impl BigStep {
             .filter(|&h| detector.keeps(h) && step_all.holds(h))
             .collect();
         drop(step_all);
-        self.step_ev = Vec::new();
+        self.step_ev = Box::default();
         let room = self.reservation.n + self.reservation.headroom;
         let mut state = detector.state.lock();
         if let Some(reservation) = self
@@ -195,7 +200,12 @@ impl BigStep {
             }
         }
         drop(state);
-        self.selection = (!selection.is_empty()).then_some(selection);
+        if selection.is_empty() {
+            return;
+        }
+        if let Some(shape) = self.reservation.shape() {
+            self.excuse = Some(Arc::new(Sketch::build(&selection, shape)));
+        }
     }
 
     /// The exact evidence candidates kept by [`Self::keep_to`].
@@ -204,15 +214,15 @@ impl BigStep {
     }
 
     /// Publish the excuse sketch into the reserved position (at record).
-    /// Without a selection the reservation is dropped, which abandons it.
+    /// Without one the reservation is dropped, which abandons it.
     pub(crate) fn publish(&self, now: Instant) {
-        let Some(selection) = &self.selection else {
+        let Some(sketch) = &self.excuse else {
             return;
         };
         let Some(reservation) = self.reservation.take() else {
             return;
         };
-        let sketch = Arc::new(Sketch::build(selection, reservation.shape));
+        let sketch = Arc::clone(sketch);
         let detector = &self.reservation.detector;
         let mut state = detector.state.lock();
         state.sketches.publish(&reservation, sketch, now);
