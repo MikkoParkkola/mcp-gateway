@@ -337,27 +337,42 @@ async fn stdio_missing_playbook_keeps_its_own_answer() {
     );
 }
 
-/// PIN p6 (the stated tightening, red on the base): authorize runs for every
-/// target before any is scanned. A chain whose last target the policy denies is
-/// refused whole and charges nothing, so the next direct call still has its
-/// single unit of budget. On the base the chain charged `read` first.
+/// PIN p6 (MIK-8361 ruling 1, E1): a chain whose last target the policy
+/// denies charges exactly what the same chain with a missing last target
+/// charges. The denied step charges nothing of its own; the earlier, visible
+/// step is the caller's own call. Counted against the twin [read, nosuch]
+/// under a policy that denies nothing: the same sends, and the next direct
+/// call meets the same budget. The twin's chain sends exactly its first step,
+/// so the equality cannot pass with neither chain running.
 #[tokio::test]
 async fn stdio_chain_with_a_denied_last_target_charges_no_earlier_target() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let audit = dir.path().join("audit.jsonl");
-    let policy = ToolPolicyConfig {
-        deny: vec!["write".to_string()],
-        ..ToolPolicyConfig::default()
-    };
-    let params = vec![chain_of(&["read", "write"]), invoke_read()];
-    let (answers, sends) = stdio_params_counted(&audit, budget(1), (None, policy, params)).await;
-    assert!(answers[0].get("error").is_some(), "{}", answers[0]);
-    assert!(
-        answers[1].get("error").is_none(),
-        "the refused chain spent the budget: {}",
-        answers[1]
+    async fn run(deny: &[&str], chain: &[&str]) -> (Vec<serde_json::Value>, usize) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let audit = dir.path().join("audit.jsonl");
+        let policy = ToolPolicyConfig {
+            deny: deny.iter().map(|tool| (*tool).to_string()).collect(),
+            ..ToolPolicyConfig::default()
+        };
+        let params = vec![chain_of(chain), invoke_read()];
+        stdio_params_counted(&audit, budget(1), (None, policy, params)).await
+    }
+    let (hidden, sends) = run(&["write"], &["read", "write"]).await;
+    let (missing, twin_sends) = run(&[], &["read", "nosuch"]).await;
+    assert_eq!(
+        twin_sends, 1,
+        "premise: the twin's chain sends exactly its first step: {missing:?}"
     );
-    assert_eq!(sends, 1);
+    assert_eq!(
+        sends, twin_sends,
+        "the denied step charged beyond a missing one: {hidden:?}"
+    );
+    assert_eq!(
+        hidden[1].get("error").is_some(),
+        missing[1].get("error").is_some(),
+        "the next direct call met a different budget: {} vs {}",
+        hidden[1],
+        missing[1]
+    );
 }
 
 /// STEPFW.3: a playbook the call budget refuses at the route resolves no

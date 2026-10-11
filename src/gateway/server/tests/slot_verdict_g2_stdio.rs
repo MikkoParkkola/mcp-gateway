@@ -448,39 +448,48 @@ fn refused(answer: &Value) -> bool {
     answer.get("error").is_some() || answer.pointer("/result/isError") == Some(&json!(true))
 }
 
-/// F5(a), stdio (guard, kills M18): a `gateway_execute` chain whose second
-/// static target route authorize refuses (`run_command` is on the default
-/// tool-policy deny list), with the operator's slot cold, resolves no
-/// credential and asks the backend nothing (no `tools/list`, no call). A
-/// verdict taken ahead of authorize would fill and release for the first
-/// target before the second is refused.
+/// F5(a), stdio (guard, kills M18; MIK-8361 ruling 1, E1): a step route
+/// authorize refuses (`run_command`, on the default tool-policy deny list)
+/// resolves no credential and asks the backend nothing beyond what a missing
+/// step does. The chain [read, run_command] is counted against the twin
+/// [read, nosuch] (a name the catalogue lacks), operator's slot cold in both:
+/// the same releases and backend requests. The twin resolves exactly once (the
+/// first step's own credential), so the equality cannot pass with both
+/// resolving nothing or both resolving extra; run_command's share is zero.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn f5a_stdio_route_authorize_refusal_resolves_nothing() {
-    let stdio = operator_stdio();
-    let (releases, requests) = (stdio.gateway.releases(), stdio.gateway.requests().len());
-    let answer = stdio
-        .rpc(
-            1,
-            "tools/call",
-            json!({"name": "gateway_execute", "arguments": {"chain": [
-                {"tool": format!("{BACKEND}:{TOOL}"), "arguments": {"folder": "inbox"}},
-                {"tool": format!("{BACKEND}:run_command"), "arguments": {}}
-            ]}}),
-        )
-        .await;
+    async fn chain(second: &str) -> (Value, usize, usize) {
+        let stdio = operator_stdio();
+        let answer = stdio
+            .rpc(
+                1,
+                "tools/call",
+                json!({"name": "gateway_execute", "arguments": {"chain": [
+                    {"tool": format!("{BACKEND}:{TOOL}"), "arguments": {"folder": "inbox"}},
+                    {"tool": format!("{BACKEND}:{second}"), "arguments": {}}
+                ]}}),
+            )
+            .await;
+        (answer, stdio.gateway.releases(), stdio.gateway.requests().len())
+    }
+    let (hidden, releases, requests) = chain("run_command").await;
+    let (missing, twin_releases, twin_requests) = chain("nosuch").await;
+    assert_eq!(
+        twin_releases, 1,
+        "premise: the twin resolves exactly once, for the first step: {missing}"
+    );
     assert!(
-        refused(&answer),
-        "premise: the chain was not refused: {answer}"
+        hidden.to_string().contains("run_command") && missing.to_string().contains("nosuch"),
+        "premise: each chain fails at its second step: {hidden} / {missing}"
     );
     assert_eq!(
-        stdio.gateway.releases(),
-        releases,
-        "F5(a) stdio: a credential was resolved: {answer}"
+        releases - twin_releases,
+        0,
+        "F5(a) stdio: run_command resolved a credential: {hidden}"
     );
     assert_eq!(
-        stdio.gateway.requests().len(),
-        requests,
-        "F5(a) stdio: the backend was asked: {answer}"
+        requests, twin_requests,
+        "F5(a) stdio: run_command asked the backend beyond a missing step: {hidden}"
     );
 }
 

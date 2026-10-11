@@ -298,41 +298,51 @@ fn refused(answer: &(StatusCode, Value)) -> bool {
     !answer.0.is_success() || answer.1.get("error").is_some()
 }
 
-/// F5(a): a `gateway_execute` chain whose second static target is refused by
-/// route authorize (`run_command` is on the default tool-policy deny list)
-/// resolves nothing for the first, per-user target: no mint, no `tools/list`,
-/// no call. A verdict taken ahead of authorize would fill and mint for the
-/// first target before the second is refused. Guard: kills M18.
+/// F5(a) (MIK-8361 ruling 1, E1): a step route authorize refuses resolves no
+/// credential and asks the backend nothing beyond what a missing step does.
+/// The chain [note, run_command] (run_command on the default deny list) is
+/// counted against the twin [note, nosuch] (a name the catalogue lacks): the
+/// same resolutions, requests and sends. The twin resolves exactly once (note's
+/// own credential), so the equality cannot pass with both resolving nothing or
+/// both resolving extra; run_command's own share is zero. Guard: kills M18.
 #[tokio::test]
 async fn g3_f5a_route_authorize_refusal_resolves_nothing() {
-    let gw = gateway(
-        CallerSlot::Valid,
-        &valid(),
-        Warmth::Cold,
-        Surfaced::No,
-        |_| {},
-    )
-    .await;
-    let (mints, requests) = (gw.mints(), gw.requests());
-    let body = json!({"jsonrpc": "2.0", "id": 11, "method": "tools/call",
-    "params": {"name": "gateway_execute", "arguments": {"chain": [
-        {"tool": format!("{BACKEND}:note"), "arguments": {"q": "x"}},
-        {"tool": format!("{BACKEND}:run_command"), "arguments": {}}
-    ]}}});
-    let answer = post_as_alpha(&gw.router, "/mcp", &body).await;
+    async fn chain(second: &str) -> ((StatusCode, Value), usize, usize, usize) {
+        let gw = gateway(
+            CallerSlot::Valid,
+            &valid(),
+            Warmth::Cold,
+            Surfaced::No,
+            |_| {},
+        )
+        .await;
+        let body = json!({"jsonrpc": "2.0", "id": 11, "method": "tools/call",
+        "params": {"name": "gateway_execute", "arguments": {"chain": [
+            {"tool": format!("{BACKEND}:note"), "arguments": {"q": "x"}},
+            {"tool": format!("{BACKEND}:{second}"), "arguments": {}}
+        ]}}});
+        let answer = post_as_alpha(&gw.router, "/mcp", &body).await;
+        (answer, gw.mints(), gw.requests(), gw.dispatched())
+    }
+    let (hidden, mints, requests, sent) = chain("run_command").await;
+    let (missing, twin_mints, twin_requests, twin_sent) = chain("nosuch").await;
+    assert_eq!(
+        twin_mints, 1,
+        "premise: the twin resolves exactly once, for note: {missing:?}"
+    );
     assert!(
-        refused(&answer),
-        "premise: the chain was not refused: {answer:?}"
+        hidden.1.to_string().contains("run_command") && missing.1.to_string().contains("nosuch"),
+        "premise: each chain fails at its second step: {hidden:?} / {missing:?}"
     );
     assert_eq!(
-        gw.mints(),
-        mints,
-        "F5(a): a credential was resolved: {answer:?}"
+        mints - twin_mints,
+        0,
+        "F5(a): run_command resolved a credential: {hidden:?}"
     );
     assert_eq!(
-        gw.requests(),
-        requests,
-        "F5(a): the backend was asked: {answer:?}"
+        (requests, sent),
+        (twin_requests, twin_sent),
+        "F5(a): run_command asked the backend beyond a missing step: {hidden:?}"
     );
 }
 
