@@ -102,8 +102,10 @@ pub(crate) struct BigStep {
     /// Exact-size, so the bytes charged are the bytes held (a thinned
     /// `Vec` keeps its pre-thinning capacity).
     step_ev: Box<[u64]>,
-    /// Dropped at retention, before the final sketch is built: only the
-    /// reserved bytes are ever held.
+    /// Dropped at retention, before the final sketch is built: between
+    /// staging and record only the reserved bytes are held. Retention itself
+    /// briefly holds one step's selection (8 bytes per selected fingerprint)
+    /// while it builds the sketch: a transient peak, freed before it returns.
     step_all: Option<Sketch>,
     /// Exact evidence candidates: `step_ev` entries the answer delivered.
     evidence: Option<Arc<[u64]>>,
@@ -350,6 +352,17 @@ impl CollusionDetector {
     /// One k-gram in `sample_rate()` is a sampled fingerprint.
     pub(crate) fn sample_rate(&self) -> u64 {
         self.sample
+    }
+
+    /// The live (published) sketch positions of `principal` from `source`.
+    pub(crate) fn live_sketch_positions(&self, source: &str, principal: &str) -> Vec<usize> {
+        let pair = (self.digest(source), self.digest(principal));
+        self.state.lock().sketches.positions_of(pair)
+    }
+
+    /// Whether any exact record holds `fp`.
+    pub(crate) fn tracks(&self, fp: u64) -> bool {
+        self.is_tracked(fp)
     }
 
     /// Bytes of every live and pending sketch.

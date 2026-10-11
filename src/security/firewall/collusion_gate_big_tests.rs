@@ -240,6 +240,13 @@ fn same_source_steps_of_one_plan_hold_distinct_positions() {
         let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered, None));
         fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &kept);
     }
+    let mut live = detector.live_sketch_positions(SOURCE, "alice");
+    live.sort_unstable();
+    assert_eq!(
+        live,
+        vec![0, 1, 2, 3],
+        "premise: all four sketches are live before measuring"
+    );
     // B3': a stranger's sampled fingerprint is excused by the pair's live
     // sketches at under 3·P0. One-sided exact band: at a rate of 3·P0
     // (P0 = 0.0035), P(Bin(200,000, 0.0105) <= 1,886) = 9.6e-7. The design
@@ -525,10 +532,14 @@ fn a_short_extract_of_a_big_step_the_sample_missed_is_still_excused() {
         deliver_step(&fw, &step, bound, &answer),
         "premise: under the bound"
     );
-    // Alice's step record is evidence (T4b), so bob passing here means it
-    // holds no exact entry of the extract: her excuse can only be the sketch.
+    // No exact record holds any of the extract's sampled fingerprints (not
+    // even one, below the relay threshold): alice's excuse can only be the
+    // sketch.
     assert!(
-        !relays(&fw, "bob", &window),
+        !detector
+            .fingerprints(&window)
+            .iter()
+            .any(|&fp| detector.tracks(fp)),
         "premise: the staged evidence holds none of the extract"
     );
     deliver(&fw, "carol", &window);
@@ -580,7 +591,7 @@ fn admit_until_full(preseed: usize) {
         let receipt = staged.baseline() - base;
         let attached = staged.total() - total - receipt;
         if attached == 0 {
-            break cap - (total + receipt);
+            break cap.saturating_sub(total.saturating_add(receipt));
         }
         assert!(
             total + receipt + attached <= cap,

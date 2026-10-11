@@ -117,7 +117,7 @@ fn every_admitted_shape_meets_its_target_rate() {
 /// disjoint 153-k-gram windows of the step itself, a window is missed when
 /// fewer than 2 of its k-grams are in the staged set: inside the exact
 /// binomial band for q = 1/(4·16): P = 0.308093, 5,853..=6,474 (each tail
-/// ≤ 1e-6). At q = 1/4 it would be about 920.
+/// ≤ 1e-6). At m = 8 (q = 1/32) it would be about 920.
 #[test]
 fn a_big_steps_miss_rate_uses_the_larger_thinning() {
     use std::collections::HashSet;
