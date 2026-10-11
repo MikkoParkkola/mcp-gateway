@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_digest.rs b/src/security/firewall/collusion_digest.rs
+index 6c5fcd74d..3f3acbdda 100644
+--- a/src/security/firewall/collusion_digest.rs
++++ b/src/security/firewall/collusion_digest.rs
+@@ -695,7 +695,7 @@ impl DeliveryDigest {
+         // and run together), so a step of leaves shorter than a k-gram still
+         // has its joined text; and a cut an earlier view retention kept (the
+         // rewritten route retains twice), so a second view never erases it.
+-        let forms: Vec<String> = self.runs().iter().flat_map(|run| run_forms(run)).collect();
++        let forms: Vec<String> = self.segments.iter().map(|s| s.text.clone()).collect();
+         let mut cut: Vec<u64> = forms
+             .iter()
+             .flat_map(|form| detector.sampled_kgram_stream(form.chars()))

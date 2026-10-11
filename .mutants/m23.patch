@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate_seams.rs b/src/security/firewall/collusion_gate_seams.rs
+index e642278b0..b022f05a7 100644
+--- a/src/security/firewall/collusion_gate_seams.rs
++++ b/src/security/firewall/collusion_gate_seams.rs
+@@ -37,7 +37,7 @@ impl Firewall {
+                 step,
+             } => {
+                 let sample = step.as_ref().map(|UnreadStep { evidence }| evidence.fps());
+-                let recorded = (fps.clone(), cut.clone(), sample);
++                let recorded = ({ let _ = (fps, cut); Vec::new() }, None, sample);
+                 Self::record_unread(
+                     detector,
+                     (source, caller),

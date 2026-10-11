@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay_delivered.rs b/src/gateway/meta_mcp/invoke/relay_delivered.rs
+index bca0572e1..c786b9ad6 100644
+--- a/src/gateway/meta_mcp/invoke/relay_delivered.rs
++++ b/src/gateway/meta_mcp/invoke/relay_delivered.rs
+@@ -256,7 +256,7 @@ fn keep_plan_receipts(
+     let read = !delivered.unread();
+     // `MIK-8209` K7: each answer leaf's step, so a receipt matches its own
+     // span first; the same walk as the seam pass.
+-    let labels = if delivered.unread() {
++    let labels = if false && delivered.unread() {
+         Vec::new()
+     } else {
+         super::seams::answer_parts(answer)

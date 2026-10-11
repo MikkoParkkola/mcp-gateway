@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate.rs b/src/security/firewall/collusion_gate.rs
+index 3555daac5..3c86f0d4c 100644
+--- a/src/security/firewall/collusion_gate.rs
++++ b/src/security/firewall/collusion_gate.rs
+@@ -787,7 +787,7 @@ impl Firewall {
+         };
+         // A2: by reference, a digest could be recorded twice; the first
+         // record sets the flag, a second adds no evidence and no charge.
+-        let twice = digest.recorded.swap(true, Ordering::Relaxed);
++        let twice = digest.recorded.load(Ordering::Relaxed);
+         if twice {
+             detector
+                 .views

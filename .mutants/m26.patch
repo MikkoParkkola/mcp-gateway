@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_big.rs b/src/security/firewall/collusion_big.rs
+index ba755347d..3ffa56f4e 100644
+--- a/src/security/firewall/collusion_big.rs
++++ b/src/security/firewall/collusion_big.rs
+@@ -290,7 +290,7 @@ impl BigStep {
+             _charge: charge,
+         });
+         let room = reservation.n + reservation.headroom;
+-        let Some(selection_charge) = detector.views.budget.reserve((room + 1) * 8) else {
++        let Some(selection_charge) = detector.views.budget.reserve(0 * room) else {
+             detector
+                 .views
+                 .selection_refusals
