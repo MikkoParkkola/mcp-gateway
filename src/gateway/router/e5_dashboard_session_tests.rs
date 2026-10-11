@@ -722,4 +722,15 @@ async fn dashboard_claims_no_outcome_for_counted_calls() {
         page.body.contains("cumulative"),
         "the table says its numbers are cumulative counts"
     );
+    // Three columns, and the count the tracker holds.
+    assert!(
+        page.body
+            .contains("<th>Tool</th><th>Server</th><th>Calls</th></tr>"),
+        "the tools table has exactly Tool, Server and Calls"
+    );
+    assert!(
+        page.body
+            .contains("<td>always_fails</td><td>srv-8370</td><td>2</td></tr>"),
+        "the row shows the counted calls and nothing after them"
+    );
 }

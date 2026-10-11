@@ -103,7 +103,6 @@ pub async fn dashboard_handler(
     let tool_counts: Vec<ToolCallCount> = snap
         .top_tools
         .iter()
-        .take(50)
         .map(|t| ToolCallCount {
             tool: t.tool.clone(),
             server: t.server.clone(),

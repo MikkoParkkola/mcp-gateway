@@ -176,7 +176,8 @@ pub struct DashboardState<'a> {
     pub backends: Vec<BackendHealth>,
     /// Session / call summary.
     pub session_summary: SessionSummary,
-    /// Calls per tool since start, most-called first (up to 50).
+    /// Calls per tool since start, most-called first (`UsageStats::snapshot`
+    /// keeps the top 10).
     pub tool_counts: Vec<ToolCallCount>,
     /// Cache statistics.
     pub cache_stats: CacheStats,
@@ -275,7 +276,7 @@ tr:hover td{{background:var(--bg3);}}
   <tbody>{backend_rows}</tbody>
 </table>
 
-<h2>Calls per tool (cumulative since start, top 50)</h2>
+<h2>Calls per tool (cumulative since start, top 10)</h2>
 <table>
   <thead><tr><th>Tool</th><th>Server</th><th>Calls</th></tr></thead>
   <tbody>{tool_rows}</tbody>
