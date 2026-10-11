@@ -80,10 +80,10 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
     ("/ui/api/control-plane/decisions", Method::POST, CP_WRITES),
 ];
 
-/// Whether `status` is a served admin answer: success, or `/sse`'s 410, which
-/// is its deliberate pointer to `POST /mcp`.
-fn is_served(status: u16) -> bool {
-    matches!(status, 200..=299 | 410)
+/// Whether `status` on `path` is a served admin answer: success, or `/sse`'s
+/// 410, which is its deliberate pointer to `POST /mcp` (that route only).
+fn is_served(path: &str, status: u16) -> bool {
+    matches!(status, 200..=299) || (path == "/sse" && status == 410)
 }
 
 /// Every row whose admin cell is not served names where the served answer is
@@ -97,7 +97,7 @@ fn every_unserved_admin_cell_names_the_test_that_serves_it() {
     // served refusal, pinned with its reason code by the cited test.
     let unserved: BTreeSet<(String, String)> = ROWS
         .iter()
-        .filter(|r| !is_served(r.configured.map_or(r.base[3], |c| c[2])))
+        .filter(|r| !is_served(r.path, r.configured.map_or(r.base[3], |c| c[2])))
         .map(|r| (r.path.to_owned(), r.method.to_string()))
         .collect();
     let cited: BTreeSet<(String, String)> = SERVED_BY
@@ -122,18 +122,27 @@ fn every_unserved_admin_cell_names_the_test_that_serves_it() {
     }
 }
 
-/// MIK-8044.SURF.8 R12: with the state the admin is served from in place (a
-/// config path and a reload context), a non-admin is still refused, and the
-/// refusal changes nothing. The statuses are the INTERNAL contract above
-/// (anonymous with auth on 401, Auditor 403).
-#[tokio::test]
-async fn a_non_admin_is_refused_with_the_served_state_present_and_changes_nothing() {
+/// The R12 posture: auth on with the Auditor key, a config path and a reload
+/// context, and `docs` both registered and written in the config file, so a
+/// PATCH or DELETE that got through would change the file.
+async fn writable() -> (
+    Arc<AppState>,
+    Arc<LiveConfig>,
+    Gateway,
+    std::path::PathBuf,
+    TempDir,
+) {
     let tmp = TempDir::new().expect("tempdir");
     let config_path = tmp.path().join("gateway.yaml");
-    let initial = Config::default();
+    let mut initial = Config::default();
+    initial.backends.insert(
+        "docs".to_string(),
+        serde_json::from_value(json!({"http_url": "http://127.0.0.1:9/docs"}))
+            .expect("docs backend"),
+    );
     write_owner_only(&config_path, serde_yaml::to_string(&initial).unwrap()).unwrap();
     let (mut state, live, _store) =
-        make_app_state_with_reload(initial.clone(), None, config_path.clone()).await;
+        make_app_state_with_reload(initial, None, config_path.clone()).await;
     Arc::get_mut(&mut state)
         .expect("test AppState should be uniquely owned")
         .auth_config = Arc::new(ResolvedAuthConfig::from_config(&auth_on()));
@@ -143,10 +152,32 @@ async fn a_non_admin_is_refused_with_the_served_state_present_and_changes_nothin
         caps: TempDir::new().expect("capability dir"),
         _store: TempDir::new().expect("store dir"),
     };
+    (state, live, gw, config_path, tmp)
+}
+
+const WRITES: [(Method, &str, Payload); 4] = [
+    (Method::POST, "/ui/api/reload", Payload::None),
+    (Method::POST, "/ui/api/backends", Payload::Json(ADD_BACKEND)),
+    (
+        Method::PATCH,
+        "/ui/api/backends/docs",
+        Payload::Json(UPDATE_BACKEND),
+    ),
+    (Method::DELETE, "/ui/api/backends/docs", Payload::None),
+];
+
+/// MIK-8044.SURF.8 R12: with the state the admin is served from in place (a
+/// config path and a reload context), a non-admin is still refused, and the
+/// refusal changes nothing. The statuses are the INTERNAL contract above
+/// (anonymous with auth on 401, Auditor 403).
+#[tokio::test]
+async fn a_non_admin_is_refused_with_the_served_state_present_and_changes_nothing() {
+    let (state, live, gw, config_path, _tmp) = writable().await;
+    let docs_before = state.backends.get("docs").expect("docs is registered");
 
     // An unapplied change waits on disk: a reload that ran would publish the
     // profile and register `staged`.
-    let mut staged = initial.clone();
+    let mut staged = Config::load(Some(&config_path)).expect("the fixture config loads");
     staged.default_routing_profile = "staged-profile".to_string();
     staged.backends.insert(
         "staged".to_string(),
@@ -157,17 +188,7 @@ async fn a_non_admin_is_refused_with_the_served_state_present_and_changes_nothin
     let on_disk = std::fs::read(&config_path).expect("read config");
     let profile_before = live.get().default_routing_profile.clone();
 
-    let writes: [(Method, &str, Payload); 4] = [
-        (Method::POST, "/ui/api/reload", Payload::None),
-        (Method::POST, "/ui/api/backends", Payload::Json(ADD_BACKEND)),
-        (
-            Method::PATCH,
-            "/ui/api/backends/docs",
-            Payload::Json(UPDATE_BACKEND),
-        ),
-        (Method::DELETE, "/ui/api/backends/docs", Payload::None),
-    ];
-    for (method, uri, payload) in &writes {
+    for (method, uri, payload) in &WRITES {
         for (caller, want) in [(Caller::AnonOn, 401), (Caller::Auditor, 403)] {
             let (status, _, body) = send(&gw, request(method, uri, caller, *payload)).await;
             let text = String::from_utf8_lossy(&body);
@@ -191,9 +212,49 @@ async fn a_non_admin_is_refused_with_the_served_state_present_and_changes_nothin
                 "{method} {uri} as {caller:?} registered a backend"
             );
             assert!(
-                state.backends.get("docs").is_some(),
-                "{method} {uri} as {caller:?} removed a backend"
+                state
+                    .backends
+                    .get("docs")
+                    .is_some_and(|now| Arc::ptr_eq(&now, &docs_before)),
+                "{method} {uri} as {caller:?} removed or replaced `docs`"
             );
         }
     }
+}
+
+/// Positive control for R12: on the same posture an admin's PATCH and DELETE
+/// of `docs` do change the config file, so the bytes R12 compares can move.
+#[tokio::test]
+async fn an_admin_write_on_the_r12_posture_changes_the_config_file() {
+    let (_state, _live, gw, config_path, _tmp) = writable().await;
+    let before = std::fs::read(&config_path).expect("read config");
+    let (status, _, body) = send(
+        &gw,
+        request(
+            &Method::PATCH,
+            "/ui/api/backends/docs",
+            Caller::Admin,
+            Payload::Json(UPDATE_BACKEND),
+        ),
+    )
+    .await;
+    assert_eq!(status.as_u16(), 200, "{}", String::from_utf8_lossy(&body));
+    let patched = std::fs::read(&config_path).expect("read config");
+    assert_ne!(patched, before, "an admin PATCH left the file unchanged");
+    let (status, _, body) = send(
+        &gw,
+        request(
+            &Method::DELETE,
+            "/ui/api/backends/docs",
+            Caller::Admin,
+            Payload::None,
+        ),
+    )
+    .await;
+    assert_eq!(status.as_u16(), 204, "{}", String::from_utf8_lossy(&body));
+    let deleted = std::fs::read_to_string(&config_path).expect("read config");
+    assert!(
+        !deleted.contains("docs"),
+        "an admin DELETE left docs: {deleted}"
+    );
 }
