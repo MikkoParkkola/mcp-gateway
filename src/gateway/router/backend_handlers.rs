@@ -53,39 +53,78 @@ use relay::{
     stage_direct_delivery,
 };
 
-/// Apply tool policy, name validation, and input sanitization to a `tools/call`
-/// request arriving at the direct backend endpoint.
+/// The checks a direct `tools/call` meets once its credential is resolved:
+/// the argument-key check (R2, F13) and input sanitization. Authorize and the
+/// firewall ran before the credential, in [`guard_tool_call`] (MIK-8361).
 ///
 /// Returns `Ok(Some(sanitized))` when all checks pass, `Ok(None)` for a
 /// passthrough backend, or `Err(response)` when a check fails and the caller
-/// should return an HTTP error immediately. A call with no params or no tool
-/// name is refused (400, -32602): with no name there is nothing to authorize,
-/// so forwarding it would skip the per-tool check (D2).
-///
-/// Order of checks matches `meta_mcp_handler`:
-/// 1. `validate_tool_name` — rejects dangerous names before any policy lookup.
-/// 2. `tool_policy.check` — enforces global allow/deny rules.
-/// 3. `sanitize_json_value` — strips/rejects dangerous byte sequences.
+/// should return an HTTP error immediately.
 #[allow(clippy::result_large_err)]
 async fn apply_backend_tool_call_security(
     state: &AppState,
     backend_name: &str,
-    auth: BackendAuthContext<'_>,
     params: Option<&Value>,
     id: &RequestId,
     backend: &crate::backend::Backend,
     (slot, failed): (key_check::CallerSlot<'_>, &DirectFailure<'_>),
 ) -> BackendSecurityResult {
-    let unnamed = || {
-        let message = "tools/call requires params.name";
-        build_http_error_response(Some(id.clone()), -32602, message, StatusCode::BAD_REQUEST)
-    };
     let Some(params) = params else {
-        return Err(unnamed());
+        return Err(unnamed_call(id));
+    };
+    // MIK-7570.SCHEMA.1 (R2), F13: above the passthrough return, so a
+    // passthrough backend is checked too.
+    let lens = crate::backend::Lens::Catalogue;
+    if let Some(rejection) = key_check::key_refusal(backend, (slot, failed), params, (id, lens)).await
+    {
+        return Err(rejection);
+    }
+
+    if backend.passthrough() {
+        return Ok(None);
+    }
+
+    let _ = state;
+    match sanitize_json_value(params) {
+        Ok(sanitized) => Ok(Some(sanitized)),
+        Err(e) => {
+            warn!(backend = %backend_name, "Input sanitization failed");
+            Err(backend_security_error(id, &e.to_string()))
+        }
+    }
+}
+
+/// The refusal of a `tools/call` with no params or no tool name (400,
+/// -32602): with no name there is nothing to authorize, so forwarding it
+/// would skip the per-tool check (D2).
+fn unnamed_call(id: &RequestId) -> BackendRejection {
+    let message = "tools/call requires params.name";
+    build_http_error_response(Some(id.clone()), -32602, message, StatusCode::BAD_REQUEST)
+}
+
+/// The checks a direct `tools/call` meets before any credential is resolved
+/// (MIK-8361 ORACLE.3/.4), in `meta_mcp_handler`'s order:
+/// 1. `validate_tool_name` rejects dangerous names before any policy lookup;
+/// 2. authorize: a refusal means the caller's listing hides the tool, so it
+///    takes the missing name's path (it is not refused for its reason here);
+/// 3. the request firewall and the relay rule, for a withheld and a missing
+///    name alike;
+/// 4. the gate: a withheld name is answered as a name the catalogue lacks,
+///    with no credential and no fill on a per-user backend.
+#[allow(clippy::result_large_err)]
+async fn guard_tool_call(
+    state: &AppState,
+    backend_name: &str,
+    auth: BackendAuthContext<'_>,
+    (params, id): (Option<&Value>, &RequestId),
+    (backend, failed): (&crate::backend::Backend, &DirectFailure<'_>),
+) -> Result<(), BackendRejection> {
+    let Some(params) = params else {
+        return Err(unnamed_call(id));
     };
     let tool_name = params.get("name").and_then(Value::as_str).unwrap_or("");
     if tool_name.is_empty() {
-        return Err(unnamed());
+        return Err(unnamed_call(id));
     }
 
     if let Err(e) = validate_tool_name(tool_name) {
@@ -99,17 +138,16 @@ async fn apply_backend_tool_call_security(
         tool: tool_name,
         arguments,
     };
-    if let Err(e) = authorize_tool_target(
+    let withheld = authorize_tool_target(
         state,
         auth.client,
         auth.oauth_agent_identity,
         auth.cert_identity,
         target,
-    ) {
-        warn!(backend = %backend_name, tool = %tool_name, "Tool blocked by authorization");
-        return Err(backend_security_error_with_status(
-            id, e.code, &e.message, e.status,
-        ));
+    )
+    .is_err();
+    if withheld {
+        warn!(backend = %backend_name, tool = %tool_name, "Tool withheld by authorization; answered as absent");
     }
 
     #[cfg(feature = "firewall")]
@@ -150,23 +188,23 @@ async fn apply_backend_tool_call_security(
         }
     }
 
-    // MIK-7570.SCHEMA.1 (R2), F13: above the passthrough return, so a
-    // passthrough backend is checked too.
-    if let Some(rejection) = key_check::key_refusal(backend, (slot, failed), params, id).await {
-        return Err(rejection);
+    if !withheld {
+        return Ok(());
     }
-
-    if backend.passthrough() {
-        return Ok(None);
-    }
-
-    match sanitize_json_value(params) {
-        Ok(sanitized) => Ok(Some(sanitized)),
-        Err(e) => {
-            warn!(backend = %backend_name, tool = %tool_name, "Input sanitization failed");
-            Err(backend_security_error(id, &e.to_string()))
-        }
-    }
+    let lens = crate::backend::Lens::Withheld;
+    let answered = key_check::key_refusal(backend, ((None, &[]), failed), params, (id, lens));
+    // A withheld name is always answered; were it not, it is still never sent.
+    Err(answered.await.unwrap_or_else(|| {
+        let absent = crate::gateway::meta_mcp::visible::absent_name(tool_name);
+        let response = crate::gateway::meta_mcp::response_security::error_response_preserving_status(
+            id.clone(),
+            &absent,
+        );
+        super::helpers::build_http_response(
+            &crate::gateway::meta_mcp::invoke::egress::Egressed::gateway_own(response),
+            StatusCode::OK,
+        )
+    }))
 }
 
 /// What a direct-route call's token must grant (MIK-7570.ATTEST.1 part 3).
@@ -429,13 +467,6 @@ async fn backend_handler_inner(
         Ok(preflight) => preflight,
         Err(response) => return response,
     };
-    let propagation =
-        match direct_preflight::propagate_identity(state, &name, &caller, &route, &preflight, &id)
-            .await
-        {
-            Ok(propagation) => propagation,
-            Err(response) => return response,
-        };
     let scope = direct_dispatch::Scope {
         state,
         name: &name,
@@ -443,6 +474,18 @@ async fn backend_handler_inner(
         route: &route,
         id: &id,
     };
+    // Authorize, the firewall and the withheld gate need no credential:
+    // a call they refuse or answer resolves none (MIK-8361 ORACLE.4).
+    if let Err(response) = direct_gate::guard_before_credential(scope, &envelope).await {
+        return response;
+    }
+    let propagation =
+        match direct_preflight::propagate_identity(state, &name, &caller, &route, &preflight, &id)
+            .await
+        {
+            Ok(propagation) => propagation,
+            Err(response) => return response,
+        };
     let admitted = match direct_dispatch::admit(scope, &envelope, &preflight, &propagation).await {
         Ok(admitted) => admitted,
         Err(response) => return response,
@@ -633,6 +676,7 @@ mod direct_audit;
 mod direct_caller;
 mod direct_dispatch;
 mod direct_failure;
+mod direct_gate;
 mod direct_idempotency;
 #[cfg(test)]
 pub(super) use direct_idempotency::seams as direct_lease_seams;

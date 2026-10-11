@@ -183,11 +183,21 @@ pub(super) async fn tools_call(
         // name withheld from this caller is not a target (MIK-8340): the meta
         // layer answers it as a name that matches no tool.
         let checked = target.as_target();
-        let routed = state.meta_mcp.authorize_route_target(
-            invoke_scope,
-            (checked.server, checked.tool),
-            checked.arguments,
-        );
+        // A requested target the caller cannot see takes the missing name's
+        // path (MIK-8361); a step's target keeps the strict authorize.
+        let routed = if index < request_targets {
+            state.meta_mcp.authorize_requested_target(
+                invoke_scope,
+                (checked.server, checked.tool),
+                checked.arguments,
+            )
+        } else {
+            state.meta_mcp.authorize_route_target(
+                invoke_scope,
+                (checked.server, checked.tool),
+                checked.arguments,
+            )
+        };
         // A step's target is operator-defined: any refusal of it is neutral (A3).
         if index >= request_targets && routed.is_err() {
             return Err(refused
@@ -283,11 +293,6 @@ pub(super) async fn tools_call(
             }
         }
     }
-    // The route stage is done; the window a catalogue change must not reach
-    // (MIK-8340, one judgement per request).
-    #[cfg(test)]
-    crate::gateway::meta_mcp::visible::seams::route_stage_done();
-
     let api_key_name = client.as_ref().map(|c| c.name.as_str());
     // Authorization reads the PROVEN principal. This value reaches
     // `IdentityGrantRequest.agent_id` -> `GrantAgent::matches`, which
@@ -404,6 +409,30 @@ pub(super) async fn tools_call(
         tool_name,
         std::mem::take(response_targets),
     );
+    // MIK-8361: a call every requested target of which this caller cannot
+    // see is answered by the gate as a missing name is, before X14, the task
+    // gate, signing and admission act on it. The judgement is recorded, so
+    // the gate answers it absent whatever the catalogue does next.
+    let invisible = state
+        .meta_mcp
+        .invisible_call(
+            tool_name,
+            (&backend_targets, request_targets),
+            &caller,
+            Some(session_id.as_str()),
+        )
+        .await;
+    // The route stage is done; the window a catalogue change must not reach
+    // (MIK-8340, one judgement per request).
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::route_stage_done();
+    if invisible {
+        let session = Some(session_id.as_str());
+        let answer = state
+            .meta_mcp
+            .handle_tools_call_ref(id, tool_name, arguments, session, caller);
+        return Ok(Box::pin(answer).await);
+    }
 
     // The modern destructive gate (X14). Every authorization, admin and
     // firewall check above has already run, and nothing below has yet

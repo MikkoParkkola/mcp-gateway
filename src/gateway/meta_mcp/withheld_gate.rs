@@ -30,9 +30,7 @@ pub(crate) mod seams {
         SkipGate(())
     }
 
-    /// Whether the gate is skipped on this thread. Read by the gate once it
-    /// exists; until then nothing reads it, and B1 is red on base.
-    #[expect(dead_code, reason = "read by the gate, which lands after the red rows")]
+    /// Whether the gate is skipped on this thread.
     pub(crate) fn gate_skipped() -> bool {
         SKIP_GATE.with(Cell::get)
     }

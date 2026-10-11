@@ -64,6 +64,7 @@ impl Backend {
 }
 
 pub(crate) use catalogue_verdict::CatalogueVerdict;
+pub(crate) use input_keys::Lens;
 pub(crate) use era::removed_method_refusal_message;
 #[cfg(test)]
 pub(crate) use pool::PoolKey;

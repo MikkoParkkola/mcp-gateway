@@ -588,6 +588,16 @@ impl Gateway {
                     caller.retry = &granted;
                 }
                 RouteStage::Proceed(None) => {}
+                // Nothing was admitted: the nonce goes back with the witness.
+                RouteStage::Absent => {
+                    if let Some(witness) = witness {
+                        meta_mcp.release_witnessed_nonce(&caller, witness);
+                    }
+                    let session = Some(session_id);
+                    let answer =
+                        meta_mcp.handle_tools_call_ref(id, &tool_name, arguments, session, caller);
+                    break 'tool_call Box::pin(answer).await;
+                }
             }
             if wants_task && let Some(tasks) = client.tasks {
                 match stdio_tasks::task_intent(

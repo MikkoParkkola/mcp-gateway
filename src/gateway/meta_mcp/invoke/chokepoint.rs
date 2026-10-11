@@ -170,6 +170,33 @@ impl MetaMcp {
         self.recheck_target(scope, (server, tool), arguments, Emit::Audit)
     }
 
+    /// [`Self::authorize_route_target`] for a target the request names
+    /// (MIK-8361). Every refusal here is one a listing also applies, so the
+    /// caller cannot see the target: it takes the missing name's path. On a
+    /// backend, a missing name passes this stage, so the withheld one does
+    /// too (its refusal record is written all the same) and the gate answers
+    /// it absent after the firewall. On the capability backend a missing
+    /// name is refused here as not found, so the withheld one is too.
+    ///
+    /// # Errors
+    /// `ToolNotFound` for a capability the caller may not reach.
+    pub(crate) fn authorize_requested_target(
+        &self,
+        scope: InvokeScope<'_>,
+        (server, tool): (&str, &str),
+        arguments: &Value,
+    ) -> Result<()> {
+        let Err(_refusal) = self.authorize_route_target(scope, (server, tool), arguments) else {
+            return Ok(());
+        };
+        match self.get_capabilities() {
+            // Even an unwritable record answers so: the call dispatches
+            // nothing (D3-a narrowed, lead ruling 2026-10-11).
+            Some(cap) if cap.name == server => Err(Error::ToolNotFound(tool.to_string())),
+            _ => Ok(()),
+        }
+    }
+
     /// The route-stage request scan on this Meta-MCP's own firewall, for the
     /// transport that has no firewall of its own (stdio; route-check-parity
     /// P3, MIK-8149.REQFW.1): the content scan and the stateful controls

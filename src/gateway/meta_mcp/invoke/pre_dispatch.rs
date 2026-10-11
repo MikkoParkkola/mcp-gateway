@@ -260,10 +260,36 @@ impl MetaMcp {
                 .await
             }
         };
+        let managed = caller_credential.managed.as_ref();
+        self.seal_key_refusal(
+            (caller, session_id),
+            (server, tool),
+            refusal,
+            (managed, verified_identity, checked_at),
+            idem_reservation,
+        )
+        .await
+    }
+
+    /// The R2 check's answer, sealed: a refusal text becomes the sealed
+    /// result, a refused fill the failed dispatch's answer, `None` proceeds.
+    /// The one place both the dispatch check and the MIK-8361 gate seal one,
+    /// so a withheld name and a lacked one are answered by the same bytes.
+    pub(super) async fn seal_key_refusal(
+        &self,
+        (caller, session_id): (&crate::gateway::meta_mcp::MetaMcpCallerContext<'_>, Option<&str>),
+        (server, tool): (&str, &str),
+        refusal: Result<Option<Value>>,
+        (managed, verified_identity, checked_at): (
+            Option<&crate::personal_accounts::ManagedLease>,
+            Option<&crate::key_server::oidc::VerifiedIdentity>,
+            std::time::Instant,
+        ),
+        idem_reservation: &mut Option<IdempotencyReservation>,
+    ) -> Result<Option<GuardedValue>> {
         let refusal = match refusal {
             Ok(refusal) => refusal,
             Err(e) => {
-                let managed = caller_credential.managed.as_ref();
                 match self
                     .answer_refused_fill(
                         (server, tool),

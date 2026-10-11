@@ -149,6 +149,14 @@ impl MetaMcp {
         self.active_profile(call.session_id)
             .check(server, tool)
             .map_err(Error::Protocol)?;
+        self.admit_backend_wide(server, tool)
+    }
+
+    /// The refusals of [`Self::admit_target`] that say nothing about whether
+    /// the caller may see the tool: the kill switch and a disabled
+    /// capability. The MIK-8361 gate answers them for a withheld and a
+    /// missing name alike, before any fill.
+    pub(crate) fn admit_backend_wide(&self, server: &str, tool: &str) -> Result<()> {
         if self.kill_switch.is_killed(server) {
             return Err(Error::json_rpc(
                 -32000,

@@ -28,6 +28,10 @@ pub(super) enum RouteStage {
     Proceed(Option<RetryFields>),
     /// Answer with this and admit nothing.
     Answer(JsonRpcResponse),
+    /// Every requested target is one this caller cannot see (MIK-8361):
+    /// dispatch it unadmitted, past X14 and the task gate, to the gate that
+    /// answers it as a missing name.
+    Absent,
 }
 
 impl Gateway {
@@ -63,11 +67,18 @@ impl Gateway {
             // The one route-stage authorize `/mcp` also runs. A surfaced name
             // withheld from this caller is not a target (MIK-8340), so neither
             // the firewall nor X14 can confirm it exists.
-            if let Err(error) = meta_mcp.authorize_route_target(
-                scope,
-                (checked.server, checked.tool),
-                checked.arguments,
-            ) {
+            // A requested target the caller cannot see takes the missing
+            // name's path (MIK-8361); a step's target keeps the strict one.
+            let routed = if index < request_targets {
+                meta_mcp.authorize_requested_target(
+                    scope,
+                    (checked.server, checked.tool),
+                    checked.arguments,
+                )
+            } else {
+                meta_mcp.authorize_route_target(scope, (checked.server, checked.tool), checked.arguments)
+            };
+            if let Err(error) = routed {
                 // A step's target is operator-defined: its refusal is neutral (A3).
                 let error = if index < request_targets {
                     error
@@ -109,6 +120,13 @@ impl Gateway {
             let _ = meta_mcp
                 .caller_verdict((checked.server, checked.tool), caller, Some(session_id))
                 .await;
+        }
+        // MIK-8361, as on `/mcp`: recorded, so the gate answers it absent.
+        let invisible = meta_mcp
+            .invisible_call(tool_name, (&targets, request_targets), caller, Some(session_id))
+            .await;
+        if invisible {
+            return (RouteStage::Absent, witness);
         }
         // X14 decides a task-augmented call, so it needs the session's task
         // store; without one the call is synchronous and X14 has nothing to say.
