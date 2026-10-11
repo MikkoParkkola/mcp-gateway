@@ -80,8 +80,10 @@ async fn a_result_beside_an_error_is_recorded() {
     assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
 }
 
-/// A13: past the recording cap, head and tail are recorded and the middle is
-/// not: the documented evasion bound, pinned. One cut is counted.
+/// A13: past the recording cap, head and tail are recorded whole and one cut
+/// is counted. The middle is evidence through its thinned sample
+/// (`MIK-8066.CAP.2`; about 71 KiB here, so m = 8 and a 1,000-char run is
+/// missed about 2e-12 of the time), so relaying it is refused too.
 #[tokio::test]
 async fn an_over_cap_result_records_head_and_tail_only() {
     let fx = fixture(Setup::default()).await;
@@ -100,10 +102,10 @@ async fn an_over_cap_result_records_head_and_tail_only() {
     let tail = &long[long.len() - 1_000..];
     assert_refused(&fx, &fx.send(Some("b"), head).await, 0);
     assert_refused(&fx, &fx.send(Some("b"), tail).await, 0);
-    assert_sent(
+    assert_refused(
         &fx,
         &fx.send(Some("b"), &long[middle..middle + 1_000]).await,
-        1,
+        0,
     );
 }
 

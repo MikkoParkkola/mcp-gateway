@@ -263,6 +263,13 @@ impl SketchStore {
         }
     }
 
+    /// Cap the store at the bytes it holds now, so the next sketch must
+    /// evict (tests only, `MIK-8066.CAP.2`).
+    #[cfg(test)]
+    pub(super) fn cap_at_live(&mut self) {
+        self.cap = self.bytes;
+    }
+
     /// Hold the lowest free position of `pair` for a sketch of `n`
     /// fingerprints, evicting live sketches (the pair's own for its
     /// backstop, any pair's for the global cap, oldest first) until it

@@ -686,3 +686,7 @@ async fn an_unreadable_grants_file_loads_no_grants_or_refuses_start() {
         "fail_on_error refuses start on an unreadable grants file"
     );
 }
+
+#[cfg(test)]
+#[path = "identity_grants_clock_tests.rs"]
+mod clock;

@@ -125,7 +125,7 @@ async fn the_sweep_log_carries_its_count_and_is_absent_on_an_empty_sweep() {
     // sweeps of one.
     let lifecycle = Arc::new(SessionLifecycle::new());
     lifecycle.register("noop", |_key| {});
-    let past = now_unix().saturating_sub(60);
+    let past = now_unix().expect("clock after 1970").saturating_sub(60);
     lifecycle.track("identity-a", past);
     lifecycle.track("identity-b", past);
 

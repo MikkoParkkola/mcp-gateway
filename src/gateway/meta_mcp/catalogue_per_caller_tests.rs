@@ -465,6 +465,8 @@ async fn an_unidentified_caller_mints_nothing_and_audits_nothing() {
 /// not tell a refetch from a cache hit that happened to return the same list.
 struct ChangingCatalogue {
     fetches: std::sync::atomic::AtomicUsize,
+    /// Holds the next fetch once armed (MIK-8354).
+    hold: crate::test_pause::Slot,
 }
 
 impl ChangingCatalogue {
@@ -501,6 +503,7 @@ impl crate::transport::Transport for ChangingCatalogue {
         let nth = self
             .fetches
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.hold.pause().await;
         let name = if nth == 0 { Self::FIRST } else { Self::SECOND };
         Ok(JsonRpcResponse::success_serialized(
             RequestId::Number(1),
@@ -544,6 +547,7 @@ fn expiring_backend(ttl: Duration) -> (Arc<Backend>, Arc<ChangingCatalogue>) {
     ));
     let wire = Arc::new(ChangingCatalogue {
         fetches: std::sync::atomic::AtomicUsize::new(0),
+        hold: crate::test_pause::Slot::default(),
     });
     backend.set_transport_for_test(Arc::clone(&wire) as Arc<dyn crate::transport::Transport>);
     backend.set_pooled_transport_for_test(
@@ -611,12 +615,21 @@ async fn a_per_user_slot_past_its_ttl_is_refetched_not_served_stale() {
 /// is asymmetric on purpose: something else always refreshes it, so a stale
 /// read costs one interval and no caller waits.
 ///
-/// Asserted on the fetch COUNT rather than the names, because the background
-/// refresh this path spawns may or may not have landed by the time the
-/// assertion runs; what must not happen is the read blocking on a fetch itself.
+/// The upstream holds the next fetch from right after the fill, whichever
+/// that is: the cold read's queued refresh if it has not fetched yet, else
+/// the refresh the second read spawns. Single-flight makes any later fetch
+/// wait on the held one, so nothing rewarms the slot and the second read is
+/// on the stale path. That read must
+/// return while the fetch is held: a synchronous refetch would wait on it
+/// (single-flight joins the held fetch) and fail the bounded wait. A count
+/// read after the read cannot say this; the cold read's refresh may already
+/// have counted (MIK-8354).
 #[tokio::test]
 async fn a_shared_slot_past_its_ttl_still_serves_without_a_synchronous_refetch() {
-    let (backend, wire) = expiring_backend(Duration::from_millis(30));
+    // A zero TTL: the slot is stale the moment it is filled (`elapsed() < ttl`
+    // never holds) while still holding its snapshot, which is the state this
+    // row reads, with no sleep to line up against the cache's clock.
+    let (backend, wire) = expiring_backend(Duration::ZERO);
 
     let first = MetaMcp::backend_tools_for_discovery(&backend, true, None, &[])
         .await
@@ -626,23 +639,22 @@ async fn a_shared_slot_past_its_ttl_still_serves_without_a_synchronous_refetch()
         vec![ChangingCatalogue::FIRST],
         "premise: the shared slot must be populated for this to measure anything"
     );
-    let after_fill = wire.count();
+    let (_, release) = wire.hold.arm();
 
-    tokio::time::sleep(Duration::from_millis(60)).await;
-
-    let second = MetaMcp::backend_tools_for_discovery(&backend, true, None, &[])
-        .await
-        .expect("second read");
-    assert!(
-        !second.is_empty(),
-        "the shared path stopped serving its cached snapshot: {second:?}"
-    );
+    let second = crate::test_pause::within(
+        "the shared discovery read returning while its refresh fetch is held (it \
+         fetched inline: its snapshot is served while a background task \
+         refreshes behind it, and making it synchronous would put a network \
+         round trip on the busiest path in the gateway)",
+        MetaMcp::backend_tools_for_discovery(&backend, true, None, &[]),
+    )
+    .await
+    .expect("second read");
+    release.notify_one();
     assert_eq!(
-        wire.count(),
-        after_fill,
-        "the shared discovery read fetched inline. Its snapshot is served while \
-         a background task refreshes behind it, and making it synchronous would \
-         put a network round trip on the busiest path in the gateway"
+        second.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+        vec![ChangingCatalogue::FIRST],
+        "the shared path must serve its cached snapshot, not a refetched one"
     );
 }
 

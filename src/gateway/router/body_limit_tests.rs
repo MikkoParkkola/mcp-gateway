@@ -148,6 +148,25 @@ async fn mcp_streamed_body_without_content_length_over_cap_is_rejected() {
     assert_eq!(body["error"]["code"], -32600, "body: {body}");
 }
 
+/// A body that declares its length gets the same JSON-RPC refusal as a
+/// streamed one: `intake` takes the headers off the request before the body
+/// read, and the limit still comes from `DefaultBodyLimit`, not a header.
+#[tokio::test]
+async fn mcp_body_with_content_length_over_cap_gets_the_jsonrpc_refusal() {
+    let (state, _store) = state_with_cap(Some(1024)).await;
+    let body = padded_ping(2048);
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("content-length", body.len())
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    let (status, body) = send(router_with_webhooks(&state), request).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "body: {body}");
+    assert_eq!(body["error"]["code"], -32600, "body: {body}");
+}
+
 /// The cap is read once when the router is built: a later `live_config` edit
 /// (a hot reload) must not lift it.
 #[tokio::test]

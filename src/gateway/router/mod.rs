@@ -74,10 +74,16 @@ mod body_limit_tests;
 mod callback_admin_denial_tests;
 #[cfg(test)]
 mod chokepoint_tests;
+/// MIK-8202 P2: task creation on a clock before 1970.
+#[cfg(test)]
+mod clock_p2_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod collusion_direct_tests;
 #[cfg(test)]
 mod continuation_instance_tests;
+/// MIK-8202 P2: the control-plane grant display on a clock before 1970.
+#[cfg(all(test, feature = "webui"))]
+mod control_plane_grant_clock_tests;
 #[cfg(test)]
 mod direct_audit_tests;
 #[cfg(test)]
@@ -136,6 +142,8 @@ mod hardened_identity_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 mod judged_answer;
+#[cfg(test)]
+mod mcp_nonce_admission_tests;
 #[cfg(test)]
 mod mcp_nonce_tests;
 #[cfg(test)]

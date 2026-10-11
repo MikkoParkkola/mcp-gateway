@@ -458,6 +458,33 @@ impl super::MetaMcp {
         self.prepare_signing_invocation(context, arguments, session, caller)
     }
 
+    /// Execution admission for a synchronous call, giving the signing nonce
+    /// back when admission refuses a call without task intent (MIK-8150
+    /// NONCE.1). Admission runs after the nonce is admitted, on /mcp and stdio
+    /// alike, so one site serves both; for a synchronous call nothing has acted
+    /// yet. A task call keeps its nonce on any refusal: on
+    /// stdio, X14 runs after nonce admission and may already have consumed the
+    /// task's grant, and a task's admission can still refuse after that (target
+    /// policy, plan check). A synchronous call has no effect before this point.
+    /// A `Replay` keeps the nonce: it is a delivered call.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn admit_meta_sync(
+        &self,
+        owner: super::AdmissionOwner<'_>,
+        caller: &super::MetaMcpCallerContext<'_>,
+        tool_name: &str,
+        arguments: &Value,
+        session: Option<&str>,
+        id: &crate::protocol::RequestId,
+    ) -> crate::Result<super::admission::SyncAdmission> {
+        let admitted =
+            self.admit_meta_sync_unrefunded(owner, caller, tool_name, arguments, session, id);
+        if admitted.is_err() && caller.task.is_none() {
+            self.release_unasked_nonce(caller);
+        }
+        admitted
+    }
+
     /// Give back the nonce of a call refused before anything could dispatch:
     /// its confirmation question could not be delivered (MIK-7869). Only a
     /// nonce this call admitted: a call left unadmitted registered none. A step
@@ -609,10 +636,8 @@ impl super::MetaMcp {
             if self.require_nonce && nonce.is_none() {
                 return Err(crate::Error::json_rpc(-32603, "Signing nonce is required"));
             }
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|_| crate::Error::json_rpc(-32603, "Signing clock is invalid"))?
-                .as_secs();
+            let timestamp = crate::clock::unix_secs()
+                .map_err(|_| crate::Error::json_rpc(-32603, "Signing clock is invalid"))?;
             signer.sign_json_rpc_response_at(response, nonce, timestamp)?;
             // MIK-7939: the signature block is the gateway's, never a receipt's.
             if let Some(result) = response.result.as_ref() {

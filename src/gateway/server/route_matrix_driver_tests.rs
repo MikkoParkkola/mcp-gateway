@@ -343,3 +343,63 @@ pub(crate) async fn stdio_twice(
     let second = stdio_send(&gateway_meta, invoke_read(&args.1)).await;
     (first, second, calls.load(Ordering::SeqCst))
 }
+
+/// R5, MIK-8150 NONCE.5: on the production-built hardened stdio gateway, a
+/// keyed signed `gateway_invoke` runs under `t1`; the key reused for other
+/// arguments is refused by execution admission (409) under `t2`; the honest
+/// call is re-sent under `t2` with its own key; then a third call under `t2`.
+/// Returns (the admission refusal, the re-send, the third send, the backend's
+/// `tools/call` count). Blocking: the fixture owns its runtime, as the stdio
+/// signing rows do.
+pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value, usize) {
+    use super::signing_allocation_tests::signing_nonce_allocations_support::{
+        BACKEND, Fixture, SESSION, TOOL, runtime,
+    };
+    use crate::gateway::meta_mcp::signing::NONCE_META;
+    use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
+    runtime().block_on(async {
+        let fixture = Fixture::start_hardened().await;
+        let call = |key: &'static str, nonce: &'static str, cmd: &'static str| {
+            let fixture = &fixture;
+            async move {
+                let request = serde_json::json!({
+                    "jsonrpc": "2.0", "id": nonce, "method": "tools/call",
+                    "params": {"name": "gateway_invoke",
+                        "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"cmd": cmd}},
+                        "_meta": {
+                            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                            "io.modelcontextprotocol/clientCapabilities": {},
+                            NONCE_META: nonce,
+                            IDEMPOTENCY_KEY_META: key,
+                        }}
+                });
+                super::Gateway::dispatch_single_with_sink(
+                    &fixture.meta,
+                    &fixture.tool_policy,
+                    &fixture.mtls_policy,
+                    request,
+                    super::StdioClient {
+                        session_id: SESSION,
+                        channel: &crate::gateway::input_bridge::NoClientChannel,
+                        handshake_capabilities: crate::protocol::meta::Declared::NONE,
+                        tasks: None,
+                        modern: false,
+                        sanitize: super::stdio_single::InputSanitizing::Off,
+                    },
+                    &super::StdioTelemetry::default(),
+                )
+                .await
+                .expect("a request carrying an id must produce a response")
+            }
+        };
+        let first = call("t-k1", "stdio-adm-t1-0001", "one").await;
+        assert!(
+            first.get("error").is_none(),
+            "premise: the first call ran: {first}"
+        );
+        let refused = call("t-k1", "stdio-adm-t2-0001", "other").await;
+        let resent = call("t-k2", "stdio-adm-t2-0001", "other").await;
+        let third = call("t-k3", "stdio-adm-t2-0001", "other").await;
+        (refused, resent, third, fixture.backend.tools_call_count())
+    })
+}

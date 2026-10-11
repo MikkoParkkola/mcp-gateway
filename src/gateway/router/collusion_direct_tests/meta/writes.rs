@@ -50,10 +50,11 @@ fn short_window() -> Setup {
     }
 }
 
-/// Let every receipt staged so far lapse ([`short_window`]).
+/// Let every receipt staged so far lapse ([`short_window`]), on the
+/// fixture's frozen clock rather than by sleeping (MIK-8354).
 #[cfg(feature = "cost-governance")]
-async fn lapse() {
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+fn lapse(fx: &Fixture) {
+    fx.lapse_window();
 }
 
 /// `dear` costs 1.0 and `cheap`, in the same [`CATEGORY`], 0.1: every answer
@@ -80,7 +81,7 @@ async fn meta_cache_hit_leaves_the_cost_suggestion_out_of_the_receipt() {
         first.contains(CATEGORY),
         "base: the gateway suggested a cheaper tool: {first}"
     );
-    lapse().await;
+    lapse(&fx);
     let reads = fx.reads();
     let (_, hit) = post(&fx, Some("a"), "gateway_invoke", &read, &json!({})).await;
     assert_eq!(fx.reads(), reads, "base: the re-read must be a cache hit");
@@ -114,7 +115,7 @@ async fn meta_replay_leaves_the_cost_suggestion_out_of_the_receipt() {
         first.contains(CATEGORY),
         "base: the gateway suggested a cheaper tool: {first}"
     );
-    lapse().await;
+    lapse(&fx);
     let reads = fx.reads();
     let (_, replay) = post(
         &fx,
@@ -269,7 +270,7 @@ async fn meta_chain_step_cache_hit_leaves_the_cost_suggestion_out() {
         first.contains(CATEGORY),
         "base: the gateway suggested a cheaper tool: {first}"
     );
-    lapse().await;
+    lapse(&fx);
     let reads = fx.reads();
     let chain = json!({"chain": [{"tool": "alpha:read", "arguments": {}}]});
     let (_, body) = post(&fx, Some("a"), "gateway_execute", &chain, &json!({})).await;

@@ -33,6 +33,7 @@ pub(super) fn local_runtime_snapshot(
     state: &AppState,
     client: Option<&AuthenticatedClient>,
     actor: &ControlPlaneActor,
+    now: chrono::DateTime<chrono::Utc>,
 ) -> (ControlPlaneSnapshot, bool) {
     let mut snapshot = ControlPlaneSnapshot::default();
     snapshot.users.push(ControlPlaneUser {
@@ -98,7 +99,6 @@ pub(super) fn local_runtime_snapshot(
     // "grants" governance view reflects actual local grants instead of an empty
     // table (MIK-6558). Status is derived from revocation/expiry; local grants
     // have no "requested" state, so an active grant reads as Approved.
-    let now = chrono::Utc::now();
     for grant in state.meta_mcp.identity_grant_rows() {
         snapshot
             .grants
