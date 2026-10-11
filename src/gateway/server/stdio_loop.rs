@@ -9,7 +9,6 @@ use tracing::{debug, info, warn};
 
 use super::BuiltMetaMcp;
 use super::Gateway;
-#[cfg(feature = "cost-governance")]
 use super::persistence;
 use super::stdio_refusal::{admit_stdio_request, stdio_busy_batch_response, stdio_busy_response};
 use super::warmstart::build_warm_start_list;
