@@ -170,7 +170,7 @@ pub(super) fn login_backend_with(
 }
 
 /// Start `backend` in the background, as a caller with no deadline of its own.
-fn spawn_start(backend: &Arc<Backend>) -> tokio::task::JoinHandle<Result<()>> {
+pub(super) fn spawn_start(backend: &Arc<Backend>) -> tokio::task::JoinHandle<Result<()>> {
     let backend = Arc::clone(backend);
     tokio::spawn(async move { backend.ensure_started().await })
 }
@@ -190,7 +190,7 @@ async fn assert_port_released(port: u16, what: &str) {
 
 /// Play the person at the browser for the authorization URL `url`: call its
 /// callback with a code and the URL's own state.
-pub(super) async fn approve(url: &str) {
+pub(crate) async fn approve(url: &str) {
     let parsed = url::Url::parse(url).unwrap();
     let query: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
     let callback = url::Url::parse_with_params(
@@ -601,7 +601,7 @@ async fn a_request_waiting_on_a_request_time_login_times_out_as_authorization_pe
 /// A backend at an `issuing_server_with(3600, upstream, ..)` with `timeout` as its
 /// request bound, started through an approved login. Its token never lapses
 /// mid-row: a row that needs it lapsed calls `token_lapse::lapse` (MIK-8269).
-pub(super) async fn approved_start(
+pub(crate) async fn approved_start(
     upstream: Upstream,
     timeout: Duration,
 ) -> (Arc<Backend>, Arc<Browser>, tempfile::TempDir) {

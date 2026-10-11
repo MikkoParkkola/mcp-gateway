@@ -758,6 +758,8 @@ fn resolve_warm_start_names(
 #[cfg(test)]
 mod hot_reload_tests;
 #[cfg(test)]
+mod login_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod warmer_tests;

@@ -1,0 +1,58 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! MIK-8339 LOGINDL.8: a start queued behind a login that then fails shares
+//! that failure, recorded on the cohort it captured before it queued, rather
+//! than discovering again and opening a login of its own.
+
+use super::login_window::{
+    Browser, approve, counted_authorization_server, login_backend, spawn_start, variant, within,
+};
+use super::*;
+
+#[tokio::test]
+async fn a_start_queued_behind_a_failed_login_shares_its_outcome() {
+    let (origin, discovered) = counted_authorization_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let browser = Browser::new();
+    let backend = login_backend(&origin, dir.path(), &browser, Duration::from_secs(30), None);
+
+    let lead = spawn_start(&backend);
+    let url = browser
+        .opened(1, "the first start opening the browser")
+        .await;
+    // Queued on the start lock the first start holds through its login, with
+    // the login's cohort captured before it queued.
+    let queued = spawn_start(&backend);
+    tokio::task::yield_now().await;
+    assert_eq!(
+        discovered.load(Ordering::SeqCst),
+        1,
+        "premise: one discovery so far"
+    );
+
+    // The token endpoint refuses the code: the login fails.
+    approve(&url).await;
+    let led = within("the first start", lead)
+        .await
+        .expect("start task")
+        .expect_err("the token endpoint refused the code");
+    let shared = within("the queued start", queued)
+        .await
+        .expect("start task")
+        .expect_err("the queued start shares the failed login's end");
+
+    assert!(
+        variant(&led).starts_with("OAuth") && variant(&shared) == variant(&led),
+        "the queued start returns the failed login's typed error: {led:?} / {shared:?}"
+    );
+    assert_eq!(
+        browser.opens(),
+        1,
+        "the queued start opened no login of its own"
+    );
+    assert_eq!(
+        discovered.load(Ordering::SeqCst),
+        1,
+        "the queued start shared the outcome without discovering again"
+    );
+}
