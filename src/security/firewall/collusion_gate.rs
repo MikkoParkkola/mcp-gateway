@@ -192,6 +192,9 @@ pub(super) struct RelayGate {
     text_cut: AtomicU64,
     /// Plans whose answer was over the bound their receipts are kept against.
     plan_drop: AtomicU64,
+    /// A test's frozen reading of this gate's receipt clock (MIK-8354).
+    #[cfg(test)]
+    pub(super) frozen: parking_lot::Mutex<Option<Instant>>,
 }
 
 impl RelayGate {
@@ -229,7 +232,20 @@ impl RelayGate {
                 .collect(),
             text_cut: AtomicU64::new(0),
             plan_drop: AtomicU64::new(0),
+            #[cfg(test)]
+            frozen: parking_lot::Mutex::new(None),
         }
+    }
+
+    /// The receipt window's clock: wall time, or a test's frozen instant.
+    /// Only a test build reads `self` (the frozen field exists there only).
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    pub(super) fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(frozen) = *self.frozen.lock() {
+            return frozen;
+        }
+        Instant::now()
     }
 
     /// The `allowed_flows` entries (bit each) whose source matches `target`.
@@ -354,7 +370,7 @@ impl Firewall {
                     caller.key(),
                     (&target, self.relay.egress_flows(&target)),
                     detector.egress_fingerprints(&egress_parts(params)),
-                    Instant::now(),
+                    self.relay.now(),
                 )
                 .map(|f| {
                     let finding = relay_finding(
@@ -672,7 +688,7 @@ impl Firewall {
                 caller.key(),
                 (digest.sensitive, masks),
                 digest.fingerprints(detector),
-                Instant::now(),
+                self.relay.now(),
             );
             return;
         }

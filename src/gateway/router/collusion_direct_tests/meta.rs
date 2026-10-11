@@ -289,7 +289,7 @@ async fn meta_cache_hit_recorded() {
     let cache = Some(Arc::new(crate::cache::ResponseCache::new()));
     let fx = meta_fixture(setup, cache).await;
     meta_read(&fx, Some("a")).await;
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    fx.lapse_window();
     assert_meta_sent(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
     let reads = fx.reads();
     meta_read(&fx, Some("a")).await;
@@ -379,7 +379,7 @@ async fn meta_replay_renews_the_receipt() {
     let read = invoke("read", &json!({}));
     let (_, first) = post(&fx, Some("a"), "gateway_invoke", &read, &keyed("key-r3")).await;
     assert!(first.contains("orchard ledger"), "base: {first}");
-    tokio::time::sleep(Duration::from_millis(1200)).await;
+    fx.lapse_window();
     assert_meta_sent(&fx, &meta_send(&fx, Some("b"), PROSE).await, 1);
     let reads = fx.reads();
     let (_, replay) = post(&fx, Some("a"), "gateway_invoke", &read, &keyed("key-r3")).await;
