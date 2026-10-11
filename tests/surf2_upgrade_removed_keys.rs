@@ -447,3 +447,32 @@ fn upgrade_never_reads_an_existing_referent() {
         );
     }
 }
+
+/// kimi impl r2: a file no YAML parse can read must never give exit 0 with
+/// nothing reported; upgrade exits 1 and names the parse error.
+#[test]
+fn upgrade_exits_1_on_a_file_it_cannot_parse() {
+    let yaml = "server:\n  port: [39400\n";
+    let s = setup(yaml, current());
+    let out = upgrade(&s, &[]);
+    let printed = text(&out);
+    assert_eq!(out.status.code(), Some(1), "{printed}");
+    assert!(printed.contains("could not be read as YAML"), "{printed}");
+    assert_eq!(read(&s.config), yaml);
+}
+
+/// kimi impl r2: a key the loader's map cannot hold (a number) does not hide
+/// a removed key from upgrade.
+#[test]
+fn upgrade_removes_a_key_beside_a_numeric_key() {
+    let s = setup(
+        "x-notes:\n  5: five\nserver:\n  ws_port: 1\n  port: 39400\n",
+        current(),
+    );
+    let out = upgrade(&s, &[]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(
+        read(&s.config),
+        "x-notes:\n  5: five\nserver:\n  port: 39400\n"
+    );
+}
