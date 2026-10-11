@@ -51,7 +51,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use crate::gateway::task_service::{
-    CommitObserver, CommitStage, UpstreamAnswer, UpstreamHandle, UpstreamRecovery, CancelDelivery,
+    CancelDelivery, CommitObserver, CommitStage, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
 };
 
 /// The opaque handle the peer answers a task-augmented call with.

@@ -12,7 +12,9 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::super::{TaskExecutor, UpstreamAnswer, UpstreamHandle, UpstreamRecovery, CancelDelivery};
+use super::super::{
+    CancelDelivery, TaskExecutor, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+};
 use super::{RecoveredRead, RecoveryRefusal, UpstreamCapture};
 use crate::gateway::meta_mcp::upstream::DirectJob;
 use crate::gateway::subscription_registry::{DEFAULT_MAX_LISTENERS, SubscriptionRegistry};

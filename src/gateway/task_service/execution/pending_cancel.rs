@@ -84,11 +84,7 @@ impl CancelSends {
     pub(crate) fn forget(&self, id: &str) {
         let mut rows = self.0.lock();
         let idle = rows.get(id).is_some_and(|row| {
-            Arc::strong_count(row) == 1
-                && row
-                    .lock
-                    .try_lock()
-                    .is_ok_and(|parked| parked.is_none())
+            Arc::strong_count(row) == 1 && row.lock.try_lock().is_ok_and(|parked| parked.is_none())
         });
         if idle {
             rows.remove(id);
@@ -320,7 +316,9 @@ impl TaskExecutor {
             if claimed {
                 sender.send((&key.0, &key.1), Some(Due::Now)).await;
             }
-            sender.run(row, held, key, (None, None), Some((seen, claimed))).await
+            sender
+                .run(row, held, key, (None, None), Some((seen, claimed)))
+                .await
         });
         claimed
     }
@@ -361,7 +359,9 @@ impl TaskExecutor {
                 let row = self.service.cancel_sends.contend(&id);
                 let held = Arc::clone(&row.lock).try_lock_owned().ok()?;
                 Some(tokio::spawn(async move {
-                    sender.run(row, held, (owner, id), (None, Some(due)), None).await;
+                    sender
+                        .run(row, held, (owner, id), (None, Some(due)), None)
+                        .await;
                 }))
             })
             .collect()

@@ -343,12 +343,19 @@ async fn a_legacy_row_at_the_byte_cap_takes_a_pending_claim() {
     let id = row.id().to_owned();
     let mut wide = descriptor(&binding, "job-wide");
     wide.backend = "b".repeat(128);
-    store.mark_upstream(&owner, &id, 1, wide.clone()).await.unwrap();
+    store
+        .mark_upstream(&owner, &id, 1, wide.clone())
+        .await
+        .unwrap();
     store
         .transition(&owner, &id, 1, TaskTransition::Cancel, at(1))
         .await
         .unwrap();
-    assert_eq!(record_json(&path, &id)["version"], json!(3), "premise: legacy");
+    assert_eq!(
+        record_json(&path, &id)["version"],
+        json!(3),
+        "premise: legacy"
+    );
     store.close().await.unwrap();
     let size = fs::read(path.join(format!("{id}.json"))).unwrap().len();
     let store = TaskStore::open(

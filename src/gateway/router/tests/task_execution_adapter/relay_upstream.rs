@@ -15,7 +15,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use crate::gateway::task_service::{UpstreamAnswer, UpstreamHandle, UpstreamRecovery, CancelDelivery};
+use crate::gateway::task_service::{
+    CancelDelivery, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+};
 use crate::security::firewall::{CollusionAction, CollusionConfig, Firewall, FirewallConfig};
 
 /// What the upstream task finally answers, long enough for several fingerprints.

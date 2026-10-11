@@ -39,7 +39,10 @@ fn http_backend(name: &str, url: String) -> Arc<Backend> {
 async fn a_shared_start_is_announced_once_after_its_lock_is_released() {
     let registry = BackendRegistry::new();
     let backend = http_backend("order", upstream().await);
-    assert!(registry.register(Arc::clone(&backend)), "fixture registration");
+    assert!(
+        registry.register(Arc::clone(&backend)),
+        "fixture registration"
+    );
     let mut feed = registry.subscribe_started();
     let gate = Arc::new(MarkWindowGate::default());
     *backend.publish_gate.lock() = Some(Arc::clone(&gate));
@@ -59,7 +62,10 @@ async fn a_shared_start_is_announced_once_after_its_lock_is_released() {
     tokio::time::timeout(HANG_BOUND, gate.reached.notified())
         .await
         .expect("the start reached publish");
-    assert!(!listener.is_finished(), "announced before the start finished");
+    assert!(
+        !listener.is_finished(),
+        "announced before the start finished"
+    );
     gate.release.notify_one();
     let (name, free, mut feed) = tokio::time::timeout(HANG_BOUND, listener)
         .await
@@ -76,7 +82,10 @@ async fn a_shared_start_is_announced_once_after_its_lock_is_released() {
         .ensure_started()
         .await
         .expect("a live transport is reused");
-    assert!(feed.try_recv().is_err(), "a start that found it live announced");
+    assert!(
+        feed.try_recv().is_err(),
+        "a start that found it live announced"
+    );
 }
 
 /// Guard. Mutant: "a failed start is
@@ -89,8 +98,14 @@ async fn a_failed_start_is_not_announced() {
     };
     let registry = BackendRegistry::new();
     let backend = http_backend("down", closed);
-    assert!(registry.register(Arc::clone(&backend)), "fixture registration");
+    assert!(
+        registry.register(Arc::clone(&backend)),
+        "fixture registration"
+    );
     let mut feed = registry.subscribe_started();
-    assert!(backend.ensure_started().await.is_err(), "premise: nothing listens");
+    assert!(
+        backend.ensure_started().await.is_err(),
+        "premise: nothing listens"
+    );
     assert!(feed.try_recv().is_err(), "a failed start was announced");
 }

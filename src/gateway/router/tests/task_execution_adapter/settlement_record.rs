@@ -14,7 +14,9 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use crate::gateway::task_service::{UpstreamAnswer, UpstreamHandle, UpstreamRecovery, CancelDelivery};
+use crate::gateway::task_service::{
+    CancelDelivery, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+};
 use crate::security::TransparencyLogger;
 use crate::security::audit::AuditFailurePolicy;
 use crate::security::firewall::tenant_guard::TenantGuardConfig;

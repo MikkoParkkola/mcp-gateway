@@ -6,9 +6,9 @@ mod context;
 mod expiry;
 mod input_round;
 mod observe;
-pub(crate) mod pending_cancel;
 #[cfg(debug_assertions)]
 pub(crate) mod pause_hook;
+pub(crate) mod pending_cancel;
 mod recovery;
 #[cfg(test)]
 pub(crate) mod resume_seams;

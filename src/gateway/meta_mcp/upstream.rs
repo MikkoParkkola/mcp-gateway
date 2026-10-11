@@ -269,12 +269,18 @@ impl UpstreamRecovery for NativeUpstreamTasks {
                     .is_err()
             {
                 let name = handle.backend.as_str();
-                tracing::warn!(backend = name, "upstream tasks/cancel not sent yet: backend still starting");
+                tracing::warn!(
+                    backend = name,
+                    "upstream tasks/cancel not sent yet: backend still starting"
+                );
                 return CancelDelivery::NotReady;
             }
             let Some(backend) = self.eligible(&handle.backend).await else {
                 let name = handle.backend.as_str();
-                tracing::warn!(backend = name, "upstream tasks/cancel not sent yet: backend unclaimed");
+                tracing::warn!(
+                    backend = name,
+                    "upstream tasks/cancel not sent yet: backend unclaimed"
+                );
                 return CancelDelivery::NotReady;
             };
             let deadline = deadline.min(backend.request_timeout());

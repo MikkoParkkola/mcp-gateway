@@ -143,9 +143,11 @@ impl TaskStore {
     ) -> Result<bool, StoreError> {
         let shared = std::sync::Arc::clone(&self.0);
         let (owner, id) = (owner.to_owned(), id.to_owned());
-        tokio::task::spawn_blocking(move || shared.record_cancel_attempt_blocking(&owner, &id, attempt))
-            .await
-            .map_err(|_| StoreError::Storage)?
+        tokio::task::spawn_blocking(move || {
+            shared.record_cancel_attempt_blocking(&owner, &id, attempt)
+        })
+        .await
+        .map_err(|_| StoreError::Storage)?
     }
 }
 
@@ -231,7 +233,11 @@ pub(crate) enum UpstreamCancelState {
 #[cfg(test)]
 impl TaskStore {
     /// The row's upstream cancel, if one was claimed.
-    pub(crate) fn upstream_cancel_state(&self, owner: &str, id: &str) -> Option<UpstreamCancelState> {
+    pub(crate) fn upstream_cancel_state(
+        &self,
+        owner: &str,
+        id: &str,
+    ) -> Option<UpstreamCancelState> {
         let state = self.0.state();
         let record = &owned(&state, owner, id).ok()?.record;
         match (&record.upstream_cancel_pending, record.upstream_cancel_sent) {

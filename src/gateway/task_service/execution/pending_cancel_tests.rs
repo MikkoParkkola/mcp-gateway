@@ -16,8 +16,7 @@ use serde_json::json;
 use tokio::sync::{Notify, broadcast, oneshot};
 
 use super::super::{
-    CancelDelivery, TaskExecutor, UpstreamAnswer, UpstreamCapture, UpstreamHandle,
-    UpstreamRecovery,
+    CancelDelivery, TaskExecutor, UpstreamAnswer, UpstreamCapture, UpstreamHandle, UpstreamRecovery,
 };
 use crate::gateway::subscription_registry::{DEFAULT_MAX_LISTENERS, SubscriptionRegistry};
 use crate::gateway::task_service::store::targets::UpstreamCancelState;
@@ -76,7 +75,10 @@ impl ScriptedPeer {
 #[async_trait::async_trait]
 impl UpstreamRecovery for ScriptedPeer {
     async fn cancel(&self, handle: &UpstreamHandle, _deadline: Duration) -> CancelDelivery {
-        assert_eq!(handle.handle, HANDLE, "only the row's own handle is cancelled");
+        assert_eq!(
+            handle.handle, HANDLE,
+            "only the row's own handle is cancelled"
+        );
         let gate = self.gate.lock().take();
         if let Some(gate) = gate {
             self.parked.notify_one();
@@ -184,18 +186,18 @@ pub(super) async fn fixture_with(ttl_ms: Option<u64>, handle: Handle) -> Fixture
     assert!(
         handle == Handle::Held
             || executor
-            .capture_upstream(
-                OWNER,
-                &id,
-                task.revision,
-                UpstreamCapture {
-                    backend: BACKEND.to_owned(),
-                    tool: TOOL.to_owned(),
-                    arguments: json!({}),
-                    handle: HANDLE.to_owned(),
-                },
-            )
-            .await,
+                .capture_upstream(
+                    OWNER,
+                    &id,
+                    task.revision,
+                    UpstreamCapture {
+                        backend: BACKEND.to_owned(),
+                        tool: TOOL.to_owned(),
+                        arguments: json!({}),
+                        handle: HANDLE.to_owned(),
+                    },
+                )
+                .await,
         "the fixture handle is durable"
     );
     let owner_digest = service
@@ -416,7 +418,11 @@ async fn failed_sends_stop_at_the_attempt_bound() {
     f.advance_store_clock(3 * HOUR);
     settle(f.executor.flush_pending_cancels(None)).await;
     settle(f.executor.flush_pending_cancels(Some(BACKEND))).await;
-    assert_eq!(peer.count(), usize::from(MAX_CANCEL_ATTEMPTS), "a send after the bound");
+    assert_eq!(
+        peer.count(),
+        usize::from(MAX_CANCEL_ATTEMPTS),
+        "a send after the bound"
+    );
 }
 
 /// T5b. Red at base. Under unlimited retention a backend that is never ready
@@ -543,7 +549,11 @@ async fn a_pending_cancel_keeps_its_age_across_a_restart() {
     let peer = ScriptedPeer::new([]);
     assert!(executor.install_recovery(peer.clone()));
     settle(executor.flush_pending_cancels(None)).await;
-    assert_eq!(peer.count(), 0, "an aged-out row was sent after the restart");
+    assert_eq!(
+        peer.count(),
+        0,
+        "an aged-out row was sent after the restart"
+    );
     assert_eq!(
         service.store.upstream_cancel_state(&f.owner_digest, &f.id),
         Some(Done)
@@ -613,7 +623,11 @@ async fn owner_cancel_meets_a_paused_offer(repeat: Repeat, hook: Hook) {
         .expect("the worker's offer ends");
     f.state_becomes(Done).await;
     sends_reach(&peer, 1).await;
-    assert_eq!(peer.confirmed(), 1, "the owner's cancel was lost or doubled");
+    assert_eq!(
+        peer.confirmed(),
+        1,
+        "the owner's cancel was lost or doubled"
+    );
 }
 
 /// T12 (r3.4). Red at base (its pause seam is the stub). Mutant:
@@ -651,7 +665,12 @@ async fn an_offer_made_before_the_owners_cancel_is_kept_for_it() {
     assert!(f.executor.install_recovery(peer.clone()));
     let offered = f
         .executor
-        .cancel_upstream_once(&f.owner_digest, &f.id, Some(held_offer(&f)), CancelSend::Inline)
+        .cancel_upstream_once(
+            &f.owner_digest,
+            &f.id,
+            Some(held_offer(&f)),
+            CancelSend::Inline,
+        )
         .await;
     assert!(!offered, "premise: a working row is not claimed");
     f.owner_cancels().await;

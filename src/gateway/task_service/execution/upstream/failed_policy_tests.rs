@@ -11,7 +11,9 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::super::{TaskExecutor, UpstreamAnswer, UpstreamHandle, UpstreamRecovery, CancelDelivery};
+use super::super::{
+    CancelDelivery, TaskExecutor, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+};
 use super::{RecoveredRead, RecoveryRefusal, UpstreamCapture};
 use crate::backend::BackendRegistry;
 use crate::gateway::authz::HTTP_STATUS_DATA_KEY;

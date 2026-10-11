@@ -18,7 +18,7 @@ use parking_lot::Mutex;
 use tokio::sync::oneshot;
 
 use crate::gateway::task_service::{
-    CommitObserver, CommitStage, UpstreamAnswer, UpstreamHandle, UpstreamRecovery, CancelDelivery,
+    CancelDelivery, CommitObserver, CommitStage, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
 };
 
 const HANDLE: &str = "peer-job-1";

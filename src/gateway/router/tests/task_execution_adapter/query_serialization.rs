@@ -39,7 +39,9 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-use crate::gateway::task_service::{UpstreamAnswer, UpstreamHandle, UpstreamRecovery, CancelDelivery};
+use crate::gateway::task_service::{
+    CancelDelivery, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
+};
 
 /// The opaque handle the peer answers the task-augmented call with.
 const UPSTREAM_HANDLE: &str = "upstream-job-serialization";
