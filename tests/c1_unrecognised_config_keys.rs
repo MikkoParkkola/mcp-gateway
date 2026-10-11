@@ -133,6 +133,16 @@ fn removed_server_request_timeout_refused() {
     );
 }
 
+/// T5c: a build without `cost-governance` refuses the whole block naming the
+/// feature, `currency` included; the feature is the first fix. Compiled only
+/// in such a build (feature-combos lints it; it runs once by hand, MIK-8044).
+#[cfg(not(feature = "cost-governance"))]
+#[test]
+fn cost_governance_block_names_the_missing_feature() {
+    let message = refusal("cost_governance:\n  currency: USD\n", &["cost_governance"]);
+    assert!(message.contains("cost-governance"), "{message}");
+}
+
 /// `currency` only labelled values that are always USD. Its sibling keys stay
 /// valid, so the refusal names the one key.
 #[cfg(feature = "cost-governance")]
