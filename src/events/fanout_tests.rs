@@ -262,6 +262,8 @@ fn webhooks_off_holds_and_stamps_webhook_subscriptions() {
 #[test]
 fn a_failed_reconcile_attempt_logs_a_warning_and_the_next_one_finishes() {
     use std::os::unix::fs::PermissionsExt;
+    // Real-time bound on each event wait: only a hang reaches it.
+    const HANG_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
     let dir = tempfile::tempdir().expect("dir");
     let config = crate::config::EventsConfig::default();
     let hub = EventsHub::open(&config, dir.path()).expect("hub");
@@ -288,12 +290,13 @@ fn a_failed_reconcile_attempt_logs_a_warning_and_the_next_one_finishes() {
         return;
     }
 
-    // Real-time bound on each event wait: only a hang reaches it.
-    const HANG_BOUND: std::time::Duration = std::time::Duration::from_secs(60);
     // The failed attempt is waited for as an event, its logged warning, not
     // a sleep that a loaded host can end before the first attempt (MIK-8360).
-    let (_logs, mut warned) =
-        crate::test_log_capture::live_count("startup reconcile could not remove");
+    // Level and target are part of the matched line, so the same message at
+    // debug does not count as the warning.
+    let (_logs, mut warned) = crate::test_log_capture::live_count(
+        "WARN mcp_gateway::events::fanout: events: startup reconcile could not remove",
+    );
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
