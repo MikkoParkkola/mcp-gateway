@@ -683,3 +683,43 @@ async fn expired_session_refusal_is_counted() {
         "{text}"
     );
 }
+
+/// MIK-8370.DASH.1: the dashboard's tools table holds cumulative call counts,
+/// and the stats behind it carry no outcome: the tracker counts every attempt
+/// before dispatch (`meta_mcp/invoke.rs`, `record_invocation`), so a tool
+/// whose calls all failed is listed like any other. The page must not call
+/// those calls a success.
+#[tokio::test]
+async fn dashboard_claims_no_outcome_for_counted_calls() {
+    let (mut state, _dir) = fixture().await;
+    let stats = Arc::new(crate::stats::UsageStats::new());
+    // Two attempts at a tool that failed both times: the tracker records
+    // them the same way it records a success.
+    stats.record_invocation("srv-8370", "always_fails");
+    stats.record_invocation("srv-8370", "always_fails");
+    {
+        let st = Arc::get_mut(&mut state).expect("state is unique");
+        st.meta_mcp = Arc::new(crate::gateway::meta_mcp::MetaMcp::with_features(
+            Arc::clone(&st.backends),
+            None,
+            Some(stats),
+            None,
+            Duration::from_secs(60),
+        ));
+    }
+    let h = issue(&state);
+    let page = send(&state, get("/dashboard", Some(&h))).await;
+    assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+    assert!(
+        page.body.contains("always_fails"),
+        "the counted tool is listed"
+    );
+    assert!(
+        !page.body.contains("badge success") && !page.body.contains(">OK<"),
+        "the page claims an outcome the stats do not carry"
+    );
+    assert!(
+        page.body.contains("cumulative"),
+        "the table says its numbers are cumulative counts"
+    );
+}
