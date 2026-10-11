@@ -594,8 +594,8 @@ fn config_with_env_file(dir: &std::path::Path, env: &str) -> std::path::PathBuf 
 /// MIK-8367.ENV.4: `MCP_GATEWAY_CAPABILITIES` is the tool subcommands'
 /// directory. On base the overlay read it as the `capabilities` key, a string
 /// where a struct belongs, and every config load failed. `serve` loads through
-/// `load_evaluated`; `doctor`, `events`, `dashboard-link` and `stats` through
-/// `load`. Both must load and keep the config's own directories.
+/// `load_evaluated`; `doctor` among others through `load`. Both must load
+/// and keep the config's own directories.
 #[test]
 fn the_cli_capabilities_variable_neither_breaks_a_load_nor_replaces_config_directories() {
     let dir = tempfile::tempdir().expect("tempdir");
