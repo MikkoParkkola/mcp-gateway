@@ -167,6 +167,13 @@ def test_m2_a_backticked_hidden_id_in_prose_fails() -> None:
     assert md_errs("Set `server.port` to move it.\n") == []
 
 
+def test_w17_a_block_marked_as_a_capability_is_skipped() -> None:
+    cap = "```yaml\n# capabilities/examples/x.yaml\nwebhooks:\n  issue_updated:\n    path: /x\n```\n"
+    assert md_errs(cap) == []
+    plain = "```yaml\nwebhooks:\n  issue_updated:\n    path: /x\n```\n"
+    assert any("webhooks.issue_updated is not a gateway config key" in e for e in md_errs(plain))
+
+
 def test_m3_a_shell_fence_is_not_prose() -> None:
     assert md_errs("```bash\necho `failsafe.retry.max_attempts`\n```\n") == []
 
