@@ -156,45 +156,17 @@ pub struct SessionSummary {
     pub avg_latency_ms: Option<u64>,
 }
 
-/// One entry in the recent-calls table.
+/// One row of the dashboard's tools table: a tool and how many calls it has
+/// had since the gateway started. The stats behind it count attempts and carry
+/// no outcome, timestamp or latency, so neither does this row (MIK-8370).
 #[derive(Debug, Clone, Serialize)]
-pub struct RecentCall {
-    /// ISO-8601 timestamp (empty if not tracked).
-    pub timestamp: String,
+pub struct ToolCallCount {
     /// Tool name.
     pub tool: String,
     /// Backend server name.
     pub server: String,
-    /// Observed latency in milliseconds.
-    pub latency_ms: Option<u64>,
-    /// Whether the call succeeded or failed.
-    pub status: CallStatus,
-    /// Cumulative call count for this tool (used when per-call log is unavailable).
+    /// Calls to this tool since the gateway started, whatever their outcome.
     pub count: u64,
-}
-
-/// Success/error classification for a call.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub enum CallStatus {
-    /// Call completed successfully.
-    Success,
-    /// Call returned an error.
-    Error,
-}
-
-impl CallStatus {
-    fn css_class(&self) -> &'static str {
-        match self {
-            Self::Success => "success",
-            Self::Error => "error",
-        }
-    }
-    fn label(&self) -> &'static str {
-        match self {
-            Self::Success => "OK",
-            Self::Error => "ERR",
-        }
-    }
 }
 
 /// Full aggregated state used to render the operator dashboard.
@@ -204,8 +176,9 @@ pub struct DashboardState<'a> {
     pub backends: Vec<BackendHealth>,
     /// Session / call summary.
     pub session_summary: SessionSummary,
-    /// Recent calls (up to 50).
-    pub recent_calls: Vec<RecentCall>,
+    /// Calls per tool since start, most-called first (`UsageStats::snapshot`
+    /// keeps the top 10).
+    pub tool_counts: Vec<ToolCallCount>,
     /// Cache statistics.
     pub cache_stats: CacheStats,
     /// Gateway uptime in seconds.
@@ -237,7 +210,7 @@ impl DashboardRenderer {
     #[must_use]
     pub fn render(ds: &DashboardState<'_>) -> String {
         let backend_rows = Self::render_backend_rows(&ds.backends);
-        let recent_rows = Self::render_recent_rows(&ds.recent_calls);
+        let tool_rows = Self::render_tool_rows(&ds.tool_counts);
         let hit_pct = format!("{:.1}", ds.cache_stats.hit_rate * 100.0);
         let uptime = format_uptime(ds.uptime_secs);
 
@@ -272,8 +245,6 @@ tr:hover td{{background:var(--bg3);}}
 .healthy{{background:rgba(63,185,80,.15);color:var(--green);}}
 .degraded{{background:rgba(210,153,34,.15);color:var(--yellow);}}
 .down{{background:rgba(248,81,73,.15);color:var(--red);}}
-.success{{background:rgba(63,185,80,.15);color:var(--green);}}
-.error{{background:rgba(248,81,73,.15);color:var(--red);}}
 .hit-bar{{background:var(--bg3);border-radius:var(--r);height:8px;overflow:hidden;margin-top:.5rem;}}
 .hit-fill{{height:100%;background:var(--green);border-radius:var(--r);}}
 .meta{{font-size:.75rem;color:var(--fg2);margin-top:1.5rem;}}
@@ -305,10 +276,10 @@ tr:hover td{{background:var(--bg3);}}
   <tbody>{backend_rows}</tbody>
 </table>
 
-<h2>Top Tools (last 50)</h2>
+<h2>Calls per tool (cumulative since start, top 10)</h2>
 <table>
-  <thead><tr><th>Tool</th><th>Server</th><th>Calls</th><th>Status</th></tr></thead>
-  <tbody>{recent_rows}</tbody>
+  <thead><tr><th>Tool</th><th>Server</th><th>Calls</th></tr></thead>
+  <tbody>{tool_rows}</tbody>
 </table>
 
 <div class="meta">Page generated server-side &mdash; refreshes automatically every 5 seconds.</div>
@@ -327,7 +298,7 @@ tr:hover td{{background:var(--bg3);}}
             cache_misses = ds.cache_stats.total_misses,
             hit_pct = hit_pct,
             backend_rows = backend_rows,
-            recent_rows = recent_rows,
+            tool_rows = tool_rows,
         )
     }
 
@@ -360,22 +331,19 @@ tr:hover td{{background:var(--bg3);}}
     }
 
     #[allow(clippy::format_collect)] // format! inside collect is intentional for HTML row building
-    fn render_recent_rows(calls: &[RecentCall]) -> String {
-        if calls.is_empty() {
-            return r#"<tr><td colspan="4" style="color:var(--fg2)">No tool calls recorded yet</td></tr>"#
+    fn render_tool_rows(counts: &[ToolCallCount]) -> String {
+        if counts.is_empty() {
+            return r#"<tr><td colspan="3" style="color:var(--fg2)">No tool calls recorded yet</td></tr>"#
                 .to_string();
         }
-        calls
+        counts
             .iter()
             .map(|c| {
                 format!(
-                    "<tr><td>{tool}</td><td>{server}</td><td>{count}</td>\
-                     <td><span class=\"badge {css}\">{label}</span></td></tr>",
+                    "<tr><td>{tool}</td><td>{server}</td><td>{count}</td></tr>",
                     tool = esc(&c.tool),
                     server = esc(&c.server),
                     count = c.count,
-                    css = c.status.css_class(),
-                    label = c.status.label(),
                 )
             })
             .collect::<String>()

@@ -166,7 +166,7 @@ pub(super) fn refuse_unrecognised_keys(
     let (path, raw) = (source.path(), source.text());
     let file: Value = Config::yaml(Some(source))
         .extract()
-        .map_err(|e| Error::Config(e.to_string()))?;
+        .map_err(super::load_error::from_figment)?;
     let mut ignored = IgnoredKeys::new();
     let mut found = ignored_by_serde(loaded, &file, &mut ignored)?;
     let backend = unread_backend_keys(raw, &mut ignored);
@@ -252,7 +252,7 @@ fn ignored_by_serde(
     file: &Value,
     ignored: &mut IgnoredKeys,
 ) -> Result<BTreeSet<String>> {
-    let merged: Value = loaded.extract().map_err(|e| Error::Config(e.to_string()))?;
+    let merged: Value = loaded.extract().map_err(super::load_error::from_figment)?;
     let mut found = BTreeSet::new();
     let parsed: std::result::Result<Config, _> = serde_ignored::deserialize(&merged, |key| {
         if in_file(file, &key).is_none() {
@@ -286,7 +286,12 @@ fn ignored_by_serde(
     });
     // Unreachable while the extract above succeeded on the same value; a
     // partial list is never reported as a clean file.
-    parsed.map_err(|e| Error::ConfigValidation(format!("could not check config keys: {e}")))?;
+    parsed.map_err(|e| {
+        Error::ConfigValidation(format!(
+            "could not check config keys: {}",
+            super::load_error::redact_message(&e.to_string())
+        ))
+    })?;
     Ok(found)
 }
 

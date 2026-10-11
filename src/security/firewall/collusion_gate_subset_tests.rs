@@ -401,7 +401,7 @@ fn a_plan_steps_staged_receipt_carries_no_seams() {
     let fw = observing();
     let p: Vec<String> = (0..4).map(|k| piece47(0, k)).collect();
     let value = labelled_parts(&p);
-    let staged = std::cell::Cell::new(0);
+    let staged = crate::security::firewall::PlanStaging::default();
     let step = fw
         .receipt_digest("alpha", "read", &value, Some(&staged))
         .expect("staged");

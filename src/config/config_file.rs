@@ -65,7 +65,7 @@ impl super::Config {
         };
         figment::Figment::from(file)
             .extract()
-            .map_err(|e| crate::Error::Config(e.to_string()))
+            .map_err(super::load_error::from_figment)
     }
 }
 

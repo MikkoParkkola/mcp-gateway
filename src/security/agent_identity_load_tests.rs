@@ -6,18 +6,23 @@
 use super::*;
 use crate::config::Config;
 
-/// T21: a bare string is a parse error naming the sources it must declare.
+/// T21: a bare string is a parse error naming the sources it must declare,
+/// and never the entry itself: a value in the wrong place may be a secret
+/// (MIK-8375).
 #[test]
 fn a_bare_string_known_agent_names_the_source_it_must_declare() {
-    let error = serde_yaml::from_str::<AgentIdentityConfig>("known_agents: [runner]")
+    let sentinel = "cfgleak-sentinel-agent";
+    let error = serde_yaml::from_str::<AgentIdentityConfig>(&format!("known_agents: [{sentinel}]"))
         .expect_err("a bare known_agents entry must not parse")
         .to_string();
-    for needle in ["mtls", "jwt", "runner"] {
+    for needle in ["mtls", "jwt"] {
         assert!(error.contains(needle), "missing {needle}: {error}");
     }
+    assert!(!error.contains(sentinel), "the entry leaked: {error}");
 }
 
-/// A qualified entry still parses, and an unknown source keeps serde's detail.
+/// A qualified entry still parses, and a bad source keeps serde's list of
+/// sources but not the value it refused.
 #[test]
 fn a_qualified_known_agent_parses_and_a_bad_source_says_why() {
     let config: AgentIdentityConfig =
@@ -29,10 +34,15 @@ fn a_qualified_known_agent_parses_and_a_bad_source_says_why() {
             id: "runner".to_string(),
         }]
     );
-    let error = serde_yaml::from_str::<AgentIdentityConfig>("known_agents: [{source: tls, id: x}]")
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("tls"), "{error}");
+    let sentinel = "cfgleak-sentinel-source";
+    let error = serde_yaml::from_str::<AgentIdentityConfig>(&format!(
+        "known_agents: [{{source: {sentinel}, id: x}}]"
+    ))
+    .unwrap_err()
+    .to_string();
+    // The detail stays (what the source may be), the refused value does not.
+    assert!(error.contains("mtls") && error.contains("jwt"), "{error}");
+    assert!(!error.contains(sentinel), "the source leaked: {error}");
 }
 
 fn config_with(enabled: bool, hatch: bool) -> Config {

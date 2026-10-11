@@ -7,7 +7,7 @@
 //! owner, so the run gets no subset seams. Deliberate fail-safe: it can only
 //! withhold an excuse. Mutant p1 (#3726) took the first holder instead.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 
 use serde_json::{Value, json};
 
@@ -39,7 +39,7 @@ fn piece(k: usize) -> String {
 
 /// A plan step's staged receipt from `server` for key-a.
 fn step_receipt(fw: &Firewall, server: &str, value: &Value) -> Receipt {
-    let staged = Cell::new(0);
+    let staged = crate::security::firewall::PlanStaging::default();
     Receipt {
         key: "key-a".to_string(),
         keyed: true,
