@@ -239,8 +239,9 @@ pub(crate) struct ConsumedThenRefused {
     pub(crate) challenge: Value,
     /// The redemption, refused by admission after X14 consumed its grant.
     pub(crate) refused: Value,
-    /// The confirmation ledger's consumed count before and after the redemption.
-    pub(crate) ledger: (usize, usize),
+    /// The confirmation ledger's consumed count before the challenge, before
+    /// and after the redemption, and after the re-send.
+    pub(crate) ledger: [usize; 4],
     /// The same nonce re-sent once the backend is revived.
     pub(crate) resent: Value,
     /// Backend `tools/call` count after the re-send.
@@ -261,12 +262,14 @@ pub(crate) async fn stdio_x14_consumed_then_refused() -> ConsumedThenRefused {
     let fixture = signed_x14_fixture().await;
     let ledger = fixture.meta.continuation();
     fixture.meta.kill_switch().kill(BACKEND);
+    let unasked = ledger.ledger().len().await;
     let challenge = dispatch(&fixture, x14_call(1, NONCE, "e2e1-a", json!({}))).await;
     let before = ledger.ledger().len().await;
     let refused = dispatch(&fixture, x14_call(2, NONCE, "e2e1-a", accept(&challenge))).await;
     let after = ledger.ledger().len().await;
     fixture.meta.kill_switch().revive(BACKEND);
     let resent = dispatch(&fixture, x14_call(3, NONCE, "e2e1-b", json!({}))).await;
+    let after_resend = ledger.ledger().len().await;
     let calls_before_honest = fixture.rounds.load(Ordering::SeqCst);
     let asked = dispatch(&fixture, x14_call(4, FRESH, "e2e1-c", json!({}))).await;
     let created = dispatch(&fixture, x14_call(5, FRESH, "e2e1-c", accept(&asked))).await;
@@ -280,7 +283,7 @@ pub(crate) async fn stdio_x14_consumed_then_refused() -> ConsumedThenRefused {
     ConsumedThenRefused {
         challenge,
         refused,
-        ledger: (before, after),
+        ledger: [unasked, before, after, after_resend],
         resent,
         calls_before_honest,
         honest,

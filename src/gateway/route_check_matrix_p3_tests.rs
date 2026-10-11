@@ -351,12 +351,15 @@ async fn stdio_task_refused_after_its_grant_was_consumed_keeps_its_nonce() {
         "premise: no X14 challenge: {}",
         seen.challenge
     );
+    let [unasked, asked, redeemed, resent] = seen.ledger;
+    assert_eq!(asked, unasked, "premise: the challenge itself moved the ledger");
     assert_eq!(
-        seen.ledger.1,
-        seen.ledger.0 + 1,
+        redeemed,
+        asked + 1,
         "premise: the redemption did not consume the grant: {}",
         seen.refused
     );
+    assert_eq!(resent, redeemed, "the refused re-send consumed a grant");
     assert_eq!(seen.refused["error"]["code"], -32000, "{}", seen.refused);
     assert!(
         message(&seen.refused).contains("kill switch"),
@@ -420,12 +423,15 @@ async fn mcp_task_refused_after_its_grant_was_consumed_keeps_its_nonce() {
         "premise: no X14 challenge: {}",
         seen.challenge
     );
+    let [unasked, asked, redeemed, resent] = seen.ledger;
+    assert_eq!(asked, unasked, "premise: the challenge itself moved the ledger");
     assert_eq!(
-        seen.ledger.1,
-        seen.ledger.0 + 1,
+        redeemed,
+        asked + 1,
         "premise: the redemption did not consume the grant: {}",
         seen.refused
     );
+    assert_eq!(resent, redeemed, "the refused re-send consumed a grant");
     assert!(
         message(&seen.refused).contains("kill switch"),
         "premise: admission's kill-switch refusal: {}",

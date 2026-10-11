@@ -16,8 +16,9 @@ pub(crate) struct McpConsumedThenRefused {
     pub(crate) challenge: Value,
     /// The redemption, refused by admission after X14 consumed its grant.
     pub(crate) refused: Value,
-    /// The confirmation ledger's consumed count before and after the redemption.
-    pub(crate) ledger: (usize, usize),
+    /// The confirmation ledger's consumed count before the challenge, before
+    /// and after the redemption, and after the re-send.
+    pub(crate) ledger: [usize; 4],
     /// The same nonce re-sent once the backend is revived.
     pub(crate) resent: Value,
     pub(crate) calls_before_honest: usize,
@@ -106,6 +107,7 @@ pub(crate) async fn mcp_x14_consumed_then_refused() -> McpConsumedThenRefused {
     let meta = &fx.state.meta_mcp;
     let none = serde_json::json!({});
     meta.kill_switch().kill("alpha");
+    let unasked = meta.continuation().ledger().len().await;
     let challenge = send_task(&fx, signed_task_read("h1-n1", "h1-a", &none)).await;
     let before = meta.continuation().ledger().len().await;
     let answer = accepting(&challenge);
@@ -113,6 +115,7 @@ pub(crate) async fn mcp_x14_consumed_then_refused() -> McpConsumedThenRefused {
     let after = meta.continuation().ledger().len().await;
     meta.kill_switch().revive("alpha");
     let resent = send_task(&fx, signed_task_read("h1-n1", "h1-b", &none)).await;
+    let after_resend = meta.continuation().ledger().len().await;
     let calls_before_honest = calls.load(Ordering::SeqCst);
     let asked = send_task(&fx, signed_task_read("h1-n2", "h1-c", &none)).await;
     let honest = send_task(&fx, signed_task_read("h1-n2", "h1-c", &accepting(&asked))).await;
@@ -120,7 +123,7 @@ pub(crate) async fn mcp_x14_consumed_then_refused() -> McpConsumedThenRefused {
     McpConsumedThenRefused {
         challenge,
         refused,
-        ledger: (before, after),
+        ledger: [unasked, before, after, after_resend],
         resent,
         calls_before_honest,
         honest,
