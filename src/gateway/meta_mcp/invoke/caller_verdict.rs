@@ -72,6 +72,12 @@ impl MetaMcp {
             return Ok(CallerVerdict::Proceed);
         }
         let proof = CallerProof::new(caller.verified_identity, caller.provenance());
+        // No principal on a required backend: no slot can hold this caller's
+        // catalogue, so it lacks the tool, answered before any resolution.
+        if self.lacks_principal_on_required(&backend, proof) {
+            visible::record_visibility(server, tool, Visibility::Withheld(Withholding::Lacked));
+            return Ok(CallerVerdict::Absent);
+        }
         let resolved = self
             .resolve_dispatch(
                 (server, tool),

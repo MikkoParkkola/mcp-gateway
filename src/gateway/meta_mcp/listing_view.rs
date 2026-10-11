@@ -31,6 +31,10 @@ pub(crate) enum ListingView {
     Cold,
     /// The binding of this caller's own warm slot.
     Caller(String),
+    /// A `required` per-user backend and a caller with no principal: no slot
+    /// can ever hold this caller's catalogue, so it lacks every tool there.
+    /// Never the cold rule's shared view (lead ruling 2026-10-11; design R3.7).
+    Lacks,
 }
 
 /// What a listing does with a per-user backend when this caller's view is
@@ -54,17 +58,31 @@ impl MetaMcp {
         if matches!(idp.strategy, PropagationStrategyKind::Passthrough) {
             return ListingView::Cold;
         }
+        if self.lacks_principal_on_required(backend, scope.caller) {
+            return ListingView::Lacks;
+        }
         let Some(principal) = self.principal_for(backend, scope.caller) else {
-            return if idp.required {
-                ListingView::Cold
-            } else {
-                ListingView::Shared
-            };
+            return ListingView::Shared;
         };
         match backend.caller_slot_binding(&principal.stable_actor_id()) {
             Some(binding) => ListingView::Caller(binding),
             None => ListingView::Cold,
         }
+    }
+
+    /// Whether `caller` has no principal on `backend`, a `required` per-user
+    /// backend: such a caller can never hold a slot there, so it lacks every
+    /// tool on it, on every listing and every call (lead ruling 2026-10-11;
+    /// design R3.7). The one predicate the listings, the caller verdict and
+    /// the dispatch funnel read. Passthrough is judged by its own rule.
+    pub(crate) fn lacks_principal_on_required(
+        &self,
+        backend: &Backend,
+        caller: crate::identity_propagation::CallerProof<'_>,
+    ) -> bool {
+        backend.identity_propagation_config().is_some_and(|idp| {
+            idp.required && !matches!(idp.strategy, PropagationStrategyKind::Passthrough)
+        }) && self.principal_for(backend, caller).is_none()
     }
 
     /// Whether a name-only listing names `tool` on `server` to this caller.
@@ -88,6 +106,7 @@ impl MetaMcp {
                 ColdRule::Withhold => false,
                 ColdRule::SharedView => self.shows_shared_name(server, tool, scope, session_id),
             },
+            ListingView::Lacks => false,
             ListingView::Caller(binding) => backend
                 .with_cached_tool_for(Some(&binding), tool, |found| {
                     self.shows_tool(server, found, scope, session_id)
@@ -106,7 +125,7 @@ impl MetaMcp {
     ) -> Option<(Arc<Vec<Tool>>, bool)> {
         match self.listing_view(backend, scope) {
             ListingView::Shared => Some(backend.cached_tools_snapshot_and_truncated()),
-            ListingView::Cold => None,
+            ListingView::Cold | ListingView::Lacks => None,
             ListingView::Caller(binding) => {
                 Some(backend.cached_tools_snapshot_and_truncated_for(Some(&binding)))
             }
@@ -124,6 +143,7 @@ impl MetaMcp {
         match self.listing_view(backend, scope) {
             ListingView::Caller(binding) => backend.get_cached_tool_for(Some(&binding), tool),
             ListingView::Shared | ListingView::Cold => backend.get_cached_tool(tool),
+            ListingView::Lacks => None,
         }
     }
 
@@ -145,7 +165,7 @@ impl MetaMcp {
                 };
                 match self.listing_view(&backend, scope) {
                     ListingView::Shared => Some((server, tool)),
-                    ListingView::Cold => None,
+                    ListingView::Cold | ListingView::Lacks => None,
                     ListingView::Caller(binding) => backend
                         .get_cached_tool_for(Some(&binding), &tool.name)
                         .map(|own| (server, own)),

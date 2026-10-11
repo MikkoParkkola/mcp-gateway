@@ -221,6 +221,14 @@ impl MetaMcp {
             Some(carried) => (Some(carried.backend), carried.resolved),
             None => {
                 let backend = self.backends.get(server);
+                // No principal on a required per-user backend: an absent name,
+                // answered before any resolution (lead ruling 2026-10-11).
+                if backend
+                    .as_deref()
+                    .is_some_and(|b| self.lacks_principal_on_required(b, caller_proof))
+                {
+                    return Err(super::visible::absent_name(tool));
+                }
                 let resolved = self
                     .resolve_dispatch(
                         (server, tool),
