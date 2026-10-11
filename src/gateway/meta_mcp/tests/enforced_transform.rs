@@ -110,11 +110,17 @@ async fn an_enforced_input_round_is_refused_and_its_hold_released() {
         [1, 0, 1],
         "one hold registered in the scope and dropped unhanded"
     );
-    assert_eq!(
-        meta.continuation().in_flight().len(now).await,
-        0,
-        "the sealed envelope's hold is released"
-    );
+    // The drop releases the slot in place when the table is free, or from a
+    // spawned task when it is busy (`sealed_hold::release`). Under a loaded
+    // full run either path can be taken, so wait for the release, bounded,
+    // rather than read the table once (MIK-8354).
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while meta.continuation().in_flight().len(now).await != 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the sealed envelope's hold is released within 10 s");
 }
 
 /// A completed result carrying a stray `requestState` must not acquire one.
