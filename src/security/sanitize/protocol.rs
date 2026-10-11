@@ -318,6 +318,22 @@ mod tests {
         assert!(sanitize_request(&request, ProtocolRoute::Meta).is_err());
     }
 
+    /// S9h (MIK-8378): the sanitize step matches the keys it decodes by as
+    /// sanitized where ENV.2 refuses nothing. A dirty `arguments` key in a
+    /// `chain` step under `gateway_invoke` (ENV.2 checks chain steps for
+    /// `gateway_execute` only) still reaches the decode, so the encoded NUL
+    /// under it is refused. S9d pinned this before ENV.2 refused its key.
+    #[test]
+    fn s9h_a_dirty_step_arguments_key_does_not_skip_the_decode() {
+        let step = json!({"tool": "alpha:read",
+            "arg\u{7}uments": json!({"cmd": "a\u{0}b"}).to_string()});
+        let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "gateway_invoke", "arguments": {"chain": [step]}}});
+        let refused = sanitize_request(&request, ProtocolRoute::Meta)
+            .expect_err("the encoded NUL is decoded and refused");
+        assert!(refused.to_string().contains("null bytes"), "{refused}");
+    }
+
     /// Round-4 seat gpt: a raw control character that makes an encoded
     /// `arguments` invalid JSON until it is stripped does not hide an escaped
     /// NUL: the client's own bytes are decoded, once, by the gateway's
