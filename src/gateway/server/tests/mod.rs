@@ -98,6 +98,8 @@ mod stdio_replay_audit;
 
 // MIK-7324.COV.3: the stdio chain-nonce refusal in `prepare_signing`.
 mod stdio_chain_nonce_refusal;
+
+// MIK-8378: envelope rows over stdio (ENV.2, ENV.4).
 mod mik8378_stdio;
 
 // MIK-7324.COV.3: the firewall `response_firewall` builds carries anomaly blocking.

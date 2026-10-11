@@ -8,8 +8,7 @@ use serde_json::Value;
 
 use super::{sanitize_json_value, sanitize_string, validate_protocol_text};
 use crate::Result;
-use crate::gateway::meta_mcp::admission::EXECUTION_DIRECTIVES;
-use crate::gateway::{ArgsPolicy, args_policy};
+use crate::gateway::{ArgsPolicy, EXECUTION_DIRECTIVES, args_policy};
 use crate::protocol::meta::KEY_CLIENT_CAPABILITIES;
 
 /// Validate `id`, `method`, the capability keys, the `_meta` nonces, the
