@@ -111,7 +111,7 @@ async fn post_as_alpha(router: &axum::Router, uri: &str, body: &Value) -> (Statu
         email: "alpha@example.invalid".to_string(),
         name: None,
         groups: vec![],
-        issuer: "https://idp.example.invalid".to_string(),
+        issuer: "https://issuer.example.invalid".to_string(), // the fixture identity's issuer
     });
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();
@@ -259,7 +259,7 @@ async fn task_call_as_alpha(router: &axum::Router, name: &str) -> (StatusCode, V
         email: "alpha@example.invalid".to_string(),
         name: None,
         groups: vec![],
-        issuer: "https://idp.example.invalid".to_string(),
+        issuer: "https://issuer.example.invalid".to_string(), // the fixture identity's issuer
     });
     let response = router.clone().oneshot(request).await.unwrap();
     let status = response.status();
