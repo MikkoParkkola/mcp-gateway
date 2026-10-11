@@ -58,7 +58,7 @@ pub(super) async fn key_refusal(
                 ));
             }
             Ok(CatalogueVerdict::Offers | CatalogueVerdict::Unknown) => {}
-            Err(e) => return Some(failed.clone().answer(None, e, &call).await),
+            Err(e) => return Some(failed.clone().answer((None, None), e, &call).await),
         }
     }
     let checked = backend.undeclared_key_refusal(identity_key, headers, tool, arguments);
