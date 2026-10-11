@@ -72,7 +72,8 @@ fn audit_verify_uses_the_resolved_key_and_rejects_the_reference_text() {
         "the honest log failed: {:?}",
         result.error_message
     );
-    assert_eq!(result.entries_checked, 3);
+    // The log's own open record, then the three entries.
+    assert_eq!(result.entries_checked, 4);
 
     let forged = dir.path().join("forged.jsonl");
     write_log(&forged, &format!("env:{VAR}"));
