@@ -61,7 +61,22 @@ pub(super) async fn key_refusal(
         if lens == Lens::Withheld {
             return Some(absent());
         }
-        match backend.catalogue_verdict(identity_key, headers, tool).await {
+        let verdict = backend.catalogue_verdict(identity_key, headers, tool).await;
+        // The check may have filled the caller's slot: index it once filled
+        // (MIK-8356), whatever the verdict.
+        if backend.holds_tools_for(identity_key) {
+            let proof = crate::identity_propagation::CallerProof::new(
+                failed.identity,
+                crate::identity_propagation::CallerProvenance::classify(
+                    failed.client.map(|client| client.principal.as_str()),
+                ),
+            );
+            failed
+                .state
+                .meta_mcp
+                .remember_caller_slot(backend, proof, identity_key);
+        }
+        match verdict {
             Ok(CatalogueVerdict::Withholds | CatalogueVerdict::Lacks) => return Some(absent()),
             Ok(CatalogueVerdict::Offers | CatalogueVerdict::Unknown) => {}
             Err(e) => return Some(failed.clone().answer((None, None), e, &call).await),

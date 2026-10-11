@@ -121,6 +121,17 @@ impl MetaMcp {
         }
     }
 
+    /// Whether the catalogue this caller's listing reads on `backend` was ever
+    /// enumerated: its own slot on a per-user backend, never the shared one
+    /// (MIK-8356). A cold or absent view is not known.
+    pub(crate) fn listing_known(&self, backend: &Backend, scope: InvokeScope<'_>) -> bool {
+        match self.listing_view(backend, scope) {
+            ListingView::Shared => backend.cached_tools_known(),
+            ListingView::Cold | ListingView::NoView => false,
+            ListingView::Caller(binding) => backend.holds_tools_for(Some(&binding)),
+        }
+    }
+
     /// The snapshot a listing walk reads for this caller on `backend`, with
     /// whether it is a truncated drain; `None` when this caller's view is
     /// cold, so the backend contributes nothing it could not vouch for.

@@ -82,6 +82,12 @@ impl Backend {
             .is_some_and(|slot| matches!(*slot, CallerSlot::NoView))
     }
 
+    /// Whether `binding`'s slot holds a listed catalogue, an empty one
+    /// included: what a caller's listing on that slot can vouch for.
+    pub(crate) fn holds_tools_for(&self, binding: Option<&str>) -> bool {
+        self.held_tools_for(binding).is_some()
+    }
+
     /// The binding of the slot that holds `principal_id`'s own catalogue on
     /// this backend, if that slot is still live. No side effects: no mint, no
     /// fill, no slot creation.

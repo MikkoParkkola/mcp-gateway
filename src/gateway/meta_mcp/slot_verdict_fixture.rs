@@ -219,6 +219,40 @@ pub(crate) fn per_user_backend_with(
     enforcement: InputSchemaEnforcement,
     configure: impl FnOnce(&mut BackendConfig),
 ) -> (Arc<Backend>, Arc<Asked>, Arc<Asked>) {
+    build_per_user_backend(
+        (slot, shared, warmth),
+        enforcement,
+        configure,
+        SharedSlot::Listed,
+    )
+}
+
+/// Whether the backend's shared slot has ever been listed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SharedSlot {
+    Listed,
+    /// Never enumerated: only alpha's own slot can be known.
+    NeverListed,
+}
+
+/// The per-user gateway with alpha's slot `slot` and warm, and the shared
+/// slot in state `shared_slot` (the known-ness rows).
+pub(crate) fn per_user_shared(slot: CallerSlot, shared_slot: SharedSlot) -> PerUser {
+    let (backend, caller_asked, shared_asked) = build_per_user_backend(
+        (slot, &valid(), Warmth::Warm),
+        InputSchemaEnforcement::Closed,
+        |_| {},
+        shared_slot,
+    );
+    per_user_on(backend, caller_asked, shared_asked, Surfaced::Yes)
+}
+
+fn build_per_user_backend(
+    (slot, shared, warmth): (CallerSlot, &Value, Warmth),
+    enforcement: InputSchemaEnforcement,
+    configure: impl FnOnce(&mut BackendConfig),
+    shared_slot: SharedSlot,
+) -> (Arc<Backend>, Arc<Asked>, Arc<Asked>) {
     let mut config = BackendConfig {
         identity_propagation: Some(IdentityPropagationConfig {
             strategy: PropagationStrategyKind::SignedAssertion,
@@ -262,7 +296,9 @@ pub(crate) fn per_user_backend_with(
             fail_list: warmth == Warmth::ColdFailing,
         }),
     );
-    backend.store_shared_tools_for_test(shared_tools);
+    if shared_slot == SharedSlot::Listed {
+        backend.store_shared_tools_for_test(shared_tools);
+    }
     if warmth == Warmth::Warm {
         backend.store_per_user_tools_for_test(BINDING, caller_tools);
     }
@@ -315,6 +351,24 @@ pub(crate) fn add_caller(meta: &MetaMcp, subject: &str, schema: &Value) -> Arc<A
         },
         Arc::new(Upstream {
             tools: serde_json::to_value(&tools).expect("tools"),
+            asked: Arc::clone(&asked),
+            fail_list: false,
+        }),
+    );
+    asked
+}
+
+/// Replace alpha's upstream with one whose catalogue is empty: a complete,
+/// successful list of no tools.
+pub(crate) fn serve_alpha_empty(meta: &MetaMcp) -> Arc<Asked> {
+    let backend = meta.backends.get(BACKEND).expect("the backend");
+    let asked = Arc::new(Asked::default());
+    backend.set_pooled_transport_for_test(
+        &PoolKey::PerUser {
+            binding: BINDING.to_string(),
+        },
+        Arc::new(Upstream {
+            tools: json!([]),
             asked: Arc::clone(&asked),
             fail_list: false,
         }),

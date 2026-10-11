@@ -413,6 +413,22 @@ pub(crate) fn absent_name(tool_name: &str) -> crate::Error {
     crate::Error::json_rpc(-32601, format!("Unknown tool: {tool_name}"))
 }
 
+/// A name this request's caller verdict withheld answers as absent at every
+/// layer that can serve a stored result for it: the invocation policy, and
+/// the two layers that skip that policy for a target signing already prepared
+/// (MIK-8356). On stdio, signing prepares before the route stage records the
+/// verdict, so a check made only inside the policy would come too early.
+///
+/// # Errors
+///
+/// [`absent_name`] when the memo records `server`'s `tool` as withheld.
+pub(crate) fn refuse_withheld(server: &str, tool: &str) -> crate::Result<()> {
+    match recorded_visibility(server, tool) {
+        Some(Visibility::Withheld(_)) => Err(absent_name(tool)),
+        _ => Ok(()),
+    }
+}
+
 /// Test-only hook between the route stage and the dispatch, for the row that
 /// changes the catalogue in that window (MIK-8340 R3.1 row). Compiled out of
 /// non-test builds.

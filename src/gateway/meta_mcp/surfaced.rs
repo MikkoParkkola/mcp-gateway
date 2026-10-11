@@ -251,6 +251,7 @@ impl MetaMcp {
                         .count()
                 })
             };
+            let known = !hidden && !cold && self.listing_known(&b, scope);
             let status = b.status();
             let killed = self.kill_switch.is_killed(&status.name);
             let mut entry = json!({
@@ -259,7 +260,7 @@ impl MetaMcp {
                 "transport": status.transport,
                 "tools_count": admitted,
                 // Consult this before reading tools_count == 0 as "empty".
-                "tools_known": status.tools_known && !hidden && !cold,
+                "tools_known": known,
                 "circuit_breaker": status.circuit_state,
                 "status": if killed { "disabled" } else { "active" }
             });

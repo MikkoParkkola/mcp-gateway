@@ -247,7 +247,7 @@ impl MetaMcp {
         let known = backends
             .iter()
             .zip(&views)
-            .filter(|(b, view)| view.is_some() && b.cached_tools_known())
+            .filter(|(b, view)| view.is_some() && self.listing_known(b, scope))
             .count();
         // A truncated drain is still "known" (enumerated), but its count is a
         // lower bound, never exact (MIK 7570 PAGING.1 design D). List and flag

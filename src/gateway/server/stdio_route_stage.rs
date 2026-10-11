@@ -120,7 +120,16 @@ impl Gateway {
         for target in &targets {
             let checked = target.as_target();
             let _ = meta_mcp
-                .caller_verdict((checked.server, checked.tool), caller, Some(session_id))
+                .caller_verdict(
+                    (checked.server, checked.tool),
+                    caller,
+                    Some(session_id),
+                    crate::gateway::meta_mcp::invoke::TargetNaming::of(
+                        meta_mcp,
+                        tool_name,
+                        (checked.server, checked.tool),
+                    ),
+                )
                 .await;
         }
         // MIK-8361, as on `/mcp`: recorded, so the gate answers it absent.

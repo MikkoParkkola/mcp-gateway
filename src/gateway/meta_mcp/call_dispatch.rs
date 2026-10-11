@@ -26,28 +26,17 @@ impl MetaMcp {
     ) -> Option<JsonRpcResponse> {
         match self.surfaced_for(tool_name, caller.scope(), session_id) {
             super::visible::Surfaced::Visible(server) => {
-                // R3.7: a caller with no view of the backend lacks the tool. A
-                // call by surfaced name names no backend, so it carries no
-                // connect offer (MIK-6745 section 9.2, predicate D) and
-                // answers exactly as the absent name below.
-                let no_view = match self.backends.get(server) {
-                    Some(backend) => self.has_no_view_for(&backend, Self::proof_of(caller)).await,
-                    None => false,
-                };
-                if no_view {
-                    let reason = super::visible::Withholding::Lacked;
-                    self.record_withheld(server, tool_name, reason, caller, session_id)
-                        .await;
-                    return self
-                        .route_retry_to_origin_backend(id, tool_name, arguments, session_id, caller)
-                        .await;
-                }
                 // MIK-8356: on a per-user backend the caller's own catalogue
                 // decides; a name it withholds or lacks answers exactly as
                 // the absent name below. A resolution refused here is left to
                 // the dispatch, which answers it as before.
                 let verdict = self
-                    .caller_verdict((server, tool_name), caller, session_id)
+                    .caller_verdict(
+                        (server, tool_name),
+                        caller,
+                        session_id,
+                        super::invoke::TargetNaming::SurfacedName,
+                    )
                     .await;
                 if matches!(verdict, Ok(super::invoke::CallerVerdict::Absent)) {
                     let reason = match super::visible::recorded_visibility(server, tool_name) {
