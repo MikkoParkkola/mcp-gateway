@@ -344,6 +344,20 @@ async fn decided(count: usize) -> bool {
     .is_ok()
 }
 
+/// Bound on a flood's answers filling the writer queue (MIK-8359).
+const FLOOD_PARKED: Duration = Duration::from_secs(120);
+
+/// Whether a ping answer found the writer queue full within [`FLOOD_PARKED`].
+async fn flood_parked() -> bool {
+    timeout(FLOOD_PARKED, async {
+        while crate::gateway::server::stdio_seams::answers_parked() == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
 /// Bound on a stopped session's drain task ending.
 const DRAIN_END: Duration = Duration::from_secs(5);
 
@@ -533,6 +547,16 @@ async fn t14_a_burst_while_stdout_is_full_is_decided_and_told_at_most_twice() {
         .write_all(&pings)
         .await
         .expect("stdin accepts the flood");
+    // Premise before the first change: stdout is blocked once a ping answer
+    // finds the writer queue full. The flood is answered on this thread, and
+    // on a slow host that takes many seconds (MIK-8359: ~18 s on Windows CI),
+    // so a change written straight after the flood spent its ARRIVAL bound
+    // queued behind it. `queue_full_wakes` cannot be the wait: it moves only
+    // after a decision wakes the sender.
+    assert!(
+        flood_parked().await,
+        "premise: no ping answer found the writer queue full within {FLOOD_PARKED:?}"
+    );
     let base = decisions();
     for n in 0..5 {
         std::fs::write(

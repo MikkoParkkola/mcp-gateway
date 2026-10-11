@@ -139,6 +139,23 @@ pub(crate) fn queue_full_wakes() -> usize {
     QUEUE_FULL.with(std::cell::Cell::get)
 }
 
+thread_local! {
+    static ANSWER_PARKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Called by a stdio request's task when its answer finds the writer queue
+/// full and must wait on `reserve` (MIK-8359 t14 premise). Unlike
+/// [`queue_full_wakes`], this moves with no tools change decided, so a test
+/// can wait on it before making the first change.
+pub(crate) fn answer_found_queue_full() {
+    ANSWER_PARKED.with(|q| q.set(q.get() + 1));
+}
+
+/// Answers on this thread that found the writer queue full.
+pub(crate) fn answers_parked() -> usize {
+    ANSWER_PARKED.with(std::cell::Cell::get)
+}
+
 /// A pause armed for one sender, keyed by the address of its stop lock, so no
 /// other session's sender ever waits on it (MIK-8278 race row).
 type FinalSendPause = (
