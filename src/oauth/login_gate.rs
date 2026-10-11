@@ -207,6 +207,15 @@ pub(crate) fn stage_end(
     (tokio::time::Instant::now() + bound).min(deadline)
 }
 
+/// Resolves when a detached step's one `deadline` passes, never when there is
+/// none (MIK-8339): the arm a stage with no window of its own races.
+pub(crate) async fn past(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(deadline) => tokio::time::sleep_until(deadline).await,
+        None => std::future::pending().await,
+    }
+}
+
 /// What [`LoginGate::set_out_now`] captures.
 pub(crate) struct SetOut {
     /// The cancel epoch the step set out at.
@@ -432,7 +441,7 @@ tokio::task_local! {
     static PROVENANCE: Arc<Provenance>;
     static FILL: Arc<AtomicBool>;
     static NON_INTERACTIVE: ();
-    static SET_OUT: (u64, Option<Arc<Cohort>>);
+    static SET_OUT: (u64, Arc<Cohort>);
 }
 
 /// Run a shared metadata fill's `work` with its `mark`: a request the fill
@@ -456,16 +465,13 @@ pub(crate) async fn set_out_with_cohort<F: std::future::Future>(
     cohort: Arc<Cohort>,
     work: F,
 ) -> F::Output {
-    SET_OUT.scope((epoch, Some(cohort)), work).await
+    SET_OUT.scope((epoch, cohort), work).await
 }
 
-/// The cohort the current start captured (`None` outside a start, or a start
-/// that captured none). Read before any `tokio::spawn`.
+/// The cohort the current start captured (`None` outside a start). Read
+/// before any `tokio::spawn`.
 pub(crate) fn set_out_cohort() -> Option<Arc<Cohort>> {
-    SET_OUT
-        .try_with(|(_, cohort)| cohort.clone())
-        .ok()
-        .flatten()
+    SET_OUT.try_with(|(_, cohort)| Arc::clone(cohort)).ok()
 }
 
 /// The epoch the current start set out at (`None` outside a start). Read
@@ -481,7 +487,7 @@ pub(crate) fn set_out_epoch() -> Option<u64> {
 pub(crate) struct Carried {
     provenance: Option<Arc<Provenance>>,
     fill: Option<Arc<AtomicBool>>,
-    set_out: Option<(u64, Option<Arc<Cohort>>)>,
+    set_out: Option<(u64, Arc<Cohort>)>,
 }
 
 /// Capture the current scopes; call it in the caller, never in the task.

@@ -669,6 +669,8 @@ fn generate_client_id() -> String {
 #[cfg(test)]
 mod authorize_tests;
 mod browser;
+#[cfg(test)]
+mod deadline_tests;
 pub(crate) mod destination;
 mod discovery;
 #[cfg(test)]

@@ -541,13 +541,30 @@ impl OAuthClient {
                 result
             }
             Begin::Join(attempt) => {
-                if let Some(outcome) = attempt.finished().await {
+                // The joiner's own deadline ends its wait; the lead's login
+                // runs on for whoever else waits on it.
+                let finished = tokio::select! {
+                    biased;
+                    finished = attempt.finished() => finished,
+                    () = crate::oauth::login_gate::past(deadline) => {
+                        return Err(self.incomplete());
+                    }
+                };
+                if let Some(outcome) = finished {
                     return Err(outcome.to_error(self.backend_name()));
                 }
                 self.adopt_stored_login().ok_or_else(|| {
                     Error::OAuth("the shared login completed but stored no token".to_string())
                 })
             }
+        }
+    }
+
+    /// A login stage that outlived its window or its step's deadline.
+    fn incomplete(&self) -> Error {
+        Error::AuthorizationIncomplete {
+            backend: self.backend_name().to_string(),
+            window_secs: OAUTH_AUTHORIZATION_WINDOW.as_secs(),
         }
     }
 
@@ -644,6 +661,7 @@ impl OAuthClient {
         let registered = tokio::select! {
             biased;
             () = cancel.cancelled() => Err(cancelled()),
+            () = crate::oauth::login_gate::past(deadline) => Err(self.incomplete()),
             registered = self.ensure_client_id_with_redirect(&callback_url) => registered,
         };
         // A cancel that lands as registration completes still wins.
@@ -687,8 +705,8 @@ impl OAuthClient {
         let (actual_callback_url, callback_result) = callback_server
             .wait_within(
                 deadline.map_or(OAUTH_AUTHORIZATION_WINDOW, |deadline| {
-                    OAUTH_AUTHORIZATION_WINDOW
-                        .min(deadline.saturating_duration_since(tokio::time::Instant::now()))
+                    crate::oauth::login_gate::stage_end(OAUTH_AUTHORIZATION_WINDOW, deadline)
+                        .saturating_duration_since(tokio::time::Instant::now())
                 }),
                 cancel,
             )
@@ -716,10 +734,12 @@ impl OAuthClient {
 
         // Exchange code for token. Cancel first (MIK-8339): a restart or stop
         // ends a login stalled here. The exchange itself is bounded by the
-        // OAuth client's own request timeout (destination.rs).
+        // OAuth client's own request timeout (destination.rs), and by a
+        // detached step's deadline.
         let token = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(cancelled()),
+            () = crate::oauth::login_gate::past(deadline) => return Err(self.incomplete()),
             token = self.exchange_code(&callback_result.code, &actual_callback_url, &code_verifier) => token?,
         };
 

@@ -399,7 +399,7 @@ async fn a_stop_ends_a_login_stalled_in_its_code_exchange() {
     let error = called.expect_err("a stopped backend's login stores no token");
     assert!(
         variant(&error).starts_with("AuthorizationCancelled"),
-        "the stalled login ends Cancelled: {error:?}"
+        "the stalled exchange was not cancelled by stop (it ended on the client's own timeout): {error:?}"
     );
 }
 
@@ -638,18 +638,27 @@ async fn three_stalled_stages_end_at_the_steps_one_deadline() {
         per_stage_end > one_deadline + Duration::from_secs(10),
         "premise: per-stage bounds would end after the one deadline"
     );
-    // Just past the one deadline, and still before the per-stage end.
+    // Just before the one deadline the save still waits, so the row cannot
+    // pass because the step ended early.
     advance_paused(
-        (one_deadline + Duration::from_secs(5))
+        (one_deadline - Duration::from_secs(5))
             .saturating_duration_since(tokio::time::Instant::now()),
     )
     .await;
-    within("the step to settle", async {
-        while backend.login_gate.in_flight() {
-            sleep(Duration::from_millis(10)).await;
+    assert!(
+        cohort.outcome().is_none() && backend.login_gate.in_flight(),
+        "premise: the save still waits just before the one deadline"
+    );
+    // Just past it, and still well before the per-stage end. No panicking
+    // guard: a step the deadline does not end leaves the outcome unset, and
+    // the assertion below names that.
+    advance_paused(Duration::from_secs(10)).await;
+    for _ in 0..200 {
+        if cohort.outcome().is_some() {
+            break;
         }
-    })
-    .await;
+        sleep(Duration::from_millis(10)).await;
+    }
     drop(lock);
 
     assert!(
@@ -659,5 +668,43 @@ async fn three_stalled_stages_end_at_the_steps_one_deadline() {
         ),
         "the step's one deadline ended the save stage: {:?}",
         cohort.outcome()
+    );
+}
+
+/// LOGINDL.23: a start's OAuth discovery stalled past the step's one
+/// deadline ends there as the backend's timeout (no login of its cohort ran),
+/// not at the discovery requests' own timeouts.
+#[tokio::test]
+async fn a_discovery_stalled_past_the_deadline_is_a_backend_timeout() {
+    use crate::oauth::login_gate::DETACHED_DEADLINE;
+    static ON: AtomicBool = AtomicBool::new(false);
+    static STALLED: AtomicUsize = AtomicUsize::new(0);
+    let (backend, _browser, _dir) = approved_start(
+        Upstream::MetadataStalls(&ON, &STALLED),
+        Duration::from_secs(3600),
+    )
+    .await;
+    ON.store(true, Ordering::SeqCst);
+
+    let restart = {
+        let backend = Arc::clone(&backend);
+        tokio::spawn(async move { backend.force_restart().await })
+    };
+    within("the restart's discovery to stall", async {
+        while STALLED.load(Ordering::SeqCst) == 0 {
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    // The discovery waits on a server that never answers: no I/O can race.
+    advance_paused(DETACHED_DEADLINE + Duration::from_secs(1)).await;
+
+    let error = within("the restart", restart)
+        .await
+        .expect("restart task")
+        .expect_err("a stalled discovery starts nothing");
+    assert!(
+        matches!(error, Error::BackendTimeout(_)),
+        "the step's deadline ended the stalled discovery: {error:?}"
     );
 }

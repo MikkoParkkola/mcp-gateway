@@ -89,6 +89,15 @@ impl HttpTransport {
                 let cancelled = || crate::Error::AuthorizationCancelled {
                     backend: refused_name.clone(),
                 };
+                // A pre-login stage that outlived the start's deadline: the
+                // cohort's recorded failure if there is one.
+                let timed_out = |gate: &crate::oauth::login_gate::LoginGate| {
+                    let otherwise = crate::Error::BackendTimeout(refused_name.clone());
+                    match &cohort {
+                        Some(cohort) => gate.classify(cohort, &refused_name, otherwise),
+                        None => otherwise,
+                    }
+                };
                 // A non-interactive caller (the health probe) never waits on
                 // the client mutex a login holds for minutes (MIK-7982 C2).
                 // An interactive one waits under the start's revocation and
@@ -106,23 +115,19 @@ impl HttpTransport {
                         () = tokio::time::sleep_until(crate::oauth::login_gate::stage_end(
                             crate::oauth::OAUTH_AUTHORIZATION_WINDOW,
                             deadline,
-                        )) => {
-                            let otherwise = crate::Error::BackendTimeout(refused_name.clone());
-                            return Err(match &cohort {
-                                Some(cohort) => gate.classify(cohort, &refused_name, otherwise),
-                                None => otherwise,
-                            });
-                        }
+                        )) => return Err(timed_out(gate)),
                         oauth = oauth_arc_for_task.lock() => oauth,
                     }
                 } else {
                     oauth_arc_for_task.lock().await
                 };
-                // Discovery, before any login: a restart or stop ends it.
+                // Discovery, before any login: a restart or stop ends it, and
+                // so does the start's deadline.
                 if let (Some(gate), Some(since)) = (&gate, since) {
                     tokio::select! {
                         biased;
                         () = gate.revoked_since(since) => return Err(cancelled()),
+                        () = crate::oauth::login_gate::past(deadline) => return Err(timed_out(gate)),
                         initialized = oauth.initialize() => initialized?,
                     }
                 } else {

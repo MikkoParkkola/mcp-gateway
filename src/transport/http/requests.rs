@@ -22,6 +22,7 @@ use super::{
 };
 use crate::gateway::trace;
 use crate::oauth::OAuthClient;
+use crate::oauth::login_gate::{self, Provenance};
 use crate::protocol::era::Era;
 use crate::protocol::meta::MODERN_VERSIONS;
 use crate::protocol::{
@@ -165,7 +166,6 @@ impl HttpTransport {
             })?;
             require_secure_oauth_target(&parsed)?;
 
-            use crate::oauth::login_gate::{self, Provenance};
             // A non-interactive caller (the health probe) never waits on the
             // client mutex a login holds for minutes, and never detaches
             // (MIK-7982 C2, MIK-8339).

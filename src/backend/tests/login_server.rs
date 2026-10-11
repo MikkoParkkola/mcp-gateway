@@ -20,6 +20,9 @@ pub(crate) enum Upstream {
     /// Hands out a session at the handshake, answers as `Plain` after it,
     /// and counts each session `DELETE` a close sends (MIK-8339).
     SessionHeld(&'static AtomicUsize),
+    /// Answers as `Plain`; once `on` is set, every authorization-server
+    /// metadata read is counted in `stalled` and never answers (MIK-8339).
+    MetadataStalls(&'static AtomicBool, &'static AtomicUsize),
 }
 
 /// How [`issuing_server_with`]'s token endpoint answers (MIK-8339).
@@ -100,37 +103,20 @@ pub(crate) async fn issuing_server_with(
             "/.well-known/oauth-authorization-server",
             get(move || {
                 let body = metadata.clone();
-                async move { Json(body) }
+                async move {
+                    if let Upstream::MetadataStalls(on, stalled) = upstream
+                        && on.load(Ordering::SeqCst)
+                    {
+                        stalled.fetch_add(1, Ordering::SeqCst);
+                        std::future::pending::<()>().await;
+                    }
+                    Json(body)
+                }
             }),
         )
         .route(
             "/token",
-            post(move |body: String| async move {
-                let grant = url::form_urlencoded::parse(body.as_bytes())
-                    .find(|(key, _)| key == "grant_type")
-                    .map(|(_, value)| value.into_owned())
-                    .unwrap_or_default();
-                match (token, grant.as_str()) {
-                    (TokenEndpoint::RefreshStalls, "refresh_token") => {
-                        std::future::pending::<()>().await;
-                    }
-                    (TokenEndpoint::ExchangeStallsAfter(n, seen), "authorization_code") => {
-                        if seen.fetch_add(1, Ordering::SeqCst) >= n {
-                            std::future::pending::<()>().await;
-                        }
-                    }
-                    _ => {}
-                }
-                let mut issued = json!({
-                    "access_token": "login-window-token",
-                    "token_type": "Bearer",
-                    "expires_in": expires_in,
-                });
-                if matches!(token, TokenEndpoint::RefreshStalls) {
-                    issued["refresh_token"] = json!("login-window-refresh");
-                }
-                Json(issued)
-            }),
+            post(move |body: String| token_answer(token, expires_in, body)),
         )
         .route(
             "/mcp",
@@ -143,4 +129,32 @@ pub(crate) async fn issuing_server_with(
         );
     tokio::spawn(async move { axum::serve(listener, app).await });
     origin
+}
+
+/// The token endpoint's answer to one grant, as `token` says (MIK-8339).
+async fn token_answer(token: TokenEndpoint, expires_in: u64, body: String) -> axum::Json<Value> {
+    let grant = url::form_urlencoded::parse(body.as_bytes())
+        .find(|(key, _)| key == "grant_type")
+        .map(|(_, value)| value.into_owned())
+        .unwrap_or_default();
+    match (token, grant.as_str()) {
+        (TokenEndpoint::RefreshStalls, "refresh_token") => {
+            std::future::pending::<()>().await;
+        }
+        (TokenEndpoint::ExchangeStallsAfter(n, seen), "authorization_code")
+            if seen.fetch_add(1, Ordering::SeqCst) >= n =>
+        {
+            std::future::pending::<()>().await;
+        }
+        _ => {}
+    }
+    let mut issued = json!({
+        "access_token": "login-window-token",
+        "token_type": "Bearer",
+        "expires_in": expires_in,
+    });
+    if matches!(token, TokenEndpoint::RefreshStalls) {
+        issued["refresh_token"] = json!("login-window-refresh");
+    }
+    axum::Json(issued)
 }
