@@ -869,6 +869,28 @@ The examples assume no repeated k-grams.
 when M <= N·P + 3·sqrt(N·P·(1 - P)). MIK-8196 measured M = 625 at N = 20,000, n = 19, against a
 bound of 694; with every k-gram kept, 0.
 
+**B1′ cut-middle sample (D1, MIK-8066.CAP.2).** A delivery over `RECORD_CAP` keeps its head and tail
+text. The rest of what the caller received is now also evidence through a thinned sample: the
+fingerprints of the cut minus those the receipt kept, each kept when `mix(fp) mod m = 0` (`mix` is the
+splitmix64 finalizer of the keyed fingerprint, so the choice depends only on the fingerprint).
+m is the smallest power of two at which the survivors fit the room left under the 4,096-per-delivery
+bound (B2). The sample is recorded under the caller's own records, so it also excuses the caller's
+own copy, with or without a sketch. A middle run of n distinct k-grams is missed when fewer than 2
+survive, with q = 1/(4m) each: P_miss(n) = (1 - q)^n + n·q·(1 - q)^(n - 1). At m = 1 this is B1.
+The bound starts to bind above about 16 KiB delivered. Assumptions: one text leaf, ASCII, no repeated
+k-grams, 48-char k-grams (an L-char relay has n = L - 47), head and tail of 6,144 chars (about 1,512
+sampled fingerprints).
+
+| delivery | m | miss, 200-char relay | 500-char | 1,000-char |
+|---|---|---|---|---|
+| 64 KiB | 8 | 4.6e-02 | 8.9e-06 | 2.3e-12 |
+| 1 MiB | 128 | 0.96 | 0.78 | 0.44 |
+
+Before this, every middle relay was missed. A thicker sample for large deliveries is a change to the
+4,096 bound (B2), whose cost is older evidence evicted from the shared map. Row
+`the_middle_sample_misses_within_its_budget` checks the formula with a seeded trial (fixed seed, exact
+binomial band); `the_selector_matches_the_published_rows` pins m = 1 / 8 / 128.
+
 **Determinism.** The sampling key is drawn once per process (`collusion.rs:303-305`), so which
 k-grams are kept cannot be predicted from outside. Inside one process a text always gets the same
 verdict, so a retry cannot draw a new sample (row `a_retried_relay_gets_the_same_verdict`). A row
@@ -933,7 +955,7 @@ middle of its own long answer, D2) are all in model.
 
 | Ticket | Direction | Class | Disposition |
 |---|---|---|---|
-| MIK-8066 CAP.2: the middle of a delivery over 6 KiB is never receipted | D1 | in model | Fix: a thinned sample of the cut middle as evidence, safe for holders because the cut-delivery sketch excuses their own copy; its miss rate is stated in B1 terms when it lands; after MIK-8200 |
+| MIK-8066 CAP.2: the middle of a delivery over 6 KiB is never receipted | D1 | in model | Fixed: a thinned sample of the cut middle as evidence, under the caller's own records (so its holder stays excused without a sketch); miss rate B1′ (14.3); row `the_middle_of_a_cut_delivery_is_evidence`, red on base |
 | MIK-8066 BIG.3 and remainder: plan answers or steps over 1 MiB lose receipts and excuses | D1, D2 | in model | Fix: streaming sketch build; the thinned sample |
 | MIK-8209 (from MIK-8035) residuals 1, 3: content items, labelled parts | D2 | in model | Fix: the per-key-path join |
 | MIK-8209 (from MIK-8035) residual 4: plan path has no run-together form | D2 and D1 | in model | Fix: the per-key-path join applied to the plan answer's k-grams |
