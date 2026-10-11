@@ -1,0 +1,44 @@
+diff --git a/src/gateway/meta_mcp/spec_preview.rs b/src/gateway/meta_mcp/spec_preview.rs
+index 143c7d139..ce52ae5a9 100644
+--- a/src/gateway/meta_mcp/spec_preview.rs
++++ b/src/gateway/meta_mcp/spec_preview.rs
+@@ -105,19 +105,10 @@ impl MetaMcp {
+             self.refresh_shared_behind_read(&backend);
+             // MIK-8356: the caller's own slot on a per-user backend; a cold one
+             // lists nothing. A shared backend is read as before.
+-            let cache_guard = match self.listing_view(&backend, scope) {
+-                super::listing_view::ListingView::Shared => {
+-                    if !backend.has_cached_tools() {
+-                        continue;
+-                    }
+-                    backend.get_cached_tools_snapshot()
+-                }
+-                super::listing_view::ListingView::Cold
+-                | super::listing_view::ListingView::NoView => continue,
+-                super::listing_view::ListingView::Caller(binding) => {
+-                    backend.get_cached_tools_snapshot_for(Some(&binding))
+-                }
+-            };
++            if !backend.has_cached_tools() {
++                continue;
++            }
++            let cache_guard = backend.get_cached_tools_snapshot();
+             for tool in cache_guard.iter() {
+                 let mut t = tool.clone();
+                 if !profile.tool_allowed(&t.name)
+@@ -221,14 +212,7 @@ impl MetaMcp {
+             if self.meta_route_isolation_refused(&backend) {
+                 continue;
+             }
+-            let found = match self.listing_view(&backend, scope) {
+-                super::listing_view::ListingView::Cold
+-                | super::listing_view::ListingView::NoView => None,
+-                super::listing_view::ListingView::Shared
+-                | super::listing_view::ListingView::Caller(_) => {
+-                    self.listing_tool(&backend, name, scope)
+-                }
+-            };
++            let found = backend.get_cached_tool(name);
+             if let Some(tool) = found
+                 && self.shows_tool(&backend.name, &tool, scope, session_id)
+             {

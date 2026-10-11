@@ -1,0 +1,23 @@
+diff --git a/src/gateway/meta_mcp/spec_preview.rs b/src/gateway/meta_mcp/spec_preview.rs
+index 143c7d139..09d0b7ea6 100644
+--- a/src/gateway/meta_mcp/spec_preview.rs
++++ b/src/gateway/meta_mcp/spec_preview.rs
+@@ -96,7 +96,6 @@ impl MetaMcp {
+             // the fill below can ask it anything (MIK-7962).
+             if !profile.backend_allowed(&backend.name)
+                 || !scope.authorizer.admits_backend(&backend.name)
+-                || self.meta_route_isolation_refused(&backend)
+             {
+                 continue;
+             }
+@@ -217,10 +216,6 @@ impl MetaMcp {
+ 
+         // Check MCP backends
+         for backend in self.backends.all() {
+-            // INV-2 (MIK-6742): skip OAuth-isolated backends on a multi-user gateway.
+-            if self.meta_route_isolation_refused(&backend) {
+-                continue;
+-            }
+             let found = match self.listing_view(&backend, scope) {
+                 super::listing_view::ListingView::Cold
+                 | super::listing_view::ListingView::NoView => None,
