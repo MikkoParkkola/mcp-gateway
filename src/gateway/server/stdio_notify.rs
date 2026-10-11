@@ -79,7 +79,11 @@ impl Gateway {
         tool_policy: &std::sync::Arc<crate::security::ToolPolicy>,
         mtls_policy: &std::sync::Arc<crate::mtls::MtlsPolicy>,
         batch: serde_json::Value,
-        (session_id, sanitize): (&str, super::stdio_single::InputSanitizing),
+        (session_id, sanitize, serving): (
+            &str,
+            super::stdio_single::InputSanitizing,
+            super::stdio_single::ModernServing,
+        ),
         protocol_telemetry_sink: &super::StdioTelemetry,
         reads: &StdioReads,
     ) -> Vec<OutboundFrame> {
@@ -115,7 +119,10 @@ impl Gateway {
                         handshake_capabilities: crate::protocol::meta::Declared::NONE,
                         // A batch is a legacy shape; it serves no `tasks/*`.
                         tasks: None,
-                        modern: false,
+                        // Judged by the process setting like any request; only
+                        // the discover listing is the legacy set (MIK-8380).
+                        serving,
+                        discover: super::stdio_single::DiscoverListing::LegacyOnly,
                         // Each item is sanitized as a single request is.
                         sanitize,
                     },
@@ -156,7 +163,11 @@ impl Gateway {
             tool_policy,
             mtls_policy,
             batch,
-            (session_id, super::stdio_single::InputSanitizing::Off),
+            (
+                session_id,
+                super::stdio_single::InputSanitizing::Off,
+                super::stdio_single::ModernServing::Disabled,
+            ),
             protocol_telemetry_sink,
             &reads,
         )
