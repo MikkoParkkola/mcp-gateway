@@ -205,3 +205,41 @@ fn any_sig_field_marks_an_entry_signed() {
     }
     assert!(!is_signed_entry(&serde_json::json!({"counter": 1})));
 }
+
+/// A null `sig` still marks an entry signed, through the scan `audit verify`
+/// uses and through the exporter alike: it cannot open a hash-only path.
+#[test]
+fn a_null_sig_is_refused_by_verify_and_export_alike() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("inv.jsonl");
+    write_log(&log, "");
+    let content = std::fs::read_to_string(&log).expect("read");
+    let mut lines: Vec<serde_json::Value> = content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).expect("json"))
+        .collect();
+    let last = lines.last_mut().expect("an entry");
+    last.as_object_mut()
+        .expect("object")
+        .insert("sig".into(), serde_json::Value::Null);
+    let mut rewritten = lines
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    rewritten.push('\n');
+    std::fs::write(&log, rewritten).expect("write");
+
+    assert!(
+        log_contains_signed_entry(&log).expect("scan"),
+        "verify sees it as signed"
+    );
+    let sink = CollectingSink::new();
+    let mut exp = keyless_exporter(dir.path(), &log);
+    assert!(
+        matches!(exp.poll(&sink), Err(ExportError::VerificationFailed(m)) if m.contains("no signing key")),
+        "export refuses it too"
+    );
+    assert!(sink.delivered().is_empty());
+}

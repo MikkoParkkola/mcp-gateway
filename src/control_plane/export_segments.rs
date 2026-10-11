@@ -230,8 +230,8 @@ impl LogExporter {
             && crate::security::transparency_log::is_signed_entry(entry)
         {
             return Err(ExportError::VerificationFailed(format!(
-                "entry {stored_hash} is signed but no signing key is configured; refusing \
-                 hash-only export"
+                "entry {stored_hash} is signed but no signing key is configured \
+                 (security.transparency_log.shared_secret is empty); refusing hash-only export"
             )));
         }
         // Per-entry HMAC when a secret is configured (MIK-6700 HMAC.3).
