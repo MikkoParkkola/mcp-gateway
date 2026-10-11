@@ -39,6 +39,8 @@ struct Script {
     written: Vec<u8>,
     flushed: bool,
     waker: Option<Waker>,
+    /// `poll_write` calls that returned Pending.
+    pends: usize,
 }
 
 #[derive(Clone, Default)]
@@ -61,6 +63,9 @@ impl Scripted {
     fn flushed(&self) -> bool {
         self.0.lock().unwrap().flushed
     }
+    fn pends(&self) -> usize {
+        self.0.lock().unwrap().pends
+    }
 }
 
 impl AsyncWrite for Scripted {
@@ -81,6 +86,7 @@ impl AsyncWrite for Scripted {
         };
         if room == 0 {
             script.waker = Some(cx.waker().clone());
+            script.pends += 1;
             return Poll::Pending;
         }
         let n = room.min(buf.len());
@@ -194,6 +200,7 @@ async fn a_write_pending_before_any_byte_finishes_whole_after_its_caller_is_drop
         mode: Mode::AcceptBeforeGate(0),
         ..Script::default()
     });
+    let before = handed_over();
     let mut caller = Box::pin(finish_whole(write_of(&writer)));
     assert!(
         futures::poll!(caller.as_mut()).is_pending(),
@@ -203,10 +210,44 @@ async fn a_write_pending_before_any_byte_finishes_whole_after_its_caller_is_drop
         writer.written().is_empty(),
         "precondition: nothing written yet"
     );
+    assert_eq!(
+        handed_over() - before,
+        1,
+        "the pending write was handed over"
+    );
     drop(caller);
     writer.open_gate();
     yield_until("the handed-over write finishes", || writer.flushed()).await;
     assert_eq!(writer.written(), frame());
+}
+
+/// The gate opens only after the handed-over task has itself polled and
+/// pended, so the wake goes to the waker that task registered, not to the
+/// no-op waker of the in-place poll. A lost wake would leave it pending.
+#[tokio::test]
+async fn a_handed_over_write_is_woken_by_its_own_waker() {
+    let writer = Scripted::new(Script {
+        mode: Mode::AcceptBeforeGate(5),
+        ..Script::default()
+    });
+    let mut caller = Box::pin(finish_whole(write_of(&writer)));
+    assert!(
+        futures::poll!(caller.as_mut()).is_pending(),
+        "precondition: the write pends"
+    );
+    assert_eq!(
+        writer.pends(),
+        1,
+        "precondition: only the in-place poll pended"
+    );
+    drop(caller);
+    yield_until("the handed-over task polls and pends", || {
+        writer.pends() >= 2
+    })
+    .await;
+    writer.open_gate();
+    yield_until("its own waker wakes it", || writer.flushed()).await;
+    assert_eq!(writer.written(), frame(), "byte for byte, once");
 }
 
 /// Every byte written, the flush still pending: handed over, and the flush
@@ -236,9 +277,15 @@ async fn a_write_error_reaches_the_caller() {
         mode: Mode::Fail,
         ..Script::default()
     });
+    let before = handed_over();
     let outcome = finish_whole(write_of(&writer)).await;
     assert!(
         matches!(&outcome, Err(Error::Transport(m)) if m.contains("scripted write failure")),
         "{outcome:?}"
+    );
+    assert_eq!(
+        handed_over() - before,
+        0,
+        "an error in the first poll takes no task hop"
     );
 }

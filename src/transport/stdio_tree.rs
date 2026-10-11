@@ -87,7 +87,7 @@ pub(super) async fn write_frame(
 }
 
 /// Write `frame` and flush it, or give up once `shutdown` is cancelled.
-async fn write_whole<W: tokio::io::AsyncWrite + Unpin>(
+async fn write_whole<W: tokio::io::AsyncWrite + Unpin + Send>(
     stdin: &mut W,
     frame: &[u8],
     shutdown: &tokio_util::sync::CancellationToken,
@@ -108,12 +108,17 @@ async fn write_whole<W: tokio::io::AsyncWrite + Unpin>(
 ///
 /// The write is polled once in place: a frame that fits the pipe completes
 /// there with no task hop (MIK-7536, the hop cost a thread handoff per call).
-/// Still pending, the SAME boxed future, progress kept, moves to its own task
-/// that the caller only awaits. There is no `.await` between that poll and
-/// the spawn, so a caller dropped at any await point cannot cut the frame:
-/// before the poll nothing is written; after it the task owns the write.
+/// That is the common case on a Unix pipe with buffer room and task budget
+/// left; a write not ready on that poll (a full pipe, an exhausted budget, a
+/// blocking-backed stdin as on Windows) takes the task path, which is correct,
+/// only slower. Still pending, the SAME boxed future, progress kept, moves to
+/// its own task that the caller only awaits. There is no `.await` between that
+/// poll and the spawn, so a caller dropped at any await point cannot cut the
+/// frame: before the poll nothing is written; after it the task owns the write.
 /// What this does not promise, as before: shutdown, an I/O error or runtime
-/// teardown can still end a frame early.
+/// teardown can still end a frame early. One difference from a spawn-only
+/// write: under `panic = "unwind"` (tests) a panic in the first poll unwinds
+/// the caller instead of arriving as a `JoinError`; release builds abort.
 async fn finish_whole<F>(write: F) -> Result<()>
 where
     F: std::future::Future<Output = Result<()>> + Send + 'static,
