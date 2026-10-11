@@ -149,6 +149,19 @@ impl DirectAccountGateway {
         self.custody.refreshes()
     }
 
+    /// Revoke the sole operator's seeded grant and reconnect it under a new
+    /// generation, through live custody (MIK-8356: the old slot stays warm and
+    /// indexed, but no longer belongs to the current grant).
+    pub(crate) async fn rotate_operator_grant(&self) {
+        revoke_and_reconnect(
+            &self.custody,
+            &operator_key(),
+            &grant(ALICE_WORK_TOKEN, u64::MAX),
+            ROTATED_TOKEN,
+        )
+        .await;
+    }
+
     /// The per-user slot the sole operator's seeded grant selects.
     pub(crate) fn operator_binding() -> String {
         expected_identity_key_for(&operator_key(), SEEDED_REVISION)
