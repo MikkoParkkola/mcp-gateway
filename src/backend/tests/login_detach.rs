@@ -324,3 +324,74 @@ async fn a_forced_restart_leads_a_fresh_login_after_its_own_cancel() {
         "the restart shared a cancelled login instead of leading its own: {restarted:?}"
     );
 }
+
+/// LOGINDL.9: a deadline that fires during a stalled REFRESH, with no login
+/// open, is the backend's timeout, not `AuthorizationPending`: the caller
+/// marks itself waited only when a login is actually in flight. Green at base
+/// (the refresh runs inline and marks nothing); after the change it fails if
+/// the caller marks waited unconditionally before detaching.
+#[tokio::test]
+async fn a_deadline_during_a_stalled_refresh_is_not_a_pending_login() {
+    let (backend, browser, _dir) = super::login_window::approved_start_full(
+        Upstream::Plain,
+        Duration::from_secs(1),
+        super::login_window::Account::PerUser,
+        super::login_window::TokenEndpoint::RefreshStalls,
+    )
+    .await;
+    super::token_lapse::lapse(&backend).await;
+    assert!(
+        !backend.login_gate.in_flight(),
+        "premise: no login in flight"
+    );
+
+    let error = within(
+        "the fill's own deadline",
+        Box::pin(backend.tools_for_check(None, &[], false)),
+    )
+    .await
+    .expect_err("the refresh never answers");
+
+    assert_eq!(browser.opens(), 1, "premise: a refresh, not a login");
+    assert!(
+        !variant(&error).starts_with("AuthorizationPending"),
+        "a deadline spent on a refresh is not a pending login: {error:?}"
+    );
+}
+
+/// LOGINDL.18a: a stop ends a login whose code exchange stalled after the
+/// person approved: the exchange waits under the Lead's cancel, so the stop
+/// returns, and the caller ends `AuthorizationCancelled`. Red at base: the
+/// exchange is not cancellable, and the stop waits on it.
+#[tokio::test]
+async fn a_stop_ends_a_login_stalled_in_its_code_exchange() {
+    static EXCHANGES: AtomicUsize = AtomicUsize::new(0);
+    let (backend, browser, _dir) = super::login_window::approved_start_full(
+        Upstream::Plain,
+        Duration::from_secs(30),
+        super::login_window::Account::PerUser,
+        super::login_window::TokenEndpoint::ExchangeStallsAfter(1, &EXCHANGES),
+    )
+    .await;
+    super::token_lapse::lapse(&backend).await;
+
+    let call = spawn_call(&backend);
+    let url = browser.opened(2, "the call's request-time login").await;
+    assert!(
+        approve_if_listening(&url).await,
+        "premise: the login was listening"
+    );
+    super::token_lapse::arrived(&EXCHANGES, 2, "the stalled code exchange").await;
+
+    let stopped = tokio::time::timeout(Duration::from_secs(20), backend.stop()).await;
+    assert!(
+        stopped.is_ok(),
+        "the stop waited on a stalled code exchange"
+    );
+    let called = within("the call", call).await.expect("call task");
+    let error = called.expect_err("a stopped backend's login stores no token");
+    assert!(
+        variant(&error).starts_with("AuthorizationCancelled"),
+        "the stalled login ends Cancelled: {error:?}"
+    );
+}

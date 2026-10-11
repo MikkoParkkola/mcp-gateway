@@ -582,10 +582,32 @@ pub(crate) enum Upstream {
     SessionHeld(&'static AtomicUsize),
 }
 
+/// How [`issuing_server_with`]'s token endpoint answers (MIK-8339).
+#[derive(Clone, Copy)]
+pub(crate) enum TokenEndpoint {
+    /// Every grant at once, with no refresh token.
+    Plain,
+    /// Issues a refresh token with each access token; a `refresh_token`
+    /// grant never answers.
+    RefreshStalls,
+    /// The first `n` `authorization_code` grants answer at once; every later
+    /// one never answers (a code exchange stalled after approval).
+    ExchangeStallsAfter(usize, &'static AtomicUsize),
+}
+
 /// An authorization server that issues a token good for `expires_in` seconds
 /// (no refresh token), and an MCP endpoint at `/mcp` that answers the
 /// handshake and behaves as `upstream` says. Returns its origin.
 async fn issuing_server(expires_in: u64, upstream: Upstream) -> String {
+    issuing_server_with(expires_in, upstream, TokenEndpoint::Plain).await
+}
+
+/// [`issuing_server`] with an explicit [`TokenEndpoint`].
+pub(crate) async fn issuing_server_with(
+    expires_in: u64,
+    upstream: Upstream,
+    token: TokenEndpoint,
+) -> String {
     use axum::http::{HeaderMap, StatusCode};
     use axum::{Json, Router, routing::get, routing::post};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -648,12 +670,31 @@ async fn issuing_server(expires_in: u64, upstream: Upstream) -> String {
         )
         .route(
             "/token",
-            post(move || async move {
-                Json(json!({
+            post(move |body: String| async move {
+                let grant = url::form_urlencoded::parse(body.as_bytes())
+                    .find(|(key, _)| key == "grant_type")
+                    .map(|(_, value)| value.into_owned())
+                    .unwrap_or_default();
+                match (token, grant.as_str()) {
+                    (TokenEndpoint::RefreshStalls, "refresh_token") => {
+                        std::future::pending::<()>().await;
+                    }
+                    (TokenEndpoint::ExchangeStallsAfter(n, seen), "authorization_code") => {
+                        if seen.fetch_add(1, Ordering::SeqCst) >= n {
+                            std::future::pending::<()>().await;
+                        }
+                    }
+                    _ => {}
+                }
+                let mut issued = json!({
                     "access_token": "login-window-token",
                     "token_type": "Bearer",
                     "expires_in": expires_in,
-                }))
+                });
+                if matches!(token, TokenEndpoint::RefreshStalls) {
+                    issued["refresh_token"] = json!("login-window-refresh");
+                }
+                Json(issued)
             }),
         )
         .route(
@@ -715,7 +756,17 @@ pub(crate) async fn approved_start_with(
     timeout: Duration,
     account: Account,
 ) -> (Arc<Backend>, Arc<Browser>, tempfile::TempDir) {
-    let origin = issuing_server(3600, upstream).await;
+    approved_start_full(upstream, timeout, account, TokenEndpoint::Plain).await
+}
+
+/// [`approved_start_with`] with an explicit [`TokenEndpoint`].
+pub(crate) async fn approved_start_full(
+    upstream: Upstream,
+    timeout: Duration,
+    account: Account,
+    token: TokenEndpoint,
+) -> (Arc<Backend>, Arc<Browser>, tempfile::TempDir) {
+    let origin = issuing_server_with(3600, upstream, token).await;
     let dir = tempfile::tempdir().unwrap();
     let browser = Browser::new();
     let backend = login_backend_with(&origin, dir.path(), &browser, timeout, None, account);
