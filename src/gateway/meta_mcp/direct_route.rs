@@ -138,6 +138,33 @@ impl MetaMcp {
         self.caller_principal(backend.account_descriptor_id(), caller)
     }
 
+    /// Record that `caller`'s own catalogue is the one in per-user slot
+    /// `binding` on `backend`, after a fill that read it (design R3.5). A
+    /// Passthrough backend is never indexed: its caller's credential reaches
+    /// the gateway only on the direct route, so no name-only reader could
+    /// select its slot (design R4.2).
+    pub(crate) fn remember_caller_slot(
+        &self,
+        backend: &crate::backend::Backend,
+        caller: crate::identity_propagation::CallerProof<'_>,
+        binding: Option<&str>,
+    ) {
+        let Some(binding) = binding else {
+            return;
+        };
+        if backend.identity_propagation_config().is_some_and(|idp| {
+            matches!(
+                idp.strategy,
+                crate::identity_propagation::PropagationStrategyKind::Passthrough
+            )
+        }) {
+            return;
+        }
+        if let Some(principal) = self.principal_for(backend, caller) {
+            backend.record_caller_slot(&principal.stable_actor_id(), binding);
+        }
+    }
+
     /// The binding of the slot holding `caller`'s own catalogue on `backend`,
     /// if warm (MIK-8356 design R3.5; the read API agreed with MIK-8350).
     /// Synchronous and side-effect free: no mint, no fill, no slot creation.

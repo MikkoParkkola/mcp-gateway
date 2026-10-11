@@ -195,6 +195,7 @@ impl MetaMcp {
             )
             .await
             {
+                self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
                 let enriched: Vec<_> = tools
                     .iter()
                     .filter(|t| profile.tool_allowed(&t.name))
@@ -301,6 +302,7 @@ impl MetaMcp {
                 Self::backend_tools_for_discovery(&backend, false, binding.as_deref(), &headers)
                     .await
             {
+                self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
                 let enriched: Vec<_> = tools
                     .iter()
                     .filter(|t| profile.tool_allowed(&t.name))
@@ -517,9 +519,11 @@ impl MetaMcp {
             return Err(Error::BackendNotFound(server.to_string()));
         };
 
-        let tools: Vec<_> = backend
+        let fetched = backend
             .get_tools_for_binding(binding.as_deref(), &headers)
-            .await?
+            .await?;
+        self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
+        let tools: Vec<_> = fetched
             .as_ref()
             .clone()
             .into_iter()
@@ -598,6 +602,7 @@ impl MetaMcp {
                 Self::backend_tools_for_discovery(&backend, false, binding.as_deref(), &headers)
                     .await
             {
+                self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
                 for tool in tools.iter() {
                     if !profile.tool_allowed(&tool.name)
                         || !tool_matches_role(tool, role_filter)

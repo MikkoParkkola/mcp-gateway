@@ -101,6 +101,11 @@ pub struct Backend {
     /// not spawn duplicate connections for the same slot and distinct users
     /// never share a session (IDP.7).
     pool: DashMap<PoolKey, Arc<PooledEntry>>,
+    /// Which per-user slot holds each caller's own catalogue (MIK-8356,
+    /// design R3.5): caller principal id to that slot's binding and entry.
+    /// Written when a fill stores into the slot, removed with the entry
+    /// (`retire`), so an entry lives exactly as long as its slot.
+    caller_slots: DashMap<String, caller_slots::CallerSlot>,
     /// Failsafe configuration, cloned so a freshly created pool slot
     /// (`pooled_entry`) can build its own independent `Failsafe` (MIK-6735
     /// fix 1). The per-backend `Failsafe` this replaced is gone; every slot,
