@@ -435,11 +435,13 @@ pub(super) fn cancelled_bytes(
         return Ok(0);
     };
     cancelled.revision = u64::MAX;
-    // The pending claim that follows (MIK-8347) needs no reservation of its
-    // own: it drops the descriptor's tool, arguments and operation digest,
-    // which outweigh its counters, so it is never wider than this row. T8b
-    // pins that at the tightest budget.
-    Ok(serialize(&cancelled)?.len())
+    let bytes = serialize(&cancelled)?.len();
+    // And once its cancel is claimed pending (MIK-8347), at its widest.
+    let Some(descriptor) = cancelled.upstream.clone() else {
+        return Ok(bytes);
+    };
+    super::pending_cancel::widest_pending_claim(task, &mut cancelled, &descriptor);
+    Ok(bytes.max(serialize(&cancelled)?.len()))
 }
 
 /// The encoded size of the bounded failure `record` would settle as, at its
