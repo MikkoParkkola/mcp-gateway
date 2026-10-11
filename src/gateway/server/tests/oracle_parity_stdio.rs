@@ -25,6 +25,15 @@ enum Side {
     Absent,
 }
 
+/// Why the withheld twin cannot see [`TOOL`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reason {
+    /// stdio's tool policy denies it.
+    Policy,
+    /// Its input schema is structurally invalid (ORACLE.5).
+    Schema,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Entry {
     Invoke,
@@ -33,13 +42,17 @@ enum Entry {
 }
 
 /// A loopback backend serving the side's catalogue, counting `tools/call`s.
-async fn serve(holds: bool) -> (String, Arc<AtomicUsize>) {
+async fn serve(holds: bool, reason: Reason) -> (String, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&calls);
     let mut tools = vec![json!({"name": SIBLING, "inputSchema": {"type": "object"}})];
     if holds {
-        tools.push(json!({"name": TOOL, "description": "Reads a record.",
-            "inputSchema": {"type": "object"}}));
+        let schema = if reason == Reason::Schema {
+            json!({"type": "array"})
+        } else {
+            json!({"type": "object"})
+        };
+        tools.push(json!({"name": TOOL, "description": "Reads a record.", "inputSchema": schema}));
     }
     let tools = Value::Array(tools);
     let app = axum::Router::new().route(
@@ -80,11 +93,11 @@ struct Twin {
 
 /// Build `side`'s stdio twin, warm, with [`TOOL`] surfaced unless this is a
 /// surfaced row's absent twin (which maps the name to no backend).
-async fn twin(side: Side, surface_tool: bool) -> Twin {
-    let (url, calls) = serve(side == Side::Withheld).await;
-    let denied = match side {
-        Side::Withheld => TOOL,
-        Side::Absent => "other",
+async fn twin(side: Side, reason: Reason, surface_tool: bool) -> Twin {
+    let (url, calls) = serve(side == Side::Withheld, reason).await;
+    let denied = match (reason, side) {
+        (Reason::Policy, Side::Withheld) => TOOL,
+        _ => "other",
     };
     let policy = crate::security::ToolPolicy::from_config(&crate::security::ToolPolicyConfig {
         deny: vec![denied.to_string()],
@@ -111,11 +124,15 @@ async fn twin(side: Side, surface_tool: bool) -> Twin {
         .expect("warm the catalogue");
     // v2 item 2: the withheld twin's catalogue holds the name, the absent
     // twin's lacks it.
-    assert_eq!(
-        backend.get_cached_tool(TOOL).is_some(),
-        side == Side::Withheld,
-        "premise: {side:?} catalogue"
-    );
+    let cached = backend.get_cached_tool(TOOL);
+    assert_eq!(cached.is_some(), side == Side::Withheld, "premise: {side:?} catalogue");
+    if let Some(cached) = cached {
+        assert_eq!(
+            crate::capability::validator::input_schema_is_structurally_valid(&cached.input_schema),
+            reason != Reason::Schema,
+            "premise: schema validity"
+        );
+    }
     Twin { fixture, calls }
 }
 
@@ -140,7 +157,8 @@ impl Twin {
     }
 }
 
-/// ORACLE.2 on stdio, policy reason: every entry, clean and tripping. RED on
+/// ORACLE.2 / ORACLE.5 on stdio, policy and schema reasons: every entry,
+/// clean and tripping; a schema-withheld tool is never sent. RED on
 /// base for the entries that name a backend; the surfaced name is MIK-8340's
 /// (green on base, mutant MS1).
 #[tokio::test]
@@ -148,15 +166,19 @@ async fn oracle2_stdio_policy_answers_as_the_missing_name() {
     let cmd = [";", " rm", " -rf", " / "].concat();
     let tripping = json!({ "cmd": cmd });
     let mut cells = Vec::new();
-    for entry in [Entry::Invoke, Entry::Execute, Entry::Surfaced] {
-        for (label, args) in [("clean", json!({})), ("tripping", tripping.clone())] {
-            let surfaced = matches!(entry, Entry::Surfaced);
-            let (withheld, sent) = twin(Side::Withheld, true).await.call(entry, &args).await;
-            let (absent, _) = twin(Side::Absent, !surfaced).await.call(entry, &args).await;
-            if withheld != absent || sent != 0 {
-                cells.push(format!(
-                    "stdio {entry:?}/{label}: withheld {withheld} (sends {sent}) vs absent {absent}"
-                ));
+    for reason in [Reason::Policy, Reason::Schema] {
+        for entry in [Entry::Invoke, Entry::Execute, Entry::Surfaced] {
+            for (label, args) in [("clean", json!({})), ("tripping", tripping.clone())] {
+                let surfaced = matches!(entry, Entry::Surfaced);
+                let withheld = twin(Side::Withheld, reason, true).await;
+                let (withheld, sent) = withheld.call(entry, &args).await;
+                let absent = twin(Side::Absent, reason, !surfaced).await;
+                let (absent, _) = absent.call(entry, &args).await;
+                if withheld != absent || sent != 0 {
+                    cells.push(format!(
+                        "stdio {reason:?} {entry:?}/{label}: withheld {withheld} (sends {sent}) vs absent {absent}"
+                    ));
+                }
             }
         }
     }

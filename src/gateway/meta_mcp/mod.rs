@@ -119,6 +119,7 @@ mod task_replay;
 pub(crate) mod upstream;
 mod visibility;
 pub(crate) mod visible;
+pub(crate) mod withheld_gate;
 
 pub use visibility::InvokeScope;
 
@@ -817,6 +818,8 @@ mod grant_slot_wrap_tests;
 /// MIK-8340 row 7: a failed grant record on a withheld name answers as absent.
 #[cfg(test)]
 mod grant_withheld_parity_tests;
+#[cfg(test)]
+mod oracle_audit_tests;
 #[cfg(test)]
 mod guide_alloc_tests;
 #[cfg(test)]

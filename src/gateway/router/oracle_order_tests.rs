@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-8361 ordering rows (test plan v3): the gate answers a name the caller
 //! cannot see before anything caller-specific acts. E1 a mixed chain, K1-K3
-//! fills and backend-wide refusals, O1-O4 signing, task admission, replay
-//! and confirmation. The twins are `oracle_parity_fixture`'s.
+//! fills and backend-wide refusals, O1-O3 signing, task admission and replay,
+//! B1 the dispatch-time backstop. O4 is folded (see the PR ledger). The
+//! twins are `oracle_parity_fixture`'s.
 
 use std::sync::atomic::Ordering;
 
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::direct_guards_fixture::{Fx, send};
 use super::oracle_parity_fixture::{
@@ -190,52 +191,19 @@ async fn o3_a_retained_result_is_not_replayed_for_an_invisible_name() {
     assert_cells("O3", &cells);
 }
 
-/// O4: a destructive name the caller cannot see draws no X14 confirmation
-/// challenge on a task-augmented call; the control (`k-std`, which may see
-/// it) is challenged. (A plain modern call is not challenged at all, so the
-/// task form is the one that reaches the confirmation gate.)
+/// B1: a withheld target let past the gate (test seam) is answered by the
+/// dispatch-time recheck with the absent answer, never its specific refusal,
+/// and is not sent. RED on base: the route stage's policy refusal names it.
 #[tokio::test]
-async fn o4_a_withheld_destructive_call_draws_no_confirmation() {
-    let challenged = |body: &Value| {
-        body.pointer("/result/resultType") == Some(&json!("input_required"))
-            || body.pointer("/error/code") == Some(&json!(-32003))
-    };
-    let state = State {
-        destructive: true,
-        ..State::WARM
-    };
-    let control_twin = twin(Side::Withheld, state).await;
-    let control = {
-        let mut meta = super::tests::modern_meta();
-        meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("o4");
-        let params = json!({"name": "gateway_invoke", "arguments":
-            {"server": SERVER, "tool": TOOL, "arguments": {}},
-            "task": {}, "_meta": meta});
-        let headers = [
-            ("mcp-protocol-version", "2026-07-28"),
-            ("mcp-method", "tools/call"),
-            ("mcp-name", "gateway_invoke"),
-        ];
-        let (status, body) = super::direct_guards_fixture::send_with_headers(
-            &control_twin.fx,
-            "/mcp",
-            "k-std",
-            "tools/call",
-            params,
-            None,
-            &headers,
-        )
-        .await;
-        control_twin.answered(status, body)
-    };
-    assert!(challenged(&control.body), "premise: the control is not challenged: {}", control.body);
-    let extra = json!({"task": {}, "_meta": {crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "o4"}});
-    let withheld = twin(Side::Withheld, state).await.invoke_modern(TOOL, json!({}), &extra).await;
-    let absent = twin(Side::Absent, state).await.invoke_modern(TOOL, json!({}), &extra).await;
+async fn b1_the_dispatch_backstop_answers_a_withheld_target_absent() {
     let mut cells = Vec::new();
-    if challenged(&withheld.body) {
-        cells.push(format!("O4: the withheld call was challenged: {}", withheld.body));
+    for entry in [Entry::Invoke, Entry::Direct] {
+        let withheld = twin(Side::Withheld, State::WARM).await;
+        let absent = twin(Side::Absent, State::WARM).await;
+        crate::gateway::meta_mcp::withheld_gate::seams::skip_gate_for_test();
+        let w = withheld.call(entry, json!({})).await;
+        let a = absent.call(entry, json!({})).await;
+        cells.extend(mismatch(&format!("B1 {entry:?}"), &w, &a));
     }
-    cells.extend(mismatch("O4", &withheld, &absent));
-    assert_cells("O4", &cells);
+    assert_cells("B1", &cells);
 }
