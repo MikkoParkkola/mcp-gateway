@@ -98,7 +98,7 @@ async fn playbook_and_code_mode_refused_under_enforce_keyed() {
     caller.retry = &retry;
     for (tool, args) in plans() {
         let error = meta
-            .admit_meta_sync(
+            .admit_meta_sync_for_test(
                 crate::gateway::meta_mcp::AdmissionOwner::for_test(caller.owner_principal()),
                 &caller,
                 tool,

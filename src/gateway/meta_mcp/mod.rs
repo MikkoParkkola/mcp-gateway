@@ -98,6 +98,7 @@ mod interim_promotion_tests;
 pub(crate) mod invoke;
 mod prompt_cache;
 mod protocol;
+pub(crate) mod refund_witness;
 mod resources;
 pub(crate) mod response_security;
 pub(crate) use response_security::error_response_preserving_status;
