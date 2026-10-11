@@ -498,3 +498,80 @@ async fn i2g_index_written_by_the_direct_route_catalogue_check() {
         "I2g: the direct-route check wrote no index entry"
     );
 }
+
+/// A modern keyed `tools/call` of [`TOOL`] on the direct route as alpha.
+async fn keyed_direct_call_as_alpha(gw: &Gateway, key: &str) -> (StatusCode, Value) {
+    let mut meta = super::tests::modern_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    let body = json!({"jsonrpc": "2.0", "id": 22, "method": "tools/call",
+        "params": {"name": TOOL, "arguments": {"q": "x"}, "_meta": meta}});
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri(direct())
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", TOOL)
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    request
+        .extensions_mut()
+        .insert(crate::key_server::oidc::VerifiedIdentity {
+            subject: "alpha".to_string(),
+            email: "alpha@example.invalid".to_string(),
+            name: None,
+            groups: vec![],
+            issuer: "https://issuer.example.invalid".to_string(),
+        });
+    let response = tower::ServiceExt::oneshot(gw.router.clone(), request)
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// R1-direct (guard; pins the direct route's order): alpha's keyed direct
+/// call of [`TOOL`] dispatches while alpha's catalogue offers it; alpha's
+/// catalogue then withholds it. The same call with the same key answers
+/// -32601 and serves no stored result: the direct route judges the caller's
+/// catalogue (`key_refusal`, in `guard_and_sanitize`) before the execution
+/// lease can replay. Green at head; the order-swap mutant turns it red.
+#[tokio::test]
+async fn r1_direct_keyed_replay_after_the_callers_catalogue_withholds_answers_absent() {
+    use crate::gateway::meta_mcp::slot_verdict_fixture::{BINDING, invalid};
+    let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
+    let first = keyed_direct_call_as_alpha(&gw, "r1-direct").await;
+    assert_eq!(
+        gw.dispatched(),
+        1,
+        "premise: the first call dispatches: {first:?}"
+    );
+    assert!(
+        first.1.get("error").is_none(),
+        "premise: the first call is answered: {first:?}"
+    );
+    let withheld: crate::protocol::Tool =
+        serde_json::from_value(json!({"name": TOOL, "inputSchema": invalid()})).expect("a tool");
+    gw.meta
+        .backends
+        .get(BACKEND)
+        .expect("the backend")
+        .store_per_user_tools_for_test(BINDING, vec![withheld]);
+    let replay = keyed_direct_call_as_alpha(&gw, "r1-direct").await;
+    assert_eq!(
+        replay.1.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "R1-direct: a withheld tool's keyed retry was answered: {replay:?}"
+    );
+    assert_eq!(
+        gw.dispatched(),
+        1,
+        "R1-direct: the retry dispatched: {replay:?}"
+    );
+}

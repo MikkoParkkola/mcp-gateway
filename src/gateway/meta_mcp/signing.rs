@@ -294,6 +294,16 @@ impl SigningInvocationContext {
         }
     }
 
+    /// [`Self::external_for_test`] that signing already prepared for
+    /// `server`'s `tool`, as `prepare_signing_invocation` leaves it.
+    #[cfg(test)]
+    pub(crate) fn prepared_for_test(server: &str, tool: &str) -> Self {
+        Self {
+            prepared_target: Some((server.to_owned(), tool.to_owned())),
+            ..Self::external_for_test(None)
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn invalid_for_test() -> Self {
         Self {
