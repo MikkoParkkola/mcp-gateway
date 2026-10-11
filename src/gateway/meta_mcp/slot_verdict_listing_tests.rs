@@ -425,6 +425,128 @@ async fn l7_passthrough_backend_tools_withheld_from_name_only_listings() {
     );
 }
 
+/// L7b (test plan L7 second half, gpt tp F13; kills M10): a passthrough
+/// fill publishes no index entry, and an entry that reached the index anyway
+/// still selects nothing. Every fill site (catalogue, direct-route drain,
+/// F13) indexes through `remember_caller_slot`, so the row calls it exactly
+/// as the direct-route drain does after alpha's passthrough listing.
+#[tokio::test]
+async fn l7b_passthrough_fills_publish_no_index_entry() {
+    use super::slot_verdict_fixture::{BINDING, per_user_backend_with, per_user_on};
+    let (backend, caller, shared) = per_user_backend_with(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Warm,
+        CLOSED,
+        |config| {
+            if let Some(idp) = config.identity_propagation.as_mut() {
+                idp.strategy = crate::identity_propagation::PropagationStrategyKind::Passthrough;
+            }
+        },
+    );
+    let fx = per_user_on(
+        std::sync::Arc::clone(&backend),
+        caller,
+        shared,
+        Surfaced::Yes,
+    );
+    let alpha = super::catalogue_per_caller_tests::identity("alpha");
+    let proof = super::MetaMcp::proof_of(&super::identified_caller(&alpha));
+    assert!(
+        backend
+            .populated_per_user_bindings_for_test()
+            .iter()
+            .any(|b| b == BINDING),
+        "premise: alpha's passthrough slot holds a catalogue"
+    );
+    fx.meta.remember_caller_slot(&backend, proof, Some(BINDING));
+    assert!(
+        backend.indexed_bindings_for_test().is_empty(),
+        "L7b: a passthrough fill published an index entry"
+    );
+    assert!(
+        !names_tool(&disabled_as_alpha(&fx.meta)),
+        "L7b: a passthrough backend's tool is named after its fill"
+    );
+    // An entry that reached the index by any other way: the listing still
+    // cannot select a passthrough slot (CallerProof carries no credential).
+    let principal = fx
+        .meta
+        .principal_for(&backend, proof)
+        .expect("alpha is a verified principal");
+    backend.record_caller_slot(&principal.stable_actor_id(), BINDING);
+    assert!(
+        !names_tool(&disabled_as_alpha(&fx.meta)),
+        "L7b: a listing selected a passthrough slot from the index"
+    );
+}
+
+/// L3b (SLOTVIS.3): the spec-preview filtered `tools/list` and `tools/resolve`
+/// judge a per-user tool by alpha's own warm slot: named when alpha's
+/// catalogue offers it, absent when it withholds or lacks it, though the
+/// shared slot offers it in every case.
+#[cfg(feature = "spec-preview")]
+#[tokio::test]
+async fn l3b_spec_preview_judges_the_callers_slot() {
+    use super::slot_verdict_fixture::TOOL;
+    for (slot, named) in [
+        (CallerSlot::Valid, true),
+        (CallerSlot::Invalid, false),
+        (CallerSlot::Lacks, false),
+    ] {
+        let fx = per_user(slot, &valid(), Warmth::Cold, CLOSED, Surfaced::No);
+        warm_by_listing(&fx.meta).await;
+        let alpha = super::catalogue_per_caller_tests::identity("alpha");
+        let scope = super::identified_caller(&alpha).scope();
+        let filtered = fx.meta.handle_tools_list_filtered(
+            crate::protocol::RequestId::Number(1),
+            TOOL,
+            None,
+            scope,
+        );
+        let filtered = serde_json::to_value(&filtered).expect("a response serialises");
+        let listed = filtered
+            .pointer("/result/tools")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|tools| tools.iter().any(|t| t["name"] == TOOL));
+        assert_eq!(listed, named, "L3b filtered {slot:?}: {filtered}");
+        let resolved = fx
+            .meta
+            .handle_tools_resolve(
+                crate::protocol::RequestId::Number(2),
+                Some(&json!({"name": TOOL})),
+                None,
+                scope,
+            )
+            .await;
+        assert_eq!(
+            resolved.error.is_none(),
+            named,
+            "L3b resolve {slot:?}: {resolved:?}"
+        );
+    }
+}
+
+/// L6c (SLOTVIS.6 third clause, control): a cold caller's surfaced list in
+/// plain `tools/list` keeps today's shared view. alpha's own catalogue would
+/// withhold the tool (invalid schema), but its slot is cold, so the shared
+/// entry is listed, by design. Green on base.
+#[tokio::test]
+async fn l6c_cold_surfaced_list_keeps_the_shared_view() {
+    let fx = per_user(
+        CallerSlot::Invalid,
+        &valid(),
+        Warmth::Cold,
+        CLOSED,
+        Surfaced::Yes,
+    );
+    let entry = surfaced_entry_for_alpha(&fx.meta);
+    assert!(
+        entry.is_some(),
+        "L6c: a cold caller's surfaced list dropped the shared entry"
+    );
+}
+
 /// alpha's plain `tools/list` in session `s1`, and its [`TOOL`] entry if any.
 #[cfg(feature = "spec-preview")]
 fn promoted_entry_for_alpha(meta: &super::MetaMcp) -> Option<serde_json::Value> {
