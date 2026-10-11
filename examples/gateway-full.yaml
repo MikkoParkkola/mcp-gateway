@@ -53,9 +53,9 @@ auth:
   public_paths:
     - /health
 
-  # Dashboard browser sessions (the link `serve` prints, or `mcp-gateway dashboard-link`).
-  # A session ends after idle_timeout_secs without activity or absolute_timeout_secs after
-  # sign-in. The dashboard's own refresh is not activity. Both > 0; idle <= absolute.
+  # Dashboard browser sessions (the link `serve` prints, or `mcp-gateway dashboard-link`)
+  # end after 30 minutes without activity or 8 hours after sign-in, whichever comes first.
+  # The dashboard's own refresh is not activity.
 
 # --- Audit log ---
 # Tamper-evident, hash-chained record of every tool call: who (credential kind,
@@ -232,7 +232,7 @@ backends:
   #                               # a backend the gateway starts itself (one with
   #                               # a `command`) - the gateway cannot stop a
   #                               # server it did not start, so this is rejected
-  #                               # at config load for `http_url` backends,
+  #                               # at config load for `url` backends,
   #                               # including local ones. Omit it to never stop.
   #   input_schema_enforcement: closed  # Undeclared tool-call argument keys:
   #                               # `closed` (default) refuses them, and a level
@@ -273,14 +273,14 @@ backends:
   # (`fetch_generic_url_content`, `search_generic_code`, `search_generic_documentation`)
   # accept a repo URL as an argument, so a single backend covers every GitHub repo.
   #
-  # For a repo-pinned backend, point `http_url` at the repo-specific route:
+  # For a repo-pinned backend, point `url` at the repo-specific route:
   # gitmcp_mcp_gateway:
   #   url: "https://gitmcp.io/MikkoParkkola/mcp-gateway/sse"
   #   description: "GitMCP — docs + search for MikkoParkkola/mcp-gateway"
   # Repo-pinned routes expose tools named after the repo
   # (e.g. `fetch_mcp_gateway_documentation`, `search_mcp_gateway_code`).
   #
-  # Transport: SSE (http_url ends in /sse, streamable_http unset: detected at connect).
+  # Transport: SSE, detected at connect (the gateway POSTs first, then falls back to SSE).
   # Auth: none required for public repos.
   # gitmcp_docs:
   #   url: "https://gitmcp.io/docs/sse"

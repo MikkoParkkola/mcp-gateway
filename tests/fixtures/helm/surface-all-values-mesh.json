@@ -1,3 +1,9 @@
 {
-  "auth": {"mode": "mesh"}
+  "auth": {
+    "mode": "mesh"
+  },
+  "persistence": {
+    "enabled": true,
+    "existingClaim": "gw-state"
+  }
 }

@@ -21,8 +21,8 @@ All fields live under `backends.<name>.oauth`:
 | `callback_port` | integer | OS-assigned | Fixed port for the callback server.  **Required when the provider's app settings enforce an exact redirect URI** (Slack, Figma, Linear, …). |
 | `callback_path` | string | `"/oauth/callback"` | URL path of the callback endpoint.  Override when the provider requires a specific path. |
 
-The background task refreshes a token ahead of its expiry by 10 % of the token's
-lifetime, and never less than 300 seconds before it.
+The background task refreshes a token before it expires, at least five minutes
+ahead; the gateway sets that margin itself.
 
 ### Redirect URI construction
 

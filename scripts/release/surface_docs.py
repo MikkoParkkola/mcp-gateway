@@ -11,7 +11,7 @@ the user docs, the shipped examples (commented blocks included) and the chart.
 Lexical by design and stdlib only. A missed spelling is a one-line pattern fix.
 
 Usage:
-  surface_docs.py          scan the docs (also run by check_surface_inventory.py)
+  surface_docs.py          scan the docs (CI: test_surface_docs.py)
   surface_docs.py --helm   render the chart per auth mode and scan the output
 """
 
@@ -204,10 +204,15 @@ def flow_paths(text: str) -> list[Seg]:
 
 
 def balanced(text: str) -> bool:
-    depth, quote = 0, None
+    depth, quote, escaped = 0, None, False
     for ch in text:
         if quote:
-            quote = None if ch == quote else quote
+            if escaped:
+                escaped = False
+            elif ch == "\\" and quote == '"':
+                escaped = True
+            elif ch == quote:
+                quote = None
         elif ch in "\"'":
             quote = ch
         elif ch in "{[":
@@ -266,7 +271,9 @@ def yaml_paths(text: str, line0: int = 1) -> list[tuple[Seg, int, int]]:
     Keys start lowercase, so prose such as `# Usage:` never joins a path.
     Each path carries its comment run (-1 for an active line)."""
     out: list[tuple[Seg, int, int]] = []
-    stack: list[tuple[int, str]] = []  # (column, segment)
+    active: list[tuple[int, str]] = []  # (column, segment) of active lines
+    commented: list[tuple[int, str]] = []  # the same for the current comment run
+    run_seen = -1
     scalar_col: int | None = None
     lines = text.splitlines()
     shifts, runs = comment_shifts(lines)
@@ -279,13 +286,24 @@ def yaml_paths(text: str, line0: int = 1) -> list[tuple[Seg, int, int]]:
             continue
         col, body = got
         col -= shifts[n - 1]
+        is_comment = runs[n - 1] >= 0
         if scalar_col is not None:
-            if col > scalar_col and not raw.lstrip().startswith("#"):
+            if col > scalar_col and not is_comment:
                 continue
             scalar_col = None
+        if is_comment and runs[n - 1] != run_seen:
+            commented, run_seen = list(active), runs[n - 1]
+        stack = commented if is_comment else active
         m = KEY.match(body)
         item = None if m else FLOW_ITEM.match(body)
         if not m and not item:
+            if body.startswith(("{", "[")) and not is_comment:
+                flow = body
+                while not balanced(flow) and n < len(lines):
+                    flow += " " + (decomment(lines[n]) or (0, ""))[1]
+                    n += 1
+                base = tuple(s for _, s in stack)
+                out += [(base + p, lineno, -1) for p in flow_paths(flow)]
             continue
         dash = (m.group("dash") if m else item.group("dash")) or ""
         if dash:
@@ -313,9 +331,14 @@ def yaml_paths(text: str, line0: int = 1) -> list[tuple[Seg, int, int]]:
                 val += " " + (decomment(lines[n]) or (0, ""))[1]
                 n += 1
             out += [(path + p, lineno, run) for p in flow_paths(val)]
-        elif BLOCK_SCALAR.match(val):
+        elif BLOCK_SCALAR.match(val) and not is_comment:
             scalar_col = col
     return out
+
+
+# Root keys that name another file format outright: a capability file opens
+# with its `fulcrum:` version, a Kubernetes manifest with `apiVersion`/`kind`.
+FOREIGN_ROOTS = {"fulcrum", "apiVersion", "kind"}
 
 
 def path_errors(found: list[tuple[Seg, int, int]], file: str, rows: Rows, whole_file: bool = False) -> list[str]:
@@ -323,11 +346,22 @@ def path_errors(found: list[tuple[Seg, int, int]], file: str, rows: Rows, whole_
     that is no config section (a capability, a k8s manifest) is not a gateway
     config and is skipped. A whole file from the scanned set is always a
     gateway config, so a stray comment cannot switch its check off."""
-    foreign = {r for p, _, r in found if r >= 0 and len(p) == 1 and not rows.top_level(p[0])}
-    found = [f for f in found if f[2] not in foreign]  # a commented capability or manifest
-    tops = {p[0] for p, _, _ in found if len(p) == 1}
-    if not whole_file and (not tops or not all(rows.top_level(k) for k in tops)):
-        return []
+    opens = {(p[0], r) for p, _, r in found if len(p) > 1}
+    foreign_roots = {
+        (p[0], r) for p, _, r in found
+        if len(p) == 1 and not rows.top_level(p[0]) and ((p[0], r) in opens or p[0] in FOREIGN_ROOTS)
+    }
+    foreign_runs = {r for _, r in foreign_roots if r >= 0}
+    # A commented run that opens a foreign block is an example of another
+    # file; a lone commented `word:` is prose and is dropped alone.
+    found = [
+        f for f in found
+        if f[2] not in foreign_runs and not (f[2] >= 0 and len(f[0]) == 1 and not rows.top_level(f[0][0]))
+    ]
+    if not whole_file:
+        tops = {p[0] for p, _, _ in found if len(p) == 1}
+        if not any(rows.top_level(k) for k in tops) or any(r < 0 for _, r in foreign_roots):
+            return []
     errors: list[str] = []
     strays: list[Seg] = []
     for path, line, _ in found:
@@ -342,8 +376,23 @@ def path_errors(found: list[tuple[Seg, int, int]], file: str, rows: Rows, whole_
     return errors
 
 
+def comment_span_errors(text: str, file: str, rows: Rows, line0: int = 1) -> list[str]:
+    """Backticked spans in YAML comments: the prose a reader follows."""
+    errors = []
+    for n, line in enumerate(text.splitlines()):
+        hash_at = line.find("#")
+        if hash_at < 0 or (hash_at and line[:hash_at].count('"') % 2):
+            continue
+        for m in SPAN.finditer(line[hash_at:]):
+            errors += [message(file, line0 + n, h) for h in span_hits(m.group(1), rows)]
+    return errors
+
+
 def yaml_errors(text: str, file: str, rows: Rows, line0: int = 1, whole_file: bool = False) -> list[str]:
-    return path_errors(yaml_paths(text, line0), file, rows, whole_file)
+    errors = path_errors(yaml_paths(text, line0), file, rows, whole_file)
+    if errors or whole_file or any(rows.top_level(p[0]) for p, _, r in yaml_paths(text, line0) if len(p) == 1 and r < 0):
+        errors += comment_span_errors(text, file, rows, line0)
+    return errors
 
 
 def values_errors(text: str, file: str, rows: Rows) -> list[str]:
@@ -363,7 +412,7 @@ CONFIG_LANGS = {"yaml", "yml", ""}
 # A fenced block that opens with a comment naming a capability (for example
 # `# capabilities/examples/linear_webhook.yaml`) is a capability file, whose
 # `webhooks:` or `auth:` sections are not gateway config.
-CAPABILITY_BLOCK = re.compile(r"^\s*#.*\bcapabilit", re.IGNORECASE)
+CAPABILITY_BLOCK = re.compile(r"^\s*#\s*(?:capabilities/\S+\.ya?ml|capability file\b)")
 
 
 def fences(text: str) -> tuple[list[tuple[str, str, int]], set[int]]:
@@ -602,6 +651,20 @@ def rendered_errors(manifest: str, label: str, rows: Rows) -> list[str]:
     return errors
 
 
+# Manifest text each fixture's non-gateway values must render, so a value
+# that another setting suppresses cannot count as covered.
+HELM_EXPECT_TEXT: dict[str, list[str]] = {
+    "bearer": ["sizeLimit: 2Gi", "kind: ServiceMonitor", "kind: NetworkPolicy", "name: GITHUB_TOKEN"],
+    "api_keys": ['claimName: "audit-pvc"'],
+    "oidc": ["kind: PersistentVolumeClaim", 'storageClassName: "standard"', "storage: 2Gi"],
+    "mesh": ['claimName: "gw-state"'],
+}
+
+
+def text_errors(manifest: str, label: str, expected: list[str]) -> list[str]:
+    return [f"helm[{label}]: render lacks {t!r}; a fixture value is suppressed" for t in expected if t not in manifest]
+
+
 def expected_errors(manifest: str, label: str, expected: list[str]) -> list[str]:
     cfg, _ = rendered_config(manifest)
     got = {show(p) for p, _, _ in yaml_paths(cfg)}
@@ -675,6 +738,7 @@ def helm_errors(helm: str = "helm") -> list[str]:
             continue
         errors += rendered_errors(run.stdout, mode, rows)
         errors += expected_errors(run.stdout, mode, expected)
+        errors += text_errors(run.stdout, mode, HELM_EXPECT_TEXT.get(mode, []))
     errors += coverage_errors(schema, fixtures)
     return errors
 

@@ -158,6 +158,36 @@ def test_w19_a_name_slot_never_matches_a_list_item() -> None:
     assert any("backends[].http_url is not a gateway config key" in e for e in errs), errs
 
 
+def test_w20_a_root_flow_mapping_is_walked() -> None:
+    errs = yaml_errs("{server: {shutdown_timeout: 5s}}\n")
+    assert len(errs) == 1 and "server.shutdown_timeout" in errs[0], errs
+
+
+def test_w21_an_escaped_quote_does_not_swallow_the_next_lines() -> None:
+    errs = yaml_errs('cache: {enabled: "a\\"", x: 1}\nserver:\n  shutdown_timeout: 5s\n')
+    assert any("server.shutdown_timeout is INTERNAL" in e for e in errs), errs
+
+
+def test_w22_a_commented_heading_does_not_reparent_active_keys() -> None:
+    errs = yaml_errs("server:\n# usage: below\n  shutdown_timeout: 5s\n")
+    assert len(errs) == 1 and "server.shutdown_timeout is INTERNAL" in errs[0], errs
+
+
+def test_w23_a_lowercase_heading_does_not_hide_its_run() -> None:
+    errs = yaml_errs("# example: below\n# cache:\n#   default_ttl: 1s\n")
+    assert len(errs) == 1 and "cache.default_ttl" in errs[0], errs
+
+
+def test_w24_a_commented_foreign_block_is_skipped_whole() -> None:
+    text = "server:\n  port: 1\n# name: weather\n# auth:\n#   type: api_key\n# rest:\n#   path: /x\n"
+    assert yaml_errs(text) == []
+
+
+def test_y1_a_backticked_hidden_key_in_a_yaml_comment_fails() -> None:
+    errs = sd.yaml_errors("server:\n  # point `http_url` at the repo\n  port: 1\n", "f.yaml", ROWS, whole_file=True)
+    assert len(errs) == 1 and errs[0].startswith("f.yaml:2:"), errs
+
+
 def test_w16_a_commented_child_keeps_its_parent() -> None:
     errs = yaml_errs("# cache:\n#   default_ttl: 60s\n")
     assert len(errs) == 1 and "cache.default_ttl" in errs[0], errs
@@ -182,6 +212,18 @@ def test_w17_a_block_marked_as_a_capability_is_skipped() -> None:
     assert md_errs(cap) == []
     plain = "```yaml\nwebhooks:\n  issue_updated:\n    path: /x\n```\n"
     assert any("webhooks.issue_updated is not a gateway config key" in e for e in md_errs(plain))
+
+
+def test_m4_an_odd_root_does_not_hide_a_config_block() -> None:
+    errs = md_errs("```yaml\nfoo: 1\ncache:\n  default_ttl: 1s\n```\n")
+    assert any("cache.default_ttl" in e for e in errs), errs
+    assert any("foo is not a gateway config key" in e for e in errs), errs
+
+
+def test_f2_only_a_capability_file_marker_skips_a_block() -> None:
+    errs = md_errs("```yaml\n# gateway capabilities enabled\ncache:\n  default_ttl: 1s\n```\n")
+    assert len(errs) == 1 and "cache.default_ttl" in errs[0], errs
+    assert md_errs("```yaml\n# capability file\nwebhooks:\n  x:\n    path: /x\n```\n") == []
 
 
 def test_m3_a_shell_fence_is_not_prose() -> None:
@@ -372,6 +414,12 @@ def test_h7_an_expected_rendered_key_that_is_absent_fails() -> None:
     assert sd.expected_errors(MANIFEST, "m", ["server.port"]) == []
     errs = sd.expected_errors(MANIFEST, "m", ["security.transparency_log.rotation.max_segment_age_secs"])
     assert len(errs) == 1 and "max_segment_age_secs" in errs[0], errs
+
+
+def test_h10_a_suppressed_fixture_value_fails() -> None:
+    errs = sd.text_errors(MANIFEST, "m", ["kind: PersistentVolumeClaim"])
+    assert len(errs) == 1 and "PersistentVolumeClaim" in errs[0], errs
+    assert sd.text_errors(MANIFEST, "m", ["kind: ConfigMap"]) == []
 
 
 def test_h4_helm_mode_needs_helm() -> None:
