@@ -85,6 +85,11 @@ SWEPT_AREAS = (
     "src/config/account_bindings.rs",
     "src/personal_accounts/config/",
     "src/personal_accounts/provider",
+    # MIK-8195 W7: the server entry module, its persistence, and the stdio
+    # backend transport.
+    "src/gateway/server/mod.rs",
+    "src/gateway/server/persistence.rs",
+    "src/transport/stdio.rs",
     # MIK-8195 W2: gateway/server outside stdio, mod.rs and persistence.rs
     # (those two are W7), listed one by one.
     "src/gateway/server/cleartext.rs",
