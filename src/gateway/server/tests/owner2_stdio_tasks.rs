@@ -177,6 +177,13 @@ pub(super) fn intent(tasks: &StdioTasks, tool: &str, retry: &RetryFields) -> Tas
             input_capabilities: Declared::NONE,
             session_id: super::super::STDIO_SESSION_ID,
             protocol_revision: None,
+            scope: crate::gateway::meta_mcp::InvokeScope {
+                authorizer: &crate::gateway::authz::AllowAll,
+                is_admin: false,
+                api_key_name: None,
+                agent_id: None,
+                grant_subject: None,
+            },
         })
         .expect("a keyed modern call is accepted")
         .expect("a dispatchable tool becomes a task")

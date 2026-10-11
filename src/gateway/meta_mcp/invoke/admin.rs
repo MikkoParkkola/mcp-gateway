@@ -229,8 +229,8 @@ impl MetaMcp {
     /// `gateway_list_disabled_capabilities` — list capabilities suspended by
     /// the per-capability error budget.
     #[allow(clippy::unnecessary_wraps)]
-    /// Filtered by `may_invoke`: a caller learns why its own capability fails,
-    /// never that another caller's exists (A3).
+    /// Filtered by `shows_name`: a caller learns why its own capability fails,
+    /// never that a capability withheld from it exists (A3, MIK-8340).
     pub(in crate::gateway::meta_mcp) fn list_disabled_capabilities(
         &self,
         scope: super::super::InvokeScope<'_>,
@@ -242,8 +242,9 @@ impl MetaMcp {
             .iter()
             .filter_map(|key| {
                 let (backend, capability) = key.split_once(':')?;
-                self.may_invoke(backend, capability, scope, session_id)
-                    .ok()?;
+                if !self.shows_name(backend, capability, scope, session_id) {
+                    return None;
+                }
                 let error_rate = self.kill_switch.capability_error_rate(backend, capability);
                 Some(json!({
                     "backend": backend,

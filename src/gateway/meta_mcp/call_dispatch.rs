@@ -5,7 +5,7 @@
 use std::borrow::Cow;
 
 use super::{
-    Arc, CallerStanding, ChainSource, DispatchTarget, Error, GateOutcome, JsonRpcResponse, MetaMcp,
+    Arc, CallerStanding, ChainSource, DispatchTarget, GateOutcome, JsonRpcResponse, MetaMcp,
     MetaMcpCallerContext, RequestId, ResultShape, Value, admission, destructive_confirmation_gate,
     error_response_preserving_status, invoke, response_security,
 };
@@ -24,36 +24,30 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
     ) -> Option<JsonRpcResponse> {
-        if let Some(server_name) = self.surfaced_tools_map.get(tool_name) {
-            let server_name = server_name.clone();
-            // A tool the catalogue will not disclose must not answer to its
-            // own name either: unlisted-but-invocable is the same defect as
-            // listed-but-refused, read the other way round. Worded like the
-            // unrecognised-tool fallback so the refusal does not confirm the
-            // existence of something the gateway declined to publish.
-            if self.surfaced_schema_withheld(&server_name, tool_name) {
-                return Some(error_response_preserving_status(
-                    id,
-                    &Error::json_rpc(-32601, format!("Unknown tool: {tool_name}")),
-                ));
+        match self.surfaced_for(tool_name, caller.scope(), session_id) {
+            super::visible::Surfaced::Visible(server) => {
+                let server_name = server.to_owned();
+                return Some(
+                    self.invoke_named_backend_tool(
+                        id,
+                        &server_name,
+                        tool_name,
+                        arguments.clone(),
+                        session_id,
+                        caller,
+                    )
+                    .await,
+                );
             }
-            // Nor a surfaced tool this caller could not invoke (A3).
-            if let Some(absent) =
-                self.withheld_surfaced(&server_name, tool_name, caller, session_id)
-            {
-                return Some(error_response_preserving_status(id, &absent));
+            // A surfaced tool withheld from this caller answers exactly as a
+            // name that matches no tool: the absent-name path below produces
+            // the answer (MIK-8340). This is the one place its operator record
+            // is written, best-effort.
+            super::visible::Surfaced::Withheld(server, reason) => {
+                self.record_withheld(server, tool_name, reason, caller, session_id)
+                    .await;
             }
-            return Some(
-                self.invoke_named_backend_tool(
-                    id,
-                    &server_name,
-                    tool_name,
-                    arguments.clone(),
-                    session_id,
-                    caller,
-                )
-                .await,
-            );
+            super::visible::Surfaced::Absent => {}
         }
         self.route_retry_to_origin_backend(id, tool_name, arguments, session_id, caller)
             .await
@@ -283,7 +277,9 @@ impl MetaMcp {
         }
         if let Some(intent) = caller.task.take() {
             // A `require` backend's answer must be a checked chain (inc3 R2).
-            if let Err(error) = self.refuse_chained_task(tool_name, &arguments) {
+            if let Err(error) =
+                self.refuse_chained_task(tool_name, &arguments, (caller.scope(), session_id))
+            {
                 return error_response_preserving_status(id, &error);
             }
             return self
@@ -510,7 +506,14 @@ impl MetaMcp {
             "gateway_set_state" => self.set_state(&arguments, session_id, caller.scope()),
             "gateway_reload_config" => self.reload_config().await,
             "gateway_reload_capabilities" => self.reload_capabilities().await,
-            _ => Err(self.no_such_meta_tool(tool_name, caller)),
+            // A name that matches no tool is refused before any backend, so it
+            // gives its signing nonce back (MIK-8340 A4, MIK-8150's rule). A
+            // withheld surfaced name ends here too, so both answer alike.
+            _ => {
+                // `invoke::nonce_settle::ask_refund`, settled when the call returns.
+                caller.signing.inspect(|signing| signing.want_refund());
+                Err(self.no_such_meta_tool(tool_name, caller))
+            }
         };
 
         // A discovery answer the canonical pass refused was scanned too.
@@ -525,8 +528,8 @@ impl MetaMcp {
 }
 
 pub(super) fn task_backend_name(meta: &MetaMcp, tool_name: &str, arguments: &Value) -> String {
-    if let Some(server) = meta.surfaced_tools_map.get(tool_name) {
-        return server.clone();
+    if let Some(server) = meta.surfaced_tools_map.unscoped(tool_name) {
+        return server.to_owned();
     }
     match tool_name {
         "gateway_invoke" => arguments

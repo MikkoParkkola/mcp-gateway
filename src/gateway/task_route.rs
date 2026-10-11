@@ -50,11 +50,17 @@ pub(crate) struct TaskRoute<'a> {
 pub(crate) fn is_task_dispatchable(
     meta_mcp: &crate::gateway::meta_mcp::MetaMcp,
     tool_name: &str,
+    (scope, session_id): (crate::gateway::meta_mcp::InvokeScope<'_>, Option<&str>),
 ) -> bool {
+    // A surfaced name withheld from this caller makes no task: it answers as
+    // a name that matches no tool (MIK-8340).
     matches!(
         tool_name,
         "gateway_invoke" | "gateway_execute" | "gateway_run_playbook"
-    ) || meta_mcp.surfaced_tool_server(tool_name).is_some()
+    ) || meta_mcp
+        .surfaced_for(tool_name, scope, session_id)
+        .visible_server()
+        .is_some()
 }
 
 /// The `taskId` a task method names, if it names one.

@@ -317,8 +317,10 @@ impl Gateway {
         Option<stdio_delivery::StdioAnswer>,
         crate::gateway::meta_mcp::invoke::relay::StagedReceipts,
     ) {
-        let dispatch =
-            Self::dispatch_relay_scoped(meta_mcp, tool_policy, mtls_policy, request, client, sink);
+        // One visibility judgement per request (MIK-8340), as on HTTP.
+        let dispatch = crate::gateway::meta_mcp::visible::with_visibility_memo(
+            Self::dispatch_relay_scoped(meta_mcp, tool_policy, mtls_policy, request, client, sink),
+        );
         if meta_mcp.relay_active() {
             return meta_mcp.collecting_staged(Box::pin(dispatch)).await;
         }
