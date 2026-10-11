@@ -1,0 +1,4 @@
+head_sha	647a95f5e72b6c4250d2fbb1a7df5b37d8fcf438
+# MIK-8154 PR2 final: merged dispatch arm (round-6 muse 1), refreshed C6 prepare_signing obligation.
+drift_merged_arm	linux	drift_merged_arm.patch	--lib -- surfaced_tools::meta_tool_names_are_the_dispatch_arms
+c6_prepare_signing	linux	c6_prepare_signing.patch	--lib -- gateway::server::signing_allocation_tests

@@ -1,0 +1,21 @@
+diff --git a/src/gateway/meta_mcp/call_dispatch.rs b/src/gateway/meta_mcp/call_dispatch.rs
+index 0578bd4c0..fff181535 100644
+--- a/src/gateway/meta_mcp/call_dispatch.rs
++++ b/src/gateway/meta_mcp/call_dispatch.rs
+@@ -482,7 +482,7 @@ impl MetaMcp {
+             "gateway_list_servers" => self.list_servers(caller, session_id).await,
+             "gateway_list_tools" => self.list_tools(&arguments, session_id, caller).await,
+             "gateway_search_tools" => self.search_tools(&arguments, session_id, caller).await,
+-            "gateway_invoke" => {
++            "gateway_get_stats" | "gateway_invoke" => {
+                 let sourced = self
+                     .invoke_tool_sourced(&arguments, session_id, caller)
+                     .await;
+@@ -491,7 +491,6 @@ impl MetaMcp {
+                     value
+                 })
+             }
+-            "gateway_get_stats" => self.get_stats(&arguments, caller.is_admin).await,
+             "gateway_cost_report" => self.get_cost_report(&arguments, session_id, caller).await,
+             "gateway_webhook_status" => self.webhook_status(),
+             "gateway_run_playbook" => self.run_playbook(&arguments, caller).await,

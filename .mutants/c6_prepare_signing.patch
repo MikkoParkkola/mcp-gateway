@@ -1,0 +1,14 @@
+diff --git a/src/gateway/server/stdio_dispatch.rs b/src/gateway/server/stdio_dispatch.rs
+index d70ab33e2..213086c70 100644
+--- a/src/gateway/server/stdio_dispatch.rs
++++ b/src/gateway/server/stdio_dispatch.rs
+@@ -253,8 +253,7 @@ impl Gateway {
+                 meta_mcp.signing_scope(),
+             )
+         });
+-        let chain_nonce = crate::protocol::mrtr::take_chain_nonce(request)
+-            .map_err(|error| refuse(raw_id.clone(), &error))?;
++        let chain_nonce = crate::protocol::mrtr::take_chain_nonce(request).unwrap_or(None);
+         // MIK-8154 SAN.1: mapped on the caller's view (the request's memo),
+         // then sanitized unless every target is `passthrough` (option (a)).
+         if sanitize == InputSanitizing::On
