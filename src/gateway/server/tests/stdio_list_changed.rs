@@ -350,7 +350,7 @@ const FLOOD_PARKED: Duration = Duration::from_secs(120);
 /// Whether a ping answer found the writer queue full within [`FLOOD_PARKED`].
 async fn flood_parked() -> bool {
     timeout(FLOOD_PARKED, async {
-        while crate::gateway::server::stdio_seams::answers_parked() == 0 {
+        while crate::gateway::server::stdio_seams::answers_found_queue_full() == 0 {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
@@ -528,7 +528,9 @@ async fn t10b_nothing_is_announced_after_eof_while_the_session_drains() {
 /// stdout stays blocked (a drain that sent inline would stop at the first),
 /// and once stdout is read at most two `list_changed` frames arrive (the parked
 /// sender's wake plus at most one stored wake), not one per change.
-#[tokio::test]
+// Current-thread on purpose: the request tasks run on the test thread, which
+// is where the thread-local premise seam counts them.
+#[tokio::test(flavor = "current_thread")]
 async fn t14_a_burst_while_stdout_is_full_is_decided_and_told_at_most_twice() {
     use crate::gateway::server::stdio_seams::decisions;
     const FLOOD: usize = super::super::STDOUT_QUEUE_DEPTH + 200;
