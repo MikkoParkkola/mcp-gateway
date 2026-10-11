@@ -625,6 +625,8 @@ mod direct_caller;
 mod direct_dispatch;
 mod direct_failure;
 mod direct_idempotency;
+#[cfg(test)]
+pub(super) use direct_idempotency::seams as direct_lease_seams;
 mod direct_list;
 mod direct_permit;
 mod direct_preflight;

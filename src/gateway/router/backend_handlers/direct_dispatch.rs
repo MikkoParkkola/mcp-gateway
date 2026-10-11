@@ -307,6 +307,8 @@ async fn forward_sanitized(
         }
     };
     // Forward the sanitized params to the backend
+    #[cfg(test)]
+    super::direct_idempotency::seams::before_mark().await;
     super::direct_idempotency::mark(admitted.lease.as_ref());
     let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(super::dispatch_armed(
@@ -424,6 +426,8 @@ async fn forward_plain(
             return Err(refused);
         }
     };
+    #[cfg(test)]
+    super::direct_idempotency::seams::before_mark().await;
     super::direct_idempotency::mark(admitted.lease.as_ref());
     let cancel_on = admitted.cancel_on.take();
     let forward = Box::pin(super::dispatch_armed(

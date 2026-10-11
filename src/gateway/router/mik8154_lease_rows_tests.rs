@@ -275,6 +275,46 @@ async fn l0_the_direct_route_admits_the_operation_invoke_admits() {
         "l0: the direct call admitted no operation"
     );
     assert_eq!(direct, invoke, "l0: the routes admit different operations");
+    // Pinned, so the two cannot drift wrong in lockstep.
+    assert_eq!(
+        direct,
+        Some(json!({
+            "kind": "backend", "server": "alpha", "tool": "read",
+            "arguments": {"cmd": "x"}, "retry": ""
+        })),
+        "l0: the operation's shape moved"
+    );
+}
+
+/// L8b CONTROL (kills "cancel before dispatch settles"): a direct call under
+/// K dropped after admission but before its lease is marked releases the key,
+/// so a `gateway_invoke` of the same target under K proceeds and runs.
+#[tokio::test]
+async fn l8b_a_call_cancelled_before_dispatch_releases() {
+    let fx = Arc::new(fixture_built(Answer::Ok, |meta| meta).await);
+    let (entered, gate) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    super::backend_handlers::direct_lease_seams::hold_before_mark(
+        Arc::clone(&entered),
+        Arc::clone(&gate),
+    );
+    let shared = Arc::clone(&fx);
+    let call = tokio::spawn(async move { keyed(&shared, Via::Direct, "l8b").await });
+    tokio::time::timeout(std::time::Duration::from_secs(30), entered.notified())
+        .await
+        .expect("the direct call reached the point before dispatch");
+    call.abort();
+    let _ = call.await;
+    assert_eq!(
+        calls(&fx),
+        0,
+        "premise: the dropped call reached the backend"
+    );
+    let after = keyed(&fx, Via::Invoke, "l8b").await;
+    assert!(after.get("error").is_none(), "l8b: {after}");
+    assert_eq!(calls(&fx), 1, "l8b: the invoke did not run");
 }
 
 /// L7a CONTROL (kills "withdraw replaced by settle"): a direct call under K
@@ -475,12 +515,12 @@ async fn l6_a_forced_7a_miss_with_a_7b_hit_replays_through_direct_delivery() {
     assert_eq!(status, 200, "l6 fresh: {replay}");
     assert_eq!(calls(&fx), 1, "l6 fresh: the backend ran again");
     let signature = &replay["result"]["_signature"];
-    assert_eq!(signature["nonce"], "l6-n2", "l6 fresh: {replay}");
     assert_eq!(
         signature["sig"],
         expected_sig(&replay, "l6-n2"),
         "l6 fresh: the replay does not verify under the gateway key and this nonce"
     );
+    assert_eq!(signature["nonce"], "l6-n2", "l6 fresh: {replay}");
     assert_ne!(
         signature["sig"],
         expected_sig(&replay, "l6-n1"),

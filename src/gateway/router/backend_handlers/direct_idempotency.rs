@@ -140,3 +140,31 @@ pub(super) fn mark(lease: Option<&SyncLease>) {
 pub(super) fn withdraw(lease: Option<&SyncLease>) {
     lease.inspect(|lease| lease.withdraw_dispatch());
 }
+
+/// Test seams: hold one call after admission, just before its lease is marked
+/// (MIK-8154 L8's pre-dispatch cell).
+#[cfg(test)]
+pub(crate) mod seams {
+    use std::sync::Arc;
+
+    use tokio::sync::Notify;
+
+    thread_local! {
+        static HOLD: std::cell::RefCell<Option<(Arc<Notify>, Arc<Notify>)>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// The next call on this thread to reach the mark signals `entered`, then
+    /// waits for `gate`. One call only.
+    pub(crate) fn hold_before_mark(entered: Arc<Notify>, gate: Arc<Notify>) {
+        HOLD.with(|hold| *hold.borrow_mut() = Some((entered, gate)));
+    }
+
+    pub(in crate::gateway::router::backend_handlers) async fn before_mark() {
+        let held = HOLD.with(|hold| hold.borrow_mut().take());
+        if let Some((entered, gate)) = held {
+            entered.notify_one();
+            gate.notified().await;
+        }
+    }
+}
