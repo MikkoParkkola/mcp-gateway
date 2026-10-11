@@ -71,7 +71,8 @@ impl MetaMcp {
                 return text;
             }
             let names = backend.get_cached_tool_names_for(identity_key);
-            let candidates = self.miss_hint_pool(&names, server, (scope, session_id));
+            let tools = backend.get_cached_tools_snapshot_for(identity_key);
+            let candidates = self.miss_hint_pool((&names, &tools), server, (scope, session_id));
             match did_you_mean(tool, &candidates, 3, 3) {
                 Some(hint) => format!("{text}. {hint}"),
                 None => text,
@@ -82,19 +83,25 @@ impl MetaMcp {
     }
 
     /// The "did you mean?" pool for a miss on `server`: the `names` from this
-    /// caller's slot that it could invoke (A3). The ONE pool source for every
-    /// miss hint (the dispatch miss and R2's text A, F13), so a fix to what
-    /// the pool admits reaches every site at once.
+    /// caller's slot that it may be shown (A3). Each is judged by the
+    /// caller's own catalogue entry in `tools` when it holds one, so a schema
+    /// valid in the shared cache but not in this caller's slot is withheld
+    /// here as in its listing (MIK-8340 seat finding). The ONE pool source for
+    /// every miss hint (the dispatch miss and R2's text A, F13), so a fix to
+    /// what the pool admits reaches every site at once.
     pub(super) fn miss_hint_pool<'n>(
         &self,
-        names: &'n [String],
+        (names, tools): (&'n [String], &[crate::protocol::Tool]),
         server: &str,
         (scope, session_id): (super::super::InvokeScope<'_>, Option<&str>),
     ) -> Vec<&'n str> {
         names
             .iter()
             .map(String::as_str)
-            .filter(|name| self.shows_name(server, name, scope, session_id))
+            .filter(|name| match tools.iter().find(|tool| tool.name == *name) {
+                Some(tool) => self.shows_tool(server, tool, scope, session_id),
+                None => self.shows_name(server, name, scope, session_id),
+            })
             .collect()
     }
 

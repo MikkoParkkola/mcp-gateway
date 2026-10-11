@@ -186,16 +186,14 @@ impl MetaMcp {
     ) {
         match reason {
             super::visible::Withholding::Refused => {
-                let (refused, written) = super::grant_audit::note_best_effort(|| {
+                let refused = super::grant_audit::note_withheld_best_effort(server, || {
                     self.withheld_surfaced(server, tool_name, caller, session_id)
                 })
                 .await;
-                if written.is_err() || matches!(refused, Some(Error::AuditUnavailable)) {
-                    tracing::warn!(
-                        server,
-                        "The audit record of a withheld surfaced call could not be written; \
-                         the call is answered as a name that matches no tool"
-                    );
+                // Outside a grant slot the note is refused and written on its
+                // own task; the call still answers as an absent name.
+                if matches!(refused, Some(Error::AuditUnavailable)) {
+                    tracing::warn!(server, "{}", super::grant_audit::WITHHELD_RECORD_FAILED);
                 }
             }
             super::visible::Withholding::Schema | super::visible::Withholding::Descriptor => {

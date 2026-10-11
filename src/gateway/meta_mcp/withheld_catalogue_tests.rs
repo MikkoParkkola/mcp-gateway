@@ -170,3 +170,82 @@ async fn row10_caller_valid_schema_is_listed_from_the_callers_view() {
         );
     }
 }
+
+/// `gateway_list_disabled_capabilities` for alpha, once `TOOL`'s error
+/// budget has disabled it on `meta`.
+fn disabled_listing(meta: &MetaMcp) -> Value {
+    let cfg = meta.capability_budget_config.read().clone();
+    for _ in 0..(cfg.window_size.max(cfg.min_samples) + 1) {
+        meta.kill_switch
+            .record_capability_failure(BACKEND, TOOL, &cfg);
+    }
+    assert!(
+        meta.kill_switch.is_capability_disabled(BACKEND, TOOL),
+        "premise: the budget did not disable {TOOL}"
+    );
+    let alpha = identity("alpha");
+    meta.list_disabled_capabilities(identified_caller(&alpha).scope(), None)
+        .expect("the disabled list answers")
+}
+
+/// Row 10b (gpt and grok seats): a disabled tool withheld by its schema is
+/// not named by the disabled-capability list, as its listing omits it; the
+/// same disabled tool with a valid schema is named (the control).
+#[tokio::test]
+async fn row10b_the_disabled_list_omits_a_schema_withheld_tool() {
+    let named = |listed: &Value| {
+        listed["disabled_capabilities"]
+            .as_array()
+            .is_some_and(|all| all.iter().any(|e| e["capability"] == TOOL))
+    };
+    let control = disabled_listing(&gateway(Some(&valid()), &valid()));
+    assert!(
+        named(&control),
+        "premise: the valid disabled tool is not named: {control}"
+    );
+    let withheld = disabled_listing(&gateway(Some(&invalid()), &invalid()));
+    assert!(
+        !named(&withheld),
+        "row 10b: a schema-withheld tool is named: {withheld}"
+    );
+}
+
+/// The text alpha gets for `gateway_invoke` of `reaf` on `BACKEND`, one edit
+/// from `TOOL`: a miss, with a "did you mean?" hint when one is admitted.
+async fn miss_text(meta: &MetaMcp) -> String {
+    let alpha = identity("alpha");
+    let args = json!({"server": BACKEND, "tool": "reaf", "arguments": {}});
+    let response = Box::pin(meta.handle_tools_call(
+        crate::protocol::RequestId::Number(1),
+        "gateway_invoke",
+        args,
+        None,
+        identified_caller(&alpha),
+    ))
+    .await;
+    let body = serde_json::to_value(&response).expect("a response serialises");
+    body.pointer("/result/content/0/text")
+        .or_else(|| body.pointer("/error/message"))
+        .and_then(Value::as_str)
+        .map_or_else(|| body.to_string(), str::to_owned)
+}
+
+/// Row 10c (gpt seat): a miss's "did you mean?" hint judges a candidate by
+/// the caller's own catalogue entry. Withheld by the caller's invalid
+/// schema (valid in the shared cache), the tool is never suggested: the
+/// text equals the one where the caller's catalogue lacks it. The control
+/// (valid for the caller) is suggested.
+#[tokio::test]
+async fn row10c_a_miss_never_suggests_a_tool_the_callers_schema_withholds() {
+    let control = miss_text(&gateway(Some(&valid()), &valid())).await;
+    assert!(
+        control.contains(TOOL) && control.contains("reaf"),
+        "premise: the miss does not suggest the caller's valid tool: {control}"
+    );
+    let withheld = miss_text(&gateway(Some(&invalid()), &valid())).await;
+    let absent = miss_text(&gateway(None, &valid())).await;
+    assert_eq!(
+        withheld, absent,
+        "row 10c: withheld {withheld} vs absent {absent}"
+    );
+}

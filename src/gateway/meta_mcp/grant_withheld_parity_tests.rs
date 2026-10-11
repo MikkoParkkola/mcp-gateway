@@ -104,8 +104,8 @@ fn row7_failed_grant_record_on_a_withheld_name_answers_as_absent() {
         "row 7: withheld {answered} vs absent {expected}"
     );
     assert!(
-        warnings.to_lowercase().contains("audit") || warnings.contains(DECISION_KIND),
-        "row 7: the failed decision write was not logged:\n{warnings}"
+        warnings.contains(super::grant_audit::WITHHELD_RECORD_FAILED),
+        "row 7: the failed decision write was not logged as documented:\n{warnings}"
     );
     // The fault was consumed by the withheld call: the next append of the
     // same kind succeeds.
@@ -126,7 +126,7 @@ fn row7_failed_grant_record_on_a_withheld_name_answers_as_absent() {
 /// own decision only. In one grant slot (one request), a decision noted
 /// before the withheld record, whose request-end write fails under
 /// `FailClosed`, still answers -32005; the withheld record was written at
-/// once. Catches a `note_best_effort` that takes every note in the slot.
+/// once. Catches a `note_withheld_best_effort` that takes every note in the slot.
 #[tokio::test]
 async fn row7b_another_decision_in_the_request_still_fails_closed() {
     let endpoint = Endpoint::start(false).await;
@@ -145,22 +145,70 @@ async fn row7b_another_decision_in_the_request_still_fails_closed() {
                 crate::gateway::authz::Emit::Audit,
             );
             assert!(other.is_err(), "premise: bob holds no grant");
-            let (_, own) = super::grant_audit::note_best_effort(|| {
+            super::grant_audit::note_withheld_best_effort(CAPS, || {
                 meta.withheld_surfaced(CAPS, PERSONAL, &caller, None)
             })
             .await;
+            let written_at_once = decisions(&dir).len();
             // Fail the request-end write, which holds only the other one.
             log.fail_next_append_of_kind_for_test(DECISION_KIND);
-            own.is_ok()
+            written_at_once
         })
         .await;
-    assert!(
-        own_written,
+    assert_eq!(
+        own_written, 1,
         "row 7b: the withheld record was not written at once"
     );
-    assert_eq!(decisions(&dir).len(), 1, "row 7b: records written at once");
     assert!(
         matches!(verdict, Err(crate::Error::AuditUnavailable)),
         "row 7b: the other decision's failed write no longer fails closed: {verdict:?}"
+    );
+}
+
+/// MIK-8340 row 7c (gpt seat): a withheld call cancelled while its own
+/// grant record is being written still logs the documented warning when
+/// that write fails, because the writing task logs it, not the caller.
+#[test]
+fn row7c_a_cancelled_withheld_call_still_logs_its_failed_record() {
+    use super::grant_audit::seams;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let ((), warnings) = crate::test_log_capture::capture_warnings(|| {
+        runtime.block_on(async {
+            let endpoint = Endpoint::start(false).await;
+            let dir = tempfile::tempdir().unwrap();
+            let meta = Arc::new(surfaced(denied_gateway(&endpoint, &dir).0));
+            let hold = seams::hold_next_write_for_test();
+            seams::fail_append_at_for_test(1);
+            let appends = seams::appends_for_test();
+            let shared = Arc::clone(&meta);
+            let caller = tokio::spawn(async move {
+                let who = api_key("bob");
+                let caller = context(&who);
+                super::grant_audit::with_grant_slot(shared.transparency_logger.as_ref(), async {
+                    super::grant_audit::note_withheld_best_effort(CAPS, || {
+                        shared.withheld_surfaced(CAPS, PERSONAL, &caller, None)
+                    })
+                    .await
+                })
+                .await
+            });
+            hold.held().await;
+            caller.abort();
+            assert!(caller.await.is_err(), "premise: the caller was cancelled");
+            hold.release();
+            while seams::appends_for_test() == appends {
+                tokio::task::yield_now().await;
+            }
+            for _ in 0..8 {
+                tokio::task::yield_now().await;
+            }
+        });
+    });
+    assert!(
+        warnings.contains(super::grant_audit::WITHHELD_RECORD_FAILED),
+        "row 7c: the cancelled call's failed record was not logged:\n{warnings}"
     );
 }

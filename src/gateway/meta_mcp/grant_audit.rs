@@ -418,13 +418,22 @@ pub(crate) async fn flush_open_slot() -> Result<()> {
     write_owned(&logger, notes).await
 }
 
-/// Run `noting`, then write the decisions it noted into the open slot at
-/// once and on their own: the write's verdict is returned, never left for the
-/// slot's end-of-request write, where under `FailClosed` it would become the
-/// request's answer. For a record the design makes best-effort (MIK-8340 A3:
-/// a withheld surfaced call answers as an absent name even when its record
-/// fails). Outside a slot `noting` runs alone.
-pub(super) async fn note_best_effort<T>(noting: impl FnOnce() -> T) -> (T, std::io::Result<()>) {
+/// The one warning a failed best-effort withheld record logs (MIK-8340 A5
+/// item 9); the upgrade note tells operators to alert on it.
+pub(super) const WITHHELD_RECORD_FAILED: &str = "The audit record of a withheld surfaced call could not be written; \
+     the call is answered as a name that matches no tool";
+
+/// The FailClosed exception of MIK-8340 A5 item 9, for the withheld surfaced
+/// call's own grant record ONLY: run `noting`, then write the decisions it
+/// noted into the open slot at once and on their own task. Their write never
+/// becomes the request's verdict (under `FailClosed` the slot's end-of-request
+/// write would answer -32005 and reveal the name exists); a failed write logs
+/// [`WITHHELD_RECORD_FAILED`] from the writing task itself, so a caller
+/// cancelled while it waits cannot drop the warning. Every note added before
+/// `noting` stays in the slot and fails closed as before. Outside a slot
+/// `noting` runs alone. Any other use is a new exception and needs its own
+/// design decision.
+pub(super) async fn note_withheld_best_effort<T>(server: &str, noting: impl FnOnce() -> T) -> T {
     let before = GRANT_SLOT
         .try_with(|slot| slot.notes.lock().expect("grant slot lock").len())
         .ok();
@@ -439,14 +448,20 @@ pub(super) async fn note_best_effort<T>(noting: impl FnOnce() -> T) -> (T, std::
             .ok()
     });
     let Some((logger, notes)) = taken.filter(|(_, notes)| !notes.is_empty()) else {
-        return (output, Ok(()));
+        return output;
     };
+    let owned_server = server.to_owned();
     // Owned by its own task, as `write_owned` is: a cancelled caller cannot
-    // drop records that were never submitted.
-    let written = tokio::spawn(async move { write_records(&logger, &notes).await })
-        .await
-        .unwrap_or_else(|join| Err(std::io::Error::other(join.to_string())));
-    (output, written)
+    // drop records that were never submitted, nor the warning of their failure.
+    let writer = tokio::spawn(async move {
+        if let Err(error) = write_records(&logger, &notes).await {
+            tracing::warn!(server = %owned_server, %error, "{WITHHELD_RECORD_FAILED}");
+        }
+    });
+    if let Err(join) = writer.await {
+        tracing::warn!(server, error = %join, "{WITHHELD_RECORD_FAILED}");
+    }
+    output
 }
 
 /// Note `event` for `(server, tool)` into the open slot. Outside every slot

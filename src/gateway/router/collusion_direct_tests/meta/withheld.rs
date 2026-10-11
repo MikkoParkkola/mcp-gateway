@@ -109,7 +109,7 @@ fn row7_http_one_grant_record_and_failclosed_answers_as_absent() {
          records after the failed one {after}\n{warnings}"
     );
     assert!(
-        warnings.to_lowercase().contains("audit") || warnings.contains(DECISION_KIND),
-        "row 7 http: the failed decision write was not logged:\n{warnings}"
+        warnings.contains(crate::gateway::meta_mcp::grant_audit::WITHHELD_RECORD_FAILED),
+        "row 7 http: the failed decision write was not logged as documented:\n{warnings}"
     );
 }
