@@ -105,6 +105,7 @@ mod anchor;
 #[path = "transparency_log_attributed.rs"]
 mod attributed;
 pub use anchor::verify_audit_log;
+pub(crate) use verify::is_signed_entry;
 #[cfg(test)]
 pub(crate) use verify::verify_segments;
 pub use verify::{
