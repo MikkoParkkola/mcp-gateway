@@ -63,14 +63,12 @@ class Rows:
         return out
 
     def exact(self, path: Seg) -> tuple[str, str] | None:
-        """The row `path` names, the most literal one when slots tie."""
-        best, score = None, -1
+        """The row `path` names. No two rows of different classes match one
+        path today (checked when P4 landed), so the first match is the row."""
         for pat, row in self.config.items():
             if len(pat) == len(path) and all(map(seg_match, pat, path)):
-                lit = sum(a == b for a, b in zip(pat, path))
-                if lit > score:
-                    best, score = row, lit
-        return best
+                return row
+        return None
 
     def is_prefix(self, path: Seg) -> bool:
         """Whether `path` is a strict prefix of some row: a known parent."""

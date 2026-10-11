@@ -108,7 +108,7 @@ def test_w5_a_list_item_opens_a_slot() -> None:
 
 
 def test_w6_a_block_scalar_body_is_not_walked() -> None:
-    assert yaml_errs("server:\n  port: |\n    failsafe:\n      retry:\n        max_attempts: 3\n") == []
+    assert yaml_errs("failsafe:\n  retry: |\n    max_attempts: 3\n") == []
 
 
 def test_w7_free_form_under_a_childless_keep_row() -> None:
@@ -151,6 +151,11 @@ def test_w14_the_flow_parser_respects_quotes() -> None:
 def test_w18_malformed_flow_terminates() -> None:
     for bad in ("{a: ]}", "[a, }", "{a: {b: [}", "{: x}", "[[[", "{{{"):
         sd.flow_paths(bad)  # returns; a parser that stops advancing hangs here
+
+
+def test_w19_a_name_slot_never_matches_a_list_item() -> None:
+    errs = yaml_errs("backends:\n  - http_url: x\n")
+    assert any("backends[].http_url is not a gateway config key" in e for e in errs), errs
 
 
 def test_w16_a_commented_child_keeps_its_parent() -> None:
@@ -248,6 +253,12 @@ def test_a2_an_entry_covers_its_file_and_prose_only() -> None:
 def test_a3_an_allowed_variable_passes_in_prose_only() -> None:
     allowed = {("f.md", "MCP_GATEWAY_RUNTIME_DOCKER_SMOKE"): "test-script variable"}
     assert md_errs("Set MCP_GATEWAY_RUNTIME_DOCKER_SMOKE=1.\n", allowed, set()) == []
+
+
+def test_a3b_an_allowed_variable_in_a_yaml_block_still_fails() -> None:
+    allowed = {("f.md", "MCP_GATEWAY_RUNTIME_DOCKER_SMOKE"): "test-script variable"}
+    block = "```yaml\nbackends:\n  foo:\n    env:\n      X: MCP_GATEWAY_RUNTIME_DOCKER_SMOKE\n```\n"
+    assert len(md_errs(block, allowed, set())) == 1
 
 
 def test_a4_every_real_entry_carries_a_reason() -> None:
