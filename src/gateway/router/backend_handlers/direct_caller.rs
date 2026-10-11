@@ -233,36 +233,8 @@ pub(super) async fn read_envelope(
     // the request: parse, telemetry and every forwarding arm see no token.
     let attestation = super::take_attestation_token(json_request.get_mut("params"));
 
-    // MIK-8154 SAN.1: the one sanitize step, honouring `sanitize_input`, before
-    // anything parses or judges the request: its protocol fields validated
-    // (S2'), then the whole request sanitized unless the backend this route
-    // names is `passthrough` (option (a)).
     if state.sanitize_input {
-        let sanitized = crate::security::sanitize::validate_protocol_fields(
-            &json_request,
-            &crate::gateway::PROTOCOL_NONCES,
-            crate::security::sanitize::ProtocolRoute::Direct,
-        )
-        .and_then(|()| {
-            if let Some(instance) = state.meta_mcp.passthrough_instance(name) {
-                crate::gateway::meta_mcp::visible::record_exempt_instances(&[instance]);
-                Ok(None)
-            } else {
-                crate::security::sanitize::sanitize_request(&json_request).map(Some)
-            }
-        });
-        match sanitized {
-            Ok(Some(clean)) => json_request = clean,
-            Ok(None) => {}
-            Err(e) => {
-                return Err(super::super::helpers::build_http_error_response(
-                    None,
-                    -32600,
-                    e.to_string(),
-                    StatusCode::BAD_REQUEST,
-                ));
-            }
-        }
+        json_request = sanitized(state, name, json_request)?;
     }
 
     let (id, method, params) = match super::super::helpers::parse_request(&json_request) {
@@ -507,4 +479,31 @@ pub(super) async fn forward_notification(
             )
         }
     }
+}
+
+/// MIK-8154 SAN.1: the one sanitize step on the direct route, before anything
+/// parses or judges the request: its protocol fields validated (S2'), then
+/// the whole request sanitized unless the backend this route names is
+/// `passthrough` (option (a)), whose instance is then recorded (F2).
+fn sanitized(state: &AppState, name: &str, request: Value) -> Result<Value, Rejection> {
+    use crate::security::sanitize::{ProtocolRoute, sanitize_request, validate_protocol_fields};
+    let refused = |e: crate::Error| {
+        super::super::helpers::build_http_error_response(
+            None,
+            -32600,
+            e.to_string(),
+            StatusCode::BAD_REQUEST,
+        )
+    };
+    validate_protocol_fields(
+        &request,
+        &crate::gateway::PROTOCOL_NONCES,
+        ProtocolRoute::Direct,
+    )
+    .map_err(refused)?;
+    if let Some(instance) = state.meta_mcp.passthrough_instance(name) {
+        crate::gateway::meta_mcp::visible::record_exempt_instances(&[instance]);
+        return Ok(request);
+    }
+    sanitize_request(&request, ProtocolRoute::Direct).map_err(refused)
 }

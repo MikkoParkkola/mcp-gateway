@@ -232,7 +232,7 @@ pub(crate) use protocol::{ProtocolRoute, validate_protocol_fields};
 /// # Errors
 ///
 /// `Error::Protocol` for a NUL anywhere, or a control character in `id`.
-pub(crate) fn sanitize_request(request: &Value) -> Result<Value> {
+pub(crate) fn sanitize_request(request: &Value, route: ProtocolRoute) -> Result<Value> {
     let Some(map) = request.as_object() else {
         return sanitize_json_value(request);
     };
@@ -245,7 +245,7 @@ pub(crate) fn sanitize_request(request: &Value) -> Result<Value> {
         let clean = if key == "id" {
             value.clone()
         } else {
-            protocol::sanitize_value(&clean_key, value)?
+            protocol::sanitize_value(&clean_key, value, route)?
         };
         sanitized.insert(clean_key, clean);
     }

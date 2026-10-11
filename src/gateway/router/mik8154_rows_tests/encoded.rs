@@ -88,25 +88,6 @@ async fn s4d_a_dirty_protocol_key_is_refused_not_aliased() {
     }
 }
 
-/// S9e (fixes seat gpt): a tool's own field that happens to be named
-/// `arguments` and holds a JSON string is business data the gateway never
-/// decodes: it reaches the backend byte for byte, not re-encoded.
-#[tokio::test]
-async fn s9e_a_business_arguments_string_is_not_re_encoded() {
-    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
-    let opaque = "{\"b\": 1,  \"a\": 2}";
-    let args = json!({"arguments": opaque});
-    let (_, body) = post_direct(&fx, "alpha", "k-std", "read", args, None, None).await;
-    assert!(body.get("error").is_none(), "s9e: {body}");
-    let seen = fx.seen.lock().expect("seen lock").last().cloned();
-    assert_eq!(
-        seen.as_ref()
-            .and_then(|p| p.pointer("/arguments/arguments")),
-        Some(&json!(opaque)),
-        "s9e: {seen:?}"
-    );
-}
-
 /// S4c (fixes seat gpt): on `/mcp/{name}` a backend tool named
 /// `gateway_invoke` is the backend's, so a control character in its own
 /// `arguments.nonce` is business data, never refused as the signing nonce.

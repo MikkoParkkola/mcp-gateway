@@ -93,15 +93,18 @@ impl LiveHost {
                     crate::gateway::meta_mcp::visible::judged(),
                 ));
             }
-            crate::security::sanitize::sanitize_request(&request)
-                .map(|clean| (clean["params"]["arguments"].clone(), Judged::default()))
-                .map_err(|e| {
-                    Box::new(JsonRpcResponse::error(
-                        Some(RequestId::Number(0)),
-                        -32600,
-                        e.to_string(),
-                    ))
-                })
+            crate::security::sanitize::sanitize_request(
+                &request,
+                crate::security::sanitize::ProtocolRoute::Meta,
+            )
+            .map(|clean| (clean["params"]["arguments"].clone(), Judged::default()))
+            .map_err(|e| {
+                Box::new(JsonRpcResponse::error(
+                    Some(RequestId::Number(0)),
+                    -32600,
+                    e.to_string(),
+                ))
+            })
         })
         .await
     }

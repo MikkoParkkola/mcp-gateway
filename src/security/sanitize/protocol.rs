@@ -86,14 +86,19 @@ fn validate_keys(value: &Value) -> Result<()> {
     }
 }
 
-/// Where an `arguments` slot sits in the request: the call's own
-/// (`params.arguments`), or one the gateway parses inside it (a meta tool's
-/// inner `arguments`, a chain step's `arguments`).
+/// Where an `arguments` slot sits in the request: a meta tool's own (the
+/// gateway parses the inner `arguments` and chain steps inside it), any other
+/// tool's own (its contents are the tool's, plain values), or one the gateway
+/// parses inside a meta tool's.
 #[derive(Clone, Copy)]
 enum Slot {
-    Call,
+    Meta,
+    Tool,
     Inner,
 }
+
+/// The meta tools whose arguments hold `arguments` the gateway decodes.
+const META_PARSED: [&str; 3] = ["gateway_invoke", "gateway_run_playbook", "gateway_execute"];
 
 /// [`sanitize_json_value`] for one top-level request member, reaching into
 /// the `arguments` slots the gateway decodes after this step when a client
@@ -105,13 +110,24 @@ enum Slot {
 /// # Errors
 ///
 /// `Error::Protocol` for a NUL anywhere, the encoded arguments included.
-pub(super) fn sanitize_value(key: &str, value: &Value) -> Result<Value> {
-    match value {
-        Value::Object(params) if key == "params" => sanitize_object(params, |key, member| {
-            (key == "arguments").then(|| sanitize_slot(member, Slot::Call))
-        }),
-        _ => sanitize_json_value(value),
+pub(super) fn sanitize_value(key: &str, value: &Value, route: ProtocolRoute) -> Result<Value> {
+    let Value::Object(params) = value else {
+        return sanitize_json_value(value);
+    };
+    if key != "params" {
+        return sanitize_json_value(value);
     }
+    // Judged on the name as sanitized: the name dispatch will route on.
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .map(sanitize_string);
+    let meta = route == ProtocolRoute::Meta
+        && matches!(name, Some(Ok(name)) if META_PARSED.contains(&name.as_str()));
+    let slot = if meta { Slot::Meta } else { Slot::Tool };
+    sanitize_object(params, |key, member| {
+        (key == "arguments").then(|| sanitize_slot(member, slot))
+    })
 }
 
 /// `map` sanitized member by member, keys first; `special` handles a member
@@ -154,8 +170,8 @@ fn sanitize_slot(value: &Value, slot: Slot) -> Result<Value> {
 /// sanitized as plain values.
 fn sanitize_arguments(map: &serde_json::Map<String, Value>, slot: Slot) -> Result<Value> {
     match slot {
-        Slot::Inner => sanitize_json_value(&Value::Object(map.clone())),
-        Slot::Call => sanitize_object(map, |key, member| match (key, member) {
+        Slot::Tool | Slot::Inner => sanitize_json_value(&Value::Object(map.clone())),
+        Slot::Meta => sanitize_object(map, |key, member| match (key, member) {
             ("arguments", _) => Some(sanitize_slot(member, Slot::Inner)),
             ("steps", Value::Array(steps)) => Some(sanitize_steps(steps)),
             _ => None,
@@ -175,4 +191,40 @@ fn sanitize_steps(steps: &[Value]) -> Result<Value> {
         })
         .collect::<Result<Vec<_>>>()
         .map(Value::Array)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::ProtocolRoute;
+    use crate::security::sanitize::sanitize_request;
+
+    /// S9e (fixes seat gpt): a tool's own field named `arguments` holding a
+    /// JSON string is the tool's business, never decoded or re-encoded: on
+    /// the direct route, and for a tool that is not a parsing meta tool on
+    /// the meta route. A parsing meta tool's inner slot is decoded.
+    #[test]
+    fn s9e_only_gateway_parsed_slots_are_decoded() {
+        let opaque = "{\"b\": 1,  \"a\": 2}";
+        for (route, name) in [
+            (ProtocolRoute::Direct, "gateway_invoke"),
+            (ProtocolRoute::Direct, "read"),
+            (ProtocolRoute::Meta, "read"),
+        ] {
+            let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": name, "arguments": {"arguments": opaque}}});
+            let clean = sanitize_request(&request, route).expect("sanitizes");
+            assert_eq!(clean["params"]["arguments"]["arguments"], opaque, "{name}");
+        }
+        let invoke = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "gateway_invoke", "arguments": {"arguments": opaque}}});
+        let clean = sanitize_request(&invoke, ProtocolRoute::Meta).expect("sanitizes");
+        let inner = clean["params"]["arguments"]["arguments"]
+            .as_str()
+            .expect("a string");
+        assert_ne!(inner, opaque, "the meta slot was not re-encoded");
+        let decoded: serde_json::Value = serde_json::from_str(inner).expect("JSON");
+        assert_eq!(decoded, json!({"b": 1, "a": 2}));
+    }
 }

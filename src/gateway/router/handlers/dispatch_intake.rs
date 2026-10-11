@@ -404,7 +404,10 @@ pub(super) async fn intake(
     #[cfg(test)]
     crate::gateway::meta_mcp::visible::seams::intake_judged();
     let mut request = if state.sanitize_input && !exempt {
-        match crate::security::sanitize::sanitize_request(&request) {
+        match crate::security::sanitize::sanitize_request(
+            &request,
+            crate::security::sanitize::ProtocolRoute::Meta,
+        ) {
             Ok(sanitized) => sanitized,
             Err(e) => {
                 return Err(build_error_response(

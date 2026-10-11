@@ -259,7 +259,11 @@ impl Gateway {
         if sanitize == InputSanitizing::On
             && !super::super::router::sanitize_exempt(meta_mcp, request, view)
         {
-            *request = crate::security::sanitize::sanitize_request(request).map_err(|error| {
+            *request = crate::security::sanitize::sanitize_request(
+                request,
+                crate::security::sanitize::ProtocolRoute::Meta,
+            )
+            .map_err(|error| {
                 JsonRpcResponse::error(None, -32600, error.to_string()).to_value_lossy()
             })?;
         }
