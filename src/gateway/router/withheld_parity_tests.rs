@@ -495,4 +495,11 @@ async fn row14_a_repair_between_route_and_dispatch_keeps_the_name_absent() {
         "row 14: the repaired name dispatched or answered differently: {}",
         answered.body
     );
+    // The repair did happen: the next request judges afresh and dispatches.
+    let after = raced.call_plain(spec.tool).await;
+    assert_eq!(
+        after.calls, 1,
+        "premise: the repair did not reach the next request: {}",
+        after.body
+    );
 }
