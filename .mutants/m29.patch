@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_view.rs b/src/security/firewall/collusion_view.rs
+index eeab7b6a2..bdabbc483 100644
+--- a/src/security/firewall/collusion_view.rs
++++ b/src/security/firewall/collusion_view.rs
+@@ -90,7 +90,7 @@ pub(crate) fn preflight(
+     let mut stack: Vec<(&Value, usize)> = Vec::with_capacity(MAX_ANSWER_DEPTH + 1);
+     stack.push((answer, 0));
+     while let Some((value, depth)) = stack.pop() {
+-        nodes += 1;
++        nodes += usize::from(value.is_string());
+         if depth > MAX_ANSWER_DEPTH || nodes > node_cap {
+             return Err(Unreadable::Shape);
+         }

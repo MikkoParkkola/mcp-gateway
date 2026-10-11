@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_big.rs b/src/security/firewall/collusion_big.rs
+index 8b7d3b554..298d04885 100644
+--- a/src/security/firewall/collusion_big.rs
++++ b/src/security/firewall/collusion_big.rs
+@@ -362,7 +362,7 @@ impl BigStep {
+         drop(reservation);
+         UnreadStep {
+             evidence: StepEvidence {
+-                fps: step_ev.into(),
++                fps: { let _ = step_ev; Box::<[u64]>::default().into() },
+                 _charge: charge,
+             },
+         }

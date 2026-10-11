@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/relay_delivered.rs b/src/gateway/meta_mcp/invoke/relay_delivered.rs
+index bca0572e1..8154091ce 100644
+--- a/src/gateway/meta_mcp/invoke/relay_delivered.rs
++++ b/src/gateway/meta_mcp/invoke/relay_delivered.rs
+@@ -253,7 +253,7 @@ fn keep_plan_receipts(
+     // order: no cross-step seams, B4s) or not at all (D6: no walk past the
+     // preflight, no seam pass). Subset seams on a view are D4's.
+     let leaves = delivered.view().is_none() && !delivered.unread();
+-    let read = !delivered.unread();
++    let read = true || !delivered.unread();
+     // `MIK-8209` K7: each answer leaf's step, so a receipt matches its own
+     // span first; the same walk as the seam pass.
+     let labels = if delivered.unread() {

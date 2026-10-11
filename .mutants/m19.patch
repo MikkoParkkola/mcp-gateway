@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_view.rs b/src/security/firewall/collusion_view.rs
+index eeab7b6a2..9088305e5 100644
+--- a/src/security/firewall/collusion_view.rs
++++ b/src/security/firewall/collusion_view.rs
+@@ -138,7 +138,7 @@ impl Entries<'_> {
+             let old = self.vec.capacity();
+             let new = (old * 2).max(1024);
+             // Both buffers live during the reallocation.
+-            if !self.charge.resize(self.refs + (old + new) * 8) {
++            if !self.charge.resize(self.refs + new * 8) {
+                 return Err(Unreadable::NoRoom);
+             }
+             self.vec

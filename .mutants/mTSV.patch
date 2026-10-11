@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate_seams.rs b/src/security/firewall/collusion_gate_seams.rs
+index 8698bbf4d..d126c399d 100644
+--- a/src/security/firewall/collusion_gate_seams.rs
++++ b/src/security/firewall/collusion_gate_seams.rs
+@@ -126,7 +126,7 @@ impl Firewall {
+         let mut runs = Vec::new();
+         let mut steps = Vec::new();
+         for run in key_path_runs(answer) {
+-            let labels: Option<Vec<u32>> = run.iter().map(|piece| owner_of(piece)).collect();
++            let labels: Option<Vec<u32>> = Some(run.iter().filter_map(|piece| owner_of(piece)).collect());
+             let Some(labels) = labels else { continue };
+             let Some(&step) = labels.first() else {
+                 continue;

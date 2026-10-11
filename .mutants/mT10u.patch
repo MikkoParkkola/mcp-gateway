@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate.rs b/src/security/firewall/collusion_gate.rs
+index 43c1172d3..d2eed6586 100644
+--- a/src/security/firewall/collusion_gate.rs
++++ b/src/security/firewall/collusion_gate.rs
+@@ -674,7 +674,7 @@ impl Firewall {
+             });
+         }
+         Some(match view::build(detector, answer, None) {
+-            Ok(view) => Delivered::of_mode(Mode::View(view)).with_answer(answer),
++            Ok(_view) => Delivered::of_mode(Mode::Unread(view::Unreadable::Shape)),
+             Err(why) => Delivered::of_mode(Mode::Unread(why)),
+         })
+     }
