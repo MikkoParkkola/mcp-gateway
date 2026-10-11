@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/stdio_dispatch.rs b/src/gateway/server/stdio_dispatch.rs
+index ac9ac1dc7..a200815bf 100644
+--- a/src/gateway/server/stdio_dispatch.rs
++++ b/src/gateway/server/stdio_dispatch.rs
+@@ -236,7 +236,7 @@ impl Gateway {
+                 .to_value_lossy()
+         };
+         // MIK-8154 S2': the protocol fields, before anything takes them off.
+-        if sanitize == InputSanitizing::On {
++        if false {
+             crate::security::sanitize::validate_protocol_fields(
+                 request,
+                 &crate::gateway::PROTOCOL_NONCES,

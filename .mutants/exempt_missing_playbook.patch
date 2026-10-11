@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/authorization.rs b/src/gateway/router/authorization.rs
+index 523cdc8c4..cebfb0f9b 100644
+--- a/src/gateway/router/authorization.rs
++++ b/src/gateway/router/authorization.rs
+@@ -42,7 +42,7 @@ pub(crate) fn sanitize_exempt(
+     let servers: Vec<String> = if name == "gateway_run_playbook" {
+         let playbook = arguments.get("name").and_then(Value::as_str).unwrap_or("");
+         let Some((servers, digest)) = meta_mcp.playbook_step_servers(playbook) else {
+-            return false;
++            return true;
+         };
+         crate::gateway::meta_mcp::visible::record_judged_playbook(digest);
+         servers

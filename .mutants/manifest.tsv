@@ -1,0 +1,6 @@
+head_sha	217c7af66eac9ddb92ef7a5dbf2c53aede9acc7e
+# MIK-8154 PR2 critical coverage: the three graded functions, each row against its mutant.
+stdio_protocol_unvalidated	linux	stdio_protocol_unvalidated.patch	--lib -- gateway::route_check_matrix_tests::p3::s2d_stdio_refuses_a_control_character_in_the_method --exact
+exempt_no_name	linux	exempt_no_name.patch	--lib -- gateway::router::mik8154_rows_tests::s8b_an_unmappable_call_is_sanitized --exact
+exempt_missing_playbook	linux	exempt_missing_playbook.patch	--lib -- gateway::router::mik8154_rows_tests::s8b_an_unmappable_call_is_sanitized --exact
+readmit_exempt_skip	linux	readmit_exempt_skip.patch	--lib -- gateway::router::mik8154_rows_tests::resume::r4_a_resume_still_exempt_forwards_as_submitted --exact

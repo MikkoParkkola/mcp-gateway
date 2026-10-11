@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/authorization.rs b/src/gateway/router/authorization.rs
+index 523cdc8c4..0324a0c0c 100644
+--- a/src/gateway/router/authorization.rs
++++ b/src/gateway/router/authorization.rs
+@@ -35,7 +35,7 @@ pub(crate) fn sanitize_exempt(
+     }
+     let params = request.get("params");
+     let Some(name) = params.and_then(|p| p.get("name")).and_then(Value::as_str) else {
+-        return false;
++        return true;
+     };
+     let empty = Value::Object(serde_json::Map::new());
+     let arguments = params.and_then(|p| p.get("arguments")).unwrap_or(&empty);
