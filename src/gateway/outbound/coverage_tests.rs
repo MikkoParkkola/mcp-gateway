@@ -204,7 +204,14 @@ fn record_fields_are_taken_once() {
 #[test]
 fn a_batch_is_attributed_its_items_union() {
     let fw = firewall(CrossTenantReads::Observe);
-    let items = vec![admitted_note(&fw, A), admitted_note(&fw, C)];
+    let mut items = vec![admitted_note(&fw, A), admitted_note(&fw, C)];
+    // One item carries a part the judge could not read: the batch must too.
+    items[1]
+        .assessment
+        .as_mut()
+        .expect("judged")
+        .attribution
+        .uninspected = true;
     let mut union = std::collections::BTreeSet::new();
     for item in &items {
         union.extend(
@@ -222,8 +229,15 @@ fn a_batch_is_attributed_its_items_union() {
     );
     match admit(&fw, Some(KEY), Payload::Batch(items), None) {
         Admission::Admitted(batch) => {
-            let named = &batch.assessment().expect("judged").attribution.tenants;
-            assert_eq!(named, &union, "the batch names its items' tenants");
+            let attribution = &batch.assessment().expect("judged").attribution;
+            assert_eq!(
+                &attribution.tenants, &union,
+                "the batch names its items' tenants"
+            );
+            assert!(
+                attribution.uninspected,
+                "an unread item makes the batch unread"
+            );
         }
         Admission::Blocked(e) => panic!("observe never withholds: {e:?}"),
     }
@@ -309,6 +323,10 @@ async fn a_failed_record_refuses_an_answer_keeping_its_id() {
     let (_dir, log) = failing_log();
     let frame = recorded(read_a(&fw), Some(&log)).await;
     assert_audit_refusal(&frame, Some(RequestId::Number(1)));
+    assert!(
+        !b_flagged(&fw),
+        "the refused read still holds its reservation"
+    );
 }
 
 /// Under fail-closed, an id-less answer whose record fails becomes the audit
@@ -319,6 +337,10 @@ async fn a_failed_record_refuses_an_idless_answer_with_a_null_id() {
     let (_dir, log) = failing_log();
     let frame = recorded(idless_answer_a(&fw), Some(&log)).await;
     assert_audit_refusal(&frame, None);
+    assert!(
+        !b_flagged(&fw),
+        "the refused read still holds its reservation"
+    );
 }
 
 /// Under fail-closed, a non-answer whose record fails is withheld; with the
@@ -330,6 +352,10 @@ async fn a_failed_record_withholds_a_non_answer() {
     let (_dir, log) = failing_log();
     let frame = recorded(admitted_note(&fw, A), Some(&log)).await;
     assert!(frame.is_withheld(), "a notification was written unrecorded");
+    assert!(
+        !b_flagged(&fw),
+        "the withheld read still holds its reservation"
+    );
 
     let (_dir, healthy) = logger(AuditFailurePolicy::FailClosed);
     let frame = recorded(admitted_note(&fw, A), Some(&healthy)).await;
@@ -406,6 +432,11 @@ async fn a_failed_pending_record_refuses_the_http_answer_with_its_id() {
     let (sent, written) = emit_http_checked(response, Some(&healthy)).await;
     assert!(written);
     assert_eq!(sent.status(), axum::http::StatusCode::OK);
+    let body = body_json(sent).await;
+    assert_eq!(
+        (&body["id"], &body["result"]),
+        (&json!(1), &json!({ "ok": true }))
+    );
 }
 
 /// An id-less answer whose pending record fails is refused with a null id,
