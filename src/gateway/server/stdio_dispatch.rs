@@ -243,7 +243,8 @@ impl Gateway {
                 crate::security::sanitize::ProtocolRoute::Meta,
             )
             .map_err(|error| {
-                JsonRpcResponse::error(None, -32600, error.to_string()).to_value_lossy()
+                JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string())
+                    .to_value_lossy()
             })?;
         }
         let mut signing_context = meta_mcp.signing_enabled().then(|| {

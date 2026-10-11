@@ -7,8 +7,8 @@
 use serde_json::Value;
 
 use super::{sanitize_json_value, sanitize_string, validate_protocol_text};
+use crate::Result;
 use crate::protocol::meta::KEY_CLIENT_CAPABILITIES;
-use crate::{Error, Result};
 
 /// Validate `id`, `method`, the capability keys, the `_meta` nonces, the
 /// idempotency key and `gateway_invoke`'s argument nonce
@@ -161,19 +161,29 @@ fn sanitize_object(
     Ok(Value::Object(sanitized))
 }
 
-/// An `arguments` slot: an object, or a string holding one (decoded,
-/// sanitized, re-encoded); anything else is sanitized as it is.
+/// An `arguments` slot. Where the gateway decodes a JSON string here (a
+/// backend tool's own, a meta tool's inner, a chain step's), it is decoded by
+/// the gateway's own decoder, once, on the bytes the client sent, and the
+/// decoded object is sanitized and handed onward in place of the string:
+/// dispatch then takes the object as it is, so what was checked is what is
+/// used. A meta tool's own `arguments` are not decoded (dispatch does not
+/// decode them either). Anything else is sanitized as it is.
+///
+/// # Errors
+///
+/// The decoder's own -32602 for a string that is not a JSON object, as
+/// dispatch would answer it; `Error::Protocol` for a NUL.
 fn sanitize_slot(value: &Value, slot: Slot) -> Result<Value> {
-    if let Value::String(raw) = value
-        && let Ok(Value::Object(decoded)) = serde_json::from_str::<Value>(raw)
-    {
-        let clean = sanitize_arguments(&decoded, slot)?;
-        return serde_json::to_string(&clean)
-            .map(Value::String)
-            .map_err(|e| Error::Protocol(format!("Invalid 'arguments' JSON string: {e}")));
-    }
-    match value {
-        Value::Object(map) => sanitize_arguments(map, slot),
+    match (value, slot) {
+        (Value::String(_), Slot::Tool | Slot::Inner) => {
+            let holder = serde_json::json!({ "arguments": value });
+            let decoded = crate::gateway::parse_tool_arguments_cow(&holder)?;
+            match decoded.as_ref() {
+                Value::Object(map) => sanitize_arguments(map, slot),
+                other => sanitize_json_value(other),
+            }
+        }
+        (Value::Object(map), _) => sanitize_arguments(map, slot),
         _ => sanitize_json_value(value),
     }
 }
@@ -234,12 +244,11 @@ mod tests {
         let invoke = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {"name": "gateway_invoke", "arguments": {"arguments": opaque}}});
         let clean = sanitize_request(&invoke, ProtocolRoute::Meta).expect("sanitizes");
-        let inner = clean["params"]["arguments"]["arguments"]
-            .as_str()
-            .expect("a string");
-        assert_ne!(inner, opaque, "the meta slot was not re-encoded");
-        let decoded: serde_json::Value = serde_json::from_str(inner).expect("JSON");
-        assert_eq!(decoded, json!({"b": 1, "a": 2}));
+        // Decoded once, by the gateway's decoder, and handed on as the object.
+        assert_eq!(
+            clean["params"]["arguments"]["arguments"],
+            json!({"b": 1, "a": 2})
+        );
     }
 
     /// Round-3 seats (both): `gateway_execute`'s `chain` step arguments are a
@@ -253,6 +262,28 @@ mod tests {
         assert!(sanitize_request(&request, ProtocolRoute::Meta).is_err());
     }
 
+    /// Round-4 seat gpt: a raw control character that makes an encoded
+    /// `arguments` invalid JSON until it is stripped does not hide an escaped
+    /// NUL: the cleaned string is what is decoded.
+    #[test]
+    fn s9i_stripping_cannot_turn_an_encoded_nul_into_a_plain_string() {
+        let raw = "{\"cmd\":\"\\u0000\"}\u{7}";
+        for (name, arguments) in [
+            ("read", json!(raw)),
+            (
+                "gateway_execute",
+                json!({"chain": [{"tool": "alpha:read", "arguments": raw}]}),
+            ),
+        ] {
+            let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": name, "arguments": arguments}});
+            assert!(
+                sanitize_request(&request, ProtocolRoute::Meta).is_err(),
+                "{request}"
+            );
+        }
+    }
+
     /// Round-3 seat muse 2 and 4: `gateway_invoke`'s argument nonce is
     /// refused when dirty whether `arguments` is an object or a JSON string,
     /// and whether or not the tool name carries a strippable character.
@@ -264,6 +295,7 @@ mod tests {
             ("gateway_invoke", nonce_args.clone()),
             ("gateway_invoke", json!(nonce_args.to_string())),
             ("gateway_invoke\u{7}", nonce_args.clone()),
+            ("gateway_invoke\u{7}", json!(nonce_args.to_string())),
         ] {
             let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                 "params": {"name": name, "arguments": arguments}});

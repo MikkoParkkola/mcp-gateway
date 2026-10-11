@@ -22,6 +22,32 @@ use super::MetaMcp;
 // Builder — with_surfaced_tools
 // ============================================================================
 
+/// Every meta-tool name, the names `call_dispatch`'s meta match routes on.
+/// Surfacing refuses a backend tool under any of them, so a meta name always
+/// resolves to the gateway's own handler (MIK-8154 relies on it); kept equal
+/// to the dispatch arms by `meta_tool_names_are_the_dispatch_arms`.
+pub(super) const META_TOOL_NAMES: &[&str] = &[
+    "gateway_search",
+    "gateway_execute",
+    "gateway_list_servers",
+    "gateway_list_tools",
+    "gateway_search_tools",
+    "gateway_invoke",
+    "gateway_get_stats",
+    "gateway_cost_report",
+    "gateway_webhook_status",
+    "gateway_run_playbook",
+    "gateway_kill_server",
+    "gateway_revive_server",
+    "gateway_list_disabled_capabilities",
+    "gateway_set_profile",
+    "gateway_get_profile",
+    "gateway_list_profiles",
+    "gateway_set_state",
+    "gateway_reload_config",
+    "gateway_reload_capabilities",
+];
+
 impl MetaMcp {
     /// Attach statically surfaced tools (consuming builder).
     ///
@@ -33,28 +59,6 @@ impl MetaMcp {
     /// gateway always starts — misconfigured surfaced tools are simply dropped.
     #[must_use]
     pub fn with_surfaced_tools(mut self, tools: Vec<SurfacedToolConfig>) -> Self {
-        const META_TOOL_NAMES: &[&str] = &[
-            "gateway_search",
-            "gateway_execute",
-            "gateway_list_servers",
-            "gateway_list_tools",
-            "gateway_search_tools",
-            "gateway_invoke",
-            "gateway_get_stats",
-            "gateway_cost_report",
-            "gateway_webhook_status",
-            "gateway_run_playbook",
-            "gateway_kill_server",
-            "gateway_revive_server",
-            "gateway_list_disabled_capabilities",
-            "gateway_set_profile",
-            "gateway_get_profile",
-            "gateway_list_profiles",
-            "gateway_set_state",
-            "gateway_reload_config",
-            "gateway_reload_capabilities",
-        ];
-
         let mut map: HashMap<String, String> = HashMap::new();
         let mut validated: Vec<SurfacedToolConfig> = Vec::with_capacity(tools.len());
 

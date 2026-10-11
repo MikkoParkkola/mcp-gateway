@@ -91,6 +91,10 @@ async fn r3_a_resume_re_judges_and_sends_nothing_unsanitized() {
         Some(&json!("failed")),
         "r3: the resume was not refused: {done}"
     );
+    assert!(
+        done.to_string().contains("null bytes"),
+        "r3: refused, but not by the sanitizer: {done}"
+    );
     assert_eq!(
         calls(&fx),
         1,

@@ -412,7 +412,7 @@ pub(super) async fn intake(
             Err(e) => {
                 return Err(build_error_response(
                     None,
-                    -32600,
+                    e.to_rpc_code(),
                     e.to_string(),
                     &session_id,
                     StatusCode::BAD_REQUEST,

@@ -101,7 +101,7 @@ impl LiveHost {
             .map_err(|e| {
                 Box::new(JsonRpcResponse::error(
                     Some(RequestId::Number(0)),
-                    -32600,
+                    e.to_rpc_code(),
                     e.to_string(),
                 ))
             })

@@ -39,6 +39,10 @@ pub(crate) use meta_mcp::visible::changed_instance;
 /// (MIK-7926.FIX.2), which run a real child in `capability::executor`.
 #[cfg(test)]
 pub(crate) use meta_mcp::{MetaMcp, invoke::audit::with_dispatch_scope};
+/// The gateway's one decode of a tool call's `arguments` (an object, or a
+/// JSON string holding one), shared with the sanitize step so what it checks
+/// is what dispatch uses (MIK-8154).
+pub(crate) use meta_mcp_helpers::parse_tool_arguments_cow;
 mod meta_mcp_helpers;
 mod meta_mcp_helpers_routing;
 mod meta_mcp_helpers_text;

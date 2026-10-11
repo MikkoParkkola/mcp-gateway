@@ -758,10 +758,17 @@ async fn direct_route_refuses_untrusted_peer_identity_header() {
 /// anonymous principal, and they pool. Headers are not trusted by default.
 #[tokio::test]
 async fn direct_route_ignores_identity_headers_when_trust_is_off() {
+    // One verified certificate on both calls: a keyed direct call needs an
+    // execution principal (MIK-8154 ANON.1). The headers still differ, and
+    // with trust off they must not split the one caller into two.
+    let as_cert = |caller: Caller| Caller {
+        cert: mtls("spiffe://test/one").cert,
+        ..caller
+    };
     let (calls, second) = direct_pair(
         Setup::auth_off(),
-        trusted_header("alice"),
-        trusted_header("bob"),
+        as_cert(trusted_header("alice")),
+        as_cert(trusted_header("bob")),
     )
     .await;
     assert_eq!(calls, 1, "untrusted headers separated callers: {second}");

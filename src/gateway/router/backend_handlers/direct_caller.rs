@@ -490,7 +490,7 @@ fn sanitized(state: &AppState, name: &str, request: Value) -> Result<Value, Reje
     let refused = |e: crate::Error| {
         super::super::helpers::build_http_error_response(
             None,
-            -32600,
+            e.to_rpc_code(),
             e.to_string(),
             StatusCode::BAD_REQUEST,
         )

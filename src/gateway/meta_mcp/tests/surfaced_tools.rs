@@ -89,7 +89,9 @@ fn with_surfaced_tools_drops_all_known_meta_tool_names() {
         "gateway_set_profile",
         "gateway_get_profile",
         "gateway_list_profiles",
+        "gateway_set_state",
         "gateway_reload_config",
+        "gateway_reload_capabilities",
     ];
     let tools: Vec<SurfacedToolConfig> = meta_names
         .iter()
@@ -566,4 +568,35 @@ fn inspect_discovery_value_redacts_credentials_when_not_blocking() {
         "{description}"
     );
     assert!(!description.contains("ghp_"), "{description}");
+}
+
+/// MIK-8154 (lead, on review finding muse 3): the meta-tool names surfacing
+/// refuses are exactly the names dispatch's meta match routes on, one source
+/// checked against the other. A new meta tool added to the match but not to
+/// the list (or the reverse) fails here, before a surfaced backend tool could
+/// shadow it and receive the gateway's meta decoding.
+#[test]
+fn meta_tool_names_are_the_dispatch_arms() {
+    let source = include_str!("../call_dispatch.rs");
+    let start = source
+        .find("let result = match tool_name {")
+        .expect("the dispatch's meta match");
+    let end = start
+        + source[start..]
+            .find("\n            _ => {")
+            .expect("the meta match's fallback arm");
+    let arms: std::collections::BTreeSet<&str> = source[start..end]
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix('"'))
+        .filter_map(|rest| rest.split_once("\" =>").map(|(name, _)| name))
+        .collect();
+    let listed: std::collections::BTreeSet<&str> = super::super::surfaced::META_TOOL_NAMES
+        .iter()
+        .copied()
+        .collect();
+    assert_eq!(arms, listed, "the dispatch arms and META_TOOL_NAMES differ");
+    assert!(
+        arms.contains("gateway_invoke"),
+        "the meta match was not read: {arms:?}"
+    );
 }
