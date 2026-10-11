@@ -259,19 +259,34 @@ pub(super) fn credential_owner(caller: &super::MetaMcpCallerContext<'_>) -> Opti
     })
 }
 
+/// The principal a caller owns its keyed calls by when it has no routed task
+/// owner: its credential (never text carrying the reserved local-operator
+/// prefix), else its proven subject. One function for the meta route and the
+/// direct route (MIK-8154), so the two cannot spell one caller apart.
+pub(super) fn credential_or_subject_owner<'a>(
+    credential_principal: Option<&'a str>,
+    grant_subject: Option<&crate::identity_grants::GrantSubject>,
+    caller_key: Option<&'a str>,
+) -> Option<&'a str> {
+    credential_principal
+        .filter(|text| !text.is_empty() && !text.starts_with(super::LOCAL_OPERATOR_PREFIX))
+        .or_else(|| proven_subject_owner(grant_subject, caller_key))
+}
+
 /// The proven subject a caller with no credential owns its keyed calls by
 /// (MIK-7688): an OAuth agent (its client id) or a client certificate (its
 /// SAN URI, else its CN), as the router's `caller_key` encodes them. Never a
 /// header identity, and never a certificate naming no subject: its
 /// `caller_key` is then no subject key.
-pub(super) fn proven_subject_owner<'a>(
-    caller: &super::MetaMcpCallerContext<'a>,
+fn proven_subject_owner<'a>(
+    grant_subject: Option<&crate::identity_grants::GrantSubject>,
+    caller_key: Option<&'a str>,
 ) -> Option<&'a str> {
-    let authority = caller.grant_subject.as_ref()?.authority.as_str();
+    let authority = grant_subject?.authority.as_str();
     if !matches!(authority, "agent_oauth" | "mtls") {
         return None;
     }
-    caller.caller_key.filter(|key| key.starts_with("subject:"))
+    caller_key.filter(|key| key.starts_with("subject:"))
 }
 
 /// Build the response-cache key for a `gateway_invoke` call.
