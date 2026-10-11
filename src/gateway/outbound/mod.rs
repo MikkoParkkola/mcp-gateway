@@ -162,8 +162,8 @@ impl OutboundFrame {
 
     /// Whether a sink bound to `destination` may write this frame. A judged
     /// frame binds to the caller it was judged for. An unjudged frame carries
-    /// no key, so any sink may write it: that is the fast path, and it is
-    /// safe only because unjudged frames hold no backend content to withhold.
+    /// no key, so any sink may write it: the fast path, taken only when there
+    /// is nothing to judge (see [`Self::unjudged`]).
     fn bound_to(&self, destination: &str) -> bool {
         self.key.as_deref().is_none_or(|key| key == destination)
     }
