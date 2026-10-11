@@ -84,9 +84,9 @@ impl MetaMcp {
 
     /// The "did you mean?" pool for a miss on `server`: the `names` from this
     /// caller's slot that it may be shown (A3). Each is judged by the
-    /// caller's own catalogue entry in `tools` when it holds one, so a schema
-    /// valid in the shared cache but not in this caller's slot is withheld
-    /// here as in its listing (MIK-8340 seat finding). The ONE pool source for
+    /// caller's own catalogue entry in `tools`, so a schema valid in the
+    /// shared cache but not in this caller's slot is withheld here as in its
+    /// listing; a name with no entry there is dropped (MIK-8340 seats). The ONE pool source for
     /// every miss hint (the dispatch miss and R2's text A, F13), so a fix to
     /// what the pool admits reaches every site at once.
     pub(super) fn miss_hint_pool<'n>(
@@ -98,9 +98,13 @@ impl MetaMcp {
         names
             .iter()
             .map(String::as_str)
-            .filter(|name| match tools.iter().find(|tool| tool.name == *name) {
-                Some(tool) => self.shows_tool(server, tool, scope, session_id),
-                None => self.shows_name(server, name, scope, session_id),
+            // A name absent from the snapshot (the two reads raced a catalogue
+            // replacement) is dropped, never judged by the shared view.
+            .filter(|name| {
+                tools
+                    .iter()
+                    .find(|tool| tool.name == *name)
+                    .is_some_and(|tool| self.shows_tool(server, tool, scope, session_id))
             })
             .collect()
     }

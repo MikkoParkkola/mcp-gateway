@@ -109,7 +109,8 @@ fn row7_http_one_grant_record_and_failclosed_answers_as_absent() {
          records after the failed one {after}\n{warnings}"
     );
     assert!(
-        warnings.contains(crate::gateway::meta_mcp::grant_audit::WITHHELD_RECORD_FAILED),
+        // The text, as the upgrade note documents it for operators.
+        warnings.contains("The audit record of a withheld surfaced call could not be written"),
         "row 7 http: the failed decision write was not logged as documented:\n{warnings}"
     );
 }

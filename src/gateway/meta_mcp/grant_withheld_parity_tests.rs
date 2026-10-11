@@ -168,55 +168,53 @@ async fn row7b_another_decision_in_the_request_still_fails_closed() {
 /// MIK-8340 row 7c (gpt seat): a withheld call cancelled through
 /// `record_withheld` while its own grant record is being written still logs
 /// the documented warning when that write fails, because the writing task
-/// logs it, not the caller.
+/// logs it, not the caller. Waits on the record itself, bounded.
 #[test]
 fn row7c_a_cancelled_withheld_call_still_logs_its_failed_record() {
     use super::grant_audit::seams;
+    // The literal, not the constant: the row also runs on the commit before
+    // the fix, where the constant does not exist.
+    const WARNING: &str = "The audit record of a withheld surfaced call could not be written";
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("runtime");
-    let ((), warnings) = crate::test_log_capture::capture_warnings(|| {
-        runtime.block_on(async {
-            let endpoint = Endpoint::start(false).await;
-            let dir = tempfile::tempdir().unwrap();
-            let meta = Arc::new(surfaced(denied_gateway(&endpoint, &dir).0));
-            let hold = seams::hold_next_write_for_test();
-            seams::fail_append_at_for_test(1);
-            let appends = seams::appends_for_test();
-            let shared = Arc::clone(&meta);
-            let caller = tokio::spawn(async move {
-                let who = api_key("bob");
-                let caller = context(&who);
-                super::grant_audit::with_grant_slot(shared.transparency_logger.as_ref(), async {
-                    shared
-                        .record_withheld(
-                            CAPS,
-                            PERSONAL,
-                            super::visible::Withholding::Refused,
-                            &caller,
-                            None,
-                        )
-                        .await;
-                })
-                .await
-            });
-            hold.held().await;
-            caller.abort();
-            assert!(caller.await.is_err(), "premise: the caller was cancelled");
-            hold.release();
-            while seams::appends_for_test() == appends {
-                tokio::task::yield_now().await;
-            }
-            for _ in 0..8 {
-                tokio::task::yield_now().await;
-            }
+    let (_guard, mut seen) = crate::test_log_capture::live_count(WARNING);
+    runtime.block_on(async {
+        let endpoint = Endpoint::start(false).await;
+        let dir = tempfile::tempdir().unwrap();
+        let meta = Arc::new(surfaced(denied_gateway(&endpoint, &dir).0));
+        let hold = seams::hold_next_write_for_test();
+        seams::fail_append_at_for_test(1);
+        let shared = Arc::clone(&meta);
+        let caller = tokio::spawn(async move {
+            let who = api_key("bob");
+            let caller = context(&who);
+            super::grant_audit::with_grant_slot(shared.transparency_logger.as_ref(), async {
+                shared
+                    .record_withheld(
+                        CAPS,
+                        PERSONAL,
+                        super::visible::Withholding::Refused,
+                        &caller,
+                        None,
+                    )
+                    .await;
+            })
+            .await
         });
+        hold.held().await;
+        caller.abort();
+        assert!(caller.await.is_err(), "premise: the caller was cancelled");
+        hold.release();
+        let logged = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            seen.wait_for(|count| *count >= 1),
+        )
+        .await;
+        assert!(
+            matches!(logged, Ok(Ok(_))),
+            "row 7c: the cancelled call's failed record was not logged within 10 s"
+        );
     });
-    assert!(
-        // The literal, not the constant: the row also runs on the commit
-        // before the fix, where the constant does not exist.
-        warnings.contains("The audit record of a withheld surfaced call could not be written"),
-        "row 7c: the cancelled call's failed record was not logged:\n{warnings}"
-    );
 }
