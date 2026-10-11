@@ -12,6 +12,8 @@
 //! hash) and the rate, never on where the text sat, so two deliveries of
 //! the same text at the same rate keep the same sample.
 
+use std::collections::HashSet;
+
 use super::CollusionDetector;
 
 /// The splitmix64 finalizer: spreads a fingerprint's bits so the thinning
@@ -31,8 +33,37 @@ pub(super) fn keep_thinned(fp: u64, m: u64) -> bool {
 /// The middle of a cut delivery thinned to fit `room`: `cut` minus `kept`,
 /// at the smallest power-of-two rate `m` whose survivors fit. Returns `m`
 /// and the survivors, sorted. Empty when `room` is 0.
-pub(super) fn thinned_middle(_cut: &[u64], _kept: &[u64], _room: usize) -> (u64, Vec<u64>) {
-    (1, Vec::new())
+///
+/// One pass: `keep_thinned(fp, 2^k)` holds exactly when `mix(fp)` has at
+/// least k trailing zeros, so a histogram of trailing zeros gives every
+/// rate's survivor count at once. Only 0 has 64 (mix is a bijection), so
+/// for `room >= 1` the search ends by k = 64; `m` saturates at 2^63 there.
+pub(super) fn thinned_middle(cut: &[u64], kept: &[u64], room: usize) -> (u64, Vec<u64>) {
+    if room == 0 {
+        return (1, Vec::new());
+    }
+    let kept: HashSet<u64> = kept.iter().copied().collect();
+    let mut middle: Vec<u64> = cut
+        .iter()
+        .copied()
+        .filter(|fp| !kept.contains(fp))
+        .collect();
+    middle.sort_unstable();
+    middle.dedup();
+    let mut at_least = [0usize; 66];
+    for fp in &middle {
+        at_least[mix(*fp).trailing_zeros() as usize] += 1;
+    }
+    // Suffix sums: at_least[k] = survivors at rate 2^k.
+    for k in (0..65).rev() {
+        at_least[k] += at_least[k + 1];
+    }
+    let k = (0..=64).find(|&k| at_least[k] <= room).unwrap_or(64);
+    let sample = middle
+        .into_iter()
+        .filter(|fp| mix(*fp).trailing_zeros() as usize >= k)
+        .collect();
+    (1u64 << k.min(63), sample)
 }
 
 #[cfg(test)]
