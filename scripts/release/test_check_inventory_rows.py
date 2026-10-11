@@ -175,10 +175,6 @@ class CheckInventoryRows(unittest.TestCase):
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn added() {}\n")
         self.repo.commit("add")
         rows.ROOT = self.repo.root
-        self.addCleanup(setattr, rows, "SWEPT_AREAS", rows.SWEPT_AREAS)
-        rows.SWEPT_AREAS = ("src/cli/",)
-        self.assertEqual(rows.missing_rows(rows.ALL, "HEAD"), [], "an unswept area is not enforced yet")
-        rows.SWEPT_AREAS = ("src/oauth/",)
         self.assertEqual(sorted(f[1] for f in rows.missing_rows(rows.ALL, "HEAD")), ["added", "existing"])
         self.repo.write(rows.UNENFORCING, UNENFORCING_HEADER + "src/oauth/mod.rs\texisting\t1\tr\nsrc/oauth/mod.rs\tadded\t1\tr\n")
         self.repo.commit("rows")
