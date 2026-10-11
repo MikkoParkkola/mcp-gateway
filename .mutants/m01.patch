@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_view.rs b/src/security/firewall/collusion_view.rs
+index eeab7b6a2..28af79d21 100644
+--- a/src/security/firewall/collusion_view.rs
++++ b/src/security/firewall/collusion_view.rs
+@@ -187,7 +187,7 @@ pub(crate) fn build(
+         }
+         entries.vec.sort_unstable();
+         entries.vec.dedup();
+-        if entries.vec.len() > entry_cap {
++        if false && entries.vec.len() > entry_cap {
+             return Err(Unreadable::EntryCap);
+         }
+         Ok(())

@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_budget.rs b/src/security/firewall/collusion_budget.rs
+index 53b2b63b7..1a0203280 100644
+--- a/src/security/firewall/collusion_budget.rs
++++ b/src/security/firewall/collusion_budget.rs
+@@ -86,7 +86,7 @@ impl ViewCharge {
+ 
+ impl Drop for ViewCharge {
+     fn drop(&mut self) {
+-        let _ = self.resize(0);
++        let _ = &self.bytes;
+     }
+ }
+ 

@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_digest.rs b/src/security/firewall/collusion_digest.rs
+index eebcbaaff..f8550ca27 100644
+--- a/src/security/firewall/collusion_digest.rs
++++ b/src/security/firewall/collusion_digest.rs
+@@ -707,7 +707,7 @@ impl DeliveryDigest {
+             sensitive: self.sensitive,
+             deferred: false,
+             seam_sources: None,
+-            cut_fps: (!cut.is_empty()).then(|| cut.into()),
++            cut_fps: (cut.is_empty() && !cut.is_empty()).then(|| cut.into()),
+             seam_excuses: None,
+             joins: Joins::None,
+             judged: Judged::default(),
