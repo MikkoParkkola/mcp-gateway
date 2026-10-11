@@ -439,9 +439,7 @@ where
 fn prompts_list_fast_backend_not_stalled_by_hung_ones() {
     paused(|| async {
         tokio::time::pause();
-        // Virtual, so its length costs no real time; at the timing gate's
-        // floor so the gate's assert scan reads it as a window, not a race.
-        let window = Duration::from_secs(10);
+        let window = Duration::from_secs(1);
         let registry = Arc::new(BackendRegistry::new());
         let fast = ListWire::answering(
             "prompts/list",

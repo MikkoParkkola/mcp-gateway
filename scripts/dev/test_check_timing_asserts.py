@@ -202,6 +202,50 @@ class Timeouts(unittest.TestCase):
         text = f"#[tokio::test(start_paused = true)]\nasync fn paused() {{}}\n#[tokio::test]\nasync fn real() {{\n{body}\n}}\n"
         self.assertEqual([f.fn for f in guard.scan_timeouts("src/x_tests.rs", text, {}, {})], ["real"])
 
+    def test_a_paused_clock_exempts_an_assert_on_tokio_time_only(self):
+        # MIK-8360: the exemption the docstring promises for asserts, not only
+        # for timeouts. A tokio `Instant` is virtual on a paused clock; a
+        # std one is not, and a real clock is judged whatever the instant.
+        bound = "assert!(start.elapsed() < Duration::from_secs(1));"
+        tokio_start = "let start = tokio::time::Instant::now();"
+        cases = {
+            "paused by attribute, tokio instant": (
+                f"#[tokio::test(start_paused = true)]\nasync fn t() {{\n{tokio_start}\n{bound}\n}}\n",
+                [],
+            ),
+            "paused by call, tokio instant": (
+                f"#[tokio::test]\nasync fn t() {{\ntokio::time::pause();\n{tokio_start}\n{bound}\n}}\n",
+                [],
+            ),
+            "paused, bare instant imported from tokio": (
+                "use tokio::time::{sleep, Instant};\n"
+                f"#[tokio::test]\nasync fn t() {{\ntokio::time::pause();\nlet start = Instant::now();\n{bound}\n}}\n",
+                [],
+            ),
+            "paused, through an alias": (
+                f"#[tokio::test]\nasync fn t() {{\ntokio::time::pause();\n{tokio_start}\nlet took = start.elapsed();\n"
+                "assert!(took < Duration::from_secs(1));\n}\n",
+                [],
+            ),
+            "real clock, tokio instant": (
+                f"#[tokio::test]\nasync fn t() {{\n{tokio_start}\n{bound}\n}}\n",
+                ["under 5 s"],
+            ),
+            "paused, std instant": (
+                f"#[tokio::test]\nasync fn t() {{\ntokio::time::pause();\nlet start = std::time::Instant::now();\n{bound}\n}}\n",
+                ["under 5 s"],
+            ),
+            "paused, bare instant from std": (
+                "use std::time::Instant;\n"
+                f"#[tokio::test]\nasync fn t() {{\ntokio::time::pause();\nlet start = Instant::now();\n{bound}\n}}\n",
+                ["under 5 s"],
+            ),
+        }
+        for name, (text, rules) in cases.items():
+            with self.subTest(name):
+                found = guard.scan_text("src/x_tests.rs", text, {})
+                self.assertEqual([f.rule for f in found], rules, found)
+
     def test_the_handshake_shape_of_mik_8253_is_refused(self):
         self.assertRefused('timeout(Duration::from_millis(500), t.start()).await.expect("handshake").unwrap();')
 

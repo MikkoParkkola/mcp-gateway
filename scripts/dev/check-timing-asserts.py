@@ -26,7 +26,9 @@ timer slept against; and (MIK-8360) a short timeout reaching a product through
 a timeout-named builder or call (`.with_x_timeout(1 s)`), a timeout-named field
 (`timeout: 300 ms`), or a `timeout(W, ..)` whose result is asserted `is_ok`.
 A `// timing:` tag from the closed set, a `timing-oracle:`, or a paused clock
-exempts a site.
+exempts a site. For an elapsed bound, the paused clock exempts it only when
+the instant measured is tokio's: a `std::time::Instant` reads real time on a
+paused clock too (MIK-8360).
 
 Stated misses: `timeout_at`; a `select!` arm on `sleep`; a `let`-bound result
 first consumed over 2000 characters later; a fn that pauses the clock partway,
@@ -417,6 +419,9 @@ def scan_text(
         if hit is None:
             continue
         expr, side = hit
+        end = fns[at + 1][0] if at + 1 < len(fns) else len(code)
+        if paused_clock(code, start, end) and tokio_measured(side, lets, code):
+            continue
         value = resolve(expr, Scope(path, lets, file_consts, tree_consts, imports))
         if value is not None:
             seconds = value[0] if value[1] else value[0] * unit_of(side, names)
@@ -522,6 +527,29 @@ def scan_timeouts(
             )
         )
     return found
+
+
+TOKIO_INSTANT_IMPORT = re.compile(r"use\s+tokio::time::(?:Instant\b|\{[^}]*\bInstant\b)")
+
+
+def tokio_measured(side: str, lets: dict[str, str], code: str) -> bool:
+    """Whether the time `side` measures was read from tokio's clock: its root
+    `let` is `tokio::time::Instant::now()`, or a bare `Instant::now()` in a
+    file that imports tokio's `Instant`. Only that clock is virtual when
+    paused; a `std::time::Instant` keeps reading real time, so an assert on
+    it is judged on a paused clock too."""
+    seen: set[str] = set()
+    expr = side
+    while True:
+        if "Instant::now()" in expr:
+            return "tokio::time::Instant::now()" in expr or bool(
+                re.search(r"(?<![\w:])Instant::now\(\)", expr) and TOKIO_INSTANT_IMPORT.search(code)
+            )
+        root = re.match(r"\s*(\w+)", expr)
+        if not root or root.group(1) not in lets or root.group(1) in seen:
+            return False
+        seen.add(root.group(1))
+        expr = lets[root.group(1)]
 
 
 def paused_clock(code: str, fn_start: int, fn_end: int) -> bool:
