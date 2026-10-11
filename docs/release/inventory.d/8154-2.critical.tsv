@@ -1,0 +1,1 @@
+src/gateway/router/authorization.rs	sanitize_exempt	1	critical	d	sanitize_exempt	Decides whether a request skips the one sanitize step: exempt only when it has at least one backend target and every target is passthrough, a surfaced name judged on the caller view through the request memo; records the judged playbook digest the run compares (MIK-8154 SAN.1, C2e)
