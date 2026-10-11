@@ -187,15 +187,19 @@ impl MetaMcp {
                 continue;
             };
             let backend_killed = self.kill_switch.is_killed(&backend.name);
-            if let Some(tools) = Self::backend_tools_for_discovery(
+            let fetched = Self::backend_tools_for_discovery(
                 &backend,
                 allow_empty_cache_fetch,
                 binding.as_deref(),
                 &headers,
             )
-            .await
-            {
+            .await;
+            // An empty fill is a fill: index any slot this caller has filled,
+            // never one a failed fill left unpopulated (MIK-8356).
+            if fetched.is_some() || backend.holds_tools_for(binding.as_deref()) {
                 self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
+            }
+            if let Some(tools) = fetched {
                 let enriched: Vec<_> = tools
                     .iter()
                     .filter(|t| profile.tool_allowed(&t.name))
@@ -298,11 +302,15 @@ impl MetaMcp {
                 continue;
             };
             let backend_killed = self.kill_switch.is_killed(&backend.name);
-            if let Some(tools) =
+            let fetched =
                 Self::backend_tools_for_discovery(&backend, false, binding.as_deref(), &headers)
-                    .await
-            {
+                    .await;
+            // An empty fill is a fill: index any slot this caller has filled,
+            // never one a failed fill left unpopulated (MIK-8356).
+            if fetched.is_some() || backend.holds_tools_for(binding.as_deref()) {
                 self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
+            }
+            if let Some(tools) = fetched {
                 let enriched: Vec<_> = tools
                     .iter()
                     .filter(|t| profile.tool_allowed(&t.name))
@@ -598,11 +606,15 @@ impl MetaMcp {
                 continue;
             };
             let backend_killed = self.kill_switch.is_killed(&backend.name);
-            if let Some(tools) =
+            let fetched =
                 Self::backend_tools_for_discovery(&backend, false, binding.as_deref(), &headers)
-                    .await
-            {
+                    .await;
+            // An empty fill is a fill: index any slot this caller has filled,
+            // never one a failed fill left unpopulated (MIK-8356).
+            if fetched.is_some() || backend.holds_tools_for(binding.as_deref()) {
                 self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
+            }
+            if let Some(tools) = fetched {
                 for tool in tools.iter() {
                     if !profile.tool_allowed(&tool.name)
                         || !tool_matches_role(tool, role_filter)

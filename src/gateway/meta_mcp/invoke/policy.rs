@@ -25,6 +25,14 @@ impl MetaMcp {
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
         self.authorize_invocation(args, caller)?;
+        // A name this request's caller verdict withheld answers as absent here
+        // too, ahead of every replay layer this policy gates (MIK-8356).
+        if matches!(
+            crate::gateway::meta_mcp::visible::recorded_visibility(server, tool),
+            Some(crate::gateway::meta_mcp::visible::Visibility::Withheld(_))
+        ) {
+            return Err(crate::gateway::meta_mcp::visible::absent_name(tool));
+        }
         if let Err(reason) = validate_tool_name(tool) {
             return Err(Error::Protocol(format!(
                 "Invalid tool name '{tool}': {reason}"

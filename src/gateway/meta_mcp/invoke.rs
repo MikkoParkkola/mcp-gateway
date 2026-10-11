@@ -83,7 +83,7 @@ mod policy;
 mod post_dispatch;
 mod pre_dispatch;
 mod projection;
-pub(crate) use caller_verdict::CallerVerdict;
+pub(crate) use caller_verdict::{CallerVerdict, TargetNaming};
 mod propagation;
 pub(crate) use propagation::ResolvedDispatch;
 pub(crate) mod worker_clock; // MIK-8202 AC12/AC13: the task worker's clock channel

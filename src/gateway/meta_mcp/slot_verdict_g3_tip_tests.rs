@@ -34,7 +34,12 @@ async fn g3_c12_reload_between_verdict_and_dispatch() {
     let answer = with_visibility_memo(async {
         let verdict = fx
             .meta
-            .caller_verdict((BACKEND, TOOL), &identified_caller(&alpha), None)
+            .caller_verdict(
+                (BACKEND, TOOL),
+                &identified_caller(&alpha),
+                None,
+                super::invoke::TargetNaming::SurfacedName,
+            )
             .await
             .expect("the verdict resolves");
         assert!(

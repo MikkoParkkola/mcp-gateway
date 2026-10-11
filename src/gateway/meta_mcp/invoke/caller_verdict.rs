@@ -30,6 +30,32 @@ pub(crate) enum CallerVerdict {
     Unavailable,
 }
 
+/// How a call named its per-user target. It decides what a caller with no
+/// view of the backend is told (MIK-6745 consent-journey design, section 9.2,
+/// predicate D).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TargetNaming {
+    /// A surfaced tool called by its own name: no backend is named, so a
+    /// caller with no view lacks it and the call answers as absent.
+    SurfacedName,
+    /// `gateway_invoke`, a chain step or a playbook step naming the backend:
+    /// the dispatch keeps the account's connect offer, the same for every
+    /// tool name on it.
+    ExplicitBackend,
+}
+
+impl TargetNaming {
+    /// How the request named `server`'s `tool`: a surfaced name when the
+    /// call's own name is that surfaced tool.
+    pub(crate) fn of(meta: &MetaMcp, tool_name: &str, (server, tool): (&str, &str)) -> Self {
+        if tool == tool_name && meta.surfaced_server_unscoped(tool_name) == Some(server) {
+            Self::SurfacedName
+        } else {
+            Self::ExplicitBackend
+        }
+    }
+}
+
 /// What [`MetaMcp::judge_caller_slot`] found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SlotJudgement {
@@ -52,6 +78,7 @@ impl MetaMcp {
         (server, tool): (&str, &str),
         caller: &MetaMcpCallerContext<'_>,
         session_id: Option<&str>,
+        naming: TargetNaming,
     ) -> crate::Result<CallerVerdict> {
         let Some(backend) = self
             .backends
@@ -78,15 +105,28 @@ impl MetaMcp {
             visible::record_visibility(server, tool, Visibility::Withheld(Withholding::Lacked));
             return Ok(CallerVerdict::Absent);
         }
-        // A managed account with no current grant: nothing to judge and
-        // nothing to resolve here. A dispatch naming the backend explicitly
-        // answers with that account's connect offer (MIK-6745 consent-journey
-        // design, section 9.2, predicate D), the same for every tool name; a
-        // call by surfaced name names no backend and answers as absent
-        // (`route_direct_backend_call`). Resolving here would create a consent
-        // journey for a call that may answer as absent.
+        // A managed account with no current grant has no view (R3.7). Nothing
+        // is resolved here: resolving would create a consent journey. The
+        // marker makes every later listing withhold the backend at once. A call
+        // by surfaced name names no backend, so it lacks the tool and every
+        // reader after this answers as absent; a dispatch naming the backend
+        // proceeds to that account's connect offer, the same for every tool
+        // name (MIK-6745 section 9.2, predicate D).
         if self.has_no_view_for(&backend, proof).await {
-            return Ok(CallerVerdict::Proceed);
+            if let Some(principal) = self.principal_for(&backend, proof) {
+                backend.record_no_view(&principal.stable_actor_id());
+            }
+            return Ok(match naming {
+                TargetNaming::SurfacedName => {
+                    visible::record_visibility(
+                        server,
+                        tool,
+                        Visibility::Withheld(Withholding::Lacked),
+                    );
+                    CallerVerdict::Absent
+                }
+                TargetNaming::ExplicitBackend => CallerVerdict::Proceed,
+            });
         }
         let resolved = self
             .resolve_dispatch(
@@ -154,10 +194,14 @@ impl MetaMcp {
         self.remember_caller_slot(backend, proof, binding);
         let (recorded, judgement) = match verdict? {
             CatalogueVerdict::Offers => (Some(Visibility::Visible), SlotJudgement::Offered),
-            CatalogueVerdict::Withholds => (
-                Some(Visibility::Withheld(Withholding::Schema)),
-                SlotJudgement::Absent,
-            ),
+            CatalogueVerdict::Withholds => {
+                let reason = if backend.is_blocked_tool(tool) {
+                    Withholding::Descriptor
+                } else {
+                    Withholding::Schema
+                };
+                (Some(Visibility::Withheld(reason)), SlotJudgement::Absent)
+            }
             CatalogueVerdict::Lacks => (
                 Some(Visibility::Withheld(Withholding::Lacked)),
                 SlotJudgement::Absent,

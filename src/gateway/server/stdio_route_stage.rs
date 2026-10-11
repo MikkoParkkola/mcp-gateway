@@ -107,7 +107,16 @@ impl Gateway {
         for target in &targets {
             let checked = target.as_target();
             let _ = meta_mcp
-                .caller_verdict((checked.server, checked.tool), caller, Some(session_id))
+                .caller_verdict(
+                    (checked.server, checked.tool),
+                    caller,
+                    Some(session_id),
+                    crate::gateway::meta_mcp::invoke::TargetNaming::of(
+                        meta_mcp,
+                        tool_name,
+                        (checked.server, checked.tool),
+                    ),
+                )
                 .await;
         }
         // X14 decides a task-augmented call, so it needs the session's task

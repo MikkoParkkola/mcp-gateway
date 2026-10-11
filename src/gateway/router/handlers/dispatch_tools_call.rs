@@ -395,6 +395,11 @@ pub(super) async fn tools_call(
                 (target.server, target.tool),
                 &caller,
                 Some(session_id.as_str()),
+                crate::gateway::meta_mcp::invoke::TargetNaming::of(
+                    &state.meta_mcp,
+                    tool_name,
+                    (target.server, target.tool),
+                ),
             )
             .await;
     }
