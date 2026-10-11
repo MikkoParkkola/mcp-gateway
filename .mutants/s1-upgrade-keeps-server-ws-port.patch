@@ -1,0 +1,12 @@
+diff --git a/src/commands/retired_config_keys.rs b/src/commands/retired_config_keys.rs
+index b10fa7f8b..b2ca32d0c 100644
+--- a/src/commands/retired_config_keys.rs
++++ b/src/commands/retired_config_keys.rs
+@@ -38,7 +38,6 @@ const REMOVED: &[(&[&str], OnLoad)] = &[
+     (&["backends", "*", "circuit_breaker"], OnLoad::Refuses),
+     (&["marketplace"], OnLoad::Refuses),
+     (&["server", "request_timeout"], OnLoad::Refuses),
+-    (&["server", "ws_port"], OnLoad::Refuses),
+     (&["cost_governance", "currency"], OnLoad::Refuses),
+ ];
+ 

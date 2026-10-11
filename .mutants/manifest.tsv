@@ -1,0 +1,4 @@
+head_sha	6a9f940cb2b479d14a16d806d5376fe218bf1bb2
+s1-upgrade-keeps-server-ws-port	linux	s1-upgrade-keeps-server-ws-port.patch	--test e2e_quickstart_minimal_config a_three_x_config_is_refused_then_serves_after_upgrade
+s2-refusal-names-no-upgrade	linux	s2-refusal-names-no-upgrade.patch	--test e2e_quickstart_minimal_config a_three_x_config_is_refused_then_serves_after_upgrade
+s3-quickstart-drops-chmod	linux	s3-quickstart-drops-chmod.patch	--test e2e_quickstart_minimal_config the_documented_minimal_config_fits_one_screen_and_names_one_backend

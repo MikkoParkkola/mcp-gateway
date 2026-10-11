@@ -1,0 +1,13 @@
+diff --git a/src/config/strict_keys.rs b/src/config/strict_keys.rs
+index e1dc7474c..97c4d58e6 100644
+--- a/src/config/strict_keys.rs
++++ b/src/config/strict_keys.rs
+@@ -207,7 +207,7 @@ fn removed_refusal(path: &Path, removed: &[(&str, &str)]) -> String {
+     for (key, why) in removed {
+         let _ = write!(message, " {}", removed_reason(key, why));
+     }
+-    message.push_str(" Run `mcp-gateway upgrade`, which deletes them, or delete them by hand.");
++    message.push_str(" Delete them by hand.");
+     message
+ }
+ 

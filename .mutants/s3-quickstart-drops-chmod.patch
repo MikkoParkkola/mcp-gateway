@@ -1,0 +1,15 @@
+diff --git a/docs/QUICKSTART.md b/docs/QUICKSTART.md
+index f786da14b..05b5803b0 100644
+--- a/docs/QUICKSTART.md
++++ b/docs/QUICKSTART.md
+@@ -82,9 +82,7 @@ run. The capability directory may stay empty until step 3.
+ The gateway refuses a config file other users can read, because it can hold
+ credentials, so make it yours alone:
+ 
+-```bash
+-chmod 600 gateway.yaml
+-```
++
+ 
+ ### 3. Add Capabilities
+ 
