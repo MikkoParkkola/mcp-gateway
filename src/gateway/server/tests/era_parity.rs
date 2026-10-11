@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8368: stdio refuses, from the body alone, what `/mcp` refuses for a
-//! request that declares MCP 2026-07-28: methods the revision removed, a
-//! revision this build does not serve, a method whose capability the client did
-//! not declare. Wire strings are written out, never taken from the constants.
+//! MIK-8368: stdio refuses, from the body alone, the methods MCP 2026-07-28
+//! removed, as `/mcp` does for a request that declares that revision. Wire
+//! strings are written out, never taken from the constants. The unserved-revision
+//! and undeclared-capability refusals stay HTTP-only (see the batch row).
 
 use super::*;
 use serde_json::{Value, json};
@@ -162,118 +162,28 @@ async fn legacy_and_other_notifications_keep_today_s_answers() {
     }
 }
 
-/// ERA.3a: a revision this build does not serve, or serves with modern support
-/// off, is refused -32022; the same revision with support on is served; the
-/// version refusal comes first.
+/// A modern call inside a batch is still served, and a removed method inside a
+/// batch is still refused. Why stdio shares only the removed-method refusal: a
+/// batch runs its items with `StdioClient::modern` off, so sharing the
+/// unserved-revision refusal would refuse every modern call in a batch.
 #[tokio::test]
-async fn modern_stdio_refuses_an_unserved_revision() {
-    let unserved = send(
-        true,
-        modern_request(Some(1), "tools/list", "1999-01-01", json!({})),
-    )
-    .await
-    .expect("answers");
-    assert_eq!(unserved["error"]["code"], -32022, "{unserved}");
-    assert_eq!(
-        unserved["error"]["message"],
-        "unsupported protocol version '1999-01-01'"
-    );
-    assert_eq!(
-        unserved["error"]["data"]["supportedVersions"],
-        json!(["2026-07-28"])
-    );
-
-    let disabled = send(
-        false,
-        modern_request(Some(2), "tools/list", "2026-07-28", json!({})),
-    )
-    .await
-    .expect("answers");
-    assert_eq!(disabled["error"]["code"], -32022, "{disabled}");
-    assert_eq!(disabled["error"]["data"]["supportedVersions"], json!([]));
-
-    let served = send(
-        true,
-        modern_request(Some(3), "tools/list", "2026-07-28", json!({})),
-    )
-    .await
-    .expect("answers");
-    assert!(served.get("error").is_none(), "{served}");
-
-    let first = send(
-        true,
-        modern_request(Some(4), "ping", "1999-01-01", json!({})),
-    )
-    .await
-    .expect("answers");
-    assert_eq!(
-        first["error"]["code"], -32022,
-        "version before removed: {first}"
-    );
-}
-
-/// ERA.3b: a method that needs a capability the client did not declare is
-/// refused -32021 naming it; declared, the request passes the check; legacy
-/// keeps today's answer.
-#[tokio::test]
-async fn modern_stdio_refuses_an_undeclared_capability() {
-    for (method, capability) in [
-        ("sampling/createMessage", "sampling"),
-        ("elicitation/create", "elicitation"),
-        ("roots/list", "roots"),
-    ] {
-        let refused = send(
-            true,
-            modern_request(Some(1), method, "2026-07-28", json!({})),
-        )
-        .await
-        .expect("answers");
-        assert_eq!(refused["error"]["code"], -32021, "{method}: {refused}");
-        assert_eq!(
-            refused["error"]["message"],
-            format!("client did not declare the '{capability}' capability")
-        );
-        assert_eq!(
-            refused["error"]["data"]["requiredCapabilities"],
-            json!([capability])
-        );
-
-        let declared = send(
-            true,
-            modern_request(Some(2), method, "2026-07-28", json!({ capability: {} })),
-        )
-        .await
-        .expect("answers");
-        assert_ne!(declared["error"]["code"], -32021, "{method}: {declared}");
-
-        let legacy = send(true, legacy_request(Some(3), method))
-            .await
-            .expect("answers");
-        assert_ne!(legacy["error"]["code"], -32021, "{method}: {legacy}");
-    }
-}
-
-/// A batch item runs with modern serving off (a batch is a legacy shape), so a
-/// modern item newly gets -32022 with an empty list (stated in the PR).
-#[tokio::test]
-async fn a_modern_batch_item_is_refused_as_unserved() {
+async fn a_modern_batch_keeps_serving_and_still_refuses_removed_methods() {
     let answers = Gateway::dispatch_batch_with_sink(
         &test_meta_mcp(),
         &test_tool_policy(),
         &test_mtls_policy(),
-        json!([modern_request(
-            Some(1),
-            "tools/list",
-            "2026-07-28",
-            json!({})
-        )]),
+        json!([
+            modern_request(Some(1), "tools/list", "2026-07-28", json!({})),
+            modern_request(Some(2), "ping", "2026-07-28", json!({})),
+        ]),
         "era-batch",
         &super::super::StdioTelemetry::default(),
     )
     .await;
-    assert_eq!(answers.len(), 1, "{answers:?}");
-    assert_eq!(answers[0]["error"]["code"], -32022, "{}", answers[0]);
-    assert_eq!(answers[0]["error"]["data"]["supportedVersions"], json!([]));
+    assert_eq!(answers.len(), 2, "{answers:?}");
+    assert!(answers[0].get("error").is_none(), "{}", answers[0]);
+    assert_eq!(answers[1]["error"]["code"], -32601, "{}", answers[1]);
+    assert_eq!(answers[1]["error"]["message"], removed_text("ping"));
 }
 
 /// A request that declares the revision and omits a required field is

@@ -262,7 +262,7 @@ async fn staged_request(
         channel: &crate::gateway::input_bridge::NoClientChannel,
         handshake_capabilities: crate::protocol::meta::Declared::NONE,
         tasks: None,
-        modern: true,
+        modern: false,
         sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
     };
     let ((answer, staged), hidden) = crate::gateway::outbound::read_scoped(
@@ -635,7 +635,7 @@ async fn stdio_gateway_built_refusal_is_sent_as_written() {
         channel: &crate::gateway::input_bridge::NoClientChannel,
         handshake_capabilities: crate::protocol::meta::Declared::NONE,
         tasks: None,
-        modern: true,
+        modern: false,
         sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
     };
     let ((answer, staged), hidden) = crate::gateway::outbound::read_scoped(

@@ -346,7 +346,7 @@ async fn stdio_dispatch_bytes(stack: &StdioStack, size: usize) -> u64 {
                 channel: &crate::gateway::input_bridge::NoClientChannel,
                 handshake_capabilities: crate::protocol::meta::Declared::NONE,
                 tasks: None,
-                modern: true,
+                modern: false,
                 sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
             },
             &telemetry,

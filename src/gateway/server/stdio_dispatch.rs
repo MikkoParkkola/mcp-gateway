@@ -49,7 +49,7 @@ impl Gateway {
             let mut sink = protocol_telemetry_sink
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            Self::parse_and_observe(&request, (session_id, client.modern), sink.as_mut())
+            Self::parse_and_observe(&request, session_id, sink.as_mut())
         };
         let (id, method, params, request_shape) = match parsed {
             Ok(parsed) => parsed,
@@ -264,7 +264,7 @@ impl Gateway {
     /// carries an already-serialized error response.
     fn parse_and_observe<'r>(
         request: &'r serde_json::Value,
-        (session_id, modern_enabled): (&str, bool),
+        session_id: &str,
         protocol_telemetry_sink: Option<
             &mut crate::protocol_revision_telemetry::DurableTelemetrySink,
         >,
@@ -320,21 +320,15 @@ impl Gateway {
         // Notifications have no id — send no response. One exception
         // (MIK-8368): a MODERN request that names a method the revision removed
         // and carries an id is a request, and HTTP refuses it, so it is refused
-        // here too, version first. Every other notification stays silent,
-        // whatever its id, era or revision.
+        // here too. Every other notification stays silent, whatever its id, era
+        // or revision.
         if method.starts_with("notifications/") {
-            if let (Some(id), crate::protocol::meta::RequestShape::Modern(fields)) =
+            if let (Some(id), crate::protocol::meta::RequestShape::Modern(_)) =
                 (id.as_ref(), &request_shape)
                 && let Some(removed) =
                     crate::protocol::modern_refusal::removed_method_refusal(Some(id), &method)
             {
-                let refusal = crate::protocol::modern_refusal::unsupported_modern_version(
-                    Some(id),
-                    fields,
-                    modern_enabled,
-                )
-                .unwrap_or(removed);
-                return Err(Some(refusal.to_value_lossy()));
+                return Err(Some(removed.to_value_lossy()));
             }
             debug!(notification = %method, "stdio: notification (no response)");
             return Err(None);
@@ -346,24 +340,19 @@ impl Gateway {
             return Err(Some(resp.to_value_lossy()));
         };
 
-        // The refusals `/mcp` runs from the body alone, before anything acts on
-        // the request: a revision this build does not serve, an undeclared
-        // capability, a method the revision removed. The header checks are
-        // HTTP-only (stdio carries no headers). One function answers both
-        // transports (MIK-8368).
-        if let crate::protocol::meta::RequestShape::Modern(fields) = &request_shape {
-            let refusal = crate::protocol::modern_refusal::unsupported_modern_version(
-                Some(&id),
-                fields,
-                modern_enabled,
-            )
-            .or_else(|| {
-                crate::protocol::modern_refusal::modern_method_refusal(Some(&id), fields, &method)
-                    .map(|(rpc, _)| rpc)
-            });
-            if let Some(rpc) = refusal {
-                return Err(Some(rpc.to_value_lossy()));
-            }
+        // A method the 2026-07-28 revision removed is refused before anything
+        // acts on it, as `/mcp` refuses it, by the same function (MIK-8368).
+        // The other body-only refusals `/mcp` runs (an unserved revision, an
+        // undeclared capability) stay HTTP-only here: a batch runs its items
+        // with `StdioClient::modern` off, so sharing them would refuse every
+        // modern call inside a batch.
+        if matches!(
+            request_shape,
+            crate::protocol::meta::RequestShape::Modern(_)
+        ) && let Some(removed) =
+            crate::protocol::modern_refusal::removed_method_refusal(Some(&id), &method)
+        {
+            return Err(Some(removed.to_value_lossy()));
         }
 
         Ok((id, method, params, request_shape))

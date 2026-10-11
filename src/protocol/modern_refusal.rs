@@ -1,10 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The refusals a MODERN (2026-07-28) request faces from its body alone
-//! (MIK-8368). `/mcp` and stdio both call these, so one request earns one
-//! answer on either transport. Checks that read an HTTP header (the served
-//! revision header, duplicate headers, the header-against-body mirror) are not
-//! here: stdio carries no headers.
+//! (MIK-8368). `/mcp` calls all of them; stdio calls [`removed_method_refusal`],
+//! so a removed method earns one answer on either transport. Checks that read an
+//! HTTP header (the served revision header, duplicate headers, the
+//! header-against-body mirror) are not here: stdio carries no headers. The
+//! unserved-revision and undeclared-capability refusals are body-only but stay
+//! HTTP-only: a stdio batch runs its items with modern serving off
+//! (`StdioClient::modern`), so sharing them would refuse every modern call in
+//! a batch.
 //!
 //! Each function takes the request's [`RequestFields`], so a legacy or malformed
 //! request never reaches it: those shapes are refused (or not) by their own
