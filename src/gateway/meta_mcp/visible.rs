@@ -295,6 +295,8 @@ pub(crate) mod seams {
     }
 
     /// Run `hook` once, the next time a route stage on this thread finishes.
+    /// Gated as its only caller, row 14 (router `withheld_parity_tests`), is.
+    #[cfg(feature = "firewall")]
     pub(crate) fn after_route_stage(hook: impl FnOnce() + 'static) {
         AFTER_ROUTE_STAGE.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     }
@@ -317,10 +319,16 @@ mod memo_tests {
 
     const WITHHELD: Visibility = Visibility::Withheld(Withholding::Schema);
 
-    fn recorded(server: &str, tool: &str) -> Option<Option<Visibility>> {
+    /// What the open scope's memo holds for `(server, tool)`; panics outside
+    /// a scope (the rows below check that separately).
+    fn recorded(server: &str, tool: &str) -> Option<Visibility> {
         VISIBILITY_MEMO
             .try_with(|memo| memo.recorded(server, tool))
-            .ok()
+            .expect("inside a visibility memo scope")
+    }
+
+    fn in_scope() -> bool {
+        VISIBILITY_MEMO.try_with(|_| ()).is_ok()
     }
 
     #[test]
@@ -337,7 +345,7 @@ mod memo_tests {
         with_visibility_memo(async {
             VISIBILITY_MEMO.with(|memo| memo.record("alpha", "read", WITHHELD));
             with_visibility_memo(async {
-                assert_eq!(recorded("alpha", "read"), Some(Some(WITHHELD)));
+                assert_eq!(recorded("alpha", "read"), Some(WITHHELD));
             })
             .await;
         })
@@ -346,7 +354,7 @@ mod memo_tests {
 
     #[tokio::test]
     async fn outside_a_scope_there_is_no_memo_and_scopes_do_not_leak() {
-        assert_eq!(recorded("alpha", "read"), None);
+        assert!(!in_scope(), "a memo outside any request scope");
         with_visibility_memo(async {
             VISIBILITY_MEMO.with(|memo| memo.record("alpha", "read", WITHHELD));
         })
@@ -354,7 +362,7 @@ mod memo_tests {
         with_visibility_memo(async {
             assert_eq!(
                 recorded("alpha", "read"),
-                Some(None),
+                None,
                 "a second request saw the first's memo"
             );
         })
