@@ -468,7 +468,8 @@ fn normalised(body: &str, tool: &str) -> (String, usize) {
 async fn f5a_stdio_route_authorize_refusal_resolves_nothing() {
     async fn chain(second: Option<&str>) -> (Value, usize, usize) {
         let stdio = operator_stdio();
-        let mut steps = vec![json!({"tool": format!("{BACKEND}:{TOOL}"), "arguments": {"folder": "inbox"}})];
+        let mut steps =
+            vec![json!({"tool": format!("{BACKEND}:{TOOL}"), "arguments": {"folder": "inbox"}})];
         if let Some(second) = second {
             steps.push(json!({"tool": format!("{BACKEND}:{second}"), "arguments": {}}));
         }
@@ -479,7 +480,11 @@ async fn f5a_stdio_route_authorize_refusal_resolves_nothing() {
                 json!({"name": "gateway_execute", "arguments": {"chain": steps}}),
             )
             .await;
-        (answer, stdio.gateway.releases(), stdio.gateway.requests().len())
+        (
+            answer,
+            stdio.gateway.releases(),
+            stdio.gateway.requests().len(),
+        )
     }
     let (hidden, releases, requests) = chain(Some("run_command")).await;
     let (missing, _, _) = chain(Some("nosuch")).await;

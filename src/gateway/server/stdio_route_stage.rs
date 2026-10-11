@@ -78,7 +78,11 @@ impl Gateway {
                     )
                     .map(|_| ())
             } else {
-                meta_mcp.authorize_route_target(scope, (checked.server, checked.tool), checked.arguments)
+                meta_mcp.authorize_route_target(
+                    scope,
+                    (checked.server, checked.tool),
+                    checked.arguments,
+                )
             };
             if let Err(error) = routed {
                 // A step's target is operator-defined: its refusal is neutral (A3).
@@ -134,7 +138,12 @@ impl Gateway {
         }
         // MIK-8361, as on `/mcp`: recorded, so the gate answers it absent.
         let invisible = meta_mcp
-            .invisible_call(tool_name, (&targets, request_targets), caller, Some(session_id))
+            .invisible_call(
+                tool_name,
+                (&targets, request_targets),
+                caller,
+                Some(session_id),
+            )
             .await;
         if invisible {
             return (RouteStage::Absent, witness);

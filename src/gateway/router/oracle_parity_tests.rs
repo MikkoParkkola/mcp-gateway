@@ -5,7 +5,6 @@
 //! rows S1-S6. The twins are `oracle_parity_fixture`'s; each panics
 //! "premise" when its setup does not hold.
 
-
 use super::oracle_parity_fixture::{
     Answered, Args, Entry, List, Reason, STATE_ENTRIES, Side, State, TOOL, Twin, assert_cells,
     mismatch, pair, twin,
@@ -51,7 +50,12 @@ async fn oracle2_schema_descriptor_profile_answer_as_the_missing_name() {
             reason,
             ..State::WARM
         };
-        for entry in [Entry::Invoke, Entry::Execute, Entry::Direct, Entry::Surfaced] {
+        for entry in [
+            Entry::Invoke,
+            Entry::Execute,
+            Entry::Direct,
+            Entry::Surfaced,
+        ] {
             for args in [Args::Clean, Args::Tripping] {
                 let (withheld, absent) = Box::pin(pair(entry, args, state)).await;
                 let cell = format!("{reason:?} {entry:?}/{args:?}");
@@ -85,13 +89,14 @@ async fn f2_the_firewall_records_both_names_alike() {
             };
             let (w, a) = (rows(&withheld), rows(&absent));
             if w != a || a.is_empty() {
-                cells.push(format!("{entry:?}/{args:?}: request rows withheld {w:?} vs absent {a:?}"));
+                cells.push(format!(
+                    "{entry:?}/{args:?}: request rows withheld {w:?} vs absent {a:?}"
+                ));
             }
         }
     }
     assert_cells("F2", &cells);
 }
-
 
 /// Every cell of `state` on [`STATE_ENTRIES`], clean arguments.
 async fn state_cells(row: &str, state: State) -> Vec<(String, Answered, Answered)> {
@@ -115,7 +120,10 @@ async fn s1_standard_complete_answers_both_and_forwards_neither() {
     for (cell, withheld, absent) in state_cells("S1", state).await {
         cells.extend(mismatch(&cell, &withheld, &absent));
         if absent.calls != 0 {
-            cells.push(format!("{cell}: the missing name was forwarded: {}", absent.body));
+            cells.push(format!(
+                "{cell}: the missing name was forwarded: {}",
+                absent.body
+            ));
         }
     }
     assert_cells("S1", &cells);
@@ -177,7 +185,10 @@ async fn assert_residual(row: &str, state: State) {
     let mut cells = Vec::new();
     for (cell, withheld, absent) in state_cells(row, state).await {
         if withheld.calls != 0 {
-            cells.push(format!("{cell}: the withheld name was sent: {}", withheld.body));
+            cells.push(format!(
+                "{cell}: the withheld name was sent: {}",
+                withheld.body
+            ));
         }
         if absent.calls != 1 {
             cells.push(format!(
@@ -221,4 +232,3 @@ async fn s3b_failed_fill_standard_withholds_and_forwards_the_missing_name() {
     };
     assert_residual("S3b", state).await;
 }
-

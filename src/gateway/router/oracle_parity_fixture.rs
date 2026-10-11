@@ -265,7 +265,11 @@ pub(super) async fn twin_surfacing(side: Side, state: State, surface_tool: bool)
     // R6: the withheld twin's profile denies the tool, the absent twin's
     // only `other`, so both run under a restricting profile.
     let profile = (state.reason == Reason::Profile).then(|| {
-        let denied = if side == Side::Withheld { TOOL } else { "other" };
+        let denied = if side == Side::Withheld {
+            TOOL
+        } else {
+            "other"
+        };
         let mut profiles = std::collections::HashMap::new();
         profiles.insert(
             "restricted".to_string(),
@@ -362,7 +366,12 @@ impl Twin {
         );
         if !blocked {
             let cached = backend.get_cached_tool(TOOL);
-            assert_eq!(cached.is_some(), withheld, "premise: {:?} catalogue", self.side);
+            assert_eq!(
+                cached.is_some(),
+                withheld,
+                "premise: {:?} catalogue",
+                self.side
+            );
             if let Some(cached) = cached {
                 assert_eq!(
                     crate::capability::validator::input_schema_is_structurally_valid(

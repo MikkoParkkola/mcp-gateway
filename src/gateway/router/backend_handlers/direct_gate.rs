@@ -62,10 +62,11 @@ pub(super) async fn guard_before_credential(
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
         let absent = crate::gateway::meta_mcp::visible::absent_name(tool);
-        let response = crate::gateway::meta_mcp::response_security::error_response_preserving_status(
-            scope.id.clone(),
-            &absent,
-        );
+        let response =
+            crate::gateway::meta_mcp::response_security::error_response_preserving_status(
+                scope.id.clone(),
+                &absent,
+            );
         return Err(super::super::helpers::build_http_response(
             &crate::gateway::meta_mcp::invoke::egress::Egressed::gateway_own(response),
             axum::http::StatusCode::OK,

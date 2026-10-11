@@ -75,7 +75,8 @@ async fn apply_backend_tool_call_security(
     // MIK-7570.SCHEMA.1 (R2), F13: above the passthrough return, so a
     // passthrough backend is checked too.
     let lens = crate::backend::Lens::Catalogue;
-    if let Some(rejection) = key_check::key_refusal(backend, (slot, failed), params, (id, lens)).await
+    if let Some(rejection) =
+        key_check::key_refusal(backend, (slot, failed), params, (id, lens)).await
     {
         return Err(rejection);
     }
@@ -221,10 +222,11 @@ async fn guard_tool_call(
     // A withheld name is always answered; were it not, it is still never sent.
     Err(answered.await.unwrap_or_else(|| {
         let absent = crate::gateway::meta_mcp::visible::absent_name(tool_name);
-        let response = crate::gateway::meta_mcp::response_security::error_response_preserving_status(
-            id.clone(),
-            &absent,
-        );
+        let response =
+            crate::gateway::meta_mcp::response_security::error_response_preserving_status(
+                id.clone(),
+                &absent,
+            );
         super::helpers::build_http_response(
             &crate::gateway::meta_mcp::invoke::egress::Egressed::gateway_own(response),
             StatusCode::OK,

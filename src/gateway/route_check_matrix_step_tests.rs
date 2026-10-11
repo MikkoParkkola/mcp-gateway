@@ -369,7 +369,10 @@ async fn stdio_chain_with_a_denied_last_target_charges_no_earlier_target() {
         missing[0]
     );
     let (hidden_text, missing_text) = (hidden[0].to_string(), missing[0].to_string());
-    let (named, twin_named) = (hidden_text.matches("write").count(), missing_text.matches("nosuch").count());
+    let (named, twin_named) = (
+        hidden_text.matches("write").count(),
+        missing_text.matches("nosuch").count(),
+    );
     assert!(
         named >= 1 && named == twin_named,
         "premise: each answer names its own step, as often ({named} vs {twin_named}): \

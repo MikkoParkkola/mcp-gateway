@@ -121,8 +121,7 @@ async fn a_direct_call_keeps_its_own_session() {
     // a name the backend does not list, not by the profile's name.
     assert!(
         answer["result"]["isError"] == true
-            && answer["result"]["content"][0]["text"]
-                == crate::backend::text_absent("alpha_read"),
+            && answer["result"]["content"][0]["text"] == crate::backend::text_absent("alpha_read"),
         "the owner's own profile was not applied: {answer}"
     );
 }

@@ -109,7 +109,9 @@ async fn authz_20_refused_call_consumes_no_nonce() {
     denied_caller.signing = Some(&denied_signing);
     let refused = meta.invoke_tool(&denied_args, None, &denied_caller).await;
     assert!(
-        refused.as_ref().is_ok_and(|answer| answer["isError"] == json!(true)),
+        refused
+            .as_ref()
+            .is_ok_and(|answer| answer["isError"] == json!(true)),
         "the call must be refused, as a missing name: {refused:?}"
     );
     meta.settle_nonce_refund(

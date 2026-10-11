@@ -125,7 +125,11 @@ async fn twin(side: Side, reason: Reason, surface_tool: bool) -> Twin {
     // v2 item 2: the withheld twin's catalogue holds the name, the absent
     // twin's lacks it.
     let cached = backend.get_cached_tool(TOOL);
-    assert_eq!(cached.is_some(), side == Side::Withheld, "premise: {side:?} catalogue");
+    assert_eq!(
+        cached.is_some(),
+        side == Side::Withheld,
+        "premise: {side:?} catalogue"
+    );
     if let Some(cached) = cached {
         assert_eq!(
             crate::capability::validator::input_schema_is_structurally_valid(&cached.input_schema),

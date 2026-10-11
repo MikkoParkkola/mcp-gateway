@@ -141,8 +141,7 @@ async fn lacks_every_tool(fx: &Fx, bearer: Option<&str>) {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["error"]["code"], -32601, "{body}");
     assert_eq!(
-        body["error"]["message"],
-        "JSON-RPC error -32601: Unknown tool: read",
+        body["error"]["message"], "JSON-RPC error -32601: Unknown tool: read",
         "{body}"
     );
     assert_eq!(fx.gateway.dispatched(), 0, "a refusal reached the backend");

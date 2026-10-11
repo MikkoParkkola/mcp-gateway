@@ -24,7 +24,9 @@ impl MetaMcp {
         // A resolution the caller verdict carried for this step is the one
         // its dispatch will use: derive from it, with no second mint (fold F6).
         if let Some(binding) =
-            crate::gateway::meta_mcp::visible::with_carried(server, tool, |carried| carried.resolved.binding.clone())
+            crate::gateway::meta_mcp::visible::with_carried(server, tool, |carried| {
+                carried.resolved.binding.clone()
+            })
         {
             return Ok(crate::protocol::mrtr::source_fingerprint(
                 caller.principal_source(binding.as_deref()),

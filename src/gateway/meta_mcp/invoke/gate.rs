@@ -99,7 +99,9 @@ impl MetaMcp {
         let Some(backend) = self.backends.get(server) else {
             return false;
         };
-        let refused = self.may_invoke(server, tool, caller.scope(), session_id).is_err();
+        let refused = self
+            .may_invoke(server, tool, caller.scope(), session_id)
+            .is_err();
         let reason = if refused {
             // Whatever the backend-wide checks say: the gate answers them
             // for this name as for a missing one.
@@ -109,7 +111,10 @@ impl MetaMcp {
         {
             return false;
         } else {
-            match self.shared_verdict(&backend, tool, backend.gate_headers()).await {
+            match self
+                .shared_verdict(&backend, tool, backend.gate_headers())
+                .await
+            {
                 // Under `off` a lacked name is forwarded: not the gate's.
                 Shared::Withheld(Withholding::Lacked) if !backend.checks_membership() => {
                     return false;
@@ -153,7 +158,12 @@ impl MetaMcp {
     /// Whether the routing profile in force for `session_id` excludes
     /// `(server, tool)`: a reason a listing hides it (R6), for the direct
     /// route, whose authorize does not read profiles.
-    pub(crate) fn profile_refuses(&self, server: &str, tool: &str, session_id: Option<&str>) -> bool {
+    pub(crate) fn profile_refuses(
+        &self,
+        server: &str,
+        tool: &str,
+        session_id: Option<&str>,
+    ) -> bool {
         self.profile_refusal(server, tool, session_id).is_some()
     }
 

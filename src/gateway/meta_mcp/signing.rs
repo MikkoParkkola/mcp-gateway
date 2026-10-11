@@ -605,7 +605,8 @@ impl super::MetaMcp {
             return false;
         };
         self.backends.get(server).is_some_and(|backend| {
-            self.may_invoke(server, tool, caller.scope(), session).is_err()
+            self.may_invoke(server, tool, caller.scope(), session)
+                .is_err()
                 || backend.blocked_tool_refusal(None, tool).is_some()
         })
     }

@@ -36,7 +36,9 @@ enum Reason {
 /// row asserts the withheld call is not sent.
 fn definition(reason: Reason) -> String {
     let metadata = match reason {
-        Reason::Admin => "  exposure: public\n  read_only: false\n  registers_external_callback: true\n",
+        Reason::Admin => {
+            "  exposure: public\n  read_only: false\n  registers_external_callback: true\n"
+        }
         Reason::Grant => {
             "  exposure: personal\n  read_only: true\n  identity_owner:\n    authority: api_key\n    subject: alice\n"
         }
@@ -57,7 +59,10 @@ fn definition(reason: Reason) -> String {
 
 /// A capability backend defining [`CAP`] (withheld twin) or nothing.
 fn capabilities(reason: Reason, defines: bool) -> Arc<CapabilityBackend> {
-    let backend = Arc::new(CapabilityBackend::new(CAPS, Arc::new(CapabilityExecutor::new())));
+    let backend = Arc::new(CapabilityBackend::new(
+        CAPS,
+        Arc::new(CapabilityExecutor::new()),
+    ));
     if defines {
         let parsed = crate::capability::parse_capability(&definition(reason))
             .expect("the fixture capability parses");
@@ -72,7 +77,9 @@ fn capabilities(reason: Reason, defines: bool) -> Arc<CapabilityBackend> {
 async fn twin(reason: Reason, withheld: bool) -> Fx {
     let caps = capabilities(reason, withheld);
     let fx = fixture_firewalled_built(Answer::Ok, move |meta| {
-        let meta = meta.with_identity_grants(crate::identity_grants::LocalIdentityGrantStore::from_grants(Vec::new()));
+        let meta = meta.with_identity_grants(
+            crate::identity_grants::LocalIdentityGrantStore::from_grants(Vec::new()),
+        );
         meta.set_capabilities(caps);
         meta
     })
@@ -131,5 +138,9 @@ async fn oracle2_capability_reasons_answer_as_the_undefined_name() {
             }
         }
     }
-    assert!(cells.is_empty(), "ORACLE.2 capability:\n{}", cells.join("\n"));
+    assert!(
+        cells.is_empty(),
+        "ORACLE.2 capability:\n{}",
+        cells.join("\n")
+    );
 }

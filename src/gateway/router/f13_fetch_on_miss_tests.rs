@@ -595,9 +595,8 @@ async fn f13_t7b_tool_added_upstream_is_judged_after_refetch() {
     assert_eq!(fx.rec.calls(), 1);
 }
 
-/// F13-T10b: complete slot, invented tool name, `standard`: MIK-8361 answers
-/// it with text A, never forwarded, counted `input_schema_refused_absent`, not
-/// `input_schema_absent_forward` nor `input_schema_unknown`.
+/// F13-T10b: complete slot, invented name, `standard`: MIK-8361 answers text A,
+/// never forwarded, counted `input_schema_refused_absent` and no other kind.
 #[cfg(feature = "metrics")]
 #[test]
 fn f13_t10b_absent_forward_is_its_own_label() {
@@ -614,12 +613,13 @@ fn f13_t10b_absent_forward_is_its_own_label() {
         let (_, body) = call(&fx.router, Route::Direct, "nosuch", &json!({}), None).await;
         (body, fx.rec)
     });
-    let text_a = crate::backend::text_absent("nosuch");
-    assert!(refused_with(&body, &text_a), "{body}");
+    let absent = crate::backend::text_absent("nosuch");
+    assert!(refused_with(&body, &absent), "{body}");
     assert_eq!(rec.calls(), 0, "a complete list's lack must not forward");
-    let refused = kind_counted(&rendered, "input_schema_refused_absent");
-    let other = ["input_schema_absent_forward", "input_schema_unknown"];
-    assert!(refused && !other.iter().any(|k| kind_counted(&rendered, k)), "{rendered}");
+    let counted = |k: &str| kind_counted(&rendered, k);
+    let refused = counted("input_schema_refused_absent");
+    let others = counted("input_schema_absent_forward") || counted("input_schema_unknown");
+    assert!(refused && !others, "{rendered}");
 }
 
 /// F13-T11: the first cold call carries its `Mcp-Param-*` mirror, because the

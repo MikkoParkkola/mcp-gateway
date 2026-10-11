@@ -380,11 +380,15 @@ async fn a_withheld_target_spends_its_nonce_as_a_missing_name_does() {
     let (missing, missing_replay) =
         spend_then_replay(&stdio, missing_tool, "a2-missing-0001").await;
     assert!(
-        missing.to_string().contains(&crate::backend::text_absent(missing_tool)),
+        missing
+            .to_string()
+            .contains(&crate::backend::text_absent(missing_tool)),
         "premise: the twin is answered as a missing name: {missing}"
     );
     assert!(
-        hidden.to_string().contains(&crate::backend::text_absent(DENIED)),
+        hidden
+            .to_string()
+            .contains(&crate::backend::text_absent(DENIED)),
         "the withheld target is answered as a missing name: {hidden}"
     );
     assert!(

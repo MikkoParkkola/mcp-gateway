@@ -38,7 +38,11 @@ async fn t4_the_session_profile_applies_on_the_direct_route() {
             Some(&session),
         )
         .await;
-        assert_eq!(status, StatusCode::OK, "{backend}: premise, listed: {listed}");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{backend}: premise, listed: {listed}"
+        );
         let warm = fx.calls.load(Ordering::SeqCst);
         let call = |tool: &'static str| {
             post_direct(&fx, backend, "k-std", tool, json!({}), None, Some(&session))
@@ -50,7 +54,10 @@ async fn t4_the_session_profile_applies_on_the_direct_route() {
         let (missing_status, missing) = call("nosuch").await;
         assert_eq!(
             (status, body.to_string()),
-            (missing_status, missing.to_string().replace("nosuch", "read")),
+            (
+                missing_status,
+                missing.to_string().replace("nosuch", "read")
+            ),
             "{backend}: the profile's refusal differs from a missing name"
         );
         assert!(
@@ -145,13 +152,18 @@ async fn a_withheld_target_pays_its_nonce_as_a_missing_name_does_on_mcp() {
         let (session, _rx) = fx.state.multiplexer.get_or_create_session_for(None, &owner);
         let uri = format!("/mcp/{backend}");
         let (status, listed) = send(&fx, &uri, "k-std", "tools/list", json!({}), None).await;
-        assert_eq!(status, StatusCode::OK, "{backend}: premise, listed: {listed}");
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{backend}: premise, listed: {listed}"
+        );
         fx.state
             .meta_mcp
             .session_profiles()
             .set_profile(&session, "no-alpha-read");
         let warm = fx.calls.load(Ordering::SeqCst);
-        let factored = |(status, body): (StatusCode, String)| (status, body.replace("nosuch", "read"));
+        let factored =
+            |(status, body): (StatusCode, String)| (status, body.replace("nosuch", "read"));
 
         let hidden = signed_invoke(&fx, &session, (backend, "read"), json!(42)).await;
         let missing = signed_invoke(&fx, &session, (backend, "nosuch"), json!(42)).await;
@@ -159,16 +171,24 @@ async fn a_withheld_target_pays_its_nonce_as_a_missing_name_does_on_mcp() {
             missing.1.contains("\"error\""),
             "{backend}: premise, a missing name's malformed nonce is refused: {missing:?}"
         );
-        assert_eq!(hidden, factored(missing), "{backend}: the malformed-nonce channel");
+        assert_eq!(
+            hidden,
+            factored(missing),
+            "{backend}: the malformed-nonce channel"
+        );
 
-        let hidden_replay = spend_then_replay(&fx, &session, (backend, "read"), "a2-mcp-hidden-0001").await;
+        let hidden_replay =
+            spend_then_replay(&fx, &session, (backend, "read"), "a2-mcp-hidden-0001").await;
         let missing_replay =
             spend_then_replay(&fx, &session, (backend, "nosuch"), "a2-mcp-missing-0001").await;
         assert!(
             !missing_replay.1.contains("replay"),
             "{backend}: premise, a missing name's nonce is given back: {missing_replay:?}"
         );
-        assert_eq!(hidden_replay, missing_replay, "{backend}: the replay channel");
+        assert_eq!(
+            hidden_replay, missing_replay,
+            "{backend}: the replay channel"
+        );
         assert_eq!(fx.calls.load(Ordering::SeqCst), warm, "{backend}: sent");
     }
 }

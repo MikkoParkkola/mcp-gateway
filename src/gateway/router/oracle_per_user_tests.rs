@@ -158,7 +158,9 @@ async fn call_as(gw: &Gateway, entry: Entry, args: Value, identified: bool) -> (
     }
     let response = gw.router.clone().oneshot(request).await.expect("response");
     let status = response.status();
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("body");
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
     let mut value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     if let Some(obj) = value.as_object_mut() {
         obj.remove("id");
@@ -184,9 +186,15 @@ async fn p1_a_policy_withheld_name_answers_absent_with_no_fill_or_mint() {
         // Calibration (v2 item 8): the missing name's fill does mint, so the
         // withheld side's zero is not a counter that never moves.
         if absent.mints() == 0 {
-            cells.push(format!("P1 {entry:?}: premise: the missing name minted nothing"));
+            cells.push(format!(
+                "P1 {entry:?}: premise: the missing name minted nothing"
+            ));
         }
-        let (mints, lists, sent) = (withheld.mints(), withheld.caller.lists(), withheld.dispatched());
+        let (mints, lists, sent) = (
+            withheld.mints(),
+            withheld.caller.lists(),
+            withheld.dispatched(),
+        );
         if (mints, lists, sent) != (0, 0, 0) {
             cells.push(format!(
                 "P1 {entry:?}: withheld minted {mints}, listed {lists}, sent {sent}"
@@ -218,7 +226,9 @@ async fn p4_a_failed_fill_leaves_the_withheld_name_absent() {
             ));
         }
         if a.1.pointer("/error/code") == Some(&json!(-32601)) {
-            cells.push(format!("P4 {entry:?}: the residual moved, missing answered {a:?}"));
+            cells.push(format!(
+                "P4 {entry:?}: the residual moved, missing answered {a:?}"
+            ));
         }
     }
     assert!(cells.is_empty(), "P4:\n{}", cells.join("\n"));
@@ -232,10 +242,18 @@ async fn c2_a_firewall_refused_direct_call_resolves_no_credential() {
     let cmd = [";", " rm", " -rf", " / "].concat();
     let answer = call(&gw, Entry::Direct, json!({ "cmd": cmd })).await;
     assert!(
-        answer.1.pointer("/error/message").and_then(Value::as_str).is_some_and(|m| m.contains("Firewall")),
+        answer
+            .1
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .is_some_and(|m| m.contains("Firewall")),
         "premise: the firewall refused: {answer:?}"
     );
-    assert_eq!(gw.mints(), 0, "C2: a refused call resolved a credential: {answer:?}");
+    assert_eq!(
+        gw.mints(),
+        0,
+        "C2: a refused call resolved a credential: {answer:?}"
+    );
     assert_eq!(gw.dispatched(), 0, "C2: sent: {answer:?}");
 }
 
@@ -256,7 +274,11 @@ async fn list_as_alpha(gw: &Gateway) {
         issuer: "https://issuer.example.invalid".to_string(),
     });
     let response = gw.router.clone().oneshot(request).await.expect("response");
-    assert_eq!(response.status(), StatusCode::OK, "premise: alpha's listing answered");
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "premise: alpha's listing answered"
+    );
 }
 
 /// P3: the per-user lifecycle. Cold slot, then listed (warm), then evicted:
@@ -315,7 +337,11 @@ async fn p5_the_caller_slot_not_the_shared_one_decides() {
     )
     .await;
     let answer = call(&gw, Entry::Invoke, json!({"q": "x"})).await;
-    assert_eq!(gw.caller.calls(), 1, "P5: alpha's offered tool was not sent: {answer:?}");
+    assert_eq!(
+        gw.caller.calls(),
+        1,
+        "P5: alpha's offered tool was not sent: {answer:?}"
+    );
 }
 
 /// alpha's upstream after an eviction: the catalogue it served before
@@ -334,7 +360,9 @@ impl crate::transport::Transport for Rescripted {
         _params: Option<Value>,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
         let body = if method == "tools/list" {
-            self.asked.lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.asked
+                .lists
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let mut tools = vec![json!({"name": "note", "description": "A ledger tool.",
                 "inputSchema": valid()})];
             if self.holds {
@@ -343,7 +371,9 @@ impl crate::transport::Transport for Rescripted {
             }
             json!({ "tools": tools })
         } else {
-            self.asked.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.asked
+                .calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             json!({"content": [{"type": "text", "text": "ok"}], "isError": false})
         };
         Ok(crate::protocol::JsonRpcResponse::success(
@@ -374,7 +404,8 @@ fn rescript(gw: &Gateway, holds: bool) {
         holds,
         asked: Arc::clone(&gw.caller),
     };
-    gw.backend.set_pooled_transport_for_test(&key, Arc::new(upstream));
+    gw.backend
+        .set_pooled_transport_for_test(&key, Arc::new(upstream));
 }
 
 /// ORACLE.4, no principal (lead ruling 2026-10-11, MIK-8356 R3.7): on the
@@ -391,7 +422,11 @@ async fn c5_direct_no_principal_answers_absent_and_resolves_nothing() {
         cells.push(format!("C5: answered {answer:?}"));
     }
     if (gw.mints(), gw.dispatched()) != (0, 0) {
-        cells.push(format!("C5: minted {}, sent {}", gw.mints(), gw.dispatched()));
+        cells.push(format!(
+            "C5: minted {}, sent {}",
+            gw.mints(),
+            gw.dispatched()
+        ));
     }
     assert!(cells.is_empty(), "C5:\n{}", cells.join("\n"));
 }

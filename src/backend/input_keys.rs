@@ -120,7 +120,10 @@ impl Backend {
     pub(crate) fn gate_headers(&self) -> &'static [(String, String)] {
         static CALLER_CREDENTIALED: std::sync::LazyLock<[(String, String); 1]> =
             std::sync::LazyLock::new(|| {
-                [("x-mcp-gateway-caller-credentialed".to_string(), String::new())]
+                [(
+                    "x-mcp-gateway-caller-credentialed".to_string(),
+                    String::new(),
+                )]
             });
         if self.propagates_caller_identity() {
             CALLER_CREDENTIALED.as_slice()

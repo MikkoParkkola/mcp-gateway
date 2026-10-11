@@ -819,9 +819,9 @@ mod grant_slot_wrap_tests;
 #[cfg(test)]
 mod grant_withheld_parity_tests;
 #[cfg(test)]
-mod oracle_audit_tests;
-#[cfg(test)]
 mod guide_alloc_tests;
+#[cfg(test)]
+mod oracle_audit_tests;
 #[cfg(test)]
 #[path = "policy_epoch_tests.rs"]
 mod policy_epoch_tests;

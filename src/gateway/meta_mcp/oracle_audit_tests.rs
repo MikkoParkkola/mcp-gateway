@@ -38,7 +38,10 @@ fn ungranted(
     let caps = if defines {
         capability_backend(endpoint.port, ALICE)
     } else {
-        Arc::new(CapabilityBackend::new(CAPS, Arc::new(CapabilityExecutor::new())))
+        Arc::new(CapabilityBackend::new(
+            CAPS,
+            Arc::new(CapabilityExecutor::new()),
+        ))
     };
     meta.set_capabilities(caps);
     (meta, log)
@@ -87,13 +90,19 @@ async fn a1_a2_a_withheld_call_is_recorded_and_an_outage_is_counted_not_answered
     log.fail_next_append_of_kind_for_test(DECISION_KIND);
     let answered = invoke(&withheld).await;
     if answered != absent {
-        cells.push(format!("A2: withheld during the outage {answered} vs undefined {absent}"));
+        cells.push(format!(
+            "A2: withheld during the outage {answered} vs undefined {absent}"
+        ));
     }
     let counted = log.append_failures() - before;
     if counted != 1 {
         cells.push(format!("A2: {counted} append failures counted, expected 1"));
     }
-    assert_eq!(endpoint.arrivals(), 0, "a withheld call reached the endpoint");
+    assert_eq!(
+        endpoint.arrivals(),
+        0,
+        "a withheld call reached the endpoint"
+    );
     assert!(cells.is_empty(), "A1/A2:\n{}", cells.join("\n"));
 }
 
@@ -194,9 +203,14 @@ async fn a3a_a_withheld_steps_failed_record_is_isolated() {
     // flush of the granted step's: the first grant-record append from now.
     seams::fail_append_at_for_test(1);
     let answered = chain(&withheld).await;
-    assert_eq!(answered, absent, "A3a: withheld {answered} vs undefined {absent}");
+    assert_eq!(
+        answered, absent,
+        "A3a: withheld {answered} vs undefined {absent}"
+    );
     assert!(
-        decisions(&dir).iter().any(|d| d.to_string().contains(PERSONAL)),
+        decisions(&dir)
+            .iter()
+            .any(|d| d.to_string().contains(PERSONAL)),
         "A3a: the granted step's record was not written: {:?}",
         decisions(&dir)
     );

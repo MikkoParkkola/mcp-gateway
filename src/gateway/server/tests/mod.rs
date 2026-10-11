@@ -110,12 +110,12 @@ mod hardened_destination;
 mod stdio_teardown_bound;
 
 // MIK-7684: the stdio reader never waits for stdout room.
+#[cfg(feature = "firewall")]
+mod oracle_parity_stdio;
 mod stdio_reader_unparked;
 /// MIK-8340: a withheld surfaced name answers on stdio as an absent one.
 #[cfg(feature = "firewall")]
 mod withheld_parity_stdio;
-#[cfg(feature = "firewall")]
-mod oracle_parity_stdio;
 
 // MIK-8356 C3, C10: a stdio call judged by the sole operator's own slot.
 mod slot_verdict_g2_stdio;

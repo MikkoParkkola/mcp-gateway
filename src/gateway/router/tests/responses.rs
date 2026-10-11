@@ -573,12 +573,20 @@ async fn backend_handler_tools_call_enforces_api_key_tool_scope() {
     let json: Value = serde_json::from_slice(&body).unwrap();
     assert!(json.get("error").is_none(), "{json}");
     assert_eq!(json["result"]["isError"], true, "{json}");
-    let text = json["result"]["content"][0]["text"].as_str().unwrap_or_default();
+    let text = json["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
     assert!(
         text.contains("could not read this tool's input schema") && !text.contains("allowlist"),
         "{json}"
     );
-    assert!(!transport.request_methods.lock().unwrap().contains(&"tools/call".to_string()));
+    assert!(
+        !transport
+            .request_methods
+            .lock()
+            .unwrap()
+            .contains(&"tools/call".to_string())
+    );
 }
 
 #[tokio::test]

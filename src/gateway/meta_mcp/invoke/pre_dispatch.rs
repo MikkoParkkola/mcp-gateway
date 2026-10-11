@@ -277,7 +277,10 @@ impl MetaMcp {
     /// so a withheld name and a lacked one are answered by the same bytes.
     pub(super) async fn seal_key_refusal(
         &self,
-        (caller, session_id): (&crate::gateway::meta_mcp::MetaMcpCallerContext<'_>, Option<&str>),
+        (caller, session_id): (
+            &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
+            Option<&str>,
+        ),
         (server, tool): (&str, &str),
         refusal: Result<Option<Value>>,
         (managed, verified_identity, checked_at): (
