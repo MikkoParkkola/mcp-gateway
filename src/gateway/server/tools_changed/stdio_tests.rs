@@ -76,7 +76,7 @@ async fn the_stop_lock_is_held_across_the_final_send() {
         stopping.try_lock().is_none(),
         "the stop lock was free between the final check and the enqueue"
     );
-    drop(release.send(()));
+    let _ = release.send(());
     tokio::time::timeout(BOUND, queue.recv())
         .await
         .expect("the frame within the bound")

@@ -168,7 +168,7 @@ pub(crate) fn final_send_pause(key: usize) {
         .expect("pause slot")
         .take_if(|(armed, _, _)| *armed == key);
     if let Some((_, reached, release)) = armed {
-        drop(reached.send(()));
-        drop(release.recv_timeout(std::time::Duration::from_secs(20)));
+        let _ = reached.send(());
+        let _ = release.recv_timeout(std::time::Duration::from_secs(20));
     }
 }
