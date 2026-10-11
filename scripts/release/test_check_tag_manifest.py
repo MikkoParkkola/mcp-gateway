@@ -3095,6 +3095,150 @@ class VariantStage(unittest.TestCase):
             "the variant stage does not pin the NodeSource signing key fingerprint",
         )
 
+    def test_the_variant_installs_what_a_deployment_declares(self):
+        stage = self.variant_stage()
+        self.assertRegex(
+            stage,
+            r"COPY[^\n]*docker/entrypoint-full\.sh",
+            "the variant does not copy the entrypoint into the image",
+        )
+        self.assertRegex(
+            stage,
+            r"ENTRYPOINT \[[^\]]*entrypoint-full\.sh",
+            "the variant does not run its own entrypoint",
+        )
+        script = (
+            pathlib.Path(__file__).parents[2] / "docker" / "entrypoint-full.sh"
+        ).read_text()
+        self.assertIn(
+            "EXTRA_APT_PACKAGES",
+            script,
+            "the entrypoint ignores the packages a deployment declares",
+        )
+        self.assertRegex(
+            script,
+            r"apt-get install",
+            "the entrypoint never installs anything",
+        )
+        # Installing needs root, but the image must not *default* to it: a
+        # deployment asks for root itself, and the entrypoint drops back.
+        self.assertEqual(
+            re.findall(r"(?m)^USER\s+(\S+)\s*$", stage)[-1],
+            "gateway",
+            "the variant leaves the image declaring root as its user",
+        )
+
+    def test_a_deployment_gets_its_startup_steps_before_the_gateway(self):
+        script = (
+            pathlib.Path(__file__).parents[2] / "docker" / "entrypoint-full.sh"
+        ).read_text()
+        self.assertRegex(
+            script,
+            r"/docker-entrypoint\.d",
+            "the entrypoint has no drop-in directory for a deployment's steps",
+        )
+        self.assertRegex(
+            script,
+            r"\.envsh\)\s*\.\s*\"\$f\"|\.\s*\"\$f\"",
+            "the entrypoint does not source an envsh drop-in",
+        )
+        self.assertRegex(
+            script,
+            r"\[ ! -x \"\$f\" \]",
+            "the entrypoint runs a drop-in that arrived without the exec bit",
+        )
+        run = script.index("run_dropins\n")
+        drop = script.index("setpriv --reuid=gateway")
+        self.assertLess(
+            run,
+            drop,
+            "the entrypoint drops privileges before a deployment's steps run, "
+            "so a step that needs root would fail",
+        )
+        self.assertEqual(
+            script.count("run_dropins\n"),
+            2,
+            "a path through the entrypoint skips the drop-ins: root and "
+            "non-root each call them once",
+        )
+
+    def test_the_variant_keeps_the_default_invocation(self):
+        # An ENTRYPOINT declared in the stage resets the CMD the base stage set.
+        # The variant's own invocation carries no arguments, so a variant
+        # without it execs a gateway with no config that starts and never exits.
+        self.assertRegex(
+            self.variant_stage(),
+            r'(?m)^CMD \["--config", "/config\.yaml"\]',
+            "the variant declares an ENTRYPOINT without the base stage's CMD, "
+            "so its default invocation is not the image's",
+        )
+
+    def test_a_startup_that_cannot_finish_stops_the_container(self):
+        script = self.entrypoint_script()
+        self.assertRegex(
+            script,
+            r"apt-get update[^\n]*&&[^\n]*apt-get install",
+            "the entrypoint does not run the update and install as one chain",
+        )
+        # `set -e` does not end the script on a failing link of an `&&` list, so
+        # the chain's status has to be carried to an explicit exit.
+        self.assertRegex(
+            script,
+            r"install failed[^\n]*\n\s*exit 1",
+            "the entrypoint does not stop the container when the install fails",
+        )
+        self.assertRegex(
+            script,
+            r"DEBIAN_FRONTEND=noninteractive",
+            "the entrypoint lets apt prompt, which no container can answer",
+        )
+        self.assertRegex(
+            script,
+            r"timeout -k \d+ \"\$INSTALL_TIMEOUT\"",
+            "the entrypoint leaves the install unbounded",
+        )
+        # PID 1 ignores SIGTERM with no handler installed, so without a trap a
+        # stop during the install waits out the grace period and SIGKILLs.
+        self.assertRegex(
+            script,
+            r"trap \w+ TERM",
+            "the entrypoint does not handle a stop while the install runs",
+        )
+
+    def test_the_privilege_drop_names_the_user_it_drops_to(self):
+        script = self.entrypoint_script()
+        # A numeric group id is whatever this distribution put in it, and Debian
+        # puts an unrelated `users` there.
+        self.assertRegex(
+            script,
+            r"setpriv --reuid=gateway --regid=gateway --init-groups",
+            "the entrypoint drops to a fixed id rather than the image's user",
+        )
+        self.assertNotRegex(
+            script,
+            r"--groups=\d",
+            "the entrypoint drops to a fixed group id",
+        )
+
+    def test_the_lists_cleanup_removes_the_directory(self):
+        script = self.entrypoint_script()
+        self.assertRegex(
+            script,
+            r"(?m)^\s*rm -rf /var/lib/apt/lists\s*$",
+            "the entrypoint leaves the apt indexes it fetched in the image",
+        )
+        self.assertNotRegex(
+            script,
+            r"/var/lib/apt/lists/\*",
+            "the cleanup globs a directory whose indexes stay while globbing is "
+            "off in that shell",
+        )
+
+    def entrypoint_script(self):
+        return (
+            pathlib.Path(__file__).parents[2] / "docker" / "entrypoint-full.sh"
+        ).read_text()
+
     def test_the_node_and_npm_assertions_are_at_build_time(self):
         self.assertRegex(
             self.body,
@@ -3222,6 +3366,42 @@ class VariantGateCoverage(unittest.TestCase):
             self.body,
             r"(?s)probe\(\)\s*\{.*?did not finish within",
             "the variant gate never reports which probe timed out",
+        )
+
+    def test_the_gate_exercises_the_root_path(self):
+        # Every other run of this image is the image's own user, so the root
+        # path -- install, steps as root, drop, exec -- is untested without a
+        # leg of its own.
+        for probe, label in (
+            (r"\-\-user root", "the root path"),
+            (r"EXTRA_APT_PACKAGES=iproute2", "a declared package"),
+            (r"/docker-entrypoint\.d", "a mounted startup step"),
+        ):
+            self.assertRegex(
+                self.body, probe, f"the variant gate never exercises {label}"
+            )
+        # The two failures a deployment has to hear about: a step that exits
+        # non-zero, and an install that cannot complete.
+        self.assertRegex(
+            self.body,
+            r"(?s)exit 7.*?FAIL_LOG|FAIL_LOG.*?exit 7",
+            "the variant gate never runs a startup step that fails",
+        )
+        self.assertRegex(
+            self.body,
+            r"BAD_LOG",
+            "the variant gate never runs an install that cannot complete",
+        )
+        # A stop during startup is the case PID 1 hangs on.
+        self.assertRegex(
+            self.body,
+            r"docker stop -t \d+",
+            "the variant gate never stops the image while startup is running",
+        )
+        self.assertRegex(
+            self.body,
+            r"proc/1/status",
+            "the variant gate never checks which user the gateway runs as",
         )
 
 

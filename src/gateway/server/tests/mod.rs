@@ -53,6 +53,8 @@ mod stdio_hardened_signing;
 
 mod stdio_sole_operator;
 
+mod playbook_retry_stdio;
+
 mod stdio_catalogue_sole_operator;
 
 #[cfg(feature = "cost-governance")]

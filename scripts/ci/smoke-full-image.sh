@@ -22,13 +22,20 @@ PROBE_TIMEOUT=60
 SOLVE_TIMEOUT=180
 REMOTE_TIMEOUT=120
 PULL_TIMEOUT=300
+# The root path's own budget: the install is bounded by INSTALL_TIMEOUT in the
+# entrypoint, and a startup step is as slow as the deployment wrote it.
+STARTUP_TIMEOUT=300
+
+WORKDIR="${RUNNER_TEMP:-/tmp}"
+ROOT_CASE="smoke-full-root-$$"
+STOP_CASE="smoke-full-stop-$$"
 
 # Probe output lands here rather than in a command substitution: `fail` has to
 # report and exit from this shell, and inside a substitution it would only exit
 # the subshell, leaving the caller to report the same fault again with the
 # annotation for its own empty capture.
-ANSWER="${RUNNER_TEMP:-/tmp}/smoke-full-answer.$$"
-trap 'rm -f "${ANSWER}"' EXIT
+ANSWER="${WORKDIR}/smoke-full-answer.$$"
+trap 'rm -f "${ANSWER}"; docker rm -f "${ROOT_CASE}" "${STOP_CASE}" > /dev/null 2>&1 || true' EXIT
 
 # Make the image local before the first probe. On a runner that has not pulled
 # this digest, `docker run` writes its pull progress to stderr, and
@@ -65,6 +72,29 @@ probe() {
     fail "$3 did not finish within ${1}s, so the network or the runtime stopped answering: $(cat "${ANSWER}")"
   fi
   return "${rc}"
+}
+
+# The root path -- `--user root` with EXTRA_APT_PACKAGES and a mounted startup
+# step -- is entrypoint code no other leg reaches: every run above and in
+# smoke-image.sh is the image's own user. It installs before it execs, so the
+# wait covers the install too.
+wait_for_gateway() {
+  local name="$1"
+  for _ in $(seq 1 $((STARTUP_TIMEOUT / 2))); do
+    # Captured and compared, never piped into `grep -q` (pipefail); a
+    # container already gone reads as not running.
+    running="$(docker inspect -f '{{.State.Running}}' "${name}" 2>/dev/null || true)"
+    if [ "${running}" != "true" ]; then
+      docker logs "${name}"
+      fail "exited during startup"
+    fi
+    if docker exec "${name}" wget --spider -q http://localhost:39400/health 2>/dev/null; then
+      return 0
+    fi
+    sleep 2
+  done
+  docker logs "${name}"
+  fail "never served /health on the root path"
 }
 
 if ! probe "${PROBE_TIMEOUT}" 'node --version' node; then
@@ -109,4 +139,94 @@ fi
 
 "$(dirname "$0")/smoke-image.sh" "${IMAGE}"
 
-echo "${IMAGE} spawns npx and uvx backends and its caches are writable by the service user"
+# Root path, declared package: the step runs as root and after the install, and
+# the gateway it execs is the image's user, not root.
+ROOTDIR="${WORKDIR}/smoke-full-root-$$"
+mkdir -p "${ROOTDIR}/steps"
+cat > "${ROOTDIR}/steps/10-package.sh" <<'STEP'
+#!/bin/sh
+ip -V > /dev/null 2>&1 || { echo "iproute2 is missing" >&2; exit 1; }
+echo "step: ran as uid $(id -u)"
+STEP
+chmod 0755 "${ROOTDIR}/steps/10-package.sh"
+docker run -d --name "${ROOT_CASE}" --pull never --user root \
+  -e EXTRA_APT_PACKAGES=iproute2 \
+  -v "${ROOTDIR}/steps:/docker-entrypoint.d:ro" \
+  -v "${WORKDIR}/smoke.yaml:/config.yaml:ro" \
+  "${IMAGE}" --config /config.yaml > /dev/null
+wait_for_gateway "${ROOT_CASE}"
+# Matched from a captured string, never through a pipe: under pipefail,
+# `grep -q` exits on its first match and the writer's SIGPIPE (141) fails a
+# pipeline that did match, once the output outgrows the pipe buffer.
+ROOT_LOG="$(docker logs "${ROOT_CASE}" 2>&1)"
+grep -q 'step: ran as uid 0' <<< "${ROOT_LOG}" \
+  || fail "the startup step did not run as root"
+if ! UID_LINE="$(docker exec "${ROOT_CASE}" sh -c 'grep -m1 "^Uid:" /proc/1/status')"; then
+  fail "cannot read the uid of the gateway process"
+fi
+case "${UID_LINE}" in
+  *1001*) ;;
+  *) fail "the gateway runs as '${UID_LINE}', not the image's user 1001" ;;
+esac
+docker exec "${ROOT_CASE}" sh -c 'ip -V' > /dev/null \
+  || fail "EXTRA_APT_PACKAGES=iproute2 left no ip(8) in the image"
+docker rm -f "${ROOT_CASE}" > /dev/null
+
+# Root path, a startup step that fails: the container stops, so a deployment
+# hears about it instead of serving from a half-configured start.
+FAILDIR="${WORKDIR}/smoke-full-fail-$$"
+mkdir -p "${FAILDIR}/steps"
+printf '#!/bin/sh\necho "step: refusing to start" >&2\nexit 7\n' \
+  > "${FAILDIR}/steps/10-fail.sh"
+chmod 0755 "${FAILDIR}/steps/10-fail.sh"
+if FAIL_LOG="$(docker run --rm --user root \
+      -v "${FAILDIR}/steps:/docker-entrypoint.d:ro" \
+      -v "${WORKDIR}/smoke.yaml:/config.yaml:ro" \
+      "${IMAGE}" --config /config.yaml 2>&1)"; then
+  fail "a startup step that fails does not stop the container"
+fi
+grep -q 'step: refusing to start' <<< "${FAIL_LOG}" \
+  || fail "the container stopped without running the failing startup step"
+
+# Root path, installed package that does not exist: the install fails and the
+# container stops rather than starting without the package it declared. Pointing
+# apt at an empty source makes the update fail here rather than at a mirror.
+BADDIR="${WORKDIR}/smoke-full-bad-$$"
+mkdir -p "${BADDIR}"
+printf 'Types: deb\nURIs: file:/nonexistent-smoke-full\nSuites: trixie\nComponents: main\n' \
+  > "${BADDIR}/empty.sources"
+if BAD_LOG="$(docker run --rm --user root \
+      -e EXTRA_APT_PACKAGES=iproute2 \
+      -v "${BADDIR}/empty.sources:/etc/apt/sources.list.d/debian.sources:ro" \
+      -v /dev/null:/etc/apt/sources.list.d/nodesource.sources:ro \
+      -v "${WORKDIR}/smoke.yaml:/config.yaml:ro" \
+      "${IMAGE}" --config /config.yaml 2>&1)"; then
+  fail "a failed EXTRA_APT_PACKAGES install does not stop the container"
+fi
+grep -q 'EXTRA_APT_PACKAGES install failed' <<< "${BAD_LOG}" \
+  || fail "the container stopped without reporting the failed install"
+
+# Root path, a stop while startup is still running: the entrypoint is PID 1
+# then, and PID 1 ignores SIGTERM with no handler installed, so `docker stop`
+# would wait out the whole grace period and then SIGKILL. The step stands in for
+# an install, which is the same wait.
+SLOWDIR="${WORKDIR}/smoke-full-slow-$$"
+mkdir -p "${SLOWDIR}/steps"
+printf '#!/bin/sh\nsleep 120\n' > "${SLOWDIR}/steps/10-slow.sh"
+chmod 0755 "${SLOWDIR}/steps/10-slow.sh"
+docker run -d --name "${STOP_CASE}" --pull never --user root \
+  -v "${SLOWDIR}/steps:/docker-entrypoint.d:ro" \
+  "${IMAGE}" --config /config.yaml > /dev/null
+sleep 3
+STARTED="$(date +%s)"
+docker stop -t 30 "${STOP_CASE}" > /dev/null
+ELAPSED="$(( $(date +%s) - STARTED ))"
+if [ "${ELAPSED}" -ge 15 ]; then
+  fail "docker stop took ${ELAPSED}s during startup: the entrypoint ignored SIGTERM"
+fi
+STOP_EXIT="$(docker inspect -f '{{.State.ExitCode}}' "${STOP_CASE}")"
+[ "${STOP_EXIT}" != "137" ] \
+  || fail "the entrypoint was SIGKILLed during startup (exit 137)"
+docker rm -f "${STOP_CASE}" > /dev/null
+
+echo "${IMAGE} spawns npx and uvx backends, its caches are writable by the service user, and its root path installs, drops privileges, stops on a failing step or install, and stops promptly on TERM"

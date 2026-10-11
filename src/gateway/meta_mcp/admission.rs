@@ -517,10 +517,10 @@ impl MetaMcp {
             }
             return Ok(SyncAdmission::Unprotected);
         }
-        let is_modern = caller.is_modern;
+        caller.retry.refuse_on_playbook_run(tool_name)?; // MIK-8341: before any reservation
         // These operations cannot execute on a sessionless protocol. Preserve
         // their protocol refusal before asking for or reserving a retry key.
-        if is_modern {
+        if caller.is_modern {
             match tool_name {
                 "gateway_set_profile" => {
                     return Err(Error::Protocol(super::NO_SESSION_FOR_PROFILE.to_string()));
@@ -545,7 +545,7 @@ impl MetaMcp {
         {
             let full = execution_arguments_cow(&mut operation_arguments);
             return self.admit_sync(
-                is_modern,
+                caller.is_modern,
                 verified_identity,
                 owner_principal,
                 retry,
@@ -572,7 +572,7 @@ impl MetaMcp {
             operation["playbook"] = json!(crate::hashing::canonical_json_sha256(&value));
         }
         let mut admission = self.admit_operation(
-            is_modern,
+            caller.is_modern,
             verified_identity,
             owner_principal,
             retry,
