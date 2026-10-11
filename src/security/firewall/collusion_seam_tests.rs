@@ -186,7 +186,9 @@ fn a_run_over_many_short_leaves_is_seamed_throughout() {
     );
 }
 
-/// `MIK-8113.SEAM.4`: 10,000 one-char leaves from 100 steps, one pass.
+/// `MIK-8113.SEAM.4`: 10,000 one-char leaves from 100 steps are read in
+/// linear work: each form once, each of its k-grams hashed once and visited
+/// at most once more. Counted, not timed, so load cannot fail it (MIK-8360).
 #[test]
 fn many_tiny_leaves_are_read_in_one_pass() {
     let det = detector();
@@ -198,14 +200,21 @@ fn many_tiny_leaves_are_read_in_one_pass() {
         .zip(0..)
         .map(|(c, i)| (c.as_str(), Some(i % 100)))
         .collect();
-    let start = std::time::Instant::now();
+    super::seam::FORM_WORK.with_borrow_mut(Vec::clear);
     let seams = det.seam_fingerprints(&parts);
     assert!(!seams.is_empty());
-    assert!(
-        start.elapsed() < std::time::Duration::from_secs(5),
-        "{:?}",
-        start.elapsed()
+    let work = super::seam::FORM_WORK.with_borrow(Clone::clone);
+    let n = chars.len();
+    assert_eq!(
+        work.iter().map(|&(form, _, _)| form).collect::<Vec<_>>(),
+        [2 * n - 1, n],
+        "each form read once: line-joined, then run together"
     );
+    for (form, hashed, visited) in work {
+        let grams = form - super::K + 1;
+        assert_eq!(hashed, grams, "each k-gram hashed once");
+        assert!(visited <= grams, "each k-gram visited at most once more");
+    }
 }
 
 /// A leaf that opens with a combining mark composes with the leaf before it

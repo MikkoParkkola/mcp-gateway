@@ -26,6 +26,15 @@ use super::{CollusionDetector, K, key, sample};
 /// stream is cut even inside a composing run.
 const MAX_PIECE: usize = 256;
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only: one entry per form this thread read, as (chars in the
+    /// form, k-grams hashed, k-grams the second slide visited), so a row
+    /// asserts linear work instead of timing it (MIK-8360).
+    pub(super) static FORM_WORK: std::cell::RefCell<Vec<(usize, usize, usize)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// A seam fingerprint and the steps whose text it touches anywhere in the
 /// answer, ascending.
 pub(crate) type SeamFingerprint = (u64, Vec<u32>);
@@ -113,10 +122,18 @@ impl CollusionDetector {
             .filter(|fp| seam.contains(fp))
             .collect();
         if selected.is_empty() {
+            #[cfg(test)]
+            FORM_WORK.with_borrow_mut(|work| work.push((chars, hashes.len(), 0)));
             return Vec::new();
         }
+        #[cfg(test)]
+        let mut visited = 0;
         let mut union: HashMap<u64, BTreeSet<u32>> = HashMap::new();
         slide(&tags, |i, window| {
+            #[cfg(test)]
+            {
+                visited += 1;
+            }
             if selected.contains(&hashes[i]) {
                 union
                     .entry(hashes[i])
@@ -124,6 +141,8 @@ impl CollusionDetector {
                     .extend(window.keys().copied());
             }
         });
+        #[cfg(test)]
+        FORM_WORK.with_borrow_mut(|work| work.push((chars, hashes.len(), visited)));
         union.into_iter().collect()
     }
 
