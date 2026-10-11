@@ -495,6 +495,9 @@ async fn l3b_spec_preview_judges_the_callers_slot() {
         (CallerSlot::Lacks, false),
     ] {
         let fx = per_user(slot, &valid(), Warmth::Cold, CLOSED, Surfaced::No);
+        // Single-user: a multi-user gateway leaves an isolated per-user
+        // backend out of spec preview altogether (INV-2), as L3a notes.
+        fx.meta.set_multi_user(false);
         warm_by_listing(&fx.meta).await;
         let alpha = super::catalogue_per_caller_tests::identity("alpha");
         let caller = super::identified_caller(&alpha);
@@ -541,6 +544,9 @@ async fn l6c_cold_surfaced_list_keeps_the_shared_view() {
         CLOSED,
         Surfaced::Yes,
     );
+    // Single-user, as L3a: a multi-user gateway omits the surfaced entry of an
+    // isolated per-user backend for every caller (INV-2).
+    fx.meta.set_multi_user(false);
     let entry = surfaced_entry_for_alpha(&fx.meta);
     assert!(
         entry.is_some(),
