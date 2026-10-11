@@ -17,7 +17,7 @@ const REMOVED: [&str; 4] = [
 
 /// One stdio request through the real dispatch, as a client with
 /// `server.modern_protocol` = `modern`.
-async fn send(modern: bool, request: Value) -> Option<Value> {
+pub(super) async fn send(modern: bool, request: Value) -> Option<Value> {
     Gateway::dispatch_single_with_sink(
         &test_meta_mcp(),
         &test_tool_policy(),
@@ -38,7 +38,12 @@ async fn send(modern: bool, request: Value) -> Option<Value> {
 }
 
 /// A request written against `version` with the `caps` the client declares.
-fn modern_request(id: Option<i64>, method: &str, version: &str, caps: impl Into<Value>) -> Value {
+pub(super) fn modern_request(
+    id: Option<i64>,
+    method: &str,
+    version: &str,
+    caps: impl Into<Value>,
+) -> Value {
     let caps: Value = caps.into();
     let mut request = json!({
         "jsonrpc": "2.0",
@@ -55,7 +60,7 @@ fn modern_request(id: Option<i64>, method: &str, version: &str, caps: impl Into<
     request
 }
 
-fn legacy_request(id: Option<i64>, method: &str) -> Value {
+pub(super) fn legacy_request(id: Option<i64>, method: &str) -> Value {
     let mut request = json!({ "jsonrpc": "2.0", "method": method, "params": {} });
     if let Some(id) = id {
         request["id"] = json!(id);
@@ -63,7 +68,7 @@ fn legacy_request(id: Option<i64>, method: &str) -> Value {
     request
 }
 
-fn removed_text(method: &str) -> String {
+pub(super) fn removed_text(method: &str) -> String {
     format!("method '{method}' was removed in MCP 2026-07-28")
 }
 
