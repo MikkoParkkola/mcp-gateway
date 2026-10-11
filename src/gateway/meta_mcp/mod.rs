@@ -822,6 +822,10 @@ mod policy_epoch_tests;
 #[cfg(test)]
 pub(crate) mod slot_verdict_fixture;
 #[cfg(test)]
+mod slot_verdict_g3_tests;
+#[cfg(test)]
+mod slot_verdict_g3_tip_tests;
+#[cfg(test)]
 mod slot_verdict_index_tests;
 #[cfg(test)]
 mod slot_verdict_listing_tests;

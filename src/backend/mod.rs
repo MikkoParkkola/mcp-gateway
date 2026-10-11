@@ -546,6 +546,10 @@ mod resend_isolation_tests;
 mod slot_eviction_tests;
 
 #[cfg(test)]
+#[path = "caller_slots_g3_tests.rs"]
+mod caller_slots_g3_tests;
+
+#[cfg(test)]
 #[path = "grant_reload_eviction_tests.rs"]
 mod grant_reload_eviction_tests;
 
