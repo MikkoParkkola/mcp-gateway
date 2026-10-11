@@ -282,7 +282,7 @@ pub(super) fn modern_call(id: u64, tool: &str, key: &str, task: bool) -> Value {
 
 /// One request through the stdio dispatcher, with this fixture's store.
 pub(crate) async fn dispatch(fixture: &Fixture, request: Value) -> Value {
-    Gateway::dispatch_single_with_sink(
+    Gateway::dispatch_single_for_client(
         &fixture.meta,
         &fixture.policy,
         &fixture.mtls,
@@ -295,7 +295,6 @@ pub(crate) async fn dispatch(fixture: &Fixture, request: Value) -> Value {
             modern: false,
             sanitize: fixture.sanitize,
         },
-        &super::super::StdioTelemetry::default(),
     )
     .await
     .expect("a request is answered")

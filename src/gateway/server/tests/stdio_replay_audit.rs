@@ -17,7 +17,7 @@ fn keyed_request(id: &str, key: &str) -> Value {
 
 /// The production stdio entry point, called as `run_stdio` calls it.
 async fn dispatch(fixture: &Fixture, request: Value) -> Value {
-    super::super::Gateway::dispatch_single_with_sink(
+    super::super::Gateway::dispatch_single_for_client(
         &fixture.meta,
         &fixture.tool_policy,
         &fixture.mtls_policy,
@@ -30,7 +30,6 @@ async fn dispatch(fixture: &Fixture, request: Value) -> Value {
             modern: false,
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
-        &super::super::StdioTelemetry::default(),
     )
     .await
     .expect("a request carrying an id must produce a response")

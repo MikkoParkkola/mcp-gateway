@@ -168,7 +168,7 @@ fn keyed_request(id: &str, key: &str) -> Value {
 
 /// The production stdio entry point, called as `run_stdio` calls it.
 async fn dispatch(fixture: &Fixture, request: Value) -> Value {
-    super::super::Gateway::dispatch_single_with_sink(
+    super::super::Gateway::dispatch_single_for_client(
         &fixture.meta,
         &fixture.tool_policy,
         &fixture.mtls_policy,
@@ -181,7 +181,6 @@ async fn dispatch(fixture: &Fixture, request: Value) -> Value {
             modern: false,
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
-        &super::super::StdioTelemetry::default(),
     )
     .await
     .expect("a request carrying an id must produce a response")
@@ -230,13 +229,12 @@ async fn stdio_idempotency_entries_are_keyed_by_transport() {
 #[tokio::test]
 async fn batched_stdio_calls_are_keyed_by_transport() {
     let fixture = Fixture::start_mutating().await;
-    let responses = super::super::Gateway::dispatch_batch_with_sink(
+    let responses = super::super::Gateway::dispatch_batch_for_client(
         &fixture.meta,
         &fixture.tool_policy,
         &fixture.mtls_policy,
         json!([keyed_request("b1", "owner-3-batch")]),
         SESSION,
-        &super::super::StdioTelemetry::default(),
     )
     .await;
     assert!(

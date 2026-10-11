@@ -161,7 +161,7 @@ fn keyed(id: &str, tool: &str, key: &str) -> Value {
 
 /// The production stdio entry point, with `policy` as the policy in force.
 async fn dispatch(stdio: &Stdio, policy: &Arc<ToolPolicy>, request: Value) -> Value {
-    Gateway::dispatch_single_with_sink(
+    Gateway::dispatch_single_for_client(
         &stdio.meta,
         policy,
         &stdio.mtls,
@@ -174,7 +174,6 @@ async fn dispatch(stdio: &Stdio, policy: &Arc<ToolPolicy>, request: Value) -> Va
             modern: false,
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
-        &super::super::StdioTelemetry::default(),
     )
     .await
     .expect("a request carrying an id must produce a response")

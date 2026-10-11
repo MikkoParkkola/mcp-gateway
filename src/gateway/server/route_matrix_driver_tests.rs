@@ -381,7 +381,7 @@ pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value, usize) {
                             IDEMPOTENCY_KEY_META: key,
                         }}
                 });
-                super::Gateway::dispatch_single_with_sink(
+                super::Gateway::dispatch_single_for_client(
                     &fixture.meta,
                     &fixture.tool_policy,
                     &fixture.mtls_policy,
@@ -394,7 +394,6 @@ pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value, usize) {
                         modern: false,
                         sanitize: super::stdio_single::InputSanitizing::Off,
                     },
-                    &super::StdioTelemetry::default(),
                 )
                 .await
                 .expect("a request carrying an id must produce a response")

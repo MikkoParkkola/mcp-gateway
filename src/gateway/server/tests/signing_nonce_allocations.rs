@@ -4,7 +4,7 @@
 //! stdio dispatcher must not pay for the payload it refuses.
 //!
 //! What is measured: every real allocation made on this thread while
-//! `Gateway::dispatch_single_with_sink` — the exact function `run_stdio` calls,
+//! `Gateway::dispatch_single_for_client` — the exact function `run_stdio` calls,
 //! not a duplicate validator — runs to completion on a prepared 1 MiB or 3 MiB
 //! request. Runtime, gateway, backend, payload and expectations are built
 //! before the scope opens; every assertion and every formatted message happens
@@ -71,7 +71,7 @@ fn test_path(name: &str) -> String {
 /// The production stdio dispatcher, called exactly as `run_stdio` calls it:
 /// owned `Value` moved in, no sink, the stdio session id.
 async fn dispatch(fixture: &Fixture, request: Value) -> Value {
-    super::super::Gateway::dispatch_single_with_sink(
+    super::super::Gateway::dispatch_single_for_client(
         &fixture.meta,
         &fixture.tool_policy,
         &fixture.mtls_policy,
@@ -84,7 +84,6 @@ async fn dispatch(fixture: &Fixture, request: Value) -> Value {
             modern: false,
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
-        &super::super::StdioTelemetry::default(),
     )
     .await
     .expect("a request carrying an id must produce a response")

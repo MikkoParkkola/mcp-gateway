@@ -14,8 +14,9 @@ pub(super) struct TestSeams {
     pub(super) data_dir: Option<PathBuf>,
     bound_port: Option<oneshot::Sender<u16>>,
     /// Starts the graceful shutdown as Ctrl+C or SIGTERM would (MIK-8156).
+    /// A mutex because `run_stdio_on` takes it through `&self` (MIK-8364).
     #[cfg(test)]
-    shutdown: Option<oneshot::Receiver<()>>,
+    shutdown: std::sync::Mutex<Option<oneshot::Receiver<()>>>,
     /// Receives `run`'s in-flight request gate, so a test can hold a request
     /// open across the drain (MIK-8156).
     #[cfg(test)]
@@ -50,18 +51,17 @@ impl TestSeams {
 
     /// The stdio telemetry saver's interval a test set, if any (MIK-8364).
     #[cfg(test)]
-    #[expect(
-        dead_code,
-        reason = "read by the MIK-8364 telemetry saver, added with the fix"
-    )]
     pub(super) fn telemetry_save_every(&self) -> Option<std::time::Duration> {
         self.telemetry_save_every
     }
 
     /// The test's shutdown trigger, taken once by `run`.
     #[cfg(test)]
-    pub(super) fn take_shutdown_trigger(&mut self) -> Option<oneshot::Receiver<()>> {
-        self.shutdown.take()
+    pub(super) fn take_shutdown_trigger(&self) -> Option<oneshot::Receiver<()>> {
+        self.shutdown
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
     }
 
     /// Hand the stdio session's Meta-MCP to the test that asked for it.
@@ -159,7 +159,11 @@ impl super::Gateway {
     #[cfg(test)]
     pub(super) fn shutdown_trigger_for_test(&mut self) -> oneshot::Sender<()> {
         let (sender, receiver) = oneshot::channel();
-        self.test_seams.shutdown = Some(receiver);
+        *self
+            .test_seams
+            .shutdown
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(receiver);
         sender
     }
 }

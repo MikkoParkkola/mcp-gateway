@@ -82,6 +82,26 @@ impl Gateway {
                 }
             },
         ));
+        // MIK-8364: a request only records its observation in memory; this
+        // saver persists the window off the request path, and the bounded
+        // save at teardown takes what is left. Dropped before that save, so
+        // no tick starts after it.
+        #[cfg(test)]
+        let telemetry_save_every = self
+            .test_seams
+            .telemetry_save_every()
+            .unwrap_or(persistence::PROTOCOL_TELEMETRY_SAVE_INTERVAL);
+        #[cfg(not(test))]
+        let telemetry_save_every = persistence::PROTOCOL_TELEMETRY_SAVE_INTERVAL;
+        let telemetry_saver = {
+            let sink = Arc::clone(&protocol_telemetry_sink);
+            AbortOnDrop::new(persistence::spawn_periodic_save(
+                "protocol telemetry save",
+                telemetry_save_every,
+                None,
+                move || Self::save_stdio_protocol_telemetry_unless_busy(&sink),
+            ))
+        };
         // MIK-7272.OWNER.2: `<tasks.store_dir>/stdio`, or `None` to serve as before.
         let task_store =
             stdio_tasks::open(&self.config, self.env.startup(), &meta_mcp, &tool_policy).await;
@@ -212,6 +232,20 @@ impl Gateway {
             ))
         });
 
+        // MIK-8364 (Option A): Ctrl+C and SIGTERM end stdio the way stdin EOF
+        // does: stop reading, drain what was accepted under the same bound,
+        // then the final telemetry save. Without this a signal killed stdio
+        // outright and the counts since the last save were lost.
+        let (signal_tx, _) = tokio::sync::broadcast::channel(1);
+        #[cfg(test)]
+        let stop_signal = super::test_seams::shutdown_signal_or_trigger(
+            signal_tx,
+            self.test_seams.take_shutdown_trigger(),
+        );
+        #[cfg(not(test))]
+        let stop_signal = super::support::shutdown_signal(signal_tx);
+        tokio::pin!(stop_signal);
+
         info!("MCP Gateway stdio mode ready — reading JSON-RPC from stdin");
 
         // ── Read → dispatch → write loop ────────────────────────────────────
@@ -300,6 +334,10 @@ impl Gateway {
                 biased;
                 () = writer.closed() => {
                     stdout_died = true;
+                    break;
+                }
+                () = &mut stop_signal => {
+                    info!("stdio: shutdown signal received; finishing accepted requests");
                     break;
                 }
                 // Reaped as each ends, so an aborted dispatch is joined at once
@@ -417,7 +455,6 @@ impl Gateway {
                 let meta_mcp = Arc::clone(&meta_mcp);
                 let tool_policy = Arc::clone(&tool_policy);
                 let mtls_policy = Arc::clone(&mtls_policy);
-                let telemetry = Arc::clone(&protocol_telemetry_sink);
                 let (writer, reads) = (writer.clone(), Arc::clone(&reads));
                 let admission = Arc::clone(&admission);
                 dispatches.spawn(None, async move {
@@ -439,7 +476,6 @@ impl Gateway {
                                 &mtls_policy,
                                 request,
                                 (session_id, sanitize),
-                                &telemetry,
                                 &reads,
                             )),
                             &writer,
@@ -447,7 +483,6 @@ impl Gateway {
                             Some(meta_mcp.notification_screen("stdio", session_id)),
                         )
                         .await;
-                        Self::persist_stdio_protocol_telemetry(&telemetry);
                         if !responses.is_empty() {
                             drop(
                                 writer
@@ -510,7 +545,6 @@ impl Gateway {
                 let meta_mcp = Arc::clone(&meta_mcp);
                 let tool_policy = Arc::clone(&tool_policy);
                 let mtls_policy = Arc::clone(&mtls_policy);
-                let telemetry = Arc::clone(&protocol_telemetry_sink);
                 // Cloned, not borrowed: the caller context holds
                 // `&dyn ClientChannel` and a spawned task needs `'static`.
                 let channel = Arc::clone(&channel);
@@ -538,14 +572,12 @@ impl Gateway {
                                 modern,
                                 sanitize,
                             },
-                            &telemetry,
                         )),
                         &writer,
                         &reads,
                         Some(meta_mcp.notification_screen("stdio", session_id)),
                     )
                     .await;
-                    Self::persist_stdio_protocol_telemetry(&telemetry);
                     #[cfg(test)]
                     if let Some(gate) = gate {
                         drop(gate.acquire().await);
@@ -669,6 +701,9 @@ impl Gateway {
             let abort = dispatches.shutdown();
             stdio_shutdown::bounded_step(shutdown_deadline, "dispatch abort", abort).await;
         }
+        // No tick starts from here; a tick write still in flight finishes
+        // first, because the final save waits for the sink lock (MIK-8364).
+        drop(telemetry_saver);
         Self::persist_stdio_telemetry_bounded(shutdown_deadline, &protocol_telemetry_sink).await;
         #[cfg(feature = "cost-governance")]
         if let Some(enforcer) = &meta_mcp.budget_enforcer {
