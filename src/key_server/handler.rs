@@ -49,7 +49,7 @@ use super::{
     audit::{self, AuditEvent},
     oidc::VerifiedIdentity,
     policy::{RequestedScopes, ScopeRefusal},
-    store::{InMemoryTokenStore, TemporaryToken},
+    store::{InMemoryTokenStore, TemporaryToken, TokenScopes},
 };
 use crate::config::KeyServerOidcConfig;
 
@@ -249,6 +249,17 @@ async fn exchange_token(
         return refusal;
     }
 
+    issue(&ks, identity, scopes, client_ip).await
+}
+
+/// Issue a temporary token for a verified identity and its resolved scopes,
+/// dated by one read of the clock, and store it.
+pub(super) async fn issue(
+    ks: &KeyServer,
+    identity: VerifiedIdentity,
+    scopes: TokenScopes,
+    client_ip: Option<IpAddr>,
+) -> axum::response::Response {
     // Issue token
     let now = crate::clock::unix_secs().unwrap_or(0);
 
@@ -256,8 +267,8 @@ async fn exchange_token(
     let token = TemporaryToken {
         jti: InMemoryTokenStore::generate_jti(),
         token: InMemoryTokenStore::generate_bearer(),
-        identity: identity.clone(),
-        scopes: scopes.clone(),
+        identity,
+        scopes,
         iat: now,
         // `token_ttl_secs` is bounded at load; never wraps regardless.
         exp: now.saturating_add(ttl),
