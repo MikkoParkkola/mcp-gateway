@@ -137,6 +137,22 @@ impl MetaMcp {
     ) -> Option<crate::personal_accounts::identity::Principal<'a>> {
         self.caller_principal(backend.account_descriptor_id(), caller)
     }
+
+    /// The binding of the slot holding `caller`'s own catalogue on `backend`,
+    /// if warm (MIK-8356 design R3.5; the read API agreed with MIK-8350).
+    /// Synchronous and side-effect free: no mint, no fill, no slot creation.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "MIK-8356: read by its rows until readers adopt it")
+    )]
+    pub(crate) fn caller_slot_binding_for(
+        &self,
+        backend: &crate::backend::Backend,
+        caller: crate::identity_propagation::CallerProof<'_>,
+    ) -> Option<String> {
+        let principal = self.principal_for(backend, caller)?;
+        backend.caller_slot_binding(&principal.stable_actor_id())
+    }
 }
 
 // T9 (test plan "Shared fixture"): counts every reservation attempt into

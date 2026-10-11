@@ -254,6 +254,26 @@ pub(super) fn per_user(
     }
 }
 
+/// Give `subject` its own upstream slot on [`BACKEND`] (binding
+/// `{subject}@ledger`, as `PerIdentityMint` names it), serving [`TOOL`] with a
+/// valid schema. For rows that need a second principal.
+pub(super) fn add_caller(meta: &MetaMcp, subject: &str) -> Arc<Asked> {
+    let backend = meta.backends.get(BACKEND).expect("the backend");
+    let asked = Arc::new(Asked::default());
+    let tools = vec![tool(TOOL, &valid()), tool(SIBLING, &valid())];
+    backend.set_pooled_transport_for_test(
+        &PoolKey::PerUser {
+            binding: format!("{subject}@ledger"),
+        },
+        Arc::new(Upstream {
+            tools: serde_json::to_value(&tools).expect("tools"),
+            asked: Arc::clone(&asked),
+            fail_list: false,
+        }),
+    );
+    asked
+}
+
 /// alpha's call of `name` with `arguments`, as the JSON the client receives.
 pub(super) async fn call_as_alpha(meta: &MetaMcp, name: &str, arguments: Value) -> Value {
     let alpha = identity("alpha");
