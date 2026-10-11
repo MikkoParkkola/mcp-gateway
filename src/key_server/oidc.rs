@@ -266,6 +266,15 @@ impl OidcVerifier {
         self.jwks_cache.discovery.get(issuer).map(|d| d.ttl)
     }
 
+    /// Lapse the issuer's recorded discovery entry now, as if its lifetime
+    /// had passed; tests use it instead of sleeping out a real window.
+    #[cfg(test)]
+    pub(crate) fn expire_discovery(&self, issuer: &str) {
+        if let Some(mut entry) = self.jwks_cache.discovery.get_mut(issuer) {
+            entry.ttl = Duration::ZERO;
+        }
+    }
+
     /// Verify an OIDC ID token and return the extracted identity.
     ///
     /// # Errors

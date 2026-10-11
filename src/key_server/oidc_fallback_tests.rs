@@ -355,9 +355,9 @@ fn one_fallback_is_fetched_and_logged_once() {
 /// D12: discovery still down after the fallback lapses. The lapsed record is
 /// replaced in place: discovery is asked once more, the fallback is recorded
 /// and logged again, and the renewed record serves the next lookup without
-/// another discovery request. The cache reads `std::time::Instant` directly
-/// (no clock seam, and tokio's paused clock does not move it), so the lapse
-/// is a real 400 ms sleep against a 200 ms window: load only lengthens it.
+/// another discovery request. The lapse is forced with `expire_discovery`,
+/// not slept out: the cache reads `std::time::Instant`, which tokio's paused
+/// clock does not move.
 #[test]
 fn a_lapsed_fallback_is_renewed_while_discovery_stays_down() {
     use crate::test_log_capture::{count, records};
@@ -370,11 +370,11 @@ fn a_lapsed_fallback_is_renewed_while_discovery_stays_down() {
         rt.block_on(async {
             let fx = start().await;
             set_discovery(&fx, 404, "{}");
-            let v = verifier_ttls(&fx, Duration::from_secs(3600), Duration::from_millis(200));
+            let v = verifier(&fx, "");
             verify(&v, &mint(&fx, &fx.k_fb))
                 .await
                 .expect("the fallback key validates");
-            tokio::time::sleep(Duration::from_millis(400)).await;
+            v.expire_discovery(&fx.issuer);
             for _ in 0..2 {
                 verify(&v, &mint(&fx, &fx.k_fb))
                     .await
