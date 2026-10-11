@@ -246,6 +246,10 @@ pub(super) async fn tools_call(
             }
         }
     }
+    // The route stage is done; the window a catalogue change must not reach
+    // (MIK-8340, one judgement per request).
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::route_stage_done();
 
     let api_key_name = client.as_ref().map(|c| c.name.as_str());
     // Authorization reads the PROVEN principal. This value reaches

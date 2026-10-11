@@ -84,7 +84,34 @@ impl MetaMcp {
     /// Whether `caller` may be shown the tool named `tool` on `server`,
     /// judged from the shared catalogue. A cold cache is not a reason: a tool
     /// not yet listed is judged on the other two reasons only.
+    ///
+    /// Judged once per request: inside [`with_visibility_memo`] the first
+    /// answer for `(server, tool)` is recorded and every later read in the
+    /// same request gets it, so the route stage and the dispatch can never
+    /// disagree (a catalogue refill between them cannot let a name withheld
+    /// at the route stage dispatch past its checks). Outside a request scope
+    /// (task workers, background paths) each read judges fresh.
     pub(crate) fn tool_visible_to(
+        &self,
+        server: &str,
+        tool: &str,
+        scope: InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> Visibility {
+        let judge = || self.judge_name(server, tool, scope, session_id);
+        match VISIBILITY_MEMO.try_with(|memo| memo.recorded(server, tool)) {
+            Ok(Some(recorded)) => recorded,
+            Ok(None) => {
+                let judged = judge();
+                VISIBILITY_MEMO
+                    .try_with(|memo| memo.record(server, tool, judged))
+                    .unwrap_or(judged)
+            }
+            Err(_) => judge(),
+        }
+    }
+
+    fn judge_name(
         &self,
         server: &str,
         tool: &str,
@@ -209,5 +236,73 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> bool {
         self.tool_visible_to(server, tool, scope, session_id) == Visibility::Visible
+    }
+}
+
+/// One visibility judgement per request (MIK-8340, perflane MIK-8356 R3.1):
+/// the first answer [`MetaMcp::tool_visible_to`] gives for a `(server, tool)`
+/// within a request, kept for the rest of that request.
+#[derive(Default)]
+pub(crate) struct VisibilityMemo(
+    parking_lot::Mutex<std::collections::HashMap<(String, String), Visibility>>,
+);
+
+impl VisibilityMemo {
+    fn recorded(&self, server: &str, tool: &str) -> Option<Visibility> {
+        self.0
+            .lock()
+            .get(&(server.to_owned(), tool.to_owned()))
+            .copied()
+    }
+
+    /// Record `judged` unless an answer is already recorded; returns the
+    /// recorded answer, so the first judgement wins.
+    fn record(&self, server: &str, tool: &str, judged: Visibility) -> Visibility {
+        *self
+            .0
+            .lock()
+            .entry((server.to_owned(), tool.to_owned()))
+            .or_insert(judged)
+    }
+}
+
+tokio::task_local! {
+    /// The open request's memo; see [`with_visibility_memo`].
+    static VISIBILITY_MEMO: VisibilityMemo;
+}
+
+/// Run `request` with one visibility memo for its whole lifetime (the HTTP
+/// `tools/call` handler and each stdio request). A request already inside
+/// one keeps it, so nested entry points share the outer request's memo.
+pub(crate) async fn with_visibility_memo<F: std::future::Future>(request: F) -> F::Output {
+    if VISIBILITY_MEMO.try_with(|_| ()).is_ok() {
+        return request.await;
+    }
+    VISIBILITY_MEMO
+        .scope(VisibilityMemo::default(), request)
+        .await
+}
+
+/// Test-only hook between the route stage and the dispatch, for the row that
+/// changes the catalogue in that window (MIK-8340 R3.1 row). Compiled out of
+/// non-test builds.
+#[cfg(test)]
+pub(crate) mod seams {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static AFTER_ROUTE_STAGE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Run `hook` once, the next time a route stage on this thread finishes.
+    pub(crate) fn after_route_stage(hook: impl FnOnce() + 'static) {
+        AFTER_ROUTE_STAGE.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Called where a route stage hands over to the dispatch.
+    pub(crate) fn route_stage_done() {
+        if let Some(hook) = AFTER_ROUTE_STAGE.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
     }
 }

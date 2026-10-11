@@ -457,3 +457,42 @@ async fn row11_route_targets_resolve_a_withheld_name_as_absent() {
     }
     assert_cells("row 11", &cells);
 }
+
+/// Row 14 (MIK-8340, perflane R3.1, one judgement per request): a surfaced
+/// tool withheld for its shared schema at the route stage stays withheld for
+/// the rest of the request. The catalogue is repaired between the route
+/// stage and the dispatch, and the call still answers exactly as without the
+/// repair, with no dispatch. RED without the per-request memo: the dispatch
+/// re-judges, finds the tool valid, and calls it past the route-stage checks.
+#[tokio::test]
+async fn row14_a_repair_between_route_and_dispatch_keeps_the_name_absent() {
+    let spec = Spec::of(Reason::Schema, Side::Withheld);
+    let unrepaired = twin(spec).await.call_plain(spec.tool).await;
+    assert_eq!(
+        unrepaired.body.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "premise: the withheld name is not answered as absent: {}",
+        unrepaired.body
+    );
+    let raced = twin(spec).await;
+    let backend = raced
+        .fx
+        .state
+        .backends
+        .get("alpha")
+        .expect("the twin serves alpha");
+    let repaired: Vec<crate::protocol::Tool> = serde_json::from_value(
+        super::withheld_twin_tests::catalogue(spec.with_side(Side::Control)),
+    )
+    .expect("the control catalogue parses");
+    crate::gateway::meta_mcp::visible::seams::after_route_stage(move || {
+        backend.store_shared_tools_for_test(repaired);
+    });
+    let answered = raced.call_plain(spec.tool).await;
+    assert_eq!(
+        (answered.status, &answered.body["error"], answered.calls),
+        (unrepaired.status, &unrepaired.body["error"], 0),
+        "row 14: the repaired name dispatched or answered differently: {}",
+        answered.body
+    );
+}
