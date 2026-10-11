@@ -137,7 +137,8 @@ async fn mcp_withheld_surfaced_task_leaves_what_a_missing_name_leaves() {
         (&missing.body, &missing.events),
         (
             withheld.backend_calls,
-            withheld.stored_keys + withheld.admitted,
+            withheld.stored_keys,
+            withheld.admitted,
             withheld.committed,
         ),
     );
@@ -166,7 +167,8 @@ async fn stdio_withheld_surfaced_task_leaves_what_a_missing_name_leaves() {
         (&missing.body, &missing.events),
         (
             withheld.backend_calls,
-            withheld.stored_keys + withheld.admitted,
+            withheld.stored_keys,
+            withheld.admitted,
             withheld.committed,
         ),
     );
@@ -194,7 +196,7 @@ fn assert_visible_control(body: &serde_json::Value, events: &[String]) {
 fn assert_refused_as_missing(
     (withheld, withheld_events): (&serde_json::Value, &[String]),
     (missing, missing_events): (&serde_json::Value, &[String]),
-    (calls, keys, tasks): (usize, usize, usize),
+    (calls, cached, admitted, tasks): (usize, usize, usize, usize),
 ) {
     assert_eq!(missing["error"]["code"], -32601, "premise: {missing}");
     assert_eq!(withheld["error"], missing["error"], "{withheld}");
@@ -205,9 +207,9 @@ fn assert_refused_as_missing(
     );
     assert!(!withheld.to_string().contains(X14_PROMPT), "{withheld}");
     assert_eq!(
-        (calls, keys, tasks),
-        (0, 0, 0),
-        "dispatched, keyed or admitted: {withheld}"
+        (calls, cached, admitted, tasks),
+        (0, 0, 0, 0),
+        "(backend calls, legacy cached keys, admission entries, tasks): {withheld}"
     );
 }
 

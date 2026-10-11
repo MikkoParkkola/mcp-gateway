@@ -16,9 +16,12 @@ use crate::gateway::meta_mcp::MetaMcp;
 
 #[path = "route_matrix_driver_step_tests.rs"]
 mod step;
+#[path = "route_matrix_driver_trace_tests.rs"]
+mod trace;
 pub(crate) use step::{
     playbook_as, playbook_budgeted, playbook_exposed, playbook_minting, playbook_then_task,
 };
+pub(crate) use trace::{audit_events, task_submit_traced};
 
 /// What one call through a route produced.
 pub(crate) struct Sent {
@@ -753,91 +756,4 @@ pub(crate) async fn surfaced_admission_then_resend() -> (Value, Value, Value, us
     let resent = call("s-k2", "s2", serde_json::json!({ "cmd": "other" })).await;
     let third = call("s-k3", "s2", serde_json::json!({ "cmd": "other" })).await;
     (refused, resent, third, fx.calls.load(Ordering::SeqCst))
-}
-
-/// What a refused submit left behind (MIK-8326): the answer and HTTP status,
-/// the backend's call count, the firewall audit log's event names, the tasks
-/// committed, the legacy idempotency responses stored and the execution
-/// admission entries (the store modern keyed calls reserve in).
-pub(crate) struct Trace {
-    pub(crate) status: axum::http::StatusCode,
-    pub(crate) body: Value,
-    pub(crate) backend_calls: usize,
-    pub(crate) events: Vec<String>,
-    pub(crate) committed: usize,
-    pub(crate) stored_keys: usize,
-    pub(crate) admitted: usize,
-}
-
-/// The event names in a firewall audit log; none when nothing was written.
-pub(crate) fn audit_events(path: &Path) -> Vec<String> {
-    let log = match std::fs::read_to_string(path) {
-        Ok(log) => log,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
-        Err(e) => panic!("unreadable audit log {}: {e}", path.display()),
-    };
-    log.lines()
-        .map(|line| {
-            let row: Value = serde_json::from_str(line)
-                .unwrap_or_else(|e| panic!("malformed audit row {line:?}: {e}"));
-            row["event"]
-                .as_str()
-                .unwrap_or_else(|| panic!("audit row without an event: {line}"))
-                .to_owned()
-        })
-        .collect()
-}
-
-/// [`task_submit_read_as`] on the same fixture with the production firewall
-/// on both layers writing to `audit`, returning everything the submit left.
-#[cfg(feature = "firewall")]
-pub(crate) async fn task_submit_traced(
-    key: &str,
-    surfacing_mode: Surfacing,
-    audit: &Path,
-) -> Trace {
-    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let transport = std::sync::Arc::new(Destructive {
-        calls: std::sync::Arc::clone(&calls),
-    });
-    let build: fn(MetaMcp) -> MetaMcp = match surfacing_mode {
-        Surfacing::On => surfacing,
-        Surfacing::Off => |meta| meta,
-    };
-    let fx = super::direct_guards_fixture::with_transport(
-        transport,
-        Box::pin(
-            super::direct_guards_fixture::fixture_firewalled_audited_built(
-                Answer::Ok,
-                audit.to_path_buf(),
-                build,
-            ),
-        ),
-    )
-    .await;
-    let params = task_submit_params();
-    let (status, body) = super::direct_guards_fixture::send_with_headers(
-        &fx,
-        "/mcp",
-        key,
-        "tools/call",
-        params,
-        None,
-        &TASK_SUBMIT_HEADERS,
-    )
-    .await;
-    Trace {
-        status,
-        body,
-        backend_calls: calls.load(Ordering::SeqCst),
-        events: audit_events(audit),
-        committed: fx
-            .state
-            .task_executor
-            .service
-            .store
-            .committed_count_for_test(),
-        stored_keys: fx.state.meta_mcp.idempotency_completed_for_test().len(),
-        admitted: fx.state.meta_mcp.execution_admission().snapshot().entries,
-    }
 }
