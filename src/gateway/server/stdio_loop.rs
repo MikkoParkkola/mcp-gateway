@@ -571,6 +571,10 @@ impl Gateway {
                     // cancel check and the enqueue.
                     #[cfg(test)]
                     super::stdio_seams::after_commit().await;
+                    #[cfg(test)]
+                    if response.is_some() && writer.capacity() == 0 {
+                        super::stdio_seams::answer_found_queue_full();
+                    }
                     if let Some(response) = response
                         && let Ok(permit) = writer.reserve().await
                     {

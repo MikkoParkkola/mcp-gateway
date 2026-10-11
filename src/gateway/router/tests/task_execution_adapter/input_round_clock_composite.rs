@@ -307,37 +307,46 @@ async fn gated_round(
     (mock, state, dir, id, settled)
 }
 
-/// T18e (MIK-8202 P2 round 2): a round a response gate replaced outright
-/// (context integrity quarantines it, so it no longer asks for input) is not
-/// handed to the worker on an unreadable clock: nothing is minted for a
-/// question the gates refused, the gated answer is what the task ends with,
-/// and the backend is not resumed. Mutant: the worker takes any gated
-/// payload and seals a live envelope onto the quarantined answer.
+/// The task ended failed with the content gate's refusal (MIK-8325), nothing
+/// parked, no live envelope, and the backend asked once.
+fn assert_refused_once(mock: &MockBackend, state: &Arc<AppState>, id: &str, settled: &Value) {
+    std::assert_eq!(status_of(settled), "failed", "{settled}");
+    std::assert_eq!(
+        settled
+            .pointer("/result/error/code")
+            .and_then(Value::as_i64),
+        Some(-32600),
+        "the gate's refusal: {settled}"
+    );
+    std::assert!(!has_round(state, id), "nothing was parked");
+    std::assert!(
+        !settled.to_string().contains("requestState\":\""),
+        "no live envelope: {settled}"
+    );
+    std::assert!(!settled.to_string().contains(STATE_1), "{settled}");
+    std::assert_eq!(mock.calls(), 1, "the backend is not resumed: {settled}");
+}
+
+/// T18e (MIK-8202 P2 round 2, retargeted by MIK-8325): a round a response
+/// gate quarantined, on an unreadable clock, is refused like on a readable
+/// one: nothing is handed to the worker or minted, the task fails with the
+/// gate's -32600 refusal, and the backend is not resumed. Mutant: the worker
+/// takes any gated payload and seals a live envelope onto it.
 #[tokio::test(start_paused = true)]
 async fn t18e_a_round_a_gate_replaced_is_not_resealed_after_the_wait() {
     use crate::context_integrity::ContextIntegrityDecisionKind::Quarantine;
     let (mock, state, _dir, id, settled) = gated_round(Quarantine, "t18e").await;
-    assert_ended_unparked(&state, &id, &settled, "quarantined");
-    std::assert!(
-        !settled.to_string().contains("requestState\":\""),
-        "no live envelope: {settled}"
-    );
-    std::assert_eq!(mock.calls(), 1, "the backend is not resumed: {settled}");
+    assert_refused_once(&mock, &state, &id, &settled);
 }
 
-/// T18f (parity): a strip keeps the round asking for input with its questions
-/// removed. On a clock before 1970 the task ends as on a readable clock, with
-/// no live envelope and nothing parked. That a stripped round resumes the
-/// backend at all is the base behaviour, tracked on its own ticket.
+/// T18f (parity, retargeted by MIK-8325): a stripped round on a clock before
+/// 1970 ends as on a readable clock. Under MIK-8325 that is the refusal: the
+/// task fails with -32600, nothing parked, no live envelope, one backend call.
 #[tokio::test(start_paused = true)]
 async fn t18f_a_stripped_round_on_an_unreadable_clock_matches_a_readable_one() {
     use crate::context_integrity::ContextIntegrityDecisionKind::Strip;
-    let (_mock, state, _dir, id, settled) = gated_round(Strip, "t18f").await;
-    assert_ended_unparked(&state, &id, &settled, "stripped");
-    std::assert!(
-        !settled.to_string().contains("requestState\":\""),
-        "no live envelope: {settled}"
-    );
+    let (mock, state, _dir, id, settled) = gated_round(Strip, "t18f").await;
+    assert_refused_once(&mock, &state, &id, &settled);
 }
 
 /// T26c (MIK-8202 P2 round 2): a redemption refused for an unreadable clock

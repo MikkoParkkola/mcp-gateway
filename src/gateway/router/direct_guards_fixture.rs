@@ -9,17 +9,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use axum::body::to_bytes;
-use axum::http::StatusCode;
 use serde_json::{Value, json};
-use tower::ServiceExt;
 
 use super::create_router;
 use super::tests::{test_router_app_state_with_auth, test_router_app_state_with_auth_and_config};
 use crate::backend::Backend;
 use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig};
 use crate::gateway::meta_mcp::MetaMcp;
-use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::transport::Transport;
 
@@ -331,8 +327,17 @@ pub(crate) async fn fixture_built_on(
     transport: Arc<dyn Transport>,
     build: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Fx {
+    with_transport(transport, Box::pin(fixture_inner(Answer::Ok, false, build))).await
+}
+
+/// Builds `fixture` (any of this module's fixtures) over `transport`. Boxed,
+/// so the caller's future holds a pointer, not the fixture's whole state.
+pub(crate) async fn with_transport(
+    transport: Arc<dyn Transport>,
+    fixture: std::pin::Pin<Box<impl std::future::Future<Output = Fx>>>,
+) -> Fx {
     TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
-    let fx = fixture_inner(Answer::Ok, false, build).await;
+    let fx = fixture.await;
     TRANSPORT.with(|t| *t.borrow_mut() = None);
     fx
 }
@@ -375,6 +380,8 @@ mod egress;
 pub(crate) use answers::envelope_in;
 #[path = "direct_guards_fixture_quota.rs"]
 mod quota;
+#[path = "direct_guards_fixture_requests.rs"]
+mod requests;
 use answers::{call_answer, listing, question};
 use egress::backend_transport;
 #[cfg(feature = "firewall")]
@@ -386,6 +393,9 @@ pub(crate) use egress::{
 };
 pub(crate) use quota::fixture_propagating;
 use quota::{fixture_backend_config, fixture_failsafe, leaked_transparency_log};
+pub(crate) use requests::{
+    initialize, post_direct, post_meta_invoke, post_meta_invoke_nonce, send, send_with_headers,
+};
 
 pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
 
@@ -663,143 +673,4 @@ async fn fixture_inner(
         seen,
         _store: store,
     }
-}
-
-/// Build `params._meta` carrying an idempotency key, when one is given.
-fn set_idem(params: &mut Value, idem: Option<&str>) {
-    if let Some(value) = idem {
-        params["_meta"] = json!({ IDEMPOTENCY_KEY_META: value });
-    }
-}
-
-/// `POST /mcp/{backend}` `tools/call`, as the direct route takes it.
-pub(crate) async fn post_direct(
-    fx: &Fx,
-    backend: &str,
-    key: &str,
-    tool: &str,
-    args: Value,
-    idem: Option<&str>,
-    session: Option<&str>,
-) -> (StatusCode, Value) {
-    let mut params = json!({ "name": tool, "arguments": args });
-    set_idem(&mut params, idem);
-    send(
-        fx,
-        &format!("/mcp/{backend}"),
-        key,
-        "tools/call",
-        params,
-        session,
-    )
-    .await
-}
-
-/// `POST /mcp` `tools/call gateway_invoke`, the meta-route twin a parity
-/// table compares against `post_direct`.
-pub(crate) async fn post_meta_invoke(
-    fx: &Fx,
-    key: &str,
-    server: &str,
-    tool: &str,
-    args: Value,
-    idem: Option<&str>,
-    session: Option<&str>,
-) -> (StatusCode, Value) {
-    let mut params = json!({
-        "name": "gateway_invoke",
-        "arguments": { "server": server, "tool": tool, "arguments": args },
-    });
-    set_idem(&mut params, idem);
-    send(fx, "/mcp", key, "tools/call", params, session).await
-}
-
-/// `initialize` on `/mcp` for `key`; returns the session id the gateway
-/// minted (it never adopts a client-chosen one).
-pub(crate) async fn initialize(fx: &Fx, key: &str) -> String {
-    let request = axum::http::Request::builder()
-        .method("POST")
-        .uri("/mcp")
-        .header("authorization", format!("Bearer {key}"))
-        .header("content-type", "application/json")
-        .body(axum::body::Body::from(
-            json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2025-06-18",
-                    "capabilities": {},
-                    "clientInfo": {"name": "t8", "version": "1"}
-                }
-            })
-            .to_string(),
-        ))
-        .unwrap();
-    let response = fx.router.clone().oneshot(request).await.unwrap();
-    response
-        .headers()
-        .get("mcp-session-id")
-        .and_then(|v| v.to_str().ok())
-        .expect("initialize mints a session id")
-        .to_string()
-}
-
-/// [`post_meta_invoke`] carrying a signing `nonce` in the `gateway_invoke`
-/// arguments.
-pub(crate) async fn post_meta_invoke_nonce(
-    fx: &Fx,
-    key: &str,
-    server: &str,
-    tool: &str,
-    nonce: &str,
-) -> (StatusCode, Value) {
-    let params = json!({
-        "name": "gateway_invoke",
-        "arguments": { "server": server, "tool": tool, "arguments": {}, "nonce": nonce },
-    });
-    send(fx, "/mcp", key, "tools/call", params, None).await
-}
-
-pub(crate) async fn send(
-    fx: &Fx,
-    uri: &str,
-    key: &str,
-    method: &str,
-    params: Value,
-    session: Option<&str>,
-) -> (StatusCode, Value) {
-    send_with_headers(fx, uri, key, method, params, session, &[]).await
-}
-
-/// [`send`] plus extra request headers, such as the modern era's mirrors.
-pub(crate) async fn send_with_headers(
-    fx: &Fx,
-    uri: &str,
-    key: &str,
-    method: &str,
-    params: Value,
-    session: Option<&str>,
-    headers: &[(&str, &str)],
-) -> (StatusCode, Value) {
-    let mut builder = axum::http::Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header("authorization", format!("Bearer {key}"))
-        .header("content-type", "application/json");
-    for (name, value) in headers {
-        builder = builder.header(*name, *value);
-    }
-    if let Some(session_id) = session {
-        builder = builder.header("mcp-session-id", session_id);
-    }
-    let request = builder
-        .body(axum::body::Body::from(
-            json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }).to_string(),
-        ))
-        .unwrap();
-    let response = fx.router.clone().oneshot(request).await.unwrap();
-    let status = response.status();
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    (status, serde_json::from_slice(&body).unwrap())
 }

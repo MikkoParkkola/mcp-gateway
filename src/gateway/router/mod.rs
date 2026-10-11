@@ -168,6 +168,8 @@ mod playbook_key_tests;
 mod reload_status_tests;
 #[cfg(all(test, feature = "firewall"))]
 pub(super) mod route_matrix_driver_tests;
+#[cfg(all(test, feature = "firewall"))]
+pub(super) mod route_matrix_x14_nonce_tests;
 #[cfg(test)]
 mod slot_quota_direct_tests;
 #[cfg(test)]

@@ -53,14 +53,20 @@ async fn admin_state() -> (Arc<crate::gateway::router::AppState>, tempfile::Temp
 
 #[tokio::test]
 async fn a_key_or_session_with_no_spend_answers_no_data() {
+    // MIK-8369.COST.2: "no data" is an error, so it carries 404, not 200.
     let (state, _store) = admin_state().await;
     let (status, body) = call(&state, "/api/costs?key=nobody", None).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_eq!(body["error"], "No data for key 'nobody'");
 
     let (status, body) = call(&state, "/api/costs", Some("no-such-session")).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_eq!(body["error"], "No data for session 'no-such-session'");
+
+    // A bare `?key` decodes to the empty name, which has no spend either.
+    let (status, body) = call(&state, "/api/costs?key", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["error"], "No data for key ''");
 }
 
 #[cfg(feature = "cost-governance")]
@@ -85,4 +91,65 @@ async fn a_recorded_key_and_the_aggregate_carry_the_spend() {
     assert_eq!(all["aggregate"]["total_tokens"], 2_000_000, "{all}");
     assert_eq!(all["sessions"].as_array().map(Vec::len), Some(1), "{all}");
     assert_eq!(all["keys"].as_array().map(Vec::len), Some(1), "{all}");
+}
+
+/// Records one call's spend under `key`.
+#[cfg(feature = "cost-governance")]
+fn spend_as(state: &crate::gateway::router::AppState, key: &str) {
+    state
+        .meta_mcp
+        .cost_tracker()
+        .record("sess-1", Some(key), "srv", "tool", 1_000, 1.0);
+}
+
+/// MIK-8369.COST.1: a key selector is URL-decoded before it is matched, so a
+/// key whose name needs escaping is reachable: `%20` and `+` for a space, and
+/// escaped reserved characters.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn an_encoded_key_selector_selects_its_decoded_key() {
+    let (state, _store) = admin_state().await;
+    spend_as(&state, "team ops");
+    spend_as(&state, "a&b=c");
+    for (uri, key) in [
+        ("/api/costs?key=team%20ops", "team ops"),
+        ("/api/costs?key=team+ops", "team ops"),
+        ("/api/costs?key=a%26b%3Dc", "a&b=c"),
+    ] {
+        let (status, body) = call(&state, uri, None).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+        assert_eq!(body["api_key_name"], key, "{uri}: {body}");
+    }
+}
+
+/// A repeated selector keeps its last value, judged on the decoded name, so
+/// an escaped spelling of `key` is the same selector.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn a_repeated_key_selector_keeps_the_last_decoded_value() {
+    let (state, _store) = admin_state().await;
+    spend_as(&state, "team ops");
+    for uri in [
+        "/api/costs?key=nobody&key=team%20ops",
+        "/api/costs?key=nobody&k%65y=team%20ops",
+    ] {
+        let (status, body) = call(&state, uri, None).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+        assert_eq!(body["api_key_name"], "team ops", "{uri}: {body}");
+    }
+}
+
+/// MIK-8369.COST.3: the session id never travels in the URI, and an escaped
+/// spelling of `session` is refused the same way.
+#[tokio::test]
+async fn an_escaped_session_parameter_is_refused_like_the_plain_one() {
+    let (state, _store) = admin_state().await;
+    for uri in ["/api/costs?session=s-1", "/api/costs?sess%69on=s-1"] {
+        let (status, body) = call(&state, uri, None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
+        assert_eq!(
+            body["error"], "Pass the session id in the X-Cost-Session-Id header, not ?session=",
+            "{uri}"
+        );
+    }
 }
