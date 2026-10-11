@@ -397,7 +397,7 @@ async fn direct_task_call(fx: &Twin, tool: &str) -> Value {
             channel: &crate::gateway::input_bridge::NoClientChannel,
             handshake_capabilities: crate::protocol::meta::Declared::NONE,
             tasks: Some(&fx.fixture.tasks),
-            modern: false,
+            modern: true,
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
     );

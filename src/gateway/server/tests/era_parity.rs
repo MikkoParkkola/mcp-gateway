@@ -253,21 +253,27 @@ async fn modern_stdio_refuses_an_undeclared_capability() {
     }
 }
 
-/// A batch item runs with modern serving off, so a modern item newly gets
-/// -32022 with an empty list (stated in the PR).
+/// A batch item runs with modern serving off (a batch is a legacy shape), so a
+/// modern item newly gets -32022 with an empty list (stated in the PR).
 #[tokio::test]
 async fn a_modern_batch_item_is_refused_as_unserved() {
-    let answer = Gateway::dispatch_single(
+    let answers = Gateway::dispatch_batch_with_sink(
         &test_meta_mcp(),
         &test_tool_policy(),
         &test_mtls_policy(),
-        &modern_request(Some(1), "tools/list", "2026-07-28", json!({})),
+        json!([modern_request(
+            Some(1),
+            "tools/list",
+            "2026-07-28",
+            json!({})
+        )]),
         "era-batch",
+        &super::super::StdioTelemetry::default(),
     )
-    .await
-    .expect("answers");
-    assert_eq!(answer["error"]["code"], -32022, "{answer}");
-    assert_eq!(answer["error"]["data"]["supportedVersions"], json!([]));
+    .await;
+    assert_eq!(answers.len(), 1, "{answers:?}");
+    assert_eq!(answers[0]["error"]["code"], -32022, "{}", answers[0]);
+    assert_eq!(answers[0]["error"]["data"]["supportedVersions"], json!([]));
 }
 
 /// A request that declares the revision and omits a required field is
