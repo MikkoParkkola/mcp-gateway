@@ -91,6 +91,11 @@ async fn f2d_a_redeemed_direct_retry_whose_answers_break_the_firewall_is_refused
         let (_, refused) = direct(&fx, who, json!({}), retry).await;
         assert_eq!(code(&refused), Some(-32600), "{backend}: {refused}");
         assert_eq!(dispatched(&fx), 1, "{backend}: the hostile answer was sent");
+        assert_eq!(
+            super::direct_continuation_tests::held(&fx).await,
+            0,
+            "{backend}: the refused retry leaked its continuation slot"
+        );
     }
 }
 
@@ -370,4 +375,98 @@ async fn f2d_giveback_a_refused_direct_send_keeps_no_spend() {
         );
         assert_eq!(dispatched(&fx), 2, "{backend}: the fresh call was not sent");
     }
+}
+
+/// `body` posted raw to `/mcp/alpha` as `k-std`: the response status and body.
+async fn post_raw(fx: &super::direct_guards_fixture::Fx, body: Value) -> (u16, String) {
+    use tower::ServiceExt as _;
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/alpha")
+        .header("authorization", "Bearer k-std")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .expect("a request");
+    let response = fx.router.clone().oneshot(request).await.expect("served");
+    let status = response.status().as_u16();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("a body");
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Path inventory (gpt and grok t2): an id-less `tools/call` is not a tool
+/// send on any door: the parser refuses it -32600 "Missing id" before routing,
+/// and nothing reaches the backend.
+#[tokio::test]
+async fn an_id_less_direct_tools_call_is_refused_before_routing() {
+    use super::direct_guards_fixture::fixture;
+    let fx = fixture(Answer::Ok, |_| {}).await;
+    let body = json!({"jsonrpc": "2.0", "method": "tools/call",
+        "params": {"name": "read", "arguments": {}}});
+    let (_, answer) = post_raw(&fx, body).await;
+    assert_eq!(dispatched(&fx), 0, "sent: {answer}");
+    assert!(answer.contains("Missing id"), "{answer}");
+}
+
+/// Path inventory: a JSON-RPC batch carrying a `tools/call` does not reach the
+/// backend around the permit. Measured on base before this row was pinned; if
+/// the route ever serves batches, each item must take its own permit.
+#[tokio::test]
+async fn a_direct_batch_carrying_tools_call_is_not_forwarded_unchecked() {
+    use super::direct_guards_fixture::fixture;
+    let fx = fixture(Answer::Ok, |_| {}).await;
+    let body = json!([{"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "read", "arguments": {}}}]);
+    let (_, answer) = post_raw(&fx, body).await;
+    assert_eq!(
+        dispatched(&fx),
+        0,
+        "a batched tools/call was forwarded: {answer}"
+    );
+}
+
+/// Path inventory: a task-augmented direct `tools/call` whose redeemed answers
+/// the firewall blocks is refused at the chokepoint like any other retry.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_hostile_task_augmented_direct_retry_is_refused() {
+    use super::direct_guards_fixture::fixture_firewalled;
+    let task = json!({"task": {"ttl": 60_000}});
+    let fx = fixture_firewalled(Answer::AskOnce).await;
+    let who = ("k-std", "alpha");
+    let (_, asked) = direct(&fx, who, json!({}), task.clone()).await;
+    let mut hostile =
+        json!({"requestState": state_of(&asked), "inputResponses": answering(BLOCKED)});
+    hostile["task"] = task["task"].clone();
+    let (_, refused) = direct(&fx, who, json!({}), hostile).await;
+    assert_eq!(code(&refused), Some(-32600), "{refused}");
+    assert_eq!(dispatched(&fx), 1, "the hostile answer was sent");
+}
+
+/// F2r (guard): a parked direct round cannot be resumed by a restarted
+/// gateway. Continuations are sealed per process, so a fresh fixture stands in
+/// for the restart: the first process's state is refused at redemption and
+/// the new process's backend is never reached. (F1r, the interrupted task
+/// settled with no send, is `task_service::runtime_tests::recovery` row
+/// `x6a-undispatched`.)
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn f2r_a_restarted_gateway_refuses_the_old_round_at_redemption() {
+    use super::direct_guards_fixture::fixture_firewalled;
+    let who = ("k-std", "alpha");
+    let first = fixture_firewalled(Answer::AskOnce).await;
+    let (_, asked) = direct(&first, who, json!({}), json!({})).await;
+    let restarted = fixture_firewalled(Answer::AskOnce).await;
+    let retry = json!({"requestState": state_of(&asked), "inputResponses": answering("work")});
+    let (_, refused) = direct(&restarted, who, json!({}), retry).await;
+    assert!(
+        refused.get("error").is_some(),
+        "the old round resumed: {refused}"
+    );
+    assert_eq!(
+        dispatched(&restarted),
+        0,
+        "the restarted backend was reached"
+    );
 }
