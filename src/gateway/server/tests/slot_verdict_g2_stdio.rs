@@ -448,6 +448,13 @@ fn refused(answer: &Value) -> bool {
     answer.get("error").is_some() || answer.pointer("/result/isError") == Some(&json!(true))
 }
 
+/// `body` with every occurrence of `tool` replaced by a placeholder, and how
+/// many there were: the twin bodies are compared byte for byte with only the
+/// tool name factored out (MIK-8361, lead ruling on F5(a)).
+fn normalised(body: &str, tool: &str) -> (String, usize) {
+    (body.replace(tool, "<tool>"), body.matches(tool).count())
+}
+
 /// F5(a), stdio (guard, kills M18; MIK-8361 ruling 1, E1): a step route
 /// authorize refuses (`run_command`, on the default tool-policy deny list)
 /// resolves no credential and asks the backend nothing beyond what a missing
@@ -478,9 +485,15 @@ async fn f5a_stdio_route_authorize_refusal_resolves_nothing() {
         twin_releases, 1,
         "premise: the twin resolves exactly once, for the first step: {missing}"
     );
+    let (hidden_body, named) = normalised(&hidden.to_string(), "run_command");
+    let (missing_body, twin_named) = normalised(&missing.to_string(), "nosuch");
     assert!(
-        hidden.to_string().contains("run_command") && missing.to_string().contains("nosuch"),
-        "premise: each chain fails at its second step: {hidden} / {missing}"
+        named >= 1 && named == twin_named,
+        "premise: each answer names its own step, as often ({named} vs {twin_named}): {hidden} / {missing}"
+    );
+    assert_eq!(
+        hidden_body, missing_body,
+        "F5(a) stdio: the hidden step's answer differs from a missing step's"
     );
     assert_eq!(
         releases - twin_releases,
