@@ -19,27 +19,12 @@ jobs:
       # Each iteration runs every gateway::server row in parallel (t14 among
       # them, as in the full suite) and prints t14's captured output only when
       # it fails; iteration 0 also prints a passing trace for comparison.
-      - name: t14 loop
+      # Timing pass: t14 alone, three times, every T14DIAG line kept.
+      - name: t14 timing
         shell: bash
         run: |
           set +e +o pipefail
-          fails=0
-          for i in $(seq 0 40); do
-            out=$(cargo test --all-features --lib gateway::server:: 2>&1)
-            echo "iteration $i failed tests: $(echo "$out" | grep -o 'test [^ ]* \.\.\. FAILED' | tr '\n' ' ')"
-            if echo "$out" | grep -q 't14_a_burst_while_stdout_is_full_is_decided_and_told_at_most_twice ... FAILED'; then
-              fails=$((fails+1))
-              echo "::group::iteration $i t14 FAILED ($fails)"
-              echo "$out" | sed -n '/---- .*t14_a_burst_while_stdout_is_full/,/^----\|^failures:$/p'
-              echo "::endgroup::"
-            else
-              echo "iteration $i t14 ok ($(echo "$out" | grep -o 'test result: [^.]*' | tail -1))"
-            fi
-            if [ "$i" -eq 0 ]; then
-              echo "::group::iteration 0 passing trace"
-              cargo test --all-features --lib t14_a_burst_while_stdout_is_full -- --nocapture 2>&1 | grep -E 'T14DIAG|test result'
-              echo "::endgroup::"
-            fi
-            [ "$fails" -ge 3 ] && break
+          for i in 1 2 3; do
+            echo "== run $i"
+            cargo test --all-features --lib gateway::server::signing_allocation_tests::stdio_list_changed::t14_a_burst_while_stdout_is_full_is_decided_and_told_at_most_twice -- --exact --nocapture 2>&1 | grep -E 'T14DIAG (persist|t14|reload begin)|test result|panicked'
           done
-          echo "t14 failures: $fails"
