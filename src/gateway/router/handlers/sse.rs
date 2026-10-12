@@ -115,7 +115,7 @@ fn get_era_refusal(state: &AppState, headers: &HeaderMap) -> Option<axum::respon
 fn stream_request_refusal(
     state: &AppState,
     headers: &HeaderMap,
-) -> Option<axum::response::Response> {
+) -> Option<(StatusCode, axum::Json<serde_json::Value>)> {
     if !state.streaming_config.enabled {
         return Some(build_http_error_response(
             None,
