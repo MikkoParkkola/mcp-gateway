@@ -51,8 +51,7 @@ pub(super) struct Admitted<'a> {
     /// The signing nonce this call registered, if it registered one.
     pub(super) nonce: Option<AdmittedNonce>,
     /// The refund witness (MIK-8379): minted with the nonce only when nothing
-    /// before admission may have acted; dropped by a consume; spent at the
-    /// send. A refusal gives the nonce back only while it is held.
+    /// before it acted; dropped by a consume; spent at the send.
     pub(super) witness: Option<RefundWitness>,
     /// MIK-7642 PR.C: this call's explicit-cancel registration, held for the
     /// request's life so the caller's own cancel can find it.
@@ -67,9 +66,8 @@ fn give_back_nonce(state: &AppState, admitted: &mut Admitted<'_>) {
     DirectRouteGuards::release_nonce(state, admitted.nonce.take(), admitted.witness.take());
 }
 
-/// The witness for a nonce admitted after `propagation` and the schema check
-/// ran (MIK-8379): only when neither may have acted, by the classifiers the
-/// `/mcp` route uses (MIK-8353 slice 3a).
+/// The witness for a nonce admitted after propagation and the schema check:
+/// only when neither may have acted, by `/mcp`'s classifiers (MIK-8379).
 fn admission_witness(
     nonce: Option<&AdmittedNonce>,
     propagation: &Propagation,
