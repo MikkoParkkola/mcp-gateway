@@ -142,39 +142,43 @@ impl MetaMcp {
     }
 
     /// Each named backend's fill count plus the registry's membership epoch,
-    /// for [`Self::filled_since`]. No instance is held: the epoch moves on
-    /// every add, replace or remove, so an unmoved epoch means every target
-    /// is the same instance as at the mark and its count compares soundly.
+    /// for [`Self::filled_since`], read in one call under the registry's
+    /// membership lock. No instance is held: the lock serializes the marks
+    /// against every add, replace or remove, so an unmoved epoch means every
+    /// target is the same instance as at the mark and its count compares
+    /// soundly.
     fn fill_marks<'s>(&self, servers: impl Iterator<Item = &'s str>) -> (u64, Vec<Option<u64>>) {
-        let membership = self.backends.membership();
-        let fills = servers
-            .map(|server| {
-                self.backends
-                    .get(server)
-                    .map(|backend| backend.list_fills())
-            })
-            .collect();
-        (membership, fills)
+        self.backends.with_membership(|membership| {
+            let fills = servers
+                .map(|server| {
+                    self.backends
+                        .get(server)
+                        .map(|backend| backend.list_fills())
+                })
+                .collect();
+            (membership, fills)
+        })
     }
 
-    /// Whether a named backend filled since `marks`, or the membership moved:
-    /// any add, replace or remove during the judgement counts as a fill, so
-    /// the nonce stays spent. Only reloads pay this; an unmoved epoch with
-    /// unchanged counts proves nothing acted. The epoch is read after the
-    /// counts, and `register` bumps before it inserts, so a swap that the
-    /// counts could miss always moves the epoch the check reads.
+    /// Whether a named backend filled since `marks`: any count changed OR
+    /// the epoch changed counts as a fill, so the nonce stays spent. The
+    /// counts and the epoch are read in one call under the registry's
+    /// membership lock, so the snapshot and the final read agree with the
+    /// map; only reloads pay this, and equal marks prove nothing acted.
     fn filled_since<'s>(
         &self,
         (membership, marks): &(u64, Vec<Option<u64>>),
         servers: impl Iterator<Item = &'s str>,
     ) -> bool {
-        let counts_changed = marks.iter().zip(servers).any(|(mark, server)| {
-            self.backends
-                .get(server)
-                .map(|backend| backend.list_fills())
-                != *mark
-        });
-        counts_changed || self.backends.membership() != *membership
+        self.backends.with_membership(|epoch| {
+            let counts_changed = marks.iter().zip(servers).any(|(mark, server)| {
+                self.backends
+                    .get(server)
+                    .map(|backend| backend.list_fills())
+                    != *mark
+            });
+            counts_changed || epoch != *membership
+        })
     }
 
     /// The route stage's judgement of one requested backend target: whether

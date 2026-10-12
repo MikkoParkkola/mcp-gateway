@@ -133,9 +133,11 @@ const STARTED_FEED: usize = 64;
 pub struct BackendRegistry {
     /// Backends by name
     backends: DashMap<String, Arc<Backend>>,
-    /// Membership epoch of `backends`: bumped on every successful `register`
-    /// (including replace-by-name) and every `remove` that removed something,
-    /// so two equal reads prove no add, replace or remove happened between.
+    /// Membership epoch of `backends`: every add, replace (including
+    /// replace-by-name) or remove that changes the map bumps it under the
+    /// `stopping` write guard, adjacent to the mutation. A reader holding the
+    /// `stopping` read guard sees an epoch and a map that agree, so two equal
+    /// reads prove no membership change between them.
     membership: std::sync::atomic::AtomicU64,
     /// Where a changed backend name goes so listeners hear `tools/list_changed`
     /// (F24). Set by the HTTP server, and by a stdio session (MIK-8278); unset
@@ -144,9 +146,15 @@ pub struct BackendRegistry {
     /// Whether shutdown has begun. Set once by [`BackendRegistry::stop_all`] and
     /// never cleared.
     ///
+    /// Double role: the shutdown latch AND the membership lock. Every map
+    /// mutation (`register`, `remove`) takes it for writing and every
+    /// consistent epoch-plus-map read takes it for reading, so the epoch and
+    /// the map agree under either guard.
+    ///
     /// A LOCK, not an atomic, and that distinction is the whole point.
-    /// `register` holds it across its check AND its insert; `stop_all` holds it
-    /// across setting the flag AND taking its snapshot. Those are the two
+    /// `register` holds the write guard across its check AND its insert;
+    /// `stop_all` holds it across setting the flag AND taking its snapshot.
+    /// Those are the two
     /// operations that must not interleave, so making each of them atomic
     /// individually - which two `SeqCst` checks around an insert do NOT achieve
     /// - is not enough.
@@ -168,7 +176,7 @@ pub struct BackendRegistry {
     /// between its check and its insert, which nothing outside `register` can
     /// arrange. The guarantee here is by construction - one critical section on
     /// each side - not by demonstration.
-    stopping: parking_lot::Mutex<bool>,
+    stopping: parking_lot::RwLock<bool>,
 
     /// Serializes config-reload transactions (#397).
     ///
@@ -212,7 +220,7 @@ impl BackendRegistry {
             backends: DashMap::new(),
             membership: std::sync::atomic::AtomicU64::new(0),
             change_feed: std::sync::OnceLock::new(),
-            stopping: parking_lot::Mutex::new(false),
+            stopping: parking_lot::RwLock::new(false),
             reload: tokio::sync::Mutex::new(()),
             reload_read: Arc::new(tokio::sync::Semaphore::new(1)),
             breaker_observer: crate::observer::Observer::default(),
@@ -248,10 +256,10 @@ impl BackendRegistry {
     /// outlive the gateway. Returns `false` when the registration was refused
     /// for that reason.
     ///
-    /// The check and the insert happen under one hold of the shutdown lock, so
-    /// a registration that returns `true` has completed its insert before any
-    /// snapshot `stop_all` takes afterwards. That cannot be built from separate
-    /// atomic operations, which is why this is a lock.
+    /// The check and the insert happen under one write hold of the shutdown
+    /// lock, so a registration that returns `true` has completed its insert
+    /// before any snapshot `stop_all` takes afterwards. That cannot be built
+    /// from separate atomic operations, which is why this is a lock.
     ///
     /// The guarantee stops there, and the limit is worth stating because it is
     /// easy to over-read: this says the entry is IN the map when the snapshot is
@@ -280,7 +288,8 @@ impl BackendRegistry {
     /// gateway serves, and tests.
     #[must_use = "a refused registration means the backend is NOT registered"]
     pub fn register(&self, backend: Arc<Backend>) -> bool {
-        let stopping = self.stopping.lock();
+        // Only reads the flag, but `.write()`: the insert and bump must exclude `with_membership` readers.
+        let stopping = self.stopping.write();
         if *stopping {
             warn!(
                 backend = %backend.name,
@@ -309,10 +318,12 @@ impl BackendRegistry {
             breaker.observe(observer);
         }
         let inserted = Arc::clone(&backend);
-        // Bump before the insert: a reader that sees the new instance must also see the moved epoch.
-        self.membership
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.backends.insert(name.clone(), backend);
+        // Under the `stopping` write guard with the insert, so the order within
+        // the guard no longer matters; Relaxed, as for every bump and read of
+        // this epoch, because the lock orders them.
+        self.membership
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         drop(stopping);
         // Before the insert, so no transition escapes; again after it, so an
         // observer attached meanwhile reaches it here or in the walk.
@@ -350,7 +361,7 @@ impl BackendRegistry {
     /// Only `Public` is recorded, and once, by whoever pairs this registry with a
     /// config: the gateway at startup, and [`crate::config_reload::ReloadContext::new`]
     /// when the running posture is `hardened`, so a caller-built registry
-    /// cannot serve a hardened config unpinned. Taken under the lock
+    /// cannot serve a hardened config unpinned. Taken under the write guard
     /// [`Self::register`] inserts under, so no registration slips between.
     ///
     /// The first such pairing is refused, recording and stamping nothing, when
@@ -377,7 +388,7 @@ impl BackendRegistry {
         if policy != crate::security::ssrf::DestinationPolicy::Public {
             return Ok(());
         }
-        let _stopping = self.stopping.lock();
+        let _stopping = self.stopping.write();
         let mut members: Vec<Arc<Backend>> = self
             .backends
             .iter()
@@ -469,11 +480,21 @@ impl BackendRegistry {
         }
     }
 
-    /// The membership epoch: equal reads prove no add, replace or remove
-    /// happened between (MIK-8361's fill marks).
-    pub(crate) fn membership(&self) -> u64 {
-        // SeqCst, as for `list_fills`: the gate orders this against those counts.
-        self.membership.load(std::sync::atomic::Ordering::SeqCst)
+    /// Read the membership epoch under the read guard of the lock every add,
+    /// replace or remove bumps it under for writing, so the epoch and the map
+    /// agree for the whole read: two equal reads prove no membership change
+    /// between them (MIK-8361's fill marks). Readers share the read guard, so
+    /// gated calls do not serialize on each other; only a register, remove,
+    /// stop or pairing excludes them.
+    ///
+    /// The closure runs while the `stopping` read guard is held. Plain map
+    /// reads (`get`) are fine; it must not take any other registry lock - in
+    /// particular it must not call `register`, `remove`, `stop_all` or
+    /// `enforce_destinations`, which take `stopping` for writing themselves.
+    pub(crate) fn with_membership<T>(&self, read: impl FnOnce(u64) -> T) -> T {
+        let _stopping = self.stopping.read();
+        let epoch = self.membership.load(std::sync::atomic::Ordering::Relaxed);
+        read(epoch)
     }
 
     /// Get a backend by name
@@ -502,10 +523,19 @@ impl BackendRegistry {
     /// If the backend must be stopped before removal, call `backend.stop()`
     /// first.  Returns `true` when the backend was present and removed.
     pub fn remove(&self, name: &str) -> bool {
-        let removed = self.backends.remove(name);
+        // The removal and its bump under the `stopping` write guard, so a
+        // reader under the read guard never sees one without the other. The
+        // nudge goes out after the guard drops: no call-out under the lock.
+        let removed = {
+            let _stopping = self.stopping.write();
+            let removed = self.backends.remove(name);
+            if removed.is_some() {
+                self.membership
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            removed
+        };
         if let Some((_, gone)) = &removed {
-            self.membership
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             // The drain finds the name unregistered: the backend shows nothing.
             gone.nudge_tools(super::tools_nudge::NudgeKind::Changed);
         }
@@ -515,7 +545,7 @@ impl BackendRegistry {
     /// Whether `stop_all` has begun: the latch it sets before stopping anything.
     #[cfg(test)]
     pub(crate) fn is_stopping(&self) -> bool {
-        *self.stopping.lock()
+        *self.stopping.read()
     }
 
     /// Stop all backends, concurrently.
@@ -529,16 +559,16 @@ impl BackendRegistry {
     /// serialise: total shutdown is now bounded by the slowest single backend
     /// rather than the sum of all of them.
     pub async fn stop_all(&self) {
-        // The latch and the snapshot are taken under ONE hold of the shutdown
-        // lock, which `register` also holds across its check and insert. So a
-        // registration either completes entirely before this snapshot and is in
-        // it, or finds the latch already set and is refused. There is no
-        // interleaving in which a caller is told its backend was registered and
-        // shutdown never sees it.
+        // The latch and the snapshot are taken under ONE write hold of the
+        // shutdown lock, which `register` also holds for writing across its
+        // check and insert. So a registration either completes entirely before
+        // this snapshot and is in it, or finds the latch already set and is
+        // refused. There is no interleaving in which a caller is told its
+        // backend was registered and shutdown never sees it.
         //
         // No await inside: the stops happen after the guard is dropped.
         let backends: Vec<std::sync::Arc<Backend>> = {
-            let mut stopping = self.stopping.lock();
+            let mut stopping = self.stopping.write();
             *stopping = true;
             self.backends
                 .iter()
