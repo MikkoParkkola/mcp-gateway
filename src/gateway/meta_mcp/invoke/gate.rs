@@ -187,6 +187,26 @@ impl MetaMcp {
         )
     }
 
+    /// MIK-8361: a name this caller cannot see is answered as missing, before
+    /// the policy, signing, idempotency, credential or dispatch; a policy
+    /// refusal of a target the caller cannot see is answered so too
+    /// ([`Self::backstop`]). `None` lets the call go on.
+    pub(super) async fn gated(
+        &self,
+        args: &Value,
+        target: (&str, &str),
+        caller: &MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
+    ) -> Option<Result<GuardedValue>> {
+        if let Some(answer) = self.withheld_gate(target, caller, session_id).await {
+            return Some(answer);
+        }
+        match self.check_or_stamp(args, session_id, caller, target) {
+            Ok(()) => None,
+            Err(refusal) => Some(self.backstop(target, caller, session_id, refusal).await),
+        }
+    }
+
     /// The gate for one `gateway_invoke` target or chain step. `Some` is the
     /// call's answer; `None` lets it go on to the invocation policy and the
     /// dispatch.

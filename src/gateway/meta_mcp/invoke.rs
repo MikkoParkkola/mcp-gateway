@@ -154,15 +154,8 @@ impl MetaMcp {
 
         let server = extract_required_str(args, "server")?;
         let tool = extract_required_str(args, "tool")?;
-        // MIK-8361: a name this caller cannot see is answered as missing,
-        // before the policy, signing, idempotency, credential or dispatch.
-        if let Some(answer) = self.withheld_gate((server, tool), caller, session_id).await {
+        if let Some(answer) = self.gated(args, (server, tool), caller, session_id).await {
             return answer;
-        }
-        if let Err(refusal) = self.check_or_stamp(args, session_id, caller, (server, tool)) {
-            return self
-                .backstop((server, tool), caller, session_id, refusal)
-                .await;
         }
 
         let mut arguments = parse_tool_arguments(args)?;
