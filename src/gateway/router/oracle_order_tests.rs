@@ -285,3 +285,39 @@ async fn b1_the_dispatch_backstop_answers_a_withheld_target_absent() {
     }
     assert_cells("B1", &cells);
 }
+
+/// MIK-8361 A5 ruling A: a keyed `gateway_execute` chain `[note, TOOL]` whose
+/// last step the policy withholds behaves on a first call exactly as the
+/// chain whose last step is a missing name: the visible step runs in both,
+/// and both fail at the second step alike. Before, admission refused the
+/// withheld chain with the policy's reason and ran nothing. A replay past a
+/// revocation still meets the refusal: `admission_tests::sub4_*` pin it.
+#[tokio::test]
+async fn a5_a_keyed_mixed_chain_answers_as_one_with_a_missing_step() {
+    let keyed = json!({"_meta": {crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "a5"}});
+    let chain = json!({"chain": [
+        {"tool": format!("{SERVER}:{SIBLING}"), "arguments": {}},
+        {"tool": format!("{SERVER}:{TOOL}"), "arguments": {}}
+    ]});
+    let mut answers = Vec::new();
+    for side in [Side::Withheld, Side::Absent] {
+        let twin = twin(side, State::WARM).await;
+        answers.push(
+            twin.meta_modern("gateway_execute", chain.clone(), &keyed)
+                .await,
+        );
+    }
+    assert_eq!(
+        answers[1].calls, 1,
+        "premise: the twin runs its visible step: {}",
+        answers[1].body
+    );
+    // Both chains send their visible step, so the sends are compared, not
+    // required to be zero.
+    let (w, a) = (&answers[0], &answers[1]);
+    assert_eq!(
+        (w.status, &w.body, w.calls),
+        (a.status, &a.body, a.calls),
+        "A5 keyed mixed chain: withheld vs missing"
+    );
+}

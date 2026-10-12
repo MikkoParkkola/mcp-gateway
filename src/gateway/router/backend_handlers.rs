@@ -151,7 +151,10 @@ async fn guard_tool_call(
             .profile_refusal(backend_name, tool_name, session_id)
             .map(|refusal| refusal.to_rpc_code())
     });
-    let withheld = withheld_code.is_some();
+    // A name its description withholds is the gate's too, judged here before
+    // any credential (MIK-8356's caller verdict leaves it to the gate).
+    let withheld =
+        withheld_code.is_some() || backend.blocked_tool_refusal(None, tool_name).is_some();
     if let Some(code) = withheld_code {
         // The call's one record names it (MIK-8361).
         crate::gateway::meta_mcp::visible::note_denial_code(backend_name, tool_name, code);

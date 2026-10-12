@@ -209,3 +209,39 @@ async fn authz_13a_surfaced_tool_allowed_reaches_the_backend() {
         "and must actually reach the backend"
     );
 }
+
+/// MIK-8361 amendment A1 (seat finding, 2026-10-12): signing judges a denied
+/// target's attestation as it judges a missing name's. Under enforcement, a
+/// signed call carrying no attestation is refused alike whether the policy
+/// denies its target or allows it; skipping the policy for the denied one
+/// must not skip the attestation it shares with every call.
+#[tokio::test]
+async fn a1_signing_judges_a_denied_targets_attestation_as_any_names() {
+    use crate::attestation::{AttestationMode, AttestationValidator, BnautAttestationSigner};
+    let (registry, _calls) = counted_backend("alpha");
+    let validator = Arc::new(AttestationValidator::new(
+        BnautAttestationSigner::new(b"a1-key".to_vec(), "a1").with_audience("test-gateway"),
+    ));
+    let mut meta = MetaMcp::new(registry).with_attestation(validator, AttestationMode::Enforce);
+    meta.enable_message_signing(
+        crate::security::message_signing::MessageSigner::new(
+            b"a-test-secret-of-sufficient-length".to_vec(),
+            None,
+            "test-key".to_string(),
+        ),
+        Duration::from_secs(300),
+        false,
+    );
+    let judge = |nonce: &str, authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync)| {
+        let (mut signing, args) = captured_external_gateway_invoke(nonce);
+        meta.prepare_signing_invocation(&mut signing, &args, None, &ctx(authorizer))
+            .map_err(|error| error.to_string())
+    };
+    let allowed = judge("a1-allowed", &AllowAll);
+    let denied = judge("a1-denied", &DenyAll);
+    assert!(
+        allowed.is_err(),
+        "premise: enforcement refuses a call with no attestation: {allowed:?}"
+    );
+    assert_eq!(denied, allowed, "the denied target skipped its attestation");
+}

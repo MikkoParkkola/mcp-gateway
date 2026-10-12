@@ -275,17 +275,19 @@ async fn a_resume_mints_nothing_for_a_substituted_chain_or_a_refused_caller() {
     ]);
     let refused = run_chain(&meta, 2, &substituted, ctx(Some(&who), None, &caps, &retry)).await;
     assert_eq!(refused["error"]["code"], json!(-32602), "{refused}");
-    // Only the pending step is denied, so the refusal is the step's policy,
-    // not a refusal of `gateway_execute` itself.
+    // Only the pending step is denied. MIK-8361 A5 ruling A: a step the
+    // caller can no longer see resumes as a missing step, answered by its
+    // gate and never by the policy's reason.
     let denied = MetaMcpCallerContext {
         authorizer: &crate::gateway::authz::DenyOne { tool: "ask" },
         ..ctx(Some(&who), None, &caps, &retry)
     };
     let refused = run(&meta, 3, denied).await;
     assert!(
-        refused
-            .to_string()
-            .contains("denied by test authorizer: 'ask'"),
+        refused.get("error").is_some()
+            && !refused
+                .to_string()
+                .contains("denied by test authorizer: 'ask'"),
         "{refused}"
     );
     assert_eq!(
@@ -339,5 +341,44 @@ async fn g3_c13_resume_fingerprint_reuses_carried_dispatch() {
         mints.load(Ordering::SeqCst),
         baseline + 2,
         "C13: the resume resolved the credential separately for the fingerprint and the invocation"
+    );
+}
+
+/// MIK-8361 A5 ruling A (second review seat, F2): a chain resumed at a step
+/// the caller can no longer see resumes as a chain whose step is missing: the
+/// step's gate answers it, the policy's reason is not the resume's answer,
+/// and the step is not sent again. Before, the resume was refused with the
+/// policy's reason, which a missing step never gets.
+#[tokio::test]
+async fn a_resume_at_a_newly_withheld_step_fails_as_a_missing_step() {
+    let stub = Arc::new(AsksOnce::default());
+    let meta = meta_over(Arc::clone(&stub));
+    let caps = elicitation_caps();
+    let no_retry = &crate::protocol::mrtr::NO_RETRY;
+    let stop = run(&meta, 1, ctx(None, Some("cafe0001"), &caps, no_retry)).await;
+    let retry = answers(&handle_in(&stop));
+    let deny = crate::gateway::authz::DenyOne { tool: "ask" };
+    let resumed = run(
+        &meta,
+        2,
+        MetaMcpCallerContext {
+            authorizer: &deny,
+            ..ctx(None, Some("cafe0001"), &caps, &retry)
+        },
+    )
+    .await;
+    let text = resumed.to_string();
+    assert!(
+        !text.contains("denied by test authorizer"),
+        "the resume answered with the policy's reason: {resumed}"
+    );
+    assert!(
+        resumed.get("error").is_some() || resumed["result"]["isError"] == json!(true),
+        "premise: the resumed chain fails at its withheld step: {resumed}"
+    );
+    assert_eq!(
+        stub.calls_to("ask").len(),
+        1,
+        "the withheld step was sent again: {resumed}"
     );
 }

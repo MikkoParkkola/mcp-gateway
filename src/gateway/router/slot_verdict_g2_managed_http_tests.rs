@@ -433,3 +433,29 @@ async fn h1_no_grant_operator_surfaced_task_call_answers_as_unknown() {
         "H1: a no-grant call reached the backend"
     );
 }
+
+/// MIK-8361 A5 ruling B: with no view of a managed backend, a name the policy
+/// withholds (`run_command`, on the default deny list) named through
+/// `gateway_invoke` gets the connect offer a missing name gets, byte for byte
+/// with the tool name factored out. A caller with no view cannot tell names
+/// apart, so the offer reveals nothing; nothing reaches the backend.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn no_grant_operator_invoke_offer_is_the_same_for_a_withheld_name() {
+    let fx = fixture_with(&Binding::Unconnected).await;
+    let withheld = invoke_named(&fx, 1, "run_command").await;
+    let missing = invoke_named(&fx, 1, "no_such_tool").await;
+    assert!(
+        missing.to_string().contains("no connected account"),
+        "premise: the missing name gets the account answer: {missing}"
+    );
+    assert_eq!(
+        withheld.to_string().replace("run_command", "<tool>"),
+        missing.to_string().replace("no_such_tool", "<tool>"),
+        "the withheld name's answer differs from the missing name's"
+    );
+    assert_eq!(
+        fx.gateway.tool_calls().len(),
+        0,
+        "a no-grant call reached the backend"
+    );
+}

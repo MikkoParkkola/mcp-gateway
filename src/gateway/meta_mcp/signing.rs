@@ -588,29 +588,6 @@ impl super::MetaMcp {
         }
     }
 
-    /// Whether a `gateway_invoke` target on a registered backend is one the
-    /// gate answers as absent: refused by the caller's invocation rules, or
-    /// withheld by its descriptor or schema. An unregistered backend is not
-    /// (MIK-8387).
-    fn withheld_invoke_target(
-        &self,
-        arguments: &Value,
-        session: Option<&str>,
-        caller: &super::MetaMcpCallerContext<'_>,
-    ) -> bool {
-        let (Ok(server), Ok(tool)) = (
-            extract_required_str(arguments, "server"),
-            extract_required_str(arguments, "tool"),
-        ) else {
-            return false;
-        };
-        self.backends.get(server).is_some_and(|backend| {
-            self.may_invoke(server, tool, caller.scope(), session)
-                .is_err()
-                || backend.blocked_tool_refusal(None, tool).is_some()
-        })
-    }
-
     /// Complete policy and nonce checks once, before outer execution admission
     /// can parse arguments or return a retained result.
     pub(crate) fn prepare_signing_invocation(
@@ -627,10 +604,12 @@ impl super::MetaMcp {
         // as a missing name is, so neither its reason nor the order of its
         // nonce refusal tells the two apart. The route stage answers it
         // absent; admission re-runs the policy before any replay.
-        if context.origin == Origin::GatewayInvoke
-            && !self.withheld_invoke_target(arguments, session, caller)
-        {
+        let skipped = context.origin == Origin::GatewayInvoke
+            && self.withheld_invoke_target(arguments, session, caller);
+        if context.origin == Origin::GatewayInvoke && !skipped {
             self.check_invocation_policy(arguments, session, caller)?;
+        } else if skipped {
+            self.check_call_level_policy(arguments, caller)?;
         }
         // A raw nonce that never became a string is refused here, before the
         // store, so the store's own telemetry cannot see it. Counted at THIS
@@ -643,7 +622,10 @@ impl super::MetaMcp {
         // The same key the refund reads (`nonce_principal`), so the two
         // cannot drift apart.
         context.nonce_stamp = self.admit_signing_nonce_stamped(nonce, nonce_principal(caller))?;
-        if context.origin == Origin::GatewayInvoke {
+        // Only a target whose policy passed here is prepared: a skipped one
+        // stays unprepared, so admission and the grant stamp run the whole
+        // policy for it should it ever get past the gate.
+        if context.origin == Origin::GatewayInvoke && !skipped {
             context.prepared_target = Some((
                 extract_required_str(arguments, "server")?.to_owned(),
                 extract_required_str(arguments, "tool")?.to_owned(),

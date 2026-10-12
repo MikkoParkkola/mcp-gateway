@@ -181,9 +181,18 @@ fn authorize_targets(
         let checked = target.as_target();
         let (server_tool, arguments) = ((checked.server, checked.tool), checked.arguments);
         let routed = if index < request_targets {
+            // Its record names the route's own refusal code, as on `/mcp`.
             meta_mcp
                 .authorize_requested_target(scope, server_tool, arguments)
-                .map(|_| ())
+                .map(|withheld| {
+                    if let Some(withheld) = withheld {
+                        crate::gateway::meta_mcp::visible::note_denial_code(
+                            checked.server,
+                            checked.tool,
+                            withheld.to_rpc_code(),
+                        );
+                    }
+                })
         } else {
             meta_mcp
                 .authorize_route_target(scope, server_tool, arguments)

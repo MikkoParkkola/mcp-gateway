@@ -144,3 +144,85 @@ async fn oracle2_capability_reasons_answer_as_the_undefined_name() {
         cells.join("\n")
     );
 }
+
+/// MIK-8361 A5 ruling C, as measured (2026-10-12): a withheld capability
+/// writes exactly as many invocation records as its undefined twin, which is
+/// none, as a `ToolNotFound` result is not an invocation record; its refusal
+/// stays in the grant decision record. Pins the parity both ways.
+#[tokio::test]
+async fn c_a_withheld_capability_writes_one_invocation_record_as_the_undefined_one() {
+    let mut cells = Vec::new();
+    for reason in [Reason::Admin, Reason::Grant] {
+        let mut counts = Vec::new();
+        for withheld in [true, false] {
+            let audit = tempfile::NamedTempFile::new().expect("tempfile");
+            let log = super::r2_identity_keys_tests::transparency_logger(&audit);
+            let caps = capabilities(reason, withheld);
+            let fx = fixture_firewalled_built(Answer::Ok, move |meta| {
+                let mut meta = meta.with_identity_grants(
+                    crate::identity_grants::LocalIdentityGrantStore::from_grants(Vec::new()),
+                );
+                meta.set_capabilities(caps);
+                meta.enable_transparency_log(log);
+                meta
+            })
+            .await;
+            call(&fx, Entry::Invoke, json!({})).await;
+            let records = std::fs::read_to_string(audit.path())
+                .unwrap_or_default()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter(|entry| entry.get("request_hash").is_some())
+                .count();
+            counts.push(records);
+        }
+        if counts[0] != counts[1] {
+            cells.push(format!(
+                "{reason:?}: invocation records withheld {} vs undefined {}",
+                counts[0], counts[1]
+            ));
+        }
+    }
+    assert!(cells.is_empty(), "C:\n{}", cells.join("\n"));
+}
+
+/// MIK-8361 review (gpt F4, disputed by the second seat): during an audit
+/// outage under fail-closed, a capability withheld by its grant answers as
+/// the undefined one does, so the grant decision's write cannot tell them
+/// apart.
+#[tokio::test]
+async fn f4_an_audit_outage_answers_a_withheld_capability_as_the_undefined_one() {
+    let mut answers = Vec::new();
+    for withheld in [true, false] {
+        let audit = tempfile::NamedTempFile::new().expect("tempfile");
+        let log = Arc::new(
+            crate::security::TransparencyLogger::open(Arc::new(
+                crate::security::TransparencyLogConfig {
+                    enabled: true,
+                    path: audit.path().to_string_lossy().to_string(),
+                    key_id: "f4".to_string(),
+                    ..crate::security::TransparencyLogConfig::default()
+                },
+            ))
+            .expect("open log")
+            .with_failure_policy(crate::security::audit::AuditFailurePolicy::FailClosed),
+        );
+        log.set_append_failure_for_test(true);
+        let caps = capabilities(Reason::Grant, withheld);
+        let meta_log = Arc::clone(&log);
+        let fx = fixture_firewalled_built(Answer::Ok, move |meta| {
+            let mut meta = meta.with_identity_grants(
+                crate::identity_grants::LocalIdentityGrantStore::from_grants(Vec::new()),
+            );
+            meta.set_capabilities(caps);
+            meta.enable_transparency_log(meta_log);
+            meta
+        })
+        .await;
+        answers.push(call(&fx, Entry::Invoke, json!({})).await);
+    }
+    assert_eq!(
+        answers[0], answers[1],
+        "an audit outage tells the withheld capability from the undefined one"
+    );
+}

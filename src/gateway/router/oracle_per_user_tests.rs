@@ -430,3 +430,85 @@ async fn c5_direct_no_principal_answers_absent_and_resolves_nothing() {
     }
     assert!(cells.is_empty(), "C5:\n{}", cells.join("\n"));
 }
+
+/// P6 (seat finding, 2026-10-12): a name withheld for its description on a
+/// per-user backend answers exactly as the allowed-but-missing name, on
+/// `gateway_invoke` and the direct route, with no credential resolution, no
+/// fill and no dispatch. MIK-8356's caller verdict leaves such a name to this
+/// gate (its step 0); before it answered, the call reached admission and was
+/// refused by its reason, and the direct route minted before judging it.
+#[tokio::test]
+async fn p6_a_descriptor_withheld_name_answers_absent_with_no_fill_or_mint() {
+    let mut cells = Vec::new();
+    for entry in [Entry::Invoke, Entry::Direct] {
+        let withheld = gateway(CallerSlot::Valid, Warmth::Cold, "other", false).await;
+        withheld.backend.block_descriptor_for_test(TOOL);
+        let absent = gateway(CallerSlot::Lacks, Warmth::Cold, "other", false).await;
+        let w = call(&withheld, entry, json!({"q": "x"})).await;
+        let a = call(&absent, entry, json!({"q": "x"})).await;
+        if w != a {
+            cells.push(format!("P6 {entry:?}: withheld {w:?} vs missing {a:?}"));
+        }
+        if absent.mints() == 0 {
+            cells.push(format!(
+                "P6 {entry:?}: premise: the missing name minted nothing"
+            ));
+        }
+        let (mints, lists, sent) = (
+            withheld.mints(),
+            withheld.caller.lists(),
+            withheld.dispatched(),
+        );
+        if (mints, lists, sent) != (0, 0, 0) {
+            cells.push(format!(
+                "P6 {entry:?}: withheld minted {mints}, listed {lists}, sent {sent}"
+            ));
+        }
+    }
+    assert!(cells.is_empty(), "P6:\n{}", cells.join("\n"));
+}
+
+/// MIK-8361 A5 ruling A, addition 1: a keyed `gateway_execute` chain
+/// `[note, read]` whose last step the caller's own catalogue withholds
+/// behaves on a first call exactly as the chain whose last step that
+/// catalogue lacks: hidden means hidden on every path, so admission leaves
+/// the step to its gate in both, the same answer and the same sends.
+#[tokio::test]
+async fn p7_a_keyed_chain_with_a_per_user_withheld_step_answers_as_a_missing_one() {
+    async fn chain(slot: CallerSlot) -> ((StatusCode, Value), usize) {
+        let gw = gateway(slot, Warmth::Warm, "other", false).await;
+        let params = json!({"name": "gateway_execute", "arguments": {"chain": [
+            {"tool": format!("{BACKEND}:note"), "arguments": {}},
+            {"tool": format!("{BACKEND}:{TOOL}"), "arguments": {}}
+        ]}, "_meta": {crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "p7"}});
+        let body = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": params});
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .expect("request");
+        request.extensions_mut().insert(VerifiedIdentity {
+            subject: "alpha".to_string(),
+            email: "alpha@example.invalid".to_string(),
+            name: None,
+            groups: vec![],
+            issuer: "https://issuer.example.invalid".to_string(),
+        });
+        let response = gw.router.clone().oneshot(request).await.expect("response");
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        ((status, value), gw.dispatched())
+    }
+    let withheld = chain(CallerSlot::Invalid).await;
+    let missing = chain(CallerSlot::Lacks).await;
+    assert_eq!(
+        missing.1, 1,
+        "premise: the twin runs its visible step: {:?}",
+        missing.0
+    );
+    assert_eq!(withheld, missing, "P7: withheld vs missing");
+}

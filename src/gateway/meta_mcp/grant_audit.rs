@@ -560,8 +560,11 @@ pub(crate) async fn slot_rpc<'a, X: Send + 'a>(
     let future: Pin<Box<dyn Future<Output = (JsonRpcResponse, X)> + Send + 'a>> = Box::pin(future);
     match with_grant_slot(logger, future).await {
         ((response, extra), Ok(()), _) => (response, extra),
+        // The same answer a failed record gets on the meta path, status data
+        // included, so a withheld call's slot cannot tell itself apart
+        // (MIK-8361 review F4).
         ((_, extra), Err(error), _) => (
-            JsonRpcResponse::error(Some(id), error.to_rpc_code(), error.to_string()),
+            super::response_security::error_response_preserving_status(id, &error),
             extra,
         ),
     }
@@ -602,7 +605,10 @@ pub(crate) async fn slot_http<'a, R: axum::response::IntoResponse + Send + 'a>(
         // is dropped unread, whatever its size (MIK-7663.GH2409.3).
         (answer_id, None)
     };
-    let body = JsonRpcResponse::error(id, error.to_rpc_code(), error.to_string());
+    let body = match id {
+        Some(id) => super::response_security::error_response_preserving_status(id, &error),
+        None => JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string()),
+    };
     let mut replacement = (
         axum::http::StatusCode::SERVICE_UNAVAILABLE,
         axum::Json(body),

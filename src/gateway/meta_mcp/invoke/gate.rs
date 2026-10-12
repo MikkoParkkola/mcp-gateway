@@ -31,6 +31,55 @@ enum Shared {
 }
 
 impl MetaMcp {
+    /// Whether a `gateway_invoke` target on a registered backend is one the
+    /// gate answers as absent: refused by the caller's invocation rules, or
+    /// withheld by its descriptor or schema. An unregistered backend is not
+    /// (MIK-8387). Signing skips the policy for it (amendment A1).
+    pub(crate) fn withheld_invoke_target(
+        &self,
+        arguments: &Value,
+        session: Option<&str>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> bool {
+        let (Ok(server), Ok(tool)) = (
+            crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server"),
+            crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "tool"),
+        ) else {
+            return false;
+        };
+        self.backends.get(server).is_some_and(|backend| {
+            self.may_invoke(server, tool, caller.scope(), session)
+                .is_err()
+                || backend.blocked_tool_refusal(None, tool).is_some()
+        })
+    }
+
+    /// What signing still judges for a target it skipped the policy for: what
+    /// a missing name meets there that its existence does not decide, the
+    /// name's form and the call's attestation, in the policy's order. Only
+    /// the refusals that name it are skipped (amendment A1).
+    ///
+    /// # Errors
+    ///
+    /// The policy's own refusal of a malformed name or a missing attestation.
+    pub(crate) fn check_call_level_policy(
+        &self,
+        arguments: &Value,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> Result<()> {
+        let tool = crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "tool")?;
+        if let Err(reason) = crate::security::validate_tool_name(tool) {
+            return Err(Error::Protocol(format!(
+                "Invalid tool name '{tool}': {reason}"
+            )));
+        }
+        self.check_attestation(
+            arguments,
+            caller.agent_id.map(crate::security::ProvenAgentId::as_str),
+            "gateway_invoke",
+        )
+    }
+
     /// What `backend`'s shared catalogue says about `tool`, filled once if
     /// cold (F13's single-flight fill, the gateway's own login).
     async fn shared_verdict(
@@ -108,13 +157,14 @@ impl MetaMcp {
             // for this name as for a missing one.
             Withholding::Refused
         } else if backend.keeps_per_user_catalogues() {
-            // MIK-8356's caller verdict judged it earlier in this request: a
-            // name it withheld or lacks takes the path a refused one takes,
-            // so both are answered by the same layer, with the same status.
-            return matches!(
-                recorded_visibility(server, tool),
-                Some(Visibility::Withheld(_))
-            );
+            // MIK-8356's caller verdict records what the caller's own slot
+            // withholds or lacks, and leaves a descriptor-withheld name to
+            // this gate (its step 0): either takes the path a refused one
+            // takes, answered by the same layer, with the same status.
+            match self.tool_visible_to(server, tool, caller.scope(), session_id) {
+                Visibility::Withheld(reason) => reason,
+                Visibility::Visible => return false,
+            }
         } else if self.admit_backend_wide(server, tool).is_err() {
             return false;
         } else {
@@ -234,14 +284,39 @@ impl MetaMcp {
             return Some(Err(refusal));
         }
         if backend.keeps_per_user_catalogues() {
-            // Lead ruling (8356 x 8361): a policy-withheld name answers -32601
-            // at once, with no fill and no credential; every other name is
-            // MIK-8356's caller-slot check's.
-            if !refused {
-                return None;
-            }
-            self.record_withheld(server, tool, Withholding::Refused, caller, session_id)
+            // Lead ruling (8356 x 8361): a policy- or descriptor-withheld name
+            // answers -32601 at once, with no fill and no credential; every
+            // other name is MIK-8356's caller-slot check's.
+            let reason = if refused {
+                Withholding::Refused
+            } else {
+                match self.tool_visible_to(server, tool, scope, session_id) {
+                    Visibility::Withheld(Withholding::Descriptor) => Withholding::Descriptor,
+                    _ => return None,
+                }
+            };
+            self.record_withheld(server, tool, reason, caller, session_id)
                 .await;
+            // Ruling B (A5): a caller with no view of this backend cannot
+            // tell names apart, so a withheld name it names gets the connect
+            // offer a missing one gets; -32601 at once is for a caller with a
+            // view. Resolution mints nothing without a grant.
+            let proof = crate::identity_propagation::CallerProof::new(
+                caller.verified_identity,
+                caller.provenance(),
+            );
+            if self.has_no_view_for(&backend, proof).await
+                && let Err(offer) = self
+                    .resolve_dispatch(
+                        (server, tool),
+                        Some(&backend),
+                        proof,
+                        caller.verified_identity,
+                    )
+                    .await
+            {
+                return Some(Err(offer));
+            }
             return Some(Err(absent_name(tool)));
         }
         let headers = backend.gate_headers();

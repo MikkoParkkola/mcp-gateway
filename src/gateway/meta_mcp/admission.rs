@@ -151,6 +151,13 @@ pub(crate) enum SyncAdmission {
     Replay(JsonRpcResponse, Option<ReplayAudit>),
 }
 
+/// The refusal of a key reused for another execution or representation. It
+/// is also how admission tells a reused key from a key in flight for a
+/// withheld step (MIK-8361 ruling A); `admission_tests::
+/// sub4_replay_current_policy_code_mode_revocation` fails if a reworded
+/// mismatch stops matching it.
+const KEY_MISMATCH: &str = "Idempotency key belongs to another execution or representation";
+
 /// Gateway controls have the same meaning at both external execution routes.
 pub(crate) fn execution_arguments(arguments: &mut Value) -> bool {
     let full = arguments
@@ -315,10 +322,7 @@ impl MetaMcp {
                 409,
                 crate::idempotency::admission::SEALED_MESSAGE,
             )),
-            Err(Refusal::Mismatch) => Err(Error::json_rpc(
-                409,
-                "Idempotency key belongs to another execution or representation",
-            )),
+            Err(Refusal::Mismatch) => Err(Error::json_rpc(409, KEY_MISMATCH)),
             Err(Refusal::InvalidIdentity | Refusal::MetadataTooLarge) => Err(Error::json_rpc(
                 -32602,
                 "Invalid execution admission metadata",
@@ -412,6 +416,8 @@ impl MetaMcp {
                 .check_target_policy(caller, tool_name, arguments, session)?
                 .is_none()
             {
+                // A withheld step is the task worker's gate's, as a missing
+                // step is; a repeat re-checks its stored targets (ruling A).
                 self.authorize_execution_plan(caller, tool_name, arguments, session)?;
             }
             return Ok(SyncAdmission::Unprotected);
@@ -460,7 +466,8 @@ impl MetaMcp {
         let read_only = meta_tool_effect(tool_name) == Effect::ReadOnly;
         // A retained result is still protected by today's authorization. Plan
         // loading and every target check precede lookup, including mismatches.
-        let playbook = self.authorize_execution_plan(caller, tool_name, arguments, session)?;
+        let (playbook, withheld_step) =
+            self.authorize_execution_plan(caller, tool_name, arguments, session)?;
         let mut operation = json!({"kind": "gateway", "tool": tool_name,
             "arguments": operation_arguments(arguments, OPERATION_DEFINING_META),
             "retry": retry.key_discriminator()});
@@ -470,7 +477,7 @@ impl MetaMcp {
             // Keep the bounded admission envelope independent of plan size.
             operation["playbook"] = json!(crate::hashing::canonical_json_sha256(&value));
         }
-        let mut admission = self.admit_operation(
+        let admission = self.admit_operation(
             caller.is_modern,
             verified_identity,
             owner_principal,
@@ -483,7 +490,21 @@ impl MetaMcp {
             read_only,
             ("gateway", tool_name),
             id,
-        )?;
+        );
+        // A key this caller already used (a replay, or a reuse with other
+        // arguments) meets a withheld step's current refusal, as SUB.4 pins
+        // it: its holder held access before. A fresh call goes on to the
+        // step's gate, and any other admission answer (a key in flight) is
+        // the one a missing step gets, never the step's reason (ruling A).
+        let used_key = match &admission {
+            Ok(SyncAdmission::Replay(..)) => true,
+            Err(error) => error.to_string().ends_with(KEY_MISMATCH),
+            Ok(_) => false,
+        };
+        if let (true, Some(refusal)) = (used_key, withheld_step) {
+            return Err(refusal);
+        }
+        let mut admission = admission?;
         if let SyncAdmission::Owned(lease) = &mut admission {
             lease.playbook = playbook;
         }
@@ -680,6 +701,10 @@ mod tests;
 #[cfg(test)]
 #[path = "admission_round_tests.rs"]
 mod round_tests;
+
+#[cfg(test)]
+#[path = "admission_withheld_tests.rs"]
+mod withheld_tests;
 
 /// The policy envelope for a backend tool called by its own name.
 ///

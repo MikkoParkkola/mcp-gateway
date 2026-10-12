@@ -425,8 +425,19 @@ impl Twin {
     /// `extra` (`_meta` merged): the era the task, X14 and idempotency rows
     /// need.
     pub(super) async fn invoke_modern(&self, tool: &str, args: Value, extra: &Value) -> Answered {
-        let mut params = json!({"name": "gateway_invoke",
-            "arguments": {"server": SERVER, "tool": tool, "arguments": args},
+        let arguments = json!({"server": SERVER, "tool": tool, "arguments": args});
+        self.meta_modern("gateway_invoke", arguments, extra).await
+    }
+
+    /// A modern `tools/call` of the meta-tool `name` with `arguments`, its
+    /// params extended by `extra` as in [`Self::invoke_modern`].
+    pub(super) async fn meta_modern(
+        &self,
+        name: &str,
+        arguments: Value,
+        extra: &Value,
+    ) -> Answered {
+        let mut params = json!({"name": name, "arguments": arguments,
             "_meta": super::tests::modern_meta()});
         if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
             for (k, v) in extra {
@@ -444,7 +455,7 @@ impl Twin {
         let headers = [
             ("mcp-protocol-version", "2026-07-28"),
             ("mcp-method", "tools/call"),
-            ("mcp-name", "gateway_invoke"),
+            ("mcp-name", name),
         ];
         let key = self.side.key(self.reason);
         let (status, body) = super::direct_guards_fixture::send_with_headers(

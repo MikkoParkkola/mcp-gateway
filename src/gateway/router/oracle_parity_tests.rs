@@ -255,3 +255,25 @@ async fn s5_s6_catalogue_reasons_withhold_and_forward_the_missing_name() {
         assert_residual(&format!("S6 {reason:?}"), off).await;
     }
 }
+
+/// MIK-8361 A5 ruling D: under `off` a cold slot cannot know a schema is
+/// invalid, so a schema-withheld name is forwarded like the missing one.
+/// Pinned so the cold case is deliberate: ORACLE.5 holds for a warm slot (the
+/// S6 schema cell above).
+#[tokio::test]
+async fn d_off_cold_forwards_a_schema_withheld_name_like_a_missing_one() {
+    let state = State {
+        mode: InputSchemaEnforcement::Off,
+        warm: false,
+        reason: Reason::Schema,
+        ..State::WARM
+    };
+    let (withheld, absent) = pair(Entry::Invoke, Args::Clean, state).await;
+    assert_eq!(
+        (withheld.calls, absent.calls),
+        (1, 1),
+        "the cold-off residual moved: withheld {} / missing {}",
+        withheld.body,
+        absent.body
+    );
+}
