@@ -93,17 +93,33 @@ pub(super) async fn gateway_cold(slot: CallerSlot, surfaced: Surfaced) -> Gatewa
 }
 
 pub(super) async fn gateway_built(
-    (slot, shared_schema, warmth): (CallerSlot, &Value, Warmth),
+    built: (CallerSlot, &Value, Warmth),
     enforcement: InputSchemaEnforcement,
     surfaced: Surfaced,
     configure: impl FnOnce(&mut crate::config::BackendConfig),
     arm: impl FnOnce(&mut crate::gateway::meta_mcp::MetaMcp),
+) -> Gateway {
+    gateway_tuned(built, enforcement, surfaced, (configure, arm), |_| {}).await
+}
+
+/// [`gateway_built`] with `tune` applied to the router state before the
+/// backend is registered (the sanitize rows switch `sanitize_input` on).
+pub(super) async fn gateway_tuned(
+    (slot, shared_schema, warmth): (CallerSlot, &Value, Warmth),
+    enforcement: InputSchemaEnforcement,
+    surfaced: Surfaced,
+    (configure, arm): (
+        impl FnOnce(&mut crate::config::BackendConfig),
+        impl FnOnce(&mut crate::gateway::meta_mcp::MetaMcp),
+    ),
+    tune: impl FnOnce(&mut super::AppState),
 ) -> Gateway {
     let (backend, caller, shared) =
         per_user_backend_with(slot, shared_schema, warmth, enforcement, configure);
     let (mut state, store) =
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
+    tune(state_mut);
     assert!(state_mut.backends.register(backend), "fixture registration");
     let audit = [
         tempfile::NamedTempFile::new().expect("tempfile"),
