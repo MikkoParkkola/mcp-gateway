@@ -40,6 +40,7 @@ thread_local! {
     static CALLS: Cell<u64> = const { Cell::new(0) };
     static LARGEST: Cell<u64> = const { Cell::new(0) };
     static LARGE: Cell<u64> = const { Cell::new(0) };
+    static LARGE_TOTAL: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Installed for the test binary only — this module is `cfg(test)` through its
@@ -62,6 +63,8 @@ fn record(bytes: usize) {
             let _ = LARGEST.try_with(|largest| largest.set(largest.get().max(bytes as u64)));
             if bytes >= LARGE_BYTES {
                 let _ = LARGE.try_with(|large| large.set(large.get().saturating_add(1)));
+                let _ = LARGE_TOTAL
+                    .try_with(|total| total.set(total.get().saturating_add(bytes as u64)));
             }
         }
     });
@@ -109,6 +112,8 @@ pub(crate) struct Measured {
     pub(crate) calls: u64,
     pub(crate) largest: u64,
     pub(crate) large: u64,
+    /// The bytes of those large allocations, included in `bytes`.
+    pub(crate) large_bytes: u64,
 }
 
 impl std::fmt::Display for Measured {
@@ -140,6 +145,7 @@ impl Meter {
         CALLS.with(|calls| calls.set(0));
         LARGEST.with(|largest| largest.set(0));
         LARGE.with(|large| large.set(0));
+        LARGE_TOTAL.with(|total| total.set(0));
         ACTIVE.with(|active| active.set(true));
         Self
     }
@@ -157,6 +163,7 @@ impl Meter {
             calls: CALLS.with(Cell::get),
             largest: LARGEST.with(Cell::get),
             large: LARGE.with(Cell::get),
+            large_bytes: LARGE_TOTAL.with(Cell::get),
         }
     }
 }
