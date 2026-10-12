@@ -780,28 +780,6 @@ async fn l3_a_deferred_replay_is_taken_only_by_its_own_key_once() {
     .await;
 }
 
-/// O4 (mutant M24): with no outcome recorded (no open memo, or the pre-pass
-/// never ran), a managed account's replay defers; it is served at admission
-/// only once the request recorded the account `Live`.
-#[tokio::test]
-async fn o4_an_unfilled_outcome_defers_and_only_live_serves() {
-    use crate::gateway::meta_mcp::visible::{
-        AccountOutcome, record_account_outcome, with_visibility_memo,
-    };
-    let mut gateway = DirectAccountGateway::new(sole_operator(), &Binding::Connected);
-    let meta = gateway.take_meta();
-    let account = meta.target_account(BACKEND, TOOL).expect("premise: a managed account");
-    assert!(meta.stored_replay_defers(BACKEND, TOOL), "O4: an unfilled outcome was served");
-    let live = with_visibility_memo(async {
-        let unfilled = meta.stored_replay_defers(BACKEND, TOOL);
-        record_account_outcome(BACKEND, &account, AccountOutcome::Live);
-        (unfilled, meta.stored_replay_defers(BACKEND, TOOL))
-    })
-    .await;
-    assert!(live.0, "O4: an unfilled outcome inside a memo was served");
-    assert!(!live.1, "O4 control: a Live outcome still defers");
-}
-
 /// G1 (guard; mutant M31): on the direct route a revoked grant's keyed replay
 /// is refused at stage 5 (the identity mint), before 7a/7b can serve a stored
 /// answer; nothing is sent.

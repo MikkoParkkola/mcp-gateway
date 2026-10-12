@@ -647,28 +647,6 @@ impl Gateway {
                     Err(refusal) => break 'tool_call *refusal,
                 }
             }
-            // MIK-8392 STORED.2: the account pre-pass, after the route
-            // stage's caller verdicts (whose clean resolution it reuses, E5)
-            // and before admission. Only a keyed synchronous call can meet
-            // a replay; anything else skips it.
-            if caller.task.is_none()
-                && !caller.awaits_signing_admission()
-                && caller.retry.idempotency_key.is_some()
-                && let Some((server, tool)) = meta_mcp.replay_prepass_target(
-                    &tool_name,
-                    arguments.as_ref(),
-                    &caller,
-                    Some(session_id),
-                )
-            {
-                let proof = crate::identity_propagation::CallerProof::new(
-                    caller.verified_identity,
-                    caller.provenance(),
-                );
-                meta_mcp
-                    .fill_account_outcomes(&[(server.as_str(), tool.as_str())], proof)
-                    .await;
-            }
             let admission = meta_mcp.admit_meta_sync(
                 super::super::meta_mcp::AdmissionOwner::local_operator(),
                 &caller,

@@ -564,28 +564,6 @@ pub(super) async fn tools_call(
         ));
     }
     caller.signing = signing_context.as_ref();
-    // MIK-8392 STORED.2: the account pre-pass, after the caller verdicts
-    // (whose clean resolution it reuses, E5) and before admission. Only a
-    // keyed synchronous call can meet a replay; anything else skips it.
-    if caller.task.is_none()
-        && !caller.awaits_signing_admission()
-        && caller.retry.idempotency_key.is_some()
-        && let Some((server, tool)) = state.meta_mcp.replay_prepass_target(
-            tool_name,
-            &arguments,
-            &caller,
-            Some(session_id.as_str()),
-        )
-    {
-        let proof = crate::identity_propagation::CallerProof::new(
-            caller.verified_identity,
-            caller.provenance(),
-        );
-        state
-            .meta_mcp
-            .fill_account_outcomes(&[(server.as_str(), tool.as_str())], proof)
-            .await;
-    }
     let admission = state.meta_mcp.admit_meta_sync(
         crate::gateway::meta_mcp::AdmissionOwner::routed(admission_owner),
         &caller,

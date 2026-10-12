@@ -655,64 +655,16 @@ impl MetaMcp {
 }
 
 impl MetaMcp {
-    /// The single-call target the STORED.2 route-stage pre-pass judges
-    /// (MIK-8392): the target-branch naming without the policy (which
-    /// admission still runs once), else a continuation retry's origin. The
-    /// route stage fills this target's account outcome before admission, so
-    /// the deferral below reads it. Infallible: anything unreadable yields
-    /// no target, and the replay (if any) then defers, which is safe.
-    pub(crate) fn replay_prepass_target(
-        &self,
-        tool_name: &str,
-        arguments: &Value,
-        caller: &super::MetaMcpCallerContext<'_>,
-        session: Option<&str>,
-    ) -> Option<(String, String)> {
-        if tool_name == "gateway_invoke" {
-            // Unparseable here is refused by admission below; the pre-pass
-            // fills nothing for it.
-            let server =
-                crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server").ok()?;
-            let tool =
-                crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "tool").ok()?;
-            return Some((server.to_owned(), tool.to_owned()));
-        }
-        if let Some(server) = self
-            .surfaced_for(tool_name, caller.scope(), session)
-            .visible_server()
-        {
-            return Some((server.to_owned(), tool_name.to_owned()));
-        }
-        // The origin fallback, as admission's plan branch reads it. Only the
-        // tool that redeems in place never takes it here (`gateway_invoke`
-        // returned above).
-        if tool_name == "gateway_execute" {
-            return None;
-        }
-        match super::invoke::retry_origin_backend(&self.continuation, caller.retry) {
-            Some(Ok(server)) => Some((server, tool_name.to_owned())),
-            // Unreadable (E1) or no continuation: the pre-pass fills
-            // nothing. Admission answers the continuation error itself, and
-            // a plan serves as today.
-            Some(Err(_)) | None => None,
-        }
-    }
-
-    /// Whether a site-1 retained result for `(server, tool)` defers to a
-    /// live dispatch (MIK-8392 STORED.2): anything but a proven-Live account
-    /// defers, including an unfilled outcome (O4) and a per-caller mint with
-    /// no account (E7). Only a backend that mints nothing per caller is
-    /// exempt (U1/U2).
+    /// Whether a site-1 retained result for `(server, tool)` defers to the
+    /// live dispatch (MIK-8392 STORED.2): every target whose dispatch binds a
+    /// per-caller credential (a managed account, or a per-caller mint with no
+    /// account, E7) defers, and the lift serves it once resolution proves the
+    /// account live. Only a backend that mints nothing per caller is exempt
+    /// (U1/U2). There is no admission shortcut for an account already known
+    /// live: the lift reuses the route-stage resolution, so serving here would
+    /// save nothing measurable (lead ruling on M14).
     pub(crate) fn stored_replay_defers(&self, server: &str, tool: &str) -> bool {
-        match self.target_account(server, tool) {
-            Some(account) => !matches!(
-                super::visible::account_outcome(server, &account),
-                Some(super::visible::AccountOutcome::Live)
-            ),
-            // E7: no `account:`, but a per-caller mint is per-user in
-            // substance, so it defers to a live mint as Unjudged would.
-            None => self.mints_per_caller(server, tool),
-        }
+        self.mints_per_caller(server, tool)
     }
 
     /// Whether dispatching `(server, tool)` mints a per-caller credential
