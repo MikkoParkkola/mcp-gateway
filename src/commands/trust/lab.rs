@@ -267,7 +267,15 @@ pub(super) async fn run_local_active_fixture_calls(
             capabilities.display()
         )
     })?;
-    let catalogue = ToolCatalogue::load(dir).await.map_err(|e| {
+    // `load` skips a directory it cannot read; for the lab a missing one is
+    // an error, as it always was.
+    if !capabilities.is_dir() {
+        return Err(format!(
+            "failed to load capabilities for TrustLab active fixtures from {}: no such directory",
+            capabilities.display()
+        ));
+    }
+    let catalogue = ToolCatalogue::load(&[dir]).await.map_err(|e| {
         format!(
             "failed to load capabilities for TrustLab active fixtures from {}: {e}",
             capabilities.display()

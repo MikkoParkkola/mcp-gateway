@@ -18,6 +18,8 @@ pub(crate) const PROTOCOL_NONCES: [&str; 2] = [
     meta_mcp::signing::NONCE_META,
     crate::protocol::mrtr::CHAIN_NONCE_META,
 ];
+/// The gateway directives the sanitize step refuses dirty (MIK-8378 ENV.2).
+pub(crate) use meta_mcp::admission::EXECUTION_DIRECTIVES;
 /// Where the CLI runner notes a child it started for the call's invocation
 /// record (MIK-7926.FIX.2), without `meta_mcp` becoming crate-visible.
 pub(crate) use meta_mcp::invoke::audit::note_process;

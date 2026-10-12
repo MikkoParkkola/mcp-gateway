@@ -210,6 +210,24 @@ impl super::Backend {
         self.shared_entry().tools_cache.replace(tools, || ());
     }
 
+    /// Prefill the shared slot as an accepted fill of `tools` would: the same
+    /// `prepare_tool_metadata`, then its resend set, verdicts and tools. So a
+    /// row reads the resend permission a real `tools/list` would produce
+    /// without a fill on its path (MIK-8360).
+    #[cfg(test)]
+    pub(crate) fn prefill_tools_for_test(&self, mut tools: Vec<Tool>) {
+        let prepared = super::prepare_tool_metadata(
+            &self.name,
+            self.flagged_tool_pins(),
+            super::Judging::Judge,
+            &mut tools,
+        );
+        let entry = self.shared_entry();
+        *entry.resend_permitted.write() = prepared.resend_permitted;
+        self.commit_verdicts("", super::Listing::Complete, prepared.verdicts);
+        entry.tools_cache.replace(tools, || ());
+    }
+
     /// Have the next drain store `tools` into the shared slot right after it
     /// reads that slot.
     #[cfg(test)]

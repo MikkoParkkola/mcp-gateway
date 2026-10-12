@@ -376,6 +376,7 @@ fn debug_redacts_secret_fields() {
         token_endpoint: Some("https://idp.example/token".to_string()),
         client_id: Some("public-client-id".to_string()),
         client_secret: Some("CLIENT-SECRET-VALUE".to_string()),
+        lifetime_secs: None,
     };
 
     let dbg = format!("{token:?}");

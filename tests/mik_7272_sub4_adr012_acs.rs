@@ -66,9 +66,6 @@ const READ_LOOKING_MUTATION: &str = "get_and_increment";
 /// How the mock fails the `tools/call` it is sent.
 #[derive(Clone, Copy)]
 enum Fault {
-    /// No answer ever comes and the caller's own request timeout fires. The
-    /// request was delivered and the backend's answer is unknown.
-    Silence,
     /// The request was read and the response body dies mid-flight — the
     /// dispatch boundary amendment A3 is phrased against, with the bytes
     /// already on the wire.
@@ -152,10 +149,6 @@ async fn mcp_handler(State(mock): State<Arc<Mutex<Mock>>>, Json(body): Json<Valu
                 (slot.fault, slot.calls.len())
             };
             match fault {
-                Fault::Silence => {
-                    tokio::time::sleep(Duration::from_secs(30)).await;
-                    Json(json!({"jsonrpc": "2.0", "id": id, "result": {}})).into_response()
-                }
                 Fault::BrokenResponse => {
                     let broken = futures::stream::once(async {
                         Err::<axum::body::Bytes, std::io::Error>(std::io::Error::other(
@@ -244,9 +237,10 @@ fn backend_for(name: &str, url: &str, arm: ForwardArm) -> Backend {
             protocol_version: None,
         },
         stop_when_idle_for: None,
-        // Short enough that `Fault::Silence` reads as a backend timeout
-        // without the suite waiting for one.
-        timeout: Duration::from_millis(300),
+        // The default request timeout: no row here needs a short one, and a
+        // short one raced discovery on a loaded host (MIK-8360). The rows
+        // whose fault is a silenced call live in the lib tree, at
+        // `src/backend/silence_resend_tests.rs`.
         env: HashMap::default(),
         headers: HashMap::default(),
         oauth: None,
@@ -601,44 +595,6 @@ fn assert_told_uncertain(first: &Value, second: &Value) {
     let told = second["error"]["message"].to_string();
     assert!(told.contains("outcome is unknown"), "{second}");
     assert_eq!(second["error"]["code"], first["error"]["code"], "{second}");
-}
-
-/// Row 3 — an unannotated `tools/call` that times out reaches the backend
-/// exactly once.
-///
-/// `src/backend/ops.rs:218` passes `entry.failsafe.retry_policy` whatever the
-/// method is, and a timeout is not provably pre-dispatch, so today the call is
-/// delivered three times inside one reservation. Per amendment A1 resend
-/// permission comes only from an explicit backend `readOnlyHint`/
-/// `idempotentHint` of `true`; absent means deny.
-#[tokio::test]
-async fn unannotated_backend_timeout_reaches_the_backend_once() {
-    let delivered = deliveries(Fault::Silence, MUTATION).await;
-
-    assert_eq!(
-        delivered, 1,
-        "a `tools/call` carrying no explicit read-only or idempotent hint must \
-         not be resent beneath the guard (ADR-012 consequence 2); the backend \
-         received it {delivered} times inside one reservation"
-    );
-}
-
-/// Row 3b — the permission the deny default is a default *for*: a call the
-/// backend annotates `readOnlyHint: true` is still resent.
-///
-/// Deliberately green, and the reason row 3 is worth having. An
-/// implementation that satisfies row 3 by disabling retries for every
-/// `tools/call` turns this row red, which is the cost the ADR declines to pay.
-#[tokio::test]
-async fn an_explicitly_read_only_call_is_still_resent() {
-    let delivered = deliveries(Fault::Silence, ANNOTATED_READ).await;
-
-    assert!(
-        delivered > 1,
-        "a call the backend explicitly annotates `readOnlyHint: true` keeps its \
-         resend permission (ADR-012 A1); it was delivered {delivered} time(s), \
-         so the deny default has been applied to a call that granted permission"
-    );
 }
 
 #[path = "mik_7272_sub4_adr012_acs/resend.rs"]

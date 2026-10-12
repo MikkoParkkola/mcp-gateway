@@ -144,7 +144,7 @@ fn backend_with_oauth(enabled: bool, shared: bool) -> BackendConfig {
             callback_host: None,
             callback_port: None,
             callback_path: None,
-            token_refresh_buffer_secs: 300,
+            token_refresh_buffer_secs: Some(300),
             shared_account: shared,
         }),
         ..BackendConfig::default()
