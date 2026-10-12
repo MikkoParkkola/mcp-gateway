@@ -108,7 +108,16 @@ async fn a_caller_that_no_longer_resolves_closes_the_stream() {
     let judge = Fake::answering("s0", "x");
     let view = view(&judge);
     judge.die();
-    assert_eq!(view.decide(&auth(), None, "", "a").await, Decision::Close);
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        axum::http::HeaderValue::from_static("Bearer dead"),
+    );
+    let held = crate::gateway::auth::live::held_credential(&headers);
+    assert_eq!(
+        view.decide(&auth(), held.as_ref(), "", "a").await,
+        Decision::Close
+    );
 }
 
 #[tokio::test]
