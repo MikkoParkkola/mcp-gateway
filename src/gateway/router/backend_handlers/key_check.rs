@@ -50,20 +50,18 @@ pub(super) async fn key_refusal(
     // argument-key mode; the argument keys are judged only after.
     if backend.keeps_per_user_catalogues() {
         let verdict = backend.catalogue_verdict(identity_key, headers, tool).await;
-        // The check may have filled the caller's slot: index it once filled
-        // (MIK-8356), whatever the verdict.
-        if backend.holds_tools_for(identity_key) {
-            let proof = crate::identity_propagation::CallerProof::new(
-                failed.identity,
-                crate::identity_propagation::CallerProvenance::classify(
-                    failed.client.map(|client| client.principal.as_str()),
-                ),
-            );
-            failed
-                .state
-                .meta_mcp
-                .remember_caller_slot(backend, proof, identity_key);
-        }
+        // The check may have filled the caller's slot: index it, whatever the
+        // verdict; an unfilled slot is never recorded (MIK-8356).
+        let proof = crate::identity_propagation::CallerProof::new(
+            failed.identity,
+            crate::identity_propagation::CallerProvenance::classify(
+                failed.client.map(|client| client.principal.as_str()),
+            ),
+        );
+        failed
+            .state
+            .meta_mcp
+            .remember_caller_slot(backend, proof, identity_key);
         match verdict {
             Ok(CatalogueVerdict::Withholds | CatalogueVerdict::Lacks) => {
                 let response = error_response_preserving_status(id.clone(), &absent_name(tool));
