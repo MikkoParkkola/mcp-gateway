@@ -420,3 +420,67 @@ impl World {
         Ear::Listen(events)
     }
 }
+
+/// Which route a raw attach goes to.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Attach {
+    /// The legacy `GET /mcp` stream.
+    Get,
+    /// The 2026 `subscriptions/listen` stream.
+    Listen,
+}
+
+impl World {
+    /// The status and body of an attach on `route` held by `bearer`, with
+    /// `extend` applied to the request first, whether or not a stream opens
+    /// (MIK-8377: an identity dead at attach is refused there).
+    pub(super) async fn attach_raw(
+        &self,
+        route: Attach,
+        bearer: &str,
+        extend: impl FnOnce(&mut axum::http::Request<Body>),
+    ) -> (axum::http::StatusCode, axum::body::Bytes) {
+        let builder = axum::http::Request::builder()
+            .uri("/mcp")
+            .header("authorization", format!("Bearer {bearer}"));
+        let mut request = match route {
+            Attach::Get => builder
+                .method("GET")
+                .header("accept", "text/event-stream")
+                .body(Body::empty()),
+            Attach::Listen => builder
+                .method("POST")
+                .header("content-type", "application/json")
+                .header("mcp-protocol-version", "2026-07-28")
+                .header("mcp-method", "subscriptions/listen")
+                .header("accept", "application/json, text/event-stream")
+                .body(Body::from(
+                    json!({
+                        "jsonrpc": "2.0", "id": "listen", "method": "subscriptions/listen",
+                        "params": {
+                            "notifications": { "toolsListChanged": true },
+                            "_meta": {
+                                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                                "io.modelcontextprotocol/clientCapabilities": {}
+                            }
+                        }
+                    })
+                    .to_string(),
+                )),
+        }
+        .expect("a request");
+        extend(&mut request);
+        let response = self.router.clone().oneshot(request).await.expect("served");
+        let status = response.status();
+        let body = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            axum::body::to_bytes(response.into_body(), 64 * 1024),
+        )
+        .await
+        .map_or_else(
+            |_| axum::body::Bytes::from_static(b"<open stream>"),
+            |b| b.unwrap_or_default(),
+        );
+        (status, body)
+    }
+}

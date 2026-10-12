@@ -6,6 +6,7 @@
 //! d2.1 L-2). The certificate and its `notAfter` are the request extensions
 //! the TLS layer inserts; MIK-8350 captures them at attach.
 
+use super::audience_ear::Attach;
 use super::audience_fixture::{World, tool};
 use crate::mtls::CertIdentity;
 use crate::mtls::identity::CertNotAfter;
@@ -108,17 +109,33 @@ async fn live_1_cert_a_get_stream_past_its_certificate_not_after_is_closed() {
     );
 }
 
-/// BASELINE-DEAD: a certificate already past `notAfter` when the GET stream
-/// attaches makes its baseline Dead, so the stream closes before any frame.
-#[tokio::test]
-async fn baseline_dead_a_stream_attached_past_not_after_is_closed() {
+/// BASELINE-DEAD (lead ruling): an identity already dead at attach is
+/// refused there, with no stream opened. The answer is the status and body
+/// that route gives an invalid credential (401).
+async fn refused_like_an_invalid_credential(route: Attach) {
     let w = World::start().await;
     let not_after = crate::clock::unix_secs().expect("clock after 1970") - 1;
-    let mut ear = w.sse_with("k-std", with_cert(not_after)).await;
-    assert!(
-        ear.closed(&w).await,
-        "a stream whose identity is dead at attach is closed"
+    let dead = w.attach_raw(route, "k-std", with_cert(not_after)).await;
+    let invalid = w.attach_raw(route, "k-not-a-key", |_| {}).await;
+    assert_eq!(
+        invalid.0,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "premise: an invalid credential is 401 on {route:?}"
     );
+    assert_eq!(
+        dead, invalid,
+        "an identity dead at attach is refused as an invalid credential on {route:?}"
+    );
+}
+
+#[tokio::test]
+async fn baseline_dead_a_get_attach_past_not_after_is_refused() {
+    refused_like_an_invalid_credential(Attach::Get).await;
+}
+
+#[tokio::test]
+async fn baseline_dead_a_listen_attach_past_not_after_is_refused() {
+    refused_like_an_invalid_credential(Attach::Listen).await;
 }
 
 /// QUEUED-THEN-DEAD: a hint queued while the certificate was valid, then
