@@ -659,3 +659,63 @@ async fn n1_a_revoked_operators_surfaced_call_marks_no_view() {
         "N1: the call left no no-view marker, so predictions still read the revoked slot"
     );
 }
+
+/// X1, stdio twin (MIK-8356 ruling (a)): on stdio, with input sanitizing on,
+/// a call by the surfaced name of a tool on a per-user `passthrough` backend
+/// is sanitized: its NUL argument is refused and nothing is dispatched. The
+/// sole operator's own catalogue is what judges the name later, so intake
+/// must not exempt it. RED before the fix: intake exempts it and the NUL is
+/// dispatched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn x1_stdio_per_user_surfaced_name_is_sanitized() {
+    let mut gateway = DirectAccountGateway::new_configured(
+        ServeMode::Stdio,
+        AuthConfig::default(),
+        &Binding::Connected,
+        |config| config.passthrough = true,
+    );
+    let meta = Arc::new(
+        gateway
+            .take_meta()
+            .with_surfaced_tools(vec![SurfacedToolConfig {
+                server: BACKEND.to_string(),
+                tool: TOOL.to_string(),
+            }]),
+    );
+    gateway
+        .backends()
+        .get(BACKEND)
+        .expect("the backend")
+        .store_shared_tools_for_test(vec![tool(TOOL, &valid())]);
+    let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": TOOL, "arguments": {"folder": "a\u{0}b"}}});
+    let answer = Gateway::dispatch_single_with_sink(
+        &meta,
+        &Arc::new(crate::security::ToolPolicy::default()),
+        &Arc::new(crate::mtls::MtlsPolicy::from_config(
+            &crate::mtls::MtlsConfig::default(),
+        )),
+        request,
+        StdioClient {
+            session_id: STDIO_SESSION_ID,
+            channel: &crate::gateway::input_bridge::NoClientChannel,
+            handshake_capabilities: Declared::NONE,
+            tasks: None,
+            serving: crate::gateway::server::stdio_single::ModernServing::Enabled,
+            discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
+            sanitize: crate::gateway::server::stdio_single::InputSanitizing::On,
+        },
+        &StdioTelemetry::default(),
+    )
+    .await
+    .expect("a request is answered");
+    assert!(
+        answer.to_string().contains("null bytes"),
+        "X1 stdio: a per-user surfaced name was exempt from sanitizing: {answer}"
+    );
+    assert_eq!(
+        gateway.tool_calls().len(),
+        0,
+        "X1 stdio: the NUL argument was dispatched: {answer}"
+    );
+}

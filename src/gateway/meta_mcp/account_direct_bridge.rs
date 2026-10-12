@@ -60,6 +60,21 @@ impl DirectAccountGateway {
         binding: &Binding,
         enforcement: Option<crate::config::InputSchemaEnforcement>,
     ) -> Self {
+        Self::new_configured(mode, auth, binding, move |config| {
+            if let Some(mode) = enforcement {
+                config.input_schema_enforcement = mode;
+            }
+        })
+    }
+
+    /// [`Self::new_in`], with `configure` applied to `BACKEND`'s config (the
+    /// MIK-8356 X1 stdio row makes it a `passthrough` backend).
+    pub(crate) fn new_configured(
+        mode: ServeMode,
+        auth: crate::config::AuthConfig,
+        binding: &Binding,
+        configure: impl Fn(&mut crate::config::BackendConfig),
+    ) -> Self {
         let operator_grant = matches!(binding, Binding::Connected);
         let bind = match binding {
             Binding::Unconnected | Binding::Connected => Bind::Account(WORK),
@@ -82,11 +97,7 @@ impl DirectAccountGateway {
             &custody.installed(),
             &slots,
             (mode, auth),
-            |config| {
-                if let Some(mode) = enforcement {
-                    config.input_schema_enforcement = mode;
-                }
-            },
+            configure,
         );
         Self {
             backends: Arc::clone(&meta.backends),
