@@ -37,6 +37,9 @@ mod collusion_stdio;
 mod collusion_stdio_delivered;
 #[cfg(feature = "firewall")]
 mod collusion_stdio_plan;
+/// MIK-8408 R3s/R4s: a keyed stdio plan replay renews its step receipts.
+#[cfg(feature = "firewall")]
+mod collusion_stdio_plan_replay;
 #[cfg(feature = "firewall")]
 mod egress_matrix_stdio;
 mod r2_stdio_keys;

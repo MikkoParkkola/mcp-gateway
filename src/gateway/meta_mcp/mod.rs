@@ -606,6 +606,17 @@ impl MetaMcp {
         &self.execution_admission
     }
 
+    /// Serve from `admission`, another Meta-MCP's store: a row that replays,
+    /// on a gateway configured differently, what a first one retained
+    /// (MIK-8408 R9). Tests only.
+    #[cfg(test)]
+    pub(crate) fn share_execution_admission_for_test(
+        &mut self,
+        admission: Arc<crate::idempotency::admission::ExecutionAdmission>,
+    ) {
+        self.execution_admission = admission;
+    }
+
     pub(crate) fn set_idempotency_config(&self, config: crate::config::IdempotencyConfig) {
         *self.idempotency_config.write() = config;
     }
