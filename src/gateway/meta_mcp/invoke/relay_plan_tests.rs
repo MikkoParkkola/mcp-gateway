@@ -294,23 +294,6 @@ async fn a_wrapped_plan_answer_keeps_escaped_step_text() {
     );
 }
 
-/// Over the bound a plan's receipts are kept against, they are dropped, as
-/// before, and counted.
-#[tokio::test]
-async fn an_answer_over_the_bound_drops_the_plan_receipts() {
-    let (meta, firewall) = relay_meta();
-    let huge = "x ".repeat(600 * 1024);
-    let answer = plan_answer(&json!({"a": text_result(PROSE), "pad": huge}));
-    deliver_plan(&meta, &[("a", PROSE)], &answer, &answer).await;
-    carol_holds(&firewall, "a", PROSE);
-
-    assert!(
-        refused(&firewall, "alice", PROSE),
-        "dropped, so not excused"
-    );
-    assert_eq!(firewall.relay_plan_drops(), 1);
-}
-
 /// A plan receipt whose answer changed commits nothing until the final answer
 /// has kept it: a route that never runs the final rebuild under-receipts.
 #[tokio::test]
@@ -789,3 +772,6 @@ async fn short_fields_delivered_reordered_keep_the_delivered_run() {
         "the receipt kept the step's order, not the delivered one"
     );
 }
+
+#[path = "relay_plan_p3_tests.rs"]
+mod p3;

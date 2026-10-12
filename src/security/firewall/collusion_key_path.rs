@@ -19,6 +19,8 @@ use serde_json::Value;
 /// empty path (an array of strings) is left to the all-values form, and a
 /// nested array is its own array, never joined across instances.
 pub(in super::super) fn key_path_runs(value: &Value) -> Vec<Vec<&str>> {
+    #[cfg(test)]
+    super::walk::note_walk();
     let mut arrays = Vec::new();
     match value {
         Value::Object(map) => map

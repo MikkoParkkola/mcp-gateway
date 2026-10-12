@@ -25,6 +25,7 @@ use super::collusion_digest::{
     DELIVERED_SET_CAP, key_path_joins, key_path_run_indices, key_path_runs,
 };
 pub(crate) use super::collusion_digest::{Delivered, DeliveryDigest};
+use super::collusion_digest::{Mode, UnreadReceipt, view};
 use super::{
     Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType, Severity,
 };
@@ -521,7 +522,54 @@ impl Firewall {
             digest
         };
         staged.add_baseline(digest.staged_len());
-        Some(self.attach_big(digest, (server, tool), result, staged))
+        let digest = self.attach_big(digest, (server, tool), result, staged);
+        Some(self.with_leaf_hashes(digest, (server, tool), result, staged))
+    }
+
+    /// `MIK-8066` D4: `leaf`'s keyed hash, for seam ownership; `None` with
+    /// relay detection off.
+    pub(crate) fn leaf_hash(&self, leaf: &str) -> Option<u64> {
+        Some(self.relay_detector()?.leaf_hash(leaf))
+    }
+
+    /// `MIK-8066` D4 + A3: a plan step's value leaves as sorted keyed hashes,
+    /// 8 B each, charged to the plan's total only (an attachment, F3), so the
+    /// capping switch stays 2a's. Only a step staged whole or a staged
+    /// `BigStep` keeps them, and only while the total has room: a step
+    /// skipped for room keeps none and is marked lost, because no hashes
+    /// means no subset seam, which fails safe.
+    fn with_leaf_hashes(
+        &self,
+        mut digest: DeliveryDigest,
+        (server, tool): (&str, &str),
+        result: &Value,
+        staged: &PlanStaging,
+    ) -> DeliveryDigest {
+        let Some(detector) = self.relay_detector() else {
+            return digest;
+        };
+        if !digest.is_deferred() && !digest.is_staged_step() {
+            return digest;
+        }
+        let (leaves, values) = delivery_parts(result);
+        let mut hashes: Vec<u64> = leaves[..values.min(leaves.len())]
+            .iter()
+            .map(|leaf| detector.leaf_hash(leaf))
+            .collect();
+        hashes.sort_unstable();
+        hashes.dedup();
+        let bytes = hashes.len() * 8;
+        if staged.total().saturating_add(bytes) > PLAN_STAGED_CAP {
+            if let Some(caller) = staged.caller() {
+                detector.mark_step_lost(&format!("{server}:{tool}"), &caller);
+            }
+            telemetry_metrics::counter!(CAPACITY_METRIC, "bound" => "plan_leaf_hashes_skipped")
+                .increment(1);
+            return digest;
+        }
+        staged.add_attachment(bytes);
+        digest.leaf_hashes = Some(hashes.into());
+        digest
     }
 
     fn digest_with(
@@ -592,85 +640,6 @@ impl Firewall {
         }
     }
 
-    /// The leaves of a plan's final answer that its step receipts are kept
-    /// against (MIK-7887.RECEIPT.2). `None` with relay detection off, or over
-    /// the bound, where the plan's receipts are dropped and counted.
-    pub(crate) fn delivered_for_plan<'v>(
-        &self,
-        answer: &'v Value,
-        staged: Option<&PlanStaging>,
-    ) -> Option<Delivered<'v>> {
-        self.relay_detector()?;
-        let (leaves, values) = delivery_parts(answer);
-        let delivered = Delivered::of_parts(leaves, values).map(|d| d.with_answer(answer));
-        if delivered.is_none() {
-            match staged {
-                Some(staged) => self.count_plan_drop_once(staged),
-                None => self.count_plan_drop(),
-            }
-        }
-        delivered
-    }
-
-    /// What `answer` delivers, read as `delivered_for_plan` reads it; when it is
-    /// over the bound, what `fallback` (the same text read as one leaf)
-    /// delivers instead, so a fuller reading never loses a receipt the plainer
-    /// one keeps (`MIK-8043.JOIN.4`). A drop is counted only when both fail.
-    pub(crate) fn delivered_preferring<'v>(
-        &self,
-        answer: &'v Value,
-        fallback: &'v Value,
-        staged: Option<&PlanStaging>,
-    ) -> Option<Delivered<'v>> {
-        self.relay_detector()?;
-        let (leaves, values) = delivery_parts(answer);
-        Delivered::of_parts(leaves, values)
-            .map(|d| d.with_answer(answer))
-            .or_else(|| self.delivered_for_plan(fallback, staged))
-    }
-
-    /// [`Self::count_plan_drop`] unless this delivery already counted one:
-    /// `staged` then holds `usize::MAX`, past every bound (`MIK-8094`).
-    fn count_plan_drop_once(&self, staged: &PlanStaging) {
-        if staged.mark_dropped() {
-            self.count_plan_drop();
-        }
-    }
-
-    fn count_plan_drop(&self) {
-        self.relay.plan_drop.fetch_add(1, Ordering::Relaxed);
-        telemetry_metrics::counter!(PLAN_DROP_METRIC).increment(1);
-    }
-
-    /// `digest` kept to what `delivered` carries, its deferred cap still to
-    /// apply: the seam pass reads which leaves it keeps whole before
-    /// [`Self::cap_kept`] cuts any (`MIK-8113`); unchanged with relay
-    /// detection off.
-    /// `step`, the receipt's plan step, has its own span of the answer
-    /// matched first (`MIK-8209` K7).
-    pub(crate) fn retain_delivered(
-        &self,
-        digest: DeliveryDigest,
-        delivered: &Delivered<'_>,
-        step: Option<u32>,
-    ) -> DeliveryDigest {
-        let Some(detector) = self.relay_detector() else {
-            return digest;
-        };
-        let mut digest = digest.retaining_for(detector, delivered, step);
-        // `MIK-8066.BIG.3`: a step past the plan bound keeps its evidence and
-        // excuse to what the answer delivered.
-        if let Some(big) = digest.big.as_mut() {
-            big.keep_to(delivered.kgrams(detector));
-        }
-        digest
-    }
-
-    /// `digest` with its deferred cap applied, a cut counted.
-    pub(crate) fn cap_kept(&self, digest: DeliveryDigest) -> DeliveryDigest {
-        self.capped(&digest).unwrap_or(digest)
-    }
-
     /// Record `digest` as delivered to `caller` from `server:tool`.
     pub(crate) fn record_digest(
         &self,
@@ -682,6 +651,19 @@ impl Firewall {
         let Some(detector) = self.relay_detector() else {
             return;
         };
+        // A2: by reference, a digest could be recorded twice; the first
+        // record sets the flag, a second adds no evidence and no charge.
+        let twice = digest.recorded.swap(true, Ordering::Relaxed);
+        if twice {
+            detector
+                .views
+                .double_records
+                .fetch_add(1, Ordering::Relaxed);
+        }
+        debug_assert!(!twice, "a delivery digest was recorded twice");
+        if twice {
+            return;
+        }
         let source = format!("{server}:{tool}");
         // MIK-8113: a seam of several sources leaves only by a flow every
         // contributing source allows.
@@ -789,6 +771,8 @@ fn context_integrity_sensitive(result: &Value) -> bool {
         })
 }
 
+#[path = "collusion_gate_answer.rs"]
+mod answer;
 #[path = "collusion_gate_seams.rs"]
 mod seams;
 #[path = "collusion_staging.rs"]

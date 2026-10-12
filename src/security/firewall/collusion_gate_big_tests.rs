@@ -19,7 +19,7 @@ use super::{CollusionAction, CollusionConfig, RelayCaller};
 use crate::security::firewall::{Firewall, FirewallConfig, ScanType};
 
 /// Relay detection on, observing, with production sampling.
-fn firewall() -> Firewall {
+pub(super) fn firewall() -> Firewall {
     let config = FirewallConfig {
         collusion: CollusionConfig {
             action: CollusionAction::Observe,
@@ -32,7 +32,7 @@ fn firewall() -> Firewall {
 }
 
 /// Distinct filler prose of about `chars` characters.
-fn filler(seed: u64, chars: usize) -> String {
+pub(super) fn filler(seed: u64, chars: usize) -> String {
     let mut out = String::new();
     let mut i = seed;
     while out.len() < chars {
@@ -44,12 +44,12 @@ fn filler(seed: u64, chars: usize) -> String {
     out
 }
 
-fn deliver(fw: &Firewall, who: &str, text: &str) {
+pub(super) fn deliver(fw: &Firewall, who: &str, text: &str) {
     let result = json!({"content": [{"type": "text", "text": text}]});
     fw.record_delivery(RelayCaller::Keyed(who), "alpha", "read", &result);
 }
 
-fn relays(fw: &Firewall, who: &str, text: &str) -> bool {
+pub(super) fn relays(fw: &Firewall, who: &str, text: &str) -> bool {
     let params = json!({"name": "send", "arguments": {"text": text}});
     fw.check_relay(
         RelayCaller::Keyed(who),
@@ -64,8 +64,33 @@ fn relays(fw: &Firewall, who: &str, text: &str) -> bool {
 }
 
 /// 2,000 chars of `text` from `at`.
-fn run(text: &str, at: usize) -> &str {
+pub(super) fn run(text: &str, at: usize) -> &str {
     &text[at..at + 2_000]
+}
+
+/// A 2,000-char run of `text` in `from..to`, picked under this run's key so
+/// at least 4 of its sampled fingerprints survive thinning at m = 128: above
+/// any record's rate here, so the run is evidence whatever the thinning.
+pub(super) fn pick_run<'t>(
+    detector: &crate::security::firewall::collusion::CollusionDetector,
+    text: &'t str,
+    from: usize,
+    to: usize,
+) -> &'t str {
+    (from..to)
+        .step_by(997)
+        .map(|at| &text[at..at + 2_000])
+        .find(|run| {
+            detector
+                .fingerprints(run)
+                .iter()
+                .filter(|&&fp| {
+                    crate::security::firewall::collusion::CollusionDetector::thinning_keeps(fp, 128)
+                })
+                .count()
+                >= 4
+        })
+        .expect("premise: a run whose fingerprints survive m = 128")
 }
 
 /// Alice's plan step `step`, staged with `staged` already held by her plan,
@@ -155,10 +180,70 @@ fn a_step_over_the_plan_bound_is_excused_and_evidence_for_what_it_delivered() {
     );
 }
 
-const SOURCE: &str = "alpha:read";
+/// `MIK-8066` T6 (P3): a 900 KiB step staged whole, delivered inside an
+/// answer of 1.6 MiB. Today the over-bound answer drops every step receipt.
+/// After BIG.3 the answer is read as a bounded fingerprint view: the step's
+/// middle is evidence and its holder is excused.
+#[test]
+fn a_step_inside_an_answer_over_the_bound_is_excused_and_evidence() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    let text = filler(51, 900 * 1024);
+    // A fixed slice this deep can lose every fingerprint to keyed thinning.
+    let relayed = pick_run(detector, &text, 300_000, 600_000);
+    let step = json!({"content": [{"type": "text", "text": text}]});
+    let answer = json!({"whole": text, "pad": filler(52, 700 * 1024)});
+    assert!(
+        deliver_step(&fw, &step, 0, &answer),
+        "an answer over the bound dropped its step receipts"
+    );
+    assert!(
+        relays(&fw, "bob", relayed),
+        "the step's middle was never receipted"
+    );
+    deliver(&fw, "carol", relayed);
+    assert!(
+        !relays(&fw, "alice", relayed),
+        "the step's holder was refused"
+    );
+}
+
+/// `MIK-8066` T6, the join form (S3b): a step's labelled parts, each under
+/// the 48-char k-gram, delivered inside an over-bound answer. Alice
+/// forwarding the parts run together (the per-key-path join, MIK-8209) is
+/// excused against carol's whole copy of that join.
+#[test]
+fn a_rejoined_step_inside_an_answer_over_the_bound_is_excused() {
+    let fw = firewall();
+    let parts: Vec<String> = (0..10)
+        .map(|i| filler(60 + i, 40)[..40].to_owned())
+        .collect();
+    let items: Vec<Value> = parts
+        .iter()
+        .map(|p| json!({"kind": "chunk", "part": p}))
+        .collect();
+    let step = json!({ "items": items });
+    let answer = json!({"items": items, "pad": filler(70, 1_200 * 1024)});
+    let joined: String = parts.concat();
+    assert!(
+        deliver_step(&fw, &step, 0, &answer),
+        "an answer over the bound dropped its step receipts"
+    );
+    deliver(&fw, "carol", &joined);
+    assert!(
+        relays(&fw, "bob", &joined),
+        "control: bob without a copy is a relay"
+    );
+    assert!(
+        !relays(&fw, "alice", &joined),
+        "the re-joined parts were refused"
+    );
+}
+
+pub(super) const SOURCE: &str = "alpha:read";
 
 /// A plan step of `chars` of `seed` filler, as one content item.
-fn step_of(seed: u64, chars: usize) -> (String, Value) {
+pub(super) fn step_of(seed: u64, chars: usize) -> (String, Value) {
     let text = filler(seed, chars);
     let step = json!({"content": [{"type": "text", "text": text}]});
     (text, step)
@@ -348,7 +433,7 @@ fn an_overfull_selection_abandons_the_sketch() {
 }
 
 /// The description of `who`'s relay refusal for `text`, if refused.
-fn refusal(fw: &Firewall, who: &str, text: &str) -> Option<String> {
+pub(super) fn refusal(fw: &Firewall, who: &str, text: &str) -> Option<String> {
     let params = json!({"name": "send", "arguments": {"text": text}});
     fw.check_relay(
         RelayCaller::Keyed(who),
@@ -364,8 +449,11 @@ fn refusal(fw: &Firewall, who: &str, text: &str) -> Option<String> {
 }
 
 /// A P2 step: 11 leaves of 100 KiB, over the bound on its own.
+/// Distinct value leaves in each [`oversized_step`].
+const STEP_LEAVES: u64 = 11;
+
 fn oversized_step(seed: u64) -> Value {
-    let leaves: Vec<String> = (0..11)
+    let leaves: Vec<String> = (0..STEP_LEAVES)
         .map(|i| filler(seed * 100 + i, 100 * 1024))
         .collect();
     json!({ "parts": leaves })
@@ -610,9 +698,35 @@ fn admit_until_full(preseed: usize) {
         detector.excuse_lost(SOURCE, "alice"),
         "the skipped step was not marked"
     );
+    // The admissions, derived from the fixture alone: each step's receipt
+    // and attachments by the sizing rules, its leaf hashes from its leaf
+    // count, replayed against the plan's 4 MiB as the plan charges them.
+    let leaf_hash_bytes = usize::try_from(STEP_LEAVES).expect("small") * 8;
+    let mut derived = 0usize;
+    let mut total = 0usize;
+    loop {
+        let step = oversized_step(20 + derived as u64);
+        let (receipt, attachment) = fw.sized_step(&step, preseed + derived, total);
+        total += receipt;
+        if attachment > cap.saturating_sub(total) {
+            break;
+        }
+        total += attachment;
+        if total + leaf_hash_bytes <= cap {
+            total += leaf_hash_bytes;
+        }
+        derived += 1;
+    }
+    assert_eq!(derived, 5, "premise: the fixture derives five admissions");
+    assert_eq!(
+        admitted, derived,
+        "admissions differ from the fixture's derivation"
+    );
+    // `MIK-8066` A3: a step's leaf hashes are charged to the plan total but
+    // held beside the receipt, never in the sketch store.
     assert_eq!(
         detector.sketch_bytes_held() - bytes_before,
-        attachments.iter().sum::<usize>(),
+        attachments.iter().sum::<usize>() - admitted * leaf_hash_bytes,
         "the store's pending bytes differ from the plan's attachment charges"
     );
     assert_eq!(
@@ -628,6 +742,53 @@ fn admit_until_full(preseed: usize) {
 #[test]
 fn a_plan_admits_attachments_until_full_then_skips_and_marks() {
     admit_until_full(0);
+}
+
+/// `MIK-8066` A3 refinement: a staged big step whose leaf hashes do not fit
+/// the plan's remaining room keeps none and is marked lost, the safe
+/// direction (no hashes, no subset seam, a lost-room refusal). The plan
+/// starts where the step's receipt and attachments fit but its 100,000 leaf
+/// hashes (800 KB) do not: both sizes derived from the fixture by the sizing
+/// rules. Inverted mutant m17b (skipped step keeps its hashes, not marked).
+#[test]
+fn a_step_whose_leaf_hashes_do_not_fit_keeps_none_and_is_marked_lost() {
+    let fw = firewall();
+    let detector = fw.collusion_detector().expect("relay detection on");
+    let leaves: Vec<String> = (0..100_000).map(|i| format!("leaf{i:011}")).collect();
+    let step = json!({ "parts": leaves });
+    let cap = 4 * super::super::DELIVERED_SET_CAP;
+    let bound = super::super::DELIVERED_SET_CAP;
+    let (receipt, attachment) = fw.sized_step(&step, 0, bound);
+    let hashes = leaves.len() * 8;
+    // Room for the receipt, the attachments and half the hashes.
+    let start = cap - receipt - attachment - hashes / 2;
+    assert!(
+        start >= bound,
+        "premise: the plan starts past the bound ({start})"
+    );
+    let staged = crate::security::firewall::PlanStaging::starting_at(start);
+    staged.set_caller("alice");
+    let digest = fw
+        .receipt_digest("alpha", "read", &step, Some(&staged))
+        .expect("staged");
+    assert!(
+        digest.is_staged_step(),
+        "premise: the step was admitted with attachments"
+    );
+    assert!(
+        staged.total() <= cap,
+        "the plan total passed its cap ({} > {cap})",
+        staged.total()
+    );
+    let hash = fw.leaf_hash(&leaves[0]).expect("relay detection on");
+    assert!(
+        !digest.holds_leaf_hash(hash),
+        "a step whose leaf hashes did not fit kept them"
+    );
+    assert!(
+        detector.excuse_lost(SOURCE, "alice"),
+        "a step skipped for leaf-hash room was not marked lost"
+    );
 }
 
 /// `MIK-8066` T15 variant: with two live sketches already held, the
