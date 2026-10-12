@@ -59,6 +59,7 @@ mod stdio_sole_operator;
 mod playbook_retry_stdio;
 
 mod stdio_catalogue_sole_operator;
+mod stored_replay_liveness_stdio;
 
 // MIK-8364: stdio saves protocol telemetry off the request path.
 mod stdio_telemetry_save;
