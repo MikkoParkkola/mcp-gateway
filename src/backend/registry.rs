@@ -491,6 +491,10 @@ impl BackendRegistry {
     /// reads (`get`) are fine; it must not take any other registry lock - in
     /// particular it must not call `register`, `remove`, `stop_all` or
     /// `enforce_destinations`, which take `stopping` for writing themselves.
+    /// It must not call `with_membership` again (or take `stopping` in any
+    /// form): `parking_lot::RwLock` read guards are not re-entrant once a
+    /// writer is queued, so a nested read would deadlock against a waiting
+    /// `register`/`remove`/`stop_all`.
     pub(crate) fn with_membership<T>(&self, read: impl FnOnce(u64) -> T) -> T {
         let _stopping = self.stopping.read();
         let epoch = self.membership.load(std::sync::atomic::Ordering::Relaxed);
