@@ -34,3 +34,8 @@
 #
 # Keep this list EMPTY unless a vuln genuinely has no fix. The right fix for a
 # fixable vuln is to bump the dependency, not to ignore it.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0449"
+ignoreUntil = 2026-10-26
+reason = "Unmaintained unsafe-libyaml (no patched release; RustSec informational advisory). MIK-8424; replacement/reassessment MIK-8425 due 2026-10-22. Exception expires 2026-10-26; no silent renewal. Reviewed 2026-10-12."
