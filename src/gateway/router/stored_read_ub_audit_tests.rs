@@ -112,10 +112,7 @@ async fn ub_an_unbindable_callers_repeat_writes_the_live_calls_audit_records() {
         "premise: the live call is refused: {live}"
     );
     let live_records = refusals(&log_path) - before_live;
-    assert!(
-        live_records >= 1,
-        "premise: the live refusal is recorded"
-    );
+    assert!(live_records >= 1, "premise: the live refusal is recorded");
     let before_repeat = refusals(&log_path);
     let _ = nobody(tasked).await;
     assert_eq!(
