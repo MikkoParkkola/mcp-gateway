@@ -79,6 +79,8 @@ mod catalogue_cache;
 mod chain_interim;
 #[cfg(test)]
 mod chain_interim_tests;
+#[cfg(test)]
+pub(crate) mod plan_entries;
 mod confirmation;
 // Read only by the `firewall` collusion rows.
 #[cfg(all(test, feature = "cost-governance", feature = "firewall"))]

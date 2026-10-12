@@ -24,6 +24,8 @@ const PLAYBOOK: &str = "two_reads";
 
 struct Fx {
     router: axum::Router,
+    /// The gateway the router serves, for its plan-execution count.
+    meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     gateway: DirectAccountGateway,
     _store: tempfile::TempDir,
 }
@@ -162,7 +164,8 @@ async fn fixture_with(second: Option<Second>) -> Fx {
         engine.register(definition);
     }
     meta.set_playbook_engine(engine);
-    state_mut.meta_mcp = Arc::new(meta);
+    let meta = Arc::new(meta);
+    state_mut.meta_mcp = Arc::clone(&meta);
     let tool: crate::protocol::Tool = serde_json::from_value(json!({
         "name": TOOL, "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
     }))
@@ -174,9 +177,15 @@ async fn fixture_with(second: Option<Second>) -> Fx {
     }
     Fx {
         router: super::create_router(state),
+        meta,
         gateway,
         _store: store,
     }
+}
+
+/// Plan executions the fixture's gateway has started (MIK-8406 t0).
+fn plan_entries(fx: &Fx) -> usize {
+    crate::gateway::meta_mcp::plan_entries::count(&fx.meta)
 }
 
 fn meta(key: &str) -> Value {
@@ -262,6 +271,7 @@ async fn refused_after_revoke(row: &str, plan: Plan) {
     let fx = fixture().await;
     run_once(&fx, &plan, row).await;
     let sent = fx.gateway.tool_calls().len();
+    let entered = plan_entries(&fx);
     fx.gateway.revoke_operator_grant().await;
     let (name, params) = plan.params(row);
     let again = send(&fx, name, params).await;
@@ -277,6 +287,11 @@ async fn refused_after_revoke(row: &str, plan: Plan) {
         fx.gateway.tool_calls().len(),
         sent,
         "{row}: the replay reached the backend: {again}"
+    );
+    assert_eq!(
+        plan_entries(&fx),
+        entered,
+        "{row}: the replay entered the plan executor: {again}"
     );
 }
 
@@ -304,7 +319,13 @@ async fn p3_keyed_code_mode_single_replay_after_revocation_is_refused() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn p5_control_live_plan_replay_is_served_stored() {
     let fx = fixture().await;
+    let before = plan_entries(&fx);
     run_once(&fx, &Plan::Playbook, "P5").await;
+    assert_eq!(
+        plan_entries(&fx),
+        before + 1,
+        "premise: the first run entered the executor once"
+    );
     let sent = fx.gateway.tool_calls().len();
     let (name, params) = Plan::Playbook.params("P5");
     let again = send(&fx, name, params).await;
@@ -316,6 +337,11 @@ async fn p5_control_live_plan_replay_is_served_stored() {
         fx.gateway.tool_calls().len(),
         sent,
         "P5: the replay was sent: {again}"
+    );
+    assert_eq!(
+        plan_entries(&fx),
+        before + 1,
+        "P5: the replay entered the plan executor"
     );
 }
 

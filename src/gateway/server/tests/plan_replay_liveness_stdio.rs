@@ -19,9 +19,7 @@ const MARKER: &str = "stored-plan-output-8406-stdio";
 const PLAYBOOK: &str = "two_reads";
 
 fn two_reads() -> crate::playbook::PlaybookDefinition {
-    let read = |name: &str| {
-        json!({"name": name, "server": BACKEND, "tool": "read", "arguments": {"folder": "inbox"}})
-    };
+    let read = |name: &str| json!({"name": name, "server": BACKEND, "tool": "read", "arguments": {"folder": "inbox"}});
     serde_json::from_value(json!({"playbook": "1.0", "name": PLAYBOOK,
         "description": "reads", "steps": [read("s0"), read("s1")]}))
     .expect("the playbook deserialises")
@@ -74,6 +72,7 @@ async fn p4_stdio_keyed_playbook_replay_after_revocation_is_refused() {
         "premise: the plan ran: {first}"
     );
     let sent = gateway.tool_calls().len();
+    let entered = crate::gateway::meta_mcp::plan_entries::count(&meta);
     gateway.revoke_operator_grant().await;
     let again = Gateway::dispatch_single(&meta, &policy, &mtls, &keyed_playbook("p4"), session)
         .await
@@ -87,5 +86,10 @@ async fn p4_stdio_keyed_playbook_replay_after_revocation_is_refused() {
         gateway.tool_calls().len(),
         sent,
         "P4: the replay reached the backend: {again}"
+    );
+    assert_eq!(
+        crate::gateway::meta_mcp::plan_entries::count(&meta),
+        entered,
+        "P4: the replay entered the plan executor: {again}"
     );
 }
