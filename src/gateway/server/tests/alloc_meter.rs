@@ -39,6 +39,7 @@ thread_local! {
     static BYTES: Cell<u64> = const { Cell::new(0) };
     static CALLS: Cell<u64> = const { Cell::new(0) };
     static LARGEST: Cell<u64> = const { Cell::new(0) };
+    static LARGE: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Installed for the test binary only — this module is `cfg(test)` through its
@@ -48,6 +49,10 @@ static METERED_SYSTEM: MeteredSystem = MeteredSystem;
 
 pub(super) struct MeteredSystem;
 
+/// An allocation this size or larger is counted in [`Measured::large`]: a
+/// copy of a dispatch's state machine, not a string or a small table.
+pub(crate) const LARGE_BYTES: usize = 2 * 1024;
+
 /// Nothing below allocates, so recording cannot re-enter the allocator.
 fn record(bytes: usize) {
     let _ = ACTIVE.try_with(|active| {
@@ -55,6 +60,9 @@ fn record(bytes: usize) {
             let _ = BYTES.try_with(|total| total.set(total.get().saturating_add(bytes as u64)));
             let _ = CALLS.try_with(|calls| calls.set(calls.get().saturating_add(1)));
             let _ = LARGEST.try_with(|largest| largest.set(largest.get().max(bytes as u64)));
+            if bytes >= LARGE_BYTES {
+                let _ = LARGE.try_with(|large| large.set(large.get().saturating_add(1)));
+            }
         }
     });
 }
@@ -93,20 +101,22 @@ unsafe impl GlobalAlloc for MeteredSystem {
 /// What one scope observed. Bytes AND calls: a byte total alone cannot
 /// distinguish "one big copy" from "many small ones", and the diagnostics in a
 /// failing assertion are worth more than the assertion. The largest single
-/// allocation names the one big copy outright (MIK-8400).
+/// allocation and the count of large ones name a big copy outright
+/// (MIK-8400).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Measured {
     pub(crate) bytes: u64,
     pub(crate) calls: u64,
     pub(crate) largest: u64,
+    pub(crate) large: u64,
 }
 
 impl std::fmt::Display for Measured {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} bytes allocated across {} allocator calls (largest {})",
-            self.bytes, self.calls, self.largest
+            "{} bytes allocated across {} allocator calls (largest {}, {} of {}+ bytes)",
+            self.bytes, self.calls, self.largest, self.large, LARGE_BYTES
         )
     }
 }
@@ -129,6 +139,7 @@ impl Meter {
         BYTES.with(|total| total.set(0));
         CALLS.with(|calls| calls.set(0));
         LARGEST.with(|largest| largest.set(0));
+        LARGE.with(|large| large.set(0));
         ACTIVE.with(|active| active.set(true));
         Self
     }
@@ -145,6 +156,7 @@ impl Meter {
             bytes: BYTES.with(Cell::get),
             calls: CALLS.with(Cell::get),
             largest: LARGEST.with(Cell::get),
+            large: LARGE.with(Cell::get),
         }
     }
 }
