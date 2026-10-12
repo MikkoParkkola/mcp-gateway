@@ -409,6 +409,8 @@ pub(super) struct Custody {
     observer: Arc<RecordingObserver>,
     /// Custody reads (`resolve`) through [`Self::installed`] (MIK-8392 O3).
     resolves: Arc<AtomicUsize>,
+    /// While set, every `resolve` answers `Busy` (MIK-8392 U1, C6).
+    failing: Arc<std::sync::atomic::AtomicBool>,
     /// Kept alive: dropping it removes the store directory under the locks.
     _root: tempfile::TempDir,
 }
@@ -431,7 +433,13 @@ impl Custody {
         Arc::new(CountedResolves {
             inner: Arc::clone(&self.handle) as Arc<dyn AccountCustody>,
             resolves: Arc::clone(&self.resolves),
+            failing: Arc::clone(&self.failing),
         })
+    }
+
+    /// Make every custody read fail as busy, or recover.
+    pub(super) fn fail_reads(&self, failing: bool) {
+        self.failing.store(failing, Ordering::SeqCst);
     }
 
     /// Custody reads made through [`Self::installed`].
@@ -444,12 +452,16 @@ impl Custody {
 struct CountedResolves {
     inner: Arc<dyn AccountCustody>,
     resolves: Arc<AtomicUsize>,
+    failing: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[async_trait::async_trait]
 impl AccountCustody for CountedResolves {
     async fn resolve(&self, account: &AccountKey) -> Result<CredentialLease, CustodyError> {
         self.resolves.fetch_add(1, Ordering::SeqCst);
+        if self.failing.load(Ordering::SeqCst) {
+            return Err(CustodyError::Busy);
+        }
         self.inner.resolve(account).await
     }
 
@@ -518,6 +530,7 @@ pub(super) fn custody_with_steps(
         refresh_calls,
         observer,
         resolves: Arc::new(AtomicUsize::new(0)),
+        failing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         _root: root,
     }
 }

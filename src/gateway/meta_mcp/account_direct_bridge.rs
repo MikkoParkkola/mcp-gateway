@@ -176,6 +176,28 @@ impl DirectAccountGateway {
         self.custody.resolves()
     }
 
+    /// Re-attach the operator's per-user upstream after a real eviction
+    /// dropped its slot, as a gateway reconnects it (MIK-8392 C6; reconnect
+    /// from config itself is MIK-8417).
+    pub(crate) fn rearm_operator_slot_for_test(&self) {
+        self.backends
+            .get(BACKEND)
+            .expect("the backend")
+            .set_pooled_transport_for_test(
+                &PoolKey::PerUser {
+                    binding: Self::operator_binding(),
+                },
+                Arc::new(CapturingTransport {
+                    dispatches: Arc::clone(&self.dispatches),
+                }),
+            );
+    }
+
+    /// Make every custody read fail as busy, or recover (MIK-8392 U1, C6).
+    pub(crate) fn fail_custody_for_test(&self, failing: bool) {
+        self.custody.fail_reads(failing);
+    }
+
     /// Credential releases custody made: one per `prepare` (MIK-8356 F5: a
     /// refused call resolves nothing).
     pub(crate) fn releases(&self) -> usize {
