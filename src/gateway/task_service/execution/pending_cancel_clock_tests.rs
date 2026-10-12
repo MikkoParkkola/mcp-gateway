@@ -17,7 +17,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::super::upstream::CancelSend;
-use super::super::{TaskExecutor, TransitionWrite};
+use super::super::{CancelDelivery, TaskExecutor, TransitionWrite};
 use super::tests::{
     BACKEND, Handle, ScriptedPeer, executor_over, fixture, fixture_with, open_service, settle,
 };
@@ -284,4 +284,60 @@ async fn retention_removes_a_sent_cancel_and_a_completed_row_past_their_ttl() {
         f.service.store.set_clock_for_test(Some(now + later));
         removed_by_one_pass(&f.service, &f.executor, &f.owner_digest, &f.id).await;
     }
+}
+
+/// G (MIK-8202 P4b, lead): the retention hold does not switch off the
+/// MIK-8347 age give-up. A dated pending cancel to a backend that is never
+/// ready is held past the row's ttl; at `MAX_CANCEL_PENDING_AGE` the sweep
+/// gives it up without another send (`pending_cancels` picks the aged row,
+/// `send` takes its aged arm, `record_cancel_attempt` records `GiveUp::Age`),
+/// and the next expiry pass removes the row by the normal rule.
+/// Mutant: `PendingSend::aged` always false (the give-up switched off):
+/// killed at "an aged-out cancel was sent instead of given up" (one more
+/// send), and the row would stay held for good.
+#[tokio::test(flavor = "current_thread")]
+async fn a_held_pending_cancel_is_still_given_up_by_age() {
+    let f = fixture(Some(60 * 60 * 1_000)).await;
+    let peer = ScriptedPeer::new(std::iter::repeat_n(CancelDelivery::NotReady, 50));
+    assert!(f.executor.install_recovery(peer.clone()));
+    f.owner_cancels().await;
+    f.state_becomes(Pending { attempts: 0 }).await;
+
+    f.advance_store_clock(2 * HOUR);
+    f.executor
+        .expiry_pass_for_test()
+        .await
+        .expect("an expiry pass");
+    assert!(
+        f.service.store.get(&f.owner_digest, &f.id).is_ok(),
+        "the unsent cancel's row was not held past its ttl"
+    );
+    assert_eq!(
+        f.state(),
+        Some(Pending { attempts: 0 }),
+        "premise: still pending"
+    );
+
+    let sends = peer.count();
+    f.advance_store_clock(DAY);
+    settle(f.executor.flush_pending_cancels(None)).await;
+    f.executor.cancel_send_idle(&f.id).await;
+    assert_eq!(
+        peer.count(),
+        sends,
+        "an aged-out cancel was sent instead of given up"
+    );
+    f.state_becomes(Done).await;
+
+    f.executor
+        .expiry_pass_for_test()
+        .await
+        .expect("an expiry pass");
+    assert!(
+        matches!(
+            f.service.store.get(&f.owner_digest, &f.id),
+            Err(StoreError::NotFound)
+        ),
+        "a given-up row past its ttl is removed by the normal rule"
+    );
 }

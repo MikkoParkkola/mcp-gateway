@@ -78,3 +78,46 @@ fn a_trip_on_a_dark_clock_is_reported_at_an_unknown_time() {
         "B4o: an undated trip is rendered unknown: {message}"
     );
 }
+
+/// Z-breaker (MIK-8202 P4b, lead): the breaker keeps an undated trip as an
+/// internal 0, which is safe only if no read path ever reports that 0 as a
+/// date. A dated trip reads back as its time; a later trip on a dark clock
+/// reads back as no time (never 0, never the old time) in the stats and the
+/// error text (the status JSON copies the stats field verbatim), and a clock
+/// that reads again afterwards does not date it.
+/// Mutant: `stats()` maps the stored 0 to `Some(0)`: killed at "a dark trip
+/// is reported undated".
+#[test]
+fn no_read_path_reports_the_undated_trip_placeholder_as_a_date() {
+    const T: u64 = 1_700_000_000;
+    let cb = one_failure_trips(Duration::ZERO);
+    {
+        let _clock = test_clock::at_secs(T);
+        cb.record_failure("down", Duration::ZERO);
+        assert_eq!(
+            cb.stats().last_trip_ms,
+            Some(T * 1_000),
+            "premise: a dated trip"
+        );
+        assert!(cb.can_proceed(), "premise: a zero reset half-opens at once");
+        cb.record_success();
+        assert_eq!(cb.state(), CircuitState::Closed, "premise: closed again");
+    }
+    {
+        let _clock = test_clock::before_epoch();
+        cb.record_failure("down", Duration::ZERO);
+        let stats = cb.stats();
+        assert_eq!(stats.last_trip_ms, None, "a dark trip is reported undated");
+        let message = build_circuit_breaker_error("clock", &stats);
+        assert!(
+            message.contains("unknown") && !message.contains("~0ms"),
+            "error text: {message}"
+        );
+    }
+    let _clock = test_clock::at_secs(T + 60);
+    assert_eq!(
+        cb.stats().last_trip_ms,
+        None,
+        "a later reading dated the dark trip"
+    );
+}

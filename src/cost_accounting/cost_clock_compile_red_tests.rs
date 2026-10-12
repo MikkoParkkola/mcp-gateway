@@ -150,3 +150,59 @@ fn the_ui_cost_snapshot_on_a_dark_clock_is_undated() {
     let _dark = before_epoch();
     assert_eq!(enforcer.snapshot().taken_at, None);
 }
+
+/// Every number under a date-named key in `value`, at any depth.
+fn dates(value: &serde_json::Value, out: &mut Vec<(String, serde_json::Value)>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, inner) in map {
+                let dated = key.ends_with("_at") || key == "timestamp" || key.starts_with("last_");
+                if dated && inner.is_number() {
+                    out.push((key.clone(), inner.clone()));
+                }
+                dates(inner, out);
+            }
+        }
+        serde_json::Value::Array(items) => items.iter().for_each(|item| dates(item, out)),
+        _ => {}
+    }
+}
+
+/// Z-cost (MIK-8202 P4b, lead): a key born on a dark clock holds its
+/// last-spend time as an internal 0, which is safe only if no read path
+/// takes that 0 for a date. Nothing the tracker reports carries a 0 date for
+/// entries born dark, and the one internal reader (the month-idle sweep)
+/// takes the first real spend over the placeholder, so the key ages from it.
+/// Mutant: the dated spend no longer replaces the placeholder (the
+/// `last_spend.fetch_max` dropped), so the key is never idle: killed at
+/// "a dated spend did not replace the undated placeholder".
+#[test]
+fn no_read_path_takes_the_undated_spend_placeholder_for_a_date() {
+    let tracker = CostTracker::new();
+    {
+        let _dark = before_epoch();
+        tracker.record_caller("dark-caller", "srv", "tool", 1_000, 15.0);
+        tracker.record("", Some("dark-key"), "srv", "tool", 1_000, 15.0);
+    }
+    {
+        let _clock = at_secs(T);
+        let reported = serde_json::json!({
+            "keys": tracker.all_keys(),
+            "caller": tracker.caller_snapshot("dark-caller"),
+        });
+        let mut found = Vec::new();
+        dates(&reported, &mut found);
+        assert!(
+            found.iter().all(|(_, value)| value.as_u64() != Some(0)),
+            "a 0 reported as a date: {found:?}"
+        );
+        tracker.record("", Some("dark-key"), "srv", "tool", 1, 15.0);
+    }
+    let _clock = at_secs(LATER);
+    // A spend on another key runs the month-idle sweep at LATER.
+    tracker.record("", Some("other-key"), "srv", "tool", 1, 15.0);
+    assert!(
+        tracker.key_snapshot("dark-key").is_none(),
+        "a dated spend did not replace the undated placeholder"
+    );
+}
