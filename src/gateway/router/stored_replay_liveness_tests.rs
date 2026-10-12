@@ -689,6 +689,119 @@ async fn t9_unavailable_never_unhides_a_tool_hidden_for_another_reason() {
     assert_eq!(fx.gateway.tool_calls().len(), sent, "T9: the call reached the backend: {again}");
 }
 
+/// S1 (guard; mutant M14): a LIVE vault account's keyed replay is served
+/// the retained result at admission, with nothing sent and no more custody
+/// resolutions than the base path (2). Deferring a proven-live replay to the
+/// lift (M14) costs a third.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn s1_live_account_replay_is_served_without_a_second_resolution() {
+    let fx = fixture(false).await;
+    answer_marker(&fx);
+    let first = send(&fx, "tools/call", "gateway_invoke", invoke_params(Some("s1"), false)).await;
+    assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+    let (sent, resolved) = (fx.gateway.tool_calls().len(), fx.gateway.resolves());
+    let again = send(&fx, "tools/call", "gateway_invoke", invoke_params(Some("s1"), false)).await;
+    assert!(again.to_string().contains(MARKER), "S1: the live replay was not served: {again}");
+    assert_eq!(fx.gateway.tool_calls().len(), sent, "S1: the replay was re-sent: {again}");
+    // Measured on the release base without STORED.2 (573338311): the live
+    // replay resolves custody twice (the route-stage verdict and the
+    // dispatch's own read). STORED.2 may not add a third.
+    assert!(
+        fx.gateway.resolves() <= resolved + 2,
+        "S1: the live replay resolved custody {} times (base: 2)",
+        fx.gateway.resolves() - resolved
+    );
+}
+
+/// S4 (mutant M16): a keyed single-call replay during a custody outage
+/// (the account `Unavailable`) defers, its live resolution fails, and the
+/// answer equals the same call made live (normalising only `id`); the
+/// retained result is never served. Serving `Unavailable` at admission as if
+/// it were live (M16) must fail this row.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn s4_outage_replay_answers_as_the_live_call() {
+    let fx = fixture(false).await;
+    answer_marker(&fx);
+    let first = send(&fx, "tools/call", "gateway_invoke", invoke_params(Some("s4"), false)).await;
+    assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+    let sent = fx.gateway.tool_calls().len();
+    fx.gateway.fail_custody_for_test(true);
+    let again = send(&fx, "tools/call", "gateway_invoke", invoke_params(Some("s4"), false)).await;
+    let live = send(&fx, "tools/call", "gateway_invoke", invoke_params(Some("s4-live"), false)).await;
+    eprintln!("S4 repeat: {again}");
+    eprintln!("S4 live: {live}");
+    assert!(live.get("error").is_some(), "premise: the live call is refused: {live}");
+    assert!(!again.to_string().contains(MARKER), "S4: the retained result was served: {again}");
+    let (mut again_id, mut live_id) = (again.clone(), live.clone());
+    again_id["id"] = Value::Null;
+    live_id["id"] = Value::Null;
+    assert_eq!(again_id, live_id, "S4: the replay differs from the live call: {again} vs {live}");
+    assert_eq!(fx.gateway.tool_calls().len(), sent, "S4: the call reached the backend: {again}");
+}
+
+/// L3 (mutant M3): two deferred replays in one memo scope, under different
+/// keys. Each take consumes only its own entry, once; a key never recorded
+/// takes nothing.
+#[tokio::test]
+async fn l3_a_deferred_replay_is_taken_only_by_its_own_key_once() {
+    use crate::gateway::meta_mcp::visible::{
+        DeferredReplay, deferred_replay_key, record_deferred_replay, take_deferred_replay,
+        with_visibility_memo,
+    };
+    let retry = |key: &str| crate::protocol::mrtr::RetryFields {
+        input_responses: None,
+        request_state: None,
+        idempotency_key: Some(key.to_string()),
+        malformed: Vec::new(),
+        attestation: None,
+    };
+    let entry = |text: &str| DeferredReplay {
+        response: crate::protocol::JsonRpcResponse::success(
+            crate::protocol::RequestId::Number(1),
+            json!({"content": [{"type": "text", "text": text}]}),
+        ),
+        audit: None,
+        tool_name: "gateway_invoke".to_string(),
+        arguments: json!({}),
+    };
+    with_visibility_memo(async {
+        let a = deferred_replay_key(BACKEND, TOOL, &retry("l3-a")).expect("keyed");
+        let b = deferred_replay_key(BACKEND, TOOL, &retry("l3-b")).expect("keyed");
+        let never = deferred_replay_key(BACKEND, TOOL, &retry("l3-never")).expect("keyed");
+        record_deferred_replay(a.clone(), entry("A"));
+        record_deferred_replay(b.clone(), entry("B"));
+        assert!(take_deferred_replay(&never).is_none(), "L3: an unrecorded key took an entry");
+        let took_a = take_deferred_replay(&a).expect("L3: key a takes its entry");
+        assert!(took_a.response.to_value_lossy().to_string().contains("\"A\""), "L3: key a took another entry");
+        assert!(take_deferred_replay(&a).is_none(), "L3: key a took its entry twice");
+        let took_b = take_deferred_replay(&b).expect("L3: key b keeps its entry");
+        assert!(took_b.response.to_value_lossy().to_string().contains("\"B\""), "L3: key b took another entry");
+    })
+    .await;
+}
+
+/// O4 (mutant M24): with no outcome recorded (no open memo, or the pre-pass
+/// never ran), a managed account's replay defers; it is served at admission
+/// only once the request recorded the account `Live`.
+#[tokio::test]
+async fn o4_an_unfilled_outcome_defers_and_only_live_serves() {
+    use crate::gateway::meta_mcp::visible::{
+        AccountOutcome, record_account_outcome, with_visibility_memo,
+    };
+    let mut gateway = DirectAccountGateway::new(sole_operator(), &Binding::Connected);
+    let meta = gateway.take_meta();
+    let account = meta.target_account(BACKEND, TOOL).expect("premise: a managed account");
+    assert!(meta.stored_replay_defers(BACKEND, TOOL), "O4: an unfilled outcome was served");
+    let live = with_visibility_memo(async {
+        let unfilled = meta.stored_replay_defers(BACKEND, TOOL);
+        record_account_outcome(BACKEND, &account, AccountOutcome::Live);
+        (unfilled, meta.stored_replay_defers(BACKEND, TOOL))
+    })
+    .await;
+    assert!(live.0, "O4: an unfilled outcome inside a memo was served");
+    assert!(!live.1, "O4 control: a Live outcome still defers");
+}
+
 /// G1 (guard; mutant M31): on the direct route a revoked grant's keyed replay
 /// is refused at stage 5 (the identity mint), before 7a/7b can serve a stored
 /// answer; nothing is sent.
@@ -1222,4 +1335,32 @@ async fn t12_token_exchange_task_repeat_after_idp_kill_answers_as_live() {
     live_id["id"] = Value::Null;
     assert_eq!(again_id, live_id, "T12: the repeat differs from the live call: {again} vs {live}");
     assert_eq!(sends.load(Ordering::SeqCst), sent, "T12: the call reached the backend: {again}");
+}
+
+/// S2b (mutant M28): the token-exchange backend's keyed replay with the
+/// `IdP` ALIVE. Admission replays it with its target, the replay defers (E7:
+/// a per-caller mint), resolution succeeds, and the lift serves the retained
+/// result: the stored bytes, nothing sent again. A lift that refuses or
+/// re-dispatches after a successful resolution (M28) must fail this row.
+#[tokio::test]
+async fn s2b_token_exchange_replay_is_lifted_when_the_mint_succeeds() {
+    use std::sync::atomic::Ordering;
+
+    let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+    let idp = r6m_token_exchange::LiveIdp::start(&key).await;
+    let alice = r6m_token_exchange::alice();
+    let (router, sends, _dirs) = r6m_token_exchange::gateway(&key, idp.endpoint(), &alice).await;
+    let call = || {
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": r6m_token_exchange::TX, "tool": TOOL,
+                "arguments": {"folder": "inbox"}},
+            "_meta": meta(Some("s2b"), false)})
+    };
+    let first = r6m_token_exchange::send_as(&router, &alice, call()).await;
+    assert!(first.to_string().contains(MARKER), "premise: dispatched: {first}");
+    assert_eq!(sends.load(Ordering::SeqCst), 1, "premise: {first}");
+    let again = r6m_token_exchange::send_as(&router, &alice, call()).await;
+    assert!(again.to_string().contains(MARKER), "S2b: the lifted replay was not served: {again}");
+    assert_eq!(sends.load(Ordering::SeqCst), 1, "S2b: the replay was re-sent: {again}");
+    drop(idp);
 }
