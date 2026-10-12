@@ -167,6 +167,9 @@ mod mik8154_rows_tests;
 mod mrtr9_lease_tests;
 #[cfg(test)]
 mod nonce_failure_class_tests;
+/// MIK-8406: a stored plan replay needs every plan account live.
+#[cfg(test)]
+mod plan_replay_liveness_tests;
 #[cfg(test)]
 mod playbook_envelope_tests;
 #[cfg(test)]
