@@ -35,7 +35,7 @@ pub(super) fn seed_caller_slots(fx: &Fx) {
 /// A signed `gateway_invoke read` on `/mcp` as `key` against `backend`, under
 /// `nonce`, carrying `SUBJECT`'s verified identity (so the backend's required
 /// propagation mints), from a modern client that declares form elicitation.
-async fn signed_call(
+pub(super) async fn signed_call(
     fx: &Fx,
     (key, backend): (&str, &str),
     nonce: &str,

@@ -162,6 +162,8 @@ mod mik8154_lease_rows_tests;
 #[cfg(test)]
 mod mrtr9_lease_tests;
 #[cfg(test)]
+mod nonce_failure_class_tests;
+#[cfg(test)]
 mod playbook_envelope_tests;
 #[cfg(test)]
 mod playbook_key_tests;

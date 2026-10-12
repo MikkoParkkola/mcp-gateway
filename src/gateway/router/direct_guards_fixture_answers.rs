@@ -85,6 +85,7 @@ pub(super) fn call_answer(answer: Answer, id: RequestId) -> crate::Result<JsonRp
         | Answer::FailedWith(_)
         | Answer::ForgedAccount(_) => error_answer(answer, id),
         Answer::Unreachable => Err(crate::Error::TransportConnect("no route".to_string())),
+        Answer::FailsWith(make) => Err(make()),
         Answer::AskOnce
         | Answer::AskNoState
         | Answer::AskMalformed
