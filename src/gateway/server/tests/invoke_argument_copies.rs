@@ -333,10 +333,9 @@ async fn stdio_dispatch_bytes(stack: &StdioStack, size: usize) -> u64 {
             "server": "bench", "tool": "search", "arguments": arguments(size),
         }},
     });
-    let telemetry = super::super::StdioTelemetry::default();
     let before = stack.answer.0.load(std::sync::atomic::Ordering::Relaxed);
     let (response, measured) = measure_async(|| {
-        super::super::Gateway::dispatch_single_with_sink(
+        super::super::Gateway::dispatch_single_for_client(
             &stack.meta,
             &stack.policy,
             &stack.mtls,
@@ -350,7 +349,6 @@ async fn stdio_dispatch_bytes(stack: &StdioStack, size: usize) -> u64 {
                 discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
                 sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
             },
-            &telemetry,
         )
     })
     .await;

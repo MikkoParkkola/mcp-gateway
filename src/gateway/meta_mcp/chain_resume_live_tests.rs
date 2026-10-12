@@ -598,3 +598,9 @@ async fn a_chain_resume_after_its_backend_is_replaced_is_refused() {
 
 #[path = "chain_resume_binding_tests.rs"]
 mod binding;
+
+// MIK-8353 slice 3b: a chain resume refused after its handle was spent keeps
+// its nonce. Beside the fixture for its private helpers.
+#[cfg(feature = "cost-governance")]
+#[path = "chain_resume_nonce_tests.rs"]
+mod nonce_tests;

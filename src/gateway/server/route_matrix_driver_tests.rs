@@ -578,7 +578,7 @@ pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value, usize) {
                             IDEMPOTENCY_KEY_META: key,
                         }}
                 });
-                super::Gateway::dispatch_single_with_sink(
+                super::Gateway::dispatch_single_for_client(
                     &fixture.meta,
                     &fixture.tool_policy,
                     &fixture.mtls_policy,
@@ -592,7 +592,6 @@ pub(crate) fn stdio_admission_then_resend() -> (Value, Value, Value, usize) {
                         discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
                         sanitize: super::stdio_single::InputSanitizing::Off,
                     },
-                    &super::StdioTelemetry::default(),
                 )
                 .await
                 .expect("a request carrying an id must produce a response")
@@ -670,7 +669,6 @@ pub(crate) fn stdio_refund_through_delivery() -> [Delivered; 3] {
                                 crate::gateway::server::stdio_single::DiscoverListing::Configured,
                             sanitize: super::stdio_single::InputSanitizing::Off,
                         },
-                        &super::StdioTelemetry::default(),
                     )),
                 )
                 .await;

@@ -352,6 +352,8 @@ fn unix_seconds() -> io::Result<u64> {
 }
 
 fn write_window_atomic(path: &Path, window: &DurableWindow) -> io::Result<()> {
+    #[cfg(test)]
+    write_seam::record(path);
     let bytes = serde_json::to_vec_pretty(window)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     let temporary = path.with_extension("json.tmp");
@@ -385,6 +387,36 @@ fn force_directory_owner_only(path: &Path) -> io::Result<()> {
 mod nonunix;
 #[cfg(not(unix))]
 use nonunix::{force_directory_owner_only, sync_parent_directory};
+
+/// Test support: window writes counted per window file (MIK-8364), so a row
+/// can assert that a request path wrote nothing. Keyed by path, so parallel
+/// tests with their own data directories never see each other's writes.
+#[cfg(test)]
+pub(crate) mod write_seam {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, PoisonError};
+
+    static WRITES: Mutex<Option<HashMap<PathBuf, usize>>> = Mutex::new(None);
+
+    pub(super) fn record(path: &Path) {
+        let mut writes = WRITES.lock().unwrap_or_else(PoisonError::into_inner);
+        *writes
+            .get_or_insert_with(HashMap::new)
+            .entry(path.to_path_buf())
+            .or_insert(0) += 1;
+    }
+
+    /// Window writes to `path` so far.
+    pub(crate) fn writes(path: &Path) -> usize {
+        WRITES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .and_then(|writes| writes.get(path).copied())
+            .unwrap_or(0)
+    }
+}
 
 #[cfg(test)]
 #[path = "durable_tests.rs"]

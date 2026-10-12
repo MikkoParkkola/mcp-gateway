@@ -538,6 +538,10 @@ pub(crate) mod tests;
 mod resend_isolation_tests;
 
 #[cfg(test)]
+#[path = "silence_resend_tests.rs"]
+mod silence_resend_tests;
+
+#[cfg(test)]
 #[path = "slot_eviction_tests.rs"]
 mod slot_eviction_tests;
 

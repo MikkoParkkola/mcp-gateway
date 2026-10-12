@@ -69,6 +69,9 @@ pub(crate) enum Answer {
     AskSecond,
     /// The backend cannot be reached: nothing was sent (`TransportConnect`).
     Unreachable,
+    /// Every `tools/call` fails with the error the function builds, as the
+    /// dispatch would raise it (MIK-8379 D4: one row per failure class).
+    FailsWith(fn() -> crate::Error),
     /// Like `AskOnce`, the question then edited by the function (MIK-8089).
     AskEdited(fn(&mut Value)),
     /// Like `Ok`, from a 2026-07-28 backend: its `tools/list` carries
@@ -394,6 +397,8 @@ pub(crate) use egress::{
 };
 #[cfg(feature = "firewall")]
 pub(crate) use quota::Minting;
+#[cfg(feature = "cost-governance")]
+pub(crate) use quota::{MINT_MODES, fixture_optional_failing_mint};
 use quota::{fixture_backend_config, fixture_failsafe, leaked_transparency_log};
 #[cfg(feature = "firewall")]
 pub(crate) use quota::{fixture_firewalled_budget_built, fixture_propagating_budgeted};
@@ -509,6 +514,8 @@ thread_local! {
     /// (`aud-<name>`), so one caller reaches them under two bindings
     /// (MIK-8293 S3c).
     static PROPAGATING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// With `PROPAGATING`, propagation is optional (`required: false`).
+    static OPTIONAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// A transport that replaces the scripted backend (the egress matrix).
     static TRANSPORT: std::cell::RefCell<Option<Arc<dyn Transport>>> =
         const { std::cell::RefCell::new(None) };
