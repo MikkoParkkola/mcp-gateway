@@ -17,7 +17,7 @@ use chrono::{DateTime, Utc};
 use tokio::sync::watch;
 
 use super::worker_tests::{Fixture, OWNER, complete, fixture_with};
-use crate::gateway::task_service::{ServiceError, TaskStatus, TaskTransition};
+use crate::gateway::task_service::{TaskStatus, TaskTransition};
 use crate::test_wait::{HANG_BOUND, wait_until};
 
 /// The task's creation time: fixed and in the past, so a settle dated at
@@ -201,26 +201,35 @@ async fn r2b_an_expired_wait_settles_the_original_outcome_at_last_updated_at() {
     assert_eq!(clock_waits(&metrics.render()), 1, "{}", metrics.render());
 }
 
-/// R2c (MIK-8202.AC.16, AC.2). r3/r4 Typing: `ClockUnreadable` is mapped to
-/// `ServiceError::Unavailable` only at `commit_to_service`, so a request-side
-/// cancel on a dark clock answers Unavailable and leaves the task unchanged.
-/// Mutant M2d (`ClockUnreadable` mapped to `RevisionConflict` inside
+/// R2c (MIK-8202.AC.16, AC.2; lead ruling A). An owner can always cancel: a
+/// cancel on a dark clock neither waits nor refuses. It commits dated at the
+/// record's own `last_updated_at` (a real time the record carries, never 1969
+/// or 0), and `Unavailable` is kept for a store that genuinely fails. Mutant
+/// M2d (`ClockUnreadable` mapped to `RevisionConflict` inside
 /// `transition_digest_write`) is killed by `refused_reads == 1`: a conflict
-/// sends the cancel to `cancel_lost_the_revision`, whose retry reads the
-/// clock a second time. Red on base: base cancels at chrono's wall clock.
+/// sends the cancel to `cancel_lost_the_revision`, whose retry reads the clock
+/// a second time. Red on base: base cancels at chrono's wall clock, so the
+/// cancel is dated at the real now, not at the record's last change.
 #[tokio::test(flavor = "current_thread")]
-async fn r2c_a_cancel_on_a_dark_clock_is_unavailable_and_changes_nothing() {
+async fn r2c_a_cancel_on_a_dark_clock_still_cancels_dated_at_the_last_change() {
     let fx = day_task("r2c-cancel").await;
+    let before = fx
+        .service
+        .get(OWNER, &fx.id)
+        .expect("the owner reads it")
+        .task
+        .last_updated_at();
     fx.service.store.set_clock_for_test(dark());
 
     let cancelled = fx.executor.cancel(OWNER, &fx.id, fx.revision).await;
 
-    assert!(
-        matches!(cancelled, Err(ServiceError::Unavailable)),
-        "a dark clock is unavailable: {cancelled:?}"
+    let cancelled = cancelled.expect("a dark clock never stops an owner's cancel");
+    assert_eq!(cancelled.task.status(), TaskStatus::Cancelled);
+    assert_eq!(
+        cancelled.task.last_updated_at(),
+        before,
+        "dated at the record's own last change"
     );
-    assert_eq!(fx.status(), TaskStatus::Working, "the task is unchanged");
-    assert_eq!(fx.stored_revision(), fx.revision, "nothing was written");
     assert_eq!(
         fx.service.store.refused_reads_for_test(),
         1,

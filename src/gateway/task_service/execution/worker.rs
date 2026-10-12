@@ -344,12 +344,13 @@ async fn follow_handle(
         _ = cancel_rx.changed() => return,
         followed = poll_to_terminal(executor, owner_digest, id, adapter, &upstream) => followed,
     };
-    // The lease is held for a terminal answer until the settlement below
-    // begins, and released before it (MIK-8202 P4a r4): the settle may wait up
-    // to the task's ttl for a clock before 1970, and must not block owner
-    // reads meanwhile. A read queued behind this query can therefore query the
-    // peer again before the outcome commits; its Recover and this Settle race
-    // on the revision, and the loser re-reads.
+    // The lease is still held for a terminal answer, and released only after
+    // the settlement below: a read that queued behind this query must find the
+    // committed outcome, not a working row it would query all over again.
+    // Stated limit (MIK-8202 P4a, lead ruling): on a clock before 1970 the
+    // settle may wait up to the task's ttl, and a read of this one record
+    // queues behind it for that long. The dark clock is the pathological case;
+    // the invariants (no second terminal query, one task_recovery record) win.
     let (answer, lease) = match followed {
         Followed::Terminal(answer, lease) => (answer, lease),
         // Still live, or unreachable, when this worker's budget ran out. The
@@ -419,7 +420,6 @@ async fn follow_handle(
         revision,
     };
     let writes = crate::gateway::gateway_writes::snapshot_since(writes_mark);
-    lease.release(executor, id).await;
     settle_followed(
         executor,
         state,
@@ -429,6 +429,7 @@ async fn follow_handle(
         cancel_rx,
     )
     .await;
+    lease.release(executor, id).await;
 }
 
 /// The answers that end a followed job: [`UpstreamAnswer`] without `Live` and

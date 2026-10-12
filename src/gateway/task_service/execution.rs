@@ -659,19 +659,47 @@ impl TaskExecutor {
                 id,
                 revision,
             } => {
-                self.transition_write(
-                    principal,
-                    id,
-                    revision,
+                let cancel = || {
                     (
                         TaskTransition::Cancel,
                         None,
                         crate::gateway::gateway_writes::WriteRecord::default(),
-                    ),
-                    ErrorAuthor::Gateway,
-                    None,
-                )
-                .await?
+                    )
+                };
+                match self
+                    .transition_write(
+                        principal,
+                        id,
+                        revision,
+                        cancel(),
+                        ErrorAuthor::Gateway,
+                        None,
+                    )
+                    .await
+                {
+                    // An owner can always cancel (MIK-8202 P4a, lead ruling): on a
+                    // clock before 1970 the cancel neither waits nor refuses. It is
+                    // dated at the record's own last change, a real time the record
+                    // already carries, never 1969 or 0.
+                    Err(CommitFailure::ClockUnreadable) => {
+                        let dated = self
+                            .service
+                            .get(principal, id)
+                            .map_err(CommitFailure::Service)?
+                            .task
+                            .last_updated_at();
+                        self.transition_write(
+                            principal,
+                            id,
+                            revision,
+                            cancel(),
+                            ErrorAuthor::Gateway,
+                            Some(dated),
+                        )
+                        .await?
+                    }
+                    other => other?,
+                }
             }
         };
         if changed {
