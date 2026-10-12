@@ -291,35 +291,45 @@ async fn a_chokepoint_refusal_after_a_consume_keeps_the_nonce() {
 }
 
 /// K-optional-mint (MIK-8379 H1): an optional propagating backend whose mint
-/// fails falls back to the static credential, so no binding comes back; the
-/// mint was still attempted (it may have reached the issuer), so the spend
-/// refusal that follows keeps the nonce. Red on slice 3a: `minted` read the
-/// binding only.
+/// fails, or succeeds with a header that does not parse, falls back to the
+/// static credential, so no binding comes back; the mint was still attempted
+/// (it may have reached the issuer), so the spend refusal that follows keeps
+/// the nonce. Red on slice 3a: `minted` read the binding only.
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_spend_refusal_after_a_failed_optional_mint_keeps_the_nonce() {
     use super::direct_continuation_tests::budget;
-    use super::direct_guards_fixture::fixture_optional_failing_mint;
-    let (fx, failing) = fixture_optional_failing_mint(Answer::Ok, budget).await;
-    let who = ("k-budget", "alpha");
-    let (_, first) = signed_call(&fx, who, "n1", json!({})).await;
-    assert!(
-        first.get("error").is_none(),
-        "the paying call fell back: {first}"
-    );
+    use super::direct_guards_fixture::{FailingMint, fixture_optional_failing_mint};
+    let modes: [(&str, fn() -> FailingMint); 2] = [
+        ("failed mint", FailingMint::default),
+        ("invalid header", FailingMint::with_bad_header),
+    ];
+    for (mode, mint) in modes {
+        let (fx, failing) = fixture_optional_failing_mint(Answer::Ok, mint(), budget).await;
+        let who = ("k-budget", "alpha");
+        let (_, first) = signed_call(&fx, who, "n1", json!({})).await;
+        assert!(
+            first.get("error").is_none(),
+            "{mode}: the paying call fell back: {first}"
+        );
 
-    let before = failing.count();
-    let (_, refused) = signed_call(&fx, who, "n2", json!({})).await;
-    assert_eq!(code(&refused), Some(-32003), "the spend refusal: {refused}");
-    assert!(
-        failing.count() > before,
-        "the refused call attempted a mint"
-    );
+        let before = failing.count();
+        let (_, refused) = signed_call(&fx, who, "n2", json!({})).await;
+        assert_eq!(
+            code(&refused),
+            Some(-32003),
+            "{mode}: the spend refusal: {refused}"
+        );
+        assert!(
+            failing.count() > before,
+            "{mode}: the refused call attempted a mint"
+        );
 
-    let (_, again) = signed_call(&fx, who, "n2", json!({})).await;
-    assert!(
-        refused_as_replay(&again),
-        "the nonce was given back after a failed mint: {again}"
-    );
-    assert_eq!(dispatched(&fx), 1);
+        let (_, again) = signed_call(&fx, who, "n2", json!({})).await;
+        assert!(
+            refused_as_replay(&again),
+            "{mode}: the nonce was given back after the attempt: {again}"
+        );
+        assert_eq!(dispatched(&fx), 1, "{mode}");
+    }
 }

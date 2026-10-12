@@ -398,7 +398,7 @@ pub(crate) use egress::{
 #[cfg(feature = "firewall")]
 pub(crate) use quota::Minting;
 #[cfg(feature = "cost-governance")]
-pub(crate) use quota::fixture_optional_failing_mint;
+pub(crate) use quota::{FailingMint, fixture_optional_failing_mint};
 use quota::{fixture_backend_config, fixture_failsafe, leaked_transparency_log};
 #[cfg(feature = "firewall")]
 pub(crate) use quota::{fixture_firewalled_budget_built, fixture_propagating_budgeted};

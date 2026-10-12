@@ -184,39 +184,46 @@ async fn a_direct_spend_refusal_after_a_cold_schema_fill_keeps_the_nonce() {
 }
 
 /// Pre-admission, KEEP (MIK-8379 H1, twin of K-optional-mint): an optional
-/// propagating backend whose mint fails falls back to the static credential;
-/// the attempt counts as an effect, so the witness is never minted and the
-/// spend refusal keeps the nonce. Both backends.
+/// propagating backend whose mint fails, or succeeds with a header that does
+/// not parse, falls back to the static credential; the attempt counts as an
+/// effect, so the witness is never minted and the spend refusal keeps the
+/// nonce. Both backends.
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn a_direct_spend_refusal_after_a_failed_optional_mint_keeps_the_nonce() {
     use super::direct_continuation_tests::budget;
-    use super::direct_guards_fixture::fixture_optional_failing_mint;
-    for backend in BACKENDS {
-        let (fx, failing) = fixture_optional_failing_mint(Answer::Ok, budget).await;
-        let who = ("k-budget", backend);
-        let (_, first) = signed_direct(&fx, who, "n1", json!({})).await;
-        assert!(
-            first.get("error").is_none(),
-            "{backend}: the paying call: {first}"
-        );
+    use super::direct_guards_fixture::{FailingMint, fixture_optional_failing_mint};
+    let modes: [(&str, fn() -> FailingMint); 2] = [
+        ("failed mint", FailingMint::default),
+        ("invalid header", FailingMint::with_bad_header),
+    ];
+    for (mode, mint) in modes {
+        for backend in BACKENDS {
+            let (fx, failing) = fixture_optional_failing_mint(Answer::Ok, mint(), budget).await;
+            let who = ("k-budget", backend);
+            let (_, first) = signed_direct(&fx, who, "n1", json!({})).await;
+            assert!(
+                first.get("error").is_none(),
+                "{mode} {backend}: the paying call: {first}"
+            );
 
-        let before = failing.count();
-        let (_, refused) = signed_direct(&fx, who, "n2", json!({})).await;
-        assert!(
-            refused.to_string().contains("budget exceeded"),
-            "{backend}: the spend refusal: {refused}"
-        );
-        assert!(
-            failing.count() > before,
-            "{backend}: the refused call attempted a mint"
-        );
+            let before = failing.count();
+            let (_, refused) = signed_direct(&fx, who, "n2", json!({})).await;
+            assert!(
+                refused.to_string().contains("budget exceeded"),
+                "{mode} {backend}: the spend refusal: {refused}"
+            );
+            assert!(
+                failing.count() > before,
+                "{mode} {backend}: the refused call attempted a mint"
+            );
 
-        let (_, again) = signed_direct(&fx, who, "n2", json!({})).await;
-        assert!(
-            refused_as_replay(&again),
-            "{backend}: the nonce was given back after a failed mint: {again}"
-        );
-        assert_eq!(dispatched(&fx), 1, "{backend}");
+            let (_, again) = signed_direct(&fx, who, "n2", json!({})).await;
+            assert!(
+                refused_as_replay(&again),
+                "{mode} {backend}: the nonce was given back after the attempt: {again}"
+            );
+            assert_eq!(dispatched(&fx), 1, "{mode} {backend}");
+        }
     }
 }

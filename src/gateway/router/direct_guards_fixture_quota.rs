@@ -177,15 +177,27 @@ pub(crate) async fn fixture_propagating_signed(
 }
 
 /// A propagation strategy whose every mint fails after it was attempted, as a
-/// token exchange that reached its issuer and errored (MIK-8379 H1). Counts
-/// its attempts.
+/// token exchange that reached its issuer and errored (MIK-8379 H1); or, with
+/// `bad_header`, succeeds with a header that does not parse, which the
+/// resolver refuses the same way. Counts its attempts.
 #[derive(Default)]
-pub(crate) struct FailingMint(std::sync::atomic::AtomicUsize);
+pub(crate) struct FailingMint {
+    attempts: std::sync::atomic::AtomicUsize,
+    bad_header: bool,
+}
 
 impl FailingMint {
+    /// A mint that succeeds with an invalid header name.
+    pub(crate) fn with_bad_header() -> Self {
+        Self {
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+            bad_header: true,
+        }
+    }
+
     /// Mints attempted so far.
     pub(crate) fn count(&self) -> usize {
-        self.0.load(std::sync::atomic::Ordering::SeqCst)
+        self.attempts.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
@@ -193,13 +205,24 @@ impl FailingMint {
 impl crate::identity_propagation::IdentityPropagation for FailingMint {
     async fn propagate(
         &self,
-        _identity: &crate::key_server::oidc::VerifiedIdentity,
-        _backend: &crate::identity_propagation::BackendDescriptor,
+        identity: &crate::key_server::oidc::VerifiedIdentity,
+        backend: &crate::identity_propagation::BackendDescriptor,
     ) -> Result<
         crate::identity_propagation::PropagatedCredential,
         crate::identity_propagation::PropagationError,
     > {
-        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.bad_header {
+            return Ok(crate::identity_propagation::PropagatedCredential {
+                headers: vec![("bad header".to_string(), "minted".to_string())],
+                expires_at: i64::MAX,
+                cache_binding: format!("{}@{}", identity.subject, backend.audience),
+                subject_key: identity.subject.clone(),
+                audience: backend.audience.clone(),
+                scopes: Vec::new(),
+            });
+        }
         Err(crate::identity_propagation::PropagationError::Refuse(
             "the issuer refused the exchange".to_string(),
         ))
@@ -212,9 +235,10 @@ impl crate::identity_propagation::IdentityPropagation for FailingMint {
 /// the signed `MetaMcp` further (a spend budget).
 pub(crate) async fn fixture_optional_failing_mint(
     answer: Answer,
+    mint: FailingMint,
     build: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> (Fx, Arc<FailingMint>) {
-    let failing = Arc::new(FailingMint::default());
+    let failing = Arc::new(mint);
     let strategy = Arc::clone(&failing);
     super::HARDENED.with(|h| h.set(true));
     super::PROPAGATING.with(|p| p.set(true));
