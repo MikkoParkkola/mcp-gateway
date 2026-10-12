@@ -784,3 +784,8 @@ pub(crate) mod rescue_seam;
 #[cfg(test)]
 #[path = "worker_tests.rs"]
 mod worker_tests;
+
+#[cfg(test)]
+#[path = "worker_clock_settle_tests.rs"]
+mod worker_clock_settle_tests;
+

@@ -555,19 +555,15 @@ mod tests {
         assert!(row.get("clock_invalid").is_none(), "{row}");
     }
 
-    /// On a host clock before 1970 the row is still written (d1 seats): the
-    /// epoch, marked `clock_invalid`, and still content-free.
+    /// On a host clock before 1970 the row is still written (d1 seats):
+    /// undated (`timestamp` null, MIK-8202 P4a A7, no longer the epoch),
+    /// marked `clock_invalid`, and still content-free.
     #[test]
     fn a_dispatch_row_on_a_clock_before_1970_is_kept_and_marked() {
         let _clock = crate::clock::test_clock::before_epoch();
         let row = dispatch_row();
         assert_eq!(row["clock_invalid"], true, "{row}");
-        assert!(
-            row["timestamp"]
-                .as_str()
-                .is_some_and(|t| t.starts_with("1970-01-01T00:00:00")),
-            "{row}"
-        );
+        assert!(row["timestamp"].is_null(), "{row}");
         assert!(row["findings"][0].get("matched").is_none(), "{row}");
     }
 }

@@ -98,3 +98,81 @@ fn the_gateway_starts_on_the_real_clock() {
     );
     assert!(!logs.contains("system clock reads before 1970"), "{logs}");
 }
+
+/// One `trust lab evaluate` run that updates the baseline registry, on the
+/// real clock or (`dark`) on one that reads before 1970.
+fn update_trust_baseline(root: &Path, dark: bool) -> std::process::Output {
+    let mut command = gateway_bin::command(root, gateway_bin::Inherit::Environment);
+    command
+        .current_dir(root)
+        .args([
+            "trust",
+            "lab",
+            "evaluate",
+            "weather",
+            "--capabilities",
+            "caps",
+            "--baseline-registry",
+            "registry",
+            "--update-baseline-registry",
+            "--baseline-id",
+            "weather-baseline",
+        ])
+        .stdin(Stdio::null());
+    if dark {
+        command.env("MCP_GATEWAY_TEST_CLOCK", "before-epoch");
+    }
+    command.output().expect("trust lab evaluate runs")
+}
+
+/// MIK-8202.AC.16 (R11, mutant M11): the trust baseline CLI on a clock that
+/// reads before 1970 reads the clock before any write: it exits non-zero with
+/// an error naming the clock, and both output files (the registry's baseline
+/// file and its `manifest.json`) are byte-identical to before. A child
+/// process, because the CLI is the binary crate and the in-crate test clock
+/// cannot reach it. Mutant M11: a write happens before the clock read.
+#[test]
+fn the_trust_baseline_cli_writes_nothing_on_a_clock_before_1970() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let caps = root.path().join("caps");
+    std::fs::create_dir_all(&caps).expect("caps dir");
+    std::fs::write(
+        caps.join("weather.yaml"),
+        "name: weather\ndescription: Read weather forecasts\nproviders:\n  primary:\n    \
+         service: rest\n    config:\n      base_url: https://example.invalid\nauth:\n  \
+         required: true\n  type: api_key\nschema:\n  input:\n    type: object\n    \
+         properties:\n      city:\n        type: string\n",
+    )
+    .expect("capability");
+    let seeded = update_trust_baseline(root.path(), false);
+    assert!(
+        seeded.status.success(),
+        "control: the real clock writes the baseline: {}",
+        String::from_utf8_lossy(&seeded.stderr)
+    );
+    let registry = root.path().join("registry");
+    let files = [
+        registry.join("baselines").join("weather-baseline.json"),
+        registry.join("manifest.json"),
+    ];
+    let before: Vec<Vec<u8>> = files
+        .iter()
+        .map(|f| std::fs::read(f).expect("seeded output"))
+        .collect();
+
+    let dark = update_trust_baseline(root.path(), true);
+    let stderr = String::from_utf8_lossy(&dark.stderr);
+    assert!(!dark.status.success(), "a dark clock must fail: {stderr}");
+    assert!(
+        stderr.contains("1970"),
+        "the error names the clock: {stderr}"
+    );
+    for (file, before) in files.iter().zip(&before) {
+        assert_eq!(
+            &std::fs::read(file).expect("output kept"),
+            before,
+            "{} is unchanged",
+            file.display()
+        );
+    }
+}

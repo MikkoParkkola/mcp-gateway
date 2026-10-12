@@ -33,7 +33,7 @@ fn annotated_tool(name: &str, description: &str) -> Tool {
     }
 }
 
-fn clean_card() -> TrustCard {
+pub(super) fn clean_card() -> TrustCard {
     let mut card = TrustCard::from_tool("docs", &annotated_tool("search_docs", "Search docs"));
     card.server.publisher = Some("MikkoParkkola".to_string());
     card.server.license = Some("MIT".to_string());

@@ -22,20 +22,31 @@ use crate::gateway::task_service::{
 };
 use crate::idempotency::admission::{ExecutionAdmission, Mode, Request};
 
-const OWNER: &str = "verified-owner";
+pub(super) const OWNER: &str = "verified-owner";
 const BACKEND: &str = "peer";
 
-struct Fixture {
-    service: Arc<TaskService>,
-    executor: Arc<TaskExecutor>,
-    id: String,
-    revision: u64,
-    owner_digest: String,
+pub(super) struct Fixture {
+    pub(super) service: Arc<TaskService>,
+    pub(super) executor: Arc<TaskExecutor>,
+    pub(super) id: String,
+    pub(super) revision: u64,
+    pub(super) owner_digest: String,
     _dir: tempfile::TempDir,
 }
 
 /// A freshly created working row, owned by [`OWNER`].
 async fn fixture(key: &str) -> Fixture {
+    let now = crate::clock::utc_now().expect("the test host's clock reads after 1970");
+    fixture_with(key, now, 86_400_000).await
+}
+
+/// [`fixture`] created at `created_at` with `ttl_ms` (MIK-8202 P4a: the
+/// clock-settle rows date against a known creation time and a 1 ms TTL).
+pub(super) async fn fixture_with(
+    key: &str,
+    created_at: chrono::DateTime<chrono::Utc>,
+    ttl_ms: u64,
+) -> Fixture {
     let dir = tempfile::tempdir().expect("a fixture store root");
     let admission = ExecutionAdmission::new(Arc::new(|| 1_000));
     let service = Arc::new(
@@ -55,9 +66,9 @@ async fn fixture(key: &str) -> Fixture {
     let workers = Arc::new(tokio::sync::Semaphore::new(1));
     let task = Task::create_at(
         "echo",
-        crate::clock::utc_now().expect("the test host's clock reads after 1970"),
+        created_at,
         TaskOptions {
-            ttl_ms: Some(86_400_000),
+            ttl_ms: Some(ttl_ms),
             poll_interval_ms: Some(1_000),
         },
     );
@@ -96,7 +107,7 @@ async fn fixture(key: &str) -> Fixture {
 }
 
 impl Fixture {
-    fn status(&self) -> TaskStatus {
+    pub(super) fn status(&self) -> TaskStatus {
         self.service
             .get(OWNER, &self.id)
             .expect("the owner reads its task")
@@ -104,7 +115,7 @@ impl Fixture {
             .status()
     }
 
-    fn stored_revision(&self) -> u64 {
+    pub(super) fn stored_revision(&self) -> u64 {
         self.service
             .get(OWNER, &self.id)
             .expect("the owner reads its task")
@@ -113,7 +124,7 @@ impl Fixture {
 
     /// Move the row on at `revision` without settling it, so a settlement
     /// holding the old revision loses its first compare-and-set.
-    async fn move_on(&self, event: TaskTransition) {
+    pub(super) async fn move_on(&self, event: TaskTransition) {
         self.service
             .store
             .transition(
@@ -145,7 +156,7 @@ impl Fixture {
     }
 }
 
-fn complete() -> TaskTransition {
+pub(super) fn complete() -> TaskTransition {
     TaskTransition::Complete(json!({"content": [{"type": "text", "text": "done"}]}))
 }
 

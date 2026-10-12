@@ -441,3 +441,4 @@ impl Default for CatalogTrustLab {
 
 #[cfg(test)]
 mod tests;
+
