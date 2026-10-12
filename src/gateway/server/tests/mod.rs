@@ -49,6 +49,8 @@ mod stdio_response_firewall;
 mod stdio_initialize_order;
 #[cfg(feature = "firewall")]
 mod stdio_tenant_reads;
+/// MIK-8044.SURF.2: a gateway.yaml `protocol_version` reaches the HTTP transport.
+mod surf2_protocol_version_config;
 
 mod stdio_hardened_signing;
 

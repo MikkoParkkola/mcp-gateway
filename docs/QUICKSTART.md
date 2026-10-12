@@ -131,6 +131,7 @@ auth:
 
 metadata:
   category: weather
+  read_only: true  # only a read-only capability is cached
   tags: [weather, forecast, free]
 ```
 
@@ -169,6 +170,7 @@ auth:
 
 metadata:
   category: knowledge
+  read_only: true  # only a read-only capability is cached
   tags: [wikipedia, encyclopedia, free]
 ```
 
