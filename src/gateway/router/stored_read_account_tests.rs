@@ -199,6 +199,8 @@ async fn t10_a_stored_read_after_the_grant_is_revoked_answers_absent() {
 #[derive(Default)]
 struct PlainBackend {
     hold: Option<Arc<tokio::sync::Semaphore>>,
+    /// `tools/call`s that arrived, counted before the hold (MIK-8392 WM1).
+    calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[async_trait::async_trait]
@@ -212,7 +214,10 @@ impl crate::transport::Transport for PlainBackend {
         if method == "tools/call"
             && let Some(hold) = &self.hold
         {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             hold.acquire().await.expect("the hold is open").forget();
+        } else if method == "tools/call" {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
         let result = if method == "tools/list" {
             json!({"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]})
@@ -357,6 +362,7 @@ async fn t10pf_a_plan_tasks_frame_after_its_accounts_revoke_carries_status_only(
             &fx,
             PlainBackend {
                 hold: Some(Arc::clone(&hold)),
+                ..PlainBackend::default()
             },
         );
         fx.gateway.answer_next(json!({

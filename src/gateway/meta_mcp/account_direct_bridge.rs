@@ -272,3 +272,98 @@ pub(super) fn operator_key() -> AccountKey {
     )
     .expect("fixture principal and descriptor must bind")
 }
+
+/// MIK-8392 T11, U2: a REST capability whose dispatch runs under alice's
+/// account `WORK` (`auth.account`), served by a loopback capture endpoint,
+/// for the router's stored-read rows. Real custody, the production installer.
+pub(crate) struct CapabilityAccount {
+    custody: Custody,
+    port: u16,
+    log: Arc<crate::security::TransparencyLogger>,
+    external: bool,
+    _log_dir: tempfile::TempDir,
+}
+
+/// The capability server and tool [`CapabilityAccount`] serves.
+pub(crate) const CAPABILITY_SERVER: &str = super::super::account_rest_fixture::CAPABILITIES;
+pub(crate) const CAPABILITY_TOOL: &str = super::super::account_rest_fixture::TOOL;
+
+impl CapabilityAccount {
+    /// Alice's grant seeded; `external` makes `WORK` an external descriptor
+    /// (no vault, so its view is unjudged).
+    pub(crate) async fn start(external: bool) -> Self {
+        let (port, _captured) = super::super::account_rest_fixture::capture_endpoint().await;
+        let custody = custody_with(&[(
+            account_key("alice", WORK),
+            grant(ALICE_WORK_TOKEN, u64::MAX),
+        )]);
+        let dir = tempfile::tempdir().expect("a log directory");
+        let log = crate::gateway::meta_mcp::grant_audit_fixture::logger(
+            &dir,
+            crate::security::audit::AuditFailurePolicy::BestEffort,
+        );
+        Self {
+            custody,
+            port,
+            log,
+            external,
+            _log_dir: dir,
+        }
+    }
+
+    /// The caller the grant belongs to.
+    pub(crate) fn alice() -> VerifiedIdentity {
+        identity("alice")
+    }
+
+    /// Install the account and the capability on `meta`.
+    pub(crate) fn install(&self, mut meta: MetaMcp) -> MetaMcp {
+        use super::super::account_rest_fixture::{capability, external, managed, rest_config};
+        meta.enable_transparency_log(Arc::clone(&self.log));
+        let descriptor = if self.external {
+            external(WORK)
+        } else {
+            managed(WORK)
+        };
+        let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
+        install_account_strategies(
+            &rest_config(&[(WORK, descriptor)]),
+            Some(&self.custody.installed()),
+            &key,
+            &meta,
+            ServeMode::Http,
+        )
+        .expect("the installer accepts the fixture");
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .expect("an HTTP client");
+        let executor = Arc::new(
+            crate::capability::CapabilityExecutor::new()
+                .with_account_strategies(meta.account_strategies())
+                .with_test_http_client(client),
+        );
+        let backend = Arc::new(crate::capability::CapabilityBackend::new(
+            CAPABILITY_SERVER,
+            executor,
+        ));
+        backend
+            .register_capability(capability(
+                &format!("http://127.0.0.1:{}", self.port),
+                "oauth:google",
+                Some(WORK),
+            ))
+            .expect("the capability registers");
+        meta.set_capabilities(backend);
+        meta
+    }
+
+    /// Revoke alice's grant through live custody.
+    pub(crate) async fn revoke(&self) {
+        self.custody
+            .handle
+            .invalidate(&account_key("alice", WORK))
+            .await
+            .expect("the seeded grant revokes");
+    }
+}

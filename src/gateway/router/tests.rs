@@ -49,7 +49,7 @@ mod mcp_malformed_hardened;
 /// The Meta-MCP route's own response-firewall verdict obligation (RED).
 #[cfg(feature = "firewall")]
 mod meta_firewall_verdict;
-mod meta_fixture;
+pub(super) mod meta_fixture;
 mod order2_fsm;
 // pub(crate): the route-check matrix drives TaskSubmit x Authorize through
 // `submit_authz` (MIK-8315).

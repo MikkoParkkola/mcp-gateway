@@ -550,3 +550,36 @@ async fn t9d_a_complete_empty_catalogue_answers_absent() {
     let _ = backend(&state).remember_listed_tools(None, false, &[]);
     assert_absent(&state, &get_task(&state, "key-a", &id).await, "T9d").await;
 }
+
+/// T16 (M25): the caller's identity grant for the target is withdrawn after
+/// the task ran. The schema is valid and no descriptor blocks it, so the read
+/// is withheld as Refused, answered as an absent name. Control: while the
+/// grant stands, the stored task is delivered.
+#[tokio::test]
+async fn t16_a_grant_withdrawn_after_the_task_ran_answers_absent() {
+    use crate::gateway::meta_mcp::grant_audit_fixture::grants;
+    use crate::security::audit::AuditFailurePolicy;
+    let row =
+        super::grant_decisions::armed(true, false, AuditFailurePolicy::BestEffort, |m| m).await;
+    let created = post(
+        &row.state,
+        "key-a",
+        super::grant_decision_tasks::as_task(super::grant_decisions::personal_invoke(1), "s1-t16"),
+    )
+    .await;
+    let id = task_id(&created);
+    let settled = poll_until_terminal(&row.state, "key-a", &id).await;
+    std::assert_eq!(status_of(&settled), "completed", "control: {settled}");
+    let control = get_task(&row.state, "key-a", &id).await;
+    assert!(
+        control.get("error").is_none(),
+        "control: delivered: {control}"
+    );
+    row.state.meta_mcp.set_identity_grants(grants(vec![]));
+    let read = get_task(&row.state, "key-a", &id).await;
+    std::assert_eq!(
+        read.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "T16: a withdrawn grant answers absent: {read}"
+    );
+}

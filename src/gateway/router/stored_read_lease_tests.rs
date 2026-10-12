@@ -300,3 +300,113 @@ async fn l3_a_retired_held_entry_is_claimable() {
     assert!(first.to_string().contains(OUTPUT), "L3: served: {first}");
     assert_eq!(mints(&gw) - before, 1, "L3: one resolution");
 }
+
+/// POST a modern request as `subject`.
+async fn send_as(gw: &Gateway, subject: &str, method: &str, name: &str, params: Value) -> Value {
+    use tower::ServiceExt;
+    let body = json!({"jsonrpc": "2.0", "id": 11, "method": method, "params": params});
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", method)
+        .header("mcp-name", name)
+        .body(axum::body::Body::from(body.to_string()))
+        .expect("a request");
+    request
+        .extensions_mut()
+        .insert(crate::key_server::oidc::VerifiedIdentity {
+            subject: subject.to_string(),
+            email: format!("{subject}@example.invalid"),
+            name: None,
+            groups: vec![],
+            issuer: "https://issuer.example.invalid".to_string(),
+        });
+    let response = gw.router.clone().oneshot(request).await.expect("an answer");
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("a body");
+    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+}
+
+async fn get_as(gw: &Gateway, subject: &str, id: &str) -> Value {
+    send_as(
+        gw,
+        subject,
+        "tasks/get",
+        id,
+        json!({"taskId": id, "_meta": super::modern_meta()}),
+    )
+    .await
+}
+
+/// A finished task of `subject`'s own `read`, served once.
+async fn finished_as(gw: &Gateway, subject: &str, key: &str) -> String {
+    let mut meta = super::modern_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    let made = send_as(
+        gw,
+        subject,
+        "tools/call",
+        "gateway_invoke",
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": crate::gateway::meta_mcp::slot_verdict_fixture::BACKEND,
+                "tool": crate::gateway::meta_mcp::slot_verdict_fixture::TOOL,
+                "arguments": {"q": "x"}},
+            "task": {}, "_meta": meta}),
+    )
+    .await;
+    let id = made
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: {subject}'s task was made: {made}"))
+        .to_owned();
+    let bound = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let got = get_as(gw, subject, &id).await;
+        if got.to_string().contains(OUTPUT) {
+            return id;
+        }
+        assert!(
+            std::time::Instant::now() < bound,
+            "premise: {subject} served: {got}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// T17 (M26): alpha and beta each own a stored task on the same per-user
+/// target. Alpha's own slot lists the tool; beta's is relisted without it.
+/// Each read is judged on its own reader's slot, in both orders: alpha is
+/// served, beta answers -32601.
+#[tokio::test]
+async fn t17_each_principal_is_judged_on_its_own_slot() {
+    let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
+    let _ = crate::gateway::meta_mcp::slot_verdict_fixture::add_caller(&gw.meta, "beta", &valid());
+    let alpha = finished(&gw, "s1-t17a").await;
+    let beta = finished_as(&gw, "beta", "s1-t17b").await;
+    let other: crate::protocol::Tool = serde_json::from_value(json!({
+        "name": "other", "description": "Another.", "inputSchema": {"type": "object"}
+    }))
+    .expect("a tool");
+    backend(&gw).store_per_user_tools_for_test("beta@ledger", vec![other]);
+    for beta_first in [false, true] {
+        let (a, b) = if beta_first {
+            let b = get_as(&gw, "beta", &beta).await;
+            (task_get(&gw, &alpha).await, b)
+        } else {
+            let a = task_get(&gw, &alpha).await;
+            (a, get_as(&gw, "beta", &beta).await)
+        };
+        assert!(
+            a.to_string().contains(OUTPUT),
+            "T17 alpha ({beta_first}): {a}"
+        );
+        assert_eq!(
+            b.pointer("/error/code"),
+            Some(&json!(-32601)),
+            "T17 beta ({beta_first}): {b}"
+        );
+    }
+}

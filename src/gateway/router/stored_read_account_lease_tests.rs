@@ -251,3 +251,197 @@ async fn n0_a_read_without_the_account_prepass_fails_closed() {
         "N0: the unfilled read is counted"
     );
 }
+
+/// Wait for the task to settle and return its committed wire form, read
+/// from the store (a stored read would itself judge, and could mask it).
+async fn settled_record(fx: &Fx, id: &str) -> Value {
+    let store = &fx.state.task_executor.service.store;
+    let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let status = store.status_for_test(id);
+        if matches!(
+            status,
+            Some(
+                crate::protocol::tasks::TaskStatus::Completed
+                    | crate::protocol::tasks::TaskStatus::Failed
+                    | crate::protocol::tasks::TaskStatus::Cancelled
+            )
+        ) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < bound,
+            "the task settles: {status:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let digest = store.owner_digest_for_test(id).expect("an owner");
+    let committed = store.get(&digest, id).expect("the settled task");
+    serde_json::to_value(committed.task.wire()).expect("JSON")
+}
+
+/// A plan task: `steps` as (server, tool) pairs, in order.
+async fn plan_task(fx: &Fx, key: &str, steps: &[(&str, &str)]) -> String {
+    let mut meta = modern_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    let chain: Vec<Value> = steps
+        .iter()
+        .map(|(server, tool)| json!({"tool": format!("{server}:{tool}"), "arguments": {}}))
+        .collect();
+    let made = send(
+        fx,
+        "tools/call",
+        "gateway_execute",
+        json!({"name": "gateway_execute", "arguments": {"chain": chain},
+            "task": {}, "_meta": meta}),
+    )
+    .await;
+    made.pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a plan task was made: {made}"))
+        .to_owned()
+}
+
+/// W1 (M14): the grant is revoked between submit and the worker's account
+/// step: the worker dispatches nothing to the account backend and records
+/// no output from it. Control: the grant live, the output is recorded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn w1_a_grant_revoked_before_the_worker_step_is_refused_there() {
+    for revoke in [false, true] {
+        let fx = fixture().await;
+        let hold = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+        super::register_plain_with(
+            &fx,
+            super::PlainBackend {
+                hold: Some(std::sync::Arc::clone(&hold)),
+                ..super::PlainBackend::default()
+            },
+        );
+        fx.gateway.answer_next(json!({
+            "content": [{"type": "text", "text": MARKER}], "isError": false
+        }));
+        let id = plan_task(
+            &fx,
+            &format!("s1-w1-{revoke}"),
+            &[(super::PLAIN, "echo"), (BACKEND, TOOL)],
+        )
+        .await;
+        if revoke {
+            fx.gateway.revoke_operator_grant_for_test().await;
+        }
+        hold.add_permits(1);
+        let record = settled_record(&fx, &id).await;
+        if revoke {
+            assert!(!record.to_string().contains(MARKER), "W1: {record}");
+            assert!(
+                fx.gateway.tool_calls().is_empty(),
+                "W1: the account step was sent"
+            );
+        } else {
+            assert!(record.to_string().contains(MARKER), "W1 control: {record}");
+        }
+    }
+}
+
+/// WM1 (M22): a two-step plan on the same tool; a descriptor block lands
+/// after step 1. The worker memo keeps no visibility, so step 2 is judged
+/// anew and refused: the backend answered one call.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn wm1_a_block_mid_run_is_seen_at_step_two() {
+    let fx = fixture().await;
+    let hold = std::sync::Arc::new(tokio::sync::Semaphore::new(0));
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    super::register_plain_with(
+        &fx,
+        super::PlainBackend {
+            hold: Some(std::sync::Arc::clone(&hold)),
+            calls: std::sync::Arc::clone(&calls),
+        },
+    );
+    let id = plan_task(
+        &fx,
+        "s1-wm1",
+        &[(super::PLAIN, "echo"), (super::PLAIN, "echo")],
+    )
+    .await;
+    // Step 1 arrives and is held: the block lands before step 2 is judged.
+    let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while calls.load(std::sync::atomic::Ordering::SeqCst) < 1 {
+        assert!(
+            std::time::Instant::now() < bound,
+            "premise: step 1 arrived and is held"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    fx.gateway
+        .backends()
+        .get(super::PLAIN)
+        .expect("the plain backend")
+        .block_tool_for_test("echo");
+    // Two permits, so a step 2 wrongly sent past the block is counted, not hung.
+    hold.add_permits(2);
+    let _ = settled_record(&fx, &id).await;
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "WM1: step 2 was dispatched past the block"
+    );
+}
+
+/// WR1 (M14b): a resume after an input round, grant live: the resumed
+/// dispatch has its account outcome (not fail-closed), serves, and the
+/// verdict's resolution reaches it (one resolution, not two).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn wr1_a_resume_with_a_live_grant_serves_on_one_resolution() {
+    let fx = fixture().await;
+    fx.gateway.answer_next(json!({
+        "resultType": "input_required",
+        "inputRequests": {"confirm": {"method": "elicitation/create",
+            "params": {"message": "confirm?", "requestedSchema": {"type": "object", "properties": {}}}}},
+        "requestState": "backend-state-wr1"
+    }));
+    let mut meta = modern_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!("s1-wr1");
+    meta["io.modelcontextprotocol/clientCapabilities"]["elicitation"] = json!({});
+    let made = send(
+        &fx,
+        "tools/call",
+        "gateway_invoke",
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"folder": "inbox"}},
+            "task": {}, "_meta": meta.clone()}),
+    )
+    .await;
+    let id = made
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+        .to_owned();
+    let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let got = task_get(&fx, &id).await;
+        if got.pointer("/result/status") == Some(&json!("input_required")) {
+            break;
+        }
+        assert!(std::time::Instant::now() < bound, "premise: parked: {got}");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    fx.gateway.answer_next(json!({
+        "content": [{"type": "text", "text": MARKER}], "isError": false
+    }));
+    let releases = fx.gateway.releases();
+    let _ = send(
+        &fx,
+        "tasks/update",
+        &id,
+        json!({"taskId": id, "inputResponses": {"confirm": {"action": "accept", "content": {}}},
+            "_meta": meta}),
+    )
+    .await;
+    let record = settled_record(&fx, &id).await;
+    assert!(
+        record.to_string().contains(MARKER),
+        "WR1: the resume served: {record}"
+    );
+    assert_eq!(fx.gateway.releases() - releases, 1, "WR1: one resolution");
+}

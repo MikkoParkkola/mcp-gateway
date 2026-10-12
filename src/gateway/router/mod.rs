@@ -184,6 +184,8 @@ mod slot_quota_direct_tests;
 #[cfg(test)]
 mod stored_read_account_tests;
 #[cfg(test)]
+mod stored_read_capability_tests;
+#[cfg(test)]
 mod webhook_mount_tests;
 /// MIK-8340: a withheld surfaced name answers as an absent one.
 #[cfg(all(test, feature = "firewall"))]
