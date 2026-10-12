@@ -54,7 +54,6 @@ impl ViewJudge for Fake {
             Judged::Live(ResolvedCaller {
                 client: crate::gateway::auth::anonymous_client(),
                 identity: None,
-                agent: None,
             })
         })
     }
@@ -196,4 +195,21 @@ fn a_withheld_listing_leaves_the_record_alone_and_a_delivered_one_moves_it() {
     let delivered = view(&judge);
     held(&delivered.record).settle(true);
     assert_eq!(delivered.record.state().peek(6, "a", &moved), Peek::Quiet);
+}
+
+#[tokio::test]
+async fn a_caller_dead_at_attach_gets_no_stream_and_is_counted() {
+    let multiplexer = NotificationMultiplexer::new(
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::StreamingConfig::default(),
+    );
+    multiplexer.set_authorizer(auth());
+    let owner = crate::gateway::session_id::SessionOwner::Credential("k".to_owned());
+    let (session, _rx) = multiplexer.get_or_create_session_scoped(Some("s"), &owner, None);
+    let judge = Fake::answering("s0", "x");
+    judge.die();
+    let attached = multiplexer
+        .attach_view(&session, ViewSubject::default(), judge)
+        .await;
+    assert!(matches!(attached, Err(DeadReason::Bearer)));
 }

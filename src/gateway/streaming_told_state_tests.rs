@@ -89,3 +89,13 @@ fn a_refresh_holds_the_view() {
     assert_eq!(told.peek(3, "a", &digest("s1", "x2")), Peek::Quiet);
     assert_eq!(told.peek(3, "a", &digest("s1", "x3")), Peek::Owed);
 }
+
+#[tokio::test]
+async fn a_plain_bearer_subject_is_live_with_an_empty_context() {
+    let ctx = LiveCtx {
+        agent: None,
+        caller_identity: &crate::security::caller_identity::CallerIdentityConfig::default(),
+        cf_verifier: None,
+    };
+    assert_eq!(ViewSubject::default().live(&ctx).await, Ok(()));
+}

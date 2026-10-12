@@ -14,7 +14,7 @@ use crate::gateway::auth::AuthState;
 use crate::gateway::auth::live::{HeldCredential, current_caller};
 use crate::gateway::meta_mcp::InvokeScope;
 use crate::gateway::streaming::{
-    DeadReason, Judged, PendingRefresh, ResolvedCaller, ViewDigest, ViewJudge, ViewSubject,
+    DeadReason, Judged, LiveCtx, PendingRefresh, ResolvedCaller, ViewDigest, ViewJudge, ViewSubject,
 };
 
 /// Judges from the state the caller holds. Borrowed for the span of one
@@ -52,7 +52,7 @@ impl ViewJudge for OwnedViewJudge {
         auth: &'a AuthState,
         caller: Caller<'a>,
     ) -> BoxFuture<'a, Judged<ResolvedCaller>> {
-        Box::pin(resolve_caller(auth, caller))
+        Box::pin(resolve_caller(&self.state, auth, caller))
     }
 
     fn digest(
@@ -81,7 +81,7 @@ impl ViewJudge for RouterViewJudge<'_> {
         auth: &'a AuthState,
         caller: Caller<'a>,
     ) -> BoxFuture<'a, Judged<ResolvedCaller>> {
-        Box::pin(resolve_caller(auth, caller))
+        Box::pin(resolve_caller(self.state, auth, caller))
     }
 
     fn digest(
@@ -108,19 +108,24 @@ impl ViewJudge for RouterViewJudge<'_> {
 /// stream's identity window first, then the credential itself. This is the
 /// only step that may reach an identity provider.
 async fn resolve_caller(
+    state: &AppState,
     auth: &AuthState,
     (credential, subject): Caller<'_>,
 ) -> Judged<ResolvedCaller> {
     let Some(current) = current_caller(auth, credential).await else {
         return Judged::Dead(DeadReason::Bearer);
     };
-    if let Err(reason) = subject.live(current.agent.as_ref()) {
+    let ctx = LiveCtx {
+        agent: current.agent.as_ref(),
+        caller_identity: state.meta_mcp.caller_identity(),
+        cf_verifier: state.meta_mcp.access_verifier(),
+    };
+    if let Err(reason) = subject.live(&ctx).await {
         return Judged::Dead(reason);
     }
     Judged::Live(ResolvedCaller {
         client: current.client,
         identity: current.identity,
-        agent: current.agent,
     })
 }
 
@@ -243,7 +248,7 @@ impl AppState {
         self: &Arc<Self>,
         session_id: &str,
         subject: ViewSubject,
-    ) -> Option<crate::gateway::streaming::StreamView> {
+    ) -> Result<Option<crate::gateway::streaming::StreamView>, DeadReason> {
         self.multiplexer
             .attach_view(session_id, subject, OwnedViewJudge::shared(self))
             .await
@@ -259,7 +264,7 @@ impl AppState {
             (&axum::http::HeaderMap, &axum::http::Extensions),
             Option<&str>,
         ),
-    ) -> Option<crate::gateway::streaming::StreamView> {
+    ) -> Result<Option<crate::gateway::streaming::StreamView>, DeadReason> {
         let verified = extensions.get::<crate::key_server::oidc::VerifiedIdentity>();
         let (cf_assertion, proxy_peer) = super::identity::identity_source_facts(
             self.meta_mcp.caller_identity(),

@@ -168,23 +168,30 @@ impl Listener {
     }
 
     /// Record what every backend shows this listener now, as the baseline the
-    /// first change is judged against; entries it already has are kept.
-    pub(crate) async fn take_baseline(&self) {
+    /// first change is judged against; entries it already has are kept. A
+    /// listener whose caller no longer resolves is refused (counted), so no
+    /// stream opens for it.
+    pub(crate) async fn take_baseline(&self) -> Result<(), crate::gateway::streaming::DeadReason> {
         let Some(view) = &self.view else {
-            return;
+            return Ok(());
         };
-        let crate::gateway::streaming::Judged::Live(caller) = view
+        let caller = match view
             .judge
             .resolve(&self.authorizer, (self.credential.as_ref(), &view.subject))
             .await
-        else {
-            return;
+        {
+            crate::gateway::streaming::Judged::Live(caller) => caller,
+            crate::gateway::streaming::Judged::Dead(reason) => {
+                reason.count();
+                return Err(reason);
+            }
         };
         let (stamp, now) = view
             .record
             .read(async { view.judge.baseline(&caller, &view.subject, "") })
             .await;
         view.record.state().baseline(stamp, now);
+        Ok(())
     }
 
     /// The constant hint owed right after the acknowledgement (MIK-8350 B10),

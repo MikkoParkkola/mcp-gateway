@@ -205,12 +205,22 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
     }
     // MIK-8350: what this stream's caller is shown, so the first change after
     // attach is judged against it.
-    let view = state
+    let view = match state
         .attach_get_view(
             &session_id,
             (subject.clone(), (&headers, &extensions), uri.query()),
         )
-        .await;
+        .await
+    {
+        Ok(view) => view,
+        // The credential no longer resolves: no stream, as the auth layer
+        // answers an invalid one.
+        Err(_) => {
+            return gateway_reply(crate::gateway::middleware::bearer_unauthorized_response(
+                "Invalid token",
+            ));
+        }
+    };
     // Read before the macro so its count is graded (MIK-7725).
     let session = opened.fp();
     info!(session_id = %session, "Client connected to SSE stream");

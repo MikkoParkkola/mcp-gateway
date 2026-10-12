@@ -182,23 +182,14 @@ pub(crate) struct ViewSubject {
     pub(crate) adapter: Option<crate::gateway::openwebui_adapter::AdapterAssertion>,
     /// The certificate's `notAfter`, in unix seconds. Captured here and
     /// checked per decision by MIK-8377.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by MIK-8377's live() clause")
-    )]
+    #[expect(dead_code, reason = "read by MIK-8377's live() clause")]
     pub(crate) cert_not_after: Option<u64>,
     /// The raw Cloudflare Access assertion, when that is the identity source;
     /// re-verified per decision by MIK-8377 and dropped with the stream.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by MIK-8377's live() clause")
-    )]
+    #[expect(dead_code, reason = "read by MIK-8377's live() clause")]
     pub(crate) cf_assertion: Option<Redacted>,
     /// The trusted proxy's peer address, when that is the identity source.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by MIK-8377's live() clause")
-    )]
+    #[expect(dead_code, reason = "read by MIK-8377's live() clause")]
     pub(crate) proxy_peer: Option<std::net::SocketAddr>,
 }
 
@@ -230,16 +221,23 @@ impl ViewSubject {
 
     /// Whether the identity the stream was admitted under is still good, or
     /// why not. The adapter assertion's window is judged here; MIK-8377 adds
-    /// its clauses.
-    pub(crate) fn live(
-        &self,
-        _agent: Option<&crate::gateway::oauth::ValidatedToken>,
-    ) -> Result<(), DeadReason> {
+    /// its clauses, which need the live handles in [`LiveCtx`].
+    pub(crate) async fn live(&self, _ctx: &LiveCtx<'_>) -> Result<(), DeadReason> {
         match &self.adapter {
             Some(adapter) if !adapter.live() => Err(DeadReason::Adapter),
             _ => Ok(()),
         }
     }
+}
+
+/// What a liveness check may consult besides the subject: the caller the
+/// credential resolved to and the live handles an identity source is
+/// re-verified with, read from the current state, never captured at attach.
+#[derive(Clone, Copy)]
+pub(crate) struct LiveCtx<'a> {
+    pub(crate) agent: Option<&'a crate::gateway::oauth::ValidatedToken>,
+    pub(crate) caller_identity: &'a crate::security::caller_identity::CallerIdentityConfig,
+    pub(crate) cf_verifier: Option<&'a crate::key_server::OidcVerifier>,
 }
 
 /// What the judge made of a caller: a view, or a caller that no longer
@@ -287,12 +285,6 @@ impl DeadReason {
 pub(crate) struct ResolvedCaller {
     pub(crate) client: crate::gateway::auth::AuthenticatedClient,
     pub(crate) identity: Option<crate::key_server::oidc::VerifiedIdentity>,
-    /// The agent token the credential validated as (read by MIK-8377).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "read by MIK-8377's live() clause")
-    )]
-    pub(crate) agent: Option<crate::gateway::oauth::ValidatedToken>,
 }
 
 /// Decides what a stream's caller is shown, for the per-stream
@@ -527,33 +519,45 @@ impl NotificationMultiplexer {
         session_id: &str,
         subject: ViewSubject,
         judge: Arc<dyn ViewJudge>,
-    ) -> Option<StreamView> {
-        let authorizer = self.authorizer.read().clone()?;
-        let session = self.sessions.read().get(session_id).map(Arc::clone)?;
+    ) -> Result<Option<StreamView>, DeadReason> {
+        let Some(authorizer) = self.authorizer.read().clone() else {
+            return Ok(None);
+        };
+        let Some(session) = self.sessions.read().get(session_id).map(Arc::clone) else {
+            return Ok(None);
+        };
         let subject = Arc::new(subject);
         let record = session.record_for(&subject);
         let credential = session.credential.read().clone();
-        if let Judged::Live(caller) = judge
+        match judge
             .resolve(&authorizer, (credential.as_ref(), &subject))
             .await
         {
-            let (stamp, view) = record
-                .read(async { judge.baseline(&caller, &subject, session_id) })
-                .await;
-            record.state().baseline(stamp, view);
+            Judged::Live(caller) => {
+                let (stamp, view) = record
+                    .read(async { judge.baseline(&caller, &subject, session_id) })
+                    .await;
+                record.state().baseline(stamp, view);
+            }
+            // A caller that does not resolve at attach gets no stream.
+            Judged::Dead(reason) => {
+                reason.count();
+                return Err(reason);
+            }
         }
-        Some(StreamView {
+        Ok(Some(StreamView {
             subject,
             record,
             judge,
-        })
+        }))
     }
 
     /// Take `session_id`'s baseline for the default subject: for a session no
     /// stream has opened a view on (a bare receiver).
     #[cfg(test)]
     pub(crate) async fn take_baseline(&self, session_id: &str, judge: &Arc<dyn ViewJudge>) {
-        self.attach_view(session_id, ViewSubject::default(), Arc::clone(judge))
+        let _ = self
+            .attach_view(session_id, ViewSubject::default(), Arc::clone(judge))
             .await;
     }
 

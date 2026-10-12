@@ -325,9 +325,6 @@ pub(crate) fn subscription_stream(
     use crate::gateway::subscription_registry::{Admit, delivers};
 
     let stream = stream! {
-        // MIK-8350: what this listener is shown now, taken before anything is
-        // written, so the first change after attach is judged against it.
-        listener.take_baseline().await;
         // The acknowledgement rides the stream it opens, so a client has one
         // thing to read rather than a body and then a stream.
         // Annotated because this function erases the stream into a

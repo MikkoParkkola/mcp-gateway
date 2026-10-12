@@ -296,7 +296,22 @@ async fn meta_mcp_dispatch(
                 .subscribe_as(crate::gateway::auth::live::held_credential(headers))
                 .await
             {
-                Ok(listener) => state.judged_listener(listener, intake.view_subject()),
+                Ok(listener) => {
+                    let listener = state.judged_listener(listener, intake.view_subject());
+                    // MIK-8350: what this listener is shown now, taken before
+                    // anything is written; a caller that no longer resolves
+                    // is refused as an unauthenticated one is.
+                    if listener.take_baseline().await.is_err() {
+                        return build_error_response(
+                            Some(id),
+                            -32001,
+                            "subscriptions/listen requires a credential that authenticates",
+                            session_id,
+                            StatusCode::UNAUTHORIZED,
+                        );
+                    }
+                    listener
+                }
                 Err(ListenRefusal::Unauthenticated) => {
                     return build_error_response(
                         Some(id),
