@@ -127,6 +127,38 @@ class TestOnlyFiles(unittest.TestCase):
         self.assertEqual(found, ["src/fixture_support.rs", "tests/it.rs"])
 
 
+    def test_an_inner_cfg_test_gates_its_whole_source_and_children(self):
+        # #3860 round 2 (gpt, muse): `#![cfg(test)]` gates the whole source.
+        found = self.only_test_files(
+            {
+                "src/lib.rs": "mod helpers;\nmod live;\n",
+                "src/helpers.rs": "#![cfg(test)]\nmod child;\n",
+                "src/helpers/child.rs": "",
+                "src/live.rs": "#![cfg(unix)]\n",
+            }
+        )
+        self.assertEqual(found, ["src/helpers.rs", "src/helpers/child.rs"])
+
+    def test_braces_in_another_attribute_keep_a_pending_cfg_test(self):
+        # #3860 round 2 (gpt): `{` inside `#[doc = concat!{..}]` is no item end.
+        found = self.only_test_files(
+            {
+                "src/lib.rs": '#[cfg(test)]\n#[doc = concat!{"x"}]\nmod t;\n',
+                "src/t.rs": "",
+            }
+        )
+        self.assertEqual(found, ["src/t.rs"])
+
+    def test_a_source_reached_by_a_test_and_a_production_chain_is_not_test_only(self):
+        # #3860 round 2 (gpt): one plain chain is enough to ship it.
+        found = self.only_test_files(
+            {
+                "src/lib.rs": '#[cfg(test)]\n#[path = "shared.rs"]\nmod a;\n#[path = "shared.rs"]\nmod b;\n',
+                "src/shared.rs": "",
+            }
+        )
+        self.assertEqual(found, [])
+
 class OrphanGuard(unittest.TestCase):
     def orphans_of(self, files: dict[str, str]) -> list[str]:
         # A crate root that declares each top-level module, unless the case

@@ -292,6 +292,25 @@ class TestNamedFiles(unittest.TestCase):
         self.assertEqual(self.repo.problems(), [])
 
 
+    def test_mounts_are_read_at_head_not_from_the_working_tree(self) -> None:
+        # #3860 round 2 (gpt HIGH, muse): an uncommitted cfg(test) on the
+        # mount must not clear a committed test-named production source.
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\npub mod case_tests;\n")
+        self.repo.write("src/oauth/case_tests.rs", "pub fn shipped() {}\n")
+        self.repo.commit("add")
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\n#[cfg(test)]\nmod case_tests;\n")
+        self.assertEqual(self.repo.missing(), ["shipped"])
+        self.assertEqual(len(self.repo.problems()), 1)
+
+    def test_a_cfg_test_beside_another_attribute_on_one_line_is_test_only(self) -> None:
+        # #3860 round 2 (gpt): the greedy match read `test)] #[cfg(unix`.
+        self.repo.write(
+            "src/oauth/mod.rs",
+            "pub fn existing() {}\n#[cfg(test)] #[cfg(unix)]\nfn probe() {}\n#[cfg(unix)] #[inline]\nfn live() {}\n",
+        )
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["live"])
+
 class PathspecShape(unittest.TestCase):
     """`--all` hands the prefixes to git as pathspecs, and a pathspec names
     one path: a bare stem matched `task_confirmation/` and never scanned

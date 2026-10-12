@@ -30,9 +30,12 @@ from __future__ import annotations
 
 import functools
 import importlib.util
+import io
 import re
 import subprocess
 import sys
+import tarfile
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -87,10 +90,18 @@ def code(line: str) -> str:
 
 
 def test_only(text: str) -> bool:
-    """Whether an attribute line `#[cfg(<expr>)]` compiles only under test,
-    by the orphan gate's one cfg judgement (`cfg_is_test`)."""
-    match = re.match(r"#\[cfg\((.*)\)\]", text.strip())
-    return bool(match) and orphan_gate().cfg_is_test(match.group(1))
+    """Whether an attribute line carries a `#[cfg(<expr>)]` that compiles
+    only under test, by the orphan gate's one cfg judgement (`cfg_is_test`).
+    Several attributes may share the line (`#[cfg(test)] #[cfg(unix)]`), so
+    each expression is read to its balancing `)`."""
+    text = text.strip()
+    if not text.startswith("#["):
+        return False
+    gate = orphan_gate()
+    return any(
+        gate.cfg_is_test(gate.cfg_expression(text, m.end()))
+        for m in re.finditer(r"#\s*\[\s*cfg\s*\(", text)
+    )
 
 
 def bodyless(lines: list[str], line: int) -> bool:
@@ -186,22 +197,42 @@ def orphan_gate():
     return module
 
 
+# The trees a crate root can sit in; the walk needs nothing else.
+CRATE_DIRS = ("src", "tests", "benches", "examples")
+
+
 @functools.lru_cache(maxsize=None)
-def mount_status(root: Path) -> tuple[frozenset[str], frozenset[str]]:
-    """(reachable, test-only) source paths under `root`, repo-relative. Read
-    from the working tree: every caller checks the tree it has checked out
-    (pre-push and CI pass HEAD)."""
+def mount_status(root: Path, commit: str) -> tuple[frozenset[str], frozenset[str]]:
+    """(reachable, test-only) source paths as `commit` has them,
+    repo-relative. Read from the commit, never the working tree, so the
+    mounts are judged on the same revision as the diff, the file contents and
+    the rows: a dirty or different checkout cannot change the verdict."""
+    present = set(git("ls-tree", "--name-only", commit).split("\n"))
+    dirs = [d for d in CRATE_DIRS if d in present]
+    archive = subprocess.run(
+        ["git", "archive", "--format=tar", commit, "--", *dirs],
+        cwd=root, check=True, capture_output=True,
+    ).stdout
     gate = orphan_gate()
-    rel = lambda paths: frozenset(p.relative_to(root.resolve()).as_posix() for p in paths)
-    return rel(gate.reachable()), rel(gate.test_only_files())
+    with tempfile.TemporaryDirectory() as tree:
+        with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+            tar.extractall(tree, filter="data")
+        gate.ROOT = Path(tree)
+        try:
+            base = Path(tree).resolve()
+            rel = lambda paths: frozenset(p.relative_to(base).as_posix() for p in paths)
+            live = gate.reachable()
+            return rel(live), rel(gate.test_only_files(live))
+        finally:
+            gate.ROOT = ROOT
 
 
-def outside_inventory(path: str) -> bool:
-    """Whether `path`'s functions are out of the inventory's scope: it
-    compiles only under test, or it is reached by no crate root (not compiled
-    at all; the orphan gate reports that). A file named like a test but
-    compiled outside tests is IN scope (MIK-8405.SPLIT.5)."""
-    reachable, test_only = mount_status(ROOT)
+def outside_inventory(path: str, commit: str) -> bool:
+    """Whether `path`'s functions are out of the inventory's scope at
+    `commit`: it compiles only under test, or it is reached by no crate root
+    (not compiled at all; the orphan gate reports that). A file named like a
+    test but compiled outside tests is IN scope (MIK-8405.SPLIT.5)."""
+    reachable, test_only = mount_status(ROOT, commit)
     return path in test_only or path not in reachable
 
 
@@ -213,9 +244,9 @@ def test_file_problems(base: str, head: str) -> list[str]:
     head = git("rev-parse", head).strip()
     merge_base = EMPTY_TREE if base == ALL else git("merge-base", base, head).strip()
     changed = git(
-        "diff", "--name-only", "--no-renames", "--diff-filter=AM", merge_base, head, "--", *PREFIXES
-    ).split()
-    reachable, test_only = mount_status(ROOT)
+        "diff", "--name-only", "-z", "--no-renames", "--diff-filter=AM", merge_base, head, "--", *PREFIXES
+    ).split("\0")
+    reachable, test_only = mount_status(ROOT, head)
     return [
         f"{path}: named like a test file but compiled outside tests"
         for path in changed
@@ -224,6 +255,7 @@ def test_file_problems(base: str, head: str) -> list[str]:
 
 
 def added_functions(base: str, head: str) -> list[tuple[str, str, int, int]]:
+    head = git("rev-parse", head).strip()
     merge_base = EMPTY_TREE if base == ALL else git("merge-base", base, head).strip()
     diff = git("diff", "-U0", "--no-renames", merge_base, head, "--", *PREFIXES)
     found: list[tuple[str, str, int, int]] = []
@@ -234,7 +266,7 @@ def added_functions(base: str, head: str) -> list[tuple[str, str, int, int]]:
     for line in diff.splitlines():
         if line.startswith("+++ "):
             path = line[6:] if line.startswith("+++ b/") else None
-            if path and (not path.endswith(".rs") or outside_inventory(path)):
+            if path and (not path.endswith(".rs") or outside_inventory(path, head)):
                 path = None
             if path:
                 lines = (show(head, path) or "").splitlines()
@@ -284,7 +316,6 @@ def main(argv: list[str]) -> int:
             f"{len(misnamed)} test-named file(s) are not mounted only for tests. Mount each "
             "under #[cfg(test)], or rename a file that is production code (MIK-8405.SPLIT.5)."
         )
-        return 1
     for path, name, line, nth in missing:
         print(f"no inventory row: {path}:{line} fn {name} (occurrence {nth})")
     if missing:
@@ -293,6 +324,7 @@ def main(argv: list[str]) -> int:
             "docs/release/inventory.d/<pr>.critical.tsv (it enforces) or "
             "docs/release/inventory.d/<pr>.unenforcing.tsv (it does not, with a reason)."
         )
+    if misnamed or missing:
         return 1
     scope = "on the COV.3 paths" if argv[1] == ALL else "added on the COV.3 paths"
     print(f"every function {scope} has a row")

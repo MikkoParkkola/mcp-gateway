@@ -59,7 +59,8 @@ SKIP_DIRS = {".git", "target", "node_modules"}
 # braces that tell which inline modules enclose a declaration.
 TOKEN = re.compile(
     r"""(?P<path>\#\s*\[\s*path\s*=\s*)(?:r\#*)?(?P<quote>")"""
-    r"""|(?P<cfg>\#\s*\[\s*cfg\s*\()"""
+    r"""|(?P<cfg>\#(?P<inner>!)?\s*\[\s*cfg\s*\()"""
+    r"""|(?P<attr>\#!?\s*\[)"""
     r"""|\bmod\s+(?:r\#)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<end>[;{])"""
     r"""|(?P<open>\{)|(?P<close>\})|(?P<semi>;)"""
 )
@@ -219,8 +220,21 @@ def declarations_with_cfg(source: Path, owns_dir: bool) -> set[tuple[Path, bool,
     test: a test `#[cfg]` on it or on an enclosing inline module
     (MIK-8405.SPLIT.5). A `#[cfg]` is dropped at the end of the item it
     belongs to (`;`, `{` or `}`), so one on a `use` or `fn` never reaches a
-    later `mod`.
+    later `mod`. An inner `#![cfg(test)]` makes the file (or the inline
+    module it opens) test-only, so everything it declares is too. The body
+    of any other attribute is skipped whole, so a brace inside one (say
+    `#[doc = concat!{..}]`) never drops a pending `#[cfg]`.
     """
+    return _scan(source, owns_dir)[0]
+
+
+def file_is_test(source: Path) -> bool:
+    """Whether `source` opens with an inner `#![cfg(test)]`: the whole file
+    then compiles only under test."""
+    return _scan(source, True)[1]
+
+
+def _scan(source: Path, owns_dir: bool) -> tuple[set[tuple[Path, bool, bool]], bool]:
     code, literals = blank(source.read_text(encoding="utf-8", errors="replace"))
     base = module_dir(source, owns_dir)
     declared: set[tuple[Path, bool, bool]] = set()
@@ -229,12 +243,23 @@ def declarations_with_cfg(source: Path, owns_dir: bool) -> set[tuple[Path, bool,
     inline: list[tuple[str | None, bool]] = []
     pending_path: str | None = None
     pending_test = False
-    for m in TOKEN.finditer(code):
-        enclosing_test = any(test for _, test in inline)
+    file_test = False
+    pos = 0
+    while m := TOKEN.search(code, pos):
+        pos = m.end()
+        enclosing_test = file_test or any(test for _, test in inline)
         if m.group("quote"):
             pending_path = literals.get(m.start("quote"))
         elif m.group("cfg"):
-            pending_test = pending_test or cfg_is_test(cfg_expression(code, m.end()))
+            test = cfg_is_test(cfg_expression(code, m.end()))
+            if not m.group("inner"):
+                pending_test = pending_test or test
+            elif inline:
+                inline[-1] = (inline[-1][0], inline[-1][1] or test)
+            else:
+                file_test = file_test or test
+        elif m.group("attr"):
+            pos = attribute_end(code, m.end())
         elif m.group("name"):
             nested = [name for name, _ in inline if name]
             test = pending_test or enclosing_test
@@ -257,7 +282,17 @@ def declarations_with_cfg(source: Path, owns_dir: bool) -> set[tuple[Path, bool,
             pending_path, pending_test = None, False
         elif m.group("semi"):
             pending_path, pending_test = None, False
-    return declared
+    return declared, file_test
+
+
+def attribute_end(code: str, start: int) -> int:
+    """The offset just past the `]` closing an attribute whose `[` ends just
+    before `start`. Literal contents are already blanked."""
+    depth, i = 1, start
+    while i < len(code) and depth:
+        depth += {"[": 1, "]": -1}.get(code[i], 0)
+        i += 1
+    return i
 
 
 def reachable() -> set[Path]:
@@ -295,7 +330,7 @@ def compiled_outside_tests() -> set[Path]:
     stack = [(root.resolve(), True) for root in library_roots()]
     while stack:
         path, owns_dir = stack.pop()
-        if (path, owns_dir) in seen or not path.is_file():
+        if (path, owns_dir) in seen or not path.is_file() or file_is_test(path):
             continue
         seen.add((path, owns_dir))
         stack.extend(
@@ -306,12 +341,13 @@ def compiled_outside_tests() -> set[Path]:
     return {path for path, _ in seen}
 
 
-def test_only_files() -> set[Path]:
+def test_only_files(live: set[Path] | None = None) -> set[Path]:
     """Files compiled only under test: reachable from a crate root, but not
     through any chain of non-test declarations from the library or a binary
     (MIK-8405.SPLIT.5). check_inventory_rows.py keeps their functions out of
-    the critical-function inventory."""
-    return reachable() - compiled_outside_tests()
+    the critical-function inventory. `live` is `reachable()`, when the
+    caller has it already."""
+    return (reachable() if live is None else live) - compiled_outside_tests()
 
 
 def orphans() -> list[Path]:
