@@ -414,6 +414,24 @@ impl TaskExecutor {
         self.service.store.set_hook(Some(hook)).await;
     }
 
+    /// Test-only: the next create fails at the store's `Published` stage,
+    /// after its record is durable and its key published (MIK-8353 3c: an
+    /// `Unavailable` that follows an act).
+    #[cfg(test)]
+    pub(crate) async fn fail_next_publication_for_test(&self) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let armed = Arc::new(AtomicBool::new(true));
+        let hook: super::store::CommitHook = Arc::new(move |stage| {
+            if matches!(stage, super::store::CommitStage::Published)
+                && armed.swap(false, Ordering::SeqCst)
+            {
+                return Err(std::io::Error::other("injected publication failure"));
+            }
+            Ok(())
+        });
+        self.service.store.set_hook(Some(hook)).await;
+    }
+
     /// Test-only twin of [`Self::barrier_on_publication`] at the store's
     /// `Write` stage: the first step of every record write, before the payload
     /// is written and before the readable row changes. A barrier held here
