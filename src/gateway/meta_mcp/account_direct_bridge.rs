@@ -117,6 +117,16 @@ impl DirectAccountGateway {
             .collect()
     }
 
+    /// Probe only: revoke the sole operator's grant through live custody,
+    /// with no reconnect.
+    pub(crate) async fn revoke_operator_grant_for_probe(&self) {
+        self._custody
+            .handle
+            .invalidate(&operator_key())
+            .await
+            .expect("the seeded grant must revoke through real custody");
+    }
+
     /// Answer the next non-`tools/list` request with `result`.
     pub(crate) fn answer_next(&self, result: serde_json::Value) {
         self.dispatches.script(&[Answer::Result(result)]);
