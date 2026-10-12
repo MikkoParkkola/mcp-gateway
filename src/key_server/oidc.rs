@@ -273,6 +273,12 @@ impl OidcVerifier {
         self.jwks_cache.discovery.get(issuer).map(|d| d.ttl)
     }
 
+    /// The lifetime of cached `JWKS`.
+    #[must_use]
+    pub(crate) fn jwks_ttl(&self) -> std::time::Duration {
+        self.jwks_cache.ttl
+    }
+
     /// Lapse the issuer's recorded discovery entry now, as if its lifetime
     /// had passed; tests use it instead of sleeping out a real window.
     #[cfg(test)]
@@ -646,3 +652,7 @@ mod tests;
 #[cfg(test)]
 #[path = "oidc_fallback_tests.rs"]
 mod fallback_tests;
+
+#[cfg(test)]
+#[path = "oidc_jwks_cooldown_tests.rs"]
+mod cooldown_tests;

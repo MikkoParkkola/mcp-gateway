@@ -5,6 +5,7 @@
 //! `{issuer}/.well-known/jwks.json` when a derived discovery URL cannot be
 //! reached (MIK-8044). Split from `oidc.rs` for size; no behaviour of its own.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
@@ -36,6 +37,9 @@ impl CachedJwks {
 /// Only the fields needed to locate and trust the signing keys are parsed.
 /// How long a fallback JWKS URI stands before discovery is tried again.
 const FALLBACK_TTL: Duration = Duration::from_secs(300);
+
+/// How long one forced refresh stands before another is tried.
+const FORCED_COOLDOWN: Duration = Duration::from_secs(30);
 
 /// Why discovery gave no JWKS URI: it could not be reached (the derived URL
 /// may fall back), or it answered with a document that is refused.
@@ -81,6 +85,12 @@ pub struct JwksCache {
     pub(super) ttl: Duration,
     /// Cap on how long a fallback JWKS URI stands (MIK-8044).
     pub(super) fallback_ttl: Duration,
+    /// How long one forced refresh stands before another is tried.
+    pub(super) forced_cooldown: Duration,
+    /// The last forced attempt per issuer, success or failure.
+    forced_at: DashMap<String, Instant>,
+    /// One fetch at a time per issuer for forced refreshes.
+    force_locks: DashMap<String, Arc<tokio::sync::Mutex<()>>>,
 }
 
 impl JwksCache {
@@ -120,6 +130,9 @@ impl JwksCache {
             loopback: built(loopback.build()),
             ttl: Duration::from_secs(3600),
             fallback_ttl: FALLBACK_TTL,
+            forced_cooldown: FORCED_COOLDOWN,
+            forced_at: DashMap::new(),
+            force_locks: DashMap::new(),
         }
     }
 
@@ -153,6 +166,9 @@ impl JwksCache {
             http: Some(http),
             ttl: Duration::from_secs(3600),
             fallback_ttl: FALLBACK_TTL,
+            forced_cooldown: FORCED_COOLDOWN,
+            forced_at: DashMap::new(),
+            force_locks: DashMap::new(),
         }
     }
 
@@ -279,6 +295,43 @@ impl JwksCache {
         }
     }
 
+    // A forced refresh inside the cooldown serves the cached keys.
+    fn forced_hit(&self, issuer: &str, jwks_uri: &str) -> Option<JwkSet> {
+        let last = self.forced_at.get(issuer)?;
+        if last.elapsed() >= self.forced_cooldown {
+            return None;
+        }
+        let cached = self.inner.get(issuer)?;
+        if cached.source != jwks_uri {
+            return None;
+        }
+        Some(cached.keys.clone())
+    }
+
+    fn force_lock(&self, issuer: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let slot = self
+            .force_locks
+            .entry(issuer.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())));
+        Arc::clone(&slot)
+    }
+
+    async fn fetch_store(&self, issuer: &str, jwks_uri: &str) -> Result<JwkSet, OidcError> {
+        let client = self.client_for(jwks_uri)?;
+        debug!(issuer = %issuer, "Fetching JWKS from {jwks_uri}");
+        let jwks: JwkSet = client.get(jwks_uri).send().await?.json().await?;
+        self.inner.insert(
+            issuer.to_string(),
+            CachedJwks {
+                keys: jwks.clone(),
+                source: jwks_uri.to_string(),
+                fetched_at: Instant::now(),
+                ttl: self.ttl,
+            },
+        );
+        Ok(jwks)
+    }
+
     pub async fn get_or_fetch(
         &self,
         issuer: &str,
@@ -292,22 +345,20 @@ impl JwksCache {
         {
             return Ok(cached.keys.clone());
         }
-
-        let client = self.client_for(jwks_uri)?;
-        debug!(issuer = %issuer, "Fetching JWKS from {jwks_uri}");
-        let jwks: JwkSet = client.get(jwks_uri).send().await?.json().await?;
-
-        self.inner.insert(
-            issuer.to_string(),
-            CachedJwks {
-                keys: jwks.clone(),
-                source: jwks_uri.to_string(),
-                fetched_at: Instant::now(),
-                ttl: self.ttl,
-            },
-        );
-
-        Ok(jwks)
+        if force_refresh {
+            if let Some(keys) = self.forced_hit(issuer, jwks_uri) {
+                return Ok(keys);
+            }
+            let lock = self.force_lock(issuer);
+            let _guard = lock.lock().await;
+            if let Some(keys) = self.forced_hit(issuer, jwks_uri) {
+                return Ok(keys);
+            }
+            let fetched = self.fetch_store(issuer, jwks_uri).await;
+            self.forced_at.insert(issuer.to_string(), Instant::now());
+            return fetched;
+        }
+        self.fetch_store(issuer, jwks_uri).await
     }
 }
 

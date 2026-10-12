@@ -59,6 +59,7 @@ impl Intake<'_> {
             cert_not_after: facts.cert_not_after,
             cf_assertion: facts.cf_assertion.clone(),
             proxy_peer: facts.proxy_peer,
+            cf_grace: Default::default(),
         }
     }
 }

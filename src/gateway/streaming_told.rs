@@ -165,6 +165,39 @@ impl std::fmt::Display for Redacted {
     }
 }
 
+/// How many transient Cloudflare failures a stream survives.
+const CF_MAX_TRANSIENT: u32 = 3;
+
+/// Per-stream Cloudflare grace: transient failures stay this decision.
+#[derive(Debug, Default)]
+pub(crate) struct CfGrace {
+    consecutive: u32,
+    last_good: Option<u64>,
+}
+
+/// What a Cloudflare re-verification means for the stream.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum CfVerdict {
+    Good,
+    Transient,
+    Dead,
+}
+
+// `Ok` is `Good`; unreachable-provider errors are `Transient`; the rest is `Dead`.
+pub(super) fn cf_verdict(
+    result: Result<crate::key_server::oidc::VerifiedIdentity, crate::key_server::oidc::OidcError>,
+) -> CfVerdict {
+    match result {
+        Ok(_) => CfVerdict::Good,
+        Err(
+            crate::key_server::oidc::OidcError::HttpError(_)
+            | crate::key_server::oidc::OidcError::DiscoveryStatus(_)
+            | crate::key_server::oidc::OidcError::ClientUnavailable,
+        ) => CfVerdict::Transient,
+        Err(_) => CfVerdict::Dead,
+    }
+}
+
 /// The identities and request surface a stream was opened under, besides its
 /// credential: part of what its caller is shown, so the judge builds the scope
 /// a POST of that caller would (MIK-8350 D11, D16). Owned by the stream.
@@ -186,9 +219,12 @@ pub(crate) struct ViewSubject {
     pub(crate) cert_not_after: Option<u64>,
     /// The raw Cloudflare Access assertion, when that is the identity source;
     /// re-verified per decision by MIK-8377 and dropped with the stream.
+    /// Kept raw for the stream's life: re-verifying needs the token itself.
     pub(crate) cf_assertion: Option<Redacted>,
     /// The trusted proxy's peer address, when that is the identity source.
     pub(crate) proxy_peer: Option<std::net::SocketAddr>,
+    /// Grace for transient Cloudflare re-verification failures.
+    pub(crate) cf_grace: Arc<parking_lot::Mutex<CfGrace>>,
 }
 
 impl std::fmt::Debug for ViewSubject {
@@ -231,11 +267,37 @@ impl ViewSubject {
         let age = crate::config::KeyServerOidcConfig {
             token_age: crate::key_server::TokenAgeCap::ExpOnly,
         };
-        verifier
-            .verify(assertion.expose(), &age)
-            .await
-            .map(drop)
-            .map_err(|_| DeadReason::Cf)
+        let outcome = verifier.verify(assertion.expose(), &age).await;
+        match cf_verdict(outcome) {
+            CfVerdict::Good => {
+                let mut grace = self.cf_grace.lock();
+                grace.consecutive = 0;
+                if let Ok(now) = crate::clock::unix_secs() {
+                    grace.last_good = Some(now);
+                }
+                Ok(())
+            }
+            CfVerdict::Dead => Err(DeadReason::Cf),
+            CfVerdict::Transient => {
+                let Ok(now) = crate::clock::unix_secs() else {
+                    return Err(DeadReason::Cf);
+                };
+                let mut grace = self.cf_grace.lock();
+                if grace.last_good.is_none() {
+                    grace.last_good = Some(now);
+                }
+                grace.consecutive = grace.consecutive.saturating_add(1);
+                if grace.consecutive >= CF_MAX_TRANSIENT {
+                    return Err(DeadReason::Cf);
+                }
+                let ttl = verifier.jwks_ttl().as_secs();
+                let since = grace.last_good.map_or(0, |last| now.saturating_sub(last));
+                if since > ttl {
+                    return Err(DeadReason::Cf);
+                }
+                Ok(())
+            }
+        }
     }
 
     /// Whether the identity the stream was admitted under is still good, or
