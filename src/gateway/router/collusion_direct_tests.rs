@@ -84,7 +84,12 @@ impl Transport for Alpha {
         if method == "tools/list" {
             let tools: Vec<Value> = ["read", "send"]
                 .iter()
-                .map(|n| json!({"name": n, "description": "A tool.", "inputSchema": {"type": "object"}}))
+                // MIK-8393: `read` declares itself read-only, which is what
+                // lets the meta cache cases below get a hit.
+                .map(|n| {
+                    json!({"name": n, "description": "A tool.", "inputSchema": {"type": "object"},
+                        "annotations": {"readOnlyHint": *n == "read"}})
+                })
                 .collect();
             return Ok(JsonRpcResponse::success(id, json!({ "tools": tools })));
         }

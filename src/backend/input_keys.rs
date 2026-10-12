@@ -295,6 +295,7 @@ impl Backend {
             &mut parsed,
         );
         let safe = prepared.resend_permitted;
+        let read_only = prepared.read_only_declared;
         let mut verdicts = prepared.verdicts;
         verdicts.add_unparseable(unparseable);
         let withheld = verdicts.withheld_names();
@@ -303,6 +304,11 @@ impl Backend {
         // own catalogue the page is (a blocked name is per backend).
         let credentialed_shared = matches!(key, PoolKey::Shared) && sent_caller_credential;
         if credentialed_shared || listing == super::descriptor_gate::Listing::Truncated {
+            self.revoke_read_only_from_page(
+                &key,
+                parsed.iter().map(|t| t.name.as_str()),
+                &read_only,
+            );
             let source = match &key {
                 PoolKey::PerUser { binding } => binding.as_str(),
                 PoolKey::Shared => identity_key.unwrap_or("credentialed"),
@@ -334,6 +340,12 @@ impl Backend {
                 .resend_permitted
                 .write()
                 .retain(|tool| safe.contains(tool));
+            // MIK-8393: narrowed the same way, so a tool this listing no
+            // longer declares read-only leaves the cache's admission set now.
+            entry
+                .read_only_declared
+                .write()
+                .retain(|tool| read_only.contains(tool));
         });
         withheld
     }
@@ -539,5 +551,38 @@ mod tests {
         backend.remember_listed_tools(None, false, &listed);
         let expected = std::collections::HashSet::from(["kept".to_owned()]);
         assert_eq!(*entry.resend_permitted.read(), expected);
+    }
+
+    /// MIK-8393 R8: the cache's read-only set narrows the same way. `dropped`
+    /// is relisted as an idempotent write, which keeps its resend permission
+    /// but must leave the cache's; `new` is not granted by a direct list.
+    #[tokio::test]
+    async fn a_direct_list_revokes_but_never_grants_cache_admission() {
+        let backend = Backend::new(
+            "edits",
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            Duration::from_secs(60),
+        );
+        backend.set_read_only_declared_for_test(&["kept", "dropped"]);
+        let tool = |name: &str, read_only: bool| {
+            json!({"name": name, "inputSchema": {"type": "object"},
+                "annotations": {"readOnlyHint": read_only, "idempotentHint": true}})
+        };
+        let listed = [
+            tool("kept", true),
+            tool("dropped", false),
+            tool("new", true),
+        ];
+        backend.remember_listed_tools(None, false, &listed);
+        assert!(backend.is_read_only_for(None, "kept"));
+        assert!(
+            !backend.is_read_only_for(None, "dropped"),
+            "a tool relisted as a write kept its cache admission"
+        );
+        assert!(
+            !backend.is_read_only_for(None, "new"),
+            "a direct list granted cache admission"
+        );
     }
 }

@@ -76,6 +76,9 @@ fn counting_backend(
         calls: Arc::clone(&calls),
     });
     backend.set_transport_for_test(transport);
+    // MIK-8393: only a declared read is cached; this fixture's subject is
+    // the cache's keying, so `search` is declared read-only here.
+    backend.set_read_only_declared_for_test(&["search"]);
     (backend, calls)
 }
 

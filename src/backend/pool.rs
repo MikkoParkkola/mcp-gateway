@@ -115,6 +115,16 @@ pub(crate) struct PooledEntry {
     /// be resent (ADR-012 A1). Absent means deny, so an unfilled slot denies
     /// every resend, which is the safe direction.
     pub(crate) resend_permitted: RwLock<std::collections::HashSet<String>>,
+    /// Tools this slot's upstream declared `readOnlyHint: true`, as of its
+    /// last `tools/list` (MIK-8393, from #3773).
+    ///
+    /// Membership is the only thing that lets the response cache serve a
+    /// stored result in place of a call, or store one. Narrower than
+    /// `resend_permitted` on purpose: a retry re-executes, so idempotence is
+    /// enough for it; a cache hit does not run at all, so it needs a call with
+    /// no effect to lose. Per slot for the same reason as that set, and absent
+    /// means deny: an unfilled slot caches nothing.
+    pub(crate) read_only_declared: RwLock<std::collections::HashSet<String>>,
     /// Set when the last drain (MIK 7570 PAGING.1) stopped before the
     /// catalogue was exhausted (page cap, repeated cursor, or the fill
     /// budget); cleared by the next complete fill. Tools and resources only.
@@ -227,6 +237,7 @@ impl PooledEntry {
             era: Arc::new(crate::protocol::era::EraCache::for_slot(name, "shared")),
             tools_cache: CachedMetadata::new(),
             resend_permitted: RwLock::default(),
+            read_only_declared: RwLock::default(),
             tools_truncated: AtomicBool::new(false),
             resources_truncated: AtomicBool::new(false),
             tools_fill_failed_at: parking_lot::Mutex::new(None),

@@ -69,6 +69,8 @@ async fn projecting_executor() -> (CapabilityExecutor, crate::capability::Capabi
         r"
 name: tenant_rows
 description: Shared cacheable rows with a projecting transform
+metadata:
+  read_only: true
 cache:
   ttl: 60
   strategy: memory
