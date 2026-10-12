@@ -245,6 +245,8 @@ def test_g6_the_guide_holds_every_non_keep_id_once() -> None:
     errs = su.coverage_errors(rows(), dropped)
     assert any("`a.gone`" in e and "missing" in e for e in errs), errs
     assert any("`a.elsewhere`" in e for e in errs), errs
+    rev = GUIDE + "\n" + su.END + "\n" + block() + su.START + "\n"
+    assert su.coverage_errors(rows(), rev) == [], "reversed markers are appendix_errors' to report"
     doubled = su.write(GUIDE, block() + "| `a.auto` | derived | x | y |\n")
     errs = su.coverage_errors(rows(), doubled)
     assert any("`a.auto`" in e and "2 times" in e for e in errs), errs
@@ -276,6 +278,9 @@ def test_p7_the_no_item_escape_needs_a_reason_and_no_citation() -> None:
     assert any("`a.same`" in e and "reason" in e for e in errs), errs
     both = INV.replace("hidden key; see upgrading.d/9-1.md", "no UPGRADING item: same; see upgrading.d/9-1.md")
     errs = su.citation_errors(rows(both), GUIDE, FRAGS)
+    assert any("`a.auto`" in e and "both" in e for e in errs), errs
+    numbered = INV.replace("hidden key; see upgrading.d/9-1.md", "no UPGRADING item: same; see UPGRADING 1")
+    errs = su.citation_errors(rows(numbered), GUIDE, FRAGS)
     assert any("`a.auto`" in e and "both" in e for e in errs), errs
 
 

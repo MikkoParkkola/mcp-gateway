@@ -142,12 +142,12 @@ def appendix_errors(guide: str, block: str) -> list[str]:
 
 def coverage_errors(rows: list, guide: str) -> list[str]:
     """The guide's appendix names every non-KEEP id exactly once and nothing else."""
-    if guide.count(START) != 1 or guide.count(END) != 1:
+    if guide.count(START) != 1 or guide.count(END) != 1 or guide.index(START) > guide.index(END):
         return []  # appendix_errors reports the markers
     listed = Counter(item_ids(guide.split(START, 1)[1].split(END, 1)[0]))
     want = Counter(r.id for r in rows if r.cls in WORD)
     errors = [f"`{i}` is missing from the surface appendix" for i in sorted(want - listed)]
-    errors += [f"`{i}` is in the surface appendix but is no non-KEEP row" for i in sorted(set(listed) - set(want))]
+    errors += [f"`{i}` is in the surface appendix but matches no non-KEEP row" for i in sorted(set(listed) - set(want))]
     errors += [f"`{i}` appears {n} times in the surface appendix" for i, n in sorted(listed.items()) if i in want and n > want[i]]
     return errors
 
