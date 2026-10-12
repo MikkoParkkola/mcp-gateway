@@ -789,3 +789,6 @@ mod worker_tests;
 #[path = "worker_clock_settle_tests.rs"]
 mod worker_clock_settle_tests;
 
+#[cfg(test)]
+#[path = "worker_clock_settle_compile_red_tests.rs"]
+mod worker_clock_settle_compile_red_tests;

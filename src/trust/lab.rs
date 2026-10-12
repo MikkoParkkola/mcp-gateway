@@ -442,3 +442,5 @@ impl Default for CatalogTrustLab {
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod lab_clock_compile_red_tests;
