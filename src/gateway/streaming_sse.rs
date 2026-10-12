@@ -82,6 +82,11 @@ pub fn create_sse_response(
                         }
                         continue;
                     }
+                    // MIK-8350 B2': what the listener was last told advances only
+                    // here, once the frame has passed every write gate.
+                    if let Some(commit) = &item.commit {
+                        commit.apply();
+                    }
                     if let Some(watch) = &item.watch {
                         watch.report(true);
                     }
@@ -245,6 +250,9 @@ pub(crate) fn subscription_stream(
     use crate::gateway::subscription_registry::delivers;
 
     let stream = stream! {
+        // MIK-8350: what this listener is shown now, taken before anything is
+        // written, so the first change after attach is judged against it.
+        listener.take_baseline().await;
         // The acknowledgement rides the stream it opens, so a client has one
         // thing to read rather than a body and then a stream.
         // Annotated because this function erases the stream into a
@@ -285,6 +293,16 @@ pub(crate) fn subscription_stream(
                             break;
                         }
                     }
+                    // MIK-8350: a `tools/list_changed` is owed only to a listener
+                    // whose own view of that backend moved since it was told.
+                    let owed = match listener.view_verdict(&published).await {
+                        crate::gateway::subscription_registry::ViewVerdict::Quiet => continue,
+                        crate::gateway::subscription_registry::ViewVerdict::Owed {
+                            backend,
+                            fingerprint,
+                        } => Some((backend, fingerprint)),
+                        crate::gateway::subscription_registry::ViewVerdict::NotAView => None,
+                    };
                     // A task notification is built for THIS reader at delivery
                     // (full state, re-authorized); every other kind is the
                     // published value, tagged.
@@ -353,6 +371,9 @@ pub(crate) fn subscription_stream(
                         crate::gateway::meta_mcp::sealed_hold::hand_off(holds);
                     }
                     yield Ok(Event::default().event("message").data(data));
+                    if let Some((backend, fingerprint)) = owed {
+                        listener.commit_told(backend, fingerprint);
+                    }
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
                 Err(broadcast::error::RecvError::Lagged(missed)) => {

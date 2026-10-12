@@ -249,6 +249,19 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
     ) -> JsonRpcResponse {
         self.shadow_tools_list_assembly(session_id, false);
+        self.served_tools_list(id, session_id, scope)
+    }
+
+    /// The `tools/list` result this caller is served, without the shadow
+    /// telemetry the serve path emits. The one builder behind the served list
+    /// and behind the per-listener fingerprint (MIK-8350 D5), so the two can
+    /// never disagree about what a caller is shown.
+    pub(crate) fn served_tools_list(
+        &self,
+        id: RequestId,
+        session_id: Option<&str>,
+        scope: InvokeScope<'_>,
+    ) -> JsonRpcResponse {
         let standing = CallerStanding::from(scope);
         let tools = self.meta_tools_for(standing, self.admitted_counts(scope, session_id));
         let mut tool_descriptors =

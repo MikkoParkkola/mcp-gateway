@@ -602,8 +602,9 @@ impl World {
     }
 
     /// A legacy GET session held by `bearer`, as the MCP handler opens one.
-    pub(super) fn legacy(&self, id: &str, bearer: &str) -> Ear {
+    pub(super) async fn legacy(&self, id: &str, bearer: &str) -> Ear {
         self.legacy_with(id, &[("authorization", format!("Bearer {bearer}"))])
+            .await
     }
 
     /// Resume legacy session `id` under a new bearer, as a re-keyed request does.
@@ -648,12 +649,13 @@ impl World {
             self.state
                 .multiplexer
                 .get_or_create_session_scoped(Some(id), &owner, held);
+        self.state.multiplexer.take_baseline(&minted).await;
         self.minted.borrow_mut().insert(id.to_string(), minted);
         Ear::Legacy(rx)
     }
 
     /// A legacy GET session opened with exactly these request headers.
-    pub(super) fn legacy_with(&self, id: &str, presented: &[(&str, String)]) -> Ear {
+    pub(super) async fn legacy_with(&self, id: &str, presented: &[(&str, String)]) -> Ear {
         let mut headers = axum::http::HeaderMap::new();
         for (name, value) in presented {
             headers.insert(
@@ -667,6 +669,8 @@ impl World {
             self.state
                 .multiplexer
                 .get_or_create_session_scoped(Some(id), &owner, held);
+        // As the GET handler does when a stream attaches (MIK-8350).
+        self.state.multiplexer.take_baseline(&minted).await;
         self.minted.borrow_mut().insert(id.to_string(), minted);
         Ear::Legacy(rx)
     }

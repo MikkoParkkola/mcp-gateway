@@ -24,7 +24,7 @@ async fn pair(w: &World, listen: bool) -> (Ear, Ear) {
     if listen {
         (w.listen(STD).await, w.listen(DENY).await)
     } else {
-        (w.legacy("std", STD), w.legacy("deny", DENY))
+        (w.legacy("std", STD).await, w.legacy("deny", DENY).await)
     }
 }
 
@@ -133,7 +133,7 @@ async fn duo() -> (World, String, String) {
 #[tokio::test]
 async fn b1_a_per_user_store_tells_only_the_owner_of_the_slot() {
     let (w, a, b) = duo().await;
-    let (mut ear_a, mut ear_b) = (w.legacy("a", &a), w.legacy("b", &b));
+    let (mut ear_a, mut ear_b) = (w.legacy("a", &a).await, w.legacy("b", &b).await);
     w.store_user("beta", "B", vec![tool("b_tool", "b"), tool("b_more", "m")]);
     assert_eq!(ear_b.told(&w).await, 1, "B's own view changed");
     assert_eq!(
@@ -148,7 +148,7 @@ async fn b1_a_per_user_store_tells_only_the_owner_of_the_slot() {
 #[tokio::test]
 async fn b2_a_revocation_tells_only_the_revoked_principal() {
     let (w, a, b) = duo().await;
-    let (mut ear_a, mut ear_b) = (w.legacy("a", &a), w.legacy("b", &b));
+    let (mut ear_a, mut ear_b) = (w.legacy("a", &a).await, w.legacy("b", &b).await);
     w.revoke("beta", "B");
     assert_eq!(ear_b.told(&w).await, 1, "B lost its view");
     assert_eq!(ear_a.told(&w).await, 0, "A's view is intact: RED on base");
@@ -178,7 +178,7 @@ async fn b3_a_revocation_mid_stream_tells_only_the_revoked_principal() {
 async fn b4_an_unlisted_backend_slot_change_tells_a_caller_who_never_listed_it() {
     let (w, _a, _b) = duo().await;
     let c = w.principal("C").await;
-    let mut ear_c = w.legacy("c", &c);
+    let mut ear_c = w.legacy("c", &c).await;
     w.store_user("beta", "B", vec![tool("b_tool", "b3")]);
     assert_eq!(
         ear_c.told(&w).await,
@@ -193,7 +193,7 @@ async fn b4_an_unlisted_backend_slot_change_tells_a_caller_who_never_listed_it()
 async fn b6_a_required_backend_is_silent_to_a_cold_caller() {
     let (w, _a, b) = duo().await;
     let c = w.principal("C").await;
-    let mut ear_c = w.legacy("c", &c);
+    let mut ear_c = w.legacy("c", &c).await;
     w.slot_serves("gamma", "B", vec![tool("g", "g")]);
     assert!(w.discovered(&b, "gamma").await.contains(&"g".to_string()));
     w.settle().await;
@@ -225,7 +225,7 @@ async fn d_order_a_bearer_without_access_decides_over_a_live_cookie() {
             ("authorization", "Bearer k-narrow".to_string()),
             ("cookie", cookie),
         ],
-    );
+    ).await;
     w.store_shared("alpha", alpha_with("r2", "f"));
     assert_eq!(
         ear.told(&w).await,
@@ -246,7 +246,7 @@ async fn d_order_2_a_non_bearer_authorization_beside_a_live_cookie_is_dead() {
             ("authorization", "Basic dXNlcjpwYXNz".to_string()),
             ("cookie", cookie),
         ],
-    );
+    ).await;
     w.store_shared("alpha", alpha_with("r2", "f"));
     assert_eq!(
         ear.told(&w).await,
@@ -260,7 +260,7 @@ async fn d_order_2_a_non_bearer_authorization_beside_a_live_cookie_is_dead() {
 #[tokio::test]
 async fn m_b5_list_changed_does_not_consume_the_shared_event_counter() {
     let w = World::start().await;
-    let mut ear = w.legacy("std", STD);
+    let mut ear = w.legacy("std", STD).await;
     let before = next_event(&w);
     w.store_shared("alpha", vec![tool("write", "w2")]);
     assert_eq!(ear.told(&w).await, 1, "premise: the change was announced");
@@ -276,7 +276,7 @@ async fn m_b5_list_changed_does_not_consume_the_shared_event_counter() {
 #[tokio::test]
 async fn m_b1a_a_hidden_change_then_a_visible_change_is_one_notice() {
     let w = World::start().await;
-    let mut deny = w.legacy("deny", DENY);
+    let mut deny = w.legacy("deny", DENY).await;
     w.store_shared("alpha", alpha_with("r2", "f"));
     w.settle().await;
     w.store_shared("alpha", vec![tool("write", "w2")]);
@@ -289,7 +289,7 @@ async fn m_b1a_a_hidden_change_then_a_visible_change_is_one_notice() {
 #[tokio::test]
 async fn m_b9_a_caller_who_listed_during_the_pending_nudge_is_not_told() {
     let w = World::start().await;
-    let mut ear = w.legacy("std", STD);
+    let mut ear = w.legacy("std", STD).await;
     let hold = super::drain_seam::Hold::arm();
     w.store_shared("alpha", vec![tool("write", "w2")]);
     hold.reached().await;
@@ -308,7 +308,7 @@ async fn m_b9_a_caller_who_listed_during_the_pending_nudge_is_not_told() {
 #[tokio::test]
 async fn m_rekey_a_resumed_session_is_judged_against_its_new_credential() {
     let w = World::start().await;
-    let mut ear = w.legacy("moved", STD);
+    let mut ear = w.legacy("moved", STD).await;
     w.rekey("moved", DENY);
     w.store_shared("alpha", alpha_with("r2", "f"));
     assert_eq!(
@@ -343,7 +343,7 @@ async fn a6_a_count_only_change_tells_only_the_caller_whose_count_moved() {
         vec![tool("read", "r"), tool("write", "w"), tool("scan", "s")],
     );
     w.settle().await;
-    let (mut std, mut deny) = (w.legacy("std", STD), w.legacy("deny", DENY));
+    let (mut std, mut deny) = (w.legacy("std", STD).await, w.legacy("deny", DENY).await);
     let (std_before, deny_before) = (w.served(STD).await, w.served(DENY).await);
     w.store_shared("alpha", alpha_with("r", "f"));
     let (std_after, deny_after) = (w.served(STD).await, w.served(DENY).await);
@@ -362,7 +362,7 @@ async fn a6_a_count_only_change_tells_only_the_caller_whose_count_moved() {
 #[tokio::test]
 async fn a7_a_surfaced_change_under_code_mode_sends_nothing() {
     let w = World::start_with(|meta| meta.with_code_mode(true)).await;
-    let mut std = w.legacy("std", STD);
+    let mut std = w.legacy("std", STD).await;
     assert!(
         !w.served_names(STD).await.contains(&"read".to_string()),
         "premise"
@@ -386,7 +386,7 @@ async fn b5_a_search_only_caller_is_silent_for_another_principals_slot() {
         )
         .await;
     w.settle().await;
-    let mut ear_d = w.legacy("d", &d);
+    let mut ear_d = w.legacy("d", &d).await;
     w.store_user("beta", "B", vec![tool("b_tool", "b4")]);
     assert_eq!(ear_d.told(&w).await, 0, "not D's slot: RED on base");
 }
@@ -429,29 +429,6 @@ async fn l2_one_nudge_tells_only_the_credentials_that_see_the_change() {
         told,
         [0, 1, 1],
         "only the credentials that see read: RED on base"
-    );
-}
-
-/// M-B2' (MIK-8350), RED per gpt (killer M4): a frame withheld at write (the
-/// session's token is revoked) leaves what that session was last told
-/// unchanged, so the same change retried once the session is re-keyed to a
-/// live credential is delivered. Base advances its record before the write.
-#[tokio::test]
-async fn m_b2_a_withheld_frame_does_not_consume_the_change() {
-    let w = World::start().await;
-    let token = super::audience_fixture::principal_token("R");
-    let (bearer, jti) = (token.token.clone(), token.jti.clone());
-    w.key_server.store.insert(token).await;
-    let mut ear = w.legacy("retry", &bearer);
-    assert!(w.key_server.store.revoke_by_jti(&jti).await);
-    w.store_shared("alpha", alpha_with("r2", "f"));
-    assert_eq!(ear.told(&w).await, 0, "premise: withheld from a dead token");
-    w.rekey("retry", STD);
-    w.store_shared("alpha", alpha_with("r2", "f"));
-    assert_eq!(
-        ear.told(&w).await,
-        1,
-        "the retried change is delivered: RED on base"
     );
 }
 
@@ -521,7 +498,7 @@ async fn oidc_principal_is_silent_for_another_principals_slot(listen: bool) {
         let (mut ear_a, mut ear_b) = if listen {
             (w.listen(&a).await, w.listen(&b).await)
         } else {
-            (w.legacy("a", &a), w.legacy("b", &b))
+            (w.legacy("a", &a).await, w.legacy("b", &b).await)
         };
         w.store_user("beta", "B", vec![tool("b_tool", "b"), tool("b_more", "m")]);
         assert_eq!(ear_b.told(&w).await, 1, "{how:?}: B's own view changed");

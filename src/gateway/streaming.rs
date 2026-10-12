@@ -65,6 +65,72 @@ pub struct SessionFrame {
     watch: Option<Arc<DeliveryWatch>>,
     /// Who the copy is for, judged again when the stream writes it (G6).
     audience: CopyAudience,
+    /// A `tools/list_changed` hint's record of what its listener was told,
+    /// applied only once the stream writes the frame (MIK-8350 B2').
+    commit: Option<Arc<ToldCommit>>,
+}
+
+/// What a session was last told of one backend: the fingerprint of what the
+/// session is shown of it, and a generation a refresh bumps, so a stale commit
+/// is dropped (MIK-8350 B11).
+#[derive(Debug, Clone)]
+struct Told {
+    fingerprint: String,
+    generation: u64,
+}
+
+/// The write-time record of a delivered `tools/list_changed`: a
+/// compare-and-set against the generation its fingerprint was read under.
+#[derive(Debug)]
+pub(crate) struct ToldCommit {
+    session: Arc<ClientSession>,
+    backend: String,
+    fingerprint: String,
+    generation: u64,
+}
+
+impl ToldCommit {
+    /// Record the fingerprint as told, unless a refresh moved the generation.
+    pub(crate) fn apply(&self) {
+        let mut told = self.session.told.write();
+        match told.get_mut(&self.backend) {
+            Some(entry) if entry.generation != self.generation => {}
+            Some(entry) => entry.fingerprint.clone_from(&self.fingerprint),
+            None => {
+                told.insert(
+                    self.backend.clone(),
+                    Told {
+                        fingerprint: self.fingerprint.clone(),
+                        generation: self.generation,
+                    },
+                );
+            }
+        }
+    }
+}
+
+/// Decides what a listener is shown, for the per-listener `list_changed`
+/// filter (MIK-8350). Installed by the router, which owns the visibility
+/// state the multiplexer does not.
+pub(crate) trait ViewJudge: Send + Sync {
+    /// The fingerprint of what `credential` is shown of `backend` now, or
+    /// `None` when the credential no longer resolves to a caller.
+    fn fingerprint<'a>(
+        &'a self,
+        auth: &'a AuthState,
+        credential: Option<&'a HeldCredential>,
+        session_id: &'a str,
+        backend: &'a str,
+    ) -> futures::future::BoxFuture<'a, Option<String>>;
+
+    /// Every backend's fingerprint for `credential`, taken when a stream opens
+    /// so the first change after attach is judged against what it saw.
+    fn baseline<'a>(
+        &'a self,
+        auth: &'a AuthState,
+        credential: Option<&'a HeldCredential>,
+        session_id: &'a str,
+    ) -> futures::future::BoxFuture<'a, HashMap<String, String>>;
 }
 
 /// How a server-to-client request's queued copies fared on their streams
@@ -157,6 +223,12 @@ impl SessionFrame {
     }
 }
 
+/// Whether `notification` is the `tools/list_changed` hint.
+fn is_tools_list_changed(notification: &TaggedNotification) -> bool {
+    notification.data.get("method").and_then(Value::as_str)
+        == Some("notifications/tools/list_changed")
+}
+
 /// Client session state
 #[derive(Debug)]
 struct ClientSession {
@@ -197,9 +269,34 @@ struct ClientSession {
     /// revoked or expired token.
     // ci-allow-secret-debug: HeldCredential's own Debug prints only <redacted>
     credential: RwLock<Option<HeldCredential>>,
+    /// What this session was last told of each backend (MIK-8350). A missing
+    /// entry is a baseline, never an empty list.
+    told: RwLock<HashMap<String, Told>>,
 }
 
 impl ClientSession {
+    /// Whether `fingerprint` differs from what this session was last told of
+    /// `backend`: the generation to commit under if so. A session with no
+    /// record yet has taken no baseline, so it records this one and is owed
+    /// nothing (a new listener is never told of a change it never saw).
+    fn peek_told(&self, backend: &str, fingerprint: &str) -> Option<u64> {
+        let mut told = self.told.write();
+        match told.get(backend) {
+            None => {
+                told.insert(
+                    backend.to_owned(),
+                    Told {
+                        fingerprint: fingerprint.to_owned(),
+                        generation: 0,
+                    },
+                );
+                None
+            }
+            Some(entry) if entry.fingerprint == fingerprint => None,
+            Some(entry) => Some(entry.generation),
+        }
+    }
+
     /// The sender, opened now if nothing has needed it yet.
     fn sender(&self) -> &broadcast::Sender<SessionFrame> {
         self.tx.get_or_init(|| broadcast::channel(self.capacity).0)
@@ -263,6 +360,9 @@ pub struct NotificationMultiplexer {
     /// The cross-tenant read judge of every session stream (MIK-7116.MIN.2);
     /// unset when the verdict is off, which is the plain fast path.
     reads: std::sync::OnceLock<crate::gateway::outbound::SessionJudge>,
+    /// What each session is shown, for the per-listener `list_changed` filter
+    /// (MIK-8350); unset means every authorized session is told, as before.
+    views: std::sync::OnceLock<Arc<dyn ViewJudge>>,
     /// Test pause between a frame leaving the session queue and the write-time
     /// credential check (MIK-8350): a row revokes the credential there, so the
     /// frame is withheld at write and not at the decision.
@@ -285,6 +385,7 @@ impl NotificationMultiplexer {
             event_counter: std::sync::atomic::AtomicU64::new(1),
             authorizer: RwLock::new(None),
             reads: std::sync::OnceLock::new(),
+            views: std::sync::OnceLock::new(),
             #[cfg(test)]
             before_write_check: Arc::default(),
         }
@@ -293,6 +394,40 @@ impl NotificationMultiplexer {
     /// Install the cross-tenant read judge (once; the router does it).
     pub(crate) fn set_read_judge(&self, judge: crate::gateway::outbound::SessionJudge) {
         let _ = self.reads.set(judge);
+    }
+
+    /// Take `session_id`'s baseline: what each backend shows its credential
+    /// now, recorded as what it was last told. Called when a stream opens, so
+    /// the first change after attach is judged against what it saw.
+    pub(crate) async fn take_baseline(&self, session_id: &str) {
+        let Some(judge) = self.views.get().cloned() else {
+            return;
+        };
+        let Some(authorizer) = self.authorizer.read().clone() else {
+            return;
+        };
+        let Some(session) = self.sessions.read().get(session_id).map(Arc::clone) else {
+            return;
+        };
+        let credential = session.credential.read().clone();
+        let baseline = judge
+            .baseline(&authorizer, credential.as_ref(), session_id)
+            .await;
+        // Only what the session has no record of: a resumed or re-keyed
+        // stream keeps what it was last told, so a change withheld at write
+        // is still owed after the reopen (MIK-8350 B1, B2').
+        let mut told = session.told.write();
+        for (backend, fingerprint) in baseline {
+            told.entry(backend).or_insert(Told {
+                fingerprint,
+                generation: 0,
+            });
+        }
+    }
+
+    /// Install the per-listener view judge (once; the router does it).
+    pub(crate) fn set_view_judge(&self, judge: Arc<dyn ViewJudge>) {
+        let _ = self.views.set(judge);
     }
 
     /// Whether session streams are judged at all.
@@ -317,6 +452,7 @@ impl NotificationMultiplexer {
         hidden: Option<&crate::security::tenant_reads::ReadAttribution>,
         watch: Option<Arc<DeliveryWatch>>,
         audience: CopyAudience,
+        commit: Option<Arc<ToldCommit>>,
     ) -> std::result::Result<usize, Unsent> {
         // No open stream: nothing to deliver, so nothing to judge, and nothing
         // is sent either, so a stream that subscribes meanwhile cannot get an
@@ -338,6 +474,7 @@ impl NotificationMultiplexer {
             mark,
             watch: watch.clone(),
             audience,
+            commit,
         })?;
         if let Some(watch) = watch {
             watch.sent(copies);
@@ -502,6 +639,7 @@ impl NotificationMultiplexer {
             last_active: RwLock::new(Instant::now()),
             owner,
             credential: RwLock::new(None),
+            told: RwLock::new(HashMap::new()),
         });
         sessions.insert(id, Arc::clone(&session));
         session
@@ -590,20 +728,50 @@ impl NotificationMultiplexer {
             .map(|s| (Arc::clone(s), s.credential.read().clone()))
             .collect();
         let audience = CopyAudience::Backend(Arc::from(backend));
+        let hint = is_tools_list_changed(notification);
         let mut reached = 0;
         for (session, credential) in targets {
             let verdict =
                 delivery(&authorizer, credential.as_ref(), Audience::Backend(backend)).await;
-            if verdict == Delivery::Deliver
-                && self
-                    .enqueue(
-                        &session,
-                        notification.clone(),
-                        hidden.as_ref(),
-                        None,
-                        audience.clone(),
+            if verdict != Delivery::Deliver {
+                continue;
+            }
+            // MIK-8350: a `tools/list_changed` is owed only to a session whose
+            // own view of `backend` moved since it was last told. The record
+            // is made when the stream writes the frame, not here.
+            let mut commit = None;
+            if hint && let Some(judge) = self.views.get() {
+                let Some(fingerprint) = judge
+                    .fingerprint(
+                        &authorizer,
+                        credential.as_ref(),
+                        session.id.expose_secret(),
+                        backend,
                     )
-                    .is_ok()
+                    .await
+                else {
+                    continue;
+                };
+                let Some(generation) = session.peek_told(backend, &fingerprint) else {
+                    continue;
+                };
+                commit = Some(Arc::new(ToldCommit {
+                    session: Arc::clone(&session),
+                    backend: backend.to_owned(),
+                    fingerprint,
+                    generation,
+                }));
+            }
+            if self
+                .enqueue(
+                    &session,
+                    notification.clone(),
+                    hidden.as_ref(),
+                    None,
+                    audience.clone(),
+                    commit,
+                )
+                .is_ok()
             {
                 reached += 1;
             }
@@ -673,7 +841,7 @@ impl NotificationMultiplexer {
         }
         let sessions = self.sessions.read();
         if let Some(session) = sessions.get(session_id) {
-            match self.enqueue(session, notification, None, None, CopyAudience::Any) {
+            match self.enqueue(session, notification, None, None, CopyAudience::Any, None) {
                 Ok(_) => true,
                 Err(e) => {
                     debug!(session_id = %session_fp(session_id), error = %e, "Failed to send notification");
@@ -709,6 +877,7 @@ impl NotificationMultiplexer {
             None,
             Some(Arc::clone(&watch)),
             CopyAudience::Any,
+            None,
         )
         .ok()
         .map(|_| watch)
@@ -719,7 +888,14 @@ impl NotificationMultiplexer {
     pub fn broadcast(&self, notification: TaggedNotification) {
         let sessions = self.sessions.read();
         for session in sessions.values() {
-            let _ = self.enqueue(session, notification.clone(), None, None, CopyAudience::Any);
+            let _ = self.enqueue(
+                session,
+                notification.clone(),
+                None,
+                None,
+                CopyAudience::Any,
+                None,
+            );
         }
     }
 

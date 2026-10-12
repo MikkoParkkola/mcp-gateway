@@ -96,7 +96,22 @@ pub struct Listener {
     // ci-allow-secret-debug: HeldCredential's own Debug prints only <redacted>
     credential: Option<HeldCredential>,
     authorizer: AuthState,
+    /// What each backend showed this listener when it was last told of it
+    /// (MIK-8350): a `tools/list_changed` is owed only when that moved. A
+    /// missing entry is a baseline, never an empty list.
+    told: std::collections::HashMap<String, String>,
+    views: Option<Arc<dyn crate::gateway::streaming::ViewJudge>>,
     _permit: OwnedSemaphorePermit,
+}
+
+/// What a published item means for one listener's own view (MIK-8350).
+pub(crate) enum ViewVerdict {
+    /// Not a `tools/list_changed` for a backend: delivered as before.
+    NotAView,
+    /// A hint for a backend whose view did not move for this listener.
+    Quiet,
+    /// A hint this listener is owed; the record is made once it is written.
+    Owed { backend: String, fingerprint: String },
 }
 
 impl std::fmt::Debug for Listener {
@@ -138,6 +153,55 @@ impl Listener {
         crate::gateway::auth::live::current_client(&self.authorizer, self.credential.as_ref()).await
     }
 
+    /// Record what every backend shows this listener now, as the baseline the
+    /// first change is judged against; entries it already has are kept.
+    pub(crate) async fn take_baseline(&mut self) {
+        let Some(judge) = self.views.clone() else {
+            return;
+        };
+        for (backend, fingerprint) in judge
+            .baseline(&self.authorizer, self.credential.as_ref(), "")
+            .await
+        {
+            self.told.entry(backend).or_insert(fingerprint);
+        }
+    }
+
+    /// Whether `published` is a `tools/list_changed` this listener is owed:
+    /// its own view of the backend moved since it was last told.
+    pub(crate) async fn view_verdict(&mut self, published: &Published) -> ViewVerdict {
+        let OwnedAudience::Backend(backend) = &published.audience else {
+            return ViewVerdict::NotAView;
+        };
+        let is_hint = published.notification.get("method").and_then(Value::as_str)
+            == Some("notifications/tools/list_changed");
+        let Some(judge) = self.views.clone().filter(|_| is_hint) else {
+            return ViewVerdict::NotAView;
+        };
+        let Some(fingerprint) = judge
+            .fingerprint(&self.authorizer, self.credential.as_ref(), "", backend)
+            .await
+        else {
+            return ViewVerdict::Quiet;
+        };
+        match self.told.get(backend) {
+            None => {
+                self.told.insert(backend.clone(), fingerprint);
+                ViewVerdict::Quiet
+            }
+            Some(told) if *told == fingerprint => ViewVerdict::Quiet,
+            Some(_) => ViewVerdict::Owed {
+                backend: backend.clone(),
+                fingerprint,
+            },
+        }
+    }
+
+    /// Record that the listener was told `backend` as `fingerprint`.
+    pub(crate) fn commit_told(&mut self, backend: String, fingerprint: String) {
+        self.told.insert(backend, fingerprint);
+    }
+
     /// What delivering `published` to this listener's caller should do now.
     pub(crate) async fn delivery(&self, published: &Published) -> Delivery {
         let audience = match &published.audience {
@@ -155,6 +219,8 @@ pub struct SubscriptionRegistry {
     /// The authorizer every listener is re-validated against. Required at
     /// construction, so a registry that delivers without one cannot exist.
     authorizer: AuthState,
+    /// The per-listener view judge (MIK-8350); unset tells every listener.
+    views: std::sync::OnceLock<Arc<dyn crate::gateway::streaming::ViewJudge>>,
 }
 
 impl std::fmt::Debug for SubscriptionRegistry {
@@ -175,7 +241,13 @@ impl SubscriptionRegistry {
             sender,
             permits: Arc::new(Semaphore::new(capacity)),
             authorizer,
+            views: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Install the per-listener view judge (once; the router does it).
+    pub(crate) fn set_view_judge(&self, judge: Arc<dyn crate::gateway::streaming::ViewJudge>) {
+        let _ = self.views.set(judge);
     }
 
     /// Admit a listener that presented no credential, or `None` when the
@@ -198,6 +270,8 @@ impl SubscriptionRegistry {
             receiver: self.sender.subscribe(),
             credential,
             authorizer: self.authorizer.clone(),
+            told: std::collections::HashMap::new(),
+            views: self.views.get().cloned(),
             _permit: permit,
         })
     }

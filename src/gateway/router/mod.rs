@@ -51,6 +51,7 @@ mod meta_refusal_audit;
 pub(crate) use identity::grant_subject_from_verified_identity;
 pub(crate) mod helpers;
 mod origin_guard;
+mod view_judge;
 mod watch_poll;
 pub(crate) use watch_poll::GatewayWatchHost;
 
@@ -507,8 +508,11 @@ fn unauthenticated_routes() -> Router<Arc<AppState>> {
 /// the middleware uses, so the two cannot disagree about who may see what.
 /// MIN.2: every session-stream copy is judged for its session's caller, on
 /// the same process read history the answers are judged against.
-fn bind_multiplexer(state: &AppState, auth_state: &AuthState) {
+fn bind_multiplexer(state: &Arc<AppState>, auth_state: &AuthState) {
     state.multiplexer.set_authorizer(auth_state.clone());
+    let judge = view_judge::RouterViewJudge::new(state);
+    state.multiplexer.set_view_judge(Arc::clone(&judge));
+    state.subscriptions.set_view_judge(judge);
     if let Some(judge) = crate::gateway::outbound::SessionJudge::new(
         helpers::read_guard(state),
         state.meta_mcp.rejection_audit(),
