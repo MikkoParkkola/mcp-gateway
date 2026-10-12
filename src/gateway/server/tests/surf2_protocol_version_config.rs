@@ -126,14 +126,16 @@ async fn call_through_config(extra: &str) -> Seen {
                 .expect("stdout open");
             let answer: Value = serde_json::from_str(&line).expect("one JSON frame per line");
             if answer.get("id").and_then(Value::as_i64) == Some(id) {
-                assert!(answer.get("error").is_none(), "premise: {frame} answered {answer}");
+                assert!(
+                    answer.get("error").is_none(),
+                    "premise: {frame} answered {answer}"
+                );
                 break;
             }
         }
     }
     task.abort();
-    let seen = std::mem::take(&mut *seen.lock().expect("lock"));
-    seen
+    std::mem::take(&mut *seen.lock().expect("lock"))
 }
 
 /// A pinned `protocol_version` in gateway.yaml reaches the HTTP transport:
