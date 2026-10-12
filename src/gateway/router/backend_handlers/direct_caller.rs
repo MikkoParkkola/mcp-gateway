@@ -503,8 +503,14 @@ fn sanitized(state: &AppState, name: &str, request: Value) -> Result<Value, Reje
         ProtocolRoute::Direct,
     )
     .map_err(|e| refused(None, e))?;
-    if let Some(instance) = state.meta_mcp.passthrough_instance(name) {
-        crate::gateway::meta_mcp::visible::record_exempt_instances(&[instance]);
+    let exempt = state.meta_mcp.passthrough_instance(name);
+    if let Some(instance) = &exempt {
+        crate::gateway::meta_mcp::visible::record_exempt_instances(std::slice::from_ref(instance));
+    }
+    // Intake has judged; the window a reload must not reach (MIK-8154 F2).
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::intake_judged();
+    if exempt.is_some() {
         return Ok(request);
     }
     let id = crate::protocol::mrtr::raw_request_id(&request);

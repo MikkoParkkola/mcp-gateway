@@ -67,19 +67,28 @@ impl DirectRouteGuards {
         }))
     }
 
-    /// Give back the nonce a call admitted when it is refused before its
-    /// backend runs, so a refused call consumes none (MIK-7698).
-    pub(crate) fn release_nonce(state: &AppState, admitted: Option<AdmittedNonce>) {
-        if let Some(admitted) = admitted {
-            let AdmittedNonce {
-                nonce,
-                principal,
-                stamp,
-            } = admitted;
-            state
-                .meta_mcp
-                .release_signing_nonce(&nonce, &principal, stamp);
-        }
+    /// Give an admitted nonce back when the call is refused before its
+    /// backend runs (MIK-7698), the direct route's one release: only with the
+    /// refund witness, which proves nothing before the refusal may have acted
+    /// (MIK-8379, the `/mcp` rule of MIK-8353). With no witness the nonce
+    /// stays spent.
+    pub(crate) fn release_nonce(
+        state: &AppState,
+        admitted: Option<AdmittedNonce>,
+        witness: Option<crate::gateway::meta_mcp::refund_witness::RefundWitness>,
+    ) {
+        let (Some(admitted), Some(witness)) = (admitted, witness) else {
+            return;
+        };
+        witness.spend();
+        let AdmittedNonce {
+            nonce,
+            principal,
+            stamp,
+        } = admitted;
+        state
+            .meta_mcp
+            .release_signing_nonce(&nonce, &principal, stamp);
     }
 
     /// S2 spend, once, immediately before an actual backend dispatch (after

@@ -375,14 +375,15 @@ pub(crate) mod seams {
         static AFTER_INTAKE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
     }
 
-    /// Run `hook` once, the next time `/mcp` intake on this thread has made
-    /// its sanitize decision (MIK-8154 NP3).
+    /// Run `hook` once, the next time `/mcp` or `/mcp/{name}` intake on this
+    /// thread has made its sanitize decision (MIK-8154 NP3, F2).
     #[cfg(feature = "firewall")]
     pub(crate) fn after_intake(hook: impl FnOnce() + 'static) {
         AFTER_INTAKE.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     }
 
-    /// Called where `/mcp` intake has made its sanitize decision.
+    /// Called where `/mcp` or `/mcp/{name}` intake has made its sanitize
+    /// decision.
     pub(crate) fn intake_judged() {
         if let Some(hook) = AFTER_INTAKE.with(|slot| slot.borrow_mut().take()) {
             hook();

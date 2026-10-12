@@ -7,7 +7,8 @@
 //! `Gateway::dispatch_single_staged` — the function the serve loop calls,
 //! boxed as the loop boxes it, not a duplicate validator — runs to completion
 //! on a prepared 1 MiB or 3 MiB request, its answer then settled as
-//! `dispatch_single_with_sink` settles it (MIK-8400). Runtime, gateway, backend, payload and expectations are built
+//! `dispatch_single_for_client` settles it (MIK-8400). Runtime, gateway,
+//! backend, payload and expectations are built
 //! before the scope opens; every assertion and every formatted message happens
 //! after it closes.
 //!
@@ -105,13 +106,12 @@ fn client() -> super::super::StdioClient<'static> {
 /// the stdio session id), for the unmetered calls only; the measured ones go
 /// through [`dispatch_as_served`], which runs it as the serve loop does.
 async fn dispatch(fixture: &Fixture, request: Value) -> Value {
-    super::super::Gateway::dispatch_single_with_sink(
+    super::super::Gateway::dispatch_single_for_client(
         &fixture.meta,
         &fixture.tool_policy,
         &fixture.mtls_policy,
         request,
         client(),
-        &super::super::StdioTelemetry::default(),
     )
     .await
     .expect("a request carrying an id must produce a response")
@@ -119,7 +119,7 @@ async fn dispatch(fixture: &Fixture, request: Value) -> Value {
 
 /// The dispatch as the serve loop runs it (`stdio_loop.rs`):
 /// `dispatch_single_staged` boxed whole, then its answer settled as
-/// `dispatch_single_with_sink` settles it (no frame judge in this fixture).
+/// `dispatch_single_for_client` settles it (no frame judge in this fixture).
 async fn dispatch_as_served(fixture: &Fixture, request: Value) -> Value {
     let (answer, staged) = Box::pin(super::super::Gateway::dispatch_single_staged(
         &fixture.meta,
@@ -127,7 +127,6 @@ async fn dispatch_as_served(fixture: &Fixture, request: Value) -> Value {
         &fixture.mtls_policy,
         request,
         client(),
-        &super::super::StdioTelemetry::default(),
     ))
     .await;
     let answer = answer.expect("a request carrying an id must produce a response");

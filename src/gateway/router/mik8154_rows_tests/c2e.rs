@@ -209,6 +209,27 @@ async fn r1_a_sync_call_whose_backend_is_reloaded_is_refused() {
     assert_eq!(calls(&fx), 0, "r1: the reloaded instance sent");
 }
 
+/// F2 R1d: R1 on the direct route. A `/mcp/{name}` call to the passthrough
+/// backend `alpha-pt` is judged exempt at intake, and its NUL is let through.
+/// The backend is then reloaded as non-passthrough before the send. The send
+/// is refused: the new instance is not the one judged, so the NUL reaches no
+/// backend.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn r1d_a_direct_call_whose_backend_is_reloaded_is_refused() {
+    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
+    crate::gateway::meta_mcp::visible::seams::after_intake(
+        super::super::direct_guards_fixture::reload_for_test(&fx, "alpha-pt", false),
+    );
+    let args = json!({"cmd": NUL});
+    let (_, body) = post_direct(&fx, "alpha-pt", "k-std", "read", args, None, None).await;
+    assert!(
+        body.to_string().contains(BACKEND_CHANGED),
+        "r1d: not refused as a changed backend: {body}"
+    );
+    assert_eq!(calls(&fx), 0, "r1d: the reloaded instance sent");
+}
+
 /// F2 R2: a task over the all-passthrough playbook whose backend is reloaded
 /// between submit and run, the definition unchanged (so C2e's digest still
 /// matches), settles with no step sent: each send meets an instance other
