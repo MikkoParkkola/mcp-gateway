@@ -3,6 +3,13 @@
 //! E5 sign-in and re-entry: cookie lifetime, redemption past a dead cookie,
 //! and minting a fresh link (MIK-7570.SESSION.1).
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::*;
 
 // ── Sign-in and re-entry ───────────────────────────────────────────────

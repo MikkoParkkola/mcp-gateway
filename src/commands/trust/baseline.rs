@@ -7,7 +7,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use chrono::Utc;
 use mcp_gateway::trust::{TrustCard, lab::TrustLabBaseline};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -74,6 +73,9 @@ pub(super) async fn write_lab_registry_baseline(
     baseline_id: &str,
     cards: &[TrustCard],
 ) -> Result<PathBuf, String> {
+    // Read before any write (MIK-8202 P4a): a clock before 1970 leaves both
+    // the baseline file and the manifest as they were.
+    let updated_at = crate::commands::clock_now()?.to_rfc3339();
     let baseline = lab_baseline_from_cards(baseline_id, cards);
     let baseline_path = lab_registry_baseline_path(registry, baseline_id)?;
     let Some(parent) = baseline_path.parent() else {
@@ -100,7 +102,7 @@ pub(super) async fn write_lab_registry_baseline(
             digest_sha256: lab_baseline_digest(&baseline)?,
             tool_schema_count: baseline.tool_schema_digests.len(),
             server_names: cards.iter().map(|card| card.server.name.clone()).collect(),
-            updated_at: Utc::now().to_rfc3339(),
+            updated_at,
         },
     );
     write_lab_registry_manifest(registry, &manifest).await?;

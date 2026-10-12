@@ -3,6 +3,13 @@
 //! Shared fixtures for the ASI07 origin-emission tests: one self signer and a
 //! verifier that trusts exactly that signer.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 

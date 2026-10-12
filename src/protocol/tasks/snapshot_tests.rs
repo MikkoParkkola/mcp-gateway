@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Snapshot preservation and corrupt-state refusals for MODEL-05/07.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::*;
 use serde_json::json;
 
@@ -11,12 +18,13 @@ fn restore(value: Value) -> Result<Task, TaskModelError> {
 }
 
 fn round_trip(data: Option<Value>) {
-    let mut task = Task::create("snapshot-probe");
-    task.fail(JsonRpcError {
+    let mut task = Task::create("snapshot-probe").expect("the test clock reads after 1970");
+    task.fail(&JsonRpcError {
         code: -32042,
         message: "backend failure".into(),
         data,
-    });
+    })
+    .expect("a live task takes its outcome");
     let before = serde_json::to_value(task.wire()).unwrap();
     let bytes = serde_json::to_vec(&task.snapshot()).unwrap();
     let restored = Task::from_snapshot(serde_json::from_slice(&bytes).unwrap()).unwrap();
@@ -43,7 +51,7 @@ fn nested_error_data_survives_snapshot() {
 #[test]
 fn malformed_request_key_or_value_is_refused_atomically() {
     for (key, value) in [("", json!({"method":"roots/list"})), ("key", json!(7))] {
-        let mut task = Task::create("input-probe");
+        let mut task = Task::create("input-probe").expect("the test clock reads after 1970");
         let before = serde_json::to_value(task.snapshot()).unwrap();
         let input = InputRequired {
             requests: vec![(key.into(), value)],
@@ -74,7 +82,8 @@ fn every_snapshot_status_restores_only_its_own_complete_payload() {
             request_state: None,
         })),
     ] {
-        let mut task = Task::create("snapshot-state-probe");
+        let mut task =
+            Task::create("snapshot-state-probe").expect("the test clock reads after 1970");
         if let Some(event) = event {
             task.transition(event, Utc::now()).unwrap();
         }
@@ -122,7 +131,12 @@ fn every_snapshot_status_restores_only_its_own_complete_payload() {
 
 #[test]
 fn noncanonical_or_non_v4_snapshot_ids_are_refused() {
-    let valid = serde_json::to_value(Task::create("id-probe").snapshot()).unwrap();
+    let valid = serde_json::to_value(
+        Task::create("id-probe")
+            .expect("the test clock reads after 1970")
+            .snapshot(),
+    )
+    .unwrap();
     for id in [
         format!("task-{}", uuid::Uuid::new_v4().simple()),
         "task-00000000-0000-3000-8000-000000000000".to_owned(),

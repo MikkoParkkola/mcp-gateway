@@ -3,6 +3,13 @@
 //! A capability reload that lands before the startup scan completes must
 //! not be lost (MIK-7862, found in review of #2732).
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 use std::time::Duration;
 

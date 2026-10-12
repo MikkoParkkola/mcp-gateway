@@ -3,6 +3,13 @@
 //! `schedule.tick` rows of the event-sources design (§7: U8, U9), driven on
 //! the source's own clock (`tick_at`) so a cron boundary needs no waiting.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone as _, Utc};

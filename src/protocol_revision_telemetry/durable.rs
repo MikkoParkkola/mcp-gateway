@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -345,10 +345,7 @@ fn checked_counter_sum(mut values: impl Iterator<Item = u64>) -> io::Result<u64>
 }
 
 fn unix_seconds() -> io::Result<u64> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    crate::clock::unix_secs().map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 fn write_window_atomic(path: &Path, window: &DurableWindow) -> io::Result<()> {

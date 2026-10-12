@@ -2,11 +2,23 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The wall clock, read in one place (MIK-8202).
 //!
+//! Twin-copy invariant: this file compiles into two crates, the library
+//! (`lib.rs`) and the binary (`main.rs`, `#[path = "clock.rs"]`, for the CLI
+//! commands). Any state in it exists twice: each copy has its own statics and
+//! thread-locals, and an override set through one copy never reaches the
+//! other. The only override both copies see is the environment's
+//! `MCP_GATEWAY_TEST_CLOCK` (debug builds only). So mutable shared state
+//! (a `static` outside the `test_clock` thread-locals, a `Mutex`, `RwLock`,
+//! `Atomic*`, `OnceLock` or `LazyLock`) may never be added here; a lexical
+//! test in `clock_tests.rs` holds that line.
+//!
 //! A host clock earlier than 1970 makes `SystemTime::duration_since(UNIX_EPOCH)`
-//! fail and makes chrono's `Utc::now()` a 1969 date. Code that fell back to 0,
-//! or compared against that date, read every real deadline as still ahead and
-//! served what had expired. Here a clock before the epoch is an error, never a
-//! value: each caller decides what it means, at the call.
+//! fail and makes chrono's `Utc::now()` panic (chrono 0.4.45 `utc.rs`,
+//! "system time before Unix epoch"), which the release profile's
+//! `panic = "abort"` turns into a dead process. Code that fell back to 0
+//! read every real deadline as still ahead and served what had expired. Here
+//! a clock before the epoch is an error, never a value: each caller decides
+//! what it means, at the call.
 //!
 //! - An access check (a credential, grant, session, lease or deadline that
 //!   admits something) asks [`expired_by`]; a clock it cannot read answers
@@ -71,6 +83,18 @@ pub(crate) fn unix_secs() -> Result<u64, ClockBeforeEpoch> {
     since_epoch().map(|d| d.as_secs())
 }
 
+/// Milliseconds since the Unix epoch (MIK-8202 P4b: health and breaker stamps).
+pub(crate) fn unix_millis() -> Result<u64, ClockBeforeEpoch> {
+    since_epoch().map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// Whether a wall-clock reading is at or after the epoch, hence usable
+/// (MIK-8202 P4b: the auth dashboard's injected `Now` judges this through
+/// the clock module rather than comparing against `UNIX_EPOCH` itself).
+pub(crate) fn wall_readable(wall: SystemTime) -> bool {
+    wall.duration_since(UNIX_EPOCH).is_ok()
+}
+
 /// Now as a `SystemTime`, for a site that compares against stored
 /// `SystemTime`s. A clock that cannot be read gives a time before the
 /// epoch, which such a site already refuses (`duration_since(UNIX_EPOCH)`
@@ -82,7 +106,7 @@ pub(crate) fn system_time_or_before_epoch() -> SystemTime {
     )
 }
 
-/// Now as a chrono time: `Err` where chrono would give a 1969 date.
+/// Now as a chrono time: `Err` where chrono's `Utc::now()` would panic.
 pub(crate) fn utc_now() -> Result<DateTime<Utc>, ClockBeforeEpoch> {
     let since = since_epoch()?;
     let secs = i64::try_from(since.as_secs()).map_err(|_| ClockBeforeEpoch)?;

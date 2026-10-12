@@ -82,7 +82,9 @@ pub(super) fn is_oversized(e: &io::Error) -> bool {
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SegState {
     pub(super) seq: u64,
-    pub(super) opened_at: u64,
+    /// When the segment opened, or `None` when it opened on a clock that
+    /// read before 1970 (MIK-8202 P4a): an undated segment never age-rotates.
+    pub(super) opened_at: Option<u64>,
     /// The open handle's `file_id` at open; compared with `path_id(path)` on
     /// every append to notice a rotation by another writer (2.8).
     pub(super) id: FileId,
@@ -95,10 +97,11 @@ pub(super) struct SegState {
     pub(super) hwm_missing_at: Option<u64>,
 }
 
-/// Unix seconds now, plus a test offset.
-pub(super) fn now_secs(offset: i64) -> u64 {
-    let now = chrono::Utc::now().timestamp().saturating_add(offset);
-    u64::try_from(now).unwrap_or(0)
+/// Unix seconds now, plus a test offset; `None` on a clock that reads before
+/// 1970, or when the offset takes the reading below 0 (never 0: MIK-8202 P4a).
+pub(super) fn now_secs(offset: i64) -> Option<u64> {
+    let now = i64::try_from(crate::clock::unix_secs().ok()?).ok()?;
+    u64::try_from(now.saturating_add(offset)).ok()
 }
 
 /// A file's identity: (volume, file id). Unix: (`st_dev`, `st_ino`). Windows:
@@ -143,7 +146,7 @@ pub(super) fn path_id(path: &Path) -> io::Result<FileId> {
 pub(super) fn housekeeping(event: &str, extra: &[(&str, Value)]) -> Map<String, Value> {
     let mut fields = Map::new();
     fields.insert("event".into(), event.into());
-    fields.insert("timestamp".into(), chrono::Utc::now().to_rfc3339().into());
+    crate::clock::stamp_audit_row(&mut fields);
     for (k, v) in extra {
         fields.insert((*k).into(), v.clone());
     }
@@ -212,7 +215,7 @@ pub(super) fn recover(
     path: &Path,
     config: &TransparencyLogConfig,
     _guard: &ExclusiveFileLock,
-    now: u64,
+    now: Option<u64>,
 ) -> io::Result<Recovered> {
     let secret = config.shared_secret.as_bytes();
     let sealed = segments::list_segments(path)?;
@@ -305,7 +308,7 @@ fn reopen_tail(
     config: &TransparencyLogConfig,
     sealed: &[Segment],
     hw: Option<&HighWater>,
-    now: u64,
+    now: Option<u64>,
 ) -> io::Result<(Recovered, bool)> {
     match read_last_nonempty_line(path) {
         Ok(Some(line)) => {
@@ -342,7 +345,7 @@ fn reopen_after_seal(
     config: &TransparencyLogConfig,
     sealed: &[Segment],
     hw: Option<&HighWater>,
-    now: u64,
+    now: Option<u64>,
 ) -> io::Result<(Recovered, bool)> {
     let (tail, tail_hash) = match sealed.last() {
         Some(segment) => seal_of(segment)?.unwrap_or_default(),
@@ -372,7 +375,7 @@ fn resume_active(
     hash: String,
     sealed: &[Segment],
     hw: Option<&HighWater>,
-    now: u64,
+    now: Option<u64>,
 ) -> io::Result<(Recovered, bool)> {
     let first = segments::read_first_line(path)?.unwrap_or_default();
     let (_, _, first_event, first_v) = record_head(&first)?;
@@ -383,13 +386,13 @@ fn resume_active(
                 .get("segment_seq")
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
-            first_v
-                .get("segment_opened_at")
-                .and_then(Value::as_u64)
-                .unwrap_or(now),
+            // A numeric time restores dated; null (opened on a clock before
+            // 1970) restores undated, even once the clock reads again.
+            first_v.get("segment_opened_at").and_then(Value::as_u64),
         )
     } else {
-        // A pre-D6 segment 0 has no open record; its age counts from now.
+        // A pre-D6 segment 0 has no open record; its age counts from now
+        // (undated when the clock cannot be read).
         (next, now)
     };
     // The active segment follows every seal and the mark's, and holds the mark's record if it
@@ -428,7 +431,7 @@ pub(super) fn open_after_seal(
     config: &TransparencyLogConfig,
     sealed: &[Segment],
     hw: Option<&HighWater>,
-    now: u64,
+    now: Option<u64>,
     carry: Option<u64>,
 ) -> io::Result<Recovered> {
     // Truncate, never `create_new`: an empty or torn-open active may exist.

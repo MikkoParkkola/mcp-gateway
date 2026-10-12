@@ -165,3 +165,30 @@ fn c5_a_dispatch_row_carries_no_content() {
     let row = row(|log| log.log_dispatch(&correlation(), &json!({KEY: "x"}), &marked(), "step"));
     assert_content_free("log_dispatch", &row);
 }
+
+/// MIK-8202.AC.16 (R4, mutant M4): on a clock that reads before 1970 the
+/// request, response and dispatch rows are each kept undated, `timestamp`
+/// null and `clock_invalid` true, as `stamp_audit_row` marks them; no row is
+/// dated 1969 or the epoch. Mutant M4: the dispatch row stamps the epoch.
+#[test]
+fn rows_on_a_clock_before_1970_are_undated_not_the_epoch() {
+    let _clock = crate::clock::test_clock::before_epoch();
+    let rows = [
+        (
+            "log_request",
+            row(|log| log.log_request("s", "srv", "t", "c", &json!({KEY: "x"}), &marked())),
+        ),
+        (
+            "log_response",
+            row(|log| log.log_response("s", "srv", "t", "c", &marked())),
+        ),
+        (
+            "log_dispatch",
+            row(|log| log.log_dispatch(&correlation(), &json!({KEY: "x"}), &marked(), "step")),
+        ),
+    ];
+    for (writer, row) in rows {
+        assert!(row["timestamp"].is_null(), "{writer}: {row}");
+        assert_eq!(row["clock_invalid"], true, "{writer}: {row}");
+    }
+}

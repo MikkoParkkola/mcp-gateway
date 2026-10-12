@@ -30,6 +30,13 @@
 //!   the budget running out.
 //! * No row sleeps. Every wait is bounded by scheduler turns or by an explicit
 //!   timeout, exactly as the rest of this suite waits.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::super::*;
 use super::support::*;
 
@@ -42,6 +49,9 @@ use tokio::time::Instant;
 use crate::gateway::task_service::{
     CancelDelivery, UpstreamAnswer, UpstreamHandle, UpstreamRecovery,
 };
+
+/// R2h (MIK-8202 P4a): a read queued behind a worker's dark-clock settle.
+mod dark_clock_settle;
 
 /// The opaque handle the peer answers the task-augmented call with.
 const UPSTREAM_HANDLE: &str = "upstream-job-serialization";

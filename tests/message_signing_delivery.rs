@@ -5,6 +5,10 @@
 //! Initial tests deliberately use existing public behavior; a fixture compile
 //! or startup failure is not accepted as behavioral red evidence.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock (MIK-8202 AC.14)"
+)]
 #[path = "common/signing_gateway.rs"]
 mod signing_gateway;
 

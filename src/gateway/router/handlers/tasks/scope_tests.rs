@@ -8,8 +8,9 @@ use serde_json::json;
 
 #[test]
 fn tasks_get_envelope_carries_a_retained_public_scope_as_private() {
-    let mut task = Task::create("probe");
-    task.complete(json!({"content": [], "cacheScope": "public"}));
+    let mut task = Task::create("probe").expect("the test clock reads after 1970");
+    task.complete(&json!({"content": [], "cacheScope": "public"}))
+        .expect("a live task takes its outcome");
     assert_eq!(task.result().expect("completed")["cacheScope"], "public");
 
     let committed = crate::gateway::task_service::CommittedTask {

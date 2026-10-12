@@ -5,6 +5,13 @@
 //! instead of resuming it. Real store, real executor, one real working task;
 //! each exit is paired with the control that does not take it.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 
 use serde_json::json;
@@ -99,7 +106,12 @@ async fn a_resume_without_its_host_settles_the_task_interrupted() {
     let fx = fixture("exit-host").await;
     std::assert_eq!(status(&fx), TaskStatus::Working, "control: it is working");
 
-    let flow = settle_interrupted(&fx.executor, (OWNER, &fx.id, fx.revision)).await;
+    let flow = settle_interrupted(
+        &fx.executor,
+        (OWNER, &fx.id, fx.revision),
+        &mut tokio::sync::watch::channel(false).1,
+    )
+    .await;
 
     assert!(flow.is_none(), "nothing is left to run after the settle");
     std::assert_ne!(status(&fx), TaskStatus::Working, "the task was settled");

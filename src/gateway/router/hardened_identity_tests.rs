@@ -5,6 +5,13 @@
 //! MCP request with no per-caller identity is refused with 403 before its body
 //! is read, on every route; `standard` refuses nothing.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 
 use axum::body::{Body, to_bytes};

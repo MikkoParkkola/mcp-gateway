@@ -297,7 +297,15 @@ async fn task_18_expiry_frees_the_key_for_a_new_task() {
     let store = open(&dir.path().join("tasks")).await;
     let (id, binding) = settled_task(&store, &admission, "k-1").await;
 
-    store.expire(&id, 2, &admission).await.unwrap();
+    store
+        .expire(
+            &id,
+            2,
+            &admission,
+            crate::gateway::task_service::store::CancelHold::Undated,
+        )
+        .await
+        .unwrap();
 
     assert!(matches!(
         store.get(binding.principal_digest(), &id),
@@ -327,7 +335,16 @@ async fn task_18b_no_admission_path_runs_inside_the_expiry_transaction() {
         let store = store.clone();
         let admission = Arc::clone(&admission);
         let id = id.clone();
-        tokio::spawn(async move { store.expire(&id, 2, &admission).await })
+        tokio::spawn(async move {
+            store
+                .expire(
+                    &id,
+                    2,
+                    &admission,
+                    crate::gateway::task_service::store::CancelHold::Undated,
+                )
+                .await
+        })
     };
     wait_for(entered, "CommitStage::Deleted").await;
 
@@ -397,7 +414,15 @@ async fn task_18c_a_failed_sync_releases_nothing_and_the_retry_completes() {
     store.set_hook(Some(failing_sync_once())).await;
 
     assert_eq!(
-        store.expire(&id, 2, &admission).await.unwrap_err(),
+        store
+            .expire(
+                &id,
+                2,
+                &admission,
+                crate::gateway::task_service::store::CancelHold::Undated
+            )
+            .await
+            .unwrap_err(),
         StoreError::Storage
     );
     assert_eq!(
@@ -436,7 +461,12 @@ async fn task_18c_a_failed_sync_releases_nothing_and_the_retry_completes() {
     // The retry meets an already-absent record and must treat that as a deletion
     // to finish rather than an error.
     store
-        .expire(&id, 2, &admission)
+        .expire(
+            &id,
+            2,
+            &admission,
+            crate::gateway::task_service::store::CancelHold::Undated,
+        )
         .await
         .expect("an already-unlinked record is a deletion to complete");
     // The lease is BOUND, not matched and dropped: an unpublished lease that

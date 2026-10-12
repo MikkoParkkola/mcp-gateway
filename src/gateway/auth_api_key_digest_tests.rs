@@ -3,6 +3,13 @@
 //! E4 (APIKEY.1): a configured API key is a sha256 digest. The presented key
 //! is hashed once and compared with each digest; an expired key is refused.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::{Arc, Mutex};
 
 use axum::body::Body;

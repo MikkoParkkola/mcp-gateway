@@ -6,11 +6,11 @@ use super::*;
 use chrono::TimeZone;
 use serde_json::json;
 
-fn at(tick: i64) -> DateTime<Utc> {
+pub(super) fn at(tick: i64) -> DateTime<Utc> {
     Utc.timestamp_millis_opt(1_800_000_000_000 + tick).unwrap()
 }
 
-fn task() -> Task {
+pub(super) fn task() -> Task {
     Task::create_at(
         "private-tool-name",
         at(0),
@@ -21,13 +21,13 @@ fn task() -> Task {
     )
 }
 
-fn wire(task: &Task) -> Value {
+pub(super) fn wire(task: &Task) -> Value {
     serde_json::to_value(task.wire()).unwrap()
 }
 fn snapshot(task: &Task) -> Value {
     serde_json::to_value(task.snapshot()).unwrap()
 }
-fn error() -> JsonRpcError {
+pub(super) fn error() -> JsonRpcError {
     JsonRpcError {
         code: -32042,
         message: "upstream refused".into(),

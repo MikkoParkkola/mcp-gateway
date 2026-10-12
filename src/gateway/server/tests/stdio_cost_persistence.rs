@@ -260,7 +260,7 @@ async fn stdio_saves_spend_periodically_before_exit() {
         let dir = tempfile::tempdir().expect("tempdir");
         let costs = dir.path().join("costs.json");
         let mut seeded = PersistedCosts {
-            saved_at: cost_persistence::now_secs(),
+            saved_at: crate::clock::unix_secs().expect("a readable clock"),
             ..PersistedCosts::default()
         };
         seeded.tool_totals.insert(

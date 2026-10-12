@@ -150,6 +150,8 @@ Verification is the client's responsibility. The gateway signs; it does not veri
 
 ## Implementation Sketch
 
+> **Superseded (MIK-8202 P4b, 2026-10-12):** the v1 `sign_response()` sketched below was removed: nothing called it, and it stamped `ts` 0 on a clock before 1970. Responses are signed by the v2 JSON-RPC envelope signer (`src/security/message_signing_v2.rs`, wired in `src/gateway/meta_mcp/signing.rs`), which refuses to sign on an unreadable clock.
+
 ### Files to create
 
 | File | Purpose |

@@ -1,18 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A copy of the crate's `same_utc_day` (`src/test_day.rs`) for integration
-//! tests, which cannot reach crate-private helpers. The day is read through
-//! the crate's public `now_secs`, so this file adds no raw clock read (the
-//! MIK-8202 clock baseline counts tests/ too). A test that
+//! tests, which cannot reach crate-private helpers. The day is read from the
+//! host clock directly: the crate's clock module is private, and test code
+//! may read the clock (MIK-8202 AC.14). A test that
 //! saves daily spend and reads it back must judge both on one UTC day: a
 //! budget's day rolls at 00:00 UTC (MIK-8395). The scenario runs between two
 //! readings of the day and once more when they differ; the caller asserts.
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock; the crate's clock module is private (MIK-8202 AC.14)"
+)]
 
 use std::future::Future;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Today's UTC day number, from the clock that dates a cost save.
 fn utc_day() -> u64 {
-    mcp_gateway::cost_accounting::persistence::now_secs() / 86_400
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the host clock reads after 1970")
+        .as_secs()
+        / 86_400
 }
 
 /// Run `scenario` within one UTC day and return what it observed.
