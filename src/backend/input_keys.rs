@@ -406,6 +406,9 @@ impl Backend {
         // named entry that does not parse cannot be judged, so it is withheld
         // (fail closed, #1441).
         let (mut parsed, unparseable) = super::descriptor_gate::parse_listed(tools);
+        // Every name the page listed, before the gates below drop any, so a
+        // dropped write still revokes (MIK-8399).
+        let listed: Vec<String> = parsed.iter().map(|t| t.name.clone()).collect();
         // The same normalisation a discovery fill applies. The list is raw
         // here (the direct route redacts only afterwards), so this is where
         // its descriptors are judged (#1441). It grants no retries, but it
@@ -427,11 +430,7 @@ impl Backend {
         // own catalogue the page is (a blocked name is per backend).
         let credentialed_shared = matches!(key, PoolKey::Shared) && sent_caller_credential;
         if credentialed_shared || listing == super::descriptor_gate::Listing::Truncated {
-            self.revoke_read_only_from_page(
-                &key,
-                parsed.iter().map(|t| t.name.as_str()),
-                &read_only,
-            );
+            self.revoke_from_page(&key, &listed, &read_only, &safe);
             let source = match &key {
                 PoolKey::PerUser { binding } => binding.as_str(),
                 PoolKey::Shared => identity_key.unwrap_or("credentialed"),
@@ -473,6 +472,11 @@ impl Backend {
         withheld
     }
 }
+
+// MIK-8399: partial and abandoned listings revoke resend permission.
+#[cfg(test)]
+#[path = "resend_revoke_tests.rs"]
+mod resend_revoke_tests;
 
 #[cfg(test)]
 mod tests {

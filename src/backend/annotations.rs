@@ -166,6 +166,14 @@ pub(crate) fn prepare_tool_metadata(
     judging: super::descriptor_gate::Judging,
     tools: &mut Vec<Tool>,
 ) -> PreparedTools {
+    // MIK-8399: a name is safe only if EVERY listed occurrence of it is. Read
+    // before the gates below drop anything, so a filtered unsafe occurrence
+    // still keeps its name out (a conflicting duplicate cannot launder a
+    // write through the one occurrence that survives).
+    let not_resend_safe = names_failing(tools, |hints| {
+        hints.read_only_hint == Some(true) || hints.idempotent_hint == Some(true)
+    });
+    let not_read_only = names_failing(tools, |hints| hints.read_only_hint == Some(true));
     // First, so a poisoned tool that also breaks a header rule is still
     // recorded as withheld and refused by name (#1441).
     let verdicts = match judging {
@@ -175,35 +183,39 @@ pub(crate) fn prepare_tool_metadata(
         }
     };
     exclude_invalid_header_tools(server, tools);
-    let resend_permitted = tools
-        .iter()
-        .filter(|tool| {
-            tool.annotations.as_ref().is_some_and(|annotations| {
-                annotations.read_only_hint == Some(true)
-                    || annotations.idempotent_hint == Some(true)
-            })
-        })
-        .map(|tool| tool.name.clone())
-        .collect();
+    let resend_permitted = names_passing(tools, &not_resend_safe);
     // MIK-8393 (#3773): read from the declarations before the inference below
     // fills omitted hints, so a `get_`-named tool the backend never declared
     // read-only stays out. Only an explicit `readOnlyHint: true` counts; an
     // idempotent write may be retried, but must never be answered from cache.
-    let read_only_declared = tools
-        .iter()
-        .filter(|tool| {
-            tool.annotations
-                .as_ref()
-                .is_some_and(|annotations| annotations.read_only_hint == Some(true))
-        })
-        .map(|tool| tool.name.clone())
-        .collect();
+    let read_only_declared = names_passing(tools, &not_read_only);
     normalize_tool_annotations(server, tools);
     PreparedTools {
         resend_permitted,
         read_only_declared,
         verdicts,
     }
+}
+
+/// Names with at least one occurrence whose declared hints fail `safe`.
+fn names_failing(
+    tools: &[Tool],
+    safe: impl Fn(&crate::protocol::ToolAnnotations) -> bool,
+) -> HashSet<String> {
+    tools
+        .iter()
+        .filter(|tool| !tool.annotations.as_ref().is_some_and(&safe))
+        .map(|tool| tool.name.clone())
+        .collect()
+}
+
+/// The listed names not in `failing`: those whose every occurrence passed.
+fn names_passing(tools: &[Tool], failing: &HashSet<String>) -> HashSet<String> {
+    tools
+        .iter()
+        .filter(|tool| !failing.contains(&tool.name))
+        .map(|tool| tool.name.clone())
+        .collect()
 }
 
 /// [`prepare_tool_metadata`]'s result: the explicitly resend-safe tools, and
