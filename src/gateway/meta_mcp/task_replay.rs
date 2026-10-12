@@ -94,7 +94,8 @@ impl MetaMcp {
             self.keep_permanent_refusal(server, tool, caller).await;
             self.settle_caller_view(server, tool, scope, session_id)
                 .await;
-            self.settle_shared_view(server).await;
+            self.settle_shared_view((server, tool), scope, session_id)
+                .await;
         }
     }
 
@@ -194,29 +195,7 @@ impl MetaMcp {
         ) {
             return;
         }
-        // MIK-8392 F4: a cold claim's winner would resolve the caller's
-        // credential and list the backend before any policy check. Skip the
-        // claim when the target is already refused without the caller's
-        // catalogue — descriptor-blocked, or refused by the invocation
-        // policy (the silent check the name judgement uses, plus the
-        // dispatch admission for the kill switch) — so a doomed read
-        // causes no resolution and no backend traffic. The sync judgement
-        // still runs, so the answer and its audit record are unchanged.
-        if backend.is_blocked_tool(tool) {
-            return;
-        }
-        if self.may_invoke(server, tool, scope, session_id).is_err() {
-            return;
-        }
-        let call = super::invoke::dispatch_guards::BackendCall {
-            server,
-            tool,
-            session_id,
-            api_key_name: scope.api_key_name,
-            trace_id: "",
-            caller_key: None,
-        };
-        if self.admit_target(&call).is_err() {
+        if self.refused_without_catalogue(&backend, (server, tool), scope, session_id) {
             return;
         }
         if let crate::backend::ColdClaim::Won(generation) =
@@ -236,7 +215,12 @@ impl MetaMcp {
     /// reasons, no fill), and a cleared one keeps F5 (retryable, no fill).
     /// A failed refresh leaves the list stale, and the sync judgement
     /// answers retryable.
-    async fn settle_shared_view(&self, server: &str) {
+    async fn settle_shared_view(
+        &self,
+        (server, tool): (&str, &str),
+        scope: super::visibility::InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) {
         let Some(backend) = self.backends.get(server) else {
             return;
         };
@@ -252,11 +236,45 @@ impl MetaMcp {
         if backend.keeps_per_user_catalogues() && !passthrough {
             return;
         }
-        let (cached, _, _) = backend.cached_tools_view(None);
-        if cached.is_none() || backend.has_cached_tools_for(None) {
+        let (cached, _, _, fresh) = backend.cached_tools_view(None);
+        if cached.is_none() || fresh {
+            return;
+        }
+        // The same F4 guard as a cold claim: a read already refused without
+        // the catalogue causes no gateway-credentialed listing.
+        if self.refused_without_catalogue(&backend, (server, tool), scope, session_id) {
             return;
         }
         let _ = backend.tools_for_check(None, &[], true).await;
+    }
+
+    /// MIK-8392 F4: whether `server`'s `tool` is refused for this caller
+    /// without reading any catalogue: descriptor-blocked, refused by the
+    /// invocation policy (the silent check the name judgement uses), or by
+    /// the dispatch admission (the kill switch). A read so refused triggers
+    /// no credential resolution and no backend listing; the sync judgement
+    /// still answers it, with its audit record.
+    fn refused_without_catalogue(
+        &self,
+        backend: &crate::backend::Backend,
+        (server, tool): (&str, &str),
+        scope: super::visibility::InvokeScope<'_>,
+        session_id: Option<&str>,
+    ) -> bool {
+        if backend.is_blocked_tool(tool)
+            || self.may_invoke(server, tool, scope, session_id).is_err()
+        {
+            return true;
+        }
+        let call = super::invoke::dispatch_guards::BackendCall {
+            server,
+            tool,
+            session_id,
+            api_key_name: scope.api_key_name,
+            trace_id: "",
+            caller_key: None,
+        };
+        self.admit_target(&call).is_err()
     }
 
     /// A stored read found no account outcome for `server`'s target: every

@@ -206,6 +206,19 @@ impl<T> CachedMetadata<T> {
     }
 
     /// One guard: read separately, a fetch landing between them publishes a lie.
+    /// [`Self::with_cached_and_populated`] plus whether the value is fresh
+    /// for `ttl`, all under the same read guard (MIK-8392): a reader judging
+    /// a snapshot never pairs it with another snapshot's freshness.
+    pub(crate) fn with_cached_populated_fresh<R>(
+        &self,
+        ttl: Duration,
+        map: impl FnOnce(Option<&Arc<T>>, bool, bool) -> R,
+    ) -> R {
+        let state = self.state.read();
+        let fresh = Self::fresh_value(&state, ttl).is_some();
+        map(state.value.as_ref(), state.ever_populated, fresh)
+    }
+
     pub(crate) fn with_cached_and_populated<R>(
         &self,
         map: impl FnOnce(Option<&Arc<T>>, bool) -> R,

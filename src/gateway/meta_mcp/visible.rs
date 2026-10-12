@@ -189,7 +189,7 @@ impl MetaMcp {
                 super::listing_view::ListingView::Caller(binding) => Some(binding),
             }
         };
-        let (cached, truncated, populated) = backend.cached_tools_view(binding.as_deref());
+        let (cached, truncated, populated, fresh) = backend.cached_tools_view(binding.as_deref());
         let Some(tools) = cached else {
             // No cached value. Cleared (ever populated) is retryable on
             // every view, never complete-and-empty and never served (F5).
@@ -212,7 +212,7 @@ impl MetaMcp {
         // means the refresh failed or raced: retryable, never judged stale.
         // Fresh judges, including a withdrawn shared tool within its TTL
         // (the documented residual).
-        if !backend.has_cached_tools_for(binding.as_deref()) {
+        if !fresh {
             return None;
         }
         Some(match tools.iter().find(|entry| entry.name == tool) {

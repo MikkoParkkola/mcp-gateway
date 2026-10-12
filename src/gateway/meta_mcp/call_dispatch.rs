@@ -381,6 +381,16 @@ impl MetaMcp {
                 } else {
                     caller.retry.attestation.as_deref()
                 };
+                // MIK-8392: the repeat runs the stored-read pre-pass too, so
+                // a catalogue past its TTL is refreshed before it is judged
+                // (otherwise it would answer retryable until other traffic
+                // refreshed it).
+                // Boxed as a trait object: its future (credential resolution,
+                // fills) must not become part of this dispatch's own
+                // recursive future type (the Send check overflows).
+                let prepare: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> =
+                    Box::pin(self.prepare_stored_read(&stored, caller.scope(), session_id));
+                prepare.await;
                 // MIK-8392 site-5 split: the catalogue is judged here; an
                 // account that is not live is the call's own live path.
                 self.refuse_stored_repeat(&id, &stored, attestation, session_id, caller)

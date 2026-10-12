@@ -15,26 +15,31 @@ impl Backend {
     /// judges "the complete catalogue lacks the tool" from one snapshot,
     /// never from membership and completeness read apart. `None` is no
     /// cached value, distinct from an empty cached list (MIK-8392 F5): a
-    /// cleared cache reads as retryable, never as complete-and-empty.
+    /// cleared cache reads as retryable, never as complete-and-empty. The
+    /// last field is whether that same snapshot is fresh for the cache TTL
+    /// (MIK-8392 F2), read under the same guard.
     #[must_use]
     pub(crate) fn cached_tools_view(
         &self,
         binding: Option<&str>,
-    ) -> (Option<Arc<Vec<Tool>>>, bool, bool) {
+    ) -> (Option<Arc<Vec<Tool>>>, bool, bool, bool) {
         let slot = self.tools_slot(binding);
-        let (tools, truncated, populated) =
-            slot.tools_cache
-                .with_cached_and_populated(|tools, populated| {
-                    (
-                        tools.map(Arc::clone),
-                        slot.tools_truncated.load(Ordering::SeqCst),
-                        populated,
-                    )
-                });
+        let (tools, truncated, populated, fresh) = slot.tools_cache.with_cached_populated_fresh(
+            self.cache_ttl,
+            |tools, populated, fresh| {
+                (
+                    tools.map(Arc::clone),
+                    slot.tools_truncated.load(Ordering::SeqCst),
+                    populated,
+                    fresh,
+                )
+            },
+        );
         (
             tools.map(|tools| self.without_blocked(tools)),
             truncated,
             populated,
+            fresh,
         )
     }
 }
