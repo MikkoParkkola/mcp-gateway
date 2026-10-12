@@ -20,7 +20,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use super::super::stdio_tasks::{self, StdioTasks};
-use super::super::{STDIO_SESSION_ID, StdioClient, StdioTelemetry};
+use super::super::{STDIO_SESSION_ID, StdioClient};
 use crate::config::{AuthConfig, InputSchemaEnforcement, SurfacedToolConfig};
 use crate::gateway::Gateway;
 use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::{
@@ -112,7 +112,7 @@ impl Stdio {
         let before = self.gateway.tool_calls().len();
         let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {"name": TOOL, "arguments": {"folder": "inbox"}}});
-        let answer = Gateway::dispatch_single_with_sink(
+        let answer = Gateway::dispatch_single_for_client(
             &self.meta,
             &Arc::new(crate::security::ToolPolicy::default()),
             &Arc::new(crate::mtls::MtlsPolicy::from_config(
@@ -128,7 +128,6 @@ impl Stdio {
                 discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
                 sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
             },
-            &StdioTelemetry::default(),
         )
         .await
         .expect("a request is answered");
@@ -190,7 +189,7 @@ async fn c10_stdio_per_user_lacked_with_enforcement_off() {
 impl Stdio {
     async fn rpc(&self, id: u64, method: &str, params: Value) -> Value {
         let request = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
-        Gateway::dispatch_single_with_sink(
+        Gateway::dispatch_single_for_client(
             &self.meta,
             &Arc::new(crate::security::ToolPolicy::default()),
             &Arc::new(crate::mtls::MtlsPolicy::from_config(
@@ -206,7 +205,6 @@ impl Stdio {
                 discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
                 sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
             },
-            &StdioTelemetry::default(),
         )
         .await
         .expect("a request is answered")
@@ -689,7 +687,7 @@ async fn x1_stdio_per_user_surfaced_name_is_sanitized() {
         .store_shared_tools_for_test(vec![tool(TOOL, &valid())]);
     let request = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": TOOL, "arguments": {"folder": "a\u{0}b"}}});
-    let answer = Gateway::dispatch_single_with_sink(
+    let answer = Gateway::dispatch_single_for_client(
         &meta,
         &Arc::new(crate::security::ToolPolicy::default()),
         &Arc::new(crate::mtls::MtlsPolicy::from_config(
@@ -705,7 +703,6 @@ async fn x1_stdio_per_user_surfaced_name_is_sanitized() {
             discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::On,
         },
-        &StdioTelemetry::default(),
     )
     .await
     .expect("a request is answered");
