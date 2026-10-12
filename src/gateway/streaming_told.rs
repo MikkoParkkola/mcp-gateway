@@ -683,3 +683,7 @@ mod state_tests;
 #[cfg(test)]
 #[path = "streaming_told_decision_tests.rs"]
 mod decision_tests;
+
+#[cfg(test)]
+#[path = "streaming_told_gap_tests.rs"]
+mod gap_tests;

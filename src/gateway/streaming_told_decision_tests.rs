@@ -4,7 +4,7 @@
 
 use super::*;
 
-fn auth() -> AuthState {
+pub(super) fn auth() -> AuthState {
     AuthState {
         auth_config: Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
             &crate::config::AuthConfig::default(),
@@ -20,13 +20,13 @@ fn auth() -> AuthState {
 }
 
 /// A judge that answers with whatever it was last told to.
-struct Fake(
+pub(super) struct Fake(
     parking_lot::Mutex<Option<ViewDigest>>,
     parking_lot::Mutex<DeadReason>,
 );
 
 impl Fake {
-    fn answering(served: &str, shown: &str) -> Arc<Self> {
+    pub(super) fn answering(served: &str, shown: &str) -> Arc<Self> {
         let judge = Arc::new(Self(
             parking_lot::Mutex::new(None),
             parking_lot::Mutex::new(DeadReason::Bearer),
@@ -35,7 +35,7 @@ impl Fake {
         judge
     }
 
-    fn say(&self, served: &str, shown: &str) {
+    pub(super) fn say(&self, served: &str, shown: &str) {
         *self.0.lock() = Some(ViewDigest {
             served: served.to_owned(),
             shown: shown.to_owned(),
@@ -83,7 +83,7 @@ impl ViewJudge for Fake {
     }
 }
 
-fn view(judge: &Arc<Fake>) -> StreamView {
+pub(super) fn view(judge: &Arc<Fake>) -> StreamView {
     let view = StreamView {
         subject: Arc::new(ViewSubject::default()),
         record: Arc::new(ViewRecord::default()),
