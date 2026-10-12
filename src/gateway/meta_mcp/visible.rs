@@ -328,6 +328,10 @@ pub(crate) struct VisibilityMemo {
     /// account outcome and a caller-view judgement are kept apart.
     offer_pending:
         parking_lot::Mutex<std::collections::HashMap<(String, AccountKey), AccountOutcome>>,
+    /// MIK-8392 d0 warm path: the binding the pre-pass's view read gave each
+    /// account, so a warm read revalidates its indexed slot without a second
+    /// vault read.
+    account_binding: parking_lot::Mutex<std::collections::HashMap<(String, AccountKey), String>>,
     /// MIK-8392 (lead ruling 2026-10-12): the live call's own refusal for an
     /// account that can never bind this caller, so a stored read answers what
     /// the live call answers instead of "retry" forever.
@@ -371,6 +375,28 @@ pub(crate) fn record_account_outcome(server: &str, account: &AccountKey, outcome
             .entry((server.to_owned(), account.clone()))
             .or_insert(outcome);
     });
+}
+
+/// Keep the binding the pre-pass's view read gave `(server, account)`.
+pub(crate) fn record_account_binding(server: &str, account: &AccountKey, binding: &str) {
+    let _ = VISIBILITY_MEMO.try_with(|memo| {
+        memo.account_binding
+            .lock()
+            .insert((server.to_owned(), account.clone()), binding.to_owned());
+    });
+}
+
+/// The binding the pre-pass's view read gave `(server, account)`, if any.
+pub(crate) fn account_binding(server: &str, account: &AccountKey) -> Option<String> {
+    VISIBILITY_MEMO
+        .try_with(|memo| {
+            memo.account_binding
+                .lock()
+                .get(&(server.to_owned(), account.clone()))
+                .cloned()
+        })
+        .ok()
+        .flatten()
 }
 
 /// Keep the live call's refusal for `(server, account)` in the open request;

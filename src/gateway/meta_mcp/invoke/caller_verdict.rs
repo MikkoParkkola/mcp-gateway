@@ -68,31 +68,39 @@ pub(super) enum SlotJudgement {
 
 impl MetaMcp {
     /// Re-establish `caller`'s cold per-user view of `server` for a stored
-    /// read that won the claim (MIK-8392 B'): resolve the caller's credential
-    /// and fill the caller's own slot, which indexes it. One resolution per
-    /// claimed attempt. A failure leaves the lease to expire; the slot was
-    /// evicted, so no stale cached list can stand in for a failed fill.
+    /// read that won the claim `generation` (MIK-8392 B', d1): resolve the
+    /// caller's credential, fill the caller's own slot through the fill that
+    /// reports its real failure (never the stale-cache fallback), and only
+    /// then publish the slot, and only over this claim's own lease. One
+    /// resolution per claimed attempt; a failure leaves the lease to expire.
     pub(in crate::gateway::meta_mcp) async fn warm_cold_view(
         &self,
         (server, tool): (&str, &str),
         backend: &Backend,
         caller: CallerProof<'_>,
+        generation: u64,
     ) {
+        #[cfg(test)]
+        backend.cold_winner.pause().await;
         let Ok(resolved) = self
             .resolve_dispatch((server, tool), Some(backend), caller, caller.verified())
             .await
         else {
             return;
         };
-        let _ = self
-            .judge_caller_slot(
-                (server, tool),
-                backend,
-                resolved.binding.as_deref(),
-                &resolved.caller_credential.headers,
-                caller,
-            )
-            .await;
+        let Some(binding) = resolved.binding.as_deref() else {
+            return;
+        };
+        if backend
+            .tools_for_check(Some(binding), &resolved.caller_credential.headers, false)
+            .await
+            .is_err()
+        {
+            return;
+        }
+        if let Some(principal) = self.principal_for(backend, caller) {
+            backend.publish_cold_view(&principal.stable_actor_id(), generation, binding);
+        }
     }
 
     /// The live call's own refusal for `caller` on `(server, tool)`: the

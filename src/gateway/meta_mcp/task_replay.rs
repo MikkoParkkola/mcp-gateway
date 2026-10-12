@@ -74,6 +74,17 @@ impl MetaMcp {
             .iter()
             .map(|target| (target.server.as_str(), target.tool.as_str()))
             .collect();
+        #[cfg(test)]
+        let targets: Vec<(&str, &str)> = targets
+            .into_iter()
+            .filter(|(server, _)| {
+                self.backends.get(server).is_none_or(|backend| {
+                    !backend
+                        .skip_account_prepass
+                        .load(std::sync::atomic::Ordering::SeqCst)
+                })
+            })
+            .collect();
         self.fill_account_outcomes(&targets, caller).await;
         for &(server, tool) in &targets {
             self.keep_permanent_refusal(server, tool, caller).await;
@@ -125,21 +136,72 @@ impl MetaMcp {
             return;
         };
         let id = principal.stable_actor_id();
-        if let Some(binding) = backend.caller_slot_binding(&id) {
-            backend.touch_caller_slot(&binding);
+        if let Some(held) = backend.caller_slot_held(&id) {
+            // d0 warm: revalidate against the binding the pre-pass's own
+            // view read gave (no second vault read). A mismatch (a rotated
+            // grant) forgets the entry, but only while it is still the one
+            // seen here, so a lease claimed meanwhile survives.
+            let current = self
+                .target_account(server, tool)
+                .and_then(|account| visible::account_binding(server, &account));
+            if current.is_none_or(|current| current == held.binding()) {
+                backend.touch_caller_slot(held.binding());
+                return;
+            }
+            #[cfg(test)]
+            backend.after_warm_capture.pause().await;
+            backend.forget_caller_held(&id, &held);
+        }
+        let account = self
+            .target_account(server, tool)
+            .map(|account| visible::account_outcome(server, &account));
+        // Only a live grant may re-establish a view (d1): a NoView entry is
+        // reclaimed only on Live, and nothing is claimed while the account
+        // is not proven (NoView, Unavailable, unfilled).
+        let account_live = matches!(account, None | Some(Some(AccountOutcome::Live)));
+        if !matches!(
+            account,
+            None | Some(Some(AccountOutcome::Live | AccountOutcome::Unjudged))
+        ) {
             return;
         }
-        let account_live = self.target_account(server, tool).is_none_or(|account| {
-            matches!(
-                visible::account_outcome(server, &account),
-                Some(AccountOutcome::Live | AccountOutcome::Unjudged)
-            )
-        });
-        if account_live
-            && backend.claim_cold_view(&id, COLD_RETRY_BACKOFF) == crate::backend::ColdClaim::Won
+        if let crate::backend::ColdClaim::Won(generation) =
+            backend.claim_cold_view(&id, COLD_RETRY_BACKOFF, account_live)
         {
-            self.warm_cold_view((server, tool), &backend, caller).await;
+            self.warm_cold_view((server, tool), &backend, caller, generation)
+                .await;
         }
+    }
+
+    /// A stored read found no account outcome for `server`'s target: every
+    /// read entry runs the pre-pass first, so this is a broken invariant
+    /// (MIK-8392 N0). It still fails closed; tests observe it by count.
+    fn unfilled_outcome_read(&self, server: &str) {
+        #[cfg(test)]
+        if let Some(backend) = self.backends.get(server) {
+            backend
+                .unfilled_outcome_reads
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        #[cfg(all(not(test), debug_assertions))]
+        panic!("stored read of {server} without the account pre-pass");
+        #[cfg(not(any(test, debug_assertions)))]
+        let _ = server;
+    }
+
+    /// What is left of `caller`'s running cold lease on `server`, if one runs.
+    fn cold_lease_remaining(
+        &self,
+        server: &str,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> Option<std::time::Duration> {
+        let backend = self.backends.get(server)?;
+        let proof = crate::identity_propagation::CallerProof::new(
+            caller.verified_identity,
+            caller.provenance(),
+        );
+        let principal = self.principal_for(&backend, proof)?;
+        backend.cold_lease_remaining(&principal.stable_actor_id())
     }
 
     fn refuse_stored(
@@ -156,7 +218,7 @@ impl MetaMcp {
         // Visibility first, as on the live path: a withheld target answers
         // as absent even where policy would also refuse (MIK-8392 T12).
         let refused = match self.judge_stored_targets(stored, session, caller, read) {
-            Err(StoredWithheld::Retry) => return Some(retry_later(id)),
+            Err(StoredWithheld::Retry(after)) => return Some(retry_later(id, after)),
             Err(StoredWithheld::Refused(error)) => Some(error),
             Ok(()) => self
                 .authorize_stored(stored, attestation, session, caller)
@@ -187,12 +249,16 @@ impl MetaMcp {
             if read == StoredRead::Read
                 && let Some(account) = self.target_account(server, tool)
             {
-                match visible::account_outcome(server, &account) {
+                let outcome = visible::account_outcome(server, &account);
+                if outcome.is_none() {
+                    self.unfilled_outcome_read(server);
+                }
+                match outcome {
                     // Unfilled: the pre-pass never ran for it. Fail closed,
                     // and retryable: nothing about the grant was learned.
                     None | Some(AccountOutcome::Unavailable) => {
                         return Err(visible::take_account_refusal(server, &account)
-                            .map_or(StoredWithheld::Retry, StoredWithheld::Refused));
+                            .map_or(StoredWithheld::Retry(None), StoredWithheld::Refused));
                     }
                     Some(AccountOutcome::NoView) => {
                         return Err(StoredWithheld::Refused(visible::absent_name(tool)));
@@ -201,7 +267,9 @@ impl MetaMcp {
                 }
             }
             let Some(judged) = self.stored_target_view(server, tool, scope, session) else {
-                return Err(StoredWithheld::Retry);
+                return Err(StoredWithheld::Retry(
+                    self.cold_lease_remaining(server, caller),
+                ));
             };
             visible::absent_if_withheld(Some(judged), tool).map_err(StoredWithheld::Refused)?;
         }
@@ -361,18 +429,23 @@ enum StoredRead {
 enum StoredWithheld {
     /// Its target is withheld from this caller: the absent answer.
     Refused(Error),
-    /// This caller's view is not settled yet: retry, never terminal.
-    Retry,
+    /// This caller's view is not settled yet: retry, never terminal. While
+    /// a cold lease runs, what is left of it.
+    Retry(Option<std::time::Duration>),
 }
 
 /// The retryable answer (MIK-8392 s1-d1): -32603 with a `retryable` data
 /// member, built here because the shared error converter keeps only listed
 /// data keys. It carries no output.
-fn retry_later(id: &RequestId) -> JsonRpcResponse {
+fn retry_later(id: &RequestId, after: Option<std::time::Duration>) -> JsonRpcResponse {
+    let mut data = json!({ "retryable": true });
+    if let Some(after) = after {
+        data["retry_after_ms"] = json!(u64::try_from(after.as_millis()).unwrap_or(u64::MAX));
+    }
     JsonRpcResponse::error_with_data(
         Some(id.clone()),
         -32603,
         "task result temporarily unavailable, retry",
-        json!({ "retryable": true }),
+        data,
     )
 }

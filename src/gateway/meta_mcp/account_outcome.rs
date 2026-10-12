@@ -77,6 +77,9 @@ impl MetaMcp {
         else {
             return AccountOutcome::Unjudged;
         };
+        if let Ok(binding) = &view {
+            visible::record_account_binding(server, account, binding);
+        }
         view_outcome(view, |binding| {
             // A binding the isolation guard or the per-user slot rule would
             // refuse is no view either (as `has_no_view_for`). Only an

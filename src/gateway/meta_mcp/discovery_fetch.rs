@@ -118,7 +118,9 @@ impl MetaMcp {
     /// (`view_binding`), and forget an entry the current grant no longer
     /// yields (MIK-8356 design R4.2, gpt r3 F2). Run at a listing's async
     /// entry, so the synchronous readers after it read a rotated or revoked
-    /// grant's slot as cold, never as the caller's.
+    /// grant's slot as cold, never as the caller's. A revoked caller's entry
+    /// becomes `NoView` even over a stored read's running cold lease
+    /// (MIK-8392 d1 F9): intended, the revocation is the newer fact.
     pub(crate) async fn revalidate_caller_slots(&self, caller: CallerProof<'_>) {
         for backend in self.backends.all() {
             if !backend.keeps_per_user_catalogues() {

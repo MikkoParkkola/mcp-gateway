@@ -86,7 +86,10 @@ impl BeginOutcome {
                 // A fresh task carries no holds; a stored one's are adopted
                 // into this request's scope before its wire form is built.
                 let task = match self {
-                    Self::Created(task) => task,
+                    Self::Created(task) => {
+                        created_serves_no_output(&task);
+                        task
+                    }
                     Self::Existing(held) => {
                         held.deliver(crate::gateway::meta_mcp::sealed_hold::HoldSink::Scope)
                     }
@@ -757,3 +760,21 @@ mod spawn_tests;
 
 #[cfg(test)]
 mod test_hooks;
+
+/// A task this request just created has run nothing yet, so it serves no
+/// backend output and needs no stored-read judgement (MIK-8392 F3). Tests
+/// observe a breach by count instead of a panic.
+fn created_serves_no_output(task: &CommittedTask) {
+    let serves = task.serves_backend_output();
+    #[cfg(test)]
+    if serves {
+        CREATED_SERVING_OUTPUT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    #[cfg(not(test))]
+    debug_assert!(!serves, "a just-created task serves backend output");
+}
+
+/// Test-only (MIK-8392 F3): Created answers that carried backend output.
+#[cfg(test)]
+pub(crate) static CREATED_SERVING_OUTPUT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);

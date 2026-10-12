@@ -32,18 +32,42 @@ pub(crate) enum CallerSlot {
     /// view (MIK-8392 B'): a lease, so one reader resolves per window. A
     /// failed or abandoned attempt only delays the next one until `until`;
     /// a success, or any fill of the caller's own slot, replaces it.
-    ColdTried { until: tokio::time::Instant },
+    ColdTried {
+        until: tokio::time::Instant,
+        /// Which claim this is: only its own winner may publish over it.
+        generation: u64,
+    },
 }
+
+/// Lease generations. One counter for the process: unique per backend too,
+/// which is all the conditional publication needs (MIK-8392 d1).
+static COLD_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// What a claim on a cold view decided (MIK-8392).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ColdClaim {
-    /// This reader holds the lease and resolves.
-    Won,
-    /// Another reader's lease is still running: answer retryable.
-    Leased,
+    /// This reader holds the lease, under this generation, and resolves.
+    Won(u64),
+    /// Another reader's lease is still running for `remaining`: answer
+    /// retryable.
+    Leased { remaining: std::time::Duration },
     /// The view is not cold (a live slot): nothing to claim.
     Warm,
+    /// A `NoView` entry while the account is not live: it stays absent.
+    NoView,
+}
+
+/// A caller's Held entry as one warm read saw it: forgotten later only if it
+/// is still that same entry (MIK-8392 d1, conditional forget).
+pub(crate) struct HeldEntry {
+    binding: String,
+    entry: Weak<PooledEntry>,
+}
+
+impl HeldEntry {
+    pub(crate) fn binding(&self) -> &str {
+        &self.binding
+    }
 }
 
 impl CallerSlot {
@@ -129,32 +153,98 @@ impl Backend {
         });
     }
 
+    /// `principal_id`'s live Held entry, captured for a later conditional
+    /// forget.
+    pub(crate) fn caller_slot_held(&self, principal_id: &str) -> Option<HeldEntry> {
+        let slot = self.caller_slots.get(principal_id)?;
+        let binding = slot.live_binding()?.to_owned();
+        let CallerSlot::Held { entry, .. } = &*slot else {
+            return None;
+        };
+        Some(HeldEntry {
+            binding,
+            entry: entry.clone(),
+        })
+    }
+
+    /// Forget `principal_id`'s entry only while it is still `seen` (same
+    /// binding, same slot): a lease or a fresher fill that replaced it stays
+    /// (MIK-8392 d1, muse F4).
+    pub(crate) fn forget_caller_held(&self, principal_id: &str, seen: &HeldEntry) {
+        self.caller_slots.remove_if(principal_id, |_, slot| {
+            matches!(slot, CallerSlot::Held { binding, entry }
+                if *binding == seen.binding && Weak::ptr_eq(entry, &seen.entry))
+        });
+    }
+
+    /// Publish a cold view's winner: `principal_id`'s entry becomes `Held` on
+    /// `binding` only while it is still this winner's own lease (MIK-8392 d1,
+    /// muse F6). A fill or a newer claim that landed meanwhile stands, and
+    /// this result is dropped. A slot that is gone or never filled is not
+    /// published, as [`Self::record_caller_slot`].
+    pub(crate) fn publish_cold_view(&self, principal_id: &str, generation: u64, binding: &str) {
+        let key = PoolKey::PerUser {
+            binding: binding.to_string(),
+        };
+        let Some(entry) = self.pool.get(&key).map(|slot| Arc::clone(slot.value())) else {
+            return;
+        };
+        if !entry.tools_cache.ever_populated() {
+            return;
+        }
+        if let Some(mut slot) = self.caller_slots.get_mut(principal_id)
+            && matches!(*slot, CallerSlot::ColdTried { generation: own, .. } if own == generation)
+        {
+            *slot = CallerSlot::Held {
+                binding: binding.to_string(),
+                entry: Arc::downgrade(&entry),
+            };
+        }
+    }
+
+    /// How long `principal_id`'s running cold lease still has, if one runs.
+    pub(crate) fn cold_lease_remaining(&self, principal_id: &str) -> Option<std::time::Duration> {
+        let now = tokio::time::Instant::now();
+        match *self.caller_slots.get(principal_id)? {
+            CallerSlot::ColdTried { until, .. } if now < until => Some(until - now),
+            _ => None,
+        }
+    }
+
     /// Claim the attempt to re-establish `principal_id`'s cold view, under
     /// one shard guard (MIK-8392 B', muse F7): the expiry is checked inside
-    /// the same entry, and nothing awaits while it is held. A dead or retired
-    /// slot's entry, a `NoView` entry (the caller checked the grant is live
-    /// again) and an expired lease are claimable.
+    /// the same entry, and nothing awaits while it is held. Claimable: no
+    /// entry, a dead or retired slot's entry, an expired lease, and a
+    /// `NoView` entry only when `account_live` (the grant came back, d1).
     pub(crate) fn claim_cold_view(
         &self,
         principal_id: &str,
         lease: std::time::Duration,
+        account_live: bool,
     ) -> ColdClaim {
         let now = tokio::time::Instant::now();
-        let fresh = CallerSlot::ColdTried { until: now + lease };
+        let generation = COLD_GENERATION.fetch_add(1, Ordering::SeqCst);
+        let fresh = CallerSlot::ColdTried {
+            until: now + lease,
+            generation,
+        };
         match self.caller_slots.entry(principal_id.to_string()) {
             dashmap::mapref::entry::Entry::Vacant(vacant) => {
                 vacant.insert(fresh);
-                ColdClaim::Won
+                ColdClaim::Won(generation)
             }
             dashmap::mapref::entry::Entry::Occupied(mut occupied) => {
                 let decision = match occupied.get() {
                     held @ CallerSlot::Held { .. } if held.live_binding().is_some() => {
                         ColdClaim::Warm
                     }
-                    CallerSlot::ColdTried { until } if now < *until => ColdClaim::Leased,
-                    _ => ColdClaim::Won,
+                    CallerSlot::ColdTried { until, .. } if now < *until => ColdClaim::Leased {
+                        remaining: *until - now,
+                    },
+                    CallerSlot::NoView if !account_live => ColdClaim::NoView,
+                    _ => ColdClaim::Won(generation),
                 };
-                if decision == ColdClaim::Won {
+                if decision == ColdClaim::Won(generation) {
                     occupied.insert(fresh);
                 }
                 decision
