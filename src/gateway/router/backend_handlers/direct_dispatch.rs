@@ -77,7 +77,7 @@ fn admission_witness(
 ) -> Option<RefundWitness> {
     nonce?;
     let credential = rw::dispatch_effect(
-        propagation.identity_key.is_some(),
+        propagation.identity_key.is_some() || propagation.attempted,
         propagation.managed.is_some(),
     );
     let filled = rw::schema_effect(backend.list_fills() != propagation.fills_before);
