@@ -156,3 +156,42 @@ async fn queued_then_dead_a_hint_held_past_not_after_is_not_written() {
         "the held hint is not written once notAfter has passed"
     );
 }
+
+/// METRIC (lead condition 2): a stream closed by a lapsed certificate is
+/// counted once under `reason="cert"` in `mcp_view_liveness_dead_total`. A
+/// current-thread runtime runs inside the local recorder, so the forced
+/// clock and the counter both stay on this thread.
+#[cfg(feature = "metrics")]
+#[test]
+fn metric_a_certificate_death_is_counted_once_as_cert() {
+    let recorder = metrics_exporter_prometheus::PrometheusBuilder::new().build_recorder();
+    let handle = recorder.handle();
+    telemetry_metrics::with_local_recorder(&recorder, || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime")
+            .block_on(async {
+                let w = World::start().await;
+                let not_after = crate::clock::unix_secs().expect("clock after 1970") + VALID_FOR;
+                let mut ear = certified(&w, not_after).await;
+                let _past = crate::clock::test_clock::at_secs(not_after + 1);
+                w.store_shared("alpha", alpha("r2"));
+                assert!(
+                    ear.closed(&w).await,
+                    "premise of the count: the stream died"
+                );
+            });
+    });
+    let text = handle.render();
+    let counted: Vec<&str> = text
+        .lines()
+        .filter(|l| l.starts_with("mcp_view_liveness_dead_total{"))
+        .collect();
+    assert_eq!(counted.len(), 1, "one death, one series: {text}");
+    assert!(counted[0].contains(r#"reason="cert""#), "{text}");
+    assert!(
+        matches!(counted[0].rsplit(' ').next(), Some("1" | "1.0")),
+        "counted once: {text}"
+    );
+}
