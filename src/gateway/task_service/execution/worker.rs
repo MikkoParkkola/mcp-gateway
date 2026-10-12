@@ -17,8 +17,8 @@ use super::settlement::{
 };
 use super::upstream::QueryLease;
 use super::{
-    BeginOutcome, CommittedTask, CreateWrite, Handoff, TaskCall, TaskExecutor, TaskIntent,
-    TransitionWrite, UpstreamAnswer, UpstreamHandle,
+    BeginOutcome, CreateWrite, Handoff, TaskCall, TaskExecutor, TaskIntent, UpstreamAnswer,
+    UpstreamHandle,
 };
 use crate::gateway::meta_mcp::invoke::relay::AnswerShape;
 use crate::gateway::meta_mcp::upstream::UpstreamSubmission;
@@ -27,7 +27,7 @@ use crate::gateway::task_service::Target;
 use crate::gateway::task_service::service::{CreateOutcome, ServiceError};
 use crate::gateway::task_service::store::StoreError;
 use crate::protocol::RequestId;
-use crate::protocol::tasks::{Task, TaskStatus, TaskTransition};
+use crate::protocol::tasks::{Task, TaskTransition};
 use crate::transport::submit_mark::{SubmitMark, with_submit_mark};
 use futures::FutureExt as _;
 
@@ -126,7 +126,7 @@ async fn run_dispatched(
         .then(|| intent.owned.host().upgrade())
         .flatten()
     else {
-        settle_interrupted(&executor, &principal, &id, revision).await;
+        settle_interrupted(&executor, &principal, &id, revision, &mut cancel_rx).await;
         return;
     };
 
@@ -175,7 +175,7 @@ async fn run_dispatched(
     if let Some(candidate) = job.as_ref()
         && !executor.upstream_descriptor_fits(&principal, &id, candidate)
     {
-        settle_descriptor_refused(&executor, &principal, &id, revision).await;
+        settle_descriptor_refused(&executor, &principal, &id, revision, &mut cancel_rx).await;
         return;
     }
 
@@ -183,7 +183,7 @@ async fn run_dispatched(
         Marker::Marked => {}
         Marker::Refused => return,
         Marker::Failed => {
-            settle_interrupted(&executor, &principal, &id, revision).await;
+            settle_interrupted(&executor, &principal, &id, revision, &mut cancel_rx).await;
             return;
         }
     }
@@ -347,6 +347,10 @@ async fn follow_handle(
     // The lease is still held for a terminal answer, and released only after
     // the settlement below: a read that queued behind this query must find the
     // committed outcome, not a working row it would query all over again.
+    // Stated limit (MIK-8202 P4a, lead ruling): on a clock before 1970 the
+    // settle may wait up to the task's ttl, and a read of this one record
+    // queues behind it for that long. The dark clock is the pathological case;
+    // the invariants (no second terminal query, one task_recovery record) win.
     let (answer, lease) = match followed {
         Followed::Terminal(answer, lease) => (answer, lease),
         // Still live, or unreachable, when this worker's budget ran out. The
@@ -416,7 +420,15 @@ async fn follow_handle(
         revision,
     };
     let writes = crate::gateway::gateway_writes::snapshot_since(writes_mark);
-    settle_followed(executor, state, &followed, (outcome, writes), &notes).await;
+    settle_followed(
+        executor,
+        state,
+        &followed,
+        (outcome, writes),
+        &notes,
+        cancel_rx,
+    )
+    .await;
     lease.release(executor, id).await;
 }
 
@@ -514,9 +526,12 @@ pub(super) async fn settle_interrupted(
     principal: &str,
     id: &str,
     revision: u64,
+    cancel_rx: &mut watch::Receiver<bool>,
 ) {
     let event = TaskTransition::Complete(interrupted_before_dispatch());
-    executor.settle_cas(principal, id, revision, event).await;
+    executor
+        .settle_cas(principal, id, revision, event, cancel_rx)
+        .await;
 }
 
 /// Settle a candidate refused by the descriptor preflight.
@@ -530,6 +545,7 @@ async fn settle_descriptor_refused(
     principal: &str,
     id: &str,
     revision: u64,
+    cancel_rx: &mut watch::Receiver<bool>,
 ) {
     let event = TaskTransition::Complete(interrupted_result(
         "not_executed",
@@ -537,7 +553,9 @@ async fn settle_descriptor_refused(
         "The gateway refused this task before calling the backend: its recovery \
          descriptor does not fit the durable record budget.",
     ));
-    executor.settle_cas(principal, id, revision, event).await;
+    executor
+        .settle_cas(principal, id, revision, event, cancel_rx)
+        .await;
 }
 
 /// The response firewall on a native task result, under the targets the
@@ -645,124 +663,6 @@ impl TaskExecutor {
             Err(_) => Marker::Failed,
         }
     }
-
-    pub(super) async fn settle_cas(
-        &self,
-        principal: &str,
-        id: &str,
-        revision: u64,
-        event: TaskTransition,
-    ) -> bool {
-        // The gateway's own outcome: nothing in it is a member it noted.
-        self.settle_cas_by(
-            principal,
-            id,
-            revision,
-            (event, None),
-            ErrorAuthor::Gateway,
-            crate::gateway::gateway_writes::WriteRecord::default(),
-        )
-        .await
-    }
-
-    /// [`Self::settle_cas`] committing a plan's dispatched `targets` in the same
-    /// write as the outcome. A settlement that does not fit the record budget
-    /// becomes a bounded `Failed` with no output (see `settle_bounded`).
-    ///
-    /// `writes` names the members of a `Complete` result the gateway wrote,
-    /// stored with it so a later read's receipt leaves them out (MIK-7993).
-    pub(super) async fn settle_cas_with(
-        &self,
-        principal: &str,
-        id: &str,
-        revision: u64,
-        outcome: (TaskTransition, Option<Vec<Target>>),
-        writes: crate::gateway::gateway_writes::WriteRecord,
-    ) -> bool {
-        self.settle_cas_by(
-            principal,
-            id,
-            revision,
-            outcome,
-            ErrorAuthor::Gateway,
-            writes,
-        )
-        .await
-    }
-
-    /// [`Self::settle_cas_with`], recording who wrote a `Fail` event's error
-    /// (MIK-7887.RECEIPT.1). `true` when the stored row delivers backend
-    /// output a relay receipt may be committed for.
-    pub(super) async fn settle_cas_by(
-        &self,
-        principal: &str,
-        id: &str,
-        revision: u64,
-        (event, targets): (TaskTransition, Option<Vec<Target>>),
-        author: ErrorAuthor,
-        writes: crate::gateway::gateway_writes::WriteRecord,
-    ) -> bool {
-        match self
-            .commit_transition(TransitionWrite::Settle {
-                principal,
-                id,
-                revision,
-                event: event.clone(),
-                targets: targets.clone(),
-                author,
-                writes: writes.clone(),
-            })
-            .await
-        {
-            Ok(stored) => return stored_backend_output(&stored),
-            Err(CommitFailure::RevisionConflict) => {}
-            Err(_) => {
-                tracing::warn!(task_id = %id, "task settlement write failed");
-                return false;
-            }
-        }
-
-        let Ok(owner) = self.service.owner(principal) else {
-            return false;
-        };
-        let Ok(current) = self.service.store.get(owner.as_digest(), id) else {
-            return false;
-        };
-        if is_terminal(current.task.status()) {
-            return false;
-        }
-        let settled = self
-            .commit_transition(TransitionWrite::Settle {
-                principal,
-                id,
-                revision: current.revision,
-                event,
-                targets,
-                author,
-                writes,
-            })
-            .await;
-        let Ok(stored) = settled else {
-            tracing::warn!(task_id = %id, "task settlement lost a second compare-and-set");
-            return false;
-        };
-        stored_backend_output(&stored)
-    }
-}
-
-/// Whether a settlement stored backend output a relay receipt may be
-/// committed for: a completed result, or (MIK-7887.RECEIPT.1) an error the
-/// gateway established as the peer's. A bounded settlement stores neither.
-fn stored_backend_output(stored: &CommittedTask) -> bool {
-    (stored.task.status() == TaskStatus::Completed && !stored.output_free)
-        || stored.backend_error().is_some()
-}
-
-fn is_terminal(status: TaskStatus) -> bool {
-    matches!(
-        status,
-        TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
-    )
 }
 
 /// Returned by `TaskExecutor::commit`, which is `pub(crate)`: the error type of
@@ -771,7 +671,14 @@ fn is_terminal(status: TaskStatus) -> bool {
 pub(crate) enum CommitFailure {
     Service(ServiceError),
     RevisionConflict,
+    /// The store clock read before 1970 on a commit with no time of its own
+    /// (MIK-8202 P4a A2). Typed through `commit_transition` so the worker can
+    /// wait for the clock; only `commit_to_service` maps it to `Unavailable`.
+    ClockUnreadable,
 }
+
+#[path = "worker_settle.rs"]
+mod settle;
 
 #[path = "worker_held.rs"]
 mod held;
@@ -784,3 +691,11 @@ pub(crate) mod rescue_seam;
 #[cfg(test)]
 #[path = "worker_tests.rs"]
 mod worker_tests;
+
+#[cfg(test)]
+#[path = "worker_clock_settle_tests.rs"]
+mod worker_clock_settle_tests;
+
+#[cfg(test)]
+#[path = "worker_clock_settle_compile_red_tests.rs"]
+mod worker_clock_settle_compile_red_tests;

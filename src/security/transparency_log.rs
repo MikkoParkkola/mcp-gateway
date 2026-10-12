@@ -799,3 +799,7 @@ mod cwe532_debug_redaction {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "transparency_log_bounded_clock_compile_red_tests.rs"]
+mod bounded_clock_compile_red_tests;

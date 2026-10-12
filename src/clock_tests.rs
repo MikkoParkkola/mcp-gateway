@@ -127,3 +127,45 @@ fn an_audit_row_is_kept_undated_on_an_unreadable_clock() {
     assert_eq!(undated["timestamp"], serde_json::Value::Null);
     assert_eq!(undated["clock_invalid"], true);
 }
+
+/// MIK-8202 P4a r4.2, the twin-copy invariant: clock.rs compiles into the
+/// library and the binary, so any state in it exists twice and an override
+/// set through one copy never reaches the other. A lexical check of its own
+/// source: the only `static` items sit inside the `test_clock` `thread_local!`
+/// block, and no lock, atomic or once-cell appears in code. Comment lines are
+/// skipped (the module doc names the forbidden types).
+#[test]
+fn clock_rs_holds_no_shared_mutable_state() {
+    let code: Vec<&str> = include_str!("clock.rs")
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect();
+    let block_start = code
+        .iter()
+        .position(|line| line.trim() == "thread_local! {")
+        .expect("the test_clock thread_local! block");
+    let block_end = block_start
+        + code[block_start..]
+            .iter()
+            .position(|line| line.trim() == "}")
+            .expect("the thread_local! block closes");
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+    for (i, line) in code.iter().enumerate() {
+        for (at, _) in line.match_indices("static") {
+            let before = line[..at].chars().next_back();
+            let after = line[at + "static".len()..].chars().next();
+            let a_static_item =
+                !before.is_some_and(|c| is_ident(c) || c == '\'') && !after.is_some_and(is_ident);
+            assert!(
+                !a_static_item || (block_start < i && i < block_end),
+                "a static outside the test_clock thread_local! block: {line}"
+            );
+        }
+        for forbidden in ["Mutex", "RwLock", "Atomic", "OnceLock", "LazyLock"] {
+            assert!(
+                !line.contains(forbidden),
+                "shared mutable state ({forbidden}) in clock.rs: {line}"
+            );
+        }
+    }
+}

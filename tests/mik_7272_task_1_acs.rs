@@ -74,12 +74,13 @@ fn ac_task_1_5_tasks_cancel_is_gated_as_a_2026_07_28_method() {
 /// must preserve the backend code, message and optional data as an object.
 #[test]
 fn ac_task_1_6_a_failed_task_carries_an_error_object_not_a_string() {
-    let mut task = Task::create("weather.get");
-    task.fail(JsonRpcError {
+    let mut task = Task::create("weather.get").expect("the test clock reads after 1970");
+    task.fail(&JsonRpcError {
         code: -32001,
         message: "upstream refused".to_string(),
         data: Some(json!({ "reason": "backend-policy" })),
-    });
+    })
+    .expect("a live task takes its outcome");
 
     let error = task.error().expect("a failed task reports why it failed");
     let encoded = serde_json::to_value(error).expect("the task error serializes");
@@ -98,8 +99,9 @@ fn ac_task_1_6_a_failed_task_carries_an_error_object_not_a_string() {
 fn ac_task_1_6_an_is_error_tool_result_is_completed_and_not_failed() {
     // A tool that ran and reported a domain failure has *completed*. Classing
     // it as `failed` loses the result the client is owed.
-    let mut task = Task::create("weather.get");
-    task.complete(json!({ "isError": true, "content": [] }));
+    let mut task = Task::create("weather.get").expect("the test clock reads after 1970");
+    task.complete(&json!({ "isError": true, "content": [] }))
+        .expect("a live task takes its outcome");
 
     assert_eq!(
         task.status(),
@@ -144,27 +146,31 @@ fn ac_task_1_7_mcp_name_mirrors_task_id_on_the_task_methods() {
 /// `protocol/tasks/snapshot_tests.rs`; this case makes no real-route claim.
 #[test]
 fn ac_task_1_2_each_status_carries_its_own_payload_and_no_other() {
-    let working = Task::create("weather.get");
+    let working = Task::create("weather.get").expect("the test clock reads after 1970");
     assert_eq!(working.status(), TaskStatus::Working);
     assert!(
         working.result().is_none() && working.error().is_none(),
         "a working task carries neither result nor error"
     );
 
-    let mut completed = Task::create("weather.get");
-    completed.complete(json!({ "content": [] }));
+    let mut completed = Task::create("weather.get").expect("the test clock reads after 1970");
+    completed
+        .complete(&json!({ "content": [] }))
+        .expect("a live task takes its outcome");
     assert_eq!(completed.status(), TaskStatus::Completed);
     assert!(
         completed.result().is_some() && completed.error().is_none(),
         "a completed task carries `result` and no `error`"
     );
 
-    let mut failed = Task::create("weather.get");
-    failed.fail(JsonRpcError {
-        code: -32001,
-        message: "upstream refused".to_string(),
-        data: None,
-    });
+    let mut failed = Task::create("weather.get").expect("the test clock reads after 1970");
+    failed
+        .fail(&JsonRpcError {
+            code: -32001,
+            message: "upstream refused".to_string(),
+            data: None,
+        })
+        .expect("a live task takes its outcome");
     assert_eq!(failed.status(), TaskStatus::Failed);
     assert!(
         failed.error().is_some() && failed.result().is_none(),

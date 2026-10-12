@@ -22,8 +22,9 @@ const ALICE: (&str, &str) = ("api_key", "alice");
 
 /// A completed task whose one recorded call was Alice's personal capability.
 fn finished_task() -> CommittedTask {
-    let mut task = Task::create("gateway_invoke");
-    task.complete(json!({ "content": [] }));
+    let mut task = Task::create("gateway_invoke").expect("the test clock reads after 1970");
+    task.complete(&json!({ "content": [] }))
+        .expect("a live task takes its outcome");
     CommittedTask {
         task,
         revision: 1,

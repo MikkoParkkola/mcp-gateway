@@ -100,13 +100,15 @@ async fn a_frame_carries_the_task_as_it_is_at_delivery() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (meta, _log) = gateway(&dir, AuditFailurePolicy::FailClosed);
     let subscription = SubscriptionId::of_request(RequestId::Number(7));
-    let mut task = crate::protocol::tasks::Task::create("gateway_invoke");
+    let mut task = crate::protocol::tasks::Task::create("gateway_invoke")
+        .expect("the test clock reads after 1970");
     let working = json!({
         "jsonrpc": "2.0",
         "method": "notifications/tasks",
         "params": { "taskId": task.id(), "status": "working" },
     });
-    task.complete(json!({ "content": [{ "type": "text", "text": "done" }] }));
+    task.complete(&json!({ "content": [{ "type": "text", "text": "done" }] }))
+        .expect("a live task takes its outcome");
     let stored = crate::gateway::task_service::CommittedTask {
         task,
         revision: 2,
