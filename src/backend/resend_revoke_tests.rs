@@ -415,7 +415,23 @@ fn catalogue_len(backend: &Backend) -> usize {
 async fn s13_an_abandoned_refresh_narrows_from_what_it_read() {
     let (backend, _wire) =
         primed(vec![Page::Tools(vec![write("t")], true), Page::ErrorFrame]).await;
-    let _ = backend.get_tools_shared().await;
+    // The refresh runs on its own thread and runtime: the abandon hook runs
+    // under the cache's write guard, so a hook that took the guard again
+    // would deadlock. Bounded here, that fails this row instead of hanging it.
+    let (done, finished) = std::sync::mpsc::channel();
+    let refresh = Arc::clone(&backend);
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime for the refresh");
+        let _ = runtime.block_on(refresh.get_tools_shared());
+        let _ = done.send(());
+    });
+    tokio::task::spawn_blocking(move || finished.recv_timeout(WAIT))
+        .await
+        .expect("the wait itself ran")
+        .expect("the abandoned refresh finished (a hook that takes the cache guard deadlocks)");
     assert!(
         !permitted(&backend).contains("t"),
         "a refresh read `t` declared a write, failed, and kept it resend-permitted"
