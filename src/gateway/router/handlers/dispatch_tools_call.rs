@@ -388,27 +388,15 @@ pub(super) async fn tools_call(
     // or lacks answers as absent; its resolution is carried to dispatch.
     // Nothing has acted before it (MIK-8353, r4 H1): the witness is minted
     // here, and a verdict that acted spends it, so the nonce stays spent.
-    let mut witness = Some(crate::gateway::meta_mcp::refund_witness::RefundWitness::at_capture());
-    for target in &backend_targets {
-        let target = target.as_target();
-        // A refusal or a failed fill is answered by the dispatch, as before.
-        witness = state
-            .meta_mcp
-            .caller_verdict(
-                (target.server, target.tool),
-                &caller,
-                Some(session_id.as_str()),
-                crate::gateway::meta_mcp::invoke::TargetNaming::of(
-                    &state.meta_mcp,
-                    tool_name,
-                    (target.server, target.tool),
-                ),
-                witness,
-            )
-            .await
-            .ok()
-            .and_then(|(_, witness)| witness);
-    }
+    let witness = state
+        .meta_mcp
+        .caller_verdicts(
+            &backend_targets,
+            tool_name,
+            (&caller, Some(session_id.as_str())),
+            Some(crate::gateway::meta_mcp::refund_witness::RefundWitness::at_capture()),
+        )
+        .await;
     // A name the verdict withheld answers -32601 under the target an absent
     // name gets, never its backend's (MIK-8356).
     *response_targets = crate::gateway::meta_mcp::response_security::without_withheld(

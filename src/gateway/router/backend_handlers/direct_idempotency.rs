@@ -203,6 +203,31 @@ pub(super) fn withdraw(lease: Option<&SyncLease>) {
     lease.inspect(|lease| lease.withdraw_dispatch());
 }
 
+/// A replay is scanned like a fresh answer: the idempotency cache is shared
+/// across routes, and the meta route settles before its delivery scan, so an
+/// entry's provenance proves nothing (design round 2).
+fn replay_scan(
+    state: &super::super::AppState,
+    (call, envelope): (
+        &crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall<'_>,
+        &Envelope,
+    ),
+    client: Option<&crate::gateway::auth::AuthenticatedClient>,
+    response: &mut JsonRpcResponse,
+) {
+    let method = envelope.method.as_str();
+    let target = super::direct_dispatch::screen_target(call, method);
+    super::super::direct_guards::scan_direct_egress(
+        state,
+        (
+            &target,
+            crate::gateway::meta_mcp::invoke::egress::ContentChecks::for_method(method),
+        ),
+        client,
+        response,
+    );
+}
+
 /// Test seams: hold one call after admission, just before its lease is marked
 /// (MIK-8154 L8's pre-dispatch cell).
 #[cfg(test)]
@@ -243,29 +268,4 @@ pub(crate) mod seams {
             gate.notified().await;
         }
     }
-}
-
-/// A replay is scanned like a fresh answer: the idempotency cache is shared
-/// across routes, and the meta route settles before its delivery scan, so an
-/// entry's provenance proves nothing (design round 2).
-fn replay_scan(
-    state: &super::super::AppState,
-    (call, envelope): (
-        &crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall<'_>,
-        &Envelope,
-    ),
-    client: Option<&crate::gateway::auth::AuthenticatedClient>,
-    response: &mut JsonRpcResponse,
-) {
-    let method = envelope.method.as_str();
-    let target = super::direct_dispatch::screen_target(call, method);
-    super::super::direct_guards::scan_direct_egress(
-        state,
-        (
-            &target,
-            crate::gateway::meta_mcp::invoke::egress::ContentChecks::for_method(method),
-        ),
-        client,
-        response,
-    );
 }

@@ -158,6 +158,30 @@ impl MetaMcp {
         .map(|verdict| (verdict, None))
     }
 
+    /// The caller verdict for each of one request's `targets`, in order, as
+    /// the route stages take it (R5.1), threading the call's refund witness:
+    /// it comes back only if no verdict acted. A refusal or a failed fill is
+    /// answered by the dispatch.
+    pub(crate) async fn caller_verdicts(
+        &self,
+        targets: &[crate::gateway::authz::CallTarget<'_>],
+        tool_name: &str,
+        (caller, session_id): (&MetaMcpCallerContext<'_>, Option<&str>),
+        mut witness: Option<RefundWitness>,
+    ) -> Option<RefundWitness> {
+        for target in targets {
+            let target = target.as_target();
+            let target = (target.server, target.tool);
+            let naming = TargetNaming::of(self, tool_name, target);
+            witness = self
+                .caller_verdict(target, caller, session_id, naming, witness)
+                .await
+                .ok()
+                .and_then(|(_, witness)| witness);
+        }
+        witness
+    }
+
     /// The half of [`Self::caller_verdict`] that may act: resolve the
     /// caller's credential, judge the caller's slot (a fill), and carry the
     /// resolution to the dispatch.
