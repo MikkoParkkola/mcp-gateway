@@ -62,20 +62,38 @@ fn a_wrapped_tool_refusal_reads_as_a_refusal() {
     );
 }
 
+/// Every burst call that ended before anything was answered: a response frame
+/// carrying its id that is not a busy refusal. A tool-level decline, a
+/// JSON-RPC error (a bridge timeout, a failed delivery) and an ordinary result
+/// all count. Each one freed an inflight slot mid-burst (MIK-8411).
+fn ended_ids(frames: &[Value]) -> Vec<i64> {
+    let busy = refused_ids(frames);
+    frames
+        .iter()
+        .filter(|frame| frame.get("method").is_none())
+        .filter_map(|frame| frame.get("id").and_then(Value::as_i64))
+        .filter(|id| *id >= FIRST_CALL_ID && !busy.contains(id))
+        .collect()
+}
+
 /// Row 7b's refusal count, exactly (MIK-8411). With the backend rate limiter
 /// off (`write_config_without_rate_limit`) no admitted call ends while the
 /// burst is read, so every id past the cap is refused and none before it. A
-/// decline would free a slot and let one over-cap call in, so any decline
-/// means this run did not exercise the cap: that fails as a premise, never as
-/// a pass.
-fn assert_refused_exactly(refused: usize, declined: usize, lines: &[String]) {
+/// call that ended would free a slot and let one over-cap call in, so any
+/// ended call means this run did not exercise the cap: that fails as a
+/// premise, never as a pass.
+fn assert_refused_exactly(refused: usize, ended: &[i64], lines: &[String]) {
     let over_cap = usize::try_from(OVER_CAP_IDS).expect("the over-cap group is not negative");
-    eprintln!("7b server-busy refusals: {refused} of {over_cap} over the cap, {declined} declined");
-    assert_eq!(
-        declined,
-        0,
-        "premise: with the rate limiter off nothing is declined after admission, \
-         yet {declined} calls were, so the cap was not exercised. {}",
+    eprintln!(
+        "7b server-busy refusals: {refused} of {over_cap} over the cap, {} ended",
+        ended.len()
+    );
+    assert!(
+        ended.is_empty(),
+        "premise: with the rate limiter off and nothing answered, no burst call \
+         ends mid-burst, yet {} did (first: {:?}), so the cap was not exercised. {}",
+        ended.len(),
+        &ended[..ended.len().min(5)],
         census_of(lines)
     );
     assert_eq!(
@@ -334,13 +352,12 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
     // Collected until every refusal is in, not for a fixed window after the
     // questions (MIK-8411): the busy refusals are written only once the reader
     // reaches the tail of the burst, which a loaded runner can leave past a
-    // short settle. A decline breaks the premise, so it ends the wait early and
-    // `assert_refused_exactly` reports it.
+    // short settle. A call that ended breaks the premise, so it ends the wait
+    // early and `assert_refused_exactly` reports it.
     let lines = session
         .collect_lines_until(COLLECT_BUDGET, SETTLE_WINDOW, |seen| {
-            let declined = tool_refused_ids(seen).len();
-            prompts_in(seen).len() + declined >= wanted
-                && (refused_ids(seen).len() >= over_cap || declined > 0)
+            !ended_ids(seen).is_empty()
+                || (prompts_in(seen).len() >= wanted && refused_ids(seen).len() >= over_cap)
         })
         .await;
     let frames = frames_lenient(&lines);
@@ -364,7 +381,7 @@ async fn ac_mrtr_7b_the_excess_past_the_inflight_cap_is_refused_not_queued() {
         &below[..below.len().min(5)],
         census_of(&lines)
     );
-    assert_refused_exactly(refused.len(), tool_refused_ids(&frames).len(), &lines);
+    assert_refused_exactly(refused.len(), &ended_ids(&frames), &lines);
 
     // The refusal is not the whole invariant: a gateway that refuses everything
     // once saturated would satisfy the assertions above. Work accepted before
