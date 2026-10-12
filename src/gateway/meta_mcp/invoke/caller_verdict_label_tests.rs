@@ -146,3 +146,71 @@ async fn r1_signed_admission_of_a_withheld_name_answers_absent() {
         "R1-signed: admission of a withheld name passed: {answer:?}"
     );
 }
+
+/// M2 (the memo invariant): `caller_verdict` answers `Absent` exactly when it
+/// leaves `Withheld` in the request's memo, on every branch a row can reach
+/// in-process (the caller's slot offers, withholds or lacks the tool; no
+/// principal on a required backend). The call path relies on it twice: the
+/// dispatch branches on the verdict, and `refuse_withheld` reads the memo as
+/// a backstop. If the two ever disagree, this fails first.
+#[tokio::test]
+async fn m2_absent_is_returned_exactly_when_the_memo_records_withheld() {
+    use crate::gateway::meta_mcp::invoke::{CallerVerdict, TargetNaming};
+    for slot in [CallerSlot::Valid, CallerSlot::Invalid, CallerSlot::Lacks] {
+        let fx = per_user(
+            slot,
+            &valid(),
+            Warmth::Warm,
+            crate::config::InputSchemaEnforcement::Closed,
+            Surfaced::Yes,
+        );
+        let alpha = crate::gateway::meta_mcp::catalogue_per_caller_tests::identity("alpha");
+        let caller = crate::gateway::meta_mcp::identified_caller(&alpha);
+        let (verdict, recorded) = with_visibility_memo(async {
+            let verdict = fx
+                .meta
+                .caller_verdict((BACKEND, TOOL), &caller, None, TargetNaming::SurfacedName)
+                .await
+                .expect("the verdict resolves");
+            (verdict, recorded_visibility(BACKEND, TOOL))
+        })
+        .await;
+        assert_eq!(
+            matches!(verdict, CallerVerdict::Absent),
+            matches!(recorded, Some(Visibility::Withheld(_))),
+            "M2 {slot:?}: verdict {verdict:?} vs memo {recorded:?}"
+        );
+        assert_eq!(
+            matches!(verdict, CallerVerdict::Absent),
+            !matches!(slot, CallerSlot::Valid),
+            "M2 premise {slot:?}: {verdict:?}"
+        );
+    }
+    let fx = per_user(
+        CallerSlot::Valid,
+        &valid(),
+        Warmth::Warm,
+        crate::config::InputSchemaEnforcement::Closed,
+        Surfaced::Yes,
+    );
+    let anonymous = crate::gateway::meta_mcp::anonymous_caller();
+    let (verdict, recorded) = with_visibility_memo(async {
+        let verdict = fx
+            .meta
+            .caller_verdict(
+                (BACKEND, TOOL),
+                &anonymous,
+                None,
+                TargetNaming::SurfacedName,
+            )
+            .await
+            .expect("the verdict resolves");
+        (verdict, recorded_visibility(BACKEND, TOOL))
+    })
+    .await;
+    assert!(
+        matches!(verdict, CallerVerdict::Absent)
+            && matches!(recorded, Some(Visibility::Withheld(_))),
+        "M2 no principal: verdict {verdict:?} vs memo {recorded:?}"
+    );
+}

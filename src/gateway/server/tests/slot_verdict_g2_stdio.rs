@@ -608,3 +608,52 @@ async fn r1_stdio_signed_keyed_replay_of_a_withheld_name_answers_absent() {
         "R1-stdio-signed: the retry reached the backend: {replay}"
     );
 }
+
+/// N1 (the no-view marker from the call path; muse delta LOW): the sole
+/// operator's slot is warm and indexed by a real listing, then its managed
+/// grant is revoked. Readers that recheck the grant (initialize, `tools/list`,
+/// `list_servers`, the disabled list) write the no-view marker themselves;
+/// next-tool predictions read the index and do not. A surfaced call by the
+/// revoked operator is answered as absent and writes the marker, so every
+/// later reader withholds the backend at once. RED without the verdict's
+/// `record_no_view`: the index still holds the revoked grant's slot.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn n1_a_revoked_operators_surfaced_call_marks_no_view() {
+    let stdio = operator_stdio();
+    let filled = stdio
+        .rpc(
+            1,
+            "tools/call",
+            json!({"name": "gateway_list_tools", "arguments": {"server": BACKEND}}),
+        )
+        .await;
+    let backend = stdio.gateway.backends().get(BACKEND).expect("the backend");
+    assert!(
+        backend
+            .populated_per_user_bindings_for_test()
+            .contains(&DirectAccountGateway::operator_binding()),
+        "premise: a real fill warmed the operator's slot: {filled}"
+    );
+    stdio.gateway.revoke_operator_grant().await;
+    let operator = DirectAccountGateway::operator_subject();
+    assert!(
+        !backend.caller_has_no_view(&operator),
+        "premise: the revocation alone writes no marker"
+    );
+    let answer = stdio
+        .rpc(
+            2,
+            "tools/call",
+            json!({"name": TOOL, "arguments": {"folder": "inbox"}}),
+        )
+        .await;
+    assert_eq!(
+        answer.pointer("/error/code"),
+        Some(&json!(-32601)),
+        "premise: the revoked operator's surfaced call answers as absent: {answer}"
+    );
+    assert!(
+        backend.caller_has_no_view(&operator),
+        "N1: the call left no no-view marker, so predictions still read the revoked slot"
+    );
+}

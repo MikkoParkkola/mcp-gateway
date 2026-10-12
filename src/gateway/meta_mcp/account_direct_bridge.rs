@@ -168,6 +168,17 @@ impl DirectAccountGateway {
         .await;
     }
 
+    /// Revoke the sole operator's seeded grant through live custody, with no
+    /// reconnect: the operator keeps its principal but has no current grant,
+    /// so it has no view of the backend (MIK-8356 R3.7).
+    pub(crate) async fn revoke_operator_grant(&self) {
+        self.custody
+            .handle
+            .invalidate(&operator_key())
+            .await
+            .expect("the seeded grant must revoke through real custody");
+    }
+
     /// The per-user slot the sole operator's seeded grant selects.
     pub(crate) fn operator_binding() -> String {
         expected_identity_key_for(&operator_key(), SEEDED_REVISION)
