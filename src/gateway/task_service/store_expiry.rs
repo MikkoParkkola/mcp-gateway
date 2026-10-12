@@ -185,7 +185,7 @@ impl TaskStore {
             return Vec::new();
         }
         let mut out = Vec::new();
-        let mut held = Vec::new();
+        let mut held = std::collections::HashSet::new();
         for (id, entry) in &state.entries {
             let terminal = matches!(
                 entry.task.status(),
@@ -197,7 +197,7 @@ impl TaskStore {
             if entry.task.status() == TaskStatus::Cancelled
                 && entry.record.upstream_cancel_pending.is_some()
             {
-                held.push(id.clone());
+                held.insert(id.clone());
                 continue;
             }
             out.push((id.clone(), entry.record.revision));
