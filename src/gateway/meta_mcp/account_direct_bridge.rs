@@ -33,7 +33,7 @@ pub(crate) struct DirectAccountGateway {
     backends: Arc<BackendRegistry>,
     dispatches: Arc<Dispatches>,
     /// Kept alive: its store directory lives as long as the gateway.
-    _custody: Custody,
+    custody: Custody,
 }
 
 impl DirectAccountGateway {
@@ -48,6 +48,32 @@ impl DirectAccountGateway {
         mode: ServeMode,
         auth: crate::config::AuthConfig,
         binding: &Binding,
+    ) -> Self {
+        Self::new_with(mode, auth, binding, None)
+    }
+
+    /// [`Self::new_in`], with `BACKEND`'s argument-key enforcement set when
+    /// `enforcement` names one (MIK-8356 C10 runs the stdio twin at Off).
+    pub(crate) fn new_with(
+        mode: ServeMode,
+        auth: crate::config::AuthConfig,
+        binding: &Binding,
+        enforcement: Option<crate::config::InputSchemaEnforcement>,
+    ) -> Self {
+        Self::new_configured(mode, auth, binding, move |config| {
+            if let Some(mode) = enforcement {
+                config.input_schema_enforcement = mode;
+            }
+        })
+    }
+
+    /// [`Self::new_in`], with `configure` applied to `BACKEND`'s config (the
+    /// MIK-8356 X1 stdio row makes it a `passthrough` backend).
+    pub(crate) fn new_configured(
+        mode: ServeMode,
+        auth: crate::config::AuthConfig,
+        binding: &Binding,
+        configure: impl Fn(&mut crate::config::BackendConfig),
     ) -> Self {
         let operator_grant = matches!(binding, Binding::Connected);
         let bind = match binding {
@@ -65,19 +91,19 @@ impl DirectAccountGateway {
             Vec::new()
         };
         let custody = custody_with(&seed);
-        let (meta, dispatches) = gateway_in(
+        let (meta, dispatches) = gateway_in_with(
             &[(BACKEND, bind)],
             &Descriptors::same(&[WORK]),
             &custody.installed(),
             &slots,
-            mode,
-            auth,
+            (mode, auth),
+            configure,
         );
         Self {
             backends: Arc::clone(&meta.backends),
             meta: Some(meta),
             dispatches,
-            _custody: custody,
+            custody,
         }
     }
 
@@ -120,6 +146,48 @@ impl DirectAccountGateway {
     /// Answer the next non-`tools/list` request with `result`.
     pub(crate) fn answer_next(&self, result: serde_json::Value) {
         self.dispatches.script(&[Answer::Result(result)]);
+    }
+
+    /// Answer the next requests, `tools/list` included, with these HTTP
+    /// statuses (MIK-8356 C9: a cold slot's first list gets a 401).
+    pub(crate) fn answer_lists_with(&self, statuses: &[u16]) {
+        self.dispatches.script_lists();
+        self.dispatches.answer_with(statuses);
+    }
+
+    /// Forced refreshes custody ran: one per `after_upstream_401`.
+    pub(crate) fn refreshes(&self) -> usize {
+        self.custody.refreshes()
+    }
+
+    /// Credential releases custody made: one per `prepare` (MIK-8356 F5: a
+    /// refused call resolves nothing).
+    pub(crate) fn releases(&self) -> usize {
+        self.custody.releases()
+    }
+
+    /// Revoke the sole operator's seeded grant and reconnect it under a new
+    /// generation, through live custody (MIK-8356: the old slot stays warm and
+    /// indexed, but no longer belongs to the current grant).
+    pub(crate) async fn rotate_operator_grant(&self) {
+        revoke_and_reconnect(
+            &self.custody,
+            &operator_key(),
+            &grant(ALICE_WORK_TOKEN, u64::MAX),
+            ROTATED_TOKEN,
+        )
+        .await;
+    }
+
+    /// Revoke the sole operator's seeded grant through live custody, with no
+    /// reconnect: the operator keeps its principal but has no current grant,
+    /// so it has no view of the backend (MIK-8356 R3.7).
+    pub(crate) async fn revoke_operator_grant(&self) {
+        self.custody
+            .handle
+            .invalidate(&operator_key())
+            .await
+            .expect("the seeded grant must revoke through real custody");
     }
 
     /// The per-user slot the sole operator's seeded grant selects.

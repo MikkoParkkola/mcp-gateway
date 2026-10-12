@@ -106,12 +106,15 @@ fn gateway(caller: Option<&Value>, shared: &Value) -> MetaMcp {
         Arc::new(Listing(serde_json::to_value(&caller_tools).expect("tools"))),
     );
     backend.store_shared_tools_for_test(shared_tools);
-    backend.store_per_user_tools_for_test(BINDING, caller_tools);
     let registry = Arc::new(BackendRegistry::new());
     assert!(registry.register(backend), "fixture registration");
     let mut meta = MetaMcp::new(registry);
     install_minting(&mut meta);
     meta.set_multi_user(true);
+    // alpha's catalogue, as alpha's own fill leaves it (stored and indexed).
+    let alpha = identity("alpha");
+    let proof = MetaMcp::proof_of(&identified_caller(&alpha));
+    meta.seed_caller_catalogue_for_test(BACKEND, proof, BINDING, caller_tools);
     meta
 }
 

@@ -211,14 +211,6 @@ pub(super) async fn admit<'a>(
         trace_id: "",
         caller_key,
     };
-    if envelope.method == "tools/call"
-        && let Err(e) = DirectRouteGuards::run(&state.meta_mcp, &call, preflight.signing_scope)
-    {
-        return Err(build_http_response(
-            &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
-            StatusCode::OK,
-        ));
-    }
     let auth = BackendAuthContext {
         client,
         oauth_agent_identity: caller.oauth_agent_identity.as_ref(),
@@ -253,6 +245,16 @@ pub(super) async fn admit<'a>(
         cancel_on,
     };
     guard_and_sanitize(scope, envelope, propagation, &mut admitted).await?;
+    // After authorize, the firewall and the caller's catalogue (MIK-8356 F3).
+    if envelope.method == "tools/call"
+        && let Err(e) =
+            DirectRouteGuards::run(&state.meta_mcp, &admitted.call, preflight.signing_scope)
+    {
+        return Err(build_http_response(
+            &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
+            StatusCode::OK,
+        ));
+    }
     let mut guarded = idempotency_outcome(scope, envelope, preflight, propagation)?;
     let (lease, replay) =
         super::direct_idempotency::execution_lease(scope, envelope, preflight, &mut guarded)?;
@@ -411,13 +413,16 @@ async fn forward_plain(
             key,
             name,
         );
-        return Ok(
-            crate::gateway::router::inflight_calls::explicitly_cancellable(
-                admitted.cancel_on.take(),
-                drain,
-            )
-            .await,
-        );
+        let drained = crate::gateway::router::inflight_calls::explicitly_cancellable(
+            admitted.cancel_on.take(),
+            drain,
+        )
+        .await;
+        // Index the slot a complete drain stored (MIK-8356 R3.5).
+        state
+            .meta_mcp
+            .remember_caller_slot(&route.backend, caller.proof(), key);
+        return Ok(drained);
     }
     let admission = if method == "tools/call" {
         match DirectRouteGuards::before_dispatch(&state.meta_mcp, &admitted.call) {
@@ -692,32 +697,10 @@ fn settle_parked(
     }
 }
 
-/// A replay is scanned like a fresh answer: the idempotency cache is shared
-/// across routes, and the meta route settles before its delivery scan, so an
-/// entry's provenance proves nothing (design round 2).
-pub(super) fn replay_scan(
-    state: &AppState,
-    (call, envelope): (&BackendCall<'_>, &Envelope),
-    client: Option<&crate::gateway::auth::AuthenticatedClient>,
-    response: &mut JsonRpcResponse,
-) {
-    let method = envelope.method.as_str();
-    let target = screen_target(call, method);
-    super::super::direct_guards::scan_direct_egress(
-        state,
-        (
-            &target,
-            crate::gateway::meta_mcp::invoke::egress::ContentChecks::for_method(method),
-        ),
-        client,
-        response,
-    );
-}
-
 /// The policy target an answer of `method` is screened under (MIK-8139):
 /// the named tool for `tools/call`, otherwise the method itself, as the
 /// result scans target it.
-fn screen_target<'a>(call: &BackendCall<'a>, method: &'a str) -> BackendCall<'a> {
+pub(super) fn screen_target<'a>(call: &BackendCall<'a>, method: &'a str) -> BackendCall<'a> {
     BackendCall {
         server: call.server,
         tool: if method == "tools/call" {

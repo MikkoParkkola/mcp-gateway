@@ -37,7 +37,15 @@ impl Gateway {
 
         let session_id = client.session_id;
         let policy = ToolPolicyAuthorizer { tool_policy };
-        let scope = InvokeScope::stdio(&policy);
+        let scope = InvokeScope::stdio(
+            &policy,
+            crate::identity_propagation::CallerProof::new(
+                None,
+                crate::identity_propagation::CallerProvenance::local_transport(
+                    StdioNonce::process(),
+                ),
+            ),
+        );
         let view = super::super::meta_mcp::visible::TargetView::Caller(scope, Some(session_id));
         let prepared = Self::prepare_signing(meta_mcp, &mut request, (client.sanitize, view));
         let (mut signing_context, chain_nonce) = match prepared {
@@ -116,17 +124,21 @@ impl Gateway {
                             meta_mcp.discover_document(client.discover_lists_modern()),
                         ),
                     ),
-                    "initialize" => stdio_tasks::advertised(
-                        client.tasks,
-                        meta_mcp.handle_initialize(
-                            id,
-                            params,
-                            Some(session_id),
-                            None,
-                            request_shape.era(),
-                            scope,
-                        ),
-                    ),
+                    "initialize" => {
+                        // The listings' managed-grant recheck (MIK-8356 R4.2).
+                        meta_mcp.revalidate_caller_slots(scope.caller).await;
+                        stdio_tasks::advertised(
+                            client.tasks,
+                            meta_mcp.handle_initialize(
+                                id,
+                                params,
+                                Some(session_id),
+                                None,
+                                request_shape.era(),
+                                scope,
+                            ),
+                        )
+                    }
                     m @ ("tasks/get" | "tasks/update" | "tasks/cancel") => {
                         let retry = crate::protocol::mrtr::RetryFields::from_params(params);
                         let caller = Self::build_stdio_caller_context(
@@ -142,6 +154,8 @@ impl Gateway {
                             .await
                     }
                     "tools/list" => {
+                        // MIK-8356: the same grant recheck HTTP runs before tools/list.
+                        meta_mcp.revalidate_caller_slots(scope.caller).await;
                         meta_mcp.handle_tools_list_with_params(id, params, Some(session_id), scope)
                     }
                     m if stdio_catalogue::METHODS.contains(&m) => {
@@ -166,6 +180,12 @@ impl Gateway {
             super::super::meta_mcp::invoke::relay::GatewayStamps::Legacy
         };
         let chain_source = response.chain_source;
+        // The caller verdicts are taken now: a withheld name is attributed
+        // as an absent one (MIK-8356).
+        let response_targets = super::super::meta_mcp::response_security::without_withheld(
+            &external_tool,
+            response_targets,
+        );
         let response = meta_mcp.finalize_content(
             response,
             &super::super::meta_mcp::response_security::ResponseDeliveryContext {

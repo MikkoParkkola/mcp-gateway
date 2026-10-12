@@ -42,6 +42,7 @@ fn request<'a>(
             api_key_name: None,
             agent_id: None,
             grant_subject: None,
+            caller: crate::identity_propagation::CallerProof::Anonymous,
         },
         input_capabilities: Declared::default(),
         session_id: None,

@@ -44,6 +44,9 @@ pub struct InvokeScope<'a> {
     pub agent_id: Option<crate::security::ProvenAgentId<'a>>,
     /// Verified caller subject for identity-grant evaluation.
     pub grant_subject: Option<&'a GrantSubject>,
+    /// What the caller proved, read only to find its own catalogue slot on a
+    /// per-user backend (MIK-8356). Never an authorization input.
+    pub(crate) caller: crate::identity_propagation::CallerProof<'a>,
 }
 
 impl MetaMcp {
@@ -196,7 +199,9 @@ impl MetaMcp {
                     tracing::warn!(server, "{}", super::grant_audit::WITHHELD_RECORD_FAILED);
                 }
             }
-            super::visible::Withholding::Schema | super::visible::Withholding::Descriptor => {
+            super::visible::Withholding::Schema
+            | super::visible::Withholding::Descriptor
+            | super::visible::Withholding::Lacked => {
                 tracing::warn!(
                     server,
                     tool = tool_name,
@@ -233,15 +238,28 @@ impl MetaMcp {
             .into_iter()
             .filter(|b| self.admits_backend(&b.name, scope, session_id))
             .collect();
-        let known = backends.iter().filter(|b| b.cached_tools_known()).count();
+        // MIK-8356: a per-user backend is counted from this caller's own slot,
+        // and is not known while that slot is cold.
+        let views: Vec<_> = backends
+            .iter()
+            .map(|b| self.listing_snapshot(b, scope))
+            .collect();
+        let known = backends
+            .iter()
+            .zip(&views)
+            .filter(|(b, view)| view.is_some() && self.listing_known(b, scope))
+            .count();
         // A truncated drain is still "known" (enumerated), but its count is a
         // lower bound, never exact (MIK 7570 PAGING.1 design D). List and flag
         // are read under one guard so a fill landing between cannot tear them.
         let mut truncated = false;
         let admitted: usize = backends
             .iter()
-            .map(|b| {
-                let (tools, cut) = b.cached_tools_snapshot_and_truncated();
+            .zip(views)
+            .map(|(b, view)| {
+                let Some((tools, cut)) = view else {
+                    return 0;
+                };
                 truncated |= cut;
                 tools
                     .iter()
@@ -309,7 +327,8 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> bool {
         let on_backend = self.backends.all().into_iter().any(|b| {
-            b.get_cached_tool(name).is_some() && self.shows_name(&b.name, name, scope, session_id)
+            self.listing_tool(&b, name, scope).is_some()
+                && self.shows_name(&b.name, name, scope, session_id)
         });
         on_backend
             || self.get_capabilities().is_some_and(|cap| {
@@ -499,6 +518,7 @@ impl InvokeScope<'static> {
             api_key_name: None,
             agent_id: None,
             grant_subject: None,
+            caller: crate::identity_propagation::CallerProof::Anonymous,
         }
     }
 }
@@ -538,6 +558,7 @@ impl InvokeScope<'static> {
             api_key_name: None,
             agent_id: None,
             grant_subject: None,
+            caller: crate::identity_propagation::CallerProof::Anonymous,
         }
     }
 }
@@ -547,13 +568,20 @@ impl<'a> InvokeScope<'a> {
     /// this process, so it holds the operator's standing; its tools are
     /// judged by the stdio authorizer (the global tool policy), as its calls
     /// are, and identity grants see no subject, which also matches invoke.
-    pub(crate) fn stdio(authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>) -> Self {
+    pub(crate) fn stdio(
+        authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>,
+        caller: crate::identity_propagation::CallerProof<'a>,
+    ) -> Self {
         Self {
             authorizer,
             is_admin: true,
             api_key_name: None,
             agent_id: None,
             grant_subject: None,
+            // The process's one operator spawned it, so its own catalogue slot on
+            // a per-user backend is the sole operator's (MIK-8356). Proven by
+            // the caller, which holds the stdio nonce.
+            caller,
         }
     }
 }

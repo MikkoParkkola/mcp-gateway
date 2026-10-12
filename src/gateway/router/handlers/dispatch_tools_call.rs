@@ -381,14 +381,35 @@ pub(super) async fn tools_call(
         },
     };
 
+    // The caller verdict (MIK-8356 R5.1): after route authorize and the
+    // firewall, before X14, the task gate and admission. On a per-user
+    // backend it records the caller's own answer in the request's memo, so
+    // every reader below sees it and a name the caller's catalogue withholds
+    // or lacks answers as absent; its resolution is carried to dispatch.
+    // Nothing has acted before it (MIK-8353, r4 H1): the witness is minted
+    // here, and a verdict that acted spends it, so the nonce stays spent.
+    let witness = state
+        .meta_mcp
+        .caller_verdicts(
+            &backend_targets,
+            tool_name,
+            (&caller, Some(session_id.as_str())),
+            Some(crate::gateway::meta_mcp::refund_witness::RefundWitness::at_capture()),
+        )
+        .await;
+    // A name the verdict withheld answers -32601 under the target an absent
+    // name gets, never its backend's (MIK-8356).
+    *response_targets = crate::gateway::meta_mcp::response_security::without_withheld(
+        tool_name,
+        std::mem::take(response_targets),
+    );
+
     // The modern destructive gate (X14). Every authorization, admin and
     // firewall check above has already run, and nothing below has yet
     // acted: a challenge mints no task, reserves no idempotency key and
     // reaches no backend, and neither does a refusal.
-    // Nothing has acted yet (MIK-8353, r4 H1): X14 hands the witness back
-    // only if it spent no grant, and admission gives the nonce back only
-    // with it.
-    let witness = Some(crate::gateway::meta_mcp::refund_witness::RefundWitness::at_capture());
+    // X14 hands the witness back only if it spent no grant, and admission
+    // gives the nonce back only with it.
     let (confirmation, witness) = state
         .meta_mcp
         .confirm_destructive_task_with(

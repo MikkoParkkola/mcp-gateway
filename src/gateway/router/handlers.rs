@@ -250,6 +250,12 @@ async fn meta_mcp_dispatch(
         api_key_name: client.as_ref().map(|c| c.name.as_str()),
         agent_id: agent_identity.proven_agent_id(),
         grant_subject: grant_subject.as_ref(),
+        caller: crate::identity_propagation::CallerProof::new(
+            verified_identity.as_ref(),
+            crate::identity_propagation::CallerProvenance::classify(
+                client.as_ref().map(|client| client.principal.as_str()),
+            ),
+        ),
     };
     // Every shared backend's one level, set over the gateway's own credential:
     // an operator action. Checked before dispatch so a case variant of the
@@ -395,14 +401,23 @@ async fn meta_mcp_dispatch(
                 .meta_mcp
                 .discover_document(state.live_config.running().server.modern_protocol),
         ),
-        "initialize" => state.meta_mcp.handle_initialize(
-            id,
-            params,
-            Some(session_id.as_str()),
-            header_profile.as_deref(),
-            era,
-            invoke_scope,
-        ),
+        "initialize" => {
+            // Its greeting counts tools per backend: the same managed-grant
+            // recheck as every listing, so a rotated grant's stale slot never
+            // contributes (MIK-8356 R4.2).
+            state
+                .meta_mcp
+                .revalidate_caller_slots(invoke_scope.caller)
+                .await;
+            state.meta_mcp.handle_initialize(
+                id,
+                params,
+                Some(session_id.as_str()),
+                header_profile.as_deref(),
+                era,
+                invoke_scope,
+            )
+        }
         "tools/list" => {
             // NFR.OBS.2. The inputs that decide this surface, and the
             // cacheScope the response will carry — recorded before the list is
@@ -431,6 +446,12 @@ async fn meta_mcp_dispatch(
                 cache_scope_advertised = is_modern,
                 "tools/list surface inputs and cache scope"
             );
+            // MIK-8356: a rotated or revoked managed grant's slot is never this
+            // caller's listing view; one recheck for every listing path.
+            state
+                .meta_mcp
+                .revalidate_caller_slots(invoke_scope.caller)
+                .await;
             state.meta_mcp.handle_tools_list_with_url_override(
                 id,
                 params,

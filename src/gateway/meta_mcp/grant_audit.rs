@@ -665,6 +665,9 @@ impl super::MetaMcp {
             .signing
             .is_some_and(|context| context.prepared_for(server, tool))
         {
+            // Signing ran the policy before the route stage could record this
+            // request's verdict (stdio): refuse a withheld name here.
+            super::visible::refuse_withheld(server, tool)?;
             stamp_prepared(server, tool);
             Ok(())
         } else {

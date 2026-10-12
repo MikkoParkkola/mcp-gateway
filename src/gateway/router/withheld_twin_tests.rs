@@ -13,6 +13,7 @@ use axum::http::StatusCode;
 use serde_json::{Value, json};
 
 use super::direct_guards_fixture::{Fx, fixture_audited_built_on, send, send_with_headers};
+use super::tests::modern_meta;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::protocol::{JsonRpcResponse, RequestId};
 
@@ -317,17 +318,6 @@ impl Twin {
             _ => assert!(!blocked, "premise: `{tool}` is blocked on {side:?}"),
         }
     }
-}
-
-/// The `_meta` of a modern call declaring form elicitation and tasks.
-pub(super) fn modern_meta() -> Value {
-    json!({
-        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-        "io.modelcontextprotocol/clientCapabilities": {
-            "elicitation": {"form": {}},
-            "extensions": {"io.modelcontextprotocol/tasks": {}}
-        }
-    })
 }
 
 /// What one call answered: HTTP status, body and the backend sends.

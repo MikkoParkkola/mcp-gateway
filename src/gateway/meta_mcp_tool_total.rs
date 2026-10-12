@@ -48,7 +48,7 @@ pub(crate) fn tool_total(backends: &[Arc<Backend>]) -> ToolTotal {
     let mut truncated = false;
     let mut total: usize = 0;
     for b in backends {
-        let (tools, cut) = b.cached_tools_snapshot_and_truncated();
+        let (tools, cut) = b.cached_tools_snapshot_and_truncated(None);
         truncated |= cut;
         total += tools.len();
     }

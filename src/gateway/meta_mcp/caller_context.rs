@@ -131,6 +131,10 @@ impl<'a> MetaMcpCallerContext<'a> {
             api_key_name: self.api_key_name,
             agent_id: self.agent_id,
             grant_subject: self.grant_subject.as_ref(),
+            caller: crate::identity_propagation::CallerProof::new(
+                self.verified_identity,
+                self.provenance(),
+            ),
         }
     }
 

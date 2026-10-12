@@ -187,7 +187,7 @@ fn backend_with(transport: Arc<Pager>, ttl: Duration) -> Arc<Backend> {
 }
 
 fn truncated(backend: &Backend) -> bool {
-    backend.cached_tools_snapshot_and_truncated().1
+    backend.cached_tools_snapshot_and_truncated(None).1
 }
 
 const LONG_TTL: Duration = Duration::from_secs(300);

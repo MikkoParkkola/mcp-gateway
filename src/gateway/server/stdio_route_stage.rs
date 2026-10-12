@@ -101,6 +101,13 @@ impl Gateway {
                 return (RouteStage::Answer(answer), witness);
             }
         }
+        // The caller verdict (MIK-8356 R5.1), after authorize and the
+        // firewall and before X14, task intent and admission: as on `/mcp`.
+        // A refusal or a failed fill is answered by the dispatch. A verdict
+        // that acted spends the witness, so the nonce stays spent (MIK-8353).
+        let witness = meta_mcp
+            .caller_verdicts(&targets, tool_name, (caller, Some(session_id)), witness)
+            .await;
         // X14 decides a task-augmented call, so it needs the session's task
         // store; without one the call is synchronous and X14 has nothing to say.
         let Some(tasks) = client.tasks else {

@@ -278,7 +278,7 @@ impl MetaMcp {
         // was promoted AND is already surfaced, we skip the promoted copy.
         #[cfg(feature = "spec-preview")]
         if !self.code_mode_enabled {
-            let promoted = self.promoted_tools_for_session(session_id);
+            let promoted = self.promoted_tools_for_caller(session_id, scope);
             for (server, tool) in promoted {
                 if !self.shows_tool(&server, &tool, scope, session_id) {
                     continue;

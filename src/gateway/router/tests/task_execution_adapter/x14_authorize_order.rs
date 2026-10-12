@@ -100,6 +100,7 @@ async fn ungranted_refusal(idem: &str) {
         api_key_name: None,
         agent_id: None,
         grant_subject: Some(&owner),
+        caller: crate::identity_propagation::CallerProof::Anonymous,
     };
     x14_does_not_classify(&granted.state.meta_mcp, PERSONAL, scope).await;
     let row = armed(false, false, AuditFailurePolicy::BestEffort, surfaced).await;
@@ -118,6 +119,7 @@ async fn non_admin_refusal(idem: &str) {
         api_key_name: None,
         agent_id: None,
         grant_subject: None,
+        caller: crate::identity_propagation::CallerProof::Anonymous,
     };
     x14_does_not_classify(&row.state.meta_mcp, WEBHOOK, admin).await;
     let (sync, task) = (by_surfaced_name(1, WEBHOOK), by_surfaced_name(2, WEBHOOK));

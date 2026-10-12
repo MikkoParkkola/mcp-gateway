@@ -272,6 +272,9 @@ fn step_failure(idx: usize, tool_ref: &str, error: Error) -> Error {
             message: format!("Chain step {idx} ({tool_ref}) refused: {message}"),
             data,
         },
+        // A step naming a tool this caller cannot see answers exactly as an
+        // absent name, unchanged (MIK-8356 fold F5).
+        e @ Error::JsonRpc { code: -32601, .. } => e,
         // The content gate's delivery refusal keeps its type, and so its
         // -32600 and its audit projection, like a denial (MIK-8325).
         Error::ResponseFirewallRefused => Error::ResponseFirewallRefused,
