@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/visible.rs b/src/gateway/meta_mcp/visible.rs
+index 53829361f..47b4f3146 100644
+--- a/src/gateway/meta_mcp/visible.rs
++++ b/src/gateway/meta_mcp/visible.rs
+@@ -323,7 +323,7 @@ pub(crate) fn changed_instance(backend: &crate::backend::Backend) -> Option<Stri
+             .instances
+             .iter()
+             .find(|(name, _)| *name == backend.name)
+-            .map(|(_, instance)| !std::ptr::eq(instance.as_ptr(), backend))
++            .map(|(_, instance)| false && !std::ptr::eq(instance.as_ptr(), backend))
+     };
+     let request = VISIBILITY_MEMO.try_with(|memo| differs(&memo.1.lock()));
+     let differs = request

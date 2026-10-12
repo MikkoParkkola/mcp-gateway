@@ -1,0 +1,3 @@
+head_sha	bd15e51f94a00fb310c2887dc104fa7408a75344
+# MIK-8154 r1d: the direct-route F2 row against the send-side instance check.
+f2_send_skip	linux	f2_send_skip.patch	--lib -- gateway::router::mik8154_rows_tests::c2e::r1d_a_direct_call_whose_backend_is_reloaded_is_refused --exact
