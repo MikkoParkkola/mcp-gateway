@@ -262,7 +262,6 @@ async fn meta_mcp_dispatch(
     let mut pending_view = crate::gateway::streaming::PendingRefresh::default();
     let mut response = match method.as_str() {
         "subscriptions/listen" => {
-            use crate::gateway::subscription_registry::ListenRefusal;
             // The single long-lived stream that replaces the GET endpoint.
             //
             // Returns EARLY with an SSE body rather than falling through to the
@@ -292,39 +291,11 @@ async fn meta_mcp_dispatch(
             // a permit is taken: nothing could ever be delivered to its stream,
             // so admitting it would only hold one of the slots.
             let listener = match state
-                .subscriptions
-                .subscribe_as(crate::gateway::auth::live::held_credential(headers))
+                .admit_listener(headers, intake.view_subject(), (id.clone(), session_id))
                 .await
             {
-                Ok(listener) => {
-                    let listener = state.judged_listener(listener, intake.view_subject());
-                    // MIK-8350: what this listener is shown now, taken before
-                    // anything is written; a caller that no longer resolves
-                    // is answered as the auth layer answers an invalid
-                    // credential.
-                    if listener.take_baseline().await.is_err() {
-                        return super::view_judge::dead_attach_refusal();
-                    }
-                    listener
-                }
-                Err(ListenRefusal::Unauthenticated) => {
-                    return build_error_response(
-                        Some(id),
-                        -32001,
-                        "subscriptions/listen requires a credential that authenticates",
-                        session_id,
-                        StatusCode::UNAUTHORIZED,
-                    );
-                }
-                Err(ListenRefusal::Full) => {
-                    return build_error_response(
-                        Some(id),
-                        -32003,
-                        "too many open subscriptions",
-                        session_id,
-                        StatusCode::SERVICE_UNAVAILABLE,
-                    );
-                }
+                Ok(listener) => listener,
+                Err(refusal) => return refusal,
             };
 
             // The request's own id, never minted: the specification defines the

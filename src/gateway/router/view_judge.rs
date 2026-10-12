@@ -313,6 +313,53 @@ impl AppState {
         listener
     }
 
+    /// Admit a `subscriptions/listen` stream: a permit for a caller whose
+    /// credential authenticates, judged by the view of the caller that opened
+    /// it, baselined before anything is written. A caller that no longer
+    /// resolves is answered as the auth layer answers an invalid credential.
+    pub(super) async fn admit_listener(
+        self: &Arc<Self>,
+        headers: &axum::http::HeaderMap,
+        subject: ViewSubject,
+        (id, session_id): (crate::protocol::RequestId, &str),
+    ) -> Result<crate::gateway::subscription_registry::Listener, axum::response::Response> {
+        use crate::gateway::subscription_registry::ListenRefusal;
+        let refuse = |code, message, status| {
+            Err(super::helpers::build_error_response(
+                Some(id.clone()),
+                code,
+                message,
+                session_id,
+                status,
+            ))
+        };
+        let listener = match self
+            .subscriptions
+            .subscribe_as(crate::gateway::auth::live::held_credential(headers))
+            .await
+        {
+            Ok(listener) => self.judged_listener(listener, subject),
+            Err(ListenRefusal::Unauthenticated) => {
+                return refuse(
+                    -32001,
+                    "subscriptions/listen requires a credential that authenticates",
+                    axum::http::StatusCode::UNAUTHORIZED,
+                );
+            }
+            Err(ListenRefusal::Full) => {
+                return refuse(
+                    -32003,
+                    "too many open subscriptions",
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                );
+            }
+        };
+        match listener.take_baseline().await {
+            Ok(()) => Ok(listener),
+            Err(_) => Err(dead_attach_refusal()),
+        }
+    }
+
     /// A switched profile changes what its caller is shown, and the switch's
     /// own answer is the notice: read the new view, to be recorded once the
     /// answer is delivered. Hands `response` back with it.
