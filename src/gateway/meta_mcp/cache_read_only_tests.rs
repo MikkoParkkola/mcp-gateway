@@ -385,8 +385,13 @@ async fn a_call_to_a_removed_backend_is_never_answered_from_cache() {
             &allow_all_ctx_named(Some("alice"), None),
         )
         .await;
-    assert!(
-        second.is_err(),
-        "a call with nothing behind it was answered from cache: {second:?}"
+    // A missing backend is answered with a rendered error result, not a Rust
+    // `Err` (post_dispatch.rs); the stored entry would come back as "ok".
+    let answer = second.expect("a missing backend is rendered as a result");
+    assert_eq!(
+        answer["isError"],
+        json!(true),
+        "a call with nothing behind it was answered from cache: {answer}"
     );
+    assert!(answer.to_string().contains("Backend not found"), "{answer}");
 }
