@@ -194,6 +194,7 @@ impl World {
         Self::start_on(
             key_server,
             None,
+            None,
             |meta| meta,
             super::audience_fixture::McpAccess::PublicPath,
         )

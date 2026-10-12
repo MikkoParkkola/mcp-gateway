@@ -290,7 +290,7 @@ impl World {
     /// As [`Self::start`], with `configure` applied to the Meta-MCP last.
     pub(super) async fn start_with(configure: impl FnOnce(MetaMcp) -> MetaMcp) -> Self {
         let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
-        Self::start_on(key_server, None, configure, McpAccess::Authenticated).await
+        Self::start_on(key_server, None, None, configure, McpAccess::Authenticated).await
     }
 
     /// As [`Self::start_with`], with an Open `WebUI` adapter that k-std may
@@ -322,6 +322,7 @@ impl World {
         Self::start_on(
             key_server,
             Some((config, dir)),
+            None,
             configure,
             McpAccess::Authenticated,
         )
@@ -346,6 +347,7 @@ impl World {
             Self::start_on(
                 Arc::clone(&oidc.ks),
                 None,
+                None,
                 |meta| meta,
                 McpAccess::Authenticated,
             )
@@ -354,14 +356,30 @@ impl World {
         )
     }
 
+    /// As [`Self::start`], with OAuth agent auth on against `registry` and
+    /// gateway auth off: with gateway auth on, an agent-only bearer is refused
+    /// before agent auth sees it (MIK-8377).
+    pub(super) async fn start_agents(registry: Arc<crate::gateway::oauth::AgentRegistry>) -> Self {
+        let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
+        Self::start_on(
+            key_server,
+            None,
+            Some(registry),
+            |meta| meta,
+            McpAccess::Authenticated,
+        )
+        .await
+    }
+
     pub(super) async fn start_on(
         key_server: Arc<KeyServer>,
         live: Option<(crate::config::Config, tempfile::TempDir)>,
+        agents: Option<Arc<crate::gateway::oauth::AgentRegistry>>,
         configure: impl FnOnce(MetaMcp) -> MetaMcp,
         access: McpAccess,
     ) -> Self {
         let auth = AuthConfig {
-            enabled: true,
+            enabled: agents.is_none(),
             public_paths: match access {
                 McpAccess::Authenticated => AuthConfig::default().public_paths,
                 McpAccess::PublicPath => vec!["/mcp".to_string()],
@@ -421,6 +439,9 @@ impl World {
             st.live_config = Arc::new(crate::config_reload::LiveConfig::new(config));
             dir
         });
+        if let Some(registry) = agents {
+            st.agent_auth = crate::gateway::oauth::AgentAuthState::new(true, registry);
+        }
         st.backends.set_change_feed(feed.clone());
         for backend in [
             shared_backend("alpha", &probe),

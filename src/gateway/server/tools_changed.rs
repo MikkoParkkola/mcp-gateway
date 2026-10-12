@@ -367,6 +367,8 @@ mod views;
 pub(super) mod stdio;
 
 #[cfg(test)]
+mod audience_agent_tests;
+#[cfg(test)]
 mod audience_cf_tests;
 #[cfg(test)]
 mod audience_ear;
