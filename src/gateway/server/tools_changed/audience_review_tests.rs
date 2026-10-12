@@ -115,3 +115,59 @@ async fn r4_a_queued_hint_made_stale_by_a_listing_is_not_written() {
         "the listing already shows the change: RED on 52c20300f"
     );
 }
+
+/// R5 (D16a): a listen request inside a session whose routing profile hides
+/// `read` is shown a list without it, so a `read` change sends it nothing;
+/// a listener with no profile is told.
+#[tokio::test]
+async fn r5_a_listen_in_a_session_with_a_profile_is_judged_by_that_profile() {
+    let w = World::start_with(|meta| meta.with_profile_registry(no_read_profiles())).await;
+    let _session = w.legacy_owned("profiled", "k-std").await;
+    let set = w
+        .post_in(
+            "k-std",
+            "profiled",
+            "tools/call",
+            serde_json::json!({ "name": "gateway_set_profile", "arguments": { "profile": "no-read" } }),
+        )
+        .await;
+    assert!(
+        set.get("error").is_none() && set["result"]["isError"] != serde_json::json!(true),
+        "premise: the profile is set: {set}"
+    );
+    let mut profiled = w.listen_at("k-std", "/mcp", Some("profiled")).await;
+    let mut plain = w.listen("k-std").await;
+    w.store_shared("alpha", alpha_with("r2"));
+    let told = [profiled.told(&w).await, plain.told(&w).await];
+    assert_eq!(told, [0, 1], "the profile hides read: RED on 52c20300f");
+}
+
+/// R6 (D16b): a stream on `?codemode=search_and_execute` is shown the two
+/// fixed Code Mode tools, which no backend change moves.
+#[tokio::test]
+async fn r6_a_listen_on_the_code_mode_url_is_told_nothing_of_a_backend_change() {
+    let w = World::start().await;
+    let mut code = w
+        .listen_at("k-std", "/mcp?codemode=search_and_execute", None)
+        .await;
+    let mut plain = w.listen("k-std").await;
+    w.store_shared("alpha", alpha_with("r2"));
+    let told = [code.told(&w).await, plain.told(&w).await];
+    assert_eq!(
+        told,
+        [0, 1],
+        "its list is the two fixed tools: RED on 52c20300f"
+    );
+}
+
+fn no_read_profiles() -> crate::routing_profile::ProfileRegistry {
+    let mut configs = std::collections::HashMap::new();
+    configs.insert(
+        "no-read".to_string(),
+        crate::routing_profile::RoutingProfileConfig {
+            deny_tools: Some(vec!["read".to_string()]),
+            ..Default::default()
+        },
+    );
+    crate::routing_profile::ProfileRegistry::from_config(&configs, "default")
+}

@@ -8,7 +8,10 @@ use futures::StreamExt as _;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::Receiver;
 
-use super::audience_fixture::{ARRIVAL, LIST_CHANGED, SENTINEL, World};
+use axum::body::Body;
+use tower::ServiceExt as _;
+
+use super::audience_fixture::{ARRIVAL, LIST_CHANGED, SENTINEL, World, asserted};
 use crate::gateway::streaming::SessionFrame;
 
 /// A listen response body read as SSE `data:` events.
@@ -204,5 +207,97 @@ impl World {
             .await;
         self.minted.borrow_mut().insert(id.to_string(), minted);
         Ear::Legacy(rx)
+    }
+}
+
+impl World {
+    /// A 2026 `subscriptions/listen` stream held by `bearer`, past its
+    /// acknowledgement, through the real route.
+    pub(super) async fn listen(&self, bearer: &str) -> Ear {
+        self.listen_as(bearer, None).await
+    }
+
+    /// As [`Self::listen`], with an Open `WebUI` `assertion`.
+    pub(super) async fn listen_as(&self, bearer: &str, assertion: Option<&str>) -> Ear {
+        let mut ear = self.listen_undrained(bearer, assertion).await;
+        // The constant attach hint (M-B10) is not a change: rows count what a
+        // change sends after attach, so it is read here and set aside.
+        let Ear::Listen(events) = &mut ear else {
+            unreachable!("a listen stream")
+        };
+        events
+            .next()
+            .await
+            .expect("the attach hint follows the acknowledgement");
+        ear
+    }
+
+    /// As [`Self::listen_as`], stopping at the acknowledgement: the attach
+    /// hint is still unread.
+    pub(super) async fn listen_undrained(&self, bearer: &str, assertion: Option<&str>) -> Ear {
+        self.listen_request(bearer, assertion, ("/mcp", None)).await
+    }
+
+    /// A listen at `uri`, inside legacy session `session` (its minted id)
+    /// when given, past its attach hint.
+    pub(super) async fn listen_at(&self, bearer: &str, uri: &str, session: Option<&str>) -> Ear {
+        let minted = session.map(|id| self.minted.borrow().get(id).cloned().expect("a session"));
+        let mut ear = self
+            .listen_request(bearer, None, (uri, minted.as_deref()))
+            .await;
+        let Ear::Listen(events) = &mut ear else {
+            unreachable!("a listen stream")
+        };
+        events.next().await.expect("the attach hint");
+        ear
+    }
+
+    async fn listen_request(
+        &self,
+        bearer: &str,
+        assertion: Option<&str>,
+        (uri, session): (&str, Option<&str>),
+    ) -> Ear {
+        let body = json!({
+            "jsonrpc": "2.0", "id": "listen", "method": "subscriptions/listen",
+            "params": {
+                "notifications": { "toolsListChanged": true, "resourcesListChanged": true },
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                }
+            }
+        });
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("authorization", format!("Bearer {bearer}"))
+            .header("content-type", "application/json")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("mcp-method", "subscriptions/listen")
+            .header("accept", "application/json, text/event-stream");
+        if let Some(session) = session {
+            request = request.header("mcp-session-id", session);
+        }
+        let request = request
+            .body(Body::from(body.to_string()))
+            .expect("a request");
+        let mut request = request;
+        asserted(&mut request, assertion);
+        let response = self.router.clone().oneshot(request).await.expect("served");
+        assert!(
+            response.status().is_success(),
+            "listen refused: {}",
+            response.status()
+        );
+        let mut events = Events {
+            stream: Box::pin(response.into_body().into_data_stream()),
+            buffer: String::new(),
+        };
+        events
+            .next()
+            .await
+            .expect("the acknowledgement opens the stream");
+        Ear::Listen(events)
     }
 }
