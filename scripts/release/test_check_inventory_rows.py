@@ -53,6 +53,15 @@ class Repo:
         rows.ROOT = self.root
         return sorted(name for _, name, _, _ in rows.missing_rows("base", "HEAD"))
 
+    def problems(self) -> list[str]:
+        """Test-named files the change touches that are mounted nowhere or
+        outside tests (MIK-8405.SPLIT.5). Empty on a script without the check,
+        so a red row fails at its own assertion."""
+        rows.ROOT = self.root
+        rows.declared_for_tests.cache_clear()
+        check = getattr(rows, "test_file_problems", lambda _base, _head: [])
+        return check("base", "HEAD")
+
 
 class CheckInventoryRows(unittest.TestCase):
     def setUp(self) -> None:
@@ -82,8 +91,16 @@ class CheckInventoryRows(unittest.TestCase):
             "pub fn existing() {}\n#[cfg(test)]\nmod tests {\n    fn helper() {}\n}\n",
         )
         self.repo.write("src/oauth/x_tests.rs", "fn case() {}\n")
+        # Mounted for tests: an unmounted test file is a finding of its own
+        # (MIK-8405.SPLIT.5), not a pass.
+        self.repo.write(
+            "src/oauth/mod.rs",
+            'pub fn existing() {}\n#[cfg(test)]\nmod tests {\n    fn helper() {}\n}\n'
+            '#[cfg(test)]\n#[path = "x_tests.rs"]\nmod x;\n',
+        )
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), [])
+        self.assertEqual(self.repo.problems(), [])
 
     def test_a_file_declared_only_for_tests_needs_no_row(self) -> None:
         # Declared by `#[path]` under cfg(test), and from a test file in turn.
@@ -185,6 +202,60 @@ class CheckInventoryRows(unittest.TestCase):
         self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\nfn helper() {}\n")
         self.repo.commit("add")
         self.assertEqual(self.repo.missing(), ["helper"])
+
+
+class TestNamedFiles(unittest.TestCase):
+    """MIK-8405.SPLIT.5: a file named like a test is skipped only when it is
+    mounted, and mounted only under `#[cfg(test)]`. Before, the name alone
+    skipped it, so production code in a `*_tests.rs` escaped the inventory and
+    an unmounted one lost its tests silently."""
+
+    def setUp(self) -> None:
+        self.repo = Repo()
+        self.addCleanup(self.repo.dir.cleanup)
+
+    def test_a_test_named_file_mounted_outside_tests_is_inventoried_and_reported(self) -> None:
+        self.repo.write(
+            "src/oauth/mod.rs",
+            'pub fn existing() {}\n#[path = "store_tests.rs"]\nmod store;\n',
+        )
+        self.repo.write("src/oauth/store_tests.rs", "pub fn refuse() {}\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["refuse"])
+        self.assertEqual(
+            self.repo.problems(),
+            ["src/oauth/store_tests.rs: named like a test file but compiled outside tests"],
+        )
+
+    def test_a_test_named_file_mounted_nowhere_is_reported(self) -> None:
+        self.repo.write("src/oauth/orphan_tests.rs", "fn case() {}\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), [])
+        self.assertEqual(
+            self.repo.problems(),
+            ["src/oauth/orphan_tests.rs: named like a test file but mounted nowhere, so its tests never compile"],
+        )
+
+    def test_a_production_file_declared_from_a_test_named_one_is_inventoried(self) -> None:
+        # The declarer's name used to make its children test-only too.
+        self.repo.write(
+            "src/oauth/mod.rs",
+            'pub fn existing() {}\n#[path = "outer_tests.rs"]\nmod outer;\n',
+        )
+        self.repo.write("src/oauth/outer_tests.rs", '#[path = "inner.rs"]\nmod inner;\n')
+        self.repo.write("src/oauth/inner.rs", "pub fn deep() {}\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["deep"])
+
+    def test_a_test_named_file_mounted_under_cfg_test_passes(self) -> None:
+        self.repo.write(
+            "src/oauth/mod.rs",
+            'pub fn existing() {}\n#[cfg(all(test, feature = "x"))]\n#[path = "case_tests.rs"]\nmod case;\n',
+        )
+        self.repo.write("src/oauth/case_tests.rs", "fn helper() {}\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), [])
+        self.assertEqual(self.repo.problems(), [])
 
 
 class PathspecShape(unittest.TestCase):
