@@ -51,6 +51,13 @@ pub(in crate::gateway) use chokepoint::{DirectPermit, Outbound};
 pub(crate) mod dispatch_guards; // S1-S4 stage methods (design doc 2026-09-27 #2.1)
 pub(crate) mod egress;
 mod nonce_settle; // MIK-8150: refund requests and dispatch marks of a signed execution
+
+/// The only entry outside `invoke` that spends a refund witness (MIK-8353
+/// 3b): something outside the invoke path consumed or acted for this call (a
+/// chain resume's handle), so no later refusal of it may give the nonce back.
+pub(super) fn spend_witness(caller: &super::MetaMcpCallerContext<'_>) {
+    nonce_settle::Witnessed::take(caller).spend();
+}
 mod r2_check;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
 mod bridge_settle;
@@ -421,7 +428,14 @@ impl MetaMcp {
             retry: &outbound_retry,
         };
         let reservation = idem_reservation.as_mut();
-        self.refuse_relay(caller, session_id, (server, tool), &egress, reservation)?;
+        if let Err(error) =
+            self.refuse_relay(caller, session_id, (server, tool), &egress, reservation)
+        {
+            // Refused before anything is sent: the witness that survived the
+            // steps above decides the refund (MIK-8353 3b, NONCEFX.3).
+            nonce_settle::ask_refund(caller);
+            return Err(error);
+        }
         // MIK-8137 b1: the chokepoint, before anything marks this send.
         let answers = outbound_retry.input_responses.as_ref();
         let outbound = chokepoint::Outbound {
