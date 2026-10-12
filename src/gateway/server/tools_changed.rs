@@ -379,6 +379,8 @@ pub(in crate::gateway::server) mod audience_fixture;
 #[cfg(test)]
 mod audience_l2_tests;
 #[cfg(test)]
+mod audience_liveness_tests;
+#[cfg(test)]
 mod audience_review_tests;
 #[cfg(test)]
 mod audience_sse_tests;
