@@ -10,8 +10,10 @@ use std::sync::atomic::Ordering;
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
+#[cfg(feature = "cost-governance")]
+use super::direct_guards_fixture::fixture_built;
 use super::direct_guards_fixture::{
-    Answer, fixture, fixture_built, post_direct, post_meta_invoke, post_meta_invoke_nonce,
+    Answer, fixture, post_direct, post_meta_invoke, post_meta_invoke_nonce,
 };
 use crate::gateway::meta_mcp::MetaMcp;
 

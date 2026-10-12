@@ -273,6 +273,7 @@ fn backend_security_error(id: &RequestId, message: &str) -> (StatusCode, Json<Va
     build_http_error_response(Some(id.clone()), -32600, message, StatusCode::FORBIDDEN)
 }
 
+#[cfg(feature = "firewall")]
 fn backend_security_error_with_status(
     id: &RequestId,
     code: i32,

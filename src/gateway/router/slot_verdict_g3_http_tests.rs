@@ -47,6 +47,7 @@ impl Gateway {
     }
 
     /// Every backend request either upstream has seen, `tools/list` included.
+    #[cfg(feature = "firewall")]
     pub(super) fn requests(&self) -> usize {
         self.dispatched() + self.caller.lists() + self.shared.lists()
     }
@@ -294,6 +295,7 @@ async fn g3_p5_withheld_answer_touches_no_response_targets() {
     );
 }
 
+#[cfg(feature = "firewall")]
 fn refused(answer: &(StatusCode, Value)) -> bool {
     !answer.0.is_success() || answer.1.get("error").is_some()
 }

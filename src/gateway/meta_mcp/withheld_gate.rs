@@ -17,6 +17,7 @@ pub(crate) mod seams {
 
     /// Run `hook` once, the next time the `/mcp` route stage on this thread
     /// has run the gate's judgement (test plan D1).
+    #[cfg(feature = "firewall")]
     pub(crate) fn after_gate(hook: impl FnOnce() + 'static) {
         AFTER_GATE.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     }
@@ -31,8 +32,10 @@ pub(crate) mod seams {
     /// Lets calls on this thread past the gate while held, so a row can
     /// reach the dispatch-time backstop with a withheld target (test plan B1).
     #[must_use = "the gate is skipped only while the guard is held"]
+    #[cfg(feature = "firewall")]
     pub(crate) struct SkipGate(());
 
+    #[cfg(feature = "firewall")]
     impl Drop for SkipGate {
         fn drop(&mut self) {
             SKIP_GATE.with(|skip| skip.set(false));
@@ -40,6 +43,7 @@ pub(crate) mod seams {
     }
 
     /// Skip the gate on this thread until the returned guard drops.
+    #[cfg(feature = "firewall")]
     pub(crate) fn skip_gate_for_test() -> SkipGate {
         SKIP_GATE.with(|skip| skip.set(true));
         SkipGate(())

@@ -444,6 +444,7 @@ async fn p1_stdio_withheld_task_call_gets_no_prompt_and_no_task() {
 }
 
 /// Whether a stdio answer is a refusal (a JSON-RPC error or an error result).
+#[cfg(feature = "firewall")]
 fn refused(answer: &Value) -> bool {
     answer.get("error").is_some() || answer.pointer("/result/isError") == Some(&json!(true))
 }
