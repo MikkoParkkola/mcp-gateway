@@ -1,0 +1,2 @@
+src/gateway/server/run_wiring.rs	log_feature_states	1	Logs which policies and features are on at startup; decides nothing (moved from Gateway::run, MIK-8416)
+src/gateway/server/run_wiring.rs	drain_inflight	1	Waits up to the shutdown timeout for in-flight requests to finish; decides nothing about access (moved from Gateway::run, MIK-8416)
