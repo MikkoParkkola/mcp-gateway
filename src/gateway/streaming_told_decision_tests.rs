@@ -291,3 +291,70 @@ async fn a_credentialed_caller_dead_for_any_reason_is_refused_at_attach() {
         assert_eq!(attached.err(), Some(reason));
     }
 }
+
+/// A key that may reach `beta` only, bearer `narrow`.
+fn narrow_auth() -> AuthState {
+    let config = crate::config::AuthConfig {
+        enabled: true,
+        api_keys: vec![crate::config::ApiKeyConfig {
+            key: None,
+            key_sha256: Some(crate::config::api_key_digest_spec(b"narrow")),
+            expires_at: None,
+            name: "narrow".to_owned(),
+            rate_limit: 0,
+            backends: vec!["beta".to_owned()],
+            allowed_tools: None,
+            denied_tools: None,
+            admin: false,
+            kind: crate::config::ApiKeyKind::Shared,
+        }],
+        ..crate::config::AuthConfig::default()
+    };
+    AuthState {
+        auth_config: Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
+            &config,
+        )),
+        ..auth()
+    }
+}
+
+/// R9-legacy (D17f): a hint for a backend the caller cannot reach is still
+/// judged, not skipped before it: a view that moved when scope narrowed is
+/// owed once. A caller whose view did not move is told nothing (the judge
+/// decides, not the scope check alone).
+#[tokio::test]
+async fn a_hint_for_a_backend_out_of_scope_is_still_judged() {
+    let multiplexer = NotificationMultiplexer::new(
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::StreamingConfig::default(),
+    );
+    multiplexer.set_authorizer(narrow_auth());
+    let owner = crate::gateway::session_id::SessionOwner::Credential("narrow".to_owned());
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        axum::http::HeaderValue::from_static("Bearer narrow"),
+    );
+    let held = crate::gateway::auth::live::held_credential(&headers);
+    let (session, _rx) = multiplexer.get_or_create_session_scoped(Some("s"), &owner, held);
+    let judge = Fake::answering("s0", "x");
+    let attached = multiplexer
+        .attach_view(&session, ViewSubject::default(), judge.clone())
+        .await;
+    assert!(matches!(attached, Ok(Some(_))), "premise: a baselined view");
+    let hint = TaggedNotification {
+        source: "alpha".to_owned(),
+        event_type: "message".to_owned(),
+        data: serde_json::json!({
+            "jsonrpc": "2.0", "method": "notifications/tools/list_changed"
+        }),
+        event_id: None,
+    };
+    let reached = multiplexer
+        .broadcast_to_backend_judged(&hint, "alpha", &*judge)
+        .await;
+    assert_eq!(
+        reached, 1,
+        "alpha is out of the key's scope, yet its view moved"
+    );
+}

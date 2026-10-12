@@ -464,4 +464,27 @@ mod tests {
             Delivery::OutOfScope
         );
     }
+
+    /// G-DIGEST (MIK-8350): session ownership keys on what was presented, not
+    /// on whether an `Authorization` header of another scheme rode along.
+    #[test]
+    fn g_digest_the_ownership_digest_ignores_the_authorization_flag() {
+        let cookie = format!("{SESSION_COOKIE}=handle");
+        let mut plain = axum::http::HeaderMap::new();
+        plain.insert(
+            axum::http::header::COOKIE,
+            cookie.parse().expect("a cookie"),
+        );
+        let mut other_scheme = plain.clone();
+        other_scheme.insert(
+            axum::http::header::AUTHORIZATION,
+            "Basic abc".parse().expect("a header"),
+        );
+        let (plain, other) = (
+            held_credential(&plain).expect("a session"),
+            held_credential(&other_scheme).expect("a session"),
+        );
+        assert_ne!(plain.authorization_present, other.authorization_present);
+        assert_eq!(plain.digest(), other.digest());
+    }
 }
