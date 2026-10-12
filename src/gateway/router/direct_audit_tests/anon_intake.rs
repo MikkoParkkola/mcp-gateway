@@ -480,3 +480,61 @@ async fn d6_set_profile_answers_intake_first() {
     assert_eq!(message(&answer), NO_PRINCIPAL, "d6: {answer}");
     assert_eq!(status, StatusCode::BAD_REQUEST, "d6: {answer}");
 }
+
+/// B6 CONTROL: a key scoped to `alpha` calling `beta` keeps its own scope
+/// refusal (403). A scoped key is a credential, so its caller has a principal
+/// and passes the intake check: the scope check can't flip.
+#[tokio::test]
+async fn b6_scoped_key_outside_its_backends_keeps_403() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        ..idempotent()
+    })
+    .await;
+    let (status, body) = post(&fx, "beta", &keyed("t"), &Caller::Key).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "b6: {body}");
+    assert_ne!(message(&body), NO_PRINCIPAL, "b6: intake answered: {body}");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "b6: dispatched");
+}
+
+/// C4 (/mcp precedence): for a keyed no-principal `tools/call` on `/mcp`, the
+/// intake refusal answers before (a) the sanitize step's NUL refusal (sanitize
+/// on) and (b) an admin tool's pre-check (`gateway_kill_server`). Every case
+/// runs; the befores are listed together from the red run.
+#[tokio::test]
+async fn c4_mcp_intake_answers_before_later_refusals() {
+    let fx = fixture(Setup {
+        sanitize: true,
+        ..idempotent()
+    })
+    .await;
+    let key = json!({(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): KEY});
+    let cases = [
+        (
+            "a sanitize NUL",
+            json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {
+                "name": "gateway_invoke",
+                "arguments": {"server": "alpha", "tool": "t", "arguments": {"customer_id": "a\u{0}b"}},
+                "_meta": key}}),
+        ),
+        (
+            "b admin pre-check",
+            json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {
+                "name": "gateway_kill_server", "arguments": {"server": "alpha"},
+                "_meta": key}}),
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (case, body) in cases {
+        let (status, answer) = post_to(&fx, "/mcp", &body.to_string(), &Caller::Session).await;
+        if message(&answer) != NO_PRINCIPAL || status != StatusCode::BAD_REQUEST {
+            wrong.push(format!("{case}: {status} {answer}"));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "c4 answered before intake:\n{}",
+        wrong.join("\n")
+    );
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "c4: dispatched");
+}
