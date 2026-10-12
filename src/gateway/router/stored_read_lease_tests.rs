@@ -231,3 +231,72 @@ async fn l1b_a_stale_winner_cannot_publish_over_a_newer_lease() {
     );
     assert_eq!(mints(&gw) - before, 2, "L1b: two resolutions in all");
 }
+
+/// C3: N readers on a cold view while the winner is held: exactly one
+/// resolution, every loser answers retryable with nothing resolved, and the
+/// winner then serves (M6: a non-atomic claim lets two win).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn c3_concurrent_cold_readers_resolve_once() {
+    let gw = std::sync::Arc::new(gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await);
+    let id = finished(&gw, "s1-c3").await;
+    evict_alpha(&gw, &valid(), false);
+    let before = mints(&gw);
+    let (reached, release) = backend(&gw).cold_winner.arm();
+    let winner = tokio::spawn({
+        let (gw, id) = (std::sync::Arc::clone(&gw), id.clone());
+        async move { task_get(&gw, &id).await }
+    });
+    reached.notified().await;
+    let losers: Vec<_> = (0..6)
+        .map(|_| {
+            let (gw, id) = (std::sync::Arc::clone(&gw), id.clone());
+            tokio::spawn(async move { task_get(&gw, &id).await })
+        })
+        .collect();
+    for loser in losers {
+        assert_retryable(&loser.await.expect("a loser's read"), "C3 loser");
+    }
+    assert_eq!(mints(&gw) - before, 0, "C3: losers resolve nothing");
+    release.notify_one();
+    let served = winner.await.expect("the winner's read");
+    assert!(
+        served.to_string().contains(OUTPUT),
+        "C3: the winner serves: {served}"
+    );
+    assert_eq!(mints(&gw) - before, 1, "C3: one resolution in all");
+}
+
+/// C8: an eviction during a lease forgets slots, never the lease: a read
+/// after it still answers retryable with nothing resolved (M40).
+#[tokio::test]
+async fn c8_an_eviction_keeps_a_running_lease() {
+    let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
+    let id = finished(&gw, "s1-c8").await;
+    evict_alpha(&gw, &valid(), true);
+    tokio::time::pause();
+    let before = mints(&gw);
+    assert_retryable(&task_get(&gw, &id).await, "C8 setup");
+    let backend = backend(&gw);
+    backend.age_per_user_slot_for_test(BINDING, 400);
+    backend.evict_idle_per_user_entries(Duration::from_secs(300));
+    assert_retryable(&task_get(&gw, &id).await, "C8: the lease survives");
+    assert_eq!(
+        mints(&gw) - before,
+        1,
+        "C8: only the first attempt resolved"
+    );
+}
+
+/// L3: an indexed Held entry whose slot was retired is claimable: one
+/// resolution, then served (M41: never claimable, retryable forever).
+#[tokio::test]
+async fn l3_a_retired_held_entry_is_claimable() {
+    let gw = gateway(CallerSlot::Valid, CLOSED, Surfaced::Yes).await;
+    let id = finished(&gw, "s1-l3").await;
+    backend(&gw).retire_per_user_slot_for_test(BINDING);
+    let _ = rearm_alpha_slot_with(&backend(&gw), &valid(), false);
+    let before = mints(&gw);
+    let first = task_get(&gw, &id).await;
+    assert!(first.to_string().contains(OUTPUT), "L3: served: {first}");
+    assert_eq!(mints(&gw) - before, 1, "L3: one resolution");
+}

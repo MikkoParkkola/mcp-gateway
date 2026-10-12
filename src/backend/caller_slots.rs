@@ -264,6 +264,18 @@ impl Backend {
         }
     }
 
+    /// Remove and retire per-user slot `binding` while its index entry
+    /// stays, as a removal racing an index write leaves it: the entry is
+    /// Held on a retired slot (MIK-8392 L3).
+    #[cfg(test)]
+    pub(crate) fn retire_per_user_slot_for_test(&self, binding: &str) {
+        let key = PoolKey::PerUser {
+            binding: binding.to_string(),
+        };
+        let (_, entry) = self.pool.remove(&key).expect("a pooled per-user slot");
+        entry.retired.store(true, Ordering::SeqCst);
+    }
+
     /// Every binding the index currently points at (test plan I2e).
     #[cfg(test)]
     pub(crate) fn indexed_bindings_for_test(&self) -> Vec<String> {
