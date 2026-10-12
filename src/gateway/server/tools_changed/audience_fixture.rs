@@ -433,6 +433,29 @@ impl World {
             .store_per_user_tools_for_test(&binding(subject, backend), tools);
     }
 
+    /// Register a shared backend `name` serving `tools` after listeners have
+    /// attached, as a reload that adds a server does.
+    pub(super) fn register_late(&self, name: &str, tools: Vec<Tool>) {
+        let backend = shared_backend(name);
+        assert!(
+            self.state.backends.register(Arc::clone(&backend)),
+            "late registration"
+        );
+        backend.store_shared_tools_for_test(tools);
+    }
+
+    /// `POST /mcp` with `bearer` inside the GET stream's session `session`.
+    pub(super) async fn post_session(
+        &self,
+        bearer: &str,
+        session: &str,
+        method: &str,
+        params: Value,
+    ) -> Value {
+        self.post_as(bearer, (Some(session), None), method, params)
+            .await
+    }
+
     /// Revoke `subject`'s grant on `backend`: evict its slots.
     pub(super) fn revoke(&self, backend: &str, subject: &str) {
         self.backend(backend)

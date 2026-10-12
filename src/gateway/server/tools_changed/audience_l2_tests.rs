@@ -204,6 +204,24 @@ async fn l2_grant_subject_one_key_two_adapter_users_differ_only_in_subject() {
     assert_eq!(told, [1, 0], "only alice sees alice_cal: RED on base");
 }
 
+/// R3 (muse MEDIUM): the same adapter pair as the grant-subject row, on the
+/// legacy GET stream. The subject is captured at attach there too.
+#[tokio::test]
+async fn r3_legacy_grant_subject_two_adapter_users_differ_only_in_subject() {
+    use super::audience_fixture::adapter_assertion;
+    let w = World::start_adapter(|meta| meta.with_identity_grants(alice_grant())).await;
+    w.set_capability_yaml(&alice_cal("one"));
+    w.settle().await;
+    let (alice, bob) = (adapter_assertion("alice"), adapter_assertion("bob"));
+    let mut ears = [
+        w.sse_as(STD, Some(&alice)).await,
+        w.sse_as(STD, Some(&bob)).await,
+    ];
+    w.set_capability_yaml(&alice_cal("two"));
+    let told = [ears[0].told(&w).await, ears[1].told(&w).await];
+    assert_eq!(told, [1, 0], "only alice sees alice_cal: RED on 52c20300f");
+}
+
 /// L2-delegated (MIK-8350), RED (killer: a key on the delegated bearer's
 /// actor rather than its token): one user's two live ID tokens, presented as
 /// delegated bearers, carry different `groups`. The first-match policy gives
