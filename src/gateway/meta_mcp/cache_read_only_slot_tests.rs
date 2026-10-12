@@ -214,4 +214,11 @@ async fn the_cache_asks_the_callers_own_slot() {
         3,
         "carol's own fill declared the tool, so her repeat is a hit"
     );
+    // Carol's declaration exists now; it must not admit bob's call either.
+    call("bob").await;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        4,
+        "carol's slot declared the tool; her declaration admitted bob's call"
+    );
 }
