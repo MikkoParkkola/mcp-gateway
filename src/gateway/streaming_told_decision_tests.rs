@@ -163,3 +163,32 @@ async fn a_read_gets_its_stamp_only_when_it_holds_the_gate() {
     let (a, b) = (first.await.expect("first"), second.await.expect("second"));
     assert!(a < b, "stamp order is capture order: {a} then {b}");
 }
+
+/// R14 (D17h): a listing the caller never got is not recorded as told, so the
+/// change it hid is still owed; a delivered one is recorded.
+#[test]
+fn a_withheld_listing_leaves_the_record_alone_and_a_delivered_one_moves_it() {
+    let moved = ViewDigest {
+        served: "s1".to_owned(),
+        shown: "x2".to_owned(),
+    };
+    let held = |record: &Arc<ViewRecord>| {
+        PendingRefresh(Some((
+            Arc::clone(record),
+            5,
+            HashMap::from([("a".to_owned(), moved.clone())]),
+        )))
+    };
+    let judge = Fake::answering("s0", "x");
+    let withheld = view(&judge);
+    held(&withheld.record).settle(false);
+    assert_eq!(
+        withheld.record.state().peek(6, "a", &moved),
+        Peek::Owed,
+        "the withheld listing must not have told the caller"
+    );
+
+    let delivered = view(&judge);
+    held(&delivered.record).settle(true);
+    assert_eq!(delivered.record.state().peek(6, "a", &moved), Peek::Quiet);
+}
