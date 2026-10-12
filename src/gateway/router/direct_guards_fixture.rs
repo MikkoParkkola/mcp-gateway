@@ -69,6 +69,9 @@ pub(crate) enum Answer {
     AskSecond,
     /// The backend cannot be reached: nothing was sent (`TransportConnect`).
     Unreachable,
+    /// Every `tools/call` fails with the error the function builds, as the
+    /// dispatch would raise it (MIK-8379 D4: one row per failure class).
+    FailsWith(fn() -> crate::Error),
     /// Like `AskOnce`, the question then edited by the function (MIK-8089).
     AskEdited(fn(&mut Value)),
     /// Like `Ok`, from a 2026-07-28 backend: its `tools/list` carries
