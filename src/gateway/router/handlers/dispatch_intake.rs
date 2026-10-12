@@ -53,6 +53,12 @@ pub(super) struct Intake<'r> {
     /// What the Open `WebUI` adapter judged about the assertion that admitted
     /// this request, when one did.
     adapter_assertion: Option<crate::gateway::openwebui_adapter::AdapterAssertion>,
+    /// The identity source facts a held stream keeps (MIK-8350 D16).
+    source: (
+        Option<crate::gateway::streaming::Redacted>,
+        Option<std::net::SocketAddr>,
+        Option<u64>,
+    ),
     pub(super) verified_identity: Option<VerifiedIdentity>,
     pub(super) presented: events::Presented,
     pub(super) agent_identity: AgentIdentity,
@@ -150,6 +156,10 @@ pub(super) async fn intake(
         .get::<crate::gateway::openwebui_adapter::AdapterAssertion>()
         .copied();
     let verified_identity = http_request.extensions().get::<VerifiedIdentity>().cloned();
+    let cert_not_after = http_request
+        .extensions()
+        .get::<crate::mtls::identity::CertNotAfter>()
+        .map(|not_after| not_after.0);
     // MCP Events caps a subscription at the credential's own expiry.
     let presented = events::Presented::capture(&http_request);
     // The headers are taken, not copied. `Presented::capture` above is the last
@@ -159,6 +169,11 @@ pub(super) async fn intake(
     let (mut parts, body) = http_request.into_parts();
     let headers = std::mem::take(&mut parts.headers);
     let http_request = axum::http::Request::from_parts(parts, body);
+    let (cf_assertion, proxy_peer) = crate::gateway::router::identity::identity_source_facts(
+        state.meta_mcp.caller_identity(),
+        (&headers, http_request.extensions()),
+        verified_identity.as_ref(),
+    );
 
     // === OWASP ASI03: per-agent identity ===
     //
@@ -704,6 +719,7 @@ pub(super) async fn intake(
             cert_identity,
             oauth_agent_identity,
             adapter_assertion,
+            source: (cf_assertion, proxy_peer, cert_not_after),
             verified_identity,
             presented,
             agent_identity,
@@ -747,7 +763,11 @@ impl Intake<'_> {
             oauth_agent: self.oauth_agent_identity.clone(),
             cert: self.cert_identity.clone(),
             code_mode_url: self.code_mode_url_active,
+            verified_identity: self.verified_identity.clone(),
             adapter: self.adapter_assertion,
+            cert_not_after: self.source.2,
+            cf_assertion: self.source.0.clone(),
+            proxy_peer: self.source.1,
         }
     }
 }

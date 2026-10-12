@@ -206,7 +206,10 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
     // MIK-8350: what this stream's caller is shown, so the first change after
     // attach is judged against it.
     let view = state
-        .attach_get_view(&session_id, (subject.clone(), &extensions, uri.query()))
+        .attach_get_view(
+            &session_id,
+            (subject.clone(), (&headers, &extensions), uri.query()),
+        )
         .await;
     // Read before the macro so its count is graded (MIK-7725).
     let session = opened.fp();

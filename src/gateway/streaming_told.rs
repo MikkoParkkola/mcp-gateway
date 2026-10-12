@@ -137,6 +137,34 @@ impl ToldState {
     }
 }
 
+/// A secret carried only so it can be checked again: its `Debug` and `Display`
+/// never show a byte of it.
+#[derive(Clone)]
+pub(crate) struct Redacted(String);
+
+impl Redacted {
+    pub(crate) fn new(secret: impl Into<String>) -> Self {
+        Self(secret.into())
+    }
+
+    /// The secret, for the check that needs it.
+    pub(crate) fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Redacted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+impl std::fmt::Display for Redacted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
 /// The identities and request surface a stream was opened under, besides its
 /// credential: part of what its caller is shown, so the judge builds the scope
 /// a POST of that caller would (MIK-8350 D11, D16). Owned by the stream.
@@ -147,8 +175,31 @@ pub(crate) struct ViewSubject {
     pub(crate) cert: Option<crate::mtls::CertIdentity>,
     /// The URL asked for Code Mode (`?codemode=search_and_execute`).
     pub(crate) code_mode_url: bool,
+    /// The verified identity the request carried (the Open `WebUI` adapter's,
+    /// a key-server token's), which selects a per-user catalogue slot.
+    pub(crate) verified_identity: Option<crate::key_server::oidc::VerifiedIdentity>,
     /// The Open `WebUI` assertion this stream was admitted under, when it was.
     pub(crate) adapter: Option<crate::gateway::openwebui_adapter::AdapterAssertion>,
+    /// The certificate's `notAfter`, in unix seconds. Captured here and
+    /// checked per decision by MIK-8377.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by MIK-8377's live() clause")
+    )]
+    pub(crate) cert_not_after: Option<u64>,
+    /// The raw Cloudflare Access assertion, when that is the identity source;
+    /// re-verified per decision by MIK-8377 and dropped with the stream.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by MIK-8377's live() clause")
+    )]
+    pub(crate) cf_assertion: Option<Redacted>,
+    /// The trusted proxy's peer address, when that is the identity source.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by MIK-8377's live() clause")
+    )]
+    pub(crate) proxy_peer: Option<std::net::SocketAddr>,
 }
 
 impl std::fmt::Debug for ViewSubject {
@@ -164,8 +215,14 @@ impl ViewSubject {
     pub(crate) fn key(&self) -> String {
         crate::hashing::sha256_hex(
             format!(
-                "{:?}|{:?}|{:?}|{}",
-                self.grant_subject, self.oauth_agent, self.cert, self.code_mode_url
+                "{:?}|{:?}|{:?}|{}|{:?}",
+                self.grant_subject,
+                self.oauth_agent,
+                self.cert,
+                self.code_mode_url,
+                self.verified_identity
+                    .as_ref()
+                    .map(crate::key_server::oidc::VerifiedIdentity::stable_actor_id)
             )
             .as_bytes(),
         )
@@ -174,7 +231,10 @@ impl ViewSubject {
     /// Whether the identity the stream was admitted under is still good, or
     /// why not. The adapter assertion's window is judged here; MIK-8377 adds
     /// its clauses.
-    pub(crate) fn live(&self) -> Result<(), DeadReason> {
+    pub(crate) fn live(
+        &self,
+        _agent: Option<&crate::gateway::oauth::ValidatedToken>,
+    ) -> Result<(), DeadReason> {
         match &self.adapter {
             Some(adapter) if !adapter.live() => Err(DeadReason::Adapter),
             _ => Ok(()),
@@ -204,6 +264,16 @@ pub(crate) enum DeadReason {
 }
 
 impl DeadReason {
+    /// Count one held stream's death under its label, where the stream
+    /// closes (`mcp_view_liveness_dead_total`).
+    pub(crate) fn count(self) {
+        telemetry_metrics::counter!(
+            "mcp_view_liveness_dead_total",
+            "reason" => self.label()
+        )
+        .increment(1);
+    }
+
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Bearer => "bearer",
@@ -212,28 +282,49 @@ impl DeadReason {
     }
 }
 
+/// The caller a stream's credential resolves to, found outside the record's
+/// gate: resolving can reach an identity provider, the digest never does.
+pub(crate) struct ResolvedCaller {
+    pub(crate) client: crate::gateway::auth::AuthenticatedClient,
+    pub(crate) identity: Option<crate::key_server::oidc::VerifiedIdentity>,
+    /// The agent token the credential validated as (read by MIK-8377).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by MIK-8377's live() clause")
+    )]
+    pub(crate) agent: Option<crate::gateway::oauth::ValidatedToken>,
+}
+
 /// Decides what a stream's caller is shown, for the per-stream
 /// `list_changed` filter (MIK-8350). Installed by the router, which owns the
-/// visibility state the multiplexer does not. It reads caches only: it never
-/// mints a credential and never fills a slot.
+/// visibility state the multiplexer does not. `resolve` may await (the
+/// credential's validation can fetch keys); `digest` and `baseline` read
+/// caches only: they never mint a credential and never fill a slot.
 pub(crate) trait ViewJudge: Send + Sync {
-    /// What the held credential is shown of `backend` now.
-    fn digest<'a>(
+    /// The caller the held credential resolves to, or why it does not.
+    fn resolve<'a>(
         &'a self,
         auth: &'a AuthState,
         caller: (Option<&'a HeldCredential>, &'a ViewSubject),
-        session_id: &'a str,
-        backend: &'a str,
-    ) -> futures::future::BoxFuture<'a, Judged<ViewDigest>>;
+    ) -> futures::future::BoxFuture<'a, Judged<ResolvedCaller>>;
 
-    /// Every backend's view for the held credential, taken when a stream opens
+    /// What the resolved caller is shown of `backend` now.
+    fn digest(
+        &self,
+        caller: &ResolvedCaller,
+        subject: &ViewSubject,
+        session_id: &str,
+        backend: &str,
+    ) -> ViewDigest;
+
+    /// Every backend's view for the resolved caller, taken when a stream opens
     /// so the first change after attach is judged against what it saw.
-    fn baseline<'a>(
-        &'a self,
-        auth: &'a AuthState,
-        caller: (Option<&'a HeldCredential>, &'a ViewSubject),
-        session_id: &'a str,
-    ) -> futures::future::BoxFuture<'a, Judged<HashMap<String, ViewDigest>>>;
+    fn baseline(
+        &self,
+        caller: &ResolvedCaller,
+        subject: &ViewSubject,
+        session_id: &str,
+    ) -> HashMap<String, ViewDigest>;
 }
 
 /// One view held on a session: the key of its subject, the subject and its
@@ -375,26 +466,22 @@ impl StreamView {
         session_id: &str,
         backend: &str,
     ) -> Judged<Option<Owed>> {
-        let (stamp, judged) = self
-            .record
-            .read(
-                self.judge
-                    .digest(auth, (credential, &self.subject), session_id, backend),
-            )
-            .await;
-        let digest = match judged {
-            Judged::Live(digest) => digest,
+        // Resolved before the gate: the credential's validation can reach an
+        // identity provider, and the gate covers cache reads only.
+        let caller = match self.judge.resolve(auth, (credential, &self.subject)).await {
+            Judged::Live(caller) => caller,
             Judged::Dead(reason) => {
-                // The one place a held stream's death is counted, for both
-                // transports.
-                telemetry_metrics::counter!(
-                    "mcp_view_liveness_dead_total",
-                    "reason" => reason.label()
-                )
-                .increment(1);
+                reason.count();
                 return Judged::Dead(reason);
             }
         };
+        let (stamp, digest) = self
+            .record
+            .read(async {
+                self.judge
+                    .digest(&caller, &self.subject, session_id, backend)
+            })
+            .await;
         let moved = self.record.state().peek(stamp, backend, &digest) == Peek::Owed;
         Judged::Live(moved.then(|| Owed {
             backend: backend.to_owned(),
@@ -446,10 +533,13 @@ impl NotificationMultiplexer {
         let subject = Arc::new(subject);
         let record = session.record_for(&subject);
         let credential = session.credential.read().clone();
-        let (stamp, judged) = record
-            .read(judge.baseline(&authorizer, (credential.as_ref(), &subject), session_id))
-            .await;
-        if let Judged::Live(view) = judged {
+        if let Judged::Live(caller) = judge
+            .resolve(&authorizer, (credential.as_ref(), &subject))
+            .await
+        {
+            let (stamp, view) = record
+                .read(async { judge.baseline(&caller, &subject, session_id) })
+                .await;
             record.state().baseline(stamp, view);
         }
         Some(StreamView {
@@ -484,17 +574,20 @@ impl NotificationMultiplexer {
         let Some(session) = self.sessions.read().get(session_id).map(Arc::clone) else {
             return PendingRefresh::default();
         };
-        let Some((held, record)) = session.existing_record(subject) else {
+        let Some((_, record)) = session.existing_record(subject) else {
             return PendingRefresh::default();
         };
         let credential = session.credential.read().clone();
-        let (stamp, judged) = record
-            .read(judge.baseline(&authorizer, (credential.as_ref(), &held), session_id))
+        let Judged::Live(caller) = judge
+            .resolve(&authorizer, (credential.as_ref(), subject))
+            .await
+        else {
+            return PendingRefresh::default();
+        };
+        let (stamp, view) = record
+            .read(async { judge.baseline(&caller, subject, session_id) })
             .await;
-        match judged {
-            Judged::Live(view) => PendingRefresh(Some((record, stamp, view))),
-            Judged::Dead(_) => PendingRefresh::default(),
-        }
+        PendingRefresh(Some((record, stamp, view)))
     }
 
     /// Deliver to every session whose caller may access `backend` now; returns the count.
@@ -559,7 +652,9 @@ impl NotificationMultiplexer {
         for (session, credential) in targets {
             let verdict =
                 delivery(&authorizer, credential.as_ref(), Audience::Backend(backend)).await;
-            if verdict == Delivery::Dead || (verdict != Delivery::Deliver && judge.is_none()) {
+            // A judged hint goes to a dead caller too: the write-time check
+            // closes its stream (D17i).
+            if judge.is_none() && verdict != Delivery::Deliver {
                 continue;
             }
             if let Some(judge) = judge
@@ -606,19 +701,17 @@ impl NotificationMultiplexer {
             ));
         }
         for (subject, record) in views {
-            let (stamp, judged) = record
-                .read(judge.digest(
-                    authorizer,
-                    (credential, &subject),
-                    session.id.expose_secret(),
-                    backend,
-                ))
-                .await;
             // A dead caller is closed by the write-time check; the copy still
             // goes so it can be.
-            let Judged::Live(digest) = judged else {
+            let Judged::Live(caller) = judge.resolve(authorizer, (credential, &subject)).await
+            else {
                 return true;
             };
+            let (stamp, digest) = record
+                .read(async {
+                    judge.digest(&caller, &subject, session.id.expose_secret(), backend)
+                })
+                .await;
             if record.state().peek(stamp, backend, &digest) == Peek::Owed {
                 return true;
             }

@@ -34,6 +34,44 @@ const HEADER_IDENTITY_MAX_LEN: usize = 512;
 /// set, typically 800-2000+ bytes, so it gets its own, larger bound.
 const HEADER_CF_ACCESS_JWT_MAX_LEN: usize = 8 * 1024;
 
+/// The identity source facts a held stream keeps beside its subject, so a
+/// check made later can ask the same question again (MIK-8350 D16): the raw
+/// Cloudflare Access assertion when that header identity is the one in force,
+/// and the direct peer when the trusted proxy is. Neither when a verified
+/// identity (a token's, the adapter's) takes precedence, as in
+/// [`caller_grant_subject`].
+pub(super) fn identity_source_facts(
+    config: &CallerIdentityConfig,
+    (headers, extensions): (&HeaderMap, &axum::http::Extensions),
+    verified: Option<&VerifiedIdentity>,
+) -> (
+    Option<crate::gateway::streaming::Redacted>,
+    Option<SocketAddr>,
+) {
+    if verified
+        .and_then(grant_subject_from_verified_identity)
+        .is_some()
+    {
+        return (None, None);
+    }
+    match config.mode {
+        CallerIdentityMode::Off => (None, None),
+        CallerIdentityMode::TrustedProxy => (
+            None,
+            extensions
+                .get::<axum::extract::ConnectInfo<SocketAddr>>()
+                .map(|info| info.0),
+        ),
+        CallerIdentityMode::CloudflareAccess => (
+            headers
+                .get(HEADER_CF_ACCESS_JWT)
+                .and_then(|value| value.to_str().ok())
+                .map(crate::gateway::streaming::Redacted::new),
+            None,
+        ),
+    }
+}
+
 /// Why a request's identity headers were refused. Each maps to one status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum IdentityHeaderRefusal {

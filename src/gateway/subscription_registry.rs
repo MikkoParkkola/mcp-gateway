@@ -173,17 +173,18 @@ impl Listener {
         let Some(view) = &self.view else {
             return;
         };
-        let (stamp, judged) = view
+        let crate::gateway::streaming::Judged::Live(caller) = view
+            .judge
+            .resolve(&self.authorizer, (self.credential.as_ref(), &view.subject))
+            .await
+        else {
+            return;
+        };
+        let (stamp, now) = view
             .record
-            .read(view.judge.baseline(
-                &self.authorizer,
-                (self.credential.as_ref(), &view.subject),
-                "",
-            ))
+            .read(async { view.judge.baseline(&caller, &view.subject, "") })
             .await;
-        if let crate::gateway::streaming::Judged::Live(now) = judged {
-            view.record.state().baseline(stamp, now);
-        }
+        view.record.state().baseline(stamp, now);
     }
 
     /// The constant hint owed right after the acknowledgement (MIK-8350 B10),
@@ -219,7 +220,10 @@ impl Listener {
     pub(crate) async fn admit(&self, published: &Published) -> Admit {
         let backend = self.judged_backend(published);
         match self.delivery(published).await {
-            Delivery::Dead => return Admit::Close,
+            Delivery::Dead => {
+                crate::gateway::streaming::DeadReason::Bearer.count();
+                return Admit::Close;
+            }
             Delivery::OutOfScope if backend.is_none() => return Admit::Skip,
             Delivery::Deliver | Delivery::OutOfScope => {}
         }

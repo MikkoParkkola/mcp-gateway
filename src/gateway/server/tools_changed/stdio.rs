@@ -72,7 +72,15 @@ impl StdioAnnouncer {
             let mut told = crate::gateway::streaming::ToldState::default();
             // Baselined with nothing, so the first sight of a backend is told.
             let mut stamp = 1_u64;
-            told.baseline(stamp, std::collections::HashMap::new());
+            // The operator's served list as it stands, so the first change is
+            // judged against it and not against nothing.
+            told.baseline(
+                stamp,
+                std::collections::HashMap::from([(
+                    String::new(),
+                    stdio_view(&meta_mcp, &tool_policy, ""),
+                )]),
+            );
             let shutdown = stop.subscribe();
             let ready = ready.clone();
             tokio::spawn(async move {

@@ -20,51 +20,56 @@ fn auth() -> AuthState {
 }
 
 /// A judge that answers with whatever it was last told to.
-struct Fake(parking_lot::Mutex<Judged<ViewDigest>>);
+struct Fake(parking_lot::Mutex<Option<ViewDigest>>);
 
 impl Fake {
     fn answering(served: &str, shown: &str) -> Arc<Self> {
-        Arc::new(Self(parking_lot::Mutex::new(Judged::Live(ViewDigest {
-            served: served.to_owned(),
-            shown: shown.to_owned(),
-        }))))
+        let judge = Arc::new(Self(parking_lot::Mutex::new(None)));
+        judge.say(served, shown);
+        judge
     }
 
     fn say(&self, served: &str, shown: &str) {
-        *self.0.lock() = Judged::Live(ViewDigest {
+        *self.0.lock() = Some(ViewDigest {
             served: served.to_owned(),
             shown: shown.to_owned(),
         });
     }
 
     fn die(&self) {
-        *self.0.lock() = Judged::Dead(DeadReason::Bearer);
+        *self.0.lock() = None;
     }
 }
 
 impl ViewJudge for Fake {
-    fn digest<'a>(
+    fn resolve<'a>(
         &'a self,
         _: &'a AuthState,
         _: (Option<&'a HeldCredential>, &'a ViewSubject),
-        _: &'a str,
-        _: &'a str,
-    ) -> futures::future::BoxFuture<'a, Judged<ViewDigest>> {
+    ) -> futures::future::BoxFuture<'a, Judged<ResolvedCaller>> {
         Box::pin(async move {
-            match &*self.0.lock() {
-                Judged::Live(digest) => Judged::Live(digest.clone()),
-                Judged::Dead(reason) => Judged::Dead(*reason),
+            if self.0.lock().is_none() {
+                return Judged::Dead(DeadReason::Bearer);
             }
+            Judged::Live(ResolvedCaller {
+                client: crate::gateway::auth::anonymous_client(),
+                identity: None,
+                agent: None,
+            })
         })
     }
 
-    fn baseline<'a>(
-        &'a self,
-        _: &'a AuthState,
-        _: (Option<&'a HeldCredential>, &'a ViewSubject),
-        _: &'a str,
-    ) -> futures::future::BoxFuture<'a, Judged<HashMap<String, ViewDigest>>> {
-        Box::pin(async move { Judged::Live(HashMap::new()) })
+    fn digest(&self, _: &ResolvedCaller, _: &ViewSubject, _: &str, _: &str) -> ViewDigest {
+        self.0.lock().clone().expect("a live fake answers")
+    }
+
+    fn baseline(
+        &self,
+        _: &ResolvedCaller,
+        _: &ViewSubject,
+        _: &str,
+    ) -> HashMap<String, ViewDigest> {
+        HashMap::new()
     }
 }
 

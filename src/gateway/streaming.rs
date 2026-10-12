@@ -38,7 +38,7 @@ use copy::{CopyAudience, Unsent};
 #[path = "streaming_told.rs"]
 mod told;
 pub(crate) use told::{
-    DeadReason, Decision, Judged, Owed, Peek, PendingRefresh, StreamView, ToldState, ViewDigest,
+    DeadReason, Decision, Judged, Owed, Peek, PendingRefresh, Redacted, ResolvedCaller, StreamView, ToldState, ViewDigest,
     ViewJudge, ViewRecord, ViewSubject,
 };
 

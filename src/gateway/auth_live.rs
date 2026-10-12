@@ -86,7 +86,7 @@ pub(crate) async fn current_client(
 ) -> Option<AuthenticatedClient> {
     current_caller(state, credential)
         .await
-        .map(|(client, _)| client)
+        .map(|caller| caller.client)
 }
 
 /// [`current_client`], and the verified identity the key server resolved for a
@@ -97,20 +97,23 @@ pub(crate) async fn current_client(
 pub(crate) async fn current_caller(
     state: &AuthState,
     credential: Option<&HeldCredential>,
-) -> Option<(
-    AuthenticatedClient,
-    Option<crate::key_server::oidc::VerifiedIdentity>,
-)> {
+) -> Option<CurrentCaller> {
     // Dead here, in either gateway mode, unless the held bearer is a valid
     // agent token: ingress refused every other request already.
-    let mut agent_validated = false;
+    let mut agent = None;
     if state.agent_auth.enabled {
         let token = credential.and_then(|held| held.bearer.as_deref())?;
-        crate::gateway::oauth::validate_agent_token(token, &state.agent_auth.registry).ok()?;
-        agent_validated = true;
+        agent = Some(
+            crate::gateway::oauth::validate_agent_token(token, &state.agent_auth.registry).ok()?,
+        );
     }
+    let found = |client, identity| CurrentCaller {
+        client,
+        identity,
+        agent: agent.clone(),
+    };
     if !state.auth_config.enabled {
-        return Some((anonymous_client(), None));
+        return Some(found(anonymous_client(), None));
     }
     let credential = credential?;
     // A presented `Authorization` header decides the request alone (the
@@ -129,19 +132,28 @@ pub(crate) async fn current_caller(
             &session_limits(state),
             Touch::No,
         ) == SessionCheck::Valid)
-            .then(|| (dashboard_client(), None));
+            .then(|| found(dashboard_client(), None));
     };
     if let Some((client, _)) = state.auth_config.validate_token_with_origin(token) {
-        return Some((client, None));
+        return Some(found(client, None));
     }
     match key_server_credential(state, token).await {
-        KsCredential::Credential(found) => return Some((found.0, Some(found.1.identity))),
+        KsCredential::Credential(held) => return Some(found(held.0, Some(held.1.identity))),
         // A recognised credential that names no one is dead, never the
         // anonymous client (MIK-8286).
         KsCredential::Refused => return None,
         KsCredential::NotOurs => {}
     }
-    agent_validated.then(|| (super::public_client(), None))
+    agent.is_some().then(|| found(super::public_client(), None))
+}
+
+/// The caller a held credential resolves to right now (MIK-8350): its client,
+/// the verified identity the key server resolved for it, and the agent token
+/// it validated as, when agent authentication is on.
+pub(crate) struct CurrentCaller {
+    pub(crate) client: AuthenticatedClient,
+    pub(crate) identity: Option<crate::key_server::oidc::VerifiedIdentity>,
+    pub(crate) agent: Option<crate::gateway::oauth::ValidatedToken>,
 }
 
 /// Who a notification is for: callers who may access one backend, or every

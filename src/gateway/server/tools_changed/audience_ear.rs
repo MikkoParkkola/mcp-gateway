@@ -59,7 +59,10 @@ impl Events {
 
 /// One listener: a legacy GET session, a real GET stream or a listen stream.
 pub(super) enum Ear {
-    Legacy(Receiver<SessionFrame>),
+    /// A bare receiver of the session's queue, with the session it reads: a
+    /// real stream checks the credential again as it writes a frame, so
+    /// this ear does too.
+    Legacy(Receiver<SessionFrame>, String),
     /// A GET stream read through the real route: the write path runs. A task
     /// reads its body continuously into `events`, as a real client does.
     Sse {
@@ -83,9 +86,17 @@ impl Ear {
     pub(super) async fn frames(&mut self, world: &World) -> Vec<String> {
         world.settle().await;
         match self {
-            Self::Legacy(rx) => {
+            Self::Legacy(rx, session) => {
                 let mut methods = Vec::new();
                 while let Ok(frame) = rx.try_recv() {
+                    if !world
+                        .state
+                        .multiplexer
+                        .passes_write_gate(session, &frame)
+                        .await
+                    {
+                        continue;
+                    }
                     methods.push(
                         frame.data["method"]
                             .as_str()
@@ -196,8 +207,10 @@ impl World {
                 &crate::gateway::router::tests::view_judge_for(&self.state),
             )
             .await;
-        self.minted.borrow_mut().insert(id.to_string(), minted);
-        Ear::Legacy(rx)
+        self.minted
+            .borrow_mut()
+            .insert(id.to_string(), minted.clone());
+        Ear::Legacy(rx, minted)
     }
 
     /// A legacy GET session opened with exactly these request headers.
@@ -223,8 +236,10 @@ impl World {
                 &crate::gateway::router::tests::view_judge_for(&self.state),
             )
             .await;
-        self.minted.borrow_mut().insert(id.to_string(), minted);
-        Ear::Legacy(rx)
+        self.minted
+            .borrow_mut()
+            .insert(id.to_string(), minted.clone());
+        Ear::Legacy(rx, minted)
     }
 }
 

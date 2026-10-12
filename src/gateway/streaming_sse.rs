@@ -84,6 +84,7 @@ pub(crate) fn create_sse_response_with_view(
                             continue;
                         }
                         Delivery::Dead => {
+                            crate::gateway::streaming::DeadReason::Bearer.count();
                             withhold(&item);
                             close_dead(&mut rx);
                             break;
@@ -172,6 +173,19 @@ pub(crate) fn create_sse_response_with_view(
     };
 
     Some(Sse::new(stream).keep_alive(KeepAlive::new().interval(keep_alive_interval).text("ping")))
+}
+
+#[cfg(test)]
+impl NotificationMultiplexer {
+    /// Whether a stream would write `frame` to `session_id`'s caller, as the
+    /// real write loop's credential check decides it: for rows that read a bare
+    /// receiver of the queue.
+    pub(crate) async fn passes_write_gate(&self, session_id: &str, frame: &SessionFrame) -> bool {
+        let Some(session) = self.sessions.read().get(session_id).map(Arc::clone) else {
+            return false;
+        };
+        credential_at_write(self, &session, frame.audience.as_audience()).await == Delivery::Deliver
+    }
 }
 
 /// What writing a copy for `audience` to `session`'s stream should do now.
