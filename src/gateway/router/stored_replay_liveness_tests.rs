@@ -1161,3 +1161,65 @@ async fn r6m_token_exchange_replay_after_idp_kill_and_ttl_is_refused() {
     assert!(again.get("error").is_some(), "R6m: not a refusal: {again}");
     assert_eq!(sends.load(Ordering::SeqCst), 1, "R6m: the call reached the backend: {again}");
 }
+
+/// T12 (site 5, M38): a task-augmented keyed call to a token-exchange backend
+/// (per-caller mint, no `account:`, so Unjudged and still visible) completes;
+/// the `IdP` dies and the cached token's TTL passes; the same keyed task call
+/// is repeated. E9 does not apply (not Unavailable) and the catalogue passes,
+/// so site 5 proves the account by resolving, which fails: the repeat answers
+/// exactly as the same call made live does (normalising only `id`), never with
+/// the stored task. Bypassing site 5 (M38) must fail this row.
+/// Current-thread: the forced clock is this thread's.
+#[tokio::test]
+async fn t12_token_exchange_task_repeat_after_idp_kill_answers_as_live() {
+    use std::sync::atomic::Ordering;
+
+    let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));
+    let idp = r6m_token_exchange::LiveIdp::start(&key).await;
+    let alice = r6m_token_exchange::alice();
+    let (router, sends, _dirs) = r6m_token_exchange::gateway(&key, idp.endpoint(), &alice).await;
+    let call = |key: &str, task: bool| {
+        let mut params = json!({"name": "gateway_invoke",
+            "arguments": {"server": r6m_token_exchange::TX, "tool": TOOL,
+                "arguments": {"folder": "inbox"}},
+            "_meta": meta(Some(key), task)});
+        if task {
+            params["task"] = json!({});
+        }
+        params
+    };
+    let made = r6m_token_exchange::send_as(&router, &alice, call("t12", true)).await;
+    let id = made
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+        .to_owned();
+    let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        if sends.load(Ordering::SeqCst) >= 1 {
+            break;
+        }
+        assert!(std::time::Instant::now() < bound, "premise: the task dispatched: {made}");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    let sent = sends.load(Ordering::SeqCst);
+    idp.kill();
+    let now = crate::clock::unix_secs().expect("a test host clock reads after 1970");
+    let _clock = crate::clock::test_clock::at_secs(now + 7200);
+    let again = r6m_token_exchange::send_as(&router, &alice, call("t12", true)).await;
+    let live = r6m_token_exchange::send_as(&router, &alice, call("t12-live", false)).await;
+    eprintln!("T12 repeat: {again}");
+    eprintln!("T12 live: {live}");
+    assert!(live.get("error").is_some(), "premise: the live call is refused: {live}");
+    assert_ne!(
+        again.pointer("/result/taskId").and_then(Value::as_str),
+        Some(id.as_str()),
+        "T12: the stored task was answered back after the IdP died: {again}"
+    );
+    let (mut again_id, mut live_id) = (again.clone(), live.clone());
+    again_id["id"] = Value::Null;
+    live_id["id"] = Value::Null;
+    assert_eq!(again_id, live_id, "T12: the repeat differs from the live call: {again} vs {live}");
+    assert_eq!(sends.load(Ordering::SeqCst), sent, "T12: the call reached the backend: {again}");
+}
