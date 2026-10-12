@@ -127,14 +127,8 @@ impl MetaMcp {
         }
         // The judgement may fill a cold catalogue: an effect, so the nonce
         // stays spent (MIK-8353 3a).
-        let fills = || {
-            targets
-                .iter()
-                .filter_map(|target| self.backends.get(&target.server))
-                .map(|backend| backend.list_fills())
-                .sum::<u64>()
-        };
-        let fills_before = fills();
+        let servers = || targets.iter().map(|target| target.server.as_str());
+        let marks = self.fill_marks(servers());
         let mut invisible = true;
         for target in targets {
             let named = (target.server.as_str(), target.tool.as_str());
@@ -143,8 +137,43 @@ impl MetaMcp {
                 break;
             }
         }
-        let filled = schema_effect(fills() != fills_before);
+        let filled = schema_effect(self.filled_since(&marks, servers()));
         (invisible, RefundWitness::carry(witness, filled))
+    }
+
+    /// Each named backend's instance and fill count, for [`Self::filled_since`].
+    /// The instance is held, so a replacement cannot reuse its address.
+    fn fill_marks<'s>(
+        &self,
+        servers: impl Iterator<Item = &'s str>,
+    ) -> Vec<Option<(std::sync::Arc<Backend>, u64)>> {
+        servers
+            .map(|server| {
+                let backend = self.backends.get(server)?;
+                let fills = backend.list_fills();
+                Some((backend, fills))
+            })
+            .collect()
+    }
+
+    /// Whether a named backend was filled since `marks`, or replaced: a reload
+    /// that swaps the instance hides the old one's fills from its counter, so
+    /// a replacement counts as a fill (the nonce stays spent).
+    fn filled_since<'s>(
+        &self,
+        marks: &[Option<(std::sync::Arc<Backend>, u64)>],
+        servers: impl Iterator<Item = &'s str>,
+    ) -> bool {
+        marks
+            .iter()
+            .zip(servers)
+            .any(|(mark, server)| match (mark, self.backends.get(server)) {
+                (None, None) => false,
+                (Some((before, fills)), Some(now)) => {
+                    !std::sync::Arc::ptr_eq(before, &now) || now.list_fills() != *fills
+                }
+                _ => true,
+            })
     }
 
     /// The route stage's judgement of one requested backend target: whether
@@ -215,9 +244,7 @@ impl MetaMcp {
         // The refund witness (MIK-8353 3a): a catalogue fill the gate causes
         // is an effect, so the nonce stays spent; whatever survives goes back
         // to the call on drop, for its settle or the dispatch's own steps.
-        let backend = self.backends.get(target.0);
-        let fills = || backend.as_ref().map_or(0, |backend| backend.list_fills());
-        let fills_before = fills();
+        let marks = self.fill_marks(std::iter::once(target.0));
         let mut witness = super::nonce_settle::Witnessed::take(caller);
         let answer = match self.withheld_gate(target, caller, session_id).await {
             Some(answer) => Some(answer),
@@ -226,7 +253,9 @@ impl MetaMcp {
                 Err(refusal) => Some(self.backstop(target, caller, session_id, refusal).await),
             },
         };
-        witness.carry(schema_effect(fills() != fills_before));
+        witness.carry(schema_effect(
+            self.filled_since(&marks, std::iter::once(target.0)),
+        ));
         answer
     }
 
@@ -446,3 +475,7 @@ pub(super) fn count_meta_denial(
     }
     None
 }
+
+#[cfg(test)]
+#[path = "gate_fill_tests.rs"]
+mod fill_tests;
