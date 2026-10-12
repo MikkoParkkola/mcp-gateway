@@ -57,6 +57,9 @@ pub(crate) enum Stage {
     ChainLink,
     /// The response firewall.
     ResponseFirewall,
+    /// A keyed call from a caller with no execution principal is refused at
+    /// intake, -32003, before every later check (MIK-8382).
+    KeyedPrincipal,
 }
 
 /// Why a stage cannot apply on a route. Closed: a new reason is a design
@@ -91,6 +94,7 @@ pub(crate) enum Na {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Ticket {
     Mik8353,
+    Mik8382,
 }
 
 /// What a (method, route, stage) row asserts.
@@ -125,7 +129,7 @@ impl Route {
 }
 
 impl Stage {
-    pub(crate) const ALL: [Self; 11] = [
+    pub(crate) const ALL: [Self; 12] = [
         Self::RouteFirewall,
         Self::ChokepointRescan,
         Self::Sanitize,
@@ -137,6 +141,7 @@ impl Stage {
         Self::NonceGiveBack,
         Self::ChainLink,
         Self::ResponseFirewall,
+        Self::KeyedPrincipal,
     ];
 
     /// Exhaustive: a new variant without an index does not compile.
@@ -153,6 +158,7 @@ impl Stage {
             Self::NonceGiveBack => 8,
             Self::ChainLink => 9,
             Self::ResponseFirewall => 10,
+            Self::KeyedPrincipal => 11,
         }
     }
 }
@@ -208,9 +214,10 @@ fn the_table_answers_every_route_and_stage() {
     // R5 route firewall, sanitize and X14; MIK-8315 closed authorize (D3);
     // MIK-8150 closed R2 and R5 nonce give-back (admission); MIK-8351 closed
     // R3 rescan; MIK-8159 closed R2's chain link; MIK-8154 closed R3 lease and
-    // R3 sanitize.
+    // R3 sanitize. MIK-8382 opens four (the keyed-principal intake check on
+    // R1, R2, R3 and R4a) and closes them in its fix.
     assert_eq!(
-        gaps, 2,
+        gaps, 6,
         "the gap count moved: update the table and this pin"
     );
 }
@@ -249,6 +256,11 @@ const DRIVEN: &[(Route, Stage)] = &[
     (Route::Invoke, Stage::ResponseFirewall),
     (Route::Direct, Stage::ResponseFirewall),
     (Route::Stdio, Stage::ResponseFirewall),
+    // `keyed` (MIK-8382), through the anon-intake fixture's driver.
+    (Route::Invoke, Stage::KeyedPrincipal),
+    (Route::Surfaced, Stage::KeyedPrincipal),
+    (Route::Direct, Stage::KeyedPrincipal),
+    (Route::TaskSubmit, Stage::KeyedPrincipal),
 ];
 
 /// Cells the table states but no live row drives yet, each with the reason

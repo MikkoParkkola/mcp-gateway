@@ -23,7 +23,9 @@ use crate::security::audit::AuditFailurePolicy;
 use crate::security::transparency_log::TransparencyLogConfig;
 use crate::transport::Transport;
 
-mod anon_intake;
+pub(in crate::gateway::router) mod anon_intake;
+mod extras;
+use extras::{Extra, arm_extras, backend_config, harden};
 mod anon_key;
 mod delivery;
 mod delivery_who;
@@ -175,19 +177,8 @@ struct Setup {
     meta_mode: MetaMode,
     /// The backends refuse every notification (L1254).
     notify_refused: bool,
-    /// MIK-8382: every backend's `tools/list` fails at the transport.
-    list_fail: bool,
-    /// MIK-8382: `security.sanitize_input` (the router's default here is off).
-    sanitize: bool,
-    /// MIK-8382: `beta` is a `passthrough: true` backend.
-    beta_passthrough: bool,
-    /// MIK-8382: `security.posture: hardened` (auth stays off).
-    hardened: bool,
-    /// MIK-8382: attestation enforced on both routes.
-    attestation: bool,
-    /// MIK-8382: `alpha` requires passthrough identity propagation (shared
-    /// slot), so a caller with no credential to pass is refused.
-    alpha_requires_identity: bool,
+    /// MIK-8382: the [`Extra`] switches this cell turns on.
+    extras: &'static [Extra],
     /// The backends' chain policy; under `Require` the gateway also has a
     /// chain identity, so their unchained answers are refused unread (MIK-7636).
     chain: crate::config::ChainMode,
@@ -266,39 +257,21 @@ async fn fixture(setup: Setup) -> Fixture {
     let calls = Arc::new(AtomicUsize::new(0));
     let lists = Arc::new(AtomicUsize::new(0));
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
-    state_mut.sanitize_input = setup.sanitize;
-    if setup.hardened {
-        // The route reads the posture the process started with, so the
-        // running config is replaced, not edited.
-        let mut config = (*state_mut.live_config.get()).clone();
-        config.security.posture = crate::security::SecurityPosture::Hardened;
-        state_mut.live_config = Arc::new(crate::config_reload::LiveConfig::new(config));
+    state_mut.sanitize_input = setup.has(Extra::Sanitize);
+    if setup.has(Extra::Hardened) {
+        harden(state_mut);
     }
     for name in ["alpha", "beta"] {
         let backend = Arc::new(Backend::new(
             name,
-            BackendConfig {
-                signature_chain: setup.chain,
-                passthrough: setup.beta_passthrough && name == "beta",
-                identity_propagation: (setup.alpha_requires_identity && name == "alpha").then(
-                    || crate::identity_propagation::IdentityPropagationConfig {
-                        strategy: crate::identity_propagation::PropagationStrategyKind::Passthrough,
-                        audience: "https://alpha".to_string(),
-                        required: true,
-                        session_mode: crate::identity_propagation::SessionMode::Stateless,
-                        token_exchange_endpoint: None,
-                        token_exchange_scope: None,
-                    },
-                ),
-                ..BackendConfig::default()
-            },
+            backend_config(&setup, name),
             &FailsafeConfig::default(),
             Duration::from_secs(60),
         ));
         backend.set_transport_for_test(Arc::new(Scripted {
             calls: Arc::clone(&calls),
             lists: Arc::clone(&lists),
-            list_fail: setup.list_fail,
+            list_fail: setup.has(Extra::ListFail),
             error: setup.backend_error,
             fail: setup.backend_fail,
             reply: setup.reply.clone(),
@@ -306,6 +279,8 @@ async fn fixture(setup: Setup) -> Fixture {
         }));
         assert!(state_mut.backends.register(backend), "fixture registration");
     }
+    // Copied out before `agent_identity` is moved from `setup` below.
+    let extras = setup.extras;
     if let Some(config) = setup.agent_identity {
         state_mut.agent_identity_config = config;
     }
@@ -325,13 +300,7 @@ async fn fixture(setup: Setup) -> Fixture {
         ));
     }
     meta.enable_transparency_log(Arc::clone(&log));
-    if setup.attestation {
-        let validator = Arc::new(crate::attestation::AttestationValidator::new(
-            crate::attestation::BnautAttestationSigner::new(b"k".to_vec(), "route")
-                .with_audience("test-gateway"),
-        ));
-        meta = meta.with_attestation(validator, crate::attestation::AttestationMode::Enforce);
-    }
+    meta = arm_extras(meta, extras);
     if setup.chain == crate::config::ChainMode::Require {
         meta.set_chain_signer(
             crate::security::signature_chain::ChainSigner::from_seed(&[7; 32], "gw-test")

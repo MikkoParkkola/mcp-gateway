@@ -9,8 +9,14 @@
 
 use super::*;
 
+mod mcp_precedence;
+
+/// A precedence case: label, request body, headers.
+type Case = (&'static str, Value, Vec<(&'static str, &'static str)>);
+
 const KEY: &str = "intake-k";
-const NO_PRINCIPAL: &str = "JSON-RPC error -32003: A verified execution principal is required";
+pub(crate) const NO_PRINCIPAL: &str =
+    "JSON-RPC error -32003: A verified execution principal is required";
 
 fn idempotent() -> Setup {
     Setup {
@@ -20,7 +26,7 @@ fn idempotent() -> Setup {
 }
 
 /// A direct `tools/call` of `tool` with `meta` as its `_meta`.
-fn call_with_meta(tool: &str, meta: Value) -> String {
+fn call_with_meta(tool: &str, meta: &Value) -> String {
     json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {
         "name": tool, "arguments": {"customer_id": "c"}, "_meta": meta}})
     .to_string()
@@ -29,7 +35,7 @@ fn call_with_meta(tool: &str, meta: Value) -> String {
 fn keyed(tool: &str) -> String {
     call_with_meta(
         tool,
-        json!({(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): KEY}),
+        &json!({(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): KEY}),
     )
 }
 
@@ -58,7 +64,7 @@ fn mint_rows(fx: &Fixture) -> usize {
 async fn b1_keyed_no_principal_does_no_backend_work() {
     for list_fail in [false, true] {
         let fx = fixture(Setup {
-            list_fail,
+            extras: if list_fail { &[Extra::ListFail] } else { &[] },
             ..idempotent()
         })
         .await;
@@ -87,7 +93,7 @@ async fn b1_keyed_no_principal_does_no_backend_work() {
 async fn b2_keyed_no_principal_is_name_independent() {
     let fx = fixture(idempotent()).await;
     let failing = fixture(Setup {
-        list_fail: true,
+        extras: &[Extra::ListFail],
         ..idempotent()
     })
     .await;
@@ -127,7 +133,7 @@ async fn b4_malformed_key_without_principal_is_refused_at_intake() {
         let fx = fixture(idempotent()).await;
         let body = call_with_meta(
             "t",
-            json!({(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): key}),
+            &json!({(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): key}),
         );
         let (status, answer) = post(&fx, "alpha", &body, &Caller::Anonymous).await;
         assert_eq!(message(&answer), NO_PRINCIPAL, "b4 {key}: {answer}");
@@ -144,7 +150,7 @@ async fn b5_malformed_key_with_principal_keeps_its_refusal() {
         let fx = fixture(idempotent()).await;
         let body = call_with_meta(
             "t",
-            json!({(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): key}),
+            &json!({(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): key}),
         );
         let (_, answer) = post(&fx, "alpha", &body, &Caller::Oidc).await;
         assert_eq!(
@@ -177,8 +183,7 @@ async fn b7_id_less_tools_call_keeps_missing_id() {
 
 fn sanitizing() -> Setup {
     Setup {
-        sanitize: true,
-        beta_passthrough: true,
+        extras: &[Extra::Sanitize, Extra::BetaPassthrough],
         ..idempotent()
     }
 }
@@ -463,7 +468,7 @@ async fn c5_trusted_proxy_subject_is_a_principal() {
 
 /// D6 (D8(c)): a keyed no-principal modern `gateway_set_profile` is refused
 /// at intake (-32003). RED: today its own Protocol refusal answers first
-/// (admission's set_profile check precedes the principal check).
+/// (admission's `set_profile` check precedes the principal check).
 #[tokio::test]
 async fn d6_set_profile_answers_intake_first() {
     let fx = fixture(idempotent()).await;
@@ -497,57 +502,25 @@ async fn b6_scoped_key_outside_its_backends_keeps_403() {
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "b6: dispatched");
 }
 
-/// C4 (/mcp precedence): for a keyed no-principal `tools/call` on `/mcp`, the
-/// intake refusal answers before (a) the sanitize step's NUL refusal (sanitize
-/// on) and (b) an admin tool's pre-check (`gateway_kill_server`). Every case
-/// runs; the befores are listed together from the red run.
-#[tokio::test]
-async fn c4_mcp_intake_answers_before_later_refusals() {
-    let fx = fixture(Setup {
-        sanitize: true,
-        ..idempotent()
-    })
-    .await;
-    let key = json!({(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): KEY});
-    let cases = [
-        (
-            "a sanitize NUL",
-            json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {
-                "name": "gateway_invoke",
-                "arguments": {"server": "alpha", "tool": "t", "arguments": {"customer_id": "a\u{0}b"}},
-                "_meta": key}}),
-        ),
-        (
-            "b admin pre-check",
-            json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {
-                "name": "gateway_kill_server", "arguments": {"server": "alpha"},
-                "_meta": key}}),
-        ),
-    ];
-    let mut wrong = Vec::new();
-    for (case, body) in cases {
-        let (status, answer) = post_to(&fx, "/mcp", &body.to_string(), &Caller::Session).await;
-        if message(&answer) != NO_PRINCIPAL || status != StatusCode::BAD_REQUEST {
-            wrong.push(format!("{case}: {status} {answer}"));
-        }
-    }
-    assert!(
-        wrong.is_empty(),
-        "c4 answered before intake:\n{}",
-        wrong.join("\n")
-    );
-    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "c4: dispatched");
-}
-
 /// One anonymous direct request to `alpha` with exactly `headers` added.
 async fn post_with_headers(
     fx: &Fixture,
     body: &Value,
     headers: &[(&str, &str)],
 ) -> (StatusCode, Value) {
+    post_uri_with_headers(fx, "/mcp/alpha", body, headers).await
+}
+
+/// One anonymous request to `uri` with exactly `headers` added.
+async fn post_uri_with_headers(
+    fx: &Fixture,
+    uri: &str,
+    body: &Value,
+    headers: &[(&str, &str)],
+) -> (StatusCode, Value) {
     let mut builder = axum::http::Request::builder()
         .method("POST")
-        .uri("/mcp/alpha")
+        .uri(uri)
         .header("content-type", "application/json");
     for (name, value) in headers {
         builder = builder.header(*name, *value);
@@ -595,7 +568,7 @@ async fn b8d_direct_refusals_answer_after_intake() {
         headers.push((header, value));
         headers
     };
-    let cases: Vec<(&str, Value, Vec<(&str, &str)>)> = vec![
+    let cases: Vec<Case> = vec![
         // A modern header set over a legacy body: Malformed (-32602).
         ("d malformed shape", keyed_body(None), mirrors("t")),
         // A legacy body naming a revision served in neither era (-32022).
@@ -639,7 +612,7 @@ async fn b8d_direct_refusals_answer_after_intake() {
     }
     // Hardened: a legacy call that declares no elicitation (403, id None).
     let hardened = fixture(Setup {
-        hardened: true,
+        extras: &[Extra::Hardened],
         ..idempotent()
     })
     .await;
@@ -685,7 +658,7 @@ async fn b8e_preflight_refusals_answer_after_intake() {
         }
     }
     let attested = fixture(Setup {
-        attestation: true,
+        extras: &[Extra::Attestation],
         ..idempotent()
     })
     .await;
@@ -709,7 +682,7 @@ async fn b8e_preflight_refusals_answer_after_intake() {
 #[tokio::test]
 async fn b8f_propagation_refusal_answers_after_intake() {
     let fx = fixture(Setup {
-        alpha_requires_identity: true,
+        extras: &[Extra::AlphaRequiresIdentity],
         ..idempotent()
     })
     .await;
@@ -718,4 +691,63 @@ async fn b8f_propagation_refusal_answers_after_intake() {
     assert_eq!(status, StatusCode::BAD_REQUEST, "b8f: {answer}");
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "b8f: dispatched");
     assert_eq!(mint_rows(&fx), 0, "b8f: identity minted");
+}
+
+/// The route x check matrix's driver for `KeyedPrincipal` (MIK-8382, family
+/// route-check-parity): a keyed `tools/call` from an anonymous caller that
+/// also trips a check later in the pipeline, on `route`. On the release line
+/// the later check answers (or, on a task submit, a task is created); once
+/// the intake check applies, the answer is [`NO_PRINCIPAL`] with HTTP 400.
+/// Returns the status, the answer and the backend sends.
+#[cfg(feature = "firewall")]
+pub(crate) async fn keyed_no_principal_on(
+    route: crate::gateway::route_check_matrix_tests::Route,
+) -> (StatusCode, Value, usize) {
+    use crate::gateway::route_check_matrix_tests::Route;
+    let modern = crate::protocol::meta::MODERN_VERSIONS[0];
+    // A legacy body under the modern header set: the shape check refuses it
+    // (-32602) after the point where the intake check runs.
+    let malformed = |name: &'static str| {
+        vec![
+            ("mcp-protocol-version", modern),
+            ("mcp-method", "tools/call"),
+            ("mcp-name", name),
+        ]
+    };
+    let (fx, uri, body, headers) = match route {
+        Route::Direct => {
+            let fx = fixture(idempotent()).await;
+            (fx, "/mcp/alpha", keyed_body(None), malformed("t"))
+        }
+        Route::Surfaced => {
+            let fx = fixture(Setup {
+                meta_mode: MetaMode::SurfacedT,
+                ..Setup::default()
+            })
+            .await;
+            (fx, "/mcp", keyed_body(None), malformed("t"))
+        }
+        Route::Invoke => {
+            let fx = fixture(idempotent()).await;
+            let mut body = keyed_body(None);
+            body["params"]["name"] = json!("gateway_invoke");
+            body["params"]["arguments"] =
+                json!({"server": "alpha", "tool": "t", "arguments": {"customer_id": "c"}});
+            (fx, "/mcp", body, malformed("gateway_invoke"))
+        }
+        Route::TaskSubmit => {
+            let fx = fixture(idempotent()).await;
+            let mut body = keyed_body(Some(modern));
+            body["params"]["name"] = json!("gateway_invoke");
+            body["params"]["arguments"] =
+                json!({"server": "alpha", "tool": "t", "arguments": {"customer_id": "c"}});
+            body["params"]["task"] = json!({});
+            body["params"]["_meta"]["io.modelcontextprotocol/clientCapabilities"] =
+                json!({"extensions": {"io.modelcontextprotocol/tasks": {}}});
+            (fx, "/mcp", body, malformed("gateway_invoke"))
+        }
+        other => unreachable!("not driven here: {other:?}"),
+    };
+    let (status, answer) = post_uri_with_headers(&fx, uri, &body, &headers).await;
+    (status, answer, fx.calls.load(Ordering::SeqCst))
 }

@@ -5,7 +5,7 @@ use super::{
 };
 use serde_json::{Value, json};
 
-fn keyed(key: Value) -> Value {
+fn keyed(key: &Value) -> Value {
     json!({ "_meta": { IDEMPOTENCY_KEY_META: key } })
 }
 
@@ -17,17 +17,17 @@ fn a1_key_field_reads_each_shape() {
         KeyField::Absent
     );
     assert_eq!(
-        idempotency_key_of(&keyed(json!("k1"))),
+        idempotency_key_of(&keyed(&json!("k1"))),
         KeyField::Valid("k1")
     );
     // Whitespace is not empty: it is a key the client chose.
     assert_eq!(
-        idempotency_key_of(&keyed(json!("  "))),
+        idempotency_key_of(&keyed(&json!("  "))),
         KeyField::Valid("  ")
     );
     for bad in [json!(""), json!(7), json!({ "k": 1 }), Value::Null] {
         assert_eq!(
-            idempotency_key_of(&keyed(bad.clone())),
+            idempotency_key_of(&keyed(&bad)),
             KeyField::Malformed,
             "{bad}"
         );
@@ -37,11 +37,11 @@ fn a1_key_field_reads_each_shape() {
 #[test]
 fn a2_retry_fields_keeps_malformed_key() {
     for bad in [json!(""), json!(7)] {
-        let fields = RetryFields::from_params(Some(&keyed(bad.clone())));
+        let fields = RetryFields::from_params(Some(&keyed(&bad)));
         assert!(fields.is_malformed(), "{bad}");
         assert_eq!(fields.idempotency_key, None, "{bad}");
     }
-    let fields = RetryFields::from_params(Some(&keyed(json!("k1"))));
+    let fields = RetryFields::from_params(Some(&keyed(&json!("k1"))));
     assert!(!fields.is_malformed());
     assert_eq!(fields.idempotency_key.as_deref(), Some("k1"));
 }
@@ -50,7 +50,7 @@ fn a2_retry_fields_keeps_malformed_key() {
 fn a3_intake_predicate_table() {
     let call = |params: Value| json!({ "jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": params });
     let named = |key: Value| {
-        let mut p = keyed(key);
+        let mut p = keyed(&key);
         p["name"] = json!("t");
         p
     };

@@ -95,6 +95,15 @@ pub(crate) const fn expect(method: MethodKind, route: Route, stage: Stage) -> Ex
                 Invoke | Surfaced | Direct | TaskWorker | Stdio => Applies,
                 TaskSubmit => NotApplicable(Na::NoBackendSend),
             },
+            // MIK-8382 (design r2 R2-8): /mcp and /mcp/{name} gain an intake
+            // check; today a later check answers first. A worker runs under
+            // the owner its submit admitted; stdio's owner is the local
+            // operator (`stdio_dispatch.rs` `local_operator()`).
+            Stage::KeyedPrincipal => match route {
+                Invoke | Surfaced | Direct | TaskSubmit => ExpectedGap(Ticket::Mik8382),
+                TaskWorker => NotApplicable(Na::DecidedAtSubmit),
+                Stdio => NotApplicable(Na::AlwaysLocalOperator),
+            },
         },
     }
 }
