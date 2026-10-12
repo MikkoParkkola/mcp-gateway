@@ -37,8 +37,8 @@ mod copy;
 use copy::{CopyAudience, Unsent};
 #[path = "streaming_told.rs"]
 mod told;
-pub(crate) use told::ViewJudge;
-use told::{Told, ToldCommit};
+use told::ToldCommit;
+pub(crate) use told::{Peek, ToldState, ViewDigest, ViewJudge, ViewSubject};
 
 /// A tagged notification event from a backend
 #[derive(Debug, Clone, Serialize)]
@@ -204,9 +204,14 @@ struct ClientSession {
     /// revoked or expired token.
     // ci-allow-secret-debug: HeldCredential's own Debug prints only <redacted>
     credential: RwLock<Option<HeldCredential>>,
-    /// What this session was last told of each backend (MIK-8350). A missing
-    /// entry is a baseline, never an empty list.
-    told: RwLock<HashMap<String, Told>>,
+    /// What this session was last told of each backend (MIK-8350).
+    told: RwLock<ToldState>,
+    /// Bumped when the credential changes, so a record read for the old
+    /// caller is never written for the new one.
+    epoch: std::sync::atomic::AtomicU64,
+    /// The identities the stream was opened under, which its view is judged
+    /// with besides the credential.
+    subject: RwLock<Option<Arc<ViewSubject>>>,
 }
 
 impl ClientSession {
@@ -221,7 +226,9 @@ impl ClientSession {
         *held = credential;
         drop(held);
         if changed {
-            self.told.write().clear();
+            let mut told = self.told.write();
+            self.epoch.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            told.clear();
         }
     }
 
@@ -529,7 +536,9 @@ impl NotificationMultiplexer {
             last_active: RwLock::new(Instant::now()),
             owner,
             credential: RwLock::new(None),
-            told: RwLock::new(HashMap::new()),
+            told: RwLock::new(ToldState::default()),
+            epoch: std::sync::atomic::AtomicU64::new(0),
+            subject: RwLock::new(None),
         });
         sessions.insert(id, Arc::clone(&session));
         session

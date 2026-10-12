@@ -84,8 +84,10 @@ pub fn create_sse_response(
                     }
                     // MIK-8350 B2': what the listener was last told advances only
                     // here, once the frame has passed every write gate.
-                    if let Some(commit) = &item.commit {
-                        commit.apply();
+                    if let Some(commit) = &item.commit
+                        && !commit.apply()
+                    {
+                        continue;
                     }
                     if let Some(watch) = &item.watch {
                         watch.report(true);

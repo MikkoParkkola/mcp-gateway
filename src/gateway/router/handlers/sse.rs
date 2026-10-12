@@ -204,7 +204,9 @@ pub(in crate::gateway::router) async fn mcp_sse_handler(
     }
     // MIK-8350: what this stream's caller is shown, so the first change after
     // attach is judged against it.
-    state.take_baseline(&session_id).await;
+    state
+        .attach_view(&session_id, subject.clone(), &extensions)
+        .await;
     // Read before the macro so its count is graded (MIK-7725).
     let session = opened.fp();
     info!(session_id = %session, "Client connected to SSE stream");

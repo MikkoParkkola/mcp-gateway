@@ -69,8 +69,9 @@ impl StdioAnnouncer {
             let announced = parking_lot::Mutex::new(Announced::default());
             // What the stdio client was last told of each backend: it is owed
             // a notice only when its own view of that backend moved (MIK-8350).
-            let mut told: std::collections::HashMap<String, String> =
-                std::collections::HashMap::new();
+            let mut told = crate::gateway::streaming::ToldState::default();
+            // Baselined with nothing, so the first sight of a backend is told.
+            told.baseline(std::collections::HashMap::new());
             let shutdown = stop.subscribe();
             let ready = ready.clone();
             tokio::spawn(async move {
@@ -82,12 +83,12 @@ impl StdioAnnouncer {
                         #[cfg(test)]
                         crate::gateway::server::stdio_seams::decided();
                         let view = stdio_view(&meta_mcp, &tool_policy, &name);
-                        if told
-                            .insert(name, view.clone())
-                            .is_some_and(|before| before == view)
-                        {
+                        let crate::gateway::streaming::Peek::Owed(generation) =
+                            told.peek(&name, &view)
+                        else {
                             return std::future::ready(());
-                        }
+                        };
+                        let _ = told.commit(&name, &view, generation);
                         if *ready.borrow() {
                             pending.notify_one();
                         } else {
@@ -154,7 +155,11 @@ impl Drop for StdioAnnouncer {
 
 /// What the stdio client is shown of `backend` now: the operator's scope,
 /// judged by the global tool policy, exactly as its `tools/list` is.
-fn stdio_view(meta_mcp: &MetaMcp, tool_policy: &ToolPolicy, backend: &str) -> String {
+fn stdio_view(
+    meta_mcp: &MetaMcp,
+    tool_policy: &ToolPolicy,
+    backend: &str,
+) -> crate::gateway::streaming::ViewDigest {
     let policy = crate::gateway::authz::ToolPolicyAuthorizer { tool_policy };
     let scope = crate::gateway::meta_mcp::InvokeScope::stdio(
         &policy,
@@ -165,7 +170,7 @@ fn stdio_view(meta_mcp: &MetaMcp, tool_policy: &ToolPolicy, backend: &str) -> St
             ),
         ),
     );
-    meta_mcp.visible_fingerprint(
+    meta_mcp.visible_digest(
         backend,
         scope,
         Some(crate::gateway::server::STDIO_SESSION_ID),

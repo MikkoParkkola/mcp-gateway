@@ -6,10 +6,11 @@
 
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::visibility::InvokeScope;
+use crate::gateway::streaming::ViewDigest;
 use crate::protocol::{RequestId, Tool};
 
 impl MetaMcp {
-    /// A digest of what `scope` is shown of `backend`, from two parts that move
+    /// What `scope` is shown of `backend`, as two digests that move
     /// independently:
     /// - (a) the served `tools/list` result itself (`served_tools_list`, the one
     ///   builder, so meta-tool counts, surfaced and promoted tools follow the
@@ -20,19 +21,20 @@ impl MetaMcp {
     ///
     /// Cache reads only: it never mints a credential and never fetches, so a
     /// cold per-user slot contributes nothing (design B3'/D4).
-    pub(crate) fn visible_fingerprint(
+    pub(crate) fn visible_digest(
         &self,
         backend: &str,
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
-    ) -> String {
+    ) -> ViewDigest {
         let served = self.served_tools_list(RequestId::Number(0), session_id, scope);
-        let mut basis = serde_json::to_string(&served.result).unwrap_or_default();
-        basis.push('\u{1}');
+        let served = serde_json::to_string(&served.result).unwrap_or_default();
         // Code Mode serves two fixed meta-tools and no discovery listing, so
         // a backend's own tools are not part of what the caller can see.
-        if !self.code_mode_enabled && self.admits_backend(backend, scope, session_id) {
-            let shown: Vec<Tool> = if let Some(b) = self.backends.get(backend) {
+        let shown: Vec<Tool> =
+            if self.code_mode_enabled || !self.admits_backend(backend, scope, session_id) {
+                Vec::new()
+            } else if let Some(b) = self.backends.get(backend) {
                 self.listing_snapshot(&b, scope)
                     .map(|(tools, _)| {
                         tools
@@ -49,8 +51,15 @@ impl MetaMcp {
                     .filter(|t| self.shows_tool(backend, t, scope, session_id))
                     .collect()
             };
-            basis.push_str(&serde_json::to_string(&shown).unwrap_or_default());
+        ViewDigest {
+            served: crate::hashing::sha256_hex(served.as_bytes()),
+            shown: if shown.is_empty() {
+                String::new()
+            } else {
+                crate::hashing::sha256_hex(
+                    serde_json::to_string(&shown).unwrap_or_default().as_bytes(),
+                )
+            },
         }
-        crate::hashing::sha256_hex(basis.as_bytes())
     }
 }

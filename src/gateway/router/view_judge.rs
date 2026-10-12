@@ -13,8 +13,7 @@ use super::{AppState, OwnedRouterAuthorizer};
 use crate::gateway::auth::live::{HeldCredential, current_caller};
 use crate::gateway::auth::{AuthState, AuthenticatedClient};
 use crate::gateway::meta_mcp::InvokeScope;
-use crate::gateway::streaming::ViewJudge;
-use crate::identity_grants::GrantSubject;
+use crate::gateway::streaming::{ViewDigest, ViewJudge, ViewSubject};
 
 /// Judges from the state the caller holds. Borrowed for the span of one
 /// fan-out, so nothing stores a pointer back into the state that owns the
@@ -33,77 +32,91 @@ impl<'s> RouterViewJudge<'s> {
 /// opened it, so it holds the state.
 pub(super) struct OwnedViewJudge {
     state: Arc<AppState>,
-    /// The adapter identity the stream was opened under, captured once: it is
-    /// part of what the stream's caller is shown (MIK-8350 D11).
-    subject: Option<GrantSubject>,
 }
 
 impl OwnedViewJudge {
-    pub(super) fn shared(
-        state: &Arc<AppState>,
-        subject: Option<GrantSubject>,
-    ) -> Arc<dyn ViewJudge> {
+    pub(super) fn shared(state: &Arc<AppState>) -> Arc<dyn ViewJudge> {
         Arc::new(Self {
             state: Arc::clone(state),
-            subject,
         })
     }
 }
 
+type Caller<'a> = (Option<&'a HeldCredential>, Option<&'a ViewSubject>);
+
 impl ViewJudge for OwnedViewJudge {
-    fn fingerprint<'a>(
+    fn digest<'a>(
         &'a self,
         auth: &'a AuthState,
-        credential: Option<&'a HeldCredential>,
+        caller: Caller<'a>,
         session_id: &'a str,
         backend: &'a str,
-    ) -> BoxFuture<'a, Option<String>> {
-        Box::pin(fingerprint_async(
-            &self.state,
-            self.subject.as_ref(),
-            auth,
-            credential,
-            session_id,
-            backend,
-        ))
+    ) -> BoxFuture<'a, Option<ViewDigest>> {
+        Box::pin(digest_async(&self.state, auth, caller, session_id, backend))
     }
 
     fn baseline<'a>(
         &'a self,
         auth: &'a AuthState,
-        credential: Option<&'a HeldCredential>,
+        caller: Caller<'a>,
         session_id: &'a str,
-    ) -> BoxFuture<'a, HashMap<String, String>> {
-        Box::pin(baseline_async(
-            &self.state,
-            self.subject.as_ref(),
-            auth,
-            credential,
-            session_id,
-        ))
+    ) -> BoxFuture<'a, HashMap<String, ViewDigest>> {
+        Box::pin(baseline_async(&self.state, auth, caller, session_id))
     }
 }
 
-/// What `client` is shown of `backend` in session `session_id`, as the same
-/// scope a POST of that client would be judged under.
-fn fingerprint_for(
+impl ViewJudge for RouterViewJudge<'_> {
+    fn digest<'a>(
+        &'a self,
+        auth: &'a AuthState,
+        caller: Caller<'a>,
+        session_id: &'a str,
+        backend: &'a str,
+    ) -> BoxFuture<'a, Option<ViewDigest>> {
+        Box::pin(digest_async(self.state, auth, caller, session_id, backend))
+    }
+
+    fn baseline<'a>(
+        &'a self,
+        auth: &'a AuthState,
+        caller: Caller<'a>,
+        session_id: &'a str,
+    ) -> BoxFuture<'a, HashMap<String, ViewDigest>> {
+        Box::pin(baseline_async(self.state, auth, caller, session_id))
+    }
+}
+
+/// What `client` is shown of `backend` in session `session_id`, under the same
+/// scope a POST of that client would be judged under: the identities the
+/// stream was opened with stand in for the ones a request carries.
+fn digest_for(
     state: &AppState,
-    subject: Option<&GrantSubject>,
+    subject: Option<&ViewSubject>,
     (client, identity): &(
         AuthenticatedClient,
         Option<crate::key_server::oidc::VerifiedIdentity>,
     ),
     session_id: &str,
     backend: &str,
-) -> String {
-    let owned = OwnedRouterAuthorizer::capture(Some(client), None, None);
+) -> ViewDigest {
+    let oauth = subject.and_then(|s| s.oauth_agent.as_ref());
+    let cert = subject.and_then(|s| s.cert.as_ref());
+    let owned = OwnedRouterAuthorizer::capture(Some(client), oauth, cert);
     let authorizer = owned.borrow(state);
+    // Only the proven half of an agent identity matters, and it comes from the
+    // certificate and the verified token alone, never a header.
+    let agent = crate::security::extract_agent_identity(
+        &axum::http::HeaderMap::new(),
+        None,
+        cert,
+        oauth.map(|a| a.client_id.as_str()),
+    );
     let scope = InvokeScope {
         authorizer: &authorizer,
         is_admin: client.admin,
         api_key_name: Some(&client.name),
-        agent_id: None,
-        grant_subject: subject,
+        agent_id: agent.proven_agent_id(),
+        grant_subject: subject.and_then(|s| s.grant_subject.as_ref()),
         caller: crate::identity_propagation::CallerProof::new(
             identity.as_ref(),
             crate::identity_propagation::CallerProvenance::classify(Some(
@@ -113,33 +126,29 @@ fn fingerprint_for(
     };
     state
         .meta_mcp
-        .visible_fingerprint(backend, scope, Some(session_id).filter(|s| !s.is_empty()))
+        .visible_digest(backend, scope, Some(session_id).filter(|s| !s.is_empty()))
 }
 
-/// What `credential` is shown of `backend` now, or `None` when it no longer
-/// resolves to a caller.
-async fn fingerprint_async(
+/// What the held credential is shown of `backend` now, or `None` when it no
+/// longer resolves to a caller.
+async fn digest_async(
     state: &AppState,
-    subject: Option<&GrantSubject>,
     auth: &AuthState,
-    credential: Option<&HeldCredential>,
+    (credential, subject): Caller<'_>,
     session_id: &str,
     backend: &str,
-) -> Option<String> {
+) -> Option<ViewDigest> {
     let caller = current_caller(auth, credential).await?;
-    Some(fingerprint_for(
-        state, subject, &caller, session_id, backend,
-    ))
+    Some(digest_for(state, subject, &caller, session_id, backend))
 }
 
-/// Every backend's fingerprint for `credential`, empty when it does not resolve.
+/// Every backend's view for the held credential, empty when it does not resolve.
 async fn baseline_async(
     state: &AppState,
-    subject: Option<&GrantSubject>,
     auth: &AuthState,
-    credential: Option<&HeldCredential>,
+    (credential, subject): Caller<'_>,
     session_id: &str,
-) -> HashMap<String, String> {
+) -> HashMap<String, ViewDigest> {
     let Some(caller) = current_caller(auth, credential).await else {
         return HashMap::new();
     };
@@ -155,35 +164,10 @@ async fn baseline_async(
     names
         .into_iter()
         .map(|name| {
-            let fingerprint = fingerprint_for(state, subject, &caller, session_id, &name);
-            (name, fingerprint)
+            let digest = digest_for(state, subject, &caller, session_id, &name);
+            (name, digest)
         })
         .collect()
-}
-
-impl ViewJudge for RouterViewJudge<'_> {
-    fn fingerprint<'a>(
-        &'a self,
-        auth: &'a AuthState,
-        credential: Option<&'a HeldCredential>,
-        session_id: &'a str,
-        backend: &'a str,
-    ) -> BoxFuture<'a, Option<String>> {
-        Box::pin(fingerprint_async(
-            self.state, None, auth, credential, session_id, backend,
-        ))
-    }
-
-    fn baseline<'a>(
-        &'a self,
-        auth: &'a AuthState,
-        credential: Option<&'a HeldCredential>,
-        session_id: &'a str,
-    ) -> BoxFuture<'a, HashMap<String, String>> {
-        Box::pin(baseline_async(
-            self.state, None, auth, credential, session_id,
-        ))
-    }
 }
 
 impl AppState {
@@ -194,28 +178,62 @@ impl AppState {
             .refresh_told(session_id, &RouterViewJudge::new(self))
             .await;
     }
-}
 
-impl AppState {
+    /// A GET stream opened for `session_id`: bind the identities it was opened
+    /// under and record what its caller is shown now, so the first change after
+    /// attach is judged against it.
+    pub(super) async fn attach_view(
+        &self,
+        session_id: &str,
+        grant_subject: Option<crate::identity_grants::GrantSubject>,
+        extensions: &axum::http::Extensions,
+    ) {
+        self.multiplexer.bind_view_subject(
+            session_id,
+            ViewSubject {
+                grant_subject,
+                oauth_agent: extensions
+                    .get::<crate::gateway::oauth::AgentIdentity>()
+                    .cloned(),
+                cert: extensions.get::<crate::mtls::CertIdentity>().cloned(),
+            },
+        );
+        self.multiplexer
+            .take_baseline(session_id, &RouterViewJudge::new(self))
+            .await;
+    }
+
     /// `listener` judged by the view of the caller that opened it, under the
-    /// adapter identity captured now (MIK-8350 D11).
+    /// identities captured now (MIK-8350 D11).
     pub(super) fn judged_listener(
         self: &Arc<Self>,
         mut listener: crate::gateway::subscription_registry::Listener,
-        subject: Option<GrantSubject>,
+        grant_subject: Option<crate::identity_grants::GrantSubject>,
+        (oauth_agent, cert): (
+            Option<crate::gateway::oauth::AgentIdentity>,
+            Option<crate::mtls::CertIdentity>,
+        ),
     ) -> crate::gateway::subscription_registry::Listener {
-        listener.set_views(OwnedViewJudge::shared(self, subject));
+        listener.set_views(
+            OwnedViewJudge::shared(self),
+            ViewSubject {
+                grant_subject,
+                oauth_agent,
+                cert,
+            },
+        );
         listener
     }
 
     /// A switched profile changes what its caller is shown, and the switch's
-    /// own answer is the notice: record the new view as told.
-    pub(super) async fn refresh_after_call(
+    /// own answer is the notice: record the new view as told. Hands `response`
+    /// back.
+    pub(super) async fn after_call(
         &self,
         session_id: &str,
         params: Option<&serde_json::Value>,
-        response: &crate::protocol::JsonRpcResponse,
-    ) {
+        response: crate::protocol::JsonRpcResponse,
+    ) -> crate::protocol::JsonRpcResponse {
         let switched = params
             .and_then(|p| p.get("name"))
             .and_then(serde_json::Value::as_str)
@@ -223,14 +241,6 @@ impl AppState {
         if switched && response.error.is_none() {
             self.refresh_told(session_id).await;
         }
-    }
-}
-
-impl AppState {
-    /// Record what `session_id`'s caller is shown now, as a stream opens.
-    pub(super) async fn take_baseline(&self, session_id: &str) {
-        self.multiplexer
-            .take_baseline(session_id, &RouterViewJudge::new(self))
-            .await;
+        response
     }
 }

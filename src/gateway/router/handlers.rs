@@ -295,7 +295,11 @@ async fn meta_mcp_dispatch(
                 .subscribe_as(crate::gateway::auth::live::held_credential(headers))
                 .await
             {
-                Ok(listener) => state.judged_listener(listener, grant_subject.clone()),
+                Ok(listener) => state.judged_listener(
+                    listener,
+                    grant_subject.clone(),
+                    (oauth_agent_identity.clone(), cert_identity.clone()),
+                ),
                 Err(ListenRefusal::Unauthenticated) => {
                     return build_error_response(
                         Some(id),
@@ -443,7 +447,6 @@ async fn meta_mcp_dispatch(
                 .meta_mcp
                 .revalidate_caller_slots(invoke_scope.caller)
                 .await;
-            // MIK-8350 B9: what this list shows is what the caller is told.
             state.refresh_told(session_id.as_str()).await;
             state.meta_mcp.handle_tools_list_with_url_override(
                 id,
@@ -496,9 +499,8 @@ async fn meta_mcp_dispatch(
             match called {
                 Some(Ok(response)) => {
                     state
-                        .refresh_after_call(session_id.as_str(), params, &response)
-                        .await;
-                    response
+                        .after_call(session_id.as_str(), params, response)
+                        .await
                 }
                 Some(Err(response)) => return response,
                 None => {

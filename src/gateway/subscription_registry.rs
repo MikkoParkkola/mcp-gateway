@@ -97,24 +97,34 @@ pub struct Listener {
     credential: Option<HeldCredential>,
     authorizer: AuthState,
     /// What each backend showed this listener when it was last told of it
-    /// (MIK-8350): a `tools/list_changed` is owed only when that moved. A
-    /// missing entry is a baseline, never an empty list.
-    told: std::collections::HashMap<String, String>,
+    /// (MIK-8350): a `tools/list_changed` is owed only when that moved.
+    told: crate::gateway::streaming::ToldState,
     views: Option<Arc<dyn crate::gateway::streaming::ViewJudge>>,
+    /// The identities the stream was opened under, which its view is judged
+    /// with besides the credential (MIK-8350 D11).
+    subject: Option<crate::gateway::streaming::ViewSubject>,
     _permit: OwnedSemaphorePermit,
 }
 
 /// What a published item means for one listener's own view (MIK-8350).
-pub(crate) enum ViewVerdict {
+enum ViewVerdict {
     /// Not a `tools/list_changed` for a backend: delivered as before.
     NotAView,
-    /// A hint for a backend whose view did not move for this listener.
+    /// A hint for a backend whose view did not move for this listener, or
+    /// that this listener already holds.
     Quiet,
     /// A hint this listener is owed; the record is made once it is written.
-    Owed {
-        backend: String,
-        fingerprint: String,
-    },
+    Owed(Owed),
+    /// The credential stopped resolving to a caller between the scope check
+    /// and the digest.
+    Dead,
+}
+
+/// The record a written view hint makes.
+pub(crate) struct Owed {
+    backend: String,
+    digest: crate::gateway::streaming::ViewDigest,
+    generation: u64,
 }
 
 /// What a listen stream does with a published item (MIK-8350).
@@ -124,7 +134,7 @@ pub(crate) enum Admit {
     /// Its credential no longer authenticates: the stream ends.
     Close,
     /// Write it; the record to make once it is written, for a view hint.
-    Send(Option<(String, String)>),
+    Send(Option<Owed>),
 }
 
 impl std::fmt::Debug for Listener {
@@ -168,8 +178,13 @@ impl Listener {
 
     /// Give this listener the judge of its own view (MIK-8350); without one it
     /// is told every `tools/list_changed` for a backend it may access.
-    pub(crate) fn set_views(&mut self, judge: Arc<dyn crate::gateway::streaming::ViewJudge>) {
+    pub(crate) fn set_views(
+        &mut self,
+        judge: Arc<dyn crate::gateway::streaming::ViewJudge>,
+        subject: crate::gateway::streaming::ViewSubject,
+    ) {
         self.views = Some(judge);
+        self.subject = Some(subject);
     }
 
     /// Record what every backend shows this listener now, as the baseline the
@@ -178,12 +193,14 @@ impl Listener {
         let Some(judge) = self.views.clone() else {
             return;
         };
-        for (backend, fingerprint) in judge
-            .baseline(&self.authorizer, self.credential.as_ref(), "")
-            .await
-        {
-            self.told.entry(backend).or_insert(fingerprint);
-        }
+        let view = judge
+            .baseline(
+                &self.authorizer,
+                (self.credential.as_ref(), self.subject.as_ref()),
+                "",
+            )
+            .await;
+        self.told.baseline(view);
     }
 
     /// The constant hint owed right after the acknowledgement (MIK-8350 B10),
@@ -220,10 +237,8 @@ impl Listener {
         }
         match self.view_verdict(published).await {
             ViewVerdict::Quiet => Admit::Skip,
-            ViewVerdict::Owed {
-                backend,
-                fingerprint,
-            } => Admit::Send(Some((backend, fingerprint))),
+            ViewVerdict::Dead => Admit::Close,
+            ViewVerdict::Owed(owed) => Admit::Send(Some(owed)),
             ViewVerdict::NotAView => Admit::Send(None),
         }
     }
@@ -239,29 +254,33 @@ impl Listener {
         let Some(judge) = self.views.clone().filter(|_| is_hint) else {
             return ViewVerdict::NotAView;
         };
-        let Some(fingerprint) = judge
-            .fingerprint(&self.authorizer, self.credential.as_ref(), "", backend)
+        let Some(digest) = judge
+            .digest(
+                &self.authorizer,
+                (self.credential.as_ref(), self.subject.as_ref()),
+                "",
+                backend,
+            )
             .await
         else {
-            return ViewVerdict::Quiet;
+            return ViewVerdict::Dead;
         };
-        match self.told.get(backend) {
-            None => {
-                self.told.insert(backend.clone(), fingerprint);
-                ViewVerdict::Quiet
-            }
-            Some(told) if *told == fingerprint => ViewVerdict::Quiet,
-            Some(_) => ViewVerdict::Owed {
+        match self.told.peek(backend, &digest) {
+            crate::gateway::streaming::Peek::Quiet => ViewVerdict::Quiet,
+            crate::gateway::streaming::Peek::Owed(generation) => ViewVerdict::Owed(Owed {
                 backend: backend.clone(),
-                fingerprint,
-            },
+                digest,
+                generation,
+            }),
         }
     }
 
     /// Make the record `admit` owed, once the frame is written.
-    pub(crate) fn commit_owed(&mut self, owed: Option<(String, String)>) {
-        if let Some((backend, fingerprint)) = owed {
-            self.told.insert(backend, fingerprint);
+    pub(crate) fn commit_owed(&mut self, owed: Option<Owed>) {
+        if let Some(owed) = owed {
+            let _ = self
+                .told
+                .commit(&owed.backend, &owed.digest, owed.generation);
         }
     }
 
@@ -325,8 +344,9 @@ impl SubscriptionRegistry {
             receiver: self.sender.subscribe(),
             credential,
             authorizer: self.authorizer.clone(),
-            told: std::collections::HashMap::new(),
+            told: crate::gateway::streaming::ToldState::default(),
             views: None,
+            subject: None,
             _permit: permit,
         })
     }
