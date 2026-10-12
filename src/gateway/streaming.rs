@@ -797,3 +797,6 @@ mod ownership;
 #[cfg(test)]
 #[path = "streaming_request_scoped_tests.rs"]
 mod request_scoped_stream_tests;
+#[cfg(test)]
+#[path = "streaming_unframed_tests.rs"]
+mod unframed_tests;
