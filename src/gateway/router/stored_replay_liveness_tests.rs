@@ -325,8 +325,10 @@ async fn r5_repeated_task_call_after_revocation_is_not_served_the_stored_task() 
 /// R4 (E8 twin): a keyed call by the SURFACED name dispatches while
 /// connected; after revocation the repeat answers exactly as the same keyed
 /// call to a name that does not exist: byte-identical after normalising only
-/// `id`, with nothing sent and no stored output. The withheld name is never
-/// served stored and never leaks its key through a 409.
+/// `id`, with nothing sent and no stored output. Both twins must hold: (i) a
+/// name that exists on no backend, and (ii) the same name where it is not
+/// surfaced. The withheld name is never served stored and never leaks its
+/// key through a 409.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn r4_revoked_surfaced_name_is_not_served_the_retained_result() {
     // The withheld half: surfaced, dispatched, revoked, repeated.
@@ -341,21 +343,42 @@ async fn r4_revoked_surfaced_name_is_not_served_the_retained_result() {
     fx.gateway.revoke_operator_grant().await;
     let again = send(&fx, "tools/call", TOOL, call("r4")).await;
     eprintln!("R4 answer: {again}");
-    // The absent half: never surfaced, so the same name matches no tool.
+    // Twin (i): a name that exists on no backend, on the same fixture.
+    // Fresh key, same shape.
+    let missing_name = "no_such_tool_8392";
+    let missing_call = json!({
+        "name": missing_name,
+        "arguments": {"folder": "inbox"},
+        "_meta": meta(Some("r4-missing"), false),
+    });
+    let truly_missing = send(&fx, "tools/call", missing_name, missing_call).await;
+    eprintln!("R4 truly-missing: {truly_missing}");
+    // Twin (ii): never surfaced, so the same name matches no tool.
     // Fresh key, same shape.
     let fx_absent = fixture(false).await;
     let missing = send(&fx_absent, "tools/call", TOOL, call("r4-absent")).await;
     eprintln!("R4 absent: {missing}");
-    // Twin: byte-identical after normalising only `id`.
+    // Both twins: byte-identical after normalising only `id`.
     let mut again_norm = again.clone();
+    let mut truly_missing_norm = truly_missing.clone();
     let mut missing_norm = missing.clone();
     again_norm["id"] = Value::Null;
+    truly_missing_norm["id"] = Value::Null;
     missing_norm["id"] = Value::Null;
+    assert_eq!(
+        again_norm, truly_missing_norm,
+        "R4: the withheld answer differs from the truly-missing answer: {again} vs {truly_missing}"
+    );
     assert_eq!(
         again_norm, missing_norm,
         "R4: the withheld answer differs from the missing-name answer: {again} vs {missing}"
     );
     assert_refused_unsent(&fx, "R4", &again, sent);
+    assert_eq!(
+        fx.gateway.tool_calls().len(),
+        sent,
+        "R4: the truly-missing call reached the backend: {truly_missing}"
+    );
     assert!(
         fx_absent.gateway.tool_calls().is_empty(),
         "R4: the missing-name call reached the backend: {missing}"
@@ -444,12 +467,14 @@ async fn s6_retained_gateway_execute_is_served_not_rerun() {
     assert_eq!(fx.gateway.tool_calls().len(), sent, "S6: a step was re-run: {again}");
 }
 
-/// Expected gap, MIK-8406: a revoked plan replay is served as today; MIK-8406
-/// flips this to a refusal. A task-augmented keyed `gateway_execute`
-/// completes; the grant is revoked; the same task call repeated is answered
-/// with the stored task. STORED.2 lists this as an OPEN gap, never as covered.
+/// T7 (twin guard): a revoked vault plan-task repeat answers as a missing
+/// name does. A task-augmented keyed `gateway_execute` completes; the grant
+/// is revoked; the same task call repeated answers -32601 for the step tool,
+/// byte-identical after normalising only `id` to the same keyed
+/// task-augmented call naming a step tool that exists on no backend. Sends
+/// +0, and no stored output.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn plan_replay_after_revoke_is_mik_8406_gap() {
+async fn t7_revoked_vault_plan_repeat_answers_as_a_missing_name() {
     let fx = fixture(false).await;
     answer_marker(&fx);
     let made = send(&fx, "tools/call", "gateway_execute", execute_params("t7", true)).await;
@@ -465,12 +490,138 @@ async fn plan_replay_after_revoke_is_mik_8406_gap() {
     let again = send(&fx, "tools/call", "gateway_execute", execute_params("t7", true)).await;
     eprintln!("T7 repeat: {again}");
     assert_eq!(
+        again.pointer("/error/code").and_then(Value::as_i64),
+        Some(-32601),
+        "T7: the revoked plan repeat is not -32601: {again}"
+    );
+    assert!(
+        !again.to_string().contains(MARKER),
+        "T7: stored output served: {again}"
+    );
+    assert!(
+        again.pointer("/result/taskId").is_none(),
+        "T7: a task was answered back: {again}"
+    );
+    assert_eq!(
+        fx.gateway.tool_calls().len(),
+        sent,
+        "T7: a step was re-run: {again}"
+    );
+    // The missing twin: the same keyed task-augmented call naming a step
+    // tool that exists on no backend. Fresh key, same shape.
+    let missing_tool = format!("{BACKEND}:no_such_tool_8392");
+    let mut missing_params = json!({
+        "name": "gateway_execute",
+        "arguments": {"chain": [{"tool": missing_tool, "arguments": {"folder": "inbox"}}]},
+        "_meta": meta(Some("t7-missing"), true),
+    });
+    missing_params["task"] = json!({});
+    let fx_missing = fixture(false).await;
+    let missing = send(&fx_missing, "tools/call", "gateway_execute", missing_params).await;
+    eprintln!("T7 missing: {missing}");
+    let mut again_norm = again.clone();
+    let mut missing_norm = missing.clone();
+    again_norm["id"] = Value::Null;
+    missing_norm["id"] = Value::Null;
+    assert_eq!(
+        again_norm, missing_norm,
+        "T7: the revoked answer differs from the missing-name answer: {again} vs {missing}"
+    );
+    assert!(
+        fx_missing.gateway.tool_calls().is_empty(),
+        "T7: the missing-name call reached the backend: {missing}"
+    );
+}
+
+/// Expected gap, MIK-8406: an external-account plan replay is served without proof of liveness; MIK-8406 flips this to a refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plan_replay_external_account_is_mik_8406_gap() {
+    use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::{
+        CAPABILITY_SERVER, CAPABILITY_TOOL, CapabilityAccount,
+    };
+
+    async fn send_alice(router: &axum::Router, method: &str, name: &str, params: Value) -> Value {
+        let body = json!({"jsonrpc": "2.0", "id": 5, "method": method, "params": params});
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("content-type", "application/json")
+            .header("mcp-protocol-version", "2026-07-28")
+            .header("mcp-method", method)
+            .header("mcp-name", name)
+            .body(axum::body::Body::from(body.to_string()))
+            .expect("a request");
+        request.extensions_mut().insert(
+            crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::CapabilityAccount::alice(),
+        );
+        let response = router.clone().oneshot(request).await.expect("an answer");
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.expect("a body");
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    }
+
+    // External WORK: no vault view, so Unjudged. Revoke is real custody.
+    let account = CapabilityAccount::start(true).await;
+    let (state, _store) = super::tests::meta_fixture::test_router_app_state_with_meta(
+        &crate::config::AuthConfig::default(),
+        None,
+        |meta| account.install(meta),
+    )
+    .await;
+    let router = super::create_router(Arc::clone(&state));
+    let tool_ref = format!("{CAPABILITY_SERVER}:{CAPABILITY_TOOL}");
+    let params_for = |key: &str| {
+        let mut meta = json!({
+            "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+            "io.modelcontextprotocol/clientCapabilities": {
+                "extensions": {"io.modelcontextprotocol/tasks": {}}
+            },
+        });
+        meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+        json!({
+            "name": "gateway_execute",
+            "arguments": {"chain": [{"tool": tool_ref.clone(), "arguments": {}}]},
+            "task": {}, "_meta": meta,
+        })
+    };
+    let made = send_alice(&router, "tools/call", "gateway_execute", params_for("ext-gap")).await;
+    let id = made
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task was made: {made}"))
+        .to_owned();
+    let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let got = send_alice(
+            &router,
+            "tasks/get",
+            &id,
+            json!({"taskId": id, "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientCapabilities": {
+                    "extensions": {"io.modelcontextprotocol/tasks": {}}
+                },
+            }}),
+        )
+        .await;
+        if got.pointer("/result/status") == Some(&json!("completed")) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < bound,
+            "premise: completes: {got}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    account.revoke().await;
+    let again =
+        send_alice(&router, "tools/call", "gateway_execute", params_for("ext-gap")).await;
+    eprintln!("ext-gap repeat: {again}");
+    assert_eq!(
         again.pointer("/result/taskId").and_then(Value::as_str),
         Some(id.as_str()),
-        "T7 gap moved: the revoked plan repeat is no longer answered with the stored task \
+        "ext-gap moved: the external-account plan repeat is no longer answered with the stored task \
          (MIK-8406 inverts this row): {again}"
     );
-    assert_eq!(fx.gateway.tool_calls().len(), sent, "T7: a step was re-run: {again}");
 }
 
 /// G1 (guard; mutant M31): on the direct route a revoked grant's keyed replay
@@ -882,8 +1033,7 @@ async fn r6m_token_exchange_replay_after_idp_kill_and_ttl_is_refused() {
         attestation: None,
     };
     let caller = |retry: &crate::protocol::mrtr::RetryFields,
-                  alice: &VerifiedIdentity|
-     -> crate::gateway::meta_mcp::MetaMcpCallerContext<'_> {
+                  alice: &VerifiedIdentity| {
         crate::gateway::meta_mcp::MetaMcpCallerContext {
             task: None,
             signing: None,
@@ -916,14 +1066,14 @@ async fn r6m_token_exchange_replay_after_idp_kill_and_ttl_is_refused() {
     // no-op here (no account to fill); admission and dispatch are the real
     // route-stage path, and the lease settle retains the result.
     let retry1 = retry("r6m");
-    let mut caller1 = caller(&retry1, &alice);
     let args1 = invoke_args();
     let id1 = crate::protocol::RequestId::Number(7);
     let (first, lease) = crate::gateway::meta_mcp::visible::with_visibility_memo(async {
+        let base = caller(&retry1, &alice);
         let admission = meta
             .admit_meta_sync_for_test(
                 crate::gateway::meta_mcp::AdmissionOwner::local_operator(),
-                &caller1,
+                &base,
                 "gateway_invoke",
                 &args1,
                 Some("s1"),
@@ -934,9 +1084,12 @@ async fn r6m_token_exchange_replay_after_idp_kill_and_ttl_is_refused() {
             SyncAdmission::Owned(lease) => lease,
             _ => panic!("premise: the first keyed call is not admitted owned"),
         };
-        caller1.execution = Some(&lease);
+        let leased = crate::gateway::meta_mcp::MetaMcpCallerContext {
+            execution: Some(&lease),
+            ..base
+        };
         let response = meta
-            .handle_tools_call(id1, "gateway_invoke", args1, Some("s1"), caller1)
+            .handle_tools_call(id1, "gateway_invoke", args1, Some("s1"), leased)
             .await;
         (response, lease)
     })
