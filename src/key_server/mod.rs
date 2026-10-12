@@ -37,6 +37,7 @@ pub mod handler;
 mod identity_rules_tests;
 pub mod oidc;
 #[cfg(test)]
+#[path = "oidc_harness_tests.rs"]
 pub(crate) mod oidc_test_harness;
 pub mod policy;
 pub mod store;
