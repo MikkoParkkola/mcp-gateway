@@ -246,15 +246,21 @@ async fn a_three_x_config_is_refused_then_serves_after_upgrade() {
     let refused = refused_serve(&ws).await;
     let said = show(&refused);
     assert!(!refused.status.success(), "a 3.x config was served\n{said}");
+    // The refusal itself, not the whole output: the `cache_tools` warning
+    // logged before it names `mcp-gateway upgrade` too.
+    let refusal = said
+        .lines()
+        .find(|line| line.contains("Removed config key(s)"))
+        .unwrap_or_else(|| panic!("no removed-key refusal\n{said}"));
     for key in REFUSING {
         assert!(
-            said.contains(key),
-            "the refusal does not name {key}\n{said}"
+            refusal.contains(key),
+            "the refusal does not name {key}\n{refusal}"
         );
     }
     assert!(
-        said.contains("mcp-gateway upgrade"),
-        "the refusal names no way out\n{said}"
+        refusal.contains("mcp-gateway upgrade"),
+        "the refusal names no way out\n{refusal}"
     );
 
     // One upgrade.
