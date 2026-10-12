@@ -564,6 +564,28 @@ pub(super) async fn tools_call(
         ));
     }
     caller.signing = signing_context.as_ref();
+    // MIK-8392 STORED.2: the account pre-pass, after the caller verdicts
+    // (whose clean resolution it reuses, E5) and before admission. Only a
+    // keyed synchronous call can meet a replay; anything else skips it.
+    if caller.task.is_none()
+        && !caller.awaits_signing_admission()
+        && caller.retry.idempotency_key.is_some()
+        && let Some((server, tool)) = state.meta_mcp.replay_prepass_target(
+            tool_name,
+            &arguments,
+            &caller,
+            Some(session_id.as_str()),
+        )
+    {
+        let proof = crate::identity_propagation::CallerProof::new(
+            caller.verified_identity,
+            caller.provenance(),
+        );
+        state
+            .meta_mcp
+            .fill_account_outcomes(&[(server.as_str(), tool.as_str())], proof)
+            .await;
+    }
     let admission = state.meta_mcp.admit_meta_sync(
         crate::gateway::meta_mcp::AdmissionOwner::routed(admission_owner),
         &caller,
@@ -575,8 +597,21 @@ pub(super) async fn tools_call(
     );
     let (owned_execution, replay) = match admission {
         Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Owned(lease)) => (Some(lease), None),
-        Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Replay(response, audit)) => {
-            (None, Some((response, audit)))
+        Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Replay(response, audit, target)) => {
+            // STORED.2 site 1: a retained single-call result is served only
+            // on proven liveness; otherwise the call proceeds as Unprotected
+            // and the lift serves it after a live proof.
+            match state.meta_mcp.defer_or_serve_replay(
+                tool_name,
+                &arguments,
+                &caller,
+                target,
+                response,
+                audit,
+            ) {
+                Some(replay) => (None, Some(replay)),
+                None => (None, None),
+            }
         }
         Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected) => (None, None),
         Err(error) => {

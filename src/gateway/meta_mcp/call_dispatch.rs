@@ -153,13 +153,18 @@ impl MetaMcp {
         let invoke_args =
             admission::named_tool_envelope(server_name, tool_name, &arguments, caller);
         let mut chain = (ChainSource::NotEligible, None);
-        let result = self
+        let result = match self
             .invoke_tool_with_source(&invoke_args, session_id, caller)
             .await
-            .map(|(content, source, upstream)| {
+        {
+            Ok(invoke::SourcedOutcome::Live((content, source, upstream))) => {
                 chain = (source, upstream);
-                content
-            });
+                Ok(content)
+            }
+            // The lift's already-shaped answer: delivered unchanged (D8).
+            Ok(invoke::SourcedOutcome::Stored(response)) => return response,
+            Err(error) => Err(error),
+        };
         // Native: the envelope verbatim. The dispatch's chain source rides on
         // a success only, as on `gateway_invoke` (A3 R5, MIK-8159).
         let declared = caller.input_capabilities;
@@ -383,15 +388,30 @@ impl MetaMcp {
                 };
                 // MIK-8392 site-5 split: the catalogue is judged here; an
                 // account that is not live is the call's own live path.
-                self.refuse_stored_repeat(&id, &stored, attestation, session_id, caller)
-                    .unwrap_or_else(|| {
-                        // The holds already sit in this request's scope.
-                        let held = super::sealed_hold::Held::new(
-                            stored,
-                            super::sealed_hold::CarriedHolds::none(),
-                        );
-                        BeginOutcome::Existing(held).into_response(id)
-                    })
+                if let Some(refusal) =
+                    self.refuse_stored_repeat(&id, &stored, attestation, session_id, caller)
+                {
+                    return refusal;
+                }
+                // E2: plan tasks are served as today (MIK-8406 owns them);
+                // T7 pins this gap.
+                if matches!(stored.task.tool(), "gateway_execute" | "gateway_run_playbook") {
+                    // The holds already sit in this request's scope.
+                    let held = super::sealed_hold::Held::new(
+                        stored,
+                        super::sealed_hold::CarriedHolds::none(),
+                    );
+                    return BeginOutcome::Existing(held).into_response(id);
+                }
+                // A single call records at most one distinct target: the
+                // one-element slice site 5 proves.
+                let targets = stored.targets.first().cloned().into_iter().collect::<Vec<_>>();
+                // The holds already sit in this request's scope.
+                let held =
+                    super::sealed_hold::Held::new(stored, super::sealed_hold::CarriedHolds::none());
+                return self
+                    .defer_or_serve_existing(id, tool_name, &targets, held, caller)
+                    .await;
             }
             Ok(outcome) => outcome.into_response(id),
             Err(crate::gateway::task_service::ServiceError::AuditUnavailable) => {
@@ -399,6 +419,90 @@ impl MetaMcp {
             }
             Err(_) => JsonRpcResponse::error(Some(id), -32603, "task store unavailable"),
         }
+    }
+
+    /// Site 5 (MIK-8392 STORED.2): the account step of a repeated task call,
+    /// run after `refuse_stored_repeat` returned None (the catalogue
+    /// judgement passed and the stored delivery's holds are already staged
+    /// in this request). A single call passes its one recorded target;
+    /// MIK-8406's plan caller passes the row's whole `stored.targets`.
+    /// `tool_name` is the presented tool, for the live-shaped answer a
+    /// carried fill failure takes (E4).
+    ///
+    /// Targets walk in recorded order. Live is proven, and so is a carried
+    /// credential with no fill error (E4); anything else proves by a live
+    /// resolution, de-duplicated by account, and the first failed resolution
+    /// answers through the status-preserving error, keeping the connect
+    /// offer. No task is created, and the row keeps its slot: a refusal
+    /// drops only this request's clones. When every target is proven the
+    /// stored answer is served, with no second catalogue check and no memo
+    /// write. An empty slice serves as today: nothing was dispatched.
+    pub(super) async fn defer_or_serve_existing(
+        &self,
+        id: RequestId,
+        tool_name: &str,
+        targets: &[crate::gateway::task_service::record::Target],
+        held: super::sealed_hold::Held<crate::gateway::task_service::record::CommittedTask>,
+        caller: &MetaMcpCallerContext<'_>,
+    ) -> JsonRpcResponse {
+        use super::visible::{self, AccountOutcome};
+        use crate::gateway::task_service::execution::BeginOutcome;
+
+        // (server, account) resolved already in this walk: an account
+        // resolved once is not resolved again.
+        let mut resolved = std::collections::HashSet::new();
+        for target in targets {
+            let (server, tool) = (target.server.as_str(), target.tool.as_str());
+            // E4 first: a carried fill failure is answered as the failed
+            // dispatch answers it, even where an outcome also reads Live
+            // (the dispatch consumes the carried resolution before anything
+            // else). A clean carried credential proves the target; either
+            // way nothing dispatches after this.
+            if let Some(carried) = visible::take_carried(server, tool) {
+                if let Some(error) = carried.fill_error {
+                    return match self.refused_fill_outcome((server, tool), error, caller).await {
+                        Ok(value) => {
+                            let shape = if tool_name == "gateway_invoke"
+                                || self.surfaced_tools_map.unscoped(tool_name).is_none()
+                            {
+                                ResultShape::Wrapped
+                            } else {
+                                ResultShape::Native
+                            };
+                            response_security::shape_meta_result(
+                                id,
+                                tool_name,
+                                Ok(value),
+                                shape,
+                                caller.input_capabilities,
+                                (ChainSource::NotEligible, None),
+                            )
+                        }
+                        Err(error) => error_response_preserving_status(id, &error),
+                    };
+                }
+                continue;
+            }
+            let proven = match self.target_account(server, tool) {
+                Some(account) => {
+                    visible::account_outcome(server, &account) == Some(AccountOutcome::Live)
+                }
+                // E7: no `account:`, but a per-caller mint is per-user in
+                // substance, so it proves only by a live resolution below.
+                // Anything else mints nothing per caller and is exempt (U2).
+                None => !self.mints_per_caller(server, tool),
+            };
+            if proven {
+                continue;
+            }
+            if !resolved.insert((server.to_owned(), self.target_account(server, tool))) {
+                continue;
+            }
+            if let Err(error) = self.prove_target_live((server, tool), caller).await {
+                return error_response_preserving_status(id, &error);
+            }
+        }
+        BeginOutcome::Existing(held).into_response(id)
     }
 
     /// The dispatch tail below the confirmation gate, as the request thread
@@ -521,10 +625,15 @@ impl MetaMcp {
                 let sourced = self
                     .invoke_tool_sourced(&arguments, session_id, caller)
                     .await;
-                sourced.map(|(value, origin, chain)| {
-                    (source, upstream) = (origin, chain);
-                    value
-                })
+                match sourced {
+                    Ok(invoke::SourcedOutcome::Live((value, origin, chain))) => {
+                        (source, upstream) = (origin, chain);
+                        Ok(value)
+                    }
+                    // The lift's already-shaped answer: delivered unchanged (D8).
+                    Ok(invoke::SourcedOutcome::Stored(response)) => return response,
+                    Err(error) => Err(error),
+                }
             }
             "gateway_get_stats" => self.get_stats(&arguments, caller.is_admin).await,
             "gateway_cost_report" => self.get_cost_report(&arguments, session_id, caller).await,

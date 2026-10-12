@@ -647,6 +647,28 @@ impl Gateway {
                     Err(refusal) => break 'tool_call *refusal,
                 }
             }
+            // MIK-8392 STORED.2: the account pre-pass, after the route
+            // stage's caller verdicts (whose clean resolution it reuses, E5)
+            // and before admission. Only a keyed synchronous call can meet
+            // a replay; anything else skips it.
+            if caller.task.is_none()
+                && !caller.awaits_signing_admission()
+                && caller.retry.idempotency_key.is_some()
+                && let Some((server, tool)) = meta_mcp.replay_prepass_target(
+                    &tool_name,
+                    arguments.as_ref(),
+                    &caller,
+                    Some(session_id),
+                )
+            {
+                let proof = crate::identity_propagation::CallerProof::new(
+                    caller.verified_identity,
+                    caller.provenance(),
+                );
+                meta_mcp
+                    .fill_account_outcomes(&[(server.as_str(), tool.as_str())], proof)
+                    .await;
+            }
             let admission = meta_mcp.admit_meta_sync(
                 super::super::meta_mcp::AdmissionOwner::local_operator(),
                 &caller,
@@ -659,12 +681,30 @@ impl Gateway {
             execution = match admission {
                 Ok(super::super::meta_mcp::admission::SyncAdmission::Unprotected) => None,
                 Ok(super::super::meta_mcp::admission::SyncAdmission::Owned(lease)) => Some(lease),
-                Ok(super::super::meta_mcp::admission::SyncAdmission::Replay(response, audit)) => {
-                    // #2480: a replay is a delivered call, recorded as its first run was.
-                    let (args, session) = (arguments.as_ref(), Some(session_id));
-                    break 'tool_call meta_mcp
-                        .audit_replay(&tool_name, args, session, &caller, response, audit)
-                        .await;
+                Ok(super::super::meta_mcp::admission::SyncAdmission::Replay(
+                    response, audit, target,
+                )) => {
+                    // STORED.2 site 1: a retained single-call result is
+                    // served only on proven liveness; otherwise the call
+                    // proceeds as Unprotected and the lift serves it after a
+                    // live proof.
+                    match meta_mcp.defer_or_serve_replay(
+                        &tool_name,
+                        arguments.as_ref(),
+                        &caller,
+                        target,
+                        response,
+                        audit,
+                    ) {
+                        Some((response, audit)) => {
+                            // #2480: a replay is a delivered call, recorded as its first run was.
+                            let (args, session) = (arguments.as_ref(), Some(session_id));
+                            break 'tool_call meta_mcp
+                                .audit_replay(&tool_name, args, session, &caller, response, audit)
+                                .await;
+                        }
+                        None => None,
+                    }
                 }
                 Err(error) => {
                     break 'tool_call JsonRpcResponse::error(

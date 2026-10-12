@@ -98,7 +98,7 @@ fn outcome(result: crate::Result<SyncAdmission>) -> String {
     match result {
         Ok(SyncAdmission::Owned(_)) => "owned".to_string(),
         Ok(SyncAdmission::Unprotected) => "unprotected".to_string(),
-        Ok(SyncAdmission::Replay(response, _)) => format!("replay of {:?}", response.result),
+        Ok(SyncAdmission::Replay(response, _, _)) => format!("replay of {:?}", response.result),
         Err(error) => format!("refused: {error}"),
     }
 }

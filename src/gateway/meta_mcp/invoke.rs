@@ -96,6 +96,9 @@ pub(crate) use caller_verdict::{CallerVerdict, TargetNaming};
 mod propagation;
 pub(crate) use propagation::ResolvedDispatch;
 pub(crate) mod worker_clock; // MIK-8202 AC12/AC13: the task worker's clock channel
+// MIK-8392 STORED.2: liveness proofs for stored replays, kept out of this
+// file's size baseline.
+mod stored_proof;
 use bridge_dispatch::{BridgeDispatcher, run_input_bridge, undeclared_input_request};
 pub(super) use bridge_dispatch::{
     REQUIRED_CAPABILITIES_DATA_KEY, UNSUPPORTED_ELICITATION_MODE_DATA_KEY,
@@ -118,11 +121,33 @@ use projection::{
 /// Global across all backends; overflow wraps (u64 → effectively infinite for our purposes).
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// What `invoke_tool_traced` answered (MIK-8392 STORED.2 D8): a live value,
+/// or the lift's already-shaped stored answer.
+enum TracedOutcome {
+    /// A live dispatch's guarded value, through the ordinary path.
+    Live(GuardedValue),
+    /// The lift's stored answer, already passed through `audit_replay`:
+    /// shaped, audited and receipted, so every later layer delivers it
+    /// unchanged, never re-wrapped.
+    Stored(crate::protocol::JsonRpcResponse),
+}
+
+/// What `invoke_tool_sourced` answered (MIK-8392 STORED.2 D8): a live value
+/// to shape, or the lift's already-shaped stored answer, delivered unchanged.
+pub(crate) enum SourcedOutcome {
+    /// A live dispatch's sourced value, through the ordinary path.
+    Live(super::response_security::Sourced),
+    /// The lift's stored answer: no invocation record, no shaping.
+    Stored(crate::protocol::JsonRpcResponse),
+}
+
 impl MetaMcp {
     /// Inner implementation executed within a trace-ID scope.
     ///
-    /// Returns a [`GuardedValue`]: every success path must produce one, so the
-    /// render guard cannot be bypassed at the chokepoint (MIK-6690).
+    /// Returns a [`TracedOutcome`]: every live success path must produce a
+    /// [`GuardedValue`], so the render guard cannot be bypassed at the
+    /// chokepoint (MIK-6690); the lift's already-shaped stored answer travels
+    /// beside it, never through it (MIK-8392 STORED.2 D8).
     #[allow(clippy::too_many_lines)] // Complex dispatch logic; splitting further harms readability
     async fn invoke_tool_traced(
         &self,
@@ -130,7 +155,7 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
         trace_id: &str,
-    ) -> Result<GuardedValue> {
+    ) -> Result<TracedOutcome> {
         // Unpacked once, here, so the context travels whole across the call
         // boundary for the same reason `invoke_tool` takes it whole: no call
         // site can pass an authorizer without the identity it authorizes.
@@ -213,6 +238,9 @@ impl MetaMcp {
         // MIK-8353 3a: the refund witness, carried through every may-effect
         // step below; any exit hands back what survived.
         let mut witness = nonce_settle::Witnessed::take(caller);
+        // MIK-8392 STORED.2: this invocation's deferred-replay key, if it is
+        // keyed. Pure to build; the take below consumes the entry once.
+        let deferred_key = super::visible::deferred_replay_key(server, tool, caller.retry);
         // MIK-8356 R5.2: the resolution a caller verdict carried, or a fresh one.
         let (backend, resolved) = match self
             .dispatch_resolution(
@@ -221,11 +249,47 @@ impl MetaMcp {
                 surface,
                 &mut witness,
             )
-            .await?
+            .await
         {
-            std::ops::ControlFlow::Continue(resolution) => resolution,
-            std::ops::ControlFlow::Break(answer) => return Ok(answer),
+            Ok(std::ops::ControlFlow::Continue(resolution)) => resolution,
+            // The account did not prove live: the live refusal goes out, and
+            // a deferred entry for this invocation is dropped, never served.
+            Ok(std::ops::ControlFlow::Break(answer)) => {
+                if let Some(key) = &deferred_key {
+                    super::visible::take_deferred_replay(key);
+                }
+                return Ok(TracedOutcome::Live(answer));
+            }
+            Err(error) => {
+                if let Some(key) = &deferred_key {
+                    super::visible::take_deferred_replay(key);
+                }
+                return Err(error);
+            }
         };
+        // The lift: the route stage deferred this call's retained result to a
+        // live dispatch, and resolution just proved the account live, so the
+        // stored answer is served without dispatching. It sits here, before
+        // the key, the spend, the redeem and the relay can act (L0-L2).
+        if let Some(key) = &deferred_key
+            && let Some(deferred) = super::visible::take_deferred_replay(key)
+        {
+            // A delivered call: the signing nonce stays spent, and nothing
+            // is sent.
+            witness.spend();
+            nonce_settle::mark_dispatched(caller);
+            let replay = self
+                .audit_replay(
+                    &deferred.tool_name,
+                    &deferred.arguments,
+                    session_id,
+                    caller,
+                    deferred.response,
+                    deferred.audit,
+                )
+                .await;
+            return Ok(TracedOutcome::Stored(replay));
+        }
         let target = (server, backend.as_ref().map(|backend| backend.instance()));
         let propagation::ResolvedDispatch {
             caller_credential,
@@ -298,7 +362,7 @@ impl MetaMcp {
             client_claim.as_ref(),
             &mut idem_reservation,
         )? {
-            return Ok(stored);
+            return Ok(TracedOutcome::Live(stored));
         }
 
         // Defense in depth on an already-classified value: the exact set both
@@ -331,7 +395,7 @@ impl MetaMcp {
         // the check's fill spent.
         witness.carry(rw::schema_effect(fills() != fills_before));
         if let Some(refusal) = checked? {
-            return Ok(refusal);
+            return Ok(TracedOutcome::Live(refusal));
         }
 
         // Counted only for a call the cache would otherwise have served, so an
@@ -368,7 +432,7 @@ impl MetaMcp {
                 &mut idem_reservation,
             )
         {
-            return Ok(cached);
+            return Ok(TracedOutcome::Live(cached));
         }
 
         if let Some(ref stats) = self.stats {
@@ -617,7 +681,7 @@ impl MetaMcp {
             )
             .await?
         {
-            return Ok(answer);
+            return Ok(TracedOutcome::Live(answer));
         }
 
         // MRTR.2: the backend's own `requestState` never reaches the client.
@@ -779,11 +843,11 @@ impl MetaMcp {
         // since then add only gateway-authored metadata. Seal at the delivery
         // boundary so the return type proves the guard ran.
         let sealed = GuardedValue::sealed_by_guard(final_result);
-        Ok(if answered {
+        Ok(TracedOutcome::Live(if answered {
             sealed.backend(upstream)
         } else {
             sealed
-        })
+        }))
     }
 }
 

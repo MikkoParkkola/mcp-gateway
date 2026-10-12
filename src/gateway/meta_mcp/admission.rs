@@ -147,8 +147,23 @@ pub(crate) fn take_last_operation() -> Option<Value> {
 pub(crate) enum SyncAdmission {
     Unprotected,
     Owned(SyncLease),
-    /// A completed execution's secured response, and its record facts.
-    Replay(JsonRpcResponse, Option<ReplayAudit>),
+    /// A completed execution's secured response, its record facts, and the
+    /// single-call target it was admitted for (MIK-8392 STORED.2): the
+    /// target-branch target, else a continuation retry's origin, else `None`
+    /// for a plan, which is served as today. Never an audit input: it steers
+    /// the route-stage deferral only.
+    Replay(JsonRpcResponse, Option<ReplayAudit>, Option<ReplayTarget>),
+}
+
+/// The single-call target a site-1 replay was admitted for (MIK-8392
+/// STORED.2): what the route stage judges for liveness and keys the deferral
+/// by. Owned: the admission outlives the arguments it names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ReplayTarget {
+    /// The backend server: the target branch's, or a continuation origin's.
+    pub(crate) server: String,
+    /// The presented tool: the target branch's, or the retry's own name.
+    pub(crate) tool: String,
 }
 
 /// The gateway's own directives inside a tool's arguments: read and removed
@@ -225,6 +240,12 @@ impl MetaMcp {
             self.read_only_target(server, tool),
             (server, tool),
             request_id,
+            || {
+                Ok(Some(ReplayTarget {
+                    server: server.to_owned(),
+                    tool: tool.to_owned(),
+                }))
+            },
         )
     }
 
@@ -247,6 +268,13 @@ impl MetaMcp {
         // (backend, tool) for the un-keyed warn only; never an identity.
         target: (&str, &str),
         request_id: &RequestId,
+        // The replay's single-call target, read only when the store yields
+        // one (MIK-8392 STORED.2). A thunk for the same reason as the two
+        // above: the plan branch reads a continuation origin through it, and
+        // anything but a replay must not pay for that read, let alone answer
+        // it. An error fails the admission, so an unreadable origin is never
+        // served stored (E1).
+        replay_target: impl FnOnce() -> Result<Option<ReplayTarget>>,
     ) -> Result<SyncAdmission> {
         if retry.is_malformed() {
             return Err(Error::json_rpc(
@@ -307,11 +335,15 @@ impl MetaMcp {
                 audit: Mutex::new(None),
             })),
             Ok(Admission::Replay(bytes)) => {
+                // Read before the store is decoded: an unreadable origin
+                // fails the admission without touching the retained bytes it
+                // must never serve (E1).
+                let single_target = replay_target()?;
                 let (mut response, audit) = stored_response(&bytes).ok_or_else(|| {
                     Error::json_rpc(409, "Secured execution result is unavailable")
                 })?;
                 response.id = Some(request_id.clone());
-                Ok(SyncAdmission::Replay(response, audit))
+                Ok(SyncAdmission::Replay(response, audit, single_target))
             }
             Ok(Admission::InFlight) => {
                 Err(Error::json_rpc(409, "Execution is already in progress"))
@@ -492,6 +524,27 @@ impl MetaMcp {
             read_only,
             ("gateway", tool_name),
             id,
+            || {
+                // The origin fallback (MIK-8392 STORED.2 D2): a continuation
+                // retry names the backend tool it continues, which no
+                // operator surfaced, so the plan branch takes the
+                // authenticated origin the envelope names, read without
+                // redeeming it. Only the two tools that redeem in place
+                // never take it, as the retry router skips them too.
+                if matches!(tool_name, "gateway_invoke" | "gateway_execute") {
+                    return Ok(None);
+                }
+                match super::invoke::retry_origin_backend(&self.continuation, retry) {
+                    None => Ok(None),
+                    Some(Ok(server)) => Ok(Some(ReplayTarget {
+                        server,
+                        tool: tool_name.to_owned(),
+                    })),
+                    // E1: an unreadable origin is never served stored; the
+                    // continuation error is the live path's answer for it.
+                    Some(Err(error)) => Err(error),
+                }
+            },
         )?;
         if let SyncAdmission::Owned(lease) = &mut admission {
             lease.playbook = playbook;
@@ -579,6 +632,110 @@ impl MetaMcp {
         }
         execution.mark_dispatched();
         Ok(())
+    }
+}
+
+impl MetaMcp {
+    /// The single-call target the STORED.2 route-stage pre-pass judges
+    /// (MIK-8392): the target-branch naming without the policy (which
+    /// admission still runs once), else a continuation retry's origin. The
+    /// route stage fills this target's account outcome before admission, so
+    /// the deferral below reads it. Infallible: anything unreadable yields
+    /// no target, and the replay (if any) then defers, which is safe.
+    pub(crate) fn replay_prepass_target(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        caller: &super::MetaMcpCallerContext<'_>,
+        session: Option<&str>,
+    ) -> Option<(String, String)> {
+        if tool_name == "gateway_invoke" {
+            // Unparseable here is refused by admission below; the pre-pass
+            // fills nothing for it.
+            let server =
+                crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "server").ok()?;
+            let tool =
+                crate::gateway::meta_mcp_helpers::extract_required_str(arguments, "tool").ok()?;
+            return Some((server.to_owned(), tool.to_owned()));
+        }
+        if let Some(server) = self
+            .surfaced_for(tool_name, caller.scope(), session)
+            .visible_server()
+        {
+            return Some((server.to_owned(), tool_name.to_owned()));
+        }
+        // The origin fallback, as admission's plan branch reads it. Only the
+        // tool that redeems in place never takes it here (`gateway_invoke`
+        // returned above).
+        if tool_name == "gateway_execute" {
+            return None;
+        }
+        match super::invoke::retry_origin_backend(&self.continuation, caller.retry) {
+            Some(Ok(server)) => Some((server, tool_name.to_owned())),
+            // Unreadable (E1) or no continuation: the pre-pass fills
+            // nothing. Admission answers the continuation error itself, and
+            // a plan serves as today.
+            Some(Err(_)) | None => None,
+        }
+    }
+
+    /// Whether a site-1 retained result for `(server, tool)` defers to a
+    /// live dispatch (MIK-8392 STORED.2): anything but a proven-Live account
+    /// defers, including an unfilled outcome (O4) and a per-caller mint with
+    /// no account (E7). Only a backend that mints nothing per caller is
+    /// exempt (U1/U2).
+    pub(crate) fn stored_replay_defers(&self, server: &str, tool: &str) -> bool {
+        match self.target_account(server, tool) {
+            Some(account) => !matches!(
+                super::visible::account_outcome(server, &account),
+                Some(super::visible::AccountOutcome::Live)
+            ),
+            // E7: no `account:`, but a per-caller mint is per-user in
+            // substance, so it defers to a live mint as Unjudged would.
+            None => self.mints_per_caller(server, tool),
+        }
+    }
+
+    /// Whether dispatching `(server, tool)` mints a per-caller credential
+    /// (MIK-8392 STORED.2 E7): the dispatch's own mint conditions, an
+    /// identity-propagation backend (with or without an `account:`) or a
+    /// capability account. A target this refuses needs no liveness proof.
+    pub(crate) fn mints_per_caller(&self, server: &str, tool: &str) -> bool {
+        self.target_account(server, tool).is_some()
+            || self.backends.get(server).is_some_and(|backend| {
+                backend.identity_propagation_config().is_some()
+            })
+    }
+
+    /// STORED.2 site 1: serve `response` when its account is proven live,
+    /// else record it as deferred and answer `None`, in which case the
+    /// caller proceeds as Unprotected, with no lease. A replay with no
+    /// target (a plan) is served as today, as is an unkeyed one, which the
+    /// lift could never meet.
+    pub(crate) fn defer_or_serve_replay(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        caller: &super::MetaMcpCallerContext<'_>,
+        target: Option<ReplayTarget>,
+        response: JsonRpcResponse,
+        audit: Option<ReplayAudit>,
+    ) -> Option<(JsonRpcResponse, Option<ReplayAudit>)> {
+        let target = target?;
+        let key = super::visible::deferred_replay_key(&target.server, &target.tool, caller.retry)?;
+        if !self.stored_replay_defers(&target.server, &target.tool) {
+            return Some((response, audit));
+        }
+        super::visible::record_deferred_replay(
+            key,
+            super::visible::DeferredReplay {
+                response,
+                audit,
+                tool_name: tool_name.to_owned(),
+                arguments: arguments.clone(),
+            },
+        );
+        None
     }
 }
 

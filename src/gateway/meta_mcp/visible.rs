@@ -337,6 +337,11 @@ pub(crate) struct VisibilityMemo {
     /// the live call answers instead of "retry" forever.
     account_refusal:
         parking_lot::Mutex<std::collections::HashMap<(String, AccountKey), crate::Error>>,
+    /// MIK-8392 STORED.2 site 1: a retained single-call result the route
+    /// stage deferred to a live dispatch, keyed by the owning invocation.
+    /// The lift consumes it once; anything left at a send arm is a bug.
+    deferred_replay:
+        parking_lot::Mutex<std::collections::HashMap<DeferredReplayKey, DeferredReplay>>,
 }
 
 /// The account a target's dispatch would use (MIK-8392): a managed
@@ -586,6 +591,72 @@ pub(crate) fn take_carried(server: &str, tool: &str) -> Option<Carried> {
         .try_with(|memo| memo.carried_credential.lock().remove(&key))
         .ok()
         .flatten()
+}
+
+/// Key of a deferred site-1 replay (MIK-8392 STORED.2): the owning
+/// invocation. The server and presented tool are the replay's target (the
+/// target-branch target, or a continuation retry's origin); the key and
+/// discriminator are the client's, so a nested invocation's take never
+/// matches another invocation's entry.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct DeferredReplayKey {
+    server: String,
+    tool: String,
+    key: String,
+    discriminator: String,
+}
+
+/// A site-1 retained result deferred to a live dispatch (MIK-8392 STORED.2):
+/// the stored answer, beside what the route stage would have passed to
+/// `audit_replay` for it (E3: the presented tool name with the envelope for
+/// `gateway_invoke`, the inner arguments for a surfaced name, so the lift's
+/// record matches the route stage's exactly).
+pub(crate) struct DeferredReplay {
+    pub(crate) response: crate::protocol::JsonRpcResponse,
+    pub(crate) audit: Option<super::admission::ReplayAudit>,
+    pub(crate) tool_name: String,
+    pub(crate) arguments: serde_json::Value,
+}
+
+/// The deferred-replay key for `(server, tool)` under `retry`, or `None` for
+/// an unkeyed call, which admission never replays and so never defers.
+pub(crate) fn deferred_replay_key(
+    server: &str,
+    tool: &str,
+    retry: &crate::protocol::mrtr::RetryFields,
+) -> Option<DeferredReplayKey> {
+    // The key first: an unkeyed call builds nothing.
+    let key = retry.idempotency_key.clone()?;
+    Some(DeferredReplayKey {
+        server: server.to_owned(),
+        tool: tool.to_owned(),
+        key,
+        discriminator: retry.key_discriminator(),
+    })
+}
+
+/// Record `entry` for `key` in the open request's memo. Outside a memo it is
+/// dropped, and the dispatch serves live.
+pub(crate) fn record_deferred_replay(key: DeferredReplayKey, entry: DeferredReplay) {
+    let _ = VISIBILITY_MEMO.try_with(|memo| memo.deferred_replay.lock().insert(key, entry));
+}
+
+/// Take the entry recorded for `key`, consuming it: a second take returns
+/// `None`, and a nested invocation's key never matches. `None` outside a memo.
+pub(crate) fn take_deferred_replay(key: &DeferredReplayKey) -> Option<DeferredReplay> {
+    VISIBILITY_MEMO
+        .try_with(|memo| memo.deferred_replay.lock().remove(key))
+        .ok()
+        .flatten()
+}
+
+/// Whether the open request's memo holds an unconsumed deferred entry. Only
+/// the direct route's impossible-path guards read this: nothing records an
+/// entry on that route, so any entry reaching its send arms is a bug.
+pub(crate) fn deferred_replay_pending() -> bool {
+    VISIBILITY_MEMO
+        .try_with(|memo| !memo.deferred_replay.lock().is_empty())
+        .unwrap_or(false)
 }
 
 /// The answer already recorded for `(server, tool)` in the open request, if

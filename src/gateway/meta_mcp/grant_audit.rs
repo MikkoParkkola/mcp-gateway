@@ -623,23 +623,42 @@ impl super::MetaMcp {
         caller: &super::MetaMcpCallerContext<'_>,
     ) -> Result<Value> {
         let sourced = self.invoke_tool_with_source(args, session_id, caller).await;
-        sourced.map(|sourced| sourced.0)
+        match sourced {
+            Ok(super::invoke::SourcedOutcome::Live((value, _, _))) => Ok(value),
+            // A nested invocation's key never matches a deferred entry
+            // (L3), so a lifted replay cannot surface through a nested
+            // call; the frame it carries is delivered rather than invented
+            // around.
+            Ok(super::invoke::SourcedOutcome::Stored(response)) => {
+                debug_assert!(false, "a lifted stored replay reached a nested invocation");
+                match (response.result, response.error) {
+                    (Some(value), _) => Ok(value),
+                    (None, Some(error)) => Err(Error::json_rpc(error.code, error.message)),
+                    (None, None) => Err(Error::json_rpc(
+                        -32603,
+                        "stored replay carried neither result nor error",
+                    )),
+                }
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// [`Self::invoke_tool`] keeping the result's chain source and upstream
     /// chain, for a reply that links it (MIK-8159: a backend tool called by
-    /// its own name).
+    /// its own name), or the lift's already-shaped stored answer, delivered
+    /// unchanged (MIK-8392 STORED.2 D8).
     pub(super) async fn invoke_tool_with_source(
         &self,
         args: &Value,
         session_id: Option<&str>,
         caller: &super::MetaMcpCallerContext<'_>,
-    ) -> Result<super::response_security::Sourced> {
+    ) -> Result<super::invoke::SourcedOutcome> {
         let logger = self.transparency_logger.as_ref();
         // Erased: the dispatch futures recurse (a chain step is an
         // invocation), and a concrete type here overflows auto-trait checks.
         let future: Pin<
-            Box<dyn Future<Output = Result<super::response_security::Sourced>> + Send + '_>,
+            Box<dyn Future<Output = Result<super::invoke::SourcedOutcome>> + Send + '_>,
         > = Box::pin(self.invoke_tool_sourced(args, session_id, caller));
         let outcome = slot_result(logger, future).await;
         // #2450: every step that got past the authorization chokepoint is a

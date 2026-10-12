@@ -505,10 +505,10 @@ async fn a_failed_bridged_retry_does_not_free_the_idempotency_key() {
         dispatched,
         "the key was freed after a round that may have acted, so the duplicate re-executed"
     );
-    let served = second
-        .expect("the duplicate is served from the cache")
-        .into_parts()
-        .0;
+    let served = match second.expect("the duplicate is served from the cache") {
+        super::TracedOutcome::Live(guarded) => guarded.into_parts().0,
+        super::TracedOutcome::Stored(_) => panic!("a stored replay is never served here"),
+    };
     assert!(
         served.to_string().contains("outcome is unknown"),
         "the duplicate was served something other than the uncertainty marker: {served}"
