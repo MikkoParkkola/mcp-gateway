@@ -146,12 +146,14 @@ const DRIVEN: &[(ReadRoute, ReadStage, &str)] = &[
     (
         ReadRoute::HttpGet,
         ReadStage::AccountView,
-        "router::stored_read_account_tests T10, T10p",
+        "router::stored_read_account_tests T10, T10p, Ub, lease::{U1, C6, L4, L4b, L5, L2, N0}; \
+         router::stored_read_capability_tests T11, U2",
     ),
     (
         ReadRoute::HttpGet,
         ReadStage::CallerView,
-        "task_execution_adapter::stored_read_access T1, T9, T12; router::stored_read_slot_tests T8",
+        "task_execution_adapter::stored_read_access T1, T9, T9c, T9d, T12, T16; \
+         router::stored_read_slot_tests T8, T8t, C1, C1r, K1, lease::{C2-C8, R1, L1b, L3, T17}",
     ),
     (
         ReadRoute::StdioGet,
@@ -167,7 +169,7 @@ const DRIVEN: &[(ReadRoute, ReadStage, &str)] = &[
     (
         ReadRoute::HttpFrame,
         ReadStage::AccountView,
-        "router::stored_read_account_tests T10pf",
+        "router::stored_read_account_tests T10pf (with N1)",
     ),
     (
         ReadRoute::HttpFrame,
