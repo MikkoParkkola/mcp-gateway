@@ -683,3 +683,6 @@ async fn ub_an_unbindable_callers_stored_read_answers_its_live_refusal() {
 
 #[path = "stored_read_account_lease_tests.rs"]
 mod lease;
+
+#[path = "stored_read_ub_audit_tests.rs"]
+mod ub_audit;
