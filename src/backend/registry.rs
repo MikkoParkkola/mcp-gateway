@@ -378,6 +378,10 @@ impl BackendRegistry {
     /// stamped `Private` instead. The policy and the names are one snapshot,
     /// recorded once, so every backend registered later is stamped from the
     /// same answer.
+    ///
+    /// Does NOT bump the `membership` epoch: it takes the `stopping` write
+    /// guard but changes no membership (pairing stamps destinations), so
+    /// readers of `with_membership` need not treat it as a change.
     pub(crate) fn enforce_destinations(
         &self,
         policy: crate::security::ssrf::DestinationPolicy,
@@ -562,6 +566,10 @@ impl BackendRegistry {
     /// independent processes, sessions and locks, so there is nothing to
     /// serialise: total shutdown is now bounded by the slowest single backend
     /// rather than the sum of all of them.
+    ///
+    /// Does NOT bump the `membership` epoch: it takes the `stopping` write
+    /// guard but changes no membership (shutdown sets the latch and snapshots
+    /// the map), so readers of `with_membership` need not treat it as a change.
     pub async fn stop_all(&self) {
         // The latch and the snapshot are taken under ONE write hold of the
         // shutdown lock, which `register` also holds for writing across its
