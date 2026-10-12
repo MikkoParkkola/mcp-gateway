@@ -343,6 +343,59 @@ async fn f2d_a_chokepoint_refusal_after_a_consume_keeps_the_nonce() {
     }
 }
 
+/// C-refund (MIK-8379.DIRECTREFUND.3/.4, site C): a chokepoint refusal with
+/// nothing acted before it (the schema warm from the first call, no mint, no
+/// continuation) gives the nonce back: the same call re-sent is served, and a
+/// third send is a replay. The direct twin of R-choke-fresh. Mutant mCKeep:
+/// the chokepoint refusal never releases.
+#[tokio::test]
+async fn a_direct_chokepoint_refusal_with_nothing_acted_gives_the_nonce_back() {
+    use super::backend_handlers::direct_permit_seams as seams;
+    use super::direct_continuation_tests::signed_call;
+    use super::direct_guards_fixture::fixture_hardened_signed;
+    for backend in BACKENDS {
+        let fx = fixture_hardened_signed(Answer::Ok, true).await;
+        let who = ("k-std", backend);
+        let (_, first) = signed_call(&fx, who, &format!("{backend}-n1"), json!({})).await;
+        assert!(
+            first.get("error").is_none(),
+            "{backend}: the warm-up: {first}"
+        );
+        let warm = fx.state.backends.get(backend).expect("fixture backend");
+        let fills = warm.list_fills();
+
+        let n2 = format!("{backend}-n2");
+        seams::refuse_next_permit();
+        let (_, refused) = signed_call(&fx, who, &n2, json!({})).await;
+        assert!(
+            refused.to_string().contains(seams::REFUSED),
+            "{backend}: the chokepoint refusal: {refused}"
+        );
+        assert_eq!(
+            warm.list_fills(),
+            fills,
+            "{backend}: premise: nothing filled"
+        );
+        assert_eq!(
+            dispatched(&fx),
+            1,
+            "{backend}: the refused call was not sent"
+        );
+
+        let (_, again) = signed_call(&fx, who, &n2, json!({})).await;
+        assert!(
+            again.get("error").is_none(),
+            "{backend}: the nonce was kept though nothing acted: {again}"
+        );
+        assert_eq!(dispatched(&fx), 2, "{backend}: the re-send was sent");
+        let (_, third) = signed_call(&fx, who, &n2, json!({})).await;
+        assert!(
+            third.to_string().to_lowercase().contains("replay"),
+            "{backend}: the nonce was given back twice: {third}"
+        );
+    }
+}
+
 /// F2d-giveback, idempotency key: a direct retry the chokepoint refuses holds
 /// no idempotency key, so a fresh call under that key reaches the backend, as
 /// R6b shows for a refused seal. Red on base. Mutant m6b: the reservation
