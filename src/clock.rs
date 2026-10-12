@@ -84,9 +84,8 @@ pub(crate) fn unix_secs() -> Result<u64, ClockBeforeEpoch> {
 }
 
 /// Milliseconds since the Unix epoch (MIK-8202 P4b: health and breaker stamps).
-#[allow(clippy::cast_possible_truncation)] // millis since epoch fits u64 for centuries
 pub(crate) fn unix_millis() -> Result<u64, ClockBeforeEpoch> {
-    since_epoch().map(|d| d.as_millis() as u64)
+    since_epoch().map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// Nanoseconds since the Unix epoch (MIK-8202 P4b: the config-export backup

@@ -342,10 +342,10 @@ async fn a_request_failing_the_half_open_probe_keeps_warm_up_from_clearing_it() 
     );
     backend.warm_tools().await.expect_err("warm-up trips it");
     assert_eq!(state(&backend), CircuitState::Open);
-    // The breaker reads the wall clock and has no test clock seam, while the
-    // F13 cooldown below needs the paused tokio clock. A 1 ms reset needs only
-    // this short blocking wait to reach half-open.
-    std::thread::sleep(Duration::from_millis(5));
+    // The breaker ages on the paused tokio clock (MIK-8202 P4b), as does the
+    // F13 cooldown below. A 1 ms reset needs only this short advance to reach
+    // half-open.
+    tokio::time::advance(Duration::from_millis(5)).await;
     backend
         .request("tools/list", None)
         .await
