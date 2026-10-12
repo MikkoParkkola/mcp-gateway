@@ -171,12 +171,14 @@ impl ViewSubject {
         )
     }
 
-    /// Whether the identity the stream was admitted under is still good. The
-    /// adapter assertion's window is judged here; MIK-8377 adds its clauses.
-    pub(crate) fn live(&self) -> bool {
-        self.adapter
-            .as_ref()
-            .is_none_or(crate::gateway::openwebui_adapter::AdapterAssertion::live)
+    /// Whether the identity the stream was admitted under is still good, or
+    /// why not. The adapter assertion's window is judged here; MIK-8377 adds
+    /// its clauses.
+    pub(crate) fn live(&self) -> Result<(), DeadReason> {
+        match &self.adapter {
+            Some(adapter) if !adapter.live() => Err(DeadReason::Adapter),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -185,7 +187,27 @@ impl ViewSubject {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Judged<T> {
     Live(T),
-    Dead,
+    Dead(DeadReason),
+}
+
+/// Why a stream's caller no longer resolves: the closed label of
+/// `mcp_view_liveness_dead_total`, set by whichever check failed (MIK-8350
+/// D17i; MIK-8377 adds the labels for its clauses).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeadReason {
+    /// The held credential no longer authenticates.
+    Bearer,
+    /// The Open WebUI assertion the stream was admitted under has expired.
+    Adapter,
+}
+
+impl DeadReason {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Bearer => "bearer",
+            Self::Adapter => "adapter",
+        }
+    }
 }
 
 /// Decides what a stream's caller is shown, for the per-stream
@@ -354,8 +376,18 @@ impl StreamView {
                     .digest(auth, (credential, &self.subject), session_id, backend),
             )
             .await;
-        let Judged::Live(digest) = judged else {
-            return Judged::Dead;
+        let digest = match judged {
+            Judged::Live(digest) => digest,
+            Judged::Dead(reason) => {
+                // The one place a held stream's death is counted, for both
+                // transports.
+                telemetry_metrics::counter!(
+                    "mcp_view_liveness_dead_total",
+                    "reason" => reason.label()
+                )
+                .increment(1);
+                return Judged::Dead(reason);
+            }
         };
         let moved = self.record.state().peek(stamp, backend, &digest) == Peek::Owed;
         Judged::Live(moved.then(|| Owed {
@@ -384,7 +416,7 @@ impl StreamView {
         backend: &str,
     ) -> Decision {
         match self.owed(auth, credential, session_id, backend).await {
-            Judged::Dead => Decision::Close,
+            Judged::Dead(_) => Decision::Close,
             Judged::Live(Some(owed)) if self.commit(&owed) => Decision::Write,
             Judged::Live(_) => Decision::Skip,
         }
@@ -454,7 +486,7 @@ impl NotificationMultiplexer {
             .await;
         match judged {
             Judged::Live(view) => PendingRefresh(Some((record, stamp, view))),
-            Judged::Dead => PendingRefresh::default(),
+            Judged::Dead(_) => PendingRefresh::default(),
         }
     }
 

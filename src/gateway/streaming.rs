@@ -38,8 +38,8 @@ use copy::{CopyAudience, Unsent};
 #[path = "streaming_told.rs"]
 mod told;
 pub(crate) use told::{
-    Decision, Judged, Owed, Peek, PendingRefresh, StreamView, ToldState, ViewDigest, ViewJudge, ViewRecord,
-    ViewSubject,
+    DeadReason, Decision, Judged, Owed, Peek, PendingRefresh, StreamView, ToldState, ViewDigest,
+    ViewJudge, ViewRecord, ViewSubject,
 };
 
 /// A tagged notification event from a backend

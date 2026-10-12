@@ -49,7 +49,17 @@ pub(in crate::gateway::server) fn tool(name: &str, description: &str) -> Tool {
 }
 
 /// Mints `Bearer minted-for-<subject>` bound to `<subject>@<audience>`.
-struct PerIdentityMint;
+pub(super) struct PerIdentityMint(pub(super) Arc<Probe>);
+
+/// What the fixture's backends and minter were asked to do: a row that
+/// requires the write path to stay on caches reads the counters, and arms the
+/// mint to hang so a mint under a held lock fails by timeout.
+#[derive(Default)]
+pub(super) struct Probe {
+    pub(super) mints: std::sync::atomic::AtomicUsize,
+    pub(super) fetches: std::sync::atomic::AtomicUsize,
+    pub(super) hang_mints: std::sync::atomic::AtomicBool,
+}
 
 #[async_trait::async_trait]
 impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
@@ -61,6 +71,11 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
         crate::identity_propagation::PropagatedCredential,
         crate::identity_propagation::PropagationError,
     > {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.0.mints.fetch_add(1, SeqCst);
+        if self.0.hang_mints.load(SeqCst) {
+            std::future::pending::<()>().await;
+        }
         let subject_key = identity.subject.clone();
         Ok(crate::identity_propagation::PropagatedCredential {
             headers: vec![(
@@ -78,7 +93,7 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
 
 /// One pool slot's transport: a `tools/list` that names its tools, and
 /// success for everything else.
-struct Wire(Vec<Tool>);
+struct Wire(Vec<Tool>, Arc<Probe>);
 
 #[async_trait::async_trait]
 impl crate::transport::Transport for Wire {
@@ -88,6 +103,9 @@ impl crate::transport::Transport for Wire {
         _params: Option<Value>,
     ) -> crate::Result<JsonRpcResponse> {
         let body = if method == "tools/list" {
+            self.1
+                .fetches
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             json!({ "tools": self.0 })
         } else {
             json!({})
@@ -160,6 +178,10 @@ pub(super) fn scoped_token(subject: &str, tools: &[&str]) -> TemporaryToken {
 }
 
 pub(in crate::gateway::server) fn per_user_backend(name: &str, required: bool) -> Arc<Backend> {
+    per_user_backend_probed(name, required, &Arc::default())
+}
+
+fn per_user_backend_probed(name: &str, required: bool, probe: &Arc<Probe>) -> Arc<Backend> {
     let backend = Arc::new(Backend::new(
         name,
         BackendConfig {
@@ -176,18 +198,21 @@ pub(in crate::gateway::server) fn per_user_backend(name: &str, required: bool) -
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
-    backend.set_transport_for_test(Arc::new(Wire(vec![tool("shared_beta", "shared")])));
+    backend.set_transport_for_test(Arc::new(Wire(
+        vec![tool("shared_beta", "shared")],
+        Arc::clone(probe),
+    )));
     backend
 }
 
-fn shared_backend(name: &str) -> Arc<Backend> {
+fn shared_backend(name: &str, probe: &Arc<Probe>) -> Arc<Backend> {
     let backend = Arc::new(Backend::new(
         name,
         BackendConfig::default(),
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
-    backend.set_transport_for_test(Arc::new(Wire(Vec::new())));
+    backend.set_transport_for_test(Arc::new(Wire(Vec::new(), Arc::clone(probe))));
     backend
 }
 
@@ -238,6 +263,7 @@ pub(super) struct World {
     pub key_server: Arc<KeyServer>,
     pub caps: Arc<crate::capability::CapabilityBackend>,
     feed: tokio::sync::mpsc::UnboundedSender<ToolsNudge>,
+    pub(super) probe: Arc<Probe>,
     /// The minted id of each legacy session, by the label a row gave it:
     /// production mints every id (F9), so the label is not the id.
     pub(super) minted: std::cell::RefCell<std::collections::HashMap<String, String>>,
@@ -350,13 +376,15 @@ impl World {
         })
         .to_vec();
         let wire_caps = Arc::clone(&caps);
+        let probe = Arc::<Probe>::default();
+        let wire_probe = Arc::clone(&probe);
         let (mut state, store) = crate::gateway::router::tests::audience_state(
             &auth,
             Some(Arc::clone(&key_server)),
             move |meta| {
                 let mut meta = meta.with_surfaced_tools(surfaced);
                 meta.enable_transparency_log(Arc::new(logger));
-                meta.set_identity_propagation(Arc::new(PerIdentityMint));
+                meta.set_identity_propagation(Arc::new(PerIdentityMint(Arc::clone(&wire_probe))));
                 meta.set_capabilities(wire_caps);
                 configure(meta)
             },
@@ -370,9 +398,9 @@ impl World {
         });
         st.backends.set_change_feed(feed.clone());
         for backend in [
-            shared_backend("alpha"),
-            per_user_backend("beta", false),
-            per_user_backend("gamma", true),
+            shared_backend("alpha", &probe),
+            per_user_backend_probed("beta", false, &probe),
+            per_user_backend_probed("gamma", true, &probe),
         ] {
             assert!(st.backends.register(backend), "fixture registration");
         }
@@ -385,6 +413,7 @@ impl World {
             key_server,
             caps,
             feed,
+            probe,
             minted: std::cell::RefCell::default(),
             _shutdown: shutdown,
             _store: store,
@@ -436,7 +465,7 @@ impl World {
     /// Register a shared backend `name` serving `tools` after listeners have
     /// attached, as a reload that adds a server does.
     pub(super) fn register_late(&self, name: &str, tools: Vec<Tool>) {
-        let backend = shared_backend(name);
+        let backend = shared_backend(name, &self.probe);
         assert!(
             self.state.backends.register(Arc::clone(&backend)),
             "late registration"
@@ -468,15 +497,17 @@ impl World {
             binding: binding(subject, backend),
         };
         self.backend(backend)
-            .set_pooled_transport_for_test(&key, Arc::new(Wire(tools)));
+            .set_pooled_transport_for_test(&key, Arc::new(Wire(tools, Arc::clone(&self.probe))));
     }
 
     /// `alpha`'s shared slot answers calls (with `{}`), so an invocation
     /// through it succeeds.
     #[cfg(feature = "spec-preview")]
     pub(super) fn alpha_answers_calls(&self, tools: Vec<Tool>) {
-        self.backend("alpha")
-            .set_pooled_transport_for_test(&PoolKey::Shared, Arc::new(Wire(tools)));
+        self.backend("alpha").set_pooled_transport_for_test(
+            &PoolKey::Shared,
+            Arc::new(Wire(tools, Arc::clone(&self.probe))),
+        );
     }
 
     /// Register or rewrite the hidden capability, and nudge its catalogue.
@@ -675,9 +706,23 @@ impl World {
     }
 
     async fn sse_open(&self, bearer: &str, assertion: Option<&str>, resume: Option<&str>) -> Ear {
+        self.sse_request(bearer, assertion, ("/mcp", resume)).await
+    }
+
+    /// A GET stream at `uri`, resuming `resume` when given.
+    pub(super) async fn sse_at(&self, bearer: &str, uri: &str, resume: Option<&str>) -> Ear {
+        self.sse_request(bearer, None, (uri, resume)).await
+    }
+
+    async fn sse_request(
+        &self,
+        bearer: &str,
+        assertion: Option<&str>,
+        (uri, resume): (&str, Option<&str>),
+    ) -> Ear {
         let mut builder = axum::http::Request::builder()
             .method("GET")
-            .uri("/mcp")
+            .uri(uri)
             .header("authorization", format!("Bearer {bearer}"))
             .header("accept", "text/event-stream");
         if let Some(session) = resume {

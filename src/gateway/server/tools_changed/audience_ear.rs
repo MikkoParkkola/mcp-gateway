@@ -146,6 +146,24 @@ impl Ear {
         }
     }
 
+    /// Whether a listen stream has been closed by the server: after the
+    /// sentinel is published, the stream ends before the sentinel arrives.
+    pub(super) async fn closed(&mut self, world: &World) -> bool {
+        let Self::Listen(events) = self else {
+            panic!("closed() reads a listen stream");
+        };
+        world.settle().await;
+        world.state.subscriptions.publish(json!({
+            "jsonrpc": "2.0", "method": SENTINEL, "params": { "mark": u64::MAX }
+        }));
+        while let Some(event) = events.next().await {
+            if event["params"]["mark"] == json!(u64::MAX) {
+                return false;
+            }
+        }
+        true
+    }
+
     /// How many `tools/list_changed` frames this listener was sent.
     pub(super) async fn told(&mut self, world: &World) -> usize {
         self.frames(world)

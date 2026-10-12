@@ -13,7 +13,9 @@ use super::{AppState, OwnedRouterAuthorizer};
 use crate::gateway::auth::live::{HeldCredential, current_caller};
 use crate::gateway::auth::{AuthState, AuthenticatedClient};
 use crate::gateway::meta_mcp::InvokeScope;
-use crate::gateway::streaming::{Judged, PendingRefresh, ViewDigest, ViewJudge, ViewSubject};
+use crate::gateway::streaming::{
+    DeadReason, Judged, PendingRefresh, ViewDigest, ViewJudge, ViewSubject,
+};
 
 /// Judges from the state the caller holds. Borrowed for the span of one
 /// fan-out, so nothing stores a pointer back into the state that owns the
@@ -143,11 +145,11 @@ async fn digest_async(
     session_id: &str,
     backend: &str,
 ) -> Judged<ViewDigest> {
-    if !subject.live() {
-        return Judged::Dead;
+    if let Err(reason) = subject.live() {
+        return Judged::Dead(reason);
     }
     let Some(caller) = current_caller(auth, credential).await else {
-        return Judged::Dead;
+        return Judged::Dead(DeadReason::Bearer);
     };
     Judged::Live(digest_for(state, subject, &caller, session_id, backend))
 }
@@ -159,11 +161,11 @@ async fn baseline_async(
     (credential, subject): Caller<'_>,
     session_id: &str,
 ) -> Judged<HashMap<String, ViewDigest>> {
-    if !subject.live() {
-        return Judged::Dead;
+    if let Err(reason) = subject.live() {
+        return Judged::Dead(reason);
     }
     let Some(caller) = current_caller(auth, credential).await else {
-        return Judged::Dead;
+        return Judged::Dead(DeadReason::Bearer);
     };
     let mut names: Vec<String> = state
         .backends

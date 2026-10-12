@@ -38,7 +38,7 @@ impl Fake {
     }
 
     fn die(&self) {
-        *self.0.lock() = Judged::Dead;
+        *self.0.lock() = Judged::Dead(DeadReason::Bearer);
     }
 }
 
@@ -53,7 +53,7 @@ impl ViewJudge for Fake {
         Box::pin(async move {
             match &*self.0.lock() {
                 Judged::Live(digest) => Judged::Live(digest.clone()),
-                Judged::Dead => Judged::Dead,
+                Judged::Dead(reason) => Judged::Dead(*reason),
             }
         })
     }

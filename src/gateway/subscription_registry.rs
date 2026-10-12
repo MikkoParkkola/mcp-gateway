@@ -230,7 +230,7 @@ impl Listener {
             .owed(&self.authorizer, self.credential.as_ref(), "", backend)
             .await
         {
-            crate::gateway::streaming::Judged::Dead => Admit::Close,
+            crate::gateway::streaming::Judged::Dead(_) => Admit::Close,
             crate::gateway::streaming::Judged::Live(None) => Admit::Skip,
             crate::gateway::streaming::Judged::Live(Some(owed)) => Admit::Send(Some(owed)),
         }

@@ -138,3 +138,88 @@ async fn r6_a_listen_on_the_code_mode_url_is_told_nothing_of_a_backend_change() 
         "its list is the two fixed tools: RED on 52c20300f"
     );
 }
+
+/// R12 (D17e): two GET streams of one session, one on the code-mode URL and
+/// one plain, attached in either order. Neither is judged by the other's
+/// surface: a backend change reaches the plain stream and not the code-mode
+/// one.
+async fn mixed_surfaces(code_first: bool) {
+    let w = World::start().await;
+    let token = scoped_token("R", &["read", "write", "scan", "fetch"]);
+    let bearer = token.token.clone();
+    w.key_server.store.insert(token).await;
+    let code_url = "/mcp?codemode=search_and_execute";
+    let (mut code, mut plain);
+    if code_first {
+        code = w.sse_at(&bearer, code_url, None).await;
+        let session = code.session_id().to_string();
+        plain = w.sse_at(&bearer, "/mcp", Some(&session)).await;
+    } else {
+        plain = w.sse_at(&bearer, "/mcp", None).await;
+        let session = plain.session_id().to_string();
+        code = w.sse_at(&bearer, code_url, Some(&session)).await;
+    }
+    assert_eq!(
+        code.session_id(),
+        plain.session_id(),
+        "premise: one session"
+    );
+    w.store_shared("alpha", alpha_with("r2"));
+    let told = [plain.told(&w).await, code.told(&w).await];
+    assert_eq!(told, [1, 0], "each stream is judged by its own surface");
+}
+
+#[tokio::test]
+async fn r12_a_code_mode_stream_attached_first_leaves_the_plain_one_told() {
+    mixed_surfaces(true).await;
+}
+
+#[tokio::test]
+async fn r12_a_plain_stream_attached_first_leaves_the_code_mode_one_quiet() {
+    mixed_surfaces(false).await;
+}
+
+/// R16 (D17d bound, kimi/gpt): judging a hint at write reads caches only. A
+/// caller with an uncached credential and a cold slot on a per-user backend
+/// is told of a visible change and not of a hidden one, with the fixture's
+/// minter armed to hang and no backend `tools/list` made. The control first
+/// shows the counters move when discovery does the work.
+async fn judging_stays_on_caches(listen: bool) {
+    use std::sync::atomic::Ordering::SeqCst;
+    let (w, _a, _b) = duo().await;
+    let (cold, control) = (w.principal("C").await, w.principal("D").await);
+    let before = (w.probe.mints.load(SeqCst), w.probe.fetches.load(SeqCst));
+    let _ = w.discovered(&control, "beta").await;
+    let after = (w.probe.mints.load(SeqCst), w.probe.fetches.load(SeqCst));
+    assert!(
+        after.0 > before.0 && after.1 > before.1,
+        "control: discovery mints and fetches ({before:?} -> {after:?})"
+    );
+    w.probe.hang_mints.store(true, SeqCst);
+    let mut ear = if listen {
+        w.listen(&cold).await
+    } else {
+        w.sse(&cold).await
+    };
+    w.settle().await;
+    let _ = ear.told(&w).await;
+    w.store_shared("alpha", alpha_with("r2"));
+    assert_eq!(ear.told(&w).await, 1, "a visible change is told");
+    w.store_user("beta", "B", vec![tool("b_tool", "b"), tool("b_more", "m")]);
+    assert_eq!(ear.told(&w).await, 0, "a hidden change is not");
+    assert_eq!(
+        (w.probe.mints.load(SeqCst), w.probe.fetches.load(SeqCst)),
+        after,
+        "the write path minted or fetched"
+    );
+}
+
+#[tokio::test]
+async fn r16_get_judging_at_write_mints_nothing_and_fetches_nothing() {
+    judging_stays_on_caches(false).await;
+}
+
+#[tokio::test]
+async fn r16_listen_judging_at_admit_mints_nothing_and_fetches_nothing() {
+    judging_stays_on_caches(true).await;
+}
