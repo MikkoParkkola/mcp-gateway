@@ -242,6 +242,21 @@ impl ResolvedAuthConfig {
         (!crate::config::api_key_expired_now(key.expires_at)).then(|| Self::client_of(key))
     }
 
+    /// [`Self::client_for_key`] judged at `now`, the caller's reading of the
+    /// clock; reads no clock (MIK-8202).
+    pub(crate) fn client_for_key_at(
+        &self,
+        name: &str,
+        principal: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<AuthenticatedClient> {
+        let key = self
+            .api_keys
+            .iter()
+            .find(|k| k.name == name && hex::encode(&k.digest[..6]) == principal)?;
+        (!crate::config::api_key_expired(key.expires_at, now)).then(|| Self::client_of(key))
+    }
+
     /// Check rate limit for a client. Returns true if allowed, false if rate limited.
     #[must_use]
     pub fn check_rate_limit(&self, client_name: &str) -> bool {

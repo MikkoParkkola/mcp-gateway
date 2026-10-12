@@ -57,7 +57,7 @@ fn a_revived_record_keeps_its_dead_letters_stamp() {
     crate::events::records::write_record(&dir.path().join("dead"), "e1.json", &saved)
         .expect("restore the dead letter");
     drop(store);
-    let reopened = Store::open(dir.path(), now, TAIL).expect("reopen");
+    let reopened = Store::open(dir.path(), Ok(now), TAIL).expect("reopen");
     assert!(
         reopened
             .due(now, &HashSet::new(), ROOMY)
@@ -143,7 +143,7 @@ fn a_re_admitted_occurrence_under_a_held_id_is_coalesced() {
         next: now,
         status: "http_5xx",
     };
-    store.settle("e1", now, retry, now, ROOMY).expect("io");
+    store.settle("e1", now, retry, Ok(now), ROOMY).expect("io");
     store.suspend("s1").expect("io");
     assert_eq!(
         store.enqueue(later(2, "c24="), OUTBOX).expect("io"),
@@ -157,4 +157,24 @@ fn a_re_admitted_occurrence_under_a_held_id_is_coalesced() {
     assert_eq!(held.body_b64, "e30=", "the first body stands");
     assert_eq!(held.created_at, now, "and its stamp");
     assert_eq!(held.attempt, 1, "and its attempt count");
+}
+
+/// MIK-8202 A6: a clock that cannot be read at the revive commit dates no
+/// lease. That is a transient fault, never a subscription gone, and the dead
+/// letter stays.
+#[test]
+fn a_revive_the_clock_cannot_date_is_undated() {
+    let dir = tempfile::tempdir().expect("dir");
+    let now = crate::clock::utc_now().expect("a readable clock");
+    let store = open_with(dir.path(), now, &["s1"]);
+    store
+        .dead_letter(record("e1", "s1", now), DeadReason::Exhausted, now, ROOMY)
+        .expect("io");
+    let outcome = store
+        .revive("e1", now, record("e1", "s1", now), OUTBOX, || {
+            Err(crate::clock::ClockBeforeEpoch)
+        })
+        .expect("io");
+    assert_eq!(outcome, Revived::Undated);
+    assert_eq!(store.dead_summaries().len(), 1, "the dead letter stays");
 }

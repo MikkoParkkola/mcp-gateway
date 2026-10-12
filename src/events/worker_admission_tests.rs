@@ -67,6 +67,7 @@ impl EventSource for Gated {
         _principal: &str,
         _arguments: &serde_json::Value,
         _event: &crate::events::fanout::SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         true
     }
@@ -252,6 +253,7 @@ impl EventSource for Held {
         _principal: &str,
         _arguments: &serde_json::Value,
         _event: &crate::events::fanout::SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         true
     }

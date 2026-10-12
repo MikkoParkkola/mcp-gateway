@@ -87,7 +87,7 @@ fn record(event: &str, sub: &str, now: DateTime<Utc>) -> OutboxRecord {
 }
 
 fn open_with(dir: &std::path::Path, now: DateTime<Utc>, subs: &[&str]) -> Store {
-    let store = Store::open(dir, now, TAIL).expect("open");
+    let store = Store::open(dir, Ok(now), TAIL).expect("open");
     for id in subs {
         store
             .admit(
@@ -147,14 +147,14 @@ fn claim_settle_and_unsubscribe_cancel() {
         next,
         status: "http_5xx",
     };
-    store.settle("a", now, retry, now, ROOMY).expect("io");
+    store.settle("a", now, retry, Ok(now), ROOMY).expect("io");
     assert_eq!(
         store.get("s1").and_then(|s| s.last_error).as_deref(),
         Some("http_5xx")
     );
     let due = store.due(now, &HashSet::new(), ROOMY).expect("io");
     assert!(due.ready.is_empty() && due.next == Some(next));
-    store.remove("s1", now, TAIL).expect("remove");
+    store.remove("s1", Ok(now), TAIL).expect("remove");
     assert!(
         store
             .due(next, &HashSet::new(), ROOMY)
@@ -186,7 +186,7 @@ fn in_flight_returns_to_pending_on_reopen() {
     ));
     drop(store);
     let later = now + crate::duration_bound::delta!(seconds, 1);
-    let store = Store::open(dir.path(), later, TAIL).expect("reopen");
+    let store = Store::open(dir.path(), Ok(later), TAIL).expect("reopen");
     let Claim::Ready(claimed) = store.claim("a", later).expect("io") else {
         panic!("recovered");
     };
@@ -234,7 +234,7 @@ fn an_outbox_record_already_dead_is_dropped_on_reopen() {
         .dead_letter(record("a", "s1", now), DeadReason::Gone, now, ROOMY)
         .expect("io");
     drop(store);
-    let store = Store::open(dir.path(), now, TAIL).expect("reopen");
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("reopen");
     assert!(matches!(store.claim("a", now).expect("io"), Claim::Skip));
     assert!(
         std::fs::read_dir(dir.path().join("outbox"))
@@ -320,7 +320,7 @@ fn a_failed_settlement_leaves_the_record_pending() {
         reason: DeadReason::Gone,
         status: Some("http_4xx"),
     };
-    assert!(store.settle("a", now, dead, now, ROOMY).is_err());
+    assert!(store.settle("a", now, dead, Ok(now), ROOMY).is_err());
     let retry_at = now + super::SETTLE_RETRY;
     assert!(
         store
@@ -340,7 +340,7 @@ fn a_failed_settlement_leaves_the_record_pending() {
         "buried again, never sent again"
     );
     drop(store);
-    let store = Store::open(dir.path(), retry_at, TAIL).expect("reopen");
+    let store = Store::open(dir.path(), Ok(retry_at), TAIL).expect("reopen");
     let Claim::Ready(claimed) = store.claim("a", retry_at).expect("io") else {
         panic!("recovered");
     };
@@ -393,7 +393,7 @@ fn a_later_occurrence_under_a_dead_id_is_kept() {
         .expect("io");
     store.enqueue(record("a", "s1", now), caps).expect("io");
     drop(store);
-    let store = Store::open(dir.path(), now, TAIL).expect("reopen");
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("reopen");
     assert!(
         matches!(store.claim("a", now).expect("io"), Claim::Ready(_)),
         "the new occurrence survives the reload"
@@ -430,7 +430,7 @@ fn a_failed_settlement_ignores_an_older_dead_letter_under_the_same_id() {
         reason: DeadReason::TooLarge,
         status: Some("http_4xx"),
     };
-    assert!(store.settle("a", now, dead, now, ROOMY).is_err());
+    assert!(store.settle("a", now, dead, Ok(now), ROOMY).is_err());
     let due = store
         .due(now + super::SETTLE_RETRY, &HashSet::new(), ROOMY)
         .expect("io");
@@ -487,7 +487,7 @@ fn a_cancelled_claim_has_no_signing_row_even_under_a_reused_id() {
         panic!("claimable");
     };
     assert!(store.signing_row(&claimed.record).is_some(), "claim alive");
-    store.remove("s1", now, TAIL).expect("io");
+    store.remove("s1", Ok(now), TAIL).expect("io");
     store
         .admit(
             sub("s1", now),
@@ -531,7 +531,7 @@ fn an_old_answer_does_not_settle_a_later_occurrence() {
         Claim::Ready(_)
     ));
     // Unsubscribed mid-flight, resubscribed, and the id re-admitted later.
-    store.remove("s1", now, TAIL).expect("io");
+    store.remove("s1", Ok(now), TAIL).expect("io");
     store
         .admit(
             sub("s1", now),
@@ -546,7 +546,7 @@ fn an_old_answer_does_not_settle_a_later_occurrence() {
     let later = now + crate::duration_bound::delta!(minutes, 30);
     store.enqueue(record("a", "s1", later), caps).expect("io");
     store
-        .settle("a", now, Settle::Delivered, later, ROOMY)
+        .settle("a", now, Settle::Delivered, Ok(later), ROOMY)
         .expect("io");
     assert!(
         matches!(store.claim("a", later).expect("io"), Claim::Ready(_)),
@@ -568,7 +568,7 @@ fn a_revocation_decided_on_an_old_row_spares_a_rebound_one() {
         .expect("io")
         .expect("admitted");
     let same = |row: &Subscription| row.credential_principal == refused.credential_principal;
-    assert!(!store.remove_where("s1", now, TAIL, same).expect("io"));
+    assert!(!store.remove_where("s1", Ok(now), TAIL, same).expect("io"));
     assert!(store.get("s1").is_some(), "the rebound row survives");
 }
 
@@ -634,7 +634,7 @@ fn revive_moves_a_dead_letter_back_only_while_it_is_the_one_scanned() {
         "a record already pending under the id is not a replay"
     );
     store
-        .settle("e3", now, Settle::Delivered, now, ROOMY)
+        .settle("e3", now, Settle::Delivered, Ok(now), ROOMY)
         .expect("io");
     let full = OutboxCaps {
         global: 0,
@@ -712,10 +712,10 @@ fn an_unsent_claim_keeps_its_number_but_is_not_a_send() {
         next: now,
         status: "audit_unavailable",
     };
-    store.settle("a", now, unsent, now, ROOMY).expect("io");
+    store.settle("a", now, unsent, Ok(now), ROOMY).expect("io");
     // Across a restart: the count is on disk with the record.
     drop(store);
-    let store = Store::open(dir.path(), now, TAIL).expect("reopen");
+    let store = Store::open(dir.path(), Ok(now), TAIL).expect("reopen");
     let Claim::Ready(claimed) = store.claim("a", now).expect("io") else {
         panic!("claimable again");
     };
@@ -750,7 +750,7 @@ fn an_unsent_settlement_the_disk_refused_is_still_not_a_send() {
         next: now,
         status: "audit_unavailable",
     };
-    assert!(store.settle("a", now, unsent, now, ROOMY).is_err());
+    assert!(store.settle("a", now, unsent, Ok(now), ROOMY).is_err());
     std::fs::create_dir(&outbox).expect("mkdir");
     let retry_at = now + super::SETTLE_RETRY;
     let Claim::Ready(claimed) = store.claim("a", retry_at).expect("io") else {
