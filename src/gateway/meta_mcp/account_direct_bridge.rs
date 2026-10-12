@@ -299,6 +299,7 @@ impl DirectAccountGateway {
                 },
                 Arc::new(CapturingTransport {
                     dispatches: Arc::clone(&self.dispatches),
+                    server: BACKEND.to_string(),
                 }),
             );
     }

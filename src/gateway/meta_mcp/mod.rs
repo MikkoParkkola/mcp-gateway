@@ -815,6 +815,8 @@ mod grant_decision_slot_tests;
 #[cfg(test)]
 mod grant_replay_dedupe_tests;
 #[cfg(test)]
+mod plan_repeat_external_gap_tests;
+#[cfg(test)]
 mod grant_slot_wrap_tests;
 /// MIK-8340 row 7: a failed grant record on a withheld name answers as absent.
 #[cfg(test)]

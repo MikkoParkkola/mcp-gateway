@@ -560,3 +560,7 @@ async fn fixture_fail_next_fails_one_call_with_the_account_live() {
     let ok = send(&fx, "tools/call", "gateway_invoke", invoke_params(None, false)).await;
     assert!(ok.to_string().contains(MARKER), "the next call succeeds: {ok}");
 }
+
+// Scratch only (MIK-8406 gap proof): never part of a PR.
+#[path = "plan_repeat_unavailable_gap_tests.rs"]
+mod plan_repeat_unavailable_gap_tests;
