@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_dispatch.rs b/src/gateway/router/backend_handlers/direct_dispatch.rs
+index 5d7d0cd83..d4cc45f1d 100644
+--- a/src/gateway/router/backend_handlers/direct_dispatch.rs
++++ b/src/gateway/router/backend_handlers/direct_dispatch.rs
+@@ -287,7 +287,7 @@ async fn forward_sanitized(
+     let admission = match DirectRouteGuards::before_dispatch(&state.meta_mcp, call) {
+         Ok(admission) => admission,
+         Err(e) => {
+-            give_back_nonce(state, &mut admitted);
++            DirectRouteGuards::release_nonce(state, admitted.nonce.take(), Some(RefundWitness::at_capture()));
+             return build_http_response(
+                 &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
+                 StatusCode::OK,

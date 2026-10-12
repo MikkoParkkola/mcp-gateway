@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_dispatch.rs b/src/gateway/router/backend_handlers/direct_dispatch.rs
+index 5d7d0cd83..88e056ecd 100644
+--- a/src/gateway/router/backend_handlers/direct_dispatch.rs
++++ b/src/gateway/router/backend_handlers/direct_dispatch.rs
+@@ -310,7 +310,7 @@ async fn forward_sanitized(
+     // Redeemed: a continuation the caller presented was consumed.
+     admitted.witness = RefundWitness::carry(
+         admitted.witness.take(),
+-        rw::retry_effect(preflight.retry.request_state.is_some()),
++        rw::retry_effect(false && preflight.retry.request_state.is_some()),
+     );
+     // After redeem, on the exact bytes sent: the answers are in the params now.
+     let permit = match super::direct_permit::mint_permit(scope, Some(&sanitized_params)) {

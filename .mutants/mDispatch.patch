@@ -1,0 +1,15 @@
+diff --git a/src/gateway/router/backend_handlers/direct_dispatch.rs b/src/gateway/router/backend_handlers/direct_dispatch.rs
+index 5d7d0cd83..034d3e74e 100644
+--- a/src/gateway/router/backend_handlers/direct_dispatch.rs
++++ b/src/gateway/router/backend_handlers/direct_dispatch.rs
+@@ -85,9 +85,7 @@ fn admission_witness(
+ 
+ /// The send is about to happen: the nonce stays spent whatever follows.
+ fn spend_witness(admitted: &mut Admitted<'_>) {
+-    if let Some(witness) = admitted.witness.take() {
+-        witness.spend();
+-    }
++    let _ = admitted;
+ }
+ 
+ /// SECURITY: apply tool policy, name validation, and input sanitization to

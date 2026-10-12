@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_dispatch.rs b/src/gateway/router/backend_handlers/direct_dispatch.rs
+index 5d7d0cd83..200d560d4 100644
+--- a/src/gateway/router/backend_handlers/direct_dispatch.rs
++++ b/src/gateway/router/backend_handlers/direct_dispatch.rs
+@@ -423,7 +423,7 @@ async fn forward_plain(
+         match DirectRouteGuards::before_dispatch(&state.meta_mcp, &admitted.call) {
+             Ok(admission) => admission,
+             Err(e) => {
+-                give_back_nonce(state, admitted);
++                DirectRouteGuards::release_nonce(state, admitted.nonce.take(), Some(RefundWitness::at_capture()));
+                 return Err(build_http_response(
+                     &Egressed::gateway_own(refusal(Some(id.clone()), &e)),
+                     StatusCode::OK,

@@ -1,0 +1,17 @@
+diff --git a/src/gateway/router/direct_guards.rs b/src/gateway/router/direct_guards.rs
+index 542a43dfb..7a46322f4 100644
+--- a/src/gateway/router/direct_guards.rs
++++ b/src/gateway/router/direct_guards.rs
+@@ -77,10 +77,10 @@ impl DirectRouteGuards {
+         admitted: Option<AdmittedNonce>,
+         witness: Option<crate::gateway::meta_mcp::refund_witness::RefundWitness>,
+     ) {
+-        let (Some(admitted), Some(witness)) = (admitted, witness) else {
++        let (Some(admitted), witness) = (admitted, witness) else {
+             return;
+         };
+-        witness.spend();
++        let _ = witness;
+         let AdmittedNonce {
+             nonce,
+             principal,

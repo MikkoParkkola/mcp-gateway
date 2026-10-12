@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_dispatch.rs b/src/gateway/router/backend_handlers/direct_dispatch.rs
+index 5d7d0cd83..d196c5a22 100644
+--- a/src/gateway/router/backend_handlers/direct_dispatch.rs
++++ b/src/gateway/router/backend_handlers/direct_dispatch.rs
+@@ -640,7 +640,7 @@ async fn redeem_retry(
+         if let Some(reservation) = admitted.idem_reservation.as_mut() {
+             reservation.release();
+         }
+-        give_back_nonce(scope.state, admitted);
++        DirectRouteGuards::release_nonce(scope.state, admitted.nonce.take(), Some(RefundWitness::at_capture()));
+         build_http_response(
+             &Egressed::gateway_own(refusal(Some(scope.id.clone()), &e)),
+             StatusCode::OK,

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/meta_mcp/invoke/propagation.rs b/src/gateway/meta_mcp/invoke/propagation.rs
+index 1180e51ce..eddca184a 100644
+--- a/src/gateway/meta_mcp/invoke/propagation.rs
++++ b/src/gateway/meta_mcp/invoke/propagation.rs
+@@ -294,7 +294,7 @@ impl MetaMcp {
+             Err(e) => refuse(format!("credential minting failed: {e}"))
+                 .await
+                 .map(|fallback| CallerCredential {
+-                    attempted: true,
++                    attempted: false,
+                     ..fallback
+                 })
+                 .map_err(|refused| {

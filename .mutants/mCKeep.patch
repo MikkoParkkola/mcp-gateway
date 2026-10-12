@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_permit.rs b/src/gateway/router/backend_handlers/direct_permit.rs
+index 8b2de09cc..ba787949a 100644
+--- a/src/gateway/router/backend_handlers/direct_permit.rs
++++ b/src/gateway/router/backend_handlers/direct_permit.rs
+@@ -72,7 +72,7 @@ pub(super) fn mint_permit(
+ /// drop), and the spend admission and continuation slot, which the caller
+ /// drops with the refusal.
+ fn give_back_refused(state: &AppState, admitted: &mut Admitted<'_>) {
+-    DirectRouteGuards::release_nonce(state, admitted.nonce.take(), admitted.witness.take());
++    let _ = (admitted.nonce.take(), admitted.witness.take());
+     if let Some(mut reservation) = admitted.idem_reservation.take() {
+         // Today the reservation is unarmed here (it is armed only in
+         // `dispatch_armed`, after the permit), so its drop would release the

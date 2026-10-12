@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_dispatch.rs b/src/gateway/router/backend_handlers/direct_dispatch.rs
+index 5d7d0cd83..17b41a933 100644
+--- a/src/gateway/router/backend_handlers/direct_dispatch.rs
++++ b/src/gateway/router/backend_handlers/direct_dispatch.rs
+@@ -78,7 +78,7 @@ fn admission_witness(
+         propagation.identity_key.is_some() || propagation.attempted,
+         propagation.managed.is_some(),
+     );
+-    let filled = rw::schema_effect(backend.list_fills() != propagation.fills_before);
++    let filled = rw::schema_effect(false && backend.list_fills() != propagation.fills_before);
+     let witness = RefundWitness::carry(Some(RefundWitness::at_capture()), credential);
+     RefundWitness::carry(witness, filled)
+ }

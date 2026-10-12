@@ -1,0 +1,13 @@
+diff --git a/src/gateway/router/backend_handlers/direct_dispatch.rs b/src/gateway/router/backend_handlers/direct_dispatch.rs
+index 5d7d0cd83..c1d8b06f0 100644
+--- a/src/gateway/router/backend_handlers/direct_dispatch.rs
++++ b/src/gateway/router/backend_handlers/direct_dispatch.rs
+@@ -737,7 +737,7 @@ fn screen_target<'a>(call: &BackendCall<'a>, method: &'a str) -> BackendCall<'a>
+ async fn answer_failure(mut admitted: Admitted<'_>, e: crate::Error, method: &str) -> Rejection {
+     // Nothing reached the backend, so the nonce is given back (MIK-7698).
+     if e.is_pre_dispatch() {
+-        give_back_nonce(admitted.failed.state, &mut admitted);
++        DirectRouteGuards::release_nonce(admitted.failed.state, admitted.nonce.take(), Some(RefundWitness::at_capture()));
+         super::direct_idempotency::withdraw(admitted.lease.as_ref());
+     }
+     // MIK-7642 PR.C: the caller's own cancel is its choice, not a failure: no
