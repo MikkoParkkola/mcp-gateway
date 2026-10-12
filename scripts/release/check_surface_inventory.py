@@ -842,7 +842,11 @@ class Row:
 
 
 def cells(line: str) -> list[str]:
-    return [c.strip() for c in line.strip().strip("|").split("|")]
+    """A table row's cells; an escaped `\\|` stays inside its cell, unescaped."""
+    body = line.strip()
+    body = body[1:] if body.startswith("|") else body
+    body = body[:-1] if body.endswith("|") and not body.endswith("\\|") else body
+    return [c.strip().replace("\\|", "|") for c in re.split(r"(?<!\\)\|", body)]
 
 
 def parse_doc(text: str) -> list[Row]:

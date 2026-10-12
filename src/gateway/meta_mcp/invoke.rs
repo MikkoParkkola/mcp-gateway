@@ -59,6 +59,7 @@ pub(super) fn spend_witness(caller: &super::MetaMcpCallerContext<'_>) {
     nonce_settle::Witnessed::take(caller).spend();
 }
 mod r2_check;
+mod step_fingerprint;
 // #1962: settlement of a bridged round's key, kept out of this file's size baseline.
 mod bridge_settle;
 pub(crate) mod cache_reads;
@@ -376,21 +377,33 @@ impl MetaMcp {
         }
         // A chained backend's answer is bound to one challenge: no cache (D7).
         let chained = self.is_chained(backend.as_deref());
-        if let Some(cached) = self.serve_cached_response(
-            caller,
-            session_id,
+        // MIK-8393 (#3773): a stored result may stand in for a call only when
+        // this caller's slot declared the tool read-only, so the call it
+        // replaces had no effect to lose. Absent means deny: an unannotated
+        // tool, an undiscovered slot and a write all go to the backend, and
+        // their answers are never stored.
+        let read_only = self.cache_admits(
             (server, tool),
-            trace_id,
-            (want_full, chained),
-            protocol_revision,
-            &arguments,
-            (&projection_key_suffix, &caller_principal),
-            (&profile.name, policy_epoch),
-            (arm_key, &tool_key),
-            api_key_name,
-            client_claim.as_ref(),
-            &mut idem_reservation,
-        ) {
+            backend.as_deref(),
+            dispatch_binding.as_deref(),
+        );
+        if read_only
+            && let Some(cached) = self.serve_cached_response(
+                caller,
+                session_id,
+                (server, tool),
+                trace_id,
+                (want_full, chained),
+                protocol_revision,
+                &arguments,
+                (&projection_key_suffix, &caller_principal),
+                (&profile.name, policy_epoch),
+                (arm_key, &tool_key),
+                api_key_name,
+                client_claim.as_ref(),
+                &mut idem_reservation,
+            )
+        {
             return Ok(cached);
         }
 
@@ -737,18 +750,20 @@ impl MetaMcp {
         self.inject_cost_advice(&mut result, &cost_warnings, tool, caller, session_id);
         let written = gateway_writes::snapshot_since(writes_mark);
 
-        self.store_response(
-            caller,
-            args,
-            (server, tool),
-            trace_id,
-            (want_full, stopped_to_ask, chained),
-            protocol_revision,
-            &arguments,
-            (&projection_key_suffix, &caller_principal),
-            (&profile.name, policy_epoch),
-            (&result, &written),
-        );
+        if read_only {
+            self.store_response(
+                caller,
+                args,
+                (server, tool),
+                trace_id,
+                (want_full, stopped_to_ask, chained),
+                protocol_revision,
+                &arguments,
+                (&projection_key_suffix, &caller_principal),
+                (&profile.name, policy_epoch),
+                (&result, &written),
+            );
+        }
 
         if let Some(reservation) = idem_reservation.as_mut()
             && reservation.complete_read(&result, (self.dispatch_reading(args), written))

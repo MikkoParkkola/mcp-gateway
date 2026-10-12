@@ -179,7 +179,7 @@ fn admitting_multi_user() -> CapabilityExecutor {
 async fn pinned_cacheable_probe(dir: &Path) -> CapabilityDefinition {
     let yaml = capability_yaml().replacen(
         "description: MCP probe.\n",
-        "description: MCP probe.\ncache:\n  ttl: 60\n  strategy: memory\n",
+        "description: MCP probe.\nmetadata:\n  read_only: true\ncache:\n  ttl: 60\n  strategy: memory\n",
         1,
     );
     let path = dir.join("mcp_probe.yaml");

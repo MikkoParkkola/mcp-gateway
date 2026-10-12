@@ -78,6 +78,15 @@ pub async fn parse_capability_file(path: &std::path::Path) -> Result<CapabilityD
         capability.name = stem.to_string_lossy().to_string();
     }
 
+    // MIK-8393: the cache stands in for a call only on a declared read.
+    if capability.cache_configured() && !capability.metadata.read_only {
+        tracing::warn!(
+            path = %path.display(),
+            capability = %capability.name,
+            "capability sets `cache:` but is not declared `read_only: true`; its results are not cached",
+        );
+    }
+
     // Last, over the definition as returned, so admission and the cache can
     // tell it from any later edit or substitute (MIK-7814).
     if capability.providers.integrity == crate::capability::Integrity::Verified {
@@ -490,5 +499,66 @@ providers:
         let err = parse_capability_file(&path).await.unwrap_err();
         // THEN: mismatch is detected
         assert!(matches!(err, Error::CapabilityHashMismatch { .. }));
+    }
+
+    /// MIK-8393 R14: an enabled `cache:` on a capability not declared
+    /// `read_only: true` is ignored, and the file load says so once, naming
+    /// the file and the capability. Both load routes pass here: a single file
+    /// and a directory. A read-only cache and a disabled cache stay quiet.
+    #[test]
+    fn a_cache_on_a_capability_not_declared_read_only_warns_at_load() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = |name: &str, metadata: &str, ttl: u32| {
+            let yaml = format!(
+                "name: {name}\ndescription: d\nmetadata:\n{metadata}cache:\n  ttl: {ttl}\n  \
+                 strategy: memory\nproviders:\n  primary:\n    service: rest\n    config:\n      \
+                 base_url: https://api.invalid\n      path: /x\n"
+            );
+            std::fs::write(dir.path().join(format!("{name}.yaml")), yaml).unwrap();
+        };
+        file("writes_cached", "  read_only: false\n", 60);
+        file("reads_cached", "  read_only: true\n", 60);
+        file("writes_uncached", "  read_only: false\n", 0);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let ((), single) = crate::test_log_capture::capture_warnings(|| {
+            runtime
+                .block_on(parse_capability_file(
+                    &dir.path().join("writes_cached.yaml"),
+                ))
+                .unwrap();
+        });
+        let (loaded, directory) = crate::test_log_capture::capture_warnings(|| {
+            runtime.block_on(super::super::loader::CapabilityLoader::load_directory(
+                dir.path().to_str().unwrap(),
+            ))
+        });
+        assert_eq!(loaded.unwrap().len(), 3, "a warned capability still loads");
+        for logs in [&single, &directory] {
+            assert_eq!(
+                logs.lines().filter(|l| l.contains("writes_cached")).count(),
+                1,
+                "one warning naming the capability: {logs}"
+            );
+            assert!(
+                logs.contains("writes_cached.yaml"),
+                "names the file: {logs}"
+            );
+            assert!(!logs.contains("reads_cached"), "{logs}");
+            assert!(!logs.contains("writes_uncached"), "{logs}");
+        }
+        let cached = |name: &str| {
+            parse_capability(
+                &std::fs::read_to_string(dir.path().join(format!("{name}.yaml"))).unwrap(),
+            )
+            .unwrap()
+            .is_cacheable()
+        };
+        assert!(cached("reads_cached"));
+        assert!(
+            !cached("writes_cached"),
+            "a write's cache block must be ignored"
+        );
     }
 }

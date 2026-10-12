@@ -368,6 +368,29 @@ class Lifecycle(unittest.TestCase):
             self.assertIn("| 6 | gamma | do gamma |", out)
             self.assertIn("## 6. Gamma\n\n**Startup:** prints a notice\n<!-- notice: gamma phrase -->", out)
 
+    def test_assemble_rewrites_surface_citations_and_the_appendix(self):
+        """MIK-8044.SURF.6: a surface row citing a fragment cites its new number."""
+        import surface_upgrading as su
+
+        inventory = (
+            "# x\n## Surface: config\n| Item | Class | Default | Reason | Migration | Defined at |\n"
+            "|---|---|---|---|---|---|\n| `a.gone` | REMOVE | - | dead | refused; see upgrading.d/3701.md | s:1 |\n"
+            "## Notes\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = tree(tmp, {"3700.md": A, "3701.md": B})
+            (root / "docs/design").mkdir()
+            (root / "docs/design/surface-4.0.md").write_text(inventory)
+            guide = (root / "docs/UPGRADING-4.0.md").read_text()
+            (root / "docs/UPGRADING-4.0.md").write_text(su.write(guide, su.render(su.rows_of(inventory))))
+            self.assertEqual(run_main(root, "assemble")[0], 0)
+            after = (root / "docs/design/surface-4.0.md").read_text()
+            self.assertIn("see UPGRADING 5", after)
+            self.assertNotIn("upgrading.d/3701.md", after)
+            doc = (root / "docs/UPGRADING-4.0.md").read_text()
+            self.assertIn("see UPGRADING 5", doc.split(su.START, 1)[1])
+            self.assertTrue(doc.rstrip().endswith(su.END))
+
     def test_check_names_a_malformed_fragment(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = tree(tmp, {"3700.md": frag("T", change="a | b")})
