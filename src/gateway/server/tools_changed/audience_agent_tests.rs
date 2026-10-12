@@ -47,10 +47,12 @@ fn alpha(read: &str, write: &str) -> Vec<crate::protocol::Tool> {
 }
 
 /// AGENT.3: an agent whose registered scopes are narrowed after its listener
-/// attaches is judged by the live registry, not the attach-time scopes. A
-/// change to a tool it can no longer see tells it nothing; a change to a tool
-/// it still sees tells it, and the stream stays open. Registry replacement
-/// emits no notification, so the row triggers each decision itself.
+/// attaches is judged by the live registry, not the attach-time scopes.
+/// Registry replacement emits no notification, so the row triggers each
+/// decision itself. The first one after narrowing tells it once (its view
+/// lost `read`); after that a change to `read` tells it nothing, where the
+/// attach-time scopes would tell it; a change to a tool it still sees tells
+/// it, and the stream stays open.
 #[tokio::test]
 async fn agent_3_a_narrowed_agent_is_judged_by_its_live_scopes() {
     let registry = Arc::new(AgentRegistry::new());
@@ -67,15 +69,20 @@ async fn agent_3_a_narrowed_agent_is_judged_by_its_live_scopes() {
         !w.served_names(&token).await.contains(&"read".to_string()),
         "premise: the narrowed a1 no longer sees read through POST"
     );
-    let _ = ear.told(&w).await;
 
     w.store_shared("alpha", alpha("r2", "w"));
+    assert_eq!(
+        ear.told(&w).await,
+        1,
+        "premise: the first decision after narrowing tells the lost tool"
+    );
+    w.store_shared("alpha", alpha("r3", "w"));
     assert_eq!(
         ear.told(&w).await,
         0,
         "a change to a tool the live scopes withdrew tells nothing"
     );
-    w.store_shared("alpha", alpha("r2", "w2"));
+    w.store_shared("alpha", alpha("r3", "w2"));
     assert_eq!(
         ear.told(&w).await,
         1,

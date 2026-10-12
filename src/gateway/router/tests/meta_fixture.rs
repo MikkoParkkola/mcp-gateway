@@ -17,6 +17,25 @@ pub(in crate::gateway::router) async fn test_router_app_state_with_meta(
     fixture_with(auth, key_server, agent_auth, configure).await
 }
 
+/// MIK-8350: the authenticated fixture with a key server and a configured
+/// Meta-MCP, for the `list_changed` audience rows under `gateway::server`.
+/// `agents`, when given, turns agent authentication on against that
+/// registry from the start (MIK-8377).
+pub(crate) async fn audience_state(
+    auth: &AuthConfig,
+    (key_server, agents): (
+        Option<Arc<crate::key_server::KeyServer>>,
+        Option<Arc<AgentRegistry>>,
+    ),
+    configure: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fixture {
+    let agent_auth = match agents {
+        Some(registry) => AgentAuthState::new(true, registry),
+        None => AgentAuthState::new(false, Arc::new(AgentRegistry::new())),
+    };
+    fixture_with(auth, key_server, agent_auth, configure).await
+}
+
 /// [`test_router_app_state_with_meta`], with `firewall` as the router's own
 /// engine (the response pass), as startup wires it beside the Meta-MCP's.
 #[cfg(feature = "firewall")]

@@ -35,6 +35,8 @@ use crate::gateway::session_lifecycle::{SessionLifecycle, now_unix};
 #[path = "streaming_copy.rs"]
 mod copy;
 use copy::{CopyAudience, Unsent};
+#[path = "streaming_liveness.rs"]
+mod liveness;
 #[path = "streaming_told.rs"]
 mod told;
 pub(crate) use told::{

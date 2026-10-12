@@ -508,7 +508,7 @@ impl World {
         .await
         .map_or_else(
             |_| axum::body::Bytes::from_static(b"<open stream>"),
-            |b| b.unwrap_or_default(),
+            Result::unwrap_or_default,
         );
         (status, body)
     }

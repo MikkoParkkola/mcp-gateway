@@ -129,6 +129,9 @@ async fn resolve_caller(
     Judged::Live(ResolvedCaller {
         client: current.client,
         identity: current.identity,
+        agent: current
+            .agent
+            .map(crate::gateway::oauth::AgentIdentity::from_validated),
     })
 }
 
@@ -144,7 +147,9 @@ fn digest_for(
     backend: &str,
 ) -> ViewDigest {
     let client = &caller.client;
-    let oauth = subject.oauth_agent.as_ref();
+    // The live agent: `live()` has pinned it to the one the stream attached
+    // as, and its scopes are the registry's now (MIK-8377).
+    let oauth = caller.agent.as_ref();
     let cert = subject.cert.as_ref();
     let owned = OwnedRouterAuthorizer::capture(Some(client), oauth, cert);
     let authorizer = owned.borrow(state);

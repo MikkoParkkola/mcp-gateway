@@ -463,15 +463,7 @@ pub(super) async fn test_router_app_state_with_auth_and_key_server(
     meta_fixture::test_router_app_state_with_meta(auth, key_server, |meta| meta).await
 }
 
-/// MIK-8350: the authenticated fixture with a key server and a configured
-/// Meta-MCP, for the `list_changed` audience rows under `gateway::server`.
-pub(crate) async fn audience_state(
-    auth: &AuthConfig,
-    key_server: Option<Arc<crate::key_server::KeyServer>>,
-    configure: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> (Arc<AppState>, tempfile::TempDir) {
-    meta_fixture::test_router_app_state_with_meta(auth, key_server, configure).await
-}
+pub(crate) use meta_fixture::audience_state;
 
 /// The streaming-session owner the router derives for `held` (as
 /// `handlers::owner::session_owner` does), for the audience rows that open a

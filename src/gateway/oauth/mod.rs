@@ -74,6 +74,25 @@ pub struct AgentIdentity {
     pub quota_principal: Option<QuotaPrincipal>,
 }
 
+impl AgentIdentity {
+    /// The identity a validated token carries: the registry's scopes as they
+    /// are now. The middleware attaches it to a request; the `list_changed`
+    /// judge rebuilds it per decision (MIK-8377).
+    pub(crate) fn from_validated(validated: ValidatedToken) -> Self {
+        let raw_scopes = validated.agent.scopes.clone();
+        // Authority follows the registration, not the token bytes or the
+        // operator-chosen display name.
+        let quota_principal = QuotaPrincipal::oauth_client(&validated.agent.client_id);
+        Self {
+            client_id: validated.claims.sub,
+            agent_name: validated.agent.name,
+            scopes: validated.scopes,
+            raw_scopes,
+            quota_principal: Some(quota_principal),
+        }
+    }
+}
+
 /// Shared state for the agent auth middleware.
 #[derive(Clone)]
 pub struct AgentAuthState {
@@ -142,18 +161,9 @@ pub async fn agent_auth_middleware(
                      Migrate this agent to HS256 (see issue #116)."
                 );
             }
-            let raw_scopes = validated.agent.scopes.clone();
-            // Authority follows the registration, not the token bytes or the
-            // operator-chosen display name.
-            let quota_principal = QuotaPrincipal::oauth_client(&validated.agent.client_id);
-            let identity = AgentIdentity {
-                client_id: validated.claims.sub.clone(),
-                agent_name: validated.agent.name.clone(),
-                scopes: validated.scopes,
-                raw_scopes,
-                quota_principal: Some(quota_principal),
-            };
-            request.extensions_mut().insert(identity);
+            request
+                .extensions_mut()
+                .insert(AgentIdentity::from_validated(validated));
             next.run(request).await
         }
         Err(JwtError::UnknownAgent(id)) => {

@@ -201,13 +201,7 @@ fn trusted_proxy_identity(
         return Ok(None);
     }
     // No `ConnectInfo` is no proven peer (the reading of `auth.rs`).
-    let trusted = peer.is_some_and(|peer| {
-        let peer = peer.ip().to_canonical();
-        config
-            .trusted_proxies
-            .iter()
-            .any(|entry| entry.to_canonical() == peer)
-    });
+    let trusted = peer.is_some_and(|peer| config.trusts_peer(peer));
     if !trusted {
         return Err(IdentityHeaderRefusal::UntrustedPeer);
     }

@@ -182,13 +182,11 @@ pub(crate) struct ViewSubject {
     pub(crate) adapter: Option<crate::gateway::openwebui_adapter::AdapterAssertion>,
     /// The certificate's `notAfter`, in unix seconds. Captured here and
     /// checked per decision by MIK-8377.
-    #[expect(dead_code, reason = "read by MIK-8377's live() clause")]
     pub(crate) cert_not_after: Option<u64>,
     /// The raw Cloudflare Access assertion, when that is the identity source;
     /// re-verified per decision by MIK-8377 and dropped with the stream.
     pub(crate) cf_assertion: Option<Redacted>,
     /// The trusted proxy's peer address, when that is the identity source.
-    #[expect(dead_code, reason = "read by MIK-8377's live() clause")]
     pub(crate) proxy_peer: Option<std::net::SocketAddr>,
 }
 
@@ -238,16 +236,6 @@ impl ViewSubject {
             .map(drop)
             .map_err(|_| DeadReason::Cf)
     }
-
-    /// Whether the identity the stream was admitted under is still good, or
-    /// why not. The adapter assertion's window is judged here; MIK-8377 adds
-    /// its clauses, which need the live handles in [`LiveCtx`].
-    pub(crate) fn live(&self, _ctx: &LiveCtx<'_>) -> Result<(), DeadReason> {
-        match &self.adapter {
-            Some(adapter) if !adapter.live() => Err(DeadReason::Adapter),
-            _ => Ok(()),
-        }
-    }
 }
 
 /// What a liveness check may consult besides the subject: the caller the
@@ -255,9 +243,7 @@ impl ViewSubject {
 /// re-verified with, read from the current state, never captured at attach.
 #[derive(Clone, Copy)]
 pub(crate) struct LiveCtx<'a> {
-    #[expect(dead_code, reason = "read by MIK-8377's live() clauses")]
     pub(crate) agent: Option<&'a crate::gateway::oauth::ValidatedToken>,
-    #[expect(dead_code, reason = "read by MIK-8377's live() clauses")]
     pub(crate) caller_identity: &'a crate::security::caller_identity::CallerIdentityConfig,
     pub(crate) cf_verifier: Option<&'a crate::key_server::OidcVerifier>,
 }
@@ -276,7 +262,15 @@ pub(crate) enum AtAttach {
 pub(crate) fn dead_at_attach(credential: Option<&HeldCredential>, reason: DeadReason) -> AtAttach {
     match (credential, reason) {
         (None, DeadReason::Bearer) => AtAttach::OpenAnonymous,
-        (Some(_), _) | (None, DeadReason::Adapter | DeadReason::Cf) => AtAttach::Refuse,
+        (Some(_), _)
+        | (
+            None,
+            DeadReason::Adapter
+            | DeadReason::Cf
+            | DeadReason::Agent
+            | DeadReason::Cert
+            | DeadReason::Proxy,
+        ) => AtAttach::Refuse,
     }
 }
 
@@ -302,6 +296,15 @@ pub(crate) enum DeadReason {
     /// The Cloudflare Access assertion the stream was admitted under no longer
     /// verifies (a rotated or revoked key, or no verifier to ask).
     Cf,
+    /// The held bearer now validates as another agent than the stream
+    /// attached as, or as one where it attached as none (MIK-8377).
+    Agent,
+    /// The client certificate's `notAfter` has passed, or the clock cannot be
+    /// read to show it has not (MIK-8377).
+    Cert,
+    /// The proxy the identity headers came through is no longer in
+    /// `trusted_proxies` (MIK-8377).
+    Proxy,
 }
 
 impl DeadReason {
@@ -320,6 +323,9 @@ impl DeadReason {
             Self::Bearer => "bearer",
             Self::Adapter => "adapter",
             Self::Cf => "cf",
+            Self::Agent => "agent",
+            Self::Cert => "cert",
+            Self::Proxy => "proxy",
         }
     }
 }
@@ -329,6 +335,10 @@ impl DeadReason {
 pub(crate) struct ResolvedCaller {
     pub(crate) client: crate::gateway::auth::AuthenticatedClient,
     pub(crate) identity: Option<crate::key_server::oidc::VerifiedIdentity>,
+    /// The agent the held bearer validates as now, with the registry's
+    /// current scopes: the judge's authorizer uses it, not the attach-time
+    /// snapshot (MIK-8377).
+    pub(crate) agent: Option<crate::gateway::oauth::AgentIdentity>,
 }
 
 /// Decides what a stream's caller is shown, for the per-stream

@@ -50,6 +50,15 @@ pub struct CallerIdentityConfig {
 }
 
 impl CallerIdentityConfig {
+    /// Whether `peer` is one of `trusted_proxies`, compared as canonical
+    /// addresses (an IPv4-mapped IPv6 peer matches its IPv4 entry).
+    pub(crate) fn trusts_peer(&self, peer: std::net::SocketAddr) -> bool {
+        let peer = peer.ip().to_canonical();
+        self.trusted_proxies
+            .iter()
+            .any(|entry| entry.to_canonical() == peer)
+    }
+
     /// Refuse a caller-identity config that would let a caller choose its
     /// own subject or collide with another authority.
     ///

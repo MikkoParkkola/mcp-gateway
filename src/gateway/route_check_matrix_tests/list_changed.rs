@@ -68,7 +68,8 @@ pub(crate) const fn expect_notify(route: NotifyRoute, check: ViewCheck) -> Notif
         (NotifyRoute::Listen, ViewCheck::SubjectAtAttach) => {
             NotifyExpect::Applies("audience_l2_tests::l2_grant_subject_one_key_two_adapter_users")
         }
-        (NotifyRoute::Stdio, ViewCheck::SubjectAtAttach) => {
+        // One fixed local caller holds no captured identity to judge or re-check.
+        (NotifyRoute::Stdio, ViewCheck::SubjectAtAttach | ViewCheck::IdentityLiveness) => {
             NotifyExpect::NotApplicable(super::Na::AlwaysLocalOperator)
         }
         (NotifyRoute::GetStream, ViewCheck::IdentityLiveness) => NotifyExpect::Applies(
@@ -77,9 +78,6 @@ pub(crate) const fn expect_notify(route: NotifyRoute, check: ViewCheck) -> Notif
         (NotifyRoute::Listen, ViewCheck::IdentityLiveness) => NotifyExpect::Applies(
             "audience_liveness_tests::live_1_cert_a_stream_past_its_certificate_not_after_is_closed",
         ),
-        (NotifyRoute::Stdio, ViewCheck::IdentityLiveness) => {
-            NotifyExpect::NotApplicable(super::Na::AlwaysLocalOperator)
-        }
     }
 }
 

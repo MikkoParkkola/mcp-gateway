@@ -408,7 +408,7 @@ impl World {
         let wire_probe = Arc::clone(&probe);
         let (mut state, store) = crate::gateway::router::tests::audience_state(
             &auth,
-            Some(Arc::clone(&key_server)),
+            (Some(Arc::clone(&key_server)), agents),
             move |meta| {
                 let mut meta = meta.with_surfaced_tools(surfaced);
                 meta.enable_transparency_log(Arc::new(logger));
@@ -424,9 +424,6 @@ impl World {
             st.live_config = Arc::new(crate::config_reload::LiveConfig::new(config));
             dir
         });
-        if let Some(registry) = agents {
-            st.agent_auth = crate::gateway::oauth::AgentAuthState::new(true, registry);
-        }
         st.backends.set_change_feed(feed.clone());
         for backend in [
             shared_backend("alpha", &probe),
