@@ -82,12 +82,10 @@ impl ViewJudge for Fake {
 }
 
 fn adapter_assertion() -> crate::gateway::openwebui_adapter::AdapterAssertion {
-    // SAFETY: `AdapterAssertion` is two `u64`s, so all-zero is a valid value;
-    // only its presence is judged here, never its window.
-    unsafe { std::mem::zeroed() }
+    crate::gateway::openwebui_adapter::AdapterAssertion::for_test(0, 0)
 }
 
-async fn attached(subject: ViewSubject) -> Result<Option<StreamView>, DeadReason> {
+async fn attached(subject: ViewSubject) -> std::result::Result<Option<StreamView>, DeadReason> {
     let multiplexer = NotificationMultiplexer::new(
         Arc::new(crate::backend::BackendRegistry::new()),
         crate::config::StreamingConfig::default(),

@@ -372,6 +372,11 @@ impl AdapterAssertion {
             self.skew,
         ) == Validity::Live
     }
+
+    #[cfg(test)]
+    pub(crate) const fn for_test(expires_at: u64, skew: u64) -> Self {
+        Self { expires_at, skew }
+    }
 }
 
 /// [`verify_assertion`] for the callers that need only the identity.

@@ -188,7 +188,6 @@ pub(crate) struct ViewSubject {
     /// re-verified per decision by MIK-8377 and dropped with the stream.
     pub(crate) cf_assertion: Option<Redacted>,
     /// The trusted proxy's peer address, when that is the identity source.
-    #[expect(dead_code, reason = "read by MIK-8377's live() clause")]
     pub(crate) proxy_peer: Option<std::net::SocketAddr>,
 }
 
@@ -523,13 +522,13 @@ impl StreamView {
         let caller = match self.judge.resolve(auth, (credential, &self.subject)).await {
             Judged::Live(caller) => caller,
             // An anonymous stream's `Bearer` death is silence, not a close.
-            Judged::Dead(reason) => match (credential, reason) {
-                (None, DeadReason::Bearer) => return Judged::Live(None),
-                _ => {
-                    reason.count();
-                    return Judged::Dead(reason);
+            Judged::Dead(reason) => {
+                if let (None, DeadReason::Bearer) = (credential, reason) {
+                    return Judged::Live(None);
                 }
-            },
+                reason.count();
+                return Judged::Dead(reason);
+            }
         };
         let (stamp, digest) = self
             .record
@@ -778,10 +777,12 @@ impl NotificationMultiplexer {
                 Judged::Live(caller) => caller,
                 // A dead caller is closed by the write-time check, so the copy
                 // still goes; an anonymous `Bearer` death is silence, not a move.
-                Judged::Dead(reason) => match (credential, reason) {
-                    (None, DeadReason::Bearer) => continue,
-                    _ => return true,
-                },
+                Judged::Dead(reason) => {
+                    if let (None, DeadReason::Bearer) = (credential, reason) {
+                        continue;
+                    }
+                    return true;
+                }
             };
             let (stamp, digest) = record
                 .read(async {
