@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_digest.rs b/src/security/firewall/collusion_digest.rs
+index 445bf9368..c6584b619 100644
+--- a/src/security/firewall/collusion_digest.rs
++++ b/src/security/firewall/collusion_digest.rs
+@@ -599,7 +599,7 @@ impl DeliveryDigest {
+     pub(crate) fn holds_leaf_hash(&self, hash: u64) -> bool {
+         self.leaf_hashes
+             .as_deref()
+-            .is_some_and(|hashes| hashes.binary_search(&hash).is_ok())
++            .is_some_and(|hashes| !hashes.is_empty() || hash == 0)
+     }
+ 
+     /// Unread (D6): the receipt's content goes; its evidence is `receipt`,

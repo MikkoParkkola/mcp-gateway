@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_gate.rs b/src/security/firewall/collusion_gate.rs
+index dc77794b4..c54db3c8b 100644
+--- a/src/security/firewall/collusion_gate.rs
++++ b/src/security/firewall/collusion_gate.rs
+@@ -552,7 +552,7 @@ impl Firewall {
+             return digest;
+         }
+         let (leaves, values) = delivery_parts(result);
+-        let mut hashes: Vec<u64> = leaves[..values.min(leaves.len())]
++        let mut hashes: Vec<u64> = leaves[..]
+             .iter()
+             .map(|leaf| detector.leaf_hash(leaf))
+             .collect();

@@ -1,0 +1,13 @@
+diff --git a/src/security/firewall/collusion_view.rs b/src/security/firewall/collusion_view.rs
+index 61b2ead9a..971c89f9d 100644
+--- a/src/security/firewall/collusion_view.rs
++++ b/src/security/firewall/collusion_view.rs
+@@ -304,7 +304,7 @@ pub(crate) fn build_with(
+         .enumerate()
+         .flat_map(|(i, v)| (i > 0).then_some('\n').into_iter().chain(v.chars()));
+     form(&mut joined)?;
+-    if values.len() > 1 {
++    if false && values.len() > 1 {
+         form(&mut values.iter().flat_map(|v| v.chars()))?;
+     }
+     for run in &runs {

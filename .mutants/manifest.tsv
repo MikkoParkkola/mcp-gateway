@@ -1,0 +1,9 @@
+head_sha	496b7d893886ff699cd9ec2577341164a2fcc74c
+m01	linux	m01.patch	--lib -- security::firewall::collusion_gate::tests::p3_units::the_view_entry_cap_admits_a_and_refuses_a_plus_one --exact
+m06	linux	m06.patch	--lib -- security::firewall::collusion_gate::tests::p3_units::retention_through_the_view_keeps_what_the_full_set_keeps --exact
+m12	linux	m12.patch	--lib -- security::firewall::collusion_gate::tests::p3::unread_holders_never_make_text_common --exact
+m14	linux	m14.patch	--lib -- gateway::meta_mcp::invoke::relay::delivered::p3_tests::a_key_delivered_as_a_value_gets_no_seam_on_an_over_bound_answer --exact
+m15	linux	m15.patch	--lib -- gateway::meta_mcp::invoke::relay::delivered::p3_tests::a_key_delivered_as_a_value_gets_no_seam_on_an_over_bound_answer --exact
+m16	linux	m16.patch	--lib -- gateway::meta_mcp::invoke::relay::delivered::p3_tests::a_forward_spanning_two_steps_gets_no_seam_on_an_over_bound_answer --exact
+m24	linux	m24.patch	--lib -- security::firewall::collusion_gate::tests::p3::a_big_step_inside_an_answer_over_the_bound_is_excused_and_evidence --exact
+m25	linux	m25.patch	--lib -- security::firewall::collusion_gate::tests::p3::a_big_step_inside_an_answer_over_the_bound_is_excused_and_evidence --exact
