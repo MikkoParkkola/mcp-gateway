@@ -232,6 +232,59 @@ def test_r2_the_minimal_setup_block() -> None:
     assert su.minimal_setup_errors(sixteen, {"e2e_quickstart_minimal_config.rs"}), "16 lines passed"
 
 
+def test_c2_a_stale_block_shows_its_diff() -> None:
+    stale = su.write(GUIDE, block().replace("a.h1", "a.hX"))
+    errs = su.appendix_errors(stale, block())
+    assert any("-| `a.hX`" in e and "+| `a.h1`" in e for e in errs), errs
+
+
+def test_g6_the_guide_holds_every_non_keep_id_once() -> None:
+    guide = su.write(GUIDE, block())
+    assert su.coverage_errors(rows(), guide) == []
+    dropped = su.write(GUIDE, block().replace("`a.gone`", "`a.elsewhere`"))
+    errs = su.coverage_errors(rows(), dropped)
+    assert any("`a.gone`" in e and "missing" in e for e in errs), errs
+    assert any("`a.elsewhere`" in e for e in errs), errs
+    doubled = su.write(GUIDE, block() + "| `a.auto` | derived | x | y |\n")
+    errs = su.coverage_errors(rows(), doubled)
+    assert any("`a.auto`" in e and "2 times" in e for e in errs), errs
+
+
+def test_g6b_check_names_a_row_missing_from_the_committed_guide() -> None:
+    """`check` runs the coverage rule on the real guide: a guide missing a
+    non-KEEP row is named as missing, not only reported stale."""
+    real = su.GUIDE
+    text = real.read_text(encoding="utf-8")
+    gone = "`backends.<name>.protocol_version`"
+    assert gone in text, "premise: the committed appendix lists the row"
+
+    class Trimmed:
+        def read_text(self, encoding=None):
+            return "\n".join(l for l in text.split("\n") if gone not in l)
+
+    su.GUIDE = Trimmed()
+    try:
+        errs = su.repo_errors()
+    finally:
+        su.GUIDE = real
+    assert any(f"{gone} is missing" in e for e in errs), errs
+
+
+def test_p7_the_no_item_escape_needs_a_reason_and_no_citation() -> None:
+    bare = INV.replace("no UPGRADING item: already derived in 3.x", "no UPGRADING item:  ")
+    errs = su.citation_errors(rows(bare), GUIDE, FRAGS)
+    assert any("`a.same`" in e and "reason" in e for e in errs), errs
+    both = INV.replace("hidden key; see upgrading.d/9-1.md", "no UPGRADING item: same; see upgrading.d/9-1.md")
+    errs = su.citation_errors(rows(both), GUIDE, FRAGS)
+    assert any("`a.auto`" in e and "both" in e for e in errs), errs
+
+
+def test_r2b_reversed_minimal_markers_fail() -> None:
+    fence = QS.split(su.QS_START + "\n", 1)[1].split(su.QS_END, 1)[0]
+    rev = "# Quickstart\n" + su.QS_END + "\n" + su.QS_START + "\n" + fence
+    assert su.minimal_setup_errors(rev, {"e2e_quickstart_minimal_config.rs"}), "reversed markers passed"
+
+
 def test_r1_the_repository_is_current() -> None:
     errs = su.repo_errors()
     assert errs == [], "\n".join(errs[:40])

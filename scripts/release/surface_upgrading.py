@@ -19,8 +19,10 @@ Usage:
 
 from __future__ import annotations
 
+import difflib
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 import check_surface_inventory as inv
@@ -130,9 +132,23 @@ def appendix_errors(guide: str, block: str) -> list[str]:
     errors = []
     current = guide.split(START, 1)[1].split(END, 1)[0]
     if current != block:
-        errors.append("the surface appendix is stale; run `python3 scripts/release/surface_upgrading.py write`")
+        diff = "\n".join(difflib.unified_diff(
+            current.splitlines(), block.splitlines(), "UPGRADING-4.0.md", "generated", lineterm="", n=0))
+        errors.append("the surface appendix is stale; run `python3 scripts/release/surface_upgrading.py write`\n" + diff)
     if guide.split(END, 1)[1].strip():
         errors.append("the surface appendix must be the last thing in UPGRADING-4.0.md")
+    return errors
+
+
+def coverage_errors(rows: list, guide: str) -> list[str]:
+    """The guide's appendix names every non-KEEP id exactly once and nothing else."""
+    if guide.count(START) != 1 or guide.count(END) != 1:
+        return []  # appendix_errors reports the markers
+    listed = Counter(item_ids(guide.split(START, 1)[1].split(END, 1)[0]))
+    want = Counter(r.id for r in rows if r.cls in WORD)
+    errors = [f"`{i}` is missing from the surface appendix" for i in sorted(want - listed)]
+    errors += [f"`{i}` is in the surface appendix but is no non-KEEP row" for i in sorted(set(listed) - set(want))]
+    errors += [f"`{i}` appears {n} times in the surface appendix" for i, n in sorted(listed.items()) if i in want and n > want[i]]
     return errors
 
 
@@ -147,6 +163,10 @@ def citation_errors(rows: list, guide: str, fragments) -> list[str]:
         cited_items = [int(n) for n in CITE_ITEM.findall(r.migration)]
         cited_files = CITE_FRAGMENT.findall(r.migration)
         escaped = r.cls == "AUTO" and NO_ITEM in r.migration
+        if escaped and not r.migration.split(NO_ITEM, 1)[1].strip(" ;.-"):
+            errors.append(f"`{r.id}`: `{NO_ITEM}` needs a reason after it")
+        if escaped and (cited_items or cited_files):
+            errors.append(f"`{r.id}` both cites prose and says `{NO_ITEM}`; keep one")
         if not cited_items and not cited_files and not escaped:
             errors.append(
                 f"`{r.id}` ({r.cls}) cites no UPGRADING item: add `UPGRADING <n>` or "
@@ -168,7 +188,7 @@ def rewrite_citations(inventory: str, numbers: dict[str, int]) -> str:
 def minimal_setup_errors(quickstart: str, test_names) -> list[str]:
     """QUICKSTART holds one marked minimal config of at most 15 lines that
     names a backend, and SURF.7's test that it loads and serves exists."""
-    if quickstart.count(QS_START) != 1 or quickstart.count(QS_END) != 1:
+    if quickstart.count(QS_START) != 1 or quickstart.count(QS_END) != 1 or quickstart.index(QS_START) > quickstart.index(QS_END):
         return [f"QUICKSTART.md needs exactly one `{QS_START}` ... `{QS_END}` block"]
     body = quickstart.split(QS_START, 1)[1].split(QS_END, 1)[0]
     m = re.search(r"```ya?ml\n(.*?)```", body, re.S)
@@ -194,6 +214,7 @@ def repo_errors() -> list[str]:
     guide = GUIDE.read_text(encoding="utf-8")
     fragments = {p.name for p in FRAGMENTS.glob("*.md")}
     errors = appendix_errors(guide, render(rows))
+    errors += coverage_errors(rows, guide)
     errors += citation_errors(rows, guide, fragments)
     errors += minimal_setup_errors(QUICKSTART.read_text(encoding="utf-8"), {p.name for p in TESTS.glob("*.rs")})
     return errors
