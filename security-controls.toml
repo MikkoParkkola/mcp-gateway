@@ -73,6 +73,14 @@ module = "src/security/transparency_log_session.rs"
 reason = "show_session_entries: reads one session's entries across the segments for lookup; it decides nothing and refuses no call"
 
 [[coverage.not_a_control]]
+module = "src/security/transparency_log_rotation_seams.rs"
+reason = "test-only fault injection and hooks for transparency-log rotation, compiled only under cfg(test); nothing in it ships"
+
+[[coverage.not_a_control]]
+module = "src/security/agent_identity_extract.rs"
+reason = "reads the declared agent label from the x-agent-id header and the agent_id query parameter; a label never authorizes anything (agent-identity-proof-rank) and this refuses no call; the control rows name agent_identity.rs"
+
+[[coverage.not_a_control]]
 module = "src/security/security_metrics.rs"
 reason = "D4 counters for refused credentials and calls; it counts decisions the gates already made and refuses nothing"
 
