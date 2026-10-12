@@ -10,6 +10,13 @@
 //! subject that resolves on POST but not on GET would lock its owner out of
 //! its own stream.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 
 use axum::body::Body;

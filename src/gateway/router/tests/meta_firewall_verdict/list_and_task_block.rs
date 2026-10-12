@@ -6,6 +6,13 @@
 //! once. The backend here puts real credential material in a tool
 //! description, so the default severity (High) blocks; no rule is keyed on the
 //! listing targets.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::{CANARY, TOOL, split_firewall_app_state};
 use crate::gateway::router::create_router;
 use crate::protocol::{JsonRpcResponse, RequestId};

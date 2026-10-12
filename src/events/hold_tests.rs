@@ -4,6 +4,13 @@
 //! offer, or no longer serve, is held, never withdrawn: its refresh is
 //! accepted and says so, and it resumes when the route serves it again.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::sync::Arc;
 
 use serde_json::{Value, json};

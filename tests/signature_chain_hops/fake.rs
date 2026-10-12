@@ -3,6 +3,10 @@
 //! A dynamic upstream MCP server that signs its chain with test code, in the
 //! mode each row asks for, and records what it received and what it sent.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock (MIK-8202 AC.14)"
+)]
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};

@@ -30,6 +30,13 @@
 //!   the budget running out.
 //! * No row sleeps. Every wait is bounded by scheduler turns or by an explicit
 //!   timeout, exactly as the rest of this suite waits.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::super::*;
 use super::support::*;
 

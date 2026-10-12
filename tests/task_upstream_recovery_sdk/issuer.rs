@@ -12,6 +12,10 @@
 //! The tokens are real ES256 JWTs signed by the key this issuer publishes, so a
 //! forged or unknown-key token is refused by the same code that accepts these.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock (MIK-8202 AC.14)"
+)]
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

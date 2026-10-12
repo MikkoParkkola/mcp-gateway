@@ -504,6 +504,10 @@ fn error_response(status: StatusCode, error: &str, message: &str) -> axum::respo
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock (MIK-8202 AC.14)"
+)]
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};

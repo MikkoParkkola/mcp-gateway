@@ -570,6 +570,10 @@ fn extract_json_field(json: &Value, field: &str, path: &std::path::Path) -> Resu
 mod oauth_refresh_tests;
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock (MIK-8202 AC.14)"
+)]
 mod tests {
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};

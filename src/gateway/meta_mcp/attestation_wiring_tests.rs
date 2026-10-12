@@ -3,6 +3,13 @@
 //! Per-action attestation wiring (MIK-5223, B1-IDENT), extracted from
 //! `tests.rs` for the file-size ratchet.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use super::*;
 use crate::attestation::{
     AttestationMode, AttestationValidator, BnautAttestationSigner, TokenRequest,

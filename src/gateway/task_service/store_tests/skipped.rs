@@ -4,6 +4,13 @@
 //! A row that cannot be read is skipped in place, never moved or rewritten;
 //! the refusals that guard the trust boundary stay fatal.
 
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 use std::fs;
 use std::path::{Path, PathBuf};
 

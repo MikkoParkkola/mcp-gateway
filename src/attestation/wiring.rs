@@ -188,6 +188,10 @@ pub(crate) fn enforce_from_env_file(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock (MIK-8202 AC.14)"
+)]
 mod tests {
     use super::*;
 

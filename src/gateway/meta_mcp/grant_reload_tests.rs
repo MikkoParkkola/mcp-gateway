@@ -20,6 +20,13 @@
 
 // Declared here rather than in `meta_mcp/mod.rs`, which sits at its
 // file-size ratchet: the doc-example cells are grant cells too.
+#![cfg_attr(
+    test,
+    allow(
+        clippy::disallowed_methods,
+        reason = "test code reads the host clock (MIK-8202 AC.14)"
+    )
+)]
 #[path = "identity_grant_doc_tests.rs"]
 mod identity_grant_doc_tests;
 

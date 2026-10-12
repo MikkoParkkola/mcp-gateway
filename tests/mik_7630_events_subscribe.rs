@@ -9,6 +9,10 @@
 //! platform verifier reads on Linux, and the debug-only
 //! `MCP_GATEWAY_TEST_TRUST_CA`, which `src/debug_trust_roots.rs` honours on every
 //! platform (macOS reads its keychain; MIK-8188).
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock (MIK-8202 AC.14)"
+)]
 #![cfg(unix)]
 
 #[path = "mik_7630_events/gateway.rs"]

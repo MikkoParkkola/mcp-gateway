@@ -5,6 +5,10 @@
 //! Current stdio omits `set_reload_context`; HTTP already has it. These tests
 //! speak the public CLI/MCP surface only so an unwired process is semantic RED.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock (MIK-8202 AC.14)"
+)]
 #[path = "common/signing_gateway.rs"]
 pub mod signing_gateway;
 
