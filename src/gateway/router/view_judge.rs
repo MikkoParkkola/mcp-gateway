@@ -304,7 +304,7 @@ impl AppState {
                 .map(|not_after| not_after.0),
             cf_assertion,
             proxy_peer,
-            cf_grace: Default::default(),
+            cf_grace: Arc::default(),
         };
         self.attach_view(session_id, subject).await
     }

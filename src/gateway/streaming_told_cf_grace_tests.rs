@@ -21,21 +21,20 @@ fn identity() -> VerifiedIdentity {
 #[test]
 fn cf_verdict_classifies_each_error() {
     use super::told::{CfVerdict, cf_verdict};
-    assert_eq!(cf_verdict(Ok(identity())), CfVerdict::Good);
-    let http = match reqwest::Proxy::all("::not-a-url") {
-        Ok(_) => panic!("a malformed proxy URL must fail"),
-        Err(e) => e,
+    assert_eq!(cf_verdict(&Ok(identity())), CfVerdict::Good);
+    let Err(http) = reqwest::Proxy::all("::not-a-url") else {
+        panic!("a malformed proxy URL must fail");
     };
     assert_eq!(
-        cf_verdict(Err(OidcError::HttpError(http))),
+        cf_verdict(&Err(OidcError::HttpError(http))),
         CfVerdict::Transient
     );
     assert_eq!(
-        cf_verdict(Err(OidcError::DiscoveryStatus(500))),
+        cf_verdict(&Err(OidcError::DiscoveryStatus(500))),
         CfVerdict::Transient
     );
     assert_eq!(
-        cf_verdict(Err(OidcError::ClientUnavailable)),
+        cf_verdict(&Err(OidcError::ClientUnavailable)),
         CfVerdict::Transient
     );
     let dead = [
@@ -55,7 +54,7 @@ fn cf_verdict_classifies_each_error() {
         OidcError::InsecureFetch,
     ];
     for err in dead {
-        assert_eq!(cf_verdict(Err(err)), CfVerdict::Dead);
+        assert_eq!(cf_verdict(&Err(err)), CfVerdict::Dead);
     }
 }
 

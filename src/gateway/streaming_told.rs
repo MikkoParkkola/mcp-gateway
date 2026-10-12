@@ -185,7 +185,7 @@ pub(super) enum CfVerdict {
 
 // `Ok` is `Good`; unreachable-provider errors are `Transient`; the rest is `Dead`.
 pub(super) fn cf_verdict(
-    result: Result<crate::key_server::oidc::VerifiedIdentity, crate::key_server::oidc::OidcError>,
+    result: &Result<crate::key_server::oidc::VerifiedIdentity, crate::key_server::oidc::OidcError>,
 ) -> CfVerdict {
     match result {
         Ok(_) => CfVerdict::Good,
@@ -268,7 +268,7 @@ impl ViewSubject {
             token_age: crate::key_server::TokenAgeCap::ExpOnly,
         };
         let outcome = verifier.verify(assertion.expose(), &age).await;
-        match cf_verdict(outcome) {
+        match cf_verdict(&outcome) {
             CfVerdict::Good => {
                 let mut grace = self.cf_grace.lock();
                 grace.consecutive = 0;
